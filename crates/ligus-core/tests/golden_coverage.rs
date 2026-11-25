@@ -108,6 +108,7 @@ fn tag(e: &SessionEvent) -> &'static str {
         E::AttachmentDeleted { .. } => "attachmentDeleted",
         E::ProfileUpdated { .. } => "profileUpdated",
         E::DeviceLabelSet { .. } => "deviceLabelSet",
+        E::MemberRetired { .. } => "memberRetired",
         E::Unknown => "unknown",
     }
 }
@@ -130,7 +131,7 @@ const ALL: &[&str] = &[
     "proposalApplied", "agentKeyCertified", "workspaceKeyRotated", "deviceKeyAgreementPublished", "passkeyRegistered",
     "passkeyRemoved", "identityLinkPublished", "identityLinkRemoved", "proposalApplyRequested", "workspaceRepoAdded",
     "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned", "proposalApplyFailed",
-    "profileUpdated", "deviceLabelSet",
+    "profileUpdated", "deviceLabelSet", "memberRetired",
     "proposalApplyWithdrawn", "workspaceSandboxSet", "workspaceRepoAliasesSet", "workspaceHostAliasSet", "chatBaseRepinned", "attachmentPolicySet", "attachmentHashBlocked", "attachmentHashUnblocked", "attachmentShared",
     "attachmentDeleted",
 ];
@@ -594,6 +595,17 @@ fn identity_v2_goldens() {
         ("profileUpdated/clearAvatar", 2, change(None, None, true)),
         ("deviceLabelSet", 3, SessionEvent::DeviceLabelSet { label: DeviceLabel { device_id: u(1), account_id: u(9), label: "Mara's MacBook Air".into() } }),
         ("deviceLabelSet/clear", 4, SessionEvent::DeviceLabelSet { label: DeviceLabel { device_id: u(1), account_id: u(9), label: String::new() } }),
+        ("memberRetired", 5, SessionEvent::MemberRetired {
+            retirement: ligus_core::retirement::MemberRetirement::sign(&device(), ws, &u(8).to_string(), u(8), u(9), u(1)),
+        }),
+        ("deviceCertificateAdded/phoneConsent", 6, {
+            let phone = p256::ecdsa::SigningKey::from_slice(&[7u8; 32]).unwrap();
+            let pk = ligus_core::crypto::p256_public_key(&phone);
+            let mut certificate = DeviceCertificate::issue_p256(&device(), u(9), &pk, Timestamp::epoch());
+            certificate.phone_consent =
+                Some(ligus_core::crypto::sign_p256(&phone, &ligus_core::crypto::phone_consent_preimage(ws, u(9), certificate.device_id)).to_vec());
+            SessionEvent::DeviceCertificateAdded { certificate }
+        }),
     ];
     let mut out = String::new();
     for (label, i, payload) in cases {

@@ -156,6 +156,11 @@ pub struct ChatSession {
     /// account → label. Render-only and never serialized, like `profiles`.
     #[serde(skip)]
     pub device_labels: BTreeMap<Uuid, BTreeMap<Uuid, String>>,
+    /// Members retired into their person (`MemberRetired`, identity model
+    /// v2, 8.3): member id → the successor account. Folded only from signed
+    /// events, never serialized.
+    #[serde(skip)]
+    pub retired: BTreeMap<String, Uuid>,
 }
 
 /// Safety ceiling on agent replies since the last human turn — a runaway/loop
@@ -260,6 +265,7 @@ impl ChatSession {
             attachments: BTreeMap::new(),
             profiles: BTreeMap::new(),
             device_labels: BTreeMap::new(),
+            retired: BTreeMap::new(),
         }
     }
 

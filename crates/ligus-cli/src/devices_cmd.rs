@@ -539,6 +539,11 @@ async fn finish_redeem(cfg: &mut Config, grant: &OpenedGrant, state: &mut LinkSt
     f.ek = cfg.epoch_keys.clone();
     f.save(&cfg.data_dir)?;
     svc.act_as_owner_device(person.clone());
+    // Rules 3: the computer accepts the desktop's certificate (its own copy),
+    // without which it counts for nothing there.
+    if let Err(e) = svc.accept_device_certificate(ws) {
+        eprintln!("ligus: accepting this computer's certificate failed (will retry on the next start): {e}");
+    }
     crate::publish_key_agreement(cfg, &mut svc);
     drop(svc);
     let _ = crate::sync_once(cfg).await;

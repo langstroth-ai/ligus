@@ -551,6 +551,10 @@ pub enum SessionEvent {
     /// render-only. Written by the device itself or by a non-delegated,
     /// non-phone device of the account. Never read by a rule.
     DeviceLabelSet { label: crate::profile::DeviceLabel },
+    /// A computer that linked as its person retires the separate member it
+    /// was (config log; identity model v2, 8.3). Rules 3 only: removes that
+    /// member like a self-leave. See [`crate::retirement`].
+    MemberRetired { retirement: crate::retirement::MemberRetirement },
     /// Remove a linked identity (the account itself, or an Admin for
     /// moderation).
     IdentityLinkRemoved { account_id: Uuid, link_id: Uuid },
@@ -660,6 +664,7 @@ impl SessionEvent {
             SessionEvent::IdentityLinkPublished { .. } => "identityLinkPublished",
             SessionEvent::ProfileUpdated { .. } => "profileUpdated",
             SessionEvent::DeviceLabelSet { .. } => "deviceLabelSet",
+            SessionEvent::MemberRetired { .. } => "memberRetired",
             SessionEvent::IdentityLinkRemoved { .. } => "identityLinkRemoved",
             SessionEvent::ProposalApplyRequested { .. } => "proposalApplyRequested",
             SessionEvent::ProposalApplyFailed { .. } => "proposalApplyFailed",
@@ -718,6 +723,7 @@ impl SessionEvent {
             | SessionEvent::IdentityLinkRemoved { .. }
             | SessionEvent::ProfileUpdated { .. }
             | SessionEvent::DeviceLabelSet { .. }
+            | SessionEvent::MemberRetired { .. }
             | SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
             | SessionEvent::WorkspaceRepoRemoved { .. }
@@ -1070,6 +1076,14 @@ impl ChatSession {
             SessionEvent::AttachmentShared { .. } | SessionEvent::AttachmentDeleted { .. } => {}
             // Folded with their signed event in projection (`fold_pass`).
             SessionEvent::ProfileUpdated { .. } | SessionEvent::DeviceLabelSet { .. } => {}
+            // Allowed only under rules 3 (`authz::retire`): the member leaves.
+            SessionEvent::MemberRetired { retirement } => {
+                if self.members.iter().any(|m| m.id == retirement.member_id) {
+                    self.guards.removed_members.insert(retirement.member_id.clone());
+                }
+                self.members.retain(|m| m.id != retirement.member_id);
+                self.retired.insert(retirement.member_id.clone(), retirement.successor_account_id);
+            }
             SessionEvent::ProposalReverted { proposal_id, .. } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     p.reverted = p.status == crate::proposals::ProposalStatus::Applied;

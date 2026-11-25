@@ -548,12 +548,14 @@ mod tests {
     fn named(name: &str) -> ChatService {
         let store = crate::event_store::EventStore::open_in_memory().unwrap();
         let author = ligus_core::ActorIdentity::new(name, name, ligus_core::ActorKind::Human);
-        ChatService::new(
+        let mut svc = ChatService::new(
             store,
             ligus_core::SigningKeypair::generate().unwrap(),
             ligus_core::SigningKeypair::generate().unwrap(),
             author,
-        )
+        );
+        svc.set_founding_rules(2);
+        svc
     }
 
     /// Deliver every event `from` has that `to` lacks (both directions = a sync).

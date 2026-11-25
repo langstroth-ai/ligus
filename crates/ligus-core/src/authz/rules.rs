@@ -46,6 +46,8 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         SessionEvent::IdentityLinkPublished { .. } | SessionEvent::IdentityLinkRemoved { .. } => false,
         // Names and pictures are render-only (identity model v2, 5.2, 6.2).
         SessionEvent::ProfileUpdated { .. } | SessionEvent::DeviceLabelSet { .. } => false,
+        // The old account's own key signs it; it holds no passkey to give.
+        SessionEvent::MemberRetired { .. } => false,
         // Guards.
         SessionEvent::DearthModeChanged { .. } | SessionEvent::ChatLockdownCleared { .. } => true,
         // Zones and the beacon (the governance flow records).

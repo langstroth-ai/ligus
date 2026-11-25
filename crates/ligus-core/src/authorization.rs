@@ -334,6 +334,8 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // A person's own name and picture, a device's own name: any member
         // (`authz::profiles`).
         SessionEvent::ProfileUpdated { .. } | SessionEvent::DeviceLabelSet { .. } => WorkspaceRole::Viewer,
+        // Leaving into your person (`authz::retire`), like a self-leave.
+        SessionEvent::MemberRetired { .. } => WorkspaceRole::Viewer,
         // The attachment policy and blocklist are an Admin's (issue #118).
         SessionEvent::AttachmentPolicySet { .. }
         | SessionEvent::AttachmentHashBlocked { .. }

@@ -42,6 +42,7 @@ pub mod votes;
 pub mod passkeys;
 pub mod links;
 pub mod profiles;
+pub mod retire;
 pub mod phone;
 pub mod rules;
 
@@ -571,7 +572,7 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
         // Rules only tighten: a workspace on rules 3 never goes back (its
         // older devices are read-only there already).
-        if *version < ctx.running.rules && ctx.running.rules_written {
+        if *version >= RULES_GENESIS && *version < ctx.running.rules && ctx.running.rules_written {
             return Decision::deny("the rules version never goes back");
         }
         // The relying party decides which page every member's desktop opens
@@ -632,7 +633,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             && on_config
             && !roster.rules_written
             && roster.passkeys.values().all(|m| m.is_empty());
-        if !genesis_rules && rules::requires_presence(&env.payload, author, roster, fold) {
+        // Rules 3: a device accepting a certificate someone else published
+        // for it (with presence) publishes its own copy, which needs none.
+        // So does a copy of a phone's certificate carrying the phone's own
+        // statement (its acceptance), whoever relays it (its box).
+        let accepting = matches!(&env.payload, SessionEvent::DeviceCertificateAdded { certificate: c }
+            if roster.unaccepted.contains(&(c.device_id, c.account_id))
+                && (env.signer_device_id == Some(c.device_id) || c.phone_consent_ok(env.workspace_id)));
+        if !genesis_rules && !accepting && rules::requires_presence(&env.payload, author, roster, fold) {
             // A device is added with its own account's presence, whoever
             // publishes the certificate.
             let whose = match &env.payload {
@@ -681,6 +689,12 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 Err(why) => Decision::deny(why),
             };
         }
+        SessionEvent::MemberRetired { retirement } => {
+            return match retire::retirement_ok(env, retirement, on_config, ctx.running, fold) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
         _ => {}
     }
 
@@ -715,6 +729,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         if let SessionEvent::DeviceRevoked { device_id, .. } = &env.payload {
             let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
             if account.is_some_and(|a| ctx.running.account_owns_device(a, *device_id)) {
+                return Decision::Allow;
+            }
+            // Rules 3: withdrawing a certificate of yours its device never
+            // accepted (approved, never finished: identity model v2, 8.2).
+            if account.is_some_and(|a| ctx.running.unaccepted.contains(&(*device_id, a)) && !ctx.running.devices.contains_key(device_id)) {
                 return Decision::Allow;
             }
         }

@@ -172,3 +172,77 @@ fn the_rules_never_go_back() {
     assert_eq!(w.verdict(id), Verdict::Denied);
     assert_eq!(w.roster().rules, 3);
 }
+
+/// 8.3: a computer that was Dee's own member links as Ben; it retires Dee
+/// under rules 3 (Dee's own account key signs it). Refused without that
+/// signature, into a device that never accepted Ben, for a member holding a
+/// passkey (an Admin removes it), or above the person's rank.
+#[test]
+fn a_duplicate_member_retires_into_their_person() {
+    use ligus_core::retirement::MemberRetirement;
+    let mut w = SignedWorld::genesis(&["ana", "ben", "cy", "dee"], None);
+    w.admit("ana", "ben", WorkspaceRole::Admin);
+    w.admit("ana", "cy", WorkspaceRole::Contributor);
+    // Dee joins without a passkey (an older box or CLI member).
+    let m = w.member_of("dee", WorkspaceRole::Contributor);
+    w.push("ana", SessionEvent::MemberAdded { member: m, invite: None, proof: None });
+    w.publish_identity("dee");
+    w.push("ana", SessionEvent::WorkspaceRulesSet { version: 3, presence: None });
+    let (ben, cy, dee) = (w.people["ben"].account_id, w.people["cy"].account_id, w.people["dee"].account_id);
+    let ws = w.wid;
+    // Ben's desktop links a computer.
+    let kp = SigningKeypair::generate().unwrap();
+    let dev = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &kp.public_key_bytes());
+    let cert = DeviceCertificate::issue(&w.people["ben"].account, ben, &kp.public_key_bytes(), Timestamp::epoch());
+    w.push("ben", SessionEvent::DeviceCertificateAdded { certificate: cert.clone() });
+
+    let forged = MemberRetirement::sign(&SigningKeypair::generate().unwrap(), ws, "dee", dee, ben, dev);
+    let id = w.push_bare("dee", SessionEvent::MemberRetired { retirement: forged });
+    assert_eq!(w.verdict(id), Verdict::Denied, "not Dee's own key");
+    let r = MemberRetirement::sign(&w.people["dee"].account, ws, "dee", dee, ben, dev);
+    let early = w.push_bare("dee", SessionEvent::MemberRetired { retirement: r });
+    assert_eq!(w.verdict(early), Verdict::Denied, "the computer hasn't accepted Ben yet");
+
+    // Cy holds a passkey: refused (an Admin removes her instead). Ben
+    // (Admin) into Cy (Contributor): above the person's rank.
+    let rc = MemberRetirement::sign(&w.people["cy"].account, ws, "cy", cy, ben, dev);
+    let passkey = w.push_bare("cy", SessionEvent::MemberRetired { retirement: rc });
+    let up = MemberRetirement::sign(&w.people["ben"].account, ws, "ben", ben, cy, dev);
+    let up = w.push_bare("ben", SessionEvent::MemberRetired { retirement: up });
+
+    // The computer accepts (its own copy of the certificate). Acceptance is
+    // read from the whole log, so the retirement it signed for stands.
+    let mut env = w.draft("ben", None, SessionEvent::DeviceCertificateAdded { certificate: cert }, None);
+    if let Some(s) = env.actor_stamp.as_mut() {
+        s.actor.device_id = Some(dev);
+        s.prev = None;
+    }
+    env.clear_raw();
+    ligus_core::crypto::sign_envelope(&mut env, dev, &kp);
+    w.push_env(None, env);
+    assert_eq!(w.verdict(early), Verdict::Allowed);
+    assert_eq!(w.verdict(passkey), Verdict::Denied, "a member with a passkey retired");
+    assert_eq!(w.verdict(up), Verdict::Denied, "retired above the person's rank");
+    let c = w.config();
+    assert!(!c.members.iter().any(|m| m.id == "dee"), "Dee is no longer a member");
+    assert_eq!(c.retired.get("dee"), Some(&ben));
+    // Dee's later events are refused like any former member's.
+    let later = w.push_bare("dee", SessionEvent::SessionTitleChanged { title: "x".into() });
+    assert_eq!(w.verdict(later), Verdict::Denied);
+}
+
+/// Under rules 2 a retirement is refused (0.3 folds it as Unknown; no
+/// state changes on either build).
+#[test]
+fn a_retirement_needs_rules_3() {
+    use ligus_core::retirement::MemberRetirement;
+    let mut w = SignedWorld::genesis(&["ana", "dee"], None);
+    let m = w.member_of("dee", WorkspaceRole::Contributor);
+    w.push("ana", SessionEvent::MemberAdded { member: m, invite: None, proof: None });
+    w.publish_identity("dee");
+    let (ana, dee) = (w.people["ana"].account_id, w.people["dee"].account_id);
+    let r = MemberRetirement::sign(&w.people["dee"].account, w.wid, "dee", dee, ana, w.people["ana"].device_id);
+    let id = w.push_bare("dee", SessionEvent::MemberRetired { retirement: r });
+    assert_eq!(w.verdict(id), Verdict::Denied);
+    assert!(w.config().members.iter().any(|m| m.id == "dee"));
+}

@@ -163,6 +163,11 @@ pub struct RosterState {
     /// The attachment policy and the blocklist of content hashes in force
     /// (issue #118).
     pub attachments: crate::attachment::AttachmentRules,
+    /// Rules 3: (device, account) certificates the log allowed that their
+    /// device hasn't accepted yet, so they count for nothing. The device
+    /// accepts by publishing its own copy, which needs no presence (the
+    /// publisher's did).
+    pub unaccepted: BTreeSet<(Uuid, Uuid)>,
 }
 
 impl RosterState {
@@ -661,9 +666,11 @@ impl RosterTracker {
     fn rebuild_devices(&mut self, fold: &ChatSession) {
         let mut devices: BTreeMap<Uuid, DeviceState> = BTreeMap::new();
         let rules3 = self.state.rules >= super::RULES_V3;
+        let mut unaccepted = BTreeSet::new();
         for cert in &self.certs {
             // Rules 3: only a certificate its device accepted counts.
             if rules3 && !self.accepted.contains(&(cert.device_id, cert.account_id)) {
+                unaccepted.insert((cert.device_id, cert.account_id));
                 continue;
             }
             // A disputed account certifies nothing.
@@ -697,6 +704,7 @@ impl RosterTracker {
             devices.entry(*d).or_default().revoked = true;
         }
         self.state.devices = devices;
+        self.state.unaccepted = unaccepted;
         self.state.account_keys = self.book.keys();
     }
 }
@@ -707,6 +715,7 @@ fn touches_roster(e: &SessionEvent) -> bool {
         e,
         SessionEvent::MemberAdded { .. }
             | SessionEvent::MemberRemoved { .. }
+            | SessionEvent::MemberRetired { .. }
             | SessionEvent::MemberRoleChanged { .. }
             | SessionEvent::AgentRosterUpdated { .. }
             | SessionEvent::AgentUpserted { .. }

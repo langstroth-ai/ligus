@@ -176,6 +176,7 @@ impl Dev {
         state.record_link(&person, g.workspace_id).map_err(|e| e.to_string())?;
         state.save(&self.dir).unwrap();
         self.svc.act_as_owner_device(person.clone());
+        self.svc.accept_device_certificate(g.workspace_id).map_err(|e| e.to_string())?;
         self.sync().await;
         Ok(person)
     }
@@ -396,6 +397,7 @@ async fn a_computer_is_never_certified_as_someone_else() {
     // It acts as Taylor (its own signature as Taylor, what the redeem's
     // key-agreement key publishes): from then on it chose Taylor.
     lt.svc.act_as_owner_device(person);
+    lt.svc.accept_device_certificate(ws).unwrap();
     let chat = lt.svc.create_chat("lt", ws, "").unwrap().id;
     lt.svc.post_user_message(chat, ws, "as Taylor").unwrap();
     lt.sync().await;
@@ -441,7 +443,9 @@ async fn a_foreign_certificate_doesnt_block_or_redirect_a_link() {
     mac.sync().await;
     let preview = mac.svc.preview_computer_link(ws, &req).unwrap();
     assert_eq!(preview.someone_elses, None, "a certificate alone isn't the computer choosing Taylor");
-    assert_eq!(preview.also_certified_by, vec!["Taylor".to_string()], "shown, quietly");
+    // Rules 3 (every new workspace): a certificate the computer never
+    // accepted counts for nothing, so there is nothing to show.
+    assert!(preview.also_certified_by.is_empty(), "{:?}", preview.also_certified_by);
     let grant = mac.svc.issue_computer_link(ws, &req, &mac.conn(room), now_ms()).unwrap();
     mac.sync().await;
     lt.svc.store().set_workspace_pin(ws, &mac.id(), &crate::envelope_verifier::FounderPin::fingerprint_hex(&mac.svc.account_public_key())).unwrap();
@@ -453,7 +457,7 @@ async fn a_foreign_certificate_doesnt_block_or_redirect_a_link() {
     assert!(mac.bodies(chat).contains(&("from lt".into(), mac.id())), "{:?}", mac.bodies(chat));
     let (standing, foreign) = lt.svc.device_standing_and_foreign(ws).unwrap();
     assert!(matches!(standing, crate::device_enroll::Standing::OwnerDevice(ref a) if a.id == mac.id()), "{standing:?}");
-    assert_eq!(foreign.iter().map(|a| a.id.clone()).collect::<Vec<_>>(), vec![taylor.id()], "the certifier is only shown");
+    assert!(foreign.is_empty(), "under rules 3 Taylor's certificate certifies nothing: {foreign:?}");
 
     // Having acted as Alex, the computer is Alex's: someone else can't link
     // it now (Sam never certified it, so this is the "chose" check).

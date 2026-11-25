@@ -130,6 +130,9 @@ pub struct ChatService {
     /// The relying party this device writes into a workspace it founds
     /// (deployment setting; authoring only, never read by the fold).
     deployment_presence: ligus_core::presence::PresencePolicy,
+    /// The rules version a workspace this service founds starts at
+    /// (`RULES_NEW_WORKSPACE`; tests of older behaviour lower it).
+    founding_rules: u32,
     /// Tests only ([`ChatService::enable_test_presence`]): answer presence
     /// prompts with a recovery key derived from the account, when no provider
     /// is set. Never on otherwise.
@@ -203,6 +206,7 @@ impl ChatService {
             runtime_effect: false,
             presence_provider: None,
             deployment_presence: ligus_core::presence::PresencePolicy::ligus(),
+            founding_rules: ligus_core::authz::RULES_NEW_WORKSPACE,
             // This crate's own unit tests run every service with a test
             // recovery key (rules v2 everywhere); a test of the refusal path
             // turns it off with `disable_test_presence`.
@@ -469,6 +473,13 @@ impl ChatService {
         let standing = crate::device_enroll::standing(&trust, config.as_ref(), self.device_id, &own, &chosen);
         let foreign = crate::device_enroll::foreign_certifiers(&trust, config.as_ref(), self.device_id, &own, &chosen);
         Ok((standing, foreign))
+    }
+
+    /// Tests only: found workspaces at rules `version` (fixtures written for
+    /// rules 2, whose member records use names for ids).
+    #[cfg(any(test, feature = "test-presence"))]
+    pub fn set_founding_rules(&mut self, version: u32) {
+        self.founding_rules = version;
     }
 
     /// Tests only: certify **any** Ed25519 device key under this account in
@@ -1849,7 +1860,7 @@ impl ChatService {
                 config_id,
                 workspace_id,
                 SessionEvent::WorkspaceRulesSet {
-                    version: ligus_core::authz::RULES_NEW_WORKSPACE,
+                    version: self.founding_rules,
                     presence: Some(self.deployment_presence.clone()),
                 },
             )?;
@@ -4731,7 +4742,10 @@ mod tests {
         let kp = SigningKeypair::generate().unwrap();
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new(id, name, ligus_core::ActorKind::Human);
-        ChatService::new(store, kp, account_kp, author)
+        let mut svc = ChatService::new(store, kp, account_kp, author);
+        // Fixtures name their members (ids that aren't account ids): rules 2.
+        svc.set_founding_rules(2);
+        svc
     }
 
     /// The founder names the workspace on its config log once; a later
