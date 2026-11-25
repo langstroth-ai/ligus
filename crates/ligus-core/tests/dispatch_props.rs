@@ -55,6 +55,7 @@ fn base() -> &'static SignedWorld {
                     forge_kind: "github".into(),
                     default_branch: "main".into(),
                     root_commit: None,
+                    scratch: false,
                 },
             },
         );

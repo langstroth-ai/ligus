@@ -1468,7 +1468,7 @@ fn repo_event_ok(e: &SessionEvent, on_config: bool, roster: &RosterState) -> Res
         }
         SessionEvent::WorkspaceRepoAliasesSet { repo_id, aliases } => wr::repo_aliases_ok(roster, *repo_id, aliases),
         SessionEvent::WorkspaceHostAliasSet { alias, host } => wr::host_alias_ok(roster, alias, host),
-        SessionEvent::WorkspaceRepoUpdated { repo_id, display_name, default_branch } => {
+        SessionEvent::WorkspaceRepoUpdated { repo_id, display_name, default_branch, .. } => {
             if !live(repo_id) {
                 return Err("no such repository".into());
             }

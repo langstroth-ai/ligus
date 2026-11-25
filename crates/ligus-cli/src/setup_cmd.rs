@@ -402,6 +402,10 @@ impl SetupOps for CliOps {
         let abs = crate::repos_cmd::abs(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
         service::bind_folder(&self.svc, self.ws, &self.label, repo_id, &abs)
     }
+    fn create_scratch(&mut self, name: &str) -> OpsResult<(String, String)> {
+        let root = crate::scratch_cmd::default_root(&self.cfg.data_dir);
+        service::create_scratch(&mut self.svc, self.ws, &self.label, &root, &crate::scratch_cmd::forbidden(), name)
+    }
 
     // box
     fn box_state(&self) -> OpsResult<BoxFact> {

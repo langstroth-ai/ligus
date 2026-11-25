@@ -677,7 +677,24 @@ fn ahead_behind(dir: &FsPath, base: &str, branch: &str, fork: bool) -> Option<(u
 
 /// `repo` for `GET /v1/chats/:id/details`.
 pub fn details_repo(s: &Shared, chat: Uuid) -> Value {
-    chat_binding(&s.cfg.data_dir, chat).1
+    let mut v = chat_binding(&s.cfg.data_dir, chat).1;
+    tag_scratch(s, chat, &mut v);
+    v
+}
+
+/// Mark a chat binding's repo as scratch (`repo.scratch`: dates, never a
+/// path) when it is one of this box's live scratch repositories.
+pub(super) fn tag_scratch(s: &Shared, chat: Uuid, v: &mut Value) {
+    if v["repo"].is_null() {
+        return;
+    }
+    let svc = s.lock();
+    if let Some(e) = crate::scratch_cmd::of_chat(&s.cfg.data_dir, &svc, chat) {
+        let st = crate::scratch_cmd::settings(&svc, &s.cfg.data_dir);
+        v["repo"]["scratch"] = crate::scratch_cmd::dto(&e, &st, ligus_runtime::repos::scratch::now());
+        v["repo"]["displayName"] = json!(ligus_runtime::display::shown(&e.name));
+        v["repo"]["name"] = json!(e.dir_name);
+    }
 }
 
 // ── GET /v1/repos ──────────────────────────────────────────────────────────
@@ -779,6 +796,17 @@ pub async fn list_repos(State(s): S, peer: Option<axum::Extension<super::tunnel:
     let data_dir = s.cfg.data_dir.clone();
     let jobs: Vec<Value> = s.repos.running_jobs().iter().map(CloneJob::dto).collect();
     let needle = query.q.as_deref().map(str::to_ascii_lowercase);
+    // This box's live scratch repositories, listed first among its
+    // checkouts (by folder name, tagged `scratch`), and whether it makes
+    // them at all (`scratch` settings; absent from an older host).
+    let (scratch_live, scratch_settings) = {
+        let svc = s.lock();
+        let st = crate::scratch_cmd::settings(&svc, &s.cfg.data_dir);
+        let live = ligus_runtime::repos::scratch::live(svc.store(), s.ws);
+        let now = ligus_runtime::repos::scratch::now();
+        let settings = crate::scratch_cmd::settings_dto(&st, live.len());
+        (live.into_iter().map(|e| { let d = crate::scratch_cmd::dto(&e, &st, now); (e, d) }).collect::<Vec<_>>(), settings)
+    };
     let (local, cloned, via_fork, ws_default) = blocking(move || {
         let repos_dir = repos::repos_dir(&data_dir);
         let b = RepoBindings::load(&data_dir);
@@ -786,6 +814,20 @@ pub async fn list_repos(State(s): S, peer: Option<axum::Extension<super::tunnel:
         let mut cloned: HashMap<String, String> = HashMap::new();
         // upstream full name → the local fork checkout of it.
         let mut via_fork: HashMap<String, String> = HashMap::new();
+        let mut scratch_rows: Vec<Value> = scratch_live
+            .iter()
+            .filter(|(e, _)| needle.as_deref().is_none_or(|n| format!("{} {}", e.dir_name, e.name).to_ascii_lowercase().contains(n)))
+            .filter(|(e, _)| ligus_runtime::git_worktree::is_git_repo(&e.path))
+            .map(|(e, d)| {
+                let info = repos::inspect(&e.path);
+                let mut v = checkout_dto_at(&e.path, &e.dir_name, &info);
+                v["displayName"] = json!(ligus_runtime::display::shown(&e.name));
+                v["scratch"] = d.clone();
+                v["isWorkspaceDefault"] = json!(false);
+                v["boundChats"] = json!(b.chats.values().filter(|c| repos::resolve_path(&repos_dir, c) == e.path).count());
+                v
+            })
+            .collect();
         let local: Vec<Value> = local_checkouts(&repos_dir)
             .into_iter()
             .filter_map(|(name, path)| {
@@ -808,12 +850,14 @@ pub async fn list_repos(State(s): S, peer: Option<axum::Extension<super::tunnel:
                 Some(v)
             })
             .collect();
+        scratch_rows.extend(local);
+        let local = scratch_rows;
         (local, cloned, via_fork, ws_default)
     })
     .await?;
     if let Some(h) = selected {
         let forge = forge_listing(&s.repos, &h, &query, &cloned, &via_fork).await;
-        let mut v = json!({ "local": local, "forge": forge, "workspaceDefault": ws_default, "jobs": jobs });
+        let mut v = json!({ "local": local, "forge": forge, "workspaceDefault": ws_default, "jobs": jobs, "scratch": scratch_settings });
         v["forge"]["id"] = json!(h.id().as_str());
         return Ok(Json(v));
     }
@@ -826,7 +870,7 @@ pub async fn list_repos(State(s): S, peer: Option<axum::Extension<super::tunnel:
         let st = forge_status(&s.repos, &h).await;
         forges.push(forge_dto(&h, Some(&st)));
     }
-    Ok(Json(json!({ "local": local, "github": github, "workspaceDefault": ws_default, "jobs": jobs, "forges": forges })))
+    Ok(Json(json!({ "local": local, "github": github, "workspaceDefault": ws_default, "jobs": jobs, "forges": forges, "scratch": scratch_settings })))
 }
 
 // ── Clone / fetch jobs ─────────────────────────────────────────────────────
@@ -1266,7 +1310,9 @@ pub async fn clone_job(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Va
 pub async fn get_chat_repo(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let chat = load_chat(&s, &id)?;
     let dir = s.cfg.data_dir.clone();
-    Ok(Json(blocking(move || chat_binding(&dir, chat.id).1).await?))
+    let mut v = blocking(move || chat_binding(&dir, chat.id).1).await?;
+    tag_scratch(&s, chat.id, &mut v);
+    Ok(Json(v))
 }
 
 #[derive(Deserialize, Default)]
@@ -1300,10 +1346,23 @@ pub async fn put_chat_repo(State(s): S, peer: Option<axum::Extension<super::tunn
                 return Err(ApiError::bad_request("repo must be the name of a checkout on this host"));
             }
             let d = repos_dir.join(&name);
-            if !blocking(move || ligus_runtime::git_worktree::is_git_repo(&d)).await? {
-                return Err(ApiError::not_found(&format!("checkout '{name}' (clone it first)")));
+            // One of this box's live scratch repositories, by folder name
+            // (the phone's listing names them so): bound by its own path.
+            let scratch = if d.exists() {
+                None
+            } else {
+                let svc = s.lock();
+                ligus_runtime::repos::scratch::live(svc.store(), s.ws).into_iter().find(|e| e.dir_name == name)
+            };
+            match scratch {
+                Some(e) => Some(e.path.to_string_lossy().into_owned()),
+                None => {
+                    if !blocking(move || ligus_runtime::git_worktree::is_git_repo(&d)).await? {
+                        return Err(ApiError::not_found(&format!("checkout '{name}' (clone it first)")));
+                    }
+                    Some(name)
+                }
             }
-            Some(name)
         }
     };
     let changed = {
@@ -1323,8 +1382,16 @@ pub async fn put_chat_repo(State(s): S, peer: Option<axum::Extension<super::tunn
     };
     let dir = s.cfg.data_dir.clone();
     let cid = chat.id;
-    let v = blocking(move || chat_binding(&dir, cid).1).await?;
+    let mut v = blocking(move || chat_binding(&dir, cid).1).await?;
+    tag_scratch(&s, chat.id, &mut v);
     if changed {
+        // Which scratch repository (if any) lists this chat follows the binding.
+        let svc = s.lock();
+        let _ = ligus_runtime::repos::scratch::forget_chat(svc.store(), chat.id);
+        if let Some(e) = target.as_deref().and_then(|t| ligus_runtime::repos::scratch::by_path(svc.store(), std::path::Path::new(t))) {
+            let _ = ligus_runtime::repos::scratch::set_chat(svc.store(), e.id, chat.id, true, ligus_runtime::repos::scratch::now());
+        }
+        drop(svc);
         let what = v["repo"]["displayName"].as_str().map(str::to_string);
         let note = match (&target, what) {
             (_, Some(name)) => format!(

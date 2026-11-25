@@ -70,6 +70,9 @@ impl RepoBindings {
     /// (`true`) or the workspace default (`false`).
     pub fn raw_for(&self, chat: Uuid) -> Option<(&str, bool)> {
         match self.chats.get(&chat.to_string()) {
+            // "" = this chat has no repository here, explicitly (its scratch
+            // repository was removed): never the workspace default.
+            Some(r) if r.trim().is_empty() => None,
             Some(r) => Some((r.as_str(), true)),
             None => self.workspace.as_deref().map(|w| (w, false)),
         }
@@ -78,7 +81,7 @@ impl RepoBindings {
     /// The checkout a turn in `chat` uses: the chat's binding, else the
     /// workspace's. Relative names resolve under `repos_dir`.
     pub fn resolve(&self, repos_dir: &Path, chat: Uuid) -> Option<PathBuf> {
-        let raw = self.chats.get(&chat.to_string()).or(self.workspace.as_ref())?;
+        let (raw, _) = self.raw_for(chat)?;
         Some(resolve_path(repos_dir, raw))
     }
 }

@@ -278,6 +278,26 @@ pub fn bind_folder(svc: &ChatService, ws: Uuid, host_label: &str, repo_id: &str,
     crate::repos::bind(svc.store(), svc.device_id(), host_label, ws, &repo, Path::new(path.trim()), CheckoutSource::Bound).map(|_| ()).map_err(failed)
 }
 
+/// "Start with a scratch repo" for a person's own device: see
+/// [`crate::repos::scratch_host::create`]. `default_root` is the host's
+/// `<data dir>/scratch`; `forbidden` the folders a scratch root may never be in.
+pub fn create_scratch(
+    svc: &mut ChatService,
+    ws: Uuid,
+    host_label: &str,
+    default_root: &Path,
+    forbidden: &[std::path::PathBuf],
+    name: &str,
+) -> OpsResult<(String, String)> {
+    let settings = crate::repos::scratch::settings(svc.store(), default_root);
+    crate::repos::scratch_host::create(svc, ws, None, &settings, forbidden, name, host_label)
+        .map(|(e, r)| (r.id.to_string(), e.path.display().to_string()))
+        .map_err(|e| match e {
+            crate::repos::scratch_host::HostError::Refused(m) => OpsError::Refused(m),
+            e => failed(e),
+        })
+}
+
 // ── box, phone, invite ──────────────────────────────────────────────────────
 
 pub fn hosts(svc: &ChatService, ws: Uuid) -> Vec<HostFact> {

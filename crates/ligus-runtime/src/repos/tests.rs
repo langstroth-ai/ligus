@@ -10,7 +10,7 @@ use proptest::prelude::*;
 const WEFIT: &str = "github.com/zazulam/wefit";
 
 fn wefit() -> WorkspaceRepo {
-    WorkspaceRepo { id: repo_id(WEFIT), canonical: WEFIT.into(), display_name: "WeFit".into(), forge_kind: "github".into(), default_branch: "main".into(), root_commit: None }
+    WorkspaceRepo { id: repo_id(WEFIT), canonical: WEFIT.into(), display_name: "WeFit".into(), forge_kind: "github".into(), default_branch: "main".into(), root_commit: None, scratch: false }
 }
 
 fn roster(repos: &[WorkspaceRepo]) -> RosterState {
@@ -570,6 +570,7 @@ fn changed_alias_target_needs_new_acceptance_and_clone_url_never_from_alias() {
         forge_kind: String::new(),
         default_branch: "main".into(),
         root_commit: None,
+        scratch: false,
     };
     sh(&e.checkout, &["remote", "set-url", "origin", "git@ssh.git.example.com:ops/infra.git"]);
     let mut r = roster(std::slice::from_ref(&infra));

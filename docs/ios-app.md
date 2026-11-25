@@ -347,6 +347,46 @@ The rows above are unchanged for the shipped app; 0.1 adds:
   tunnel (or on a loopback bind) and need presence; on a direct LAN bind
   they answer 403, and `GET /v1/forges` says `tokenEntry: false`.
 
+#### Scratch repositories (0.4, additive)
+
+A scratch repository is a throwaway one the box creates empty for a chat:
+`git init` on `main` with one empty commit, under the box's scratch root
+(`LIGUS_SCRATCH_DIR`, default `<data dir>/scratch`, never inside another
+repository or the desktop app's data dir). The chat is bound to it on the
+box like any checkout, so turns run on the chat's own branch and worktree
+with proposals, approvals and the sandbox unchanged. Every route is the box
+owner's (`owner_required`, like a clone). A host before 0.4 has no `scratch`
+key in `GET /v1/repos`: the phone hides "New scratch repo" there.
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/v1/repos/scratch` | `{scratch: [Scratch], settings: ScratchSettings}`, newest first (live, kept and removed) |
+| POST | `/v1/repos/scratch` `{chatId?, name?}` | `{scratch: Scratch, binding?: Binding}`. With `chatId` the chat is bound to it here and a system note says so. 429 past the limits (per host, default 16; per member by account id, default 8); 400 for a name over 80 characters |
+| POST | `/v1/repos/scratch/{id}/keep` `{name?}` | `{scratch}` with `state: "kept"` and `checkout` its new folder name: moved into `LIGUS_REPOS_DIR` (an ordinary checkout of the box from then on; its chats' bindings follow). 404 when it isn't live |
+| POST | `/v1/repos/scratch/{id}/publish` `{owner, name, confirm, forge?}` | `{url, private: true}`. A **kept** one only (409 otherwise). Creates a private repository `owner/name` with the box's code-host connection (default github.com) and pushes its branches; `confirm` must repeat `owner/name` exactly as the confirmation showed it (409 otherwise; nothing is created). Never public, never forced, never automatic. 409 when it already has an `origin` |
+| DELETE | `/v1/repos/scratch/{id}` | `{ok, id}`. Removes a live one now; its chats get "No repository" and a note. 409 when a path check refuses |
+| PUT | `/v1/repos/scratch/settings` `{cleanupDays}` | the `GET` shape. `cleanupDays` 1 to 365, `0` turns the cleanup off, `null` is the default (14) |
+
+- `Scratch = {id, name, checkout, state: "live"|"kept"|"removed", createdAt, lastActivity, removeAt?, noticeFrom?, notice, chats, registered, published?}`.
+  `checkout` is the folder name (what `PUT /v1/chats/{id}/repo {repo}`
+  takes to bind another chat to it). `removeAt`/`noticeFrom` are absent when
+  the cleanup is off; `notice` is true from two days before `removeAt`: the
+  chat header shows "This scratch repo will be removed on <date> · Keep it".
+- `ScratchSettings = {cleanupDays|null, noticeDays: 2, maxPerHost, maxPerMember, live, customRoot}`.
+- `GET /v1/repos` returns `scratch: ScratchSettings`, and lists live scratch
+  repositories first in `local`, each a `Checkout` plus `scratch: Scratch`.
+- A `Binding`'s `repo` carries `scratch: Scratch` when the chat works in one
+  (also in `GET /v1/chats/{id}/details`).
+- `GET /v1/workspace-repos` rows and a chat's `workspaceRepo` carry
+  `scratch: bool` for a workspace repository another device created as
+  scratch (that device's; the box has no checkout of it).
+- Cleanup: after `cleanupDays` without activity (a turn, a commit, a bind),
+  the box posts the notice in each of its chats two days ahead, then removes
+  the folder and leaves those chats with no repository (not the workspace
+  default), with a note. Proposals and diffs stay in the chats. The box
+  only ever deletes a folder it created and recorded itself, directly under
+  its scratch root, not a symlink, carrying its own marker.
+
 #### Identity: safety codes, invites, contacts and DMs (0.1, additive)
 
 The phone is a remote control of the box, and the box is one Ligus device:

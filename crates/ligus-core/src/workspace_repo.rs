@@ -66,6 +66,14 @@ pub struct WorkspaceRepo {
     /// check on a checkout. Unverified until a device checks it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_commit: Option<String>,
+    /// A scratch repository: a throwaway one a host created empty for a
+    /// chat (`ligus_runtime::repos::scratch`). A display hint only (the
+    /// "scratch" tag): it never authorizes anything, and no device removes a
+    /// checkout because of it (each host deletes only scratch folders it
+    /// created itself and recorded locally). Cleared by
+    /// `WorkspaceRepoUpdated { scratch: Some(false) }` when someone keeps it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scratch: bool,
 }
 
 /// The repo id for a canonical.
@@ -737,6 +745,7 @@ mod tests {
             forge_kind: "github".into(),
             default_branch: "main".into(),
             root_commit: None,
+            scratch: false,
         };
         assert!(repo_well_formed(&r).is_ok());
         assert!(repo_well_formed(&WorkspaceRepo { id: Uuid::nil(), ..r.clone() }).is_err());
@@ -794,6 +803,7 @@ mod tests {
             forge_kind: String::new(),
             default_branch: String::new(),
             root_commit: None,
+            scratch: false,
         };
         let a = mk("github.com/zazulam/wefit");
         for evil in ["github.com/zazu1am/wefit", "github.com/zazuiam/wefit", "github.com/zazularn/wefit", "github.com/zazulam/wef1t", "githu8.com/zazulam/wefit", "github.com/zazulam/we-fit"] {
@@ -814,6 +824,7 @@ mod tests {
             forge_kind: String::new(),
             default_branch: String::new(),
             root_commit: root.map(str::to_owned),
+            scratch: false,
         };
         let root = "0123456789abcdef0123456789abcdef01234567";
         let a = mk("github.com/zazulam/wefit", Some(root));

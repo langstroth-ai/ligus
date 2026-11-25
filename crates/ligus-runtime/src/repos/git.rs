@@ -246,7 +246,7 @@ mod tests {
 
     fn wefit() -> WorkspaceRepo {
         let c = "github.com/zazulam/wefit";
-        WorkspaceRepo { id: repo_id(c), canonical: c.into(), display_name: "WeFit".into(), forge_kind: "github".into(), default_branch: "main".into(), root_commit: None }
+        WorkspaceRepo { id: repo_id(c), canonical: c.into(), display_name: "WeFit".into(), forge_kind: "github".into(), default_branch: "main".into(), root_commit: None, scratch: false }
     }
 
     #[test]

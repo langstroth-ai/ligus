@@ -182,7 +182,7 @@ mod tests {
     use ligus_core::workspace_repo::repo_id;
 
     fn r(c: &str) -> WorkspaceRepo {
-        WorkspaceRepo { id: repo_id(c), canonical: c.into(), display_name: "R".into(), forge_kind: String::new(), default_branch: String::new(), root_commit: None }
+        WorkspaceRepo { id: repo_id(c), canonical: c.into(), display_name: "R".into(), forge_kind: String::new(), default_branch: String::new(), root_commit: None, scratch: false }
     }
 
     #[test]

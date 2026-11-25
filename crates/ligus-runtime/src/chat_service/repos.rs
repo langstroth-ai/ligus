@@ -46,6 +46,28 @@ impl ChatService {
         default_branch: &str,
         root_commit: Option<String>,
     ) -> Result<WorkspaceRepo> {
+        self.add_workspace_repo_as(workspace_id, input, display_name, forge_kind, default_branch, root_commit, false)
+    }
+
+    /// [`Self::add_workspace_repo`] for a scratch repository this host just
+    /// created (`repos::scratch`): the same rules (Admin, presence), with
+    /// the `scratch` display hint set.
+    pub fn add_scratch_workspace_repo(&mut self, workspace_id: Uuid, root_commit: &str, display_name: &str) -> Result<WorkspaceRepo> {
+        let canonical = format!("local:{root_commit}");
+        self.add_workspace_repo_as(workspace_id, &canonical, display_name, "", "main", Some(root_commit.to_string()), true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_workspace_repo_as(
+        &mut self,
+        workspace_id: Uuid,
+        input: &str,
+        display_name: &str,
+        forge_kind: &str,
+        default_branch: &str,
+        root_commit: Option<String>,
+        scratch: bool,
+    ) -> Result<WorkspaceRepo> {
         let aliases = self.store.ssh_host_aliases()?;
         let canonical = canonical_from_input(input, forge_kind, &aliases).map_err(ChatError::Unauthorized)?;
         let name = display_name.trim();
@@ -60,6 +82,7 @@ impl ChatService {
             forge_kind: forge_kind.trim().to_ascii_lowercase(),
             default_branch: default_branch.trim().to_string(),
             root_commit: root_commit.filter(|r| ligus_core::workspace_repo::is_commit_id(r)),
+            scratch,
         };
         ligus_core::workspace_repo::repo_well_formed(&repo).map_err(|e| ChatError::Unauthorized(e.into()))?;
         let config = self.ensure_workspace_config(workspace_id)?;
@@ -74,7 +97,26 @@ impl ChatService {
         self.append_signed(
             config,
             workspace_id,
-            SessionEvent::WorkspaceRepoUpdated { repo_id: repo, display_name: display_name.trim().into(), default_branch: default_branch.trim().into() },
+            SessionEvent::WorkspaceRepoUpdated { repo_id: repo, display_name: display_name.trim().into(), default_branch: default_branch.trim().into(), scratch: None },
+        )?;
+        Ok(())
+    }
+
+    /// Keep a scratch repo (Admin; cosmetic like a rename, no presence):
+    /// sign `WorkspaceRepoUpdated` with its name and branch as they are and
+    /// `scratch: Some(false)`, so every device drops the "scratch" tag.
+    pub fn keep_workspace_repo(&mut self, workspace_id: Uuid, repo: Uuid, display_name: Option<&str>) -> Result<()> {
+        let roster = self.workspace_roster(workspace_id)?;
+        let entry = roster.repos.get(&repo).filter(|e| !e.removed).ok_or_else(|| ChatError::Unauthorized("no such repository".into()))?;
+        let name = display_name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&entry.repo.display_name).to_string();
+        if !display_name_ok(&name) {
+            return Err(ChatError::Unauthorized("bad repository name".into()));
+        }
+        let config = self.ensure_workspace_config(workspace_id)?;
+        self.append_signed(
+            config,
+            workspace_id,
+            SessionEvent::WorkspaceRepoUpdated { repo_id: repo, display_name: name, default_branch: entry.repo.default_branch.clone(), scratch: Some(false) },
         )?;
         Ok(())
     }

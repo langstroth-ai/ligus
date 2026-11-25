@@ -60,6 +60,8 @@ pub async fn repo_for_turn(data_dir: &Path, svc: &Mutex<ChatService>, s: &ChatSe
                         return Err(format!("{} on {host_label} is managed by {label}; give this chat a workspace repository and clone it separately here", r.display()));
                     }
                     crate::repos::ensure_chat_base(r);
+                    // A turn in a scratch repository is activity.
+                    ligus_runtime::repos::scratch::touch(lock(svc).store(), r, ligus_runtime::repos::scratch::now());
                 }
                 return Ok(RepoTurn { repo_root, context: crate::repos::turn_context(data_dir, s.id), base: None });
             }
@@ -77,6 +79,7 @@ pub async fn repo_for_turn(data_dir: &Path, svc: &Mutex<ChatService>, s: &ChatSe
                     let label = host_label.to_string();
                     tokio::task::spawn_blocking(move || rr::prepare_chat(&ready, &s, &label)).await.map_err(|e| e.to_string())??
                 };
+                ligus_runtime::repos::scratch::touch(lock(svc).store(), &ready.path, ligus_runtime::repos::scratch::now());
                 if let Some(pin) = &prepared.pin {
                     if let Err(e) = lock(svc).pin_chat_base(s.id, s.workspace_id, ready.repo.id, pin) {
                         eprintln!("repos: couldn't pin the chat's base: {e}");
@@ -123,6 +126,9 @@ pub fn migrate_bindings(data_dir: &Path, svc: &ChatService, workspace_id: Uuid, 
     }
     for (chat, raw) in &b.chats {
         let Ok(chat) = Uuid::parse_str(chat) else { continue };
+        if raw.trim().is_empty() {
+            continue;
+        }
         if let Some((repo, path)) = map(raw) {
             svc.store().set_chat_checkout(chat, repo, Some(&path))?;
         }
@@ -181,6 +187,8 @@ pub(crate) fn abs(p: &str) -> Result<PathBuf> {
 pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, pos: &[&str], flag: &dyn Fn(&str) -> Option<String>) -> Result<()> {
     let entries = || -> Result<Vec<RepoEntry>> { svc_entries(svc, ws) };
     match pos.first().copied() {
+        Some("scratch") => crate::scratch_cmd::cmd_scratch(data_dir, svc, ws, host_label, flag),
+        Some("keep") => crate::scratch_cmd::cmd_keep(data_dir, svc, ws, host_label, pos.get(1).copied(), flag),
         None | Some("list") => {
             let es = entries()?;
             let maps = svc.store().repo_mappings(ws)?;
@@ -423,7 +431,7 @@ mod tests {
 
     fn e(c: &str, name: &str, removed: bool) -> RepoEntry {
         RepoEntry {
-            repo: WorkspaceRepo { id: ligus_core::workspace_repo::repo_id(c), canonical: c.into(), display_name: name.into(), forge_kind: String::new(), default_branch: String::new(), root_commit: None },
+            repo: WorkspaceRepo { id: ligus_core::workspace_repo::repo_id(c), canonical: c.into(), display_name: name.into(), forge_kind: String::new(), default_branch: String::new(), root_commit: None, scratch: false },
             removed,
         }
     }

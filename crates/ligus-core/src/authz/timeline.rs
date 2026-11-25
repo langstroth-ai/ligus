@@ -491,10 +491,14 @@ impl RosterTracker {
             SessionEvent::WorkspaceRepoAdded { repo } if allowed => {
                 self.state.repos.insert(repo.id, crate::workspace_repo::RepoEntry { repo: repo.clone(), removed: false });
             }
-            SessionEvent::WorkspaceRepoUpdated { repo_id, display_name, default_branch } if allowed => {
+            SessionEvent::WorkspaceRepoUpdated { repo_id, display_name, default_branch, scratch } if allowed => {
                 if let Some(r) = self.state.repos.get_mut(repo_id) {
                     r.repo.display_name = display_name.clone();
                     r.repo.default_branch = default_branch.clone();
+                    // Kept: no longer scratch. Never the other way round.
+                    if *scratch == Some(false) {
+                        r.repo.scratch = false;
+                    }
                 }
             }
             SessionEvent::WorkspaceRepoRemoved { repo_id } if allowed => {

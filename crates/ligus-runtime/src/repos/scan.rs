@@ -131,7 +131,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("WeFit"), root.join("alias")).unwrap();
         let c = "github.com/zazulam/wefit";
-        let repo = WorkspaceRepo { id: repo_id(c), canonical: c.into(), display_name: "WeFit".into(), forge_kind: String::new(), default_branch: String::new(), root_commit: None };
+        let repo = WorkspaceRepo { id: repo_id(c), canonical: c.into(), display_name: "WeFit".into(), forge_kind: String::new(), default_branch: String::new(), root_commit: None, scratch: false };
         let found = scan(std::slice::from_ref(&root), &[repo], &Default::default());
         assert_eq!(found.iter().map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>(), vec!["WeFit"]);
     }

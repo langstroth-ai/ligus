@@ -84,6 +84,9 @@ pub fn listing(s: &Shared) -> ApiResult<Value> {
                 "forgeKind": r.forge_kind,
                 "defaultBranch": r.default_branch,
                 "removed": e.removed,
+                // A scratch repository someone's device created (a display
+                // hint: the "scratch" tag).
+                "scratch": r.scratch,
                 "here": {
                     "state": here.map(|c| c.state.as_str()).unwrap_or(if e.removed { "removed" } else { "missing" }),
                     "code": here.map(|c| c.code.as_str()).unwrap_or(""),
@@ -234,6 +237,7 @@ pub fn chat_repo(s: &Shared, chat: Uuid) -> ApiResult<Value> {
         "name": entry.map(|e| shown(&e.repo.display_name)),
         "canonical": entry.map(|e| e.repo.canonical.clone()),
         "removed": entry.is_some_and(|e| e.removed),
+        "scratch": entry.is_some_and(|e| e.repo.scratch),
         "baseBranch": cr.base_branch,
         "basePinned": cr.base_commit.is_some(),
         "here": { "state": state, "reason": reason },

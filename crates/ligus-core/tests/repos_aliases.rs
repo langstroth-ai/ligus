@@ -21,6 +21,7 @@ fn repo(canonical: &str, kind: &str) -> WorkspaceRepo {
         forge_kind: kind.into(),
         default_branch: String::new(),
         root_commit: None,
+        scratch: false,
     }
 }
 

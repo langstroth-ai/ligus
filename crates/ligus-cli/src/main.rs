@@ -58,6 +58,7 @@ mod selftest;
 mod reply;
 mod repos;
 mod repos_cmd;
+mod scratch_cmd;
 mod secret_arg;
 mod serve;
 mod setup_cmd;
@@ -2734,7 +2735,7 @@ fn run() -> Result<()> {
             flag_val("--chat").as_deref(),
             has("--clear"),
         ),
-        "repos" => {
+        "repos" | "repo" => {
             let mut svc = open_service(&cfg)?;
             let ws = uuid_of_room(&cfg.room);
             let label = flag_val("--label").or_else(|| env_opt("LIGUS_HOST_LABEL")).or_else(|| env_opt("HOSTNAME")).unwrap_or_else(|| "this host".into());
@@ -2776,6 +2777,10 @@ fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: &mut dyn FnMut(
 /// flag read with `flag_val` must be listed here, or its value is taken as a
 /// positional argument (a test checks this against the source).
 const VALUE_FLAGS: &[&str] = &[
+    "--set-root",
+    "--cleanup-days",
+    "--remove",
+    "--to",
     "--approver-fingerprint",
     "--timeout",
     "--gateway",
