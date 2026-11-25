@@ -35,7 +35,7 @@ export const COPY = {
   contested: "Opened by a device that can't approve this. It may be an attempt to intercept it.",
   waitingComputer: "Waiting for the computer to confirm…",
   aboutMismatch:
-    "Someone may have tried to intercept this request. Check the device you're adding, then start again from it. If it happens twice, tell an Admin.",
+    "The two screens showed different codes, so someone may have tried to intercept the request. Check the device you're adding and start again; tell an Admin if it happens twice.",
 };
 
 export function titleFor(kind: string, label: string): string {

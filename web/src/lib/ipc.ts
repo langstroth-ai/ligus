@@ -1712,11 +1712,15 @@ export interface ApprovalDto {
 
 /// A device-local Inbox fact kept for a day.
 export interface ApprovalFactDto {
+  /// The request's rid (what dismisses it).
   key: string;
   kind: "mismatch" | "didntFinish";
   workspaceId: string;
   label: string;
   at: number;
+  /// The Inbox line and its "?", worded by the runtime.
+  text?: string;
+  help?: string;
 }
 
 export interface ApprovalsDto {

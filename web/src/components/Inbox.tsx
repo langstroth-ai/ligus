@@ -187,7 +187,14 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
             title={item.title}
             when={item.at ? shortAgo(item.at) : undefined}
             whenInline
-            actions={item.fact?.kind === "mismatch" ? <InfoTip label="a request that didn't match" text={APPROVAL_COPY.aboutMismatch} /> : undefined}
+            actions={
+              item.fact?.help || item.fact?.kind === "mismatch" ? (
+                <InfoTip
+                  label={item.fact.kind === "mismatch" ? "a request that didn't match" : "a link that didn't finish"}
+                  text={item.fact.help ?? APPROVAL_COPY.aboutMismatch}
+                />
+              ) : undefined
+            }
             menu={[
               {
                 label: "Dismiss",

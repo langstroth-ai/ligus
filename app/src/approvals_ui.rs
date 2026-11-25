@@ -20,23 +20,24 @@
 //! * a phone: the existing phone certification of the request's phone
 //!   code, then the result.
 //!
-//! The passkey sheet's summary names the label and the code. Nothing about
-//! the code is logged or written to the workspace log (decision D4); the
-//! only things kept on disk are the seen-set (`approval-seen.json`) and the
-//! Inbox facts of the last day (`approval-facts.json`), both device-local.
+//! The passkey sheet's summary names the label and the code (the runtime's
+//! [`MatchContext`]). Nothing about the code is logged or written to the
+//! workspace log (decision D4); the only things kept on disk are the
+//! seen-set (`approval-seen.json`) and the Inbox notices of the last day
+//! (`approval-notices.json`), both device-local.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use ligus_core::match_code::MatchKind;
 use ligus_core::WorkspaceRole;
 use ligus_runtime::approval_mailbox::{
-    claim_view, end_request, list_live, AbortReason, ApprovalAddress, Approvability, ApproverClassifier, ApproverError, ApproverIdentity, ApproverPerson,
-    ApproverSession, ClaimView, EpochKey, LiveRequest, MailboxClient, MailboxError, RequestSubject, SeenSet, Signer, VerifiedRequest,
+    claim_view, current_address, end_request, list_live, AbortReason, ApprovalAddress, ApproverError, ApproverIdentity, ApproverPerson, ApproverSession,
+    ClaimView, EpochKey, LiveRequest, MailboxClient, MailboxError, Notice, NoticeKind, Notices, RequestSubject, SeenSet, Signer, VerifiedRequest,
 };
-use serde::{Deserialize, Serialize};
+use ligus_runtime::chat_service::{MatchContext, WorkspaceApprovers};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
@@ -46,9 +47,6 @@ use crate::AppState;
 pub(crate) const CHANGED_EVENT: &str = "approvals://changed";
 /// An open approval moved on. Payload: [`SessionDto`].
 pub(crate) const SESSION_EVENT: &str = "approvals://session";
-/// The Inbox facts of the last day (a mismatch, a link that didn't finish).
-const FACTS_FILE: &str = "approval-facts.json";
-const FACT_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 /// How often the mailboxes are listed while all is well.
 const POLL: Duration = Duration::from_secs(5);
 /// The longest backoff after errors.
@@ -62,49 +60,7 @@ fn now_ms() -> i64 {
     ligus_core::flow::now_ms()
 }
 
-// ── Who may approve what (pure, tested) ──────────────────────────────────
-
-/// One certified device, as the classifier needs it.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct DeviceFacts {
-    pub accounts: BTreeSet<Uuid>,
-    pub revoked: bool,
-    pub phone: bool,
-    pub public_key: Vec<u8>,
-    pub delegated_for: BTreeSet<Uuid>,
-}
-
-/// The folded workspace, reduced to what decides a claim (design 6.4): an
-/// Admin's device for a box, the person's own device for a computer or a
-/// phone; revoked, re-keyed or unknown devices can't approve.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Roster {
-    /// This device's person.
-    pub me: Option<Uuid>,
-    /// Accounts of human members who are Admins (or the Owner).
-    pub admins: HashSet<Uuid>,
-    pub devices: HashMap<Uuid, DeviceFacts>,
-}
-
-impl ApproverClassifier for Roster {
-    fn classify(&self, kind: MatchKind, device_id: Uuid, key: &[u8]) -> Approvability {
-        let Some(d) = self.devices.get(&device_id) else { return Approvability::Unknown };
-        if d.revoked || d.public_key != key || d.accounts.is_empty() {
-            return Approvability::Cannot;
-        }
-        let ok = match kind {
-            MatchKind::Box => d.accounts.iter().any(|a| self.admins.contains(a)),
-            // A computer or a phone is certified by a non-delegated,
-            // non-phone device of the person (link-a-computer 3).
-            MatchKind::Computer | MatchKind::Phone => self.me.is_some_and(|me| d.accounts.contains(&me) && !d.phone && !d.delegated_for.contains(&me)),
-        };
-        if ok {
-            Approvability::CanApprove
-        } else {
-            Approvability::Cannot
-        }
-    }
-}
+// ── Pure helpers (tested) ────────────────────────────────────────────────
 
 /// The live request whose code the pasted `text` is, byte for byte after
 /// trimming (wire note 7). Only join and link requests: a phone's code has
@@ -131,59 +87,52 @@ fn same_group(a: MatchKind, b: MatchKind) -> bool {
     (a == MatchKind::Box) == (b == MatchKind::Box)
 }
 
-/// The passkey sheet's summary for an approval (design 6.2, test M12).
-pub(crate) fn presence_summary(kind: MatchKind, label: &str, code: &str) -> String {
-    let l = if label.trim().is_empty() { "unnamed".to_string() } else { label.to_string() };
-    match kind {
-        MatchKind::Box => format!("Admit box \u{201C}{l}\u{201D}, code {code}"),
-        MatchKind::Computer => format!("Add computer \u{201C}{l}\u{201D} to your devices, code {code}"),
-        MatchKind::Phone => format!("Add phone \u{201C}{l}\u{201D} to your devices, code {code}"),
-    }
-}
+// ── Inbox notices (device-local, a day: the runtime's `Notices`) ──────────
 
-/// The event kind each approval drafts (the presence request's `kind`).
-fn drafted_kind(kind: MatchKind) -> &'static str {
-    match kind {
-        MatchKind::Box => "joinApproved",
-        MatchKind::Computer | MatchKind::Phone => "deviceCertificateAdded",
-    }
-}
-
-// ── Facts (device-local, a day) ──────────────────────────────────────────
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FactDto {
+    /// The request's rid (what dismisses it).
     pub key: String,
     /// `mismatch` or `didntFinish`.
     pub kind: String,
     pub workspace_id: String,
     pub label: String,
     pub at: i64,
+    /// The Inbox line and its "?" ([`Notice::text`], [`Notice::help`]).
+    pub text: String,
+    pub help: String,
 }
 
-fn load_facts(dir: &Path, now: i64) -> Vec<FactDto> {
-    let mut v: Vec<FactDto> = std::fs::read(dir.join(FACTS_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    v.retain(|f| now.saturating_sub(f.at) <= FACT_TTL_MS);
-    v
-}
-
-fn save_facts(dir: &Path, facts: &[FactDto]) {
-    if let Ok(b) = serde_json::to_vec(facts) {
-        if let Err(e) = ligus_runtime::private_file::write_private_atomic(&dir.join(FACTS_FILE), &b) {
-            tracing::warn!(error = %e, "couldn't keep the approval facts");
+fn fact_dto(n: &Notice) -> FactDto {
+    FactDto {
+        key: n.rid.clone(),
+        kind: match n.kind {
+            NoticeKind::Mismatch => "mismatch",
+            NoticeKind::DidntFinish => "didntFinish",
         }
+        .into(),
+        workspace_id: n.workspace_id.to_string(),
+        label: n.label.clone(),
+        at: n.at,
+        text: n.text(),
+        help: n.help().into(),
     }
 }
 
-fn add_fact(app: &AppHandle, kind: &str, ws: Uuid, label: &str, rid: &str) {
+fn add_fact(app: &AppHandle, kind: NoticeKind, slot: &Slot) {
     let dir = app.state::<AppState>().data_dir.clone();
-    let now = now_ms();
-    let mut facts = load_facts(&dir, now);
-    let key = format!("{kind}:{rid}");
-    if !facts.iter().any(|f| f.key == key) {
-        facts.push(FactDto { key, kind: kind.into(), workspace_id: ws.to_string(), label: label.into(), at: now });
-        save_facts(&dir, &facts);
+    let n = Notice {
+        kind,
+        workspace_id: slot.ws,
+        rid: slot.request.rid_hex(),
+        request_kind: slot.kind,
+        label: slot.label.clone(),
+        at: now_ms(),
+        by: None,
+    };
+    if let Err(e) = Notices::new(&dir).record(n) {
+        tracing::warn!(error = %e, "couldn't keep the approval notice");
     }
     let _ = app.emit(CHANGED_EVENT, ());
 }
@@ -199,7 +148,7 @@ struct Target {
     token: Option<String>,
     founder_pin: String,
     epochs: Vec<EpochKey>,
-    roster: Roster,
+    approvers: WorkspaceApprovers,
     can_box: bool,
     can_devices: bool,
     is_admin: bool,
@@ -361,27 +310,6 @@ fn ended_by(e: &ApproverError) -> (&'static str, String) {
 
 // ── The loop ─────────────────────────────────────────────────────────────
 
-fn roster_of(svc: &ligus_runtime::ChatService, ws: Uuid, founder: &str, local: Uuid) -> Roster {
-    let mut r = Roster { me: svc.author().account_id, ..Roster::default() };
-    let Ok((config, timeline)) = svc.store().load_config(ws, Some(founder), Some(local)) else { return r };
-    if let Some(config) = config {
-        for m in &config.members {
-            if m.actor.kind == ligus_core::ActorKind::Human && config.role_of(&m.actor.id).rank() >= WorkspaceRole::Admin.rank() {
-                if let Some(a) = m.actor.account_id {
-                    r.admins.insert(a);
-                }
-            }
-        }
-    }
-    for (id, d) in &timeline.current().devices {
-        r.devices.insert(
-            *id,
-            DeviceFacts { accounts: d.accounts.clone(), revoked: d.revoked, phone: d.phone, public_key: d.public_key.clone(), delegated_for: d.delegated_for.clone() },
-        );
-    }
-    r
-}
-
 /// Every team workspace this device can approve in, with its epoch keys.
 fn targets(state: &AppState) -> Vec<Target> {
     let (conns, static_token) = {
@@ -396,28 +324,23 @@ fn targets(state: &AppState) -> Vec<Target> {
         }
         let src = crate::key_source_for(state, Some(&conn));
         let svc = state.service.lock().unwrap();
-        let epochs: Vec<EpochKey> = svc
-            .delivered_epoch_keys(ws, &src)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|d| d.key().map(|key| EpochKey { epoch: d.v, key }))
-            .collect();
-        let Some(pin) = svc.store().workspace_pin(ws).ok().flatten() else { continue };
+        let epochs = svc.approval_epoch_keys(ws, &src).unwrap_or_default();
+        let Some(founder_pin) = svc.founder_pin_hex(ws).ok().flatten() else { continue };
         if epochs.is_empty() {
             continue;
         }
         let role = svc.my_workspace_role(ws);
         let is_admin = role.is_some_and(|r| r.rank() >= WorkspaceRole::Admin.rank());
         let human = svc.author().kind == ligus_core::ActorKind::Human && svc.author().account_id.is_some();
-        let roster = roster_of(&svc, ws, &pin.founder_account.to_string(), state.local_workspace_id);
+        let approvers = svc.approval_classifier(ws).unwrap_or_default();
         out.push(Target {
             id: ws,
             name: crate::shown(&conn.display_name()),
             relay: conn.relay_url.trim().trim_end_matches('/').to_string(),
             token: crate::ligus_auth_ui::effective(Some(&conn.relay_url), static_token.clone()),
-            founder_pin: ligus_core::keys::hex(&pin.fk),
+            founder_pin,
             epochs,
-            roster,
+            approvers,
             can_box: is_admin,
             can_devices: human && !svc.is_delegated(),
             is_admin,
@@ -522,7 +445,7 @@ pub(crate) fn list_approvals(state: tauri::State<AppState>) -> ApprovalsDto {
             if !allowed {
                 continue;
             }
-            let claim: ClaimDto = claim_view(l, me, &t.roster).into();
+            let claim: ClaimDto = claim_view(l, me, &t.approvers).into();
             // Ended, or opened here before a restart (it can't be answered
             // twice): only a session still on screen shows it.
             if session.is_none() && (l.ended.is_some() || claim == ClaimDto::Mine) {
@@ -545,15 +468,16 @@ pub(crate) fn list_approvals(state: tauri::State<AppState>) -> ApprovalsDto {
         }
     }
     requests.sort_by_key(|r| r.created_at);
-    ApprovalsDto { requests, facts: load_facts(&state.data_dir, now_ms()) }
+    let facts = Notices::new(&state.data_dir).live(now_ms()).unwrap_or_default().iter().map(fact_dto).collect();
+    ApprovalsDto { requests, facts }
 }
 
-/// Forget an Inbox fact (its row's Dismiss).
+/// Forget an Inbox notice (its row's Dismiss; `key` is its rid).
 #[tauri::command]
 pub(crate) fn approval_dismiss_fact(state: tauri::State<AppState>, key: String) {
-    let mut facts = load_facts(&state.data_dir, now_ms());
-    facts.retain(|f| f.key != key);
-    save_facts(&state.data_dir, &facts);
+    if let Err(e) = Notices::new(&state.data_dir).dismiss(&key) {
+        tracing::warn!(error = %e, "couldn't dismiss the approval notice");
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -587,9 +511,7 @@ fn mailbox_text(e: MailboxError) -> String {
 pub(crate) async fn get_approval_address(app: AppHandle, workspace_id: String) -> Result<AddressDto, String> {
     let ws = Uuid::parse_str(&workspace_id).map_err(|e| e.to_string())?;
     let t = crate::off_main(app.clone(), move |app| target_for(app, ws)).await?;
-    let cur = t.current().ok_or("No workspace key on this device yet.")?;
-    let counter = t.client().ensure_registered(&cur.key).await.map_err(mailbox_text)?;
-    let a = ApprovalAddress::derive(&t.relay, t.id, &t.founder_pin, cur.epoch, &cur.key, counter);
+    let a = current_address(&t.client(), t.id, &t.founder_pin, &t.epochs).await.map_err(mailbox_text)?;
     Ok(AddressDto { address: a.encode(), relay: a.relay, can_reset: t.is_admin })
 }
 
@@ -725,7 +647,7 @@ async fn await_code(app: AppHandle, slot: Arc<Slot>) {
             Err(e) => {
                 let (p, msg) = ended_by(&e);
                 if p == "mismatch" {
-                    add_fact(&app, "mismatch", slot.ws, &slot.label, &slot.request.rid_hex());
+                    add_fact(&app, NoticeKind::Mismatch, &slot);
                 }
                 set_view(&app, &slot, |v| {
                     v.phase = p.into();
@@ -739,8 +661,10 @@ async fn await_code(app: AppHandle, slot: Arc<Slot>) {
 
 fn fail(app: &AppHandle, slot: &Slot, e: &ApproverError) -> SessionDto {
     let (p, msg) = ended_by(e);
-    if p == "mismatch" || p == "didntFinish" {
-        add_fact(app, p, slot.ws, &slot.label, &slot.request.rid_hex());
+    match p {
+        "mismatch" => add_fact(app, NoticeKind::Mismatch, slot),
+        "didntFinish" => add_fact(app, NoticeKind::DidntFinish, slot),
+        _ => {}
     }
     set_view(app, slot, |v| {
         v.phase = p.into();
@@ -774,7 +698,7 @@ pub(crate) async fn approval_codes_match(app: AppHandle, rid: String) -> Result<
     if app.state::<AppState>().active_workspace_id() != slot.ws {
         return Err("Switch back to this request's workspace to approve it.".into());
     }
-    let summary = presence_summary(slot.kind, &slot.label, &code);
+    let ctx = MatchContext { label: slot.label.clone(), code };
     let ws = slot.ws;
     match slot.kind {
         MatchKind::Box => {
@@ -785,7 +709,11 @@ pub(crate) async fn approval_codes_match(app: AppHandle, rid: String) -> Result<
             let req_code = slot.request.code.clone();
             let issued = crate::off_main(app.clone(), move |app| {
                 let st = app.state::<AppState>();
-                crate::passkey_ui::with_approval_summary(drafted_kind(MatchKind::Box), summary, || crate::issue_box_admission_code(&st, ws, Some(req_code), None))
+                // The passkey sheet names the label and the code.
+                st.service.lock().unwrap().set_match_context(Some(ctx));
+                let r = crate::issue_box_admission_code(&st, ws, Some(req_code), None);
+                st.service.lock().unwrap().set_match_context(None);
+                r
             })
             .await;
             let (dto, _) = match issued {
@@ -807,9 +735,13 @@ pub(crate) async fn approval_codes_match(app: AppHandle, rid: String) -> Result<
             });
             let certified = crate::off_main(app.clone(), move |app| {
                 let st = app.state::<AppState>();
-                let r = crate::passkey_ui::with_approval_summary(drafted_kind(MatchKind::Phone), summary, || {
-                    st.service.lock().unwrap().certify_phone_code(ws, &pc).map_err(|e| e.to_string())
-                });
+                let r = {
+                    let mut svc = st.service.lock().unwrap();
+                    svc.set_match_context(Some(ctx));
+                    let r = svc.certify_phone_code(ws, &pc).map_err(|e| e.to_string());
+                    svc.set_match_context(None);
+                    r
+                };
                 if let Ok(id) = &r {
                     crate::remember_phone_label(&st, *id, &pc.label);
                 }
@@ -826,13 +758,13 @@ pub(crate) async fn approval_codes_match(app: AppHandle, rid: String) -> Result<
                 Err(e) => fail(&app, &slot, &e),
             })
         }
-        MatchKind::Computer => computer_match(app, slot, summary).await,
+        MatchKind::Computer => computer_match(app, slot, ctx).await,
     }
 }
 
 /// Identity model v2, 8.1: grant sealed now, offer, wait for the ack (2
 /// minutes), only then the passkey and the certificate, then the result.
-async fn computer_match(app: AppHandle, slot: Arc<Slot>, summary: String) -> Result<SessionDto, String> {
+async fn computer_match(app: AppHandle, slot: Arc<Slot>, ctx: MatchContext) -> Result<SessionDto, String> {
     let RequestSubject::Computer(req) = slot.request.subject.clone() else { return Err("Not a computer request.".into()) };
     let ws = slot.ws;
     let acked = slot.session.lock().await.acknowledged();
@@ -877,9 +809,11 @@ async fn computer_match(app: AppHandle, slot: Arc<Slot>, summary: String) -> Res
     let published = crate::off_main(app.clone(), move |app| {
         let st = app.state::<AppState>();
         let conn = crate::computer_link_conn(&st, ws)?;
-        crate::passkey_ui::with_approval_summary(drafted_kind(MatchKind::Computer), summary, || {
-            st.service.lock().unwrap().publish_computer_link(ws, &req, &conn, now_ms()).map_err(|e| e.to_string())
-        })
+        let mut svc = st.service.lock().unwrap();
+        svc.set_match_context(Some(ctx));
+        let r = svc.publish_computer_link(ws, &req, &conn, now_ms()).map_err(|e| e.to_string());
+        svc.set_match_context(None);
+        r
     })
     .await;
     if let Err(e) = published {
@@ -901,7 +835,7 @@ pub(crate) async fn approval_dont_match(app: AppHandle, rid: String) -> Result<S
     let slot = slot(&rid)?;
     set_view(&app, &slot, |v| v.phase = "mismatch".into());
     let r = slot.session.lock().await.mismatch().await;
-    add_fact(&app, "mismatch", slot.ws, &slot.label, &rid);
+    add_fact(&app, NoticeKind::Mismatch, &slot);
     if let Err(e) = r {
         tracing::debug!(target: "approvals", rid = %rid, error = %e, "couldn't post the mismatch");
     }
@@ -982,48 +916,6 @@ pub(crate) fn approval_forget(app: AppHandle, rid: String) {
 mod tests {
     use super::*;
 
-    fn dev(accounts: &[Uuid], key: &[u8]) -> DeviceFacts {
-        DeviceFacts { accounts: accounts.iter().copied().collect(), public_key: key.to_vec(), ..DeviceFacts::default() }
-    }
-
-    #[test]
-    fn a_box_is_approved_by_an_admins_device_only() {
-        let (admin, member) = (Uuid::new_v4(), Uuid::new_v4());
-        let (d1, d2, d3) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        let mut r = Roster { me: Some(member), admins: [admin].into(), ..Roster::default() };
-        r.devices.insert(d1, dev(&[admin], b"k1"));
-        r.devices.insert(d2, dev(&[member], b"k2"));
-        let mut revoked = dev(&[admin], b"k3");
-        revoked.revoked = true;
-        r.devices.insert(d3, revoked);
-        assert_eq!(r.classify(MatchKind::Box, d1, b"k1"), Approvability::CanApprove);
-        assert_eq!(r.classify(MatchKind::Box, d2, b"k2"), Approvability::Cannot, "a member's device");
-        assert_eq!(r.classify(MatchKind::Box, d3, b"k3"), Approvability::Cannot, "revoked");
-        assert_eq!(r.classify(MatchKind::Box, d1, b"other"), Approvability::Cannot, "another key under the id");
-        assert_eq!(r.classify(MatchKind::Box, Uuid::new_v4(), b"k"), Approvability::Unknown);
-    }
-
-    #[test]
-    fn a_device_of_mine_is_approved_by_my_own_full_device_only() {
-        let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
-        let (mine, phone, lt, theirs) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        let mut r = Roster { me: Some(me), admins: [other].into(), ..Roster::default() };
-        r.devices.insert(mine, dev(&[me], b"a"));
-        let mut p = dev(&[me], b"b");
-        p.phone = true;
-        r.devices.insert(phone, p);
-        let mut d = dev(&[me], b"c");
-        d.delegated_for = [me].into();
-        r.devices.insert(lt, d);
-        r.devices.insert(theirs, dev(&[other], b"d"));
-        for k in [MatchKind::Computer, MatchKind::Phone] {
-            assert_eq!(r.classify(k, mine, b"a"), Approvability::CanApprove);
-            assert_eq!(r.classify(k, phone, b"b"), Approvability::Cannot, "a phone can't certify devices");
-            assert_eq!(r.classify(k, lt, b"c"), Approvability::Cannot, "a delegated device can't either");
-            assert_eq!(r.classify(k, theirs, b"d"), Approvability::Cannot, "an Admin's device isn't mine");
-        }
-    }
-
     #[test]
     fn paste_runs_the_exchange_only_for_a_byte_equal_live_request() {
         let live = [("r1", "ligusjoin1:AAAA"), ("r2", "liguslink1:BBBB")];
@@ -1036,41 +928,23 @@ mod tests {
     }
 
     #[test]
-    fn the_passkey_summary_names_the_label_and_the_code() {
-        let s = presence_summary(MatchKind::Box, "\u{201C}build-1\u{201D}".trim_matches(['\u{201C}', '\u{201D}']), "K7Q4 M9X2");
-        assert_eq!(s, "Admit box \u{201C}build-1\u{201D}, code K7Q4 M9X2");
-        assert!(presence_summary(MatchKind::Computer, "lt on mbp", "K7Q4 M9X2").contains("lt on mbp"));
-        assert!(presence_summary(MatchKind::Phone, "Ana's iPhone", "K7Q4 M9X2").ends_with("code K7Q4 M9X2"));
-        assert_eq!(drafted_kind(MatchKind::Box), "joinApproved");
-        assert_eq!(drafted_kind(MatchKind::Computer), "deviceCertificateAdded");
-    }
-
-    #[test]
-    fn the_note_replaces_only_its_own_kind() {
-        let req = ligus_runtime::chat_service::PresenceRequest {
-            challenge: [0; 32],
-            kind: "joinApproved".into(),
-            account_id: Uuid::nil(),
-            credential_ids: vec![],
-            digest_short: String::new(),
-            summary: "Let someone join with a single-use invite".into(),
-            policy: Default::default(),
+    fn notices_reach_the_inbox_with_the_runtimes_copy() {
+        let n = Notice {
+            kind: NoticeKind::Mismatch,
+            workspace_id: Uuid::nil(),
+            rid: "ab".repeat(16),
+            request_kind: MatchKind::Box,
+            label: "build-1".into(),
+            at: 5,
+            by: None,
         };
-        let note = ("joinApproved".to_string(), "Admit box \u{201C}b\u{201D}, code K7Q4 M9X2".to_string());
-        assert_eq!(crate::passkey_ui::summary_with_note(&req, Some(&note)).as_deref(), Some(note.1.as_str()));
-        let other = ("deviceCertificateAdded".to_string(), "x".to_string());
-        assert_eq!(crate::passkey_ui::summary_with_note(&req, Some(&other)), None);
-        assert_eq!(crate::passkey_ui::summary_with_note(&req, None), None);
-    }
-
-    #[test]
-    fn facts_last_a_day() {
-        let dir = tempfile::tempdir().unwrap();
-        let now = 10 * FACT_TTL_MS;
-        let f = |key: &str, at| FactDto { key: key.into(), kind: "mismatch".into(), workspace_id: Uuid::nil().to_string(), label: "build-1".into(), at };
-        save_facts(dir.path(), &[f("old", now - FACT_TTL_MS - 1), f("new", now - 1000)]);
-        let got = load_facts(dir.path(), now);
-        assert_eq!(got.iter().map(|f| f.key.as_str()).collect::<Vec<_>>(), ["new"]);
+        let d = fact_dto(&n);
+        assert_eq!(d.kind, "mismatch");
+        assert_eq!(d.key, n.rid);
+        assert_eq!(d.text, "Request from build-1 didn't match. Nothing was granted.");
+        assert_eq!(d.help, n.help());
+        let d = fact_dto(&Notice { kind: NoticeKind::DidntFinish, ..n });
+        assert_eq!((d.kind.as_str(), d.text.as_str()), ("didntFinish", "Linking build-1 didn't finish. Nothing was added."));
     }
 
     #[test]

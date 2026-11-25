@@ -51,7 +51,7 @@ export interface NeedsYouItem {
   /// When it was asked or happened (ms), shown muted on the row.
   at?: number;
   /// An approval fact's kind and its key (to dismiss it).
-  fact?: { kind: "mismatch" | "didntFinish"; key: string };
+  fact?: { kind: "mismatch" | "didntFinish"; key: string; help?: string };
 }
 
 export interface ApprovalRef {
@@ -105,7 +105,7 @@ export interface NeedsYouSources {
   /// Code-match requests this device can approve.
   approvals?: readonly ApprovalRef[];
   /// Approval facts of the last day.
-  approvalFacts?: readonly { key: string; kind: "mismatch" | "didntFinish"; label: string; at: number }[];
+  approvalFacts?: readonly { key: string; kind: "mismatch" | "didntFinish"; label: string; at: number; text?: string; help?: string }[];
 }
 
 function plural(n: number, one: string, many: string) {
@@ -139,11 +139,12 @@ export function needsYouItems(s: NeedsYouSources): NeedsYouItem[] {
       key: `approvalFact:${f.key}`,
       kind: "approvalFact",
       title:
-        f.kind === "mismatch"
+        f.text ??
+        (f.kind === "mismatch"
           ? `Request from ${f.label || "a device"} didn't match. Nothing was granted.`
-          : `Linking ${f.label || "a computer"} didn't finish. Nothing was added.`,
+          : `Linking ${f.label || "a computer"} didn't finish. Nothing was added.`),
       at: f.at,
-      fact: { kind: f.kind, key: f.key },
+      fact: { kind: f.kind, key: f.key, help: f.help },
     });
   }
   for (const a of s.attention ?? []) {

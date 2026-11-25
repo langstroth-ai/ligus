@@ -45,7 +45,7 @@ function requests() {
 
 function facts() {
   if (scenario !== "mismatch") return [];
-  return [{ key: "mismatch:r-old", kind: "mismatch", workspaceId: WS, label: "build-1", at: t0 - 25 * 60_000 }];
+  return [{ key: "r-old", kind: "mismatch", workspaceId: WS, label: "build-1", at: t0 - 25 * 60_000, text: "Request from build-1 didn't match. Nothing was granted.", help: "The two screens showed different codes, so someone may have tried to intercept the request. Check the device you're adding and start again; tell an Admin if it happens twice." }];
 }
 
 const sessions = new Map<string, Record<string, unknown>>();
