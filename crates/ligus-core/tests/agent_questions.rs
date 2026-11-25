@@ -415,3 +415,72 @@ fn ask_digest_golden_vector() {
         assert_eq!(ask_digest(id, payload.as_bytes()), case["digest"].as_str().unwrap(), "{}", case["name"]);
     }
 }
+
+/// Review M1: a duplicated field 0.4 added must not make 0.4 refuse a
+/// payload 0.3 accepts (0.3 ignores unknown keys, duplicates included); a
+/// duplicated 0.3 field is refused by both.
+#[test]
+fn duplicated_new_fields_decode_as_older_builds_do() {
+    fn forge(w: &mut SignedWorld, chat: Uuid, by: &str, payload: SessionEvent, from: &str, to: &str) -> Uuid {
+        let env = w.draft(by, Some(chat), payload, None);
+        let text = serde_json::to_string(&env).unwrap().replacen(from, to, 1);
+        let mut env: ligus_core::SessionEventEnvelope = serde_json::from_str(&text).unwrap();
+        let p = &w.people[by];
+        ligus_core::crypto::sign_envelope(&mut env, p.device_id, &p.device);
+        w.push_env(Some(chat), env)
+    }
+    let run = |dup: &str| {
+        let mut w = SignedWorld::genesis(&["ana", "bo"], None);
+        w.admit("ana", "bo", WorkspaceRole::Contributor);
+        let chat = w.chat("ana", "c");
+        let ask_id = Uuid::new_v4();
+        let ask = HumanAsk { ask_id, question: "q".into(), options: vec!["a".into(), "b".into()], at_ms: 1, ..Default::default() };
+        let key = format!("\"askId\":\"{ask_id}\"");
+        let forged = forge(&mut w, chat, "bo", SessionEvent::FlowRecorded { record: FlowRecord::HumanAsk(ask) }, &key, &format!("{key},\"{dup}\":2,\"{dup}\":3"));
+        let ans = HumanAnswered { ask_id, answer: "a".into(), option_index: Some(0), by: "Bo".into(), at_ms: 2, ..Default::default() };
+        let answer = w.say(chat, "ana", SessionEvent::FlowRecorded { record: FlowRecord::HumanAnswered(ans) });
+        let folded = w.state(chat).flow.asks.get(&ask_id).map(|a| (a.ask.v, a.ask.quorum));
+        (w.verdict(forged), folded.is_some(), w.verdict(answer), folded)
+    };
+    let control = run("zz");
+    for dup in ["v", "quorum", "audience", "effect", "origin", "settledBy", "allowText"] {
+        let got = run(dup);
+        assert_eq!((got.0, got.1, got.2), (control.0, control.1, control.2), "duplicated {dup}");
+    }
+    assert_eq!(run("v").3, Some((2, None)), "the first value of a duplicated new field");
+    // A duplicated 0.3 field is refused (as 0.3's own decoder refuses it).
+    let raw = r#"{"type":"humanAsk","askId":"00000000-0000-0000-0000-000000000001","turnId":"00000000-0000-0000-0000-000000000002","agentKey":"a","question":"q","question":"r","atMs":1}"#;
+    assert!(serde_json::from_str::<FlowRecord>(raw).is_err());
+    let raw = r#"{"type":"humanAnswered","askId":"00000000-0000-0000-0000-000000000001","answer":"x","atMs":1,"askDigest":"a","askDigest":"b","decline":true,"decline":7}"#;
+    let FlowRecord::HumanAnswered(a) = serde_json::from_str(raw).unwrap() else { panic!() };
+    assert_eq!((a.ask_digest.as_str(), a.decline), ("a", true));
+}
+
+/// Review M4: a copy of the asking envelope re-encoded on the way (keys
+/// reordered, spacing changed: still the same signed event) gives the same
+/// digest, so every peer and the phone bind answers to one card.
+#[test]
+fn a_re_encoded_copy_has_the_same_digest() {
+    let mut r = room();
+    let q = question(r.turn, AskAudience::people(vec!["bo".into()]), 1);
+    let chat = r.chat;
+    let env = r.w.draft("ana", Some(chat), SessionEvent::FlowRecorded { record: FlowRecord::HumanAsk(q.clone()) }, None);
+    let text = serde_json::to_string(&env).unwrap();
+    let original: ligus_core::SessionEventEnvelope = serde_json::from_str(&text).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let reordered = serde_json::to_string(&v).unwrap().replace("\"payload\":{", "\"payload\": {");
+    let copy: ligus_core::SessionEventEnvelope = serde_json::from_str(&reordered).unwrap();
+    ligus_core::crypto::verify_envelope(&copy, &r.w.people["ana"].device.public_key_bytes()).unwrap();
+    use ligus_core::flow::asks::envelope_ask_digest;
+    assert_eq!(envelope_ask_digest(&original), envelope_ask_digest(&copy));
+}
+
+/// Review M3: the fold remembers which event posted the ask, so a device
+/// binds answers to that record, never to a refused squat under its id.
+#[test]
+fn the_fold_names_the_event_that_posted_the_ask() {
+    let mut r = room();
+    let q = question(r.turn, AskAudience::people(vec!["bo".into()]), 1);
+    let id = r.record("ana", FlowRecord::HumanAsk(q.clone()));
+    assert_eq!(r.st(&q).event_id, Some(id));
+}

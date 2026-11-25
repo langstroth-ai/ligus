@@ -35,7 +35,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::{
-    agent_from_key, AskEffect, AskPoster, AskState, AskVote, FlowRecord, FlowState, HumanAnswered, HumanAsk,
+    agent_from_key, AskEffect, AskPoster, AskState, AskVote, FlowRecord, FlowState, HumanAnswered, HumanAsk, MAX_FOLDED_TEXT_CHARS,
     EFFECT_PERMISSION, EFFECT_SECRET, MAX_ASKS_PER_CHAT, MAX_AUDIENCE_PEOPLE, MAX_COUNTED_ANSWERS,
     MAX_EFFECT_DETAIL_BYTES, ORIGIN_OUTSIDE, PRIMARY,
 };
@@ -44,21 +44,93 @@ use crate::authz::RosterState;
 use crate::events::SessionEventEnvelope;
 use crate::session::ChatSession;
 
+/// The digest a v2 ask seeded from a snapshot carries: no answer names it.
+pub const SNAPSHOT_DIGEST: &str = "snapshot";
+
 /// The signing context of [`ask_digest`]. Frozen: answers on the log name
 /// digests made with it.
 pub const ASK_DIGEST_CONTEXT: &[u8] = b"ligus-ask-digest-v1\0";
 
-/// `SHA256("ligus-ask-digest-v1\0" ‖ askId (16 bytes) ‖ payload)` as lowercase
-/// hex, where `payload` is the asking envelope's payload bytes exactly as
-/// signed ([`signed_payload`]): what an answer binds (`askDigest`). Any
-/// change to the question, the options, the audience or the effect gives
-/// another digest.
+/// `SHA256("ligus-ask-digest-v1\0" ‖ askId (16 bytes) ‖ canonical payload)`
+/// as lowercase hex: what an answer binds (`askDigest`). The payload is the
+/// asking envelope's payload as signed ([`signed_payload`]), in its
+/// canonical JSON form ([`canonical_json`]: keys sorted, no spaces, the
+/// RFC 8785 string rules), so two encodings of one signed event (a copy
+/// whose keys were reordered on the way) give one digest. Any change to
+/// the question, the options, the audience or the effect gives another.
 pub fn ask_digest(ask_id: Uuid, payload: &[u8]) -> String {
+    let canonical = match serde_json::from_slice::<serde_json::Value>(payload) {
+        Ok(v) => canonical_json(&v).into_bytes(),
+        Err(_) => payload.to_vec(),
+    };
     let mut h = Sha256::new();
     h.update(ASK_DIGEST_CONTEXT);
     h.update(ask_id.as_bytes());
-    h.update(payload);
+    h.update(&canonical);
     crate::keys::hex(&h.finalize())
+}
+
+/// The canonical JSON of `v`: object keys sorted by their UTF-16 code
+/// units, no insignificant whitespace, strings escaped as RFC 8785 says
+/// (`\"`, `\\`, `\b \f \n \r \t`, other controls as lowercase `\u00xx`,
+/// everything else as is), integers in decimal. The phone repositories
+/// implement the same (golden vectors: `tests/golden/ask_digest_v1.json`).
+pub fn canonical_json(v: &serde_json::Value) -> String {
+    let mut out = String::new();
+    write_canonical(v, &mut out);
+    out
+}
+
+fn write_canonical(v: &serde_json::Value, out: &mut String) {
+    use serde_json::Value;
+    match v {
+        Value::Null => out.push_str("null"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Number(n) => out.push_str(&n.to_string()),
+        Value::String(s) => write_string(s, out),
+        Value::Array(a) => {
+            out.push('[');
+            for (i, x) in a.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_canonical(x, out);
+            }
+            out.push(']');
+        }
+        Value::Object(m) => {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+            out.push('{');
+            for (i, k) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_string(k, out);
+                out.push(':');
+                write_canonical(&m[*k], out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+fn write_string(s: &str, out: &mut String) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0C}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 /// The payload bytes `env`'s signature covers: the bytes it arrived with,
@@ -373,11 +445,27 @@ impl FlowState {
     /// the same snapshot (its answer and closed flags).
     pub fn reseat_snapshot_asks(&mut self) {
         for st in self.asks.values_mut() {
+            // Eviction reads what 0.3 reads from the same snapshot: its
+            // answer and closed flags (never fields 0.3 doesn't know).
+            st.legacy_settled = st.answer.is_some() || st.ask.closed;
             st.ask.permission = false;
             st.ask.effect = None;
             st.signer = None;
             st.host = None;
-            st.legacy_settled = !st.is_open();
+            st.event_id = None;
+            if st.is_v2() {
+                // A snapshot's word about who answered a v2 ask isn't
+                // evidence: its votes and settlement go, and no answer can
+                // match its digest (there is no signed record to bind to).
+                st.counted.clear();
+                st.uncounted.clear();
+                st.answered_by.clear();
+                st.declined = false;
+                st.answer = None;
+                st.frontier = None;
+                st.digest = SNAPSHOT_DIGEST.into();
+                st.ask.closed = true;
+            }
         }
     }
 
@@ -433,6 +521,7 @@ impl FlowState {
                             legacy_settled: a.closed,
                             digest: p.digest.clone(),
                             frontier: p.frontier,
+                            event_id: p.event_id,
                             ..Default::default()
                         },
                     );
@@ -458,8 +547,8 @@ impl AskState {
             event_id: p.event_id,
             device_id: p.signer,
             option_index: ans.option_index,
-            answer: ans.answer.clone(),
-            text: if self.ask.allow_text || !self.is_v2() { ans.text.clone() } else { String::new() },
+            answer: ans.answer.chars().take(MAX_FOLDED_TEXT_CHARS).collect(),
+            text: if self.ask.allow_text || !self.is_v2() { ans.text.chars().take(MAX_FOLDED_TEXT_CHARS).collect() } else { String::new() },
             decline: ans.decline,
             at_ms: ans.at_ms,
             why: String::new(),
@@ -468,7 +557,7 @@ impl AskState {
         if !counts {
             if self.uncounted.len() < MAX_COUNTED_ANSWERS {
                 let why = if p.why.is_empty() { "not the host's person or the agent's owner".into() } else { p.why.clone() };
-                self.uncounted.push(AskVote { why, ..vote });
+                self.uncounted.push(AskVote { why, text: String::new(), answer: String::new(), ..vote });
             }
             return;
         }
@@ -488,7 +577,7 @@ impl AskState {
         let text_only = ans.option_index.is_none() && self.ask.allow_text && !ans.text.trim().is_empty();
         if !ans.decline && !has_option && !text_only {
             if self.uncounted.len() < MAX_COUNTED_ANSWERS {
-                self.uncounted.push(AskVote { why: "no option chosen".into(), ..vote });
+                self.uncounted.push(AskVote { why: "no option chosen".into(), text: String::new(), answer: String::new(), ..vote });
             }
             return;
         }
@@ -522,6 +611,9 @@ impl AskState {
             return;
         }
         let q = self.quorum() as usize;
+        let mut ans = ans.clone();
+        ans.text = vote.text.clone();
+        let ans = &ans;
         if text_only {
             if q == 1 {
                 self.answer = Some(ans.clone());
@@ -550,6 +642,12 @@ impl AskState {
         } else {
             self.counted.iter().filter(|x| !x.decline && x.option_index == pick).cloned().collect()
         };
+        // Only an answer that settles the ask on its own terms: a decline
+        // by the one person asked, or an option with its quorum.
+        let single = self.ask.audience.as_ref().and_then(|a| a.single()) == Some(v.member_id.as_str());
+        if (v.decline && !single) || (!v.decline && pick.is_some() && voters.len() < self.quorum() as usize) {
+            return;
+        }
         if v.decline {
             self.declined = true;
             self.answer = None;
