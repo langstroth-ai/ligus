@@ -326,6 +326,10 @@ pub struct Shared {
     pub held: ligus_runtime::dm_delivery::HeldInvites,
     /// Wakes the held-invite loop (after a pull, or a new held invite).
     pub held_kick: Notify,
+    /// Unix seconds of the last blob renewal pass, and whether one is
+    /// running ([`renew_attachment_blobs`]).
+    renewed_blobs_at: std::sync::atomic::AtomicI64,
+    renewing_blobs: AtomicBool,
     /// The last contacts status (`contacts_api::status`).
     pub contact_state: Mutex<String>,
     /// Drop-box invites from the last listing (codes stay on the box).
@@ -1202,6 +1206,8 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         contact_lock: tokio::sync::Mutex::new(()),
         held: ligus_runtime::dm_delivery::HeldInvites::for_data_dir(&cfg.data_dir),
         held_kick: Notify::new(),
+        renewed_blobs_at: std::sync::atomic::AtomicI64::new(0),
+        renewing_blobs: AtomicBool::new(false),
         contact_state: Mutex::new("unknown".into()),
         pending_codes: identity_api::PendingCodes::default(),
         typing: typing_api::Typing::default(),
@@ -1411,6 +1417,9 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                     // A peer's contact id may have arrived: deliver what waits.
                     shared.held_kick.notify_one();
                 }
+                if !engine.is_behind() {
+                    renew_attachment_blobs(&shared);
+                }
                 if engine.is_behind() {
                     // Mid catch-up (a large room): next round of pages now.
                     Duration::ZERO
@@ -1453,6 +1462,40 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             _ = stop.wait_for(|s| *s) => return,
         }
     }
+}
+
+/// How often the box looks for attachment blobs to renew.
+const BLOB_RENEW_EVERY_SECS: i64 = 60 * 60;
+
+/// Renew the relay blobs of the files this box shared (an agent's approved
+/// offers) that are still live, past a third of their life, at most once a
+/// day each (identity model v2, 10.5). A box is never an Admin's desktop,
+/// so it renews only its own. Low priority: after a caught-up sync round, at
+/// most once an hour, in its own task; a relay without the retain route
+/// changes nothing.
+fn renew_attachment_blobs(shared: &Arc<Shared>) {
+    let now = Timestamp::now().inner().unix_timestamp();
+    if now - shared.renewed_blobs_at.load(Ordering::SeqCst) < BLOB_RENEW_EVERY_SECS || shared.renewing_blobs.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let shared = shared.clone();
+    tokio::spawn(async move {
+        let due = shared.lock().blob_renewals_due(shared.ws, false, now);
+        match due {
+            Ok(due) if !due.is_empty() => {
+                if let Ok(client) = crate::relay_client(&shared.cfg) {
+                    let outcomes = ligus_runtime::attachment_blob::renew_blobs(&client, &shared.cfg.room, &due).await;
+                    if let Err(e) = shared.lock().record_blob_renewals(shared.ws, &outcomes, now) {
+                        eprintln!("attachments: recording blob renewals: {e}");
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("attachments: planning blob renewals: {e}"),
+        }
+        shared.renewed_blobs_at.store(now, Ordering::SeqCst);
+        shared.renewing_blobs.store(false, Ordering::SeqCst);
+    });
 }
 
 /// Host liveness: publish this box's beat to the relay's presence channel and

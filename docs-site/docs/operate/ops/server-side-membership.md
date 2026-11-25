@@ -5,6 +5,15 @@ writes from callers who aren't on it. It is off unless the operator turns it
 on with `LANGSTROTH_RELAY_MEMBERSHIP=1`, and even then it only applies to
 workspaces someone has **claimed**.
 
+> **Deprecated for Ligus workspaces (Ligus 0.4).** Ligus never reads the
+> relay roster: every device enforces the signed roster in the workspace
+> log. A relay roster on a Ligus workspace is a second list that can drift
+> from it (someone removed in Ligus can stay on the relay's list, or the
+> other way round), and the relay can't check one against the other because
+> it holds no workspace keys. Gate a Ligus relay with signed tokens and
+> workspace scope instead. Relay membership stays a supported feature for
+> other clients.
+
 ## Why a relay-side roster
 
 The relay is content-blind: it forwards end-to-end encrypted envelopes. The
