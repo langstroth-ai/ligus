@@ -50,7 +50,7 @@ impl ChatService {
         let session = self.load_in(workspace_id, session_id)?.ok_or_else(|| ChatError::NotFound("chat".into()))?;
         let st = session.flow.asks.get(&ask_id).cloned().ok_or_else(|| ChatError::NotFound("no such question".into()))?;
         let rec = answer_record(self, &session, &st, &choice)?;
-        let presence = st.is_v2() && st.grant().is_some_and(|e| e.needs_presence());
+        let presence = st.is_v2() && st.grant_needs_presence();
         self.force_presence = presence;
         let r = self.record_flow_signed(session_id, workspace_id, rec);
         self.force_presence = false;

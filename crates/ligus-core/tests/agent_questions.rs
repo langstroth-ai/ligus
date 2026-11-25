@@ -358,6 +358,12 @@ fn an_outside_prompt_counts_only_from_a_person_to_themselves() {
     let chat = r.chat;
     r.w.write("bo", Some(chat), SessionEvent::FlowRecorded { record: answer_rec(&mine, "bo", Some(0), &d) }, None, Proof::Recovery);
     assert_eq!(who(&r.st(&mine)), vec!["bo"]);
+    // An outside prompt needs the passkey whatever its effect says.
+    let mut lax = outside(&r, "bo", vec!["bo"]);
+    lax.effect.as_mut().unwrap().presence = "none".into();
+    let d = r.post("bo", &lax);
+    r.answer("bo", &lax, Some(0), &d);
+    assert_eq!(r.st(&lax).uncounted[0].why, "no passkey");
     // His device closes it.
     let q = outside(&r, "bo", vec!["bo"]);
     r.post("bo", &q);

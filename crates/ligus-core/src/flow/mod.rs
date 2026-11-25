@@ -790,6 +790,14 @@ impl AskState {
         self.ask.permission.then(|| AskEffect { kind: EFFECT_PERMISSION.into(), ..Default::default() })
     }
 
+    /// An answer to this grant counts only with its author's passkey: the
+    /// effect says so, or it is a secret, or it came from outside Ligus
+    /// (whose agent and sandbox Ligus doesn't know), whatever it says.
+    pub fn grant_needs_presence(&self) -> bool {
+        let outside = self.ask.origin.as_ref().is_some_and(|o| o.via == ORIGIN_OUTSIDE);
+        self.grant().is_some_and(|e| e.needs_presence() || outside)
+    }
+
     /// The quorum, between 1 and [`MAX_QUORUM`].
     pub fn quorum(&self) -> u8 {
         self.ask.quorum.unwrap_or(1).clamp(1, MAX_QUORUM)

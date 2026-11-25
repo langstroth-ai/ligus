@@ -6,7 +6,26 @@ Full release notes are on the
 
 ## Unreleased
 
+### New
+
+- **Decision cards from agents.** Agents ask with `ligus_ask_person` (the
+  person who asked for the turn) or `ligus_ask_room` (anyone at or above a
+  role, or a quorum who must agree), with 2 to 5 options or Yes/No and an
+  optional reply. Only the people a card names can answer it, every answer
+  is signed and bound to the exact card, and **Not now** on a room card is
+  only your abstention. The card always says what your answer does: a
+  question grants nothing. See
+  [Questions to the chat](../addons/ligus-mcp.md#asks).
+- **Permission requests are grant cards.** An ACP agent's request shows the
+  exact command or file change, the agent's own description labelled as
+  such, and Allow once and Deny. A passkey is asked in a lockdown, in dearth
+  mode, and for a call outside the agent's sandbox.
+
 ### Changed
+
+- Every question card is plain text: no Markdown and no clickable links.
+- Members on 0.3 can't answer the new cards until they update: their
+  answers are kept but not counted.
 
 - **Linking a computer is easier to find.** ⌘K **Add a computer to my
   devices…** (type link, computer, device, lt or terminal) and ⌘K **My

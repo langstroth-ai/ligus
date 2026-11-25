@@ -1557,6 +1557,7 @@ impl HostAsker {
                     too_large: req.too_large,
                     ..Default::default()
                 }),
+                origin: req.subagent.then(|| flow::AskOrigin { via: flow::ORIGIN_SUBAGENT.into(), ..Default::default() }),
                 ..Default::default()
             });
         });
