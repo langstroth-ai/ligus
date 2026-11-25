@@ -69,50 +69,23 @@ pub(crate) fn server(app: &AppHandle) -> Arc<LigusMcp> {
     S.get_or_init(|| LigusMcp::new(Arc::new(AppHost { app: app.clone() }))).clone()
 }
 
-/// An open question an agent asked in a chat (D.4.2).
-#[derive(serde::Serialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AskDto {
-    pub ask_id: String,
-    pub agent_name: String,
-    pub question: String,
-    pub options: Vec<String>,
-    pub expires_at_ms: i64,
-    pub answer: Option<String>,
-    pub answered_by: Option<String>,
-    pub open: bool,
-    /// `permission`: the turn's host asks to run something (only its
-    /// person or the agent's owner can grant it); `question` otherwise.
-    pub kind: &'static str,
-    /// Posted by someone other than the agent or its turn's host: theirs,
-    /// and never a permission request.
-    pub posted_by: Option<String>,
-}
+/// An agent's question in a chat, as the decision card draws it
+/// (`docs/design/agent-questions.md` 7.1): the same card every surface
+/// builds ([`ligus_runtime::ask_view`]).
+pub(crate) type AskDto = ligus_runtime::ask_view::AskView;
 
-pub(crate) fn ask_dtos(session: &ligus_core::ChatSession) -> Vec<AskDto> {
-    let name = |key: &str| {
-        ligus_core::flow::agent_from_key(key)
-            .and_then(|id| session.workspace_agents.iter().find(|a| a.id == id).map(|a| a.name.clone()))
-            .unwrap_or_else(|| "ligus".into())
+/// The cards of a chat, newest first, for this device's person.
+pub(crate) fn ask_dtos(svc: &ChatService, session: &ligus_core::ChatSession) -> Vec<AskDto> {
+    let me = svc.author().id.clone();
+    let here = svc.device_id();
+    let hosts = svc.list_hosts(session.workspace_id).unwrap_or_default();
+    let label = |d: Uuid| -> Option<String> {
+        if d == here {
+            return Some("this device".into());
+        }
+        hosts.iter().find(|h| h.id == d.to_string()).map(|h| crate::shown(&h.label)).filter(|l| !l.is_empty())
     };
-    let mut v: Vec<&ligus_core::flow::AskState> = session.flow.asks.values().collect();
-    v.sort_by_key(|a| a.ask.at_ms);
-    v.into_iter()
-        .rev()
-        .take(20)
-        .map(|a| AskDto {
-            ask_id: a.ask.ask_id.to_string(),
-            agent_name: name(&a.ask.agent_key),
-            question: a.ask.question.clone(),
-            options: a.ask.options.clone(),
-            expires_at_ms: a.ask.expires_at_ms,
-            answer: a.answer.as_ref().map(|x| x.answer.clone()),
-            answered_by: a.answer.as_ref().map(|x| x.by.clone()).filter(|b| !b.is_empty()),
-            open: a.is_open(),
-            kind: if a.ask.permission { "permission" } else { "question" },
-            posted_by: a.poster_name(&session.members).map(|n| ligus_proto::names::clean_display_name(&n)),
-        })
-        .collect()
+    ligus_runtime::ask_view::views(session, &me, ligus_core::flow::now_ms(), 20, &label)
 }
 
 /// The agents' questions in a chat, newest first.
@@ -124,14 +97,27 @@ pub(crate) async fn list_asks(ligus_app: tauri::AppHandle, session_id: String) -
 pub(crate) fn list_asks_sync(state: tauri::State<'_, AppState>, session_id: String) -> Result<Vec<AskDto>, String> {
     let sid = Uuid::parse_str(&session_id).map_err(|e| e.to_string())?;
     let svc = state.service.lock().unwrap();
-    Ok(svc.load_resolving(sid).map_err(|e| e.to_string())?.map(|s| ask_dtos(&s)).unwrap_or_default())
+    Ok(svc.load_resolving(sid).map_err(|e| e.to_string())?.map(|s| ask_dtos(&svc, &s)).unwrap_or_default())
 }
 
-/// Answer an agent's question as this device's person. Answering grants
-/// nothing by itself; the first answer in canonical order wins.
+/// Answer a card as this device's person: an option, free text where the
+/// card allows it, or "Not now". The answer is bound to the digest of the
+/// signed question this device holds; a grant whose effect needs it is
+/// signed with the person's passkey (the presence provider asks).
 #[tauri::command]
-pub(crate) async fn answer_ask(ligus_app: tauri::AppHandle, session_id: String, ask_id: String, answer: String, option_index: Option<u32>) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| answer_ask_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id, ask_id, answer, option_index)).await
+pub(crate) async fn answer_ask(
+    ligus_app: tauri::AppHandle,
+    session_id: String,
+    ask_id: String,
+    option_index: Option<u32>,
+    text: Option<String>,
+    decline: Option<bool>,
+) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        let choice = ligus_runtime::chat_service::AskChoice { option: option_index, text: text.unwrap_or_default(), decline: decline.unwrap_or(false) };
+        answer_ask_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id, ask_id, choice)
+    })
+    .await
 }
 
 pub(crate) fn answer_ask_sync(
@@ -139,40 +125,119 @@ pub(crate) fn answer_ask_sync(
     state: tauri::State<'_, AppState>,
     session_id: String,
     ask_id: String,
-    answer: String,
-    option_index: Option<u32>,
+    choice: ligus_runtime::chat_service::AskChoice,
 ) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(|e| e.to_string())?;
     let aid = Uuid::parse_str(&ask_id).map_err(|e| e.to_string())?;
     let mut svc = state.service.lock().unwrap();
     let session = svc.load_resolving(sid).map_err(|e| e.to_string())?.ok_or("unknown chat")?;
-    answer_in(&mut svc, &session, aid, answer, option_index)?;
+    answer_in(&mut svc, &session, aid, choice)?;
     drop(svc);
     let _ = app.emit("workspace://synced", 1);
     Ok(())
 }
 
 /// Record a person's answer (shared with tests).
-pub(crate) fn answer_in(svc: &mut ChatService, session: &ligus_core::ChatSession, ask_id: Uuid, answer: String, option_index: Option<u32>) -> Result<(), String> {
-    let st = session.flow.asks.get(&ask_id).ok_or("no such question")?;
-    if !st.is_open() {
-        return Err("that question is already answered or closed".into());
+pub(crate) fn answer_in(svc: &mut ChatService, session: &ligus_core::ChatSession, ask_id: Uuid, choice: ligus_runtime::chat_service::AskChoice) -> Result<(), String> {
+    svc.answer_ask(session.id, session.workspace_id, ask_id, choice).map(|_| ()).map_err(|e| match e {
+        ligus_runtime::chat_service::ChatError::Unauthorized(m) | ligus_runtime::chat_service::ChatError::NotFound(m) => m,
+        other => other.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ligus_core::flow::{AskAudience, FlowRecord, HumanAsk, ASK_V2};
+
+    fn service() -> (ChatService, Uuid, Uuid) {
+        let store = ligus_runtime::EventStore::open_in_memory().unwrap();
+        let author = ligus_core::ActorIdentity::new("u1", "Mike", ligus_core::ActorKind::Human);
+        let mut svc = ChatService::new(store, ligus_core::SigningKeypair::generate().unwrap(), ligus_core::SigningKeypair::generate().unwrap(), author);
+        svc.enable_test_presence();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "rt").unwrap().id;
+        (svc, wid, chat)
     }
-    let text = match option_index.and_then(|i| st.ask.options.get(i as usize)) {
-        Some(o) if answer.trim().is_empty() => o.clone(),
-        _ => answer.trim().to_string(),
-    };
-    if text.is_empty() {
-        return Err("an answer is required".into());
+
+    fn post(svc: &mut ChatService, wid: Uuid, chat: Uuid, ask: HumanAsk) {
+        svc.record_flow(chat, wid, FlowRecord::HumanAsk(ask)).unwrap();
     }
-    let by = svc.author().display_name.clone();
-    let rec = ligus_core::flow::FlowRecord::HumanAnswered(ligus_core::flow::HumanAnswered {
-        ask_id,
-        answer: text.chars().take(ligus_core::flow::MAX_ANSWER_CHARS).collect(),
-        option_index,
-        by,
-        at_ms: ligus_core::flow::now_ms(),
-        ..Default::default()
-    });
-    svc.record_flow(session.id, session.workspace_id, rec).map_err(|e| e.to_string())
+
+    /// The card's DTO: plain text cleaned, who it asks, eligibility, and the
+    /// effect line's data; a v2 answer is bound to the question's digest.
+    #[test]
+    fn cards_carry_what_the_card_draws_and_answers_bind_the_digest() {
+        let (mut svc, wid, chat) = service();
+        let me = svc.author().id.clone();
+        let id = Uuid::new_v4();
+        post(
+            &mut svc,
+            wid,
+            chat,
+            HumanAsk {
+                ask_id: id,
+                turn_id: Uuid::new_v4(),
+                agent_key: "primary".into(),
+                question: "Use Postgres\u{202E} or SQLite?".into(),
+                options: vec!["Postgres".into(), "SQLite".into()],
+                at_ms: 1,
+                v: ASK_V2,
+                audience: Some(AskAudience::people(vec![me.clone()])),
+                allow_text: true,
+                ..Default::default()
+            },
+        );
+        let s = svc.load_resolving(chat).unwrap().unwrap();
+        let d = ask_dtos(&svc, &s);
+        assert_eq!(d.len(), 1);
+        let v = serde_json::to_value(&d[0]).unwrap();
+        assert_eq!(v["question"], "Use Postgres or SQLite?", "readers clean too");
+        assert_eq!(v["kind"], "question");
+        assert_eq!(v["eligible"], true);
+        assert_eq!(v["audience"]["kind"], "people");
+        assert!(v["turnId"].is_string() && v["live"] == true && v["allowText"] == true);
+        answer_in(&mut svc, &s, id, ligus_runtime::chat_service::AskChoice { option: Some(1), text: "keep the dev db".into(), decline: false }).unwrap();
+        let s = svc.load_resolving(chat).unwrap().unwrap();
+        let st = &s.flow.asks[&id];
+        let digest = svc.ask_digest_here(wid, chat, id).unwrap().unwrap();
+        assert_eq!(st.answer.as_ref().map(|a| a.ask_digest.clone()), Some(digest), "bound to the signed question here");
+        let v = serde_json::to_value(&ask_dtos(&svc, &s)[0]).unwrap();
+        assert_eq!((v["answer"].as_str(), v["answerText"].as_str(), v["live"].as_bool()), (Some("SQLite"), Some("keep the dev db"), Some(false)));
+        assert_eq!(v["answeredBy"][0]["memberId"], me);
+    }
+
+    /// An older card's "Not now" writes nothing (it would settle it for
+    /// everyone); on a v2 card to one person it declines it.
+    #[test]
+    fn not_now_is_local_on_an_older_card() {
+        let (mut svc, wid, chat) = service();
+        let me = svc.author().id.clone();
+        let old = Uuid::new_v4();
+        post(&mut svc, wid, chat, HumanAsk { ask_id: old, turn_id: Uuid::new_v4(), agent_key: "primary".into(), question: "q".into(), at_ms: 1, ..Default::default() });
+        let s = svc.load_resolving(chat).unwrap().unwrap();
+        let decline = ligus_runtime::chat_service::AskChoice { decline: true, ..Default::default() };
+        assert!(answer_in(&mut svc, &s, old, decline.clone()).is_err());
+        let new = Uuid::new_v4();
+        post(
+            &mut svc,
+            wid,
+            chat,
+            HumanAsk {
+                ask_id: new,
+                turn_id: Uuid::new_v4(),
+                agent_key: "primary".into(),
+                question: "q".into(),
+                options: vec!["a".into(), "b".into()],
+                at_ms: 2,
+                v: ASK_V2,
+                audience: Some(AskAudience::people(vec![me])),
+                ..Default::default()
+            },
+        );
+        let s = svc.load_resolving(chat).unwrap().unwrap();
+        answer_in(&mut svc, &s, new, decline).unwrap();
+        let s = svc.load_resolving(chat).unwrap().unwrap();
+        assert!(s.flow.asks[&new].declined && s.flow.asks[&old].is_open());
+    }
 }

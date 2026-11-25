@@ -77,6 +77,9 @@ pub struct VoteView {
 pub struct AskView {
     pub ask_id: String,
     pub chat_id: String,
+    /// The asking turn (its reply message): where the card sits in the
+    /// transcript. `None` for an outside prompt.
+    pub turn_id: Option<String>,
     /// The asking agent's name (or `Claude Code` for an outside prompt).
     pub agent_name: String,
     /// `question`, `permission` or `secret`.
@@ -218,6 +221,7 @@ pub fn view(session: &ChatSession, st: &AskState, me: &str, now_ms: i64, host_la
     AskView {
         ask_id: st.ask.ask_id.to_string(),
         chat_id: session.id.to_string(),
+        turn_id: (!st.ask.turn_id.is_nil()).then(|| st.ask.turn_id.to_string()),
         agent_name,
         kind,
         v: st.ask.v,

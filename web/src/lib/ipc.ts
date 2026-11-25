@@ -1855,30 +1855,90 @@ export const withdrawApplyRequest = (sessionId: string, requestId: string) =>
 export const getImplementPlan = (sessionId: string, proposalId: string, targetAgentId?: string | null) =>
   invoke<ImplementPreviewDto>("get_implement_plan", { sessionId, proposalId, targetAgentId: targetAgentId ?? null });
 
-/// An agent's question to the chat's people (ligus_ask_human).
+/// Who a decision card is put to.
+export type AskAudienceDto = {
+  kind: "people" | "room";
+  memberIds?: string[];
+  /// The named people's roster names, in order.
+  names?: string[];
+  minRole?: "contributor" | "admin" | "owner" | null;
+};
+
+/// What answering a grant card lets the host do (written only by the host).
+export type AskEffectDto = {
+  kind: "permission" | "secret" | string;
+  tool: string;
+  /// The agent's own description (unverified; shown as "… describes it as").
+  title: string;
+  /// The call's own content, verbatim: the command, the files and content.
+  detail: string;
+  cwd: string;
+  hostDeviceId?: string | null;
+  hostLabel: string;
+  /// An answer needs the person's passkey.
+  presenceRequired: boolean;
+  standing: boolean;
+  /// Too large to review on a card: Deny only.
+  tooLarge: boolean;
+};
+
+export type AskOriginDto = { via: "subagent" | "chat" | "outside" | string; label: string; chatId?: string | null; runtime: string };
+
+export type AskVoteDto = { memberId: string; name: string; deviceId?: string | null; atMs: number };
+
+/// An agent's question in a chat, as the decision card draws it (the same
+/// card every surface builds: ligus_runtime::ask_view).
 export type AskDto = {
   askId: string;
+  chatId: string;
+  /// The asking turn (its reply message): the card sits there.
+  turnId?: string | null;
   agentName: string;
+  kind: "question" | "permission" | "secret";
+  /// 2 for a card with the 0.4 rules, 0 for an older ligus_ask_human one.
+  v: number;
+  /// The agent's words, cleaned, plain text (never Markdown).
   question: string;
   options: string[];
+  allowText: boolean;
+  audience: AskAudienceDto;
+  quorum: number;
+  /// This person may answer it.
+  eligible: boolean;
+  effect?: AskEffectDto | null;
+  origin?: AskOriginDto | null;
+  tally: number[];
   expiresAtMs: number;
-  answer?: string | null;
-  answeredBy?: string | null;
   open: boolean;
-  /// "permission": the turn's host asks to run something (only its person or
-  /// the agent's owner can grant it); "question" otherwise.
-  kind?: "permission" | "question";
-  /// Posted by someone other than the agent or its turn's host: theirs, never
-  /// a permission request.
+  /// Open and not expired: the buttons show.
+  live: boolean;
+  declined: boolean;
+  answer?: string | null;
+  answerText?: string | null;
+  answeredBy: AskVoteDto[];
+  olderAnswerUncounted: boolean;
+  /// Posted by someone other than the agent or its host: theirs, never a grant.
   postedBy?: string | null;
+  atMs: number;
 };
 
 /// The agents' questions in a chat, newest first.
 export const listAsks = (sessionId: string) => invoke<AskDto[]>("list_asks", { sessionId });
 
-/// Answer an agent's question (the first answer wins; it authorizes nothing).
-export const answerAsk = (sessionId: string, askId: string, answer: string, optionIndex?: number | null) =>
-  invoke<void>("answer_ask", { sessionId, askId, answer, optionIndex: optionIndex ?? null });
+/// What a person picked on a card.
+export type AskChoice = { optionIndex?: number | null; text?: string; decline?: boolean };
+
+/// Answer a card: an option, free text where allowed, or Not now. The answer
+/// is bound to the signed question this device holds; a grant that needs it
+/// asks for your passkey first.
+export const answerAsk = (sessionId: string, askId: string, choice: AskChoice) =>
+  invoke<void>("answer_ask", {
+    sessionId,
+    askId,
+    optionIndex: choice.optionIndex ?? null,
+    text: choice.text ?? null,
+    decline: choice.decline ?? null,
+  });
 
 /// Check for an app update. Resolves to the new version if one is available,
 /// null if up to date; rejects with a friendly message if the updater isn't

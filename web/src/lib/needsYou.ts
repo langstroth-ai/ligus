@@ -25,7 +25,10 @@ export type NeedsYouKind =
   /// The open repository ships commands that stay inert until you enable them.
   | "trust"
   /// The workspace's sandbox grants changed since you last looked.
-  | "sandbox";
+  | "sandbox"
+  /// An agent's question to someone else (shown only when nothing else
+  /// waits; never counted).
+  | "waiting";
 
 export interface NeedsYouItem {
   /// Stable across refetches (for React keys and "seen" bookkeeping).
@@ -41,6 +44,8 @@ export interface NeedsYouItem {
   proposalId?: string;
   /// How many questions an "ask" row stands for.
   count?: number;
+  /// The question, for an "ask" or "waiting" row.
+  askId?: string;
 }
 
 /// Most urgent first: security checks (a phone alert, then changed sandbox
@@ -58,6 +63,7 @@ const ORDER: Record<NeedsYouKind, number> = {
   failed: 6,
   device: 7,
   invite: 8,
+  waiting: 9,
 };
 
 export interface NeedsYouSources {
@@ -81,6 +87,7 @@ function plural(n: number, one: string, many: string) {
 /// Everything waiting on this person, most urgent first.
 export function needsYouItems(s: NeedsYouSources): NeedsYouItem[] {
   const out: NeedsYouItem[] = [];
+  const waitingOnOthers: NeedsYouItem[] = [];
   const titleOf = (id: string) => {
     const t = s.chatTitles?.get(id);
     return t && t.trim() ? t : "Untitled chat";
@@ -93,7 +100,15 @@ export function needsYouItems(s: NeedsYouSources): NeedsYouItem[] {
     });
   }
   for (const a of s.attention ?? []) {
-    if (a.openAsks > 0) {
+    if (a.asks) {
+      // One row per question you can answer; opening it opens the card in
+      // its chat (nothing is answered from the Inbox).
+      for (const q of a.asks) {
+        const row = { askId: q.askId, chatId: a.sessionId, chatTitle: titleOf(a.sessionId) };
+        if (q.eligible) out.push({ key: `ask:${q.askId}`, kind: "ask", title: `${q.agentName} asks you`, count: 1, ...row });
+        else waitingOnOthers.push({ key: `waiting:${q.askId}`, kind: "waiting", title: `${q.agentName} asks ${q.audience}`, ...row });
+      }
+    } else if (a.openAsks > 0) {
       out.push({
         key: `ask:${a.sessionId}`,
         kind: "ask",
@@ -139,12 +154,14 @@ export function needsYouItems(s: NeedsYouSources): NeedsYouItem[] {
         : `Invite to join ${i.workspaceName || "a workspace"}`,
     });
   }
+  // Questions put to others show only when nothing else waits on you.
+  if (out.length === 0) out.push(...waitingOnOthers);
   return out.sort((a, b) => ORDER[a.kind] - ORDER[b.kind]);
 }
 
 /// The badge number: one per item, except an "ask" row counts each question.
 export function needsYouCount(items: readonly NeedsYouItem[]): number {
-  return items.reduce((n, i) => n + (i.kind === "ask" ? (i.count ?? 1) : 1), 0);
+  return items.reduce((n, i) => n + (i.kind === "waiting" ? 0 : i.kind === "ask" ? (i.count ?? 1) : 1), 0);
 }
 
 /// "3 need you" / "1 needs you".
