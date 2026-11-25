@@ -223,9 +223,9 @@ where
     if let Some(n) = name.map(str::trim).filter(|n| !n.is_empty()) {
         svc.set_author_display_name(n.to_string());
     }
-    match svc.device_standing(ws, None)? {
+    match svc.device_standing(ws)? {
         Standing::OwnerDevice(owner) => bail!(
-            "this box's device is certified as {}'s device; {OWNER_MODE_REMOVED}. Revoke it first (Settings > Account > My \
+            "this box's device acted as {}'s device (it signed as them); {OWNER_MODE_REMOVED}. Revoke it first (Settings > Account > My \
              devices > Revoke) and start the box from a fresh data dir",
             owner.display_name
         ),

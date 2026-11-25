@@ -1983,6 +1983,36 @@ impl EventStore {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// Each stored event (any log of `workspace_id`, equivocations
+    /// included) whose envelope names `device` as its signer, oldest first,
+    /// until `visit` returns `false`. Through `idx_events_by_signer`. Rows
+    /// that don't parse are skipped. The signature is **not** checked here:
+    /// ingest stores some trust-bootstrap kinds from a signer it can't verify
+    /// yet, so a caller that reads who the device acted for checks each one
+    /// (`crate::device_enroll::chosen_accounts`).
+    pub fn for_each_signed_by(
+        &self,
+        workspace_id: Uuid,
+        device: Uuid,
+        mut visit: impl FnMut(SessionEventEnvelope) -> bool,
+    ) -> Result<()> {
+        for table in ["events", "equivocations"] {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT envelope_json FROM {table} WHERE json_extract(envelope_json, '$.signerDeviceId') = ?1 \
+                 AND +workspace_id = ?2 ORDER BY row_id ASC"
+            ))?;
+            let mut rows = stmt.query(rusqlite::params![device.to_string(), workspace_id.to_string()])?;
+            while let Some(row) = rows.next()? {
+                let json: String = row.get(0)?;
+                let Ok(env) = serde_json::from_str::<SessionEventEnvelope>(&json) else { continue };
+                if !visit(env) {
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The newest event `signer` put on `session_id` here (by local row
     /// order) with a lamport below `below`: what a new event of that signer at
     /// lamport `below` names as `ActorStamp::prev` (a chain link is always

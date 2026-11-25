@@ -319,7 +319,7 @@ async fn a_linked_computer_is_the_persons_own_device_until_revoked() {
     mac.sync().await;
     taylor.sync().await;
     lt.sync().await;
-    assert_eq!(lt.svc.device_standing(ws, None).unwrap(), crate::device_enroll::Standing::Revoked);
+    assert_eq!(lt.svc.device_standing(ws).unwrap(), crate::device_enroll::Standing::Revoked);
     // Written anyway (a stale build), it is dropped by everyone.
     let _ = lt.svc.post_user_message(chat, ws, "after revocation");
     lt.sync().await;
@@ -393,6 +393,12 @@ async fn a_computer_is_never_certified_as_someone_else() {
     // The honest grant names Taylor: the computer is Taylor's, not Alex's.
     let person = lt.svc.check_computer_link(&g, now_ms()).unwrap();
     assert_eq!(person.account_id, Some(tacct));
+    // It acts as Taylor (its own signature as Taylor, what the redeem's
+    // key-agreement key publishes): from then on it chose Taylor.
+    lt.svc.act_as_owner_device(person);
+    let chat = lt.svc.create_chat("lt", ws, "").unwrap().id;
+    lt.svc.post_user_message(chat, ws, "as Taylor").unwrap();
+    lt.sync().await;
     mac.sync().await;
     // Now it is Taylor's: Alex's desktop refuses to make it his.
     let again = lt.request("lt");
@@ -404,6 +410,68 @@ async fn a_computer_is_never_certified_as_someone_else() {
     let mut stale = lt.request("lt");
     stale.created_at -= crate::computer_link::REQUEST_TTL_MS + 1;
     assert!(mac.svc.issue_computer_link(ws, &stale, &mac.conn(room), now_ms()).is_err());
+}
+
+/// B3 (identity model v2, 7.2): a certificate another member puts on a
+/// computer's public key before the person approves it doesn't block the
+/// link: the desktop's approval and the computer's redeem both go through,
+/// and the computer acts as the person, never as the certifier. Once the
+/// computer has acted as the person, a second person's approval is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_foreign_certificate_doesnt_block_or_redirect_a_link() {
+    let relay = spawn_relay().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let room = "acme";
+    let ws = ligus_core::room_workspace_id(room);
+    let mut mac = Dev::open(&tmp.path().join("mac"), "Alex", &relay, ws);
+    mac.found(ws);
+    let chat = mac.svc.create_chat("plans", ws, "").unwrap().id;
+    mac.sync().await;
+    let mut taylor = Dev::open(&tmp.path().join("taylor"), "Taylor", &relay, ws);
+    taylor.join_via(&mut mac, ws).await;
+    taylor.sync().await;
+    mac.sync().await;
+
+    // The computer asks; its request (and so its public key) is seen by
+    // Taylor, who certifies the key for herself before Alex approves.
+    let mut lt = Dev::open(&tmp.path().join("lt"), "lt", &relay, ws);
+    let req = lt.request("lt");
+    taylor.svc.publish_foreign_certificate(ws, &req.device_public_key).unwrap();
+    taylor.sync().await;
+    mac.sync().await;
+    let preview = mac.svc.preview_computer_link(ws, &req).unwrap();
+    assert_eq!(preview.someone_elses, None, "a certificate alone isn't the computer choosing Taylor");
+    assert_eq!(preview.also_certified_by, vec!["Taylor".to_string()], "shown, quietly");
+    let grant = mac.svc.issue_computer_link(ws, &req, &mac.conn(room), now_ms()).unwrap();
+    mac.sync().await;
+    lt.svc.store().set_workspace_pin(ws, &mac.id(), &crate::envelope_verifier::FounderPin::fingerprint_hex(&mac.svc.account_public_key())).unwrap();
+    let person = lt.redeem(&grant).await.unwrap();
+    assert_eq!(person.id, mac.id(), "the computer is Alex's");
+    lt.svc.post_user_message(chat, ws, "from lt").unwrap();
+    lt.sync().await;
+    mac.sync().await;
+    assert!(mac.bodies(chat).contains(&("from lt".into(), mac.id())), "{:?}", mac.bodies(chat));
+    let (standing, foreign) = lt.svc.device_standing_and_foreign(ws).unwrap();
+    assert!(matches!(standing, crate::device_enroll::Standing::OwnerDevice(ref a) if a.id == mac.id()), "{standing:?}");
+    assert_eq!(foreign.iter().map(|a| a.id.clone()).collect::<Vec<_>>(), vec![taylor.id()], "the certifier is only shown");
+
+    // Having acted as Alex, the computer is Alex's: someone else can't link
+    // it now (Sam never certified it, so this is the "chose" check).
+    let mut sam = Dev::open(&tmp.path().join("sam"), "Sam", &relay, ws);
+    sam.join_via(&mut mac, ws).await;
+    sam.sync().await;
+    mac.sync().await;
+    let sacct = sam.account();
+    let key = ligus_core::testkit::test_recovery_key(sacct);
+    sam.svc.register_passkey(ws, key.credential(sacct, "Test recovery key"), &|r| Ok(key.assert(&r.challenge))).unwrap();
+    sam.svc.set_presence_provider(Some(Arc::new(TestPasskey(sacct))));
+    sam.sync().await;
+    let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&mac.svc.account_public_key());
+    sam.svc.store().set_workspace_pin(ws, &mac.id(), &fk).unwrap();
+    sam.svc.set_trusted_founder(Some(mac.id()));
+    let again = lt.request("lt");
+    let err = sam.svc.issue_computer_link(ws, &again, &mac.conn(room), now_ms()).unwrap_err().to_string();
+    assert!(err.contains("as someone else"), "{err}");
 }
 
 /// T7: lockdown refuses; the previous-member proof is shown when it verifies,

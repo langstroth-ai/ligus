@@ -1332,6 +1332,8 @@ export interface MyDeviceDto {
   phone: boolean;
   /** The label is a real name, not the "Device 1a2b3c4d" fallback. */
   named: boolean;
+  /** One quiet line when another member also certified this device's key. */
+  note?: string;
 }
 export interface DeviceRequestDto {
   hostId: string;
@@ -1357,8 +1359,10 @@ export interface ComputerRequestDto {
   fingerprint: string;
   alreadyMine: boolean;
   revoked: boolean;
-  /** Already in the workspace as someone else (their name). */
+  /** Already in the workspace as someone else (their name): it signed as them. */
   someoneElses: string | null;
+  /** Members who certified this computer's key without it acting for them: shown, never a refusal. */
+  alsoCertifiedBy?: string[];
   /** The separate member this computer proved it was here. */
   previousMember: { memberId: string; displayName: string } | null;
   /** This desktop's fingerprint: the computer shows it when it redeems. */

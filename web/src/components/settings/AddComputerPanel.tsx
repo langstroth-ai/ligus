@@ -167,6 +167,11 @@ export function AddComputerPanel({
               device key (<code>ligus devices request --new-device</code>).
             </div>
           )}
+          {canAdd && (preview.alsoCertifiedBy?.length ?? 0) > 0 && (
+            <div className="text-ink-soft" data-testid="also-certified">
+              {preview.alsoCertifiedBy!.join(", ")} also certified this computer's key. That gives them nothing over it.
+            </div>
+          )}
           {canAdd && (
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={matches} onChange={(e) => setMatches(e.target.checked)} />

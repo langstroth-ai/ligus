@@ -23,8 +23,13 @@ pub struct LinkPreview {
     pub already_mine: bool,
     /// Revoked here: the computer needs a new device key.
     pub revoked: bool,
-    /// Certified here for someone else (their name).
+    /// Already acting here for someone else (their name): the computer
+    /// itself signed as them. Refused.
     pub someone_elses: Option<String>,
+    /// Members whose account certified this computer's key without it ever
+    /// acting for them (their names). A foreign certificate gives them
+    /// nothing over it and doesn't stop the link; it is only shown.
+    pub also_certified_by: Vec<String>,
     /// The member this computer proved it was here (its account key signed
     /// the request), if any.
     pub previous_member: Option<WorkspaceMember>,
@@ -47,10 +52,17 @@ impl ChatService {
                 .map(|m| crate::display::shown(&m.actor.display_name))
                 .unwrap_or_else(|| format!("account {}", &account.to_string()[..8]))
         };
+        // Who the computer chose is read from its own signatures, never from
+        // a certificate (anyone can certify a public device key).
+        let chosen = self.device_chosen_accounts(workspace_id, request.device_id, &request.device_public_key)?;
         let someone_elses = device
             .filter(|d| !d.revoked)
-            .and_then(|d| d.accounts.iter().find(|a| Some(**a) != me).copied())
+            .and_then(|_| chosen.iter().find(|a| Some(**a) != me).copied())
             .map(name_of);
+        let also_certified_by = device
+            .filter(|d| !d.revoked)
+            .map(|d| d.accounts.iter().filter(|a| Some(**a) != me && !chosen.contains(a)).map(|a| name_of(*a)).collect())
+            .unwrap_or_default();
         // The proof shows only for a current human member other than you,
         // under the account key this workspace registers for them.
         let previous_member = request.previous.as_ref().and_then(|p| {
@@ -67,6 +79,7 @@ impl ChatService {
             already_mine,
             revoked,
             someone_elses,
+            also_certified_by,
             previous_member,
         })
     }
@@ -125,7 +138,12 @@ impl ChatService {
             if d.accounts.contains(&account_id) {
                 return Err(refused("this computer is already one of your devices here"));
             }
-            if !d.accounts.is_empty() {
+            // Refused only when the computer itself acted as someone else
+            // here (a signature by its own key). Another member's
+            // certificate of its public key alone is foreign: it gives them
+            // nothing and must not block the person's own link.
+            let chosen = self.device_chosen_accounts(workspace_id, request.device_id, &request.device_public_key)?;
+            if chosen.iter().any(|a| *a != account_id) {
                 return Err(refused(
                     "this computer is already in the workspace as someone else: on it, make a new request with a new device key",
                 ));
@@ -149,9 +167,11 @@ impl ChatService {
     /// the grant's founder pin): whether the workspace agrees with the grant.
     /// The founding is verified; the person is a human member; the approving
     /// device is theirs (certified, not delegated, not revoked, its key the
-    /// grant's); this device is certified for the person and for no one
-    /// else, and isn't revoked; no lockdown. Writes nothing. Returns the
-    /// person (to `act_as_owner_device`).
+    /// grant's); this device is certified for the person, never acted for
+    /// anyone else here, and isn't revoked; no lockdown. A certificate
+    /// another member put on this device's key is ignored (it gives them
+    /// nothing). Writes nothing. Returns the person (to
+    /// `act_as_owner_device`).
     pub fn check_computer_link(&self, grant: &OpenedGrant, now_ms: i64) -> Result<ActorIdentity> {
         let person = grant.check(&self.keypair.public_key_bytes(), now_ms).map_err(|e| refused(e.to_string()))?;
         let ws = grant.workspace_id;
@@ -182,7 +202,8 @@ impl ChatService {
         if me.revoked {
             return Err(refused("this computer's device was revoked in this workspace: make a new request with a new device key"));
         }
-        if me.accounts.iter().any(|a| *a != account) {
+        let chosen = self.device_chosen_accounts(ws, self.device_id, &self.keypair.public_key_bytes())?;
+        if chosen.iter().any(|a| *a != account) {
             return Err(refused("this computer is already in the workspace as someone else: make a new request with a new device key"));
         }
         if !me.accounts.contains(&account) {

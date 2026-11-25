@@ -74,6 +74,18 @@ impl ChatService {
     /// The member phone `phone` is certified for here (its actor, stamped
     /// with the phone as its device). Refused for a revoked or unknown
     /// phone, or one whose person isn't a member.
+    ///
+    /// A phone never vouches (its person's desktop enrolls it), so when
+    /// another member also certified its key for themselves (device keys
+    /// are public: every certificate on the log carries one), the fold's
+    /// holders name both. The phone's person is then the account whose
+    /// certificate of this key **this device stored first** (local arrival
+    /// order, not the log's order, which an author can steer by naming an
+    /// older head): nobody can certify a key before they have seen it, and
+    /// they see it in the genuine certificate. A later certificate never
+    /// redirects the phone or takes it away from its person (identity
+    /// model v2, 7.3a); if the first certifier is no longer a member, the
+    /// phone names no one (fail closed), never the later certifier.
     pub fn phone_person(&self, workspace_id: Uuid, phone: Uuid) -> Result<ligus_core::ActorIdentity> {
         let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         let config = config.ok_or_else(|| ChatError::Unauthorized("the workspace configuration hasn't synced to this box yet".into()))?;
@@ -83,19 +95,57 @@ impl ChatService {
             .get(&phone)
             .filter(|d| d.phone && !d.revoked)
             .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
-        // The one member who holds this phone (someone else who certified
-        // its key for themselves leaves it naming no one: fail closed).
-        let mut people = config
+        let not_member = || ChatError::Unauthorized("that phone's person isn't a member here".into());
+        let account = if device.holders.len() == 1 {
+            device.holders.first().copied()
+        } else {
+            self.first_certifier(workspace_id, phone, &device.holders)?
+        }
+        .ok_or_else(not_member)?;
+        let member = config
             .members
             .iter()
-            .filter(|m| m.actor.kind == ligus_core::ActorKind::Human && m.actor.account_id.is_some_and(|a| device.holders.contains(&a)));
-        let member = match (people.next(), people.next()) {
-            (Some(m), None) => m,
-            _ => return Err(ChatError::Unauthorized("that phone's person isn't a member here".into())),
-        };
+            .find(|m| m.actor.kind == ligus_core::ActorKind::Human && m.actor.account_id == Some(account))
+            .ok_or_else(not_member)?;
         let mut actor = member.actor.clone();
         actor.device_id = Some(phone);
         Ok(actor)
+    }
+
+    /// Among `holders`, the account whose certificate of `device` this
+    /// store holds first (row order; see [`Self::phone_person`]).
+    fn first_certifier(
+        &self,
+        workspace_id: Uuid,
+        device: Uuid,
+        holders: &std::collections::BTreeSet<Uuid>,
+    ) -> Result<Option<Uuid>> {
+        Ok(self.store.trust_envelopes(workspace_id)?.into_iter().find_map(|e| match e.payload {
+            SessionEvent::DeviceCertificateAdded { certificate } if certificate.device_id == device && holders.contains(&certificate.account_id) => {
+                Some(certificate.account_id)
+            }
+            _ => None,
+        }))
+    }
+
+    /// The current members other than its person ([`Self::phone_person`])
+    /// who also certified phone `phone`'s key. A revocation goes strictly
+    /// down the ranks over every holder, so while one at or above the
+    /// person's rank holds it, the person can't revoke their own phone: My
+    /// devices says so and who can. Empty for a phone only its person holds.
+    pub fn phone_co_holders(&self, workspace_id: Uuid, phone: Uuid) -> Result<Vec<ligus_core::ActorIdentity>> {
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let Some(config) = config else { return Ok(Vec::new()) };
+        let roster = timeline.current();
+        let Some(device) = roster.devices.get(&phone).filter(|d| d.phone && !d.revoked) else { return Ok(Vec::new()) };
+        let person = self.phone_person(workspace_id, phone).ok().and_then(|p| p.account_id);
+        Ok(config
+            .members
+            .iter()
+            .filter(|m| m.actor.kind == ligus_core::ActorKind::Human)
+            .filter(|m| m.actor.account_id.is_some_and(|a| Some(a) != person && device.holders.contains(&a)))
+            .map(|m| m.actor.clone())
+            .collect())
     }
 
     /// The accounts of the person who admitted this box (repos review F12,
