@@ -72,7 +72,10 @@ import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { CANVAS_TAB_HINT, TOUR_CANVAS_TABS, TOUR_DIFF } from "@/lib/tour";
 import { tip } from "@/components/Tooltip";
 import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour } from "@/lib/firstRun";
-import { ADMIT_BOX_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, flashMessage, requestAddPhone, type OpenChatDetail } from "@/lib/nav";
+import { ADMIT_BOX_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, OPEN_SETUP_EVENT, flashMessage, openSetup, requestAddPhone, type OpenChatDetail } from "@/lib/nav";
+import { SetupWizard } from "@/components/setup/SetupWizard";
+import { isSetupFlow } from "@/lib/setup";
+import type { SetupFlowId } from "@/lib/ipc";
 import { useCustomThemes } from "@/lib/customThemes";
 import {
   applyActiveTheme,
@@ -185,6 +188,7 @@ export function App() {
       toast.error(`Couldn't join: ${errMsg(e)}`);
     }
   };
+  const [setupFlow, setSetupFlow] = useState<SetupFlowId | null>(null);
   const [mode, setMode] = useState<CanvasMode>("chat");
   // Live mirror of `mode` for non-React callbacks (the editorStore subscription
   // below) so they read the current canvas mode without re-subscribing.
@@ -556,6 +560,16 @@ export function App() {
     const onAdmit = () => setAdmitBoxOpen(true);
     window.addEventListener(ADMIT_BOX_EVENT, onAdmit);
     return () => window.removeEventListener(ADMIT_BOX_EVENT, onAdmit);
+  }, []);
+
+  // Guided setup (⌘K "Set up an agent", `/setup agent`, an empty pane).
+  useEffect(() => {
+    const onSetup = (e: Event) => {
+      const flow = (e as CustomEvent<string>).detail;
+      if (isSetupFlow(flow)) setSetupFlow(flow);
+    };
+    window.addEventListener(OPEN_SETUP_EVENT, onSetup);
+    return () => window.removeEventListener(OPEN_SETUP_EVENT, onSetup);
   }, []);
 
   // System-tray navigation: the native menu emits a route string and we switch
@@ -1111,6 +1125,7 @@ export function App() {
             window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")?.focus(), 0);
           },
           addPhone: () => requestAddPhone(),
+          setup: (flow) => openSetup(flow),
           showShortcuts: () => setShortcutsOpen(true),
           showErrors: () => setErrorsOpen(true),
           openInbox: () => setView("inbox"),
@@ -1443,6 +1458,7 @@ export function App() {
         />
       )}
       {/* After Settings so it stacks above it when opened from there. */}
+      {setupFlow && <SetupWizard flow={setupFlow} workspaceId={activeWorkspace?.id} onClose={() => setSetupFlow(null)} />}
       {admitBoxOpen && activeWorkspace?.kind === "room" && (
         <AdmitBoxModal workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} onClose={() => setAdmitBoxOpen(false)} />
       )}

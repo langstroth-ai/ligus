@@ -8,6 +8,8 @@ import { fuzzyRank } from "@/lib/fuzzy";
 import { loadRecents, noteRecent } from "@/lib/paletteRecents";
 import { keyLabel, paneKey, shortcutKey } from "@/lib/shortcuts";
 import { useChatAttention } from "@/state/useSessionStates";
+import { SETUP_FLOWS } from "@/lib/setup";
+import type { SetupFlowId } from "@/lib/ipc";
 
 export interface PaletteActions {
   newChat: () => void;
@@ -45,6 +47,8 @@ export interface PaletteActions {
   mentionAgent?: (name: string) => void;
   /// Settings → Profile with the add-a-phone panel open.
   addPhone?: () => void;
+  /// Open a guided setup flow ("Set up an agent", "Connect a tool", …).
+  setup?: (flow: SetupFlowId) => void;
   /// The ⌘/ keyboard shortcuts sheet.
   showShortcuts?: () => void;
   /// Errors this session, including ones whose toast already faded.
@@ -217,6 +221,12 @@ export function CommandPalette({
         keywords: "join code redeem relay invite",
         run: run(actions.redeemInvite),
       });
+    }
+    if (actions.setup) {
+      const open = actions.setup;
+      for (const f of SETUP_FLOWS) {
+        items.push({ id: `setup-${f.id}`, label: f.title, hint: "Set up", keywords: `setup wizard ${f.keywords}`, run: run(() => open(f.id)) });
+      }
     }
     if (actions.takeTour) {
       items.push({ id: "take-tour", label: "Take the tour", hint: "Help", run: run(actions.takeTour) });

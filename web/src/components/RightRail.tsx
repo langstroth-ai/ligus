@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { SetupAction } from "@/components/setup/SetupAction";
 import {
   addAgent,
   listAgentTemplates,
@@ -470,7 +471,7 @@ function ToolsPane({
     >
       <Section title="Runtime" info="The runtime that answers untagged messages in this chat. Pick one here; it applies to this chat only. Manage runtimes in Settings → Models.">
         {runtimeList.length === 0 ? (
-          <EmptyHint text="No runtimes configured" />
+          <EmptyHint text="No runtimes configured" action={<SetupAction flow="agent" />} />
         ) : (
           <RuntimeSwitcher runtimes={runtimeList} activeId={activeRuntimeId} onSelect={(id) => void selectRuntime(id)} />
         )}
@@ -528,7 +529,7 @@ function ToolsPane({
         tag={<MetaTag>workspace</MetaTag>}
       >
         {mcpList.length === 0 ? (
-          <EmptyHint text="No MCP servers" />
+          <EmptyHint text="No MCP servers" action={<SetupAction flow="tool" />} />
         ) : (
           <RowList label="MCP servers">
             {mcpList.map((server) => (
@@ -2265,7 +2266,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
 
       <Section title="Workers & hosts">
         {(hosts.data ?? []).length === 0 ? (
-          <EmptyHint text="No hosts yet" />
+          <EmptyHint text="No hosts yet" action={<SetupAction flow="box" />} />
         ) : (
           <RowList label="Workers and hosts">
             {(hosts.data ?? []).map((host) => <HostRow key={host.id} host={host} />)}
