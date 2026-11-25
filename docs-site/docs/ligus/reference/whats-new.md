@@ -33,6 +33,18 @@ Full release notes are on the
   cleanup isn't finished stays in view with **Retry now**. See
   [Revoked devices](../features/linked-devices.md#revoked-devices).
 
+### Security
+
+- **Model API keys are never stored in the workspace.** `ligus add-runtime
+  --secret` is gone (it's a usage error): give a workspace runtime a key with
+  `--secret-ref <NAME>` and set `LIGUS_WS_SECRET_<NAME>` on each worker. A
+  key an older version stored in the workspace is never used, shown or
+  exported; such a runtime reads as "stored key (unused)", runs only if it
+  can run keyless, and `ligus doctor` warns about it (`runtimes.inline-key`).
+  Every member's device received that key, so rotate it with the provider and
+  move the runtime to `--secret-ref`. See
+  [Headless agents](../../operate/concepts/headless-agents.md).
+
 ### Fixed
 
 - **Claiming a workspace on the relay.** The People pane offered
