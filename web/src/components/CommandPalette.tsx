@@ -47,6 +47,10 @@ export interface PaletteActions {
   mentionAgent?: (name: string) => void;
   /// Settings → Profile with the add-a-phone panel open.
   addPhone?: () => void;
+  /// Settings → Profile → My devices with Add a computer open.
+  addComputer?: () => void;
+  /// Settings → Profile, scrolled to My devices.
+  myDevices?: () => void;
   /// Open a guided setup flow ("Set up an agent", "Connect a tool", …).
   setup?: (flow: SetupFlowId) => void;
   /// The ⌘/ keyboard shortcuts sheet.
@@ -187,6 +191,24 @@ export function CommandPalette({
         hint: "Devices",
         keywords: "iphone mobile pair qr device enroll",
         run: run(actions.addPhone),
+      });
+    }
+    if (actions.addComputer) {
+      items.push({
+        id: "add-computer",
+        label: "Add a computer to my devices…",
+        hint: "Devices",
+        keywords: "link device computer laptop lt terminal cli ligus devices request second member invited myself duplicate",
+        run: run(actions.addComputer),
+      });
+    }
+    if (actions.myDevices) {
+      items.push({
+        id: "my-devices",
+        label: "My devices",
+        hint: "Settings",
+        keywords: "devices computers phones link revoke revoked lt terminal profile",
+        run: run(actions.myDevices),
       });
     }
     if (actions.showShortcuts) {

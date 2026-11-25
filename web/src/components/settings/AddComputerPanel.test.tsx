@@ -70,4 +70,44 @@ describe("AddComputerPanel", () => {
     await userEvent.type(screen.getByLabelText("The computer's link request"), "hivews1:x");
     expect((await screen.findByRole("alert")).textContent).toContain("ligus devices request");
   });
+
+  it("opened from People: names the member and offers to remove it after adding", async () => {
+    vi.mocked(ipc.inspectComputerRequest).mockResolvedValue({ ...request, previousMember: null });
+    vi.mocked(ipc.addComputer).mockResolvedValue({
+      grant: "ligusgrant1:abc",
+      expiresInMinutes: 30,
+      thisDesktop: request.thisDesktop,
+      previousMember: null,
+    });
+    render(<AddComputerPanel onDone={() => {}} onCancel={() => {}} suggested={{ memberId: "m-zaz", displayName: "zaz" }} />);
+    expect(screen.getByTestId("add-computer-suggested").textContent).toContain("zaz");
+    await userEvent.type(screen.getByLabelText("The computer's link request"), "liguslink1:x");
+    await screen.findByTestId("add-computer-request");
+    await userEvent.click(screen.getByLabelText("The computer shows the same fingerprint"));
+    await userEvent.click(screen.getByRole("button", { name: "Add with passkey" }));
+    const row = await screen.findByTestId("add-computer-remove-old");
+    expect(row.textContent).toContain("You opened this from");
+    // Never removed on its own: only after the person chooses it.
+    expect(ipc.removeDuplicateMember).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Remove…" }));
+    await waitFor(() => expect(ipc.removeDuplicateMember).toHaveBeenCalledWith("m-zaz"));
+  });
+
+  it("prefers the member the computer proved it was", async () => {
+    vi.mocked(ipc.inspectComputerRequest).mockResolvedValue(request);
+    vi.mocked(ipc.addComputer).mockResolvedValue({
+      grant: "ligusgrant1:abc",
+      expiresInMinutes: 30,
+      thisDesktop: request.thisDesktop,
+      previousMember: request.previousMember,
+    });
+    render(<AddComputerPanel onDone={() => {}} onCancel={() => {}} suggested={{ memberId: "m-zaz", displayName: "zaz" }} />);
+    await userEvent.type(screen.getByLabelText("The computer's link request"), "liguslink1:x");
+    await screen.findByTestId("add-computer-request");
+    await userEvent.click(screen.getByLabelText("The computer shows the same fingerprint"));
+    await userEvent.click(screen.getByRole("button", { name: "Add with passkey" }));
+    expect((await screen.findByTestId("add-computer-remove-old")).textContent).toContain("Alex (lt)");
+    await userEvent.click(screen.getByRole("button", { name: "Remove…" }));
+    await waitFor(() => expect(ipc.removeDuplicateMember).toHaveBeenCalledWith("m-lt"));
+  });
 });

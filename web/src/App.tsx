@@ -72,7 +72,7 @@ import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { CANVAS_TAB_HINT, TOUR_CANVAS_TABS, TOUR_DIFF } from "@/lib/tour";
 import { tip } from "@/components/Tooltip";
 import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour } from "@/lib/firstRun";
-import { ADMIT_BOX_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, OPEN_SETUP_EVENT, flashMessage, openSetup, requestAddPhone, type OpenChatDetail } from "@/lib/nav";
+import { ADMIT_BOX_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, OPEN_SETUP_EVENT, flashMessage, openSetup, requestAddPhone, requestDevices, type OpenChatDetail } from "@/lib/nav";
 import { SetupWizard } from "@/components/setup/SetupWizard";
 import { isSetupFlow } from "@/lib/setup";
 import type { SetupFlowId } from "@/lib/ipc";
@@ -1125,6 +1125,8 @@ export function App() {
             window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")?.focus(), 0);
           },
           addPhone: () => requestAddPhone(),
+          addComputer: () => requestDevices({ open: "computer" }),
+          myDevices: () => requestDevices({ open: "list" }),
           setup: (flow) => openSetup(flow),
           showShortcuts: () => setShortcutsOpen(true),
           showErrors: () => setErrorsOpen(true),
