@@ -4,6 +4,24 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## Unreleased
+
+### Changed
+
+- **Linking a computer is easier to find.** ⌘K **Add a computer to my
+  devices…** (type link, computer, device, lt or terminal) and ⌘K **My
+  devices**; Profile has a **My devices** link at the top. In People, a
+  member that looks like you on another computer says so, and its row menu
+  opens Add a computer for it, with removing that member offered once it's
+  added. In lt, Settings and People say when the terminal is its own member,
+  and **D** links it. See
+  [Already invited yourself?](../features/linked-devices.md#already-invited-yourself).
+- **Revoked devices are out of the way.** My devices folds them into a
+  collapsed **Revoked (N)** group, one line each, with the cleanup report
+  behind **Details** and **Hide from this list** (it stays revoked). One whose
+  cleanup isn't finished stays in view with **Retry now**. See
+  [Revoked devices](../features/linked-devices.md#revoked-devices).
+
 ## 0.3.0
 
 A calmer desktop, guided setup for everything you connect (on the desktop,

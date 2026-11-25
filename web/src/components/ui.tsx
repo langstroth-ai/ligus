@@ -113,8 +113,11 @@ export function Section({
   tag,
   children,
   className = "",
+  id,
 }: {
   title: string;
+  /// An anchor to jump to (`#my-devices`).
+  id?: string;
   action?: ReactNode;
   /// The explanation, behind a small "?" beside the title.
   info?: string;
@@ -124,7 +127,7 @@ export function Section({
   className?: string;
 }) {
   return (
-    <section className={`mb-5 ${className}`}>
+    <section id={id} className={`mb-5 ${className}`}>
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <h2 className="ligus-section">{title}</h2>

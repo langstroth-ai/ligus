@@ -24,6 +24,8 @@ const flags = {
   inbox: params.get("inbox") === "1",
   modelProblem: params.get("modelproblem") === "1",
   noAgents: params.get("noagents") === "1",
+  // You on another computer (lt joined with an invite) and revoked devices.
+  devices: params.get("devices") === "1",
   empty: scenario === "empty" || scenario === "onboarding",
 };
 
@@ -80,7 +82,7 @@ function handle(cmd: string, args: Args): unknown {
     case "get_agent_usage":
       return fx.agentUsage(String(args?.agentId ?? ""));
     case "list_members":
-      return fx.members;
+      return flags.devices ? [...fx.members, fx.ltMember] : fx.members;
     case "workspace_members":
       return fx.serverMembers;
     case "presence_list":
@@ -112,7 +114,7 @@ function handle(cmd: string, args: Args): unknown {
     case "list_chat_attention":
       return flags.empty ? [] : fx.chatAttention;
     case "list_workspace_hosts":
-      return flags.noAgents ? [] : fx.hosts;
+      return flags.noAgents ? [] : flags.devices ? [...fx.hosts, fx.ltHost] : fx.hosts;
     case "list_mention_states":
     case "list_all_mention_states":
       return [];
@@ -286,6 +288,7 @@ function handle(cmd: string, args: Args): unknown {
       return [
         { deviceId: "d1", label: "MacBook Pro", fingerprint: "a1b2-c3d4", thisDevice: true, revoked: false, lastSeen: null, phone: false, named: true },
         { deviceId: "p1", label: "Ana's iPhone", fingerprint: "e5f6-a7b8", thisDevice: false, revoked: false, lastSeen: null, phone: true, named: true },
+        ...(flags.devices ? fx.revokedDevices : []),
       ];
     case "inspect_computer_request":
       return {
@@ -312,7 +315,7 @@ function handle(cmd: string, args: Args): unknown {
     case "list_device_requests":
       return [];
     case "list_device_revocations":
-      return [];
+      return flags.devices ? fx.revocationReports() : [];
     case "retry_device_revocation":
       return null;
     case "has_issuer_key":

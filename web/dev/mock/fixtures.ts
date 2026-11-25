@@ -692,3 +692,36 @@ const diffSides: Record<string, { original: string; modified: string }> = {
   },
 };
 export const fileDiffSides = (path: string) => ({ ...(diffSides[path] ?? { original: "", modified: "" }), isBinary: false });
+
+// ?devices=1: lt joined this workspace with an invite, so it is its own
+// member (a shorter name, with its own lt host), and three revoked devices,
+// one whose cleanup isn't finished on the serve box.
+export const ltMember = { id: "mem-lt", actorId: "a-lt", displayName: "Zaz (lt)", role: "contributor", title: "", index: 5, isSelf: false, avatarUrl: null, kind: "human", isFounder: false, removeRefusal: null, roleOptions: [], regrantRefusal: null };
+export const ltHost = { id: "h-lt", kind: "device", label: "lt on studio-mini", online: true, lastSeen: iso(0), ownerName: "Zaz (lt)", mine: false, modelGateways: [] };
+export const revokedDevices = [
+  { deviceId: "59e53e62-0000-4000-8000-000000000001", label: "Device 59e53e62", fingerprint: "0C3B-77A1", thisDevice: false, revoked: true, lastSeen: null, phone: true, named: false },
+  { deviceId: "7a10c4d2-0000-4000-8000-000000000002", label: "Old iPad", fingerprint: "41D0-9E22", thisDevice: false, revoked: true, lastSeen: null, phone: true, named: true },
+  { deviceId: "c3e9b801-0000-4000-8000-000000000003", label: "Lost iPhone", fingerprint: "B2F4-6C10", thisDevice: false, revoked: true, lastSeen: null, phone: true, named: true },
+];
+const step = (state: string, detail?: string) => ({ state, detail, at: 0, attempts: 1 });
+export const revocationReports = () => {
+  const now = Math.floor(Date.now() / 1000);
+  const report = (deviceId: string, name: string, days: number, done: boolean) => ({
+    hostId: "h-box",
+    hostLabel: "home-server",
+    reportedAt: now - days * 86400 + 60,
+    summary: done ? "revoked: tunnel cut, push removed, session: not applicable" : "revoked: push removed; tunnel not cut yet",
+    complete: done,
+    deviceId,
+    name,
+    revokedAt: now - days * 86400,
+    tunnel: done ? step("done", "pairing cut") : step("failed", "relay unreachable, retrying"),
+    push: step("done", "token removed"),
+    session: step("not_applicable"),
+  });
+  return [
+    report(revokedDevices[0].deviceId, "", 21, true),
+    report(revokedDevices[1].deviceId, "Old iPad", 9, true),
+    report(revokedDevices[2].deviceId, "Lost iPhone", 1, false),
+  ];
+};

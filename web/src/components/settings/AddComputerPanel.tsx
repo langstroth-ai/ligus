@@ -17,7 +17,20 @@ import { Fingerprint } from "@/components/kit/Fingerprint";
 import { confirmDialog } from "@/components/Dialog";
 import { toast, errMsg } from "@/components/Toast";
 
-export function AddComputerPanel({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+type MemberRef = { memberId: string; displayName: string };
+
+export function AddComputerPanel({
+  onDone,
+  onCancel,
+  suggested,
+}: {
+  onDone: () => void;
+  onCancel: () => void;
+  /// Opened from People on a member that looks like you on another computer:
+  /// offer to remove that member once the computer is added. The computer's
+  /// own proof (`previousMember`) wins when it names someone.
+  suggested?: MemberRef;
+}) {
   const [code, setCode] = useState("");
   const [preview, setPreview] = useState<ComputerRequestDto | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -36,7 +49,7 @@ export function AddComputerPanel({ onDone, onCancel }: { onDone: () => void; onC
       setPreview(await inspectComputerRequest(next.trim()));
     } catch (e) {
       if (next.trim().startsWith("liguslink1:")) setProblem(errMsg(e));
-      else setProblem("That isn't a computer's link request. On the computer, choose Add to my devices (lt) or run ligus devices request.");
+      else setProblem("That isn't a computer's link request. On the computer, choose Link to my devices in lt, or run ligus devices request.");
     }
   }
 
@@ -52,9 +65,10 @@ export function AddComputerPanel({ onDone, onCancel }: { onDone: () => void; onC
     }
   }
 
-  async function removeOld(m: { memberId: string; displayName: string }) {
+  async function removeOld(m: MemberRef, proven: boolean) {
     const ok = await confirmDialog(
-      `Remove the member "${m.displayName}" from this workspace? Their past messages keep their name; nothing new from them is accepted.`,
+      `Remove the member "${m.displayName}" from this workspace? Their past messages keep their name; nothing new from them is accepted.` +
+        (proven ? "" : " The computer didn't prove it was them: remove them only if that member was you on it."),
       { danger: true },
     );
     if (!ok) return;
@@ -66,6 +80,11 @@ export function AddComputerPanel({ onDone, onCancel }: { onDone: () => void; onC
       toast.error(`Couldn't remove them: ${errMsg(e)}`);
     }
   }
+
+  // Who to offer to remove: the member the computer proved it was, else the
+  // one People suggested.
+  const proven = grant?.previousMember ?? preview?.previousMember ?? null;
+  const toRemove = proven ?? suggested ?? null;
 
   if (grant) {
     return (
@@ -90,12 +109,17 @@ export function AddComputerPanel({ onDone, onCancel }: { onDone: () => void; onC
         </div>
         <p className="text-ink-soft">It's sealed: only that computer can open it. It will ask you to check this desktop:</p>
         <Fingerprint value={grant.thisDesktop} label="This desktop's fingerprint" copyable={false} />
-        {grant.previousMember && !removed && (
-          <div className="flex items-center justify-between gap-3 rounded-lg border px-2.5 py-2" style={fieldStyle}>
+        {toRemove && !removed && (
+          <div
+            className="flex items-center justify-between gap-3 rounded-lg border px-2.5 py-2"
+            style={fieldStyle}
+            data-testid="add-computer-remove-old"
+          >
             <span>
-              This computer was the separate member <strong>"{grant.previousMember.displayName}"</strong>.
+              {proven ? "This computer was" : "You opened this from"} the separate member{" "}
+              <strong>"{toRemove.displayName}"</strong>.
             </span>
-            <Button size="sm" onClick={() => void removeOld(grant.previousMember!)}>
+            <Button size="sm" onClick={() => void removeOld(toRemove, Boolean(proven))}>
               Remove…
             </Button>
           </div>
@@ -110,9 +134,15 @@ export function AddComputerPanel({ onDone, onCancel }: { onDone: () => void; onC
   const canAdd = preview && !preview.alreadyMine && !preview.revoked && !preview.someoneElses;
   return (
     <div className="space-y-2" data-testid="add-computer">
+      {suggested && !preview && (
+        <p className="text-xs" data-testid="add-computer-suggested">
+          Linking <strong>"{suggested.displayName}"</strong>: you can remove that member once it's added.
+        </p>
+      )}
       <p className="text-xs text-ink-soft">
-        On the other computer, choose <em>Add to my devices</em> in lt, or run <code>ligus devices request</code>. Paste
-        what it shows. An invite would make a second member; this makes the computer yours.
+        On the other computer, choose <em>Link to my devices</em> in lt (Settings or People, or the palette), or run{" "}
+        <code>ligus devices request</code>. Paste what it shows. An invite would make a second member; this makes the
+        computer yours.
       </p>
       <textarea
         value={code}
