@@ -32,7 +32,10 @@ async fn a_foreign_certificate_on_a_running_box_blocks_nothing_and_revocation_st
     let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
 
     // The desktop's person certifies the box's public device key for their
-    // own account (a modified client can; the rules accept it).
+    // own account (a modified client can; the rules accept it), after
+    // seeing the box's admission (a certificate drafted before it, sorting
+    // before the box's own redemption, is a fold matter: rules 3).
+    sync_once(&h.desktop).await.unwrap();
     let founder = {
         let mut svc = open_service(&h.desktop).unwrap();
         svc.publish_foreign_certificate(ws, &box_key).unwrap();
