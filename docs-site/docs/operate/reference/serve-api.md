@@ -362,7 +362,7 @@ voter's account, so they never act as the person (see
 | `POST /v1/proposals/:id/comments` | `{text, requestChanges?}` | a Viewer gets 403 |
 | `POST /v1/proposals/:id/request-changes` | `{note?}` | sends the proposal back to its agent (or the default agent). 409 if already revised or applied |
 | `GET /v1/proposals/:id/implement-plan` | | exactly what Implement does: `{plan: {kind, argv?, cwd?, instruction?, targetAgentId?, targetName, legacyCommand}}` |
-| `GET /v1/chats/:id/asks` | | agents' questions in the chat, newest first: `{asks: [{id, agentName, kind, question, options, open, answer?, answeredBy?, expiresAtMs}]}`. `kind` is `question` (an agent's `ligus_ask_human`) or `permission` (an ACP permission escalation, which only the host's person or the agent's owner can grant) |
+| `GET /v1/chats/:id/asks` | | agents' questions in the chat, newest first: `{asks: [{id, agentName, kind, question, options, open, answer?, answeredBy?, postedBy?, expiresAtMs}]}`. `kind` is `question` (an agent's `ligus_ask_human`) or `permission` (an ACP permission escalation, which only the host's person or the agent's owner can grant, posted by the host that runs the turn). `postedBy` names whoever posted an ask that isn't the agent's or its host's; such an ask is always a `question` |
 | `POST /v1/asks/:id/answer` | | **410 Gone**: only a person answers an agent's question; the phone answers with the `answer` [phone action](#phone-actions), or answer from the desktop |
 | `GET /v1/proposals/:id/file` | `?path=<relative>&side=old\|new` | one whole file before or after the diff, rebuilt in a scratch dir. 400 bad path, 404, 409 base moved, 413 over 512 KiB, 415 not UTF-8 |
 

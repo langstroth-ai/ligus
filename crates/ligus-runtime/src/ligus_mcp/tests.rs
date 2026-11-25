@@ -72,8 +72,9 @@ pub(crate) fn world() -> World {
     rev.owner_actor_id = account;
     let reviewer = rev.id;
     svc.add_agent(chat.id, wid, rev).unwrap();
-    svc.post_user_message(chat.id, wid, "please fix the bug").unwrap();
-    let reply = svc.begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None).unwrap();
+    let trigger = svc.post_user_message(chat.id, wid, "please fix the bug").unwrap();
+    // The turn's placeholder answers the request, as a host's turn does.
+    let reply = svc.begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), Some(trigger.id)).unwrap();
     let host = Arc::new(Host { svc: Mutex::new(svc), started: Mutex::new(Vec::new()), forge: Mutex::new(None), staged: Mutex::new(Vec::new()) });
     let mcp = LigusMcp::new(host.clone());
     World { host, mcp, wid, chat: chat.id, agent: agent_id, reviewer, reply, _dir: dir }
@@ -624,6 +625,12 @@ async fn permission_escalation_needs_the_hosts_own_person() {
                 }
             }
             let ask_id = ask_id.expect("the escalation was posted");
+            {
+                // The host's own escalation folds as a permission prompt.
+                let s = host.svc.lock().unwrap().load(chat).unwrap().unwrap();
+                let a = &s.flow.asks[&ask_id];
+                assert!(a.ask.permission && a.posted_by.is_none(), "{a:?}");
+            }
             let mut svc = host.svc.lock().unwrap();
             if answerer == "bob" {
                 // A teammate with write access (a Viewer can't record flow at all).

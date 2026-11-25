@@ -167,14 +167,20 @@ pub fn for_proposal(s: &ChatSession, p: &ActionProposal) -> Option<(Notice, Push
 }
 
 /// An agent's question waiting for a person (`ask.pending`).
-pub fn for_ask(s: &ChatSession, a: &ligus_core::flow::HumanAsk) -> Option<(Notice, PushContent)> {
+/// An ask someone other than the agent or its host posted is sent as
+/// theirs.
+pub fn for_ask(s: &ChatSession, st: &ligus_core::flow::AskState) -> Option<(Notice, PushContent)> {
+    let a = &st.ask;
     if a.closed {
         return None;
     }
-    let agent = ligus_core::flow::agent_from_key(&a.agent_key)
-        .and_then(|id| s.workspace_agents.iter().find(|x| x.id == id))
-        .map(|x| format!("@{}", shown(&x.name)))
-        .unwrap_or_else(|| "An agent".into());
+    let agent = match &st.posted_by {
+        Some(p) => shown(if p.name.trim().is_empty() { &p.id } else { &p.name }),
+        None => ligus_core::flow::agent_from_key(&a.agent_key)
+            .and_then(|id| s.workspace_agents.iter().find(|x| x.id == id))
+            .map(|x| format!("@{}", shown(&x.name)))
+            .unwrap_or_else(|| "An agent".into()),
+    };
     let notice = ntfy::ask_notice(&agent, &shown(&s.title), s.id);
     let mut push = base("ask.pending", s, notice.title.clone());
     push.sender = Some(agent);

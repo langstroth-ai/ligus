@@ -81,6 +81,12 @@ pub(crate) struct AskDto {
     pub answer: Option<String>,
     pub answered_by: Option<String>,
     pub open: bool,
+    /// `permission`: the turn's host asks to run something (only its
+    /// person or the agent's owner can grant it); `question` otherwise.
+    pub kind: &'static str,
+    /// Posted by someone other than the agent or its turn's host: theirs,
+    /// and never a permission request.
+    pub posted_by: Option<String>,
 }
 
 pub(crate) fn ask_dtos(session: &ligus_core::ChatSession) -> Vec<AskDto> {
@@ -103,6 +109,8 @@ pub(crate) fn ask_dtos(session: &ligus_core::ChatSession) -> Vec<AskDto> {
             answer: a.answer.as_ref().map(|x| x.answer.clone()),
             answered_by: a.answer.as_ref().map(|x| x.by.clone()).filter(|b| !b.is_empty()),
             open: a.is_open(),
+            kind: if a.ask.permission { "permission" } else { "question" },
+            posted_by: a.posted_by.as_ref().map(|p| ligus_proto::names::clean_display_name(if p.name.trim().is_empty() { &p.id } else { &p.name })),
         })
         .collect()
 }

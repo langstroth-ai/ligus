@@ -829,9 +829,9 @@ impl Shared {
                     Change::AskPending { chat, ask } => {
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
                         let Some(a) = s.flow.asks.get(&ask) else { continue };
-                        self.hub.emit("ask.pending", json!({ "ask": api::ask_dto(chat, &a.ask) }));
+                        self.hub.emit("ask.pending", json!({ "ask": api::ask_state_dto(s, a) }));
                         if self.fresh(ligus_core::Timestamp::from_unix_seconds(a.ask.at_ms / 1000)) {
-                            notices.extend(notify::for_ask(s, &a.ask));
+                            notices.extend(notify::for_ask(s, a));
                         }
                     }
                     Change::ProposalUpdated { chat, proposal } => {

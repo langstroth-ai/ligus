@@ -148,6 +148,40 @@ async fn agy_flavor_below_tier_escalates_to_a_human() {
     assert!(out.text.unwrap().contains("permission=reject-once"));
 }
 
+/// An agent that offers only a standing permission (`allow_always`, no
+/// `allow_once`) never gets one by default: not for a call its tier would
+/// allow, and not from an "Allow once". A person is asked in words that say
+/// it lasts the session, and only their explicit yes selects it; with no one
+/// to ask, it is refused.
+#[tokio::test]
+async fn a_standing_permission_is_only_a_persons_explicit_choice() {
+    if executor::skip_without_sandbox("a_standing_permission_is_only_a_persons_explicit_choice") {
+        return;
+    }
+    let wt = tempfile::tempdir().unwrap();
+    let tier = ["--allow-tool=read", "--allow-tool=write", "--deny-tool=shell"];
+    // In tier, nobody to ask: refused, never allow_always.
+    let out = run("always", ModelProviderKind::Copilot, &tier, GatePlan::Full, None, wt.path()).await;
+    let text = out.text.unwrap();
+    assert!(text.contains("permission=reject-once"), "{text}");
+    assert!(!wt.path().join("notes.txt").exists());
+    // A person denies.
+    let asker = Arc::new(Answers { option: Some(1), asked: Mutex::new(Vec::new()) });
+    let out = run("always", ModelProviderKind::Copilot, &tier, GatePlan::Full, Some(asker.clone()), wt.path()).await;
+    assert!(out.text.unwrap().contains("permission=reject-once"));
+    let asked = asker.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1, "an in-tier call is still put to a person: {asked:?}");
+    assert!(asked[0].contains("rest of its session"), "the question says it is a standing permission: {}", asked[0]);
+    // A person explicitly allows it.
+    let asker = Arc::new(Answers { option: Some(0), asked: Mutex::new(Vec::new()) });
+    let out = run("always", ModelProviderKind::Copilot, &tier, GatePlan::Full, Some(asker), wt.path()).await;
+    let text = out.text.unwrap();
+    assert!(text.contains("permission=allow-always"), "{text}");
+    // Below tier (read-only), nobody to ask: refused too.
+    let out = run("always", ModelProviderKind::Antigravity, &[], GatePlan::Full, None, wt.path()).await;
+    assert!(out.text.unwrap().contains("permission=reject-once"));
+}
+
 #[tokio::test]
 async fn read_only_gate_denies_edits_without_asking() {
     if executor::skip_without_sandbox("read_only_gate_denies_edits_without_asking") {

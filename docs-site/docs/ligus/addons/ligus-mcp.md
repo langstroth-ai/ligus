@@ -221,6 +221,9 @@ and is pushed to paired phones as `ask.pending`. Anyone in the chat can
 answer, and the first answer wins. Answering a `ligus_ask_human` question
 doesn't authorize anything by itself, so it needs no passkey. A permission
 request is different: it is granted only by the host's own person or the
-agent's owner (see [ACP permissions](acp.md#permissions)). An agent can't answer a question. If the host
+agent's owner (see [ACP permissions](acp.md#permissions)), and only the
+host running the turn can post one. A question someone else posts under an
+agent's name is shown as theirs. Only the asker (the agent or its host)
+closes a question. An agent can't answer a question. If the host
 restarts while a turn is waiting, the turn is cancelled. A question can't be
 resumed in 0.1.
