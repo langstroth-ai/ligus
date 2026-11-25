@@ -2293,6 +2293,12 @@ With the deploy script (from a checkout of the repository; every step has --json
      (exits 4 until the box is admitted, and prints the next commands)
   4. Admit the box, with the env file loaded:
        set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
+     Live (code match), with the approval address an Admin gives you
+     (ligus admit address, or the desktop's workspace menu > Admit a box):
+       ligus admit request --to ligusaddr1:… --label home-box
+     It prints Code: XXXX XXXX; the Admin's screen shows the same code, they confirm
+     with a passkey, and the box keeps the admission once it is on the workspace log.
+     Or paste:
        ligus admit request --label home-box   # prints ligusjoin1:… and a fingerprint
      HUMAN: an Admin approves it (desktop: workspace menu > Admit a box…, or the
      phone), checks the fingerprint, confirms with a passkey, sends back a code.
@@ -2740,9 +2746,15 @@ Set up a box (serve) on this machine:
   $L preflight --role serve --data-dir ~/.ligus-serve --json         # verify: ok true
   $L install-cli --json                                              # verify: ligus --version
   $L configure --role serve --data-dir ~/.ligus-serve --json         # exit 4 until admitted; prints next[]
-  (env file loaded) ligus admit request --label <name>               # prints ligusjoin1:… + fingerprint
-  HUMAN: an Admin approves it (desktop: workspace menu > Admit a box…) and sends a code
-  ligus admit redeem ligusadmit1:…                                   # verify: ligus status --json (admissionKept)
+  (env file loaded) ligus admit request --to ligusaddr1:… --label <name> --json
+      # the approval address comes from an Admin (ligus admit address, or the desktop);
+      # it waits for an approver, prints Code: XXXX XXXX on stderr (check id match-code),
+      # and keeps the admission only once it is on the workspace log. Exit 3 (no
+      # mailbox on the relay): use the paste path below. Exit 4: nobody approved in --wait.
+  HUMAN: an Admin approves it in their Inbox or on the phone, checking the same code
+  (paste path: ligus admit request --label <name>, HUMAN approves it on the desktop
+   and sends a code, then ligus admit redeem ligusadmit1:…)
+  verify: ligus status --json (admissionKept)
   $L start --role serve --data-dir ~/.ligus-serve --systemd|--launchd --json
   $L verify --role serve --data-dir ~/.ligus-serve --json            # verify: ok true
   LIGUS_DATA_DIR=~/.ligus-serve ligus status --json                  # verify: member true

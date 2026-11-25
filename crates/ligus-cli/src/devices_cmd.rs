@@ -175,6 +175,9 @@ pub(crate) fn connection(cfg: &Config, svc: &ligus_runtime::ChatService) -> Resu
     Ok(ligus_runtime::workspace_invite::encode_workspace_invite(&conn))
 }
 
+/// Asks the person whether they link as this person (code-match check 6).
+pub type ConfirmPerson<'a> = &'a mut (dyn FnMut(&ligus_core::ActorIdentity) -> Result<bool> + Send);
+
 /// Asks the person at a terminal whether `what` matches; `Ok(true)` is yes.
 pub type Confirm<'a> = &'a mut dyn FnMut(&str) -> Result<bool>;
 
@@ -410,7 +413,7 @@ pub(crate) async fn link_with_grant(
     device_id: Uuid,
     old_device: Uuid,
     state: &mut LinkState,
-    confirm_person: Option<&mut (dyn FnMut(&ligus_core::ActorIdentity) -> Result<bool> + Send)>,
+    confirm_person: Option<ConfirmPerson<'_>>,
 ) -> Result<ligus_core::ActorIdentity> {
     let ids = identity(cfg);
     let (founder, fk) = grant.conn.founder_pin().ok_or_else(|| anyhow!("the grant has no founder pin"))?;
@@ -444,7 +447,7 @@ async fn finish_redeem(
     state: &mut LinkState,
     founder: String,
     fk: String,
-    confirm_person: Option<&mut (dyn FnMut(&ligus_core::ActorIdentity) -> Result<bool> + Send)>,
+    confirm_person: Option<ConfirmPerson<'_>>,
 ) -> Result<ligus_core::ActorIdentity> {
     // The connection lives in memory until the link is recorded (a failed
     // redeem must not leave this data dir connected as its own

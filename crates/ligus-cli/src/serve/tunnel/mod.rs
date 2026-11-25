@@ -903,7 +903,8 @@ impl TunnelHost {
                 println!("push: {} to {who} not sent: notifications are off on that phone (the app hasn't turned them on for this host)", content.kind);
                 continue;
             }
-            let verdict = Self::lock(&self.push_gate).check(&rec.pid, &content.kind, content.chat_id.as_deref(), at);
+            let group = content.chat_id.as_deref().or(content.coalesce.as_deref());
+            let verdict = Self::lock(&self.push_gate).check(&rec.pid, &content.kind, group, at);
             if verdict != push::Verdict::Send {
                 println!("push: {} to {who} {}", content.kind, verdict.describe());
                 continue;
@@ -923,7 +924,7 @@ impl TunnelHost {
         let Some((seq, key)) = self.registry.next_push_seq(&rec.pid) else { return false };
         let ct = seal_push(&key, self.host_id(), &rec.pid, content, rec.push_previews, seq, now());
         let mut msg = json!({ "t": "push", "pid": rec.pid, "ct": b64u(ct), "prio": "high" });
-        if let Some(c) = &content.chat_id {
+        if let Some(c) = content.chat_id.as_ref().or(content.collapse.as_ref()) {
             msg["collapse"] = json!(push_collapse(&key, c));
         }
         if diag {
@@ -1080,7 +1081,7 @@ pub const PREVIEW_CHARS: usize = 120;
 /// What a push is about (§14). `title` and `sender` never carry message
 /// text; `preview` is the content shown only to phones with previews on.
 /// Kinds: `message.done`, `mention`, `proposal.created`, `workflow.approval`,
-/// `phone.paired`, `test` (`docs/push-notifications.md`).
+/// `approval.request`, `phone.paired`, `test` (`docs/push-notifications.md`).
 #[derive(Debug, Clone, Default)]
 pub struct PushContent {
     pub kind: String,
@@ -1102,6 +1103,16 @@ pub struct PushContent {
     /// `phone.paired`): shown regardless of the preference, when there is
     /// no preview.
     pub fixed_body: String,
+    /// What the push collapses under when it names no chat (an
+    /// `approval.request` collapses per workspace).
+    pub collapse: Option<String>,
+    /// What the host's limiter coalesces it under when it names no chat
+    /// (the request id: each request may push once).
+    pub coalesce: Option<String>,
+    /// Extra plaintext fields (an `approval.request`'s `workspaceId`, `rid`,
+    /// `label`, `requestKind`). Never message text; each clipped to 64 bytes,
+    /// and never one of the fields above.
+    pub fields: Vec<(&'static str, String)>,
 }
 
 /// The first [`PREVIEW_CHARS`] characters of `s` as plain text: markdown
@@ -1156,6 +1167,11 @@ pub fn push_plaintext(content: &PushContent, previews: bool, seq: u64, ts: u64) 
     }
     if let Some(s) = &content.sender {
         pt["sender"] = json!(clip(s, 64));
+    }
+    for (key, value) in &content.fields {
+        if pt.get(*key).is_none() && *key != "preview" {
+            pt[*key] = json!(clip(value, 64));
+        }
     }
     if preview.is_some() {
         pt["preview"] = json!(true);

@@ -5223,5 +5223,6 @@ async fn internal_errors_answer_a_generic_message() {
     assert!(String::from_utf8_lossy(&body).contains("deviceId isn't a uuid"));
 }
 
+mod approvals;
 mod box_removal;
 mod devices_link;

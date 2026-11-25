@@ -2785,6 +2785,8 @@ fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: &mut dyn FnMut(
 /// positional argument (a test checks this against the source).
 const VALUE_FLAGS: &[&str] = &[
     "--approver-fingerprint",
+    "--to",
+    "--wait",
     "--timeout",
     "--gateway",
     "--model",
