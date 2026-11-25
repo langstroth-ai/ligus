@@ -16,9 +16,11 @@ after the wizard is tracked the same way (`"tour_seen"`).
 | Runtime        | One agent (Claude Code / OpenAI-compatible / Anthropic API key / Ollama) + "let agents edit files" |
 | Team & sync    | **Just me (no sync)**, **Join a team** (an invite or short code), or **Sync through a relay**: the [community relay](../../operate/networking/community-relay.md) (preselected, best-effort) or your own relay URL and token |
 
-![Onboarding identity step](../images/onboarding-identity.png){ width="700" }
+![Onboarding identity step: display name and this device's safety code (demo data)](../images/desktop-onboarding-identity-light.png#only-light){ width="560" loading=lazy }
+![Onboarding identity step: display name and this device's safety code (demo data)](../images/desktop-onboarding-identity-dark.png#only-dark){ width="560" loading=lazy }
 
-![Onboarding step 4 — Team & sync](../images/onboarding-team.png){ width="700" }
+![Onboarding, Team & sync: just me, join a team, or sync through a relay](../images/desktop-onboarding-team-light.png#only-light){ width="560" loading=lazy }
+![Onboarding, Team & sync: just me, join a team, or sync through a relay](../images/desktop-onboarding-team-dark.png#only-dark){ width="560" loading=lazy }
 
 There is no separate Welcome, Permissions, or Finish/Review screen —
 identity is the first thing you see, and the last step's **Finish**

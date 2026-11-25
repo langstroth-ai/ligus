@@ -16,7 +16,16 @@ vertical icon strip you click to switch contents. Ten panes:
 | Memory    | The workspace memory: shared notes agents read and propose changes to, and the proposals waiting for a person. See [Workspace memory and task state](memory.md) |
 | Activity  | Streaming runtime activity for the workspace                    |
 
-<!-- Screenshot pending (Right rail with the Tools pane active): images/right-rail.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
+<div class="grid" markdown>
+
+![The Agents & tools pane: the runtime, three workspace agents and two MCP servers (demo data)](../images/desktop-tools-light.png#only-light){ width="340" loading=lazy }
+![The Agents & tools pane: the runtime, three workspace agents and two MCP servers (demo data)](../images/desktop-tools-dark.png#only-dark){ width="340" loading=lazy }
+
+![The Review pane: a proposal with its diff, a comment, one of two approvals and Approve or Reject (demo data)](../images/desktop-review-light.png#only-light){ width="340" loading=lazy }
+![The Review pane: a proposal with its diff, a comment, one of two approvals and Approve or Reject (demo data)](../images/desktop-review-dark.png#only-dark){ width="340" loading=lazy }
+
+</div>
+
 Switching panes preserves the visible width. Click the `×` in the
 pane header to close the rail entirely. Each pane's header has a small `?`
 beside its title: hover it for what the pane is for, click it to open the

@@ -1,25 +1,52 @@
 <div align="center">
 
-<img src="assets/branding/ligus-app-icon-1024.png" alt="Ligus" width="112" height="112">
+<img src="assets/branding/ligus-app-icon-1024.png" alt="Ligus app icon" width="96" height="96">
 
 # Ligus
 
-**A shared, multi-agent workspace for developers.**
+**One end-to-end encrypted workspace for you, your teammates and your AI agents.**
+
+Ligus is short for *ligustica*, the Italian honeybee.
 
 [![CI](https://github.com/langstroth-ai/ligus/actions/workflows/ci.yml/badge.svg)](https://github.com/langstroth-ai/ligus/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/langstroth-ai/ligus?include_prereleases&sort=semver&label=release)](https://github.com/langstroth-ai/ligus/releases/latest)
 [![Docs](https://img.shields.io/badge/docs-docs.langstroth.ai-4c8bf5)](https://docs.langstroth.ai/ligus/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-[Install](#install) · [Quick start](#quick-start) · [Docs](https://docs.langstroth.ai/ligus/) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
-
 </div>
 
-Ligus (LEE-gus, short for *ligustica*) is where you, your coding agents and
-your teammates share one transcript and one working tree. Agents propose
-changes; people review and apply them. The workspace is a signed, append-only
-event log kept on your own devices and synced end to end encrypted, either
-peer to peer or through a relay that only ever sees ciphertext.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/desktop-overview-dark.png">
+  <img src="assets/readme/desktop-overview-light.png" alt="The Ligus desktop app: a chat where agents hand work to each other, and the Review pane with a proposal, its diff and one of two approvals (demo data)" width="100%">
+</picture>
+
+```sh
+brew install --cask langstroth-ai/ligus/ligus-app
+```
+
+- **Agents propose, people decide.** Agents' file changes and commands arrive
+  as proposals with a diff; teammates vote, and nothing is applied until it
+  meets the workspace's approvals.
+- **End-to-end encrypted and self-hostable.** The workspace lives on your
+  devices and syncs peer to peer or through a relay you can run yourself; the
+  relay only ever sees ciphertext. No account to create.
+- **Sandboxed by default.** Every local agent turn runs in an OS sandbox, in
+  its own git worktree, with network through a per-turn proxy.
+
+[Docs](https://docs.langstroth.ai/ligus/) ·
+[Website](https://langstroth.ai/ligus) ·
+[lt, Ligus in the terminal](https://github.com/langstroth-ai/ligus-term) ·
+[Relay](https://github.com/langstroth-ai/langstroth-relay) ·
+[Discussions](https://github.com/langstroth-ai/ligus/discussions) ·
+[Install](#install) · [Quick start](#quick-start)
+
+## About
+
+Ligus (LEE-gus) is where you, your coding agents and your teammates share one
+transcript and one working tree. Agents propose changes; people review and
+apply them. The workspace is a signed, append-only event log kept on your own
+devices and synced end to end encrypted, either peer to peer or through a
+relay that only ever sees ciphertext.
 
 Ligus is the client side of [Langstroth](https://langstroth.ai), an open
 source platform you run yourself. There is no account to create and no
@@ -78,7 +105,7 @@ curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh
 ```
 
 It installs to `~/.local/bin` by default; set `LIGUS_INSTALL_DIR` to change
-that or `LIGUS_VERSION` to pin a release (`v0.2.0` or `0.2.0`). It checks the
+that or `LIGUS_VERSION` to pin a release (`v0.3.0` or `0.3.0`). It checks the
 binary against the release's `ligus-<target>.sha256` and refuses to install
 on a missing or mismatched checksum.
 

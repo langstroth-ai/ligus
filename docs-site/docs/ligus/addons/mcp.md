@@ -11,7 +11,8 @@ Use MCP when you want to:
 - Share a tool set across many agents and workspaces.
 - Run a long-lived tool process separately from Ligus.
 
-![Settings — Tools & MCP](../images/settings-tools-mcp.png){ width="820" }
+![Settings, Tools & MCP: two MCP servers, one on and one off (demo data)](../images/desktop-settings-tools-light.png#only-light){ width="800" loading=lazy }
+![Settings, Tools & MCP: two MCP servers, one on and one off (demo data)](../images/desktop-settings-tools-dark.png#only-dark){ width="800" loading=lazy }
 
 Don't use MCP when:
 

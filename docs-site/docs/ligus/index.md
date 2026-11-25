@@ -13,7 +13,8 @@ agents, the `ligus` CLI. Self-hosting and deploying (the relay, sign-in,
 Kubernetes, always-on `ligus serve` hosts) is in
 **[Operating Langstroth](../operate/index.md)**.
 
-<!-- Screenshot pending (full window on 0.2.0: Inbox row, status bar, no pane counts): images/overview.png predates 0.2.0 and the rename. See images/CAPTURE_GUIDE.md; restore the image line once it is recaptured. -->
+![The Ligus desktop app: a chat where agents hand work to each other, and the Review pane with a proposal, its diff and one of two approvals (demo data)](images/desktop-overview-light.png#only-light){ loading=lazy }
+![The Ligus desktop app: a chat where agents hand work to each other, and the Review pane with a proposal, its diff and one of two approvals (demo data)](images/desktop-overview-dark.png#only-dark){ loading=lazy }
 
 ---
 
@@ -95,7 +96,7 @@ append-only event log in SQLite; replies stream from your chosen runtime (the
 
 ## Project status
 
-Ligus 0.2.0 is the current release. The macOS app is
+Ligus 0.3.0 is the current release. The macOS app is
 signed and notarized and updates itself; Windows and Linux builds are
 unsigned. The headless `ligus` CLI ships for macOS and Linux through
 Homebrew. See [What's new](reference/whats-new.md).

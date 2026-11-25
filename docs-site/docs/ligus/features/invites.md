@@ -11,10 +11,10 @@ already share a workspace with.
     computer of yours (`lt`, the `ligus` CLI), link it instead:
     [Add a computer](linked-devices.md).
 
-<!-- Screenshot pending (Invite controls in the People pane): images/invite-pane.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
-## Create / join a team (the ＋ button)
+![People pane, Invite someone: create a single-use invite link](../images/desktop-invite-light.png#only-light){ width="480" loading=lazy }
+![People pane, Invite someone: create a single-use invite link](../images/desktop-invite-dark.png#only-dark){ width="480" loading=lazy }
 
-![Creating a team: the invite code is redacted here](../images/team-invite.png){ width="760" }
+## Create / join a team (the ＋ button)
 
 The common path is the **workspace rail's ＋ button**, which opens
 the **Add workspace** modal with two tabs:

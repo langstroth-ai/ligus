@@ -52,6 +52,21 @@ SERVED_ON_ALIASES = ("/version.json",)
 RENAMED_FILES = (
     ("/ligus/images/hive-lockup-dark.svg", "/ligus/images/ligus-lockup-dark.svg"),
     ("/ligus/images/hive-lockup-light.svg", "/ligus/images/ligus-lockup-light.svg"),
+    # Screenshots replaced by light/dark pairs: the old name serves the light one.
+    ("/ligus/images/add-workspace.png", "/ligus/images/desktop-overview-light.png"),
+    ("/ligus/images/onboarding-appearance.png", "/ligus/images/desktop-onboarding-appearance-light.png"),
+    ("/ligus/images/onboarding-github.png", "/ligus/images/desktop-onboarding-identity-light.png"),
+    ("/ligus/images/onboarding-identity.png", "/ligus/images/desktop-onboarding-identity-light.png"),
+    ("/ligus/images/onboarding-runtime.png", "/ligus/images/desktop-onboarding-agent-light.png"),
+    ("/ligus/images/onboarding-team.png", "/ligus/images/desktop-onboarding-team-light.png"),
+    ("/ligus/images/onboarding-welcome.png", "/ligus/images/desktop-onboarding-identity-light.png"),
+    ("/ligus/images/onboarding-workspace.png", "/ligus/images/desktop-onboarding-identity-light.png"),
+    ("/ligus/images/overview.png", "/ligus/images/desktop-overview-light.png"),
+    ("/ligus/images/settings-general.png", "/ligus/images/desktop-settings-profile-light.png"),
+    ("/ligus/images/settings-runtimes.png", "/ligus/images/desktop-settings-models-light.png"),
+    ("/ligus/images/settings-team-sync.png", "/ligus/images/desktop-settings-profile-light.png"),
+    ("/ligus/images/settings-tools-mcp.png", "/ligus/images/desktop-settings-tools-light.png"),
+    ("/ligus/images/team-invite.png", "/ligus/images/desktop-invite-light.png"),
 )
 BEGIN = "# BEGIN generated"
 END = "# END generated"

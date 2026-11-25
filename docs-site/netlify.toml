@@ -2200,6 +2200,174 @@
   status = 301
   force = true
 
+[[redirects]]
+  from = "/ligus/images/add-workspace.png"
+  to = "/ligus/images/desktop-overview-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/add-workspace.png"
+  to = "/ligus/images/desktop-overview-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/onboarding-appearance.png"
+  to = "/ligus/images/desktop-onboarding-appearance-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/onboarding-appearance.png"
+  to = "/ligus/images/desktop-onboarding-appearance-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/onboarding-github.png"
+  to = "/ligus/images/desktop-onboarding-identity-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/onboarding-github.png"
+  to = "/ligus/images/desktop-onboarding-identity-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/onboarding-identity.png"
+  to = "/ligus/images/desktop-onboarding-identity-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/onboarding-identity.png"
+  to = "/ligus/images/desktop-onboarding-identity-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/onboarding-runtime.png"
+  to = "/ligus/images/desktop-onboarding-agent-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/onboarding-runtime.png"
+  to = "/ligus/images/desktop-onboarding-agent-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/onboarding-team.png"
+  to = "/ligus/images/desktop-onboarding-team-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/onboarding-team.png"
+  to = "/ligus/images/desktop-onboarding-team-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/onboarding-welcome.png"
+  to = "/ligus/images/desktop-onboarding-identity-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/onboarding-welcome.png"
+  to = "/ligus/images/desktop-onboarding-identity-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/onboarding-workspace.png"
+  to = "/ligus/images/desktop-onboarding-identity-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/onboarding-workspace.png"
+  to = "/ligus/images/desktop-onboarding-identity-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/overview.png"
+  to = "/ligus/images/desktop-overview-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/overview.png"
+  to = "/ligus/images/desktop-overview-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/settings-general.png"
+  to = "/ligus/images/desktop-settings-profile-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/settings-general.png"
+  to = "/ligus/images/desktop-settings-profile-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/settings-runtimes.png"
+  to = "/ligus/images/desktop-settings-models-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/settings-runtimes.png"
+  to = "/ligus/images/desktop-settings-models-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/settings-team-sync.png"
+  to = "/ligus/images/desktop-settings-profile-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/settings-team-sync.png"
+  to = "/ligus/images/desktop-settings-profile-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/settings-tools-mcp.png"
+  to = "/ligus/images/desktop-settings-tools-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/settings-tools-mcp.png"
+  to = "/ligus/images/desktop-settings-tools-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/ligus/images/team-invite.png"
+  to = "/ligus/images/desktop-invite-light.png"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/images/team-invite.png"
+  to = "/ligus/images/desktop-invite-light.png"
+  status = 301
+  force = true
+
 # Old screenshot URLs (/images/...). Not forced: the theme's own files
 
 # under /images/ are served as they are.

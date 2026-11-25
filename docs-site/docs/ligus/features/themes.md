@@ -19,6 +19,9 @@ and in lt.
 **Appearance** picks the variant: **auto** follows the system (the desktop)
 or the terminal's background (lt), or choose **light** or **dark**.
 
+![Settings, Appearance: Mode (auto, light, dark), the six palettes, import and export a theme, and density](../images/desktop-appearance-light.png#only-light){ width="720" loading=lazy }
+![Settings, Appearance: Mode (auto, light, dark), the six palettes, import and export a theme, and density](../images/desktop-appearance-dark.png#only-dark){ width="720" loading=lazy }
+
 - **Desktop:** Settings → Appearance → **Mode** and **Theme**. Changes apply
   at once and are kept on this device.
 - **lt:** the **Theme** and **Appearance** rows in Settings cycle them for
@@ -37,6 +40,9 @@ or the terminal's background (lt), or choose **light** or **dark**.
   terminal's own background; on 256- and 16-colour terminals it uses the
   nearest colours (`COLORTERM=truecolor` turns on 24-bit colour;
   `LT_COLOR_DEPTH=truecolor|256|16` overrides the detection).
+
+![lt in the Pollen palette: the chat list and a chat with two proposals (demo data; light on a light terminal, dark on a dark one)](../images/lt-chats-light.png#only-light){ width="760" loading=lazy }
+![lt in the Pollen palette: the chat list and a chat with two proposals (demo data; light on a light terminal, dark on a dark one)](../images/lt-chats-dark.png#only-dark){ width="760" loading=lazy }
 
 ## Custom themes
 

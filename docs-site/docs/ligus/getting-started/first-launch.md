@@ -4,11 +4,19 @@ Ligus is a desktop app for macOS, Windows and Linux. On first launch
 you'll see a guided onboarding wizard that captures your identity, picks a
 workspace folder, and configures a runtime.
 
-![Onboarding welcome step](../images/onboarding-welcome.png){ width="720" }
+![Onboarding, step 1: who are you? A display name and the safety code for this device (demo data)](../images/desktop-onboarding-identity-light.png#only-light){ width="560" loading=lazy }
+![Onboarding, step 1: who are you? A display name and the safety code for this device (demo data)](../images/desktop-onboarding-identity-dark.png#only-dark){ width="560" loading=lazy }
 
 ## Install
 
-Grab a bundle for your OS, or build from source:
+On macOS, install with Homebrew:
+
+```bash
+brew install --cask langstroth-ai/ligus/ligus-app
+```
+
+Or grab a bundle for your OS from the
+[releases page](https://github.com/langstroth-ai/ligus/releases), or build from source:
 
 ```bash
 git clone https://github.com/langstroth-ai/ligus.git
@@ -58,9 +66,11 @@ them off):
    Harbor or Meadow) and light / dark / auto. It applies live as you choose, and
    you can change it anytime from **Settings → Appearance**.
 
-![Onboarding runtime step](../images/onboarding-runtime.png){ width="720" }
+![Onboarding, the agent step: Claude Code detected, other harnesses and API keys listed (demo data)](../images/desktop-onboarding-agent-light.png#only-light){ width="560" loading=lazy }
+![Onboarding, the agent step: Claude Code detected, other harnesses and API keys listed (demo data)](../images/desktop-onboarding-agent-dark.png#only-dark){ width="560" loading=lazy }
 
-![Onboarding step 5 — pick a theme](../images/onboarding-appearance.png){ width="720" }
+![Onboarding, the last step: pick a palette and light, dark or auto](../images/desktop-onboarding-appearance-light.png#only-light){ width="560" loading=lazy }
+![Onboarding, the last step: pick a palette and light, dark or auto](../images/desktop-onboarding-appearance-dark.png#only-dark){ width="560" loading=lazy }
 
 There's no separate Welcome, Permissions, or Finish/Review screen —
 identity is the first thing you see, and the last step's **Finish**

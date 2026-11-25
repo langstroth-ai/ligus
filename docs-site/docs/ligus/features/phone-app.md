@@ -30,6 +30,9 @@ The app has four tabs: **Inbox**, **Chats**, **Review** and **Agents**.
 Settings opens from your avatar at the top right of each tab, and **Done**
 takes you back.
 
+![The phone app's Chats tab: direct messages, channels and chats that need you (demo workspace)](../images/phone-chats-light.png#only-light){ width="300" loading=lazy }
+![The phone app's Chats tab: direct messages, channels and chats that need you (demo workspace)](../images/phone-chats-dark.png#only-dark){ width="300" loading=lazy }
+
 - **Inbox** is home. *Needs you* lists only what waits on you: votes you can
   still cast, approval gates, agents' questions and permission requests you
   may answer, this phone needing to be added to your devices again, a box
@@ -477,6 +480,9 @@ your host's connections (it holds the tokens, never the phone). See [Repos on th
 
 Proposals (an agent's file changes, a command, a decision) appear on the
 phone with the same collaboration state as the desktop's Review card:
+
+![A proposal on the phone: its votes (one of two approvals), what Implement does, the diff, and Reject or Approve (demo workspace)](../images/phone-proposal-light.png#only-light){ width="300" loading=lazy }
+![A proposal on the phone: its votes (one of two approvals), what Implement does, the diff, and Reject or Approve (demo workspace)](../images/phone-proposal-dark.png#only-dark){ width="300" loading=lazy }
 
 - **Votes, with who and role.** Each member's latest vote shows their name and
   workspace role, alongside the required approvals, the qualifying approvals
