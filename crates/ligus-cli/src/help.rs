@@ -181,7 +181,9 @@ pub const COMMANDS: &[Cmd] = &[
         name: "enroll",
         group: G_START,
         summary: "a person's own CLI device: save a workspace connection from an invite",
-        purpose: "For a person's own CLI device (never a serve or worker box: a box joins with `ligus admit`). Decode a workspace invite (`hivews1:…`: relay URL, room, end-to-end key) and save it: the relay and \
+        purpose: "For a person's own CLI device (never a serve or worker box: a box joins with `ligus admit`). An invite makes \
+                  a NEW member: if you are already in the workspace on your desktop, link this computer instead \
+                  (`ligus devices request`). Decode a workspace invite (`hivews1:…`: relay URL, room, end-to-end key) and save it: the relay and \
                   room to <data dir>/config.toml, the key and the optional relay access token to the secret store. \
                   An invite carries the workspace key: pipe it or pass a file; on the command line it works with a \
                   warning. Refuses an invite whose workspace has no usable relay URL.",
@@ -192,7 +194,120 @@ pub const COMMANDS: &[Cmd] = &[
             f("--token - | @FILE", "none", "relay access token, from stdin or an owner-only file (a literal value works with a warning)"),
         ],
         examples: &["pbpaste | ligus enroll -", "ligus enroll --file ./invite --token @./relay-token", "ligus enroll --file ./invite && ligus sync"],
-        see_also: &["ligus sync", "ligus help quickstart", "ligus admit (a box)", "ligus help security"],
+        see_also: &["ligus devices request (your own second computer)", "ligus sync", "ligus help quickstart", "ligus admit (a box)", "ligus help security"],
+        ..D
+    },
+    Cmd {
+        name: "devices",
+        group: G_START,
+        summary: "link this computer as one of your own devices (not a new member)",
+        purpose: "Add a computer: make this computer one of YOUR devices in a workspace you are already in, so what it \
+                  does is yours and not a separate member's (an invite always makes a new member). This computer prints \
+                  a link request (no secret); you approve it on your desktop (Settings > Profile > My devices > Add a \
+                  computer) with your passkey; the desktop shows a grant sealed to this computer (the workspace key \
+                  inside, readable only here); you redeem it here. The computer then acts as you without your account \
+                  key: votes ask for your passkey, and account changes (devices, phones, passkeys, keys) stay on the \
+                  desktop. One person per data dir. Revoke it from My devices.",
+        synopsis: &[
+            "ligus devices request [--label NAME] [--new-device]",
+            "ligus devices redeem <ligusgrant1:code> | - | --code-file PATH [--approver-fingerprint FP]",
+            "ligus devices approve <liguslink1:request> | --code-file PATH --fingerprint FP --recovery-words-file PATH [--out PATH]",
+            "ligus devices list",
+        ],
+        flags: &[JSON],
+        conn: true,
+        examples: &[
+            "ligus devices request",
+            "ligus devices redeem --code-file ./grant --approver-fingerprint 7F3A-91C0-77DE-0B14-5E62",
+            "ligus devices list --json",
+        ],
+        exit: &[
+            (3, "no usable relay URL"),
+            (4, "a person must act: approve on the desktop, compare a fingerprint, confirm the approving desktop"),
+            (6, "refused: a box, a computer already someone else's, lockdown, revoked"),
+            (7, "the relay is unreachable, or the desktop's approval hasn't synced yet (retry)"),
+        ],
+        see_also: &["ligus devices request", "ligus devices redeem", "ligus devices approve", "ligus devices list", "desktop: Settings > Profile > My devices > Add a computer"],
+        ..D
+    },
+    Cmd {
+        name: "devices request",
+        group: G_START,
+        summary: "print this computer's link request for your desktop",
+        purpose: "Print this computer's link request (`liguslink1:…`, no secret) and its fingerprint, and remember it as \
+                  pending (15 minutes, single use). An install that was already connected (it may have written as its own \
+                  member) asks with a new device key, switched to only when you redeem, and adds a proof that it was that \
+                  member, so the desktop can offer to remove the duplicate. A box can't: it joins with `ligus admit`.",
+        synopsis: &["ligus devices request [--label NAME] [--new-device] [--json]"],
+        flags: &[
+            f("--label NAME", "ligus on <host name>", "the label your desktop shows"),
+            f("--new-device", "off (on when this data dir was connected)", "ask with a new device key"),
+            JSON,
+        ],
+        examples: &["ligus devices request --label work-laptop"],
+        exit: &[(6, "this data dir is a box")],
+        see_also: &["ligus devices redeem", "desktop: Settings > Profile > My devices > Add a computer"],
+        ..D
+    },
+    Cmd {
+        name: "devices redeem",
+        group: G_START,
+        summary: "link this computer with the grant your desktop showed",
+        purpose: "Open the grant (`ligusgrant1:…`, sealed to this computer) that answers this computer's pending request, \
+                  confirm who approved it (the person, the workspace and the approving desktop's fingerprint: \
+                  --approver-fingerprint, or a yes at a terminal), save the connection (the workspace key to the secret \
+                  store), pull the workspace, check your desktop's certificate for this computer is there, and act as you \
+                  from then on. Publishes this computer's key-agreement key so later key rotations reach it. The relay \
+                  access token is never in the grant: on a gated relay, sign in here (ligus auth login).",
+        synopsis: &["ligus devices redeem <ligusgrant1:code> | - | --code-file PATH [--approver-fingerprint FP] [--json]"],
+        flags: &[
+            f("-", "", "read the grant from stdin"),
+            f("--code-file PATH", "none", "read the grant from a file"),
+            f("--approver-fingerprint FP", "none (asks at a terminal)", "the approving desktop's fingerprint, as its sheet shows"),
+            JSON,
+        ],
+        conn: true,
+        examples: &["ligus devices redeem --code-file ./grant --approver-fingerprint 7F3A-91C0-77DE-0B14-5E62"],
+        exit: &[
+            (4, "confirm the approving desktop (pass --approver-fingerprint or run at a terminal)"),
+            (6, "refused: already someone else's device, another workspace in this data dir, lockdown, revoked"),
+            (7, "the relay is unreachable, or the desktop's approval hasn't synced yet (retry within 30 minutes)"),
+        ],
+        see_also: &["ligus devices request", "ligus devices list", "ligus auth login"],
+        ..D
+    },
+    Cmd {
+        name: "devices approve",
+        group: G_START,
+        summary: "approve another computer as yours, headless (prefer the desktop)",
+        purpose: "A person's own step (prefer the desktop's My devices > Add a computer): certify the computer whose \
+                  request is given as one of your devices in this workspace, confirmed with your recovery key, sync the \
+                  certificate, and print the grant for that computer (sealed to it). The fingerprint check is required: \
+                  --fingerprint, or a yes at a terminal. Never from a box or a linked computer (no account key).",
+        synopsis: &["ligus devices approve <liguslink1:request> | --code-file PATH --fingerprint FP --recovery-words-file PATH [--out PATH] [--json]"],
+        flags: &[
+            f("--code-file PATH", "none", "read the request from a file"),
+            f("--fingerprint FP", "none (asks at a terminal)", "the computer's fingerprint as its screen shows it"),
+            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence"),
+            f("--out PATH", "stdout", "write the grant to an owner-only file"),
+            JSON,
+        ],
+        conn: true,
+        examples: &["ligus devices approve --code-file ./request --fingerprint 7F3A-91C0-77DE-0B14-5E62 --recovery-words-file ~/.ligus-recovery --out ./grant"],
+        exit: &[(4, "compare the fingerprint, or confirm with your passkey or recovery key"), (6, "refused: not yours to add, lockdown, already here")],
+        see_also: &["ligus devices request", "ligus recovery-key create", "desktop: Settings > Profile > My devices > Add a computer"],
+        ..D
+    },
+    Cmd {
+        name: "devices list",
+        group: G_START,
+        summary: "your devices in this workspace, and where this computer stands",
+        purpose: "List the devices your account certified in this workspace (fingerprint, revoked, this device), whether \
+                  this computer acts as you, as its own identity or is revoked, and pending link requests. Read-only.",
+        synopsis: &["ligus devices list [--json]"],
+        flags: &[JSON],
+        examples: &["ligus devices list --json"],
+        see_also: &["ligus devices request", "desktop: Settings > Profile > My devices"],
         ..D
     },
     Cmd {
@@ -409,15 +524,23 @@ pub const COMMANDS: &[Cmd] = &[
         name: "app",
         group: G_START,
         summary: "open the desktop app, detached from this terminal",
-        purpose: "Open the Ligus desktop app (or bring it forward) and return at once. It takes no arguments and never \
-                  opens the data dir, the config or the secret store. macOS: Launch Services; Windows: the installer's \
-                  registry keys, the default install dirs, then PATH; Linux: ligus-desktop on PATH, then an AppImage \
-                  (needs DISPLAY or WAYLAND_DISPLAY).",
-        synopsis: &["ligus app"],
+        purpose: "Open the Ligus desktop app (or bring it forward) and return at once. It never opens the data dir, \
+                  the config or the secret store. macOS: LIGUS_APP, then /Applications/Ligus.app, then \
+                  ~/Applications/Ligus.app, then (last resort) the copies Spotlight knows by bundle id, never one on \
+                  a mounted disk image (/Volumes) or an App Translocation copy unless LIGUS_APP names it; the bundle is \
+                  opened by path. When the app's version differs from this CLI's, a note on stderr says which to \
+                  update, and the app opens anyway. When a copy is already running from another path, it says so on \
+                  stderr and opens nothing. Windows: the installer's registry keys, the default install dirs, then \
+                  PATH; Linux: ligus-desktop on PATH, then an AppImage (needs DISPLAY or WAYLAND_DISPLAY). --json \
+                  prints ligus.app.v1: path, version, cliVersion, versionMatches, launched, alreadyRunning, \
+                  runningFrom, note.",
+        synopsis: &["ligus app [--json]"],
+        flags: &[JSON],
         data: false,
-        env: &["LIGUS_APPIMAGE", "DISPLAY", "WAYLAND_DISPLAY", "PATH"],
-        examples: &["ligus app"],
-        exit: &[(1, "the app isn't installed (the message lists where it looked), or no graphical session on Linux")],
+        env: &["LIGUS_APP", "LIGUS_APPIMAGE", "HOME", "DISPLAY", "WAYLAND_DISPLAY", "PATH"],
+        examples: &["ligus app", "LIGUS_APP=\"/Volumes/Ligus 0.2.1/Ligus.app\" ligus app --json"],
+        exit: &[(1, "the app isn't installed (the message lists where it looked), LIGUS_APP or LIGUS_APPIMAGE names \
+                     no app, or no graphical session on Linux")],
         see_also: &["ligus help quickstart"],
         ..D
     },
@@ -1946,6 +2069,7 @@ pub const ENV: &[(&str, &[EnvVar])] = &[
         "Other commands",
         &[
             e("LIGUS_HOST_LABEL", "$HOSTNAME, else \"this host\"", "ligus repos: this host's label"),
+            e("LIGUS_APP", "unset", "ligus app (macOS): the Ligus.app bundle to open, wherever it is"),
             e("LIGUS_APPIMAGE", "unset", "ligus app (Linux): the desktop AppImage"),
             e("LIGUS_GITHUB_APP_CLIENT_ID", "built in", "ligus forge login: GitHub App client id"),
             e("LIGUS_GITLAB_CLIENT_ID", "built in", "ligus forge login: GitLab application id"),
@@ -1980,7 +2104,10 @@ Every step ends with a command that shows it worked.
      brew install langstroth-ai/ligus/ligus
      # or: curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh | sh
    verify: ligus --version
-2. Get an invite from the desktop app (workspace menu > Invite) and save it to a
+2. Already in the workspace on your desktop? Link this computer as yours
+   instead of inviting yourself (an invite makes a second member):
+     ligus devices request     # then My devices > Add a computer on the desktop
+   Otherwise, get an invite from the desktop app (workspace menu > Invite) and save it to a
    file. It carries the workspace key: don't paste it on the command line.
      ligus enroll --file ./invite              # add --token @./relay-token for a gated relay
    verify: ligus status
@@ -2903,6 +3030,7 @@ mod tests {
             ("config", main.clone(), "\"config\" => match", "\n        },\n", &[]),
             ("remote", main.clone(), "\"remote\" => {", "\n        }\n", &[]),
             ("phones", main.clone(), "\"phones\" => {", "\n        \"dashboard\"", &[]),
+            ("devices", main.clone(), "\"devices\" => {", "\n        \"recovery-key\"", &[]),
             ("dashboard", main.clone(), "\"dashboard\" => match", "\n        },\n", &[]),
             ("facts", main.clone(), "\"facts\" => {", "\n        }\n", &[]),
             ("trust", main.clone(), "fn cmd_trust", "\n}\n", &[]),

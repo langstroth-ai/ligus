@@ -30,9 +30,12 @@ the app data dir; the theme is stored locally per device.
   here: **Contact forges to check linked identities** (on by default) and the
   self-managed forges this device may ask. See [Linked accounts](linked-identities.md).
 - **My devices** — devices that act as you in this workspace. **Add a
-  device** takes the enrollment code a `ligus serve` box prints, so what you
-  do from your phone through that box is authored as you rather than as a
-  separate member. See [Running ligus serve as your own device](../../operate/ops/serve-box.md).
+  computer** takes the link request another computer of yours shows (`lt`,
+  `ligus devices request`): compare the fingerprint, confirm with your passkey,
+  and paste the grant it shows on that computer, so it acts as you instead of
+  as a separate member. See [Add a computer](linked-devices.md). A `ligus
+  serve` box isn't added here: it joins as its own member (workspace menu →
+  Admit a box).
   **Add a phone** shows a QR code that the phone app scans (**Settings → This
   phone → Add to my devices**); compare the fingerprint and confirm with your
   passkey. **Can't scan?** takes the phone's code as text instead. See
@@ -58,6 +61,11 @@ the app data dir; the theme is stored locally per device.
   **obsidian is a true dark, monochrome theme** — a neutral near-black
   glass with an achromatic silver accent that stays dark regardless of
   the Mode toggle.
+- **Import a theme… / Export current theme** — bring your own colours as
+  a theme file (TOML or JSON, the same file lt reads), or save the theme in
+  use as a starting file. Imported themes are listed under the palettes,
+  with **Rename** and **Remove** in the row menu, and stay on this device.
+  See [Themes](themes.md).
 - **Density** — how much room rows, cards and messages take:
   **Compact** (shorter rows, tighter turns, a slightly smaller message
   body), **Comfortable** (the default) or **Spacious** (taller rows, more

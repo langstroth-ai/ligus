@@ -76,11 +76,11 @@ import { ADMIT_BOX_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, OPEN_SETUP_EVENT
 import { SetupWizard } from "@/components/setup/SetupWizard";
 import { isSetupFlow } from "@/lib/setup";
 import type { SetupFlowId } from "@/lib/ipc";
+import { useCustomThemes } from "@/lib/customThemes";
 import {
-  applyTheme,
+  applyActiveTheme,
   loadMode,
   loadTheme,
-  resolvePalette,
   saveMode,
   savePalette,
   watchSystemScheme,
@@ -145,6 +145,7 @@ function loadPaneWidth(storageKey: string, fallback: number, min: number, max: n
 export function App() {
   const [palette, setPaletteState] = useState<ThemeName>(loadTheme());
   const [appearanceMode, setAppearanceModeState] = useState<AppearanceMode>(loadMode());
+  const customTheme = useCustomThemes();
   const [view, setView] = useState<View>("workspace");
   // Settings is a presented sheet over the workspace, not a view — opening it
   // never unmounts the chat behind it. A nonce remounts the sheet so a repeat
@@ -315,11 +316,13 @@ export function App() {
   // Apply the resolved palette whenever the accent or the light/dark mode
   // changes, and re-resolve live when the OS appearance flips (mode = auto).
   useEffect(() => {
-    applyTheme(resolvePalette(palette, appearanceMode));
-    // Best-effort copy for `ligus serve` (a phone set to "Match host").
+    const apply = () => applyActiveTheme(palette, appearanceMode, customTheme.active);
+    apply();
+    // Best-effort copy for `ligus serve` (a phone set to "Match host"). A
+    // custom theme stays on this device; the phone gets the palette it extends.
     void saveAppearance(palette, appearanceMode).catch(() => {});
-    return watchSystemScheme(() => applyTheme(resolvePalette(palette, appearanceMode)));
-  }, [appearanceMode, palette]);
+    return watchSystemScheme(apply);
+  }, [appearanceMode, palette, customTheme.active]);
 
 
   const setPalette = (next: ThemeName) => {

@@ -111,6 +111,7 @@ step with the code.
 
 | Variable | Default | Read by | Effect |
 |---|---|---|---|
+| `LIGUS_APP` | unset | CLI (`ligus app`, macOS) | path to the `Ligus.app` bundle to open, ahead of `/Applications` and `~/Applications`; the only way to open a copy on a mounted disk image; a path that isn't an app bundle is an error ([`ligus app`](../../ligus/reference/cli.md#opening-the-desktop-app)) |
 | `LIGUS_APPIMAGE` | unset | CLI (`ligus app`, Linux) | path to the desktop AppImage to open when `ligus-desktop` isn't on `PATH`; a path that isn't a file is an error ([`ligus app`](../../ligus/reference/cli.md#opening-the-desktop-app)) |
 
 ## `ligus serve`

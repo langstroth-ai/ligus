@@ -30,8 +30,39 @@ Full release notes are on the
   server, never in a file a commit could change, and a turn of the
   default agent gets only tools every agent may use.
 
+- **Add a computer to your devices.** Use Ligus on a second computer (`lt`,
+  or the `ligus` CLI) as yourself, not as a second member with your name:
+  **Settings → Profile → My devices → Add a computer** on the desktop, one
+  passkey confirmation, and a grant sealed to that computer. `lt` has **Add
+  to my devices** on first run and **Link this computer to my devices** in
+  the palette; the CLI has `ligus devices request`, `redeem`, `approve` and
+  `list` (`ligus help devices`). Already invited yourself? Linking offers to
+  remove the duplicate member; their messages keep their name. See
+  [Add a computer](../features/linked-devices.md).
+
+- **Custom themes.** Settings → Appearance → **Import a theme…** reads a
+  theme file (TOML or JSON) that sets colours for light, dark or both, on
+  top of one of the six palettes; **Export current theme** saves the theme
+  in use as a starting file. The same file works in lt. Colours only, each
+  checked strictly; hard-to-read pairs are flagged, not refused. Imported
+  themes stay on this device. See [Themes](../features/themes.md).
+
 ### Fixes
 
+- **My devices no longer points at `ligus serve enroll`.** That command was
+  removed in 0.1; a box that still names you as its owner now shows how to
+  admit it (`ligus admit request`, then workspace menu → Admit a box).
+
+- **`ligus app` on macOS opens the installed app.** It asked Launch
+  Services by bundle id, which picks the highest `CFBundleVersion` it has
+  seen, so an old test build on a mounted disk image could open instead of
+  `/Applications/Ligus.app`. It now looks in a fixed order (`LIGUS_APP`,
+  `/Applications`, `~/Applications`, then Spotlight, never a disk image or
+  an App Translocation copy unless `LIGUS_APP` names it) and opens that
+  bundle by path. It notes on stderr when the app and the CLI are different
+  versions, says so when Ligus is already running from another path
+  instead of switching to it, and `--json` reports the path and version.
+  See [Opening the desktop app](cli.md#opening-the-desktop-app).
 - **The keychain stops asking (macOS).** A release of Ligus that finds its
   keychain items saved by a different Ligus build (a test or development
   build) no longer prompts again and again. It reads the keychain's unlock

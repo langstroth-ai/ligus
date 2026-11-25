@@ -50,6 +50,9 @@ takes you back.
 
 ## Add your phone {#add-this-phone}
 
+(For a second computer, the same idea without a QR code: [Add a
+computer](linked-devices.md).)
+
 Before the phone can pair with your box or sign anything, your desktop
 certifies the phone's own device key (a P-256 key in the Secure Enclave) as
 one of **your** devices. Since 0.1.1 the desktop shows a QR code and the

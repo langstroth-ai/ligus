@@ -121,7 +121,7 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
             key={item.key}
             state="idle"
             title={item.title}
-            detail="Approve it in Settings → Profile with the code it shows."
+            detail="Boxes join as their own member: run ligus admit request on it, then Admit a box."
             onOpen={() => actions.openSettingsTab("account")}
             actions={
               <Button size="sm" onClick={() => actions.openSettingsTab("account")}>

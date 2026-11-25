@@ -197,7 +197,8 @@
 
 /* Shared motion: short, and off when the OS asks. */
 @keyframes ligus-fade-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
-.ligus-enter { animation: ligus-fade-in var(--ligus-dur) var(--ligus-ease) both; }
+/* backwards, not both: a held transform (even the identity) makes the element the containing block of position: fixed menus inside it, which then open off to the side and clipped. */
+.ligus-enter { animation: ligus-fade-in var(--ligus-dur) var(--ligus-ease) backwards; }
 /* Briefly mark the element a cross-surface link jumped to. */
 @keyframes ligus-flash { 0% { box-shadow: 0 0 0 0 transparent; } 20% { box-shadow: 0 0 0 3px var(--tint-cool-line); background-color: var(--tint-cool); } 100% { box-shadow: 0 0 0 0 transparent; } }
 .ligus-flash { animation: ligus-flash 1.6s var(--ligus-ease) 1; border-radius: var(--ligus-radius-md); }
