@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::client::{MailboxAuth, MailboxClient, MailboxError};
 use super::envelope::{
-    grant_digest, open_blob, seal_blob, sign_message, verify_abort, verify_claim, verify_reveal, AbortBody, AbortReason, ApproverPerson,
+    grant_digest, open_blob, seal_blob, sign_message, verify_abort, verify_ack, verify_claim, verify_reveal, OfferBody, AbortBody, AbortReason, ApproverPerson,
     ClaimBody, MsgError, MsgType, OpenBody, Outcome, ResultBody, Signer, Verified, VerifiedRequest,
 };
 use super::{b64, hex_fixed, rand_bytes, MatchCode};
@@ -20,6 +20,9 @@ use super::{b64, hex_fixed, rand_bytes, MatchCode};
 pub const SEEN_FILE: &str = "approval-seen.json";
 /// How long an approver remembers a `rid` it opened.
 pub const SEEN_TTL_MS: i64 = 24 * 60 * 60 * 1000;
+/// How long an approver waits for a computer's ack after its offer
+/// (identity model v2, 8.1): past it, nothing is signed or published.
+pub const ACK_WINDOW_MS: i64 = 2 * 60 * 1000;
 /// How many epochs an approver polls: the current one and the previous two.
 const EPOCHS_POLLED: usize = 3;
 
@@ -294,6 +297,16 @@ pub enum ApproverError {
     NoCode,
     #[error("this request is already over")]
     Ended,
+    /// No ack within [`ACK_WINDOW_MS`] of the offer: "Linking <label>
+    /// didn't finish. Nothing was added."
+    #[error("the computer didn't acknowledge in time: linking didn't finish, nothing was added")]
+    DidntFinish,
+    #[error("a computer link sends its grant only after an offer the computer acknowledged")]
+    NotAcknowledged,
+    #[error("the grant isn't the one offered")]
+    GrantChanged,
+    #[error("only a computer link makes an offer")]
+    NotAComputer,
     #[error("couldn't keep the seen requests: {0}")]
     Io(String),
     #[error("{0}")]
@@ -344,6 +357,16 @@ pub struct ApproverSession {
     cursor: u64,
     code: Option<MatchCode>,
     ended: bool,
+    person: ApproverPerson,
+    offered: Option<Offered>,
+    acked: bool,
+}
+
+/// The grant built and sealed at "Codes match", kept in memory until the ack.
+struct Offered {
+    grant: zeroize::Zeroizing<String>,
+    digest: String,
+    at: i64,
 }
 
 impl std::fmt::Debug for ApproverSession {
@@ -411,6 +434,9 @@ impl ApproverSession {
             cursor: 0,
             code: None,
             ended: false,
+            person: me.person,
+            offered: None,
+            acked: false,
         })
     }
 
@@ -497,13 +523,127 @@ impl ApproverSession {
         Ok(())
     }
 
-    /// The person confirmed the match and the approval is on the log: send
-    /// the grant (`ligusadmit1:`/`ligusgrant1:`, sealed as today; `None` for
-    /// a phone) with its digest, signed by this device. Refused once the
-    /// code expired.
+    /// **Computers** (identity model v2, 8.1): the person chose Codes
+    /// match. `grant` is the `ligusgrant1:` built and sealed now (before any
+    /// passkey or publish); only its digest is sent, in a signed `offer`.
+    /// The grant stays in memory until [`Self::finish_approved`]. If the
+    /// workspace key rotates before that, [`Self::decline`] and start again.
+    pub async fn offer(&mut self, grant: String) -> Result<(), ApproverError> {
+        if self.ended {
+            return Err(ApproverError::Ended);
+        }
+        if self.request.kind != MatchKind::Computer {
+            return Err(ApproverError::NotAComputer);
+        }
+        if self.offered.is_some() {
+            return Err(ApproverError::Ended);
+        }
+        let code = self.code.as_ref().ok_or(ApproverError::NoCode)?;
+        let now = self.client.now();
+        if code.expired(now) {
+            self.expire().await?;
+            return Err(ApproverError::CodeExpired);
+        }
+        let digest = grant_digest(&grant);
+        let body = OfferBody {
+            rid: self.request.rid_hex(),
+            grant_digest: digest.clone(),
+            person: self.person.clone(),
+            approver_device_id: self.approver_device_id,
+        };
+        let msg = sign_message(MsgType::Offer, &body, &self.signer);
+        let blob = seal_to(&self.request.requester_ka, &msg)?;
+        self.client.post_msg(MailboxAuth::Member(&self.keys), &self.request.mailbox, &self.request.rid, &blob, "requester").await?;
+        self.offered = Some(Offered { grant: zeroize::Zeroizing::new(grant), digest, at: now });
+        Ok(())
+    }
+
+    /// Wait (up to `wait_secs`) for the computer's ack of the offer, signed
+    /// by the request's device key over the offered digest. `Ok(true)` once
+    /// acknowledged: **only then** the caller runs the passkey ceremony and
+    /// publishes the certificate, then calls [`Self::finish_approved`]. An
+    /// ack by another key or for another digest is ignored. Past
+    /// [`ACK_WINDOW_MS`] the grant is dropped, nothing is sent, and this is
+    /// [`ApproverError::DidntFinish`].
+    pub async fn await_ack(&mut self, wait_secs: u64) -> Result<bool, ApproverError> {
+        if self.acked {
+            return Ok(true);
+        }
+        if self.ended {
+            return Err(ApproverError::Ended);
+        }
+        let Some(at) = self.offered.as_ref().map(|o| o.at) else { return Err(ApproverError::NotAcknowledged) };
+        let deadline = at.saturating_add(ACK_WINDOW_MS);
+        if self.client.now() > deadline {
+            return Err(self.didnt_finish());
+        }
+        let remaining = ((deadline - self.client.now()).max(0) / 1000) as u64;
+        let msgs = self
+            .client
+            .get_msgs(MailboxAuth::Member(&self.keys), &self.request.mailbox, &self.request.rid, self.cursor, wait_secs.min(remaining))
+            .await?;
+        let seal = self.keys.seal();
+        for m in msgs {
+            self.cursor = self.cursor.max(m.seq);
+            let plain = open_blob(&self.ka, &m.blob).or_else(|| open_blob(&seal, &m.blob));
+            let Some(v) = plain.and_then(|p| Verified::parse(&p).ok()) else { continue };
+            match v.t {
+                MsgType::Ack => {
+                    let Ok(d) = verify_ack(&v, &self.request.rid, self.request.signer_alg, &self.request.signer_key) else { continue };
+                    if self.offered.as_ref().is_some_and(|o| o.digest == d) && self.client.now() <= deadline {
+                        self.acked = true;
+                        return Ok(true);
+                    }
+                }
+                MsgType::Abort => {
+                    if let Ok(reason) = verify_abort(&v, &self.request.rid) {
+                        self.ended = true;
+                        self.offered = None;
+                        return Err(ApproverError::Aborted(reason));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if self.client.now() > deadline {
+            return Err(self.didnt_finish());
+        }
+        Ok(false)
+    }
+
+    fn didnt_finish(&mut self) -> ApproverError {
+        self.ended = true;
+        self.offered = None;
+        ApproverError::DidntFinish
+    }
+
+    /// Whether the offer was acknowledged (computers).
+    pub fn acknowledged(&self) -> bool {
+        self.acked
+    }
+
+    /// The approval is on the log: send the result with the grant and its
+    /// digest, signed by this device.
+    ///
+    /// * A box or a phone: `grant` is the `ligusadmit1:` (`None` for a
+    ///   phone). Refused once the code expired.
+    /// * A computer: only after [`Self::offer`] and a valid
+    ///   [`Self::await_ack`]; the offered grant is sent (`grant`, if given,
+    ///   must be that one).
     pub async fn finish_approved(&mut self, grant: Option<&str>) -> Result<(), ApproverError> {
         if self.ended {
             return Err(ApproverError::Ended);
+        }
+        if self.request.kind == MatchKind::Computer {
+            if !self.acked {
+                return Err(ApproverError::NotAcknowledged);
+            }
+            let offered = self.offered.take().ok_or(ApproverError::NotAcknowledged)?;
+            if grant.is_some_and(|g| grant_digest(g) != offered.digest) {
+                self.offered = Some(offered);
+                return Err(ApproverError::GrantChanged);
+            }
+            return self.post_result(Outcome::Approved, Some(&offered.grant)).await;
         }
         let code = self.code.as_ref().ok_or(ApproverError::NoCode)?;
         if code.expired(self.client.now()) {
@@ -516,12 +656,14 @@ impl ApproverSession {
     /// The person said the codes don't match: a `mismatch` result to the
     /// requester and an abort to the members and the requester.
     pub async fn mismatch(&mut self) -> Result<(), ApproverError> {
+        self.offered = None;
         self.post_result(Outcome::Mismatch, None).await?;
         post_abort(&self.client, &self.keys, &self.request, &self.signer, AbortReason::Mismatch).await
     }
 
     /// The person declined: a `declined` result and a `cancelled` abort.
     pub async fn decline(&mut self) -> Result<(), ApproverError> {
+        self.offered = None;
         self.post_result(Outcome::Declined, None).await?;
         post_abort(&self.client, &self.keys, &self.request, &self.signer, AbortReason::Cancelled).await
     }

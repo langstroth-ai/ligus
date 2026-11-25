@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::client::{MailboxAuth, MailboxClient, MailboxError};
 use super::envelope::{
-    grant_digest, open_blob, seal_blob, sign_message, verify_abort, verify_open, verify_result, AbortBody, AbortReason, MsgError, MsgType,
+    grant_digest, open_blob, seal_blob, sign_message, verify_abort, verify_offer, verify_open, verify_result, AbortBody, AckBody, AbortReason, MsgError, MsgType,
     Outcome, RequestBody, ResultBody, RevealBody, Signer, Verified, VerifiedOpen,
 };
 use super::{b64, hex_fixed, rand_bytes, ApprovalAddress, MatchCode};
@@ -188,6 +188,10 @@ pub struct ClaimedApprover {
 pub enum RequesterEvent {
     /// The first valid `open`: the reveal went out and the code is ready.
     Opened { code: MatchCode, claimed: ClaimedApprover },
+    /// A computer link's offer (identity model v2, 8.1): the approver built
+    /// the grant with this digest. Nothing is granted yet; the caller
+    /// answers with [`Requester::ack`] (after its person confirmed the code).
+    Offered { grant_digest: String, person_name: String },
     /// The approver's signed result (any outcome). An approved one goes
     /// through [`Requester::check_grant`].
     Result(ResultBody),
@@ -215,6 +219,9 @@ pub struct Requester {
     cursor: u64,
     open: Option<VerifiedOpen>,
     match_code: Option<MatchCode>,
+    /// A computer's offered digest, and whether it was acknowledged.
+    offered: Option<String>,
+    acked: Option<String>,
     ended: bool,
     pending: Option<PendingStore>,
     dead: Option<DeadLog>,
@@ -305,6 +312,8 @@ impl Requester {
             cursor: 0,
             open: None,
             match_code: None,
+            offered: None,
+            acked: None,
             ended: false,
             pending,
             dead,
@@ -370,6 +379,12 @@ impl Requester {
                     let Ok(open) = verify_open(&v, &self.rid) else { continue };
                     self.accept_open(open, &mut out).await?;
                 }
+                MsgType::Offer if self.kind == MatchKind::Computer && self.offered.is_none() => {
+                    let Some(open) = &self.open else { continue };
+                    let Ok(o) = verify_offer(&v, &self.rid, open) else { continue };
+                    self.offered = Some(o.grant_digest.clone());
+                    out.push(RequesterEvent::Offered { grant_digest: o.grant_digest, person_name: crate::display::shown(&o.person.name) });
+                }
                 MsgType::Result => {
                     let Some(open) = &self.open else { continue };
                     let Ok(r) = verify_result(&v, &self.rid, open.approver_alg, &open.approver_sig_key) else { continue };
@@ -392,6 +407,8 @@ impl Requester {
         }
         let now = self.client.now();
         match &self.match_code {
+            // An acknowledged offer waits for the approver's passkey.
+            Some(_) if self.acked.is_some() => {}
             Some(c) if c.expired(now) => {
                 self.mark_dead();
                 out.push(RequesterEvent::CodeExpired);
@@ -435,6 +452,30 @@ impl Requester {
         self.match_code = Some(code);
         self.open = Some(open);
         Ok(())
+    }
+
+    /// A computer acknowledges the offer the approver made: an `ack` of its
+    /// digest, signed by this device and sealed to the approver. Call it once
+    /// the person confirmed the code on this computer. The result must then
+    /// carry a grant that hashes to this digest.
+    pub async fn ack(&mut self) -> Result<(), RequesterError> {
+        let (Some(open), Some(digest)) = (&self.open, &self.offered) else {
+            return Err(RequesterError::BadSpec("there is no offer to acknowledge".into()));
+        };
+        if self.match_code.as_ref().is_none_or(|c| c.expired(self.client.now())) {
+            return Err(RequesterError::BadSpec("the code expired: start again".into()));
+        }
+        let msg = sign_message(MsgType::Ack, &AckBody { rid: hex(&self.rid), grant_digest: digest.clone() }, &self.signer);
+        let blob = seal_blob(&open.approver_ka, msg.as_bytes()).map_err(|e| RequesterError::BadSpec(e.to_string()))?;
+        self.client.post_msg(MailboxAuth::Requester(&self.read_key), &self.address.mailbox, &self.rid, &blob, "approver").await?;
+        self.acked = Some(digest.clone());
+        Ok(())
+    }
+
+    /// Tests: acknowledge `digest` without an offer (to reach checks 1 to 4).
+    #[cfg(test)]
+    pub(crate) fn set_acked_for_tests(&mut self, digest: &str) {
+        self.acked = Some(digest.to_string());
     }
 
     /// End the request from this side (the person said the codes don't
@@ -494,7 +535,12 @@ impl Requester {
         if result.outcome != Outcome::Approved {
             return Err(GrantError::NotApproved(result.outcome));
         }
-        if self.match_code.as_ref().is_none_or(|c| c.expired(now_ms)) {
+        if self.kind == MatchKind::Computer {
+            // The grant must be the one this computer acknowledged.
+            if self.acked.is_none() || result.grant_digest != self.acked {
+                return Err(GrantError::NotAcknowledged);
+            }
+        } else if self.match_code.as_ref().is_none_or(|c| c.expired(now_ms)) {
             return Err(GrantError::CodeExpired);
         }
         check_grant(&self.address, self.kind, open, result, target, now_ms)
@@ -547,6 +593,8 @@ pub enum GrantError {
     NotApproved(Outcome),
     #[error("the code expired before the approval arrived: start again")]
     CodeExpired,
+    #[error("the grant isn't the one this computer acknowledged")]
+    NotAcknowledged,
     #[error("the result carries no grant")]
     NoGrant,
     #[error("the grant's digest doesn't match the grant")]

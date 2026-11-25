@@ -36,6 +36,10 @@ pub const OPEN_CTX: &[u8] = b"ligus-match-open-v1\0";
 pub const REVEAL_CTX: &[u8] = b"ligus-match-reveal-v1\0";
 pub const RESULT_CTX: &[u8] = b"ligus-match-result-v1\0";
 pub const ABORT_CTX: &[u8] = b"ligus-match-abort-v1\0";
+/// A computer link's offer: the sealed grant's digest, before it is sent.
+pub const OFFER_CTX: &[u8] = b"ligus-match-offer-v1\0";
+/// The requester's acknowledgement of an offer.
+pub const ACK_CTX: &[u8] = b"ligus-match-ack-v1\0";
 /// HKDF salt of every approval-mailbox key.
 pub const MAILBOX_SALT: &[u8] = b"ligus-approval-mailbox-v1";
 /// What a mailbox register or reset is signed over (by the mailbox auth key).
@@ -320,6 +324,8 @@ pub fn message_ctx(t: &str) -> Option<&'static [u8]> {
         "reveal" => REVEAL_CTX,
         "result" => RESULT_CTX,
         "abort" => ABORT_CTX,
+        "offer" => OFFER_CTX,
+        "ack" => ACK_CTX,
         _ => return None,
     })
 }
@@ -340,7 +346,7 @@ pub fn hex(b: &[u8]) -> String {
 
 /// Bytes from lowercase or uppercase hex.
 pub fn unhex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 || !s.is_ascii() {
+    if !s.len().is_multiple_of(2) || !s.is_ascii() {
         return None;
     }
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
@@ -367,6 +373,8 @@ mod tests {
         assert_eq!(hex(REVEAL_CTX), "6c696775732d6d617463682d72657665616c2d763100");
         assert_eq!(hex(RESULT_CTX), "6c696775732d6d617463682d726573756c742d763100");
         assert_eq!(hex(ABORT_CTX), "6c696775732d6d617463682d61626f72742d763100");
+        assert_eq!(hex(OFFER_CTX), "6c696775732d6d617463682d6f666665722d763100");
+        assert_eq!(hex(ACK_CTX), "6c696775732d6d617463682d61636b2d763100");
         assert_eq!(MAILBOX_SALT, b"ligus-approval-mailbox-v1");
         assert_eq!(MAILBOX_REGISTER_CTX, b"ligus-mailbox-register-v1\0");
         assert_eq!(MAILBOX_MEMBER_CTX, b"ligus-mailbox-member-v1\0");
@@ -568,7 +576,7 @@ mod tests {
 
     #[test]
     fn message_contexts_are_distinct() {
-        let ts = ["request", "claim", "open", "reveal", "result", "abort"];
+        let ts = ["request", "claim", "open", "reveal", "result", "abort", "offer", "ack"];
         for a in ts {
             for b in ts {
                 if a != b {

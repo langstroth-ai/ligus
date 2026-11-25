@@ -50,7 +50,11 @@ struct MockState {
     envelope_gets: usize,
 }
 
+// A path from this file's directory, so the CLI's tests (which include this
+// file by path) find it too.
+#[path = "test_relay/mailbox.rs"]
 mod mailbox;
+#[allow(unused_imports)]
 pub use mailbox::{AUTH_WINDOW_MS, MAX_LIVE, MAX_MSGS, PUTS_PER_MIN};
 
 /// The clock a mock relay's mailboxes read: the system clock plus an offset
@@ -71,7 +75,7 @@ impl TestClock {
     }
 
     /// The same clock, for a [`crate::approval_mailbox::MailboxClient`].
-    pub fn clock(&self) -> crate::approval_mailbox::Clock {
+    pub fn clock(&self) -> Arc<dyn Fn() -> i64 + Send + Sync> {
         let c = self.clone();
         Arc::new(move || c.now())
     }

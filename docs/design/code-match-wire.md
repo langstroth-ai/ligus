@@ -56,7 +56,7 @@ a plaintext routing hint `to`: `members` (sealed to `sealKey`), `requester`
 ```
 
 `sig` is over `match_code::message_preimage(t, body)` =
-`ctx(t) ‖ utf8(body)`, with `ctx` one of `ligus-match-{request,claim,open,reveal,result,abort}-v1\0`.
+`ctx(t) ‖ utf8(body)`, with `ctx` one of `ligus-match-{request,claim,open,reveal,offer,ack,result,abort}-v1\0`.
 Ed25519 keys are 32 bytes; P-256 keys are the 65-byte SEC1 uncompressed point
 and signatures the 64-byte low-S `r ‖ s` (`ligus_core::crypto::verify_p256`).
 The verifier verifies over the exact `body` string, then parses it. Unknown
@@ -73,6 +73,8 @@ refuses a body whose `rid` isn't the one it is reading.
 | `claim` | `sealKey` (`members`) | approver device key | `rid`, `approverDeviceId`, `approverName` (a display hint), `at` |
 | `open` | `requesterKa` (`requester`) | approver device key (`key` = `approverSigKey`) | `rid`, `approverDeviceId`, `approverSigKey` (b64u), `approverKa` (b64u 32, ephemeral per exchange), `approverPerson:{accountId,name}`, `nA` (b64u 32), `at` |
 | `reveal` | `approverKa` (`approver`) | requester device key | `rid`, `nR` (b64u 32) |
+| `offer` | `requesterKa` (`requester`) | `approverSigKey` from the `open` | computers only: `rid`, `grantDigest` (hex SHA-256 of the sealed `ligusgrant1:` text, built and sealed now and kept in memory), `person:{accountId,name}` (equal to the `open`'s `approverPerson`), `approverDeviceId` (equal to the `open`'s) |
+| `ack` | `approverKa` (`approver`) | requester device key | computers only: `rid`, `grantDigest` (the offer's) |
 | `result` | `requesterKa` (`requester`) | `approverSigKey` from the `open` | `rid`, `outcome:"approved"\|"mismatch"\|"declined"\|"expired"`, `grant` (the `ligusadmit1:`/`ligusgrant1:` text, or null), `grantDigest` (hex SHA-256 of the grant's UTF-8 bytes, or null) |
 | `abort` | posted twice: `sealKey` (`members`) and `requesterKa` (`requester`); the requester posts to `members` and, after an `open`, `approver` | anyone (its own key) | `rid`, `reason:"mismatch"\|"cancelled"\|"contested"` |
 
@@ -86,6 +88,22 @@ minutes (5 minutes of clock skew ahead allowed).
 
 `kind:"box"` with `code` a `ligusjoin1:` is the only way a box request is
 signed: the `ligusjoin1` codec itself is unchanged.
+
+**Computers: certify on acknowledgement** (`identity-model-v2.md` 8.1).
+After the codes match the approver builds and seals the grant, keeps it in
+memory and sends `offer`. The requester checks it (signed by the `open`'s
+`approverSigKey`, the same person and device) and, once its person confirmed
+the code, sends `ack`. Only after a valid `ack` (signed by the request's
+device key, over the offered digest) does the approver run the passkey
+ceremony and publish `DeviceCertificateAdded`, drafted fresh, and then send
+`result{approved, grant, grantDigest}`; the requester refuses a grant whose
+digest isn't the acknowledged one. No valid `ack` within **2 minutes** of the
+`offer`: nothing is signed or published, no key leaves the approver ("Linking
+<label> didn't finish. Nothing was added."). A key rotation before the
+publish aborts the exchange. A computer exchange uses at most claim, open,
+reveal, offer, ack and result: within the 10 messages per request. Boxes and
+phones have no `offer` or `ack`. A phone's `code` is carried verbatim, so a
+later additive field inside `ligusphone1:` rides through unchanged.
 
 ### 3.4 The code
 

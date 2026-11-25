@@ -236,14 +236,89 @@ async fn a_computer_and_its_persons_desktop_see_the_same_code() {
     let (req, mut session, rc, ac) = exchange(&env, c.spec(), me, &mut SeenSet::in_memory()).await;
     assert_eq!(rc.code40, ac.code40);
     let grant = computer_grant(&env, &c.request, &desk, &env.room, &env.fk, 3, env.clock.now());
-    session.finish_approved(Some(&grant)).await.unwrap();
     let mut req = req;
+    // Identity model v2, 8.1: offer, ack, then (the caller's passkey and
+    // publish) the result.
+    assert_eq!(session.finish_approved(Some(&grant)).await.unwrap_err(), ApproverError::NotAcknowledged);
+    session.offer(grant.clone()).await.unwrap();
+    let ev = req.poll(0).await.unwrap();
+    assert!(matches!(&ev[0], RequesterEvent::Offered { grant_digest, person_name } if *grant_digest == super::envelope::grant_digest(&grant) && person_name == "Ana"), "{ev:?}");
+    req.ack().await.unwrap();
+    assert!(session.await_ack(0).await.unwrap());
+    session.finish_approved(None).await.unwrap();
     let ev = req.poll(0).await.unwrap();
     let RequesterEvent::Result(r) = &ev[0] else { panic!("{ev:?}") };
     let pk = c.key.public_key_bytes();
     let target = || GrantTarget::Computer { request: &c.request, ka: &c.ka, device_key: &pk[..] };
     let checked = req.check_grant(r, target(), env.clock.now()).unwrap();
     assert!(matches!(checked, CheckedGrant::Computer { ref person, .. } if person.display_name == "Ana"));
+}
+
+/// Identity model v2 K1: for a computer, nothing leaves the desktop before
+/// a valid ack: no grant in the mailbox, no result; an ack by another key or
+/// for another digest is refused; past 2 minutes the link didn't finish and
+/// nothing is sent; with a valid ack the grant hashes to the acknowledged
+/// digest.
+#[tokio::test]
+async fn a_computer_gets_nothing_before_a_valid_ack() {
+    let env = env().await;
+    let c = Computer::new(env.clock.now());
+    let (me, desk) = approver("Ana");
+    let (mut req, mut session, _, _) = exchange(&env, c.spec(), me, &mut SeenSet::in_memory()).await;
+    let grant = computer_grant(&env, &c.request, &desk, &env.room, &env.fk, 3, env.clock.now());
+    session.offer(grant.clone()).await.unwrap();
+    assert!(matches!(req.poll(0).await.unwrap()[0], RequesterEvent::Offered { .. }));
+    // Nothing in the mailbox carries the grant.
+    let keys = MailboxKeys::derive(&env.ek.key);
+    let msgs = env.client.get_msgs(MailboxAuth::Member(&keys), &env.address.mailbox, &req.rid(), 0, 0).await.unwrap();
+    for m in &msgs {
+        if let Some(p) = open_blob(&c.ka, &m.blob) {
+            assert!(!String::from_utf8_lossy(&p).contains(crate::computer_link::GRANT_PREFIX), "the grant left before the ack");
+        }
+    }
+    assert_eq!(session.finish_approved(None).await.unwrap_err(), ApproverError::NotAcknowledged);
+    // Forged acks: another key, another digest.
+    let open = msgs.iter().find_map(|m| open_blob(&c.ka, &m.blob).and_then(|p| Verified::parse(&p).ok()).filter(|v| v.t == MsgType::Open)).unwrap();
+    let open = super::envelope::verify_open(&open, &req.rid()).unwrap();
+    let post_ack = |signer: Signer, digest: String| {
+        let msg = sign_message(MsgType::Ack, &AckBody { rid: req.rid_hex(), grant_digest: digest }, &signer);
+        let blob = seal_blob(&open.approver_ka, msg.as_bytes()).unwrap();
+        let (client, mailbox, rid) = (env.client.clone(), env.address.mailbox, req.rid());
+        let keys = MailboxKeys::derive(&env.ek.key);
+        async move { client.post_msg(MailboxAuth::Member(&keys), &mailbox, &rid, &blob, "approver").await.unwrap() }
+    };
+    post_ack(Signer::Ed25519(SigningKeypair::generate().unwrap()), super::envelope::grant_digest(&grant)).await;
+    post_ack(c.spec().signer, hex(&[7; 32])).await;
+    assert!(!session.await_ack(0).await.unwrap(), "neither forged ack counts");
+    // Two minutes pass: the link didn't finish, and nothing is sent.
+    env.clock.advance(ACK_WINDOW_MS + 1_000);
+    req.ack().await.unwrap();
+    assert_eq!(session.await_ack(0).await.unwrap_err(), ApproverError::DidntFinish, "a late ack counts for nothing");
+    assert_eq!(session.finish_approved(None).await.unwrap_err(), ApproverError::Ended);
+    assert!(!req.poll(0).await.unwrap().iter().any(|e| matches!(e, RequesterEvent::Result(_))));
+}
+
+/// The valid path: the grant that arrives hashes to the acknowledged digest.
+#[tokio::test]
+async fn a_computer_receives_the_grant_it_acknowledged() {
+    let env = env().await;
+    let c = Computer::new(env.clock.now());
+    let (me, desk) = approver("Ana");
+    let (mut req, mut session, _, _) = exchange(&env, c.spec(), me, &mut SeenSet::in_memory()).await;
+    let grant = computer_grant(&env, &c.request, &desk, &env.room, &env.fk, 3, env.clock.now());
+    session.offer(grant.clone()).await.unwrap();
+    let RequesterEvent::Offered { grant_digest, .. } = req.poll(0).await.unwrap().remove(0) else { panic!() };
+    req.ack().await.unwrap();
+    assert!(session.await_ack(0).await.unwrap());
+    // The caller's passkey and publish happen here; then the result. A
+    // different grant is refused.
+    let other = computer_grant(&env, &c.request, &desk, &env.room, &env.fk, 3, env.clock.now());
+    assert_eq!(session.finish_approved(Some(&other)).await.unwrap_err(), ApproverError::GrantChanged);
+    session.finish_approved(Some(&grant)).await.unwrap();
+    let RequesterEvent::Result(r) = req.poll(0).await.unwrap().remove(0) else { panic!() };
+    assert_eq!(r.grant_digest.as_deref(), Some(grant_digest.as_str()));
+    let pk = c.key.public_key_bytes();
+    req.check_grant(&r, GrantTarget::Computer { request: &c.request, ka: &c.ka, device_key: &pk }, env.clock.now()).unwrap();
 }
 
 /// A phone (P-256) approves a box.
@@ -504,24 +579,21 @@ async fn a_computer_refuses_every_grant_that_fails_checks_1_to_4() {
     let now = env.clock.now();
     let rid = req.rid_hex();
     let key = c.key.public_key_bytes();
-    let check = |g: &str| req.check_grant(&approved(&rid, g), GrantTarget::Computer { request: &c.request, ka: &c.ka, device_key: &key }, now);
+    let mut req = req;
+    let mut check = |g: &str| {
+        req.set_acked_for_tests(&super::envelope::grant_digest(g));
+        req.check_grant(&approved(&rid, g), GrantTarget::Computer { request: &c.request, ka: &c.ka, device_key: &key }, now)
+    };
     assert!(check(&computer_grant(&env, &c.request, &desk, &env.room, &env.fk, 3, now)).is_ok());
     let other_desk = SigningKeypair::generate().unwrap();
     assert_eq!(check(&computer_grant(&env, &c.request, &other_desk, &env.room, &env.fk, 3, now)).unwrap_err(), GrantError::WrongApprover);
     let good = computer_grant(&env, &c.request, &desk, &env.room, &env.fk, 3, now);
-    let mut bad_digest = approved(&rid, &good);
-    bad_digest.grant_digest = Some(hex(&[0; 32]));
-    assert_eq!(
-        req.check_grant(&bad_digest, GrantTarget::Computer { request: &c.request, ka: &c.ka, device_key: &key }, now).unwrap_err(),
-        GrantError::DigestMismatch
-    );
-    let mut no_grant = approved(&rid, &good);
-    no_grant.grant = None;
-    no_grant.grant_digest = None;
-    assert_eq!(
-        req.check_grant(&no_grant, GrantTarget::Computer { request: &c.request, ka: &c.ka, device_key: &key }, now).unwrap_err(),
-        GrantError::NoGrant
-    );
+    // Forks.
+    let fork_fk = "cd".repeat(16);
+    assert_eq!(check(&computer_grant(&env, &c.request, &desk, &env.room, &fork_fk, 3, now)).unwrap_err(), GrantError::WrongFounder);
+    assert_eq!(check(&computer_grant(&env, &c.request, &desk, "another-room", &env.fk, 3, now)).unwrap_err(), GrantError::WrongWorkspace);
+    // An older key epoch than the address's (3).
+    assert_eq!(check(&computer_grant(&env, &c.request, &desk, &env.room, &env.fk, 2, now)).unwrap_err(), GrantError::OldEpoch);
     // Another request (same key-agreement key, another device key).
     let other_dev = SigningKeypair::generate().unwrap();
     let other = LinkRequest::new(&other_dev, &c.ka.public_key_bytes(), "lt", now, None);
@@ -529,12 +601,28 @@ async fn a_computer_refuses_every_grant_that_fails_checks_1_to_4() {
     // Sealed to another computer.
     let elsewhere = Computer::new(now);
     assert!(matches!(check(&computer_grant(&env, &elsewhere.request, &desk, &env.room, &env.fk, 3, now)).unwrap_err(), GrantError::NotForThisRequest(_)));
-    // Forks.
-    let fork_fk = "cd".repeat(16);
-    assert_eq!(check(&computer_grant(&env, &c.request, &desk, &env.room, &fork_fk, 3, now)).unwrap_err(), GrantError::WrongFounder);
-    assert_eq!(check(&computer_grant(&env, &c.request, &desk, "another-room", &env.fk, 3, now)).unwrap_err(), GrantError::WrongWorkspace);
-    // An older key epoch than the address's (3).
-    assert_eq!(check(&computer_grant(&env, &c.request, &desk, &env.room, &env.fk, 2, now)).unwrap_err(), GrantError::OldEpoch);
+    // A grant other than the acknowledged one.
+    req.set_acked_for_tests(&hex(&[1; 32]));
+    assert_eq!(
+        req.check_grant(&approved(&rid, &good), GrantTarget::Computer { request: &c.request, ka: &c.ka, device_key: &key }, now).unwrap_err(),
+        GrantError::NotAcknowledged
+    );
+    req.set_acked_for_tests(&super::envelope::grant_digest(&good));
+    let mut bad_digest = approved(&rid, &good);
+    bad_digest.grant_digest = Some(hex(&[0; 32]));
+    req.set_acked_for_tests(&hex(&[0; 32]));
+    assert_eq!(
+        req.check_grant(&bad_digest, GrantTarget::Computer { request: &c.request, ka: &c.ka, device_key: &key }, now).unwrap_err(),
+        GrantError::DigestMismatch
+    );
+    req.set_acked_for_tests(&super::envelope::grant_digest(&good));
+    let mut no_grant = approved(&rid, &good);
+    no_grant.grant = None;
+    no_grant.grant_digest = None;
+    assert_eq!(
+        req.check_grant(&no_grant, GrantTarget::Computer { request: &c.request, ka: &c.ka, device_key: &key }, now).unwrap_err(),
+        GrantError::NotAcknowledged, "a computer's result must carry the acknowledged grant"
+    );
     // Not approved.
     let mut declined = approved(&rid, &good);
     declined.outcome = Outcome::Declined;
@@ -972,9 +1060,17 @@ mod on_the_log {
         let RequesterEvent::Opened { code, claimed } = req.poll(0).await.unwrap().remove(0) else { panic!() };
         assert_eq!(claimed.name, "Alex");
         assert_eq!(session.await_reveal(0).await.unwrap().unwrap().code40, code.code40);
-        let RequestSubject::Computer(parsed) = &session.request().subject else { panic!() };
-        let grant = mac.svc.issue_computer_link(ws, parsed, &encode_workspace_invite(&mac.conn("http://relay.invalid", room, None)), now).unwrap();
-        session.finish_approved(Some(&grant)).await.unwrap();
+        let RequestSubject::Computer(parsed) = session.request().subject.clone() else { panic!() };
+        let parsed = &parsed;
+        let conn_code = encode_workspace_invite(&mac.conn("http://relay.invalid", room, None));
+        let grant = mac.svc.prepare_computer_link(ws, parsed, &conn_code, now).unwrap();
+        session.offer(grant).await.unwrap();
+        assert!(matches!(req.poll(0).await.unwrap()[0], RequesterEvent::Offered { .. }));
+        req.ack().await.unwrap();
+        assert!(session.await_ack(0).await.unwrap());
+        // Only now: the passkey and the certificate.
+        mac.svc.publish_computer_link(ws, parsed, &conn_code, now).unwrap();
+        session.finish_approved(None).await.unwrap();
         let RequesterEvent::Result(r) = req.poll(0).await.unwrap().remove(0) else { panic!() };
         let ka = lt.ka();
         let pk = lt.device_key().public_key_bytes();

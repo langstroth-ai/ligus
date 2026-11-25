@@ -40,11 +40,11 @@ mod tests;
 pub use address::{AddressError, ApprovalAddress, ADDRESS_PREFIX};
 pub use approver::{
     claim_view, end_request, list_live, ApproverError, ApproverIdentity, ApproverSession, Approvability, ApproverClassifier, ClaimView, EpochKey,
-    LiveRequest, Listing, SeenClaim, SeenSet, SEEN_FILE, SEEN_TTL_MS,
+    LiveRequest, Listing, SeenClaim, SeenSet, ACK_WINDOW_MS, SEEN_FILE, SEEN_TTL_MS,
 };
 pub use client::{ListedRequest, MailboxAuth, MailboxClient, MailboxError, MailboxMsg, PutAck, MAX_MSG_BLOB, MAX_REQUEST_BLOB, MAX_WAIT_SECS};
 pub use envelope::{
-    open_blob, seal_blob, AbortBody, AbortReason, ApproverPerson, ClaimBody, MsgError, MsgType, OpenBody, Outcome, RequestBody, RequestSubject,
+    open_blob, seal_blob, AbortBody, AckBody, OfferBody, AbortReason, ApproverPerson, ClaimBody, MsgError, MsgType, OpenBody, Outcome, RequestBody, RequestSubject,
     ResultBody, RevealBody, Signer, Verified, VerifiedOpen, VerifiedRequest, CLOCK_SKEW_MS,
 };
 pub use log_check::{retry_log_check, LogApproval, LogApprovalCheck, LogSubject, LogVerdict, LOG_CHECK_RETRY_MS};

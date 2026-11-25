@@ -119,6 +119,10 @@ pub enum MsgType {
     Reveal,
     Result,
     Abort,
+    /// A computer link: the sealed grant's digest before the grant.
+    Offer,
+    /// The requester's acknowledgement of an offer.
+    Ack,
 }
 
 impl MsgType {
@@ -130,6 +134,8 @@ impl MsgType {
             Self::Reveal => "reveal",
             Self::Result => "result",
             Self::Abort => "abort",
+            Self::Offer => "offer",
+            Self::Ack => "ack",
         }
     }
 
@@ -141,6 +147,8 @@ impl MsgType {
             "reveal" => Self::Reveal,
             "result" => Self::Result,
             "abort" => Self::Abort,
+            "offer" => Self::Offer,
+            "ack" => Self::Ack,
             _ => return None,
         })
     }
@@ -353,6 +361,25 @@ pub enum AbortReason {
 pub struct AbortBody {
     pub rid: String,
     pub reason: AbortReason,
+}
+
+/// A computer link's offer (identity model v2, 8.1): the approver built and
+/// sealed the grant and names its digest; the grant follows only after the
+/// requester's [`AckBody`] and the approver's passkey.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfferBody {
+    pub rid: String,
+    pub grant_digest: String,
+    pub person: ApproverPerson,
+    pub approver_device_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AckBody {
+    pub rid: String,
+    pub grant_digest: String,
 }
 
 /// The code a request carries, decoded and verified as today.
@@ -580,6 +607,34 @@ pub(crate) fn verify_claim(v: &Verified, rid: &[u8; 16]) -> Result<ClaimBody, Ms
         return Err(MsgError::WrongDeviceId);
     }
     Ok(b)
+}
+
+/// An offer signed by the open's approver key, naming the open's person and
+/// device, with a well-formed digest.
+pub(crate) fn verify_offer(v: &Verified, rid: &[u8; 16], open: &VerifiedOpen) -> Result<OfferBody, MsgError> {
+    v.expect(MsgType::Offer)?;
+    if v.alg != open.approver_alg || v.key != open.approver_sig_key {
+        return Err(MsgError::WrongKey);
+    }
+    let b: OfferBody = v.body_as()?;
+    check_rid(&b.rid, rid)?;
+    if b.approver_device_id != open.approver_device_id || b.person != open.person {
+        return Err(MsgError::WrongDeviceId);
+    }
+    hex_fixed::<32>(&b.grant_digest).ok_or(MsgError::Malformed)?;
+    Ok(b)
+}
+
+/// The digest an ack signed by the requester (`alg`, `key`) acknowledges.
+pub(crate) fn verify_ack(v: &Verified, rid: &[u8; 16], alg: SigAlg, key: &[u8]) -> Result<String, MsgError> {
+    v.expect(MsgType::Ack)?;
+    if v.alg != alg || v.key != key {
+        return Err(MsgError::WrongKey);
+    }
+    let b: AckBody = v.body_as()?;
+    check_rid(&b.rid, rid)?;
+    hex_fixed::<32>(&b.grant_digest).ok_or(MsgError::Malformed)?;
+    Ok(b.grant_digest)
 }
 
 /// SHA-256 of a grant's UTF-8 bytes, hex.
