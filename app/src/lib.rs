@@ -16318,6 +16318,13 @@ pub fn run() {
                                 Ok(_) => {}
                                 Err(e) => eprintln!("clear stale streaming: {e}"),
                             }
+                            // Close the questions a turn of the last run was
+                            // waiting on: nobody waits on them any more.
+                            match svc.sweep_open_asks() {
+                                Ok(n) if n > 0 => eprintln!("closed {n} question(s) left open by the last run"),
+                                Ok(_) => {}
+                                Err(e) => eprintln!("close open questions: {e}"),
+                            }
                         }
                         // Re-spawn drivers for runs interrupted by the last
                         // shutdown so they auto-continue instead of stalling.

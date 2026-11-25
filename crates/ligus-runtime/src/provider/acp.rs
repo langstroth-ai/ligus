@@ -690,10 +690,79 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
     async fn escalate(&mut self, tool: &Value, standing: bool) -> bool {
         let Some(scope) = self.scope.clone() else { return false };
         let Some(asker) = scope.asker.clone() else { return false };
-        let (question, choices) = permission_question(&self.agent_label, tool, standing);
+        let root = self.fs.as_ref().map(|f| f.root.clone());
+        let req = grant_request(&self.agent_label, tool, standing, root.as_deref(), self.egress_open, ask_timeout());
+        let too_large = req.too_large;
         let _pause = scope.pause();
-        let answer = asker.ask(question, choices, ask_timeout()).await;
-        answer.is_some_and(|a| a.option_index == Some(0))
+        let answer = asker.ask_grant(req).await;
+        // A call too large to show is never allowed from a card.
+        !too_large && answer.is_some_and(|a| a.option_index == Some(0))
+    }
+}
+
+/// A permission request as a grant card shows it: the call's own content
+/// (the raw input, the command, the locations and diffs ACP gives), the
+/// agent's title labelled as its own, and whether it reaches outside the
+/// turn's worktree (`root`) or out through open egress.
+pub fn grant_request(agent_label: &str, tool: &Value, standing: bool, root: Option<&Path>, egress_open: bool, timeout: std::time::Duration) -> crate::agent_turn::GrantRequest {
+    let kind = tool.get("kind").and_then(Value::as_str).unwrap_or("other").to_string();
+    let title = tool.get("title").and_then(Value::as_str).unwrap_or("").to_string();
+    let mut detail = String::new();
+    if let Some(raw) = tool.get("rawInput").filter(|v| !v.is_null()) {
+        match raw.get("command") {
+            Some(Value::String(c)) => detail.push_str(c),
+            Some(Value::Array(a)) => detail.push_str(&a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")),
+            _ => detail.push_str(&serde_json::to_string_pretty(raw).unwrap_or_default()),
+        }
+    }
+    let mut paths: Vec<String> = Vec::new();
+    for loc in tool.get("locations").and_then(Value::as_array).into_iter().flatten() {
+        if let Some(p) = loc.get("path").and_then(Value::as_str) {
+            paths.push(p.to_string());
+        }
+    }
+    for c in tool.get("content").and_then(Value::as_array).into_iter().flatten() {
+        if c.get("type").and_then(Value::as_str) == Some("diff") {
+            let path = c.get("path").and_then(Value::as_str).unwrap_or("");
+            if !path.is_empty() && !paths.iter().any(|p| p == path) {
+                paths.push(path.to_string());
+            }
+            let new = c.get("newText").and_then(Value::as_str).unwrap_or("");
+            detail.push_str(&format!("\n--- {path}\n{new}"));
+        }
+    }
+    if !paths.is_empty() {
+        detail = format!("{}\n{}", paths.join("\n"), detail);
+    }
+    let detail = detail.trim().to_string();
+    let outside = egress_open
+        || root.is_some_and(|r| {
+            paths.iter().any(|p| {
+                let p = Path::new(p);
+                let abs = if p.is_absolute() { p.to_path_buf() } else { r.join(p) };
+                !crate::executor::canonical(&abs).starts_with(r)
+            })
+        });
+    let too_large = detail.len() > crate::agent_turn::MAX_GRANT_DETAIL_BYTES;
+    let detail = if too_large {
+        let mut cut = crate::agent_turn::MAX_GRANT_DETAIL_BYTES;
+        while !detail.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        detail[..cut].to_string()
+    } else {
+        detail
+    };
+    crate::agent_turn::GrantRequest {
+        agent_label: agent_label.to_string(),
+        tool: kind,
+        title,
+        detail,
+        too_large,
+        cwd: root.map(|r| r.display().to_string()).unwrap_or_default(),
+        standing,
+        outside_sandbox: outside,
+        timeout,
     }
 }
 

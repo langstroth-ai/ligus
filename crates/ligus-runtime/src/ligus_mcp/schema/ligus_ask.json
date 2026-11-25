@@ -1,7 +1,16 @@
 {
-  "description": "Ask the chat's humans a question and wait for the answer (your turn pauses).",
+  "description": "Ask the chat's people a question and wait for the answer (your turn pauses). to: person asks the person who started this turn (or a member id in member); to: room asks anyone at or above minRole, or a quorum. Options are 2 to 5 short choices, or yesNo. Any status other than answered means no.",
   "inputSchema": {
     "properties": {
+      "allowText": {
+        "type": "boolean"
+      },
+      "member": {
+        "type": "string"
+      },
+      "minRole": {
+        "type": "string"
+      },
       "options": {
         "items": {
           "type": "string"
@@ -11,8 +20,21 @@
       "question": {
         "type": "string"
       },
+      "quorum": {
+        "type": "integer"
+      },
       "timeoutSecs": {
         "type": "integer"
+      },
+      "to": {
+        "enum": [
+          "person",
+          "room"
+        ],
+        "type": "string"
+      },
+      "yesNo": {
+        "type": "boolean"
       }
     },
     "required": [

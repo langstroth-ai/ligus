@@ -107,6 +107,9 @@ impl Budgets {
     }
 }
 
+#[path = "decision.rs"]
+pub mod decision;
+
 /// What the server needs from its host.
 pub trait LigusHost: Send + Sync {
     /// Run `f` with the host's chat service (under its lock).
@@ -469,7 +472,7 @@ impl LigusMcp {
             "ligus_propose_diff" | "ligus_propose_decision" | "ligus_propose_command" | "ligus_propose_workflow" | "ligus_open_alternatives"
             | "ligus_offer_file" => Some(0),
             "ligus_handoff" => Some(1),
-            "ligus_ask_human" => Some(2),
+            "ligus_ask_human" | "ligus_ask_person" | "ligus_ask_room" => Some(2),
             _ => None,
         };
         if let Some(k) = kind {
@@ -478,11 +481,14 @@ impl LigusMcp {
                 1 => (&mut c.handoffs, b.max_handoffs, "maxHandoffs", &mut cc.handoffs, cb.max_handoffs, "cascadeHandoffs"),
                 _ => (&mut c.asks, b.max_asks, "maxAsks", &mut cc.asks, cb.max_asks, "cascadeAsks"),
             };
+            // A card past the asks budget posts nothing (section 4.1).
+            let card = matches!(tool, "ligus_ask_person" | "ligus_ask_room");
+            let over = |name: &str| if card { ToolResult::err(Outcome::Budget, json!({"error": "ask_budget", "budget": name})) } else { exhausted(name) };
             if *n >= max {
-                return Err(exhausted(name));
+                return Err(over(name));
             }
             if *cn >= cmax {
-                return Err(exhausted(cname));
+                return Err(over(cname));
             }
             *n += 1;
             *cn += 1;
@@ -491,6 +497,15 @@ impl LigusMcp {
         cc.total += 1;
         *c.calls.entry(tool.to_string()).or_insert(0) += 1;
         Ok(())
+    }
+
+    /// Give back the ask a card charged when it was refused before posting
+    /// (a bad argument is not a question asked).
+    pub(super) fn refund_ask(st: &TurnState) {
+        let mut c = st.counters.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cc = st.cascade.lock().unwrap_or_else(|e| e.into_inner());
+        c.asks = c.asks.saturating_sub(1);
+        cc.asks = cc.asks.saturating_sub(1);
     }
 
     /// Count an ACP permission escalation (a question to the chat's people)
@@ -820,6 +835,8 @@ impl LigusMcp {
                 self.memory_tool(st, tool, args)
             }
             "ligus_ask_human" => self.ask_human(st, &ctx, args).await,
+            "ligus_ask_person" => self.ask_card(st, &ctx, args, true).await,
+            "ligus_ask_room" => self.ask_card(st, &ctx, args, false).await,
             "ligus_report" => {
                 let status = s("status");
                 if !matches!(status.as_str(), "done" | "blocked" | "needsReview") {
@@ -1430,6 +1447,36 @@ pub struct HostAsker {
 }
 
 impl crate::agent_turn::HumanAsker for HostAsker {
+    fn ask_grant(&self, req: crate::agent_turn::GrantRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<crate::agent_turn::HumanAnswer>> + Send + '_>> {
+        Box::pin(async move {
+            if self.turn.as_ref().is_some_and(|st| !LigusMcp::charge_escalation(st)) {
+                return None;
+            }
+            let ask = self.grant_card(&req)?;
+            let posted = decision::post_card(&*self.host, &self.ctx, ask).ok()?;
+            let outcome = decision::wait_card(&*self.host, self.ctx.session_id, &posted, req.timeout, || self.revoked()).await;
+            match outcome {
+                // The fold counted it (the named people, their passkey where
+                // needed, the digest of this card); the host checks the
+                // approver again before it acts.
+                decision::CardOutcome::Answered(st) => {
+                    let acted = decision::acted_on(&st).and_then(|v| v.event_id);
+                    decision::close_card(&*self.host, &self.ctx, &posted.ask, acted);
+                    let a = st.answer?;
+                    if req.too_large || !self.answered_by_approver(&a) {
+                        return None;
+                    }
+                    Some(crate::agent_turn::HumanAnswer { answer: a.answer, option_index: a.option_index.map(|i| i as usize) })
+                }
+                decision::CardOutcome::Foreign => None,
+                _ => {
+                    decision::close_card(&*self.host, &self.ctx, &posted.ask, None);
+                    None
+                }
+            }
+        })
+    }
+
     fn ask(&self, question: String, options: Vec<String>, timeout: Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<crate::agent_turn::HumanAnswer>> + Send + '_>> {
         Box::pin(async move {
             // It asks the chat's people like ligus_ask_human: past the
@@ -1440,7 +1487,7 @@ impl crate::agent_turn::HumanAsker for HostAsker {
             }
             let q: String = question.chars().take(flow::MAX_ASK_QUESTION_CHARS).collect();
             let posted = post_ask_as(&*self.host, &self.ctx, self.turn_id, q, options, timeout, true).ok()?;
-            match wait_answer(&*self.host, self.ctx.session_id, &posted.ask, timeout, || false).await {
+            match wait_answer(&*self.host, self.ctx.session_id, &posted.ask, timeout, || self.revoked()).await {
                 // A permission answer authorizes a run on this host: it counts
                 // only from the host's own person or the agent's owner. Any
                 // other first answer (a teammate on another device) denies.
@@ -1458,6 +1505,64 @@ impl crate::agent_turn::HumanAsker for HostAsker {
 }
 
 impl HostAsker {
+    /// The turn was revoked (stopped or ended): a wait stops.
+    fn revoked(&self) -> bool {
+        self.turn.as_ref().is_some_and(|st| st.revoked.load(Ordering::SeqCst))
+    }
+
+    /// The grant card for `req` (section 6.2): Ligus's words and labels, the
+    /// call's own detail, the people who may grant it (this host's person
+    /// and the agent's owner), and whether their passkey is needed (the chat
+    /// in lockdown, dearth mode on, or the call outside the sandbox).
+    fn grant_card(&self, req: &crate::agent_turn::GrantRequest) -> Option<HumanAsk> {
+        let ctx = &self.ctx;
+        let mut out = None;
+        self.host.with_service(&mut |svc| {
+            let Some(session) = svc.load_in(ctx.workspace_id, ctx.session_id).ok().flatten() else { return };
+            let mut people = vec![svc.author().id.clone()];
+            if let Some(owner) = ctx.agent_id.and_then(|id| session.workspace_agents.iter().find(|a| a.id == id)).map(|a| a.owner_actor_id.clone()) {
+                if !owner.is_empty() && !people.contains(&owner) {
+                    people.push(owner);
+                }
+            }
+            let guarded = !session.guards.lockdowns.is_empty() || session.guards.dearth_on().is_some();
+            let presence = if guarded || req.outside_sandbox { flow::PRESENCE_REQUIRED } else { "none" };
+            let labels = if req.standing { ligus_proto::ask_text::STANDING_GRANT_LABELS } else { ligus_proto::ask_text::GRANT_LABELS };
+            let question = if req.standing {
+                format!("{} asks permission to run this for the rest of its session.", req.agent_label)
+            } else {
+                format!("{} asks permission to run this once.", req.agent_label)
+            };
+            let now = flow::now_ms();
+            out = Some(HumanAsk {
+                ask_id: Uuid::new_v4(),
+                turn_id: self.turn_id,
+                agent_key: ctx.agent_key(),
+                question,
+                options: labels.iter().map(|s| s.to_string()).collect(),
+                expires_at_ms: now + req.timeout.as_millis() as i64,
+                at_ms: now,
+                permission: true,
+                v: flow::ASK_V2,
+                audience: Some(flow::AskAudience::people(people)),
+                effect: Some(flow::AskEffect {
+                    kind: flow::EFFECT_PERMISSION.into(),
+                    tool: req.tool.clone(),
+                    title: ligus_proto::ask_text::cut(&ligus_proto::ask_text::clean_option(&req.title), 200),
+                    detail: req.detail.clone(),
+                    cwd: req.cwd.clone(),
+                    host_device_id: Some(svc.device_id()),
+                    presence: presence.into(),
+                    standing: req.standing,
+                    too_large: req.too_large,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        });
+        out
+    }
+
     /// Whether the winning answer was signed by the host's own person or the
     /// asking agent's owner.
     fn answered_by_approver(&self, ans: &flow::HumanAnswered) -> bool {

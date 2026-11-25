@@ -75,8 +75,10 @@ Ligus answers from your permission tier for CLI agents (Settings, Agents):
 | fetch from the web | **asks a person** | **asks a person** | **asks a person** | allowed |
 | anything else | **asks a person** | **asks a person** | **asks a person** | **asks a person** |
 
-- "Asks a person" posts the request in the chat as a question (the same one
-  `ligus_ask_human` uses). Because allowing it lets the agent act on this
+- "Asks a person" posts the request in the chat as a **grant card** (see
+  [Questions to the chat](ligus-mcp.md#asks)): the call's own content, the
+  agent's title labelled as its own words, and Allow once and Deny in
+  Ligus's labels. Because allowing it lets the agent act on this
   host, only **the host's own person or the agent's owner** can grant it,
   from the desktop or the phone. Anyone else's answer is kept in the chat
   but counts for nothing, and the request keeps waiting. The turn waits, and

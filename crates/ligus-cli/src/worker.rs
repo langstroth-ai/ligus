@@ -131,7 +131,14 @@ impl LigusHost for CliLigusHost {
 }
 
 /// A Ligus MCP server over `source`.
+/// The server starts with no turn: the questions a turn of an earlier run
+/// was waiting on are closed (the restart sweep).
 pub fn ligus_server(source: std::sync::Arc<dyn ServiceSource>) -> std::sync::Arc<LigusMcp> {
+    match lock(source.service()).sweep_open_asks() {
+        Ok(n) if n > 0 => eprintln!("closed {n} question(s) left open by the last run"),
+        Ok(_) => {}
+        Err(e) => eprintln!("close open questions: {e}"),
+    }
     LigusMcp::new(std::sync::Arc::new(CliLigusHost(source)))
 }
 

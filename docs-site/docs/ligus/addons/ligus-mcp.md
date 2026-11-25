@@ -45,7 +45,9 @@ changes workspace settings.
 | `ligus_read_chat` | `chatId?`, `sinceMessageId?`, `limit ≤ 100` | Messages from **any chat in the workspace** whose egress is no stricter than this one's |
 | `ligus_read_proposals` | `chatId?`, `status?`, `setId?` | Proposals |
 | `ligus_read_board` | | Marks, hand-offs and open questions |
-| `ligus_ask_human` | `question`, `options? ≤ 6`, `timeoutSecs ≤ 3600` | Asks the chat's people. **The turn pauses** until someone answers or the timeout passes (then `{"error":"no_answer"}`) |
+| `ligus_ask_person` | `question ≤ 500`, `options` (2 to 5, each ≤ 60) or `yesNo`, `allowText?`, `to?: requester\|<member id>`, `timeoutSecs 10-3600` | A [decision card](#asks) for one person: by default the one who started this turn. **The turn pauses** until they answer, say Not now, or the timeout passes |
+| `ligus_ask_room` | as `ligus_ask_person`, with `minRole?: contributor\|admin\|owner` and `quorum? 1-5` instead of `to` | A decision card for anyone at or above `minRole`, or a quorum of them who must pick the same option |
+| `ligus_ask_human` | `question`, `options? ≤ 6`, `timeoutSecs ≤ 3600` | The older question tool, unchanged: anyone at Contributor or above answers, the first answer wins (else `{"error":"no_answer"}`). Prefer the two above |
 | `ligus_report` | `status: done\|blocked\|needsReview`, `summary ≤ 400`, `filesTouched?`, `confidence?` | A short self-report, shown on the turn. Never used for scoring |
 | `ligus_offer_file` | `path`, `title`, `body?` | Offers a file from your worktree as a proposal, only when the workspace lets agents offer files. Nothing is shared until a person approves it; blocked types and files holding a host credential are refused. See [Sharing files](../features/attachments.md#files-from-agents). The in-process tool loops (API and local runtimes) don't have it |
 | `ligus_memory_search` | `query`, `tags? ≤ 8`, `limit ≤ 20` | Keyword search over the [workspace memory](../features/memory.md): every word must match |
@@ -215,15 +217,63 @@ day's spend reaches it. See
 
 ## Questions to the chat {#asks}
 
-`ligus_ask_human` (and an ACP permission request that needs a person) posts
-the question in the chat. It shows in the [Review pane](../features/right-rail.md)
-and is pushed to paired phones as `ask.pending`. Anyone in the chat can
-answer, and the first answer wins. Answering a `ligus_ask_human` question
-doesn't authorize anything by itself, so it needs no passkey. A permission
-request is different: it is granted only by the host's own person or the
-agent's owner (see [ACP permissions](acp.md#permissions)), and only the
-host running the turn can post one. A question someone else posts under an
-agent's name is shown as theirs. Only the asker (the agent or its host)
-closes a question. An agent can't answer a question. If the host
-restarts while a turn is waiting, the turn is cancelled. A question can't be
-resumed in 0.1.
+An agent that needs one word from a person asks with a **decision card**:
+`ligus_ask_person` (one person, by default whoever asked for the turn) or
+`ligus_ask_room` (anyone at or above a role, or a quorum). The card has the
+question, 2 to 5 options or Yes/No, an optional free-text reply, and **Not
+now**. It shows in the chat where the agent asked, in the Review pane, as an
+Inbox row and in `lt`, and is pushed to the phones of the people it asks.
+
+- **Who may answer.** Only the people the card names. Others see it
+  read-only ("Waiting on Ana", "Waiting on Admins · 1 of 2"). A room's role
+  is judged at the answer's own position in the workspace's history, so a
+  demoted member can't answer by back-dating. Every answer is a signed event
+  bound to a digest of the exact card it answers: change the question, the
+  options or who it asks, and the answer counts for nothing.
+- **Quorum.** With `quorum: 2`, two different people must pick the same
+  option. Each person's latest answer is their vote; once an option has
+  enough, the card is settled and stays settled.
+- **Not now** closes a card put to one person (`declined`). On a room card
+  it is only that person's abstention: the card stays open for the others.
+- **What an answer does.** Nothing by itself: the agent reads it and goes on
+  within what it could already do. The card says so in Ligus's words ("Your
+  answer grants no new permission"). A change that needs approval is a
+  proposal, not a question.
+- **Plain text.** The question and options are the agent's words, shown as
+  plain text: no Markdown, no clickable links. Bidi, zero-width and control
+  characters are removed, options are one line, and an option may not be
+  one of Ligus's own control labels (Allow once, Approve, Approve & apply,
+  Deny, Not now, Reject): the tool refuses it with `option_reserved`.
+- **Limits.** A card shares the asks budget (3 per turn, 6 per cascade; past
+  it `{"error":"ask_budget"}`, nothing posted). An agent may have 2 open
+  cards in a chat and a chat 5 (`too_many_open`). A quorum larger than the
+  people who could answer now is refused (`quorum_unreachable`).
+
+The tool returns one of:
+
+```json
+{"status": "answered", "optionIndex": 0, "option": "Postgres", "text": "keep the dev db",
+ "answeredBy": [{"memberId": "…", "name": "Ana", "at": "2026-11-24T10:02:11Z"}]}
+{"status": "no_answer", "tally": [1, 0]}
+{"status": "declined"}
+{"status": "cancelled"}
+```
+
+Every status but `answered` is an error result: the agent treats it as no
+and doesn't ask again this turn. `tally` comes only with a quorum.
+
+**Permission requests** from an ACP agent are **grant cards** the host
+posts (see [ACP permissions](acp.md#permissions)): "Allow once lets Builder
+run this once on Ana's mbp", the call's own content (the command, the files
+and their new content), and the agent's own title labelled as its words.
+Only the host's person or the agent's owner can grant one. The host asks for
+a passkey when the chat is in lockdown, dearth mode is on, or the call
+reaches outside the turn's sandbox. A call too large to show on a card
+(over 8 KiB) gets no Allow. Only the host that runs the turn can post a
+grant card; one anybody else signs is drawn as their plain question.
+
+`ligus_ask_human` still works as before: anyone at Contributor or above
+answers and the first answer wins. Its card is plain text too. Only the
+asker (the agent or its host) closes a question, and an agent can't answer
+one. When a host restarts, its turns are cancelled and it closes the
+questions they were waiting on. A question can't be resumed.
