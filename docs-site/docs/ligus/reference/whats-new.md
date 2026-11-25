@@ -4,10 +4,19 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
-## Unreleased
+## 0.3.0
+
+A calmer desktop, guided setup for everything you connect (on the desktop,
+the CLI and lt), adding a second computer to your own devices, custom
+themes, and security fixes for agent tools.
 
 ### New
 
+- **A calmer desktop.** List rows are one line: who or what, then one
+  muted status. A row's actions are in its menu (right-click the row, or
+  click **⋯**), each pane shows one main action, and the longer
+  explanations sit behind **?** instead of under every pane. Settings
+  follows the same pattern. See [Settings](../features/settings.md).
 - **Guided setup on the command line.** `ligus setup` lists seven flows
   and what each has done on this device: set up an agent, connect a tool
   (an MCP server), add a code folder, add a box, add a phone, invite a
@@ -25,11 +34,13 @@ Full release notes are on the
   composer does the same. Each opens one wizard, one step per screen, that
   checks before it changes anything and shows a failure's fix right under
   it. An empty list of runtimes, MCP servers or hosts offers its flow.
+- **Guided setup in lt.** `u` (or the palette) lists the same seven
+  flows, each a popup one step per screen, and `lt setup <flow>` runs one
+  from a script with the same flags, `--json` and exit codes.
 - **Choose which agents may use a tool.** A tool (MCP server) can be
   limited to some agents. The choice is kept on the device that runs the
   server, never in a file a commit could change, and a turn of the
   default agent gets only tools every agent may use.
-
 - **Add a computer to your devices.** Use Ligus on a second computer (`lt`,
   or the `ligus` CLI) as yourself, not as a second member with your name:
   **Settings → Profile → My devices → Add a computer** on the desktop, one
@@ -39,7 +50,6 @@ Full release notes are on the
   `list` (`ligus help devices`). Already invited yourself? Linking offers to
   remove the duplicate member; their messages keep their name. See
   [Add a computer](../features/linked-devices.md).
-
 - **Custom themes.** Settings → Appearance → **Import a theme…** reads a
   theme file (TOML or JSON) that sets colours for light, dark or both, on
   top of one of the six palettes; **Export current theme** saves the theme
@@ -49,10 +59,14 @@ Full release notes are on the
 
 ### Fixes
 
+- **@hive still reaches the default agent.** Messages, scripts and older
+  phones that mention `@hive` are answered by the default agent again, and
+  its replies from the Hive builds show as Ligus. Nothing stored is
+  rewritten. New agents can't be named `ligus`, `hive`, `primary` or a
+  look-alike of them, on the desktop or with `ligus add-agent`.
 - **My devices no longer points at `ligus serve enroll`.** That command was
   removed in 0.1; a box that still names you as its owner now shows how to
   admit it (`ligus admit request`, then workspace menu → Admit a box).
-
 - **`ligus app` on macOS opens the installed app.** It asked Launch
   Services by bundle id, which picks the highest `CFBundleVersion` it has
   seen, so an old test build on a mounted disk image could open instead of
@@ -77,6 +91,23 @@ Full release notes are on the
   shows this with a **Try again** button. `ligus doctor` reports it as
   `secrets.keychain-access`, without prompting. See
   [The Ligus keychain on macOS](../../operate/security/runbooks.md#mac-keychain).
+
+### Security
+
+- **Tool restrictions apply to Claude Code turns.** A tool limited to some
+  agents is left out of the tools Claude Code is given for any other agent.
+  If the file that holds those limits can't be read, no tools are offered.
+- **Tokens go only to their own server.** A saved relay access token is
+  sent only to the relay it was saved for, and a tool's token only to the
+  server it was saved for. Relay and tool URLs must use https (plain http
+  only for this machine) and can't carry a user name or token, and tool
+  errors no longer show the URL.
+
+### Upgrading
+
+- **`ligus setup --apply` is now `ligus setup runtimes --apply`.** The old
+  spelling still works in 0.3.0 and is removed in the next release; update
+  scripts that use it.
 
 ## 0.2.1
 
