@@ -74,7 +74,7 @@ fn hidden_or_reordering(c: char) -> bool {
         )
 }
 
-fn clamp_label(label: &str) -> String {
+pub(crate) fn clamp_label(label: &str) -> String {
     // Drop what a label never carries first, then trim, so what is left is
     // already trimmed (a dropped character can't leave a space at an end);
     // trim again after the cut. Idempotent: a code's label is refused unless

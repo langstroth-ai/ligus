@@ -27,6 +27,8 @@ use crate::provider::ChatTurn;
 
 mod attachments;
 mod changes;
+mod computer_link;
+pub use computer_link::LinkPreview;
 pub use changes::{ChangeFeed, ChangeOrigin, ChatChange, CHANGE_FEED_CAPACITY};
 mod facts;
 mod guards;

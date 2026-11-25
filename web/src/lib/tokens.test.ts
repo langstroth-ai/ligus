@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import tokens from "../../../assets/branding/ligus-brand-tokens.json";
 import { contrast, nearestXterm, parse, rgbOf, simulate, toRgbCss } from "../../../assets/branding/tokens/color.mjs";
-import { readRepoFile, render, stale } from "../../../assets/branding/tokens/generate.mjs";
+import { LT_TERMINAL_BACKGROUNDS, ltScheme, readRepoFile, render, stale } from "../../../assets/branding/tokens/generate.mjs";
 import { validate } from "../../../assets/branding/tokens/validate.mjs";
 import { STATUS_COLORS, THEMES } from "./theme";
 import { SCHEME_TOKENS, STATE_GLYPHS } from "./tokens.generated";
@@ -51,13 +51,32 @@ describe("token parity", () => {
 
   it("lt's table carries the same status inks and a 256-colour index for each", () => {
     const rs = render(tokens)["assets/branding/generated/lt/ligus_tokens.rs"];
-    const dark = rs.slice(rs.indexOf("pub const DARK"), rs.indexOf("pub const LIGHT"));
+    const pollen = rs.slice(rs.indexOf('name: "pollen"'), rs.indexOf('name: "studio"'));
+    const dark = pollen.slice(pollen.indexOf("dark: SchemeTokens"));
     const warn = dark.match(/warn: TokenColor \{ rgb: \((\d+), (\d+), (\d+)\), xterm256: (\d+), ansi16: Some\(3\) \}/);
     expect(warn).not.toBeNull();
     const rgb = warn!.slice(1, 4).map(Number) as [number, number, number];
     expect(Number(warn![4])).toBe(nearestXterm(rgb));
     // The accent has no 16-colour hue: yellow belongs to warn.
     expect(dark).toMatch(/accent: TokenColor \{[^}]*ansi16: None \}/);
+    // Every palette, for both backgrounds.
+    for (const name of Object.keys(tokens.themes)) expect(rs).toContain(`name: "${name}"`);
+  });
+
+  it("lt's colours read on its own canvas and on common terminal backgrounds", () => {
+    const text = ["text", "dim", "accent", "mention", "ok", "info", "warn", "danger", "neutral", "diff_add", "diff_del", "agent"] as const;
+    for (const name of Object.keys(tokens.themes)) {
+      for (const variant of ["light", "dark"] as const) {
+        const k = ltScheme(tokens, name, variant);
+        const backgrounds = [k.canvas, ...Object.values(LT_TERMINAL_BACKGROUNDS[variant])];
+        for (const bg of backgrounds) {
+          for (const role of text) expect(contrast(k[role], bg), `${name}/${variant} ${role}`).toBeGreaterThanOrEqual(4.5);
+          expect(contrast(k.border, bg), `${name}/${variant} border`).toBeGreaterThanOrEqual(3);
+          expect(contrast(k.diff_comment, bg), `${name}/${variant} diff comment`).toBeGreaterThanOrEqual(3);
+        }
+        expect(contrast(k.text, k.selection), `${name}/${variant} text on selection`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 
   it("every state has a glyph on every surface, and the desktop shares the table", () => {

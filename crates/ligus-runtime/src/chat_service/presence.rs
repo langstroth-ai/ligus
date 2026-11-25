@@ -95,7 +95,11 @@ pub fn summarize(payload: &SessionEvent) -> String {
                 crate::device_enroll::fingerprint(&certificate.device_public_key)
             )
         }
-        SessionEvent::DeviceCertificateAdded { certificate } => format!("Add device {} to your account", certificate.device_id),
+        SessionEvent::DeviceCertificateAdded { certificate } => format!(
+            "Add device {} (key {}) as one of your devices",
+            certificate.device_id,
+            crate::device_enroll::fingerprint(&certificate.device_public_key)
+        ),
         SessionEvent::ProposalApplyRequested { request } => {
             format!("Ask host {} to apply a proposal", request.host_device_id)
         }

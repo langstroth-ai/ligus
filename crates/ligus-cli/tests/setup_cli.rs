@@ -18,11 +18,23 @@ fn fresh() -> Box_ {
     Box_ { data, home: home.path().to_path_buf(), _home: home }
 }
 
+/// A clean environment that still runs on every OS: Windows needs its
+/// system variables (Winsock can't load its providers without `SystemRoot`,
+/// so every socket fails), the rest only `PATH`.
+fn clean_env(c: &mut Command) -> &mut Command {
+    c.env_clear().env("PATH", std::env::var("PATH").unwrap_or_default());
+    for k in ["SystemRoot", "SYSTEMROOT", "windir", "SystemDrive", "TEMP", "TMP", "ComSpec", "PATHEXT"] {
+        if let Ok(v) = std::env::var(k) {
+            c.env(k, v);
+        }
+    }
+    c
+}
+
 fn ligus(b: &Box_, args: &[&str], stdin: Option<&str>) -> Output {
     let mut c = Command::new(env!("CARGO_BIN_EXE_ligus"));
-    c.args(args)
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
+    clean_env(&mut c)
+        .args(args)
         .env("HOME", &b.home)
         .env("LIGUS_DATA_DIR", &b.data)
         .env("LIGUS_SECRET_BACKEND", "file")
@@ -141,31 +153,48 @@ fn the_access_token_never_goes_to_another_relay() {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    // A fake relay that answers one request, or gives up after 30 s (never
+    // a blocking accept: a CLI that can't connect must fail this test, not
+    // hang it).
+    listener.set_nonblocking(true).unwrap();
     let seen = std::thread::spawn(move || {
-        let mut all = String::new();
-        listener.set_nonblocking(false).unwrap();
-        if let Ok((mut s, _)) = listener.accept() {
-            s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-            let mut buf = [0u8; 8192];
-            let n = s.read(&mut buf).unwrap_or(0);
-            all.push_str(&String::from_utf8_lossy(&buf[..n]));
-            let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match listener.accept() {
+                Ok((mut s, _)) => {
+                    s.set_nonblocking(false).unwrap();
+                    s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                    let mut buf = [0u8; 8192];
+                    let n = s.read(&mut buf).unwrap_or(0);
+                    let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+                    return Some(String::from_utf8_lossy(&buf[..n]).into_owned());
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(_) => return None,
+            }
         }
-        all
     });
     let b = fresh();
     let url = format!("http://127.0.0.1:{port}");
     let mut c = Command::new(env!("CARGO_BIN_EXE_ligus"));
-    c.args(["setup", "relay", "--kind", "own", "--url", &url, "--dry-run", "--json"])
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
+    clean_env(&mut c)
+        .args(["setup", "relay", "--kind", "own", "--url", &url, "--dry-run", "--json"])
         .env("HOME", &b.home)
         .env("LIGUS_DATA_DIR", &b.data)
         .env("LIGUS_SECRET_BACKEND", "file")
         .env("LIGUS_RELAY_ACCESS_TOKEN", "hrt1CANARYOLDRELAY")
         .stdin(std::process::Stdio::null());
     let o = c.output().unwrap();
-    let request = seen.join().unwrap();
+    let Some(request) = seen.join().unwrap() else {
+        panic!(
+            "the CLI never reached the fake relay at {url} within 30 s (exit {:?})\nstdout: {}\nstderr: {}",
+            o.status.code(),
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
     assert!(request.starts_with("GET "), "the relay was probed: {request:?} / {}", String::from_utf8_lossy(&o.stdout));
     assert!(!request.contains("hrt1CANARYOLDRELAY"), "the token went to another relay: {request}");
 }
