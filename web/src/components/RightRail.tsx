@@ -2171,14 +2171,12 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
         {relayOn && srvMembers.isSuccess && (srvMembers.data ?? []).length === 0 && (
           <div
             className="flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs"
-            style={{ borderColor: "var(--ligus-warn-line)", background: "var(--ligus-warn-tint)" }}
+            style={{ borderColor: "var(--ligus-line)" }}
           >
-            <span className="font-semibold" style={{ color: "var(--ligus-warn-ink)" }}>
-              Not enforced: anyone can write
-            </span>
+            <span className="text-ink-soft">Relay roster off</span>
             <InfoTip
               label="member controls"
-              text="Who the relay accepts writes from (server-enforced). Claim this workspace on the relay so it enforces who can write; you become the owner. Requires a relay with membership turned on (LANGSTROTH_RELAY_MEMBERSHIP=1); no-op on an open relay."
+              text="Who can write here is decided by this workspace's signed roster, on every member's device. The relay's own roster (LANGSTROTH_RELAY_MEMBERSHIP=1) is deprecated for Ligus workspaces: it only stops non-members' uploads at the relay. Claiming makes the relay enforce it too; you become its owner there."
             />
             <span className="flex-1" />
             <Button size="sm" disabled={claimMutation.isPending} onClick={() => claimMutation.mutate()}>
