@@ -26,14 +26,16 @@ impl ChatService {
         self.append_signed(session_id, workspace_id, SessionEvent::FlowRecorded { record })
     }
 
-    /// The envelope that posted `ask_id` in a chat: the first in the log's
-    /// canonical order (an ask id belongs to its first signer).
+    /// The envelope that posted `ask_id` in a chat: the event the fold
+    /// credits with it (an ask id belongs to its first signer that the fold
+    /// accepted; a refused squat under the id is never it).
     pub fn ask_envelope(&self, workspace_id: Uuid, session_id: Uuid, ask_id: Uuid) -> Result<Option<SessionEventEnvelope>> {
-        let envs = self.store.list_in(workspace_id, session_id)?;
-        Ok(envs
-            .into_iter()
-            .filter(|e| matches!(&e.payload, SessionEvent::FlowRecorded { record: FlowRecord::HumanAsk(a) } if a.ask_id == ask_id))
-            .min_by_key(|e| e.canonical_key()))
+        let Some(session) = self.load_in(workspace_id, session_id)? else { return Ok(None) };
+        let Some(event_id) = session.flow.asks.get(&ask_id).and_then(|st| st.event_id) else { return Ok(None) };
+        let envs = self.store.list_copies_in(workspace_id, session_id)?;
+        Ok(envs.into_iter().find(|e| {
+            e.event_id == event_id && matches!(&e.payload, SessionEvent::FlowRecorded { record: FlowRecord::HumanAsk(a) } if a.ask_id == ask_id)
+        }))
     }
 
     /// The digest of the ask as this device holds it ([`fold::ask_digest`]).

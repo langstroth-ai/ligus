@@ -269,7 +269,10 @@ and their new content), and the agent's own title labelled as its words.
 Only the host's person or the agent's owner can grant one. The host asks for
 a passkey when the chat is in lockdown, dearth mode is on, or the call
 reaches outside the turn's sandbox. A call too large to show on a card
-(over 8 KiB) gets no Allow. Only the host that runs the turn can post a
+(over 8 KiB), or one whose agent sent no details of it, gets no Allow.
+Every input of the call is shown (a working directory, environment, a
+sandbox switch), and hidden characters in it are shown as visible escapes
+such as ⟨U+200B⟩, so what you allow is what you saw. Only the host that runs the turn can post a
 grant card; one anybody else signs is drawn as their plain question.
 
 `ligus_ask_human` still works as before: anyone at Contributor or above

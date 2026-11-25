@@ -117,6 +117,22 @@ pub struct AskView {
     pub at_ms: i64,
 }
 
+/// A grant's detail as a card shows it: byte for byte what runs, with every
+/// hidden or control character (bidi, zero-width, controls other than line
+/// breaks and tabs) shown as a visible escape (`⟨U+200B⟩`) instead of being
+/// removed, so what a person allows is what they saw.
+pub fn visible_detail(detail: &str) -> String {
+    let mut out = String::with_capacity(detail.len());
+    for c in detail.chars() {
+        if c == '\n' || c == '\t' || !ligus_proto::names::is_hidden_name_char(c) {
+            out.push(c);
+        } else {
+            out.push_str(&format!("\u{27E8}U+{:04X}\u{27E9}", c as u32));
+        }
+    }
+    out
+}
+
 /// The roster name of `id` (cleaned), or `fallback` cleaned, or the id.
 fn name_of(session: &ChatSession, id: &str, fallback: &str) -> String {
     session
@@ -171,7 +187,11 @@ fn vote_view(session: &ChatSession, v: &AskVote) -> VoteView {
 /// The card for one ask, for `me` (this device's person) at `now_ms`.
 /// `host_label` names a device (its workspace host label), when known.
 pub fn view(session: &ChatSession, st: &AskState, me: &str, now_ms: i64, host_label: &dyn Fn(uuid::Uuid) -> Option<String>) -> AskView {
-    let outside = st.ask.origin.as_ref().is_some_and(|o| o.via == ORIGIN_OUTSIDE);
+    // Someone else's ask under an agent's name keeps no origin of its own
+    // (an "outside Ligus" header is drawn only for a prompt whose grant
+    // counted).
+    let origin = st.ask.origin.as_ref().filter(|o| st.posted_by.is_none() || (o.via == ORIGIN_OUTSIDE && st.grant().is_some()));
+    let outside = origin.is_some_and(|o| o.via == ORIGIN_OUTSIDE) && st.grant().is_some();
     let agent_name = if outside {
         match st.ask.origin.as_ref().map(|o| o.runtime.as_str()) {
             Some("claude-code") | None | Some("") => "Claude Code".to_string(),
@@ -188,7 +208,7 @@ pub fn view(session: &ChatSession, st: &AskState, me: &str, now_ms: i64, host_la
         kind: e.kind.clone(),
         tool: ask_text::cut(&ask_text::clean_option(&e.tool), 60),
         title: ask_text::cut(&ask_text::clean_option(&e.title), 200),
-        detail: e.detail.chars().filter(|c| *c == '\n' || *c == '\t' || !ligus_proto::names::is_hidden_name_char(*c)).collect(),
+        detail: visible_detail(&e.detail),
         cwd: ask_text::clean_option(&e.cwd),
         host_device_id: e.host_device_id.or(st.host).map(|d| d.to_string()),
         host_label: e.host_device_id.or(st.host).and_then(host_label).unwrap_or_default(),
@@ -232,7 +252,7 @@ pub fn view(session: &ChatSession, st: &AskState, me: &str, now_ms: i64, host_la
         quorum: st.quorum(),
         eligible: eligible(session, st, me),
         effect,
-        origin: st.ask.origin.as_ref().map(|o| OriginView {
+        origin: origin.map(|o| OriginView {
             via: o.via.clone(),
             label: ask_text::cut(&ask_text::clean_option(&o.label), 60),
             chat_id: o.chat_id.map(|c| c.to_string()),
@@ -318,6 +338,7 @@ mod tests {
         assert_eq!(v.kind, "permission");
         assert_eq!(v.options, vec!["Allow once", "Deny"], "labels by index, never the record's swapped ones");
         assert!(v.effect.as_ref().unwrap().presence_required && !v.allow_text);
+        assert_eq!(visible_detail("rm -rf /tmp/a\u{200B}b\nx"), "rm -rf /tmp/a\u{27E8}U+200B\u{27E9}b\nx", "hidden characters are shown, never dropped");
     }
 
     #[test]

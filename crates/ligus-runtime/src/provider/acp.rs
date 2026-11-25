@@ -709,10 +709,25 @@ pub fn grant_request(agent_label: &str, tool: &Value, standing: bool, root: Opti
     let title = tool.get("title").and_then(Value::as_str).unwrap_or("").to_string();
     let mut detail = String::new();
     if let Some(raw) = tool.get("rawInput").filter(|v| !v.is_null()) {
-        match raw.get("command") {
-            Some(Value::String(c)) => detail.push_str(c),
-            Some(Value::Array(a)) => detail.push_str(&a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")),
-            _ => detail.push_str(&serde_json::to_string_pretty(raw).unwrap_or_default()),
+        let command = match raw.get("command") {
+            Some(Value::String(c)) => Some(c.clone()),
+            Some(Value::Array(a)) if a.iter().all(Value::is_string) => Some(a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")),
+            _ => None,
+        };
+        match command {
+            // Allow once covers the whole call: every other input (a cwd,
+            // env, a sandbox switch) is shown under the command.
+            Some(c) => {
+                detail.push_str(&c);
+                if let Some(o) = raw.as_object() {
+                    let rest: serde_json::Map<String, Value> = o.iter().filter(|(k, _)| k.as_str() != "command").map(|(k, v)| (k.clone(), v.clone())).collect();
+                    if !rest.is_empty() {
+                        detail.push_str("\n");
+                        detail.push_str(&serde_json::to_string_pretty(&Value::Object(rest)).unwrap_or_default());
+                    }
+                }
+            }
+            None => detail.push_str(&serde_json::to_string_pretty(raw).unwrap_or_default()),
         }
     }
     let mut paths: Vec<String> = Vec::new();
@@ -743,7 +758,9 @@ pub fn grant_request(agent_label: &str, tool: &Value, standing: bool, root: Opti
                 !crate::executor::canonical(&abs).starts_with(r)
             })
         });
-    let too_large = detail.len() > crate::agent_turn::MAX_GRANT_DETAIL_BYTES;
+    // Nothing to show is nothing to allow: an empty detail offers no Allow
+    // either.
+    let too_large = detail.len() > crate::agent_turn::MAX_GRANT_DETAIL_BYTES || detail.is_empty();
     let detail = if too_large {
         let mut cut = crate::agent_turn::MAX_GRANT_DETAIL_BYTES;
         while !detail.is_char_boundary(cut) {
@@ -1076,6 +1093,10 @@ mod tests {
         let inside = json!({"kind": "edit", "locations": [{"path": "src/a.rs"}]});
         assert!(!grant_request("Builder", &inside, false, Some(&root), false, t).outside_sandbox);
         assert!(grant_request("Builder", &inside, false, Some(&root), true, t).outside_sandbox, "open egress");
+        let extra = json!({"kind": "execute", "rawInput": {"command": "make", "cwd": "/", "dangerouslyDisableSandbox": true}});
+        let r = grant_request("Builder", &extra, false, Some(&root), false, t);
+        assert!(r.detail.starts_with("make\n") && r.detail.contains("dangerouslyDisableSandbox") && r.detail.contains("\"cwd\""), "{}", r.detail);
+        assert!(grant_request("Builder", &json!({"kind": "execute"}), false, Some(&root), false, t).too_large, "nothing to show, nothing to allow");
         let big = json!({"kind": "edit", "content": [{"type": "diff", "path": "a", "newText": "y".repeat(9000)}]});
         let r = grant_request("Builder", &big, false, Some(&root), false, t);
         assert!(r.too_large && r.detail.len() <= crate::agent_turn::MAX_GRANT_DETAIL_BYTES);

@@ -117,7 +117,7 @@ fn main() {
                 let perm_id = next_id;
                 send(json!({"jsonrpc":"2.0","id":perm_id,"method":"session/request_permission","params":{
                     "sessionId": sid,
-                    "toolCall": {"toolCallId":"t1","title":"Edit notes.txt","kind":"edit"},
+                    "toolCall": {"toolCallId":"t1","title":"Edit notes.txt","kind":"edit","locations":[{"path":"notes.txt"}],"rawInput":{"file_path":"notes.txt","content":"hello"}},
                     "options": if mode == "always" {
                         json!([
                             {"optionId":"allow-always","name":"Always allow","kind":"allow_always"},

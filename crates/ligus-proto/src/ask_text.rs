@@ -120,10 +120,37 @@ pub fn cut(s: &str, max: usize) -> String {
     t
 }
 
-/// Whether `option` (cleaned) poses as one of Ligus's controls.
+/// Whether `option` poses as one of Ligus's controls: equal to one after
+/// folding what makes text look alike (case, width, combining marks,
+/// spaces, punctuation, and the look-alike letters [`name_skeleton`]
+/// folds), so `Аllow once` (Cyrillic А), `Ａｌｌｏｗ ｏｎｃｅ` or `Deny.` are
+/// refused too.
 pub fn is_reserved(option: &str) -> bool {
-    let o = clean_option(option);
-    RESERVED_LABELS.iter().any(|r| r.eq_ignore_ascii_case(&o))
+    let o = control_skeleton(option);
+    !o.is_empty() && RESERVED_LABELS.iter().any(|r| control_skeleton(r) == o)
+}
+
+/// The comparison form [`is_reserved`] uses.
+fn control_skeleton(s: &str) -> String {
+    let folded: String = s
+        .chars()
+        .filter_map(|c| {
+            let u = c as u32;
+            // Fullwidth ASCII to ASCII.
+            let c = if (0xFF01..=0xFF5E).contains(&u) { char::from_u32(u - 0xFEE0).unwrap_or(c) } else { c };
+            let u = c as u32;
+            let combining = (0x0300..=0x036F).contains(&u)
+                || (0x1AB0..=0x1AFF).contains(&u)
+                || (0x1DC0..=0x1DFF).contains(&u)
+                || (0x20D0..=0x20FF).contains(&u)
+                || (0xFE20..=0xFE2F).contains(&u);
+            if combining || c.is_ascii_punctuation() && c != '&' || matches!(c, '\u{2024}' | '\u{2026}' | '\u{3002}' | '\u{FF0E}' | '\u{00B7}') {
+                return None;
+            }
+            Some(if c.is_whitespace() { ' ' } else { c })
+        })
+        .collect();
+    crate::names::name_skeleton(&folded).replace('&', "and")
 }
 
 #[cfg(test)]
@@ -155,7 +182,10 @@ mod tests {
         for r in ["allow ONCE", "Deny", " Not\u{200B} now ", "approve & apply"] {
             assert!(is_reserved(r), "{r}");
         }
-        assert!(!is_reserved("Postgres") && !is_reserved("Yes"));
+        for r in ["\u{0410}llow once", "Ａｌｌｏｗ ｏｎｃｅ", "A\u{0300}llow once", "Allow once\u{0323}", "Allow\u{00A0}once.", "Al\u{0399}ow once", "Deny\u{2024}", "Approve and apply", "REJECT!"] {
+            assert!(is_reserved(r), "{r:?}");
+        }
+        assert!(!is_reserved("Postgres") && !is_reserved("Yes") && !is_reserved("Allow both") && !is_reserved("Deploy"));
     }
 
     #[test]

@@ -1540,3 +1540,46 @@ async fn the_restart_sweep_closes_the_hosts_open_asks() {
         assert!(s.flow.asks.values().all(|a| !a.is_open()));
     }
 }
+
+/// Tool calls run on tokio workers with the default 2 MiB stack (lt, the
+/// desktop, serve): the call future stays small, so its waits (the asks'
+/// polls, a grant's wait) never overflow one. Regression for a stack
+/// overflow when they were inlined into the dispatch future.
+#[test]
+fn a_tool_call_future_stays_small() {
+    let w = world();
+    let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+    let args = json!({"question": "q", "yesNo": true});
+    let call = turn.call("ligus_ask_person", &args);
+    let size = std::mem::size_of_val(&call);
+    assert!(size < 32 * 1024, "the call future is {size} bytes");
+    let asker = turn.asker();
+    let grant = asker.ask_grant(crate::agent_turn::GrantRequest::default());
+    drop(grant);
+    drop(call);
+    // And a call runs to its end on a default-sized worker.
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(2 * 1024 * 1024).enable_all().build().unwrap();
+    let r = rt.block_on(async { tokio::spawn(async move { turn.call("ligus_ask_person", &json!({"question": "q", "options": ["Approve", "b"]})).await }).await.unwrap() });
+    assert_eq!(body(&r)["error"], "option_reserved");
+}
+
+/// Review S1/S2: the older tool refuses Ligus's control labels too, and a
+/// member's own asks don't count toward the agents' open caps.
+#[tokio::test]
+async fn the_older_tool_refuses_control_labels_and_member_asks_dont_crowd_agents() {
+    let w = world();
+    let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+    let r = turn.call("ligus_ask_human", &json!({"question": "Run it?", "options": ["Allow once", "Deny"]})).await;
+    assert_eq!(body(&r)["error"], "option_reserved");
+    // Six never-expiring asks a member posted under the agent's name.
+    let mut s = ligus_core::ChatSession::new("t", w.wid, "rt");
+    for i in 0..6u128 {
+        let a = ligus_core::flow::HumanAsk { ask_id: Uuid::from_u128(i + 1), agent_key: w.agent.to_string(), question: "q".into(), ..Default::default() };
+        s.flow.asks.insert(a.ask_id, ligus_core::flow::AskState { ask: a, posted_by: Some(ligus_core::flow::AskPoster { id: "bob".into(), name: String::new() }), ..Default::default() });
+    }
+    assert!(super::server::decision::open_caps(&s, &w.agent.to_string(), ligus_core::flow::now_ms()).is_ok(), "a member's asks don't crowd agents out");
+    for st in s.flow.asks.values_mut() {
+        st.posted_by = None;
+    }
+    assert_eq!(super::server::decision::open_caps(&s, &w.agent.to_string(), ligus_core::flow::now_ms()).unwrap_err().code, "too_many_open");
+}

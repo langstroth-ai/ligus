@@ -100,3 +100,28 @@ proptest! {
         }
     }
 }
+
+/// Review M2: eviction over a snapshot reads only what 0.3 reads from it
+/// (its answer and closed flags), never 0.4's `declined`.
+#[test]
+fn a_snapshot_with_a_declined_ask_evicts_as_older_builds_do() {
+    let mut s = ChatSession::new("t", Uuid::nil(), "rt");
+    let mut asks = serde_json::Map::new();
+    for i in 0..MAX_ASKS_PER_CHAT as u128 {
+        let id = Uuid::from_u128(i + 1);
+        let a = HumanAsk { ask_id: id, question: "q".into(), options: vec!["a".into(), "b".into()], at_ms: i as i64, ..Default::default() };
+        let mut st = serde_json::json!({"ask": serde_json::to_value(&a).unwrap()});
+        if i == 0 {
+            st["declined"] = serde_json::json!(true);
+            st["ask"]["v"] = serde_json::json!(2);
+        }
+        asks.insert(id.to_string(), st);
+    }
+    let mut flow = serde_json::to_value(&s.flow).unwrap();
+    flow["asks"] = serde_json::Value::Object(asks);
+    s.flow = serde_json::from_value(flow).unwrap();
+    s.flow.reseat_snapshot_asks();
+    s.flow.apply(&FlowRecord::HumanAsk(HumanAsk { ask_id: Uuid::from_u128(9999), question: "q".into(), options: vec!["a".into()], at_ms: 10_000, ..Default::default() }));
+    let ans = FlowRecord::HumanAnswered(HumanAnswered { ask_id: Uuid::from_u128(1), answer: "a".into(), option_index: Some(0), at_ms: 1, ..Default::default() });
+    assert!(flow_within_bounds(&s, &ans), "the declined ask is kept, as on 0.3");
+}
