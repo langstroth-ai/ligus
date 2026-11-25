@@ -18,6 +18,13 @@ Full release notes are on the
   remove the duplicate member; their messages keep their name. See
   [Add a computer](../features/linked-devices.md).
 
+- **Custom themes.** Settings → Appearance → **Import a theme…** reads a
+  theme file (TOML or JSON) that sets colours for light, dark or both, on
+  top of one of the six palettes; **Export current theme** saves the theme
+  in use as a starting file. The same file works in lt. Colours only, each
+  checked strictly; hard-to-read pairs are flagged, not refused. Imported
+  themes stay on this device. See [Themes](../features/themes.md).
+
 ### Fixes
 
 - **My devices no longer points at `ligus serve enroll`.** That command was

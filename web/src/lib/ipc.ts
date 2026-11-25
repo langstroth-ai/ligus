@@ -445,6 +445,11 @@ export const listWorkspaceFiles = () => invoke<string[]>("list_workspace_files")
 export const exportChat = (sessionId: string) =>
   invoke<string | null>("export_chat", { sessionId });
 
+/// Save a theme file (Settings → Appearance → Export current theme) via a
+/// save dialog. Resolves to the written path, or null if cancelled.
+export const exportThemeFile = (fileName: string, contents: string) =>
+  invoke<string | null>("export_theme", { fileName, contents });
+
 /// Persist a composer attachment (base64 bytes) to disk; resolves to its
 /// absolute path, embedded in the message as a `[Attached: ...]` marker.
 export const saveAttachment = (name: string, dataBase64: string) =>
