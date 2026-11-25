@@ -867,8 +867,8 @@ pub const COMMANDS: &[Cmd] = &[
         name: "hook token",
         group: G_AGENTS,
         summary: "where the install's hook token is",
-        purpose: "Print the path of each running install's hook token (0600; created when missing) and whether its \
-                  socket listens. Never the token itself.",
+        purpose: "Print the path of each install's hook token (0600) and whether its socket listens. Never the \
+                  token itself, and it creates nothing: the desktop makes its token when it starts listening.",
         synopsis: &["ligus hook token [--data-dir DIR] [--json]"],
         flags: &[f("--data-dir DIR", "the desktop's", "the install"), JSON],
         data: false,

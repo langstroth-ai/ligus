@@ -175,28 +175,55 @@ pub fn outside_detail(input: &Value) -> OutsidePrompt {
     let tool = input.get("tool_name").and_then(Value::as_str).unwrap_or("a tool").to_string();
     let ti = input.get("tool_input").cloned().unwrap_or(Value::Null);
     let s = |k: &str| ti.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    // Every key the card doesn't already show, as JSON: Allow once covers the
+    // whole call, so nothing in it goes unseen.
+    let rest_of = |shown: &[&str]| -> String {
+        let rest: serde_json::Map<String, Value> = ti.as_object().map(|o| o.iter().filter(|(k, _)| !shown.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+        if rest.is_empty() { String::new() } else { format!("\n\n{}", serde_json::to_string_pretty(&Value::Object(rest)).unwrap_or_default()) }
+    };
+    // Something with no content to show (an empty or non-string command, no
+    // path) offers no Allow: nothing to show is nothing to allow.
+    let mut empty = false;
     let main = match tool.as_str() {
-        "Bash" => s("command"),
-        "Write" => format!("{}\n\n{}", s("file_path"), s("content")),
-        "Edit" => {
-            let mut d = format!("{}\n--- old\n{}\n+++ new\n{}", s("file_path"), s("old_string"), s("new_string"));
-            if ti.get("replace_all").and_then(Value::as_bool) == Some(true) {
-                d.push_str("\n(every occurrence)");
+        "Bash" => {
+            let cmd = ti.get("command").and_then(Value::as_str).unwrap_or("");
+            empty = cmd.trim().is_empty();
+            let mut d = String::new();
+            if ti.get("dangerouslyDisableSandbox").and_then(Value::as_bool) == Some(true) {
+                d.push_str("Runs outside Claude Code's sandbox\n\n");
             }
+            d.push_str(cmd);
+            d.push_str(&rest_of(&["command"]));
             d
         }
+        "Write" => {
+            empty = s("file_path").is_empty();
+            format!("{}\n\n{}{}", s("file_path"), s("content"), rest_of(&["file_path", "content"]))
+        }
+        "Edit" => {
+            empty = s("file_path").is_empty();
+            format!("{}\n--- old\n{}\n+++ new\n{}{}", s("file_path"), s("old_string"), s("new_string"), rest_of(&["file_path", "old_string", "new_string"]))
+        }
         "MultiEdit" => {
+            empty = s("file_path").is_empty();
             let mut d = s("file_path");
             for e in ti.get("edits").and_then(Value::as_array).into_iter().flatten() {
                 let g = |k: &str| e.get(k).and_then(Value::as_str).unwrap_or("");
                 d.push_str(&format!("\n--- old\n{}\n+++ new\n{}", g("old_string"), g("new_string")));
             }
+            d.push_str(&rest_of(&["file_path", "edits"]));
             d
         }
-        "NotebookEdit" => format!("{} (cell {})\n\n{}", s("notebook_path"), ti.get("cell_id").and_then(Value::as_str).unwrap_or("new"), s("new_source")),
-        _ => serde_json::to_string_pretty(&ti).unwrap_or_default(),
+        "NotebookEdit" => {
+            empty = s("notebook_path").is_empty();
+            format!("{}\n\n{}{}", s("notebook_path"), s("new_source"), rest_of(&["notebook_path", "new_source"]))
+        }
+        _ => {
+            empty = ti.as_object().is_none_or(|o| o.is_empty()) && !ti.is_string();
+            serde_json::to_string_pretty(&ti).unwrap_or_default()
+        }
     };
-    let too_large = main.len() > MAX_DETAIL_BYTES;
+    let too_large = main.len() > MAX_DETAIL_BYTES || main.trim().is_empty() || empty;
     let mut detail = cut_bytes(&main, MAX_DETAIL_BYTES);
     let mut extra = String::new();
     if let Some(sug) = input.get("permission_suggestions").filter(|v| !v.is_null()) {
@@ -491,10 +518,12 @@ mod tests {
 
     #[test]
     fn detail_is_the_calls_own_content() {
-        let d = outside_detail(&json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf node_modules", "description": "clean"}, "cwd": "/home/ana/shop"}));
+        let d = outside_detail(&json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf node_modules"}, "cwd": "/home/ana/shop"}));
         assert_eq!((d.tool.as_str(), d.detail.as_str(), d.label.as_str(), d.too_large), ("Bash", "rm -rf node_modules", "shop", false));
         let d = outside_detail(&json!({"tool_name": "Edit", "tool_input": {"file_path": "a.rs", "old_string": "x", "new_string": "y"}}));
         assert_eq!(d.detail, "a.rs\n--- old\nx\n+++ new\ny");
+        let d = outside_detail(&json!({"tool_name": "Edit", "tool_input": {"file_path": "a.rs", "old_string": "x", "new_string": "y", "replace_all": true}}));
+        assert!(d.detail.contains("\"replace_all\": true"), "every key Allow covers is shown");
         let d = outside_detail(&json!({"tool_name": "Write", "tool_input": {"file_path": "big.txt", "content": "z".repeat(9000)}}));
         assert!(d.too_large, "a write over 8 KiB offers no Allow");
         assert!(d.detail.len() <= MAX_DETAIL_BYTES + 4);
@@ -502,6 +531,26 @@ mod tests {
         assert!(d.detail.contains("\"n\": 1") && d.detail.contains("never applied") && d.detail.contains("MCP server"));
         let d = outside_detail(&json!({"tool_name": "Bash", "tool_input": {"command": "touch sub1.txt"}, "agent_id": "aed5aacb28d201d4a", "agent_type": "general-purpose"}));
         assert_eq!(d.subagent, "general-purpose");
+    }
+
+    /// Review S4: Allow once covers the whole call, so the card shows all
+    /// of it, says loudly when it leaves Claude Code's sandbox, and offers
+    /// no Allow when there is nothing to show.
+    #[test]
+    fn the_card_shows_the_whole_call() {
+        let d = outside_detail(&json!({"tool_name": "Bash", "tool_input": {"command": "make", "description": "build", "timeout": 600000, "run_in_background": true, "dangerouslyDisableSandbox": true}}));
+        assert!(d.detail.starts_with("Runs outside Claude Code's sandbox\n\nmake"), "{}", d.detail);
+        assert!(d.detail.contains("\"timeout\": 600000") && d.detail.contains("\"run_in_background\": true") && d.detail.contains("dangerouslyDisableSandbox"));
+        assert!(d.detail.contains("\"description\": \"build\""), "every other key, the agent's description too");
+        assert!(!d.too_large);
+        for ti in [json!({"command": ""}), json!({"command": "   "}), json!({"command": ["rm", "-rf"]}), json!({})] {
+            assert!(outside_detail(&json!({"tool_name": "Bash", "tool_input": ti})).too_large, "no command, no Allow: {ti}");
+        }
+        assert!(outside_detail(&json!({"tool_name": "Write", "tool_input": {"content": "x"}})).too_large, "a write with no path");
+        assert!(outside_detail(&json!({"tool_name": "mcp__x__y", "tool_input": {}})).too_large, "an empty call");
+        assert!(outside_detail(&json!({"tool_name": "mcp__x__y"})).too_large, "no input at all");
+        let d = outside_detail(&json!({"tool_name": "WebFetch", "tool_input": {"url": "https://example.com", "prompt": "p"}}));
+        assert!(d.detail.contains("example.com") && d.detail.contains("\"prompt\"") && !d.too_large);
     }
 
     #[test]

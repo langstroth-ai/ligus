@@ -14,13 +14,18 @@ it from the desktop or your phone while the terminal waits.
 - The hook asks the **running Ligus desktop app** over a socket in the
   app's data dir. The socket is owner-only (0600), and the hook presents the
   install's hook token (`ligus hook token` says where it is; the token itself
-  is never printed). The hook never opens a data dir itself.
+  is never printed, and that command creates nothing: the desktop makes the
+  token when it starts listening). The hook never opens a data dir itself.
 - The desktop posts a grant card in the chat you named. The card is signed
   by your device as you, is put to **you alone**, and its header says
   "Claude Code (outside Ligus)". It shows the call's own content: the exact
   command, or the file and its full new content (or the old and new text of
-  an edit). A call over 8 KiB offers only **Deny**, and the card says to
-  answer at the terminal. What Claude Code suggests (`permission_suggestions`,
+  an edit), followed by **every other field of the call**, since Allow once
+  covers all of it. A command that would run outside Claude Code's sandbox
+  (`dangerouslyDisableSandbox`) says so on its own line first: "Runs outside
+  Claude Code's sandbox". A call over 8 KiB, or one with nothing to show (an
+  empty command, a write with no path), offers only **Deny**, and the card
+  says to answer at the terminal. What Claude Code suggests (`permission_suggestions`,
   the MCP server) is listed under Details and is never applied.
 - **Allow once always needs your passkey** on the desktop and Face ID on
   the phone. Ligus didn't start this agent and doesn't know its sandbox.

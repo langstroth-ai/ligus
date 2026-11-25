@@ -105,17 +105,17 @@ pub fn decide(dirs: &[PathBuf], workspace: &str, chat: &str, timeout: u64, input
     None
 }
 
-/// `ligus hook token [--data-dir DIR] [--json]`: where the install's hook
-/// token is (created when the data dir exists and has none). Never its value.
+/// `ligus hook token [--data-dir DIR] [--json]`: where each install's hook
+/// token is, and whether its socket listens. Never its value, and never
+/// creates anything: the running desktop (or box) makes its own token when
+/// it starts listening, so this CLI writes nothing into a data dir it
+/// doesn't hold.
 fn token(args: &[String]) -> Result<()> {
     let dirs = candidates(flag(args, "--data-dir").as_deref());
     let mut rows = Vec::new();
-    for d in &dirs {
-        if !d.is_dir() {
-            continue;
-        }
-        let p = hook::ensure_token(d)?;
-        rows.push(json!({"dataDir": d, "token": p, "listening": hook::socket_path(d).exists()}));
+    for d in dirs.iter().filter(|d| d.is_dir()) {
+        let p = hook::token_path(d);
+        rows.push(json!({"dataDir": d, "token": p, "present": hook::read_token(&p).is_some(), "listening": hook::socket_path(d).exists()}));
     }
     if rows.is_empty() {
         return Err(anyhow::Error::new(crate::problem::Problem {
@@ -129,7 +129,12 @@ fn token(args: &[String]) -> Result<()> {
         println!("{}", json!({"schema": "ligus.hook-token.v1", "installs": rows}));
     } else {
         for r in rows {
-            println!("{}  (socket {})", r["token"].as_str().unwrap_or(""), if r["listening"] == true { "listening" } else { "not listening" });
+            let state = match (r["present"] == true, r["listening"] == true) {
+                (true, true) => "listening",
+                (true, false) => "not listening",
+                (false, _) => "not created yet: the desktop makes it when it starts",
+            };
+            println!("{}  ({state})", r["token"].as_str().unwrap_or(""));
         }
     }
     Ok(())
