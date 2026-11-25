@@ -144,3 +144,110 @@ pub fn answer_record(svc: &ChatService, session: &ligus_core::ChatSession, st: &
         decline: choice.decline,
     }))
 }
+
+/// What an outside prompt (`ligus hook permission`) asks the person to
+/// allow, as [`crate::hook::outside_detail`] reads it from Claude Code.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OutsidePrompt {
+    /// The tool (`Bash`, `Write`, `mcp__…`).
+    pub tool: String,
+    /// The call's own content.
+    pub detail: String,
+    pub cwd: String,
+    /// The label the card shows (the project folder's name).
+    pub label: String,
+    /// Too large to review on a card: Deny only.
+    pub too_large: bool,
+    /// The Claude Code sub-agent that asked (`agent_type`), when one did.
+    pub subagent: String,
+}
+
+/// The agent key an outside prompt is posted under.
+pub const OUTSIDE_AGENT_KEY: &str = "outside:claude-code";
+
+impl ChatService {
+    /// Post an outside prompt as a grant card to this device's own person
+    /// (section 8.2): signed by this device as its person, put to that
+    /// person alone, its passkey always required. Returns the ask and the
+    /// digest an answer must name. Refused when this device's identity
+    /// isn't a person in the workspace (a box is its own member: its card
+    /// couldn't be a grant).
+    pub fn post_outside_ask(&mut self, workspace_id: Uuid, chat_id: Uuid, p: &OutsidePrompt, timeout: std::time::Duration) -> Result<(HumanAsk, String)> {
+        if self.author.kind != ligus_core::ActorKind::Human || self.delegated {
+            return Err(ChatError::Unauthorized("only a person's own device can raise a permission prompt to them".into()));
+        }
+        let session = self.load_in(workspace_id, chat_id)?.ok_or_else(|| ChatError::NotFound("chat".into()))?;
+        if session.workspace_id != workspace_id {
+            return Err(ChatError::NotFound("chat".into()));
+        }
+        let me = self.author.id.clone();
+        if !session.members.iter().any(|m| m.id == me) {
+            return Err(ChatError::Unauthorized("you aren't a member of that chat's workspace".into()));
+        }
+        let now = ligus_core::flow::now_ms();
+        let ask = HumanAsk {
+            ask_id: Uuid::new_v4(),
+            turn_id: Uuid::nil(),
+            agent_key: OUTSIDE_AGENT_KEY.into(),
+            question: {
+                let short = |s: &str| ligus_proto::ask_text::cut(&ligus_proto::ask_text::clean_option(s), 60);
+                let via = if p.subagent.is_empty() { String::new() } else { format!(" (through its {} sub-agent)", short(&p.subagent)) };
+                format!("Claude Code (outside Ligus) asks to run {} in {}{via}.", short(&p.tool), short(&p.label))
+            },
+            options: ligus_proto::ask_text::GRANT_LABELS.iter().map(|s| s.to_string()).collect(),
+            expires_at_ms: now + timeout.as_millis() as i64,
+            at_ms: now,
+            v: ligus_core::flow::ASK_V2,
+            audience: Some(ligus_core::flow::AskAudience::people(vec![me])),
+            effect: Some(ligus_core::flow::AskEffect {
+                kind: ligus_core::flow::EFFECT_PERMISSION.into(),
+                tool: p.tool.clone(),
+                detail: p.detail.clone(),
+                cwd: p.cwd.clone(),
+                host_device_id: Some(self.device_id),
+                presence: ligus_core::flow::PRESENCE_REQUIRED.into(),
+                too_large: p.too_large,
+                ..Default::default()
+            }),
+            origin: Some(ligus_core::flow::AskOrigin {
+                via: ligus_core::flow::ORIGIN_OUTSIDE.into(),
+                label: p.label.clone(),
+                runtime: "claude-code".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let prev = self.acting_agent.take();
+        let r = self.record_flow_signed(chat_id, workspace_id, FlowRecord::HumanAsk(ask.clone()));
+        self.acting_agent = prev;
+        let env = r?;
+        let digest = fold::envelope_ask_digest(&env).unwrap_or_default();
+        Ok((ask, digest))
+    }
+
+    /// Close an outside prompt this device posted, naming the answer it
+    /// acted on when it did.
+    pub fn close_outside_ask(&mut self, workspace_id: Uuid, chat_id: Uuid, ask: &HumanAsk, settled_by: Option<Uuid>) -> Result<()> {
+        let close = HumanAsk {
+            ask_id: ask.ask_id,
+            turn_id: ask.turn_id,
+            agent_key: ask.agent_key.clone(),
+            closed: true,
+            at_ms: ligus_core::flow::now_ms(),
+            v: ask.v,
+            settled_by,
+            ..Default::default()
+        };
+        let prev = self.acting_agent.take();
+        let r = self.record_flow_signed(chat_id, workspace_id, FlowRecord::HumanAsk(close));
+        self.acting_agent = prev;
+        r.map(|_| ())
+    }
+
+    /// The other members of `workspace_id`'s chat `chat_id` who can read an
+    /// outside prompt posted there (everyone but this device's person).
+    pub fn others_in_chat(&self, workspace_id: Uuid, chat_id: Uuid) -> Result<usize> {
+        let me = self.author.id.clone();
+        Ok(self.load_in(workspace_id, chat_id)?.map(|s| s.members.iter().filter(|m| m.id != me).count()).unwrap_or(0))
+    }
+}

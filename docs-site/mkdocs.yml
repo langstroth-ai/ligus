@@ -238,6 +238,7 @@ nav:
           - MCP servers: ligus/addons/mcp.md
           - Ligus tools for agents (MCP): ligus/addons/ligus-mcp.md
           - Subscription CLIs over ACP: ligus/addons/acp.md
+          - Claude Code's permission prompts: ligus/addons/claude-code-hook.md
           - Linear & remote MCP (OAuth): ligus/addons/linear.md
       - Help:
           - Troubleshooting: ligus/help/troubleshooting.md

@@ -64,4 +64,5 @@ libc = "0.2"
 ligus-runtime = { path = "../ligus-runtime", features = ["test-presence"] }
 async-trait = "0.1"
 tempfile = "3"
+libc = "0.2"
 hex = "0.4"

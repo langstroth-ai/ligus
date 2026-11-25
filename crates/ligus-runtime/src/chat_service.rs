@@ -26,7 +26,7 @@ use crate::event_store::{EventStore, EventStoreError};
 use crate::provider::ChatTurn;
 
 mod asks;
-pub use asks::{answer_record, AskChoice};
+pub use asks::{answer_record, AskChoice, OutsidePrompt, OUTSIDE_AGENT_KEY};
 mod attachments;
 mod changes;
 mod computer_link;
