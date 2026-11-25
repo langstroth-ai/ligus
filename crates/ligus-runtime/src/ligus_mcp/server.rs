@@ -834,9 +834,11 @@ impl LigusMcp {
             "ligus_memory_search" | "ligus_memory_read" | "ligus_memory_propose" | "ligus_task_update" | "ligus_task_state" => {
                 self.memory_tool(st, tool, args)
             }
-            "ligus_ask_human" => self.ask_human(st, &ctx, args).await,
-            "ligus_ask_person" => self.ask_card(st, &ctx, args, true).await,
-            "ligus_ask_room" => self.ask_card(st, &ctx, args, false).await,
+            // Boxed: their waits are large futures, and inlined into this
+            // one they overflow a default-sized tokio worker's stack.
+            "ligus_ask_human" => Box::pin(self.ask_human(st, &ctx, args)).await,
+            "ligus_ask_person" => Box::pin(self.ask_card(st, &ctx, args, true)).await,
+            "ligus_ask_room" => Box::pin(self.ask_card(st, &ctx, args, false)).await,
             "ligus_report" => {
                 let status = s("status");
                 if !matches!(status.as_str(), "done" | "blocked" | "needsReview") {
@@ -1151,6 +1153,22 @@ impl LigusMcp {
             .map(|a| a.iter().filter_map(|v| v.as_str()).map(|o| o.trim().chars().take(flow::MAX_ASK_OPTION_CHARS).collect::<String>()).filter(|o| !o.is_empty()).take(flow::MAX_ASK_OPTIONS).collect())
             .unwrap_or_default();
         let timeout = Duration::from_secs(args.get("timeoutSecs").and_then(Value::as_u64).unwrap_or(600).clamp(1, 3600));
+        // The same guards as the decision cards: no option posing as a
+        // Ligus control, and the open caps.
+        if options.iter().any(|o| ligus_proto::ask_text::is_reserved(o)) {
+            Self::refund_ask(st);
+            return (ToolResult::err(Outcome::Denied, json!({"error": "option_reserved", "message": "an option is one of Ligus's own control labels; word it differently"})), None);
+        }
+        let mut caps = Ok(());
+        self.host.with_service(&mut |svc| {
+            if let Ok(Some(s)) = svc.load_in(ctx.workspace_id, ctx.session_id) {
+                caps = decision::open_caps(&s, &ctx.agent_key(), flow::now_ms());
+            }
+        });
+        if let Err(r) = caps {
+            Self::refund_ask(st);
+            return (r.result(), None);
+        }
         let posted = match post_ask(&*self.host, ctx, st.spec.message_id, question, options, timeout) {
             Ok(a) => a,
             Err(e) => return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": e})), None),
@@ -1454,7 +1472,7 @@ impl crate::agent_turn::HumanAsker for HostAsker {
             }
             let ask = self.grant_card(&req)?;
             let posted = decision::post_card(&*self.host, &self.ctx, ask).ok()?;
-            let outcome = decision::wait_card(&*self.host, self.ctx.session_id, &posted, req.timeout, || self.revoked()).await;
+            let outcome = Box::pin(decision::wait_card(&*self.host, self.ctx.session_id, &posted, req.timeout, || self.revoked())).await;
             match outcome {
                 // The fold counted it (the named people, their passkey where
                 // needed, the digest of this card); the host checks the

@@ -251,8 +251,10 @@ pub fn result_of(outcome: &CardOutcome, members: &[ligus_core::identity::Workspa
 }
 
 /// Whether the chat can take another open ask from `agent_key` at `now`.
-fn open_caps(session: &ligus_core::ChatSession, agent_key: &str, now: i64) -> Result<(), Refusal> {
-    let live: Vec<&AskState> = session.flow.asks.values().filter(|a| a.is_live(now)).collect();
+pub(crate) fn open_caps(session: &ligus_core::ChatSession, agent_key: &str, now: i64) -> Result<(), Refusal> {
+    // Only cards agents posted through a host count: an ask a member posted
+    // (with whatever expiry they chose) can't crowd agents out.
+    let live: Vec<&AskState> = session.flow.asks.values().filter(|a| a.posted_by.is_none() && a.is_live(now)).collect();
     if live.iter().filter(|a| a.ask.agent_key == agent_key).count() >= MAX_OPEN_PER_AGENT {
         return Err(refuse("too_many_open", format!("you already have {MAX_OPEN_PER_AGENT} open questions in this chat")));
     }
@@ -276,7 +278,7 @@ impl LigusMcp {
     /// `ligus_ask_person` (`person`) or `ligus_ask_room`: post a v2 card,
     /// pause the turn, wait, close it, and return the outcome.
     pub(super) async fn ask_card(&self, st: &Arc<TurnState>, ctx: &EffectCtx, args: &Value, person: bool) -> (ToolResult, Option<Uuid>) {
-        let r = self.ask_card_inner(st, ctx, args, person).await;
+        let r = Box::pin(self.ask_card_inner(st, ctx, args, person)).await;
         if r.0.outcome == Outcome::Denied && r.0.text.contains("\"error\"") && !r.0.text.contains("\"status\"") {
             LigusMcp::refund_ask(st);
         }
@@ -356,7 +358,7 @@ impl LigusMcp {
             Err(e) => return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": e})), None),
         };
         let _pause = crate::agent_turn::pause_counter(&st.paused);
-        let outcome = wait_card(&*self.host, chat, &posted, card.timeout, || st.revoked.load(Ordering::SeqCst)).await;
+        let outcome = Box::pin(wait_card(&*self.host, chat, &posted, card.timeout, || st.revoked.load(Ordering::SeqCst))).await;
         match &outcome {
             CardOutcome::Answered(s) => close_card(&*self.host, ctx, &posted.ask, acted_on(s).and_then(|v| v.event_id)),
             CardOutcome::Foreign => {}
