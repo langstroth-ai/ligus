@@ -55,11 +55,11 @@ const { chromium } = require("playwright-core");
 // swapped, and one tool result that shows a failure in the hero is shown
 // succeeding. Applied to the mock's modules as the browser loads them.
 const REWRITES = [
-  [/zazulam/g, "alex-dev"],
-  [/Zaz/g, "Alex"],
-  [/zaz/g, "alex"],
+  [/zazulam/g, "mike-dev"],
+  [/Zaz/g, "Mike"],
+  [/zaz/g, "mike"],
   [/home-server/g, "serve box"],
-  [/Ana's iPhone/g, "Alex's iPhone"],
+  [/Ana's iPhone/g, "Mike's iPhone"],
   [/relay\.langstroth\.ai/g, "relay.example.org"],
   [/content: "error: patch did not apply cleanly at src\/scheduler\.rs:41",\s*isError: true/g, 'content: "Applied: src/scheduler.rs (+4 -0)", isError: false'],
   [/(turns: 3,\s*costUsd: 0?\.42,\s*error: )true/g, "$1false"],
