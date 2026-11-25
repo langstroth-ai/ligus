@@ -78,10 +78,15 @@ pub fn turns_to_messages(turns: &[ChatTurn]) -> Vec<Value> {
 /// `None` when no server is enabled or none lists an offered tool.
 pub async fn tool_set(
     servers: Vec<McpServerSpec>,
+    agent: Option<uuid::Uuid>,
     shell: bool,
     injection_hits: Option<InjectionHits>,
     listed: impl FnOnce(&[(String, McpTool)]),
 ) -> Option<(Vec<Value>, McpToolExecutor)> {
+    // Per-agent reach (device-local, `McpServerSpec::agents`): a server
+    // limited to some agents is never offered to another agent's turn, nor
+    // to a turn with no workspace agent.
+    let servers: Vec<McpServerSpec> = servers.into_iter().filter(|s| s.reaches(agent)).collect();
     let registry = McpRegistry::new(servers);
     registry.enabled().next()?;
     let tagged = registry.list_all_tools().await;
@@ -112,5 +117,28 @@ pub struct AnthropicMessages {
 impl MessagesApi for AnthropicMessages {
     async fn run(&self, messages: &[Value], tools: &[Value]) -> Result<AnthropicResponse, ProviderError> {
         self.client.run_messages(&self.api_key, &self.model, self.system.as_deref(), messages, tools, self.max_tokens).await
+    }
+}
+
+#[cfg(test)]
+mod reach_tests {
+    use super::*;
+
+    /// `ligus reply` and the turn engine both go through `tool_set`: a
+    /// server limited to other agents is dropped before anything starts.
+    #[tokio::test]
+    async fn tool_set_drops_servers_the_agent_may_not_reach() {
+        let a = uuid::Uuid::new_v4();
+        let mut s = McpServerSpec::new("limited", crate::mcp::McpTransport::Stdio { command: "/nonexistent/ligus-test-server".into(), args: vec![] });
+        s.enabled = true;
+        s.agents = vec![a];
+        for agent in [None, Some(uuid::Uuid::new_v4())] {
+            let mut listed = false;
+            assert!(tool_set(vec![s.clone()], agent, false, None, |_| listed = true).await.is_none());
+            assert!(!listed, "{agent:?}: never started");
+        }
+        let mut listed = false;
+        let _ = tool_set(vec![s], Some(a), false, None, |_| listed = true).await;
+        assert!(listed, "the named agent's turn lists it");
     }
 }

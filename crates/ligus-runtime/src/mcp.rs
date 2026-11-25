@@ -51,6 +51,81 @@ pub struct McpServerSpec {
     /// `Debug` redacts it too.
     #[serde(default, skip_serializing)]
     pub auth: Option<String>,
+    /// The workspace agents whose turns may reach it; empty: every agent.
+    /// Device-local (the host copies it from [`McpReach`] when it assembles
+    /// its servers) and **never read from or written to** a catalog, so no
+    /// commit can widen it. [`crate::turn_engine::mcp::tool_set`] drops a
+    /// server whose list doesn't name the turn's agent.
+    #[serde(skip)]
+    pub agents: Vec<uuid::Uuid>,
+}
+
+impl McpServerSpec {
+    /// A disabled server with no token and every agent's reach.
+    pub fn new(id: impl Into<String>, transport: McpTransport) -> Self {
+        McpServerSpec { id: id.into(), transport, enabled: false, auth: None, agents: Vec::new() }
+    }
+
+    /// Whether a turn of `agent` (`None`: not a workspace agent, the
+    /// default agent) may be offered this server. Fail-closed: a server
+    /// limited to some agents is never offered to a turn without one.
+    pub fn reaches(&self, agent: Option<uuid::Uuid>) -> bool {
+        self.agents.is_empty() || agent.is_some_and(|a| self.agents.contains(&a))
+    }
+}
+
+/// Which agents may reach which MCP server, per workspace: device-local
+/// (`<data dir>/mcp-reach.json`), never synced or committed. A server not
+/// listed reaches every agent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpReach(pub std::collections::BTreeMap<uuid::Uuid, std::collections::BTreeMap<String, Vec<uuid::Uuid>>>);
+
+impl McpReach {
+    pub const FILE: &'static str = "mcp-reach.json";
+
+    /// The file in `data_dir`. A missing file is empty. An unreadable or
+    /// malformed one is an error: the caller must not fall back to "every
+    /// agent" (that would widen what the person chose).
+    pub fn load(data_dir: &std::path::Path) -> Result<Self, String> {
+        match std::fs::read(data_dir.join(Self::FILE)) {
+            Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", Self::FILE)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(format!("{}: {e}", Self::FILE)),
+        }
+    }
+
+    /// Write it (owner-only, atomically).
+    pub fn save(&self, data_dir: &std::path::Path) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
+        crate::private_file::write_private_atomic(&data_dir.join(Self::FILE), &bytes).map_err(|e| e.to_string())
+    }
+
+    pub fn get(&self, ws: uuid::Uuid, server: &str) -> Vec<uuid::Uuid> {
+        self.0.get(&ws).and_then(|m| m.get(server)).cloned().unwrap_or_default()
+    }
+
+    /// Set (empty: every agent) one server's reach.
+    pub fn set(&mut self, ws: uuid::Uuid, server: &str, agents: &[uuid::Uuid]) {
+        let m = self.0.entry(ws).or_default();
+        if agents.is_empty() {
+            m.remove(server);
+        } else {
+            let mut a = agents.to_vec();
+            a.sort();
+            a.dedup();
+            m.insert(server.to_string(), a);
+        }
+        if m.is_empty() {
+            self.0.remove(&ws);
+        }
+    }
+
+    /// Copy the reach onto `servers` of workspace `ws`.
+    pub fn apply(&self, ws: uuid::Uuid, servers: &mut [McpServerSpec]) {
+        for s in servers {
+            s.agents = self.get(ws, &s.id);
+        }
+    }
 }
 
 impl std::fmt::Debug for McpServerSpec {
@@ -327,7 +402,8 @@ async fn http_send(
     if let Some(sid) = session {
         req = req.header("Mcp-Session-Id", sid);
     }
-    let resp = req.send().await.map_err(|e| McpError::Transport(e.to_string()))?;
+    // Without the URL: a check or a log line must never carry a path or query.
+    let resp = req.send().await.map_err(|e| McpError::Transport(e.without_url().to_string()))?;
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
         // OAuth hook (task #147): a 401 here is where we'd run the auth flow.
         return Err(McpError::Transport(
@@ -349,7 +425,7 @@ async fn http_send(
         .map(|c| c.contains("text/event-stream"))
         .unwrap_or(false);
     let want_id = request.get("id").and_then(Value::as_u64);
-    let body = resp.text().await.map_err(|e| McpError::Transport(e.to_string()))?;
+    let body = resp.text().await.map_err(|e| McpError::Transport(e.without_url().to_string()))?;
     let value = if is_sse {
         parse_sse_jsonrpc(&body, want_id)
             .ok_or_else(|| McpError::Protocol("no matching JSON-RPC response in SSE stream".into()))?
@@ -598,6 +674,7 @@ mod tests {
             },
             enabled: false,
             auth: None,
+            agents: Vec::new(),
         }]);
         // The gate must trip before any spawn attempt.
         assert!(matches!(reg.list_tools("fs").await, Err(McpError::Disabled)));
@@ -623,6 +700,7 @@ mod tests {
             transport: McpTransport::Http { url: "http://x".into() },
             enabled: false,
             auth: None,
+            agents: Vec::new(),
         }]);
         assert!(matches!(
             reg.call_tool("fs", "read", &json!({})).await,
@@ -653,6 +731,7 @@ mod tests {
             transport: McpTransport::Http { url: "http://x/mcp".into() },
             enabled: true,
             auth: Some("s3cret-token".into()),
+            agents: Vec::new(),
         };
         let json = serde_json::to_string(&spec).unwrap();
         assert!(!json.contains("s3cret-token"), "{json}");
@@ -703,12 +782,14 @@ mod tests {
                 transport: McpTransport::Http { url: "http://x".into() },
                 enabled: true,
                 auth: None,
+                agents: Vec::new(),
             },
             McpServerSpec {
                 id: "b".into(),
                 transport: McpTransport::Http { url: "http://y".into() },
                 enabled: false,
                 auth: None,
+                agents: Vec::new(),
             },
         ]);
         let ids: Vec<_> = reg.enabled().map(|s| s.id.as_str()).collect();
@@ -734,5 +815,64 @@ mod shell_tool_tests {
         for n in ["read_file", "list_issues", "search", "create_issue", "get_weather", "fetch", "query_db", "write_file", "commit", "execute_query", "spawn_agent"] {
             assert!(!is_shell_tool(n), "{n}");
         }
+    }
+}
+
+#[cfg(test)]
+mod reach_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn stdio(id: &str) -> McpServerSpec {
+        let mut s = McpServerSpec::new(id, McpTransport::Stdio { command: "/bin/true".into(), args: vec![] });
+        s.enabled = true;
+        s
+    }
+
+    #[test]
+    fn reach_is_never_read_from_or_written_to_a_catalog() {
+        let (a, ws) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut s = stdio("files");
+        s.agents = vec![a];
+        let json = serde_json::to_value(&s).unwrap();
+        assert!(json.get("agents").is_none(), "{json}");
+        // A catalog (or a commit to one) that names agents is ignored.
+        let widened: McpServerSpec = serde_json::from_value(serde_json::json!({
+            "id": "files", "transport": {"kind": "stdio", "command": "/bin/true", "args": []}, "enabled": true, "agents": []
+        }))
+        .unwrap();
+        assert!(widened.agents.is_empty());
+        let mut reach = McpReach::default();
+        reach.set(ws, "files", &[a]);
+        let mut servers = vec![widened];
+        reach.apply(ws, &mut servers);
+        assert_eq!(servers[0].agents, vec![a], "the device-local reach wins");
+    }
+
+    #[test]
+    fn default_ligus_gets_only_all_agents_servers() {
+        let a = Uuid::new_v4();
+        let mut limited = stdio("limited");
+        limited.agents = vec![a];
+        let open = stdio("open");
+        assert!(limited.reaches(Some(a)));
+        assert!(!limited.reaches(Some(Uuid::new_v4())));
+        assert!(!limited.reaches(None), "fail-closed for a turn with no workspace agent");
+        assert!(open.reaches(None) && open.reaches(Some(a)));
+    }
+
+    #[test]
+    fn a_malformed_reach_file_is_an_error_not_every_agent() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(McpReach::load(d.path()).unwrap(), McpReach::default());
+        std::fs::write(d.path().join(McpReach::FILE), b"{not json").unwrap();
+        assert!(McpReach::load(d.path()).is_err());
+        let ws = Uuid::new_v4();
+        let mut r = McpReach::default();
+        r.set(ws, "x", &[Uuid::new_v4()]);
+        r.save(d.path()).unwrap();
+        assert_eq!(McpReach::load(d.path()).unwrap(), r);
+        r.set(ws, "x", &[]);
+        assert!(r.0.is_empty(), "every agent again: the entry goes");
     }
 }

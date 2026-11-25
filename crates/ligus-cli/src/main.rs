@@ -59,6 +59,7 @@ mod repos;
 mod repos_cmd;
 mod secret_arg;
 mod serve;
+mod setup_cmd;
 mod worker;
 
 #[derive(Clone)]
@@ -2360,6 +2361,8 @@ fn run() -> Result<()> {
     // Ligus's own secret env values are masked wherever agent output is
     // logged (relay tokens, the workspace key, provider keys passed in).
     ligus_runtime::secret_redact::register_env_secrets();
+    // `ligus setup tool`'s servers, saved tokens and per-agent reach.
+    mcp_config::set_context(&cfg.data_dir, uuid_of_room(&cfg.room));
     let cmd = args.first().map(String::as_str).unwrap_or("");
     let rest = &args[args.len().min(1)..];
     let has = |flag: &str| rest.iter().any(|a| a == flag);
@@ -2488,7 +2491,7 @@ fn run() -> Result<()> {
                 .ok_or_else(|| anyhow!("usage: ligus join <invite-code>"))?;
             rt()?.block_on(cmd_join(&cfg, code))
         }
-        "setup" => cmd_setup(&cfg, has("--apply")),
+        "setup" => setup_cmd::cmd(&cfg, rest),
         "config" => match positional.first().map(|s| s.as_str()) {
             Some("export") => cmd_config_export(&cfg),
             Some("import") => {
@@ -2791,6 +2794,13 @@ const VALUE_FLAGS: &[&str] = &[
     "--token",
     "--ttl",
     "--request",
+    "--harness",
+    "--path",
+    "--id",
+    "--command",
+    "--url",
+    "--reach",
+    "--code",
 ];
 
 /// The positional arguments: everything that is not a flag or a flag's value.
@@ -2817,7 +2827,7 @@ fn split_flag_values(args: Vec<String>) -> Vec<String> {
 }
 
 /// The commands that take `--dry-run`.
-const DRY_RUN_COMMANDS: &[&str] = &["add-runtime", "rm-runtime", "add-agent", "set-agent-host"];
+const DRY_RUN_COMMANDS: &[&str] = &["add-runtime", "rm-runtime", "add-agent", "set-agent-host", "setup"];
 
 /// A usage error when `--dry-run` (before any `--`) is given to a command
 /// that has no dry run.

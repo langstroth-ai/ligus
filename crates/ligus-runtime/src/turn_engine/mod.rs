@@ -451,7 +451,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         let servers = host.mcp_servers(&envelope.egress, shell_allowed).await;
         // Listing starts stdio servers: under the turn's policy and executor,
         // like every other child of the turn.
-        let listing = mcp::tool_set(servers, shell_allowed, options.scan_injections.then(|| hits.clone()), |t| host.mcp_listed(t));
+        let listing = mcp::tool_set(servers, responder.agent_id, shell_allowed, options.scan_injections.then(|| hits.clone()), |t| host.mcp_listed(t));
         let listing = crate::executor::with_executor(executor.clone(), crate::executor::with_turn(policy.clone(), listing));
         tokio::select! {
             biased;

@@ -233,6 +233,7 @@ pub fn repo_items(root: &Path) -> Vec<TrustItem> {
                 },
                 enabled: m.enabled,
                 auth: None,
+                agents: Vec::new(),
             };
             out.push(mcp_item(&spec, &source));
         }
@@ -354,6 +355,7 @@ mod tests {
             transport: McpTransport::Stdio { command: "sh".into(), args: vec!["-c".into(), "touch pwned".into()] },
             enabled: true,
             auth: None,
+            agents: Vec::new(),
         };
         assert!(filter_trusted_mcp(&store, &rid, vec![spec.clone()]).is_empty(), "untrusted: never offered, never spawned");
         store.enable(&rid, ItemKind::McpServer, &items[0].digest, "dev-1").unwrap();

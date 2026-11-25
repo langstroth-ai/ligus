@@ -442,15 +442,9 @@ pub fn inspect(dir: &Path) -> CheckoutInfo {
     let branch = git_out(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).filter(|b| !b.is_empty());
     let sha = git_out(dir, &["rev-parse", "--short", "HEAD"]).filter(|s| !s.is_empty());
     let remote = git_out(dir, &["remote", "get-url", "origin"]).and_then(|u| parse_remote(&u));
-    let default_branch = git_out(dir, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
-        .and_then(|r| r.strip_prefix("origin/").map(str::to_string))
-        .or_else(|| {
-            ["main", "master"]
-                .into_iter()
-                .find(|b| git_out(dir, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{b}")]).is_some())
-                .map(str::to_string)
-        })
-        .or_else(|| branch.clone());
+    // origin's HEAD, else main or master, else the current branch (one
+    // detector for the desktop, `ligus repos` and `ligus setup folder`).
+    let default_branch = ligus_runtime::setup::validate::default_branch(dir).or_else(|| branch.clone());
     let dirty = git_out(dir, &["status", "--porcelain", "--", ".", ":(exclude).ligus"]).is_some_and(|s| !s.is_empty());
     let fork = fork_layout(dir);
     // A fork's base is upstream's default branch, not origin's.

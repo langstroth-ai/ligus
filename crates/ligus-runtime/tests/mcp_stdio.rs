@@ -16,6 +16,7 @@ fn fixture_spec(enabled: bool) -> McpServerSpec {
         },
         enabled,
         auth: None,
+        agents: Vec::new(),
     }
 }
 

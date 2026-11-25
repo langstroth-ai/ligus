@@ -296,11 +296,7 @@ pub fn add_workspace_repo_sync(state: State<AppState>, input: String, name: Opti
     let ws = ws_of(&state);
     let dir = path.as_deref().map(str::trim).filter(|p| !p.is_empty()).map(PathBuf::from);
     let root = dir.as_deref().and_then(rr::git::root_commit);
-    let branch = branch.filter(|b| !b.trim().is_empty()).or_else(|| {
-        dir.as_deref()
-            .and_then(|d| rr::git::git(d, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).ok())
-            .and_then(|b| b.strip_prefix("origin/").map(str::to_string))
-    });
+    let branch = branch.filter(|b| !b.trim().is_empty()).or_else(|| dir.as_deref().and_then(ligus_runtime::setup::validate::default_branch));
     let kind = kind.filter(|k| !k.trim().is_empty()).unwrap_or_else(|| guess_kind(&input));
     let repo = state
         .service

@@ -164,7 +164,7 @@ pub fn find_repo(entries: &[RepoEntry], sel: &str) -> Result<WorkspaceRepo> {
     }
 }
 
-fn abs(p: &str) -> Result<PathBuf> {
+pub(crate) fn abs(p: &str) -> Result<PathBuf> {
     let p = PathBuf::from(p);
     let p = if p.is_absolute() { p } else { std::env::current_dir()?.join(p) };
     Ok(rr::git::canonical(&p))
@@ -230,7 +230,7 @@ pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, p
             let (input, root, branch) = match &as_path {
                 Some(p) => {
                     let (c, _) = rr::git::suggested_canonical(p, &aliases).ok_or_else(|| anyhow!("{} has no forge remote", p.display()))?;
-                    let branch = rr::git::git(p, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).ok().and_then(|b| b.strip_prefix("origin/").map(str::to_string));
+                    let branch = ligus_runtime::setup::validate::default_branch(p);
                     (c, rr::git::root_commit(p), branch)
                 }
                 None => (what.to_string(), None, None),
