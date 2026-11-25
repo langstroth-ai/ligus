@@ -26,6 +26,7 @@ use crate::event_store::{EventStore, EventStoreError};
 use crate::provider::ChatTurn;
 
 mod approval_check;
+pub use approval_check::WorkspaceApprovers;
 mod attachments;
 mod changes;
 mod computer_link;
@@ -48,7 +49,7 @@ mod repos;
 pub use repos::canonical_from_input;
 pub use keys::RotationIssued;
 pub use phone_sign::{PhoneDraft, STALE_DRAFT};
-pub use presence::{PresenceDraft, PresenceProvider, PresenceRequest};
+pub use presence::{summarize_with, MatchContext, PresenceDraft, PresenceProvider, PresenceRequest};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChatError {
@@ -140,6 +141,8 @@ pub struct ChatService {
     capture_presence: bool,
     /// The last captured draft.
     presence_draft: Option<PresenceDraft>,
+    /// The code-match label and code the next passkey sheet names.
+    match_context: Option<presence::MatchContext>,
     /// Assistant messages this host is writing as an agent: message → agent.
     agent_messages: std::collections::HashMap<Uuid, Uuid>,
     /// Agent access refusal notes this device posted recently, and turns
@@ -210,6 +213,7 @@ impl ChatService {
             test_presence: cfg!(test),
             capture_presence: false,
             presence_draft: None,
+            match_context: None,
             agent_messages: std::collections::HashMap::new(),
             refusals: Default::default(),
             acting_agent: None,

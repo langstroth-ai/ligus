@@ -400,3 +400,16 @@ async fn problem(resp: reqwest::Response) -> MailboxError {
     }
 }
 
+
+/// The workspace's current approval address on `client`'s relay: the newest
+/// of `epochs`, its mailbox registered (idempotent). Not a secret.
+pub async fn current_address(
+    client: &MailboxClient,
+    workspace_id: uuid::Uuid,
+    founder_pin_hex: &str,
+    epochs: &[super::EpochKey],
+) -> Result<super::ApprovalAddress, MailboxError> {
+    let e = epochs.iter().max_by_key(|e| e.epoch).ok_or(MailboxError::Malformed)?;
+    let counter = client.ensure_registered(&e.key).await?;
+    Ok(super::ApprovalAddress::derive(client.relay(), workspace_id, founder_pin_hex, e.epoch, &e.key, counter))
+}

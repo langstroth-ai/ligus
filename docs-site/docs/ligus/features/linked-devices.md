@@ -10,6 +10,69 @@ Ligus is short for *ligustica*, the Italian honeybee.
 
 ## How it works
 
+There are two ways to add a computer. Both end the same way: one passkey
+confirmation on your desktop, and the computer acts as you.
+
+### With the approval address (code match) {#code-match}
+
+From 0.4 the computer's request reaches your desktop by itself, and both
+screens show the same 8-symbol code to compare.
+
+1. **Copy the approval address.** On your desktop, **Settings → Profile → My
+    devices → Add a computer** shows it with **Copy** (it is the same address
+    as workspace menu → **Admit a box…**; `ligus admit address` prints it
+    too). It looks like `ligusaddr1:…`, isn't a secret and grants nothing.
+
+2. **On the new computer**, in a terminal:
+
+    ```sh
+    ligus devices request --to 'ligusaddr1:…' --label work-laptop
+    ```
+
+    It prints the link request and its fingerprint straight away (an older
+    desktop can still [paste it](#paste)), then waits for your desktop.
+
+3. **On your desktop**, the Inbox shows "work-laptop wants to be your
+    device". Open it: the sheet **Add work-laptop to your devices?** shows a
+    code, and the computer prints the same one:
+
+    ```text
+    Code: K7Q4 M9X2  (the approver's screen must show the same)
+    ```
+
+    Check the computer you are holding shows the same code, and choose
+    **Codes match** (or **Don't match**).
+
+4. **On the computer**, answer `Does your desktop show this code? [y/N]`.
+    Once both sides have said the codes match, the computer confirms it to
+    your desktop.
+
+5. **On your desktop**, confirm with your passkey. The desktop asks for it
+    only after the computer has confirmed, and the prompt names the computer
+    and the code (`Add computer “work-laptop” to your devices, code K7Q4
+    M9X2`).
+
+6. **On the computer**, the grant arrives. The computer checks it came from
+    the device that showed the code, for this workspace, then syncs and finds
+    your desktop's certificate for it on the workspace log. Last, it asks
+    `Link this computer as Ana (verified on the workspace log)? [y/N]`: check
+    it is your name. A yes links it; a no links nothing.
+
+The code isn't a secret: it may be on screen while you share it, and it is in
+the computer's output. It is good for one attempt, for 5 minutes. If the codes
+don't match, the request ends and nothing is added: check the computer and
+start again on a trusted network. The desktop's Inbox keeps "Request from
+work-laptop didn't match. Nothing was granted." for a day.
+
+A person confirms on the computer, so `ligus devices request --to` needs a
+terminal: without one it exits 4. If the computer doesn't confirm within 2
+minutes of your match, nothing is signed or added, and the desktop's Inbox
+shows "Linking work-laptop didn't finish. Nothing was added." Start again from
+the computer. With no approval mailbox on the relay it exits 3: use the paste
+path below.
+
+### By paste {#paste}
+
 1. **On the new computer**, ask to be added:
     - `lt`: on first run choose **Add to my devices** (or, in an install you
       already use, the palette's **Link this computer to my devices**).
@@ -34,6 +97,14 @@ Ligus is short for *ligustica*, the Italian honeybee.
 4. **On the computer**, paste the grant (`lt`), or run
     `ligus devices redeem --code-file grant`. It shows who approved it and the
     approving desktop's fingerprint: check it is yours and confirm.
+
+### On your phone
+
+Approving a computer or a phone from the phone isn't in 0.4: adding a device
+needs the desktop that holds your account key. The phone lists device requests
+read-only, "Approve on your desktop". It can't show their code: the code comes
+from messages sealed to the computer and the approving device only, so neither
+the phone nor the box it goes through can work it out.
 
 From then on the computer acts as you in that workspace: your name, your
 role, your chats.
@@ -129,6 +200,10 @@ a one-line warning and **Retry now**.
 | "the workspace is in lockdown" | dearth mode is on | an Admin turns it off first |
 | "add a passkey first" | your account has no passkey here | Settings → Passkeys & keys |
 | the relay refuses the computer | a gated relay | sign in as yourself on the computer (`ligus auth login`) |
+| "a computer is linked by a person at it" (exit 4) | `--to` ran without a terminal | run it in a terminal, or use the paste path |
+| "this relay has no approval mailbox" (exit 3) | the relay doesn't offer it | paste the link request `--to` printed ([By paste](#paste)) |
+| "the approval wasn't found on the workspace log: nothing was linked" | your desktop hasn't published the certificate yet | keep the desktop online and synced, then start again |
+| "Linking … didn't finish. Nothing was added." (desktop Inbox) | the computer didn't confirm within 2 minutes | start again from the computer |
 
 For how this works underneath (the codes, what is sealed, what each side
 checks), see the design note `docs/design/link-a-computer.md` in the

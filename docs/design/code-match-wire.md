@@ -223,8 +223,15 @@ phone puts in its signed `result` (with `grantDigest`). The phone checks the
 never against the box's preview.
 
 Push kind `approval.request`, sealed per phone like every push, payload
-`{"workspaceId","rid","kind","label"}`; the box stops pushing after 3 in 10
-minutes per workspace and the phone's Inbox shows "Several join requests".
+`{"workspaceId","rid","label","requestKind"}` (`requestKind` is box,
+computer or phone; the push envelope's own `kind` is `approval.request`). Only
+unclaimed box requests are pushed; device requests are listed in
+`GET /v1/approvals` without a code, which neither a phone nor a box can compute
+(the `open` and `reveal` are sealed to the requester and the approver). The
+box stops pushing after 3 in 10 minutes per workspace and the phone's Inbox
+shows "Several join requests". `/v1/admissions/commit` answers the sealed
+`ligusadmit1:` text in `code` for a request-bound admission; the phone signs
+`result` with its `grantDigest`.
 
 ## 6. Requester state (data dir, owner-only)
 
