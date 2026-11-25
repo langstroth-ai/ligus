@@ -104,3 +104,80 @@ impl ChatService {
         }
     }
 }
+
+impl ChatService {
+    /// The workspace keys this device holds for code-match approval, one per
+    /// authorized epoch (the passphrase key as epoch 0 before any rotation),
+    /// for [`crate::approval_mailbox::list_live`] and
+    /// [`crate::approval_mailbox::current_address`].
+    pub fn approval_epoch_keys(
+        &self,
+        workspace_id: uuid::Uuid,
+        src: &crate::keyring::KeySource,
+    ) -> Result<Vec<crate::approval_mailbox::EpochKey>, ChatError> {
+        let (_, timeline) = self.pinned_config(workspace_id)?;
+        let ring = crate::keyring::KeyringEngine::build(workspace_id, Some(&timeline), src, &[]);
+        let mut out: Vec<crate::approval_mailbox::EpochKey> =
+            ring.authorized_keys(&timeline).into_iter().map(|(epoch, key)| crate::approval_mailbox::EpochKey { epoch, key }).collect();
+        if let Some(seal) = ring.seal_key() {
+            if !out.iter().any(|e| e.epoch == seal.version) {
+                out.push(crate::approval_mailbox::EpochKey { epoch: seal.version, key: seal.key });
+            }
+        }
+        out.sort_by_key(|e| e.epoch);
+        Ok(out)
+    }
+
+    /// The founder pin this device holds for `workspace_id`, as an approval
+    /// address carries it (32 lowercase hex).
+    pub fn founder_pin_hex(&self, workspace_id: uuid::Uuid) -> Result<Option<String>, ChatError> {
+        Ok(self.store.workspace_pin(workspace_id)?.map(|p| p.fk.iter().map(|b| format!("{b:02x}")).collect()))
+    }
+}
+
+/// Who can approve what in one workspace, from this device's folded config
+/// log: the [`crate::approval_mailbox::ApproverClassifier`] the contested
+/// sheet asks (design note 6.4).
+#[derive(Debug, Clone, Default)]
+pub struct WorkspaceApprovers {
+    devices: std::collections::HashMap<uuid::Uuid, ligus_core::authz::DeviceState>,
+    admins: std::collections::HashSet<uuid::Uuid>,
+    humans: std::collections::HashSet<uuid::Uuid>,
+}
+
+impl crate::approval_mailbox::ApproverClassifier for WorkspaceApprovers {
+    fn classify(&self, kind: ligus_core::match_code::MatchKind, device_id: uuid::Uuid, key: &[u8]) -> crate::approval_mailbox::Approvability {
+        use crate::approval_mailbox::Approvability;
+        use ligus_core::match_code::MatchKind;
+        let Some(d) = self.devices.get(&device_id) else { return Approvability::Unknown };
+        if d.revoked || d.public_key != key {
+            return Approvability::Cannot;
+        }
+        let ok = match kind {
+            // An Admin's device (a phone included).
+            MatchKind::Box => d.accounts.iter().any(|a| self.admins.contains(a)),
+            // A person's own device holding their account key.
+            MatchKind::Computer | MatchKind::Phone => !d.phone && d.accounts.iter().any(|a| self.humans.contains(a) && !d.delegated_for(*a)),
+        };
+        if ok { Approvability::CanApprove } else { Approvability::Cannot }
+    }
+}
+
+impl ChatService {
+    /// [`WorkspaceApprovers`] for `workspace_id` (empty before it syncs: every
+    /// device then reads as unknown).
+    pub fn approval_classifier(&self, workspace_id: uuid::Uuid) -> Result<WorkspaceApprovers, ChatError> {
+        let (config, timeline) = self.pinned_config(workspace_id)?;
+        let Some(config) = config else { return Ok(WorkspaceApprovers::default()) };
+        let head = timeline.current();
+        let mut out = WorkspaceApprovers { devices: head.devices.iter().map(|(k, v)| (*k, v.clone())).collect(), ..Default::default() };
+        for m in config.members.iter().filter(|m| m.actor.kind == ActorKind::Human) {
+            let Some(a) = m.actor.account_id else { continue };
+            out.humans.insert(a);
+            if config.role_of(&m.actor.id).rank() >= WorkspaceRole::Admin.rank() {
+                out.admins.insert(a);
+            }
+        }
+        Ok(out)
+    }
+}

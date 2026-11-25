@@ -42,6 +42,9 @@ use uuid::Uuid;
 
 mod admit;
 mod app_cmd;
+mod approvals_cmd;
+#[cfg(test)]
+mod approvals_cmd_tests;
 mod auth;
 mod checks;
 mod cli_flags;
@@ -2536,14 +2539,45 @@ fn run() -> Result<()> {
             if matches!(positional.first().map(|s| s.as_str()), Some("request" | "redeem")) {
                 devices_cmd::refuse_if_linked(&cfg, "become a box")?;
             }
-            admit::cmd_admit(&cfg, &positional, |f| flag_val(f))
+            match (positional.first().map(|s| s.as_str()), flag_val("--to")) {
+                (Some("address"), _) => rt()?.block_on(approvals_cmd::cmd_address(&cfg, has("--reset"), has("--json"))),
+                (Some("request"), Some(to)) => {
+                    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+                    let mut ask = devices_cmd::confirm_on_tty;
+                    let label = flag_val("--label")
+                        .or_else(|| env_opt("LIGUS_SERVE_LABEL"))
+                        .or_else(ligus_runtime::machine_hostname)
+                        .unwrap_or_else(|| "box".into());
+                    let wait = flag_val("--wait").map(|w| cli_flags::parse_duration(&w)).transpose()?.unwrap_or(approvals_cmd::DEFAULT_WAIT);
+                    let o = approvals_cmd::ToOptions::new(to, label, wait, has("--insecure-relay"), has("--json"));
+                    rt()?.block_on(approvals_cmd::cmd_admit_request_to(&cfg, o, interactive.then_some(&mut ask as approvals_cmd::Ask<'_>)))
+                }
+                _ => admit::cmd_admit(&cfg, &positional, |f| flag_val(f)),
+            }
         }
+        "approvals" => match positional.first().map(|s| s.as_str()) {
+            Some("list") | None => rt()?.block_on(approvals_cmd::cmd_list(&cfg, has("--json"))),
+            Some("approve") => {
+                let rid = positional.get(1).map(|s| s.to_string()).ok_or_else(|| help::usage_error("usage: ligus approvals approve <rid> --code XXXXXXXX --recovery-words-file PATH"))?;
+                let o = approvals_cmd::ApproveOptions { rid, code: flag_val("--code"), words: flag_val("--recovery-words-file"), json: has("--json") };
+                let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+                let mut type_code = approvals_cmd::type_code_on_tty;
+                rt()?.block_on(approvals_cmd::cmd_approve(&cfg, o, interactive.then_some(&mut type_code as &mut dyn FnMut() -> Result<String>)))
+            }
+            Some(other) => bail!("unknown `ligus approvals {other}`: use list|approve"),
+        },
         "devices" => {
             let json = has("--json");
             let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
             let mut ask = devices_cmd::confirm_on_tty;
             match positional.first().map(|s| s.as_str()) {
                 Some("list") | None => devices_cmd::cmd_list(&cfg, json),
+                Some("request") if flag_val("--to").is_some() => {
+                    let wait = flag_val("--wait").map(|w| cli_flags::parse_duration(&w)).transpose()?.unwrap_or(approvals_cmd::DEFAULT_WAIT);
+                    let o = approvals_cmd::ToOptions::new(flag_val("--to").unwrap_or_default(), flag_val("--label").unwrap_or_default(), wait, has("--insecure-relay"), json);
+                    let mut ask2 = devices_cmd::confirm_on_tty;
+                    rt()?.block_on(approvals_cmd::cmd_devices_request_to(&cfg, o, has("--new-device"), interactive.then_some(&mut ask2 as approvals_cmd::Ask<'_>)))
+                }
                 Some("request") => devices_cmd::cmd_request(&cfg, flag_val("--label"), has("--new-device"), json),
                 Some("approve") => rt()?.block_on(devices_cmd::cmd_approve(
                     &cfg,
