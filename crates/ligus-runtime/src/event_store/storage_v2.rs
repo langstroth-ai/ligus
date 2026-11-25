@@ -683,6 +683,9 @@ impl EventStore {
         if self.newer.is_some() {
             return Ok((0, 0));
         }
+        // A seed deleted while another connection was reading may still sit
+        // in the file or the log: every start truncates the log again.
+        checkpoint(&self.conn);
         let copied = copy_seeds(&self.conn, store.as_ref(), now)?;
         let deleted = self.retire_seeds(store.as_ref(), now)?;
         Ok((copied, deleted))
@@ -793,17 +796,18 @@ impl EventStore {
                 Err(e) => tracing::warn!(target: "event_store", secret = %id.account(), "couldn't delete a used redeem key seed from the secret store: {e}"),
             }
         }
-        tracing::info!(target: "event_store", deleted = doomed.len(), "deleted the redeem key seeds of closed invites");
-        Ok(doomed.len())
+        let n = doomed.len() + gone_copies.len();
+        tracing::info!(target: "event_store", deleted = n, "deleted the redeem key seeds of closed invites");
+        Ok(n)
     }
 
     /// Put a seed this device now holds in the store too (a fresh seed: its
     /// keep-time starts now).
-    fn store_seed(&self, id: &SecretId, ws: Uuid, invite: Option<Uuid>, seed: &[u8; 32]) {
-        let Some(store) = &self.secrets else { return };
-        if init_seed_copies(&self.conn).is_ok() {
-            put_and_check(&self.conn, store.as_ref(), id, ws, invite, seed, now_ms());
-        }
+    /// Copy a seed to the secret store and read it back; whether it is
+    /// there.
+    fn store_seed(&self, id: &SecretId, ws: Uuid, invite: Option<Uuid>, seed: &[u8; 32]) -> bool {
+        let Some(store) = &self.secrets else { return false };
+        init_seed_copies(&self.conn).is_ok() && put_and_check(&self.conn, store.as_ref(), id, ws, invite, seed, now_ms())
     }
 
     /// A seed: the store's copy, unless its table row says otherwise (a 0.3
@@ -816,7 +820,7 @@ impl EventStore {
             (Some(s), None) => Some(s),
             (Some(s), Some(r)) if s == r => Some(s),
             (_, Some(r)) => {
-                self.store_seed(id, ws, invite, &r);
+                let _ = self.store_seed(id, ws, invite, &r);
                 Some(r)
             }
             (None, None) => None,
@@ -846,9 +850,17 @@ impl EventStore {
     }
 
     /// Keep the redeem key seed of the box admission (or person invite) this
-    /// device redeems to join `workspace_id`: in the secret store, and in its
-    /// table for an older build on this data dir.
+    /// device redeems to join `workspace_id`: in the secret store only (design
+    /// 10.3: a seed this build writes never reaches SQLite), or in its table
+    /// when there is no secret store or it didn't keep the seed.
     pub fn set_join_redeem_key(&self, workspace_id: Uuid, seed: &[u8; 32]) -> Result<()> {
+        if self.newer.is_none() && self.store_seed(&redeem_secret(workspace_id), workspace_id, None, seed) {
+            // A stale row from before would shadow it: gone, securely.
+            let ws = workspace_id.to_string();
+            securely(&self.conn, || Ok(self.conn.execute("DELETE FROM join_redeem_keys WHERE workspace_id = ?1", [&ws])?))?;
+            checkpoint(&self.conn);
+            return Ok(());
+        }
         securely(&self.conn, || {
             self.conn.execute(
                 "INSERT INTO join_redeem_keys (workspace_id, seed) VALUES (?1, ?2) \
@@ -857,7 +869,7 @@ impl EventStore {
             )?;
             Ok(())
         })?;
-        self.store_seed(&redeem_secret(workspace_id), workspace_id, None, seed);
+        let _ = self.store_seed(&redeem_secret(workspace_id), workspace_id, None, seed);
         Ok(())
     }
 
@@ -889,9 +901,12 @@ impl EventStore {
     }
 
     /// Keep the redeem key seed of person invite `invite_id` this device
-    /// issued, for its code: in the secret store, and in its table for an
-    /// older build on this data dir.
+    /// issued, for its code: in the secret store only (design 10.3), or in
+    /// its table when there is no secret store or it didn't keep the seed.
     pub fn set_issued_invite_key(&self, workspace_id: Uuid, invite_id: Uuid, seed: &[u8; 32]) -> Result<()> {
+        if self.newer.is_none() && self.store_seed(&invite_secret(workspace_id, invite_id), workspace_id, Some(invite_id), seed) {
+            return Ok(());
+        }
         securely(&self.conn, || {
             self.conn.execute(
                 "INSERT OR REPLACE INTO issued_invite_keys (workspace_id, invite_id, seed) VALUES (?1, ?2, ?3)",
@@ -899,7 +914,7 @@ impl EventStore {
             )?;
             Ok(())
         })?;
-        self.store_seed(&invite_secret(workspace_id, invite_id), workspace_id, Some(invite_id), seed);
+        let _ = self.store_seed(&invite_secret(workspace_id, invite_id), workspace_id, Some(invite_id), seed);
         Ok(())
     }
 
