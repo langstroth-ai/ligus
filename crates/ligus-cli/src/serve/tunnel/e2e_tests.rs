@@ -1691,6 +1691,26 @@ async fn a_phone_lists_only_its_persons_dms() {
     let r = c.request("GET", &format!("/v1/chats/{dm_chat}/messages"), None).await.unwrap();
     assert_eq!(r.status, 404, "{}", String::from_utf8_lossy(&r.body));
 
+    // Its messages don't reach the phone's event stream either; a
+    // workspace chat's do.
+    let sse = c.open("GET", "/v1/events", &[("accept", "text/event-stream")], None, true).await.unwrap();
+    let head = c.recv_timeout(WAIT).await.unwrap();
+    assert_eq!((head.ty, head.stream), (frame::RESPONSE, sse));
+    h.handle.shared.lock().post_user_message(dm_chat, dm_ws, "secret dm text").unwrap();
+    h.handle.shared.after_write();
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "workspace text" }))).await;
+    let mut text = String::new();
+    while !text.contains("workspace text") {
+        let f = c.recv_timeout(WAIT).await.unwrap();
+        if f.ty == frame::DATA && f.stream == sse {
+            text.push_str(&String::from_utf8_lossy(&f.payload));
+        }
+    }
+    assert!(!text.contains("secret dm text") && !text.contains(&dm_chat.to_string()), "{text}");
+    c.send(Frame::reset(sse, frame::reset::CANCEL, "")).await.unwrap();
+
     // The rule: the box's view sees every DM, a member of the DM sees it,
     // anyone else (and a phone the box can't place) doesn't.
     use crate::serve::dms::DmViewer;

@@ -1864,6 +1864,23 @@ async fn events(State(s): S, peer: Option<Extension<TunnelPeer>>, headers: Heade
     event_stream(s, peer, headers, slot).into_response()
 }
 
+/// Whether an event may go to a stream whose DMs are `dms`: anything not
+/// about a chat, a workspace chat's, or a DM's its person is in.
+fn dm_event_shown(s: &Shared, dms: super::dms::DmViewer, ev: &super::hub::SseEvent) -> bool {
+    if dms == super::dms::DmViewer::Box {
+        return true;
+    }
+    let d = &ev.data;
+    let chat = [&d["chatId"], &d["message"]["chatId"], &d["chat"]["id"]]
+        .into_iter()
+        .find_map(|v| v.as_str().and_then(|x| Uuid::parse_str(x).ok()));
+    let Some(chat) = chat else { return true };
+    if !s.is_dm_chat(chat) {
+        return true;
+    }
+    s.dm_chats().iter().any(|c| c.id == chat && dms.sees(c))
+}
+
 fn event_stream(
     s: Arc<Shared>,
     peer: Option<Extension<TunnelPeer>>,
@@ -1886,6 +1903,9 @@ fn event_stream(
     // Proposal events are built for this box's identity; a phone through the
     // tunnel gets them as its own person sees them (see `viewer`).
     let viewer = peer.as_ref().map(|Extension(p)| tunnel_viewer(&s, &p.pid)).filter(|v| *v != s.my_actor_id());
+    // A DM's events (its messages, typing) reach only a phone whose person
+    // is in it, as its list does ([`Shared::dm_viewer`]).
+    let dms = s.dm_viewer();
     let personal = {
         let s = s.clone();
         move |ev: super::hub::SseEvent| match viewer.as_deref() {
@@ -1893,12 +1913,18 @@ fn event_stream(
             None => ev,
         }
     };
+    let shown = {
+        let s = s.clone();
+        move |ev: &super::hub::SseEvent| dm_event_shown(&s, dms, ev)
+    };
     let foreground = peer.and_then(|Extension(p)| s.tunnel.as_ref().map(|t| t.foreground(&p.pid)));
     // Open with a comment so the client sees body bytes at once: URLSession
     // (the phone) doesn't hand back the response until the first body byte, so
     // without this a quiet stream looked "connecting" until the 15 s heartbeat.
     let hello = stream::once(async { Ok(Event::default().comment("connected")) });
-    let backlog = hello.chain(stream::iter(backlog.into_iter().map(|e| Ok(to_event(personal(e)))).collect::<Vec<_>>()));
+    let backlog = hello.chain(stream::iter(
+        backlog.into_iter().filter(|e| shown(e)).map(|e| Ok(to_event(personal(e)))).collect::<Vec<_>>(),
+    ));
     let live = stream::unfold((rx, (foreground, slot), token_gen), |(mut rx, foreground, mut token_gen)| async move {
         loop {
             let next = match token_gen.as_mut() {
@@ -1917,7 +1943,9 @@ fn event_stream(
             }
         }
     });
-    let live = live.map(move |ev: Result<super::hub::SseEvent, Infallible>| ev.map(|e| to_event(personal(e))));
+    let live = live
+        .filter(move |ev: &Result<super::hub::SseEvent, Infallible>| std::future::ready(ev.as_ref().map_or(true, &shown)))
+        .map(move |ev: Result<super::hub::SseEvent, Infallible>| ev.map(|e| to_event(personal(e))));
     Sse::new(backlog.chain(live)).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("heartbeat"))
 }
 

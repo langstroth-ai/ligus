@@ -424,7 +424,7 @@ itself: https in front of it counts only when the box listens on loopback.
 | GET | `/v1/invites/pending` | `{contacts, invites: [{relay, seq, isDm, workspaceName, founderAccount?, founderName?, safetyCode?, trust, acceptable, refusal?}]}`: the box's contact drop box (relay v0.3), read and acknowledged like the desktop's. The codes stay on the box |
 | POST | `/v1/invites/pending/accept` `{relay, seq, confirmSafetyCode}` | `{workspaceId, account}` (by reference to the last listing) |
 | POST | `/v1/invites/pending/dismiss` `{relay, seq}` | `{dismissed: true}` |
-| GET | `/v1/dms` | `{dms: [{workspaceId, account, name, chatId?, safetyCode?, avatarUrl?, archived, waitingForFounder, foundedAt?, updatedAt?}], canFound}`. Through the tunnel, only the DMs the phone's person is a member of (none for a phone this box can't place); `/v1/chats` and a DM's message routes follow the same rule |
+| GET | `/v1/dms` | `{dms: [{workspaceId, account, name, chatId?, safetyCode?, avatarUrl?, archived, waitingForFounder, foundedAt?, updatedAt?}], canFound}`. Through the tunnel, only the DMs the phone's person is a member of (none for a phone this box can't place); `/v1/chats`, a DM's message routes and the event stream follow the same rule |
 | POST | `/v1/dms` `{accountId}` | `{workspaceId, chatId?, invite?, delivered, safetyCode?}`: opens the kept DM with a co-member, or founds one (random `dm-` room and key, this box's account pinned as founder, a signed invite addressed to them, sealed to their verified devices and dropped into their contact box). `invite` (hand it over yourself) is set on creation; `delivered` says it reached their box. A box acting for its owner can't found one (409) |
 | GET | `/v1/chats/{id}/founder` | `{waiting, founderName?}` |
 
