@@ -69,6 +69,35 @@ fn shown(raw: &str) -> String {
     format!("\u{201C}{s}\u{201D}")
 }
 
+/// What a code match adds to the passkey sheet (design note 6.2): the
+/// request's label and the code both screens showed. Device-local: nothing
+/// about the code goes on the log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchContext {
+    /// The request's label (a hint; quoted and cleaned on the sheet).
+    pub label: String,
+    /// The code as shown (`K7Q4 M9X2`); anything that isn't a code is ignored.
+    pub code: String,
+}
+
+/// [`summarize`], naming the label and the code when the approval comes
+/// from a code match: "Admit box “build-1”, code K7Q4 M9X2".
+pub fn summarize_with(payload: &SessionEvent, ctx: Option<&MatchContext>) -> String {
+    let Some(ctx) = ctx else { return summarize(payload) };
+    let Some(code) = ligus_core::match_code::decode(&ctx.code).map(ligus_core::match_code::encode) else {
+        return summarize(payload);
+    };
+    let label = shown(&ctx.label);
+    match payload {
+        SessionEvent::JoinApproved { admission: Some(_), .. } => format!("Admit box {label}, code {code}"),
+        SessionEvent::DeviceCertificateAdded { certificate } if certificate.alg == ligus_core::crypto::SigAlg::P256 => {
+            format!("Add phone {label} to your devices, code {code}")
+        }
+        SessionEvent::DeviceCertificateAdded { .. } => format!("Add computer {label} to your devices, code {code}"),
+        _ => summarize(payload),
+    }
+}
+
 /// A short description of what an event authorizes (the confirmation sheet).
 pub fn summarize(payload: &SessionEvent) -> String {
     match payload {
@@ -140,6 +169,14 @@ impl ChatService {
         self.presence_provider = provider;
     }
 
+    /// Name a code match's label and code on the next passkey sheet (design
+    /// note 6.2): set it right before the approving write
+    /// (`issue_box_admission`, `publish_computer_link`, `certify_phone`); the
+    /// next presence request uses it and clears it. `None` clears it.
+    pub fn set_match_context(&mut self, ctx: Option<MatchContext>) {
+        self.match_context = ctx;
+    }
+
     /// Capture the next write instead of appending it (serve): it returns
     /// `Err(Unauthorized(PRESENCE_REQUIRED))` and leaves its draft in
     /// [`ChatService::take_presence_draft`], whether or not the rules need
@@ -179,13 +216,19 @@ impl ChatService {
             account_id,
             credential_ids,
             digest_short: ligus_core::keys::hex(&challenge[..8]),
-            summary: summarize(&env.payload),
+            summary: summarize_with(&env.payload, self.match_context.as_ref()),
         })
     }
 
     /// `append_signed`'s answer to a presence refusal: ask the provider, or
     /// capture the draft, or refuse.
     pub(super) fn with_presence(&mut self, env: &mut SessionEventEnvelope) -> Result<()> {
+        let r = self.with_presence_inner(env);
+        self.match_context = None;
+        r
+    }
+
+    fn with_presence_inner(&mut self, env: &mut SessionEventEnvelope) -> Result<()> {
         // Compiled only into tests (this crate's, or a dev-dependency's
         // `test-presence`); a normal build has no path to it.
         #[cfg(any(test, feature = "test-presence"))]
@@ -280,6 +323,7 @@ impl ChatService {
         let request = self.presence_request(env)?;
         self.presence_draft = Some(PresenceDraft { env: env.clone(), request });
         self.capture_presence = false;
+        self.match_context = None;
         Ok(())
     }
 
@@ -352,8 +396,43 @@ impl ChatService {
                 r => r?,
             }
             self.changes.local(&env);
+            // A workspace this build founded moves to its founding rules (3)
+            // with the founder's first credential: its genesis is rules 2,
+            // presence-free, which a 0.3 build accepts, so the switch is an
+            // ordinary Owner act with presence that makes 0.3 builds
+            // read-only there (identity model v2, "Rules 3 in 0.4").
+            if let Err(e) = self.adopt_founding_rules(workspace_id, prove) {
+                tracing::warn!(target: "identity", error = %e, "moving the new workspace to its founding rules failed; Settings offers it");
+            }
             return Ok(env);
         }
+    }
+
+    /// Switch a workspace this device founded, still its founder's alone, to
+    /// this build's founding rules, confirmed by `prove`. A no-op elsewhere.
+    fn adopt_founding_rules(
+        &mut self,
+        workspace_id: Uuid,
+        prove: &dyn Fn(&PresenceRequest) -> std::result::Result<PresenceAssertion, String>,
+    ) -> Result<()> {
+        let config_id = ligus_core::workspace_config_session_id(workspace_id);
+        let Some(config) = self.load_in(workspace_id, config_id)? else { return Ok(()) };
+        if config.authz.rules >= self.founding_rules || config.creator_actor_id != self.author.id || config.members.len() != 1 {
+            return Ok(());
+        }
+        let mut env = self.draft_signed(config_id, workspace_id, SessionEvent::WorkspaceRulesSet { version: self.founding_rules, presence: None })?;
+        let request = self.presence_request(&env)?;
+        let proof = prove(&request).map_err(|e| ChatError::Unauthorized(format!("passkey: {e}")))?;
+        if let Some(stamp) = env.actor_stamp.as_mut() {
+            stamp.presence = Some(proof);
+        }
+        env.clear_raw();
+        sign_envelope(&mut env, self.device_id, &self.keypair);
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
+        self.store_authored(&env)?;
+        self.changes.local(&env);
+        Ok(())
     }
 
     /// Remove one of `account_id`'s passkeys on `workspace_id` (the account

@@ -1,5 +1,5 @@
 {
-  "description": "Ask the chat's humans a question and wait for the answer. Your turn pauses until someone answers or the timeout passes.",
+  "description": "Ask the chat's humans a question and wait for the answer. Your turn pauses until someone answers or the timeout passes. Prefer ligus_ask_person or ligus_ask_room.",
   "inputSchema": {
     "additionalProperties": false,
     "properties": {

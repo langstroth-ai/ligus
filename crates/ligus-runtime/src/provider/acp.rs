@@ -690,10 +690,97 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
     async fn escalate(&mut self, tool: &Value, standing: bool) -> bool {
         let Some(scope) = self.scope.clone() else { return false };
         let Some(asker) = scope.asker.clone() else { return false };
-        let (question, choices) = permission_question(&self.agent_label, tool, standing);
+        let root = self.fs.as_ref().map(|f| f.root.clone());
+        let req = grant_request(&self.agent_label, tool, standing, root.as_deref(), self.egress_open, ask_timeout());
+        let too_large = req.too_large;
         let _pause = scope.pause();
-        let answer = asker.ask(question, choices, ask_timeout()).await;
-        answer.is_some_and(|a| a.option_index == Some(0))
+        let answer = asker.ask_grant(req).await;
+        // A call too large to show is never allowed from a card.
+        !too_large && answer.is_some_and(|a| a.option_index == Some(0))
+    }
+}
+
+/// A permission request as a grant card shows it: the call's own content
+/// (the raw input, the command, the locations and diffs ACP gives), the
+/// agent's title labelled as its own, and whether it reaches outside the
+/// turn's worktree (`root`) or out through open egress.
+pub fn grant_request(agent_label: &str, tool: &Value, standing: bool, root: Option<&Path>, egress_open: bool, timeout: std::time::Duration) -> crate::agent_turn::GrantRequest {
+    let kind = tool.get("kind").and_then(Value::as_str).unwrap_or("other").to_string();
+    let title = tool.get("title").and_then(Value::as_str).unwrap_or("").to_string();
+    let mut detail = String::new();
+    if let Some(raw) = tool.get("rawInput").filter(|v| !v.is_null()) {
+        let command = match raw.get("command") {
+            Some(Value::String(c)) => Some(c.clone()),
+            Some(Value::Array(a)) if a.iter().all(Value::is_string) => Some(a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")),
+            _ => None,
+        };
+        match command {
+            // Allow once covers the whole call: every other input (a cwd,
+            // env, a sandbox switch) is shown under the command.
+            Some(c) => {
+                detail.push_str(&c);
+                if let Some(o) = raw.as_object() {
+                    let rest: serde_json::Map<String, Value> = o.iter().filter(|(k, _)| k.as_str() != "command").map(|(k, v)| (k.clone(), v.clone())).collect();
+                    if !rest.is_empty() {
+                        detail.push_str("\n");
+                        detail.push_str(&serde_json::to_string_pretty(&Value::Object(rest)).unwrap_or_default());
+                    }
+                }
+            }
+            None => detail.push_str(&serde_json::to_string_pretty(raw).unwrap_or_default()),
+        }
+    }
+    let mut paths: Vec<String> = Vec::new();
+    for loc in tool.get("locations").and_then(Value::as_array).into_iter().flatten() {
+        if let Some(p) = loc.get("path").and_then(Value::as_str) {
+            paths.push(p.to_string());
+        }
+    }
+    for c in tool.get("content").and_then(Value::as_array).into_iter().flatten() {
+        if c.get("type").and_then(Value::as_str) == Some("diff") {
+            let path = c.get("path").and_then(Value::as_str).unwrap_or("");
+            if !path.is_empty() && !paths.iter().any(|p| p == path) {
+                paths.push(path.to_string());
+            }
+            let new = c.get("newText").and_then(Value::as_str).unwrap_or("");
+            detail.push_str(&format!("\n--- {path}\n{new}"));
+        }
+    }
+    if !paths.is_empty() {
+        detail = format!("{}\n{}", paths.join("\n"), detail);
+    }
+    let detail = detail.trim().to_string();
+    let outside = egress_open
+        || root.is_some_and(|r| {
+            paths.iter().any(|p| {
+                let p = Path::new(p);
+                let abs = if p.is_absolute() { p.to_path_buf() } else { r.join(p) };
+                !crate::executor::canonical(&abs).starts_with(r)
+            })
+        });
+    // Nothing to show is nothing to allow: an empty detail offers no Allow
+    // either.
+    let too_large = detail.len() > crate::agent_turn::MAX_GRANT_DETAIL_BYTES || detail.is_empty();
+    let detail = if too_large {
+        let mut cut = crate::agent_turn::MAX_GRANT_DETAIL_BYTES;
+        while !detail.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        detail[..cut].to_string()
+    } else {
+        detail
+    };
+    crate::agent_turn::GrantRequest {
+        agent_label: agent_label.to_string(),
+        tool: kind,
+        title,
+        detail,
+        too_large,
+        cwd: root.map(|r| r.display().to_string()).unwrap_or_default(),
+        standing,
+        outside_sandbox: outside,
+        subagent: tool.pointer("/_meta/claudeCode/parentToolUseId").and_then(Value::as_str).is_some_and(|p| !p.is_empty()),
+        timeout,
     }
 }
 
@@ -988,6 +1075,32 @@ pub async fn stream_reply(
 
 #[cfg(test)]
 mod tests {
+    /// A grant card's detail is the call's own content, not its title; a
+    /// path outside the worktree or open egress needs a passkey; a call
+    /// too large to show offers no Allow; a sub-agent's call says so.
+    #[test]
+    fn grant_requests_carry_the_calls_own_content() {
+        let root = std::env::temp_dir().join(format!("grant-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = crate::executor::canonical(&root);
+        let t = std::time::Duration::from_secs(5);
+        let call = json!({"kind": "execute", "title": "Run safe cleanup", "rawInput": {"command": "rm -rf build"}});
+        let r = grant_request("Builder", &call, false, Some(&root), false, t);
+        assert_eq!((r.detail.as_str(), r.title.as_str(), r.outside_sandbox, r.too_large, r.subagent), ("rm -rf build", "Run safe cleanup", false, false, false));
+        let edit = json!({"kind": "edit", "locations": [{"path": "/etc/hosts"}], "content": [{"type": "diff", "path": "/etc/hosts", "newText": "x"}], "_meta": {"claudeCode": {"parentToolUseId": "toolu_1"}}});
+        let r = grant_request("Builder", &edit, false, Some(&root), false, t);
+        assert!(r.outside_sandbox && r.detail.starts_with("/etc/hosts") && r.subagent);
+        let inside = json!({"kind": "edit", "locations": [{"path": "src/a.rs"}]});
+        assert!(!grant_request("Builder", &inside, false, Some(&root), false, t).outside_sandbox);
+        assert!(grant_request("Builder", &inside, false, Some(&root), true, t).outside_sandbox, "open egress");
+        let extra = json!({"kind": "execute", "rawInput": {"command": "make", "cwd": "/", "dangerouslyDisableSandbox": true}});
+        let r = grant_request("Builder", &extra, false, Some(&root), false, t);
+        assert!(r.detail.starts_with("make\n") && r.detail.contains("dangerouslyDisableSandbox") && r.detail.contains("\"cwd\""), "{}", r.detail);
+        assert!(grant_request("Builder", &json!({"kind": "execute"}), false, Some(&root), false, t).too_large, "nothing to show, nothing to allow");
+        let big = json!({"kind": "edit", "content": [{"type": "diff", "path": "a", "newText": "y".repeat(9000)}]});
+        let r = grant_request("Builder", &big, false, Some(&root), false, t);
+        assert!(r.too_large && r.detail.len() <= crate::agent_turn::MAX_GRANT_DETAIL_BYTES);
+    }
     use super::*;
 
     /// A Ligus tool call is pre-approved (Ligus authorizes it per call);

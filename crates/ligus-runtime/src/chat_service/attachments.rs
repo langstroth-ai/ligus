@@ -27,6 +27,59 @@ impl ChatService {
         Ok(self.load_in(workspace_id, session_id)?.map(|s| s.attachments).unwrap_or_default())
     }
 
+    /// Every attachment shared in the workspace's chats (tombstones
+    /// included).
+    fn workspace_attachments(&self, workspace_id: Uuid) -> Result<Vec<SharedAttachment>> {
+        let mut out = Vec::new();
+        for session_id in self.store.sessions_of_workspace(workspace_id)? {
+            if session_id == workspace_config_session_id(workspace_id) {
+                continue;
+            }
+            if let Some(s) = self.load_in(workspace_id, session_id)? {
+                out.extend(s.attachments.into_values());
+            }
+        }
+        Ok(out)
+    }
+
+    /// The relay blobs this device should renew now (identity model v2,
+    /// 10.5): live attachments of the workspace it shared, or every live one
+    /// when `desktop` and this person is an Admin, past a third of their
+    /// life ([`crate::attachment_blob::plan_renewals`]). Nothing for the
+    /// device-local workspace.
+    pub fn blob_renewals_due(&self, workspace_id: Uuid, desktop: bool, now: i64) -> Result<Vec<String>> {
+        if self.local_workspace_id == Some(workspace_id) {
+            return Ok(Vec::new());
+        }
+        let (_, role) = self.attachment_standing(workspace_id)?;
+        let state = self.store.blob_renewals(workspace_id)?;
+        let live = self.workspace_attachments(workspace_id)?;
+        Ok(crate::attachment_blob::plan_renewals(&live, &self.author.id, role, desktop, &state, self.device_id, now))
+    }
+
+    /// Keep what a renewal pass found ([`crate::attachment_blob::renew_blobs`]).
+    pub fn record_blob_renewals(&self, workspace_id: Uuid, outcomes: &[(String, crate::attachment_blob::RenewalOutcome)], now: i64) -> Result<()> {
+        use crate::attachment_blob::RenewalOutcome;
+        for (blob, r) in outcomes {
+            match r {
+                RenewalOutcome::Answered => self.store.record_blob_renewed(workspace_id, blob, now)?,
+                RenewalOutcome::Gone => self.store.mark_blob_gone(workspace_id, blob, now)?,
+                RenewalOutcome::Failed(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The relay no longer has `blob_id` (a download found it gone).
+    pub fn mark_blob_gone(&self, workspace_id: Uuid, blob_id: &str, now: i64) -> Result<()> {
+        Ok(self.store.mark_blob_gone(workspace_id, blob_id, now)?)
+    }
+
+    /// The blobs of the workspace this device saw gone from the relay.
+    pub fn gone_blobs(&self, workspace_id: Uuid) -> Result<std::collections::HashSet<String>> {
+        Ok(self.store.blob_renewals(workspace_id)?.into_iter().filter(|(_, r)| r.gone_at.is_some()).map(|(b, _)| b).collect())
+    }
+
     /// Sign a share of an uploaded file in a chat.
     pub fn share_attachment(&mut self, session_id: Uuid, workspace_id: Uuid, attachment: AttachmentRef) -> Result<()> {
         if self.local_workspace_id == Some(workspace_id) {

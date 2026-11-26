@@ -41,6 +41,8 @@ pub mod timeline;
 pub mod votes;
 pub mod passkeys;
 pub mod links;
+pub mod profiles;
+pub mod retire;
 pub mod phone;
 pub mod rules;
 
@@ -64,7 +66,14 @@ use crate::session::ChatSession;
 pub struct RulesVersion(pub u32);
 
 /// The highest rules version this build enforces.
-pub const RULES_SUPPORTED: u32 = 2;
+pub const RULES_SUPPORTED: u32 = 3;
+/// Rules version 3 (identity model v2, "Rules 3 in 0.4"): a certificate
+/// counts only with its device's own acceptance, a retired member is
+/// removed, inline credentials and member records whose ids disagree are
+/// denied, and hosts of former members are inert.
+pub const RULES_V3: u32 = 3;
+/// The rules a workspace founded by this build starts at.
+pub const RULES_NEW_WORKSPACE: u32 = 3;
 /// The rules every workspace starts at (the seed's roster), and the lowest
 /// version a `WorkspaceRulesSet` may name.
 pub const RULES_GENESIS: u32 = 2;
@@ -489,7 +498,12 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 }
             }
         }
-        if certificate.alg == crate::crypto::SigAlg::P256 && !ctx.running.account_certified(certificate.account_id, certificate.device_id) {
+        // A copy carrying the phone's own statement of a certificate already
+        // allowed here is the phone accepting it (rules 3): any member's
+        // device may relay it (its box).
+        let consent_copy = ctx.running.unaccepted.contains(&(certificate.device_id, certificate.account_id))
+            && certificate.phone_consent_ok(env.workspace_id);
+        if certificate.alg == crate::crypto::SigAlg::P256 && !consent_copy && !ctx.running.account_certified(certificate.account_id, certificate.device_id) {
             if !on_config {
                 return Decision::deny("a phone is enrolled on the workspace config log");
             }
@@ -545,6 +559,15 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
     }
 
+    // Rules 3 (identity model v2): records whose ids disagree, and model
+    // keys stored in the workspace, are refused.
+    let rules_here = if on_config { ctx.running.rules } else { ctx.workspace.map(|w| w.rules).unwrap_or(ctx.running.rules) };
+    if rules_here >= RULES_V3 {
+        if let Some(why) = rules3_refusal(&env.payload) {
+            return Decision::deny(why);
+        }
+    }
+
     // The workspace rules: the relying party is well formed and on the
     // config log; only the Owner changes it (with presence verified under
     // the policy in force before the change) or the version.
@@ -559,6 +582,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
         if *version != ctx.running.rules && fold.role_of(author) != WorkspaceRole::Owner {
             return Decision::deny("only the Owner changes the rules version");
+        }
+        // Rules only tighten: a workspace on rules 3 never goes back (its
+        // older devices are read-only there already).
+        if *version >= RULES_GENESIS && *version < ctx.running.rules && ctx.running.rules_written {
+            return Decision::deny("the rules version never goes back");
         }
         // The relying party decides which page every member's desktop opens
         // for each passkey ceremony and what a re-registration under it binds:
@@ -618,7 +646,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             && on_config
             && !roster.rules_written
             && roster.passkeys.values().all(|m| m.is_empty());
-        if !genesis_rules && rules::requires_presence(&env.payload, author, roster, fold) {
+        // Rules 3: a device accepting a certificate someone else published
+        // for it (with presence) publishes its own copy, which needs none.
+        // So does a copy of a phone's certificate carrying the phone's own
+        // statement (its acceptance), whoever relays it (its box).
+        let accepting = matches!(&env.payload, SessionEvent::DeviceCertificateAdded { certificate: c }
+            if roster.unaccepted.contains(&(c.device_id, c.account_id))
+                && (env.signer_device_id == Some(c.device_id) || c.phone_consent_ok(env.workspace_id)));
+        if !genesis_rules && !accepting && rules::requires_presence(&env.payload, author, roster, fold) {
             // A device is added with its own account's presence, whoever
             // publishes the certificate.
             let whose = match &env.payload {
@@ -651,6 +686,24 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
         SessionEvent::IdentityLinkRemoved { account_id, link_id } => {
             return match links::removal_ok(env, *account_id, *link_id, on_config, ctx.running, fold, author) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
+        SessionEvent::ProfileUpdated { profile } => {
+            return match profiles::profile_ok(env, profile, on_config, ctx.running) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
+        SessionEvent::DeviceLabelSet { label } => {
+            return match profiles::label_ok(env, label, on_config, ctx.running) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
+        SessionEvent::MemberRetired { retirement } => {
+            return match retire::retirement_ok(env, retirement, on_config, ctx.running, fold) {
                 Ok(()) => Decision::Allow,
                 Err(why) => Decision::deny(why),
             };
@@ -689,6 +742,18 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         if let SessionEvent::DeviceRevoked { device_id, .. } = &env.payload {
             let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
             if account.is_some_and(|a| ctx.running.account_owns_device(a, *device_id)) {
+                return Decision::Allow;
+            }
+            // Rules 3: withdrawing a certificate of yours its device never
+            // accepted (approved, never finished: identity model v2, 8.2).
+            // Only when every certificate of that device is the author's own:
+            // a revocation revokes the whole device id, so a member who
+            // certified someone else's unaccepted device can't burn it.
+            if account.is_some_and(|a| {
+                ctx.running.unaccepted.contains(&(*device_id, a))
+                    && ctx.running.unaccepted.iter().filter(|(d, _)| d == device_id).all(|(_, x)| *x == a)
+                    && !ctx.running.devices.contains_key(device_id)
+            }) {
                 return Decision::Allow;
             }
         }
@@ -1152,6 +1217,30 @@ pub(crate) fn certified_signer<'r>(env: &SessionEventEnvelope, roster: &'r Roste
     }
     d.verifying_key(env).ok_or("bad signature")?;
     Ok(d)
+}
+
+/// What rules 3 refuses outright (identity model v2, "Rules 3 in 0.4"): a
+/// member record whose member id isn't its actor id, or whose actor id isn't
+/// its account id (when it names one); and a workspace runtime carrying a
+/// model key on the log (keys are never stored in the workspace, O11).
+fn rules3_refusal(e: &SessionEvent) -> Option<&'static str> {
+    let inline = |r: &crate::workspace_runtime::WorkspaceRuntime| matches!(r.credential, crate::workspace_runtime::WorkspaceCredential::Inline { .. });
+    match e {
+        SessionEvent::MemberAdded { member, .. } => {
+            if member.id != member.actor.id {
+                return Some("a member's id is its actor's id");
+            }
+            if member.actor.account_id.is_some_and(|a| a.to_string() != member.actor.id) {
+                return Some("a member's actor id is its account id");
+            }
+            None
+        }
+        SessionEvent::WorkspaceRuntimeUpserted { runtime } if inline(runtime) => Some("model keys are never stored in the workspace"),
+        SessionEvent::WorkspaceRuntimesUpdated { runtimes } if runtimes.iter().any(inline) => {
+            Some("model keys are never stored in the workspace")
+        }
+        _ => None,
+    }
 }
 
 /// `DeviceKeyAgreementPublished`: on the config log, signed by the very device

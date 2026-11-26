@@ -1,6 +1,6 @@
 # Agent questions: decisions an agent waits on (design note)
 
-Status: design, owner decisions taken 2026-11-25 (section 13); not implemented. Target: Ligus 0.4. Surfaces: the Ligus
+Status: owner decisions taken 2026-11-25 (section 13); implemented for 0.4 (section 15 lists where the build differs from this note). Target: Ligus 0.4. Surfaces: the Ligus
 MCP server, the desktop, the phone apps, `lt` (ligus-term), the `ligus` CLI
 and `ligus serve`. Ligus is short for *ligustica*, the Italian honeybee.
 
@@ -779,3 +779,35 @@ shadow per ask, folded as 0.3 does, drives eviction and that check only
   quorums as them, but never grant.
 - 0.3 peers may draw forged or ineligible states for display.
 - A misleading question can steer what an agent does within its own tier.
+
+## 15. As built (0.4)
+
+Where the implementation differs from this note, or settles what it left open:
+
+- **The digest is over canonical JSON.** `askDigest` hashes the payload's
+  canonical JSON (keys sorted, RFC 8785 strings), not its raw bytes. A copy
+  of a signed event can be re-encoded on the way and still verify
+  (`crypto.rs` typed-preimage fallback), and raw bytes would then give peers
+  different digests. Golden vectors: `crates/ligus-core/tests/golden/ask_digest_v1.json`.
+- **Decoding matches 0.3 exactly.** `HumanAsk` and `HumanAnswered` decode by
+  hand (`flow/ask_wire.rs`). A duplicated 0.3 field is refused as 0.3
+  refuses it, and a duplicated 0.4 field takes its first value.
+- **Standing permissions.** The 0.3.1 rule is kept (D7: the shipped fix is
+  the base). An agent that offers only a standing permission is asked about
+  in words that say so, with Ligus's "Allow for the rest of the session"
+  label, and a person may pick it knowingly. 6.2's "never" is not built.
+- **Folded `ligus_ask` without `to`** stays the older `ligus_ask_human`, so
+  existing callers keep their behaviour. `to: room` and `to: person` select
+  the new tools.
+- **Child chats (8.1).** Hand-offs and workflow stages run in the chat that
+  started them, and no record links a child chat to a parent, so there is no
+  pointer card to draw. A sub-agent's ACP permission request carries
+  `origin: subagent`, and Claude Code hook prompts from sub-agents name the
+  sub-agent type (verified locally: the hook fires with `agent_id` and
+  `agent_type`).
+- **Hook targets.** Only the desktop raises hook cards. A `ligus serve` box
+  is its own service member, so a card it posted could never be the
+  person's own outside prompt (5.1). Its socket answers "no decision", and
+  Claude Code decides. lt support is later.
+- **A grant with no details of its call** offers no Allow, like one too
+  large to show. Hidden characters in a detail are shown as visible escapes.

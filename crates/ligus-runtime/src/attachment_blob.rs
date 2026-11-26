@@ -180,7 +180,7 @@ pub async fn upload_as(client: &RelayClient, workspace: &str, ring: &KeyringEngi
 /// user-visible path.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BlobError {
-    #[error("the relay no longer has this file (it may have expired or been deleted)")]
+    #[error("This file expired on the relay")]
     NotFound,
     #[error("couldn't reach the relay: {0}")]
     Transport(String),
@@ -416,6 +416,121 @@ pub fn sender_label(s: &SharedAttachment) -> String {
     let name = name.trim();
     let id: String = s.author.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == ':').take(8).collect();
     if name.is_empty() { id } else { format!("{name} ({id})") }
+}
+
+// ── Renewals (identity model v2, 10.5) ─────────────────────────────────────
+//
+// A relay expires a blob some days after its upload (30 by default). While
+// an attachment is live (no `AttachmentDeleted`), the sharer's own devices
+// and every Admin's desktop renew its blob on the relay once it is a third of
+// the way through that life, at most once a day per blob, with a per-device
+// jitter so they don't all ask at once. The relay caps renewals at its
+// operator's maximum age; an old relay without the route answers 404 and
+// nothing changes. When to renew is kept on this device only
+// (`EventStore::blob_renewals`).
+
+/// The relay retention clients assume (the relay's default).
+pub const ASSUMED_RETENTION_SECS: i64 = 30 * 24 * 60 * 60;
+/// Renew once a blob is a third of the way through its life.
+pub const RENEW_AFTER_SECS: i64 = ASSUMED_RETENTION_SECS / 3;
+/// At most one renewal a day per blob.
+pub const RENEW_MIN_GAP_SECS: i64 = 24 * 60 * 60;
+/// Up to six hours later than due, per device and blob.
+pub const RENEW_JITTER_SECS: i64 = 6 * 60 * 60;
+/// At most this many renewals in one pass (a low-priority background job).
+pub const RENEW_PER_PASS: usize = 32;
+
+/// This device's jitter for `blob_id`: stable (the same every pass, so a
+/// blob isn't renewed early by a lucky draw) and different per device.
+pub fn renewal_jitter(device: Uuid, blob_id: &str) -> i64 {
+    let h = Sha256::digest(format!("ligus-blob-renewal\0{device}\0{blob_id}").as_bytes());
+    (u64::from_le_bytes(h[..8].try_into().expect("8 bytes")) % RENEW_JITTER_SECS as u64) as i64
+}
+
+/// Whether a blob shared at `shared_at` and last renewed at `last` is due at
+/// `now`: past a third of its life since the later of the two (plus the
+/// jitter), and not renewed in the last day.
+pub fn renewal_due(shared_at: i64, last: Option<i64>, now: i64, jitter: i64) -> bool {
+    if last.is_some_and(|l| now - l < RENEW_MIN_GAP_SECS) {
+        return false;
+    }
+    let since = last.map_or(shared_at, |l| l.max(shared_at));
+    now - since >= RENEW_AFTER_SECS + jitter
+}
+
+/// Whether this device renews `s`: a live attachment it shared (the person
+/// it acts for is the author), or any live one when it is an Admin's desktop.
+pub fn renews(s: &SharedAttachment, me: &str, role: WorkspaceRole, desktop: bool) -> bool {
+    !s.deleted && (s.author == me || (desktop && role.rank() >= WorkspaceRole::Admin.rank()))
+}
+
+/// The blobs this device should renew now, oldest first, at most
+/// [`RENEW_PER_PASS`]: of `live` (a workspace's attachments), the ones it
+/// [`renews`], not seen gone, and [`renewal_due`]. One blob is asked about
+/// once, whatever number of attachments name it.
+pub fn plan_renewals<'a>(
+    attachments: impl IntoIterator<Item = &'a SharedAttachment>,
+    me: &str,
+    role: WorkspaceRole,
+    desktop: bool,
+    state: &std::collections::HashMap<String, crate::event_store::BlobRenewal>,
+    device: Uuid,
+    now: i64,
+) -> Vec<String> {
+    let mut due: BTreeMap<String, i64> = BTreeMap::new();
+    for s in attachments {
+        if !renews(s, me, role, desktop) || !attachment::blob_id_ok(&s.attachment.blob_id) {
+            continue;
+        }
+        let blob = &s.attachment.blob_id;
+        let st = state.get(blob).copied().unwrap_or_default();
+        if st.gone_at.is_some() {
+            continue;
+        }
+        let shared_at = s.shared_at.inner().unix_timestamp();
+        if renewal_due(shared_at, st.renewed_at, now, renewal_jitter(device, blob)) {
+            let at = st.renewed_at.map_or(shared_at, |l| l.max(shared_at));
+            due.entry(blob.clone()).and_modify(|t| *t = (*t).min(at)).or_insert(at);
+        }
+    }
+    let mut out: Vec<(i64, String)> = due.into_iter().map(|(b, t)| (t, b)).collect();
+    out.sort();
+    out.into_iter().take(RENEW_PER_PASS).map(|(_, b)| b).collect()
+}
+
+/// What one renewal came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenewalOutcome {
+    /// The relay renewed it (or has no retain route): not again for a day.
+    Answered,
+    /// The relay no longer has it: shown as expired, never renewed again.
+    Gone,
+    /// Unreachable, refused or busy: tried again on a later pass.
+    Failed(String),
+}
+
+/// Renew `blobs` on the relay, one at a time (a background job: it yields
+/// to everything else and stops at the first sign the relay is busy).
+pub async fn renew_blobs(client: &RelayClient, workspace: &str, blobs: &[String]) -> Vec<(String, RenewalOutcome)> {
+    use crate::relay_client::BlobRetained;
+    let mut out = Vec::with_capacity(blobs.len());
+    for b in blobs {
+        let r = match client.retain_blob(workspace, b).await {
+            Ok(BlobRetained::Renewed { .. } | BlobRetained::Unsupported) => RenewalOutcome::Answered,
+            Ok(BlobRetained::Gone) => RenewalOutcome::Gone,
+            Err(e) => {
+                let busy = matches!(e, RelayError::Refused(_));
+                out.push((b.clone(), RenewalOutcome::Failed(e.to_string())));
+                if busy {
+                    break;
+                }
+                continue;
+            }
+        };
+        out.push((b.clone(), r));
+        tokio::task::yield_now().await;
+    }
+    out
 }
 
 /// The `[Attached: <path>]` markers in turns this device's person wrote
@@ -745,4 +860,194 @@ mod tests {
         let other = materialize_for_agent(&bin.marker(), &placed, &open, None, "ws", &ring, dir.path()).await;
         assert_eq!(other, "[an attachment that isn't available]");
     }
+
+    // ── Renewals (R1t) ──────────────────────────────────────────────────
+
+    const DAY: i64 = 24 * 60 * 60;
+
+    fn shared_at(a: &AttachmentRef, author: &str, at: i64) -> SharedAttachment {
+        let mut s = shared(a, author);
+        s.shared_at = ligus_core::Timestamp::from_unix_seconds(at);
+        s
+    }
+
+    #[test]
+    fn renewal_is_due_past_a_third_of_the_life_and_at_most_daily() {
+        let t0 = 1_800_000_000;
+        // Not due before ten days, due after ten days plus the jitter.
+        assert!(!renewal_due(t0, None, t0 + 9 * DAY, 0));
+        assert!(renewal_due(t0, None, t0 + 10 * DAY, 0));
+        assert!(!renewal_due(t0, None, t0 + 10 * DAY, 3600), "the jitter delays it");
+        assert!(renewal_due(t0, None, t0 + 10 * DAY + 3600, 3600));
+        // Renewed: counted from the renewal, so ten days later again.
+        assert!(!renewal_due(t0, Some(t0 + 10 * DAY), t0 + 15 * DAY, 0));
+        assert!(renewal_due(t0, Some(t0 + 10 * DAY), t0 + 20 * DAY, 0));
+        // Never twice a day, even with a renewal stamp older than the share.
+        assert!(!renewal_due(t0, Some(t0 + 40 * DAY - 3600), t0 + 40 * DAY, 0));
+        // The jitter is stable per device and blob, bounded, and spreads devices.
+        let (d1, d2) = (Uuid::new_v4(), Uuid::new_v4());
+        let b = "B".repeat(43);
+        assert_eq!(renewal_jitter(d1, &b), renewal_jitter(d1, &b));
+        assert!((0..RENEW_JITTER_SECS).contains(&renewal_jitter(d1, &b)));
+        let spread: std::collections::BTreeSet<i64> = (0..8).map(|_| renewal_jitter(Uuid::new_v4(), &b)).collect();
+        assert!(spread.len() > 1 || renewal_jitter(d2, &b) != renewal_jitter(d1, &b));
+    }
+
+    #[test]
+    fn only_the_sharer_and_admin_desktops_renew_live_attachments() {
+        let now = 1_800_000_000;
+        let device = Uuid::new_v4();
+        let mut a = reference(b"x", "a.txt");
+        a.blob_id = "a".repeat(43);
+        let mut b = reference(b"y", "b.txt");
+        b.blob_id = "b".repeat(43);
+        let mut c = reference(b"z", "c.txt");
+        c.blob_id = "c".repeat(43);
+        let mine = shared_at(&a, "me", now - 11 * DAY);
+        let theirs = shared_at(&b, "eve", now - 11 * DAY);
+        let mut deleted = shared_at(&c, "me", now - 11 * DAY);
+        deleted.deleted = true;
+        let all = [mine.clone(), theirs.clone(), deleted.clone()];
+        let none = std::collections::HashMap::new();
+        let plan = |role, desktop| plan_renewals(&all, "me", role, desktop, &none, device, now);
+        // Due: mine; not theirs (not mine, not an Admin); never a deleted one.
+        assert_eq!(plan(WorkspaceRole::Contributor, true), vec![a.blob_id.clone()]);
+        // An Admin's desktop renews every live one; a box (not a desktop) doesn't.
+        assert_eq!(plan(WorkspaceRole::Admin, true), vec![a.blob_id.clone(), b.blob_id.clone()]);
+        assert_eq!(plan(WorkspaceRole::Owner, true).len(), 2);
+        assert_eq!(plan(WorkspaceRole::Admin, false), vec![a.blob_id.clone()]);
+        // Not due yet.
+        let fresh = [shared_at(&a, "me", now - 2 * DAY)];
+        assert!(plan_renewals(&fresh, "me", WorkspaceRole::Owner, true, &none, device, now).is_empty());
+        // Renewed today, or seen gone: not again.
+        let mut state = std::collections::HashMap::new();
+        state.insert(a.blob_id.clone(), crate::event_store::BlobRenewal { renewed_at: Some(now - 3600), gone_at: None });
+        state.insert(b.blob_id.clone(), crate::event_store::BlobRenewal { renewed_at: None, gone_at: Some(now - DAY) });
+        assert!(plan_renewals(&all, "me", WorkspaceRole::Owner, true, &state, device, now).is_empty());
+        // One request per blob, however many shares name it; at most a pass's worth.
+        let twice = [mine.clone(), mine.clone()];
+        assert_eq!(plan_renewals(&twice, "me", WorkspaceRole::Viewer, false, &none, device, now).len(), 1);
+        let many: Vec<SharedAttachment> = (0..RENEW_PER_PASS + 5)
+            .map(|i| {
+                let mut r = reference(b"m", "m.txt");
+                r.blob_id = format!("{i:0>43}");
+                shared_at(&r, "me", now - 20 * DAY)
+            })
+            .collect();
+        assert_eq!(plan_renewals(&many, "me", WorkspaceRole::Viewer, false, &none, device, now).len(), RENEW_PER_PASS);
+    }
+
+    async fn serve_mock(router: axum::Router) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        (format!("http://{addr}"), tokio::spawn(async move { axum::serve(listener, router).await.unwrap() }))
+    }
+
+    fn unix_now() -> i64 {
+        time::OffsetDateTime::now_utc().unix_timestamp()
+    }
+
+    /// The retain route on the mock relay: renews, caps at the maximum age,
+    /// a gone blob is `Gone`, and an old relay is `Unsupported` (no error).
+    #[tokio::test]
+    async fn retain_renews_caps_and_tells_gone_from_an_old_relay() {
+        use crate::relay_client::BlobRetained;
+        use crate::test_relay::{router_with_blobs, BLOB_MAX_AGE_SECS, BLOB_RETENTION_SECS};
+        let (router, blobs) = router_with_blobs(true);
+        let (url, server) = serve_mock(router).await;
+        let c = RelayClient::new(url);
+        let up = c.post_blob("ws", vec![1, 2, 3]).await.unwrap();
+        let now = unix_now();
+        blobs.set_times("ws", &up.id, now - 11 * DAY, now + 19 * DAY);
+        let Ok(BlobRetained::Renewed { expires_at }) = c.retain_blob("ws", &up.id).await else { panic!("not renewed") };
+        assert!((expires_at - (now + BLOB_RETENTION_SECS)).abs() <= 5, "now plus the retention");
+        assert_eq!(blobs.get("ws", &up.id).unwrap().expires_at, expires_at);
+        // Capped: never past the upload plus the maximum age.
+        blobs.set_times("ws", &up.id, now - 360 * DAY, now + DAY);
+        assert_eq!(c.retain_blob("ws", &up.id).await.unwrap(), BlobRetained::Renewed { expires_at: now - 360 * DAY + BLOB_MAX_AGE_SECS });
+        // Unknown, expired, deleted: gone.
+        assert_eq!(c.retain_blob("ws", &"Z".repeat(43)).await.unwrap(), BlobRetained::Gone);
+        blobs.set_times("ws", &up.id, now - 400 * DAY, now - 1);
+        assert_eq!(c.retain_blob("ws", &up.id).await.unwrap(), BlobRetained::Gone);
+        server.abort();
+        // A relay from before the route: unsupported, and nothing else changes.
+        let (router, old) = router_with_blobs(false);
+        let (url, server) = serve_mock(router).await;
+        let c = RelayClient::new(url);
+        let up = c.post_blob("ws", vec![4, 5]).await.unwrap();
+        let before = old.get("ws", &up.id).unwrap().expires_at;
+        assert_eq!(c.retain_blob("ws", &up.id).await.unwrap(), BlobRetained::Unsupported);
+        assert_eq!(old.get("ws", &up.id).unwrap().expires_at, before);
+        assert_eq!(renew_blobs(&c, "ws", &[up.id.clone()]).await, vec![(up.id.clone(), RenewalOutcome::Answered)]);
+        assert_eq!(c.get_blob("ws", &up.id, 10).await.unwrap(), Some(vec![4, 5]), "downloads work as before");
+        server.abort();
+    }
+
+    /// R1t end to end through the chat service and the mock relay: a shared
+    /// file is renewed once it is due and not again that day; a deleted one
+    /// is never renewed; a blob the relay lost is marked gone and the
+    /// download says it expired.
+    #[tokio::test]
+    async fn clients_renew_live_attachments_and_not_deleted_ones() {
+        use crate::test_relay::{router_with_blobs, BLOB_RETENTION_SECS};
+        use ligus_core::crypto::SigningKeypair;
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::event_store::EventStore::open(dir.path().join("ligus.db")).unwrap();
+        let mut svc = crate::ChatService::new(
+            store,
+            SigningKeypair::generate().unwrap(),
+            SigningKeypair::generate().unwrap(),
+            ligus_core::ActorIdentity::new("x", "Alex", ActorKind::Human),
+        );
+        svc.set_author_account(Uuid::new_v4().to_string(), "Alex", None);
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "rt").unwrap();
+        svc.enable_test_presence();
+        svc.set_attachment_policy(wid, ligus_core::attachment::AttachmentPolicy::recommended()).unwrap();
+        let (router, blobs) = router_with_blobs(true);
+        let (url, server) = serve_mock(router).await;
+        let c = RelayClient::new(url);
+        let ring = ring();
+        let room = "ws";
+        let share = |svc: &mut crate::ChatService, a: AttachmentRef| svc.share_attachment(chat.id, wid, a).unwrap();
+        let (kind, role) = svc.attachment_standing(wid).unwrap();
+        let p1 = prepare("one.txt", b"first file".to_vec(), &rules(), kind, role).unwrap();
+        let p2 = prepare("two.txt", b"second file".to_vec(), &rules(), kind, role).unwrap();
+        let a1 = upload(&c, room, &ring, &p1, svc.device_id()).await.unwrap();
+        let a2 = upload(&c, room, &ring, &p2, svc.device_id()).await.unwrap();
+        share(&mut svc, a1.clone());
+        share(&mut svc, a2.clone());
+        svc.delete_attachment(chat.id, wid, a2.id).unwrap();
+        let now = unix_now();
+        // Fresh: nothing is due.
+        assert!(svc.blob_renewals_due(wid, false, now).unwrap().is_empty());
+        // Eleven days on (plus the longest jitter): the live one, not the deleted one.
+        let later = now + 10 * DAY + RENEW_JITTER_SECS;
+        let due = svc.blob_renewals_due(wid, false, later).unwrap();
+        assert_eq!(due, vec![a1.blob_id.clone()]);
+        blobs.set_times(room, &a1.blob_id, now - 11 * DAY, now + 19 * DAY);
+        let outcomes = renew_blobs(&c, room, &due).await;
+        assert_eq!(outcomes, vec![(a1.blob_id.clone(), RenewalOutcome::Answered)]);
+        svc.record_blob_renewals(wid, &outcomes, later).unwrap();
+        let exp = blobs.get(room, &a1.blob_id).unwrap().expires_at;
+        assert!(exp >= now + BLOB_RETENTION_SECS - 5, "renewed on the relay");
+        assert_eq!(blobs.retain_calls(), vec![a1.blob_id.clone()], "the deleted file's blob was never renewed");
+        // Not again that day, nor before another third of the life.
+        assert!(svc.blob_renewals_due(wid, false, later + 3600).unwrap().is_empty());
+        assert!(svc.blob_renewals_due(wid, false, later + 5 * DAY).unwrap().is_empty());
+        assert_eq!(svc.blob_renewals_due(wid, false, later + 10 * DAY + RENEW_JITTER_SECS).unwrap(), vec![a1.blob_id.clone()]);
+        // The relay lost it: the renewal finds it gone, it is never asked about again,
+        // and a download says it expired instead of failing obscurely.
+        blobs.set_times(room, &a1.blob_id, now - 400 * DAY, now - 1);
+        let outcomes = renew_blobs(&c, room, &[a1.blob_id.clone()]).await;
+        assert_eq!(outcomes, vec![(a1.blob_id.clone(), RenewalOutcome::Gone)]);
+        svc.record_blob_renewals(wid, &outcomes, later + 11 * DAY).unwrap();
+        assert!(svc.gone_blobs(wid).unwrap().contains(&a1.blob_id));
+        assert!(svc.blob_renewals_due(wid, true, later + 40 * DAY).unwrap().is_empty());
+        let err = download_verified(&c, room, &ring, &a1).await.unwrap_err();
+        assert_eq!(err, BlobError::NotFound);
+        assert_eq!(err.to_string(), "This file expired on the relay");
+        server.abort();
+    }
+
 }

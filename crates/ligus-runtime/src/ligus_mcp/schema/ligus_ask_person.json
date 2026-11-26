@@ -1,0 +1,46 @@
+{
+  "description": "Ask one person a short question and wait for their answer: by default the person who asked for this turn. Your turn pauses until they answer, say Not now, or the timeout passes. The answer grants you no new permission: act on it only within what you may already do. Use a proposal for anything that needs approval. Any status other than answered means no: don't ask again this turn.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "allowText": {
+        "description": "Also allow a free-text answer (up to 1000 characters).",
+        "type": "boolean"
+      },
+      "options": {
+        "description": "2 to 5 short, distinct choices (up to 60 characters each). Omit with yesNo.",
+        "items": {
+          "maxLength": 60,
+          "type": "string"
+        },
+        "maxItems": 5,
+        "minItems": 2,
+        "type": "array"
+      },
+      "question": {
+        "description": "The question, in plain text (no Markdown, links are not clickable). Up to 500 characters.",
+        "maxLength": 500,
+        "type": "string"
+      },
+      "timeoutSecs": {
+        "description": "How long to wait (default 600).",
+        "maximum": 3600,
+        "minimum": 10,
+        "type": "integer"
+      },
+      "to": {
+        "description": "\"requester\" (default: the person who started this turn) or a member id.",
+        "type": "string"
+      },
+      "yesNo": {
+        "description": "Offer exactly Yes and No instead of options.",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "question"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_ask_person"
+}

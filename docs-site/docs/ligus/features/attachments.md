@@ -141,8 +141,29 @@ device removes its encrypted copy from the relay. When an Admin removes a
 member, Ligus asks whether to delete the files that member shared as well.
 A relay that binds files to their uploader may refuse an Admin's delete of
 someone else's file; the file is still hidden on every device and the relay
-expires it at the end of its retention. The relay also deletes files on its own after its retention period (30 days by
-default); see [Operating the relay's file storage](../../operate/networking/self-host.md#file-attachments).
+expires it at the end of its retention.
+
+## How long files stay on the relay
+
+A relay keeps each file for a while and then lets it go: 30 days by
+default, set by whoever runs the relay. Ligus keeps the files your chats
+still use from lapsing. While a file isn't deleted, the device that shared
+it, the sharer's other devices and every Admin's desktop quietly renew it on
+the relay, about ten days after it was shared and every ten days or so
+after that, at most once a day per file. This runs in the background after a
+sync and needs nothing from you.
+
+Renewals have a limit. The relay never keeps a file longer than its operator
+allows (a year after it was shared, by default), and renewed files still
+count toward the workspace's storage on the relay. A relay from before
+Ligus 0.4 has no renewals: files there expire after its retention, as before.
+
+When the relay no longer has a file, its card says **This file expired on
+the relay** instead of offering a download. A copy you already checked stays
+in Ligus's private storage on your device and keeps working there. To share
+it again, attach it again.
+
+Operators: see [Operating the relay's file storage](../../operate/networking/self-host.md#file-attachments).
 
 ## Files from agents {#files-from-agents}
 

@@ -14,6 +14,7 @@ export function InboxItem({
   context,
   detail,
   when,
+  whenInline = false,
   unread = false,
   onOpen,
   actions,
@@ -28,6 +29,8 @@ export function InboxItem({
   detail?: ReactNode;
   /// A short time ("2m", "3:14 PM").
   when?: string;
+  /// Show `when` muted on the title's line (a one-line row).
+  whenInline?: boolean;
   /// New since you last opened the Inbox (bold title, no badge).
   unread?: boolean;
   onOpen?: () => void;
@@ -48,13 +51,18 @@ export function InboxItem({
             {title}
             {unread && <span className="sr-only"> (new)</span>}
           </span>
+          {whenInline && when && (
+            <span className="shrink-0 text-[11.5px] tabular-nums" style={{ color: "var(--ligus-ink-soft)" }}>
+              {when}
+            </span>
+          )}
           <SessionStateChip state={state} />
         </span>
-        {(context || when) && (
+        {(context || (when && !whenInline)) && (
           <span className="flex items-center gap-1.5 text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
             {context && <span className="min-w-0 truncate">{context}</span>}
-            {context && when && <span aria-hidden>·</span>}
-            {when && <span className="shrink-0 tabular-nums">{when}</span>}
+            {context && when && !whenInline && <span aria-hidden>·</span>}
+            {when && !whenInline && <span className="shrink-0 tabular-nums">{when}</span>}
           </span>
         )}
         {detail && (

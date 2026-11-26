@@ -212,7 +212,10 @@ containers and CI.
 | `sandbox.turn-test` | with `--turn-test`: one real headless agent turn ran confined |
 | `sandbox.policy` | with `--sandbox`: what an agent turn may read and write here (in `notes`) |
 | `secrets.backend` | the secret store in use; a warning when it fell back to plain files |
+| `store.schema` | the version of `ligus.db`; a failure (exit 3) when a newer Ligus wrote it ([database version](../security/index.md#seeds-and-backups)) |
+| `store.backups` | full copies of `ligus.db` next to it, which hold invite seeds: a warning listing their paths; delete one once you no longer need it |
 | `workspace.joined` | the device has a workspace, is a member, and holds a local copy |
 | `relay.reachable` | one request to the relay (10 seconds at most): reachable and the access token accepted |
 | `sync.held` | events held aside until this device can judge them |
+| `runtimes.inline-key` | a warning when a workspace runtime's key was stored in the workspace by an older version (never used or shown): rotate it and use `--secret-ref` |
 | `gateway.<name>.hosted`, `gateway.<name>.cli`, `gateways.unlisted` | this host's model gateways, as `ligus gateway-check` proves them; `gateways` is skipped when the host lists none |

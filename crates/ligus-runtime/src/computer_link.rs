@@ -499,6 +499,13 @@ pub struct LinkState {
     /// The workspaces it was linked into.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspaces: Vec<Uuid>,
+    /// Identity model v2 (7.4): workspace → the account this install acts
+    /// for there. Ids only: the name shown is always the person's current
+    /// profile. A cache of the device's own choice on the log
+    /// (`ChatService::binding`), rebuilt from `person` and `workspaces` when
+    /// an older build saved without it (migration M7).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub links: std::collections::BTreeMap<Uuid, Uuid>,
 }
 
 impl LinkState {
@@ -511,7 +518,12 @@ impl LinkState {
     /// for, and acting as no one instead would author as the wrong identity.
     pub fn load(data_dir: &Path) -> std::io::Result<Self> {
         match std::fs::read(Self::path(data_dir)) {
-            Ok(b) => serde_json::from_slice(&b).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Ok(b) => serde_json::from_slice::<Self>(&b)
+                .map(|mut s| {
+                    s.migrate_links();
+                    s
+                })
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e),
         }
@@ -580,6 +592,26 @@ impl LinkState {
         self.person.as_ref().filter(|_| self.workspaces.contains(&workspace_id))
     }
 
+    /// Migration M7 (identity model v2, 11): `links` from `person` and
+    /// `workspaces` for every workspace it misses (a 0.3 save drops it).
+    pub fn migrate_links(&mut self) {
+        if let Some(account) = self.person.as_ref().and_then(|p| p.account_id) {
+            for ws in &self.workspaces {
+                self.links.entry(*ws).or_insert(account);
+            }
+        }
+    }
+
+    /// The account this install acts for in `workspace_id` (the cache).
+    pub fn account_in(&self, workspace_id: Uuid) -> Option<Uuid> {
+        self.links.get(&workspace_id).copied()
+    }
+
+    /// Whether this install is linked as a person's device anywhere.
+    pub fn is_linked(&self) -> bool {
+        self.person.is_some() || !self.links.is_empty()
+    }
+
     /// Record a redeemed link: the install is `person`'s device in
     /// `workspace_id`, and every pending request is used up (the device they
     /// named is either the one now linked, or unused). Refused when the
@@ -596,6 +628,9 @@ impl LinkState {
         self.person = Some(device_local_cleared(person));
         if !self.workspaces.contains(&workspace_id) {
             self.workspaces.push(workspace_id);
+        }
+        if let Some(a) = person.account_id {
+            self.links.insert(workspace_id, a);
         }
         self.pending.clear();
         Ok(())

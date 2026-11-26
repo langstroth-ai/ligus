@@ -131,7 +131,14 @@ impl LigusHost for CliLigusHost {
 }
 
 /// A Ligus MCP server over `source`.
+/// The server starts with no turn: the questions a turn of an earlier run
+/// was waiting on are closed (the restart sweep).
 pub fn ligus_server(source: std::sync::Arc<dyn ServiceSource>) -> std::sync::Arc<LigusMcp> {
+    match lock(source.service()).sweep_open_asks() {
+        Ok(n) if n > 0 => eprintln!("closed {n} question(s) left open by the last run"),
+        Ok(_) => {}
+        Err(e) => eprintln!("close open questions: {e}"),
+    }
     LigusMcp::new(std::sync::Arc::new(CliLigusHost(source)))
 }
 
@@ -273,6 +280,16 @@ pub fn runtime_for<'a>(runtimes: &'a [WorkspaceRuntime], agent: &WorkspaceAgent)
 /// host's own, see [`local_runtimes`]). A detached agent never runs on a
 /// member's personal key (§12.5) — this returns an error if neither knows the
 /// agent's runtime.
+/// Log, once per runtime per process, that a runtime's key was stored in the
+/// workspace by an older version (the key itself is never read or printed).
+fn warn_legacy_inline_once(runtime_id: &str) {
+    static WARNED: std::sync::Mutex<Option<HashSet<String>>> = std::sync::Mutex::new(None);
+    let mut g = WARNED.lock().unwrap_or_else(|e| e.into_inner());
+    if g.get_or_insert_with(HashSet::new).insert(runtime_id.to_string()) {
+        eprintln!("worker: runtime '{runtime_id}': {}", ligus_core::LEGACY_INLINE_WARNING);
+    }
+}
+
 pub fn agent_workspace_runtime(
     runtimes: &[WorkspaceRuntime],
     agent: &WorkspaceAgent,
@@ -287,8 +304,15 @@ pub fn agent_workspace_runtime(
     let gateway = Some(wr.gateway.trim()).filter(|g| !g.is_empty()).map(ligus_runtime::model_gateway::GatewaySelection::named);
     // Through a gateway the runtime's own key is never sent: the gateway's
     // credential (this host's operator config) is.
+    // A key an older version stored in the workspace is never used.
+    if wr.credential.is_legacy_inline() {
+        warn_legacy_inline_once(&wr.id);
+    }
     let api_key = if gateway.is_some() { None } else { resolve_workspace_credential(&wr.credential) };
     if api_key.is_none() && gateway.is_none() && !keyless_ok(wr) {
+        if wr.credential.is_legacy_inline() {
+            bail!("workspace runtime '{}' has no key on this box. {}", wr.name, ligus_core::LEGACY_INLINE_WARNING);
+        }
         bail!("workspace runtime '{}' has no secret on this box (provision LIGUS_WS_SECRET_…)", wr.name);
     }
     // claude-code / agy / copilot take the worker's permission tier; other
@@ -989,9 +1013,26 @@ credential = { kind = "none" }
     }
 
     #[test]
+    fn a_legacy_inline_key_is_never_used() {
+        // Hosted provider: fails closed with the rotation advice.
+        let mut wr = WorkspaceRuntime::new("oa", "OpenAI", ModelProviderKind::OpenAI, "gpt-4o");
+        wr.endpoint = "https://api.openai.com/v1/chat/completions".into();
+        wr.credential = WorkspaceCredential::Inline {};
+        let err = agent_workspace_runtime(&[wr], &agent("oa")).unwrap_err().to_string();
+        assert!(err.contains("stored in the workspace by an older version"), "{err}");
+        assert!(err.contains("--secret-ref"), "{err}");
+        // A keyless-capable runtime still runs, with no key.
+        let mut wr = WorkspaceRuntime::new("ol", "Ollama", ModelProviderKind::Ollama, "llama3.2");
+        wr.credential = WorkspaceCredential::Inline {};
+        let (rt, _) = agent_workspace_runtime(&[wr], &agent("ol")).unwrap();
+        assert!(rt.api_key.is_none());
+    }
+
+    #[test]
     fn hosted_api_never_gets_agent_tools() {
         let mut wr = WorkspaceRuntime::new("oa", "OpenAI", ModelProviderKind::OpenAI, "gpt-4o");
-        wr.credential = WorkspaceCredential::Inline { secret: "sk-test".into() };
+        std::env::set_var("LIGUS_WS_SECRET_worker_hosted_tools_test", "sk-test");
+        wr.credential = WorkspaceCredential::SecretRef { secret_ref: "worker_hosted_tools_test".into() };
         let (rt, _) = agent_workspace_runtime(&[wr], &agent("oa")).unwrap();
         assert!(!rt.runs_agent_tools());
     }
@@ -1000,7 +1041,8 @@ credential = { kind = "none" }
     fn builtin_tools_need_a_private_endpoint_unless_opted_in() {
         let mut wr = WorkspaceRuntime::new("gw", "GW", ModelProviderKind::Custom, "m");
         wr.endpoint = "https://models.example.com/v1/chat/completions".into();
-        wr.credential = WorkspaceCredential::Inline { secret: "k".into() };
+        std::env::set_var("LIGUS_WS_SECRET_worker_builtin_tools_test", "k");
+        wr.credential = WorkspaceCredential::SecretRef { secret_ref: "worker_builtin_tools_test".into() };
         let (rt, _) = agent_workspace_runtime(&[wr], &agent("gw")).unwrap();
         let mut settings = ToolSettings::default();
         assert!(!reply::wants_builtin_tools(&rt, &settings), "public endpoint: no file tools by default");

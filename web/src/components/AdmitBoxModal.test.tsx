@@ -3,9 +3,18 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AdmitBoxModal } from "./AdmitBoxModal";
 import * as ipc from "@/lib/ipc";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import { approvalSheet } from "@/state/approvals";
+
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{children}</QueryClientProvider>
+);
 
 vi.mock("@/lib/ipc", () => ({
   inspectBoxRequest: vi.fn(async () => ({ fingerprint: "AB12-CD34-EF56", label: "build-1", accountId: "a1" })),
+  approvalMatchPaste: vi.fn(async () => null),
+  getApprovalAddress: vi.fn(async () => ({ address: "ligusaddr1:demo", relay: "https://relay.example", canReset: false })),
   admitBox: vi.fn(async (_ws: string, request: string | null) =>
     request ? { code: "ligusadmit1:sealed", sealed: true, expiresInMinutes: 60 } : { code: "hivews1:bearer", sealed: false, expiresInMinutes: 1440 },
   ),
@@ -20,7 +29,8 @@ describe("AdmitBoxModal", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("admits only after the request's fingerprint was shown", async () => {
-    render(<AdmitBoxModal workspaceId="w1" workspaceName="Acme" onClose={() => {}} />);
+    render(<AdmitBoxModal workspaceId="w1" workspaceName="Acme" onClose={() => {}} />, { wrapper });
+    await userEvent.click(screen.getByRole("tab", { name: "Paste a join request" }));
     const admit = screen.getByRole("button", { name: "Admit this box" });
     expect(admit).toBeDisabled();
     await userEvent.type(screen.getByLabelText(/Join request/), "ligusjoin1:xyz");
@@ -33,11 +43,31 @@ describe("AdmitBoxModal", () => {
   });
 
   it("makes a bearer code for Kubernetes with its lifetime", async () => {
-    render(<AdmitBoxModal workspaceId="w1" workspaceName="Acme" onClose={() => {}} />);
+    render(<AdmitBoxModal workspaceId="w1" workspaceName="Acme" onClose={() => {}} />, { wrapper });
     await userEvent.click(screen.getByRole("tab", { name: "For Kubernetes" }));
     await userEvent.click(screen.getByRole("button", { name: "Make an admission code" }));
     await waitFor(() => expect(ipc.admitBox).toHaveBeenCalledWith("w1", null, 24 * 60));
     expect((screen.getByLabelText("Admission code") as HTMLTextAreaElement).value).toBe("hivews1:bearer");
     expect(screen.getByText(/Kubernetes Secret/)).toBeInTheDocument();
+  });
+
+  it("opens with the approval address and Copy, no secret", async () => {
+    render(<AdmitBoxModal workspaceId="w1" workspaceName="Acme" onClose={() => {}} />, { wrapper });
+    expect(await screen.findByText("ligusaddr1:demo")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reset address" })).toBeNull();
+  });
+
+  it("runs the code match when the pasted request is live", async () => {
+    vi.mocked(ipc.approvalMatchPaste).mockResolvedValueOnce({ workspaceId: "w1", rid: "r1" });
+    const onClose = vi.fn();
+    render(<AdmitBoxModal workspaceId="w1" workspaceName="Acme" onClose={onClose} />, { wrapper });
+    await userEvent.click(screen.getByRole("tab", { name: "Paste a join request" }));
+    await userEvent.type(screen.getByLabelText(/Join request/), "ligusjoin1:xyz");
+    await userEvent.click(screen.getByRole("button", { name: "Check" }));
+    await waitFor(() => expect(approvalSheet.snapshot()).toEqual({ workspaceId: "w1", rid: "r1" }));
+    expect(onClose).toHaveBeenCalled();
+    expect(ipc.inspectBoxRequest).not.toHaveBeenCalled();
+    approvalSheet.close();
   });
 });

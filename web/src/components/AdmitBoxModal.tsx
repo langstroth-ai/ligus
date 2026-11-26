@@ -1,18 +1,22 @@
 import { useState } from "react";
-import { admitBox, inspectBoxRequest, type BoxAdmission, type BoxRequest } from "@/lib/ipc";
+import { admitBox, approvalMatchPaste, inspectBoxRequest, type BoxAdmission, type BoxRequest } from "@/lib/ipc";
+import { ApprovalAddress } from "@/components/ApprovalAddress";
+import { approvalSheet } from "@/state/approvals";
 import { copyWhenReady } from "@/lib/clipboard";
 import { toast, errMsg } from "@/components/Toast";
 import { Modal } from "@/components/ui";
 
-type Mode = "request" | "secret";
+type Mode = "address" | "request" | "secret";
 
 /// Admit a `ligus serve` or `ligus worker` box to a workspace as its own
 /// service member (capped at Contributor; its votes never count as a
 /// person's). Either paste the join request the box printed (the code comes
 /// back sealed to that box) or make a single-use code for a Kubernetes
-/// Secret. Both are confirmed with this person's passkey.
+/// Secret. Both are confirmed with this person's passkey. First, the
+/// workspace's approval address: a box that sends its request there shows up
+/// in the Inbox, where the code match runs (the paste tab stays).
 export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspaceId: string; workspaceName: string; onClose: () => void }) {
-  const [mode, setMode] = useState<Mode>("request");
+  const [mode, setMode] = useState<Mode>("address");
   const [request, setRequest] = useState("");
   const [checked, setChecked] = useState<BoxRequest | null>(null);
   const [hours, setHours] = useState(24);
@@ -21,6 +25,13 @@ export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspa
 
   async function check() {
     try {
+      // A request that is live in the mailbox: compare the code instead.
+      const live = await approvalMatchPaste(request.trim()).catch(() => null);
+      if (live) {
+        approvalSheet.open(live.workspaceId, live.rid);
+        onClose();
+        return;
+      }
       setChecked(await inspectBoxRequest(request.trim()));
     } catch (e) {
       setChecked(null);
@@ -73,7 +84,8 @@ export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspa
         You confirm with your passkey.
       </p>
       <div role="tablist" className="mt-3 flex gap-1">
-        {tab("request", "From the box's join request")}
+        {tab("address", "Approval address")}
+        {tab("request", "Paste a join request")}
         {tab("secret", "For Kubernetes")}
       </div>
       {result ? (
@@ -93,6 +105,10 @@ export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspa
               Done
             </button>
           </div>
+        </div>
+      ) : mode === "address" ? (
+        <div className="mt-4">
+          <ApprovalAddress workspaceId={workspaceId} hint={<>On the box, run <code>ligus admit request --to</code> with it. The request comes to your Inbox.</>} />
         </div>
       ) : mode === "request" ? (
         <div className="mt-4 space-y-2">

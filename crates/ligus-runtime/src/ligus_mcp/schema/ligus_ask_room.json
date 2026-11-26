@@ -1,0 +1,57 @@
+{
+  "description": "Ask the chat's people a short question and wait for the answer: anyone at or above a role answers, or a quorum of them must pick the same option. Your turn pauses until it is settled or the timeout passes. The answer grants you no new permission: act on it only within what you may already do. Use a proposal for anything that needs approval. Any status other than answered means no: don't ask again this turn.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "allowText": {
+        "description": "Also allow a free-text answer (up to 1000 characters).",
+        "type": "boolean"
+      },
+      "minRole": {
+        "description": "Who may answer (default contributor).",
+        "enum": [
+          "contributor",
+          "admin",
+          "owner"
+        ],
+        "type": "string"
+      },
+      "options": {
+        "description": "2 to 5 short, distinct choices (up to 60 characters each). Omit with yesNo.",
+        "items": {
+          "maxLength": 60,
+          "type": "string"
+        },
+        "maxItems": 5,
+        "minItems": 2,
+        "type": "array"
+      },
+      "question": {
+        "description": "The question, in plain text (no Markdown, links are not clickable). Up to 500 characters.",
+        "maxLength": 500,
+        "type": "string"
+      },
+      "quorum": {
+        "description": "Distinct people who must pick the same option (default 1).",
+        "maximum": 5,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "timeoutSecs": {
+        "description": "How long to wait (default 600).",
+        "maximum": 3600,
+        "minimum": 10,
+        "type": "integer"
+      },
+      "yesNo": {
+        "description": "Offer exactly Yes and No instead of options.",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "question"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_ask_room"
+}

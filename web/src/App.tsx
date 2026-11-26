@@ -49,6 +49,8 @@ import { Tour, type TourStep } from "@/components/Tour";
 import { ToastHost, toast, errMsg } from "@/components/Toast";
 import { PresenceSheet } from "@/components/PresenceSheet";
 import { PhoneEnrollTripwire } from "@/components/PhoneEnrollTripwire";
+import { ApprovalSheetHost } from "@/components/ApprovalSheet";
+import { approvalSheet, useApprovalEvents, useApprovalSheet } from "@/state/approvals";
 import { DearthBanner } from "@/components/guards/DearthBanner";
 import { LockdownBar } from "@/components/guards/LockdownBar";
 import { AppStatusBar } from "@/components/AppStatusBar";
@@ -701,6 +703,8 @@ export function App() {
   const banner = blockingBanner({ lockdown: view === "workspace" && Boolean(lockdown.data?.active), dearth: dearthOn });
   // What waits on you: the Inbox lists it; the dock and tray count it.
   const needsYou = useNeedsYou(activeWorkspaceId);
+  useApprovalEvents();
+  const approvalOpen = useApprovalSheet();
   useDockBadge(needsYou);
 
   // Default view on workspace open/switch: land on the workspace's most-recent
@@ -1058,6 +1062,7 @@ export function App() {
       <DialogHost />
       <PresenceSheet />
       <PhoneEnrollTripwire />
+      <ApprovalSheetHost open={approvalOpen} onClose={() => approvalSheet.close()} />
       {shortcutsOpen && <ShortcutsSheet onClose={() => setShortcutsOpen(false)} />}
       {errorsOpen && <ErrorLogSheet onClose={() => setErrorsOpen(false)} />}
       {archivedOpen && (

@@ -97,3 +97,44 @@ describe("reviewBadge", () => {
     expect(reviewBadge(attention, null)).toBeUndefined();
   });
 });
+
+describe("approval requests", () => {
+  const a = (rid: string, kind: "box" | "computer" | "phone", label: string, createdAt = 1) => ({ workspaceId: "w1", rid, kind, label, createdAt });
+
+  it("rank right after a phone alert, above the other security rows and asks", () => {
+    const items = needsYouItems({
+      sandboxChanged: true,
+      trustWaiting: 1,
+      attention: [{ sessionId: "c1", openAsks: 1, proposals: [] } as never],
+      phoneAlerts: [{ rid: "p", otherDeviceId: "o", addedLabel: "iPhone" }],
+      approvals: [a("r1", "box", "build-1")],
+      approvalFacts: [{ key: "mismatch:r0", kind: "mismatch", label: "build-0", at: 1 }],
+    });
+    expect(items.map((i) => i.kind)).toEqual(["phone", "approval", "approvalFact", "sandbox", "trust", "ask"]);
+    expect(items[1].title).toBe("A box asks to join: \u201Cbuild-1\u201D");
+    expect(items[2].title).toBe("Request from \u201Cbuild-0\u201D didn't match. Nothing was granted.");
+  });
+
+  it("names a device of mine, and a link that didn't finish", () => {
+    const items = needsYouItems({
+      approvals: [a("r1", "computer", "lt on mbp")],
+      approvalFacts: [{ key: "didntFinish:r2", kind: "didntFinish", label: "build-2", at: 1 }],
+    });
+    expect(items.map((i) => i.title)).toEqual([
+      "A computer asks to be your device: \u201Clt on mbp\u201D",
+      "Linking \u201Cbuild-2\u201D didn't finish. Nothing was added.",
+    ]);
+  });
+
+  it("collapse past three into one row that counts each request; facts don't count", () => {
+    const four = [a("r1", "box", "b1", 1), a("r2", "box", "b2", 2), a("r3", "computer", "c3", 3), a("r4", "box", "b4", 4)];
+    const items = needsYouItems({ approvals: four, approvalFacts: [{ key: "k", kind: "mismatch", label: "x", at: 1 }] });
+    const rows = items.filter((i) => i.kind === "approval");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].title).toBe("4 requests to approve");
+    expect(rows[0].approvals).toHaveLength(4);
+    expect(needsYouCount(items)).toBe(4);
+    expect(needsYouItems({ approvals: four.slice(0, 3) }).filter((i) => i.kind === "approval")).toHaveLength(3);
+  });
+});
+
