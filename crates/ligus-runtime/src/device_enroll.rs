@@ -393,6 +393,9 @@ pub struct OwnDevice {
     pub revoked: bool,
     /// Other accounts that also certified it (a box's own bootstrap account).
     pub also_certified_by: Vec<Uuid>,
+    /// When `account` first certified it (the certificate's envelope time):
+    /// what an unnamed device is called by ("Phone · added 24 Nov").
+    pub certified_at: Option<ligus_core::Timestamp>,
 }
 
 /// The devices `account` has certified in this workspace, revoked ones included.
@@ -410,7 +413,14 @@ pub fn devices_of(trust: &[SessionEventEnvelope], account: Uuid) -> Vec<OwnDevic
         .map(|(device_id, (key, accts))| {
             let mut also: Vec<Uuid> = accts.into_iter().filter(|a| *a != account).collect();
             also.sort();
-            OwnDevice { device_id, fingerprint: fingerprint(&key), revoked: revoked.contains(&device_id), also_certified_by: also }
+            let certified_at = trust
+                .iter()
+                .filter_map(|e| match &e.payload {
+                    SessionEvent::DeviceCertificateAdded { certificate: c } if c.device_id == device_id && c.account_id == account => Some(e.timestamp),
+                    _ => None,
+                })
+                .min();
+            OwnDevice { device_id, fingerprint: fingerprint(&key), revoked: revoked.contains(&device_id), also_certified_by: also, certified_at }
         })
         .collect();
     out.sort_by_key(|d| d.device_id);

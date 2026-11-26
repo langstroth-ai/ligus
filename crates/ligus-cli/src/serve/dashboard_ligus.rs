@@ -456,9 +456,16 @@ impl LigusSnapshot {
                         let n = self.host.remote.as_ref().map(|r| r.phones_with_push).unwrap_or(0);
                         format!("On, {n} phone{}", if n == 1 { "" } else { "s" })
                     }
-                    (false, false) => "Off".to_string(),
+                    (false, false) => String::new(),
                 };
-                rows.push(MetricRow::status("Push", self.host.ntfy || relay_push, &text));
+                rows.push(match (self.host.ntfy || relay_push, self.host.remote.as_ref()) {
+                    (true, _) => MetricRow::status("Push", true, &text),
+                    // On for a phone but not reaching it: the one red case.
+                    (false, Some(r)) if r.phones_with_push > 0 && !r.connected => MetricRow::status("Push", false, "Relay disconnected"),
+                    // Never chosen, or no phone turned it on: grey, not a failure.
+                    (false, Some(r)) if r.push => MetricRow::info("Push", "No phone has push on"),
+                    (false, _) => MetricRow::info("Push", "Not set up"),
+                });
                 Ok(MetricValue::Rows(rows))
             }
             "sync.age" => {
@@ -523,6 +530,11 @@ impl MetricRow {
 
     fn status(label: &str, up: bool, text: &str) -> Self {
         Self { label: label.into(), value: None, text: Some(text.into()), up: Some(up) }
+    }
+
+    /// A row with no up or down: something not set up (grey, never red).
+    fn info(label: &str, text: &str) -> Self {
+        Self { label: label.into(), value: None, text: Some(text.into()), up: None }
     }
 }
 
@@ -893,7 +905,10 @@ pub(crate) mod tests {
         let r = rows(&quiet, "host.status");
         let labels: Vec<&str> = r.iter().map(|r| r.label.as_str()).collect();
         assert_eq!(labels, ["Ligus serve", "Push"], "no relay, no remote access: no rows for them");
-        assert_eq!(r[1].text.as_deref(), Some("Off"));
+        // Push nobody turned on is "Not set up" with no up or down (grey on
+        // the phone), never a red "Off".
+        assert_eq!(r[1].text.as_deref(), Some("Not set up"));
+        assert_eq!(r[1].up, None);
         assert!(quiet.metric("sync.age").is_err());
         assert_eq!(quiet.metric("sync.last").unwrap(), MetricValue::Text("No relay configured".into()));
         assert!(quiet.metric("phones.paired").unwrap_err().to_string().contains("remote access is off"));

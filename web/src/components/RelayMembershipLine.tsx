@@ -3,8 +3,36 @@
 // step that can actually work from this device (claim it, get a relay token
 // that names you, or nothing).
 
+import { useState } from "react";
 import { Button, InfoTip } from "@/components/ui";
 import type { RelayMembershipDto } from "@/lib/ipc";
+import { IconX } from "@/lib/icons";
+
+/// This device remembers a hidden line per workspace and state: a change
+/// of state (say, the relay now refuses this device) shows it again.
+const HIDE_KEY = "ligus.relayMembershipLine.hidden";
+
+function hiddenKey(scope: string, state: string) {
+  return `${HIDE_KEY}.${scope}.${state}`;
+}
+
+function isHidden(scope: string | undefined, state: string): boolean {
+  if (!scope) return false;
+  try {
+    return localStorage.getItem(hiddenKey(scope, state)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberHidden(scope: string | undefined, state: string) {
+  if (!scope) return;
+  try {
+    localStorage.setItem(hiddenKey(scope, state), "1");
+  } catch {
+    // Storage blocked: hidden for this session only.
+  }
+}
 
 /// What Ligus enforces whatever the relay does. Kept in one place so every
 /// state says the same thing.
@@ -66,14 +94,22 @@ export function RelayMembershipLine({
   claiming,
   onClaim,
   onToken,
+  scope,
 }: {
   status: RelayMembershipDto;
   claiming: boolean;
   onClaim: () => void;
   onToken: () => void;
+  /// What a hidden line is remembered under (the workspace).
+  scope?: string;
 }) {
+  const [hidden, setHidden] = useState<string | null>(null);
   const copy = relayMembershipCopy(status);
   if (!copy) return null;
+  // The line is informational (Ligus checks membership itself), so it can be
+  // put away. "You're not on it" is a refusal this device hits, so it stays.
+  const dismissible = status.state !== "hidden";
+  if (dismissible && (hidden === status.state || isHidden(scope, status.state))) return null;
   return (
     <div className="flex items-center gap-1.5 px-1 text-[11.5px] leading-5" style={{ color: "var(--ligus-ink-soft)" }}>
       <span>{copy.line}</span>
@@ -88,6 +124,20 @@ export function RelayMembershipLine({
         <Button size="sm" variant="quiet" onClick={onToken}>
           Add a relay token
         </Button>
+      )}
+      {dismissible && (
+        <button
+          type="button"
+          aria-label="Hide this line"
+          data-tip="Hide this line"
+          className="shrink-0 px-1 leading-none text-ink-soft hover:text-ink"
+          onClick={() => {
+            rememberHidden(scope, status.state);
+            setHidden(status.state);
+          }}
+        >
+          <IconX size={12} />
+        </button>
       )}
     </div>
   );

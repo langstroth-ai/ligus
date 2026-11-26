@@ -46,7 +46,7 @@ import { SettingsView, lastSettingsTab, parseSettingsTab, type SettingsTab } fro
 import { RightRail } from "@/components/RightRail";
 import { Onboarding } from "@/components/Onboarding";
 import { Tour, type TourStep } from "@/components/Tour";
-import { ToastHost, toast, errMsg } from "@/components/Toast";
+import { ToastHost, toast, errMsg, setShowErrorLog } from "@/components/Toast";
 import { PresenceSheet } from "@/components/PresenceSheet";
 import { PhoneEnrollTripwire } from "@/components/PhoneEnrollTripwire";
 import { ApprovalSheetHost } from "@/components/ApprovalSheet";
@@ -168,6 +168,11 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [errorsOpen, setErrorsOpen] = useState(false);
+  // A folded "N problems" toast opens the error log.
+  useEffect(() => {
+    setShowErrorLog(() => setErrorsOpen(true));
+    return () => setShowErrorLog(undefined);
+  }, []);
   // Focus mode: only the chat and the message box. It hides the workspace
   // rail, sidebar, tools rail and status bar without forgetting whether they
   // were open, so leaving it puts everything back.
