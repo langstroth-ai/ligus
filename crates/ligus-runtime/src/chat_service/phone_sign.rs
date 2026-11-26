@@ -328,6 +328,7 @@ impl ChatService {
                         option_index: *option_index,
                         by: actor.display_name.clone(),
                         at_ms: ligus_core::flow::now_ms(),
+                        ..Default::default()
                     }),
                 }
             }

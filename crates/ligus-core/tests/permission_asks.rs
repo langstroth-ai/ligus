@@ -73,6 +73,7 @@ fn answer(ask_id: Uuid, by: &str) -> FlowRecord {
         option_index: Some(0),
         by: by.into(),
         at_ms: 2,
+        ..Default::default()
     })
 }
 

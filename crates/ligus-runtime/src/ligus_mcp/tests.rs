@@ -405,7 +405,7 @@ async fn ask_pauses_and_resumes_with_answer() {
         .svc
         .lock()
         .unwrap()
-        .record_flow(w.chat, w.wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "postgres".into(), option_index: Some(1), by: "Alex".into(), at_ms: 1 }))
+        .record_flow(w.chat, w.wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "postgres".into(), option_index: Some(1), by: "Alex".into(), at_ms: 1, ..Default::default() }))
         .unwrap();
     let r = task.await.unwrap();
     assert!(!r.is_error, "{}", r.text);
@@ -646,7 +646,7 @@ async fn permission_escalation_needs_the_hosts_own_person() {
                 svc.add_member(chat, wid, member).unwrap();
                 svc.set_author_account(bob, "Bob", None);
             }
-            let answered = svc.record_flow(chat, wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "Allow once".into(), option_index: Some(0), by: "Alex".into(), at_ms: 1 }));
+            let answered = svc.record_flow(chat, wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "Allow once".into(), option_index: Some(0), by: "Alex".into(), at_ms: 1, ..Default::default() }));
             // The host's device writing as another member (Bob) is refused
             // by the fold outright: it isn't certified for Bob's account.
             if answerer != "bob" {
@@ -1357,7 +1357,7 @@ async fn the_host_never_takes_an_answer_to_someone_elses_ask_under_its_id() {
     {
         let mut svc = w.host.svc.lock().unwrap();
         svc.record_flow(w.chat, w.wid, FlowRecord::HumanAsk(theirs.clone())).unwrap();
-        svc.record_flow(w.chat, w.wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "Yes, deny".into(), option_index: Some(0), by: "Alex".into(), at_ms: 2 })).unwrap();
+        svc.record_flow(w.chat, w.wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "Yes, deny".into(), option_index: Some(0), by: "Alex".into(), at_ms: 2, ..Default::default() })).unwrap();
         assert!(svc.load(w.chat).unwrap().unwrap().flow.asks[&ask_id].answer.is_some(), "their ask took the answer");
     }
     let mine = ligus_core::flow::HumanAsk { question: "coder asks permission to run rm (execute). Allow it once?".into(), options: vec!["Allow once".into(), "Deny".into()], permission: true, ..theirs };

@@ -15,6 +15,7 @@ use ts_rs::TS;
 
 pub mod guards;
 pub use guards::*;
+pub mod ask_text;
 pub mod names;
 mod proposal_sets;
 pub use proposal_sets::{

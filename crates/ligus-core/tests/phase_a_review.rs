@@ -225,7 +225,7 @@ fn a_service_member_cannot_answer_as_a_human_by_stamping_itself_human() {
     w.admit("owner", "box", WorkspaceRole::Contributor);
     let chat = w.chat("owner", "c");
     let answer = SessionEvent::FlowRecorded {
-        record: FlowRecord::HumanAnswered(HumanAnswered { ask_id: Uuid::new_v4(), answer: "yes".into(), option_index: None, by: "box".into(), at_ms: 0 }),
+        record: FlowRecord::HumanAnswered(HumanAnswered { ask_id: Uuid::new_v4(), answer: "yes".into(), option_index: None, by: "box".into(), at_ms: 0, ..Default::default() }),
     };
     // Honestly stamped (Service): refused already.
     let honest = w.say(chat, "box", answer.clone());

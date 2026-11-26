@@ -1,0 +1,48 @@
+{
+  "context": "ligus-ask-digest-v1\\0",
+  "note": "digest = hex(SHA-256(context bytes ‖ askId as 16 raw bytes ‖ canonical payload)); payload is the envelope's payload JSON as signed (the fourth length-prefixed field of the hive-envelope-v3 preimage), parsed and re-serialized canonically: object keys sorted by UTF-16 code units, no whitespace, strings with RFC 8785 escapes (\\\" \\\\ \\b \\f \\n \\r \\t, other controls as lowercase \\u00xx, everything else literal UTF-8), integers in decimal. 'canonical' shows the bytes hashed.",
+  "cases": [
+    {
+      "name": "question",
+      "askId": "0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59",
+      "payload": "{\"kind\":\"flowRecorded\",\"record\":{\"type\":\"humanAsk\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"agentKey\":\"primary\",\"question\":\"Use Postgres or SQLite for the test fixtures?\",\"options\":[\"Postgres\",\"SQLite\"],\"expiresAtMs\":1764064931000,\"atMs\":1764064331000,\"v\":2,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]}}}",
+      "canonical": "{\"kind\":\"flowRecorded\",\"record\":{\"agentKey\":\"primary\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"atMs\":1764064331000,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]},\"expiresAtMs\":1764064931000,\"options\":[\"Postgres\",\"SQLite\"],\"question\":\"Use Postgres or SQLite for the test fixtures?\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"type\":\"humanAsk\",\"v\":2}}",
+      "digest": "943c77e0fb691093b8a46f59f170ec3cc4d58ce2b4c20de14b3c99c0c6b6b24e"
+    },
+    {
+      "name": "question re-encoded (keys reordered, spaces): same digest",
+      "askId": "0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59",
+      "payload": "{\n \"kind\": \"flowRecorded\",\n \"record\": {\n  \"agentKey\": \"primary\",\n  \"askId\": \"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\n  \"atMs\": 1764064331000,\n  \"audience\": {\n   \"kind\": \"people\",\n   \"memberIds\": [\n    \"ana\"\n   ]\n  },\n  \"expiresAtMs\": 1764064931000,\n  \"options\": [\n   \"Postgres\",\n   \"SQLite\"\n  ],\n  \"question\": \"Use Postgres or SQLite for the test fixtures?\",\n  \"turnId\": \"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\n  \"type\": \"humanAsk\",\n  \"v\": 2\n }\n}",
+      "canonical": "{\"kind\":\"flowRecorded\",\"record\":{\"agentKey\":\"primary\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"atMs\":1764064331000,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]},\"expiresAtMs\":1764064931000,\"options\":[\"Postgres\",\"SQLite\"],\"question\":\"Use Postgres or SQLite for the test fixtures?\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"type\":\"humanAsk\",\"v\":2}}",
+      "digest": "943c77e0fb691093b8a46f59f170ec3cc4d58ce2b4c20de14b3c99c0c6b6b24e"
+    },
+    {
+      "name": "options swapped",
+      "askId": "0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59",
+      "payload": "{\"kind\":\"flowRecorded\",\"record\":{\"type\":\"humanAsk\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"agentKey\":\"primary\",\"question\":\"Use Postgres or SQLite for the test fixtures?\",\"options\":[\"SQLite\",\"Postgres\"],\"expiresAtMs\":1764064931000,\"atMs\":1764064331000,\"v\":2,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]}}}",
+      "canonical": "{\"kind\":\"flowRecorded\",\"record\":{\"agentKey\":\"primary\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"atMs\":1764064331000,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]},\"expiresAtMs\":1764064931000,\"options\":[\"SQLite\",\"Postgres\"],\"question\":\"Use Postgres or SQLite for the test fixtures?\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"type\":\"humanAsk\",\"v\":2}}",
+      "digest": "9668cd58520e1479e7a689c883989b652f6e219a68e3d8e67ef67c83241387cc"
+    },
+    {
+      "name": "grant (escapes)",
+      "askId": "0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59",
+      "payload": "{\"kind\":\"flowRecorded\",\"record\":{\"type\":\"humanAsk\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"agentKey\":\"primary\",\"question\":\"Ligus asks to run cargo publish --dry-run\",\"options\":[\"Allow once\",\"Deny\"],\"expiresAtMs\":1764064931000,\"atMs\":1764064331000,\"v\":2,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]},\"permission\":true,\"effect\":{\"kind\":\"permission\",\"tool\":\"execute\",\"detail\":\"cargo publish --dry-run\\n\\t\\\"quoted\\\" \\\\ back \\u0001 ctl\",\"cwd\":\"/home/ana/shop\",\"hostDeviceId\":\"9a8b7c6d-5e4f-4321-8765-0fedcba98765\",\"presence\":\"none\"}}}",
+      "canonical": "{\"kind\":\"flowRecorded\",\"record\":{\"agentKey\":\"primary\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"atMs\":1764064331000,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]},\"effect\":{\"cwd\":\"/home/ana/shop\",\"detail\":\"cargo publish --dry-run\\n\\t\\\"quoted\\\" \\\\ back \\u0001 ctl\",\"hostDeviceId\":\"9a8b7c6d-5e4f-4321-8765-0fedcba98765\",\"kind\":\"permission\",\"presence\":\"none\",\"tool\":\"execute\"},\"expiresAtMs\":1764064931000,\"options\":[\"Allow once\",\"Deny\"],\"permission\":true,\"question\":\"Ligus asks to run cargo publish --dry-run\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"type\":\"humanAsk\",\"v\":2}}",
+      "digest": "e54e7baf8f4ff9415aac393b361998afb898aba7ae2a496a7aa1dd18e63a6351"
+    },
+    {
+      "name": "unicode",
+      "askId": "0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59",
+      "payload": "{\"kind\":\"flowRecorded\",\"record\":{\"type\":\"humanAsk\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"agentKey\":\"primary\",\"question\":\"Tést fixtures ✓ 𝄞?\",\"options\":[\"Postgres\",\"SQLite\"],\"expiresAtMs\":1764064931000,\"atMs\":1764064331000,\"v\":2,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]}}}",
+      "canonical": "{\"kind\":\"flowRecorded\",\"record\":{\"agentKey\":\"primary\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"atMs\":1764064331000,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]},\"expiresAtMs\":1764064931000,\"options\":[\"Postgres\",\"SQLite\"],\"question\":\"Tést fixtures ✓ 𝄞?\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"type\":\"humanAsk\",\"v\":2}}",
+      "digest": "ba7264c33c3272756e4e2a937a7ff72881a072066d7c6dbb46be0101cd394b5d"
+    },
+    {
+      "name": "unicode escaped on the wire: same digest",
+      "askId": "0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59",
+      "payload": "{\"kind\":\"flowRecorded\",\"record\":{\"type\":\"humanAsk\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"agentKey\":\"primary\",\"question\":\"T\\u00e9st fixtures \\u2713 \\ud834\\udd1e?\",\"options\":[\"Postgres\",\"SQLite\"],\"expiresAtMs\":1764064931000,\"atMs\":1764064331000,\"v\":2,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]}}}",
+      "canonical": "{\"kind\":\"flowRecorded\",\"record\":{\"agentKey\":\"primary\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"atMs\":1764064331000,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]},\"expiresAtMs\":1764064931000,\"options\":[\"Postgres\",\"SQLite\"],\"question\":\"Tést fixtures ✓ 𝄞?\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"type\":\"humanAsk\",\"v\":2}}",
+      "digest": "ba7264c33c3272756e4e2a937a7ff72881a072066d7c6dbb46be0101cd394b5d"
+    }
+  ]
+}
