@@ -109,17 +109,11 @@ fn protected_filters(plan: &EnforcementPlan) -> String {
         if r.parent() != Some(wt.as_path()) {
             continue;
         }
-        let Some(name) = r.file_name().map(|n| n.to_string_lossy().into_owned()) else {
-            continue;
-        };
+        let Some(name) = r.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
         if name.contains('"') {
             continue;
         }
-        p.push_str(&format!(
-            " (regex #\"^{}/(.*/)?{}(/.*)?$\")",
-            ci_regex(&wt_s),
-            ci_regex(&name)
-        ));
+        p.push_str(&format!(" (regex #\"^{}/(.*/)?{}(/.*)?$\")", ci_regex(&wt_s), ci_regex(&name)));
     }
     p
 }
@@ -161,19 +155,10 @@ const MACH_ALLOW_KEYCHAIN: &[&str] = &["com.apple.SecurityServer", "com.apple.se
 /// whose sign-in lives there). With the home denied (Phase C), only when the
 /// runtime's allow-list names it and no deny takes it back.
 fn keychain_reachable(plan: &EnforcementPlan) -> bool {
-    let denied = plan
-        .deny_read
-        .iter()
-        .any(|d| d.ends_with("Library/Keychains"));
+    let denied = plan.deny_read.iter().any(|d| d.ends_with("Library/Keychains"));
     match plan.home {
         None => !denied,
-        Some(_) => {
-            !denied
-                && plan
-                    .home_read
-                    .iter()
-                    .any(|d| d.ends_with("Library/Keychains"))
-        }
+        Some(_) => !denied && plan.home_read.iter().any(|d| d.ends_with("Library/Keychains")),
     }
 }
 
@@ -203,9 +188,7 @@ fn ancestors_within(home: &Path, p: &Path) -> Vec<std::path::PathBuf> {
 /// worktree, the turn's dirs, the writable extras and `home_read`; their
 /// ancestors keep their metadata.
 fn home_rules(plan: &EnforcementPlan) -> String {
-    let Some(home) = plan.home.as_ref().map(|h| canonical(h)) else {
-        return String::new();
-    };
+    let Some(home) = plan.home.as_ref().map(|h| canonical(h)) else { return String::new() };
     let mut p = format!("(deny file-read* file-write* (subpath {}))\n", q(&home));
     let mut open: Vec<std::path::PathBuf> = vec![canonical(&plan.worktree), canonical(&plan.tmp)];
     open.extend(plan.write_extra.iter().map(|w| canonical(w)));
@@ -224,12 +207,7 @@ fn home_rules(plan: &EnforcementPlan) -> String {
     }
     // Writes the plan grants under the home (the worktree, its extras) come
     // back; reads above are read-only otherwise.
-    let mut writes: Vec<std::path::PathBuf> = plan
-        .write_extra
-        .iter()
-        .map(|w| canonical(w))
-        .filter(|w| w.starts_with(&home))
-        .collect();
+    let mut writes: Vec<std::path::PathBuf> = plan.write_extra.iter().map(|w| canonical(w)).filter(|w| w.starts_with(&home)).collect();
     if plan.worktree_writable && canonical(&plan.worktree).starts_with(&home) {
         writes.push(canonical(&plan.worktree));
     }
@@ -259,16 +237,10 @@ fn home_rules(plan: &EnforcementPlan) -> String {
 /// (the worktree, `allow_read`), denied again, with the allowed paths inside
 /// them (and this turn's own dir) opened after.
 fn inner_denies(plan: &EnforcementPlan) -> String {
-    let opened: Vec<std::path::PathBuf> = std::iter::once(&plan.worktree)
-        .chain(plan.allow_read.iter())
-        .map(|o| canonical(o))
-        .collect();
+    let opened: Vec<std::path::PathBuf> = std::iter::once(&plan.worktree).chain(plan.allow_read.iter()).map(|o| canonical(o)).collect();
     let mut hard: Vec<std::path::PathBuf> = plan.deny_read.iter().map(|d| canonical(d)).collect();
     hard.extend(super::sibling_turns_root(&plan.tmp).map(|r| canonical(&r)));
-    let inner: Vec<std::path::PathBuf> = hard
-        .into_iter()
-        .filter(|d| opened.iter().any(|o| d.starts_with(o) && d != o))
-        .collect();
+    let inner: Vec<std::path::PathBuf> = hard.into_iter().filter(|d| opened.iter().any(|o| d.starts_with(o) && d != o)).collect();
     if inner.is_empty() {
         return String::new();
     }
@@ -278,12 +250,7 @@ fn inner_denies(plan: &EnforcementPlan) -> String {
     }
     p.push_str(")\n");
     let inside = |b: &Path| inner.iter().any(|d| b.starts_with(d));
-    let back: Vec<std::path::PathBuf> = plan
-        .allow_read
-        .iter()
-        .map(|a| canonical(a))
-        .filter(|b| inside(b))
-        .collect();
+    let back: Vec<std::path::PathBuf> = plan.allow_read.iter().map(|a| canonical(a)).filter(|b| inside(b)).collect();
     if !back.is_empty() {
         p.push_str("(allow file-read*");
         for b in &back {
@@ -293,10 +260,7 @@ fn inner_denies(plan: &EnforcementPlan) -> String {
     }
     let tmp = canonical(&plan.tmp);
     if inside(&tmp) {
-        p.push_str(&format!(
-            "(allow file-read* file-write* (subpath {}))\n",
-            q(&tmp)
-        ));
+        p.push_str(&format!("(allow file-read* file-write* (subpath {}))\n", q(&tmp)));
     }
     p
 }
@@ -340,10 +304,7 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     // Readable again: the turn's directory and explicitly allowed paths
     // (a checkout under the data dir). Metadata of the denied dirs' parents
     // stays readable so `cd`/`stat` along the path work.
-    p.push_str(&format!(
-        "(allow file-read* (subpath {})",
-        q(&plan.worktree)
-    ));
+    p.push_str(&format!("(allow file-read* (subpath {})", q(&plan.worktree)));
     for a in &plan.allow_read {
         p.push_str(&format!(" (subpath {})", q(a)));
     }
@@ -358,15 +319,9 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     if plan.worktree_writable {
         // Re-allow writes in the worktree if it sits inside a denied dir,
         // then re-deny its protected parts.
-        let inside_denied = plan
-            .deny_read
-            .iter()
-            .any(|d| canonical(&plan.worktree).starts_with(canonical(d)));
+        let inside_denied = plan.deny_read.iter().any(|d| canonical(&plan.worktree).starts_with(canonical(d)));
         if inside_denied {
-            p.push_str(&format!(
-                "(allow file-write* (subpath {}))\n",
-                q(&plan.worktree)
-            ));
+            p.push_str(&format!("(allow file-write* (subpath {}))\n", q(&plan.worktree)));
             if !plan.read_only.is_empty() {
                 p.push_str(&format!("(deny file-write*{})\n", protected_filters(plan)));
             }
@@ -430,16 +385,11 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
         }
         (EgressPlan::Proxy { .. }, Some(port)) => {
             p.push_str("(deny network*)\n");
-            p.push_str(&format!(
-                "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
-            ));
+            p.push_str(&format!("(allow network-outbound (remote ip \"localhost:{port}\"))\n"));
             // Loopback allow-list entries (a local model server) are direct.
             if let EgressPlan::Proxy { allow } = &plan.egress {
                 for hp in allow.iter().filter(|h| h.is_loopback()) {
-                    p.push_str(&format!(
-                        "(allow network-outbound (remote ip \"localhost:{}\"))\n",
-                        hp.port
-                    ));
+                    p.push_str(&format!("(allow network-outbound (remote ip \"localhost:{}\"))\n", hp.port));
                 }
             }
         }
@@ -447,10 +397,7 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     }
     // The turn's Ligus MCP socket (D.3.2): the one extra connection allowed.
     if let Some(sock) = &plan.ligus_mcp_socket {
-        p.push_str(&format!(
-            "(allow network-outbound (remote unix-socket (path-literal {})))\n",
-            q(sock)
-        ));
+        p.push_str(&format!("(allow network-outbound (remote unix-socket (path-literal {})))\n", q(sock)));
     }
     p
 }
@@ -460,27 +407,13 @@ impl TurnExecutor for Seatbelt {
         ExecutorKind::Seatbelt
     }
 
-    fn confine(
-        &self,
-        program: &OsStr,
-        args: &[OsString],
-        cwd: &Path,
-        plan: &EnforcementPlan,
-        proxy: Option<&EgressProxy>,
-    ) -> io::Result<std::process::Command> {
+    fn confine(&self, program: &OsStr, args: &[OsString], cwd: &Path, plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> io::Result<std::process::Command> {
         let prof = profile(plan, proxy.map(EgressProxy::port));
         // The profile goes in the turn's 0700 scratch dir (never the repo).
         let path = plan.tmp.join(".ligus-sandbox.sb");
         crate::private_file::write_private_atomic(&path, prof.as_bytes())?;
         let mut c = ligus_core::process_util::command(SANDBOX_EXEC);
-        c.arg("-f")
-            .arg(&path)
-            .arg("--")
-            .arg(program)
-            .args(args)
-            .current_dir(cwd)
-            .env_clear()
-            .envs(plan_env(plan, proxy));
+        c.arg("-f").arg(&path).arg("--").arg(program).args(args).current_dir(cwd).env_clear().envs(plan_env(plan, proxy));
         super::new_session(&mut c);
         Ok(c)
     }

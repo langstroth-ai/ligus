@@ -68,11 +68,7 @@ pub struct SealedBlob {
 
 /// Derive a 32-byte key + 12-byte nonce from the ECDH shared secret, bound to
 /// both public keys so the same shared secret can't be replayed across pairs.
-fn derive_key_nonce(
-    shared: &[u8],
-    ephemeral_pub: &[u8],
-    recipient_pub: &[u8],
-) -> ([u8; 32], [u8; 12]) {
+fn derive_key_nonce(shared: &[u8], ephemeral_pub: &[u8], recipient_pub: &[u8]) -> ([u8; 32], [u8; 12]) {
     let mut salt = Vec::with_capacity(64);
     salt.extend_from_slice(ephemeral_pub);
     salt.extend_from_slice(recipient_pub);
@@ -94,9 +90,7 @@ fn derive_key_nonce(
 /// [`open`] refuses a low-order ephemeral key: the same check the tunnel's
 /// Noise handshake makes on every DH output.
 pub fn seal(recipient_public: &[u8], plaintext: &[u8]) -> Result<SealedBlob, CryptoError> {
-    let recipient: [u8; 32] = recipient_public
-        .try_into()
-        .map_err(|_| CryptoError::BadKey)?;
+    let recipient: [u8; 32] = recipient_public.try_into().map_err(|_| CryptoError::BadKey)?;
     let recipient_pk = PublicKey::from(recipient);
 
     let mut eph_seed = [0u8; 32];
@@ -300,20 +294,14 @@ mod tests {
     ];
 
     fn unhex(s: &str) -> [u8; 32] {
-        let v: Vec<u8> = (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-            .collect();
+        let v: Vec<u8> = (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect();
         v.try_into().unwrap()
     }
 
     #[test]
     fn seal_refuses_a_low_order_recipient() {
         for p in LOW_ORDER {
-            assert!(
-                seal(&unhex(p), b"workspace-key-payload-1234567890").is_err(),
-                "sealed to low-order point {p}"
-            );
+            assert!(seal(&unhex(p), b"workspace-key-payload-1234567890").is_err(), "sealed to low-order point {p}");
         }
     }
 
@@ -327,17 +315,9 @@ mod tests {
         for p in LOW_ORDER {
             let eph = unhex(p);
             let (key, nonce) = derive_key_nonce(&[0u8; 32], &eph, &recipient);
-            let ciphertext = ChaCha20Poly1305::new(&Key::from(key))
-                .encrypt(&Nonce::from(nonce), &b"forged"[..])
-                .unwrap();
-            let blob = SealedBlob {
-                ephemeral_public: eph.to_vec(),
-                ciphertext,
-            };
-            assert!(
-                open(&device, &blob).is_err(),
-                "opened a blob with low-order ephemeral {p}"
-            );
+            let ciphertext = ChaCha20Poly1305::new(&Key::from(key)).encrypt(&Nonce::from(nonce), &b"forged"[..]).unwrap();
+            let blob = SealedBlob { ephemeral_public: eph.to_vec(), ciphertext };
+            assert!(open(&device, &blob).is_err(), "opened a blob with low-order ephemeral {p}");
         }
     }
 
@@ -345,11 +325,7 @@ mod tests {
     fn wrong_device_cannot_open() {
         let alice = KeyAgreementKeypair::generate().unwrap();
         let bob = KeyAgreementKeypair::generate().unwrap();
-        let blob = seal(
-            &alice.public_key_bytes(),
-            b"workspace-key-payload-1234567890",
-        )
-        .unwrap();
+        let blob = seal(&alice.public_key_bytes(), b"workspace-key-payload-1234567890").unwrap();
         assert!(open(&bob, &blob).is_err());
     }
 
@@ -395,24 +371,12 @@ mod tests {
     #[test]
     fn crypto_constants_are_frozen() {
         // b"hive-workspace-key-seal-v1"
-        assert_eq!(
-            hex(HKDF_INFO),
-            "686976652d776f726b73706163652d6b65792d7365616c2d7631"
-        );
+        assert_eq!(hex(HKDF_INFO), "686976652d776f726b73706163652d6b65792d7365616c2d7631");
         // b"hive-workspace-key-argon2id"
-        assert_eq!(
-            hex(ARGON2_SALT),
-            "686976652d776f726b73706163652d6b65792d6172676f6e326964"
-        );
-        assert_eq!(
-            hex(&derive_workspace_key("pinned passphrase")),
-            "60cc65fc19c112e3699959d5a56a708fc6ac23f4362d761718dfd7d3067f3ec2"
-        );
+        assert_eq!(hex(ARGON2_SALT), "686976652d776f726b73706163652d6b65792d6172676f6e326964");
+        assert_eq!(hex(&derive_workspace_key("pinned passphrase")), "60cc65fc19c112e3699959d5a56a708fc6ac23f4362d761718dfd7d3067f3ec2");
         let (key, nonce) = derive_key_nonce(&[7u8; 32], &[1u8; 32], &[2u8; 32]);
-        assert_eq!(
-            hex(&key),
-            "2362b77b54fa70c7b4e1c7db9cb7efdefacc3840aaeee8cd64fd4a0d8f52d58f"
-        );
+        assert_eq!(hex(&key), "2362b77b54fa70c7b4e1c7db9cb7efdefacc3840aaeee8cd64fd4a0d8f52d58f");
         assert_eq!(hex(&nonce), "642b977119bafd3df8edc1f0");
     }
 

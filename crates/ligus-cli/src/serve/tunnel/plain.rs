@@ -28,12 +28,7 @@ pub fn markdown_to_plain(md: &str) -> String {
         let line = lines[i];
         let trimmed = line.trim_start();
         if let Some(open) = &fence {
-            if trimmed.starts_with(open.as_str())
-                && trimmed
-                    .trim_start_matches(open.chars().next().unwrap_or('`'))
-                    .trim()
-                    .is_empty()
-            {
+            if trimmed.starts_with(open.as_str()) && trimmed.trim_start_matches(open.chars().next().unwrap_or('`')).trim().is_empty() {
                 fence = None;
             } else {
                 out.push(line.trim_end().to_string());
@@ -56,12 +51,7 @@ pub fn markdown_to_plain(md: &str) -> String {
                 let parts: Vec<String> = cells
                     .iter()
                     .enumerate()
-                    .map(|(k, c)| {
-                        (
-                            header.get(k).map(String::as_str).unwrap_or(""),
-                            inline_plain(c),
-                        )
-                    })
+                    .map(|(k, c)| (header.get(k).map(String::as_str).unwrap_or(""), inline_plain(c)))
                     .filter(|(_, v)| !v.is_empty())
                     .map(|(h, v)| if h.is_empty() { v } else { format!("{h}: {v}") })
                     .collect();
@@ -72,13 +62,7 @@ pub fn markdown_to_plain(md: &str) -> String {
             }
             if rows.is_empty() {
                 // A header with no body: show the header names.
-                rows.push(
-                    header
-                        .into_iter()
-                        .filter(|h| !h.is_empty())
-                        .collect::<Vec<_>>()
-                        .join(" · "),
-                );
+                rows.push(header.into_iter().filter(|h| !h.is_empty()).collect::<Vec<_>>().join(" · "));
             }
             let n = rows.len();
             for (k, r) in rows.into_iter().enumerate() {
@@ -139,9 +123,7 @@ fn is_separator_row(line: &str) -> bool {
     !cells.is_empty()
         && cells.iter().all(|c| {
             let c = c.trim();
-            !c.is_empty()
-                && c.contains('-')
-                && c.chars().all(|ch| ch == '-' || ch == ':' || ch == ' ')
+            !c.is_empty() && c.contains('-') && c.chars().all(|ch| ch == '-' || ch == ':' || ch == ' ')
         })
 }
 
@@ -282,10 +264,7 @@ pub fn inline_plain(s: &str) -> String {
             },
             '<' => {
                 // Autolink <https://…> / <mailto:…>.
-                let end = c[i + 1..]
-                    .iter()
-                    .position(|x| *x == '>' || x.is_whitespace())
-                    .map(|p| p + i + 1);
+                let end = c[i + 1..].iter().position(|x| *x == '>' || x.is_whitespace()).map(|p| p + i + 1);
                 match end {
                     Some(e) if c[e] == '>' => {
                         let inner: String = c[i + 1..e].iter().collect();
@@ -408,48 +387,24 @@ mod tests {
     #[test]
     fn code_fences_drop_but_code_stays() {
         let md = "Run:\n```bash\ncargo test -p ligus-cli\n```\n~~~\nx\n~~~\nok";
-        assert_eq!(
-            markdown_to_plain(md),
-            "Run:\ncargo test -p ligus-cli\nx\nok"
-        );
+        assert_eq!(markdown_to_plain(md), "Run:\ncargo test -p ligus-cli\nx\nok");
     }
 
     #[test]
     fn inline_markup_is_removed_but_text_is_kept() {
-        assert_eq!(
-            inline_plain("**bold** *it* _em_ __strong__ ~~gone~~ `code`"),
-            "bold it em strong gone code"
-        );
-        assert_eq!(
-            inline_plain("see [the docs](https://x.test/a_(b)) and ![logo](l.png)"),
-            "see the docs and logo"
-        );
-        assert_eq!(
-            inline_plain("<https://example.com> \\*literal\\*"),
-            "https://example.com *literal*"
-        );
+        assert_eq!(inline_plain("**bold** *it* _em_ __strong__ ~~gone~~ `code`"), "bold it em strong gone code");
+        assert_eq!(inline_plain("see [the docs](https://x.test/a_(b)) and ![logo](l.png)"), "see the docs and logo");
+        assert_eq!(inline_plain("<https://example.com> \\*literal\\*"), "https://example.com *literal*");
         // Things that look like markup but are text.
-        assert_eq!(
-            inline_plain("snake_case_name 2 * 3 ~5 min a_b"),
-            "snake_case_name 2 * 3 ~5 min a_b"
-        );
+        assert_eq!(inline_plain("snake_case_name 2 * 3 ~5 min a_b"), "snake_case_name 2 * 3 ~5 min a_b");
         assert_eq!(inline_plain("``a `tick` b``"), "a `tick` b");
-        assert_eq!(
-            inline_plain("unclosed `tick and [bracket"),
-            "unclosed `tick and [bracket"
-        );
+        assert_eq!(inline_plain("unclosed `tick and [bracket"), "unclosed `tick and [bracket");
         assert_eq!(inline_plain("emoji 🐝 ✅ stay"), "emoji 🐝 ✅ stay");
     }
 
     #[test]
     fn plain_text_passes_through() {
-        assert_eq!(
-            markdown_to_plain("Done: the build is green."),
-            "Done: the build is green."
-        );
-        assert_eq!(
-            markdown_to_plain("a | b without a separator"),
-            "a | b without a separator"
-        );
+        assert_eq!(markdown_to_plain("Done: the build is green."), "Done: the build is green.");
+        assert_eq!(markdown_to_plain("a | b without a separator"), "a | b without a separator");
     }
 }

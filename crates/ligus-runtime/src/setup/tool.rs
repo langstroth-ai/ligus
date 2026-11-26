@@ -6,12 +6,8 @@ use ligus_core::WorkspaceRole;
 use uuid::Uuid;
 
 use super::agent::ops_code;
-use super::validate::{
-    arg_looks_secret, mcp_id_problem, origin, split_command, url_problem, value,
-};
-use super::{
-    exit, gate, Choice, Ctx, Field, FieldKind, Inputs, Progress, Secrets, SetupOps, StepDef,
-};
+use super::validate::{arg_looks_secret, mcp_id_problem, origin, split_command, url_problem, value};
+use super::{exit, gate, Choice, Ctx, Field, FieldKind, Inputs, Progress, Secrets, SetupOps, StepDef};
 use crate::mcp::{McpServerSpec, McpTransport};
 
 pub(crate) fn status(ops: &dyn SetupOps) -> (Progress, String) {
@@ -25,11 +21,7 @@ pub(crate) fn status(ops: &dyn SetupOps) -> (Progress, String) {
 
 pub(crate) fn steps(ops: &dyn SetupOps, _inputs: &Inputs) -> Vec<StepDef> {
     let mut reach = vec![Choice::new("all", "Every agent")];
-    reach.extend(
-        ops.agents()
-            .into_iter()
-            .map(|a| Choice::new(a.name.clone(), format!("@{}", a.name))),
-    );
+    reach.extend(ops.agents().into_iter().map(|a| Choice::new(a.name.clone(), format!("@{}", a.name))));
     vec![
         StepDef::input(
             "server",
@@ -105,23 +97,11 @@ fn spec_of(ctx: &mut Ctx, inputs: &Inputs, fields: &[Field]) -> Option<McpServer
         }
         _ => {
             let Some(words) = split_command(value(inputs, fields, "command").unwrap_or("")) else {
-                ctx.fail(
-                    "input.command",
-                    "command",
-                    "a quote isn't closed",
-                    "check the quoting of --command",
-                    exit::USAGE,
-                );
+                ctx.fail("input.command", "command", "a quote isn't closed", "check the quoting of --command", exit::USAGE);
                 return None;
             };
             let Some((cmd, args)) = words.split_first().filter(|(c, _)| !c.is_empty()) else {
-                ctx.fail(
-                    "input.command",
-                    "command",
-                    "--command is empty",
-                    "pass --command \"<program> <args>\"",
-                    exit::USAGE,
-                );
+                ctx.fail("input.command", "command", "--command is empty", "pass --command \"<program> <args>\"", exit::USAGE);
                 return None;
             };
             let mut prev: Option<&str> = None;
@@ -138,10 +118,7 @@ fn spec_of(ctx: &mut Ctx, inputs: &Inputs, fields: &[Field]) -> Option<McpServer
                 }
                 prev = Some(a);
             }
-            McpTransport::Stdio {
-                command: cmd.clone(),
-                args: args.to_vec(),
-            }
+            McpTransport::Stdio { command: cmd.clone(), args: args.to_vec() }
         }
     };
     let mut spec = McpServerSpec::new(id, transport);
@@ -151,41 +128,21 @@ fn spec_of(ctx: &mut Ctx, inputs: &Inputs, fields: &[Field]) -> Option<McpServer
 
 fn target(t: &McpTransport) -> String {
     match t {
-        McpTransport::Stdio { command, args } => std::iter::once(command.as_str())
-            .chain(args.iter().map(String::as_str))
-            .collect::<Vec<_>>()
-            .join(" "),
+        McpTransport::Stdio { command, args } => std::iter::once(command.as_str()).chain(args.iter().map(String::as_str)).collect::<Vec<_>>().join(" "),
         McpTransport::Http { url } => origin(url),
     }
 }
 
 pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, secrets: &Secrets) {
-    let fields: Vec<Field> = steps(ops, inputs)
-        .into_iter()
-        .flat_map(|s| s.fields)
-        .collect();
-    let Some(spec) = spec_of(ctx, inputs, &fields) else {
-        return;
-    };
+    let fields: Vec<Field> = steps(ops, inputs).into_iter().flat_map(|s| s.fields).collect();
+    let Some(spec) = spec_of(ctx, inputs, &fields) else { return };
     let token = secrets.get("token");
     if token.is_some() && !matches!(spec.transport, McpTransport::Http { .. }) {
-        return ctx.fail(
-            "input.token",
-            "token",
-            "a token is for a URL server",
-            "drop --token, or use --kind url",
-            exit::USAGE,
-        );
+        return ctx.fail("input.token", "token", "a token is for a URL server", "drop --token, or use --kind url", exit::USAGE);
     }
     if let Some(t) = token {
         if let Err(e) = crate::mcp::normalize_bearer_token(t) {
-            return ctx.fail(
-                "input.token",
-                "token",
-                e,
-                "paste the token alone, without 'Bearer '",
-                exit::USAGE,
-            );
+            return ctx.fail("input.token", "token", e, "paste the token alone, without 'Bearer '", exit::USAGE);
         }
     }
 
@@ -205,11 +162,7 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, secret
     let reach_raw = value(inputs, &fields, "reach").unwrap_or("all").to_string();
     let mut reach: Vec<Uuid> = Vec::new();
     let mut names = Vec::new();
-    for w in reach_raw
-        .split(',')
-        .map(str::trim)
-        .filter(|w| !w.is_empty())
-    {
+    for w in reach_raw.split(',').map(str::trim).filter(|w| !w.is_empty()) {
         if w == "all" {
             continue;
         }
@@ -221,32 +174,14 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, secret
                     names.push(format!("@{}", a.name));
                 }
             }
-            None => {
-                return ctx.fail(
-                    "input.reach",
-                    "agents",
-                    format!("no agent named '{n}'"),
-                    "ligus agents lists them; or pass --reach all",
-                    exit::USAGE,
-                )
-            }
+            None => return ctx.fail("input.reach", "agents", format!("no agent named '{n}'"), "ligus agents lists them; or pass --reach all", exit::USAGE),
         }
     }
     if reach_raw.split(',').any(|w| w.trim() == "all") && !reach.is_empty() {
-        return ctx.fail(
-            "input.reach",
-            "agents",
-            "'all' and named agents together",
-            "pass --reach all, or a list of agent names",
-            exit::USAGE,
-        );
+        return ctx.fail("input.reach", "agents", "'all' and named agents together", "pass --reach all, or a list of agent names", exit::USAGE);
     }
     reach.sort();
-    let reach_text = if reach.is_empty() {
-        "every agent".to_string()
-    } else {
-        names.join(", ")
-    };
+    let reach_text = if reach.is_empty() { "every agent".to_string() } else { names.join(", ") };
 
     // Already connected the same way: nothing to do.
     if let Some(have) = ops.mcp_servers().into_iter().find(|s| s.id == spec.id) {
@@ -256,82 +191,44 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, secret
             a == reach
         };
         if same && have.enabled && (token.is_none() || have.has_secret) {
-            ctx.ok(
-                "server",
-                "server",
-                format!("'{}' is already connected for {reach_text}", spec.id),
-            );
+            ctx.ok("server", "server", format!("'{}' is already connected for {reach_text}", spec.id));
             return ctx.done();
         }
         return ctx.fail(
             "input.id",
             "name",
-            format!(
-                "a server named '{}' already exists, set up differently",
-                spec.id
-            ),
+            format!("a server named '{}' already exists, set up differently", spec.id),
             "pick another --id, or change that server in Settings > Tools",
             exit::USAGE,
         );
     }
-    ctx.ok(
-        "server",
-        "server",
-        format!("{} ({})", spec.id, target(&spec.transport)),
-    );
+    ctx.ok("server", "server", format!("{} ({})", spec.id, target(&spec.transport)));
 
     // Handshake on the unsaved spec, under the agent sandbox.
     if ctx.cancelled() {
         return;
     }
     if ctx.dry_run() {
-        ctx.skip(
-            "handshake",
-            "handshake",
-            "would start the server and list its tools",
-        );
-        ctx.skip(
-            "write",
-            "save",
-            format!("would save '{}' for {reach_text}", spec.id),
-        );
+        ctx.skip("handshake", "handshake", "would start the server and list its tools");
+        ctx.skip("write", "save", format!("would save '{}' for {reach_text}", spec.id));
         return ctx.done();
     }
     match ops.mcp_handshake(&spec, token) {
         Ok(tools) => {
             ctx.ok("handshake", "handshake", format!("{} tools", tools.len()));
-            let shells: Vec<String> = tools
-                .iter()
-                .filter(|t| crate::mcp::is_shell_tool(t))
-                .cloned()
-                .collect();
+            let shells: Vec<String> = tools.iter().filter(|t| crate::mcp::is_shell_tool(t)).cloned().collect();
             if !shells.is_empty() {
                 ctx.warn(
                     "handshake.shell",
                     "shell tools",
-                    format!(
-                        "it offers shell tools ({}): only turns that have the shell get them",
-                        shells.join(", ")
-                    ),
+                    format!("it offers shell tools ({}): only turns that have the shell get them", shells.join(", ")),
                     None,
                 );
             }
         }
         Err(e) => {
-            let code = if matches!(spec.transport, McpTransport::Http { .. })
-                && matches!(e, super::OpsError::Offline(_))
-            {
-                exit::OFFLINE
-            } else {
-                ops_code(&e)
-            };
-            return ctx.fail(
-                "handshake",
-                "handshake",
-                e.to_string(),
-                "check the command or URL (and the token), then run this again",
-                code,
-            );
+            let code = if matches!(spec.transport, McpTransport::Http { .. }) && matches!(e, super::OpsError::Offline(_)) { exit::OFFLINE } else { ops_code(&e) };
+            return ctx.fail("handshake", "handshake", e.to_string(), "check the command or URL (and the token), then run this again", code);
         }
     }
 
@@ -341,29 +238,14 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, secret
     }
     if let (Some(t), McpTransport::Http { url }) = (token, &spec.transport) {
         if let Err(e) = ops.put_mcp_secret(&spec.id, url, t) {
-            return ctx.fail(
-                "token",
-                "token",
-                format!("couldn't save the token: {e}"),
-                "ligus doctor checks the secret store",
-                ops_code(&e),
-            );
+            return ctx.fail("token", "token", format!("couldn't save the token: {e}"), "ligus doctor checks the secret store", ops_code(&e));
         }
         let (id, url) = (spec.id.clone(), url.clone());
-        ctx.undo(
-            "the token",
-            Box::new(move |o| o.delete_mcp_secret(&id, &url)),
-        );
+        ctx.undo("the token", Box::new(move |o| o.delete_mcp_secret(&id, &url)));
         ctx.ok("token", "token", "saved in this device's secret store");
     }
     if let Err(e) = ops.add_mcp_server(&spec, &reach) {
-        return ctx.fail(
-            "write",
-            "save",
-            format!("couldn't save '{}': {e}", spec.id),
-            "fix what it says and run this again",
-            ops_code(&e),
-        );
+        return ctx.fail("write", "save", format!("couldn't save '{}': {e}", spec.id), "fix what it says and run this again", ops_code(&e));
     }
     ctx.commit();
     ctx.ok("write", "save", format!("'{}' for {reach_text}", spec.id));
@@ -373,12 +255,6 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, secret
             ctx.result("serverId", spec.id.clone());
             ctx.done();
         }
-        _ => ctx.fail(
-            "verify",
-            "verify",
-            format!("'{}' isn't listed as enabled", spec.id),
-            "Settings > Tools lists the servers",
-            exit::FAILED,
-        ),
+        _ => ctx.fail("verify", "verify", format!("'{}' isn't listed as enabled", spec.id), "Settings > Tools lists the servers", exit::FAILED),
     }
 }

@@ -115,11 +115,7 @@ pub struct ThrottlePolicy {
 
 impl Default for ThrottlePolicy {
     fn default() -> Self {
-        Self {
-            background_pct: 70,
-            workflow_pct: 85,
-            stagger_pct: 8,
-        }
+        Self { background_pct: 70, workflow_pct: 85, stagger_pct: 8 }
     }
 }
 
@@ -133,41 +129,19 @@ impl ThrottlePolicy {
             TurnPriority::Background => self.background_pct,
         } as i32;
         let spread = self.stagger_pct as i32;
-        let jitter = if spread == 0 {
-            0
-        } else {
-            (fnv(agent_key) % (spread as u64 + 1)) as i32 - spread / 2
-        };
+        let jitter = if spread == 0 { 0 } else { (fnv(agent_key) % (spread as u64 + 1)) as i32 - spread / 2 };
         // Workflows always keep at least the slack interactive turns need.
-        let cap = if priority == TurnPriority::Workflow {
-            95
-        } else {
-            99
-        };
+        let cap = if priority == TurnPriority::Workflow { 95 } else { 99 };
         Some((base + jitter).clamp(1, cap) as u8)
     }
 
     /// Whether a turn should wait, and why.
-    pub fn decide(
-        &self,
-        priority: TurnPriority,
-        agent_key: &str,
-        window: Option<&PlanWindow>,
-        now: i64,
-    ) -> ThrottleDecision {
-        let Some(threshold) = self.threshold(priority, agent_key) else {
-            return ThrottleDecision::Run;
-        };
-        let Some(w) = window else {
-            return ThrottleDecision::Run;
-        };
+    pub fn decide(&self, priority: TurnPriority, agent_key: &str, window: Option<&PlanWindow>, now: i64) -> ThrottleDecision {
+        let Some(threshold) = self.threshold(priority, agent_key) else { return ThrottleDecision::Run };
+        let Some(w) = window else { return ThrottleDecision::Run };
         let pct = w.effective_pct(now);
         if pct >= threshold {
-            ThrottleDecision::Defer {
-                utilization_pct: pct,
-                threshold_pct: threshold,
-                resets_at: w.resets_at,
-            }
+            ThrottleDecision::Defer { utilization_pct: pct, threshold_pct: threshold, resets_at: w.resets_at }
         } else {
             ThrottleDecision::Run
         }
@@ -177,11 +151,7 @@ impl ThrottlePolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThrottleDecision {
     Run,
-    Defer {
-        utilization_pct: u8,
-        threshold_pct: u8,
-        resets_at: Option<i64>,
-    },
+    Defer { utilization_pct: u8, threshold_pct: u8, resets_at: Option<i64> },
 }
 
 fn fnv(s: &str) -> u64 {
@@ -198,85 +168,40 @@ mod tests {
     use super::*;
 
     fn w(status: WindowStatus, pct: Option<u8>) -> PlanWindow {
-        PlanWindow {
-            status,
-            utilization_pct: pct,
-            resets_at: Some(10_000),
-            window: Some("five_hour".into()),
-            observed_at: 0,
-        }
+        PlanWindow { status, utilization_pct: pct, resets_at: Some(10_000), window: Some("five_hour".into()), observed_at: 0 }
     }
 
     #[test]
     fn the_brood_always_runs() {
         let p = ThrottlePolicy::default();
-        for s in [
-            WindowStatus::Allowed,
-            WindowStatus::Warning,
-            WindowStatus::Rejected,
-        ] {
-            assert_eq!(
-                p.decide(TurnPriority::Interactive, "a", Some(&w(s, Some(100))), 0),
-                ThrottleDecision::Run
-            );
+        for s in [WindowStatus::Allowed, WindowStatus::Warning, WindowStatus::Rejected] {
+            assert_eq!(p.decide(TurnPriority::Interactive, "a", Some(&w(s, Some(100))), 0), ThrottleDecision::Run);
         }
     }
 
     #[test]
     fn background_backs_off_before_workflows() {
-        let p = ThrottlePolicy {
-            stagger_pct: 0,
-            ..Default::default()
-        };
+        let p = ThrottlePolicy { stagger_pct: 0, ..Default::default() };
         let at = |pct| Some(w(WindowStatus::Allowed, Some(pct)));
-        assert_eq!(
-            p.decide(TurnPriority::Background, "a", at(69).as_ref(), 0),
-            ThrottleDecision::Run
-        );
-        assert!(matches!(
-            p.decide(TurnPriority::Background, "a", at(70).as_ref(), 0),
-            ThrottleDecision::Defer { .. }
-        ));
-        assert_eq!(
-            p.decide(TurnPriority::Workflow, "a", at(80).as_ref(), 0),
-            ThrottleDecision::Run
-        );
-        assert!(matches!(
-            p.decide(TurnPriority::Workflow, "a", at(85).as_ref(), 0),
-            ThrottleDecision::Defer { .. }
-        ));
+        assert_eq!(p.decide(TurnPriority::Background, "a", at(69).as_ref(), 0), ThrottleDecision::Run);
+        assert!(matches!(p.decide(TurnPriority::Background, "a", at(70).as_ref(), 0), ThrottleDecision::Defer { .. }));
+        assert_eq!(p.decide(TurnPriority::Workflow, "a", at(80).as_ref(), 0), ThrottleDecision::Run);
+        assert!(matches!(p.decide(TurnPriority::Workflow, "a", at(85).as_ref(), 0), ThrottleDecision::Defer { .. }));
         // No signal, no throttle.
-        assert_eq!(
-            p.decide(TurnPriority::Background, "a", None, 0),
-            ThrottleDecision::Run
-        );
+        assert_eq!(p.decide(TurnPriority::Background, "a", None, 0), ThrottleDecision::Run);
     }
 
     #[test]
     fn thresholds_are_staggered_per_agent_and_stable() {
         let p = ThrottlePolicy::default();
-        let ts: std::collections::BTreeSet<u8> = (0..40)
-            .map(|i| {
-                p.threshold(TurnPriority::Background, &format!("agent-{i}"))
-                    .unwrap()
-            })
-            .collect();
+        let ts: std::collections::BTreeSet<u8> =
+            (0..40).map(|i| p.threshold(TurnPriority::Background, &format!("agent-{i}")).unwrap()).collect();
         assert!(ts.len() > 3, "agents back off at different points: {ts:?}");
         assert!(ts.iter().all(|t| (66..=74).contains(t)));
-        assert_eq!(
-            p.threshold(TurnPriority::Workflow, "x"),
-            p.threshold(TurnPriority::Workflow, "x")
-        );
+        assert_eq!(p.threshold(TurnPriority::Workflow, "x"), p.threshold(TurnPriority::Workflow, "x"));
         // Workflows always leave interactive slack.
-        let tight = ThrottlePolicy {
-            workflow_pct: 99,
-            stagger_pct: 20,
-            background_pct: 99,
-        };
-        assert!((0..50).all(|i| tight
-            .threshold(TurnPriority::Workflow, &i.to_string())
-            .unwrap()
-            <= 95));
+        let tight = ThrottlePolicy { workflow_pct: 99, stagger_pct: 20, background_pct: 99 };
+        assert!((0..50).all(|i| tight.threshold(TurnPriority::Workflow, &i.to_string()).unwrap() <= 95));
     }
 
     #[test]
@@ -289,26 +214,13 @@ mod tests {
 
     #[test]
     fn a_teammates_direct_mention_is_background_on_the_owners_runtime() {
-        assert_eq!(
-            agent_turn_priority(true, false),
-            TurnPriority::Interactive,
-            "your own direct turn always runs"
-        );
+        assert_eq!(agent_turn_priority(true, false), TurnPriority::Interactive, "your own direct turn always runs");
         assert_eq!(agent_turn_priority(true, true), TurnPriority::Background);
         assert_eq!(agent_turn_priority(false, false), TurnPriority::Workflow);
         assert_eq!(agent_turn_priority(false, true), TurnPriority::Background);
-        let p = ThrottlePolicy {
-            stagger_pct: 0,
-            ..Default::default()
-        };
+        let p = ThrottlePolicy { stagger_pct: 0, ..Default::default() };
         let at75 = w(WindowStatus::Allowed, Some(75));
-        assert_eq!(
-            p.decide(agent_turn_priority(true, false), "a", Some(&at75), 0),
-            ThrottleDecision::Run
-        );
-        assert!(matches!(
-            p.decide(agent_turn_priority(true, true), "a", Some(&at75), 0),
-            ThrottleDecision::Defer { .. }
-        ));
+        assert_eq!(p.decide(agent_turn_priority(true, false), "a", Some(&at75), 0), ThrottleDecision::Run);
+        assert!(matches!(p.decide(agent_turn_priority(true, true), "a", Some(&at75), 0), ThrottleDecision::Defer { .. }));
     }
 }

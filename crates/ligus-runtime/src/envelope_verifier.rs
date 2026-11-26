@@ -207,9 +207,7 @@ impl WorkspaceRoster {
     /// Whether `device_id` is cert-verified to sign as `account` (any of its
     /// certified accounts). False for an unknown device.
     pub fn device_signs_for(&self, device_id: Uuid, account: Uuid) -> bool {
-        self.devices
-            .get(&device_id)
-            .is_some_and(|(_, accts)| accts.contains(&account))
+        self.devices.get(&device_id).is_some_and(|(_, accts)| accts.contains(&account))
     }
     /// Whether `device_id` is a trusted (cert-verified, non-revoked) device.
     pub fn is_certified(&self, device_id: Uuid) -> bool {
@@ -219,9 +217,7 @@ impl WorkspaceRoster {
     /// for callers needing a single account when an event carries no stamp. Use
     /// `device_signs_for` for authorization — a device may hold several.
     pub fn account_of(&self, device_id: Uuid) -> Option<Uuid> {
-        self.devices
-            .get(&device_id)
-            .and_then(|(_, accts)| accts.iter().min().copied())
+        self.devices.get(&device_id).and_then(|(_, accts)| accts.iter().min().copied())
     }
     /// The pinned account signing key for a member account, if known. Used by the
     /// Option-C identity gate to compare against GitHub `ssh_signing_keys`.
@@ -288,33 +284,21 @@ fn config_workspaces(ordered: &[&SessionEventEnvelope]) -> HashSet<Uuid> {
 /// the usual ingest authorization (so only an Admin's switch or approval counts)
 /// and the same founder pin as the roster, so a forged lower-lamport seed
 /// can't pick the projection dearth mode is read from.
-fn dearth_policies(
-    ordered: &[&SessionEventEnvelope],
-    pin: Option<&FounderPin>,
-) -> HashMap<Uuid, DearthPolicy> {
+fn dearth_policies(ordered: &[&SessionEventEnvelope], pin: Option<&FounderPin>) -> HashMap<Uuid, DearthPolicy> {
     let founder = pin.map(|p| p.founder_account.to_string());
     let mut logs: HashMap<Uuid, Vec<SessionEventEnvelope>> = HashMap::new();
     for env in ordered {
         if env.session_id == ligus_core::workspace_config_session_id(env.workspace_id) {
-            logs.entry(env.workspace_id)
-                .or_default()
-                .push((*env).clone());
+            logs.entry(env.workspace_id).or_default().push((*env).clone());
         }
     }
     let mut out = HashMap::new();
     for (ws, envs) in logs {
-        if !envs
-            .iter()
-            .any(|e| matches!(e.payload, SessionEvent::DearthModeChanged { .. }))
-        {
+        if !envs.iter().any(|e| matches!(e.payload, SessionEvent::DearthModeChanged { .. })) {
             continue;
         }
-        let Some(cfg) = ligus_core::project_with_founder(&envs, founder.as_deref()) else {
-            continue;
-        };
-        let Some(d) = cfg.guards.dearth_on() else {
-            continue;
-        };
+        let Some(cfg) = ligus_core::project_with_founder(&envs, founder.as_deref()) else { continue };
+        let Some(d) = cfg.guards.dearth_on() else { continue };
         let approvers = cfg
             .guards
             .join_approvals
@@ -329,13 +313,7 @@ fn dearth_policies(
                 (subject.clone(), accts)
             })
             .collect();
-        out.insert(
-            ws,
-            DearthPolicy {
-                admitted: d.admitted_devices.iter().copied().collect(),
-                approvers,
-            },
-        );
+        out.insert(ws, DearthPolicy { admitted: d.admitted_devices.iter().copied().collect(), approvers });
     }
     out
 }
@@ -382,10 +360,7 @@ impl FounderPin {
         for (i, b) in fk.iter_mut().enumerate() {
             *b = u8::from_str_radix(fk_hex.get(2 * i..2 * i + 2)?, 16).ok()?;
         }
-        Some(Self {
-            founder_account,
-            fk,
-        })
+        Some(Self { founder_account, fk })
     }
 
     /// The `fk` of an account signing key.
@@ -399,10 +374,7 @@ impl FounderPin {
 
     /// Lowercase hex of [`FounderPin::fingerprint`], as the invite carries it.
     pub fn fingerprint_hex(signing_public_key: &[u8]) -> String {
-        Self::fingerprint(signing_public_key)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+        Self::fingerprint(signing_public_key).iter().map(|b| format!("{b:02x}")).collect()
     }
 }
 
@@ -414,10 +386,7 @@ impl FounderPin {
 /// invite has not (yet) founded it. A stamp claiming the founder's id is not
 /// enough; a co-member who forged an invite "from" someone else can't sign as
 /// that person's device.
-pub fn founder_seed<'a>(
-    envelopes: &'a [SessionEventEnvelope],
-    pin: &FounderPin,
-) -> Option<&'a SessionEventEnvelope> {
+pub fn founder_seed<'a>(envelopes: &'a [SessionEventEnvelope], pin: &FounderPin) -> Option<&'a SessionEventEnvelope> {
     let roster = build_roster_pinned(envelopes, Some(pin));
     let account = pin.founder_account;
     let key = roster.account_signing_key(account)?;
@@ -432,10 +401,7 @@ pub fn founder_seed<'a>(
     ordered.into_iter().find(|e| {
         let claims = match &e.payload {
             ligus_core::SessionEvent::SessionSnapshot { session } => {
-                session.creator_actor_id == founder
-                    && e.actor_stamp
-                        .as_ref()
-                        .is_some_and(|s| s.actor.id == founder)
+                session.creator_actor_id == founder && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == founder)
             }
             _ => false,
         };
@@ -443,9 +409,7 @@ pub fn founder_seed<'a>(
             && e.signer_device_id.is_some_and(|device| {
                 roster.device_signs_for(device, account)
                     && !roster.is_revoked(device)
-                    && roster
-                        .public_key(device)
-                        .is_some_and(|k| ligus_core::crypto::verify_envelope(e, k).is_ok())
+                    && roster.public_key(device).is_some_and(|k| ligus_core::crypto::verify_envelope(e, k).is_ok())
             })
     })
 }
@@ -453,10 +417,7 @@ pub fn founder_seed<'a>(
 /// One workspace's roster from that workspace's own trust events (P0.4). With
 /// a founder pin, a registration of the founder's account under a key that
 /// doesn't match the pin is rejected.
-pub fn build_roster_pinned(
-    envelopes: &[SessionEventEnvelope],
-    pin: Option<&FounderPin>,
-) -> WorkspaceRoster {
+pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&FounderPin>) -> WorkspaceRoster {
     let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
     ordered.sort_by_key(|e| e.canonical_key());
 
@@ -469,8 +430,8 @@ pub fn build_roster_pinned(
     let mut cert_ws: Vec<Uuid> = Vec::new();
 
     let note_member = |members: &mut HashSet<Uuid>,
-                       member_account: &mut HashMap<String, Uuid>,
-                       m: &ligus_core::WorkspaceMember| {
+                           member_account: &mut HashMap<String, Uuid>,
+                           m: &ligus_core::WorkspaceMember| {
         if let Some(aid) = m.actor.account_id {
             members.insert(aid);
             member_account.insert(m.id.clone(), aid);
@@ -486,28 +447,14 @@ pub fn build_roster_pinned(
         .map(|ws| {
             let envs: Vec<SessionEventEnvelope> = ordered
                 .iter()
-                .filter(|e| {
-                    e.workspace_id == ws
-                        && e.session_id == ligus_core::workspace_config_session_id(ws)
-                })
+                .filter(|e| e.workspace_id == ws && e.session_id == ligus_core::workspace_config_session_id(ws))
                 .map(|e| (*e).clone())
                 .collect();
             let (projected, timeline) = ligus_core::project_config(&envs, founder.as_deref(), None);
             // By copy: a forged copy under an allowed event's id is not that
             // event (`ligus_core::copies`).
-            let decisions = ligus_core::fold_copy_decisions(
-                &envs,
-                founder.as_deref(),
-                None,
-                ligus_core::WorkspaceAuthz::Unchecked,
-            );
-            CfgFold {
-                ws,
-                envs,
-                projected,
-                timeline,
-                decisions,
-            }
+            let decisions = ligus_core::fold_copy_decisions(&envs, founder.as_deref(), None, ligus_core::WorkspaceAuthz::Unchecked);
+            CfgFold { ws, envs, projected, timeline, decisions }
         })
         .collect();
 
@@ -516,13 +463,8 @@ pub fn build_roster_pinned(
     // account's own admission), so a registration someone else published
     // under an account id is refused (attributed to its signer) and never
     // disputes the account.
-    let index = std::sync::Arc::new(ligus_core::account_keys::KeyIndex::of(
-        ordered.iter().copied(),
-    ));
-    let mut book = ligus_core::account_keys::KeyBook::new(
-        std::sync::Arc::clone(&index),
-        pin.map(|p| (p.founder_account, p.fk)),
-    );
+    let index = std::sync::Arc::new(ligus_core::account_keys::KeyIndex::of(ordered.iter().copied()));
+    let mut book = ligus_core::account_keys::KeyBook::new(std::sync::Arc::clone(&index), pin.map(|p| (p.founder_account, p.fk)));
     for c in &cfg_folds {
         for (account, device) in c.timeline.anchors() {
             book.anchor(*account, *device);
@@ -596,23 +538,13 @@ pub fn build_roster_pinned(
             explicit_revoked.insert(*device);
         }
     }
-    for CfgFold {
-        ws,
-        envs: cfg_envs,
-        projected,
-        timeline,
-        decisions,
-    } in cfg_folds
-    {
+    for CfgFold { ws, envs: cfg_envs, projected, timeline, decisions } in cfg_folds {
         // Only removals this projection accepted are sticky; a raw one it
         // refused (anyone "removing" the founder) removes no one.
         for e in &cfg_envs {
             if let SessionEvent::MemberRemoved { member_id, .. } = &e.payload {
                 if decisions.get(e) == Some(ligus_core::Verdict::Allowed) {
-                    removed_by_ws
-                        .entry(ws)
-                        .or_default()
-                        .insert(member_id.clone());
+                    removed_by_ws.entry(ws).or_default().insert(member_id.clone());
                 }
             }
         }
@@ -627,13 +559,8 @@ pub fn build_roster_pinned(
                 explicit_revoked.insert(*key_id);
             }
         }
-        explicit_revoked.extend(
-            projected
-                .iter()
-                .flat_map(|c| c.guards.revoked_devices.iter().copied()),
-        );
-        let current: Vec<ligus_core::WorkspaceMember> =
-            projected.map(|c| c.members).unwrap_or_default();
+        explicit_revoked.extend(projected.iter().flat_map(|c| c.guards.revoked_devices.iter().copied()));
+        let current: Vec<ligus_core::WorkspaceMember> = projected.map(|c| c.members).unwrap_or_default();
         current_accounts.extend(current.iter().filter_map(|m| m.actor.account_id));
         for id in removed_by_ws.get(&ws).into_iter().flatten() {
             if !current.iter().any(|m| &m.id == id) {
@@ -671,9 +598,7 @@ pub fn build_roster_pinned(
     let dearth = dearth_policies(&ordered, pin);
     roster.dearth_workspaces = dearth.keys().copied().collect();
     for (cert, ws) in certs.iter().zip(&cert_ws) {
-        let Some(account_key) = account_keys.get(&cert.account_id) else {
-            continue;
-        };
+        let Some(account_key) = account_keys.get(&cert.account_id) else { continue };
         if cert.verify(account_key).is_err() {
             continue; // cert must chain to its account's key
         }
@@ -683,9 +608,7 @@ pub fn build_roster_pinned(
         // under a backdated frontier) certifies nothing then.
         if heads.get(ws).is_some_and(|h| {
             h.rules >= 2
-                && h.passkeys
-                    .get(&cert.account_id)
-                    .is_some_and(|m| !m.is_empty())
+                && h.passkeys.get(&cert.account_id).is_some_and(|m| !m.is_empty())
                 && !h.account_certified(cert.account_id, cert.device_id)
         }) {
             continue;
@@ -694,10 +617,7 @@ pub fn build_roster_pinned(
         // config fold decides which, `RosterTracker::accepted`); one someone
         // put on another device's public key certifies nothing at ingest
         // either.
-        if heads.get(ws).is_some_and(|h| {
-            h.rules >= ligus_core::authz::RULES_V3
-                && !h.account_certified(cert.account_id, cert.device_id)
-        }) {
+        if heads.get(ws).is_some_and(|h| h.rules >= ligus_core::authz::RULES_V3 && !h.account_certified(cert.account_id, cert.device_id)) {
             continue;
         }
         if !roster.disputed.contains(&cert.account_id) {
@@ -733,11 +653,7 @@ pub fn build_roster_pinned(
     // this device yet, or never comes) is revoked too, but marked unadmitted:
     // whether the admission came first is arrival order, so ingest holds its
     // events rather than refusing them for good (`verdict_for`).
-    let ever_members: HashSet<Uuid> = member_account
-        .values()
-        .copied()
-        .chain(sticky_removed.iter().copied())
-        .collect();
+    let ever_members: HashSet<Uuid> = member_account.values().copied().chain(sticky_removed.iter().copied()).collect();
     let mut removed_only: HashSet<Uuid> = HashSet::new();
     for cert in &certs {
         if roster.devices.contains_key(&cert.device_id) {
@@ -754,9 +670,7 @@ pub fn build_roster_pinned(
             }
         }
     }
-    roster
-        .unadmitted
-        .retain(|d| !removed_only.contains(d) && !explicit_revoked.contains(d));
+    roster.unadmitted.retain(|d| !removed_only.contains(d) && !explicit_revoked.contains(d));
     roster
 }
 
@@ -778,9 +692,7 @@ struct CfgFold {
 /// copy of such a rotation, which anyone can publish again, would count).
 fn rotation_gated(cfg: &[CfgFold], env: &SessionEventEnvelope, account: Uuid) -> bool {
     let _ = account;
-    let Some(c) = cfg.iter().find(|c| c.ws == env.workspace_id) else {
-        return false;
-    };
+    let Some(c) = cfg.iter().find(|c| c.ws == env.workspace_id) else { return false };
     let head = c.timeline.current();
     if head.rules < 2 {
         return false;
@@ -800,10 +712,7 @@ pub fn build_rosters(
     for e in envelopes {
         by_ws.entry(e.workspace_id).or_default().push(e.clone());
     }
-    by_ws
-        .into_iter()
-        .map(|(ws, envs)| (ws, build_roster_pinned(&envs, pins.get(&ws))))
-        .collect()
+    by_ws.into_iter().map(|(ws, envs)| (ws, build_roster_pinned(&envs, pins.get(&ws)))).collect()
 }
 
 /// Kinds that feed the trust roster (the same set `EventStore::trust_envelopes`
@@ -844,14 +753,9 @@ pub fn roster_with_batch(
     batch: &[&SessionEventEnvelope],
     pin: Option<&FounderPin>,
 ) -> WorkspaceRoster {
-    let mut pending: Vec<&SessionEventEnvelope> = batch
-        .iter()
-        .copied()
-        .filter(|e| is_trust_kind(&e.payload))
-        .collect();
+    let mut pending: Vec<&SessionEventEnvelope> = batch.iter().copied().filter(|e| is_trust_kind(&e.payload)).collect();
     pending.sort_by_key(|e| e.canonical_key());
-    let (boot, mut pending): (Vec<_>, Vec<_>) =
-        pending.into_iter().partition(|e| is_trust_bootstrap(e));
+    let (boot, mut pending): (Vec<_>, Vec<_>) = pending.into_iter().partition(|e| is_trust_bootstrap(e));
     // A key registration or rotation joins only when it speaks for its own
     // signer's account (see `key_publication_ok`): a forged one would make the
     // victim's account disputed for this very batch.
@@ -867,19 +771,16 @@ pub fn roster_with_batch(
         all.extend(
             batch
                 .iter()
-                .filter(|e| {
-                    e.session_id == ligus_core::workspace_config_session_id(e.workspace_id)
-                        && !have.contains(&e.event_id)
-                })
+                .filter(|e| e.session_id == ligus_core::workspace_config_session_id(e.workspace_id) && !have.contains(&e.event_id))
                 .map(|e| ligus_core::lamport::inert_witness(e)),
         );
         all
     };
     let mut roster = build_roster_pinned(&with_witnesses(&stored), pin);
     while !pending.is_empty() {
-        let (ok, rest): (Vec<_>, Vec<_>) = pending.into_iter().partition(|e| {
-            verdict_for(&roster, e) == Verdict::Valid || self_validating(&roster, e, pin)
-        });
+        let (ok, rest): (Vec<_>, Vec<_>) = pending
+            .into_iter()
+            .partition(|e| verdict_for(&roster, e) == Verdict::Valid || self_validating(&roster, e, pin));
         pending = rest;
         if ok.is_empty() {
             break;
@@ -901,31 +802,19 @@ pub fn roster_with_batch(
 /// that joins can become the roster's base (earliest seed) and anchor the
 /// founder to its signer. A seed's signer vouches only under the founder
 /// pin's key (`fk`), or chains under the account's roster key.
-fn signed_as(
-    roster: &WorkspaceRoster,
-    env: &SessionEventEnvelope,
-    account: Uuid,
-    seed: Option<Option<&FounderPin>>,
-) -> bool {
-    let Some(device) = env.signer_device_id else {
-        return false;
-    };
+fn signed_as(roster: &WorkspaceRoster, env: &SessionEventEnvelope, account: Uuid, seed: Option<Option<&FounderPin>>) -> bool {
+    let Some(device) = env.signer_device_id else { return false };
     match seed {
         None => {
-            if roster
-                .key_index
-                .as_ref()
-                .is_some_and(|i| i.device_vouches(env, account, device))
-            {
+            if roster.key_index.as_ref().is_some_and(|i| i.device_vouches(env, account, device)) {
                 return true;
             }
         }
         Some(Some(pin)) => {
             let pinned = roster.key_index.as_ref().is_some_and(|i| {
-                i.registered_by(account, device).iter().any(|k| {
-                    FounderPin::fingerprint(k) == pin.fk
-                        && i.device_vouches_under(env, account, device, k)
-                })
+                i.registered_by(account, device)
+                    .iter()
+                    .any(|k| FounderPin::fingerprint(k) == pin.fk && i.device_vouches_under(env, account, device, k))
             });
             if pinned {
                 return true;
@@ -933,9 +822,7 @@ fn signed_as(
         }
         Some(None) => {}
     }
-    let Some((key, accounts)) = roster.chained.get(&device) else {
-        return false;
-    };
+    let Some((key, accounts)) = roster.chained.get(&device) else { return false };
     // Not `is_revoked`: before its account is a member, the roster lists such
     // a device as revoked (non-member certs are). A removed member's own
     // re-enrollment is refused by the config projection, and their removal
@@ -947,28 +834,15 @@ fn signed_as(
 /// log's founding seed (the self-consistent seed, signed by a device of the
 /// founder's account; the pinned founder's, when pinned) and a self-enrollment
 /// below Admin signed by a device of the joining account.
-fn self_validating(
-    roster: &WorkspaceRoster,
-    env: &SessionEventEnvelope,
-    pin: Option<&FounderPin>,
-) -> bool {
-    let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else {
-        return false;
-    };
-    let author = env
-        .actor_stamp
-        .as_ref()
-        .map(|s| s.actor.id.as_str())
-        .unwrap_or("");
+fn self_validating(roster: &WorkspaceRoster, env: &SessionEventEnvelope, pin: Option<&FounderPin>) -> bool {
+    let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { return false };
+    let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
     match &env.payload {
         SessionEvent::SessionSnapshot { session }
             if env.session_id == ligus_core::workspace_config_session_id(env.workspace_id) =>
         {
-            let owners: Vec<_> = session
-                .members
-                .iter()
-                .filter(|m| m.role == ligus_core::WorkspaceRole::Owner)
-                .collect();
+            let owners: Vec<_> =
+                session.members.iter().filter(|m| m.role == ligus_core::WorkspaceRole::Owner).collect();
             session.creator_actor_id == author
                 && owners.len() == 1
                 && owners[0].id == author
@@ -998,10 +872,7 @@ pub fn rosters_for_batch(
     let mut out = HashMap::new();
     for (ws, envs) in by_ws {
         let pin = store.workspace_pin(ws)?;
-        out.insert(
-            ws,
-            roster_with_batch(store.trust_envelopes(ws)?, &envs, pin.as_ref()),
-        );
+        out.insert(ws, roster_with_batch(store.trust_envelopes(ws)?, &envs, pin.as_ref()));
     }
     Ok(out)
 }
@@ -1044,12 +915,12 @@ fn entrance_closed(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> bool
 /// signs is then quarantined).
 fn key_publication_ok(env: &SessionEventEnvelope) -> bool {
     let account = match &env.payload {
-        SessionEvent::AccountKeyRegistered { account_id, .. }
-        | SessionEvent::AccountKeyRotated { account_id, .. } => *account_id,
+        SessionEvent::AccountKeyRegistered { account_id, .. } | SessionEvent::AccountKeyRotated { account_id, .. } => {
+            *account_id
+        }
         _ => return true,
     };
-    env.signer_device_id.is_some()
-        && env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) == Some(account)
+    env.signer_device_id.is_some() && env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) == Some(account)
 }
 
 /// Whether an event `signer` signed, stamped as `claimed` (if anything), that
@@ -1082,9 +953,7 @@ pub fn may_judge_now(roster: &WorkspaceRoster, signer: Uuid, claimed: Option<Uui
 /// disputes it.
 pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verdict {
     match verdict_inner(roster, env) {
-        Verdict::Unverifiable(_) if is_trust_bootstrap(env) => {
-            Verdict::Unverifiable(QuarantineReason::UnknownDevice)
-        }
+        Verdict::Unverifiable(_) if is_trust_bootstrap(env) => Verdict::Unverifiable(QuarantineReason::UnknownDevice),
         v => v,
     }
 }
@@ -1113,15 +982,9 @@ fn verdict_inner(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verdic
             return Verdict::Quarantine(QuarantineReason::BadSignature);
         }
         let speaks_as_agent = env.actor_stamp.as_ref().is_some_and(|s| {
-            s.actor.kind == ligus_core::ActorKind::Agent
-                && s.actor.id == agent_id.to_string()
-                && s.actor.account_id.is_none()
+            s.actor.kind == ligus_core::ActorKind::Agent && s.actor.id == agent_id.to_string() && s.actor.account_id.is_none()
         });
-        return if speaks_as_agent {
-            Verdict::Valid
-        } else {
-            Verdict::Quarantine(QuarantineReason::Impersonation)
-        };
+        return if speaks_as_agent { Verdict::Valid } else { Verdict::Quarantine(QuarantineReason::Impersonation) };
     }
     if roster.is_revoked(device_id) {
         // Certified only to accounts not admitted here (yet): held until the
@@ -1139,9 +1002,7 @@ fn verdict_inner(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verdic
                 Some((k, _)) if verify_envelope(env, k).is_ok() && is_trust_bootstrap(env) => {
                     Verdict::Unverifiable(QuarantineReason::UnknownDevice)
                 }
-                Some((k, _)) if verify_envelope(env, k).is_ok() => {
-                    Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
-                }
+                Some((k, _)) if verify_envelope(env, k).is_ok() => Verdict::Unverifiable(QuarantineReason::UncertifiedDevice),
                 Some(_) => Verdict::Quarantine(QuarantineReason::BadSignature),
                 // Its account's key is disputed: held, never applied (a
                 // dispute can still resolve once the account's own
@@ -1168,23 +1029,16 @@ fn verdict_inner(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verdic
         // nothing: held events never pin the sync cursor.
         let stamp = env.actor_stamp.as_ref();
         let claims_account = stamp.is_some_and(|s| s.actor.account_id.is_some())
-            || stamp
-                .and_then(|s| Uuid::parse_str(&s.actor.id).ok())
-                .is_some_and(|a| {
-                    roster.account_signing_key(a).is_some()
-                        || roster.is_disputed(a)
-                        || roster.removed_accounts.contains(&a)
-                });
+            || stamp.and_then(|s| Uuid::parse_str(&s.actor.id).ok()).is_some_and(|a| {
+                roster.account_signing_key(a).is_some() || roster.is_disputed(a) || roster.removed_accounts.contains(&a)
+            });
         if claims_account && !is_trust_bootstrap(env) {
             return Verdict::Unverifiable(QuarantineReason::UncertifiedDevice);
         }
         return Verdict::Unverifiable(QuarantineReason::UnknownDevice);
     }
     // The device's one key (its id derives from it): only the device signs.
-    if roster
-        .public_key(device_id)
-        .is_none_or(|k| verify_envelope(env, k).is_err())
-    {
+    if roster.public_key(device_id).is_none_or(|k| verify_envelope(env, k).is_err()) {
         return Verdict::Quarantine(QuarantineReason::BadSignature);
     }
     // The stamped author's account must be one the signing device is
@@ -1197,20 +1051,16 @@ fn verdict_inner(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verdic
     // is held until the certificate arrives instead, and never applied
     // without it. Only a contested account key refuses for good (disputes
     // only grow).
-    let Some(stamp) = &env.actor_stamp else {
-        return Verdict::Valid;
-    };
+    let Some(stamp) = &env.actor_stamp else { return Verdict::Valid };
     let claimed = match stamp.actor.account_id {
         Some(a) => Some(a),
         // No account on the stamp, but its actor id *is* a known account (a
         // member's actor id is their account id): the signer must sign for
         // it, or a member could leave the account off and act under anyone's
         // id (the fold and the author gate read the actor id).
-        None => Uuid::parse_str(&stamp.actor.id).ok().filter(|n| {
-            roster.account_signing_key(*n).is_some()
-                || roster.is_disputed(*n)
-                || roster.removed_accounts.contains(n)
-        }),
+        None => Uuid::parse_str(&stamp.actor.id)
+            .ok()
+            .filter(|n| roster.account_signing_key(*n).is_some() || roster.is_disputed(*n) || roster.removed_accounts.contains(n)),
     };
     if let Some(claimed) = claimed {
         if roster.is_disputed(claimed) {
@@ -1290,7 +1140,11 @@ mod tests {
             },
         );
 
-        let outcome = verify_stream(vec![good, tampered, unknown, unsigned], &roster, false);
+        let outcome = verify_stream(
+            vec![good, tampered, unknown, unsigned],
+            &roster,
+            false,
+        );
         assert_eq!(outcome.valid.len(), 1);
         assert_eq!(outcome.quarantined.len(), 3);
         let reasons: Vec<_> = outcome.quarantined.iter().map(|(_, r)| *r).collect();
@@ -1311,15 +1165,16 @@ mod tests {
 
         let outcome = verify_stream(vec![env], &roster, false);
         assert_eq!(outcome.valid.len(), 0);
-        assert_eq!(outcome.quarantined[0].1, QuarantineReason::RevokedDevice);
+        assert_eq!(
+            outcome.quarantined[0].1,
+            QuarantineReason::RevokedDevice
+        );
     }
 
     // --- S1 roster + verdicts ------------------------------------------------
 
     use ligus_core::crypto::{DeviceCertificate, SigningKeypair};
-    use ligus_core::identity::{
-        ActorIdentity, ActorKind, ActorStamp, WorkspaceMember, WorkspaceRole,
-    };
+    use ligus_core::identity::{ActorIdentity, ActorKind, ActorStamp, WorkspaceMember, WorkspaceRole};
     use ligus_core::{ChatSession, SessionEventEnvelope, Timestamp};
 
     /// A test principal: an account keypair + one device keypair, with the trust
@@ -1337,10 +1192,7 @@ mod tests {
         Principal {
             account_kp: SigningKeypair::generate().unwrap(),
             account_id: Uuid::new_v4(),
-            device_id: ligus_core::crypto::device_id_for(
-                ligus_core::crypto::SigAlg::Ed25519,
-                &device_kp.public_key_bytes(),
-            ),
+            device_id: ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &device_kp.public_key_bytes()),
             device_kp,
         }
     }
@@ -1350,12 +1202,7 @@ mod tests {
     }
 
     fn trust_events(p: &Principal, lamport_base: i64) -> Vec<SessionEventEnvelope> {
-        let cert = DeviceCertificate::issue(
-            &p.account_kp,
-            p.account_id,
-            &p.device_kp.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let cert = DeviceCertificate::issue(&p.account_kp, p.account_id, &p.device_kp.public_key_bytes(), Timestamp::epoch());
         let member = WorkspaceMember {
             id: p.account_id.to_string(),
             actor: ActorIdentity {
@@ -1377,18 +1224,7 @@ mod tests {
         // Published by the principal's own device, stamped as its account,
         // as every device publishes its identity.
         vec![
-            signed_as(
-                p,
-                p.account_id,
-                env(
-                    lamport_base,
-                    SessionEvent::MemberAdded {
-                        member,
-                        invite: None,
-                        proof: None,
-                    },
-                ),
-            ),
+            signed_as(p, p.account_id, env(lamport_base, SessionEvent::MemberAdded { member, invite: None, proof: None })),
             signed_as(
                 p,
                 p.account_id,
@@ -1400,23 +1236,12 @@ mod tests {
                     },
                 ),
             ),
-            signed_as(
-                p,
-                p.account_id,
-                env(
-                    lamport_base + 2,
-                    SessionEvent::DeviceCertificateAdded { certificate: cert },
-                ),
-            ),
+            signed_as(p, p.account_id, env(lamport_base + 2, SessionEvent::DeviceCertificateAdded { certificate: cert })),
         ]
     }
 
     /// `e`, stamped as `account` and signed by `p`'s device.
-    fn signed_as(
-        p: &Principal,
-        account: Uuid,
-        mut e: SessionEventEnvelope,
-    ) -> SessionEventEnvelope {
+    fn signed_as(p: &Principal, account: Uuid, mut e: SessionEventEnvelope) -> SessionEventEnvelope {
         e.actor_stamp = Some(ActorStamp {
             actor: ActorIdentity {
                 id: account.to_string(),
@@ -1467,14 +1292,8 @@ mod tests {
                 avatar_url: None,
                 contact: None,
             },
-            recorded_at: Timestamp::epoch(),
-            cfg_frontier: None,
-            presence: None,
-            runtime_effect: false,
-            prev: None,
-            sig_alg: Default::default(),
-            log_head: None,
-        });
+            recorded_at: Timestamp::epoch(), cfg_frontier: None,
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         ligus_core::sign_envelope(&mut e, signer_device, signer_kp);
         e
     }
@@ -1502,26 +1321,11 @@ mod tests {
             ),
         ));
         // Re-cert the device under K2 (its K1 cert no longer verifies vs pinned K2).
-        let cert2 = DeviceCertificate::issue(
-            &new_kp,
-            p.account_id,
-            &p.device_kp.public_key_bytes(),
-            Timestamp::epoch(),
-        );
-        events.push(signed_as(
-            &p,
-            p.account_id,
-            env(
-                11,
-                SessionEvent::DeviceCertificateAdded { certificate: cert2 },
-            ),
-        ));
+        let cert2 = DeviceCertificate::issue(&new_kp, p.account_id, &p.device_kp.public_key_bytes(), Timestamp::epoch());
+        events.push(signed_as(&p, p.account_id, env(11, SessionEvent::DeviceCertificateAdded { certificate: cert2 })));
 
         let roster = build_roster(&events);
-        assert!(
-            !roster.is_disputed(p.account_id),
-            "a valid succession must NOT dispute"
-        );
+        assert!(!roster.is_disputed(p.account_id), "a valid succession must NOT dispute");
         let signed = authored(p.device_id, &p.device_kp, p.account_id, 20);
         assert_eq!(verdict_for(&roster, &signed), Verdict::Valid);
     }
@@ -1536,10 +1340,7 @@ mod tests {
         let p = principal();
         let attacker = principal();
         let mut events = trust_events(&p, 1);
-        let bad_sig = attacker
-            .account_kp
-            .sign(&attacker.account_kp.public_key_bytes())
-            .to_vec();
+        let bad_sig = attacker.account_kp.sign(&attacker.account_kp.public_key_bytes()).to_vec();
         let forged = signed_as(
             &attacker,
             p.account_id,
@@ -1554,24 +1355,10 @@ mod tests {
         );
         events.push(forged.clone());
         let roster = build_roster(&events);
-        assert!(
-            !roster.is_disputed(p.account_id),
-            "a rotation not signed by the current key must not dispute"
-        );
-        assert_eq!(
-            roster.account_signing_key(p.account_id),
-            Some(&p.account_kp.public_key_bytes()[..])
-        );
-        assert!(roster.refused_keys().iter().any(
-            |r| r.event_id == forged.event_id && r.signer_device_id == Some(attacker.device_id)
-        ));
-        assert_eq!(
-            verdict_for(
-                &roster,
-                &authored(p.device_id, &p.device_kp, p.account_id, 20)
-            ),
-            Verdict::Valid
-        );
+        assert!(!roster.is_disputed(p.account_id), "a rotation not signed by the current key must not dispute");
+        assert_eq!(roster.account_signing_key(p.account_id), Some(&p.account_kp.public_key_bytes()[..]));
+        assert!(roster.refused_keys().iter().any(|r| r.event_id == forged.event_id && r.signer_device_id == Some(attacker.device_id)));
+        assert_eq!(verdict_for(&roster, &authored(p.device_id, &p.device_kp, p.account_id, 20)), Verdict::Valid);
     }
 
     #[test]
@@ -1580,33 +1367,20 @@ mod tests {
         // K3): only the holder of K1 can sign either, so its lineage asserts
         // two keys. That is the dispute the rule keeps: fail closed.
         let p = principal();
-        let (k2, k3) = (
-            SigningKeypair::generate().unwrap(),
-            SigningKeypair::generate().unwrap(),
-        );
+        let (k2, k3) = (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
         let mut events = trust_events(&p, 1);
         for (l, k) in [(10, &k2), (11, &k3)] {
             let sig = p.account_kp.sign(&k.public_key_bytes()).to_vec();
             events.push(signed_as(
                 &p,
                 p.account_id,
-                env(
-                    l,
-                    SessionEvent::AccountKeyRotated {
-                        account_id: p.account_id,
-                        new_signing_public_key: k.public_key_bytes().to_vec(),
-                        succession_signature: sig,
-                    },
-                ),
+                env(l, SessionEvent::AccountKeyRotated { account_id: p.account_id, new_signing_public_key: k.public_key_bytes().to_vec(), succession_signature: sig }),
             ));
         }
         assert!(build_roster(&events).is_disputed(p.account_id));
         let mut reversed = events.clone();
         reversed.reverse();
-        assert!(
-            build_roster(&reversed).is_disputed(p.account_id),
-            "order-independent"
-        );
+        assert!(build_roster(&reversed).is_disputed(p.account_id), "order-independent");
     }
 
     #[test]
@@ -1622,13 +1396,7 @@ mod tests {
         assert_eq!(verdict_for(&before, &signed), Verdict::Valid);
 
         // Revoke the device; now the same signed event is quarantined.
-        events.push(env(
-            20,
-            SessionEvent::DeviceRevoked {
-                device_id: p.device_id,
-                watermark: Vec::new(),
-            },
-        ));
+        events.push(env(20, SessionEvent::DeviceRevoked { device_id: p.device_id, watermark: Vec::new() }));
         let after = build_roster(&events);
         assert_eq!(
             verdict_for(&after, &signed),
@@ -1670,52 +1438,17 @@ mod tests {
                 if with_cert {
                     // The attacker certifies its own device for the victim's
                     // account under its own key (self-evident), backdated too.
-                    let cert = DeviceCertificate::issue(
-                        &attacker.account_kp,
-                        victim.account_id,
-                        &attacker.device_kp.public_key_bytes(),
-                        Timestamp::epoch(),
-                    );
-                    events.push(signed_as(
-                        &attacker,
-                        victim.account_id,
-                        env(
-                            lamport,
-                            SessionEvent::DeviceCertificateAdded { certificate: cert },
-                        ),
-                    ));
+                    let cert = DeviceCertificate::issue(&attacker.account_kp, victim.account_id, &attacker.device_kp.public_key_bytes(), Timestamp::epoch());
+                    events.push(signed_as(&attacker, victim.account_id, env(lamport, SessionEvent::DeviceCertificateAdded { certificate: cert })));
                 }
                 let roster = build_roster(&events);
-                assert!(
-                    !roster.is_disputed(victim.account_id),
-                    "lamport {lamport} cert {with_cert}: disputed"
-                );
-                assert_eq!(
-                    roster.account_signing_key(victim.account_id),
-                    Some(&victim.account_kp.public_key_bytes()[..])
-                );
-                assert!(roster
-                    .refused_keys()
-                    .iter()
-                    .any(|r| r.event_id == forged.event_id
-                        && r.signer_device_id == Some(attacker.device_id)));
+                assert!(!roster.is_disputed(victim.account_id), "lamport {lamport} cert {with_cert}: disputed");
+                assert_eq!(roster.account_signing_key(victim.account_id), Some(&victim.account_kp.public_key_bytes()[..]));
+                assert!(roster.refused_keys().iter().any(|r| r.event_id == forged.event_id && r.signer_device_id == Some(attacker.device_id)));
                 let genuine = authored(victim.device_id, &victim.device_kp, victim.account_id, 10);
-                assert_eq!(
-                    verdict_for(&roster, &genuine),
-                    Verdict::Valid,
-                    "lamport {lamport} cert {with_cert}"
-                );
-                let as_victim = authored(
-                    attacker.device_id,
-                    &attacker.device_kp,
-                    victim.account_id,
-                    11,
-                );
-                assert_ne!(
-                    verdict_for(&roster, &as_victim),
-                    Verdict::Valid,
-                    "the attacker never signs as the victim"
-                );
+                assert_eq!(verdict_for(&roster, &genuine), Verdict::Valid, "lamport {lamport} cert {with_cert}");
+                let as_victim = authored(attacker.device_id, &attacker.device_kp, victim.account_id, 11);
+                assert_ne!(verdict_for(&roster, &as_victim), Verdict::Valid, "the attacker never signs as the victim");
             }
         }
     }
@@ -1728,38 +1461,17 @@ mod tests {
         let p = principal();
         let other = SigningKeypair::generate().unwrap();
         let mut events = trust_events(&p, 1);
-        let cert = DeviceCertificate::issue(
-            &other,
-            p.account_id,
-            &p.device_kp.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let cert = DeviceCertificate::issue(&other, p.account_id, &p.device_kp.public_key_bytes(), Timestamp::epoch());
+        events.push(signed_as(&p, p.account_id, env(8, SessionEvent::DeviceCertificateAdded { certificate: cert })));
         events.push(signed_as(
             &p,
             p.account_id,
-            env(
-                8,
-                SessionEvent::DeviceCertificateAdded { certificate: cert },
-            ),
-        ));
-        events.push(signed_as(
-            &p,
-            p.account_id,
-            env(
-                9,
-                SessionEvent::AccountKeyRegistered {
-                    account_id: p.account_id,
-                    signing_public_key: other.public_key_bytes().to_vec(),
-                },
-            ),
+            env(9, SessionEvent::AccountKeyRegistered { account_id: p.account_id, signing_public_key: other.public_key_bytes().to_vec() }),
         ));
         let roster = build_roster(&events);
         assert!(roster.is_disputed(p.account_id));
         assert_eq!(
-            verdict_for(
-                &roster,
-                &authored(p.device_id, &p.device_kp, p.account_id, 10)
-            ),
+            verdict_for(&roster, &authored(p.device_id, &p.device_kp, p.account_id, 10)),
             Verdict::Unverifiable(QuarantineReason::DisputedAccountKey)
         );
     }
@@ -1785,8 +1497,7 @@ mod tests {
                     member_id: owner.account_id.to_string(),
                     old_role: WorkspaceRole::Contributor,
                     new_role: WorkspaceRole::Owner,
-                },
-                watermark: Vec::new(),
+                }, watermark: Vec::new(),
             },
         );
         forged.actor_stamp = Some(ActorStamp {
@@ -1801,18 +1512,9 @@ mod tests {
                 avatar_url: None,
                 contact: None,
             },
-            recorded_at: Timestamp::epoch(),
-            cfg_frontier: None,
-            presence: None,
-            runtime_effect: false,
-            prev: None,
-            sig_alg: Default::default(),
-            log_head: None,
-        });
-        assert!(
-            forged.signer_device_id.is_none(),
-            "PoC envelope must be unsigned"
-        );
+            recorded_at: Timestamp::epoch(), cfg_frontier: None,
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+        assert!(forged.signer_device_id.is_none(), "PoC envelope must be unsigned");
 
         // The verdict must be Quarantine, and Relay-mode ingest must DROP it.
         assert_eq!(
@@ -1822,13 +1524,7 @@ mod tests {
         let cache = IdentityCache::new();
         assert!(
             matches!(
-                gate_ingest(
-                    IdentityMode::Relay,
-                    verdict_for(&roster, &forged),
-                    None,
-                    None,
-                    &cache
-                ),
+                gate_ingest(IdentityMode::Relay, verdict_for(&roster, &forged), None, None, &cache),
                 IngestAction::Quarantine(_)
             ),
             "Relay-mode ingest must quarantine a forged unsigned stamped event, not Accept it",
@@ -1888,18 +1584,8 @@ mod tests {
         let new_account = Uuid::new_v4();
         let new_account_kp = SigningKeypair::generate().unwrap();
 
-        let old_cert = DeviceCertificate::issue(
-            &p.account_kp,
-            old_account,
-            &p.device_kp.public_key_bytes(),
-            Timestamp::epoch(),
-        );
-        let new_cert = DeviceCertificate::issue(
-            &new_account_kp,
-            new_account,
-            &p.device_kp.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let old_cert = DeviceCertificate::issue(&p.account_kp, old_account, &p.device_kp.public_key_bytes(), Timestamp::epoch());
+        let new_cert = DeviceCertificate::issue(&new_account_kp, new_account, &p.device_kp.public_key_bytes(), Timestamp::epoch());
         let mk_member = |acct: Uuid| WorkspaceMember {
             id: acct.to_string(),
             actor: ActorIdentity {
@@ -1919,72 +1605,18 @@ mod tests {
             joined_at: Timestamp::epoch(),
         };
         let events = vec![
-            signed_as(
-                &p,
-                old_account,
-                env(
-                    1,
-                    SessionEvent::MemberAdded {
-                        invite: None,
-                        proof: None,
-                        member: mk_member(old_account),
-                    },
-                ),
-            ),
-            signed_as(
-                &p,
-                new_account,
-                env(
-                    2,
-                    SessionEvent::MemberAdded {
-                        invite: None,
-                        proof: None,
-                        member: mk_member(new_account),
-                    },
-                ),
-            ),
-            signed_as(
-                &p,
-                old_account,
-                env(
-                    3,
-                    SessionEvent::AccountKeyRegistered {
-                        account_id: old_account,
-                        signing_public_key: p.account_kp.public_key_bytes().to_vec(),
-                    },
-                ),
-            ),
-            signed_as(
-                &p,
-                new_account,
-                env(
-                    4,
-                    SessionEvent::AccountKeyRegistered {
-                        account_id: new_account,
-                        signing_public_key: new_account_kp.public_key_bytes().to_vec(),
-                    },
-                ),
-            ),
-            signed_as(
-                &p,
-                old_account,
-                env(
-                    5,
-                    SessionEvent::DeviceCertificateAdded {
-                        certificate: old_cert,
-                    },
-                ),
-            ),
-            signed_as(
-                &p,
-                new_account,
-                env(
-                    6,
-                    SessionEvent::DeviceCertificateAdded {
-                        certificate: new_cert,
-                    },
-                ),
-            ),
+            signed_as(&p, old_account, env(1, SessionEvent::MemberAdded { invite: None, proof: None, member: mk_member(old_account) })),
+            signed_as(&p, new_account, env(2, SessionEvent::MemberAdded { invite: None, proof: None, member: mk_member(new_account) })),
+            signed_as(&p, old_account, env(3, SessionEvent::AccountKeyRegistered {
+                account_id: old_account,
+                signing_public_key: p.account_kp.public_key_bytes().to_vec(),
+            })),
+            signed_as(&p, new_account, env(4, SessionEvent::AccountKeyRegistered {
+                account_id: new_account,
+                signing_public_key: new_account_kp.public_key_bytes().to_vec(),
+            })),
+            signed_as(&p, old_account, env(5, SessionEvent::DeviceCertificateAdded { certificate: old_cert })),
+            signed_as(&p, new_account, env(6, SessionEvent::DeviceCertificateAdded { certificate: new_cert })),
         ];
         let roster = build_roster(&events);
 
@@ -2012,12 +1644,7 @@ mod tests {
         // accepted on the stamp (whether the account is known yet is arrival
         // order).
         let stranger = principal();
-        let unknown = authored(
-            stranger.device_id,
-            &stranger.device_kp,
-            stranger.account_id,
-            100,
-        );
+        let unknown = authored(stranger.device_id, &stranger.device_kp, stranger.account_id, 100);
         assert_eq!(
             verdict_for(&roster, &unknown),
             Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
@@ -2036,26 +1663,13 @@ mod tests {
         let alice = principal();
         // Forge a cert for alice.device signed by a DIFFERENT (attacker) account key.
         let attacker = SigningKeypair::generate().unwrap();
-        let forged = DeviceCertificate::issue(
-            &attacker,
-            alice.account_id,
-            &alice.device_kp.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let forged = DeviceCertificate::issue(&attacker, alice.account_id, &alice.device_kp.public_key_bytes(), Timestamp::epoch());
         let events = vec![
-            env(
-                1,
-                SessionEvent::AccountKeyRegistered {
-                    account_id: alice.account_id,
-                    signing_public_key: alice.account_kp.public_key_bytes().to_vec(), // real key
-                },
-            ),
-            env(
-                2,
-                SessionEvent::DeviceCertificateAdded {
-                    certificate: forged,
-                },
-            ),
+            env(1, SessionEvent::AccountKeyRegistered {
+                account_id: alice.account_id,
+                signing_public_key: alice.account_kp.public_key_bytes().to_vec(), // real key
+            }),
+            env(2, SessionEvent::DeviceCertificateAdded { certificate: forged }),
         ];
         let roster = build_roster(&events);
         // The forged cert doesn't verify against Alice's real account key → device
@@ -2067,19 +1681,10 @@ mod tests {
     fn removed_member_devices_are_revoked() {
         let alice = principal();
         let mut events = trust_events(&alice, 1);
-        events.push(env(
-            50,
-            SessionEvent::MemberRemoved {
-                member_id: alice.account_id.to_string(),
-                watermark: Vec::new(),
-            },
-        ));
+        events.push(env(50, SessionEvent::MemberRemoved { member_id: alice.account_id.to_string(), watermark: Vec::new() }));
         let roster = build_roster(&events);
 
-        assert!(
-            roster.is_revoked(alice.device_id),
-            "removed account's device is revoked"
-        );
+        assert!(roster.is_revoked(alice.device_id), "removed account's device is revoked");
         let e = authored(alice.device_id, &alice.device_kp, alice.account_id, 100);
         assert_eq!(
             verdict_for(&roster, &e),

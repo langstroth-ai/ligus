@@ -4,12 +4,12 @@
 use uuid::Uuid;
 
 use crate::events::SessionEvent;
+use crate::testkit::project_honest as project;
 use crate::guard::{human_gate_reason, ChatLockdown, LockdownSignal};
 use crate::identity::{ActorIdentity, ActorKind, WorkspaceMember, WorkspaceRole};
 use crate::lease_projection_tests::{base, ev, seed};
 use crate::proposals::ActionProposal;
 use crate::sandbox::{envelope_for_session, EgressPolicy};
-use crate::testkit::project_honest as project;
 use crate::time_util::Timestamp;
 
 fn raise(chat: Uuid) -> SessionEvent {
@@ -29,10 +29,7 @@ fn raise(chat: Uuid) -> SessionEvent {
 
 /// A clear of the raises `raised` (their event ids).
 fn clear(chat: Uuid, raised: &[&crate::SessionEventEnvelope]) -> SessionEvent {
-    SessionEvent::ChatLockdownCleared {
-        chat_id: chat,
-        raises: raised.iter().map(|e| e.event_id).collect(),
-    }
+    SessionEvent::ChatLockdownCleared { chat_id: chat, raises: raised.iter().map(|e| e.event_id).collect() }
 }
 
 /// Project the config log, then look at it as chat `chat` would (the overlay
@@ -62,15 +59,8 @@ fn anyone_with_the_key_can_raise_only_a_human_member_can_clear() {
     let chat = Uuid::new_v4();
     let r = ev(&s, 1, "some-worker-host", None, raise(chat));
     let mut envs = vec![seed(&s), r.clone()];
-    assert!(
-        as_chat(&envs, chat).guards.lockdown_active(),
-        "a non-member worker host may tighten"
-    );
-    assert_eq!(
-        as_chat(&envs, chat).guards.lockdowns_of(chat)[0].raise_event_id,
-        Some(r.event_id),
-        "known by its raise"
-    );
+    assert!(as_chat(&envs, chat).guards.lockdown_active(), "a non-member worker host may tighten");
+    assert_eq!(as_chat(&envs, chat).guards.lockdowns_of(chat)[0].raise_event_id, Some(r.event_id), "known by its raise");
     // A non-member clearing it: dropped.
     envs.push(ev(&s, 2, "stranger", None, clear(chat, &[&r])));
     // A Viewer: dropped.
@@ -116,19 +106,14 @@ fn lockdown_closes_egress_and_gates_every_proposal() {
 /// and the projection keeps it so the UI can jump to the cause by id.
 #[test]
 fn lockdown_message_id_is_left_out_when_absent_and_kept_through_projection() {
-    let SessionEvent::ChatLockdownRaised { lockdown, .. } = raise(Uuid::nil()) else {
-        unreachable!()
-    };
+    let SessionEvent::ChatLockdownRaised { lockdown, .. } = raise(Uuid::nil()) else { unreachable!() };
     let json = serde_json::to_value(&lockdown).unwrap();
     assert!(json.get("messageId").is_none(), "{json}");
     let old: ChatLockdown = serde_json::from_value(json).unwrap();
     assert_eq!(old.message_id, None);
 
     let reply = Uuid::new_v4();
-    let with = ChatLockdown {
-        message_id: Some(reply),
-        ..lockdown
-    };
+    let with = ChatLockdown { message_id: Some(reply), ..lockdown };
     let json = serde_json::to_value(&with).unwrap();
     assert_eq!(json["messageId"], serde_json::json!(reply));
     assert_eq!(serde_json::from_value::<ChatLockdown>(json).unwrap(), with);
@@ -137,21 +122,9 @@ fn lockdown_message_id_is_left_out_when_absent_and_kept_through_projection() {
     let chat = Uuid::new_v4();
     let envs = vec![
         seed(&s),
-        ev(
-            &s,
-            1,
-            "some-worker-host",
-            None,
-            SessionEvent::ChatLockdownRaised {
-                chat_id: chat,
-                lockdown: with,
-            },
-        ),
+        ev(&s, 1, "some-worker-host", None, SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: with }),
     ];
-    assert_eq!(
-        as_chat(&envs, chat).guards.lockdowns_of(chat)[0].message_id,
-        Some(reply)
-    );
+    assert_eq!(as_chat(&envs, chat).guards.lockdowns_of(chat)[0].message_id, Some(reply));
 }
 
 /// A clear lifts exactly the raises it names: one it doesn't name (raised
@@ -161,41 +134,14 @@ fn lockdown_message_id_is_left_out_when_absent_and_kept_through_projection() {
 fn a_clear_lifts_only_the_raises_it_names() {
     let s = base();
     let chat = Uuid::new_v4();
-    let (r1, r2) = (
-        ev(&s, 1, "owner", None, raise(chat)),
-        ev(&s, 2, "owner", None, raise(chat)),
-    );
-    let envs = vec![
-        seed(&s),
-        r1.clone(),
-        r2.clone(),
-        ev(&s, 3, "alice", None, clear(chat, &[&r1])),
-    ];
-    let left: Vec<Option<Uuid>> = as_chat(&envs, chat)
-        .guards
-        .lockdowns_of(chat)
-        .iter()
-        .map(|l| l.raise_event_id)
-        .collect();
-    assert_eq!(
-        left,
-        vec![Some(r2.event_id)],
-        "the raise it doesn't name stays"
-    );
+    let (r1, r2) = (ev(&s, 1, "owner", None, raise(chat)), ev(&s, 2, "owner", None, raise(chat)));
+    let envs = vec![seed(&s), r1.clone(), r2.clone(), ev(&s, 3, "alice", None, clear(chat, &[&r1]))];
+    let left: Vec<Option<Uuid>> = as_chat(&envs, chat).guards.lockdowns_of(chat).iter().map(|l| l.raise_event_id).collect();
+    assert_eq!(left, vec![Some(r2.event_id)], "the raise it doesn't name stays");
     // Named, but raised after the clear (it sorts later): stays.
     let late = ev(&s, 5, "owner", None, raise(chat));
-    let envs = vec![
-        seed(&s),
-        r1.clone(),
-        ev(&s, 3, "alice", None, clear(chat, &[&r1, &late])),
-        late.clone(),
-    ];
-    let left: Vec<Option<Uuid>> = as_chat(&envs, chat)
-        .guards
-        .lockdowns_of(chat)
-        .iter()
-        .map(|l| l.raise_event_id)
-        .collect();
+    let envs = vec![seed(&s), r1.clone(), ev(&s, 3, "alice", None, clear(chat, &[&r1, &late])), late.clone()];
+    let left: Vec<Option<Uuid>> = as_chat(&envs, chat).guards.lockdowns_of(chat).iter().map(|l| l.raise_event_id).collect();
     assert_eq!(left, vec![Some(late.event_id)]);
 }
 
@@ -205,25 +151,8 @@ fn a_clear_lifts_only_the_raises_it_names() {
 fn a_raise_claiming_its_raise_id_is_refused() {
     let s = base();
     let chat = Uuid::new_v4();
-    let SessionEvent::ChatLockdownRaised { lockdown, .. } = raise(chat) else {
-        unreachable!()
-    };
-    let forged = ChatLockdown {
-        raise_event_id: Some(Uuid::new_v4()),
-        ..lockdown
-    };
-    let envs = vec![
-        seed(&s),
-        ev(
-            &s,
-            1,
-            "owner",
-            None,
-            SessionEvent::ChatLockdownRaised {
-                chat_id: chat,
-                lockdown: forged,
-            },
-        ),
-    ];
+    let SessionEvent::ChatLockdownRaised { lockdown, .. } = raise(chat) else { unreachable!() };
+    let forged = ChatLockdown { raise_event_id: Some(Uuid::new_v4()), ..lockdown };
+    let envs = vec![seed(&s), ev(&s, 1, "owner", None, SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: forged })];
     assert!(!as_chat(&envs, chat).guards.lockdown_active());
 }

@@ -45,11 +45,7 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
-        Err(format!(
-            "git {}: {}",
-            args.first().copied().unwrap_or(""),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ))
+        Err(format!("git {}: {}", args.first().copied().unwrap_or(""), String::from_utf8_lossy(&out.stderr).trim()))
     }
 }
 
@@ -79,36 +75,15 @@ pub fn main_checkout(dir: &Path) -> Option<PathBuf> {
 /// name → every `url` value it has.
 pub fn remotes(dir: &Path) -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let Some(common) = git_common_dir(dir) else {
-        return out;
-    };
+    let Some(common) = git_common_dir(dir) else { return out };
     let config = common.join("config");
-    let Ok(text) = git(
-        dir,
-        &[
-            "config",
-            "--file",
-            &config.to_string_lossy(),
-            "--no-includes",
-            "--get-regexp",
-            r"^remote\..*\.url$",
-        ],
-    ) else {
+    let Ok(text) = git(dir, &["config", "--file", &config.to_string_lossy(), "--no-includes", "--get-regexp", r"^remote\..*\.url$"]) else {
         return out;
     };
     for line in text.lines() {
-        let Some((key, url)) = line.split_once(' ') else {
-            continue;
-        };
-        let Some(name) = key
-            .strip_prefix("remote.")
-            .and_then(|k| k.strip_suffix(".url"))
-        else {
-            continue;
-        };
-        out.entry(name.to_string())
-            .or_default()
-            .push(url.trim().to_string());
+        let Some((key, url)) = line.split_once(' ') else { continue };
+        let Some(name) = key.strip_prefix("remote.").and_then(|k| k.strip_suffix(".url")) else { continue };
+        out.entry(name.to_string()).or_default().push(url.trim().to_string());
     }
     out
 }
@@ -125,11 +100,7 @@ pub enum MatchVia {
 /// Whether the checkout with these `remotes` covers `repo`: `origin` (or,
 /// for a fork, `upstream`) canonicalizes to the repo's canonical. A remote
 /// with more than one `url` is ambiguous and never matches.
-pub fn match_repo(
-    remotes: &BTreeMap<String, Vec<String>>,
-    repo: &WorkspaceRepo,
-    aliases: &BTreeMap<String, String>,
-) -> Option<MatchVia> {
+pub fn match_repo(remotes: &BTreeMap<String, Vec<String>>, repo: &WorkspaceRepo, aliases: &BTreeMap<String, String>) -> Option<MatchVia> {
     let is = |name: &str| {
         remotes
             .get(name)
@@ -165,10 +136,7 @@ pub struct Aliases {
 
 impl From<BTreeMap<String, String>> for Aliases {
     fn from(device: BTreeMap<String, String>) -> Self {
-        Self {
-            device,
-            ..Default::default()
-        }
+        Self { device, ..Default::default() }
     }
 }
 
@@ -183,11 +151,7 @@ impl Aliases {
 
 /// [`match_repo`] with synced aliases: `(how, via_alias)`, where
 /// `via_alias` says an accepted synced alias was needed (shown "via alias").
-pub fn match_repo_via(
-    remotes: &BTreeMap<String, Vec<String>>,
-    repo: &WorkspaceRepo,
-    aliases: &Aliases,
-) -> Option<(MatchVia, bool)> {
+pub fn match_repo_via(remotes: &BTreeMap<String, Vec<String>>, repo: &WorkspaceRepo, aliases: &Aliases) -> Option<(MatchVia, bool)> {
     if let Some(v) = match_repo(remotes, repo, &aliases.device) {
         return Some((v, false));
     }
@@ -195,9 +159,7 @@ pub fn match_repo_via(
         return None;
     }
     let hosts = aliases.all_hosts();
-    let names: Vec<&String> = std::iter::once(&repo.canonical)
-        .chain(aliases.repos.get(&repo.id).into_iter().flatten())
-        .collect();
+    let names: Vec<&String> = std::iter::once(&repo.canonical).chain(aliases.repos.get(&repo.id).into_iter().flatten()).collect();
     let is = |name: &str| {
         remotes
             .get(name)
@@ -216,16 +178,9 @@ pub fn match_repo_via(
 
 /// The canonical of a checkout's `origin` (or, for a fork, `upstream`)
 /// with no case hint: what to suggest when proposing a new repo.
-pub fn suggested_canonical(
-    dir: &Path,
-    aliases: &BTreeMap<String, String>,
-) -> Option<(String, bool)> {
+pub fn suggested_canonical(dir: &Path, aliases: &BTreeMap<String, String>) -> Option<(String, bool)> {
     let r = remotes(dir);
-    let one = |name: &str| {
-        r.get(name)
-            .filter(|u| u.len() == 1)
-            .and_then(|u| canonical_repo(&u[0], "", aliases).ok())
-    };
+    let one = |name: &str| r.get(name).filter(|u| u.len() == 1).and_then(|u| canonical_repo(&u[0], "", aliases).ok());
     match (one("upstream"), one("origin")) {
         (Some(up), Some(_)) => Some((up, true)),
         (_, Some(o)) => Some((o, false)),
@@ -242,10 +197,7 @@ pub fn root_commit(dir: &Path) -> Option<String> {
         return None;
     }
     let out = git(dir, &["rev-list", "--max-parents=0", "HEAD"]).ok()?;
-    out.lines()
-        .last()
-        .map(str::to_string)
-        .filter(|c| is_commit_id(c))
+    out.lines().last().map(str::to_string).filter(|c| is_commit_id(c))
 }
 
 /// Fingerprint membership (review F10): `root` is a parentless commit in
@@ -255,12 +207,7 @@ pub fn has_root(dir: &Path, root: &str) -> bool {
     if !is_commit_id(root) {
         return false;
     }
-    git(dir, &["cat-file", "-e", &format!("{root}^{{commit}}")]).is_ok()
-        && git(
-            dir,
-            &["rev-parse", "--verify", "--quiet", &format!("{root}^")],
-        )
-        .is_err()
+    git(dir, &["cat-file", "-e", &format!("{root}^{{commit}}")]).is_ok() && git(dir, &["rev-parse", "--verify", "--quiet", &format!("{root}^")]).is_err()
 }
 
 /// Whether `commit` is a commit object in the checkout.
@@ -299,15 +246,7 @@ mod tests {
 
     fn wefit() -> WorkspaceRepo {
         let c = "github.com/zazulam/wefit";
-        WorkspaceRepo {
-            id: repo_id(c),
-            canonical: c.into(),
-            display_name: "WeFit".into(),
-            forge_kind: "github".into(),
-            default_branch: "main".into(),
-            root_commit: None,
-            scratch: false,
-        }
+        WorkspaceRepo { id: repo_id(c), canonical: c.into(), display_name: "WeFit".into(), forge_kind: "github".into(), default_branch: "main".into(), root_commit: None, scratch: false }
     }
 
     #[test]
@@ -316,45 +255,16 @@ mod tests {
         let a = t.path().join("a");
         repo_with_origin(&a, Some("git@github.com:ZaZulam/WeFit.git"));
         let none = BTreeMap::new();
-        assert_eq!(
-            match_repo(&remotes(&a), &wefit(), &none),
-            Some(MatchVia::Origin)
-        );
+        assert_eq!(match_repo(&remotes(&a), &wefit(), &none), Some(MatchVia::Origin));
         // A fork: origin is the person's own, upstream the workspace repo.
         let b = t.path().join("b");
         repo_with_origin(&b, Some("https://github.com/alice/wefit"));
-        sh(
-            &b,
-            &[
-                "remote",
-                "add",
-                "upstream",
-                "https://github.com/zazulam/wefit.git",
-            ],
-        );
-        assert_eq!(
-            match_repo(&remotes(&b), &wefit(), &none),
-            Some(MatchVia::Upstream)
-        );
-        assert_eq!(
-            suggested_canonical(&b, &none),
-            Some(("github.com/zazulam/wefit".into(), true))
-        );
+        sh(&b, &["remote", "add", "upstream", "https://github.com/zazulam/wefit.git"]);
+        assert_eq!(match_repo(&remotes(&b), &wefit(), &none), Some(MatchVia::Upstream));
+        assert_eq!(suggested_canonical(&b, &none), Some(("github.com/zazulam/wefit".into(), true)));
         // Two urls on origin: ambiguous.
-        sh(
-            &a,
-            &[
-                "config",
-                "--add",
-                "remote.origin.url",
-                "https://github.com/evil/x",
-            ],
-        );
-        assert_eq!(
-            match_repo(&remotes(&a), &wefit(), &none),
-            None,
-            "multi_url_remote_is_ambiguous"
-        );
+        sh(&a, &["config", "--add", "remote.origin.url", "https://github.com/evil/x"]);
+        assert_eq!(match_repo(&remotes(&a), &wefit(), &none), None, "multi_url_remote_is_ambiguous");
     }
 
     #[test]
@@ -363,27 +273,12 @@ mod tests {
         let a = t.path().join("a");
         repo_with_origin(&a, Some("https://example.com/other/thing"));
         // A rewrite that would make it "look like" WeFit to git's transport.
-        sh(
-            &a,
-            &[
-                "config",
-                "url.https://github.com/zazulam/wefit.insteadOf",
-                "https://example.com/other/thing",
-            ],
-        );
+        sh(&a, &["config", "url.https://github.com/zazulam/wefit.insteadOf", "https://example.com/other/thing"]);
         // And an include that sets origin to WeFit.
         let inc = t.path().join("inc.cfg");
-        std::fs::write(
-            &inc,
-            "[remote \"origin\"]\n\turl = https://github.com/zazulam/wefit\n",
-        )
-        .unwrap();
+        std::fs::write(&inc, "[remote \"origin\"]\n\turl = https://github.com/zazulam/wefit\n").unwrap();
         sh(&a, &["config", "include.path", &inc.to_string_lossy()]);
-        assert_eq!(
-            match_repo(&remotes(&a), &wefit(), &BTreeMap::new()),
-            None,
-            "include_path_does_not_change_identity"
-        );
+        assert_eq!(match_repo(&remotes(&a), &wefit(), &BTreeMap::new()), None, "include_path_does_not_change_identity");
     }
 
     #[test]
@@ -402,9 +297,6 @@ mod tests {
         // A chat worktree reports the main checkout.
         let wt = t.path().join("wt");
         sh(&a, &["worktree", "add", "-q", &wt.to_string_lossy()]);
-        assert_eq!(
-            main_checkout(&wt).map(|p| std::fs::canonicalize(p).unwrap()),
-            Some(std::fs::canonicalize(&a).unwrap())
-        );
+        assert_eq!(main_checkout(&wt).map(|p| std::fs::canonicalize(p).unwrap()), Some(std::fs::canonicalize(&a).unwrap()));
     }
 }

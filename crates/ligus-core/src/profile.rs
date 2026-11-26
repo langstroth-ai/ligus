@@ -68,18 +68,14 @@ impl Avatar {
         if self.data.len() > MAX_AVATAR_BYTES.div_ceil(3) * 4 + 4 {
             return Err("an avatar is at most 16 KiB");
         }
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(self.data.as_bytes())
-            .map_err(|_| "an avatar's data isn't base64")?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(self.data.as_bytes()).map_err(|_| "an avatar's data isn't base64")?;
         if bytes.len() > MAX_AVATAR_BYTES {
             return Err("an avatar is at most 16 KiB");
         }
         let magic_ok = match self.content_type.as_str() {
             "image/png" => bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
             "image/jpeg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
-            "image/webp" => {
-                bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP"
-            }
+            "image/webp" => bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
             _ => false,
         };
         if !magic_ok {
@@ -197,8 +193,7 @@ fn hidden_v1(c: char) -> bool {
 fn space_v1(c: char) -> bool {
     matches!(
         c,
-        ' ' | '\u{0085}' | '\u{00A0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
+        ' ' | '\u{0085}' | '\u{00A0}' | '\u{1680}' | '\u{2000}'..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
     )
 }
 
@@ -279,36 +274,15 @@ mod tests {
 
     #[test]
     fn frozen_cleaner_matches_the_display_cleaner_on_its_own_set() {
-        for s in [
-            "Ana",
-            "  Ana  Ruiz ",
-            "A\u{202E}na",
-            "A\u{200B}na",
-            "Ana\u{0007}",
-            "Ana\u{3000}Ruiz",
-            "Zoë",
-            "李华",
-        ] {
-            assert_eq!(
-                clean_v1(s),
-                ligus_proto::names::clean_display_name(s),
-                "{s:?}"
-            );
+        for s in ["Ana", "  Ana  Ruiz ", "A\u{202E}na", "A\u{200B}na", "Ana\u{0007}", "Ana\u{3000}Ruiz", "Zoë", "李华"] {
+            assert_eq!(clean_v1(s), ligus_proto::names::clean_display_name(s), "{s:?}");
         }
     }
 
     #[test]
     fn names_are_checked() {
         assert!(name_ok("Ana Ruiz").is_ok());
-        for bad in [
-            "",
-            " Ana",
-            "Ana ",
-            "A  na",
-            "A\u{202E}na",
-            "A\u{200B}na",
-            "Ana\n",
-        ] {
+        for bad in ["", " Ana", "Ana ", "A  na", "A\u{202E}na", "A\u{200B}na", "Ana\n"] {
             assert!(name_ok(bad).is_err(), "{bad:?}");
         }
         assert!(name_ok(&"a".repeat(64)).is_ok());
@@ -323,10 +297,7 @@ mod tests {
     fn avatars_are_checked() {
         let a = Avatar::new("image/png", &png()).unwrap();
         assert!(a.check().is_ok());
-        assert!(
-            Avatar::new("image/svg+xml", b"<svg/>").is_err(),
-            "never SVG"
-        );
+        assert!(Avatar::new("image/svg+xml", b"<svg/>").is_err(), "never SVG");
         assert!(Avatar::new("image/jpeg", &png()).is_err(), "magic bytes");
         let mut big = png();
         big.resize(MAX_AVATAR_BYTES + 1, 0);
@@ -343,13 +314,7 @@ mod tests {
     #[test]
     fn a_change_changes_something_and_never_both_sets_and_clears() {
         let id = Uuid::new_v4();
-        let mut c = ProfileChange {
-            account_id: id,
-            display_name: None,
-            avatar: None,
-            clear_avatar: false,
-            issued_at_ms: 0,
-        };
+        let mut c = ProfileChange { account_id: id, display_name: None, avatar: None, clear_avatar: false, issued_at_ms: 0 };
         assert!(change_ok(&c).is_err());
         c.clear_avatar = true;
         assert!(change_ok(&c).is_ok());

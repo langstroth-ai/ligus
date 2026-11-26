@@ -38,10 +38,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use ligus_core::{ChatSession, Timestamp, WorkspaceRole};
-use ligus_forge::{
-    ChangeRequestDraft, ChangeRequestOutcome, Connection, Connections, Forge, ForgeId, ForgeKind,
-    RepoQuery, RepoRef, Transport,
-};
+use ligus_forge::{ChangeRequestDraft, ChangeRequestOutcome, Connection, Connections, Forge, ForgeId, ForgeKind, RepoQuery, RepoRef, Transport};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -61,11 +58,7 @@ const MAX_JOBS: usize = 2;
 const KEEP_JOBS: usize = 20;
 
 fn env_secs(name: &str, default: u64) -> Duration {
-    Duration::from_secs(
-        crate::env_opt(name)
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(default),
-    )
+    Duration::from_secs(crate::env_opt(name).and_then(|v| v.trim().parse().ok()).unwrap_or(default))
 }
 
 fn clone_timeout() -> Duration {
@@ -73,11 +66,7 @@ fn clone_timeout() -> Duration {
 }
 
 fn max_clone_bytes() -> u64 {
-    crate::env_opt("LIGUS_REPOS_MAX_CLONE_MB")
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .unwrap_or(2048)
-        * 1024
-        * 1024
+    crate::env_opt("LIGUS_REPOS_MAX_CLONE_MB").and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(2048) * 1024 * 1024
 }
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -101,11 +90,7 @@ pub struct RunOut {
 pub fn quiet(program: &str) -> Command {
     // git: Ligus's own hardened git (no inherited repo redirects); either
     // way none of Ligus's own secrets reach the child or its helpers.
-    let mut c = if program == "git" {
-        ligus_core::process_util::git()
-    } else {
-        ligus_core::process_util::command(program)
-    };
+    let mut c = if program == "git" { ligus_core::process_util::git() } else { ligus_core::process_util::command(program) };
     ligus_core::process_util::scrub_ligus_secrets(&mut c);
     c.env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
@@ -124,11 +109,7 @@ pub fn run_watched(
     mut on_line: impl FnMut(&str),
     mut check: impl FnMut() -> Option<String>,
 ) -> Result<RunOut, String> {
-    let mut child = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
     let mut stdout = child.stdout.take().ok_or("no stdout")?;
     let mut stderr = child.stderr.take().ok_or("no stderr")?;
     let out_t = std::thread::spawn(move || {
@@ -198,11 +179,7 @@ pub fn run_watched(
         lines.push(l);
     }
     let stdout = out_t.join().unwrap_or_default();
-    Ok(RunOut {
-        ok: status.success(),
-        stdout,
-        stderr: lines.join("\n"),
-    })
+    Ok(RunOut { ok: status.success(), stdout, stderr: lines.join("\n") })
 }
 
 pub fn run(cmd: Command, timeout: Duration) -> Result<RunOut, String> {
@@ -266,12 +243,11 @@ pub fn load_forges(data_dir: &FsPath, offline: bool) -> Vec<ForgeHandle> {
         .into_iter()
         .map(|conn| {
             // Offline (tests): never the host's gh login.
-            let creds: Arc<dyn ligus_forge::CredentialSource> =
-                if offline && conn.auth == ligus_forge::AuthSource::Gh {
-                    Arc::new(ligus_forge::tokens::Anonymous)
-                } else {
-                    conn.credentials(store.clone(), helper.as_deref(), Some(data_dir))
-                };
+            let creds: Arc<dyn ligus_forge::CredentialSource> = if offline && conn.auth == ligus_forge::AuthSource::Gh {
+                Arc::new(ligus_forge::tokens::Anonymous)
+            } else {
+                conn.credentials(store.clone(), helper.as_deref(), Some(data_dir))
+            };
             let forge = conn.build(creds);
             ForgeHandle { conn, forge }
         })
@@ -283,54 +259,22 @@ pub const OFFLINE: &str = "offline: this build never contacts code hosts";
 
 /// A connection's status: signed in as whom, or why not (cached a minute).
 async fn forge_status(st: &RepoState, h: &ForgeHandle) -> GhStatus {
-    if let Some((at, s)) = st
-        .status
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(h.id())
-    {
+    if let Some((at, s)) = st.status.lock().unwrap_or_else(|e| e.into_inner()).get(h.id()) {
         if at.elapsed() < Duration::from_secs(60) {
             return s.clone();
         }
     }
     if st.offline.load(Ordering::SeqCst) && !st.pinned.load(Ordering::SeqCst) {
-        return GhStatus {
-            available: false,
-            login: None,
-            reason: Some(OFFLINE.into()),
-        };
+        return GhStatus { available: false, login: None, reason: Some(OFFLINE.into()) };
     }
     let s = match tokio::time::timeout(GH_TIMEOUT, h.forge.whoami()).await {
-        Ok(Ok(Some(u))) => GhStatus {
-            available: true,
-            login: Some(u.login),
-            reason: None,
-        },
-        Ok(Ok(None)) => GhStatus {
-            available: false,
-            login: None,
-            reason: h.forge.signed_out_reason(),
-        },
+        Ok(Ok(Some(u))) => GhStatus { available: true, login: Some(u.login), reason: None },
+        Ok(Ok(None)) => GhStatus { available: false, login: None, reason: h.forge.signed_out_reason() },
         // Never what the host answered: its URL may not be a code host.
-        Ok(Err(e)) => GhStatus {
-            available: false,
-            login: None,
-            reason: Some(format!(
-                "{} didn't answer with this box's login: {}",
-                h.conn.display(),
-                e.summary()
-            )),
-        },
-        Err(_) => GhStatus {
-            available: false,
-            login: None,
-            reason: Some(format!("{} didn't answer in time", h.conn.display())),
-        },
+        Ok(Err(e)) => GhStatus { available: false, login: None, reason: Some(format!("{} didn't answer with this box's login: {}", h.conn.display(), e.summary())) },
+        Err(_) => GhStatus { available: false, login: None, reason: Some(format!("{} didn't answer in time", h.conn.display())) },
     };
-    st.status
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(h.id().clone(), (Instant::now(), s.clone()));
+    st.status.lock().unwrap_or_else(|e| e.into_inner()).insert(h.id().clone(), (Instant::now(), s.clone()));
     s
 }
 
@@ -461,12 +405,7 @@ impl Default for RepoState {
 impl RepoState {
     /// The box's connections.
     pub fn forges(&self, data_dir: &FsPath) -> Vec<ForgeHandle> {
-        if let Some(f) = self
-            .forges
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-        {
+        if let Some(f) = self.forges.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
             return f.clone();
         }
         let loaded = load_forges(data_dir, self.offline.load(Ordering::SeqCst));
@@ -479,10 +418,7 @@ impl RepoState {
         if !self.pinned.load(Ordering::SeqCst) {
             *self.forges.write().unwrap_or_else(|e| e.into_inner()) = None;
         }
-        self.status
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        self.status.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     /// The connection with this id (`github.com` is the GitHub alias).
@@ -498,17 +434,12 @@ impl RepoState {
     /// The GitHub connection the legacy `github` listing key shows.
     pub fn github(&self, data_dir: &FsPath) -> Option<ForgeHandle> {
         let all = self.forges(data_dir);
-        all.iter()
-            .find(|h| h.is_github_com())
-            .or_else(|| all.iter().find(|h| h.conn.kind == ForgeKind::GitHub))
-            .cloned()
+        all.iter().find(|h| h.is_github_com()).or_else(|| all.iter().find(|h| h.conn.kind == ForgeKind::GitHub)).cloned()
     }
 
     /// The connection a remote URL is on.
     pub fn forge_of_remote(&self, data_dir: &FsPath, url: &str) -> Option<(ForgeHandle, RepoRef)> {
-        self.forges(data_dir)
-            .into_iter()
-            .find_map(|h| h.forge.repo_of_remote(url).map(|r| (h, r)))
+        self.forges(data_dir).into_iter().find_map(|h| h.forge.repo_of_remote(url).map(|r| (h, r)))
     }
 
     /// Swap the forges (tests).
@@ -516,19 +447,11 @@ impl RepoState {
     pub fn set_forges(&self, forges: Vec<ForgeHandle>) {
         self.pinned.store(true, Ordering::SeqCst);
         *self.forges.write().unwrap_or_else(|e| e.into_inner()) = Some(forges);
-        self.status
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        self.status.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     fn job(&self, id: Uuid) -> Option<CloneJob> {
-        self.jobs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .find(|j| j.id == id)
-            .cloned()
+        self.jobs.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|j| j.id == id).cloned()
     }
 
     fn update_job(&self, id: Uuid, f: impl FnOnce(&mut CloneJob)) -> Option<CloneJob> {
@@ -539,13 +462,7 @@ impl RepoState {
     }
 
     fn running_jobs(&self) -> Vec<CloneJob> {
-        self.jobs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .filter(|j| j.state == "running")
-            .cloned()
-            .collect()
+        self.jobs.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|j| j.state == "running").cloned().collect()
     }
 }
 
@@ -554,25 +471,13 @@ struct BusyGuard<'a>(&'a RepoState, String);
 
 impl Drop for BusyGuard<'_> {
     fn drop(&mut self) {
-        self.0
-            .busy
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.1);
+        self.0.busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.1);
     }
 }
 
 fn claim<'a>(st: &'a RepoState, name: &str) -> ApiResult<BusyGuard<'a>> {
-    if !st
-        .busy
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(name.to_string())
-    {
-        return Err(err(
-            StatusCode::CONFLICT,
-            format!("{name} is busy with another git operation; try again in a moment"),
-        ));
+    if !st.busy.lock().unwrap_or_else(|e| e.into_inner()).insert(name.to_string()) {
+        return Err(err(StatusCode::CONFLICT, format!("{name} is busy with another git operation; try again in a moment")));
     }
     Ok(BusyGuard(st, name.to_string()))
 }
@@ -592,10 +497,7 @@ pub(super) fn ensure_can_write(s: &Shared, chat: Option<&ChatSession>) -> ApiRes
         None => super::api::hosts_and_agents(s)?.1.role_of(&me),
     };
     if role.rank() < WRITE_FLOOR.rank() {
-        return Err(err(
-            StatusCode::FORBIDDEN,
-            "unauthorized: this host's role in the workspace can't change repositories",
-        ));
+        return Err(err(StatusCode::FORBIDDEN, "unauthorized: this host's role in the workspace can't change repositories"));
     }
     Ok(())
 }
@@ -619,16 +521,10 @@ pub(super) fn owner_gate(s: &Shared, peer: Option<&super::tunnel::TunnelPeer>) -
         // this host, so it never counts.
         None => s.opts.listen.ip().is_loopback() && super::api::is_operator(),
         Some(p) => {
-            let device = s
-                .tunnel
-                .as_ref()
-                .and_then(|t| t.registry.get(&p.pid))
-                .filter(|r| r.is_active())
-                .and_then(|r| r.device_id);
+            let device = s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)).filter(|r| r.is_active()).and_then(|r| r.device_id);
             device.is_some_and(|d| {
                 let svc = s.lock();
-                svc.box_owner_accounts(s.ws)
-                    .is_ok_and(|owners| svc.phone_of_accounts(s.ws, d, &owners))
+                svc.box_owner_accounts(s.ws).is_ok_and(|owners| svc.phone_of_accounts(s.ws, d, &owners))
             })
         }
     };
@@ -643,9 +539,7 @@ pub(super) fn owner_gate(s: &Shared, peer: Option<&super::tunnel::TunnelPeer>) -
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> ApiResult<T> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    tokio::task::spawn_blocking(f).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 // ── DTOs ───────────────────────────────────────────────────────────────────
@@ -711,8 +605,7 @@ fn local_checkouts(repos_dir: &FsPath) -> Vec<(String, PathBuf)> {
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let path = e.path();
-            (repos::valid_checkout_dir_name(&name) && path.is_dir() && path.join(".git").exists())
-                .then_some((name, path))
+            (repos::valid_checkout_dir_name(&name) && path.is_dir() && path.join(".git").exists()).then_some((name, path))
         })
         .collect();
     out.sort_by_key(|(n, _)| n.to_ascii_lowercase());
@@ -725,12 +618,7 @@ fn binding_name(raw: &str) -> (String, bool) {
     let p = FsPath::new(raw.trim());
     // `has_root`: a drive-less `/home/x` on Windows is still a full path.
     if p.is_absolute() || p.has_root() {
-        (
-            p.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "checkout".into()),
-            true,
-        )
+        (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "checkout".into()), true)
     } else {
         (raw.trim().to_string(), false)
     }
@@ -742,10 +630,7 @@ fn chat_binding(data_dir: &FsPath, chat: Uuid) -> (Option<PathBuf>, Value) {
     let repos_dir = repos::repos_dir(data_dir);
     let workspace_default = b.workspace.as_deref().map(|w| binding_name(w).0);
     let Some((raw, own)) = b.raw_for(chat) else {
-        return (
-            None,
-            json!({ "repo": null, "workspaceDefault": workspace_default, "chatBranch": repos::chat_branch(chat) }),
-        );
+        return (None, json!({ "repo": null, "workspaceDefault": workspace_default, "chatBranch": repos::chat_branch(chat) }));
     };
     let (name, external) = binding_name(raw);
     let dir = repos::resolve_path(&repos_dir, raw);
@@ -763,16 +648,7 @@ fn chat_binding(data_dir: &FsPath, chat: Uuid) -> (Option<PathBuf>, Value) {
     repo["source"] = json!(if own { "chat" } else { "workspace" });
     repo["available"] = json!(true);
     repo["external"] = json!(external);
-    let exists = repos::git_out(
-        &dir,
-        &[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ],
-    )
-    .is_some();
+    let exists = repos::git_out(&dir, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_some();
     let mut out = json!({ "repo": repo, "workspaceDefault": workspace_default, "chatBranch": branch, "chatBranchExists": exists });
     if exists {
         if let Some(base) = info.default_branch.as_deref() {
@@ -794,10 +670,7 @@ fn ahead_behind(dir: &FsPath, base: &str, branch: &str, fork: bool) -> Option<(u
     let upstream = fork.then(|| format!("refs/remotes/{UPSTREAM_REMOTE}/{base}"));
     let base_ref = upstream
         .into_iter()
-        .chain([
-            format!("refs/heads/{base}"),
-            format!("refs/remotes/origin/{base}"),
-        ])
+        .chain([format!("refs/heads/{base}"), format!("refs/remotes/origin/{base}")])
         .find(|r| repos::ref_exists(dir, r))?;
     repos::behind_ahead(dir, &base_ref, &format!("refs/heads/{branch}"))
 }
@@ -818,8 +691,7 @@ pub(super) fn tag_scratch(s: &Shared, chat: Uuid, v: &mut Value) {
     let svc = s.lock();
     if let Some(e) = crate::scratch_cmd::of_chat(&s.cfg.data_dir, &svc, chat) {
         let st = crate::scratch_cmd::settings(&svc, &s.cfg.data_dir);
-        v["repo"]["scratch"] =
-            crate::scratch_cmd::dto(&e, &st, ligus_runtime::repos::scratch::now());
+        v["repo"]["scratch"] = crate::scratch_cmd::dto(&e, &st, ligus_runtime::repos::scratch::now());
         v["repo"]["displayName"] = json!(ligus_runtime::display::shown(&e.name));
         v["repo"]["name"] = json!(e.dir_name);
     }
@@ -846,21 +718,13 @@ fn valid_owner_any(o: &str) -> bool {
 
 /// The listing of one connection, in the shape the phone knows from the
 /// `github` key.
-async fn forge_listing(
-    st: &RepoState,
-    h: &ForgeHandle,
-    query: &RepoQuery,
-    cloned: &HashMap<String, String>,
-    via_fork: &HashMap<String, String>,
-) -> Value {
+async fn forge_listing(st: &RepoState, h: &ForgeHandle, query: &RepoQuery, cloned: &HashMap<String, String>, via_fork: &HashMap<String, String>) -> Value {
     let status = forge_status(st, h).await;
     let mut out = json!({ "available": status.available });
     if let Some(r) = &status.reason {
         out["reason"] = json!(r);
     }
-    let (true, Some(login)) = (status.available, status.login.as_deref()) else {
-        return out;
-    };
+    let (true, Some(login)) = (status.available, status.login.as_deref()) else { return out };
     out["login"] = json!(login);
     out["owners"] = match h.forge.owners(login).await {
         Ok(o) => json!(o),
@@ -910,45 +774,25 @@ async fn forge_listing(
     out
 }
 
-pub async fn list_repos(
-    State(s): S,
-    peer: Option<axum::Extension<super::tunnel::TunnelPeer>>,
-    Query(lq): Query<ListQuery>,
-) -> ApiResult<Json<Value>> {
+pub async fn list_repos(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Query(lq): Query<ListQuery>) -> ApiResult<Json<Value>> {
     // Lists with the owner's forge sign-in (private repos, any org).
     owner_gate(&s, peer.as_deref())?;
     let q = lq.q.map(|q| q.trim().to_string()).filter(|q| !q.is_empty());
-    if q.as_ref()
-        .is_some_and(|q| q.chars().count() > 100 || q.chars().any(char::is_control))
-    {
+    if q.as_ref().is_some_and(|q| q.chars().count() > 100 || q.chars().any(char::is_control)) {
         return Err(ApiError::bad_request("search text is too long"));
     }
-    let owner = lq
-        .owner
-        .map(|o| o.trim().to_string())
-        .filter(|o| !o.is_empty());
+    let owner = lq.owner.map(|o| o.trim().to_string()).filter(|o| !o.is_empty());
     if owner.as_deref().is_some_and(|o| !valid_owner_any(o)) {
-        return Err(ApiError::bad_request(
-            "owner must be an account, org or group name",
-        ));
+        return Err(ApiError::bad_request("owner must be an account, org or group name"));
     }
     let selected = match lq.forge.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
         None => None,
         Some(raw) => {
             let id = ForgeId::parse(raw).map_err(|e| ApiError::bad_request(e.to_string()))?;
-            Some(
-                s.repos
-                    .forge(&s.cfg.data_dir, &id)
-                    .ok_or_else(|| ApiError::not_found("code host connection"))?,
-            )
+            Some(s.repos.forge(&s.cfg.data_dir, &id).ok_or_else(|| ApiError::not_found("code host connection"))?)
         }
     };
-    let query = RepoQuery {
-        q,
-        owner,
-        page: lq.page.unwrap_or(1).clamp(1, 100),
-        per_page: lq.per_page.unwrap_or(30).clamp(1, 100),
-    };
+    let query = RepoQuery { q, owner, page: lq.page.unwrap_or(1).clamp(1, 100), per_page: lq.per_page.unwrap_or(30).clamp(1, 100) };
     let data_dir = s.cfg.data_dir.clone();
     let jobs: Vec<Value> = s.repos.running_jobs().iter().map(CloneJob::dto).collect();
     let needle = query.q.as_deref().map(str::to_ascii_lowercase);
@@ -961,15 +805,7 @@ pub async fn list_repos(
         let live = ligus_runtime::repos::scratch::live(svc.store(), s.ws);
         let now = ligus_runtime::repos::scratch::now();
         let settings = crate::scratch_cmd::settings_dto(&st, live.len());
-        (
-            live.into_iter()
-                .map(|e| {
-                    let d = crate::scratch_cmd::dto(&e, &st, now);
-                    (e, d)
-                })
-                .collect::<Vec<_>>(),
-            settings,
-        )
+        (live.into_iter().map(|e| { let d = crate::scratch_cmd::dto(&e, &st, now); (e, d) }).collect::<Vec<_>>(), settings)
     };
     let (local, cloned, via_fork, ws_default) = blocking(move || {
         let repos_dir = repos::repos_dir(&data_dir);
@@ -980,13 +816,7 @@ pub async fn list_repos(
         let mut via_fork: HashMap<String, String> = HashMap::new();
         let mut scratch_rows: Vec<Value> = scratch_live
             .iter()
-            .filter(|(e, _)| {
-                needle.as_deref().is_none_or(|n| {
-                    format!("{} {}", e.dir_name, e.name)
-                        .to_ascii_lowercase()
-                        .contains(n)
-                })
-            })
+            .filter(|(e, _)| needle.as_deref().is_none_or(|n| format!("{} {}", e.dir_name, e.name).to_ascii_lowercase().contains(n)))
             .filter(|(e, _)| ligus_runtime::git_worktree::is_git_repo(&e.path))
             .map(|(e, d)| {
                 let info = repos::inspect(&e.path);
@@ -994,11 +824,7 @@ pub async fn list_repos(
                 v["displayName"] = json!(ligus_runtime::display::shown(&e.name));
                 v["scratch"] = d.clone();
                 v["isWorkspaceDefault"] = json!(false);
-                v["boundChats"] = json!(b
-                    .chats
-                    .values()
-                    .filter(|c| repos::resolve_path(&repos_dir, c) == e.path)
-                    .count());
+                v["boundChats"] = json!(b.chats.values().filter(|c| repos::resolve_path(&repos_dir, c) == e.path).count());
                 v
             })
             .collect();
@@ -1007,19 +833,14 @@ pub async fn list_repos(
             .filter_map(|(name, path)| {
                 let info = repos::inspect(&path);
                 if let Some(r) = info.remote.as_ref() {
-                    cloned
-                        .entry(r.full_name().to_ascii_lowercase())
-                        .or_insert_with(|| name.clone());
+                    cloned.entry(r.full_name().to_ascii_lowercase()).or_insert_with(|| name.clone());
                 }
                 if let Some(f) = info.fork.as_ref() {
-                    via_fork
-                        .entry(f.upstream.full_name().to_ascii_lowercase())
-                        .or_insert_with(|| name.clone());
+                    via_fork.entry(f.upstream.full_name().to_ascii_lowercase()).or_insert_with(|| name.clone());
                 }
                 let mut v = checkout_dto_at(&path, &name, &info);
                 if let Some(n) = needle.as_deref() {
-                    let hay = format!("{} {}", name, v["displayName"].as_str().unwrap_or(""))
-                        .to_ascii_lowercase();
+                    let hay = format!("{} {}", name, v["displayName"].as_str().unwrap_or("")).to_ascii_lowercase();
                     if !hay.contains(n) {
                         return None;
                     }
@@ -1049,9 +870,7 @@ pub async fn list_repos(
         let st = forge_status(&s.repos, &h).await;
         forges.push(forge_dto(&h, Some(&st)));
     }
-    Ok(Json(
-        json!({ "local": local, "github": github, "workspaceDefault": ws_default, "jobs": jobs, "forges": forges, "scratch": scratch_settings }),
-    ))
+    Ok(Json(json!({ "local": local, "github": github, "workspaceDefault": ws_default, "jobs": jobs, "forges": forges, "scratch": scratch_settings })))
 }
 
 // ── Clone / fetch jobs ─────────────────────────────────────────────────────
@@ -1085,42 +904,25 @@ pub struct ForkPlan {
 /// The connection and repository a spec names: a URL's host picks the
 /// connection; a bare `owner/name` uses `forge` (default github.com).
 fn resolve_spec(s: &Shared, raw: &str, forge: Option<&str>) -> ApiResult<(ForgeHandle, RepoRef)> {
-    let spec = ligus_forge::spec::parse_repo_spec(raw, true)
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let h = match (
-        spec.host.as_deref(),
-        forge.map(str::trim).filter(|f| !f.is_empty()),
-    ) {
+    let spec = ligus_forge::spec::parse_repo_spec(raw, true).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let h = match (spec.host.as_deref(), forge.map(str::trim).filter(|f| !f.is_empty())) {
         (Some(host), _) => s
             .repos
             .forges(&s.cfg.data_dir)
             .into_iter()
             .find(|h| ligus_forge::spec::same_host(&h.conn.host(), host))
-            .ok_or_else(|| {
-                ApiError::bad_request(format!(
-                    "{host} isn't a code host connected to this box: add it under Code hosts first"
-                ))
-            })?,
+            .ok_or_else(|| ApiError::bad_request(format!("{host} isn't a code host connected to this box: add it under Code hosts first")))?,
         (None, Some(id)) => {
             let id = ForgeId::parse(id).map_err(|e| ApiError::bad_request(e.to_string()))?;
-            s.repos
-                .forge(&s.cfg.data_dir, &id)
-                .ok_or_else(|| ApiError::not_found("code host connection"))?
+            s.repos.forge(&s.cfg.data_dir, &id).ok_or_else(|| ApiError::not_found("code host connection"))?
         }
-        (None, None) => s.repos.github(&s.cfg.data_dir).ok_or_else(|| {
-            ApiError::bad_request("no GitHub connection on this host: name a forge")
-        })?,
+        (None, None) => s.repos.github(&s.cfg.data_dir).ok_or_else(|| ApiError::bad_request("no GitHub connection on this host: name a forge"))?,
     };
     if h.conn.kind != ForgeKind::GitLab && spec.repo.owner.contains('/') {
         return Err(ApiError::bad_request("give a repository as owner/name"));
     }
-    if h.is_github_com()
-        && (!repos::valid_owner(&spec.repo.owner) || !repos::valid_repo_name(&spec.repo.name))
-    {
-        return Err(ApiError::bad_request(format!(
-            "'{}' isn't a valid GitHub repository name",
-            spec.repo.full_name()
-        )));
+    if h.is_github_com() && (!repos::valid_owner(&spec.repo.owner) || !repos::valid_repo_name(&spec.repo.name)) {
+        return Err(ApiError::bad_request(format!("'{}' isn't a valid GitHub repository name", spec.repo.full_name())));
     }
     Ok((h, spec.repo))
 }
@@ -1143,11 +945,7 @@ async fn fork_plan(st: &RepoState, h: &ForgeHandle, r: &RepoRef) -> Option<ForkP
         return None;
     }
     let (p, base) = h.forge.repo(r).await.ok()??.parent?;
-    Some(ForkPlan {
-        upstream: p.full_name(),
-        url: h.forge.clone_url(&p, Transport::Https),
-        base,
-    })
+    Some(ForkPlan { upstream: p.full_name(), url: h.forge.clone_url(&p, Transport::Https), base })
 }
 
 #[derive(Deserialize)]
@@ -1159,56 +957,34 @@ pub struct ForkQuery {
 
 /// `GET /v1/repos/fork?repo=owner/name[&forge=id]`: whether the signed-in
 /// account has a fork of it (so the phone can offer "clone via my fork").
-pub async fn fork_of(
-    State(s): S,
-    peer: Option<axum::Extension<super::tunnel::TunnelPeer>>,
-    Query(q): Query<ForkQuery>,
-) -> ApiResult<Json<Value>> {
+pub async fn fork_of(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Query(q): Query<ForkQuery>) -> ApiResult<Json<Value>> {
     owner_gate(&s, peer.as_deref())?;
     let (h, repo) = resolve_spec(&s, &q.repo, q.forge.as_deref())?;
     let st = forge_status(&s.repos, &h).await;
     let Some(login) = st.login.filter(|_| st.available) else {
         return Err(err(
             StatusCode::PRECONDITION_FAILED,
-            format!(
-                "{} isn't signed in on this host: {}",
-                h.conn.display(),
-                st.reason
-                    .unwrap_or_else(|| "run gh auth login on the host".into())
-            ),
+            format!("{} isn't signed in on this host: {}", h.conn.display(), st.reason.unwrap_or_else(|| "run gh auth login on the host".into())),
         ));
     };
-    let fork = h
-        .forge
-        .find_own_fork(&login, &repo)
-        .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let fork = h.forge.find_own_fork(&login, &repo).await.map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
     let repos_dir = repos::repos_dir(&s.cfg.data_dir);
     let fork = fork.map(|m| {
         let checkout = checkout_for(&h, &m.repo);
         let local = repos_dir.join(&checkout).join(".git").exists();
         json!({ "fullName": m.repo.full_name(), "checkout": checkout, "cloned": local })
     });
-    Ok(Json(
-        json!({ "repo": repo.full_name(), "login": login, "fork": fork, "forge": h.id().as_str() }),
-    ))
+    Ok(Json(json!({ "repo": repo.full_name(), "login": login, "fork": fork, "forge": h.id().as_str() })))
 }
 
 /// git's progress line → (phase, percent): `Receiving objects:  45% (…)`.
 pub fn parse_progress(line: &str) -> Option<(String, Option<u8>)> {
     let line = line.trim().trim_start_matches("remote:").trim();
     let (phase, rest) = line.split_once(':')?;
-    if !phase.contains(' ')
-        || phase.len() > 40
-        || !phase.chars().all(|c| c.is_ascii_alphabetic() || c == ' ')
-    {
+    if !phase.contains(' ') || phase.len() > 40 || !phase.chars().all(|c| c.is_ascii_alphabetic() || c == ' ') {
         return None;
     }
-    let pct = rest
-        .split_whitespace()
-        .next()
-        .and_then(|w| w.strip_suffix('%'))
-        .and_then(|n| n.parse::<u8>().ok());
+    let pct = rest.split_whitespace().next().and_then(|w| w.strip_suffix('%')).and_then(|n| n.parse::<u8>().ok());
     Some((phase.to_string(), pct.filter(|p| *p <= 100)))
 }
 
@@ -1229,44 +1005,20 @@ fn dir_size(p: &FsPath) -> u64 {
 
 /// A live workspace repo and the connection on this box for its host
 /// (never a URL from the event: host and path re-validated, review F12).
-fn resolve_by_id(
-    s: &Shared,
-    id: Uuid,
-) -> ApiResult<(
-    ligus_core::workspace_repo::WorkspaceRepo,
-    ForgeHandle,
-    RepoRef,
-)> {
-    let roster = s
-        .lock()
-        .workspace_roster(s.ws)
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let wr = roster
-        .repos
-        .get(&id)
-        .filter(|e| !e.removed)
-        .map(|e| e.repo.clone())
-        .ok_or_else(|| ApiError::not_found("workspace repository"))?;
-    let (host, rref) =
-        ligus_runtime::repos::clone::clone_target(&wr).map_err(ApiError::bad_request)?;
+fn resolve_by_id(s: &Shared, id: Uuid) -> ApiResult<(ligus_core::workspace_repo::WorkspaceRepo, ForgeHandle, RepoRef)> {
+    let roster = s.lock().workspace_roster(s.ws).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let wr = roster.repos.get(&id).filter(|e| !e.removed).map(|e| e.repo.clone()).ok_or_else(|| ApiError::not_found("workspace repository"))?;
+    let (host, rref) = ligus_runtime::repos::clone::clone_target(&wr).map_err(ApiError::bad_request)?;
     let h = s
         .repos
         .forges(&s.cfg.data_dir)
         .into_iter()
         .find(|h| ligus_forge::spec::same_host(&h.conn.host(), &host))
-        .ok_or_else(|| {
-            ApiError::bad_request(format!(
-                "{host} isn't a code host connected to this box: add it under Code hosts first"
-            ))
-        })?;
+        .ok_or_else(|| ApiError::bad_request(format!("{host} isn't a code host connected to this box: add it under Code hosts first")))?;
     Ok((wr, h, rref))
 }
 
-pub async fn clone_repo(
-    State(s): S,
-    peer: Option<axum::Extension<super::tunnel::TunnelPeer>>,
-    Json(req): Json<CloneReq>,
-) -> ApiResult<Json<Value>> {
+pub async fn clone_repo(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Json(req): Json<CloneReq>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
     owner_gate(&s, peer.as_deref())?;
     let by_id = match req.repo_id {
@@ -1281,9 +1033,7 @@ pub async fn clone_repo(
     // Re-check the host's address and pin it for git (a name rebound to
     // internal space since the connection was added is refused).
     let pin = match &workspace_repo {
-        Some(_) => ligus_forge::conn::git_resolve_pin(&h.conn)
-            .await
-            .map_err(|e| ApiError::bad_request(e.to_string()))?,
+        Some(_) => ligus_forge::conn::git_resolve_pin(&h.conn).await.map_err(|e| ApiError::bad_request(e.to_string()))?,
         None => None,
     };
     // "Clone the parent via my fork": swap in the account's fork, or report
@@ -1291,21 +1041,9 @@ pub async fn clone_repo(
     if req.via_fork {
         let st = forge_status(&s.repos, &h).await;
         let Some(login) = st.login.filter(|_| st.available) else {
-            return Err(err(
-                StatusCode::PRECONDITION_FAILED,
-                format!(
-                    "cloning via your fork needs {}: {}",
-                    h.conn.display(),
-                    st.reason
-                        .unwrap_or_else(|| "run gh auth login on the host".into())
-                ),
-            ));
+            return Err(err(StatusCode::PRECONDITION_FAILED, format!("cloning via your fork needs {}: {}", h.conn.display(), st.reason.unwrap_or_else(|| "run gh auth login on the host".into()))));
         };
-        let found = h
-            .forge
-            .find_own_fork(&login, &repo)
-            .await
-            .map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+        let found = h.forge.find_own_fork(&login, &repo).await.map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
         let Some(f) = found else {
             return Err(ApiError::not_found(&format!(
                 "a fork of {repo} under your account (this host doesn't create forks; fork it on {}, or clone {repo} directly)",
@@ -1325,17 +1063,11 @@ pub async fn clone_repo(
     // Idempotent: the same repo already in flight returns that job.
     {
         let jobs = s.repos.jobs.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(j) = jobs
-            .iter()
-            .find(|j| j.state == "running" && j.checkout == checkout)
-        {
+        if let Some(j) = jobs.iter().find(|j| j.state == "running" && j.checkout == checkout) {
             return Ok(Json(json!({ "job": j.dto() })));
         }
         if jobs.iter().filter(|j| j.state == "running").count() >= MAX_JOBS {
-            return Err(err(
-                StatusCode::TOO_MANY_REQUESTS,
-                "two clones are already running; try again when one finishes",
-            ));
+            return Err(err(StatusCode::TOO_MANY_REQUESTS, "two clones are already running; try again when one finishes"));
         }
     }
     let action = if dest.exists() {
@@ -1343,33 +1075,18 @@ pub async fn clone_repo(
         let origin = blocking(move || repos::git_out(&d, &["remote", "get-url", "origin"])).await?;
         let same = origin.as_deref().is_some_and(|o| {
             ligus_forge::spec::parse_remote(o).is_some_and(|(_, r)| r.same(&repo))
-                || repos::parse_remote(o).is_some_and(|r| {
-                    r.owner.eq_ignore_ascii_case(&repo.owner)
-                        && r.name.eq_ignore_ascii_case(&repo.name)
-                })
+                || repos::parse_remote(o).is_some_and(|r| r.owner.eq_ignore_ascii_case(&repo.owner) && r.name.eq_ignore_ascii_case(&repo.name))
         });
         if !same {
-            return Err(err(
-                StatusCode::CONFLICT,
-                format!("{checkout} already exists on this host and isn't a clone of {full}"),
-            ));
+            return Err(err(StatusCode::CONFLICT, format!("{checkout} already exists on this host and isn't a clone of {full}")));
         }
         "fetch"
     } else {
         "clone"
     };
     let guard_name = checkout.clone();
-    if !s
-        .repos
-        .busy
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(guard_name.clone())
-    {
-        return Err(err(
-            StatusCode::CONFLICT,
-            format!("{checkout} is busy with another git operation"),
-        ));
+    if !s.repos.busy.lock().unwrap_or_else(|e| e.into_inner()).insert(guard_name.clone()) {
+        return Err(err(StatusCode::CONFLICT, format!("{checkout} is busy with another git operation")));
     }
     let job = CloneJob {
         id: Uuid::new_v4(),
@@ -1377,11 +1094,7 @@ pub async fn clone_repo(
         checkout: checkout.clone(),
         action,
         state: "running",
-        phase: if action == "clone" {
-            "Starting clone".into()
-        } else {
-            "Fetching".into()
-        },
+        phase: if action == "clone" { "Starting clone".into() } else { "Fetching".into() },
         percent: None,
         error: None,
         started_at: Timestamp::now(),
@@ -1409,16 +1122,11 @@ pub async fn clone_repo(
     let url = h.forge.clone_url(&repo, Transport::Https);
     let rt = tokio::runtime::Handle::current();
     std::thread::spawn(move || {
-        let _cloning = workspace_repo
-            .as_ref()
-            .map(|w| ligus_runtime::repos::start_cloning(w.id));
+        let _cloning = workspace_repo.as_ref().map(|w| ligus_runtime::repos::start_cloning(w.id));
         let plan = rt.block_on(fork_plan(&shared.repos, &h, &repo));
         let mut auth = h.forge.git_auth_args();
         if workspace_repo.is_some() {
-            auth.splice(
-                0..0,
-                ligus_runtime::repos::clone::by_id_transport_args(pin.as_deref()),
-            );
+            auth.splice(0..0, ligus_runtime::repos::clone::by_id_transport_args(pin.as_deref()));
         }
         let result = run_clone_job(&shared, id, action, &url, &repos_dir, &dest, auth.clone())
             .and_then(|()| setup_fork(&shared, id, &dest, plan.as_ref(), action == "clone", &auth))
@@ -1426,12 +1134,7 @@ pub async fn clone_repo(
                 Some(w) => bind_clone(&shared, w, &dest, &checkout),
                 None => Ok(()),
             });
-        shared
-            .repos
-            .busy
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&guard_name);
+        shared.repos.busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&guard_name);
         let finished = shared.repos.update_job(id, |j| {
             j.finished_at = Some(Timestamp::now());
             match result {
@@ -1456,36 +1159,19 @@ pub async fn clone_repo(
 /// After a clone by repo id: map it (confirmed, this host manages it),
 /// check the repo's claimed root commit, and make it the box's workspace
 /// default when there is none (review F18).
-fn bind_clone(
-    s: &Shared,
-    w: &ligus_core::workspace_repo::WorkspaceRepo,
-    dest: &FsPath,
-    checkout: &str,
-) -> Result<(), String> {
+fn bind_clone(s: &Shared, w: &ligus_core::workspace_repo::WorkspaceRepo, dest: &FsPath, checkout: &str) -> Result<(), String> {
     // The clone's origin names the repo's identity; when the connection
     // cloned from a different URL (a mirror, an internal address), git keeps
     // using that one for transport (a local insteadOf).
     if ligus_runtime::repos::clone::finish_clone(dest, w)? == Some(false) {
-        eprintln!(
-            "repos: {} doesn't contain the root commit the workspace entry claims",
-            w.display_name
-        );
+        eprintln!("repos: {} doesn't contain the root commit the workspace entry claims", w.display_name);
     }
     {
         let svc = s.lock();
-        ligus_runtime::repos::bind(
-            svc.store(),
-            svc.device_id(),
-            &s.opts.label,
-            s.ws,
-            w,
-            dest,
-            ligus_runtime::event_store::CheckoutSource::Cloned,
-        )
-        .map_err(|e| e.to_string())?;
+        ligus_runtime::repos::bind(svc.store(), svc.device_id(), &s.opts.label, s.ws, w, dest, ligus_runtime::event_store::CheckoutSource::Cloned)
+            .map_err(|e| e.to_string())?;
     }
-    crate::repos_cmd::bind_default_if_empty(&s.cfg.data_dir, checkout)
-        .map_err(|e| e.to_string())?;
+    crate::repos_cmd::bind_default_if_empty(&s.cfg.data_dir, checkout).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1505,23 +1191,14 @@ fn run_clone_job(
     let mut c = quiet("git");
     ligus_core::process_util::harden_git(&mut c);
     let watch_dir: PathBuf = if action == "clone" {
-        c.args(&auth)
-            .args(["clone", "--progress", "--no-recurse-submodules", "--", url])
-            .arg(&tmp);
+        c.args(&auth).args(["clone", "--progress", "--no-recurse-submodules", "--", url]).arg(&tmp);
         tmp.clone()
     } else {
-        c.arg("-C")
-            .arg(dest)
-            .args(&auth)
-            .args(["fetch", "--prune", "--progress", "origin"]);
+        c.arg("-C").arg(dest).args(&auth).args(["fetch", "--prune", "--progress", "origin"]);
         dest.to_path_buf()
     };
     let limit = max_clone_bytes();
-    let start_size = if action == "fetch" {
-        dir_size(&watch_dir)
-    } else {
-        0
-    };
+    let start_size = if action == "fetch" { dir_size(&watch_dir) } else { 0 };
     let mut last_emit = Instant::now() - Duration::from_secs(1);
     let out = run_watched(
         c,
@@ -1541,12 +1218,8 @@ fn run_clone_job(
             }
         },
         || {
-            (dir_size(&watch_dir).saturating_sub(start_size) > limit).then(|| {
-                format!(
-                    "stopped: the repository is larger than {} MB (LIGUS_REPOS_MAX_CLONE_MB)",
-                    limit / 1024 / 1024
-                )
-            })
+            (dir_size(&watch_dir).saturating_sub(start_size) > limit)
+                .then(|| format!("stopped: the repository is larger than {} MB (LIGUS_REPOS_MAX_CLONE_MB)", limit / 1024 / 1024))
         },
     );
     let fail = |e: String| {
@@ -1559,11 +1232,8 @@ fn run_clone_job(
         Err(e) => return fail(e),
         Ok(o) if !o.ok => {
             let msg = last_lines(&o.stderr);
-            let hint = if msg.contains("could not read Username")
-                || msg.contains("Authentication failed")
-                || msg.contains("not found")
-            {
-                " (a private repository needs a signed-in code host on the host: gh auth login, or a token under Code hosts)"
+            let hint = if msg.contains("could not read Username") || msg.contains("Authentication failed") || msg.contains("not found") {
+                 " (a private repository needs a signed-in code host on the host: gh auth login, or a token under Code hosts)"
             } else {
                 ""
             };
@@ -1573,10 +1243,7 @@ fn run_clone_job(
     }
     if action == "clone" {
         if dest.exists() {
-            return fail(format!(
-                "{} appeared while cloning",
-                dest.file_name().unwrap_or_default().to_string_lossy()
-            ));
+            return fail(format!("{} appeared while cloning", dest.file_name().unwrap_or_default().to_string_lossy()));
         }
         std::fs::rename(&tmp, dest).map_err(|e| format!("moving the clone into place: {e}"))?;
     }
@@ -1587,77 +1254,34 @@ fn run_clone_job(
 /// (fetch-only: its push URL is a dummy) when GitHub says the repo is a fork
 /// and it isn't there yet, fetches it, records upstream's default branch, and
 /// on a fresh clone points the local base branch at upstream's.
-fn setup_fork(
-    s: &Shared,
-    id: Uuid,
-    dest: &FsPath,
-    plan: Option<&ForkPlan>,
-    fresh: bool,
-    auth: &[String],
-) -> Result<(), String> {
+fn setup_fork(s: &Shared, id: Uuid, dest: &FsPath, plan: Option<&ForkPlan>, fresh: bool, auth: &[String]) -> Result<(), String> {
     let has_upstream = repos::git_out(dest, &["remote", "get-url", UPSTREAM_REMOTE]).is_some();
     if !has_upstream {
         let Some(p) = plan else { return Ok(()) };
-        git(
-            dest,
-            &[],
-            &["remote", "add", UPSTREAM_REMOTE, &p.url],
-            GIT_TIMEOUT,
-        )
-        .map_err(|e| format!("adding upstream: {e}"))?;
+        git(dest, &[], &["remote", "add", UPSTREAM_REMOTE, &p.url], GIT_TIMEOUT).map_err(|e| format!("adding upstream: {e}"))?;
     }
     // Fetch-only, whatever was there before.
     if !has_upstream || repos::upstream_push_enabled(dest) {
-        git(
-            dest,
-            &[],
-            &[
-                "remote",
-                "set-url",
-                "--push",
-                UPSTREAM_REMOTE,
-                "DISABLED-push-to-fork-only",
-            ],
-            GIT_TIMEOUT,
-        )
-        .map_err(|e| format!("disabling pushes to upstream: {e}"))?;
+        git(dest, &[], &["remote", "set-url", "--push", UPSTREAM_REMOTE, "DISABLED-push-to-fork-only"], GIT_TIMEOUT)
+            .map_err(|e| format!("disabling pushes to upstream: {e}"))?;
     }
     if let Some(j) = s.repos.update_job(id, |j| {
-        j.phase = format!(
-            "Fetching {}",
-            plan.map(|p| p.upstream.as_str()).unwrap_or(UPSTREAM_REMOTE)
-        );
+        j.phase = format!("Fetching {}", plan.map(|p| p.upstream.as_str()).unwrap_or(UPSTREAM_REMOTE));
         j.percent = None;
     }) {
         s.hub.emit("repo.clone", json!({ "job": j.dto() }));
     }
-    git(
-        dest,
-        auth,
-        &["fetch", "--prune", "--no-tags", UPSTREAM_REMOTE],
-        clone_timeout(),
-    )
-    .map_err(|e| format!("git fetch upstream: {e}"))?;
-    let base = plan.map(|p| p.base.clone()).filter(|b| {
-        !b.is_empty() && repos::ref_exists(dest, &format!("refs/remotes/{UPSTREAM_REMOTE}/{b}"))
-    });
+    git(dest, auth, &["fetch", "--prune", "--no-tags", UPSTREAM_REMOTE], clone_timeout()).map_err(|e| format!("git fetch upstream: {e}"))?;
+    let base = plan
+        .map(|p| p.base.clone())
+        .filter(|b| !b.is_empty() && repos::ref_exists(dest, &format!("refs/remotes/{UPSTREAM_REMOTE}/{b}")));
     let base = match base {
         Some(b) => {
-            let _ = git(
-                dest,
-                &[],
-                &["remote", "set-head", UPSTREAM_REMOTE, &b],
-                GIT_TIMEOUT,
-            );
+            let _ = git(dest, &[], &["remote", "set-head", UPSTREAM_REMOTE, &b], GIT_TIMEOUT);
             b
         }
         None => {
-            let _ = git(
-                dest,
-                &[],
-                &["remote", "set-head", UPSTREAM_REMOTE, "--auto"],
-                GIT_TIMEOUT,
-            );
+            let _ = git(dest, &[], &["remote", "set-head", UPSTREAM_REMOTE, "--auto"], GIT_TIMEOUT);
             match repos::fork_layout(dest) {
                 Some(f) => f.base_branch,
                 None => return Ok(()),
@@ -1667,20 +1291,9 @@ fn setup_fork(
     let up = format!("{UPSTREAM_REMOTE}/{base}");
     if fresh {
         // Nothing local yet: the base branch simply follows upstream.
-        git(
-            dest,
-            &[],
-            &["checkout", "-q", "-B", &base, "--track", &up],
-            GIT_TIMEOUT,
-        )
-        .map_err(|e| format!("tracking {up}: {e}"))?;
+        git(dest, &[], &["checkout", "-q", "-B", &base, "--track", &up], GIT_TIMEOUT).map_err(|e| format!("tracking {up}: {e}"))?;
     } else if repos::ref_exists(dest, &format!("refs/heads/{base}")) {
-        let _ = git(
-            dest,
-            &[],
-            &["branch", "--set-upstream-to", &up, &base],
-            GIT_TIMEOUT,
-        );
+        let _ = git(dest, &[], &["branch", "--set-upstream-to", &up, &base], GIT_TIMEOUT);
     }
     repos::ensure_chat_base(dest);
     Ok(())
@@ -1708,18 +1321,12 @@ pub struct SetRepo {
     repo: Option<String>,
 }
 
-pub async fn put_chat_repo(
-    State(s): S,
-    peer: Option<axum::Extension<super::tunnel::TunnelPeer>>,
-    Path(id): Path<String>,
-    body: Bytes,
-) -> ApiResult<Json<Value>> {
+pub async fn put_chat_repo(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Path(id): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
     owner_gate(&s, peer.as_deref())?;
     let req: SetRepo = if body.iter().all(u8::is_ascii_whitespace) {
         SetRepo::default()
     } else {
-        serde_json::from_slice(&body)
-            .map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?
+        serde_json::from_slice(&body).map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?
     };
     let chat = load_chat(&s, &id)?;
     ensure_can_write(&s, Some(&chat))?;
@@ -1730,16 +1337,13 @@ pub async fn put_chat_repo(
         Some(r) => {
             // `owner/name` names the checkout it was cloned into.
             let name = if r.contains('/') {
-                let (o, n) =
-                    repos::parse_repo_spec(r).map_err(|e| ApiError::bad_request(e.to_string()))?;
+                let (o, n) = repos::parse_repo_spec(r).map_err(|e| ApiError::bad_request(e.to_string()))?;
                 repos::checkout_name(&o, &n)
             } else {
                 r.to_string()
             };
             if !repos::valid_checkout_dir_name(&name) {
-                return Err(ApiError::bad_request(
-                    "repo must be the name of a checkout on this host",
-                ));
+                return Err(ApiError::bad_request("repo must be the name of a checkout on this host"));
             }
             let d = repos_dir.join(&name);
             // One of this box's live scratch repositories, by folder name
@@ -1748,17 +1352,13 @@ pub async fn put_chat_repo(
                 None
             } else {
                 let svc = s.lock();
-                ligus_runtime::repos::scratch::live(svc.store(), s.ws)
-                    .into_iter()
-                    .find(|e| e.dir_name == name)
+                ligus_runtime::repos::scratch::live(svc.store(), s.ws).into_iter().find(|e| e.dir_name == name)
             };
             match scratch {
                 Some(e) => Some(e.path.to_string_lossy().into_owned()),
                 None => {
                     if !blocking(move || ligus_runtime::git_worktree::is_git_repo(&d)).await? {
-                        return Err(ApiError::not_found(&format!(
-                            "checkout '{name}' (clone it first)"
-                        )));
+                        return Err(ApiError::not_found(&format!("checkout '{name}' (clone it first)")));
                     }
                     Some(name)
                 }
@@ -1788,16 +1388,8 @@ pub async fn put_chat_repo(
         // Which scratch repository (if any) lists this chat follows the binding.
         let svc = s.lock();
         let _ = ligus_runtime::repos::scratch::forget_chat(svc.store(), chat.id);
-        if let Some(e) = target.as_deref().and_then(|t| {
-            ligus_runtime::repos::scratch::by_path(svc.store(), std::path::Path::new(t))
-        }) {
-            let _ = ligus_runtime::repos::scratch::set_chat(
-                svc.store(),
-                e.id,
-                chat.id,
-                true,
-                ligus_runtime::repos::scratch::now(),
-            );
+        if let Some(e) = target.as_deref().and_then(|t| ligus_runtime::repos::scratch::by_path(svc.store(), std::path::Path::new(t))) {
+            let _ = ligus_runtime::repos::scratch::set_chat(svc.store(), e.id, chat.id, true, ligus_runtime::repos::scratch::now());
         }
         drop(svc);
         let what = v["repo"]["displayName"].as_str().map(str::to_string);
@@ -1809,8 +1401,7 @@ pub async fn put_chat_repo(
             ),
             (_, None) => format!("This chat no longer has a repository on {}.", s.opts.label),
         };
-        s.lock()
-            .post_system_note(chat.id, chat.workspace_id, note)?;
+        s.lock().post_system_note(chat.id, chat.workspace_id, note)?;
         s.after_write();
     }
     Ok(Json(v))
@@ -1819,27 +1410,15 @@ pub async fn put_chat_repo(
 /// The bound checkout of `chat`, or 409.
 fn bound_dir(s: &Shared, chat: Uuid) -> ApiResult<(PathBuf, String)> {
     let b = RepoBindings::load(&s.cfg.data_dir);
-    let (raw, _) = b.raw_for(chat).ok_or_else(|| {
-        err(
-            StatusCode::CONFLICT,
-            "this chat has no repository on this host",
-        )
-    })?;
+    let (raw, _) = b.raw_for(chat).ok_or_else(|| err(StatusCode::CONFLICT, "this chat has no repository on this host"))?;
     let dir = repos::resolve_path(&repos::repos_dir(&s.cfg.data_dir), raw);
     if !ligus_runtime::git_worktree::is_git_repo(&dir) {
-        return Err(err(
-            StatusCode::CONFLICT,
-            "this chat's checkout is missing on this host",
-        ));
+        return Err(err(StatusCode::CONFLICT, "this chat's checkout is missing on this host"));
     }
     Ok((dir, binding_name(raw).0))
 }
 
-pub async fn pull_chat_repo(
-    State(s): S,
-    peer: Option<axum::Extension<super::tunnel::TunnelPeer>>,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
+pub async fn pull_chat_repo(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     // Fetches with the owner's forge auth and moves the box's checkout.
     owner_gate(&s, peer.as_deref())?;
     let chat = load_chat(&s, &id)?;
@@ -1847,82 +1426,45 @@ pub async fn pull_chat_repo(
     let (dir, name) = bound_dir(&s, chat.id)?;
     let _busy = claim(&s.repos, &name)?;
     let d = dir.clone();
-    let origin = blocking(move || repos::git_out(&d, &["remote", "get-url", "origin"]))
-        .await?
-        .unwrap_or_default();
-    let auth = s
-        .repos
-        .forge_of_remote(&s.cfg.data_dir, &origin)
-        .map(|(h, _)| h.forge.git_auth_args())
-        .unwrap_or_default();
+    let origin = blocking(move || repos::git_out(&d, &["remote", "get-url", "origin"])).await?.unwrap_or_default();
+    let auth = s.repos.forge_of_remote(&s.cfg.data_dir, &origin).map(|(h, _)| h.forge.git_auth_args()).unwrap_or_default();
     let d = dir.clone();
     let res = blocking(move || -> Result<(String, String), (StatusCode, String)> {
         let info = repos::inspect(&d);
         let conflict = |m: String| (StatusCode::CONFLICT, m);
         if info.dirty {
-            return Err(conflict(
-                "the checkout has uncommitted changes; pull only fast-forwards a clean checkout"
-                    .into(),
-            ));
+            return Err(conflict("the checkout has uncommitted changes; pull only fast-forwards a clean checkout".into()));
         }
-        let branch = info
-            .branch
-            .ok_or_else(|| conflict("the checkout isn't on a branch".into()))?;
+        let branch = info.branch.ok_or_else(|| conflict("the checkout isn't on a branch".into()))?;
         let before = info.sha.unwrap_or_default();
-        git(&d, &auth, &["fetch", "--prune", "origin"], GIT_TIMEOUT)
-            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("git fetch: {e}")))?;
+        git(&d, &auth, &["fetch", "--prune", "origin"], GIT_TIMEOUT).map_err(|e| (StatusCode::BAD_GATEWAY, format!("git fetch: {e}")))?;
         if let Some(f) = info.fork {
             // A fork: fast-forward the base from the upstream project.
-            git(
-                &d,
-                &auth,
-                &["fetch", "--prune", "--no-tags", UPSTREAM_REMOTE],
-                GIT_TIMEOUT,
-            )
-            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("git fetch upstream: {e}")))?;
+            git(&d, &auth, &["fetch", "--prune", "--no-tags", UPSTREAM_REMOTE], GIT_TIMEOUT)
+                .map_err(|e| (StatusCode::BAD_GATEWAY, format!("git fetch upstream: {e}")))?;
             let up = f.base_ref();
             let local_base = format!("refs/heads/{}", f.base_branch);
-            let before =
-                repos::git_out(&d, &["rev-parse", "--short", &local_base]).unwrap_or_default();
+            let before = repos::git_out(&d, &["rev-parse", "--short", &local_base]).unwrap_or_default();
             if !repos::ref_exists(&d, &up) {
-                return Err(conflict(format!(
-                    "upstream has no branch {}",
-                    f.base_branch
-                )));
+                return Err(conflict(format!("upstream has no branch {}", f.base_branch)));
             }
-            let diverged = || {
-                conflict(format!(
-                    "can't fast-forward {}: it has diverged from {}",
-                    f.base_branch,
-                    f.upstream.full_name()
-                ))
-            };
+            let diverged = || conflict(format!("can't fast-forward {}: it has diverged from {}", f.base_branch, f.upstream.full_name()));
             if branch == f.base_branch {
                 git(&d, &[], &["merge", "--ff-only", &up], GIT_TIMEOUT).map_err(|_| diverged())?;
             } else {
                 // Not checked out: a fast-forward-only ref update (no `+`).
-                git(
-                    &d,
-                    &[],
-                    &["fetch", ".", &format!("{up}:refs/heads/{}", f.base_branch)],
-                    GIT_TIMEOUT,
-                )
-                .map_err(|_| diverged())?;
+                git(&d, &[], &["fetch", ".", &format!("{up}:refs/heads/{}", f.base_branch)], GIT_TIMEOUT).map_err(|_| diverged())?;
             }
             repos::ensure_chat_base(&d);
-            let after =
-                repos::git_out(&d, &["rev-parse", "--short", &local_base]).unwrap_or_default();
+            let after = repos::git_out(&d, &["rev-parse", "--short", &local_base]).unwrap_or_default();
             return Ok((before, after));
         }
         let upstream = format!("refs/remotes/origin/{branch}");
         if repos::git_out(&d, &["rev-parse", "--verify", "--quiet", &upstream]).is_none() {
             return Err(conflict(format!("origin has no branch {branch}")));
         }
-        git(&d, &[], &["merge", "--ff-only", &upstream], GIT_TIMEOUT).map_err(|_| {
-            conflict(format!(
-                "can't fast-forward {branch}: it has diverged from origin"
-            ))
-        })?;
+        git(&d, &[], &["merge", "--ff-only", &upstream], GIT_TIMEOUT)
+            .map_err(|_| conflict(format!("can't fast-forward {branch}: it has diverged from origin")))?;
         let after = repos::git_out(&d, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
         Ok((before, after))
     })
@@ -1949,21 +1491,14 @@ pub struct PrReq {
     draft: Option<bool>,
 }
 
-pub async fn open_pr(
-    State(s): S,
-    peer: Option<axum::Extension<super::tunnel::TunnelPeer>>,
-    Path(id): Path<String>,
-    Json(req): Json<PrReq>,
-) -> ApiResult<Json<Value>> {
+pub async fn open_pr(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Path(id): Path<String>, Json(req): Json<PrReq>) -> ApiResult<Json<Value>> {
     // Pushes and opens the PR as the owner, with their forge credentials.
     owner_gate(&s, peer.as_deref())?;
     let chat = load_chat(&s, &id)?;
     ensure_can_write(&s, Some(&chat))?;
     let title = req.title.trim().to_string();
     if title.is_empty() || title.chars().count() > 256 {
-        return Err(ApiError::bad_request(
-            "a pull request needs a title (up to 256 characters)",
-        ));
+        return Err(ApiError::bad_request("a pull request needs a title (up to 256 characters)"));
     }
     let body = req.body.clone().unwrap_or_default();
     if body.len() > 60_000 {
@@ -1976,27 +1511,16 @@ pub async fn open_pr(
     let d = dir.clone();
     // The configured URL: the PR is opened on that repository, whatever
     // insteadOf rewrites say.
-    let origin = blocking(move || {
-        ligus_runtime::ligus_mcp::forge_tools::configured_remote_url(&d, "origin")
-    })
-    .await?
-    .unwrap_or_default();
+    let origin = blocking(move || ligus_runtime::ligus_mcp::forge_tools::configured_remote_url(&d, "origin")).await?.unwrap_or_default();
     let (h, remote) = s
         .repos
         .forge_of_remote(&s.cfg.data_dir, &origin)
-        .ok_or_else(|| {
-            conflict("this checkout's origin isn't on a code host connected to this box".into())
-        })?;
+        .ok_or_else(|| conflict("this checkout's origin isn't on a code host connected to this box".into()))?;
     let st = forge_status(&s.repos, &h).await;
     if !st.available {
         return Err(err(
             StatusCode::PRECONDITION_FAILED,
-            format!(
-                "{} isn't signed in on this host: {}",
-                h.conn.display(),
-                st.reason
-                    .unwrap_or_else(|| "run gh auth login on the host".into())
-            ),
+            format!("{} isn't signed in on this host: {}", h.conn.display(), st.reason.unwrap_or_else(|| "run gh auth login on the host".into())),
         ));
     }
     // What the forge says about origin (a fork without `upstream` would open
@@ -2091,18 +1615,10 @@ pub async fn open_pr(
         body,
         draft,
     };
-    let ChangeRequestOutcome::Opened { url, existing, .. } = h
-        .forge
-        .open_change_request(&d)
-        .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let ChangeRequestOutcome::Opened { url, existing, .. } = h.forge.open_change_request(&d).await.map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
     let repo = pushed.base_repo.full_name();
     let kind = h.conn.kind.change_request_kind();
-    let noun = if kind == ligus_forge::ChangeRequestKind::MergeRequest {
-        "merge request"
-    } else {
-        "pull request"
-    };
+    let noun = if kind == ligus_forge::ChangeRequestKind::MergeRequest { "merge request" } else { "pull request" };
     let note = if existing {
         format!("{} (already open, branch updated): {url}", capitalize(noun))
     } else if draft {
@@ -2110,8 +1626,7 @@ pub async fn open_pr(
     } else {
         format!("Opened {noun}: {url}")
     };
-    s.lock()
-        .post_system_note(chat.id, chat.workspace_id, note)?;
+    s.lock().post_system_note(chat.id, chat.workspace_id, note)?;
     s.after_write();
     Ok(Json(json!({
         "url": url,
@@ -2128,9 +1643,7 @@ pub async fn open_pr(
 
 fn capitalize(s: &str) -> String {
     let mut c = s.chars();
-    c.next()
-        .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
-        .unwrap_or_default()
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
 
 /// What the git half of opening a PR did.
@@ -2152,11 +1665,7 @@ mod tests {
     #[test]
     fn final_review_quiet_git_is_the_hardened_git() {
         let c = quiet("git");
-        let removed: Vec<String> = c
-            .get_envs()
-            .filter(|(_, v)| v.is_none())
-            .map(|(k, _)| k.to_string_lossy().into_owned())
-            .collect();
+        let removed: Vec<String> = c.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_string_lossy().into_owned()).collect();
         for k in ["GIT_DIR", "GIT_INDEX_FILE", "GIT_EXTERNAL_DIFF"] {
             assert!(removed.iter().any(|r| r == k), "{k} inherited: {removed:?}");
         }
@@ -2164,14 +1673,8 @@ mod tests {
 
     #[test]
     fn progress_lines_parse() {
-        assert_eq!(
-            parse_progress("Receiving objects:  45% (450/1000), 1.2 MiB | 2 MiB/s"),
-            Some(("Receiving objects".into(), Some(45)))
-        );
-        assert_eq!(
-            parse_progress("remote: Counting objects: 100% (5/5), done."),
-            Some(("Counting objects".into(), Some(100)))
-        );
+        assert_eq!(parse_progress("Receiving objects:  45% (450/1000), 1.2 MiB | 2 MiB/s"), Some(("Receiving objects".into(), Some(45))));
+        assert_eq!(parse_progress("remote: Counting objects: 100% (5/5), done."), Some(("Counting objects".into(), Some(100))));
         assert_eq!(parse_progress("Cloning into '/x/.clone-1'..."), None);
         assert_eq!(parse_progress("fatal: repository not found"), None);
     }
@@ -2201,13 +1704,7 @@ mod tests {
     #[test]
     fn check_can_stop_a_command() {
         let c = five_seconds();
-        let e = run_watched(
-            c,
-            Duration::from_secs(10),
-            |_| {},
-            || Some("too big".into()),
-        )
-        .unwrap_err();
+        let e = run_watched(c, Duration::from_secs(10), |_| {}, || Some("too big".into())).unwrap_err();
         assert_eq!(e, "too big");
     }
 
@@ -2221,19 +1718,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let all = st.forges(dir.path());
         assert_eq!(all.len(), 1);
-        assert_eq!(
-            all[0].forge.auth_source(),
-            ligus_forge::AuthSource::None,
-            "not the gh login"
-        );
+        assert_eq!(all[0].forge.auth_source(), ligus_forge::AuthSource::None, "not the gh login");
         assert!(!all[0].forge.has_write());
         let s = forge_status(&st, &all[0]).await;
         assert_eq!(s.reason.as_deref(), Some(OFFLINE));
-        assert_eq!(
-            checkout_for(&all[0], &RepoRef::new("o", "n")),
-            "o__n",
-            "github.com keeps owner__name"
-        );
+        assert_eq!(checkout_for(&all[0], &RepoRef::new("o", "n")), "o__n", "github.com keeps owner__name");
     }
 
     #[test]

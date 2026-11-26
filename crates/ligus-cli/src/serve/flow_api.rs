@@ -34,29 +34,18 @@ const MAX_RECRUITS: usize = 10;
 fn agent_names(chats: &[ChatSession], config: &ChatSession) -> HashMap<String, String> {
     let mut out = HashMap::new();
     out.insert(flow::PRIMARY.to_string(), "Ligus (primary)".to_string());
-    for a in chats
-        .iter()
-        .flat_map(|c| c.workspace_agents.iter())
-        .chain(config.workspace_agents.iter())
-    {
+    for a in chats.iter().flat_map(|c| c.workspace_agents.iter()).chain(config.workspace_agents.iter()) {
         out.insert(flow::agent_key(Some(a.id)), shown(&a.name));
     }
     out
 }
 
 fn name_of(names: &HashMap<String, String>, key: &str) -> String {
-    names
-        .get(key)
-        .cloned()
-        .unwrap_or_else(|| key.get(..8).unwrap_or(key).to_string())
+    names.get(key).cloned().unwrap_or_else(|| key.get(..8).unwrap_or(key).to_string())
 }
 
 fn chat_title(chats: &[ChatSession], id: uuid::Uuid) -> String {
-    chats
-        .iter()
-        .find(|c| c.id == id)
-        .map(|c| shown(&c.title))
-        .unwrap_or_default()
+    chats.iter().find(|c| c.id == id).map(|c| shown(&c.title)).unwrap_or_default()
 }
 
 fn kind_str<T: serde::Serialize>(v: &T) -> Value {
@@ -67,14 +56,8 @@ fn kind_str<T: serde::Serialize>(v: &T) -> Value {
 fn gate_waits(chats: &[ChatSession], since: i64) -> Vec<flow::EdgeWait> {
     let mut out = Vec::new();
     for c in chats {
-        for p in c
-            .proposals
-            .iter()
-            .filter(|p| p.status != ProposalStatus::Open)
-        {
-            let Some(decided) = p.approvals.iter().map(|a| flow::ms(&a.created_at)).max() else {
-                continue;
-            };
+        for p in c.proposals.iter().filter(|p| p.status != ProposalStatus::Open) {
+            let Some(decided) = p.approvals.iter().map(|a| flow::ms(&a.created_at)).max() else { continue };
             if decided < since {
                 continue;
             }
@@ -191,39 +174,22 @@ pub fn marks(chats: &[ChatSession], config: &FlowState, now: i64) -> Vec<Value> 
 /// router decided on in the window, how often it would have picked someone
 /// other than the primary, its most common picks, per-arm outcomes, and the
 /// routes in cool-down.
-pub fn routing(
-    chats: &[ChatSession],
-    config: &FlowState,
-    names: &HashMap<String, String>,
-    now: i64,
-) -> Value {
+pub fn routing(chats: &[ChatSession], config: &FlowState, names: &HashMap<String, String>, now: i64) -> Value {
     let since = now - ROUTING_DAYS * 86_400_000;
-    let decisions: Vec<&flow::RouteDecision> = chats
-        .iter()
-        .flat_map(|c| c.flow.route_decisions.values())
-        .filter(|d| d.at_ms >= since)
-        .collect();
+    let decisions: Vec<&flow::RouteDecision> =
+        chats.iter().flat_map(|c| c.flow.route_decisions.values()).filter(|d| d.at_ms >= since).collect();
     let n = decisions.len();
-    let off_primary = decisions
-        .iter()
-        .filter(|d| d.shadow_choice != flow::PRIMARY)
-        .count();
+    let off_primary = decisions.iter().filter(|d| d.shadow_choice != flow::PRIMARY).count();
     let explored = decisions.iter().filter(|d| d.explore).count();
-    let live = decisions
-        .iter()
-        .filter(|d| d.mode == flow::RouteMode::Live)
-        .count();
+    let live = decisions.iter().filter(|d| d.mode == flow::RouteMode::Live).count();
     let mut picks: HashMap<&str, u32> = HashMap::new();
     for d in &decisions {
         *picks.entry(d.shadow_choice.as_str()).or_default() += 1;
     }
     let mut picks: Vec<(&str, u32)> = picks.into_iter().collect();
     picks.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-    let top: Vec<Value> = picks
-        .into_iter()
-        .take(3)
-        .map(|(k, c)| json!({ "agent": k, "name": name_of(names, k), "count": c }))
-        .collect();
+    let top: Vec<Value> =
+        picks.into_iter().take(3).map(|(k, c)| json!({ "agent": k, "name": name_of(names, k), "count": c })).collect();
 
     // Per-arm outcomes from tagged turns and the proposals they filed.
     #[derive(Default)]
@@ -235,18 +201,11 @@ pub fn routing(
     }
     let mut arms: HashMap<String, Arm> = HashMap::new();
     for c in chats {
-        for t in c
-            .flow
-            .turns
-            .iter()
-            .filter(|t| t.at_ms >= since && !t.arm.is_empty())
-        {
+        for t in c.flow.turns.iter().filter(|t| t.at_ms >= since && !t.arm.is_empty()) {
             let row = arms.entry(t.arm.clone()).or_default();
             row.turns += 1;
             for pid in &t.proposal_ids {
-                let Some(p) = c.proposals.iter().find(|p| p.id == *pid) else {
-                    continue;
-                };
+                let Some(p) = c.proposals.iter().find(|p| p.id == *pid) else { continue };
                 row.proposals += 1;
                 match p.status {
                     ProposalStatus::Approved | ProposalStatus::Applied => {
@@ -321,13 +280,7 @@ pub async fn flow_view(State(s): S) -> ApiResult<Json<Value>> {
 }
 
 pub fn handoff_dto(h: &flow::HandoffCard, names: &HashMap<String, String>) -> Value {
-    let pick = |name: &str, key: &str| {
-        if name.trim().is_empty() {
-            name_of(names, key)
-        } else {
-            shown(name)
-        }
-    };
+    let pick = |name: &str, key: &str| if name.trim().is_empty() { name_of(names, key) } else { shown(name) };
     let mut v = json!({
         "id": h.id,
         "from": h.from,

@@ -58,12 +58,7 @@ struct Mailbox {
 
 impl Mailbox {
     fn sweep(&mut self, now: i64) {
-        let expired: Vec<String> = self
-            .requests
-            .iter()
-            .filter(|(_, r)| r.expires_at <= now)
-            .map(|(k, _)| k.clone())
-            .collect();
+        let expired: Vec<String> = self.requests.iter().filter(|(_, r)| r.expires_at <= now).map(|(k, _)| k.clone()).collect();
         for rid in expired {
             if let Some(r) = self.requests.remove(&rid) {
                 self.spent.insert(rid, r.expires_at + mc::REQUEST_TTL_MS);
@@ -87,31 +82,17 @@ struct St {
 }
 
 pub(super) fn router(clock: TestClock) -> Router {
-    let st = St {
-        inner: Arc::default(),
-        notify: Arc::new(tokio::sync::Notify::new()),
-        clock,
-    };
+    let st = St { inner: Arc::default(), notify: Arc::new(tokio::sync::Notify::new()), clock };
     Router::new()
         .route("/v1/mailboxes/{mb}", get(get_mailbox).put(register))
         .route("/v1/mailboxes/{mb}/requests", get(list))
-        .route(
-            "/v1/mailboxes/{mb}/requests/{rid}",
-            put(put_request).delete(delete_request),
-        )
-        .route(
-            "/v1/mailboxes/{mb}/requests/{rid}/msgs",
-            get(get_msgs).post(post_msg),
-        )
+        .route("/v1/mailboxes/{mb}/requests/{rid}", put(put_request).delete(delete_request))
+        .route("/v1/mailboxes/{mb}/requests/{rid}/msgs", get(get_msgs).post(post_msg))
         .with_state(st)
 }
 
 fn problem(status: StatusCode, code: &str) -> Response {
-    (
-        status,
-        Json(json!({ "error": code, "code": code, "message": code })),
-    )
-        .into_response()
+    (status, Json(json!({ "error": code, "code": code, "message": code }))).into_response()
 }
 
 fn b64(s: &str) -> Option<Vec<u8>> {
@@ -120,10 +101,7 @@ fn b64(s: &str) -> Option<Vec<u8>> {
 
 /// A blob is non-empty base64url.
 fn blob_ok(blob: &str) -> bool {
-    !blob.is_empty()
-        && blob
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    !blob.is_empty() && blob.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 
 fn fixed<const N: usize>(v: Option<&Value>) -> Option<[u8; N]> {
@@ -138,17 +116,11 @@ async fn get_mailbox(State(st): State<St>, Path(mb): Path<String>) -> Response {
     }
 }
 
-async fn register(
-    State(st): State<St>,
-    Path(mb): Path<String>,
-    Json(body): Json<Value>,
-) -> Response {
+async fn register(State(st): State<St>, Path(mb): Path<String>, Json(body): Json<Value>) -> Response {
     let (Some(auth_pub), Some(cap_hash), Some(counter), Some(sig)) = (
         fixed::<32>(body.get("authPub")),
         fixed::<32>(body.get("putCapHash")),
-        body.get("counter")
-            .and_then(Value::as_u64)
-            .and_then(|n| u32::try_from(n).ok()),
+        body.get("counter").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()),
         body.get("sig").and_then(Value::as_str).and_then(b64),
     ) else {
         return problem(StatusCode::BAD_REQUEST, "invalid_request");
@@ -157,28 +129,13 @@ async fn register(
     if hex(&mailbox) != mb {
         return problem(StatusCode::BAD_REQUEST, "mailbox_mismatch");
     }
-    if ligus_core::crypto::verify(
-        &auth_pub,
-        &mc::register_preimage(&mailbox, &cap_hash, counter),
-        &sig,
-    )
-    .is_err()
-    {
+    if ligus_core::crypto::verify(&auth_pub, &mc::register_preimage(&mailbox, &cap_hash, counter), &sig).is_err() {
         return problem(StatusCode::FORBIDDEN, "bad_signature");
     }
     let mut inner = st.inner.lock().unwrap();
     let created = match inner.boxes.get_mut(&mb) {
         None => {
-            inner.boxes.insert(
-                mb.clone(),
-                Mailbox {
-                    auth_pub,
-                    cap_hash,
-                    counter,
-                    requests: BTreeMap::new(),
-                    spent: HashMap::new(),
-                },
-            );
+            inner.boxes.insert(mb.clone(), Mailbox { auth_pub, cap_hash, counter, requests: BTreeMap::new(), spent: HashMap::new() });
             true
         }
         Some(m) if counter == m.counter && cap_hash == m.cap_hash => false,
@@ -194,11 +151,7 @@ async fn register(
                 .into_response();
         }
     };
-    let status = if created {
-        StatusCode::CREATED
-    } else {
-        StatusCode::OK
-    };
+    let status = if created { StatusCode::CREATED } else { StatusCode::OK };
     (status, Json(json!({ "mailbox": mb, "counter": counter }))).into_response()
 }
 
@@ -209,14 +162,7 @@ enum Caller {
     Requester,
 }
 
-fn member_ok(
-    m: &Mailbox,
-    headers: &HeaderMap,
-    method: &str,
-    path: &str,
-    body: &[u8],
-    now: i64,
-) -> Option<bool> {
+fn member_ok(m: &Mailbox, headers: &HeaderMap, method: &str, path: &str, body: &[u8], now: i64) -> Option<bool> {
     let h = headers.get("x-ligus-mailbox-auth")?.to_str().ok()?;
     let (ts, sig) = h.split_once('.')?;
     let ts: i64 = ts.parse().ok()?;
@@ -224,14 +170,7 @@ fn member_ok(
     if (now - ts).abs() > AUTH_WINDOW_MS {
         return Some(false);
     }
-    Some(
-        ligus_core::crypto::verify(
-            &m.auth_pub,
-            &mc::member_preimage(method, path, ts, body),
-            &sig,
-        )
-        .is_ok(),
-    )
+    Some(ligus_core::crypto::verify(&m.auth_pub, &mc::member_preimage(method, path, ts, body), &sig).is_ok())
 }
 
 fn read_key_ok(r: &Req, headers: &HeaderMap) -> Option<bool> {
@@ -240,25 +179,13 @@ fn read_key_ok(r: &Req, headers: &HeaderMap) -> Option<bool> {
 }
 
 /// The caller of a call on `rid`, or the refusal.
-fn caller(
-    m: &Mailbox,
-    rid: &str,
-    parts: &Parts,
-    body: &[u8],
-    now: i64,
-) -> Result<Caller, (StatusCode, &'static str)> {
+fn caller(m: &Mailbox, rid: &str, parts: &Parts, body: &[u8], now: i64) -> Result<Caller, (StatusCode, &'static str)> {
     let method = parts.method.as_str();
     let path = parts.uri.path();
     if let Some(ok) = member_ok(m, &parts.headers, method, path, body, now) {
-        return if ok {
-            Ok(Caller::Member)
-        } else {
-            Err((StatusCode::UNAUTHORIZED, "bad_member_auth"))
-        };
+        return if ok { Ok(Caller::Member) } else { Err((StatusCode::UNAUTHORIZED, "bad_member_auth")) };
     }
-    let Some(r) = m.requests.get(rid) else {
-        return Err((StatusCode::NOT_FOUND, "request_unknown"));
-    };
+    let Some(r) = m.requests.get(rid) else { return Err((StatusCode::NOT_FOUND, "request_unknown")) };
     match read_key_ok(r, &parts.headers) {
         Some(true) => Ok(Caller::Requester),
         _ => Err((StatusCode::UNAUTHORIZED, "bad_read_key")),
@@ -266,19 +193,10 @@ fn caller(
 }
 
 fn client_of(parts: &Parts) -> String {
-    parts
-        .extensions
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|c| c.0.ip().to_string())
-        .unwrap_or_else(|| "local".into())
+    parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip().to_string()).unwrap_or_else(|| "local".into())
 }
 
-async fn put_request(
-    State(st): State<St>,
-    Path((mb, rid)): Path<(String, String)>,
-    parts: Parts,
-    body: Bytes,
-) -> Response {
+async fn put_request(State(st): State<St>, Path((mb, rid)): Path<(String, String)>, parts: Parts, body: Bytes) -> Response {
     let now = st.clock.now();
     let mut inner = st.inner.lock().unwrap();
     let client = client_of(&parts);
@@ -287,14 +205,11 @@ async fn put_request(
     if log.len() >= PUTS_PER_MIN {
         let wait = (60_000 - (now - log[0])) / 1000 + 1;
         let mut r = problem(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
-        r.headers_mut()
-            .insert("retry-after", wait.to_string().parse().unwrap());
+        r.headers_mut().insert("retry-after", wait.to_string().parse().unwrap());
         return r;
     }
     log.push(now);
-    let Some(m) = inner.boxes.get_mut(&mb) else {
-        return problem(StatusCode::NOT_FOUND, "mailbox_unknown");
-    };
+    let Some(m) = inner.boxes.get_mut(&mb) else { return problem(StatusCode::NOT_FOUND, "mailbox_unknown") };
     m.sweep(now);
     let cap_ok = parts
         .headers
@@ -305,13 +220,8 @@ async fn put_request(
     if !cap_ok {
         return problem(StatusCode::FORBIDDEN, "bad_put_cap");
     }
-    let Ok(v) = serde_json::from_slice::<Value>(&body) else {
-        return problem(StatusCode::BAD_REQUEST, "invalid_request");
-    };
-    let (Some(blob), Some(read_key_hash)) = (
-        v.get("blob").and_then(Value::as_str),
-        fixed::<32>(v.get("readKeyHash")),
-    ) else {
+    let Ok(v) = serde_json::from_slice::<Value>(&body) else { return problem(StatusCode::BAD_REQUEST, "invalid_request") };
+    let (Some(blob), Some(read_key_hash)) = (v.get("blob").and_then(Value::as_str), fixed::<32>(v.get("readKeyHash"))) else {
         return problem(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !blob_ok(blob) {
@@ -330,29 +240,14 @@ async fn put_request(
         return problem(StatusCode::TOO_MANY_REQUESTS, "mailbox_full");
     }
     let expires_at = now + mc::REQUEST_TTL_MS;
-    m.requests.insert(
-        rid.clone(),
-        Req {
-            blob: blob.to_string(),
-            read_key_hash,
-            put_at: now,
-            expires_at,
-            msgs: Vec::new(),
-        },
-    );
-    (
-        StatusCode::CREATED,
-        Json(json!({ "rid": rid, "putAt": now, "expiresAt": expires_at })),
-    )
-        .into_response()
+    m.requests.insert(rid.clone(), Req { blob: blob.to_string(), read_key_hash, put_at: now, expires_at, msgs: Vec::new() });
+    (StatusCode::CREATED, Json(json!({ "rid": rid, "putAt": now, "expiresAt": expires_at }))).into_response()
 }
 
 async fn list(State(st): State<St>, Path(mb): Path<String>, parts: Parts) -> Response {
     let now = st.clock.now();
     let mut inner = st.inner.lock().unwrap();
-    let Some(m) = inner.boxes.get_mut(&mb) else {
-        return problem(StatusCode::NOT_FOUND, "mailbox_unknown");
-    };
+    let Some(m) = inner.boxes.get_mut(&mb) else { return problem(StatusCode::NOT_FOUND, "mailbox_unknown") };
     m.sweep(now);
     if member_ok(m, &parts.headers, "GET", parts.uri.path(), b"", now) != Some(true) {
         return problem(StatusCode::UNAUTHORIZED, "bad_member_auth");
@@ -366,32 +261,18 @@ async fn list(State(st): State<St>, Path(mb): Path<String>, parts: Parts) -> Res
     Json(json!({ "requests": requests })).into_response()
 }
 
-async fn post_msg(
-    State(st): State<St>,
-    Path((mb, rid)): Path<(String, String)>,
-    parts: Parts,
-    body: Bytes,
-) -> Response {
+async fn post_msg(State(st): State<St>, Path((mb, rid)): Path<(String, String)>, parts: Parts, body: Bytes) -> Response {
     let now = st.clock.now();
     let mut inner = st.inner.lock().unwrap();
-    let Some(m) = inner.boxes.get_mut(&mb) else {
-        return problem(StatusCode::NOT_FOUND, "mailbox_unknown");
-    };
+    let Some(m) = inner.boxes.get_mut(&mb) else { return problem(StatusCode::NOT_FOUND, "mailbox_unknown") };
     m.sweep(now);
     let who = match caller(m, &rid, &parts, &body, now) {
         Ok(c) => c,
         Err((status, code)) => return problem(status, code),
     };
-    let Some(r) = m.requests.get_mut(&rid) else {
-        return problem(StatusCode::NOT_FOUND, "request_unknown");
-    };
-    let Ok(v) = serde_json::from_slice::<Value>(&body) else {
-        return problem(StatusCode::BAD_REQUEST, "invalid_request");
-    };
-    let (Some(blob), Some(to)) = (
-        v.get("blob").and_then(Value::as_str),
-        v.get("to").and_then(Value::as_str),
-    ) else {
+    let Some(r) = m.requests.get_mut(&rid) else { return problem(StatusCode::NOT_FOUND, "request_unknown") };
+    let Ok(v) = serde_json::from_slice::<Value>(&body) else { return problem(StatusCode::BAD_REQUEST, "invalid_request") };
+    let (Some(blob), Some(to)) = (v.get("blob").and_then(Value::as_str), v.get("to").and_then(Value::as_str)) else {
         return problem(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !matches!(to, "members" | "requester" | "approver") {
@@ -414,13 +295,7 @@ async fn post_msg(
         Caller::Member => "member",
         Caller::Requester => "requester",
     };
-    r.msgs.push(Msg {
-        seq,
-        blob: blob.to_string(),
-        to: to.to_string(),
-        from,
-        at: now,
-    });
+    r.msgs.push(Msg { seq, blob: blob.to_string(), to: to.to_string(), from, at: now });
     drop(inner);
     st.notify.notify_waiters();
     (StatusCode::CREATED, Json(json!({ "seq": seq }))).into_response()
@@ -434,29 +309,19 @@ struct MsgQuery {
     wait: u64,
 }
 
-async fn get_msgs(
-    State(st): State<St>,
-    Path((mb, rid)): Path<(String, String)>,
-    Query(q): Query<MsgQuery>,
-    parts: Parts,
-) -> Response {
-    let deadline =
-        tokio::time::Instant::now() + std::time::Duration::from_secs(q.wait.min(MAX_WAIT_SECS));
+async fn get_msgs(State(st): State<St>, Path((mb, rid)): Path<(String, String)>, Query(q): Query<MsgQuery>, parts: Parts) -> Response {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(q.wait.min(MAX_WAIT_SECS));
     loop {
         let notified = st.notify.notified();
         {
             let now = st.clock.now();
             let mut inner = st.inner.lock().unwrap();
-            let Some(m) = inner.boxes.get_mut(&mb) else {
-                return problem(StatusCode::NOT_FOUND, "mailbox_unknown");
-            };
+            let Some(m) = inner.boxes.get_mut(&mb) else { return problem(StatusCode::NOT_FOUND, "mailbox_unknown") };
             m.sweep(now);
             if let Err((status, code)) = caller(m, &rid, &parts, b"", now) {
                 return problem(status, code);
             }
-            let Some(r) = m.requests.get(&rid) else {
-                return problem(StatusCode::NOT_FOUND, "request_unknown");
-            };
+            let Some(r) = m.requests.get(&rid) else { return problem(StatusCode::NOT_FOUND, "request_unknown") };
             let msgs: Vec<Value> = r
                 .msgs
                 .iter()
@@ -471,20 +336,12 @@ async fn get_msgs(
     }
 }
 
-async fn delete_request(
-    State(st): State<St>,
-    Path((mb, rid)): Path<(String, String)>,
-    parts: Parts,
-) -> Response {
+async fn delete_request(State(st): State<St>, Path((mb, rid)): Path<(String, String)>, parts: Parts) -> Response {
     let now = st.clock.now();
     let mut inner = st.inner.lock().unwrap();
-    let Some(m) = inner.boxes.get_mut(&mb) else {
-        return problem(StatusCode::NOT_FOUND, "mailbox_unknown");
-    };
+    let Some(m) = inner.boxes.get_mut(&mb) else { return problem(StatusCode::NOT_FOUND, "mailbox_unknown") };
     m.sweep(now);
-    let Some(r) = m.requests.get(&rid) else {
-        return problem(StatusCode::NOT_FOUND, "request_unknown");
-    };
+    let Some(r) = m.requests.get(&rid) else { return problem(StatusCode::NOT_FOUND, "request_unknown") };
     if read_key_ok(r, &parts.headers) != Some(true) {
         return problem(StatusCode::UNAUTHORIZED, "bad_read_key");
     }

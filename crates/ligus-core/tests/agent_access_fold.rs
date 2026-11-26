@@ -43,11 +43,7 @@ fn judge(w: &mut SignedWorld, by: &str, e: SessionEvent) -> Verdict {
 }
 
 fn folded(w: &SignedWorld, id: Uuid) -> WorkspaceAgent {
-    w.config()
-        .workspace_agents
-        .into_iter()
-        .find(|a| a.id == id)
-        .expect("agent folded")
+    w.config().workspace_agents.into_iter().find(|a| a.id == id).expect("agent folded")
 }
 
 #[test]
@@ -55,11 +51,7 @@ fn the_owner_opens_their_agent_and_no_one_else_can() {
     let mut w = world();
     let mut a = agent(1, "scout", "mara");
     assert_eq!(judge(&mut w, "mara", up(&a)), Verdict::Allowed);
-    assert_eq!(
-        folded(&w, a.id).effective_access(),
-        ligus_core::agent::Access::Owner,
-        "personal: only me"
-    );
+    assert_eq!(folded(&w, a.id).effective_access(), ligus_core::agent::Access::Owner, "personal: only me");
 
     // An Admin, and even the workspace Owner, can't open it up.
     a.access = ACCESS_EVERYONE.into();
@@ -82,10 +74,7 @@ fn the_owner_opens_their_agent_and_no_one_else_can() {
     dropped.access.clear();
     assert_eq!(judge(&mut w, "adm", up(&dropped)), Verdict::Denied);
     let mut budget = renamed.clone();
-    budget.limits = AgentLimits {
-        member_turns_per_day: Some(0),
-        usd_cents_per_day: None,
-    };
+    budget.limits = AgentLimits { member_turns_per_day: Some(0), usd_cents_per_day: None };
     assert_eq!(judge(&mut w, "adm", up(&budget)), Verdict::Denied);
     let mut notify = renamed.clone();
     notify.notify_on_use = true;
@@ -98,22 +87,10 @@ fn the_owner_opens_their_agent_and_no_one_else_can() {
 fn a_shared_agent_is_an_admins_to_restrict() {
     let mut w = world();
     let mut b = agent(2, "helper", "");
-    assert_eq!(
-        judge(&mut w, "carl", up(&b)),
-        Verdict::Allowed,
-        "a Contributor adds a shared agent"
-    );
+    assert_eq!(judge(&mut w, "carl", up(&b)), Verdict::Allowed, "a Contributor adds a shared agent");
     b.access = ACCESS_OWNER.into();
-    assert_eq!(
-        judge(&mut w, "carl", up(&b)),
-        Verdict::Denied,
-        "but can't restrict it"
-    );
-    assert_eq!(
-        judge(&mut w, "adm", up(&b)),
-        Verdict::Allowed,
-        "an Admin can"
-    );
+    assert_eq!(judge(&mut w, "carl", up(&b)), Verdict::Denied, "but can't restrict it");
+    assert_eq!(judge(&mut w, "adm", up(&b)), Verdict::Allowed, "an Admin can");
     assert_eq!(folded(&w, b.id).access, ACCESS_OWNER);
     // A new shared agent with settings: an Admin's too.
     let mut c = agent(3, "capped", "");
@@ -148,16 +125,8 @@ fn a_chat_copy_cant_open_up_the_workspace_agent() {
     let mut open = a.clone();
     open.access = ACCESS_EVERYONE.into();
     let id = w.write("adm", Some(chat), up(&open), None, Proof::Recovery);
-    assert_ne!(
-        w.verdicts().get(&id),
-        Some(&Verdict::Allowed),
-        "an Admin's chat-level copy that opens it up"
-    );
-    assert!(w
-        .state(chat)
-        .workspace_agents
-        .iter()
-        .all(|x| x.access.is_empty()));
+    assert_ne!(w.verdicts().get(&id), Some(&Verdict::Allowed), "an Admin's chat-level copy that opens it up");
+    assert!(w.state(chat).workspace_agents.iter().all(|x| x.access.is_empty()));
 }
 
 /// Opening an agent to everyone spends its owner's credentials on other
@@ -172,11 +141,7 @@ fn opening_an_agent_needs_presence_narrowing_doesnt() {
     a.limits.member_turns_per_day = Some(3);
     a.notify_on_use = true;
     let id = w.write("mara", None, up(&a), None, Proof::None);
-    assert_eq!(
-        w.verdict(id),
-        Verdict::Allowed,
-        "budgets and the notice: no presence"
-    );
+    assert_eq!(w.verdict(id), Verdict::Allowed, "budgets and the notice: no presence");
     a.access = ACCESS_EVERYONE.into();
     let id = w.write("mara", None, up(&a), None, Proof::None);
     assert_eq!(w.verdict(id), Verdict::Denied, "opening without presence");
@@ -194,15 +159,7 @@ fn opening_an_agent_needs_presence_narrowing_doesnt() {
     assert_eq!(w.verdict(id), Verdict::Denied);
     let mut opened = a.clone();
     opened.access = ACCESS_EVERYONE.into();
-    let id = w.write(
-        "mara",
-        None,
-        SessionEvent::AgentRosterUpdated {
-            agents: vec![opened],
-        },
-        None,
-        Proof::None,
-    );
+    let id = w.write("mara", None, SessionEvent::AgentRosterUpdated { agents: vec![opened] }, None, Proof::None);
     assert_eq!(w.verdict(id), Verdict::Denied);
 }
 
@@ -213,19 +170,9 @@ fn a_whole_roster_replace_is_judged_per_agent() {
     bare(&mut w, "mara", up(&a));
     let mut open = a.clone();
     open.access = ACCESS_EVERYONE.into();
-    let id = bare(
-        &mut w,
-        "adm",
-        SessionEvent::AgentRosterUpdated {
-            agents: vec![open.clone()],
-        },
-    );
+    let id = bare(&mut w, "adm", SessionEvent::AgentRosterUpdated { agents: vec![open.clone()] });
     assert_eq!(w.verdict(id), Verdict::Denied);
-    let id = bare(
-        &mut w,
-        "mara",
-        SessionEvent::AgentRosterUpdated { agents: vec![open] },
-    );
+    let id = bare(&mut w, "mara", SessionEvent::AgentRosterUpdated { agents: vec![open] });
     assert_eq!(w.verdict(id), Verdict::Allowed);
 }
 
@@ -259,24 +206,12 @@ fn arb_step() -> impl Strategy<Value = Step> {
     (
         0usize..4,
         0usize..2,
-        prop_oneof![
-            Just(None),
-            Just(Some(ACCESS_OWNER)),
-            Just(Some(ACCESS_EVERYONE)),
-            Just(Some("members"))
-        ],
+        prop_oneof![Just(None), Just(Some(ACCESS_OWNER)), Just(Some(ACCESS_EVERYONE)), Just(Some("members"))],
         prop_oneof![Just(None), Just(Some(0u32)), Just(Some(5u32))],
         prop_oneof![Just(None), Just(Some(250u64))],
         any::<bool>(),
     )
-        .prop_map(|(by, which, access, turns, cents, notify)| Step {
-            by,
-            which,
-            access,
-            turns,
-            cents,
-            notify,
-        })
+        .prop_map(|(by, which, access, turns, cents, notify)| Step { by, which, access, turns, cents, notify })
 }
 
 proptest! {
@@ -331,23 +266,11 @@ proptest! {
 /// and still verifies byte for byte (`raw_bytes.rs` checks every line).
 #[test]
 fn the_access_golden_decodes() {
-    let line = include_str!("golden/envelopes_v3.jsonl")
-        .lines()
-        .find(|l| l.contains("\"label\":\"agentUpserted/access\""))
-        .expect("golden line");
+    let line = include_str!("golden/envelopes_v3.jsonl").lines().find(|l| l.contains("\"label\":\"agentUpserted/access\"")).expect("golden line");
     let v: serde_json::Value = serde_json::from_str(line).unwrap();
-    let env: ligus_core::SessionEventEnvelope =
-        serde_json::from_value(v["envelope"].clone()).unwrap();
-    let SessionEvent::AgentUpserted { agent } = env.payload else {
-        panic!("kind")
-    };
+    let env: ligus_core::SessionEventEnvelope = serde_json::from_value(v["envelope"].clone()).unwrap();
+    let SessionEvent::AgentUpserted { agent } = env.payload else { panic!("kind") };
     assert_eq!(agent.access, ACCESS_EVERYONE);
-    assert_eq!(
-        agent.limits,
-        AgentLimits {
-            member_turns_per_day: Some(20),
-            usd_cents_per_day: Some(500)
-        }
-    );
+    assert_eq!(agent.limits, AgentLimits { member_turns_per_day: Some(20), usd_cents_per_day: Some(500) });
     assert!(agent.notify_on_use);
 }

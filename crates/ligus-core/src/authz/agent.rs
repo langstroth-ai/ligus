@@ -15,41 +15,29 @@ use crate::session::ChatSession;
 /// Everything not listed is denied: every admin or governance kind, votes,
 /// `ProposalApplied`, set decisions, tuning, quorum and pre-flight, clearing a
 /// lockdown, workflow definitions.
-pub fn tier_allows(
-    event: &SessionEvent,
-    agent_id: Uuid,
-    host_device: Uuid,
-    fold: &ChatSession,
-) -> Result<(), String> {
+pub fn tier_allows(event: &SessionEvent, agent_id: Uuid, host_device: Uuid, fold: &ChatSession) -> Result<(), String> {
     let me = agent_id.to_string();
     let own_message = |id: Uuid| {
-        fold.messages
-            .iter()
-            .find(|m| m.id == id)
-            .is_some_and(|m| m.responder_id == Some(agent_id))
+        fold.messages.iter().find(|m| m.id == id).is_some_and(|m| m.responder_id == Some(agent_id))
     };
     let ok = match event {
         SessionEvent::MessageAppended { message } => message.responder_id == Some(agent_id),
-        SessionEvent::MessageChunkReceived { message_id, .. }
-        | SessionEvent::MessageCompleted { message_id, .. } => own_message(*message_id),
+        SessionEvent::MessageChunkReceived { message_id, .. } | SessionEvent::MessageCompleted { message_id, .. } => {
+            own_message(*message_id)
+        }
         SessionEvent::MessageReactionAdded { reaction, .. } => reaction.actor_id == me,
         SessionEvent::MessageReactionRemoved { actor_id, .. } => *actor_id == me,
         SessionEvent::ProposalUpserted { proposal } => {
             // As itself, or authorless naming itself as producer; never
             // under someone else's name or for another agent.
             (proposal.author_actor_id == me
-                || (proposal.author_actor_id.is_empty()
-                    && proposal.producing_agent_id == Some(agent_id)))
+                || (proposal.author_actor_id.is_empty() && proposal.producing_agent_id == Some(agent_id)))
                 && proposal.producing_agent_id.is_none_or(|p| p == agent_id)
                 && proposal.status == ProposalStatus::Open
                 && proposal.approvals.is_empty()
-                && fold
-                    .proposals
-                    .iter()
-                    .find(|p| p.id == proposal.id)
-                    .is_none_or(|p| {
-                        p.author_actor_id == me || p.producing_agent_id == Some(agent_id)
-                    })
+                && fold.proposals.iter().find(|p| p.id == proposal.id).is_none_or(|p| {
+                    p.author_actor_id == me || p.producing_agent_id == Some(agent_id)
+                })
         }
         SessionEvent::ProposalRefined { refinement, .. } => refinement.actor_id == me,
         SessionEvent::ProposalSetOpened { .. }
@@ -87,11 +75,7 @@ pub fn tier_allows(
 /// the host certified a key for that agent (A3 transition).
 pub fn agent_authored(event: &SessionEvent) -> Option<Uuid> {
     match event {
-        SessionEvent::MessageAppended { message }
-            if message.role != crate::chat::MessageRole::User =>
-        {
-            message.responder_id
-        }
+        SessionEvent::MessageAppended { message } if message.role != crate::chat::MessageRole::User => message.responder_id,
         SessionEvent::ProposalUpserted { proposal } => proposal.producing_agent_id,
         _ => None,
     }
@@ -137,9 +121,6 @@ pub fn runtime_tier_allows(event: &SessionEvent) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
-        Err(format!(
-            "the chat's runtime can't sign {}",
-            event.kind_str()
-        ))
+        Err(format!("the chat's runtime can't sign {}", event.kind_str()))
     }
 }

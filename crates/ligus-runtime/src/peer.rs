@@ -139,16 +139,8 @@ impl LoopbackLink {
     pub fn pair(a: PeerId, b: PeerId) -> (LoopbackLink, LoopbackLink) {
         let (to_a, a_inbox) = mpsc::unbounded_channel();
         let (to_b, b_inbox) = mpsc::unbounded_channel();
-        let la = LoopbackLink {
-            local: a.clone(),
-            tx: to_b,
-            rx: tokio::sync::Mutex::new(a_inbox),
-        };
-        let lb = LoopbackLink {
-            local: b,
-            tx: to_a,
-            rx: tokio::sync::Mutex::new(b_inbox),
-        };
+        let la = LoopbackLink { local: a.clone(), tx: to_b, rx: tokio::sync::Mutex::new(a_inbox) };
+        let lb = LoopbackLink { local: b, tx: to_a, rx: tokio::sync::Mutex::new(b_inbox) };
         (la, lb)
     }
 }
@@ -156,9 +148,7 @@ impl LoopbackLink {
 impl PeerLink for LoopbackLink {
     async fn send(&self, _to: &PeerId, data: Vec<u8>) -> Result<(), PeerError> {
         // The loopback has a single remote; tag the message with our own id.
-        self.tx
-            .send((self.local.clone(), data))
-            .map_err(|_| PeerError::Closed)
+        self.tx.send((self.local.clone(), data)).map_err(|_| PeerError::Closed)
     }
     async fn recv(&self) -> Option<(PeerId, Vec<u8>)> {
         self.rx.lock().await.recv().await
@@ -215,27 +205,17 @@ impl PeerSync {
     /// Serialize every local envelope not yet shared, marking them seen.
     pub fn take_unpushed(&mut self, store: &EventStore) -> Result<Vec<Vec<u8>>, PeerError> {
         let mut out = Vec::new();
-        let ids = store
-            .list_session_ids()
-            .map_err(|e| PeerError::Store(e.to_string()))?;
+        let ids = store.list_session_ids().map_err(|e| PeerError::Store(e.to_string()))?;
         for session_id in ids {
             // Every copy held, not only the first of an id to arrive here,
             // of each log (workspace, session) this peer shares.
-            let claims = store
-                .workspaces_claiming(session_id)
-                .map_err(|e| PeerError::Store(e.to_string()))?;
+            let claims = store.workspaces_claiming(session_id).map_err(|e| PeerError::Store(e.to_string()))?;
             let mut envs = Vec::new();
             for ws in claims.into_iter().filter(|w| self.workspaces.contains(w)) {
-                envs.extend(
-                    store
-                        .list_copies_in(ws, session_id)
-                        .map_err(|e| PeerError::Store(e.to_string()))?,
-                );
+                envs.extend(store.list_copies_in(ws, session_id).map_err(|e| PeerError::Store(e.to_string()))?);
             }
             for env in envs {
-                if self.workspaces.contains(&env.workspace_id)
-                    && self.seen.insert((env.event_id, env.signature.clone()))
-                {
+                if self.workspaces.contains(&env.workspace_id) && self.seen.insert((env.event_id, env.signature.clone())) {
                     out.push(serde_json::to_vec(&env)?);
                 }
             }
@@ -264,17 +244,8 @@ impl PeerSync {
     /// endpoint is dropped before anything is parsed, held or kept as a
     /// lamport witness: a stranger can't fill the held table, or relay a
     /// removed member's copies here.
-    pub fn apply_from(
-        &mut self,
-        store: &mut EventStore,
-        from: &PeerId,
-        contacts: &[Contact],
-        data: &[u8],
-    ) -> Result<bool, PeerError> {
-        if !contacts
-            .iter()
-            .any(|c| c.peer_id.0.eq_ignore_ascii_case(&from.0))
-        {
+    pub fn apply_from(&mut self, store: &mut EventStore, from: &PeerId, contacts: &[Contact], data: &[u8]) -> Result<bool, PeerError> {
+        if !contacts.iter().any(|c| c.peer_id.0.eq_ignore_ascii_case(&from.0)) {
             tracing::warn!(peer = %from.0, "dropped a peer message from an endpoint that isn't a contact");
             return Ok(false);
         }
@@ -312,9 +283,7 @@ impl PeerSync {
             || env.session_id == ligus_core::workspace_config_session_id(env.workspace_id);
         match self.gate(&roster, &env) {
             IngestAction::Accept => {
-                let new = store
-                    .ingest(&env)
-                    .map_err(|e| PeerError::Store(e.to_string()))?;
+                let new = store.ingest(&env).map_err(|e| PeerError::Store(e.to_string()))?;
                 // It may be what a held event waits for (a certificate, an
                 // admission): judge those again now.
                 if roster_relevant {
@@ -327,14 +296,8 @@ impl PeerSync {
                 // A lamport witness, as on the relay path
                 // (`SyncEngine::apply_fetched`): only for a refusal another
                 // device's roster could judge otherwise.
-                if !matches!(
-                    reason,
-                    crate::envelope_verifier::QuarantineReason::Unsigned
-                        | crate::envelope_verifier::QuarantineReason::BadSignature
-                ) {
-                    store
-                        .note_lamport_witness(&env)
-                        .map_err(|e| PeerError::Store(e.to_string()))?;
+                if !matches!(reason, crate::envelope_verifier::QuarantineReason::Unsigned | crate::envelope_verifier::QuarantineReason::BadSignature) {
+                    store.note_lamport_witness(&env).map_err(|e| PeerError::Store(e.to_string()))?;
                 }
                 Ok(false)
             }
@@ -344,25 +307,12 @@ impl PeerSync {
                 // table, never ingested now, and judged again when a peer
                 // event (or the workspace's sync engine) changes the roster.
                 tracing::debug!(reason, event_id = %env.event_id, "holding a peer event until the roster can judge it");
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
+                let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
                 store
-                    .hold_events(
-                        env.workspace_id,
-                        &[crate::event_store::HoldItem {
-                            env: &env,
-                            reason,
-                            seq: None,
-                        }],
-                        now_ms,
-                    )
+                    .hold_events(env.workspace_id, &[crate::event_store::HoldItem { env: &env, reason, seq: None }], now_ms)
                     .map_err(|e| PeerError::Store(e.to_string()))?;
                 // A lamport witness meanwhile (as on the relay path).
-                store
-                    .note_lamport_witness(&env)
-                    .map_err(|e| PeerError::Store(e.to_string()))?;
+                store.note_lamport_witness(&env).map_err(|e| PeerError::Store(e.to_string()))?;
                 Ok(false)
             }
         }
@@ -371,11 +321,7 @@ impl PeerSync {
     /// The ingest gate, the same as the relay path's (not just
     /// `verdict_for`): so the Option-C GitHub-identity check applies on P2P
     /// too, instead of silently accepting anything not provably-bad.
-    fn gate(
-        &self,
-        roster: &crate::envelope_verifier::WorkspaceRoster,
-        env: &SessionEventEnvelope,
-    ) -> IngestAction {
+    fn gate(&self, roster: &crate::envelope_verifier::WorkspaceRoster, env: &SessionEventEnvelope) -> IngestAction {
         let base = verdict_for(roster, env);
         let signer_account = env
             .actor_stamp
@@ -408,10 +354,7 @@ impl PeerSync {
                 break;
             }
             let refs: Vec<&SessionEventEnvelope> = held.iter().map(|h| &h.env).collect();
-            let roster = crate::envelope_verifier::rosters_for_batch(store, &refs)
-                .map_err(err)?
-                .remove(&workspace)
-                .unwrap_or_default();
+            let roster = crate::envelope_verifier::rosters_for_batch(store, &refs).map_err(err)?.remove(&workspace).unwrap_or_default();
             let mut release = Vec::new();
             for h in &held {
                 match self.gate(&roster, &h.env) {
@@ -510,33 +453,13 @@ mod tests {
     fn only_a_contacts_messages_are_applied() {
         let env = sample_envelope(1);
         let data = serde_json::to_vec(&env).unwrap();
-        let friend = Contact {
-            peer_id: PeerId("friend".into()),
-            label: "F".into(),
-        };
+        let friend = Contact { peer_id: PeerId("friend".into()), label: "F".into() };
         let mut store = EventStore::open_in_memory().unwrap();
         let mut sync = PeerSync::new([Uuid::nil()]);
-        assert!(!sync
-            .apply_from(
-                &mut store,
-                &PeerId("stranger".into()),
-                std::slice::from_ref(&friend),
-                &data
-            )
-            .unwrap());
-        assert!(
-            !store.has_event(env.event_id).unwrap(),
-            "a stranger's message was applied"
-        );
+        assert!(!sync.apply_from(&mut store, &PeerId("stranger".into()), std::slice::from_ref(&friend), &data).unwrap());
+        assert!(!store.has_event(env.event_id).unwrap(), "a stranger's message was applied");
         assert!(store.witness_ids(Uuid::nil()).unwrap().is_empty());
-        assert!(sync
-            .apply_from(
-                &mut store,
-                &friend.peer_id,
-                std::slice::from_ref(&friend),
-                &data
-            )
-            .unwrap());
+        assert!(sync.apply_from(&mut store, &friend.peer_id, std::slice::from_ref(&friend), &data).unwrap());
         assert!(store.has_event(env.event_id).unwrap());
     }
 
@@ -554,9 +477,7 @@ mod tests {
                 Uuid::new_v4(),
                 ws,
                 1,
-                SessionEvent::MessageAppended {
-                    message: ChatMessage::new(MessageRole::User, "Alex", body),
-                },
+                SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", body) },
             ))
         };
         let store_a = EventStore::open_in_memory().unwrap();
@@ -566,11 +487,7 @@ mod tests {
         store_a.append_envelope(&private).unwrap();
 
         let mut sync_a = PeerSync::new([room]);
-        assert_eq!(
-            sync_a.push_to(&la, &b, &store_a).await.unwrap(),
-            1,
-            "only the room's event goes out"
-        );
+        assert_eq!(sync_a.push_to(&la, &b, &store_a).await.unwrap(), 1, "only the room's event goes out");
         let (_, data) = lb.recv().await.unwrap();
         assert!(!String::from_utf8_lossy(&data).contains("PRIVATE"));
 
@@ -589,17 +506,12 @@ mod tests {
     #[test]
     fn a_peer_event_held_before_its_certificate_is_released_when_it_arrives() {
         use ligus_core::crypto::{DeviceCertificate, SigningKeypair};
-        use ligus_core::identity::{
-            ActorIdentity, ActorKind, ActorStamp, WorkspaceMember, WorkspaceRole,
-        };
+        use ligus_core::identity::{ActorIdentity, ActorKind, ActorStamp, WorkspaceMember, WorkspaceRole};
         use ligus_core::Timestamp;
         let account = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = ligus_core::crypto::device_id_for(
-            ligus_core::crypto::SigAlg::Ed25519,
-            &device.public_key_bytes(),
-        );
+        let device_id = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
         let mut actor = ActorIdentity::new(account_id.to_string(), "A", ActorKind::Human);
         actor.account_id = Some(account_id);
         actor.device_id = Some(device_id);
@@ -618,56 +530,22 @@ mod tests {
             ligus_core::sign_envelope(&mut e, device_id, &device);
             e
         };
-        let member = WorkspaceMember {
-            id: account_id.to_string(),
-            actor: actor.clone(),
-            role: WorkspaceRole::Contributor,
-            title: String::new(),
-            index: 1,
-            joined_at: Timestamp::epoch(),
-        };
-        let cert = DeviceCertificate::issue(
-            &account,
-            account_id,
-            &device.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let member = WorkspaceMember { id: account_id.to_string(), actor: actor.clone(), role: WorkspaceRole::Contributor, title: String::new(), index: 1, joined_at: Timestamp::epoch() };
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
         let content = own(10, SessionEvent::SessionTitleChanged { title: "t".into() });
         let mut store = EventStore::open_in_memory().unwrap();
         let mut sync = PeerSync::new([Uuid::nil()]);
         let bytes = |e: &SessionEventEnvelope| serde_json::to_vec(e).unwrap();
-        assert!(
-            !sync.apply(&mut store, &bytes(&content)).unwrap(),
-            "held, not applied on its stamp"
-        );
+        assert!(!sync.apply(&mut store, &bytes(&content)).unwrap(), "held, not applied on its stamp");
         assert_eq!(store.held_events(Uuid::nil()).unwrap().len(), 1);
         for e in [
-            own(
-                1,
-                SessionEvent::MemberAdded {
-                    member,
-                    invite: None,
-                    proof: None,
-                },
-            ),
-            own(
-                2,
-                SessionEvent::AccountKeyRegistered {
-                    account_id,
-                    signing_public_key: account.public_key_bytes().to_vec(),
-                },
-            ),
-            own(
-                3,
-                SessionEvent::DeviceCertificateAdded { certificate: cert },
-            ),
+            own(1, SessionEvent::MemberAdded { member, invite: None, proof: None }),
+            own(2, SessionEvent::AccountKeyRegistered { account_id, signing_public_key: account.public_key_bytes().to_vec() }),
+            own(3, SessionEvent::DeviceCertificateAdded { certificate: cert }),
         ] {
             sync.apply(&mut store, &bytes(&e)).unwrap();
         }
-        assert!(
-            store.has_event(content.event_id).unwrap(),
-            "released once the certificate arrived"
-        );
+        assert!(store.has_event(content.event_id).unwrap(), "released once the certificate arrived");
         assert!(store.held_events(Uuid::nil()).unwrap().is_empty());
     }
 
@@ -681,58 +559,33 @@ mod tests {
             Uuid::new_v4(),
             room,
             1,
-            SessionEvent::MessageAppended {
-                message: ChatMessage::new(MessageRole::User, "Alex", "honest"),
-            },
+            SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", "honest") },
         ));
         let mut other = honest.clone();
-        other.payload = SessionEvent::MessageAppended {
-            message: ChatMessage::new(MessageRole::User, "Mal", "mine"),
-        };
+        other.payload = SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Mal", "mine") };
         other.clear_raw();
-        ligus_core::sign_envelope(
-            &mut other,
-            Uuid::new_v4(),
-            &ligus_core::SigningKeypair::generate().unwrap(),
-        );
+        ligus_core::sign_envelope(&mut other, Uuid::new_v4(), &ligus_core::SigningKeypair::generate().unwrap());
         let mut store = EventStore::open_in_memory().unwrap();
         store.ingest(&other).unwrap();
         store.ingest(&honest).unwrap();
         let mut sync = PeerSync::new([room]);
         let out = sync.take_unpushed(&store).unwrap();
-        assert!(
-            out.iter()
-                .any(|d| String::from_utf8_lossy(d).contains("honest")),
-            "the honest copy never left this device"
-        );
+        assert!(out.iter().any(|d| String::from_utf8_lossy(d).contains("honest")), "the honest copy never left this device");
         assert_eq!(out.len(), 2);
-        assert!(
-            sync.take_unpushed(&store).unwrap().is_empty(),
-            "each copy goes out once"
-        );
+        assert!(sync.take_unpushed(&store).unwrap().is_empty(), "each copy goes out once");
     }
 
     #[test]
     fn apply_verifies_before_ingest() {
         use ligus_core::crypto::{DeviceCertificate, SigningKeypair};
-        use ligus_core::identity::{
-            ActorIdentity, ActorKind, ActorStamp, WorkspaceMember, WorkspaceRole,
-        };
+        use ligus_core::identity::{ActorIdentity, ActorKind, ActorStamp, WorkspaceMember, WorkspaceRole};
         use ligus_core::Timestamp;
 
         let account = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = ligus_core::crypto::device_id_for(
-            ligus_core::crypto::SigAlg::Ed25519,
-            &device.public_key_bytes(),
-        );
-        let cert = DeviceCertificate::issue(
-            &account,
-            account_id,
-            &device.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let device_id = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
         let member = WorkspaceMember {
             id: account_id.to_string(),
             actor: ActorIdentity {
@@ -774,14 +627,7 @@ mod tests {
         };
         let mut store = EventStore::open_in_memory().unwrap();
         for e in [
-            plain(
-                1,
-                SessionEvent::MemberAdded {
-                    member: member.clone(),
-                    invite: None,
-                    proof: None,
-                },
-            ),
+            plain(1, SessionEvent::MemberAdded { member: member.clone(), invite: None, proof: None }),
             own(plain(
                 2,
                 SessionEvent::AccountKeyRegistered {
@@ -789,10 +635,7 @@ mod tests {
                     signing_public_key: account.public_key_bytes().to_vec(),
                 },
             )),
-            own(plain(
-                3,
-                SessionEvent::DeviceCertificateAdded { certificate: cert },
-            )),
+            own(plain(3, SessionEvent::DeviceCertificateAdded { certificate: cert })),
         ] {
             store.ingest(&e).unwrap();
         }
@@ -803,9 +646,7 @@ mod tests {
                 Uuid::nil(),
                 Uuid::nil(),
                 lamport,
-                SessionEvent::SessionTitleChanged {
-                    title: format!("t{lamport}"),
-                },
+                SessionEvent::SessionTitleChanged { title: format!("t{lamport}") },
             );
             e.actor_stamp = Some(ActorStamp {
                 actor: ActorIdentity {
@@ -819,14 +660,8 @@ mod tests {
                     avatar_url: None,
                     contact: None,
                 },
-                recorded_at: Timestamp::epoch(),
-                cfg_frontier: None,
-                presence: None,
-                runtime_effect: false,
-                prev: None,
-                sig_alg: Default::default(),
-                log_head: None,
-            });
+                recorded_at: Timestamp::epoch(), cfg_frontier: None,
+                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
             ligus_core::sign_envelope(&mut e, device_id, &device);
             e
         };
@@ -840,24 +675,15 @@ mod tests {
         let bytes = |e: &SessionEventEnvelope| serde_json::to_vec(e).unwrap();
 
         // A validly-signed envelope from a known-roster device is ingested.
-        assert!(
-            sync.apply(&mut store, &bytes(&good)).unwrap(),
-            "valid signed event ingested"
-        );
+        assert!(sync.apply(&mut store, &bytes(&good)).unwrap(), "valid signed event ingested");
         assert!(store.has_event(good.event_id).unwrap());
 
         // A tampered (forged-signature) envelope is rejected, not ingested.
-        assert!(
-            !sync.apply(&mut store, &bytes(&tampered)).unwrap(),
-            "tampered event rejected"
-        );
+        assert!(!sync.apply(&mut store, &bytes(&tampered)).unwrap(), "tampered event rejected");
         assert!(!store.has_event(tampered.event_id).unwrap());
 
         // An impersonating envelope is rejected, not ingested.
-        assert!(
-            !sync.apply(&mut store, &bytes(&spoof)).unwrap(),
-            "impersonation rejected"
-        );
+        assert!(!sync.apply(&mut store, &bytes(&spoof)).unwrap(), "impersonation rejected");
         assert!(!store.has_event(spoof.event_id).unwrap());
     }
 }

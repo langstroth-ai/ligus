@@ -7,9 +7,7 @@
 //! the new member and the redeeming device, and the key's secret rides only
 //! in the invite code.
 
-use ligus_core::admission::{
-    person_redemption_message, RedeemKey, PERSON_REDEEM_CONTEXT, REDEEM_CONTEXT,
-};
+use ligus_core::admission::{person_redemption_message, RedeemKey, PERSON_REDEEM_CONTEXT, REDEEM_CONTEXT};
 use ligus_core::crypto::sign_envelope;
 use ligus_core::events::Verdict;
 use ligus_core::testkit::{Proof, SignedWorld};
@@ -30,11 +28,7 @@ fn world(keyed: bool) -> (SignedWorld, Uuid) {
     w.write(
         "owner",
         None,
-        SessionEvent::JoinApproved {
-            subject: ligus_core::authorization::invite_subject(invite),
-            admission: None,
-            redeem_key,
-        },
+        SessionEvent::JoinApproved { subject: ligus_core::authorization::invite_subject(invite), admission: None, redeem_key },
         None,
         Proof::Recovery,
     );
@@ -45,14 +39,7 @@ fn world(keyed: bool) -> (SignedWorld, Uuid) {
 fn vic_redeems(w: &mut SignedWorld, invite: Uuid, proof: bool) -> Uuid {
     let m = w.member_of("vic", WorkspaceRole::Contributor);
     let proof = proof.then(|| key().prove_person(w.wid, invite, &m.id, w.people["vic"].device_id));
-    let id = w.push_bare(
-        "vic",
-        SessionEvent::MemberAdded {
-            member: m,
-            invite: Some(invite),
-            proof,
-        },
-    );
+    let id = w.push_bare("vic", SessionEvent::MemberAdded { member: m, invite: Some(invite), proof });
     w.publish_identity("vic");
     id
 }
@@ -67,26 +54,14 @@ fn eve_steals(w: &mut SignedWorld, invite: Uuid, proof: Option<Vec<u8>>) -> Sess
         .unwrap()
         .clone();
     let m = w.member_of("vic", WorkspaceRole::Contributor);
-    let mut env = w.draft(
-        "eve",
-        None,
-        SessionEvent::MemberAdded {
-            member: m,
-            invite: Some(invite),
-            proof,
-        },
-        None,
-    );
+    let mut env = w.draft("eve", None, SessionEvent::MemberAdded { member: m, invite: Some(invite), proof }, None);
     let p = &w.people["eve"];
     let s = env.actor_stamp.as_mut().unwrap();
     let mut actor = w.people["vic"].actor();
     actor.device_id = Some(p.device_id);
     s.actor = actor;
     s.prev = None;
-    let head = Some(CfgFrontier {
-        lamport: issued.lamport,
-        event_id: issued.event_id,
-    });
+    let head = Some(CfgFrontier { lamport: issued.lamport, event_id: issued.event_id });
     s.log_head = head;
     env.lamport = ligus_core::lamport::next(head);
     env.event_id = Uuid::from_u128(1);
@@ -102,10 +77,7 @@ fn the_person_redeem_context_is_frozen_and_distinct() {
     let (ws, inv, dev) = (Uuid::from_u128(2), Uuid::from_u128(3), Uuid::from_u128(4));
     let m = person_redemption_message(ws, inv, "vic", dev);
     assert!(m.starts_with(PERSON_REDEEM_CONTEXT));
-    assert_eq!(
-        &m[PERSON_REDEEM_CONTEXT.len()..],
-        &ligus_core::admission::redemption_message(ws, inv, "vic", dev)[REDEEM_CONTEXT.len()..]
-    );
+    assert_eq!(&m[PERSON_REDEEM_CONTEXT.len()..], &ligus_core::admission::redemption_message(ws, inv, "vic", dev)[REDEEM_CONTEXT.len()..]);
 }
 
 #[test]
@@ -114,40 +86,17 @@ fn a_member_cannot_steal_a_keyed_person_invite() {
     // eve can't sign the code's proof: none, one under another key, or
     // vic's own proof (it names vic's device, not hers).
     let vic_proof = key().prove_person(w.wid, invite, "vic", w.people["vic"].device_id);
-    let wrong = RedeemKey::from_seed(&[9; 32]).unwrap().prove_person(
-        w.wid,
-        invite,
-        "vic",
-        w.people["eve"].device_id,
-    );
-    let thefts: Vec<SessionEventEnvelope> = [None, Some(wrong), Some(vic_proof)]
-        .into_iter()
-        .map(|p| eve_steals(&mut w, invite, p))
-        .collect();
+    let wrong = RedeemKey::from_seed(&[9; 32]).unwrap().prove_person(w.wid, invite, "vic", w.people["eve"].device_id);
+    let thefts: Vec<SessionEventEnvelope> = [None, Some(wrong), Some(vic_proof)].into_iter().map(|p| eve_steals(&mut w, invite, p)).collect();
     let real = vic_redeems(&mut w, invite, true);
     for t in &thefts {
         let mut w2 = w.clone();
         w2.push_env(None, t.clone());
-        assert_eq!(
-            w2.verdict(t.event_id),
-            Verdict::Denied,
-            "a backdated theft without the code's proof is refused"
-        );
-        assert_eq!(
-            w2.verdict(real),
-            Verdict::Allowed,
-            "vic's own redemption stands"
-        );
+        assert_eq!(w2.verdict(t.event_id), Verdict::Denied, "a backdated theft without the code's proof is refused");
+        assert_eq!(w2.verdict(real), Verdict::Allowed, "vic's own redemption stands");
         let vic = w2.people["vic"].account_id;
-        assert_eq!(
-            w2.timeline().anchors().get(&vic),
-            Some(&w2.people["vic"].device_id),
-            "vic's account is anchored to her own device"
-        );
-        assert_eq!(
-            w2.roster().account_keys.get(&vic),
-            Some(&w2.people["vic"].account.public_key_bytes().to_vec())
-        );
+        assert_eq!(w2.timeline().anchors().get(&vic), Some(&w2.people["vic"].device_id), "vic's account is anchored to her own device");
+        assert_eq!(w2.roster().account_keys.get(&vic), Some(&w2.people["vic"].account.public_key_bytes().to_vec()));
     }
 }
 
@@ -166,19 +115,12 @@ fn a_keyless_invite_redeems_as_before() {
     let theft = eve_steals(&mut w, invite, None);
     let real = vic_redeems(&mut w, invite, false);
     w.push_env(None, theft.clone());
-    assert_eq!(
-        w.verdict(theft.event_id),
-        Verdict::Allowed,
-        "legacy: the backdated redemption takes the invite"
-    );
+    assert_eq!(w.verdict(theft.event_id), Verdict::Allowed, "legacy: the backdated redemption takes the invite");
     // vic's own redemption then reads as a re-add, and the theft anchored
     // her account to eve's device.
     let _ = real;
     let vic = w.people["vic"].account_id;
-    assert_eq!(
-        w.timeline().anchors().get(&vic),
-        Some(&w.people["eve"].device_id)
-    );
+    assert_eq!(w.timeline().anchors().get(&vic), Some(&w.people["eve"].device_id));
 }
 
 #[test]
@@ -186,23 +128,11 @@ fn a_redeem_key_belongs_to_a_person_invite_on_the_config_log() {
     let (mut w, _) = world(true);
     let k = key().public().to_vec();
     let bad = [
-        SessionEvent::JoinApproved {
-            subject: "someone".into(),
-            admission: None,
-            redeem_key: Some(k.clone()),
-        },
+        SessionEvent::JoinApproved { subject: "someone".into(), admission: None, redeem_key: Some(k.clone()) },
+        SessionEvent::JoinApproved { subject: ligus_core::authorization::invite_subject(Uuid::new_v4()), admission: None, redeem_key: Some(vec![1; 31]) },
         SessionEvent::JoinApproved {
             subject: ligus_core::authorization::invite_subject(Uuid::new_v4()),
-            admission: None,
-            redeem_key: Some(vec![1; 31]),
-        },
-        SessionEvent::JoinApproved {
-            subject: ligus_core::authorization::invite_subject(Uuid::new_v4()),
-            admission: Some(ligus_core::admission::Admission::service(
-                i64::MAX / 2,
-                None,
-                key().public(),
-            )),
+            admission: Some(ligus_core::admission::Admission::service(i64::MAX / 2, None, key().public())),
             redeem_key: Some(k.clone()),
         },
     ];

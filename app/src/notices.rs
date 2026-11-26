@@ -56,11 +56,7 @@ pub(crate) struct Notice {
 
 impl Notice {
     pub fn new(kind: NoticeKind, chat: Option<Uuid>, line: impl Into<String>) -> Self {
-        Self {
-            kind,
-            chat,
-            line: line.into(),
-        }
+        Self { kind, chat, line: line.into() }
     }
 }
 
@@ -69,10 +65,7 @@ impl Notice {
 pub(crate) fn coalesce(notices: Vec<Notice>) -> Vec<Notice> {
     let mut out: Vec<Notice> = Vec::new();
     for n in notices {
-        match n
-            .chat
-            .and_then(|c| out.iter().position(|o| o.chat == Some(c)))
-        {
+        match n.chat.and_then(|c| out.iter().position(|o| o.chat == Some(c))) {
             Some(i) if n.kind <= out[i].kind => out[i] = n,
             Some(_) => {}
             None => out.push(n),
@@ -97,28 +90,18 @@ pub(crate) fn summarize(notices: &[Notice]) -> Option<String> {
         [one] => Some(one.line.clone()),
         _ => {
             let of = |k: NoticeKind| notices.iter().filter(|n| n.kind == k).count();
-            let kinds = [
-                NoticeKind::NeedsYou,
-                NoticeKind::Vote,
-                NoticeKind::Failed,
-                NoticeKind::Done,
-                NoticeKind::Used,
-            ];
+            let kinds = [NoticeKind::NeedsYou, NoticeKind::Vote, NoticeKind::Failed, NoticeKind::Done, NoticeKind::Used];
             let present: Vec<NoticeKind> = kinds.into_iter().filter(|k| of(*k) > 0).collect();
             let phrase = |k: NoticeKind, alone: bool| {
                 let n = of(k);
                 match k {
-                    NoticeKind::NeedsYou => {
-                        format!("{n} need{} you", if n == 1 { "s" } else { "" })
-                    }
+                    NoticeKind::NeedsYou => format!("{n} need{} you", if n == 1 { "s" } else { "" }),
                     NoticeKind::Vote => count(n, "vote needs you", "votes need you"),
                     NoticeKind::Failed if alone => format!("{} failed", count(n, "run", "runs")),
                     NoticeKind::Failed => format!("{n} failed"),
                     NoticeKind::Done if alone => format!("{} finished", count(n, "chat", "chats")),
                     NoticeKind::Done => format!("{n} finished"),
-                    NoticeKind::Used => {
-                        format!("your agents were used {}", count(n, "time", "times"))
-                    }
+                    NoticeKind::Used => format!("your agents were used {}", count(n, "time", "times")),
                 }
             };
             let alone = present.len() == 1;
@@ -139,28 +122,20 @@ struct Batch {
 
 fn batch() -> &'static Batch {
     static B: OnceLock<Batch> = OnceLock::new();
-    B.get_or_init(|| Batch {
-        pending: Mutex::new(Vec::new()),
-        armed: AtomicBool::new(false),
-    })
+    B.get_or_init(|| Batch { pending: Mutex::new(Vec::new()), armed: AtomicBool::new(false) })
 }
 
 /// The window is in front: it already shows the change (chat-row states,
 /// the inbox), so a native notification would only repeat it.
 fn window_focused(app: &AppHandle) -> bool {
-    app.get_webview_window("main")
-        .and_then(|w| w.is_focused().ok())
-        .unwrap_or(false)
+    app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false)
 }
 
 /// Queue a notice. It shows after a short quiet window, batched with any
 /// that arrive meanwhile, unless the window has focus by then.
 pub(crate) fn post(app: &AppHandle, notice: Notice) {
     let b = batch();
-    b.pending
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .push(notice);
+    b.pending.lock().unwrap_or_else(|e| e.into_inner()).push(notice);
     if b.armed.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -174,12 +149,7 @@ pub(crate) fn post(app: &AppHandle, notice: Notice) {
             return;
         }
         if let Some(body) = summarize(&coalesce(drained)) {
-            let _ = app
-                .notification()
-                .builder()
-                .title("Ligus")
-                .body(body)
-                .show();
+            let _ = app.notification().builder().title("Ligus").body(body).show();
         }
     });
 }
@@ -227,9 +197,7 @@ fn agent_name(s: &ChatSession, m: &ChatMessage) -> String {
 /// Whether this device's person asked for the turn `reply` answers (the
 /// nearest human behind its trigger). Unknown is no.
 fn asked_by_me(svc: &ChatService, s: &ChatSession, reply: &ChatMessage) -> bool {
-    let Some(trigger) = reply.reply_to_message_id else {
-        return false;
-    };
+    let Some(trigger) = reply.reply_to_message_id else { return false };
     let links = svc.device_links(s.workspace_id).unwrap_or_default();
     let me = links.person(&svc.author().id).to_string();
     svc.trigger_people(s.id, trigger)
@@ -241,21 +209,11 @@ fn asked_by_me(svc: &ChatService, s: &ChatSession, reply: &ChatMessage) -> bool 
 
 /// The notice for a finished or failed reply in a run this person asked for,
 /// if it warrants one. A stopped or empty reply doesn't.
-fn reply_notice(
-    svc: &ChatService,
-    s: &ChatSession,
-    reply: &ChatMessage,
-    failed: bool,
-) -> Option<Notice> {
+fn reply_notice(svc: &ChatService, s: &ChatSession, reply: &ChatMessage, failed: bool) -> Option<Notice> {
     reply_notice_with(s, reply, failed, |m| asked_by_me(svc, s, m))
 }
 
-fn reply_notice_with(
-    s: &ChatSession,
-    reply: &ChatMessage,
-    failed: bool,
-    mine: impl Fn(&ChatMessage) -> bool,
-) -> Option<Notice> {
+fn reply_notice_with(s: &ChatSession, reply: &ChatMessage, failed: bool, mine: impl Fn(&ChatMessage) -> bool) -> Option<Notice> {
     if !matches!(reply.role, MessageRole::Assistant | MessageRole::Agent) || reply.superseded {
         return None;
     }
@@ -268,45 +226,22 @@ fn reply_notice_with(
     }
     let who = agent_name(s, reply);
     Some(if failed {
-        Notice::new(
-            NoticeKind::Failed,
-            Some(s.id),
-            format!("{who}'s run failed{}", in_chat(s)),
-        )
+        Notice::new(NoticeKind::Failed, Some(s.id), format!("{who}'s run failed{}", in_chat(s)))
     } else {
-        Notice::new(
-            NoticeKind::Done,
-            Some(s.id),
-            format!("{who} finished{}", in_chat(s)),
-        )
+        Notice::new(NoticeKind::Done, Some(s.id), format!("{who} finished{}", in_chat(s)))
     })
 }
 
 /// A turn this device ran ended (the turn engine's terminal phase).
-pub(crate) fn turn_ended(
-    app: &AppHandle,
-    state: &AppState,
-    chat: Uuid,
-    message_id: Uuid,
-    failed: bool,
-) {
+pub(crate) fn turn_ended(app: &AppHandle, state: &AppState, chat: Uuid, message_id: Uuid, failed: bool) {
     let notice = {
         let svc = state.service.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(s) = svc.load_resolving(chat).ok().flatten() else {
-            return;
-        };
-        let Some(m) = s.messages.iter().find(|m| m.id == message_id) else {
-            return;
-        };
+        let Some(s) = svc.load_resolving(chat).ok().flatten() else { return };
+        let Some(m) = s.messages.iter().find(|m| m.id == message_id) else { return };
         reply_notice(&svc, &s, m, failed)
     };
     if let Some(n) = notice {
-        if state
-            .notified
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(message_id, NOTIFIED_CAP)
-        {
+        if state.notified.lock().unwrap_or_else(|e| e.into_inner()).insert(message_id, NOTIFIED_CAP) {
             post(app, n);
         }
     }
@@ -318,26 +253,15 @@ pub(crate) fn synced_replies(app: &AppHandle, state: &AppState, chat: Uuid, ids:
     let now = ligus_core::Timestamp::now().0;
     let notices: Vec<(Uuid, Notice)> = {
         let svc = state.service.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(s) = svc.load_resolving(chat).ok().flatten() else {
-            return;
-        };
+        let Some(s) = svc.load_resolving(chat).ok().flatten() else { return };
         s.messages
             .iter()
-            .filter(|m| {
-                ids.contains(&m.id)
-                    && !m.is_streaming
-                    && (now - m.created_at.0).whole_seconds() < SYNCED_FRESH_SECS
-            })
+            .filter(|m| ids.contains(&m.id) && !m.is_streaming && (now - m.created_at.0).whole_seconds() < SYNCED_FRESH_SECS)
             .filter_map(|m| reply_notice(&svc, &s, m, false).map(|n| (m.id, n)))
             .collect()
     };
     for (id, n) in notices {
-        if state
-            .notified
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id, NOTIFIED_CAP)
-        {
+        if state.notified.lock().unwrap_or_else(|e| e.into_inner()).insert(id, NOTIFIED_CAP) {
             post(app, n);
         }
     }
@@ -345,36 +269,17 @@ pub(crate) fn synced_replies(app: &AppHandle, state: &AppState, chat: Uuid, ids:
 
 /// An agent turn on this device asked a question (`ligus_ask_human`) in a
 /// run this person asked for.
-pub(crate) fn ask_posted(
-    app: &AppHandle,
-    state: &AppState,
-    chat: Uuid,
-    turn_message: Uuid,
-    ask_id: Uuid,
-) {
+pub(crate) fn ask_posted(app: &AppHandle, state: &AppState, chat: Uuid, turn_message: Uuid, ask_id: Uuid) {
     let notice = {
         let svc = state.service.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(s) = svc.load_resolving(chat).ok().flatten() else {
-            return;
-        };
-        let Some(m) = s.messages.iter().find(|m| m.id == turn_message) else {
-            return;
-        };
+        let Some(s) = svc.load_resolving(chat).ok().flatten() else { return };
+        let Some(m) = s.messages.iter().find(|m| m.id == turn_message) else { return };
         if !asked_by_me(&svc, &s, m) {
             return;
         }
-        Notice::new(
-            NoticeKind::NeedsYou,
-            Some(chat),
-            format!("{} asked you something{}", agent_name(&s, m), in_chat(&s)),
-        )
+        Notice::new(NoticeKind::NeedsYou, Some(chat), format!("{} asked you something{}", agent_name(&s, m), in_chat(&s)))
     };
-    if state
-        .notified
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(ask_id, NOTIFIED_CAP)
-    {
+    if state.notified.lock().unwrap_or_else(|e| e.into_inner()).insert(ask_id, NOTIFIED_CAP) {
         post(app, notice);
     }
 }
@@ -401,23 +306,10 @@ mod tests {
         let mut s = ChatSession::new("Relay backoff", Uuid::new_v4(), "rt");
         let r = reply(&mut s, "Done: retry cap is 30s.");
         let done = reply_notice_with(&s, &r, false, |_| true).unwrap();
-        assert_eq!(
-            (done.kind, done.line.as_str()),
-            (NoticeKind::Done, "builder finished in “Relay backoff”")
-        );
-        assert_eq!(
-            reply_notice_with(&s, &r, false, |_| false),
-            None,
-            "someone else's run"
-        );
+        assert_eq!((done.kind, done.line.as_str()), (NoticeKind::Done, "builder finished in “Relay backoff”"));
+        assert_eq!(reply_notice_with(&s, &r, false, |_| false), None, "someone else's run");
         let failed = reply_notice_with(&s, &r, true, |_| true).unwrap();
-        assert_eq!(
-            (failed.kind, failed.line.as_str()),
-            (
-                NoticeKind::Failed,
-                "builder's run failed in “Relay backoff”"
-            )
-        );
+        assert_eq!((failed.kind, failed.line.as_str()), (NoticeKind::Failed, "builder's run failed in “Relay backoff”"));
     }
 
     #[test]
@@ -427,10 +319,7 @@ mod tests {
         assert_eq!(reply_notice_with(&s, &stopped, false, |_| true), None);
         let errored = reply(&mut s, "[error] the model refused");
         let n = reply_notice_with(&s, &errored, false, |_| true).unwrap();
-        assert_eq!(
-            (n.kind, n.line.as_str()),
-            (NoticeKind::Failed, "builder's run failed")
-        );
+        assert_eq!((n.kind, n.line.as_str()), (NoticeKind::Failed, "builder's run failed"));
         let human = ChatMessage::new(MessageRole::User, "Ana", "thanks");
         assert_eq!(reply_notice_with(&s, &human, false, |_| true), None);
     }
@@ -444,25 +333,13 @@ mod tests {
 
     #[test]
     fn one_notice_says_itself() {
-        assert_eq!(
-            summarize(&[n(
-                NoticeKind::Done,
-                1,
-                "builder finished in “Relay backoff”"
-            )])
-            .as_deref(),
-            Some("builder finished in “Relay backoff”")
-        );
+        assert_eq!(summarize(&[n(NoticeKind::Done, 1, "builder finished in “Relay backoff”")]).as_deref(), Some("builder finished in “Relay backoff”"));
         assert_eq!(summarize(&[]), None);
     }
 
     #[test]
     fn a_burst_of_one_kind_is_counted() {
-        let done = [
-            n(NoticeKind::Done, 1, "a"),
-            n(NoticeKind::Done, 2, "b"),
-            n(NoticeKind::Done, 3, "c"),
-        ];
+        let done = [n(NoticeKind::Done, 1, "a"), n(NoticeKind::Done, 2, "b"), n(NoticeKind::Done, 3, "c")];
         assert_eq!(summarize(&done).as_deref(), Some("3 chats finished"));
         let failed = [n(NoticeKind::Failed, 1, "a"), n(NoticeKind::Failed, 2, "b")];
         assert_eq!(summarize(&failed).as_deref(), Some("2 runs failed"));
@@ -472,41 +349,15 @@ mod tests {
 
     #[test]
     fn a_mixed_burst_lists_the_most_urgent_first() {
-        let mixed = [
-            n(NoticeKind::Done, 1, "a"),
-            n(NoticeKind::Failed, 2, "b"),
-            n(NoticeKind::NeedsYou, 3, "c"),
-            n(NoticeKind::Done, 4, "d"),
-        ];
-        assert_eq!(
-            summarize(&mixed).as_deref(),
-            Some("1 needs you · 1 failed · 2 finished")
-        );
+        let mixed = [n(NoticeKind::Done, 1, "a"), n(NoticeKind::Failed, 2, "b"), n(NoticeKind::NeedsYou, 3, "c"), n(NoticeKind::Done, 4, "d")];
+        assert_eq!(summarize(&mixed).as_deref(), Some("1 needs you · 1 failed · 2 finished"));
     }
 
     #[test]
     fn a_chat_counts_once_with_its_most_urgent_notice() {
-        let got = coalesce(vec![
-            n(NoticeKind::Done, 1, "done"),
-            n(NoticeKind::NeedsYou, 1, "asks"),
-            n(NoticeKind::Done, 1, "done again"),
-            n(NoticeKind::Done, 2, "other"),
-        ]);
-        assert_eq!(
-            got,
-            vec![
-                n(NoticeKind::NeedsYou, 1, "asks"),
-                n(NoticeKind::Done, 2, "other")
-            ]
-        );
+        let got = coalesce(vec![n(NoticeKind::Done, 1, "done"), n(NoticeKind::NeedsYou, 1, "asks"), n(NoticeKind::Done, 1, "done again"), n(NoticeKind::Done, 2, "other")]);
+        assert_eq!(got, vec![n(NoticeKind::NeedsYou, 1, "asks"), n(NoticeKind::Done, 2, "other")]);
         // Notices without a chat are never merged.
-        assert_eq!(
-            coalesce(vec![
-                n(NoticeKind::Vote, 0, "a"),
-                n(NoticeKind::Vote, 0, "b")
-            ])
-            .len(),
-            2
-        );
+        assert_eq!(coalesce(vec![n(NoticeKind::Vote, 0, "a"), n(NoticeKind::Vote, 0, "b")]).len(), 2);
     }
 }

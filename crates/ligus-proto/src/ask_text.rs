@@ -93,11 +93,7 @@ fn clean_line(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut space = false;
     for c in raw.chars() {
-        let c = if matches!(c, '\n' | '\r' | '\t') {
-            ' '
-        } else {
-            c
-        };
+        let c = if matches!(c, '\n' | '\r' | '\t') { ' ' } else { c };
         if is_hidden_name_char(c) {
             continue;
         }
@@ -141,24 +137,14 @@ fn control_skeleton(s: &str) -> String {
         .filter_map(|c| {
             let u = c as u32;
             // Fullwidth ASCII to ASCII.
-            let c = if (0xFF01..=0xFF5E).contains(&u) {
-                char::from_u32(u - 0xFEE0).unwrap_or(c)
-            } else {
-                c
-            };
+            let c = if (0xFF01..=0xFF5E).contains(&u) { char::from_u32(u - 0xFEE0).unwrap_or(c) } else { c };
             let u = c as u32;
             let combining = (0x0300..=0x036F).contains(&u)
                 || (0x1AB0..=0x1AFF).contains(&u)
                 || (0x1DC0..=0x1DFF).contains(&u)
                 || (0x20D0..=0x20FF).contains(&u)
                 || (0xFE20..=0xFE2F).contains(&u);
-            if combining
-                || c.is_ascii_punctuation() && c != '&'
-                || matches!(
-                    c,
-                    '\u{2024}' | '\u{2026}' | '\u{3002}' | '\u{FF0E}' | '\u{00B7}'
-                )
-            {
+            if combining || c.is_ascii_punctuation() && c != '&' || matches!(c, '\u{2024}' | '\u{2026}' | '\u{3002}' | '\u{FF0E}' | '\u{00B7}') {
                 return None;
             }
             Some(if c.is_whitespace() { ' ' } else { c })
@@ -173,10 +159,7 @@ mod tests {
 
     #[test]
     fn bidi_zero_width_and_controls_are_removed() {
-        assert_eq!(
-            clean_option("Ap\u{202E}prove\u{200B} it\u{0007}"),
-            "Approve it"
-        );
+        assert_eq!(clean_option("Ap\u{202E}prove\u{200B} it\u{0007}"), "Approve it");
         assert_eq!(clean_question("a\u{2066}b\u{2069}\u{FEFF}c"), "abc");
     }
 
@@ -187,10 +170,7 @@ mod tests {
 
     #[test]
     fn a_question_keeps_at_most_eight_line_breaks() {
-        let q = (0..20)
-            .map(|i| format!("l{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let q = (0..20).map(|i| format!("l{i}")).collect::<Vec<_>>().join("\n");
         let c = clean_question(&q);
         assert_eq!(c.matches('\n').count(), MAX_QUESTION_LINE_BREAKS);
         assert!(c.ends_with("l8 l9 l10 l11 l12 l13 l14 l15 l16 l17 l18 l19"));
@@ -202,25 +182,10 @@ mod tests {
         for r in ["allow ONCE", "Deny", " Not\u{200B} now ", "approve & apply"] {
             assert!(is_reserved(r), "{r}");
         }
-        for r in [
-            "\u{0410}llow once",
-            "Ａｌｌｏｗ ｏｎｃｅ",
-            "A\u{0300}llow once",
-            "Allow once\u{0323}",
-            "Allow\u{00A0}once.",
-            "Al\u{0399}ow once",
-            "Deny\u{2024}",
-            "Approve and apply",
-            "REJECT!",
-        ] {
+        for r in ["\u{0410}llow once", "Ａｌｌｏｗ ｏｎｃｅ", "A\u{0300}llow once", "Allow once\u{0323}", "Allow\u{00A0}once.", "Al\u{0399}ow once", "Deny\u{2024}", "Approve and apply", "REJECT!"] {
             assert!(is_reserved(r), "{r:?}");
         }
-        assert!(
-            !is_reserved("Postgres")
-                && !is_reserved("Yes")
-                && !is_reserved("Allow both")
-                && !is_reserved("Deploy")
-        );
+        assert!(!is_reserved("Postgres") && !is_reserved("Yes") && !is_reserved("Allow both") && !is_reserved("Deploy"));
     }
 
     #[test]

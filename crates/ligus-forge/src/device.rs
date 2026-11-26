@@ -24,10 +24,7 @@ use crate::tokens::Secret;
 use crate::{ForgeError, ForgeKind, Result};
 
 pub fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 const GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -55,11 +52,7 @@ pub fn github_client_id(conn: &Connection) -> Option<String> {
         return Some(c);
     }
     conn_is_github_com(conn)
-        .then(|| {
-            std::env::var("LIGUS_GITHUB_APP_CLIENT_ID")
-                .ok()
-                .or_else(|| option_env!("LIGUS_GITHUB_APP_CLIENT_ID").map(str::to_string))
-        })
+        .then(|| std::env::var("LIGUS_GITHUB_APP_CLIENT_ID").ok().or_else(|| option_env!("LIGUS_GITHUB_APP_CLIENT_ID").map(str::to_string)))
         .flatten()
         .filter(|c| !c.trim().is_empty())
 }
@@ -77,11 +70,7 @@ pub fn gitlab_client_id(conn: &Connection) -> Option<String> {
     }
     let is_com = crate::spec::host_of(&conn.base_url).is_some_and(|h| h == "gitlab.com");
     is_com
-        .then(|| {
-            std::env::var("LIGUS_GITLAB_CLIENT_ID")
-                .ok()
-                .or_else(|| option_env!("LIGUS_GITLAB_CLIENT_ID").map(str::to_string))
-        })
+        .then(|| std::env::var("LIGUS_GITLAB_CLIENT_ID").ok().or_else(|| option_env!("LIGUS_GITLAB_CLIENT_ID").map(str::to_string)))
         .flatten()
         .filter(|c| !c.trim().is_empty())
 }
@@ -94,13 +83,7 @@ pub fn endpoints(conn: &Connection) -> Result<DeviceEndpoints> {
             let client_id = github_client_id(conn).ok_or_else(|| {
                 ForgeError::Unsupported("device sign-in for GitHub isn't configured in this build (no Ligus GitHub App client id): use the gh login on this device or paste a fine-grained token".into())
             })?;
-            Ok(DeviceEndpoints {
-                device_url: format!("{base}/login/device/code"),
-                token_url: format!("{base}/login/oauth/access_token"),
-                client_id,
-                scope: None,
-                internal: conn.internal,
-            })
+            Ok(DeviceEndpoints { device_url: format!("{base}/login/device/code"), token_url: format!("{base}/login/oauth/access_token"), client_id, scope: None, internal: conn.internal })
         }
         ForgeKind::GitLab => {
             let client_id = gitlab_client_id(conn).ok_or_else(|| {
@@ -114,9 +97,7 @@ pub fn endpoints(conn: &Connection) -> Result<DeviceEndpoints> {
                 internal: conn.internal,
             })
         }
-        ForgeKind::Gitea => Err(ForgeError::Unsupported(
-            "Forgejo, Gitea and Codeberg have no device sign-in: paste a token".into(),
-        )),
+        ForgeKind::Gitea => Err(ForgeError::Unsupported("Forgejo, Gitea and Codeberg have no device sign-in: paste a token".into())),
     }
 }
 
@@ -150,11 +131,7 @@ pub enum Poll {
     Expired,
 }
 
-async fn post_form(
-    url: &str,
-    form: &[(&str, &str)],
-    internal: bool,
-) -> Result<(reqwest::StatusCode, Value)> {
+async fn post_form(url: &str, form: &[(&str, &str)], internal: bool) -> Result<(reqwest::StatusCode, Value)> {
     crate::http::guard_url(url)?;
     crate::http::check_url_address(url, internal)?;
     let resp = crate::http::client_for(internal)
@@ -163,21 +140,13 @@ async fn post_form(
         .form(form)
         .send()
         .await
-        .map_err(|e| {
-            ForgeError::Transport(format!("couldn't reach the code host: {}", e.without_url()))
-        })?;
+        .map_err(|e| ForgeError::Transport(format!("couldn't reach the code host: {}", e.without_url())))?;
     let status = resp.status();
     let mut resp = resp;
     let mut buf: Vec<u8> = Vec::new();
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| ForgeError::Transport(e.without_url().to_string()))?
-    {
+    while let Some(chunk) = resp.chunk().await.map_err(|e| ForgeError::Transport(e.without_url().to_string()))? {
         if buf.len() + chunk.len() > 64 * 1024 {
-            return Err(ForgeError::Transport(
-                "the code host's answer was too large".into(),
-            ));
+            return Err(ForgeError::Transport("the code host's answer was too large".into()));
         }
         buf.extend_from_slice(&chunk);
     }
@@ -188,10 +157,7 @@ fn token_set(v: &Value) -> Option<TokenSet> {
     let access = v["access_token"].as_str().filter(|t| !t.is_empty())?;
     Some(TokenSet {
         access: Secret::new(access),
-        refresh: v["refresh_token"]
-            .as_str()
-            .filter(|t| !t.is_empty())
-            .map(Secret::new),
+        refresh: v["refresh_token"].as_str().filter(|t| !t.is_empty()).map(Secret::new),
         expires_in: v["expires_in"].as_u64(),
         scope: v["scope"].as_str().map(str::to_string),
     })
@@ -201,16 +167,9 @@ fn token_set(v: &Value) -> Option<TokenSet> {
 /// device endpoint), or plain http only when that host is a real loopback
 /// host. Parsed, never matched by prefix.
 fn verification_uri_ok(uri: &str, device_url: &str) -> bool {
-    let (Ok(u), Ok(d)) = (url::Url::parse(uri), url::Url::parse(device_url)) else {
-        return false;
-    };
-    let (Some(host), Some(forge_host)) = (u.host_str(), d.host_str()) else {
-        return false;
-    };
-    if !u.username().is_empty()
-        || u.password().is_some()
-        || !crate::spec::same_host(host, forge_host)
-    {
+    let (Ok(u), Ok(d)) = (url::Url::parse(uri), url::Url::parse(device_url)) else { return false };
+    let (Some(host), Some(forge_host)) = (u.host_str(), d.host_str()) else { return false };
+    if !u.username().is_empty() || u.password().is_some() || !crate::spec::same_host(host, forge_host) {
         return false;
     }
     let loopback = match u.host() {
@@ -231,33 +190,16 @@ pub async fn start(ep: &DeviceEndpoints) -> Result<DeviceStart> {
     let (status, v) = post_form(&ep.device_url, &form, ep.internal).await?;
     let code = v["device_code"].as_str().filter(|_| status.is_success());
     let Some(code) = code else {
-        let why = v["error_description"]
-            .as_str()
-            .or(v["error"].as_str())
-            .unwrap_or("no device code");
-        return Err(ForgeError::Rejected(format!(
-            "the code host refused to start a device sign-in: {why}"
-        )));
+        let why = v["error_description"].as_str().or(v["error"].as_str()).unwrap_or("no device code");
+        return Err(ForgeError::Rejected(format!("the code host refused to start a device sign-in: {why}")));
     };
-    let uri = v["verification_uri"]
-        .as_str()
-        .or(v["verification_url"].as_str())
-        .unwrap_or("")
-        .to_string();
+    let uri = v["verification_uri"].as_str().or(v["verification_url"].as_str()).unwrap_or("").to_string();
     if !verification_uri_ok(&uri, &ep.device_url) {
-        return Err(ForgeError::Rejected(
-            "the code host gave a verification address that isn't https on the code host itself"
-                .into(),
-        ));
+        return Err(ForgeError::Rejected("the code host gave a verification address that isn't https on the code host itself".into()));
     }
     Ok(DeviceStart {
         device_code: Secret::new(code),
-        user_code: v["user_code"]
-            .as_str()
-            .unwrap_or("")
-            .chars()
-            .take(32)
-            .collect(),
+        user_code: v["user_code"].as_str().unwrap_or("").chars().take(32).collect(),
         verification_uri: uri,
         expires_in: v["expires_in"].as_u64().unwrap_or(900).min(3600),
         interval: v["interval"].as_u64().unwrap_or(5).clamp(1, 60),
@@ -266,57 +208,26 @@ pub async fn start(ep: &DeviceEndpoints) -> Result<DeviceStart> {
 
 /// Poll once.
 pub async fn poll(ep: &DeviceEndpoints, device_code: &Secret) -> Result<Poll> {
-    let (_, v) = post_form(
-        &ep.token_url,
-        &[
-            ("client_id", ep.client_id.as_str()),
-            ("device_code", device_code.expose()),
-            ("grant_type", GRANT),
-        ],
-        ep.internal,
-    )
-    .await?;
+    let (_, v) = post_form(&ep.token_url, &[("client_id", ep.client_id.as_str()), ("device_code", device_code.expose()), ("grant_type", GRANT)], ep.internal).await?;
     if let Some(t) = token_set(&v) {
         return Ok(Poll::Done(t));
     }
     match v["error"].as_str().unwrap_or("") {
         "authorization_pending" => Ok(Poll::Pending),
-        "slow_down" => Ok(Poll::SlowDown(
-            v["interval"].as_u64().unwrap_or(10).clamp(1, 120),
-        )),
+        "slow_down" => Ok(Poll::SlowDown(v["interval"].as_u64().unwrap_or(10).clamp(1, 120))),
         "access_denied" => Ok(Poll::Denied),
         // GitHub's docs spell it both ways.
         "expired_token" | "token_expired" => Ok(Poll::Expired),
         other => Err(ForgeError::Rejected(format!(
             "device sign-in failed: {}",
-            v["error_description"]
-                .as_str()
-                .unwrap_or(if other.is_empty() { "no token" } else { other })
+            v["error_description"].as_str().unwrap_or(if other.is_empty() { "no token" } else { other })
         ))),
     }
 }
 
 /// Exchange a refresh token for a new access token.
 /// `internal`: the connection is marked internal on this device.
-pub async fn refresh(
-    token_url: &str,
-    client_id: &str,
-    refresh_token: &Secret,
-    internal: bool,
-) -> Result<TokenSet> {
-    let (_, v) = post_form(
-        token_url,
-        &[
-            ("client_id", client_id),
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh_token.expose()),
-        ],
-        internal,
-    )
-    .await?;
-    token_set(&v).ok_or_else(|| {
-        ForgeError::NotSignedIn(
-            "the device sign-in for this code host expired: sign in again".into(),
-        )
-    })
+pub async fn refresh(token_url: &str, client_id: &str, refresh_token: &Secret, internal: bool) -> Result<TokenSet> {
+    let (_, v) = post_form(token_url, &[("client_id", client_id), ("grant_type", "refresh_token"), ("refresh_token", refresh_token.expose())], internal).await?;
+    token_set(&v).ok_or_else(|| ForgeError::NotSignedIn("the device sign-in for this code host expired: sign in again".into()))
 }

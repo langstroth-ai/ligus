@@ -37,12 +37,7 @@ pub mod spec;
 pub mod tokens;
 
 pub use conn::{Connection, Connections};
-pub use http::{
-    client_builder as http_client_builder,
-    client_builder_with_roots as http_client_builder_with_roots, install_tls_provider,
-    new_client as new_http_client, public_only_client_builder, real_hosts_denied,
-    tls_client_config, uses_platform_roots,
-};
+pub use http::{client_builder as http_client_builder, client_builder_with_roots as http_client_builder_with_roots, install_tls_provider, public_only_client_builder, new_client as new_http_client, real_hosts_denied, tls_client_config, uses_platform_roots};
 pub use tokens::{AuthSource, CredentialSource, Purpose, Secret, TokenStore};
 
 /// Environment variables forge CLIs and community MCP servers read tokens
@@ -99,15 +94,11 @@ impl ForgeError {
     /// out, unsupported, invalid input, refused addresses) pass through.
     pub fn summary(&self) -> String {
         match self {
-            ForgeError::NotSignedIn(m) | ForgeError::Unsupported(m) | ForgeError::Invalid(m) => {
-                self_message(self, m)
-            }
+            ForgeError::NotSignedIn(m) | ForgeError::Unsupported(m) | ForgeError::Invalid(m) => self_message(self, m),
             ForgeError::Unauthorized(_) => "the code host refused the credentials".into(),
             ForgeError::NotFound(_) => "not found on the code host".into(),
             ForgeError::Rejected(_) => "the code host refused the request".into(),
-            ForgeError::Transport(_) => {
-                "couldn't reach the code host, or it answered with an error".into()
-            }
+            ForgeError::Transport(_) => "couldn't reach the code host, or it answered with an error".into(),
             ForgeError::Store(_) => "this device's secret store failed".into(),
         }
     }
@@ -195,11 +186,8 @@ impl ForgeId {
         if raw.eq_ignore_ascii_case("github.com") || raw.eq_ignore_ascii_case("github") {
             return Ok(Self::github_com());
         }
-        let (kind, host) = raw.split_once(':').ok_or_else(|| {
-            ForgeError::Invalid(format!("'{raw}' isn't a forge connection id (kind:host)"))
-        })?;
-        let kind = ForgeKind::parse(kind)
-            .ok_or_else(|| ForgeError::Invalid(format!("unknown forge kind '{kind}'")))?;
+        let (kind, host) = raw.split_once(':').ok_or_else(|| ForgeError::Invalid(format!("'{raw}' isn't a forge connection id (kind:host)")))?;
+        let kind = ForgeKind::parse(kind).ok_or_else(|| ForgeError::Invalid(format!("unknown forge kind '{kind}'")))?;
         if !spec::valid_host(host) {
             return Err(ForgeError::Invalid(format!("'{host}' isn't a host name")));
         }
@@ -229,10 +217,7 @@ pub struct RepoRef {
 
 impl RepoRef {
     pub fn new(owner: impl Into<String>, name: impl Into<String>) -> Self {
-        Self {
-            owner: owner.into(),
-            name: name.into(),
-        }
+        Self { owner: owner.into(), name: name.into() }
     }
     pub fn full_name(&self) -> String {
         format!("{}/{}", self.owner, self.name)
@@ -489,18 +474,8 @@ pub struct CiStatus {
 
 impl CiStatus {
     pub fn from_checks(checks: Vec<CiCheck>, note: Option<String>) -> Self {
-        let state = if checks.is_empty() {
-            CiState::Unknown
-        } else {
-            checks
-                .iter()
-                .fold(CiState::Success, |a, c| a.worst(c.state))
-        };
-        Self {
-            state,
-            checks,
-            note,
-        }
+        let state = if checks.is_empty() { CiState::Unknown } else { checks.iter().fold(CiState::Success, |a, c| a.worst(c.state)) };
+        Self { state, checks, note }
     }
 }
 
@@ -543,11 +518,7 @@ pub struct RepoLayout {
 /// The remote a change request's head is pushed to: `origin`, and never a
 /// remote that resolves to the upstream project.
 pub fn push_remote(layout: &RepoLayout) -> Result<&'static str> {
-    if layout
-        .upstream
-        .as_ref()
-        .is_some_and(|u| u.same(&layout.origin))
-    {
+    if layout.upstream.as_ref().is_some_and(|u| u.same(&layout.origin)) {
         return Err(ForgeError::Rejected(format!(
             "refusing to push: origin points at {}, the upstream project; pushes go only to your fork",
             layout.origin
@@ -576,12 +547,7 @@ pub(crate) fn cap_text(s: &str, max: usize) -> (String, bool) {
 pub trait ForgeReader: Send + Sync {
     fn kind(&self) -> ForgeKind;
     fn id(&self) -> &ForgeId;
-    async fn list_change_requests(
-        &self,
-        r: &RepoRef,
-        state: StateFilter,
-        limit: u32,
-    ) -> Result<Vec<ChangeRequest>>;
+    async fn list_change_requests(&self, r: &RepoRef, state: StateFilter, limit: u32) -> Result<Vec<ChangeRequest>>;
     async fn change_request(&self, r: &RepoRef, number: &str) -> Result<ChangeRequest>;
     async fn review_comments(&self, r: &RepoRef, number: &str) -> Result<Vec<ReviewComment>>;
     async fn issues(&self, r: &RepoRef, state: StateFilter, limit: u32) -> Result<Vec<Issue>>;
@@ -623,10 +589,7 @@ pub trait Forge: ForgeReader {
         if login.eq_ignore_ascii_case(&upstream.owner) {
             return Ok(None);
         }
-        Ok(self
-            .repo(&RepoRef::new(login, upstream.name.clone()))
-            .await?
-            .filter(|m| m.parent.as_ref().is_some_and(|(p, _)| p.same(upstream))))
+        Ok(self.repo(&RepoRef::new(login, upstream.name.clone())).await?.filter(|m| m.parent.as_ref().is_some_and(|(p, _)| p.same(upstream))))
     }
     /// Only on an explicit human action.
     async fn create_fork(&self, upstream: &RepoRef) -> Result<RepoRef>;
@@ -637,9 +600,7 @@ pub trait Forge: ForgeReader {
     /// for that. Forges without it say so.
     async fn create_private_repo(&self, owner: &str, login: &str, name: &str) -> Result<RepoRef> {
         let _ = (owner, login, name);
-        Err(ForgeError::Unsupported(
-            "publishing a new repository isn't supported on this code host yet".into(),
-        ))
+        Err(ForgeError::Unsupported("publishing a new repository isn't supported on this code host yet".into()))
     }
     /// Only on an explicit human action or an applied proposal.
     async fn open_change_request(&self, d: &ChangeRequestDraft) -> Result<ChangeRequestOutcome>;
@@ -647,11 +608,7 @@ pub trait Forge: ForgeReader {
     fn clone_url(&self, r: &RepoRef, transport: Transport) -> String {
         let host = spec::host_of(self.web_base()).unwrap_or_default();
         match transport {
-            Transport::Https => format!(
-                "{}/{}.git",
-                self.web_base().trim_end_matches('/'),
-                r.full_name()
-            ),
+            Transport::Https => format!("{}/{}.git", self.web_base().trim_end_matches('/'), r.full_name()),
             Transport::Ssh => format!("git@{host}:{}.git", r.full_name()),
         }
     }
@@ -679,12 +636,7 @@ impl ForgeReader for ReadOnly {
     fn id(&self) -> &ForgeId {
         self.0.id()
     }
-    async fn list_change_requests(
-        &self,
-        r: &RepoRef,
-        state: StateFilter,
-        limit: u32,
-    ) -> Result<Vec<ChangeRequest>> {
+    async fn list_change_requests(&self, r: &RepoRef, state: StateFilter, limit: u32) -> Result<Vec<ChangeRequest>> {
         self.0.list_change_requests(r, state, limit).await
     }
     async fn change_request(&self, r: &RepoRef, number: &str) -> Result<ChangeRequest> {

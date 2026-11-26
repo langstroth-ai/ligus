@@ -125,9 +125,7 @@ pub struct ScoutAssessment {
 impl ScoutAssessment {
     /// Stable identity of the scout: its agent id, or [`PRIMARY_KEY`].
     pub fn scout_key(&self) -> String {
-        self.scout_agent_id
-            .map(|a| a.to_string())
-            .unwrap_or_else(|| PRIMARY_KEY.to_string())
+        self.scout_agent_id.map(|a| a.to_string()).unwrap_or_else(|| PRIMARY_KEY.to_string())
     }
 }
 
@@ -167,22 +165,13 @@ pub struct CheckOutcome {
 
 impl CheckOutcome {
     pub fn passed(note: impl Into<String>) -> Self {
-        Self {
-            status: CheckStatus::Passed,
-            note: note.into(),
-        }
+        Self { status: CheckStatus::Passed, note: note.into() }
     }
     pub fn failed(note: impl Into<String>) -> Self {
-        Self {
-            status: CheckStatus::Failed,
-            note: note.into(),
-        }
+        Self { status: CheckStatus::Failed, note: note.into() }
     }
     pub fn skipped(note: impl Into<String>) -> Self {
-        Self {
-            status: CheckStatus::Skipped,
-            note: note.into(),
-        }
+        Self { status: CheckStatus::Skipped, note: note.into() }
     }
 }
 
@@ -240,21 +229,9 @@ pub struct QuorumKnobs {
 impl QuorumDial {
     pub fn knobs(self) -> QuorumKnobs {
         match self {
-            QuorumDial::Fast => QuorumKnobs {
-                agent_quorum: 1,
-                required_approvals: 1,
-                quality_bar: 60,
-            },
-            QuorumDial::Balanced => QuorumKnobs {
-                agent_quorum: 2,
-                required_approvals: 1,
-                quality_bar: 70,
-            },
-            QuorumDial::Careful => QuorumKnobs {
-                agent_quorum: 3,
-                required_approvals: 2,
-                quality_bar: 80,
-            },
+            QuorumDial::Fast => QuorumKnobs { agent_quorum: 1, required_approvals: 1, quality_bar: 60 },
+            QuorumDial::Balanced => QuorumKnobs { agent_quorum: 2, required_approvals: 1, quality_bar: 70 },
+            QuorumDial::Careful => QuorumKnobs { agent_quorum: 3, required_approvals: 2, quality_bar: 80 },
         }
     }
 }
@@ -342,11 +319,7 @@ pub struct ProposalSet {
 
 impl ProposalSet {
     /// A new set over `alternatives`, at the balanced dial position.
-    pub fn new(
-        question: impl Into<String>,
-        author_actor_id: impl Into<String>,
-        alternatives: Vec<Uuid>,
-    ) -> Self {
+    pub fn new(question: impl Into<String>, author_actor_id: impl Into<String>, alternatives: Vec<Uuid>) -> Self {
         let now = Timestamp::now();
         let knobs = QuorumDial::Balanced.knobs();
         Self {
@@ -422,8 +395,7 @@ impl ProposalSet {
     /// withdrawal, or a stop from this attempt.
     pub fn stop_of(&self, proposal_id: Uuid) -> Option<&StopRecord> {
         self.stops.iter().find(|s| {
-            s.proposal_id == proposal_id
-                && (s.reason == StopReason::Withdrawn || s.attempt == self.attempt)
+            s.proposal_id == proposal_id && (s.reason == StopReason::Withdrawn || s.attempt == self.attempt)
         })
     }
 
@@ -433,9 +405,7 @@ impl ProposalSet {
         self.contains(proposal_id)
             && self.stop_of(proposal_id).is_none()
             && proposals.iter().any(|p| {
-                p.id == proposal_id
-                    && p.superseded_by.is_none()
-                    && p.status != ProposalStatus::Rejected
+                p.id == proposal_id && p.superseded_by.is_none() && p.status != ProposalStatus::Rejected
             })
     }
 
@@ -449,8 +419,7 @@ impl ProposalSet {
     /// Current (decayed) support of one assessment.
     pub fn current_support(&self, a: &ScoutAssessment) -> u32 {
         let rounds = self.round.saturating_sub(a.round);
-        a.score
-            .saturating_sub(self.decay_per_round.saturating_mul(rounds))
+        a.score.saturating_sub(self.decay_per_round.saturating_mul(rounds))
     }
 
     /// How `proposal_id` stands. Only the latest assessment per scout counts
@@ -462,11 +431,7 @@ impl ProposalSet {
         };
         let mut st = Standing::default();
         let mut runtimes: Vec<&str> = Vec::new();
-        for a in self
-            .assessments
-            .iter()
-            .filter(|a| a.proposal_id == proposal_id)
-        {
+        for a in self.assessments.iter().filter(|a| a.proposal_id == proposal_id) {
             if is_self_assessment(p, a) {
                 st.self_assessments += 1;
                 continue;
@@ -497,9 +462,7 @@ impl ProposalSet {
         if self.phase != SetPhase::Scouting {
             return None;
         }
-        self.ranked(proposals)
-            .into_iter()
-            .find(|id| self.meets_quorum(proposals, *id))
+        self.ranked(proposals).into_iter().find(|id| self.meets_quorum(proposals, *id))
     }
 
     /// Past the deadline with nothing at quorum: the alternative with the most
@@ -559,20 +522,14 @@ impl ProposalSet {
         self.is_open()
             && self.is_active(proposals, proposal_id)
             && human_ok
-            && self
-                .latest_preflight(proposal_id)
-                .is_some_and(|r| r.report.passed())
+            && self.latest_preflight(proposal_id).is_some_and(|r| r.report.passed())
     }
 
     /// Scouts (by name) whose latest assessment backs `proposal_id`: the ones a
     /// stop signal for it goes to.
     pub fn scouts_of(&self, proposal_id: Uuid) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
-        for a in self
-            .assessments
-            .iter()
-            .filter(|a| a.proposal_id == proposal_id)
-        {
+        for a in self.assessments.iter().filter(|a| a.proposal_id == proposal_id) {
             if !names.contains(&a.scout_name) {
                 names.push(a.scout_name.clone());
             }
@@ -598,48 +555,14 @@ pub fn is_self_assessment(p: &ActionProposal, a: &ScoutAssessment) -> bool {
 /// matching `SessionEvent` variants so the fold lives here.
 pub enum SetChange<'a> {
     Opened(&'a ProposalSet),
-    AlternativeAdded {
-        set_id: Uuid,
-        proposal_id: Uuid,
-        revises: Option<Uuid>,
-    },
-    Assessed {
-        set_id: Uuid,
-        assessment: &'a ScoutAssessment,
-    },
-    RoundAdvanced {
-        set_id: Uuid,
-        round: u32,
-    },
-    QuorumReached {
-        set_id: Uuid,
-        proposal_id: Uuid,
-        tie_break: bool,
-        at: Timestamp,
-    },
-    Stopped {
-        set_id: Uuid,
-        proposal_id: Uuid,
-        stopped_by: Option<Uuid>,
-        reason: StopReason,
-    },
-    Tuned {
-        set_id: Uuid,
-        agent_quorum: u32,
-        required_approvals: u32,
-        quality_bar: u32,
-    },
-    Preflight {
-        set_id: Uuid,
-        proposal_id: Uuid,
-        report: &'a PreflightReport,
-        at: Timestamp,
-    },
-    Decided {
-        set_id: Uuid,
-        winner: Option<Uuid>,
-        at: Timestamp,
-    },
+    AlternativeAdded { set_id: Uuid, proposal_id: Uuid, revises: Option<Uuid> },
+    Assessed { set_id: Uuid, assessment: &'a ScoutAssessment },
+    RoundAdvanced { set_id: Uuid, round: u32 },
+    QuorumReached { set_id: Uuid, proposal_id: Uuid, tie_break: bool, at: Timestamp },
+    Stopped { set_id: Uuid, proposal_id: Uuid, stopped_by: Option<Uuid>, reason: StopReason },
+    Tuned { set_id: Uuid, agent_quorum: u32, required_approvals: u32, quality_bar: u32 },
+    Preflight { set_id: Uuid, proposal_id: Uuid, report: &'a PreflightReport, at: Timestamp },
+    Decided { set_id: Uuid, winner: Option<Uuid>, at: Timestamp },
 }
 
 /// Fold one set event. Every guard is a pure function of the event and the
@@ -665,19 +588,11 @@ pub fn apply(sets: &mut Vec<ProposalSet>, proposals: &mut [ActionProposal], chan
             }
             sets.push(set);
         }
-        SetChange::AlternativeAdded {
-            set_id,
-            proposal_id,
-            revises,
-        } => {
-            if sets.iter().any(|s| s.contains(proposal_id))
-                || !proposals.iter().any(|p| p.id == proposal_id)
-            {
+        SetChange::AlternativeAdded { set_id, proposal_id, revises } => {
+            if sets.iter().any(|s| s.contains(proposal_id)) || !proposals.iter().any(|p| p.id == proposal_id) {
                 return;
             }
-            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else {
-                return;
-            };
+            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else { return };
             if !set.is_open() || set.alternatives.len() >= MAX_ALTERNATIVES && revises.is_none() {
                 return;
             }
@@ -689,9 +604,7 @@ pub fn apply(sets: &mut Vec<ProposalSet>, proposals: &mut [ActionProposal], chan
             stamp(set, proposals, proposal_id);
         }
         SetChange::Assessed { set_id, assessment } => {
-            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else {
-                return;
-            };
+            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else { return };
             let pid = assessment.proposal_id;
             let accepting = match set.phase {
                 SetPhase::Scouting => true,
@@ -700,10 +613,7 @@ pub fn apply(sets: &mut Vec<ProposalSet>, proposals: &mut [ActionProposal], chan
                 SetPhase::Piping => set.front_runner == Some(pid),
                 _ => false,
             };
-            if !accepting
-                || !set.is_active(proposals, pid)
-                || assessment.scout_name.trim().is_empty()
-            {
+            if !accepting || !set.is_active(proposals, pid) || assessment.scout_name.trim().is_empty() {
                 return;
             }
             let mut a = assessment.clone();
@@ -711,29 +621,19 @@ pub fn apply(sets: &mut Vec<ProposalSet>, proposals: &mut [ActionProposal], chan
             a.round = set.round;
             a.attempt = set.attempt;
             let key = a.scout_key();
-            set.assessments
-                .retain(|x| !(x.proposal_id == pid && x.scout_key() == key));
+            set.assessments.retain(|x| !(x.proposal_id == pid && x.scout_key() == key));
             set.assessments.push(a);
         }
         SetChange::RoundAdvanced { set_id, round } => {
-            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else {
-                return;
-            };
+            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else { return };
             // Exactly the next round: concurrent advances collapse into one, and
             // nobody can jump the clock to wipe out every scout's support.
             if set.is_open() && round == set.round + 1 {
                 set.round = round;
             }
         }
-        SetChange::QuorumReached {
-            set_id,
-            proposal_id,
-            tie_break,
-            at,
-        } => {
-            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else {
-                return;
-            };
+        SetChange::QuorumReached { set_id, proposal_id, tie_break, at } => {
+            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else { return };
             let valid = if tie_break {
                 set.deadline_leader(proposals, at) == Some(proposal_id)
             } else {
@@ -747,15 +647,8 @@ pub fn apply(sets: &mut Vec<ProposalSet>, proposals: &mut [ActionProposal], chan
             set.quorum_at = Some(at);
             set.tie_break = tie_break;
         }
-        SetChange::Stopped {
-            set_id,
-            proposal_id,
-            stopped_by,
-            reason,
-        } => {
-            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else {
-                return;
-            };
+        SetChange::Stopped { set_id, proposal_id, stopped_by, reason } => {
+            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else { return };
             if !set.is_open() || !set.contains(proposal_id) || set.stop_of(proposal_id).is_some() {
                 return;
             }
@@ -772,23 +665,11 @@ pub fn apply(sets: &mut Vec<ProposalSet>, proposals: &mut [ActionProposal], chan
             };
             if valid {
                 let attempt = set.attempt;
-                set.stops.push(StopRecord {
-                    proposal_id,
-                    stopped_by,
-                    reason,
-                    attempt,
-                });
+                set.stops.push(StopRecord { proposal_id, stopped_by, reason, attempt });
             }
         }
-        SetChange::Tuned {
-            set_id,
-            agent_quorum,
-            required_approvals,
-            quality_bar,
-        } => {
-            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else {
-                return;
-            };
+        SetChange::Tuned { set_id, agent_quorum, required_approvals, quality_bar } => {
+            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else { return };
             if !set.is_open() {
                 return;
             }
@@ -799,15 +680,8 @@ pub fn apply(sets: &mut Vec<ProposalSet>, proposals: &mut [ActionProposal], chan
                 stamp(set, proposals, id);
             }
         }
-        SetChange::Preflight {
-            set_id,
-            proposal_id,
-            report,
-            at,
-        } => {
-            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else {
-                return;
-            };
+        SetChange::Preflight { set_id, proposal_id, report, at } => {
+            let Some(set) = sets.iter_mut().find(|s| s.id == set_id) else { return };
             if !set.is_open() || !set.is_active(proposals, proposal_id) {
                 return;
             }
@@ -830,9 +704,7 @@ pub fn apply(sets: &mut Vec<ProposalSet>, proposals: &mut [ActionProposal], chan
             }
         }
         SetChange::Decided { set_id, winner, at } => {
-            let Some(set) = sets.iter().find(|s| s.id == set_id) else {
-                return;
-            };
+            let Some(set) = sets.iter().find(|s| s.id == set_id) else { return };
             let valid = match winner {
                 None => set.is_open(),
                 Some(w) => set.can_decide_for(proposals, w),
@@ -840,10 +712,7 @@ pub fn apply(sets: &mut Vec<ProposalSet>, proposals: &mut [ActionProposal], chan
             if !valid {
                 return;
             }
-            let set = sets
-                .iter_mut()
-                .find(|s| s.id == set_id)
-                .expect("found above");
+            let set = sets.iter_mut().find(|s| s.id == set_id).expect("found above");
             set.phase = SetPhase::Decided;
             set.winner = winner;
             set.decided_at = Some(at);
@@ -890,9 +759,7 @@ pub fn denies(
         E::ProposalSetDecided { set_id, winner, .. } => {
             let set = set_of(set_id)?;
             if actor_role.rank() < set.approval_role_floor.rank() {
-                return Some(format!(
-                    "role {actor_role:?} is below this set's decision floor"
-                ));
+                return Some(format!("role {actor_role:?} is below this set's decision floor"));
             }
             let w = (*winner)?;
             let p = session.proposals.iter().find(|p| p.id == w)?;
@@ -913,17 +780,9 @@ pub fn denies(
 /// editing for one request are usually doing complementary work.
 pub fn wants_options(message: &str) -> bool {
     let m = message.to_ascii_lowercase();
-    [
-        "option",
-        "alternative",
-        "approaches",
-        "compare",
-        "explore",
-        "which is better",
-        "competing",
-    ]
-    .iter()
-    .any(|k| m.contains(k))
+    ["option", "alternative", "approaches", "compare", "explore", "which is better", "competing"]
+        .iter()
+        .any(|k| m.contains(k))
 }
 
 #[cfg(test)]
@@ -934,9 +793,7 @@ mod tests {
     fn alt(title: &str, producer: Option<Uuid>) -> ActionProposal {
         let mut p = ActionProposal::new(title, ProposalKind::Decision, "");
         p.producing_agent_id = producer;
-        p.author_actor_id = producer
-            .map(|_| String::new())
-            .unwrap_or_else(|| "someone".into());
+        p.author_actor_id = producer.map(|_| String::new()).unwrap_or_else(|| "someone".into());
         p
     }
 
@@ -983,14 +840,7 @@ mod tests {
             created_at: Timestamp::epoch(),
         };
         let set_id = fx.set_id;
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Assessed {
-                set_id,
-                assessment: &a,
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Assessed { set_id, assessment: &a });
     }
 
     fn set(fx: &Fx) -> &ProposalSet {
@@ -999,13 +849,7 @@ mod tests {
 
     fn vote(fx: &mut Fx, pid: Uuid, actor: &str, role: WorkspaceRole, approved: bool) {
         let p = fx.props.iter_mut().find(|p| p.id == pid).unwrap();
-        p.cast_vote(ProposalApproval {
-            actor_id: actor.into(),
-            role,
-            approved,
-            created_at: Timestamp::epoch(),
-            diff_digest: None,
-        });
+        p.cast_vote(ProposalApproval { actor_id: actor.into(), role, approved, created_at: Timestamp::epoch(), diff_digest: None });
     }
 
     fn passing() -> PreflightReport {
@@ -1019,11 +863,7 @@ mod tests {
     #[test]
     fn opening_stamps_alternatives_with_the_set_gate_and_resets_folded_state() {
         let props = vec![alt("A", None), alt("B", None)];
-        let mut forged = ProposalSet::new(
-            "Q",
-            "x",
-            vec![props[0].id, props[1].id, props[0].id, Uuid::new_v4()],
-        );
+        let mut forged = ProposalSet::new("Q", "x", vec![props[0].id, props[1].id, props[0].id, Uuid::new_v4()]);
         forged.phase = SetPhase::Decided;
         forged.winner = Some(props[0].id);
         forged.required_approvals = 99;
@@ -1031,17 +871,9 @@ mod tests {
         let (mut sets, mut props) = (Vec::new(), props);
         apply(&mut sets, &mut props, SetChange::Opened(&forged));
         let s = &sets[0];
-        assert_eq!(
-            s.phase,
-            SetPhase::Scouting,
-            "an opener can't seed a decided set"
-        );
+        assert_eq!(s.phase, SetPhase::Scouting, "an opener can't seed a decided set");
         assert_eq!(s.winner, None);
-        assert_eq!(
-            s.alternatives.len(),
-            2,
-            "duplicates and unknown proposals are dropped"
-        );
+        assert_eq!(s.alternatives.len(), 2, "duplicates and unknown proposals are dropped");
         assert_eq!(s.required_approvals, MAX_REQUIRED_APPROVALS);
         for p in &props {
             assert_eq!(p.set_id, Some(s.id));
@@ -1049,10 +881,7 @@ mod tests {
             assert_eq!(p.approval_role_floor, WorkspaceRole::Admin);
         }
         // Re-opening the same id is ignored; a second set can't claim them.
-        let again = ProposalSet {
-            id: s.id,
-            ..ProposalSet::new("other", "y", vec![props[0].id])
-        };
+        let again = ProposalSet { id: s.id, ..ProposalSet::new("other", "y", vec![props[0].id]) };
         apply(&mut sets, &mut props, SetChange::Opened(&again));
         let other = ProposalSet::new("other", "y", vec![props[0].id]);
         apply(&mut sets, &mut props, SetChange::Opened(&other));
@@ -1063,61 +892,22 @@ mod tests {
     #[test]
     fn support_decays_per_round_unless_renewed() {
         let mut fx = fixture();
-        {
-            let p = fx.b;
-            assess(&mut fx, 1, p, 90);
-        }
-        assert_eq!(
-            set(&fx).assessments[0].round,
-            0,
-            "round is stamped by the fold"
-        );
+        { let p = fx.b; assess(&mut fx, 1, p, 90); }
+        assert_eq!(set(&fx).assessments[0].round, 0, "round is stamped by the fold");
         assert_eq!(set(&fx).standing(&fx.props, fx.b).support, 90);
         let id = fx.set_id;
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::RoundAdvanced {
-                set_id: id,
-                round: 1,
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::RoundAdvanced { set_id: id, round: 1 });
         assert_eq!(set(&fx).standing(&fx.props, fx.b).support, 65);
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::RoundAdvanced {
-                set_id: id,
-                round: 2,
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::RoundAdvanced { set_id: id, round: 2 });
         assert_eq!(set(&fx).standing(&fx.props, fx.b).support, 40);
-        assert_eq!(
-            set(&fx).standing(&fx.props, fx.b).qualifying_scouts,
-            0,
-            "below the bar now"
-        );
+        assert_eq!(set(&fx).standing(&fx.props, fx.b).qualifying_scouts, 0, "below the bar now");
         // Re-evaluating against the new evidence renews it.
-        {
-            let p = fx.b;
-            assess(&mut fx, 1, p, 85);
-        }
+        { let p = fx.b; assess(&mut fx, 1, p, 85); }
         let st = set(&fx).standing(&fx.props, fx.b);
-        assert_eq!(
-            (st.support, st.scouts, st.qualifying_scouts),
-            (85, 1, 1),
-            "latest per scout replaces"
-        );
+        assert_eq!((st.support, st.scouts, st.qualifying_scouts), (85, 1, 1), "latest per scout replaces");
         // Support floors at zero.
         for r in 3..=10 {
-            apply(
-                &mut fx.sets,
-                &mut fx.props,
-                SetChange::RoundAdvanced {
-                    set_id: id,
-                    round: r,
-                },
-            );
+            apply(&mut fx.sets, &mut fx.props, SetChange::RoundAdvanced { set_id: id, round: r });
         }
         assert_eq!(set(&fx).standing(&fx.props, fx.b).support, 0);
     }
@@ -1126,40 +916,11 @@ mod tests {
     fn rounds_only_advance_one_at_a_time() {
         let mut fx = fixture();
         let id = fx.set_id;
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::RoundAdvanced {
-                set_id: id,
-                round: 50,
-            },
-        );
-        assert_eq!(
-            set(&fx).round,
-            0,
-            "a jump that would wipe all support is ignored"
-        );
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::RoundAdvanced {
-                set_id: id,
-                round: 1,
-            },
-        );
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::RoundAdvanced {
-                set_id: id,
-                round: 1,
-            },
-        );
-        assert_eq!(
-            set(&fx).round,
-            1,
-            "concurrent advances to the same round collapse"
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::RoundAdvanced { set_id: id, round: 50 });
+        assert_eq!(set(&fx).round, 0, "a jump that would wipe all support is ignored");
+        apply(&mut fx.sets, &mut fx.props, SetChange::RoundAdvanced { set_id: id, round: 1 });
+        apply(&mut fx.sets, &mut fx.props, SetChange::RoundAdvanced { set_id: id, round: 1 });
+        assert_eq!(set(&fx).round, 1, "concurrent advances to the same round collapse");
     }
 
     #[test]
@@ -1169,14 +930,7 @@ mod tests {
         vote(&mut fx, b, "human", WorkspaceRole::Contributor, true);
         let id = fx.set_id;
         for r in 1..=8 {
-            apply(
-                &mut fx.sets,
-                &mut fx.props,
-                SetChange::RoundAdvanced {
-                    set_id: id,
-                    round: r,
-                },
-            );
+            apply(&mut fx.sets, &mut fx.props, SetChange::RoundAdvanced { set_id: id, round: r });
         }
         let p = fx.props.iter().find(|p| p.id == b).unwrap();
         assert_eq!(p.qualifying_approvals(), 1);
@@ -1187,36 +941,18 @@ mod tests {
     fn quorum_needs_k_distinct_scouts_over_the_bar_and_ignores_self_assessment() {
         let mut fx = fixture();
         // Scout 0 produced A: its own assessment never counts.
-        {
-            let p = fx.a;
-            assess(&mut fx, 0, p, 100);
-        }
-        {
-            let p = fx.a;
-            assess(&mut fx, 1, p, 90);
-        }
+        { let p = fx.a; assess(&mut fx, 0, p, 100); }
+        { let p = fx.a; assess(&mut fx, 1, p, 90); }
         let st = set(&fx).standing(&fx.props, fx.a);
-        assert_eq!(
-            (st.scouts, st.self_assessments, st.qualifying_scouts),
-            (1, 1, 1)
-        );
+        assert_eq!((st.scouts, st.self_assessments, st.qualifying_scouts), (1, 1, 1));
         assert_eq!(set(&fx).quorum_candidate(&fx.props), None, "k=2 not met");
         // The same scout twice is still one scout.
-        {
-            let p = fx.a;
-            assess(&mut fx, 1, p, 95);
-        }
+        { let p = fx.a; assess(&mut fx, 1, p, 95); }
         assert_eq!(set(&fx).quorum_candidate(&fx.props), None);
         // A below-bar score doesn't count.
-        {
-            let p = fx.a;
-            assess(&mut fx, 2, p, 50);
-        }
+        { let p = fx.a; assess(&mut fx, 2, p, 50); }
         assert_eq!(set(&fx).quorum_candidate(&fx.props), None);
-        {
-            let p = fx.a;
-            assess(&mut fx, 3, p, 72);
-        }
+        { let p = fx.a; assess(&mut fx, 3, p, 72); }
         assert_eq!(set(&fx).quorum_candidate(&fx.props), Some(fx.a));
         assert_eq!(set(&fx).standing(&fx.props, fx.a).runtimes, 2);
     }
@@ -1224,110 +960,32 @@ mod tests {
     #[test]
     fn quorum_moves_to_piping_freezes_rivals_and_accepts_stop_signals_only_from_the_front_runner() {
         let mut fx = fixture();
-        {
-            let p = fx.b;
-            assess(&mut fx, 1, p, 80);
-        }
-        {
-            let p = fx.c;
-            assess(&mut fx, 2, p, 90);
-        }
+        { let p = fx.b; assess(&mut fx, 1, p, 80); }
+        { let p = fx.c; assess(&mut fx, 2, p, 90); }
         let (id, a, b, c) = (fx.set_id, fx.a, fx.b, fx.c);
         // A forged quorum for an alternative that doesn't have it is ignored.
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::QuorumReached {
-                set_id: id,
-                proposal_id: b,
-                tie_break: false,
-                at: Timestamp::now(),
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::QuorumReached { set_id: id, proposal_id: b, tie_break: false, at: Timestamp::now() });
         assert_eq!(set(&fx).phase, SetPhase::Scouting);
-        {
-            let p = fx.b;
-            assess(&mut fx, 3, p, 75);
-        }
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::QuorumReached {
-                set_id: id,
-                proposal_id: b,
-                tie_break: false,
-                at: Timestamp::now(),
-            },
-        );
+        { let p = fx.b; assess(&mut fx, 3, p, 75); }
+        apply(&mut fx.sets, &mut fx.props, SetChange::QuorumReached { set_id: id, proposal_id: b, tie_break: false, at: Timestamp::now() });
         assert_eq!(set(&fx).phase, SetPhase::Piping);
         assert_eq!(set(&fx).front_runner, Some(b));
         assert!(set(&fx).is_frozen(c) && set(&fx).is_frozen(a) && !set(&fx).is_frozen(b));
         // A second quorum (another device, concurrently) loses: first wins.
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::QuorumReached {
-                set_id: id,
-                proposal_id: c,
-                tie_break: false,
-                at: Timestamp::now(),
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::QuorumReached { set_id: id, proposal_id: c, tie_break: false, at: Timestamp::now() });
         assert_eq!(set(&fx).front_runner, Some(b));
         // Frozen rivals take no new assessments; the front-runner still does.
         let before = set(&fx).assessments.len();
-        {
-            let p = fx.c;
-            assess(&mut fx, 3, p, 100);
-        }
+        { let p = fx.c; assess(&mut fx, 3, p, 100); }
         assert_eq!(set(&fx).assessments.len(), before);
-        {
-            let p = fx.b;
-            assess(&mut fx, 2, p, 88);
-        }
+        { let p = fx.b; assess(&mut fx, 2, p, 88); }
         assert_eq!(set(&fx).assessments.len(), before + 1);
         // Stop signals: only from the front-runner, never onto it.
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Stopped {
-                set_id: id,
-                proposal_id: b,
-                stopped_by: Some(c),
-                reason: StopReason::Quorum,
-            },
-        );
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Stopped {
-                set_id: id,
-                proposal_id: c,
-                stopped_by: Some(a),
-                reason: StopReason::Quorum,
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Stopped { set_id: id, proposal_id: b, stopped_by: Some(c), reason: StopReason::Quorum });
+        apply(&mut fx.sets, &mut fx.props, SetChange::Stopped { set_id: id, proposal_id: c, stopped_by: Some(a), reason: StopReason::Quorum });
         assert!(set(&fx).stops.is_empty());
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Stopped {
-                set_id: id,
-                proposal_id: c,
-                stopped_by: Some(b),
-                reason: StopReason::Quorum,
-            },
-        );
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Stopped {
-                set_id: id,
-                proposal_id: c,
-                stopped_by: Some(b),
-                reason: StopReason::Quorum,
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Stopped { set_id: id, proposal_id: c, stopped_by: Some(b), reason: StopReason::Quorum });
+        apply(&mut fx.sets, &mut fx.props, SetChange::Stopped { set_id: id, proposal_id: c, stopped_by: Some(b), reason: StopReason::Quorum });
         assert_eq!(set(&fx).stops.len(), 1, "idempotent");
         assert_eq!(set(&fx).scouts_of(c), vec!["scout2".to_string()]);
     }
@@ -1335,89 +993,33 @@ mod tests {
     #[test]
     fn tie_past_deadline_picks_the_higher_supported_side_and_stops_the_other() {
         let mut fx = fixture();
-        {
-            let p = fx.b;
-            assess(&mut fx, 1, p, 65);
-        } // below the bar: no quorum anywhere
-        {
-            let p = fx.c;
-            assess(&mut fx, 2, p, 69);
-        }
+        { let p = fx.b; assess(&mut fx, 1, p, 65); } // below the bar: no quorum anywhere
+        { let p = fx.c; assess(&mut fx, 2, p, 69); }
         let (id, b, c) = (fx.set_id, fx.b, fx.c);
         let deadline = set(&fx).scouting_deadline.unwrap();
         let before = Timestamp::from_unix_seconds(deadline.inner().unix_timestamp() - 1);
-        assert_eq!(
-            set(&fx).deadline_leader(&fx.props, before),
-            None,
-            "not before the deadline"
-        );
+        assert_eq!(set(&fx).deadline_leader(&fx.props, before), None, "not before the deadline");
         // Before the deadline, a tie-break event is ignored.
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::QuorumReached {
-                set_id: id,
-                proposal_id: c,
-                tie_break: true,
-                at: before,
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::QuorumReached { set_id: id, proposal_id: c, tie_break: true, at: before });
         assert_eq!(set(&fx).phase, SetPhase::Scouting);
         // After it, only the leader can take it.
         assert_eq!(set(&fx).deadline_leader(&fx.props, deadline), Some(c));
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::QuorumReached {
-                set_id: id,
-                proposal_id: b,
-                tie_break: true,
-                at: deadline,
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::QuorumReached { set_id: id, proposal_id: b, tie_break: true, at: deadline });
         assert_eq!(set(&fx).phase, SetPhase::Scouting);
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::QuorumReached {
-                set_id: id,
-                proposal_id: c,
-                tie_break: true,
-                at: deadline,
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::QuorumReached { set_id: id, proposal_id: c, tie_break: true, at: deadline });
         assert_eq!(set(&fx).front_runner, Some(c));
         assert!(set(&fx).tie_break);
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Stopped {
-                set_id: id,
-                proposal_id: b,
-                stopped_by: Some(c),
-                reason: StopReason::TieDeadline,
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Stopped { set_id: id, proposal_id: b, stopped_by: Some(c), reason: StopReason::TieDeadline });
         assert!(set(&fx).stop_of(b).is_some());
     }
 
     #[test]
     fn exact_tie_is_broken_deterministically_by_proposal_order() {
         let mut fx = fixture();
-        {
-            let p = fx.c;
-            assess(&mut fx, 1, p, 60);
-        }
-        {
-            let p = fx.b;
-            assess(&mut fx, 2, p, 60);
-        }
+        { let p = fx.c; assess(&mut fx, 1, p, 60); }
+        { let p = fx.b; assess(&mut fx, 2, p, 60); }
         let deadline = set(&fx).scouting_deadline.unwrap();
-        assert_eq!(
-            set(&fx).deadline_leader(&fx.props, deadline),
-            Some(fx.b),
-            "earlier-proposed wins a dead heat"
-        );
+        assert_eq!(set(&fx).deadline_leader(&fx.props, deadline), Some(fx.b), "earlier-proposed wins a dead heat");
         // No support at all: nothing to pick, stay scouting.
         let empty = fixture();
         assert_eq!(set(&empty).deadline_leader(&empty.props, deadline), None);
@@ -1426,163 +1028,53 @@ mod tests {
     #[test]
     fn two_phase_commit_needs_human_quorum_and_a_passing_preflight() {
         let mut fx = fixture();
-        {
-            let p = fx.b;
-            assess(&mut fx, 1, p, 80);
-        }
-        {
-            let p = fx.b;
-            assess(&mut fx, 2, p, 80);
-        }
+        { let p = fx.b; assess(&mut fx, 1, p, 80); }
+        { let p = fx.b; assess(&mut fx, 2, p, 80); }
         let (id, b, c) = (fx.set_id, fx.b, fx.c);
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::QuorumReached {
-                set_id: id,
-                proposal_id: b,
-                tie_break: false,
-                at: Timestamp::now(),
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::QuorumReached { set_id: id, proposal_id: b, tie_break: false, at: Timestamp::now() });
         // Agent quorum alone never decides.
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Decided {
-                set_id: id,
-                winner: Some(b),
-                at: Timestamp::now(),
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Decided { set_id: id, winner: Some(b), at: Timestamp::now() });
         assert_eq!(set(&fx).phase, SetPhase::Piping);
         // Human approval, but no pre-flight yet.
         vote(&mut fx, b, "human", WorkspaceRole::Contributor, true);
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Decided {
-                set_id: id,
-                winner: Some(b),
-                at: Timestamp::now(),
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Decided { set_id: id, winner: Some(b), at: Timestamp::now() });
         assert_eq!(set(&fx).phase, SetPhase::Piping);
         // Pre-flight passes, then the decision lands.
         let report = passing();
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Preflight {
-                set_id: id,
-                proposal_id: b,
-                report: &report,
-                at: Timestamp::now(),
-            },
-        );
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Decided {
-                set_id: id,
-                winner: Some(b),
-                at: Timestamp::now(),
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Preflight { set_id: id, proposal_id: b, report: &report, at: Timestamp::now() });
+        apply(&mut fx.sets, &mut fx.props, SetChange::Decided { set_id: id, winner: Some(b), at: Timestamp::now() });
         assert_eq!(set(&fx).phase, SetPhase::Decided);
         assert_eq!(set(&fx).winner, Some(b));
         // Decided is terminal.
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Decided {
-                set_id: id,
-                winner: Some(c),
-                at: Timestamp::now(),
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Decided { set_id: id, winner: Some(c), at: Timestamp::now() });
         assert_eq!(set(&fx).winner, Some(b));
     }
 
     #[test]
     fn a_failed_preflight_returns_the_set_to_scouting() {
         let mut fx = fixture();
-        {
-            let p = fx.b;
-            assess(&mut fx, 1, p, 80);
-        }
-        {
-            let p = fx.b;
-            assess(&mut fx, 2, p, 80);
-        }
-        {
-            let p = fx.c;
-            assess(&mut fx, 3, p, 90);
-        }
+        { let p = fx.b; assess(&mut fx, 1, p, 80); }
+        { let p = fx.b; assess(&mut fx, 2, p, 80); }
+        { let p = fx.c; assess(&mut fx, 3, p, 90); }
         let (id, b, c) = (fx.set_id, fx.b, fx.c);
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::QuorumReached {
-                set_id: id,
-                proposal_id: b,
-                tie_break: false,
-                at: Timestamp::now(),
-            },
-        );
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Stopped {
-                set_id: id,
-                proposal_id: c,
-                stopped_by: Some(b),
-                reason: StopReason::Quorum,
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::QuorumReached { set_id: id, proposal_id: b, tie_break: false, at: Timestamp::now() });
+        apply(&mut fx.sets, &mut fx.props, SetChange::Stopped { set_id: id, proposal_id: c, stopped_by: Some(b), reason: StopReason::Quorum });
         vote(&mut fx, b, "human", WorkspaceRole::Contributor, true);
         let mut report = passing();
         report.base_unchanged = CheckOutcome::failed("the chat branch moved");
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Preflight {
-                set_id: id,
-                proposal_id: b,
-                report: &report,
-                at: Timestamp::now(),
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Preflight { set_id: id, proposal_id: b, report: &report, at: Timestamp::now() });
         let s = set(&fx);
         assert_eq!(s.phase, SetPhase::Scouting);
         assert_eq!(s.front_runner, None);
         assert_eq!((s.attempt, s.round), (1, 1));
         assert!(s.stop_of(c).is_none(), "this attempt's stops lift");
         assert!(!s.is_frozen(c));
-        assert_eq!(
-            s.standing(&fx.props, b).support,
-            110,
-            "old support decayed one round"
-        );
+        assert_eq!(s.standing(&fx.props, b).support, 110, "old support decayed one round");
         // The failed pre-flight doesn't count for the new attempt.
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Decided {
-                set_id: id,
-                winner: Some(b),
-                at: Timestamp::now(),
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Decided { set_id: id, winner: Some(b), at: Timestamp::now() });
         assert_eq!(set(&fx).phase, SetPhase::Scouting);
         // An unknown check status fails closed.
-        let odd = PreflightReport {
-            tests: CheckOutcome {
-                status: CheckStatus::Unknown,
-                note: String::new(),
-            },
-            ..passing()
-        };
+        let odd = PreflightReport { tests: CheckOutcome { status: CheckStatus::Unknown, note: String::new() }, ..passing() };
         assert!(!odd.passed());
     }
 
@@ -1595,43 +1087,14 @@ mod tests {
         // B's author ("someone") approving it doesn't count either.
         vote(&mut fx, b, "someone", WorkspaceRole::Owner, true);
         let report = passing();
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Preflight {
-                set_id: id,
-                proposal_id: b,
-                report: &report,
-                at: Timestamp::now(),
-            },
-        );
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Decided {
-                set_id: id,
-                winner: Some(b),
-                at: Timestamp::now(),
-            },
-        );
-        assert_eq!(
-            set(&fx).phase,
-            SetPhase::Scouting,
-            "no qualifying human approval yet"
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Preflight { set_id: id, proposal_id: b, report: &report, at: Timestamp::now() });
+        apply(&mut fx.sets, &mut fx.props, SetChange::Decided { set_id: id, winner: Some(b), at: Timestamp::now() });
+        assert_eq!(set(&fx).phase, SetPhase::Scouting, "no qualifying human approval yet");
         // A qualifying rejection blocks it outright.
         vote(&mut fx, b, "c2", WorkspaceRole::Contributor, false);
         assert!(!set(&fx).is_active(&fx.props, b));
         // Closing without a winner is always possible while open.
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Decided {
-                set_id: id,
-                winner: None,
-                at: Timestamp::now(),
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Decided { set_id: id, winner: None, at: Timestamp::now() });
         assert_eq!(set(&fx).phase, SetPhase::Decided);
         assert_eq!(set(&fx).winner, None);
     }
@@ -1641,45 +1104,15 @@ mod tests {
         let mut fx = fixture();
         let (id, b) = (fx.set_id, fx.b);
         vote(&mut fx, b, "h1", WorkspaceRole::Contributor, true);
-        assert!(fx
-            .props
-            .iter()
-            .find(|p| p.id == b)
-            .unwrap()
-            .ready_to_apply());
+        assert!(fx.props.iter().find(|p| p.id == b).unwrap().ready_to_apply());
         let k = QuorumDial::Careful.knobs();
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Tuned {
-                set_id: id,
-                agent_quorum: k.agent_quorum,
-                required_approvals: k.required_approvals,
-                quality_bar: k.quality_bar,
-            },
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Tuned { set_id: id, agent_quorum: k.agent_quorum, required_approvals: k.required_approvals, quality_bar: k.quality_bar });
         let p = fx.props.iter().find(|p| p.id == b).unwrap();
         assert_eq!(p.required_approvals, 2);
         assert!(!p.ready_to_apply(), "careful needs a second approval");
         assert_eq!(set(&fx).agent_quorum, 3);
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Tuned {
-                set_id: id,
-                agent_quorum: 0,
-                required_approvals: 0,
-                quality_bar: 500,
-            },
-        );
-        assert_eq!(
-            (
-                set(&fx).agent_quorum,
-                set(&fx).required_approvals,
-                set(&fx).quality_bar
-            ),
-            (1, 1, 100)
-        );
+        apply(&mut fx.sets, &mut fx.props, SetChange::Tuned { set_id: id, agent_quorum: 0, required_approvals: 0, quality_bar: 500 });
+        assert_eq!((set(&fx).agent_quorum, set(&fx).required_approvals, set(&fx).quality_bar), (1, 1, 100));
     }
 
     #[test]
@@ -1690,37 +1123,13 @@ mod tests {
         rev.parent_id = Some(b);
         let rid = rev.id;
         fx.props.push(rev);
-        fx.props
-            .iter_mut()
-            .find(|p| p.id == b)
-            .unwrap()
-            .superseded_by = Some(rid);
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::AlternativeAdded {
-                set_id: id,
-                proposal_id: rid,
-                revises: Some(b),
-            },
-        );
+        fx.props.iter_mut().find(|p| p.id == b).unwrap().superseded_by = Some(rid);
+        apply(&mut fx.sets, &mut fx.props, SetChange::AlternativeAdded { set_id: id, proposal_id: rid, revises: Some(b) });
         assert_eq!(set(&fx).alternatives, vec![a, b, rid, fx.c]);
         assert!(!set(&fx).is_active(&fx.props, b), "superseded");
         assert!(set(&fx).is_active(&fx.props, rid));
-        assert_eq!(
-            fx.props.iter().find(|p| p.id == rid).unwrap().set_id,
-            Some(id)
-        );
-        apply(
-            &mut fx.sets,
-            &mut fx.props,
-            SetChange::Stopped {
-                set_id: id,
-                proposal_id: a,
-                stopped_by: None,
-                reason: StopReason::Withdrawn,
-            },
-        );
+        assert_eq!(fx.props.iter().find(|p| p.id == rid).unwrap().set_id, Some(id));
+        apply(&mut fx.sets, &mut fx.props, SetChange::Stopped { set_id: id, proposal_id: a, stopped_by: None, reason: StopReason::Withdrawn });
         let s = &mut fx.sets[0];
         s.attempt += 1;
         assert!(s.stop_of(a).is_some(), "withdrawal survives a new attempt");

@@ -37,12 +37,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
-use ligus_runtime::chat_service::EnrollPhoneStanding;
 use ligus_runtime::phone_enroll_qr::{
-    self as qr, box_check_offer, box_check_request, check_relayed_answer, open_relayed_answers,
-    request_slot, seal_relayed_request, BoxRefusal, EnrollAnswer, OfferFields, RelayedAnswer,
-    RelayedRequest, Rid,
+    self as qr, box_check_offer, box_check_request, check_relayed_answer, open_relayed_answers, request_slot, seal_relayed_request,
+    BoxRefusal, EnrollAnswer, OfferFields, RelayedAnswer, RelayedRequest, Rid,
 };
+use ligus_runtime::chat_service::EnrollPhoneStanding;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{watch, Notify};
@@ -65,26 +64,19 @@ pub const PROVISIONAL_MAX_REQUESTS: usize = 8;
 /// How often the box looks for answers while a request is pending.
 const ANSWER_POLL: Duration = Duration::from_secs(2);
 /// How long the loop reuses its keyring.
-const RING_TTL: Duration =
-    Duration::from_secs(ligus_runtime::host_presence::HOST_BEAT_EVERY_SECS as u64);
+const RING_TTL: Duration = Duration::from_secs(ligus_runtime::host_presence::HOST_BEAT_EVERY_SECS as u64);
 /// A request past its `exp` still answers `expired` this long, then goes.
 const KEEP_EXPIRED_SECS: i64 = qr::PAST_TOLERANCE_SECS;
 
 fn now_ms() -> i64 {
-    ligus_core::Timestamp::now()
-        .inner()
-        .unix_timestamp_nanos()
-        .div_euclid(1_000_000) as i64
+    ligus_core::Timestamp::now().inner().unix_timestamp_nanos().div_euclid(1_000_000) as i64
 }
 
 /// One line in the box's log, never with a request's text, MAC or code.
 fn note(line: String) {
     eprintln!("phone-enroll: {line}");
     #[cfg(test)]
-    test_log()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .push(line);
+    test_log().lock().unwrap_or_else(|e| e.into_inner()).push(line);
 }
 
 /// Every [`note`] so far (tests: the log-hygiene check, review T10).
@@ -142,37 +134,19 @@ impl Channel {
     }
 }
 
-fn channel(
-    s: &Shared,
-    prov: Option<&ProvisionalPeer>,
-    peer: Option<&TunnelPeer>,
-) -> Option<Channel> {
+fn channel(s: &Shared, prov: Option<&ProvisionalPeer>, peer: Option<&TunnelPeer>) -> Option<Channel> {
     if let Some(p) = prov {
-        return Some(Channel::Provisional {
-            conn: p.conn.clone(),
-            device: p.device_id,
-        });
+        return Some(Channel::Provisional { conn: p.conn.clone(), device: p.device_id });
     }
     if let Some(p) = peer {
-        let device = s
-            .tunnel
-            .as_ref()
-            .and_then(|t| t.registry.get(&p.pid))
-            .and_then(|r| r.device_id);
-        return Some(Channel::Paired {
-            pid: p.pid.clone(),
-            device,
-        });
+        let device = s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)).and_then(|r| r.device_id);
+        return Some(Channel::Paired { pid: p.pid.clone(), device });
     }
     match caller() {
         Caller::Operator => Some(Channel::Operator),
         Caller::Bearer => Some(Channel::Bearer),
         Caller::Tunnel(pid) => {
-            let device = s
-                .tunnel
-                .as_ref()
-                .and_then(|t| t.registry.get(&pid))
-                .and_then(|r| r.device_id);
+            let device = s.tunnel.as_ref().and_then(|t| t.registry.get(&pid)).and_then(|r| r.device_id);
             Some(Channel::Paired { pid, device })
         }
         Caller::Anonymous => None,
@@ -182,11 +156,7 @@ fn channel(
 // ── Answers ────────────────────────────────────────────────────────────────
 
 fn refuse(status: StatusCode, error: &str, message: impl Into<String>) -> Response {
-    (
-        status,
-        Json(json!({ "error": error, "message": message.into() })),
-    )
-        .into_response()
+    (status, Json(json!({ "error": error, "message": message.into() }))).into_response()
 }
 
 fn refusal(r: &BoxRefusal) -> Response {
@@ -195,11 +165,7 @@ fn refusal(r: &BoxRefusal) -> Response {
 }
 
 fn unauthorized() -> Response {
-    refuse(
-        StatusCode::UNAUTHORIZED,
-        "unauthorized",
-        "missing or invalid credential",
-    )
+    refuse(StatusCode::UNAUTHORIZED, "unauthorized", "missing or invalid credential")
 }
 
 fn rate_limited(message: &str) -> Response {
@@ -233,10 +199,7 @@ impl Entry {
 
     /// The answer names this entry's phone: nothing more to relay for it.
     fn answered_for_me(&self) -> bool {
-        self.answer
-            .as_deref()
-            .and_then(|a| EnrollAnswer::decode(a).ok())
-            .is_some_and(|a| a.device_id == self.device)
+        self.answer.as_deref().and_then(|a| EnrollAnswer::decode(a).ok()).is_some_and(|a| a.device_id == self.device)
     }
 
     fn slot(&self) -> SlotKey {
@@ -268,9 +231,7 @@ enum Full {
 
 impl Inner {
     fn remove(&mut self, pred: impl Fn(&Entry) -> bool) -> Vec<Entry> {
-        let (gone, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.entries)
-            .into_iter()
-            .partition(|e| pred(e));
+        let (gone, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.entries).into_iter().partition(|e| pred(e));
         self.entries = keep;
         for e in &gone {
             // Only a slot on the relay needs clearing.
@@ -282,11 +243,7 @@ impl Inner {
     }
 
     fn oldest_of(&self, channel: &str) -> Option<u64> {
-        self.entries
-            .iter()
-            .filter(|e| e.channel == channel)
-            .map(|e| e.seq)
-            .min()
+        self.entries.iter().filter(|e| e.channel == channel).map(|e| e.seq).min()
     }
 
     /// Add `e` under the limits (§7.3 step 6). Re-submitting the same bytes
@@ -306,16 +263,8 @@ impl Inner {
         let device = e.device;
         let mut evicted = self.remove(|x| x.device == device);
         evicted.clear(); // the same phone's older request: replaced, not evicted
-        while self
-            .entries
-            .iter()
-            .filter(|x| x.channel == e.channel)
-            .count()
-            >= cap
-        {
-            let Some(seq) = self.oldest_of(&e.channel) else {
-                break;
-            };
+        while self.entries.iter().filter(|x| x.channel == e.channel).count() >= cap {
+            let Some(seq) = self.oldest_of(&e.channel) else { break };
             evicted.extend(self.remove(|x| x.seq == seq));
         }
         while self.entries.len() >= MAX_PENDING {
@@ -327,9 +276,7 @@ impl Inner {
                 .into_iter()
                 .max_by_key(|(c, n)| (*n, std::cmp::Reverse(self.oldest_of(c).unwrap_or(u64::MAX))))
                 .map(|(c, _)| c.to_string());
-            let Some(seq) = heaviest.and_then(|c| self.oldest_of(&c)) else {
-                break;
-            };
+            let Some(seq) = heaviest.and_then(|c| self.oldest_of(&c)) else { break };
             evicted.extend(self.remove(|x| x.seq == seq));
         }
         self.seq += 1;
@@ -344,18 +291,8 @@ impl Inner {
     fn purge(&mut self, now_ms: i64) {
         let limit = |e: &Entry| now_ms as i128 > (e.exp as i128 + KEEP_EXPIRED_SECS as i128) * 1000;
         self.remove(limit);
-        let live: HashSet<SlotKey> = self
-            .entries
-            .iter()
-            .filter(|e| !e.expired(now_ms))
-            .map(Entry::slot)
-            .collect();
-        let dead: Vec<SlotKey> = self
-            .slots
-            .keys()
-            .filter(|k| !live.contains(k))
-            .copied()
-            .collect();
+        let live: HashSet<SlotKey> = self.entries.iter().filter(|e| !e.expired(now_ms)).map(Entry::slot).collect();
+        let dead: Vec<SlotKey> = self.slots.keys().filter(|k| !live.contains(k)).copied().collect();
         for r in dead {
             self.slots.remove(&r);
             self.clear.insert(r);
@@ -368,28 +305,16 @@ impl Inner {
     /// names, or past its offer's `exp`, is cleared.
     fn plan(&mut self, now_ms: i64) -> (Vec<(SlotKey, String)>, Vec<SlotKey>) {
         self.purge(now_ms);
-        let show: HashMap<SlotKey, &Entry> = self
-            .entries
-            .iter()
-            .filter(|e| !e.expired(now_ms) && !e.answered_for_me())
-            .map(|e| (e.slot(), e))
-            .collect();
+        let show: HashMap<SlotKey, &Entry> =
+            self.entries.iter().filter(|e| !e.expired(now_ms) && !e.answered_for_me()).map(|e| (e.slot(), e)).collect();
         let mut publish: Vec<(SlotKey, String, u64)> = Vec::new();
         for (key, e) in &show {
-            let due = self
-                .slots
-                .get(key)
-                .is_none_or(|at| now_ms - at >= qr::REPUBLISH_SECS as i64 * 1000);
+            let due = self.slots.get(key).is_none_or(|at| now_ms - at >= qr::REPUBLISH_SECS as i64 * 1000);
             if due {
                 publish.push((*key, e.text.clone(), e.seq));
             }
         }
-        let mut settled: Vec<SlotKey> = self
-            .slots
-            .keys()
-            .filter(|k| !show.contains_key(k))
-            .copied()
-            .collect();
+        let mut settled: Vec<SlotKey> = self.slots.keys().filter(|k| !show.contains_key(k)).copied().collect();
         for (key, _, _) in &publish {
             self.slots.insert(*key, now_ms);
             self.clear.remove(key);
@@ -403,20 +328,12 @@ impl Inner {
         // Oldest request first, so a desktop listing mid-publish sees the
         // first phone before the ones after it.
         publish.sort_by_key(|(_, _, seq)| *seq);
-        (
-            publish.into_iter().map(|(k, t, _)| (k, t)).collect(),
-            settled,
-        )
+        (publish.into_iter().map(|(k, t, _)| (k, t)).collect(), settled)
     }
 
     /// The offers whose answer the box still watches for (until `exp`).
     fn watched(&self, now_ms: i64) -> Vec<(Rid, Uuid)> {
-        let mut out: Vec<(Rid, Uuid)> = self
-            .entries
-            .iter()
-            .filter(|e| !e.expired(now_ms))
-            .map(|e| (e.rid, e.desktop))
-            .collect();
+        let mut out: Vec<(Rid, Uuid)> = self.entries.iter().filter(|e| !e.expired(now_ms)).map(|e| (e.rid, e.desktop)).collect();
         out.sort();
         out.dedup();
         out
@@ -425,18 +342,11 @@ impl Inner {
     /// Take the answer slots (opened, not yet checked) that the offers'
     /// own desktops signed (§5.5): each is set on the requests it answers.
     /// Returns the offers that got a new answer.
-    fn take_answers(
-        &mut self,
-        opened: Vec<(String, RelayedAnswer)>,
-        now_ms: i64,
-        desktop_key: impl Fn(Uuid) -> Option<Vec<u8>>,
-    ) -> Vec<Rid> {
+    fn take_answers(&mut self, opened: Vec<(String, RelayedAnswer)>, now_ms: i64, desktop_key: impl Fn(Uuid) -> Option<Vec<u8>>) -> Vec<Rid> {
         let watched = self.watched(now_ms);
         let mut out = Vec::new();
         for (slot, a) in opened {
-            let Ok(rid) = EnrollAnswer::decode(&a.answer).map(|x| x.rid) else {
-                continue;
-            };
+            let Ok(rid) = EnrollAnswer::decode(&a.answer).map(|x| x.rid) else { continue };
             // Only the requests sent to the desktop that signed it: an
             // answer from another desktop (a co-member's, for a request
             // naming it) never answers a request for this one.
@@ -455,11 +365,7 @@ impl Inner {
 
     fn set_answer(&mut self, rid: Rid, desktop: Uuid, answer: &str) -> bool {
         let mut changed = false;
-        for e in self
-            .entries
-            .iter_mut()
-            .filter(|e| e.rid == rid && e.desktop == desktop)
-        {
+        for e in self.entries.iter_mut().filter(|e| e.rid == rid && e.desktop == desktop) {
             if e.answer.as_deref() != Some(answer) {
                 e.answer = Some(answer.to_string());
                 changed = true;
@@ -493,11 +399,7 @@ impl EnrollBox {
     /// Pending requests from one phone (tests).
     #[cfg(test)]
     pub fn pending_for(&self, device: Uuid) -> usize {
-        self.lock()
-            .entries
-            .iter()
-            .filter(|e| e.device == device)
-            .count()
+        self.lock().entries.iter().filter(|e| e.device == device).count()
     }
 }
 
@@ -506,12 +408,7 @@ impl EnrollBox {
 /// Whether this box can relay at all: a relay to publish presence on, and
 /// its own device a service member's (the only signer a desktop accepts).
 fn relay_refusal(s: &Shared) -> Option<Response> {
-    let relay = s
-        .cfg
-        .relay_url
-        .as_deref()
-        .is_some_and(|u| !u.trim().is_empty())
-        && crate::relay_client(&s.cfg).is_ok();
+    let relay = s.cfg.relay_url.as_deref().is_some_and(|u| !u.trim().is_empty()) && crate::relay_client(&s.cfg).is_ok();
     if !relay {
         return Some(refusal(&BoxRefusal::RelayUnavailable));
     }
@@ -528,17 +425,8 @@ fn relay_refusal(s: &Shared) -> Option<Response> {
 
 fn keyring(s: &Shared) -> Option<ligus_runtime::keyring::KeyringEngine> {
     match crate::key_source(&s.cfg) {
-        Ok(src) => Some(ligus_runtime::keyring::KeyringEngine::from_store(
-            s.lock().store(),
-            s.ws,
-            &src,
-        )),
-        Err(_) => s.cfg.key.as_deref().map(|p| {
-            ligus_runtime::keyring::KeyringEngine::passphrase(
-                s.ws,
-                ligus_core::derive_workspace_key(p),
-            )
-        }),
+        Ok(src) => Some(ligus_runtime::keyring::KeyringEngine::from_store(s.lock().store(), s.ws, &src)),
+        Err(_) => s.cfg.key.as_deref().map(|p| ligus_runtime::keyring::KeyringEngine::passphrase(s.ws, ligus_core::derive_workspace_key(p))),
     }
 }
 
@@ -546,9 +434,7 @@ fn keyring(s: &Shared) -> Option<ligus_runtime::keyring::KeyringEngine> {
 /// one, then every 10 s; clearing settled ones with `{}`), and watch for
 /// the desktops' answers while any offer is open.
 pub async fn relay_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
-    let Ok(relay) = crate::relay_client(&shared.cfg) else {
-        return;
-    };
+    let Ok(relay) = crate::relay_client(&shared.cfg) else { return };
     let room = shared.cfg.room.clone();
     // The keyring, rebuilt as often as the presence loop rebuilds its own.
     let mut ring: Option<(tokio::time::Instant, ligus_runtime::keyring::KeyringEngine)> = None;
@@ -566,26 +452,17 @@ pub async fn relay_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             if let Some((_, ring)) = &ring {
                 let me = shared.lock().device_id();
                 for ((rid, phone), text) in publish {
-                    let r = shared.lock().sign_relayed_request(RelayedRequest::new(
-                        &text,
-                        me,
-                        now_ms(),
-                    ));
+                    let r = shared.lock().sign_relayed_request(RelayedRequest::new(&text, me, now_ms()));
                     let Some(blob) = seal_relayed_request(ring, &r) else {
                         note(format!("request {rid}: no workspace key to seal it under"));
                         continue;
                     };
-                    if let Err(e) = relay
-                        .publish_presence(&room, &request_slot(rid, me, phone), &blob)
-                        .await
-                    {
+                    if let Err(e) = relay.publish_presence(&room, &request_slot(rid, me, phone), &blob).await {
                         note(format!("request {rid}: publishing failed: {e}"));
                     }
                 }
                 for (rid, phone) in clear {
-                    let _ = relay
-                        .publish_presence(&room, &request_slot(rid, me, phone), &json!({}))
-                        .await;
+                    let _ = relay.publish_presence(&room, &request_slot(rid, me, phone), &json!({})).await;
                 }
                 if !watched.is_empty() {
                     watch_answers(&shared, &relay, &room, ring).await;
@@ -608,26 +485,15 @@ async fn watch_answers(
     room: &str,
     ring: &ligus_runtime::keyring::KeyringEngine,
 ) {
-    let Ok(blobs) = relay.list_presence(room).await else {
-        return;
-    };
+    let Ok(blobs) = relay.list_presence(room).await else { return };
     let opened = open_relayed_answers(&blobs, ring);
     // The signers' keys first (the service's lock), then the store's lock:
     // never both at once.
     let keys: HashMap<Uuid, Option<Vec<u8>>> = {
         let svc = shared.lock();
-        opened
-            .iter()
-            .map(|(_, a)| a.desktop)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .map(|d| (d, svc.enroll_desktop_key(shared.ws, d)))
-            .collect()
+        opened.iter().map(|(_, a)| a.desktop).collect::<HashSet<_>>().into_iter().map(|d| (d, svc.enroll_desktop_key(shared.ws, d))).collect()
     };
-    let answered = shared
-        .phone_enroll
-        .lock()
-        .take_answers(opened, now_ms(), |d| keys.get(&d).cloned().flatten());
+    let answered = shared.phone_enroll.lock().take_answers(opened, now_ms(), |d| keys.get(&d).cloned().flatten());
     for rid in &answered {
         note(format!("request {rid}: the desktop answered"));
     }
@@ -652,14 +518,12 @@ pub fn routes(r: Router<Arc<Shared>>) -> Router<Arc<Shared>> {
 /// the three enroll routes; it never reaches the API router or its auth.
 pub fn provisional_router(shared: Arc<Shared>) -> Router {
     routes(Router::new())
-        .layer(axum::middleware::from_fn(
-            |req: axum::extract::Request, next: axum::middleware::Next| async move {
-                if req.extensions().get::<ProvisionalPeer>().is_none() {
-                    return unauthorized();
-                }
-                next.run(req).await
-            },
-        ))
+        .layer(axum::middleware::from_fn(|req: axum::extract::Request, next: axum::middleware::Next| async move {
+            if req.extensions().get::<ProvisionalPeer>().is_none() {
+                return unauthorized();
+            }
+            next.run(req).await
+        }))
         .with_state(shared)
 }
 
@@ -676,33 +540,17 @@ pub struct CheckBody {
 }
 
 fn bad_json(e: impl std::fmt::Display) -> Response {
-    refuse(
-        StatusCode::BAD_REQUEST,
-        "bad_request",
-        format!("invalid JSON body: {e}"),
-    )
+    refuse(StatusCode::BAD_REQUEST, "bad_request", format!("invalid JSON body: {e}"))
 }
 
 /// `POST /v1/phone-enroll/check` (§7.2).
-async fn check(
-    State(s): S,
-    prov: Option<Extension<ProvisionalPeer>>,
-    peer: Option<Extension<TunnelPeer>>,
-    body: axum::body::Bytes,
-) -> Response {
-    let Some(ch) = channel(&s, prov.as_deref(), peer.as_deref()) else {
-        return unauthorized();
-    };
+async fn check(State(s): S, prov: Option<Extension<ProvisionalPeer>>, peer: Option<Extension<TunnelPeer>>, body: axum::body::Bytes) -> Response {
+    let Some(ch) = channel(&s, prov.as_deref(), peer.as_deref()) else { return unauthorized() };
     let b: CheckBody = match serde_json::from_slice(&body) {
         Ok(b) => b,
         Err(e) => return bad_json(e),
     };
-    let fields = OfferFields {
-        workspace_id: b.workspace_id,
-        desktop_device_id: b.desktop_device_id,
-        rid: b.rid,
-        exp: b.exp,
-    };
+    let fields = OfferFields { workspace_id: b.workspace_id, desktop_device_id: b.desktop_device_id, rid: b.rid, exp: b.exp };
     if let Err(r) = box_check_offer(&fields, s.ws, now_ms()) {
         return refusal(&r);
     }
@@ -715,8 +563,7 @@ async fn check(
             Err(r) => return refusal(&r),
         };
         let standing = match device {
-            Some(d) => match svc.enroll_phone_standing(s.ws, d, key.as_deref(), desktop.account_id)
-            {
+            Some(d) => match svc.enroll_phone_standing(s.ws, d, key.as_deref(), desktop.account_id) {
                 Ok(st) => json!({ "standing": st.as_str() }),
                 Err(r) => return refusal(&r),
             },
@@ -754,20 +601,11 @@ pub struct SubmitBody {
 }
 
 /// `POST /v1/phone-enroll/requests` (§7.3).
-async fn submit(
-    State(s): S,
-    prov: Option<Extension<ProvisionalPeer>>,
-    peer: Option<Extension<TunnelPeer>>,
-    body: axum::body::Bytes,
-) -> Response {
-    let Some(ch) = channel(&s, prov.as_deref(), peer.as_deref()) else {
-        return unauthorized();
-    };
+async fn submit(State(s): S, prov: Option<Extension<ProvisionalPeer>>, peer: Option<Extension<TunnelPeer>>, body: axum::body::Bytes) -> Response {
+    let Some(ch) = channel(&s, prov.as_deref(), peer.as_deref()) else { return unauthorized() };
     if let Some(p) = prov.as_deref() {
         if p.requests.fetch_add(1, Ordering::SeqCst) >= PROVISIONAL_MAX_REQUESTS {
-            return rate_limited(
-                "this connection has sent as many requests as it may; enroll again",
-            );
+            return rate_limited("this connection has sent as many requests as it may; enroll again");
         }
     }
     let b: SubmitBody = match serde_json::from_slice(&body) {
@@ -787,12 +625,7 @@ async fn submit(
             Ok(d) => d,
             Err(r) => return refusal(&r),
         };
-        if let Err(r) = svc.enroll_phone_standing(
-            s.ws,
-            req.device_id(),
-            Some(&req.code.public_key),
-            desktop.account_id,
-        ) {
+        if let Err(r) = svc.enroll_phone_standing(s.ws, req.device_id(), Some(&req.code.public_key), desktop.account_id) {
             return refusal(&r);
         }
         desktop.account_id
@@ -815,31 +648,14 @@ async fn submit(
     };
     let evicted = match s.phone_enroll.lock().submit(entry, ch.cap(), now) {
         Ok(ev) => ev,
-        Err(Full::RateLimited) => {
-            return rate_limited(
-                "this box is taking too many add-a-phone requests; try again in a minute",
-            )
-        }
+        Err(Full::RateLimited) => return rate_limited("this box is taking too many add-a-phone requests; try again in a minute"),
     };
     for e in evicted {
-        note(format!(
-            "request {} from device {} evicted (limits)",
-            e.rid, e.device
-        ));
+        note(format!("request {} from device {} evicted (limits)", e.rid, e.device));
     }
-    note(format!(
-        "relaying request {} from device {} ({}) to desktop {}",
-        req.rid,
-        req.device_id(),
-        ch.kind(),
-        req.desktop_device_id
-    ));
+    note(format!("relaying request {} from device {} ({}) to desktop {}", req.rid, req.device_id(), ch.kind(), req.desktop_device_id));
     s.phone_enroll.kick.notify_one();
-    (
-        StatusCode::ACCEPTED,
-        Json(json!({ "rid": req.rid, "state": "relayed" })),
-    )
-        .into_response()
+    (StatusCode::ACCEPTED, Json(json!({ "rid": req.rid, "state": "relayed" }))).into_response()
 }
 
 #[derive(Deserialize, Default)]
@@ -872,17 +688,9 @@ fn snapshot(s: &Shared, rid: Rid, ch: &Channel, device: Option<Uuid>) -> Option<
                     (None, None) => e.channel == ch.key(),
                 }
         };
-        inner
-            .entries
-            .iter()
-            .filter(mine)
-            .max_by_key(|e| e.seq)?
-            .clone()
+        inner.entries.iter().filter(mine).max_by_key(|e| e.seq)?.clone()
     };
-    let certified = s
-        .lock()
-        .enroll_phone_standing(s.ws, e.device, Some(&e.public_key), e.account)
-        == Ok(EnrollPhoneStanding::AlreadyMine);
+    let certified = s.lock().enroll_phone_standing(s.ws, e.device, Some(&e.public_key), e.account) == Ok(EnrollPhoneStanding::AlreadyMine);
     let state = if e.answer.is_some() {
         "answered"
     } else if e.expired(now) {
@@ -890,11 +698,7 @@ fn snapshot(s: &Shared, rid: Rid, ch: &Channel, device: Option<Uuid>) -> Option<
     } else {
         "waiting"
     };
-    Some(Snapshot {
-        state,
-        answer: e.answer,
-        certified,
-    })
+    Some(Snapshot { state, answer: e.answer, certified })
 }
 
 /// `GET /v1/phone-enroll/requests/{rid}?wait=N` (§7.4). While the request
@@ -908,29 +712,14 @@ async fn status(
     Path(rid): Path<String>,
     Query(q): Query<StatusQuery>,
 ) -> Response {
-    let Some(ch) = channel(&s, prov.as_deref(), peer.as_deref()) else {
-        return unauthorized();
-    };
-    let not_found = || {
-        refuse(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "no pending request with that id on this box; submit it again",
-        )
-    };
-    let Some(rid) = Rid::from_b64u(&rid) else {
-        return not_found();
-    };
-    let Some(first) = snapshot(&s, rid, &ch, q.device_id) else {
-        return not_found();
-    };
+    let Some(ch) = channel(&s, prov.as_deref(), peer.as_deref()) else { return unauthorized() };
+    let not_found = || refuse(StatusCode::NOT_FOUND, "not_found", "no pending request with that id on this box; submit it again");
+    let Some(rid) = Rid::from_b64u(&rid) else { return not_found() };
+    let Some(first) = snapshot(&s, rid, &ch, q.device_id) else { return not_found() };
     let wait = Duration::from_secs(q.wait.unwrap_or(0).min(qr::MAX_WAIT_SECS));
     let deadline = tokio::time::Instant::now() + wait;
     let mut cur = first.clone();
-    while cur.state == "waiting"
-        && cur.certified == first.certified
-        && tokio::time::Instant::now() < deadline
-    {
+    while cur.state == "waiting" && cur.certified == first.certified && tokio::time::Instant::now() < deadline {
         let changed = s.phone_enroll.changed.notified();
         tokio::select! {
             _ = changed => {}
@@ -974,72 +763,30 @@ mod tests {
     fn a_flood_evicts_itself_and_an_honest_phone_stays() {
         let mut inner = Inner::default();
         let mut now = 1_000_000;
-        inner
-            .submit(entry(9, 900, "tunnel:honest", "honest"), PER_PEER, now)
-            .unwrap();
+        inner.submit(entry(9, 900, "tunnel:honest", "honest"), PER_PEER, now).unwrap();
         // Many provisional connections, each one request.
         for i in 0..200u128 {
             now += 2_100; // under 30 a minute
-            let r = inner.submit(
-                entry(
-                    i as u8,
-                    1000 + i,
-                    &format!("provisional:{}", i % 5),
-                    &format!("flood-{i}"),
-                ),
-                PER_PEER,
-                now,
-            );
+            let r = inner.submit(entry(i as u8, 1000 + i, &format!("provisional:{}", i % 5), &format!("flood-{i}")), PER_PEER, now);
             assert!(r.is_ok());
             assert!(inner.entries.len() <= MAX_PENDING);
-            assert!(
-                inner.entries.iter().any(|e| e.text == "honest"),
-                "the honest phone was evicted at {i}"
-            );
+            assert!(inner.entries.iter().any(|e| e.text == "honest"), "the honest phone was evicted at {i}");
             for c in 0..5 {
-                assert!(
-                    inner
-                        .entries
-                        .iter()
-                        .filter(|e| e.channel == format!("provisional:{c}"))
-                        .count()
-                        <= PER_PEER
-                );
+                assert!(inner.entries.iter().filter(|e| e.channel == format!("provisional:{c}")).count() <= PER_PEER);
             }
         }
         // A bearer caller: at most 2 pending.
         for i in 0..10u128 {
             now += 2_100;
-            inner
-                .submit(
-                    entry(50 + i as u8, 5000 + i, "bearer", &format!("bearer-{i}")),
-                    PER_BEARER,
-                    now,
-                )
-                .unwrap();
-            assert!(
-                inner
-                    .entries
-                    .iter()
-                    .filter(|e| e.channel == "bearer")
-                    .count()
-                    <= PER_BEARER
-            );
+            inner.submit(entry(50 + i as u8, 5000 + i, "bearer", &format!("bearer-{i}")), PER_BEARER, now).unwrap();
+            assert!(inner.entries.iter().filter(|e| e.channel == "bearer").count() <= PER_BEARER);
         }
         // Global cap with many distinct callers: the heaviest is evicted.
         let mut inner = Inner::default();
         for i in 0..MAX_PENDING as u128 {
-            inner
-                .submit(
-                    entry(i as u8, 100 + i, &format!("tunnel:{i}"), &format!("t{i}")),
-                    PER_PEER,
-                    now + i as i64,
-                )
-                .unwrap();
+            inner.submit(entry(i as u8, 100 + i, &format!("tunnel:{i}"), &format!("t{i}")), PER_PEER, now + i as i64).unwrap();
         }
-        inner
-            .submit(entry(99, 9999, "bearer", "b1"), PER_BEARER, now + 100)
-            .unwrap();
+        inner.submit(entry(99, 9999, "bearer", "b1"), PER_BEARER, now + 100).unwrap();
         assert_eq!(inner.entries.len(), MAX_PENDING);
         assert!(inner.entries.iter().any(|e| e.text == "b1"));
     }
@@ -1048,47 +795,25 @@ mod tests {
     fn rate_limit_idempotence_and_replacement() {
         let mut inner = Inner::default();
         let now = 10_000_000;
-        inner
-            .submit(entry(1, 1, "bearer", "a"), PER_BEARER, now)
-            .unwrap();
+        inner.submit(entry(1, 1, "bearer", "a"), PER_BEARER, now).unwrap();
         // The same bytes again: idempotent, not counted.
         for _ in 0..100 {
-            inner
-                .submit(entry(1, 1, "bearer", "a"), PER_BEARER, now)
-                .unwrap();
+            inner.submit(entry(1, 1, "bearer", "a"), PER_BEARER, now).unwrap();
         }
         assert_eq!((inner.entries.len(), inner.accepted.len()), (1, 1));
         // The same phone's fresh request replaces its old one.
         assert_eq!(inner.plan(now).0.len(), 1);
-        inner
-            .submit(entry(2, 1, "bearer", "b"), PER_BEARER, now)
-            .unwrap();
+        inner.submit(entry(2, 1, "bearer", "b"), PER_BEARER, now).unwrap();
         assert_eq!(inner.entries.len(), 1);
         assert_eq!(inner.entries[0].text, "b");
-        assert!(
-            inner.clear.contains(&(Rid([1; 16]), Uuid::from_u128(1))),
-            "the old offer's slot is cleared"
-        );
+        assert!(inner.clear.contains(&(Rid([1; 16]), Uuid::from_u128(1))), "the old offer's slot is cleared");
         // 30 a minute.
         let mut inner = Inner::default();
         for i in 0..MAX_PER_MINUTE as u128 {
-            inner
-                .submit(
-                    entry(i as u8, 100 + i, &format!("tunnel:{i}"), &format!("r{i}")),
-                    PER_PEER,
-                    now,
-                )
-                .unwrap();
+            inner.submit(entry(i as u8, 100 + i, &format!("tunnel:{i}"), &format!("r{i}")), PER_PEER, now).unwrap();
         }
-        assert_eq!(
-            inner
-                .submit(entry(200, 999, "tunnel:x", "late"), PER_PEER, now + 1)
-                .unwrap_err(),
-            Full::RateLimited
-        );
-        assert!(inner
-            .submit(entry(200, 999, "tunnel:x", "late"), PER_PEER, now + 61_000)
-            .is_ok());
+        assert_eq!(inner.submit(entry(200, 999, "tunnel:x", "late"), PER_PEER, now + 1).unwrap_err(), Full::RateLimited);
+        assert!(inner.submit(entry(200, 999, "tunnel:x", "late"), PER_PEER, now + 61_000).is_ok());
     }
 
     /// An answer slot counts only for the requests whose own desktop signed
@@ -1104,10 +829,7 @@ mod tests {
         let mut inner = Inner::default();
         let now = 30_000_000;
         let rid = Rid([7; 16]);
-        let (kx, ky) = (
-            ligus_core::SigningKeypair::generate().unwrap(),
-            ligus_core::SigningKeypair::generate().unwrap(),
-        );
+        let (kx, ky) = (ligus_core::SigningKeypair::generate().unwrap(), ligus_core::SigningKeypair::generate().unwrap());
         // X is the co-member's desktop, Y the offer's real desktop.
         let (x, y) = (Uuid::from_u128(1), Uuid::from_u128(2));
         let key = |d: Uuid| {
@@ -1126,64 +848,26 @@ mod tests {
         inner.submit(decoy, PER_PEER, now).unwrap();
         inner.submit(real, PER_PEER, now).unwrap();
         // X's answer about the real phone (its tag can't be right: X has no secret).
-        let forged = qr::EnrollAnswer {
-            rid,
-            outcome: qr::Outcome::Declined,
-            device_id: Uuid::from_u128(200),
-            tag: [0; 32],
-        };
+        let forged = qr::EnrollAnswer { rid, outcome: qr::Outcome::Declined, device_id: Uuid::from_u128(200), tag: [0; 32] };
         let signed = RelayedAnswer::new(&forged, x, now).sign(&kx);
         let taken = inner.take_answers(vec![(qr::answer_slot(rid), signed.clone())], now, key);
         assert_eq!(taken, vec![rid], "it answers the decoy, sent to X");
-        let real = inner
-            .entries
-            .iter()
-            .find(|e| e.text == "real phone")
-            .unwrap();
-        assert_eq!(
-            real.answer, None,
-            "X's answer must not answer a request for Y"
-        );
-        let shown: HashSet<String> = (0..6)
-            .flat_map(|t| inner.plan(now + t * 4_000).0)
-            .map(|(_, text)| text)
-            .collect();
-        assert!(
-            shown.contains("real phone"),
-            "the box still relays the real phone: {shown:?}"
-        );
+        let real = inner.entries.iter().find(|e| e.text == "real phone").unwrap();
+        assert_eq!(real.answer, None, "X's answer must not answer a request for Y");
+        let shown: HashSet<String> = (0..6).flat_map(|t| inner.plan(now + t * 4_000).0).map(|(_, text)| text).collect();
+        assert!(shown.contains("real phone"), "the box still relays the real phone: {shown:?}");
         // Y's own answer is still taken for Y's request.
-        let real_answer = qr::EnrollAnswer {
-            rid,
-            outcome: qr::Outcome::Certified,
-            device_id: Uuid::from_u128(999),
-            tag: [1; 32],
-        };
+        let real_answer = qr::EnrollAnswer { rid, outcome: qr::Outcome::Certified, device_id: Uuid::from_u128(999), tag: [1; 32] };
         let ya = RelayedAnswer::new(&real_answer, y, now).sign(&ky);
-        assert_eq!(
-            inner.take_answers(vec![(qr::answer_slot(rid), ya.clone())], now, key),
-            vec![rid]
-        );
-        let real = inner
-            .entries
-            .iter()
-            .find(|e| e.text == "real phone")
-            .unwrap();
+        assert_eq!(inner.take_answers(vec![(qr::answer_slot(rid), ya.clone())], now, key), vec![rid]);
+        let real = inner.entries.iter().find(|e| e.text == "real phone").unwrap();
         assert_eq!(real.answer.as_deref(), Some(ya.answer.as_str()));
         let decoy = inner.entries.iter().find(|e| e.text == "decoy").unwrap();
-        assert_eq!(
-            decoy.answer.as_deref(),
-            Some(signed.answer.as_str()),
-            "and not on X's"
-        );
+        assert_eq!(decoy.answer.as_deref(), Some(signed.answer.as_str()), "and not on X's");
         // An answer signed by a desktop no request names is ignored.
         let kz = ligus_core::SigningKeypair::generate().unwrap();
         let za = RelayedAnswer::new(&real_answer, Uuid::from_u128(3), now).sign(&kz);
-        assert!(inner
-            .take_answers(vec![(qr::answer_slot(rid), za)], now, |d| (d
-                == Uuid::from_u128(3))
-            .then(|| kz.public_key_bytes().to_vec()))
-            .is_empty());
+        assert!(inner.take_answers(vec![(qr::answer_slot(rid), za)], now, |d| (d == Uuid::from_u128(3)).then(|| kz.public_key_bytes().to_vec())).is_empty());
     }
 
     // ── The hold sees every phone (design §8.3) ──────────────────────────
@@ -1204,14 +888,10 @@ mod tests {
         let out = (0..phones)
             .map(|i| {
                 let p = ligus_core::testkit::Phone::new();
-                let code = ligus_runtime::phone_enroll::PhoneCode::new_signed(
-                    p.device_id,
-                    p.public_key(),
-                    &format!("phone {i}"),
-                    |m| ligus_core::crypto::sign_p256(&p.key, m),
-                );
-                let req =
-                    scanned.build_request(&code, |m| ligus_core::crypto::sign_p256(&p.key, m));
+                let code = ligus_runtime::phone_enroll::PhoneCode::new_signed(p.device_id, p.public_key(), &format!("phone {i}"), |m| {
+                    ligus_core::crypto::sign_p256(&p.key, m)
+                });
+                let req = scanned.build_request(&code, |m| ligus_core::crypto::sign_p256(&p.key, m));
                 let e = Entry {
                     rid: req.rid,
                     text: req.encode(),
@@ -1241,11 +921,7 @@ mod tests {
 
     impl Sim {
         fn new() -> Self {
-            Self {
-                inner: Inner::default(),
-                presence: HashMap::new(),
-                next_pass: i64::MAX,
-            }
+            Self { inner: Inner::default(), presence: HashMap::new(), next_pass: i64::MAX }
         }
 
         fn pass(&mut self, now: i64) {
@@ -1275,16 +951,9 @@ mod tests {
         /// (each passes the desktop's request checks).
         fn visible(&self, offer: &qr::DesktopOffer, now: i64) -> Vec<qr::EnrollRequest> {
             let prefix = offer.request_slot_prefix();
-            let mut slots: Vec<_> = self
-                .presence
-                .iter()
-                .filter(|(s, _)| s.starts_with(&prefix))
-                .collect();
+            let mut slots: Vec<_> = self.presence.iter().filter(|(s, _)| s.starts_with(&prefix)).collect();
             slots.sort();
-            slots
-                .into_iter()
-                .filter_map(|(_, text)| offer.check_request(text, now).ok())
-                .collect()
+            slots.into_iter().filter_map(|(_, text)| offer.check_request(text, now).ok()).collect()
         }
 
         /// One `phone_enroll_offer_poll`.
@@ -1320,20 +989,14 @@ mod tests {
                 let first_seen = T0 + phase;
                 let mut t = first_seen;
                 sim.desktop_poll(&mut offer, t);
-                assert!(
-                    offer.locked_request().is_some(),
-                    "phase {phase}: the first phone wasn't seen"
-                );
+                assert!(offer.locked_request().is_some(), "phase {phase}: the first phone wasn't seen");
                 sim.submit(phones[1].1.clone(), first_seen + delta);
                 let approve_at = first_seen + qr::HOLD_MS;
                 while t + 2_000 < approve_at {
                     t += 2_000;
                     sim.desktop_poll(&mut offer, t);
                 }
-                let code_fp = offer
-                    .locked_request()
-                    .map(|r| r.code.fingerprint())
-                    .unwrap_or_default();
+                let code_fp = offer.locked_request().map(|r| r.code.fingerprint()).unwrap_or_default();
                 assert_eq!(
                     offer.check_approve(offer.rid(), &code_fp, approve_at).map(|_| ()),
                     Err(qr::EnrollError::OfferClosed),
@@ -1355,16 +1018,8 @@ mod tests {
             sim.submit(e.clone(), t);
             t += 10;
         }
-        let seen: HashSet<Uuid> = sim
-            .visible(&offer, t)
-            .iter()
-            .map(|r| r.device_id())
-            .collect();
-        assert_eq!(
-            seen.len(),
-            MAX_PENDING,
-            "one poll sees every pending request"
-        );
+        let seen: HashSet<Uuid> = sim.visible(&offer, t).iter().map(|r| r.device_id()).collect();
+        assert_eq!(seen.len(), MAX_PENDING, "one poll sees every pending request");
         // Re-published every 10 s, all of them.
         sim.run_until(t + qr::REPUBLISH_SECS as i64 * 1000 + 2_000);
         assert_eq!(sim.visible(&offer, t + 11_000).len(), MAX_PENDING);
@@ -1374,20 +1029,10 @@ mod tests {
         assert_eq!(visible.len(), MAX_PENDING);
         assert_eq!(sim.inner.entries.len(), MAX_PENDING);
         for r in &visible {
-            assert!(
-                sim.inner.entries.iter().any(|e| e.device == r.device_id()),
-                "an evicted request is still shown"
-            );
+            assert!(sim.inner.entries.iter().any(|e| e.device == r.device_id()), "an evicted request is still shown");
         }
         let prefix = qr::REQUEST_SLOT_PREFIX;
-        assert!(
-            sim.presence
-                .keys()
-                .filter(|k| k.starts_with(prefix))
-                .count()
-                <= MAX_PENDING,
-            "at most 16 slots at once"
-        );
+        assert!(sim.presence.keys().filter(|k| k.starts_with(prefix)).count() <= MAX_PENDING, "at most 16 slots at once");
     }
 
     /// Two phones on one offer each have their own slot, both published at
@@ -1398,30 +1043,15 @@ mod tests {
         let mut inner = Inner::default();
         let now = 20_000_000;
         let (r, a, b) = (Rid([7; 16]), Uuid::from_u128(1), Uuid::from_u128(2));
-        inner
-            .submit(entry(7, 1, "tunnel:a", "first"), PER_PEER, now)
-            .unwrap();
+        inner.submit(entry(7, 1, "tunnel:a", "first"), PER_PEER, now).unwrap();
         let (p, c) = inner.plan(now);
         assert_eq!((p, c), (vec![((r, a), "first".to_string())], vec![]));
         // Nothing new within 10 s.
         assert!(inner.plan(now + 1_000).0.is_empty());
-        inner
-            .submit(entry(7, 2, "bearer", "second"), PER_BEARER, now + 2_000)
-            .unwrap();
-        assert_eq!(
-            inner.plan(now + 2_000).0,
-            vec![((r, b), "second".to_string())],
-            "the second at once, in its own slot"
-        );
-        assert_eq!(
-            inner.plan(now + 10_500).0,
-            vec![((r, a), "first".to_string())],
-            "each re-published every 10 s"
-        );
-        assert_eq!(
-            inner.plan(now + 12_500).0,
-            vec![((r, b), "second".to_string())]
-        );
+        inner.submit(entry(7, 2, "bearer", "second"), PER_BEARER, now + 2_000).unwrap();
+        assert_eq!(inner.plan(now + 2_000).0, vec![((r, b), "second".to_string())], "the second at once, in its own slot");
+        assert_eq!(inner.plan(now + 10_500).0, vec![((r, a), "first".to_string())], "each re-published every 10 s");
+        assert_eq!(inner.plan(now + 12_500).0, vec![((r, b), "second".to_string())]);
         // The desktop answered about phone 1: its slot is cleared, phone 2's stays.
         let keys = ligus_runtime::phone_enroll_qr::EnrollSecret::from_bytes([3; 32]).keys();
         let answer = EnrollAnswer::build(&keys, qr::Outcome::Certified, a).encode();
@@ -1429,24 +1059,12 @@ mod tests {
         let (p, c) = inner.plan(now + 13_000);
         assert!(p.is_empty());
         assert_eq!(c, vec![(r, a)]);
-        assert_eq!(
-            inner.plan(now + 23_000).0,
-            vec![((r, b), "second".to_string())]
-        );
+        assert_eq!(inner.plan(now + 23_000).0, vec![((r, b), "second".to_string())]);
         // The same phone's new request replaces its slot's content, not the slot.
-        inner
-            .submit(
-                entry(7, 2, "bearer", "second, rescanned"),
-                PER_BEARER,
-                now + 24_000,
-            )
-            .unwrap();
+        inner.submit(entry(7, 2, "bearer", "second, rescanned"), PER_BEARER, now + 24_000).unwrap();
         let (p, c) = inner.plan(now + 24_000);
         assert_eq!(p, vec![((r, b), "second, rescanned".to_string())]);
-        assert!(
-            c.is_empty(),
-            "never cleared and published in one pass: {c:?}"
-        );
+        assert!(c.is_empty(), "never cleared and published in one pass: {c:?}");
         // Past exp: every slot is cleared.
         for e in inner.entries.iter_mut() {
             e.exp = 1;

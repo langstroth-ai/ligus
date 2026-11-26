@@ -20,18 +20,15 @@ use ligus_core::phone_action::{check_phone_action_preimage, Confirmed, PhoneActi
 use ligus_core::presence::{b64url, unb64url, PresenceAssertion};
 use ligus_core::workspace_repo::ApplyRequest;
 use ligus_core::{
-    workspace_config_session_id, ActorIdentity, ActorKind, ActorStamp, CfgFrontier, ChatMessage,
-    MessageRole, ProposalApproval, SessionEvent, SessionEventEnvelope, Timestamp, WorkspaceRole,
+    workspace_config_session_id, ActorIdentity, ActorKind, ActorStamp, CfgFrontier, ChatMessage, MessageRole, ProposalApproval, SessionEvent,
+    SessionEventEnvelope, Timestamp, WorkspaceRole,
 };
 use uuid::Uuid;
 
 const GOLDEN: &str = include_str!("golden/phone_actions_v1.jsonl");
 
 fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-        .collect()
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
 }
 
 fn hex(b: &[u8]) -> String {
@@ -47,25 +44,10 @@ fn phone_action_vectors_check_as_frozen() {
         let uuid = |k: &str| Uuid::parse_str(v[k].as_str().unwrap()).unwrap();
         let action: PhoneAction = serde_json::from_value(v["action"].clone()).unwrap();
         let preimage = unb64url(v["preimage"].as_str().unwrap()).unwrap();
-        let challenge: Option<[u8; 32]> = v["challenge"]
-            .as_str()
-            .map(|c| unb64url(c).unwrap().try_into().unwrap());
-        let assertion: Option<PresenceAssertion> = v
-            .get("assertion")
-            .filter(|a| !a.is_null())
-            .map(|a| serde_json::from_value(a.clone()).unwrap());
-        let confirmed = challenge.as_ref().map(|c| Confirmed {
-            challenge: c,
-            assertion: assertion.as_ref(),
-        });
-        let got = check_phone_action_preimage(
-            &preimage,
-            confirmed,
-            uuid("workspaceId"),
-            uuid("phoneDeviceId"),
-            uuid("accountId"),
-            &action,
-        );
+        let challenge: Option<[u8; 32]> = v["challenge"].as_str().map(|c| unb64url(c).unwrap().try_into().unwrap());
+        let assertion: Option<PresenceAssertion> = v.get("assertion").filter(|a| !a.is_null()).map(|a| serde_json::from_value(a.clone()).unwrap());
+        let confirmed = challenge.as_ref().map(|c| Confirmed { challenge: c, assertion: assertion.as_ref() });
+        let got = check_phone_action_preimage(&preimage, confirmed, uuid("workspaceId"), uuid("phoneDeviceId"), uuid("accountId"), &action);
         let expect = v["expect"].as_str().unwrap();
         match got {
             Ok(_) => {
@@ -97,14 +79,7 @@ struct Ids {
 }
 
 fn ids() -> Ids {
-    Ids {
-        ws: u(1),
-        chat: u(2),
-        phone: u(3),
-        account: u(4),
-        proposal: u(5),
-        host: u(6),
-    }
+    Ids { ws: u(1), chat: u(2), phone: u(3), account: u(4), proposal: u(5), host: u(6) }
 }
 
 fn actor(i: &Ids) -> ActorIdentity {
@@ -119,29 +94,10 @@ const BASE: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn action(i: &Ids, kind: &str) -> PhoneAction {
     match kind {
-        "post" => PhoneAction::Post {
-            chat_id: i.chat,
-            text: "Ship it after lunch.".into(),
-        },
-        "vote" => PhoneAction::Vote {
-            chat_id: i.chat,
-            proposal_id: i.proposal,
-            diff_digest: DIGEST.into(),
-            approved: true,
-        },
-        "answer" => PhoneAction::Answer {
-            chat_id: i.chat,
-            ask_id: u(7),
-            answer: "yes".into(),
-            option_index: Some(0),
-            ask_digest: String::new(),
-            text: String::new(),
-            decline: false,
-        },
-        "clearLockdown" => PhoneAction::ClearLockdown {
-            chat_id: i.chat,
-            raises: vec![u(0x20), u(0x21)],
-        },
+        "post" => PhoneAction::Post { chat_id: i.chat, text: "Ship it after lunch.".into() },
+        "vote" => PhoneAction::Vote { chat_id: i.chat, proposal_id: i.proposal, diff_digest: DIGEST.into(), approved: true },
+        "answer" => PhoneAction::Answer { chat_id: i.chat, ask_id: u(7), answer: "yes".into(), option_index: Some(0), ask_digest: String::new(), text: String::new(), decline: false },
+        "clearLockdown" => PhoneAction::ClearLockdown { chat_id: i.chat, raises: vec![u(0x20), u(0x21)] },
         "requestApply" => PhoneAction::RequestApply {
             chat_id: i.chat,
             proposal_id: i.proposal,
@@ -150,11 +106,7 @@ fn action(i: &Ids, kind: &str) -> PhoneAction {
             expected_base_commit: Some(BASE.into()),
             repo_id: None,
         },
-        _ => PhoneAction::WithdrawApply {
-            chat_id: i.chat,
-            proposal_id: i.proposal,
-            request_id: u(8),
-        },
+        _ => PhoneAction::WithdrawApply { chat_id: i.chat, proposal_id: i.proposal, request_id: u(8) },
     }
 }
 
@@ -168,12 +120,7 @@ fn payload(i: &Ids, a: &PhoneAction) -> SessionEvent {
             m.actor_identity = Some(actor(i));
             SessionEvent::MessageAppended { message: m }
         }
-        PhoneAction::Vote {
-            proposal_id,
-            diff_digest,
-            approved,
-            ..
-        } => SessionEvent::ProposalVoteCast {
+        PhoneAction::Vote { proposal_id, diff_digest, approved, .. } => SessionEvent::ProposalVoteCast {
             proposal_id: *proposal_id,
             approval: ProposalApproval {
                 actor_id: i.account.to_string(),
@@ -183,15 +130,7 @@ fn payload(i: &Ids, a: &PhoneAction) -> SessionEvent {
                 diff_digest: Some(diff_digest.clone()),
             },
         },
-        PhoneAction::Answer {
-            ask_id,
-            answer,
-            option_index,
-            ask_digest,
-            text,
-            decline,
-            ..
-        } => SessionEvent::FlowRecorded {
+        PhoneAction::Answer { ask_id, answer, option_index, ask_digest, text, decline, .. } => SessionEvent::FlowRecorded {
             record: FlowRecord::HumanAnswered(HumanAnswered {
                 ask_id: *ask_id,
                 answer: answer.clone(),
@@ -203,18 +142,8 @@ fn payload(i: &Ids, a: &PhoneAction) -> SessionEvent {
                 decline: *decline,
             }),
         },
-        PhoneAction::ClearLockdown { chat_id, raises } => SessionEvent::ChatLockdownCleared {
-            chat_id: *chat_id,
-            raises: raises.clone(),
-        },
-        PhoneAction::RequestApply {
-            proposal_id,
-            diff_digest,
-            host_device_id,
-            expected_base_commit,
-            repo_id,
-            ..
-        } => SessionEvent::ProposalApplyRequested {
+        PhoneAction::ClearLockdown { chat_id, raises } => SessionEvent::ChatLockdownCleared { chat_id: *chat_id, raises: raises.clone() },
+        PhoneAction::RequestApply { proposal_id, diff_digest, host_device_id, expected_base_commit, repo_id, .. } => SessionEvent::ProposalApplyRequested {
             request: ApplyRequest {
                 id: u(0x11),
                 proposal_id: *proposal_id,
@@ -224,37 +153,14 @@ fn payload(i: &Ids, a: &PhoneAction) -> SessionEvent {
                 repo_id: *repo_id,
             },
         },
-        PhoneAction::WithdrawApply {
-            proposal_id,
-            request_id,
-            ..
-        } => SessionEvent::ProposalApplyWithdrawn {
-            request_id: *request_id,
-            proposal_id: *proposal_id,
-        },
-        PhoneAction::Archive {
-            proposal_id,
-            archived,
-            ..
-        } => SessionEvent::ProposalDismissed {
-            proposal_id: *proposal_id,
-            dismissed: *archived,
-        },
-        PhoneAction::ProposeMemory {
-            chat_id,
-            op,
-            rationale,
-        } => SessionEvent::FlowRecorded {
+        PhoneAction::WithdrawApply { proposal_id, request_id, .. } => SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id },
+        PhoneAction::Archive { proposal_id, archived, .. } => SessionEvent::ProposalDismissed { proposal_id: *proposal_id, dismissed: *archived },
+        PhoneAction::ProposeMemory { chat_id, op, rationale } => SessionEvent::FlowRecorded {
             record: FlowRecord::MemoryProposed(ligus_core::memory::MemoryProposal {
                 proposal_id: u(0x12),
                 op: op.clone(),
                 proposer: String::new(),
-                source: ligus_core::memory::MemorySource {
-                    chat_id: Some(*chat_id),
-                    message_id: None,
-                    turn_id: None,
-                    egress: None,
-                },
+                source: ligus_core::memory::MemorySource { chat_id: Some(*chat_id), message_id: None, turn_id: None, egress: None },
                 rationale: rationale.clone(),
             }),
         },
@@ -269,10 +175,7 @@ fn draft(i: &Ids, a: &PhoneAction, n: u128, ev: SessionEvent) -> SessionEventEnv
     e.actor_stamp = Some(ActorStamp {
         actor: actor(i),
         recorded_at: Timestamp::epoch(),
-        cfg_frontier: Some(CfgFrontier {
-            lamport: 899,
-            event_id: u(0x300),
-        }),
+        cfg_frontier: Some(CfgFrontier { lamport: 899, event_id: u(0x300) }),
         presence: None,
         runtime_effect: false,
         prev: Some(u(0x301)),
@@ -280,22 +183,14 @@ fn draft(i: &Ids, a: &PhoneAction, n: u128, ev: SessionEvent) -> SessionEventEnv
         log_head: None,
     });
     // The box's log head when it drafted: the lamport is one past it.
-    ligus_core::lamport::stamp_next(
-        &mut e,
-        Some(CfgFrontier {
-            lamport: 899 + n as u64,
-            event_id: u(0x400 + n),
-        }),
-    );
+    ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 899 + n as u64, event_id: u(0x400 + n) }));
     e
 }
 
 #[test]
 #[ignore]
 fn phone_action_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
-        return;
-    };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
     let i = ids();
     let key = p256::ecdsa::SigningKey::from_slice(&[0x11; 32]).unwrap();
     let pk = hex(&ligus_core::crypto::p256_public_key(&key));
@@ -316,19 +211,9 @@ fn phone_action_goldens() {
         ("refuse/presence-not-run", "vote", true, 3),
         ("refuse/trailing-byte", "post", false, 4),
         ("refuse/other-host", "requestApply", false, 5),
-        (
-            "refuse/clearLockdown-on-chat-log",
-            "clearLockdown",
-            false,
-            6,
-        ),
+        ("refuse/clearLockdown-on-chat-log", "clearLockdown", false, 6),
         ("refuse/vote-for-someone-else", "vote", false, 7),
-        (
-            "refuse/clearLockdown-other-raises",
-            "clearLockdown",
-            true,
-            8,
-        ),
+        ("refuse/clearLockdown-other-raises", "clearLockdown", true, 8),
         ("refuse/lamport-past-head", "post", false, 9),
         ("refuse/clearLockdown-names-none", "clearLockdown", true, 10),
     ];
@@ -336,10 +221,7 @@ fn phone_action_goldens() {
         n += 1;
         let mut asked = action(&i, kind);
         if *tweak == 10 {
-            asked = PhoneAction::ClearLockdown {
-                chat_id: i.chat,
-                raises: Vec::new(),
-            };
+            asked = PhoneAction::ClearLockdown { chat_id: i.chat, raises: Vec::new() };
         }
         let mut ev = payload(&i, &asked);
         match tweak {
@@ -396,13 +278,8 @@ fn phone_action_goldens() {
         if *tweak == 4 {
             preimage.push(0);
         }
-        let confirmed = challenge.as_ref().map(|c| Confirmed {
-            challenge: c,
-            assertion: assertion.as_ref(),
-        });
-        let expect = match check_phone_action_preimage(
-            &preimage, confirmed, i.ws, i.phone, i.account, &asked,
-        ) {
+        let confirmed = challenge.as_ref().map(|c| Confirmed { challenge: c, assertion: assertion.as_ref() });
+        let expect = match check_phone_action_preimage(&preimage, confirmed, i.ws, i.phone, i.account, &asked) {
             Ok(_) => "ok".to_string(),
             Err(why) => why.to_string(),
         };
@@ -443,9 +320,7 @@ fn with_extra_payload_field(preimage: &[u8]) -> Vec<u8> {
         rest = &rest[4 + len..];
         if k == 3 {
             let mut v: serde_json::Value = serde_json::from_slice(&json).unwrap();
-            v.as_object_mut()
-                .unwrap()
-                .insert("zz".into(), serde_json::json!(1));
+            v.as_object_mut().unwrap().insert("zz".into(), serde_json::json!(1));
             json = serde_json::to_vec(&v).unwrap();
         }
         out.extend_from_slice(&(json.len() as u32).to_le_bytes());
@@ -461,20 +336,13 @@ fn with_extra_payload_field(preimage: &[u8]) -> Vec<u8> {
 #[ignore]
 fn phone_memory_goldens() {
     use ligus_core::memory::MemoryOp;
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
-        return;
-    };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
     let i = ids();
     let key = p256::ecdsa::SigningKey::from_slice(&[0x11; 32]).unwrap();
     let pk = hex(&ligus_core::crypto::p256_public_key(&key));
     let asked = PhoneAction::ProposeMemory {
         chat_id: i.chat,
-        op: MemoryOp::Create {
-            entry_id: u(0x13),
-            title: "Deploy day".into(),
-            body: "We ship on Thursdays.".into(),
-            tags: vec!["process".into()],
-        },
+        op: MemoryOp::Create { entry_id: u(0x13), title: "Deploy day".into(), body: "We ship on Thursdays.".into(), tags: vec!["process".into()] },
         rationale: "Said in standup".into(),
     };
     let mut out = String::new();
@@ -494,20 +362,13 @@ fn phone_memory_goldens() {
         ("refuse/proposeMemory-unbound-entry", 5),
         ("proposeMemory-closed-egress", 6),
     ]
-    .into_iter()
-    .enumerate()
+        .into_iter()
+        .enumerate()
     {
         let mut ev = payload(&i, &asked);
-        if let SessionEvent::FlowRecorded {
-            record: FlowRecord::MemoryProposed(p),
-        } = &mut ev
-        {
+        if let SessionEvent::FlowRecorded { record: FlowRecord::MemoryProposed(p) } = &mut ev {
             // The proposal is known by the event that files it (`draft`'s id).
-            p.proposal_id = if tweak == 4 {
-                u(0x12)
-            } else {
-                u(0x200 + 40 + n as u128)
-            };
+            p.proposal_id = if tweak == 4 { u(0x12) } else { u(0x200 + 40 + n as u128) };
             if let MemoryOp::Create { entry_id, .. } = &mut p.op {
                 *entry_id = if tweak == 5 { u(0x13) } else { p.proposal_id };
             }
@@ -527,16 +388,11 @@ fn phone_memory_goldens() {
             env.session_id = i.chat;
         }
         let preimage = envelope_preimage(&env);
-        let expect =
-            match check_phone_action_preimage(&preimage, None, i.ws, i.phone, i.account, &asked) {
-                Ok(_) => "ok".to_string(),
-                Err(why) => why.to_string(),
-            };
-        assert_eq!(
-            expect == "ok",
-            tweak == 0 || tweak == 6,
-            "{label}: {expect}"
-        );
+        let expect = match check_phone_action_preimage(&preimage, None, i.ws, i.phone, i.account, &asked) {
+            Ok(_) => "ok".to_string(),
+            Err(why) => why.to_string(),
+        };
+        assert_eq!(expect == "ok", tweak == 0 || tweak == 6, "{label}: {expect}");
         let mut line = serde_json::json!({
             "label": label,
             "workspaceId": i.ws,
@@ -561,12 +417,7 @@ fn propose_memory_vectors_are_present() {
     let labels: Vec<String> = GOLDEN
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .map(|l| {
-            serde_json::from_str::<serde_json::Value>(l).unwrap()["label"]
-                .as_str()
-                .unwrap()
-                .to_string()
-        })
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["label"].as_str().unwrap().to_string())
         .collect();
     for want in [
         "proposeMemory",
@@ -588,9 +439,7 @@ fn propose_memory_vectors_are_present() {
 #[test]
 #[ignore]
 fn phone_answer_v2_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
-        return;
-    };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
     let i = ids();
     let key = p256::ecdsa::SigningKey::from_slice(&[0x11; 32]).unwrap();
     let pk = hex(&ligus_core::crypto::p256_public_key(&key));
@@ -599,47 +448,27 @@ fn phone_answer_v2_goldens() {
     // (label, the phone's answer, tweak): 0 as drafted; 1 the box names
     // another digest; 2 the box drops the free text; 3 the box turns Not now
     // into the first option.
-    let answer =
-        |answer: &str, option: Option<u32>, text: &str, decline: bool| PhoneAction::Answer {
-            chat_id: i.chat,
-            ask_id: u(9),
-            answer: answer.into(),
-            option_index: option,
-            ask_digest: digest.into(),
-            text: text.into(),
-            decline,
-        };
+    let answer = |answer: &str, option: Option<u32>, text: &str, decline: bool| PhoneAction::Answer {
+        chat_id: i.chat,
+        ask_id: u(9),
+        answer: answer.into(),
+        option_index: option,
+        ask_digest: digest.into(),
+        text: text.into(),
+        decline,
+    };
     for (n, (label, asked, tweak)) in [
-        (
-            "answer/v2",
-            answer("Postgres", Some(0), "keep the dev db", false),
-            0u8,
-        ),
+        ("answer/v2", answer("Postgres", Some(0), "keep the dev db", false), 0u8),
         ("answer/v2-not-now", answer("Not now", None, "", true), 0),
-        (
-            "refuse/answer-other-digest",
-            answer("Postgres", Some(0), "", false),
-            1,
-        ),
-        (
-            "refuse/answer-dropped-text",
-            answer("Postgres", Some(0), "keep the dev db", false),
-            2,
-        ),
-        (
-            "refuse/answer-not-now-as-yes",
-            answer("Not now", None, "", true),
-            3,
-        ),
+        ("refuse/answer-other-digest", answer("Postgres", Some(0), "", false), 1),
+        ("refuse/answer-dropped-text", answer("Postgres", Some(0), "keep the dev db", false), 2),
+        ("refuse/answer-not-now-as-yes", answer("Not now", None, "", true), 3),
     ]
     .into_iter()
     .enumerate()
     {
         let mut ev = payload(&i, &asked);
-        if let SessionEvent::FlowRecorded {
-            record: FlowRecord::HumanAnswered(a),
-        } = &mut ev
-        {
+        if let SessionEvent::FlowRecorded { record: FlowRecord::HumanAnswered(a) } = &mut ev {
             match tweak {
                 1 => a.ask_digest = "0".repeat(64),
                 2 => a.text.clear(),
@@ -653,11 +482,10 @@ fn phone_answer_v2_goldens() {
         }
         let env = draft(&i, &asked, 60 + n as u128, ev);
         let preimage = envelope_preimage(&env);
-        let expect =
-            match check_phone_action_preimage(&preimage, None, i.ws, i.phone, i.account, &asked) {
-                Ok(_) => "ok".to_string(),
-                Err(why) => why.to_string(),
-            };
+        let expect = match check_phone_action_preimage(&preimage, None, i.ws, i.phone, i.account, &asked) {
+            Ok(_) => "ok".to_string(),
+            Err(why) => why.to_string(),
+        };
         assert_eq!(expect == "ok", tweak == 0, "{label}: {expect}");
         let mut line = serde_json::json!({
             "label": label,
@@ -684,9 +512,7 @@ fn phone_answer_v2_goldens() {
 #[test]
 #[ignore]
 fn phone_archive_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
-        return;
-    };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
     let i = ids();
     let key = p256::ecdsa::SigningKey::from_slice(&[0x11; 32]).unwrap();
     let pk = hex(&ligus_core::crypto::p256_public_key(&key));
@@ -698,32 +524,21 @@ fn phone_archive_goldens() {
         ("refuse/archive-flipped", true, 1),
         ("refuse/archive-other-proposal", true, 2),
     ]
-    .into_iter()
-    .enumerate()
+        .into_iter()
+        .enumerate()
     {
-        let asked = PhoneAction::Archive {
-            chat_id: i.chat,
-            proposal_id: i.proposal,
-            archived,
-        };
+        let asked = PhoneAction::Archive { chat_id: i.chat, proposal_id: i.proposal, archived };
         let ev = match tweak {
-            1 => SessionEvent::ProposalDismissed {
-                proposal_id: i.proposal,
-                dismissed: !archived,
-            },
-            2 => SessionEvent::ProposalDismissed {
-                proposal_id: u(0x55),
-                dismissed: archived,
-            },
+            1 => SessionEvent::ProposalDismissed { proposal_id: i.proposal, dismissed: !archived },
+            2 => SessionEvent::ProposalDismissed { proposal_id: u(0x55), dismissed: archived },
             _ => payload(&i, &asked),
         };
         let env = draft(&i, &asked, 60 + n as u128, ev);
         let preimage = envelope_preimage(&env);
-        let expect =
-            match check_phone_action_preimage(&preimage, None, i.ws, i.phone, i.account, &asked) {
-                Ok(_) => "ok".to_string(),
-                Err(why) => why.to_string(),
-            };
+        let expect = match check_phone_action_preimage(&preimage, None, i.ws, i.phone, i.account, &asked) {
+            Ok(_) => "ok".to_string(),
+            Err(why) => why.to_string(),
+        };
         assert_eq!(expect == "ok", tweak == 0, "{label}: {expect}");
         let mut line = serde_json::json!({
             "label": label,
@@ -749,19 +564,9 @@ fn archive_vectors_are_present() {
     let labels: Vec<String> = GOLDEN
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .map(|l| {
-            serde_json::from_str::<serde_json::Value>(l).unwrap()["label"]
-                .as_str()
-                .unwrap()
-                .to_string()
-        })
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["label"].as_str().unwrap().to_string())
         .collect();
-    for want in [
-        "archive",
-        "archive/restore",
-        "refuse/archive-flipped",
-        "refuse/archive-other-proposal",
-    ] {
+    for want in ["archive", "archive/restore", "refuse/archive-flipped", "refuse/archive-other-proposal"] {
         assert!(labels.iter().any(|l| l == want), "missing {want}");
     }
 }

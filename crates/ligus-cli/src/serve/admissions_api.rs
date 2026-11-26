@@ -62,11 +62,7 @@ pub struct Drafts(super::drafts::OwnedDrafts<Pending>);
 
 impl Default for Drafts {
     fn default() -> Self {
-        Self(super::drafts::OwnedDrafts::new(
-            TTL,
-            PER_CALLER,
-            MAX_PENDING,
-        ))
+        Self(super::drafts::OwnedDrafts::new(TTL, PER_CALLER, MAX_PENDING))
     }
 }
 
@@ -89,29 +85,17 @@ pub struct PrepareReq {
 }
 
 /// `POST /v1/admissions/prepare` → `{prepareId, challenge, preview}`.
-pub async fn prepare(
-    State(s): State<std::sync::Arc<Shared>>,
-    peer: Option<Extension<TunnelPeer>>,
-    Json(req): Json<PrepareReq>,
-) -> ApiResult<Json<Value>> {
+pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Json(req): Json<PrepareReq>) -> ApiResult<Json<Value>> {
     super::identity_api::require_secret_channel(&s, peer.as_deref())?;
     // Through the tunnel, only for the phone this pairing proved it holds.
     super::phone_actions_api::bound_device(&s, peer.as_deref(), req.device_id)?;
-    let request = req
-        .request
-        .filter(|r| !r.trim().is_empty())
-        .map(|r| JoinRequest::decode(&r))
-        .transpose()
-        .map_err(ApiError::bad_request)?;
+    let request = req.request.filter(|r| !r.trim().is_empty()).map(|r| JoinRequest::decode(&r)).transpose().map_err(ApiError::bad_request)?;
     let default = if request.is_some() {
         ligus_runtime::box_admission::DEFAULT_TTL_MS
     } else {
         ligus_runtime::box_admission::DEFAULT_BEARER_TTL_MS
     };
-    let ttl = req
-        .ttl_minutes
-        .map(|m| m.saturating_mul(60_000))
-        .unwrap_or(default);
+    let ttl = req.ttl_minutes.map(|m| m.saturating_mul(60_000)).unwrap_or(default);
     let (draft, invite, seed) = s
         .lock()
         .draft_phone_admission(s.ws, req.device_id, ttl, request.as_ref())
@@ -129,23 +113,8 @@ pub async fn prepare(
         "sealed": request.is_some(),
     });
     let challenge = b64url(&r.challenge);
-    let id = s
-        .admission_drafts
-        .0
-        .put(
-            &caller(),
-            Pending {
-                draft,
-                invite,
-                seed,
-                request,
-                presence: false,
-            },
-        )
-        .map_err(super::api::draft_refused)?;
-    Ok(Json(
-        json!({ "prepareId": id, "challenge": challenge, "preview": preview }),
-    ))
+    let id = s.admission_drafts.0.put(&caller(), Pending { draft, invite, seed, request, presence: false }).map_err(super::api::draft_refused)?;
+    Ok(Json(json!({ "prepareId": id, "challenge": challenge, "preview": preview })))
 }
 
 #[derive(Deserialize)]
@@ -167,17 +136,9 @@ pub struct PresenceReq {
 
 /// `POST /v1/admissions/presence` → `{preimage}` (base64url) for the phone
 /// to sign.
-pub async fn presence(
-    State(s): State<std::sync::Arc<Shared>>,
-    peer: Option<Extension<TunnelPeer>>,
-    Json(req): Json<PresenceReq>,
-) -> ApiResult<Json<Value>> {
+pub async fn presence(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Json(req): Json<PresenceReq>) -> ApiResult<Json<Value>> {
     super::identity_api::require_secret_channel(&s, peer.as_deref())?;
-    let (mut p, at) = s
-        .admission_drafts
-        .0
-        .take_aged(&caller(), &req.prepare_id)
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
+    let (mut p, at) = s.admission_drafts.0.take_aged(&caller(), &req.prepare_id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
     if p.presence {
         return Err(ApiError::new(StatusCode::CONFLICT, "already confirmed"));
     }
@@ -189,9 +150,7 @@ pub async fn presence(
     };
     let preimage = ligus_runtime::ChatService::phone_preimage(&mut p.draft, a);
     p.presence = true;
-    s.admission_drafts
-        .0
-        .put_back(&caller(), req.prepare_id, p, at);
+    s.admission_drafts.0.put_back(&caller(), req.prepare_id, p, at);
     Ok(Json(json!({ "preimage": b64url(&preimage) })))
 }
 
@@ -205,47 +164,26 @@ pub struct CommitReq {
 
 /// `POST /v1/admissions/commit` → `{committed, eventId, code, sealed,
 /// expiresInMinutes}`.
-pub async fn commit(
-    State(s): State<std::sync::Arc<Shared>>,
-    peer: Option<Extension<TunnelPeer>>,
-    Json(req): Json<CommitReq>,
-) -> ApiResult<Json<Value>> {
+pub async fn commit(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Json(req): Json<CommitReq>) -> ApiResult<Json<Value>> {
     super::identity_api::require_secret_channel(&s, peer.as_deref())?;
-    let p = s
-        .admission_drafts
-        .0
-        .take(&caller(), &req.prepare_id)
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
+    let p = s.admission_drafts.0.take(&caller(), &req.prepare_id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
     if !p.presence {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "confirm with a passkey first (admissions/presence)",
-        ));
+        return Err(ApiError::new(StatusCode::CONFLICT, "confirm with a passkey first (admissions/presence)"));
     }
     let signature = unb64(&req.signature, "signature")?;
     let expires_ms = match &p.draft.env.payload {
-        ligus_core::SessionEvent::JoinApproved {
-            admission: Some(a), ..
-        } => a.expires_ms,
+        ligus_core::SessionEvent::JoinApproved { admission: Some(a), .. } => a.expires_ms,
         _ => 0,
     };
     let issued_ms = ligus_core::admission::envelope_ms(&p.draft.env);
-    let env = s
-        .lock()
-        .append_phone_signed(p.draft, signature)
-        .map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e.to_string()))?;
+    let env = s.lock().append_phone_signed(p.draft, signature).map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e.to_string()))?;
     s.after_write();
     let code = {
         let svc = s.lock();
-        crate::serve::admission_code(&s.cfg, &svc, p.invite, &p.seed)
-            .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?
+        crate::serve::admission_code(&s.cfg, &svc, p.invite, &p.seed).map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?
     };
     let (code, sealed) = match &p.request {
-        Some(r) => (
-            r.seal(&code)
-                .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            true,
-        ),
+        Some(r) => (r.seal(&code).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?, true),
         None => (code, false),
     };
     Ok(Json(json!({

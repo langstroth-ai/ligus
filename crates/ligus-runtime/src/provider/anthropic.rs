@@ -66,12 +66,7 @@ impl From<crate::agent_turn::SpendError> for ProviderError {
 /// The token usage in an Anthropic `usage` object.
 pub fn usage_of(u: &Value) -> crate::spend::Usage {
     let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
-    crate::spend::Usage {
-        input: n("input_tokens"),
-        output: n("output_tokens"),
-        cache_write: n("cache_creation_input_tokens"),
-        cache_read: n("cache_read_input_tokens"),
-    }
+    crate::spend::Usage { input: n("input_tokens"), output: n("output_tokens"), cache_write: n("cache_creation_input_tokens"), cache_read: n("cache_read_input_tokens") }
 }
 
 /// Charges a streamed message's usage as it is reported: `message_start`
@@ -85,12 +80,8 @@ pub struct StreamSpend {
 impl StreamSpend {
     /// Fold one SSE line; `Err` = the turn's budget is used up.
     pub fn line(&mut self, model: &str, line: &str) -> Result<(), ProviderError> {
-        let Some(data) = line.strip_prefix("data:").map(str::trim) else {
-            return Ok(());
-        };
-        let Ok(v) = serde_json::from_str::<Value>(data) else {
-            return Ok(());
-        };
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else { return Ok(()) };
+        let Ok(v) = serde_json::from_str::<Value>(data) else { return Ok(()) };
         let usage = match v.get("type").and_then(Value::as_str) {
             Some("message_start") => v.get("message").and_then(|m| m.get("usage")),
             Some("message_delta") => v.get("usage"),
@@ -175,7 +166,10 @@ fn image_attachments(text: &str) -> Vec<(String, &'static str)> {
 /// references readable image attachments, in which case a content-block array
 /// with the images inlined as base64 (vision). `read` loads file bytes
 /// (injected for tests).
-pub fn content_value_with(text: &str, read: impl Fn(&str) -> Option<Vec<u8>>) -> serde_json::Value {
+pub fn content_value_with(
+    text: &str,
+    read: impl Fn(&str) -> Option<Vec<u8>>,
+) -> serde_json::Value {
     use base64::Engine;
     let images = image_attachments(text);
     if images.is_empty() {
@@ -217,10 +211,7 @@ pub struct AnthropicClient {
     http: reqwest::Client,
     endpoint: String,
     /// An operator-listed model gateway: its credential replaces the key.
-    gateway: Option<(
-        std::sync::Arc<crate::model_gateway::Gateway>,
-        Option<crate::model_gateway::Attribution>,
-    )>,
+    gateway: Option<(std::sync::Arc<crate::model_gateway::Gateway>, Option<crate::model_gateway::Attribution>)>,
 }
 
 impl Default for AnthropicClient {
@@ -240,12 +231,7 @@ impl AnthropicClient {
 
     /// Send through model gateway `gw` (its TLS client `http`, its
     /// endpoint): the gateway's credential is sent, never a key.
-    pub fn with_gateway(
-        mut self,
-        gw: std::sync::Arc<crate::model_gateway::Gateway>,
-        attribution: Option<crate::model_gateway::Attribution>,
-        http: reqwest::Client,
-    ) -> Self {
+    pub fn with_gateway(mut self, gw: std::sync::Arc<crate::model_gateway::Gateway>, attribution: Option<crate::model_gateway::Attribution>, http: reqwest::Client) -> Self {
         self.endpoint = gw.chat_endpoint();
         self.http = http;
         self.gateway = Some((gw, attribution));
@@ -299,11 +285,7 @@ impl AnthropicClient {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(ProviderError::Api {
-                provider: "anthropic",
-                status,
-                body,
-            });
+            return Err(ProviderError::Api { provider: "anthropic", status, body });
         }
 
         let mut assembled = String::new();
@@ -397,11 +379,7 @@ impl AnthropicClient {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(ProviderError::Api {
-                provider: "anthropic",
-                status,
-                body,
-            });
+            return Err(ProviderError::Api { provider: "anthropic", status, body });
         }
         let value: Value = resp.json().await.map_err(ProviderError::Http)?;
         if let Some(u) = value.get("usage") {
@@ -510,31 +488,15 @@ mod tests {
         // $2 more: past a $3 budget at the message_delta.
         let meter = SpendMeter::new(Some(3.0));
         let mut seen = String::new();
-        let scope = AgentTurnScope {
-            spend: Some(meter.clone()),
-            ..Default::default()
-        };
-        let r = with_agent_turn(
-            scope,
-            client.stream_reply("k", "claude-opus-5-5", None, &turns, 64, |d| {
-                seen.push_str(&d)
-            }),
-        )
-        .await;
+        let scope = AgentTurnScope { spend: Some(meter.clone()), ..Default::default() };
+        let r = with_agent_turn(scope, client.stream_reply("k", "claude-opus-5-5", None, &turns, 64, |d| seen.push_str(&d))).await;
         assert!(matches!(r, Err(ProviderError::Budget(_))), "{r:?}");
         assert_eq!(seen, "hello", "the stream stopped at the budget");
         assert!((meter.total() - 4.0).abs() < 1e-6, "{}", meter.total());
         // Under budget it streams to the end.
         let meter = SpendMeter::new(Some(10.0));
-        let scope = AgentTurnScope {
-            spend: Some(meter.clone()),
-            ..Default::default()
-        };
-        let r = with_agent_turn(
-            scope,
-            client.stream_reply("k", "claude-opus-5-5", None, &turns, 64, |_| {}),
-        )
-        .await;
+        let scope = AgentTurnScope { spend: Some(meter.clone()), ..Default::default() };
+        let r = with_agent_turn(scope, client.stream_reply("k", "claude-opus-5-5", None, &turns, 64, |_| {})).await;
         assert_eq!(r.unwrap(), "hello more");
     }
 
@@ -570,7 +532,8 @@ mod tests {
     #[test]
     fn non_image_attachment_does_not_inline() {
         // A .txt attachment is left for the agent to read by path, not inlined.
-        assert!(content_value_with("see [Attached: /tmp/a.txt]", |_| Some(vec![9])).is_string());
+        assert!(content_value_with("see [Attached: /tmp/a.txt]", |_| Some(vec![9]))
+            .is_string());
     }
 
     #[test]
@@ -587,9 +550,10 @@ mod tests {
         assert!(extract_text_delta("event: message_start").is_none());
         assert!(extract_text_delta("").is_none());
         assert!(extract_text_delta("data: [DONE]").is_none());
-        assert!(
-            extract_text_delta(r#"data: {"type":"message_start","message":{"id":"x"}}"#).is_none()
-        );
+        assert!(extract_text_delta(
+            r#"data: {"type":"message_start","message":{"id":"x"}}"#
+        )
+        .is_none());
         assert!(extract_text_delta(
             r#"data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}"#
         )

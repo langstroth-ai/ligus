@@ -64,16 +64,7 @@ pub enum FounderTrust {
 pub fn known_fingerprints(co_members: &[CoMember]) -> BTreeMap<Uuid, Option<String>> {
     co_members
         .iter()
-        .map(|c| {
-            (
-                c.account_id,
-                if c.key_conflict {
-                    None
-                } else {
-                    c.fingerprint.clone()
-                },
-            )
-        })
+        .map(|c| (c.account_id, if c.key_conflict { None } else { c.fingerprint.clone() }))
         .collect()
 }
 
@@ -87,8 +78,7 @@ pub fn check_founder(
     known: &BTreeMap<Uuid, Option<String>>,
     signed_by: Option<Uuid>,
 ) -> FounderTrust {
-    let (Some(founder), Some(fk)) = (founder.and_then(|f| Uuid::parse_str(f.trim()).ok()), fk)
-    else {
+    let (Some(founder), Some(fk)) = (founder.and_then(|f| Uuid::parse_str(f.trim()).ok()), fk) else {
         return FounderTrust::NoFingerprint;
     };
     let fk = fk.trim().to_ascii_lowercase();
@@ -135,29 +125,22 @@ pub fn accept_dm_invite(
     if to != Some(me) {
         return Err("this direct message invite is addressed to someone else".into());
     }
-    let peer = founder
-        .and_then(|f| Uuid::parse_str(f.trim()).ok())
-        .ok_or("the invite doesn't say who sent it")?;
+    let peer = founder.and_then(|f| Uuid::parse_str(f.trim()).ok()).ok_or("the invite doesn't say who sent it")?;
     if peer == me {
         return Err("that's your own invite".into());
     }
     let trust = check_founder(founder, fk, known, signed_by);
     if signed_by != Some(peer) && matches!(trust, FounderTrust::Claimed | FounderTrust::Unknown) {
-        return Err(
-            "the invite isn't signed by the sender's device, so nothing shows who sent it".into(),
-        );
+        return Err("the invite isn't signed by the sender's device, so nothing shows who sent it".into());
     }
     match trust {
         FounderTrust::KnownMatch => Ok(peer),
         FounderTrust::Claimed => Err("the invite isn't signed by the sender's device".into()),
         FounderTrust::Unknown if safety_code_confirmed => Ok(peer),
-        FounderTrust::Unknown => {
-            Err("unknown sender: compare their safety code before accepting".into())
+        FounderTrust::Unknown => Err("unknown sender: compare their safety code before accepting".into()),
+        FounderTrust::Mismatch => {
+            Err("the invite's key doesn't match the one your shared workspaces have for that person".into())
         }
-        FounderTrust::Mismatch => Err(
-            "the invite's key doesn't match the one your shared workspaces have for that person"
-                .into(),
-        ),
         FounderTrust::NoFingerprint => Err("the invite carries no safety code".into()),
     }
 }
@@ -224,11 +207,7 @@ mod tests {
         let hex = &a[DM_ROOM_PREFIX.len()..];
         assert_eq!(hex.len(), 32);
         let id = Uuid::parse_str(hex).unwrap();
-        assert_eq!(
-            id.get_version_num(),
-            4,
-            "a v4 (random) id, not a v5 derivation"
-        );
+        assert_eq!(id.get_version_num(), 4, "a v4 (random) id, not a v5 derivation");
         // Not the 1.x derivation over the same pair, for any pair.
         let legacy = Uuid::new_v5(&crate::frozen_ns::DM_NS, b"1001\x002002");
         assert_ne!(hex, legacy.simple().to_string());
@@ -248,38 +227,20 @@ mod tests {
     /// D12: both sides converge on the same DM whatever order they list them.
     #[test]
     fn simultaneous_dm_converges() {
-        let a = DmCandidate {
-            room: new_room(),
-            created_at: Some(ts(1_800_000_000)),
-        };
-        let b = DmCandidate {
-            room: new_room(),
-            created_at: Some(ts(1_800_000_001)),
-        };
+        let a = DmCandidate { room: new_room(), created_at: Some(ts(1_800_000_000)) };
+        let b = DmCandidate { room: new_room(), created_at: Some(ts(1_800_000_001)) };
         let mine = resolve_concurrent(&[a.clone(), b.clone()]).unwrap();
         let theirs = resolve_concurrent(&[b.clone(), a.clone()]).unwrap();
         assert_eq!(mine, theirs);
         assert_eq!(mine.keep, a.room, "the older one is kept");
         assert_eq!(mine.archive, vec![b.room.clone()]);
         // Same second: the smaller room wins, on both sides.
-        let c = DmCandidate {
-            room: "dm-0000".into(),
-            created_at: Some(ts(5)),
-        };
-        let d = DmCandidate {
-            room: "dm-ffff".into(),
-            created_at: Some(ts(5)),
-        };
-        assert_eq!(
-            resolve_concurrent(&[d.clone(), c.clone()]).unwrap().keep,
-            "dm-0000"
-        );
+        let c = DmCandidate { room: "dm-0000".into(), created_at: Some(ts(5)) };
+        let d = DmCandidate { room: "dm-ffff".into(), created_at: Some(ts(5)) };
+        assert_eq!(resolve_concurrent(&[d.clone(), c.clone()]).unwrap().keep, "dm-0000");
         assert_eq!(resolve_concurrent(&[c, d]).unwrap().keep, "dm-0000");
         // Not yet synced: no decision.
-        let e = DmCandidate {
-            room: new_room(),
-            created_at: None,
-        };
+        let e = DmCandidate { room: new_room(), created_at: None };
         assert_eq!(resolve_concurrent(&[a.clone(), e]), None);
         assert_eq!(resolve_concurrent(&[a]), None);
     }
@@ -293,117 +254,29 @@ mod tests {
         let mut known = BTreeMap::new();
         known.insert(peer, Some(fk.to_string()));
         let (me_s, peer_s) = (me.to_string(), peer.to_string());
-        assert_eq!(
-            accept_dm_invite(
-                Some(&me_s),
-                Some(&peer_s),
-                Some(fk),
-                me,
-                &known,
-                Some(peer),
-                false,
-                false
-            ),
-            Ok(peer)
-        );
+        assert_eq!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, Some(peer), false, false), Ok(peer));
         // Addressed to someone else (a replayed invite).
-        assert!(accept_dm_invite(
-            Some(&Uuid::new_v4().to_string()),
-            Some(&peer_s),
-            Some(fk),
-            me,
-            &known,
-            Some(peer),
-            true,
-            false
-        )
-        .is_err());
+        assert!(accept_dm_invite(Some(&Uuid::new_v4().to_string()), Some(&peer_s), Some(fk), me, &known, Some(peer), true, false).is_err());
         // The co-member's name with another key: refused even when "confirmed".
-        assert!(accept_dm_invite(
-            Some(&me_s),
-            Some(&peer_s),
-            Some(other),
-            me,
-            &known,
-            Some(peer),
-            true,
-            false
-        )
-        .is_err());
+        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(other), me, &known, Some(peer), true, false).is_err());
         // No fingerprint at all.
-        assert!(accept_dm_invite(
-            Some(&me_s),
-            Some(&peer_s),
-            None,
-            me,
-            &known,
-            Some(peer),
-            true,
-            false
-        )
-        .is_err());
+        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), None, me, &known, Some(peer), true, false).is_err());
         // A stranger: only after the safety code was compared.
         let stranger_id = Uuid::new_v4();
         let stranger = stranger_id.to_string();
         let signed = Some(stranger_id);
-        assert!(accept_dm_invite(
-            Some(&me_s),
-            Some(&stranger),
-            Some(fk),
-            me,
-            &known,
-            signed,
-            false,
-            false
-        )
-        .is_err());
-        assert!(accept_dm_invite(
-            Some(&me_s),
-            Some(&stranger),
-            Some(fk),
-            me,
-            &known,
-            signed,
-            true,
-            false
-        )
-        .is_ok());
+        assert!(accept_dm_invite(Some(&me_s), Some(&stranger), Some(fk), me, &known, signed, false, false).is_err());
+        assert!(accept_dm_invite(Some(&me_s), Some(&stranger), Some(fk), me, &known, signed, true, false).is_ok());
         // Unsigned: refused even after a safety-code comparison (the code is
         // public; only the signature shows the invite came from its holder).
-        assert!(accept_dm_invite(
-            Some(&me_s),
-            Some(&stranger),
-            Some(fk),
-            me,
-            &known,
-            None,
-            true,
-            false
-        )
-        .is_err());
+        assert!(accept_dm_invite(Some(&me_s), Some(&stranger), Some(fk), me, &known, None, true, false).is_err());
         // A co-member's invite without their device's signature.
-        assert!(accept_dm_invite(
-            Some(&me_s),
-            Some(&peer_s),
-            Some(fk),
-            me,
-            &known,
-            None,
-            true,
-            false
-        )
-        .is_err());
+        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, None, true, false).is_err());
         // A co-member whose key the logs dispute is a mismatch.
         known.insert(peer, None);
-        assert_eq!(
-            check_founder(Some(&peer_s), Some(fk), &known, Some(peer)),
-            FounderTrust::Mismatch
-        );
+        assert_eq!(check_founder(Some(&peer_s), Some(fk), &known, Some(peer)), FounderTrust::Mismatch);
         // A legacy `github:<id>` founder is no account id.
-        assert_eq!(
-            check_founder(Some("github:42"), Some(fk), &known, None),
-            FounderTrust::NoFingerprint
-        );
+        assert_eq!(check_founder(Some("github:42"), Some(fk), &known, None), FounderTrust::NoFingerprint);
     }
 
     /// D12 over time: Alice first sees DM A as the older one and archives B;
@@ -411,30 +284,14 @@ mod tests {
     /// exactly one live DM (B), not two archived ones.
     #[test]
     fn d12_archive_set_is_recomputed_not_accumulated() {
-        let a = DmCandidate {
-            room: "dm-a".into(),
-            created_at: Some(ts(100)),
-        };
-        let b = DmCandidate {
-            room: "dm-b".into(),
-            created_at: Some(ts(101)),
-        };
+        let a = DmCandidate { room: "dm-a".into(), created_at: Some(ts(100)) };
+        let b = DmCandidate { room: "dm-b".into(), created_at: Some(ts(101)) };
         let mut archived = Vec::new();
-        apply_resolution(
-            &mut archived,
-            &resolve_concurrent(&[a.clone(), b.clone()]).unwrap(),
-        );
+        apply_resolution(&mut archived, &resolve_concurrent(&[a.clone(), b.clone()]).unwrap());
         assert_eq!(archived, vec!["dm-b".to_string()]);
-        let b_older = DmCandidate {
-            created_at: Some(ts(50)),
-            ..b
-        };
+        let b_older = DmCandidate { created_at: Some(ts(50)), ..b };
         apply_resolution(&mut archived, &resolve_concurrent(&[a, b_older]).unwrap());
-        assert_eq!(
-            archived,
-            vec!["dm-a".to_string()],
-            "exactly one of the two stays live"
-        );
+        assert_eq!(archived, vec!["dm-a".to_string()], "exactly one of the two stays live");
     }
 
     /// A DM invite reusing a room this device already holds (say a team
@@ -447,30 +304,8 @@ mod tests {
         let fk = "00112233445566778899aabbccddeeff";
         let known = BTreeMap::from([(peer, Some(fk.to_string()))]);
         let (me_s, peer_s) = (me.to_string(), peer.to_string());
-        assert!(accept_dm_invite(
-            Some(&me_s),
-            Some(&peer_s),
-            Some(fk),
-            me,
-            &known,
-            Some(peer),
-            true,
-            true
-        )
-        .is_err());
-        assert_eq!(
-            accept_dm_invite(
-                Some(&me_s),
-                Some(&peer_s),
-                Some(fk),
-                me,
-                &known,
-                Some(peer),
-                false,
-                false
-            ),
-            Ok(peer)
-        );
+        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, Some(peer), true, true).is_err());
+        assert_eq!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, Some(peer), false, false), Ok(peer));
     }
 
     /// R1: an invite (from the drop box or pasted) that names a co-member as
@@ -482,27 +317,12 @@ mod tests {
         let fk = "00112233445566778899aabbccddeeff";
         let known = BTreeMap::from([(peer, Some(fk.to_string()))]);
         let trust = check_founder(Some(&peer.to_string()), Some(fk), &known, None);
-        assert_ne!(
-            trust,
-            FounderTrust::KnownMatch,
-            "an unsigned claim is not proof of the sender"
-        );
+        assert_ne!(trust, FounderTrust::KnownMatch, "an unsigned claim is not proof of the sender");
         assert_eq!(trust, FounderTrust::Claimed);
         // Signed by someone else's device (a valid signature of another
         // account, relabelled): still only a claim.
-        assert_eq!(
-            check_founder(
-                Some(&peer.to_string()),
-                Some(fk),
-                &known,
-                Some(Uuid::new_v4())
-            ),
-            FounderTrust::Claimed
-        );
-        assert_eq!(
-            check_founder(Some(&peer.to_string()), Some(fk), &known, Some(peer)),
-            FounderTrust::KnownMatch
-        );
+        assert_eq!(check_founder(Some(&peer.to_string()), Some(fk), &known, Some(Uuid::new_v4())), FounderTrust::Claimed);
+        assert_eq!(check_founder(Some(&peer.to_string()), Some(fk), &known, Some(peer)), FounderTrust::KnownMatch);
     }
 
     /// The display-name cleaner (S3) and the identity-link handle check (L5)

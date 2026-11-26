@@ -40,27 +40,19 @@ mod tests;
 
 pub use address::{AddressError, ApprovalAddress, ADDRESS_PREFIX};
 pub use approver::{
-    claim_view, end_request, list_live, Approvability, ApproverClassifier, ApproverError,
-    ApproverIdentity, ApproverSession, ClaimView, EpochKey, Listing, LiveRequest, SeenClaim,
-    SeenSet, ACK_WINDOW_MS, REVEAL_WAIT_MS, SEEN_FILE, SEEN_TTL_MS,
+    claim_view, end_request, list_live, ApproverError, ApproverIdentity, ApproverSession, Approvability, ApproverClassifier, ClaimView, EpochKey,
+    LiveRequest, Listing, SeenClaim, SeenSet, ACK_WINDOW_MS, REVEAL_WAIT_MS, SEEN_FILE, SEEN_TTL_MS,
 };
-pub use client::{
-    current_address, ListedRequest, MailboxAuth, MailboxClient, MailboxError, MailboxMsg, PutAck,
-    MAX_MSG_BLOB, MAX_REQUEST_BLOB, MAX_WAIT_SECS,
-};
+pub use client::{current_address, ListedRequest, MailboxAuth, MailboxClient, MailboxError, MailboxMsg, PutAck, MAX_MSG_BLOB, MAX_REQUEST_BLOB, MAX_WAIT_SECS};
 pub use envelope::{
-    hint, open_blob, seal_blob, AbortBody, AbortReason, AckBody, ApproverPerson, ClaimBody,
-    MsgError, MsgType, OfferBody, OpenBody, Outcome, RequestBody, RequestSubject, ResultBody,
-    RevealBody, Signer, Verified, VerifiedOpen, VerifiedRequest, CLOCK_SKEW_MS, MAX_HINT_CHARS,
-};
-pub use log_check::{
-    retry_log_check, LogApproval, LogApprovalCheck, LogSubject, LogVerdict, LOG_CHECK_RETRY_MS,
+    hint, open_blob, seal_blob, AbortBody, AckBody, OfferBody, AbortReason, ApproverPerson, ClaimBody, MsgError, MsgType, OpenBody, Outcome, RequestBody, RequestSubject,
+    ResultBody, RevealBody, Signer, Verified, VerifiedOpen, VerifiedRequest, CLOCK_SKEW_MS, MAX_HINT_CHARS,
 };
 pub use notices::{Notice, NoticeKind, Notices, NOTICES_FILE, NOTICE_TTL_MS};
+pub use log_check::{retry_log_check, LogApproval, LogApprovalCheck, LogSubject, LogVerdict, LOG_CHECK_RETRY_MS};
 pub use requester::{
-    CheckedGrant, ClaimedApprover, DeadLog, GrantError, GrantTarget, PendingEntry, PendingStore,
-    RequestSpec, Requester, RequesterError, RequesterEvent, DEAD_FILE, DEAD_LIMIT, DEAD_WINDOW_MS,
-    PENDING_FILE,
+    CheckedGrant, ClaimedApprover, DeadLog, GrantError, GrantTarget, PendingEntry, PendingStore, Requester, RequesterError, RequesterEvent,
+    RequestSpec, DEAD_FILE, DEAD_LIMIT, DEAD_WINDOW_MS, PENDING_FILE,
 };
 
 /// A code both screens show, with when it stops being valid.
@@ -81,13 +73,7 @@ pub struct MatchCode {
 impl MatchCode {
     pub(crate) fn new(code40: u64, expires_at: i64) -> Self {
         use ligus_core::match_code as mc;
-        Self {
-            code40,
-            shown: mc::encode(code40),
-            compact: mc::encode_compact(code40),
-            spelled: mc::spell(code40),
-            expires_at,
-        }
+        Self { code40, shown: mc::encode(code40), compact: mc::encode_compact(code40), spelled: mc::spell(code40), expires_at }
     }
 
     /// Whether the code has expired at `now_ms`.
@@ -108,10 +94,7 @@ pub type Clock = std::sync::Arc<dyn Fn() -> i64 + Send + Sync>;
 /// The system clock.
 pub fn system_clock() -> Clock {
     std::sync::Arc::new(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0)
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
     })
 }
 

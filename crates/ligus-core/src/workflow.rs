@@ -55,11 +55,7 @@ pub struct WorkflowNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    tag = "kind"
-)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
 pub enum WorkflowNodeKind {
     /// One assistant turn. `agent_id: None` runs the session's primary
     /// runtime, so definitions work before any named agents exist.
@@ -80,11 +76,7 @@ pub enum WorkflowNodeKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    tag = "policy"
-)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "policy")]
 pub enum GateRejectPolicy {
     /// Rejection halts the run.
     #[default]
@@ -221,11 +213,7 @@ pub fn new_run(
         definition: definition.clone(),
         input: input.into(),
         status: WorkflowRunStatus::Running,
-        nodes: definition
-            .nodes
-            .iter()
-            .map(|n| NodeRunState::fresh(&n.id))
-            .collect(),
+        nodes: definition.nodes.iter().map(|n| NodeRunState::fresh(&n.id)).collect(),
         initiator_actor_id: initiator_actor_id.into(),
         started_at: Timestamp::now(),
         updated_at: Timestamp::now(),
@@ -247,10 +235,7 @@ pub fn validate(def: &WorkflowDefinition) -> Result<(), String> {
     let mut ids = HashSet::new();
     for node in &def.nodes {
         if node.id.is_empty()
-            || !node
-                .id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            || !node.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
             return Err(format!(
                 "stage id {:?} must be a non-empty slug (letters, digits, '-', '_')",
@@ -268,10 +253,7 @@ pub fn validate(def: &WorkflowDefinition) -> Result<(), String> {
                 return Err(format!("stage {:?} depends on itself", node.id));
             }
             if !ids.contains(dep.as_str()) {
-                return Err(format!(
-                    "stage {:?} depends on unknown stage {:?}",
-                    node.id, dep
-                ));
+                return Err(format!("stage {:?} depends on unknown stage {:?}", node.id, dep));
             }
         }
     }
@@ -308,9 +290,7 @@ pub fn validate(def: &WorkflowDefinition) -> Result<(), String> {
             Ok(())
         };
         match &node.kind {
-            WorkflowNodeKind::Agent {
-                prompt_template, ..
-            } => check_refs(prompt_template)?,
+            WorkflowNodeKind::Agent { prompt_template, .. } => check_refs(prompt_template)?,
             WorkflowNodeKind::Gate {
                 title_template,
                 body_template,
@@ -320,10 +300,7 @@ pub fn validate(def: &WorkflowDefinition) -> Result<(), String> {
                 check_refs(title_template)?;
                 check_refs(body_template)?;
                 if *required_approvals == 0 {
-                    return Err(format!(
-                        "gate {:?} needs at least one required approval",
-                        node.id
-                    ));
+                    return Err(format!("gate {:?} needs at least one required approval", node.id));
                 }
                 if let GateRejectPolicy::RouteTo { node: target } = on_reject {
                     if !ids.contains(target.as_str()) {
@@ -477,10 +454,9 @@ pub fn propagate_skips(run: &mut WorkflowRun) {
 /// halting once the gate has been rejected [`MAX_NODE_ATTEMPTS`] times.
 pub fn apply_gate_outcome(run: &mut WorkflowRun, node_id: &str, approved: bool) {
     let policy = match run.definition.nodes.iter().find(|n| n.id == node_id) {
-        Some(WorkflowNode {
-            kind: WorkflowNodeKind::Gate { on_reject, .. },
-            ..
-        }) => on_reject.clone(),
+        Some(WorkflowNode { kind: WorkflowNodeKind::Gate { on_reject, .. }, .. }) => {
+            on_reject.clone()
+        }
         _ => return,
     };
 
@@ -594,10 +570,7 @@ pub fn upsert_definition(defs: &mut Vec<WorkflowDefinition>, def: WorkflowDefini
 /// order where the graph allows it, else as stored.
 fn reading_order(def: &WorkflowDefinition) -> Vec<&WorkflowNode> {
     match topo_order(def) {
-        Some(ids) => ids
-            .iter()
-            .filter_map(|id| def.nodes.iter().find(|n| n.id == *id))
-            .collect(),
+        Some(ids) => ids.iter().filter_map(|id| def.nodes.iter().find(|n| n.id == *id)).collect(),
         None => def.nodes.iter().collect(),
     }
 }
@@ -605,10 +578,7 @@ fn reading_order(def: &WorkflowDefinition) -> Vec<&WorkflowNode> {
 /// A plain-text rendering of a definition: what a reviewer reads in a
 /// workflow proposal (and what older peers and the phone show as its body).
 /// `agent_name` resolves a stage's agent id to its roster name.
-pub fn describe_definition(
-    def: &WorkflowDefinition,
-    agent_name: &dyn Fn(Uuid) -> Option<String>,
-) -> String {
+pub fn describe_definition(def: &WorkflowDefinition, agent_name: &dyn Fn(Uuid) -> Option<String>) -> String {
     let mut out = String::new();
     if !def.description.trim().is_empty() {
         out.push_str(def.description.trim());
@@ -624,34 +594,21 @@ pub fn describe_definition(
             format!(" (after {})", node.depends_on.join(", "))
         };
         match &node.kind {
-            WorkflowNodeKind::Agent {
-                agent_id,
-                prompt_template,
-            } => {
+            WorkflowNodeKind::Agent { agent_id, prompt_template } => {
                 let who = match agent_id {
                     None => "primary runtime".to_string(),
                     Some(id) => agent_name(*id)
                         .map(|n| format!("@{n}"))
                         .unwrap_or_else(|| "an agent not in this chat".into()),
                 };
-                out.push_str(&format!(
-                    "{}. {} [{}], {who}{after}\n",
-                    i + 1,
-                    node.name,
-                    node.id
-                ));
+                out.push_str(&format!("{}. {} [{}], {who}{after}\n", i + 1, node.name, node.id));
                 for line in prompt_template.lines() {
                     out.push_str("   > ");
                     out.push_str(line);
                     out.push('\n');
                 }
             }
-            WorkflowNodeKind::Gate {
-                title_template,
-                required_approvals,
-                on_reject,
-                ..
-            } => {
+            WorkflowNodeKind::Gate { title_template, required_approvals, on_reject, .. } => {
                 let reject = match on_reject {
                     GateRejectPolicy::Halt => "reject halts the run".to_string(),
                     GateRejectPolicy::RouteTo { node } => format!("reject retries from {node}"),
@@ -673,10 +630,7 @@ pub fn describe_definition(
 /// A definition as the `[[workflow: …]]` JSON an agent authors (agents by
 /// roster name), with `revises` set to its id: what "ask an agent to change
 /// this" hands the agent to edit.
-pub fn directive_json(
-    def: &WorkflowDefinition,
-    agent_name: &dyn Fn(Uuid) -> Option<String>,
-) -> serde_json::Value {
+pub fn directive_json(def: &WorkflowDefinition, agent_name: &dyn Fn(Uuid) -> Option<String>) -> serde_json::Value {
     use serde_json::{json, Map, Value};
     let stages: Vec<Value> = def
         .nodes
@@ -686,22 +640,14 @@ pub fn directive_json(
             s.insert("id".into(), json!(n.id));
             s.insert("name".into(), json!(n.name));
             match &n.kind {
-                WorkflowNodeKind::Agent {
-                    agent_id,
-                    prompt_template,
-                } => {
+                WorkflowNodeKind::Agent { agent_id, prompt_template } => {
                     s.insert("kind".into(), json!("agent"));
                     if let Some(name) = agent_id.and_then(agent_name) {
                         s.insert("agent".into(), json!(name));
                     }
                     s.insert("prompt".into(), json!(prompt_template));
                 }
-                WorkflowNodeKind::Gate {
-                    title_template,
-                    body_template,
-                    required_approvals,
-                    on_reject,
-                } => {
+                WorkflowNodeKind::Gate { title_template, body_template, required_approvals, on_reject } => {
                     s.insert("kind".into(), json!("gate"));
                     s.insert("title".into(), json!(title_template));
                     if !body_template.is_empty() {
@@ -790,9 +736,7 @@ pub fn preset_review_gate() -> WorkflowDefinition {
                                     {{nodes.critique.output}}"
                         .into(),
                     required_approvals: 1,
-                    on_reject: GateRejectPolicy::RouteTo {
-                        node: "implement".into(),
-                    },
+                    on_reject: GateRejectPolicy::RouteTo { node: "implement".into() },
                 },
             },
         ],
@@ -859,10 +803,7 @@ mod tests {
             id: id.into(),
             name: id.into(),
             depends_on: deps.iter().map(|s| s.to_string()).collect(),
-            kind: WorkflowNodeKind::Agent {
-                agent_id: None,
-                prompt_template: template.into(),
-            },
+            kind: WorkflowNodeKind::Agent { agent_id: None, prompt_template: template.into() },
             x: None,
             y: None,
         }
@@ -949,20 +890,14 @@ mod tests {
         let d = def(vec![agent("a", &[], "{{nodes.ghost.output}}")]);
         assert!(validate(&d).unwrap_err().contains("unknown stage"));
         // Referencing a node that exists but isn't upstream is also an error.
-        let d = def(vec![
-            agent("a", &[], "x"),
-            agent("b", &[], "{{nodes.a.output}}"),
-        ]);
+        let d = def(vec![agent("a", &[], "x"), agent("b", &[], "{{nodes.a.output}}")]);
         assert!(validate(&d).unwrap_err().contains("depend"));
     }
 
     #[test]
     fn validate_gate_rules() {
         let mut g = gate("g", &["a"], GateRejectPolicy::Halt);
-        if let WorkflowNodeKind::Gate {
-            required_approvals, ..
-        } = &mut g.kind
-        {
+        if let WorkflowNodeKind::Gate { required_approvals, .. } = &mut g.kind {
             *required_approvals = 0;
         }
         let d = def(vec![agent("a", &[], "x"), g]);
@@ -985,11 +920,7 @@ mod tests {
 
     #[test]
     fn ready_nodes_walks_a_chain_one_at_a_time() {
-        let d = def(vec![
-            agent("a", &[], "x"),
-            agent("b", &["a"], "y"),
-            agent("c", &["b"], "z"),
-        ]);
+        let d = def(vec![agent("a", &[], "x"), agent("b", &["a"], "y"), agent("c", &["b"], "z")]);
         let mut run = new_run(&d, "in", "actor");
         let ready: Vec<_> = ready_nodes(&run).iter().map(|n| n.id.clone()).collect();
         assert_eq!(ready, vec!["a"]);
@@ -1014,11 +945,7 @@ mod tests {
 
     #[test]
     fn skips_cascade_transitively_and_fail_beats_halt_in_status() {
-        let d = def(vec![
-            agent("a", &[], "x"),
-            agent("b", &["a"], "y"),
-            agent("c", &["b"], "z"),
-        ]);
+        let d = def(vec![agent("a", &[], "x"), agent("b", &["a"], "y"), agent("c", &["b"], "z")]);
         let mut run = new_run(&d, "in", "actor");
         set_status(&mut run, "a", NodeRunStatus::Failed);
         propagate_skips(&mut run);
@@ -1062,10 +989,7 @@ mod tests {
 
     #[test]
     fn rejected_halt_gate_halts_the_run() {
-        let d = def(vec![
-            agent("a", &[], "x"),
-            gate("g", &["a"], GateRejectPolicy::Halt),
-        ]);
+        let d = def(vec![agent("a", &[], "x"), gate("g", &["a"], GateRejectPolicy::Halt)]);
         let mut run = new_run(&d, "in", "actor");
         set_status(&mut run, "a", NodeRunStatus::Succeeded);
         set_status(&mut run, "g", NodeRunStatus::AwaitingApproval);
@@ -1086,19 +1010,10 @@ mod tests {
 
         // Rejection 1: implement + critique + the gate reset to Pending.
         apply_gate_outcome(&mut run, "approval", false);
-        assert_eq!(
-            run.node_state("implement").unwrap().status,
-            NodeRunStatus::Pending
-        );
+        assert_eq!(run.node_state("implement").unwrap().status, NodeRunStatus::Pending);
         assert_eq!(run.node_state("implement").unwrap().message_id, None);
-        assert_eq!(
-            run.node_state("critique").unwrap().status,
-            NodeRunStatus::Pending
-        );
-        assert_eq!(
-            run.node_state("approval").unwrap().status,
-            NodeRunStatus::Pending
-        );
+        assert_eq!(run.node_state("critique").unwrap().status, NodeRunStatus::Pending);
+        assert_eq!(run.node_state("approval").unwrap().status, NodeRunStatus::Pending);
         assert_eq!(run.node_state("approval").unwrap().attempts, 1);
         let ready: Vec<_> = ready_nodes(&run).iter().map(|n| n.id.clone()).collect();
         assert_eq!(ready, vec!["implement"]);
@@ -1109,19 +1024,13 @@ mod tests {
         set_status(&mut run, "approval", NodeRunStatus::AwaitingApproval);
         apply_gate_outcome(&mut run, "approval", false);
         assert_eq!(run.node_state("approval").unwrap().attempts, 2);
-        assert_eq!(
-            run.node_state("approval").unwrap().status,
-            NodeRunStatus::Pending
-        );
+        assert_eq!(run.node_state("approval").unwrap().status, NodeRunStatus::Pending);
 
         set_status(&mut run, "implement", NodeRunStatus::Succeeded);
         set_status(&mut run, "critique", NodeRunStatus::Succeeded);
         set_status(&mut run, "approval", NodeRunStatus::AwaitingApproval);
         apply_gate_outcome(&mut run, "approval", false);
-        assert_eq!(
-            run.node_state("approval").unwrap().status,
-            NodeRunStatus::Rejected
-        );
+        assert_eq!(run.node_state("approval").unwrap().status, NodeRunStatus::Rejected);
         propagate_skips(&mut run);
         assert_eq!(derive_run_status(&run), WorkflowRunStatus::Halted);
     }
@@ -1137,10 +1046,7 @@ mod tests {
             "do it",
             &outputs,
         );
-        assert_eq!(
-            rendered,
-            "Task: do it\nPrev: ALPHA\nMissing: [no output from b]"
-        );
+        assert_eq!(rendered, "Task: do it\nPrev: ALPHA\nMissing: [no output from b]");
     }
 
     #[test]
@@ -1189,11 +1095,7 @@ mod tests {
     fn describe_definition_reads_in_dependency_order() {
         let agent_id = Uuid::new_v4();
         let mut d = def(vec![
-            gate(
-                "ok",
-                &["fix"],
-                GateRejectPolicy::RouteTo { node: "fix".into() },
-            ),
+            gate("ok", &["fix"], GateRejectPolicy::RouteTo { node: "fix".into() }),
             agent("fix", &["scan"], "Fix {{nodes.scan.output}}"),
             agent("scan", &[], "Scan {{input}}"),
         ]);
@@ -1217,12 +1119,7 @@ mod tests {
         let v = directive_json(&d, &|_| None);
         assert_eq!(v["revises"], d.id.to_string());
         assert_eq!(v["stages"].as_array().unwrap().len(), d.nodes.len());
-        let gate = v["stages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|s| s["kind"] == "gate")
-            .unwrap();
+        let gate = v["stages"].as_array().unwrap().iter().find(|s| s["kind"] == "gate").unwrap();
         assert_eq!(gate["onReject"]["retryFrom"], "implement");
     }
 
@@ -1230,14 +1127,10 @@ mod tests {
     fn disabled_defaults_off_and_is_omitted_when_off() {
         let d = preset_review_gate();
         let json = serde_json::to_string(&d).unwrap();
-        assert!(
-            !json.contains("disabled"),
-            "an older peer sees the same shape"
-        );
+        assert!(!json.contains("disabled"), "an older peer sees the same shape");
         let mut paused = d.clone();
         paused.disabled = true;
-        let back: WorkflowDefinition =
-            serde_json::from_str(&serde_json::to_string(&paused).unwrap()).unwrap();
+        let back: WorkflowDefinition = serde_json::from_str(&serde_json::to_string(&paused).unwrap()).unwrap();
         assert!(back.disabled);
     }
 
@@ -1254,11 +1147,7 @@ mod tests {
         assert!(validate(&d).is_ok());
 
         // A proposal from before workflow proposals existed decodes with none.
-        let p = crate::proposals::ActionProposal::new(
-            "Ship",
-            crate::proposals::ProposalKind::Decision,
-            "a",
-        );
+        let p = crate::proposals::ActionProposal::new("Ship", crate::proposals::ProposalKind::Decision, "a");
         let mut v = serde_json::to_value(&p).unwrap();
         v.as_object_mut().unwrap().remove("workflow");
         let back: crate::proposals::ActionProposal = serde_json::from_value(v).unwrap();

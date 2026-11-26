@@ -118,13 +118,7 @@ impl KeyIndex {
     pub fn of<'a>(envelopes: impl IntoIterator<Item = &'a SessionEventEnvelope>) -> Self {
         let mut ordered: Vec<&SessionEventEnvelope> = envelopes
             .into_iter()
-            .filter(|e| {
-                matches!(
-                    e.payload,
-                    SessionEvent::DeviceCertificateAdded { .. }
-                        | SessionEvent::AccountKeyRegistered { .. }
-                )
-            })
+            .filter(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. } | SessionEvent::AccountKeyRegistered { .. }))
             .collect();
         ordered.sort_by_key(|e| e.canonical_key());
         let mut idx = Self::default();
@@ -141,25 +135,14 @@ impl KeyIndex {
                 }
             }
         }
-        let ordered: Vec<&SessionEventEnvelope> = ordered
-            .into_iter()
-            .filter(|e| !idx.equivocated.contains(&(e.event_id, e.signer_device_id)))
-            .collect();
+        let ordered: Vec<&SessionEventEnvelope> = ordered.into_iter().filter(|e| !idx.equivocated.contains(&(e.event_id, e.signer_device_id))).collect();
         for e in ordered {
             match &e.payload {
-                SessionEvent::DeviceCertificateAdded { certificate: c }
-                    if e.signer_device_id == Some(c.device_id) =>
-                {
-                    idx.candidates
-                        .entry((c.account_id, c.device_id))
-                        .or_default()
-                        .push(e.clone());
+                SessionEvent::DeviceCertificateAdded { certificate: c } if e.signer_device_id == Some(c.device_id) => {
+                    idx.candidates.entry((c.account_id, c.device_id)).or_default().push(e.clone());
                 }
                 SessionEvent::AccountKeyRegistered { account_id, .. } => {
-                    idx.registrations
-                        .entry(*account_id)
-                        .or_default()
-                        .push(e.clone());
+                    idx.registrations.entry(*account_id).or_default().push(e.clone());
                 }
                 _ => {}
             }
@@ -169,46 +152,27 @@ impl KeyIndex {
 
     /// Whether `env`'s signer equivocated on its id (left out everywhere).
     pub fn is_equivocated(&self, env: &SessionEventEnvelope) -> bool {
-        self.equivocated
-            .contains(&(env.event_id, env.signer_device_id))
+        self.equivocated.contains(&(env.event_id, env.signer_device_id))
     }
 
     /// The certificates `device` published of itself for `account` (checked
     /// once, then remembered).
     fn own_certs(&self, account: Uuid, device: Uuid) -> Arc<Vec<DeviceCertificate>> {
-        if let Some(v) = self
-            .own
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&(account, device))
-        {
+        if let Some(v) = self.own.lock().unwrap_or_else(|e| e.into_inner()).get(&(account, device)) {
             return Arc::clone(v);
         }
         let mut out: Vec<DeviceCertificate> = Vec::new();
-        for e in self
-            .candidates
-            .get(&(account, device))
-            .into_iter()
-            .flatten()
-        {
+        for e in self.candidates.get(&(account, device)).into_iter().flatten() {
             if out.len() >= OWN_CERTS_KEEP {
                 break;
             }
-            let SessionEvent::DeviceCertificateAdded { certificate: c } = &e.payload else {
-                continue;
-            };
-            if c.id_matches_key()
-                && !out.contains(c)
-                && crate::crypto::verify_envelope(e, &c.device_public_key).is_ok()
-            {
+            let SessionEvent::DeviceCertificateAdded { certificate: c } = &e.payload else { continue };
+            if c.id_matches_key() && !out.contains(c) && crate::crypto::verify_envelope(e, &c.device_public_key).is_ok() {
                 out.push(c.clone());
             }
         }
         let out = Arc::new(out);
-        self.own
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert((account, device), Arc::clone(&out));
+        self.own.lock().unwrap_or_else(|e| e.into_inner()).insert((account, device), Arc::clone(&out));
         out
     }
 
@@ -217,46 +181,28 @@ impl KeyIndex {
     /// device's key: the registration is the device's own word about its
     /// account's key.
     pub fn self_evident(&self, env: &SessionEventEnvelope, account: Uuid, key: &[u8]) -> bool {
-        let Some(device) = env.signer_device_id else {
-            return false;
-        };
-        self.own_certs(account, device).iter().any(|c| {
-            c.verify(key).is_ok()
-                && crate::crypto::verify_envelope(env, &c.device_public_key).is_ok()
-        })
+        let Some(device) = env.signer_device_id else { return false };
+        self.own_certs(account, device)
+            .iter()
+            .any(|c| c.verify(key).is_ok() && crate::crypto::verify_envelope(env, &c.device_public_key).is_ok())
     }
 
     /// Whether `device` published, itself, a certificate of itself for
     /// `account` under `key` (only the device can sign that).
     pub fn self_vouched(&self, account: Uuid, device: Uuid, key: &[u8]) -> bool {
-        self.own_certs(account, device)
-            .iter()
-            .any(|c| c.verify(key).is_ok())
+        self.own_certs(account, device).iter().any(|c| c.verify(key).is_ok())
     }
 
     /// The account's self-evident registrations, (device, key), in canonical
     /// order (checked once, then remembered).
     fn evident(&self, account: Uuid) -> Arc<Vec<(Uuid, Vec<u8>)>> {
-        if let Some(v) = self
-            .evident
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&account)
-        {
+        if let Some(v) = self.evident.lock().unwrap_or_else(|e| e.into_inner()).get(&account) {
             return Arc::clone(v);
         }
         let mut out: Vec<(Uuid, Vec<u8>)> = Vec::new();
         for e in self.registrations.get(&account).into_iter().flatten() {
-            let SessionEvent::AccountKeyRegistered {
-                signing_public_key: k,
-                ..
-            } = &e.payload
-            else {
-                continue;
-            };
-            let Some(device) = e.signer_device_id else {
-                continue;
-            };
+            let SessionEvent::AccountKeyRegistered { signing_public_key: k, .. } = &e.payload else { continue };
+            let Some(device) = e.signer_device_id else { continue };
             if out.iter().any(|(d, x)| *d == device && x == k) {
                 continue;
             }
@@ -270,10 +216,7 @@ impl KeyIndex {
             }
         }
         let out = Arc::new(out);
-        self.evident
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(account, Arc::clone(&out));
+        self.evident.lock().unwrap_or_else(|e| e.into_inner()).insert(account, Arc::clone(&out));
         out
     }
 
@@ -281,44 +224,23 @@ impl KeyIndex {
     /// published its own certificate for the account under a key it
     /// registered itself, and `env` verifies under the device's key.
     pub fn device_vouches(&self, env: &SessionEventEnvelope, account: Uuid, device: Uuid) -> bool {
-        let keys: Vec<Vec<u8>> = self
-            .evident(account)
+        let keys: Vec<Vec<u8>> = self.evident(account).iter().filter(|(d, _)| *d == device).map(|(_, k)| k.clone()).collect();
+        self.own_certs(account, device)
             .iter()
-            .filter(|(d, _)| *d == device)
-            .map(|(_, k)| k.clone())
-            .collect();
-        self.own_certs(account, device).iter().any(|c| {
-            keys.iter().any(|k| c.verify(k).is_ok())
-                && crate::crypto::verify_envelope(env, &c.device_public_key).is_ok()
-        })
+            .any(|c| keys.iter().any(|k| c.verify(k).is_ok()) && crate::crypto::verify_envelope(env, &c.device_public_key).is_ok())
     }
 
     /// Whether `device` vouches for `account` under `key`: it registered
     /// `key` itself, published its own certificate for the account under
     /// it, and `env` verifies under the device's key.
-    pub fn device_vouches_under(
-        &self,
-        env: &SessionEventEnvelope,
-        account: Uuid,
-        device: Uuid,
-        key: &[u8],
-    ) -> bool {
-        self.evident(account)
-            .iter()
-            .any(|(d, k)| *d == device && k == key)
-            && self.own_certs(account, device).iter().any(|c| {
-                c.verify(key).is_ok()
-                    && crate::crypto::verify_envelope(env, &c.device_public_key).is_ok()
-            })
+    pub fn device_vouches_under(&self, env: &SessionEventEnvelope, account: Uuid, device: Uuid, key: &[u8]) -> bool {
+        self.evident(account).iter().any(|(d, k)| *d == device && k == key)
+            && self.own_certs(account, device).iter().any(|c| c.verify(key).is_ok() && crate::crypto::verify_envelope(env, &c.device_public_key).is_ok())
     }
 
     /// The keys `device` registered for `account` (self-evident ones).
     pub fn registered_by(&self, account: Uuid, device: Uuid) -> Vec<Vec<u8>> {
-        self.evident(account)
-            .iter()
-            .filter(|(d, _)| *d == device)
-            .map(|(_, k)| k.clone())
-            .collect()
+        self.evident(account).iter().filter(|(d, _)| *d == device).map(|(_, k)| k.clone()).collect()
     }
 
     /// Every self-evident registration's key, by account (in canonical
@@ -341,10 +263,7 @@ impl KeyIndex {
     /// self-evident registration whose key certified the device in a
     /// certificate the device published itself.
     pub fn anchored_key(&self, account: Uuid, device: Uuid) -> Option<Vec<u8>> {
-        self.evident(account)
-            .iter()
-            .find(|(_, k)| self.self_vouched(account, device, k))
-            .map(|(_, k)| k.clone())
+        self.evident(account).iter().find(|(_, k)| self.self_vouched(account, device, k)).map(|(_, k)| k.clone())
     }
 }
 
@@ -380,16 +299,8 @@ pub struct RefusedKey {
 
 #[derive(Debug, Clone)]
 enum KeyEvent {
-    Register {
-        env: SessionEventEnvelope,
-        key: Vec<u8>,
-    },
-    Rotate {
-        env: SessionEventEnvelope,
-        new_key: Vec<u8>,
-        sig: Vec<u8>,
-        allowed: bool,
-    },
+    Register { env: SessionEventEnvelope, key: Vec<u8> },
+    Rotate { env: SessionEventEnvelope, new_key: Vec<u8>, sig: Vec<u8>, allowed: bool },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -424,12 +335,7 @@ pub fn key_fingerprint(signing_public_key: &[u8]) -> [u8; 16] {
 impl KeyBook {
     /// A book over `index`, with the founder pinned to `fk` when given.
     pub fn new(index: Arc<KeyIndex>, pin: Option<(Uuid, [u8; 16])>) -> Self {
-        Self {
-            index,
-            pin,
-            accounts: BTreeMap::new(),
-            refused: Vec::new(),
-        }
+        Self { index, pin, accounts: BTreeMap::new(), refused: Vec::new() }
     }
 
     /// The index this book reads.
@@ -439,29 +345,17 @@ impl KeyBook {
 
     /// Judge an `AccountKeyRegistered` (in canonical order).
     pub fn register(&mut self, env: &SessionEventEnvelope) -> KeyVerdict {
-        let SessionEvent::AccountKeyRegistered {
-            account_id,
-            signing_public_key,
-        } = &env.payload
-        else {
+        let SessionEvent::AccountKeyRegistered { account_id, signing_public_key } = &env.payload else {
             return KeyVerdict::Ignored;
         };
-        let ev = KeyEvent::Register {
-            env: env.clone(),
-            key: signing_public_key.clone(),
-        };
+        let ev = KeyEvent::Register { env: env.clone(), key: signing_public_key.clone() };
         self.apply_new(*account_id, ev)
     }
 
     /// Judge an `AccountKeyRotated` (in canonical order). `allowed`: the log
     /// let it count (rules v2 presence); otherwise it is left out.
     pub fn rotate(&mut self, env: &SessionEventEnvelope, allowed: bool) -> KeyVerdict {
-        let SessionEvent::AccountKeyRotated {
-            account_id,
-            new_signing_public_key,
-            succession_signature,
-        } = &env.payload
-        else {
+        let SessionEvent::AccountKeyRotated { account_id, new_signing_public_key, succession_signature } = &env.payload else {
             return KeyVerdict::Ignored;
         };
         let ev = KeyEvent::Rotate {
@@ -495,35 +389,23 @@ impl KeyBook {
 
     /// Every anchor set so far: account → device.
     pub fn anchors(&self) -> BTreeMap<Uuid, Uuid> {
-        self.accounts
-            .iter()
-            .filter_map(|(a, s)| s.anchor.map(|d| (*a, d)))
-            .collect()
+        self.accounts.iter().filter_map(|(a, s)| s.anchor.map(|d| (*a, d))).collect()
     }
 
     /// The account's current key, if it has one and isn't disputed.
     pub fn key(&self, account: Uuid) -> Option<&[u8]> {
-        self.accounts
-            .get(&account)
-            .filter(|s| s.disputed.is_none())
-            .and_then(|s| s.lineage.last())
-            .map(Vec::as_slice)
+        self.accounts.get(&account).filter(|s| s.disputed.is_none()).and_then(|s| s.lineage.last()).map(Vec::as_slice)
     }
 
     /// The account's current key even when disputed (what its certificates
     /// are checked against for revocation bookkeeping).
     pub fn key_any(&self, account: Uuid) -> Option<&[u8]> {
-        self.accounts
-            .get(&account)
-            .and_then(|s| s.lineage.last())
-            .map(Vec::as_slice)
+        self.accounts.get(&account).and_then(|s| s.lineage.last()).map(Vec::as_slice)
     }
 
     /// Whether the account's own lineage asserted two keys.
     pub fn is_disputed(&self, account: Uuid) -> bool {
-        self.accounts
-            .get(&account)
-            .is_some_and(|s| s.disputed.is_some())
+        self.accounts.get(&account).is_some_and(|s| s.disputed.is_some())
     }
 
     /// Why the account is disputed, if it is.
@@ -533,11 +415,7 @@ impl KeyBook {
 
     /// Every disputed account.
     pub fn disputed(&self) -> BTreeSet<Uuid> {
-        self.accounts
-            .iter()
-            .filter(|(_, s)| s.disputed.is_some())
-            .map(|(a, _)| *a)
-            .collect()
+        self.accounts.iter().filter(|(_, s)| s.disputed.is_some()).map(|(a, _)| *a).collect()
     }
 
     /// Every undisputed account with its current key.
@@ -551,10 +429,7 @@ impl KeyBook {
 
     /// Every account with a key, disputed or not.
     pub fn keys_any(&self) -> BTreeMap<Uuid, Vec<u8>> {
-        self.accounts
-            .iter()
-            .filter_map(|(a, s)| s.lineage.last().map(|k| (*a, k.clone())))
-            .collect()
+        self.accounts.iter().filter_map(|(a, s)| s.lineage.last().map(|k| (*a, k.clone()))).collect()
     }
 
     /// The key events refused so far (at most [`REFUSED_KEEP`]), each with
@@ -638,9 +513,7 @@ fn judge(
             // log: nothing else pins the account meanwhile, or a registration
             // someone made in advance would.
             if st.anchor.is_some() && anchored.is_none() {
-                return KeyVerdict::Refused(
-                    "the account's anchor device published no key of its own here yet",
-                );
+                return KeyVerdict::Refused("the account's anchor device published no key of its own here yet");
             }
             // The key the account's lineage is judged against: its current
             // key, or (before the anchored registration sorts) the anchored
@@ -665,12 +538,7 @@ fn judge(
             // genuine one apart (rule 5).
             KeyVerdict::Disputed("two self-evident registrations and no anchor to tell them apart")
         }
-        KeyEvent::Rotate {
-            env,
-            new_key,
-            sig,
-            allowed,
-        } => {
+        KeyEvent::Rotate { env, new_key, sig, allowed } => {
             if !published_by_account(env, account) {
                 return KeyVerdict::Refused("not published by a device of the account it names");
             }
@@ -694,13 +562,8 @@ fn judge(
                 return KeyVerdict::Same;
             }
             let superseded = &st.lineage[..st.lineage.len() - 1];
-            if superseded
-                .iter()
-                .any(|k| crate::crypto::verify(k, new_key, sig).is_ok())
-            {
-                return KeyVerdict::Disputed(
-                    "a key the account rotated away from designated another successor",
-                );
+            if superseded.iter().any(|k| crate::crypto::verify(k, new_key, sig).is_ok()) {
+                return KeyVerdict::Disputed("a key the account rotated away from designated another successor");
             }
             KeyVerdict::Refused("not signed by the account's current key")
         }
@@ -719,18 +582,13 @@ pub fn seed_anchor(seed: &SessionEventEnvelope) -> Option<(Uuid, Uuid)> {
 /// device, when it is a self-enrollment (the member is its author, stamped
 /// as its account) that admits someone who wasn't a member before.
 pub fn admission_anchor(env: &SessionEventEnvelope, was_member: bool) -> Option<(Uuid, Uuid)> {
-    let SessionEvent::MemberAdded { member, .. } = &env.payload else {
-        return None;
-    };
+    let SessionEvent::MemberAdded { member, .. } = &env.payload else { return None };
     if was_member {
         return None;
     }
     let stamp = env.actor_stamp.as_ref()?;
     let account = member.actor.account_id?;
-    if stamp.actor.id != member.id
-        || stamp.actor.account_id != Some(account)
-        || env.signature.is_none()
-    {
+    if stamp.actor.id != member.id || stamp.actor.account_id != Some(account) || env.signature.is_none() {
         return None;
     }
     Some((account, env.signer_device_id?))
@@ -750,13 +608,7 @@ mod tests {
 
     fn dev() -> Dev {
         let kp = SigningKeypair::generate().unwrap();
-        Dev {
-            id: crate::crypto::device_id_for(
-                crate::crypto::SigAlg::Ed25519,
-                &kp.public_key_bytes(),
-            ),
-            kp,
-        }
+        Dev { id: crate::crypto::device_id_for(crate::crypto::SigAlg::Ed25519, &kp.public_key_bytes()), kp }
     }
 
     fn signed(d: &Dev, account: Uuid, lamport: u64, payload: SessionEvent) -> SessionEventEnvelope {
@@ -780,42 +632,15 @@ mod tests {
 
     /// A device's identity for `account` under `key`: its own certificate
     /// and its registration.
-    fn identity(
-        d: &Dev,
-        account: Uuid,
-        key: &SigningKeypair,
-        lamport: u64,
-    ) -> Vec<SessionEventEnvelope> {
-        let cert = DeviceCertificate::issue(
-            key,
-            account,
-            &d.kp.public_key_bytes(),
-            crate::Timestamp::epoch(),
-        );
+    fn identity(d: &Dev, account: Uuid, key: &SigningKeypair, lamport: u64) -> Vec<SessionEventEnvelope> {
+        let cert = DeviceCertificate::issue(key, account, &d.kp.public_key_bytes(), crate::Timestamp::epoch());
         vec![
-            signed(
-                d,
-                account,
-                lamport,
-                SessionEvent::DeviceCertificateAdded { certificate: cert },
-            ),
-            signed(
-                d,
-                account,
-                lamport + 1,
-                SessionEvent::AccountKeyRegistered {
-                    account_id: account,
-                    signing_public_key: key.public_key_bytes().to_vec(),
-                },
-            ),
+            signed(d, account, lamport, SessionEvent::DeviceCertificateAdded { certificate: cert }),
+            signed(d, account, lamport + 1, SessionEvent::AccountKeyRegistered { account_id: account, signing_public_key: key.public_key_bytes().to_vec() }),
         ]
     }
 
-    fn run(
-        envs: &[SessionEventEnvelope],
-        anchor: Option<(Uuid, Uuid)>,
-        anchor_at: usize,
-    ) -> (BTreeMap<Uuid, Vec<u8>>, BTreeSet<Uuid>) {
+    fn run(envs: &[SessionEventEnvelope], anchor: Option<(Uuid, Uuid)>, anchor_at: usize) -> (BTreeMap<Uuid, Vec<u8>>, BTreeSet<Uuid>) {
         let mut ordered: Vec<&SessionEventEnvelope> = envs.iter().collect();
         ordered.sort_by_key(|e| e.canonical_key());
         let mut book = KeyBook::new(Arc::new(KeyIndex::of(ordered.iter().copied())), None);
@@ -851,15 +676,7 @@ mod tests {
         let mut envs = identity(&owner, account, &k, 10);
         let other = SigningKeypair::generate().unwrap();
         for l in [1, 50] {
-            envs.push(signed(
-                &ghost,
-                account,
-                l,
-                SessionEvent::AccountKeyRegistered {
-                    account_id: account,
-                    signing_public_key: other.public_key_bytes().to_vec(),
-                },
-            ));
+            envs.push(signed(&ghost, account, l, SessionEvent::AccountKeyRegistered { account_id: account, signing_public_key: other.public_key_bytes().to_vec() }));
         }
         let (keys, disputed) = run(&envs, None, 0);
         assert_eq!(keys.get(&account), Some(&k.public_key_bytes().to_vec()));
@@ -873,10 +690,7 @@ mod tests {
         let owner = dev();
         let account = Uuid::new_v4();
         let k0 = SigningKeypair::generate().unwrap();
-        let (k1, k2) = (
-            SigningKeypair::generate().unwrap(),
-            SigningKeypair::generate().unwrap(),
-        );
+        let (k1, k2) = (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
         let mut envs = identity(&owner, account, &k0, 1);
         let rot = |from: &SigningKeypair, to: &SigningKeypair| SessionEvent::AccountKeyRotated {
             account_id: account,
@@ -893,9 +707,7 @@ mod tests {
         // disputes it.
         let k3 = SigningKeypair::generate().unwrap();
         envs.push(signed(&owner, account, 13, rot(&k0, &k3)));
-        assert!(run(&envs, Some((account, owner.id)), 0)
-            .1
-            .contains(&account));
+        assert!(run(&envs, Some((account, owner.id)), 0).1.contains(&account));
     }
 
     proptest! {

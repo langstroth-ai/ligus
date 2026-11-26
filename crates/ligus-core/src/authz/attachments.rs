@@ -35,45 +35,28 @@ use crate::session::ChatSession;
 /// chat kinds on chat logs, a policy is well formed, a hash is a hash, the
 /// blocklist is bounded, and a proposal that carries a file is allowed by the
 /// workspace's policy at its position.
-pub fn payload_refusal(
-    env: &SessionEventEnvelope,
-    on_config: bool,
-    checked: bool,
-    at: Option<&RosterState>,
-    running: &RosterState,
-) -> Option<String> {
+pub fn payload_refusal(env: &SessionEventEnvelope, on_config: bool, checked: bool, at: Option<&RosterState>, running: &RosterState) -> Option<String> {
     match &env.payload {
         SessionEvent::AttachmentPolicySet { policy } => {
             if !on_config {
                 return Some("the attachment policy is set on the workspace config log".into());
             }
-            policy
-                .well_formed()
-                .err()
-                .map(|e| format!("attachment policy: {e}"))
+            policy.well_formed().err().map(|e| format!("attachment policy: {e}"))
         }
-        SessionEvent::AttachmentHashBlocked { sha256 }
-        | SessionEvent::AttachmentHashUnblocked { sha256 } => {
+        SessionEvent::AttachmentHashBlocked { sha256 } | SessionEvent::AttachmentHashUnblocked { sha256 } => {
             if !on_config {
                 return Some("the attachment blocklist lives on the workspace config log".into());
             }
             if !attachment::is_sha256_hex(sha256) {
-                return Some(
-                    "a blocked file is named by the lowercase hex SHA-256 of its content".into(),
-                );
+                return Some("a blocked file is named by the lowercase hex SHA-256 of its content".into());
             }
             let adding = matches!(env.payload, SessionEvent::AttachmentHashBlocked { .. });
-            if adding
-                && !running.attachments.blocked.contains(sha256)
-                && running.attachments.blocked.len() >= attachment::MAX_BLOCKLIST
-            {
+            if adding && !running.attachments.blocked.contains(sha256) && running.attachments.blocked.len() >= attachment::MAX_BLOCKLIST {
                 return Some("the attachment blocklist is full".into());
             }
             None
         }
-        SessionEvent::AttachmentShared { .. } | SessionEvent::AttachmentDeleted { .. }
-            if on_config =>
-        {
+        SessionEvent::AttachmentShared { .. } | SessionEvent::AttachmentDeleted { .. } if on_config => {
             Some("attachments are shared in a chat, not on the workspace config log".into())
         }
         SessionEvent::ProposalUpserted { proposal } => {
@@ -93,21 +76,14 @@ pub fn payload_refusal(
             if !checked {
                 return None;
             }
-            let Some(at) = at else {
-                return Some("no workspace position".into());
-            };
+            let Some(at) = at else { return Some("no workspace position".into()) };
             // The offer names the host that holds the file, and that host
             // signs it (itself, or through an agent key it certified): nobody
             // can point an offer at another member's device.
             let signer = env.signer_device_id;
-            let host = signer
-                .and_then(|k| at.agent_keys.get(&k))
-                .map(|k| k.host_device_id)
-                .or(signer);
+            let host = signer.and_then(|k| at.agent_keys.get(&k)).map(|k| k.host_device_id).or(signer);
             if proposal.produced_on.is_none() || proposal.produced_on != host {
-                return Some(
-                    "an offered file names the host that produced it, which signs the offer".into(),
-                );
+                return Some("an offered file names the host that produced it, which signs the offer".into());
             }
             if host.is_none_or(|h| a.id != attachment::offer_id(h, proposal.id)) {
                 return Some("an offered file's id is bound to its host and proposal".into());
@@ -119,40 +95,24 @@ pub fn payload_refusal(
             if rules.blocked.contains(&a.sha256) {
                 return Some("this file is blocked in this workspace".into());
             }
-            rules
-                .policy
-                .file_refusal(&attachment::type_tokens(&a.name, None), a.size)
+            rules.policy.file_refusal(&attachment::type_tokens(&a.name, None), a.size)
         }
         _ => None,
     }
 }
 
 /// `AttachmentShared` against the workspace roster `at` at its position.
-pub fn share_ok(
-    env: &SessionEventEnvelope,
-    a: &AttachmentRef,
-    fold: &ChatSession,
-    at: &RosterState,
-    author: &str,
-    role: WorkspaceRole,
-) -> Result<(), String> {
+pub fn share_ok(env: &SessionEventEnvelope, a: &AttachmentRef, fold: &ChatSession, at: &RosterState, author: &str, role: WorkspaceRole) -> Result<(), String> {
     attachment::check_ref(a, true)?;
     let rules = &at.attachments;
-    let kind = at
-        .members
-        .get(author)
-        .map(|m| m.kind)
-        .unwrap_or(ActorKind::Human);
+    let kind = at.members.get(author).map(|m| m.kind).unwrap_or(ActorKind::Human);
     if let Some(why) = rules.policy.sharer_refusal(kind, role) {
         return Err(why);
     }
     if rules.blocked.contains(&a.sha256) {
         return Err("this file is blocked in this workspace".into());
     }
-    if let Some(why) = rules
-        .policy
-        .file_refusal(&attachment::type_tokens(&a.name, None), a.size)
-    {
+    if let Some(why) = rules.policy.file_refusal(&attachment::type_tokens(&a.name, None), a.size) {
         return Err(why);
     }
     if fold.attachments.contains_key(&a.id) {
@@ -170,10 +130,7 @@ pub fn share_ok(
             if !own_device(env, at) {
                 return Err("a file is shared from its sharer's own certified device".into());
             }
-            if env
-                .signer_device_id
-                .is_none_or(|d| a.id != attachment::share_id(d, &a.blob_id))
-            {
+            if env.signer_device_id.is_none_or(|d| a.id != attachment::share_id(d, &a.blob_id)) {
                 return Err("an attachment id is bound to the device that shares it".into());
             }
         }
@@ -193,22 +150,14 @@ pub fn share_ok(
             }
             // Approved, with a signed approval by a person who is a human
             // member (Contributor or above) of the workspace at this position.
-            let by_person = fold
-                .guards
-                .verified_approvals
-                .get(&pid)
-                .is_some_and(|voters| {
-                    voters.iter().any(|v| {
-                        at.members.get(v).is_some_and(|m| {
-                            m.kind == ActorKind::Human
-                                && m.role.rank() >= WorkspaceRole::Contributor.rank()
-                        }) && p.producing_agent_id.is_none_or(|a| a.to_string() != *v)
-                    })
-                });
+            let by_person = fold.guards.verified_approvals.get(&pid).is_some_and(|voters| {
+                voters.iter().any(|v| {
+                    at.members.get(v).is_some_and(|m| m.kind == ActorKind::Human && m.role.rank() >= WorkspaceRole::Contributor.rank())
+                        && p.producing_agent_id.is_none_or(|a| a.to_string() != *v)
+                })
+            });
             if !p.ready_to_apply() || !by_person {
-                return Err(
-                    "a file an agent offered is shared only after a person approves it".into(),
-                );
+                return Err("a file an agent offered is shared only after a person approves it".into());
             }
             if p.produced_on.is_none() || env.signer_device_id != p.produced_on {
                 return Err("an agent's file is shared by the host that produced it".into());
@@ -216,11 +165,7 @@ pub fn share_ok(
             if !voter_signed(env, at) {
                 return Err("signed by a device that doesn't act for its author".into());
             }
-            if fold
-                .attachments
-                .values()
-                .any(|s| s.attachment.proposal_id == Some(pid))
-            {
+            if fold.attachments.values().any(|s| s.attachment.proposal_id == Some(pid)) {
                 return Err("that proposal's file was already shared".into());
             }
         }
@@ -230,14 +175,7 @@ pub fn share_ok(
 
 /// `AttachmentDeleted`: the sharer's, or an Admin's, through a certified
 /// device of theirs.
-pub fn delete_ok(
-    env: &SessionEventEnvelope,
-    attachment_id: Uuid,
-    fold: &ChatSession,
-    at: &RosterState,
-    author: &str,
-    role: WorkspaceRole,
-) -> Result<(), String> {
+pub fn delete_ok(env: &SessionEventEnvelope, attachment_id: Uuid, fold: &ChatSession, at: &RosterState, author: &str, role: WorkspaceRole) -> Result<(), String> {
     let Some(s) = fold.attachments.get(&attachment_id) else {
         return Err("no such attachment".into());
     };

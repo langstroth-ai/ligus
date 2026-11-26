@@ -16,11 +16,9 @@
 //! lockdown, ask a host to apply and withdraw that request).
 
 use ligus_core::crypto::{DeviceCertificate, SigAlg};
-use ligus_core::phone_action::PhoneAction;
 use ligus_core::presence::PresenceAssertion;
-use ligus_core::{
-    workspace_config_session_id, ActorStamp, SessionEvent, SessionEventEnvelope, Timestamp,
-};
+use ligus_core::phone_action::PhoneAction;
+use ligus_core::{workspace_config_session_id, ActorStamp, SessionEvent, SessionEventEnvelope, Timestamp};
 use uuid::Uuid;
 
 use super::presence::PresenceRequest;
@@ -36,41 +34,18 @@ pub struct PhoneDraft {
 impl ChatService {
     /// Certify `device_id`'s P-256 key as a phone of this device's account in
     /// `workspace_id` (the person's presence confirms it). Never from a box.
-    pub fn certify_phone(
-        &mut self,
-        workspace_id: Uuid,
-        device_id: Uuid,
-        public_key: &[u8],
-    ) -> Result<DeviceCertificate> {
+    pub fn certify_phone(&mut self, workspace_id: Uuid, device_id: Uuid, public_key: &[u8]) -> Result<DeviceCertificate> {
         if self.delegated || self.author.kind == ligus_core::ActorKind::Service {
-            return Err(ChatError::Unauthorized(
-                "only a person's own device enrolls their phone".into(),
-            ));
+            return Err(ChatError::Unauthorized("only a person's own device enrolls their phone".into()));
         }
-        let account = self
-            .author
-            .account_id
-            .ok_or_else(|| ChatError::Unauthorized("this device has no account".into()))?;
+        let account = self.author.account_id.ok_or_else(|| ChatError::Unauthorized("this device has no account".into()))?;
         // A phone's device id is the one its Secure Enclave key derives.
         if device_id != ligus_core::crypto::device_id_for(SigAlg::P256, public_key) {
-            return Err(ChatError::Unauthorized(
-                "the phone's device id isn't the one its key derives".into(),
-            ));
+            return Err(ChatError::Unauthorized("the phone's device id isn't the one its key derives".into()));
         }
-        let certificate = DeviceCertificate::issue_p256(
-            &self.account_keypair,
-            account,
-            public_key,
-            Timestamp::now(),
-        );
+        let certificate = DeviceCertificate::issue_p256(&self.account_keypair, account, public_key, Timestamp::now());
         let config_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(
-            config_id,
-            workspace_id,
-            SessionEvent::DeviceCertificateAdded {
-                certificate: certificate.clone(),
-            },
-        )?;
+        self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate: certificate.clone() })?;
         Ok(certificate)
     }
 
@@ -87,27 +62,13 @@ impl ChatService {
         request: Option<&crate::box_admission::JoinRequest>,
     ) -> Result<(PhoneDraft, Uuid, [u8; 32])> {
         let (payload, invite, seed) = super::box_admission_payload(ttl_ms, request)?;
-        Ok((
-            self.draft_for_phone(workspace_id, phone, payload)?,
-            invite,
-            seed,
-        ))
+        Ok((self.draft_for_phone(workspace_id, phone, payload)?, invite, seed))
     }
 
     /// Draft `payload` on `workspace_id`'s config log as the person phone
     /// `phone` is certified for, to be signed by that phone.
-    pub fn draft_for_phone(
-        &mut self,
-        workspace_id: Uuid,
-        phone: Uuid,
-        payload: SessionEvent,
-    ) -> Result<PhoneDraft> {
-        self.draft_for_phone_on(
-            workspace_config_session_id(workspace_id),
-            workspace_id,
-            phone,
-            payload,
-        )
+    pub fn draft_for_phone(&mut self, workspace_id: Uuid, phone: Uuid, payload: SessionEvent) -> Result<PhoneDraft> {
+        self.draft_for_phone_on(workspace_config_session_id(workspace_id), workspace_id, phone, payload)
     }
 
     /// The member phone `phone` is certified for here (its actor, stamped
@@ -131,31 +92,16 @@ impl ChatService {
     /// member, the phone names no one: fail closed, never another certifier
     /// (identity model v2, 7.3a; the phone naming its account in its
     /// requests, 0.4, removes this case).
-    pub fn phone_person(
-        &self,
-        workspace_id: Uuid,
-        phone: Uuid,
-    ) -> Result<ligus_core::ActorIdentity> {
-        let (config, timeline) = self.store.load_config(
-            workspace_id,
-            self.trusted_founder.as_deref(),
-            self.local_workspace_id,
-        )?;
-        let config = config.ok_or_else(|| {
-            ChatError::Unauthorized(
-                "the workspace configuration hasn't synced to this box yet".into(),
-            )
-        })?;
+    pub fn phone_person(&self, workspace_id: Uuid, phone: Uuid) -> Result<ligus_core::ActorIdentity> {
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let config = config.ok_or_else(|| ChatError::Unauthorized("the workspace configuration hasn't synced to this box yet".into()))?;
         let roster = timeline.current();
         let device = roster
             .devices
             .get(&phone)
             .filter(|d| d.phone && !d.revoked)
-            .ok_or_else(|| {
-                ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into())
-            })?;
-        let not_member =
-            || ChatError::Unauthorized("that phone's person isn't a member here".into());
+            .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
+        let not_member = || ChatError::Unauthorized("that phone's person isn't a member here".into());
         let account = if device.holders.len() == 1 {
             let only = device.holders.first().copied();
             if let Some(a) = only {
@@ -172,19 +118,14 @@ impl ChatService {
                 (Some(_), Some(_)) => None,
                 // A recorded person that no longer holds it names no one
                 // (fail closed), never another certifier.
-                (None, _) => self
-                    .store
-                    .phone_person_pin(workspace_id, phone)?
-                    .filter(|a| device.holders.contains(a)),
+                (None, _) => self.store.phone_person_pin(workspace_id, phone)?.filter(|a| device.holders.contains(a)),
             }
         }
         .ok_or_else(not_member)?;
         let member = config
             .members
             .iter()
-            .find(|m| {
-                m.actor.kind == ligus_core::ActorKind::Human && m.actor.account_id == Some(account)
-            })
+            .find(|m| m.actor.kind == ligus_core::ActorKind::Human && m.actor.account_id == Some(account))
             .ok_or_else(not_member)?;
         let mut actor = member.actor.clone();
         // The person's current name (identity model v2, 5.4), never the
@@ -200,11 +141,7 @@ impl ChatService {
     /// a certificate someone adds later then changes nothing. Run after
     /// every sync by the devices that act for phones (boxes).
     pub fn pin_phone_persons(&self, workspace_id: Uuid) -> Result<()> {
-        let (_, timeline) = self.store.load_config(
-            workspace_id,
-            self.trusted_founder.as_deref(),
-            self.local_workspace_id,
-        )?;
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         for (id, d) in &timeline.current().devices {
             if d.phone && !d.revoked && d.holders.len() == 1 {
                 if let Some(a) = d.holders.first() {
@@ -218,17 +155,8 @@ impl ChatService {
     /// Whether phone `phone`'s certificate for `account` here carries the
     /// phone's own enrollment statement (identity model v2, 7.3a).
     pub fn phone_consented(&self, workspace_id: Uuid, phone: Uuid, account: Uuid) -> Result<bool> {
-        let (_, timeline) = self.store.load_config(
-            workspace_id,
-            self.trusted_founder.as_deref(),
-            self.local_workspace_id,
-        )?;
-        let key = timeline
-            .current()
-            .account_keys
-            .get(&account)
-            .cloned()
-            .unwrap_or_default();
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let key = timeline.current().account_keys.get(&account).cloned().unwrap_or_default();
         Ok(self.store.trust_envelopes(workspace_id)?.iter().any(|e| {
             matches!(&e.payload, SessionEvent::DeviceCertificateAdded { certificate: c }
                 if c.device_id == phone
@@ -243,57 +171,32 @@ impl ChatService {
     /// here) with a copy of its certificate for `account`: the phone's own
     /// acceptance, which rules 3 counts. A box relays it for its phones.
     /// Returns `Ok(false)` when it was already published.
-    pub fn publish_phone_consent(
-        &mut self,
-        workspace_id: Uuid,
-        phone: Uuid,
-        account: Uuid,
-        signature: &[u8],
-    ) -> Result<bool> {
+    pub fn publish_phone_consent(&mut self, workspace_id: Uuid, phone: Uuid, account: Uuid, signature: &[u8]) -> Result<bool> {
         if self.phone_consented(workspace_id, phone, account)? {
             return Ok(false);
         }
-        let (_, timeline) = self.store.load_config(
-            workspace_id,
-            self.trusted_founder.as_deref(),
-            self.local_workspace_id,
-        )?;
-        let key = timeline
-            .current()
-            .account_keys
-            .get(&account)
-            .cloned()
-            .unwrap_or_default();
-        let cert = self
-            .store
-            .trust_envelopes(workspace_id)?
-            .into_iter()
-            .find_map(|e| match e.payload {
-                SessionEvent::DeviceCertificateAdded { certificate }
-                    if certificate.device_id == phone
-                        && certificate.account_id == account
-                        && certificate.alg == SigAlg::P256
-                        && certificate.verify(&key).is_ok() =>
-                {
-                    Some(certificate)
-                }
-                _ => None,
-            });
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let key = timeline.current().account_keys.get(&account).cloned().unwrap_or_default();
+        let cert = self.store.trust_envelopes(workspace_id)?.into_iter().find_map(|e| match e.payload {
+            SessionEvent::DeviceCertificateAdded { certificate }
+                if certificate.device_id == phone
+                    && certificate.account_id == account
+                    && certificate.alg == SigAlg::P256
+                    && certificate.verify(&key).is_ok() =>
+            {
+                Some(certificate)
+            }
+            _ => None,
+        });
         let Some(mut certificate) = cert else {
-            return Err(ChatError::Unauthorized(
-                "that phone isn't certified for that account here".into(),
-            ));
+            return Err(ChatError::Unauthorized("that phone isn't certified for that account here".into()));
         };
         certificate.phone_consent = Some(signature.to_vec());
         if !certificate.phone_consent_ok(workspace_id) {
             return Err(ChatError::Unauthorized(BAD_CONSENT.into()));
         }
         let config_id = workspace_config_session_id(workspace_id);
-        self.append_signed(
-            config_id,
-            workspace_id,
-            SessionEvent::DeviceCertificateAdded { certificate },
-        )?;
+        self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate })?;
         Ok(true)
     }
 
@@ -302,36 +205,17 @@ impl ChatService {
     /// down the ranks over every holder, so while one at or above the
     /// person's rank holds it, the person can't revoke their own phone: My
     /// devices says so and who can. Empty for a phone only its person holds.
-    pub fn phone_co_holders(
-        &self,
-        workspace_id: Uuid,
-        phone: Uuid,
-    ) -> Result<Vec<ligus_core::ActorIdentity>> {
-        let (config, timeline) = self.store.load_config(
-            workspace_id,
-            self.trusted_founder.as_deref(),
-            self.local_workspace_id,
-        )?;
-        let Some(config) = config else {
-            return Ok(Vec::new());
-        };
+    pub fn phone_co_holders(&self, workspace_id: Uuid, phone: Uuid) -> Result<Vec<ligus_core::ActorIdentity>> {
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let Some(config) = config else { return Ok(Vec::new()) };
         let roster = timeline.current();
-        let Some(device) = roster.devices.get(&phone).filter(|d| d.phone && !d.revoked) else {
-            return Ok(Vec::new());
-        };
-        let person = self
-            .phone_person(workspace_id, phone)
-            .ok()
-            .and_then(|p| p.account_id);
+        let Some(device) = roster.devices.get(&phone).filter(|d| d.phone && !d.revoked) else { return Ok(Vec::new()) };
+        let person = self.phone_person(workspace_id, phone).ok().and_then(|p| p.account_id);
         Ok(config
             .members
             .iter()
             .filter(|m| m.actor.kind == ligus_core::ActorKind::Human)
-            .filter(|m| {
-                m.actor
-                    .account_id
-                    .is_some_and(|a| Some(a) != person && device.holders.contains(&a))
-            })
+            .filter(|m| m.actor.account_id.is_some_and(|a| Some(a) != person && device.holders.contains(&a)))
             .map(|m| m.actor.clone())
             .collect())
     }
@@ -340,49 +224,25 @@ impl ChatService {
     /// the box owner): the Admins whose `JoinApproved` issued the admission
     /// this box's own `MemberAdded` redeemed, while they are still members
     /// at Admin or above. Empty when this device wasn't admitted that way.
-    pub fn box_owner_accounts(
-        &self,
-        workspace_id: Uuid,
-    ) -> Result<std::collections::BTreeSet<Uuid>> {
+    pub fn box_owner_accounts(&self, workspace_id: Uuid) -> Result<std::collections::BTreeSet<Uuid>> {
         let mut out = std::collections::BTreeSet::new();
-        let (config, timeline) = self.store.load_config(
-            workspace_id,
-            self.trusted_founder.as_deref(),
-            self.local_workspace_id,
-        )?;
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         let Some(config) = config else { return Ok(out) };
         let me = self.author.id.as_str();
-        let invite = self
-            .store
-            .config_envelopes(workspace_id)?
-            .into_iter()
-            .find_map(|e| match &e.payload {
-                SessionEvent::MemberAdded {
-                    member,
-                    invite: Some(i),
-                    ..
-                } if member.id == me
+        let invite = self.store.config_envelopes(workspace_id)?.into_iter().find_map(|e| match &e.payload {
+            SessionEvent::MemberAdded { member, invite: Some(i), .. }
+                if member.id == me
                     && e.signer_device_id == Some(self.device_id)
                     && e.actor_stamp.as_ref().is_some_and(|st| st.actor.id == me) =>
-                {
-                    Some(*i)
-                }
-                _ => None,
-            });
+            {
+                Some(*i)
+            }
+            _ => None,
+        });
         let Some(invite) = invite else { return Ok(out) };
         let roster = timeline.current();
-        for approver in config
-            .guards
-            .join_approvals
-            .get(&ligus_core::authorization::invite_subject(invite))
-            .into_iter()
-            .flatten()
-        {
-            if let Some(m) = roster
-                .members
-                .get(approver)
-                .filter(|m| m.role.rank() >= ligus_core::WorkspaceRole::Admin.rank())
-            {
+        for approver in config.guards.join_approvals.get(&ligus_core::authorization::invite_subject(invite)).into_iter().flatten() {
+            if let Some(m) = roster.members.get(approver).filter(|m| m.role.rank() >= ligus_core::WorkspaceRole::Admin.rank()) {
                 out.extend(m.account_id);
             }
         }
@@ -391,43 +251,18 @@ impl ChatService {
 
     /// Whether phone `phone` is certified here (enrolled, not revoked, its
     /// person a member) for one of `accounts`.
-    pub fn phone_of_accounts(
-        &self,
-        workspace_id: Uuid,
-        phone: Uuid,
-        accounts: &std::collections::BTreeSet<Uuid>,
-    ) -> bool {
-        let Ok(person) = self.phone_person(workspace_id, phone) else {
-            return false;
-        };
+    pub fn phone_of_accounts(&self, workspace_id: Uuid, phone: Uuid, accounts: &std::collections::BTreeSet<Uuid>) -> bool {
+        let Ok(person) = self.phone_person(workspace_id, phone) else { return false };
         person.account_id.is_some_and(|a| accounts.contains(&a))
     }
 
     /// Draft `payload` on `session_id` (a chat of `workspace_id`, or its
     /// config log) as the person phone `phone` is certified for, to be signed
     /// by that phone, at this box's head. Nothing is written.
-    pub fn draft_for_phone_on(
-        &mut self,
-        session_id: Uuid,
-        workspace_id: Uuid,
-        phone: Uuid,
-        payload: SessionEvent,
-    ) -> Result<PhoneDraft> {
+    pub fn draft_for_phone_on(&mut self, session_id: Uuid, workspace_id: Uuid, phone: Uuid, payload: SessionEvent) -> Result<PhoneDraft> {
         let actor = self.phone_person(workspace_id, phone)?;
-        let (_, timeline) = self.store.load_config(
-            workspace_id,
-            self.trusted_founder.as_deref(),
-            self.local_workspace_id,
-        )?;
-        let mut env = SessionEventEnvelope::new(
-            session_id,
-            workspace_id,
-            self.store
-                .max_sequence(workspace_id, session_id)?
-                .unwrap_or(0)
-                + 1,
-            payload,
-        );
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let mut env = SessionEventEnvelope::new(session_id, workspace_id, self.store.max_sequence(workspace_id, session_id)?.unwrap_or(0) + 1, payload);
         // One past the newest event of the log this box holds, named as the
         // stamp's `log_head` (`ligus_core::lamport`): the phone signs a lamport
         // every fold can account for.
@@ -439,9 +274,7 @@ impl ChatService {
             cfg_frontier: timeline.head(),
             presence: None,
             runtime_effect: false,
-            prev: self
-                .store
-                .last_signed_by(workspace_id, session_id, phone, env.lamport)?,
+            prev: self.store.last_signed_by(workspace_id, session_id, phone, env.lamport)?,
             sig_alg: SigAlg::P256,
             log_head,
         });
@@ -454,12 +287,7 @@ impl ChatService {
     /// judges the unsigned draft as every fold will, so anything the fold
     /// would refuse for another reason is refused here, before the phone
     /// signs anything. Nothing is written.
-    pub fn draft_phone_action(
-        &mut self,
-        workspace_id: Uuid,
-        phone: Uuid,
-        action: &PhoneAction,
-    ) -> Result<(PhoneDraft, bool)> {
+    pub fn draft_phone_action(&mut self, workspace_id: Uuid, phone: Uuid, action: &PhoneAction) -> Result<(PhoneDraft, bool)> {
         if let Some(why) = action.malformed() {
             return Err(ChatError::Unauthorized(why.into()));
         }
@@ -473,24 +301,13 @@ impl ChatService {
             .ok_or_else(|| ChatError::Unauthorized("no such chat in this workspace".into()))?;
         let payload = match action {
             PhoneAction::Post { text, .. } => {
-                let mut m = ligus_core::ChatMessage::new(
-                    ligus_core::MessageRole::User,
-                    actor.display_name.clone(),
-                    text.clone(),
-                );
+                let mut m = ligus_core::ChatMessage::new(ligus_core::MessageRole::User, actor.display_name.clone(), text.clone());
                 m.actor_identity = Some(actor.clone());
                 SessionEvent::MessageAppended { message: m }
             }
-            PhoneAction::Vote {
-                proposal_id,
-                diff_digest,
-                approved,
-                ..
-            } => {
+            PhoneAction::Vote { proposal_id, diff_digest, approved, .. } => {
                 if !chat.proposals.iter().any(|p| p.id == *proposal_id) {
-                    return Err(ChatError::Unauthorized(
-                        "no such proposal in this chat".into(),
-                    ));
+                    return Err(ChatError::Unauthorized("no such proposal in this chat".into()));
                 }
                 SessionEvent::ProposalVoteCast {
                     proposal_id: *proposal_id,
@@ -503,187 +320,101 @@ impl ChatService {
                     },
                 }
             }
-            PhoneAction::Answer {
-                ask_id,
-                answer,
-                option_index,
-                ask_digest,
-                text,
-                decline,
-                ..
-            } => {
-                let st = chat
-                    .flow
-                    .asks
-                    .get(ask_id)
-                    .filter(|a| a.is_open())
-                    .ok_or_else(|| {
-                        ChatError::Unauthorized(
-                            "that question is already answered or closed".into(),
-                        )
-                    })?;
+            PhoneAction::Answer { ask_id, answer, option_index, ask_digest, text, decline, .. } => {
+                let st = chat.flow.asks.get(ask_id).filter(|a| a.is_open()).ok_or_else(|| ChatError::Unauthorized("that question is already answered or closed".into()))?;
                 if st.is_v2() {
                     // A v2 card (agent questions 6.3): the phone drew it from
                     // the signed ask and names its digest; the box drafts
                     // nothing for a card the phone didn't see.
-                    let choice = super::asks::AskChoice {
-                        option: *option_index,
-                        text: text.clone(),
-                        decline: *decline,
-                    };
-                    let ligus_core::flow::FlowRecord::HumanAnswered(mut a) =
-                        super::asks::answer_record(self, &chat, st, &choice)?
-                    else {
+                    let choice = super::asks::AskChoice { option: *option_index, text: text.clone(), decline: *decline };
+                    let ligus_core::flow::FlowRecord::HumanAnswered(mut a) = super::asks::answer_record(self, &chat, st, &choice)? else {
                         return Err(ChatError::Unauthorized("not an answer".into()));
                     };
                     if a.ask_digest != *ask_digest {
-                        return Err(ChatError::Unauthorized(
-                            "the question isn't the one the phone showed: refresh and answer again"
-                                .into(),
-                        ));
+                        return Err(ChatError::Unauthorized("the question isn't the one the phone showed: refresh and answer again".into()));
                     }
                     if a.answer != *answer || a.text != *text {
-                        return Err(ChatError::Unauthorized(
-                            "the answer doesn't match the card's option".into(),
-                        ));
+                        return Err(ChatError::Unauthorized("the answer doesn't match the card's option".into()));
                     }
                     a.by = actor.display_name.clone();
                     needs_presence = st.grant_needs_presence();
-                    SessionEvent::FlowRecorded {
-                        record: ligus_core::flow::FlowRecord::HumanAnswered(a),
-                    }
+                    SessionEvent::FlowRecorded { record: ligus_core::flow::FlowRecord::HumanAnswered(a) }
                 } else {
-                    if *decline || !text.is_empty() {
-                        return Err(ChatError::Unauthorized(
-                            "an older question takes neither Not now nor a separate reply".into(),
-                        ));
-                    }
-                    if !ask_digest.is_empty()
-                        && self
-                            .ask_digest_here(workspace_id, chat.id, *ask_id)?
-                            .as_deref()
-                            != Some(ask_digest.as_str())
-                    {
-                        return Err(ChatError::Unauthorized(
-                            "the question isn't the one the phone showed: refresh and answer again"
-                                .into(),
-                        ));
-                    }
-                    SessionEvent::FlowRecorded {
-                        record: ligus_core::flow::FlowRecord::HumanAnswered(
-                            ligus_core::flow::HumanAnswered {
-                                ask_id: *ask_id,
-                                answer: answer.clone(),
-                                option_index: *option_index,
-                                by: actor.display_name.clone(),
-                                at_ms: ligus_core::flow::now_ms(),
-                                ask_digest: ask_digest.clone(),
-                                ..Default::default()
-                            },
-                        ),
-                    }
+                if *decline || !text.is_empty() {
+                    return Err(ChatError::Unauthorized("an older question takes neither Not now nor a separate reply".into()));
+                }
+                if !ask_digest.is_empty() && self.ask_digest_here(workspace_id, chat.id, *ask_id)?.as_deref() != Some(ask_digest.as_str()) {
+                    return Err(ChatError::Unauthorized("the question isn't the one the phone showed: refresh and answer again".into()));
+                }
+                SessionEvent::FlowRecorded {
+                    record: ligus_core::flow::FlowRecord::HumanAnswered(ligus_core::flow::HumanAnswered {
+                        ask_id: *ask_id,
+                        answer: answer.clone(),
+                        option_index: *option_index,
+                        by: actor.display_name.clone(),
+                        at_ms: ligus_core::flow::now_ms(),
+                        ask_digest: ask_digest.clone(),
+                        ..Default::default()
+                    }),
+                }
                 }
             }
             PhoneAction::ClearLockdown { chat_id, raises } => {
                 // Only lockdowns in force here, each named by its raise: a
                 // phone showing an older view prepares again.
-                let active: Vec<Uuid> = self
-                    .workspace_guards(workspace_id)?
-                    .lockdowns_of(*chat_id)
-                    .iter()
-                    .filter_map(|l| l.raise_event_id)
-                    .collect();
+                let active: Vec<Uuid> =
+                    self.workspace_guards(workspace_id)?.lockdowns_of(*chat_id).iter().filter_map(|l| l.raise_event_id).collect();
                 if raises.iter().any(|r| !active.contains(r)) {
-                    return Err(ChatError::Unauthorized(
-                        "a lockdown it names isn't in force here: refresh and prepare again".into(),
-                    ));
+                    return Err(ChatError::Unauthorized("a lockdown it names isn't in force here: refresh and prepare again".into()));
                 }
-                SessionEvent::ChatLockdownCleared {
-                    chat_id: *chat_id,
-                    raises: raises.clone(),
+                SessionEvent::ChatLockdownCleared { chat_id: *chat_id, raises: raises.clone() }
+            }
+            PhoneAction::RequestApply { proposal_id, diff_digest, host_device_id, expected_base_commit, repo_id, .. } => {
+                SessionEvent::ProposalApplyRequested {
+                    request: ligus_core::workspace_repo::ApplyRequest {
+                        id: Uuid::new_v4(),
+                        proposal_id: *proposal_id,
+                        diff_digest: diff_digest.clone(),
+                        host_device_id: *host_device_id,
+                        expected_base_commit: expected_base_commit.clone(),
+                        repo_id: *repo_id,
+                    },
                 }
             }
-            PhoneAction::RequestApply {
-                proposal_id,
-                diff_digest,
-                host_device_id,
-                expected_base_commit,
-                repo_id,
-                ..
-            } => SessionEvent::ProposalApplyRequested {
-                request: ligus_core::workspace_repo::ApplyRequest {
-                    id: Uuid::new_v4(),
-                    proposal_id: *proposal_id,
-                    diff_digest: diff_digest.clone(),
-                    host_device_id: *host_device_id,
-                    expected_base_commit: expected_base_commit.clone(),
-                    repo_id: *repo_id,
-                },
-            },
-            PhoneAction::WithdrawApply {
-                proposal_id,
-                request_id,
-                ..
-            } => SessionEvent::ProposalApplyWithdrawn {
-                request_id: *request_id,
-                proposal_id: *proposal_id,
-            },
-            PhoneAction::Archive {
-                proposal_id,
-                archived,
-                ..
-            } => {
+            PhoneAction::WithdrawApply { proposal_id, request_id, .. } => {
+                SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id }
+            }
+            PhoneAction::Archive { proposal_id, archived, .. } => {
                 let Some(p) = chat.proposals.iter().find(|p| p.id == *proposal_id) else {
-                    return Err(ChatError::Unauthorized(
-                        "no such proposal in this chat".into(),
-                    ));
+                    return Err(ChatError::Unauthorized("no such proposal in this chat".into()));
                 };
                 // As on a desktop (`archive_proposals`): a proposal that
                 // still waits on someone isn't archived.
                 if *archived && ligus_core::proposal_archive::waits_on_someone(p, &chat) {
-                    return Err(ChatError::Unauthorized(
-                        "it still waits on a decision, so it can't be archived".into(),
-                    ));
+                    return Err(ChatError::Unauthorized("it still waits on a decision, so it can't be archived".into()));
                 }
-                SessionEvent::ProposalDismissed {
-                    proposal_id: *proposal_id,
-                    dismissed: *archived,
-                }
+                SessionEvent::ProposalDismissed { proposal_id: *proposal_id, dismissed: *archived }
             }
-            PhoneAction::ProposeMemory {
-                chat_id,
-                op,
-                rationale,
-            } => {
+            PhoneAction::ProposeMemory { chat_id, op, rationale } => {
                 // A new entry is named by its proposal; the source chat's
                 // egress is recorded (it can only narrow who reads the note).
                 let proposal_id = Uuid::new_v4();
                 let op = match op {
-                    ligus_core::memory::MemoryOp::Create {
-                        title, body, tags, ..
-                    } => ligus_core::memory::MemoryOp::Create {
-                        entry_id: proposal_id,
-                        title: title.clone(),
-                        body: body.clone(),
-                        tags: tags.clone(),
-                    },
+                    ligus_core::memory::MemoryOp::Create { title, body, tags, .. } => {
+                        ligus_core::memory::MemoryOp::Create { entry_id: proposal_id, title: title.clone(), body: body.clone(), tags: tags.clone() }
+                    }
                     other => other.clone(),
                 };
-                let mut source = ligus_core::memory::MemorySource {
-                    chat_id: Some(*chat_id),
-                    ..Default::default()
-                };
+                let mut source = ligus_core::memory::MemorySource { chat_id: Some(*chat_id), ..Default::default() };
                 self.stamp_memory_egress(workspace_id, &mut source);
                 SessionEvent::FlowRecorded {
-                    record: ligus_core::flow::FlowRecord::MemoryProposed(
-                        ligus_core::memory::MemoryProposal {
-                            proposal_id,
-                            op,
-                            proposer: String::new(),
-                            source,
-                            rationale: rationale.clone(),
-                        },
-                    ),
+                    record: ligus_core::flow::FlowRecord::MemoryProposed(ligus_core::memory::MemoryProposal {
+                        proposal_id,
+                        op,
+                        proposer: String::new(),
+                        source,
+                        rationale: rationale.clone(),
+                    }),
                 }
             }
         };
@@ -693,16 +424,10 @@ impl ChatService {
         // presence table, the action's own rules).
         let mut probe = draft.env.clone();
         probe.signer_device_id = Some(phone);
-        let (config, timeline) = self.store.load_config(
-            workspace_id,
-            self.trusted_founder.as_deref(),
-            self.local_workspace_id,
-        )?;
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         let presence = match self.authorize_as_fold(&probe, config.as_ref(), &timeline) {
             Ok(()) => needs_presence,
-            Err(ChatError::Unauthorized(why)) if why == ligus_core::authz::PRESENCE_REQUIRED => {
-                true
-            }
+            Err(ChatError::Unauthorized(why)) if why == ligus_core::authz::PRESENCE_REQUIRED => true,
             Err(e) => return Err(e),
         };
         Ok((draft, presence))
@@ -734,52 +459,30 @@ impl ChatService {
     /// fresh local sequence (the phone signed the draft's own), and refused
     /// when this phone signed something else on that log since the draft
     /// (its chain link would fork): prepare again.
-    pub fn append_phone_signed(
-        &mut self,
-        draft: PhoneDraft,
-        signature: Vec<u8>,
-    ) -> Result<SessionEventEnvelope> {
+    pub fn append_phone_signed(&mut self, draft: PhoneDraft, signature: Vec<u8>) -> Result<SessionEventEnvelope> {
         let mut env = draft.env;
-        let phone = env
-            .actor_stamp
-            .as_ref()
-            .and_then(|s| s.actor.device_id)
-            .ok_or_else(|| ChatError::Unauthorized("no phone".into()))?;
+        let phone = env.actor_stamp.as_ref().and_then(|s| s.actor.device_id).ok_or_else(|| ChatError::Unauthorized("no phone".into()))?;
         if self.store.has_event_in(env.workspace_id, env.event_id)? {
             return Err(ChatError::Unauthorized("already committed".into()));
         }
-        if env.actor_stamp.as_ref().and_then(|s| s.prev)
-            != self
-                .store
-                .last_signed_by(env.workspace_id, env.session_id, phone, u64::MAX)?
-        {
+        if env.actor_stamp.as_ref().and_then(|s| s.prev) != self.store.last_signed_by(env.workspace_id, env.session_id, phone, u64::MAX)? {
             return Err(ChatError::Unauthorized(STALE_DRAFT.into()));
         }
         env.signer_device_id = Some(phone);
         env.signature = Some(signature);
-        let (config, timeline) = self.store.load_config(
-            env.workspace_id,
-            self.trusted_founder.as_deref(),
-            self.local_workspace_id,
-        )?;
+        let (config, timeline) = self.store.load_config(env.workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         let device = timeline
             .current()
             .devices
             .get(&phone)
             .filter(|d| d.phone && !d.revoked)
-            .ok_or_else(|| {
-                ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into())
-            })?;
-        device.verifying_key(&env).ok_or_else(|| {
-            ChatError::Unauthorized("the phone's signature doesn't verify".into())
-        })?;
+            .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
+        device.verifying_key(&env).ok_or_else(|| ChatError::Unauthorized("the phone's signature doesn't verify".into()))?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         // Under the store's write lock: refused if this phone's chain moved
         // past the draft's link since the check above (another connection).
         match self.store.ingest_authored(&env) {
-            Err(crate::event_store::EventStoreError::StaleDraft) => {
-                return Err(ChatError::Unauthorized(STALE_DRAFT.into()))
-            }
+            Err(crate::event_store::EventStoreError::StaleDraft) => return Err(ChatError::Unauthorized(STALE_DRAFT.into())),
             r => r?,
         };
         self.changes.local(&env);
@@ -790,34 +493,18 @@ impl ChatService {
 // "Add this phone" (`crate::phone_enroll`).
 impl ChatService {
     /// Where `code`'s device stands in `workspace_id`.
-    pub fn phone_standing(
-        &self,
-        workspace_id: Uuid,
-        code: &crate::phone_enroll::PhoneCode,
-    ) -> Result<crate::phone_enroll::PhoneStanding> {
-        let (_, timeline) = self.store.load_config(
-            workspace_id,
-            self.trusted_founder.as_deref(),
-            self.local_workspace_id,
-        )?;
+    pub fn phone_standing(&self, workspace_id: Uuid, code: &crate::phone_enroll::PhoneCode) -> Result<crate::phone_enroll::PhoneStanding> {
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         let account = self.author.account_id;
         Ok(match timeline.current().devices.get(&code.device_id) {
             None => crate::phone_enroll::PhoneStanding::New,
             Some(d) if d.revoked => crate::phone_enroll::PhoneStanding::Revoked,
-            Some(d) if !d.phone => crate::phone_enroll::PhoneStanding::Conflict(
-                "that device id is a desktop or box of this workspace, not a phone".into(),
-            ),
+            Some(d) if !d.phone => crate::phone_enroll::PhoneStanding::Conflict("that device id is a desktop or box of this workspace, not a phone".into()),
             Some(d) if d.public_key != code.public_key => {
-                crate::phone_enroll::PhoneStanding::Conflict(
-                    "that phone is certified here with a different key".into(),
-                )
+                crate::phone_enroll::PhoneStanding::Conflict("that phone is certified here with a different key".into())
             }
-            Some(d) if account.is_some_and(|a| d.accounts.contains(&a)) => {
-                crate::phone_enroll::PhoneStanding::AlreadyMine
-            }
-            Some(_) => {
-                crate::phone_enroll::PhoneStanding::Conflict("that phone is someone else's".into())
-            }
+            Some(d) if account.is_some_and(|a| d.accounts.contains(&a)) => crate::phone_enroll::PhoneStanding::AlreadyMine,
+            Some(_) => crate::phone_enroll::PhoneStanding::Conflict("that phone is someone else's".into()),
         })
     }
 
@@ -826,15 +513,9 @@ impl ChatService {
     /// the checks [`Self::phone_standing`] makes. The person's passkey
     /// presence is asked for by the presence provider (the desktop's sheet,
     /// a CLI's recovery key). Returns the certificate's device id.
-    pub fn certify_phone_code(
-        &mut self,
-        workspace_id: Uuid,
-        code: &crate::phone_enroll::PhoneCode,
-    ) -> Result<Uuid> {
-        code.verify()
-            .map_err(|e| ChatError::Unauthorized(e.to_string()))?;
-        crate::phone_enroll::check_device_id(code.device_id, &code.public_key)
-            .map_err(ChatError::Unauthorized)?;
+    pub fn certify_phone_code(&mut self, workspace_id: Uuid, code: &crate::phone_enroll::PhoneCode) -> Result<Uuid> {
+        code.verify().map_err(|e| ChatError::Unauthorized(e.to_string()))?;
+        crate::phone_enroll::check_device_id(code.device_id, &code.public_key).map_err(ChatError::Unauthorized)?;
         match self.phone_standing(workspace_id, code)? {
             crate::phone_enroll::PhoneStanding::New => {}
             crate::phone_enroll::PhoneStanding::AlreadyMine => return Ok(code.device_id),
@@ -851,9 +532,7 @@ impl ChatService {
 }
 
 /// The refusal of an enrollment statement that doesn't verify.
-pub const BAD_CONSENT: &str =
-    "that statement isn't this phone's signature for this account and workspace";
+pub const BAD_CONSENT: &str = "that statement isn't this phone's signature for this account and workspace";
 
 /// The refusal of a phone draft whose chain link went stale.
-pub const STALE_DRAFT: &str =
-    "this phone signed something else here since the draft; prepare it again";
+pub const STALE_DRAFT: &str = "this phone signed something else here since the draft; prepare it again";

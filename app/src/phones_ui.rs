@@ -52,20 +52,11 @@ pub(crate) fn standing_dto(s: PhoneStanding) -> (String, Option<String>) {
 /// Check a phone code (signature, key, where the device stands) without
 /// writing anything.
 #[tauri::command]
-pub(crate) async fn inspect_phone_code(
-    ligus_app: tauri::AppHandle,
-    code: String,
-) -> Result<PhoneCodeDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        inspect_phone_code_sync(tauri::Manager::state::<AppState>(ligus_app), code)
-    })
-    .await
+pub(crate) async fn inspect_phone_code(ligus_app: tauri::AppHandle, code: String) -> Result<PhoneCodeDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| inspect_phone_code_sync(tauri::Manager::state::<AppState>(ligus_app), code)).await
 }
 
-pub(crate) fn inspect_phone_code_sync(
-    state: State<AppState>,
-    code: String,
-) -> Result<PhoneCodeDto, String> {
+pub(crate) fn inspect_phone_code_sync(state: State<AppState>, code: String) -> Result<PhoneCodeDto, String> {
     let c = decode(&code)?;
     let ws = state.active_workspace_id();
     let svc = state.service.lock().unwrap();
@@ -102,21 +93,8 @@ pub(crate) fn confirm_matches_preview(
 /// be the active one. Blocks on the person's passkey (the presence sheet);
 /// refused without it.
 #[tauri::command(async)]
-pub(crate) async fn certify_phone_code(
-    ligus_app: tauri::AppHandle,
-    code: String,
-    fingerprint: String,
-    workspace_id: String,
-) -> Result<String, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        certify_phone_code_sync(
-            tauri::Manager::state::<AppState>(ligus_app),
-            code,
-            fingerprint,
-            workspace_id,
-        )
-    })
-    .await
+pub(crate) async fn certify_phone_code(ligus_app: tauri::AppHandle, code: String, fingerprint: String, workspace_id: String) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| certify_phone_code_sync(tauri::Manager::state::<AppState>(ligus_app), code, fingerprint, workspace_id)).await
 }
 
 pub(crate) fn certify_phone_code_sync(
@@ -142,9 +120,7 @@ mod tests {
 
     // Only the key's fingerprint matters here, not the signature.
     fn code() -> PhoneCode {
-        let key: Vec<u8> = std::iter::once(4u8)
-            .chain((0..64).map(|i| i as u8))
-            .collect();
+        let key: Vec<u8> = std::iter::once(4u8).chain((0..64).map(|i| i as u8)).collect();
         PhoneCode::new_signed(uuid::Uuid::new_v4(), key, "Ana's iPhone", |_| [0u8; 64])
     }
 
@@ -153,8 +129,7 @@ mod tests {
         let c = code();
         let (shown, active) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
         assert!(confirm_matches_preview(&c, &c.fingerprint(), &shown.to_string(), shown).is_ok());
-        let err =
-            confirm_matches_preview(&c, &c.fingerprint(), &shown.to_string(), active).unwrap_err();
+        let err = confirm_matches_preview(&c, &c.fingerprint(), &shown.to_string(), active).unwrap_err();
         assert!(err.contains("workspace changed"), "{err}");
         assert!(confirm_matches_preview(&c, &c.fingerprint(), "not-a-uuid", active).is_err());
     }
@@ -163,12 +138,7 @@ mod tests {
     fn certify_refuses_another_fingerprint() {
         let c = code();
         let ws = uuid::Uuid::new_v4();
-        assert!(
-            confirm_matches_preview(&c, &c.fingerprint().to_lowercase(), &ws.to_string(), ws)
-                .is_ok()
-        );
-        assert!(
-            confirm_matches_preview(&c, "0000-0000-0000-0000-0000", &ws.to_string(), ws).is_err()
-        );
+        assert!(confirm_matches_preview(&c, &c.fingerprint().to_lowercase(), &ws.to_string(), ws).is_ok());
+        assert!(confirm_matches_preview(&c, "0000-0000-0000-0000-0000", &ws.to_string(), ws).is_err());
     }
 }

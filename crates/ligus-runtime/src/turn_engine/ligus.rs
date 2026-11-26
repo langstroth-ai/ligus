@@ -39,20 +39,14 @@ pub struct Begin<'a> {
 
 impl TurnIface {
     pub fn none() -> Self {
-        Self {
-            turn: None,
-            socket: None,
-            tool_loop: false,
-        }
+        Self { turn: None, socket: None, tool_loop: false }
     }
 }
 
 /// Start the Ligus server's turn when the runtime can use it and the author
 /// gate allows tools. Otherwise the turn keeps the reply directives.
 pub fn begin(server: Option<&Arc<LigusMcp>>, b: Begin<'_>) -> TurnIface {
-    let Some(server) = server else {
-        return TurnIface::none();
-    };
+    let Some(server) = server else { return TurnIface::none() };
     if !b.tools_allowed || !crate::ligus_mcp::offered_for(b.runtime, b.restricted) {
         return TurnIface::none();
     }
@@ -78,11 +72,7 @@ pub fn begin(server: Option<&Arc<LigusMcp>>, b: Begin<'_>) -> TurnIface {
     } else {
         None
     };
-    TurnIface {
-        turn: Some(Arc::new(turn)),
-        socket,
-        tool_loop: !cli,
-    }
+    TurnIface { turn: Some(Arc::new(turn)), socket, tool_loop: !cli }
 }
 
 impl TurnIface {
@@ -108,15 +98,10 @@ impl TurnIface {
     /// permission asker, the folded tools).
     pub fn scope(&self) -> crate::agent_turn::AgentTurnScope {
         match &self.turn {
-            Some(t) => crate::agent_turn::AgentTurnScope {
-                ligus: self.folded(),
-                ..t.agent_scope()
-            },
+            Some(t) => crate::agent_turn::AgentTurnScope { ligus: self.folded(), ..t.agent_scope() },
             // No Ligus tools this turn: the spend budget still holds.
             None => crate::agent_turn::AgentTurnScope {
-                spend: Some(crate::agent_turn::SpendMeter::new(
-                    Budgets::from_env().max_spend_usd,
-                )),
+                spend: Some(crate::agent_turn::SpendMeter::new(Budgets::from_env().max_spend_usd)),
                 ..Default::default()
             },
         }
@@ -152,24 +137,12 @@ impl TurnIface {
             }
         }
         if let Some(r) = t.report() {
-            let files = if r.files_touched.is_empty() {
-                String::new()
-            } else {
-                format!(" Files: {}.", r.files_touched.join(", "))
-            };
+            let files = if r.files_touched.is_empty() { String::new() } else { format!(" Files: {}.", r.files_touched.join(", ")) };
             let conf = match (&r.confidence, detailed) {
                 (Some(c), true) => format!(" Confidence: {c}."),
                 _ => String::new(),
             };
-            let _ = svc.post_system_note(
-                chat_id,
-                workspace_id,
-                format!(
-                    "\u{1f4cb} {author} reported {}: {}.{files}{conf}",
-                    r.status,
-                    r.summary.trim_end_matches('.')
-                ),
-            );
+            let _ = svc.post_system_note(chat_id, workspace_id, format!("\u{1f4cb} {author} reported {}: {}.{files}{conf}", r.status, r.summary.trim_end_matches('.')));
         }
     }
 }

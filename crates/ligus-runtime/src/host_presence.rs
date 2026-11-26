@@ -46,14 +46,7 @@ type Beat = ligus_core::workspace_repo::HostBeat;
 /// Seal a beat for `host_id` at `at` (unix seconds) under `ring`'s seal key
 /// (none when this device may not seal).
 pub fn seal_host_beat(ring: &KeyringEngine, host_id: &str, at: i64) -> Option<Value> {
-    seal_beat(
-        ring,
-        &Beat {
-            host_id: host_id.to_string(),
-            at,
-            ..Default::default()
-        },
-    )
+    seal_beat(ring, &Beat { host_id: host_id.to_string(), at, ..Default::default() })
 }
 
 /// Seal a full beat (with this host's repo coverage and its `seq`).
@@ -68,15 +61,8 @@ pub fn seal_beat(ring: &KeyringEngine, beat: &Beat) -> Option<Value> {
 /// presence, beats sealed under another key or under an epoch older than the
 /// authorized head, and a beat whose slot doesn't match the host it names. A
 /// beat from the future is clamped to `now`.
-pub fn open_host_beats(
-    blobs: &HashMap<String, Value>,
-    ring: &KeyringEngine,
-    now: i64,
-) -> HashMap<String, i64> {
-    open_beats(blobs, ring, now)
-        .into_iter()
-        .map(|(h, b)| (h, b.at))
-        .collect()
+pub fn open_host_beats(blobs: &HashMap<String, Value>, ring: &KeyringEngine, now: i64) -> HashMap<String, i64> {
+    open_beats(blobs, ring, now).into_iter().map(|(h, b)| (h, b.at)).collect()
 }
 
 /// How far ahead of this device's clock a beat's `seq` (its sender's clock,
@@ -96,33 +82,20 @@ fn seq_plausible(seq: u64, now_secs: i64) -> bool {
 /// included). Of several beats for one host, the highest `seq` wins (ties
 /// by `at`); a beat whose coverage breaks the bounds keeps its liveness and
 /// loses its coverage.
-pub fn open_beats(
-    blobs: &HashMap<String, Value>,
-    ring: &KeyringEngine,
-    now: i64,
-) -> HashMap<String, Beat> {
+pub fn open_beats(blobs: &HashMap<String, Value>, ring: &KeyringEngine, now: i64) -> HashMap<String, Beat> {
     let mut out: HashMap<String, Beat> = HashMap::new();
     let floor = ring.authorized_head();
     for (slot, blob) in blobs {
-        let Some(sealed) = blob.get("hostBeat") else {
-            continue;
-        };
-        let Ok(sealed) = serde_json::from_value::<SealedEnvelope>(sealed.clone()) else {
-            continue;
-        };
+        let Some(sealed) = blob.get("hostBeat") else { continue };
+        let Ok(sealed) = serde_json::from_value::<SealedEnvelope>(sealed.clone()) else { continue };
         if sealed.version < floor {
             continue;
         }
-        let Some(plain) = ring
-            .keys_for(sealed.version, sealed.kid.as_deref())
-            .into_iter()
-            .find_map(|k| open_symmetric(k, &sealed).ok())
+        let Some(plain) = ring.keys_for(sealed.version, sealed.kid.as_deref()).into_iter().find_map(|k| open_symmetric(k, &sealed).ok())
         else {
             continue;
         };
-        let Ok(beat) = serde_json::from_slice::<Beat>(&plain) else {
-            continue;
-        };
+        let Ok(beat) = serde_json::from_slice::<Beat>(&plain) else { continue };
         if *slot != host_presence_slot(&beat.host_id) {
             continue;
         }
@@ -143,19 +116,10 @@ pub fn open_beats(
 }
 
 /// Publish this host's beat to the room's presence channel.
-pub async fn publish_host_beat(
-    relay: &RelayClient,
-    room: &str,
-    ring: &KeyringEngine,
-    host_id: &str,
-) -> Result<(), RelayError> {
+pub async fn publish_host_beat(relay: &RelayClient, room: &str, ring: &KeyringEngine, host_id: &str) -> Result<(), RelayError> {
     let now = Timestamp::now().inner().unix_timestamp();
-    let Some(blob) = seal_host_beat(ring, host_id, now) else {
-        return Ok(());
-    };
-    relay
-        .publish_presence(room, &host_presence_slot(host_id), &blob)
-        .await
+    let Some(blob) = seal_host_beat(ring, host_id, now) else { return Ok(()) };
+    relay.publish_presence(room, &host_presence_slot(host_id), &blob).await
 }
 
 /// This host's beat now, with its repo coverage (`seq` orders beats from
@@ -164,60 +128,28 @@ pub async fn publish_host_beat(
 /// (`ChatService::sign_beat`), or readers ignore it.
 pub fn beat_now(host_id: &str, coverage: Vec<ligus_core::workspace_repo::CoverageEntry>) -> Beat {
     let now = Timestamp::now().inner().unix_timestamp();
-    let seq = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    Beat {
-        host_id: host_id.to_string(),
-        at: now,
-        seq: if coverage.is_empty() { 0 } else { seq },
-        coverage,
-        ..Default::default()
-    }
+    let seq = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    Beat { host_id: host_id.to_string(), at: now, seq: if coverage.is_empty() { 0 } else { seq }, coverage, ..Default::default() }
 }
 
 /// Publish a whole beat (see [`beat_now`]) to the room's presence channel.
-pub async fn publish_beat(
-    relay: &RelayClient,
-    room: &str,
-    ring: &KeyringEngine,
-    beat: &Beat,
-) -> Result<(), RelayError> {
+pub async fn publish_beat(relay: &RelayClient, room: &str, ring: &KeyringEngine, beat: &Beat) -> Result<(), RelayError> {
     let Some(blob) = seal_beat(ring, beat) else {
         return Ok(());
     };
-    relay
-        .publish_presence(room, &host_presence_slot(&beat.host_id), &blob)
-        .await
+    relay.publish_presence(room, &host_presence_slot(&beat.host_id), &blob).await
 }
 
 /// Read every host's whole latest beat in the room.
-pub async fn fetch_beats(
-    relay: &RelayClient,
-    room: &str,
-    ring: &KeyringEngine,
-) -> Result<HashMap<String, Beat>, RelayError> {
+pub async fn fetch_beats(relay: &RelayClient, room: &str, ring: &KeyringEngine) -> Result<HashMap<String, Beat>, RelayError> {
     let blobs = relay.list_presence(room).await?;
-    Ok(open_beats(
-        &blobs,
-        ring,
-        Timestamp::now().inner().unix_timestamp(),
-    ))
+    Ok(open_beats(&blobs, ring, Timestamp::now().inner().unix_timestamp()))
 }
 
 /// Read every host's latest beat in the room (host id → unix seconds).
-pub async fn fetch_host_beats(
-    relay: &RelayClient,
-    room: &str,
-    ring: &KeyringEngine,
-) -> Result<HashMap<String, i64>, RelayError> {
+pub async fn fetch_host_beats(relay: &RelayClient, room: &str, ring: &KeyringEngine) -> Result<HashMap<String, i64>, RelayError> {
     let blobs = relay.list_presence(room).await?;
-    Ok(open_host_beats(
-        &blobs,
-        ring,
-        Timestamp::now().inner().unix_timestamp(),
-    ))
+    Ok(open_host_beats(&blobs, ring, Timestamp::now().inner().unix_timestamp()))
 }
 
 /// The latest beat seen per host, shared between the task that polls the relay
@@ -257,11 +189,7 @@ impl HostPresence {
     /// coverage-less or unverified beat leaves the last coverage alone).
     pub fn record_beat(&self, beat: &Beat, verified: bool) {
         self.record(&beat.host_id, beat.at);
-        if !verified
-            || beat.coverage.is_empty()
-            || !beat.coverage_ok()
-            || !seq_plausible(beat.seq, Timestamp::now().inner().unix_timestamp())
-        {
+        if !verified || beat.coverage.is_empty() || !beat.coverage_ok() || !seq_plausible(beat.seq, Timestamp::now().inner().unix_timestamp()) {
             return;
         }
         let mut c = self.coverage.lock().unwrap_or_else(|p| p.into_inner());
@@ -283,24 +211,13 @@ impl HostPresence {
 
     /// The coverage `host_id` last reported (`None`: it reports nothing, so
     /// readers show "unknown", never "missing").
-    pub fn coverage_of(
-        &self,
-        host_id: &str,
-    ) -> Option<Vec<ligus_core::workspace_repo::CoverageEntry>> {
-        self.coverage
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(host_id)
-            .map(|(_, c)| c.clone())
+    pub fn coverage_of(&self, host_id: &str) -> Option<Vec<ligus_core::workspace_repo::CoverageEntry>> {
+        self.coverage.lock().unwrap_or_else(|p| p.into_inner()).get(host_id).map(|(_, c)| c.clone())
     }
 
     /// The newest beat seen for `host_id`.
     pub fn beat_of(&self, host_id: &str) -> Option<i64> {
-        self.beats
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(host_id)
-            .copied()
+        self.beats.lock().unwrap_or_else(|p| p.into_inner()).get(host_id).copied()
     }
 
     /// When `host` was last seen: its newest presence beat or its durable
@@ -315,8 +232,7 @@ impl HostPresence {
 
     /// Whether `host` was seen within [`HOST_ONLINE_WINDOW_SECS`] of `now`.
     pub fn is_online(&self, host: &WorkspaceHost, now: &Timestamp) -> bool {
-        now.inner().unix_timestamp() - self.last_seen(host).inner().unix_timestamp()
-            <= HOST_ONLINE_WINDOW_SECS
+        now.inner().unix_timestamp() - self.last_seen(host).inner().unix_timestamp() <= HOST_ONLINE_WINDOW_SECS
     }
 }
 
@@ -333,30 +249,15 @@ mod tests {
     fn beats_round_trip_and_ignore_everything_else() {
         let k = key("room secret");
         let mut blobs = HashMap::new();
-        blobs.insert(
-            host_presence_slot("box"),
-            seal_host_beat(&k, "box", 1_000).unwrap(),
-        );
+        blobs.insert(host_presence_slot("box"), seal_host_beat(&k, "box", 1_000).unwrap());
         // Human presence (plaintext typing blob) is not a beat.
-        blobs.insert(
-            "actor-1".into(),
-            serde_json::json!({ "actorId": "actor-1", "ts": 5 }),
-        );
+        blobs.insert("actor-1".into(), serde_json::json!({ "actorId": "actor-1", "ts": 5 }));
         // A beat sealed under another workspace's key doesn't open.
-        blobs.insert(
-            host_presence_slot("stranger"),
-            seal_host_beat(&key("other"), "stranger", 1_000).unwrap(),
-        );
+        blobs.insert(host_presence_slot("stranger"), seal_host_beat(&key("other"), "stranger", 1_000).unwrap());
         // A beat that claims another host's slot is ignored.
-        blobs.insert(
-            host_presence_slot("desk"),
-            seal_host_beat(&k, "box", 2_000).unwrap(),
-        );
+        blobs.insert(host_presence_slot("desk"), seal_host_beat(&k, "box", 2_000).unwrap());
         // A beat from the future is clamped to now.
-        blobs.insert(
-            host_presence_slot("fast"),
-            seal_host_beat(&k, "fast", 9_999).unwrap(),
-        );
+        blobs.insert(host_presence_slot("fast"), seal_host_beat(&k, "fast", 9_999).unwrap());
 
         let beats = open_host_beats(&blobs, &k, 5_000);
         assert_eq!(beats.get("box"), Some(&1_000));
@@ -374,10 +275,7 @@ mod tests {
         let mut host = WorkspaceHost::new("box", HostKind::Worker, "Box");
         host.last_seen = Timestamp::from_unix_seconds(t - 10_000);
         let p = HostPresence::new();
-        assert!(
-            !p.is_online(&host, &now),
-            "stale durable record and no beat: offline"
-        );
+        assert!(!p.is_online(&host, &now), "stale durable record and no beat: offline");
         p.record("box", t - 20);
         assert!(p.is_online(&host, &now), "a fresh beat: online");
         assert_eq!(p.last_seen(&host).inner().unix_timestamp(), t - 20);
@@ -394,50 +292,23 @@ mod tests {
     fn coverage_highest_seq_wins_any_order() {
         use ligus_core::workspace_repo::{CoverageEntry, HostBeat};
         let k = key("room secret");
-        let entry = |state: &str| CoverageEntry {
-            repo_id: uuid::Uuid::nil(),
-            state: state.into(),
-            code: String::new(),
-            via_fork: false,
-        };
-        let newer = HostBeat {
-            host_id: "box".into(),
-            at: 100,
-            seq: 7,
-            coverage: vec![entry("present")],
-            ..Default::default()
-        };
-        let older = HostBeat {
-            host_id: "box".into(),
-            at: 200,
-            seq: 3,
-            coverage: vec![entry("missing")],
-            ..Default::default()
-        };
+        let entry = |state: &str| CoverageEntry { repo_id: uuid::Uuid::nil(), state: state.into(), code: String::new(), via_fork: false };
+        let newer = HostBeat { host_id: "box".into(), at: 100, seq: 7, coverage: vec![entry("present")], ..Default::default() };
+        let older = HostBeat { host_id: "box".into(), at: 200, seq: 3, coverage: vec![entry("missing")], ..Default::default() };
         for order in [[&newer, &older], [&older, &newer]] {
             let p = HostPresence::new();
             for b in order {
                 p.record_beat(b, true);
             }
             assert_eq!(p.coverage_of("box").unwrap()[0].state, "present");
-            assert_eq!(
-                p.beat_of("box"),
-                Some(200),
-                "liveness is the newest beat either way"
-            );
+            assert_eq!(p.beat_of("box"), Some(200), "liveness is the newest beat either way");
         }
         let mut blobs = HashMap::new();
         blobs.insert(host_presence_slot("box"), seal_beat(&k, &newer).unwrap());
         let opened = open_beats(&blobs, &k, 1_000);
         assert_eq!(opened["box"].coverage, newer.coverage);
         // Over the bound: liveness kept, coverage dropped.
-        let big = HostBeat {
-            host_id: "big".into(),
-            at: 1,
-            seq: 1,
-            coverage: (0..65).map(|_| entry("present")).collect(),
-            ..Default::default()
-        };
+        let big = HostBeat { host_id: "big".into(), at: 1, seq: 1, coverage: (0..65).map(|_| entry("present")).collect(), ..Default::default() };
         blobs.insert(host_presence_slot("big"), seal_beat(&k, &big).unwrap());
         let opened = open_beats(&blobs, &k, 1_000);
         assert!(opened["big"].coverage.is_empty());
@@ -450,38 +321,17 @@ mod tests {
     #[test]
     fn unverified_coverage_is_ignored() {
         use ligus_core::workspace_repo::{CoverageEntry, HostBeat};
-        let entry = |state: &str| CoverageEntry {
-            repo_id: uuid::Uuid::nil(),
-            state: state.into(),
-            code: String::new(),
-            via_fork: false,
-        };
+        let entry = |state: &str| CoverageEntry { repo_id: uuid::Uuid::nil(), state: state.into(), code: String::new(), via_fork: false };
         let p = HostPresence::new();
-        let real = HostBeat {
-            host_id: "box".into(),
-            at: 5,
-            seq: 1,
-            coverage: vec![entry("present")],
-            ..Default::default()
-        };
-        let forged = HostBeat {
-            host_id: "box".into(),
-            at: 9,
-            seq: 2,
-            coverage: vec![entry("missing")],
-            ..Default::default()
-        };
+        let real = HostBeat { host_id: "box".into(), at: 5, seq: 1, coverage: vec![entry("present")], ..Default::default() };
+        let forged = HostBeat { host_id: "box".into(), at: 9, seq: 2, coverage: vec![entry("missing")], ..Default::default() };
         let mut beats = HashMap::new();
         beats.insert("box".to_string(), real.clone());
         p.merge_beats(beats, |b| b == &real);
         let mut beats = HashMap::new();
         beats.insert("box".to_string(), forged);
         p.merge_beats(beats, |_| false);
-        assert_eq!(
-            p.coverage_of("box").unwrap()[0].state,
-            "present",
-            "the forged report is ignored"
-        );
+        assert_eq!(p.coverage_of("box").unwrap()[0].state, "present", "the forged report is ignored");
         assert_eq!(p.beat_of("box"), Some(9), "its liveness still counts");
     }
 
@@ -491,30 +341,10 @@ mod tests {
     #[test]
     fn far_future_seq_never_pins_coverage() {
         use ligus_core::workspace_repo::{CoverageEntry, HostBeat};
-        let entry = |state: &str| CoverageEntry {
-            repo_id: uuid::Uuid::nil(),
-            state: state.into(),
-            code: String::new(),
-            via_fork: false,
-        };
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        let forged = HostBeat {
-            host_id: "box".into(),
-            at: 1,
-            seq: u64::MAX,
-            coverage: vec![entry("missing")],
-            ..Default::default()
-        };
-        let real = HostBeat {
-            host_id: "box".into(),
-            at: 2,
-            seq: now_ms,
-            coverage: vec![entry("present")],
-            ..Default::default()
-        };
+        let entry = |state: &str| CoverageEntry { repo_id: uuid::Uuid::nil(), state: state.into(), code: String::new(), via_fork: false };
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let forged = HostBeat { host_id: "box".into(), at: 1, seq: u64::MAX, coverage: vec![entry("missing")], ..Default::default() };
+        let real = HostBeat { host_id: "box".into(), at: 2, seq: now_ms, coverage: vec![entry("present")], ..Default::default() };
         let p = HostPresence::new();
         p.record_beat(&forged, true);
         p.record_beat(&real, true);
@@ -524,33 +354,21 @@ mod tests {
         let mut blobs = HashMap::new();
         blobs.insert(host_presence_slot("box"), seal_beat(&k, &forged).unwrap());
         let opened = open_beats(&blobs, &k, (now_ms / 1000) as i64);
-        assert!(
-            opened.get("box").is_none_or(|b| b.coverage.is_empty()),
-            "a far-future seq carries no coverage"
-        );
+        assert!(opened.get("box").is_none_or(|b| b.coverage.is_empty()), "a far-future seq carries no coverage");
     }
 
     #[tokio::test]
     async fn publish_and_fetch_through_the_relay() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, crate::test_relay::router())
-                .await
-                .unwrap()
-        });
+        tokio::spawn(async move { axum::serve(listener, crate::test_relay::router()).await.unwrap() });
         let relay = RelayClient::new(format!("http://{addr}"));
         let k = key("room secret");
-        publish_host_beat(&relay, "room-a", &k, "box")
-            .await
-            .unwrap();
+        publish_host_beat(&relay, "room-a", &k, "box").await.unwrap();
         let beats = fetch_host_beats(&relay, "room-a", &k).await.unwrap();
         let now = Timestamp::now().inner().unix_timestamp();
         let at = *beats.get("box").expect("beat published");
         assert!(now - at < 5);
-        assert!(fetch_host_beats(&relay, "room-b", &k)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(fetch_host_beats(&relay, "room-b", &k).await.unwrap().is_empty());
     }
 }

@@ -12,12 +12,7 @@ use ligus_core::{ActorKind, MemberRoleChange, SessionEvent, Verdict, WorkspaceRo
 use proptest::prelude::*;
 
 const NAMES: [&str; 6] = ["f", "p1", "p2", "p3", "p4", "p5"];
-const ROLES: [WorkspaceRole; 4] = [
-    WorkspaceRole::Owner,
-    WorkspaceRole::Admin,
-    WorkspaceRole::Contributor,
-    WorkspaceRole::Viewer,
-];
+const ROLES: [WorkspaceRole; 4] = [WorkspaceRole::Owner, WorkspaceRole::Admin, WorkspaceRole::Contributor, WorkspaceRole::Viewer];
 
 fn world(roles: &[(usize, bool)]) -> SignedWorld {
     let mut w = SignedWorld::genesis(&NAMES, None);
@@ -36,18 +31,11 @@ fn world(roles: &[(usize, bool)]) -> SignedWorld {
 
 fn payload(w: &SignedWorld, action: &MemberAction) -> SessionEvent {
     match action {
-        MemberAction::Remove { member_id } => SessionEvent::MemberRemoved {
-            member_id: member_id.clone(),
-            watermark: vec![],
-        },
+        MemberAction::Remove { member_id } => SessionEvent::MemberRemoved { member_id: member_id.clone(), watermark: vec![] },
         MemberAction::SetRole { member_id, role } => {
             let old = w.config().role_of(member_id);
             SessionEvent::MemberRoleChanged {
-                change: MemberRoleChange {
-                    member_id: member_id.clone(),
-                    old_role: old,
-                    new_role: *role,
-                },
+                change: MemberRoleChange { member_id: member_id.clone(), old_role: old, new_role: *role },
                 watermark: vec![],
             }
         }
@@ -90,13 +78,8 @@ fn the_named_cases_read_as_the_rank_rules() {
     // f (founder, Owner), p1 Owner, p2 Admin, p3 Admin, p4 Contributor, p5 a service.
     let w = world(&[(0, false), (1, false), (1, false), (2, false), (0, true)]);
     let (r, c) = (w.roster(), w.config());
-    let rm = |m: &str| MemberAction::Remove {
-        member_id: m.into(),
-    };
-    let set = |m: &str, role| MemberAction::SetRole {
-        member_id: m.into(),
-        role,
-    };
+    let rm = |m: &str| MemberAction::Remove { member_id: m.into() };
+    let set = |m: &str, role| MemberAction::SetRole { member_id: m.into(), role };
     // An Admin removing or demoting an Admin: refused.
     assert!(member_action_refusal(&r, &c, "p2", &rm("p3")).is_some());
     assert!(member_action_refusal(&r, &c, "p2", &set("p3", WorkspaceRole::Contributor)).is_some());

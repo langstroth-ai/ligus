@@ -40,11 +40,7 @@ impl Requester {
         let shared = session
             .members
             .iter()
-            .filter(|m| {
-                m.actor
-                    .display_name
-                    .eq_ignore_ascii_case(&self.display_name)
-            })
+            .filter(|m| m.actor.display_name.eq_ignore_ascii_case(&self.display_name))
             .count()
             > 1;
         if shared && self.index > 0 {
@@ -136,7 +132,9 @@ fn mentions_phrase_opts(body_lower: &str, needle: &str, allow_hash_after: bool) 
         let ok_after = body_lower[after..]
             .chars()
             .next()
-            .map(|c| !c.is_alphanumeric() && c != '_' && c != '-' && (allow_hash_after || c != '#'))
+            .map(|c| {
+                !c.is_alphanumeric() && c != '_' && c != '-' && (allow_hash_after || c != '#')
+            })
             .unwrap_or(true);
         if ok_before && ok_after {
             return true;
@@ -159,10 +157,7 @@ pub fn parse_mentions(body: &str, session: &ChatSession) -> MentionTargets {
     // (`legacy_primary_alias_active`).
     let legacy_alias = ligus_core::agent::legacy_primary_alias_active(session)
         && mentions_phrase(&lower, ligus_core::agent::LEGACY_PRIMARY_HANDLE);
-    if mentions_phrase(&lower, "primary")
-        || mentions_phrase(&lower, ligus_core::agent::PRIMARY_HANDLE)
-        || legacy_alias
-    {
+    if mentions_phrase(&lower, "primary") || mentions_phrase(&lower, ligus_core::agent::PRIMARY_HANDLE) || legacy_alias {
         targets.primary = true;
     }
     if mentions_phrase(&lower, "all") {
@@ -272,20 +267,11 @@ fn requester_for(session: &ChatSession, a: &ligus_core::ActorIdentity) -> Reques
         .members
         .iter()
         .find(|m| m.actor.id == a.id || m.id == a.id)
-        .or_else(|| {
-            a.account_id.and_then(|acct| {
-                session
-                    .members
-                    .iter()
-                    .find(|m| m.actor.account_id == Some(acct))
-            })
-        });
+        .or_else(|| a.account_id.and_then(|acct| session.members.iter().find(|m| m.actor.account_id == Some(acct))));
     Requester {
         actor_id: a.id.clone(),
         member_id: member.map(|m| m.id.clone()),
-        display_name: member
-            .map(|m| m.actor.display_name.clone())
-            .unwrap_or_else(|| a.display_name.clone()),
+        display_name: member.map(|m| m.actor.display_name.clone()).unwrap_or_else(|| a.display_name.clone()),
         index: member.map(|m| m.index).unwrap_or(0),
         account_id: a.account_id,
     }
@@ -295,10 +281,7 @@ fn requester_by_name(session: &ChatSession, author: &str) -> Option<Requester> {
     if author.trim().is_empty() {
         return None;
     }
-    let mut named = session
-        .members
-        .iter()
-        .filter(|m| m.actor.kind == ActorKind::Human && m.actor.display_name == author);
+    let mut named = session.members.iter().filter(|m| m.actor.kind == ActorKind::Human && m.actor.display_name == author);
     match (named.next(), named.next()) {
         (Some(m), None) => Some(requester_for(session, &m.actor)),
         (Some(_), Some(_)) => None,
@@ -315,9 +298,7 @@ fn requester_by_name(session: &ChatSession, author: &str) -> Option<Requester> {
 /// Whether another agent reply in this chat wrote `@all` within
 /// [`AGENT_BROADCAST_WINDOW_SECS`] before `m`.
 fn recent_agent_broadcast(session: &ChatSession, m: &ChatMessage) -> bool {
-    let Some(at) = session.messages.iter().position(|x| x.id == m.id) else {
-        return false;
-    };
+    let Some(at) = session.messages.iter().position(|x| x.id == m.id) else { return false };
     session.messages[..at].iter().rev().any(|p| {
         is_agent_reply(p)
             && !p.is_streaming
@@ -365,12 +346,7 @@ impl MentionTargets {
     /// and actor ids) holding `roles`: a broadcast, a name/handle, a role
     /// group, or the requester `@you` resolved to. `my_name` matches a legacy
     /// requester that has no actor id.
-    pub fn reaches(
-        &self,
-        is_me: impl Fn(&str) -> bool,
-        roles: &[WorkspaceRole],
-        my_name: &str,
-    ) -> bool {
+    pub fn reaches(&self, is_me: impl Fn(&str) -> bool, roles: &[WorkspaceRole], my_name: &str) -> bool {
         self.human_broadcast
             || self.humans.iter().any(|h| is_me(h))
             || self.roles.iter().any(|r| roles.contains(r))
@@ -433,10 +409,7 @@ mod tests {
     /// contributor), Olu (owner).
     fn team() -> ChatSession {
         session_with(
-            vec![
-                WorkspaceAgent::new("coder", "r1"),
-                WorkspaceAgent::new("reviewer", "r1"),
-            ],
+            vec![WorkspaceAgent::new("coder", "r1"), WorkspaceAgent::new("reviewer", "r1")],
             vec![
                 human("olu", "Olu", WorkspaceRole::Owner, 1),
                 human("ana", "Ana", WorkspaceRole::Contributor, 2),
@@ -446,13 +419,7 @@ mod tests {
     }
 
     fn said(s: &mut ChatSession, who: &str, body: &str) -> Uuid {
-        let a = s
-            .members
-            .iter()
-            .find(|m| m.actor.id == who)
-            .unwrap()
-            .actor
-            .clone();
+        let a = s.members.iter().find(|m| m.actor.id == who).unwrap().actor.clone();
         let mut m = ChatMessage::new(MessageRole::User, a.display_name.clone(), body);
         m.actor_identity = Some(a);
         let id = m.id;
@@ -471,35 +438,15 @@ mod tests {
     fn agent_at_you_targets_only_the_requester() {
         let mut s = team();
         let q = said(&mut s, "ana", "@coder fix the build");
-        let r = replied(
-            &mut s,
-            "coder",
-            Some(q),
-            "Done — @you can you check the token?",
-        );
+        let r = replied(&mut s, "coder", Some(q), "Done — @you can you check the token?");
         let t = message_mentions(&r, &s);
         assert!(!t.human_broadcast);
         assert_eq!(t.humans, vec!["m-ana".to_string()]);
         let req = t.requester.clone().unwrap();
-        assert_eq!(
-            (req.actor_id.as_str(), req.display_name.as_str()),
-            ("ana", "Ana")
-        );
-        assert!(t.reaches(
-            |id| id == "ana" || id == "m-ana",
-            &[WorkspaceRole::Contributor],
-            "Ana"
-        ));
-        assert!(!t.reaches(
-            |id| id == "ben" || id == "m-ben",
-            &[WorkspaceRole::Contributor],
-            "Ben"
-        ));
-        assert!(!t.reaches(
-            |id| id == "olu" || id == "m-olu",
-            &[WorkspaceRole::Owner],
-            "Olu"
-        ));
+        assert_eq!((req.actor_id.as_str(), req.display_name.as_str()), ("ana", "Ana"));
+        assert!(t.reaches(|id| id == "ana" || id == "m-ana", &[WorkspaceRole::Contributor], "Ana"));
+        assert!(!t.reaches(|id| id == "ben" || id == "m-ben", &[WorkspaceRole::Contributor], "Ben"));
+        assert!(!t.reaches(|id| id == "olu" || id == "m-olu", &[WorkspaceRole::Owner], "Olu"));
     }
 
     #[test]
@@ -564,17 +511,13 @@ mod tests {
     #[test]
     fn requester_handle_disambiguates_shared_names() {
         let mut s = team();
-        s.members
-            .push(human("ana2", "Ana", WorkspaceRole::Viewer, 4));
+        s.members.push(human("ana2", "Ana", WorkspaceRole::Viewer, 4));
         let q = said(&mut s, "ana2", "@coder hi");
         let r = replied(&mut s, "coder", Some(q), "@you hi");
         let req = requester_of(&s, &r).unwrap();
         assert_eq!(req.handle(&s), "Ana#4");
         // `@Ana#4` written by the agent targets the same person.
-        assert_eq!(
-            parse_mentions("@Ana#4 hi", &s).humans,
-            vec!["m-ana2".to_string()]
-        );
+        assert_eq!(parse_mentions("@Ana#4 hi", &s).humans, vec!["m-ana2".to_string()]);
         let q = said(&mut s, "ben", "@coder hi");
         let r = replied(&mut s, "coder", Some(q), "@you hi");
         assert_eq!(requester_of(&s, &r).unwrap().handle(&s), "Ben");
@@ -622,9 +565,7 @@ mod tests {
         let q3 = said(&mut s, "ana", "@coder later");
         let mut third = ChatMessage::new(MessageRole::Agent, "coder", "@all done");
         third.reply_to_message_id = Some(q3);
-        third.created_at = ligus_core::Timestamp(
-            second.created_at.0 + time::Duration::seconds(AGENT_BROADCAST_WINDOW_SECS + 1),
-        );
+        third.created_at = ligus_core::Timestamp(second.created_at.0 + time::Duration::seconds(AGENT_BROADCAST_WINDOW_SECS + 1));
         s.messages.push(third.clone());
         assert!(message_mentions(&third, &s).human_broadcast);
     }
@@ -642,10 +583,7 @@ mod tests {
     /// never wakes the default agent on someone's credentials as well.
     #[test]
     fn legacy_hive_alias_yields_to_a_person_or_agent_named_hive() {
-        let s = session_with(
-            vec![],
-            vec![human("h1", "Hive", WorkspaceRole::Contributor, 0)],
-        );
+        let s = session_with(vec![], vec![human("h1", "Hive", WorkspaceRole::Contributor, 0)]);
         let t = parse_mentions("@Hive can you look?", &s);
         assert!(!t.primary && t.humans == vec!["m-h1".to_string()], "{t:?}");
         // A name that `@hive` doesn't match (" hive") leaves the alias on.
@@ -659,13 +597,7 @@ mod tests {
     /// place.
     #[test]
     fn look_alike_ligus_agents_are_never_mention_targets() {
-        let s = session_with(
-            vec![
-                WorkspaceAgent::new("l\u{0456}gus", "evil"),
-                WorkspaceAgent::new("li\u{200B}gus", "evil"),
-            ],
-            vec![],
-        );
+        let s = session_with(vec![WorkspaceAgent::new("l\u{0456}gus", "evil"), WorkspaceAgent::new("li\u{200B}gus", "evil")], vec![]);
         for body in ["@l\u{0456}gus hi", "@li\u{200B}gus hi", "@ligus hi"] {
             assert!(parse_mentions(body, &s).agents.is_empty(), "{body:?}");
         }
@@ -679,9 +611,7 @@ mod tests {
         // Email / inline-handle forms must NOT summon the primary or an agent.
         assert!(!parse_mentions("reach me at me@ligus.io", &s).primary);
         assert!(!parse_mentions("email support@primary please", &s).primary);
-        assert!(parse_mentions("ping user@scout for that", &s)
-            .agents
-            .is_empty());
+        assert!(parse_mentions("ping user@scout for that", &s).agents.is_empty());
         // A real mention (boundary before @) still resolves.
         assert!(parse_mentions("hey @ligus can you look?", &s).primary);
         assert!(parse_mentions("(@scout) take a look", &s).agents.len() == 1);
@@ -692,14 +622,9 @@ mod tests {
         let scout = WorkspaceAgent::new("Scout", "r1");
         let scout_id = scout.id;
         let s = session_with(vec![scout], vec![]);
-        assert_eq!(
-            parse_mentions("ask @Scout please", &s).agents,
-            vec![scout_id]
-        );
+        assert_eq!(parse_mentions("ask @Scout please", &s).agents, vec![scout_id]);
         // substring should not match
-        assert!(parse_mentions("email scout@example.com", &s)
-            .agents
-            .is_empty());
+        assert!(parse_mentions("email scout@example.com", &s).agents.is_empty());
         assert!(parse_mentions("@Scouts go", &s).agents.is_empty());
     }
 

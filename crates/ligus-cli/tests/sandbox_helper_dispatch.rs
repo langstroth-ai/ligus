@@ -22,8 +22,5 @@ fn the_ligus_binary_dispatches_the_sandbox_helper() {
     let err = String::from_utf8_lossy(&out.stderr);
     // The helper's own refusal (exit 126), not the CLI's argument parser.
     assert_eq!(out.status.code(), Some(126), "{err}");
-    assert!(
-        err.contains("ligus sandbox: unknown helper option --not-a-helper-option"),
-        "{err}"
-    );
+    assert!(err.contains("ligus sandbox: unknown helper option --not-a-helper-option"), "{err}");
 }

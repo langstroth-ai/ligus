@@ -7,16 +7,12 @@ use std::sync::{Arc, Mutex};
 use super::*;
 use crate::secret_store::File0600;
 
-const INVITE: &str =
-    "hivews1:eyJyb29tIjoiZG0tc2VjcmV0LXJvb20iLCJrZXkiOiJ0aGUtZG0ta2V5LTEyMzQ1Njc4OTAifQ";
+const INVITE: &str = "hivews1:eyJyb29tIjoiZG0tc2VjcmV0LXJvb20iLCJrZXkiOiJ0aGUtZG0ta2V5LTEyMzQ1Njc4OTAifQ";
 const NOW: i64 = 1_800_000_000;
 
 fn device(seed: u8) -> Recipient {
     let ka = KeyAgreementKeypair::from_seed(&[seed; 32]).unwrap();
-    Recipient {
-        device_id: Uuid::from_bytes([seed; 16]).to_string(),
-        ka_public: ka.public_key_bytes(),
-    }
+    Recipient { device_id: Uuid::from_bytes([seed; 16]).to_string(), ka_public: ka.public_key_bytes() }
 }
 
 fn person(account: Uuid, devices: Vec<Recipient>, contact: bool) -> CoMember {
@@ -76,21 +72,13 @@ impl Host for Fake {
     fn own_ka(&self) -> Option<KeyAgreementKeypair> {
         KeyAgreementKeypair::from_seed(&self.ka.seed_bytes()).ok()
     }
-    fn deliver(
-        &self,
-        _person: &CoMember,
-        plan: &SealPlan,
-        invite: &str,
-    ) -> impl Future<Output = Delivery> + Send {
+    fn deliver(&self, _person: &CoMember, plan: &SealPlan, invite: &str) -> impl Future<Output = Delivery> + Send {
         let out = self.outcome.lock().unwrap().clone();
         if let Some(f) = self.during_drop.lock().unwrap().take() {
             f(&mut self.people.lock().unwrap());
         }
         if out == Delivery::Delivered {
-            self.drops.lock().unwrap().push((
-                plan.recipients.iter().map(|r| r.ka_public).collect(),
-                invite.to_string(),
-            ));
+            self.drops.lock().unwrap().push((plan.recipients.iter().map(|r| r.ka_public).collect(), invite.to_string()));
         }
         async move {
             tokio::task::yield_now().await;
@@ -105,26 +93,14 @@ fn setup(contact: bool) -> (tempfile::TempDir, HeldInvites, Fake, Uuid) {
     let p = person(Uuid::new_v4(), vec![device(1), device(2)], contact);
     let host = Fake::new(p.clone());
     let ws = Uuid::new_v4();
-    store
-        .hold(
-            ws,
-            &p,
-            &p.seal_plan().unwrap(),
-            INVITE,
-            &host.ka.public_key_bytes(),
-            NOW,
-        )
-        .unwrap();
+    store.hold(ws, &p, &p.seal_plan().unwrap(), INVITE, &host.ka.public_key_bytes(), NOW).unwrap();
     (tmp, store, host, ws)
 }
 
 #[tokio::test]
 async fn an_invite_held_before_the_contact_id_is_delivered_once_it_arrives() {
     let (_tmp, store, host, ws) = setup(false);
-    assert_eq!(
-        store.get(ws).unwrap().status_json()["pending"],
-        serde_json::json!(true)
-    );
+    assert_eq!(store.get(ws).unwrap().status_json()["pending"], serde_json::json!(true));
     // No contact id yet: nothing is sent.
     assert!(run_pass(&host, &store, NOW + 1).await.is_empty());
     assert_eq!(host.drops(), 0);
@@ -149,10 +125,7 @@ async fn a_held_invite_is_never_delivered_twice() {
     let (tmp, store, host, ws) = setup(true);
     // Concurrent passes, then more passes, then a "restart" (a fresh store
     // on the same dir): one drop.
-    let (a, b) = tokio::join!(
-        run_pass(&host, &store, NOW + 1),
-        run_pass(&host, &store, NOW + 1)
-    );
+    let (a, b) = tokio::join!(run_pass(&host, &store, NOW + 1), run_pass(&host, &store, NOW + 1));
     assert_eq!(a.len() + b.len(), 1);
     for i in 2..6 {
         run_pass(&host, &store, NOW + i).await;
@@ -167,9 +140,7 @@ async fn a_held_invite_is_never_delivered_twice() {
 #[tokio::test]
 async fn a_crash_mid_drop_is_never_resent() {
     let (_tmp, store, host, ws) = setup(true);
-    store
-        .transition(ws, &[HeldState::Waiting], HeldState::Sending, |_| {})
-        .unwrap();
+    store.transition(ws, &[HeldState::Waiting], HeldState::Sending, |_| {}).unwrap();
     run_pass(&host, &store, NOW + 1).await;
     assert_eq!(host.drops(), 0);
     assert_eq!(store.get(ws).unwrap().state, HeldState::Sending);
@@ -203,10 +174,7 @@ async fn a_held_invite_expires() {
     let changed = run_pass(&host, &store, exp).await;
     assert_eq!(changed[0].state, HeldState::Expired);
     assert_eq!(host.drops(), 0);
-    assert!(
-        store.open_invite(ws, &host.ka).is_none(),
-        "the sealed invite is forgotten"
-    );
+    assert!(store.open_invite(ws, &host.ka).is_none(), "the sealed invite is forgotten");
     // Kept a day for the DM view, then gone.
     run_pass(&host, &store, exp + KEEP_FINISHED_SECS + 1).await;
     assert!(store.get(ws).is_none());
@@ -219,39 +187,12 @@ async fn held_invites_are_capped() {
     let p = person(Uuid::new_v4(), vec![device(1)], false);
     let ka = KeyAgreementKeypair::from_seed(&[9; 32]).unwrap();
     for _ in 0..MAX_HELD {
-        store
-            .hold(
-                Uuid::new_v4(),
-                &p,
-                &p.seal_plan().unwrap(),
-                INVITE,
-                &ka.public_key_bytes(),
-                NOW,
-            )
-            .unwrap();
+        store.hold(Uuid::new_v4(), &p, &p.seal_plan().unwrap(), INVITE, &ka.public_key_bytes(), NOW).unwrap();
     }
-    let err = store
-        .hold(
-            Uuid::new_v4(),
-            &p,
-            &p.seal_plan().unwrap(),
-            INVITE,
-            &ka.public_key_bytes(),
-            NOW,
-        )
-        .unwrap_err();
+    let err = store.hold(Uuid::new_v4(), &p, &p.seal_plan().unwrap(), INVITE, &ka.public_key_bytes(), NOW).unwrap_err();
     assert!(err.contains("already waiting"), "{err}");
     // Expired ones make room again.
-    store
-        .hold(
-            Uuid::new_v4(),
-            &p,
-            &p.seal_plan().unwrap(),
-            INVITE,
-            &ka.public_key_bytes(),
-            NOW + HOLD_SECS + KEEP_FINISHED_SECS,
-        )
-        .unwrap();
+    store.hold(Uuid::new_v4(), &p, &p.seal_plan().unwrap(), INVITE, &ka.public_key_bytes(), NOW + HOLD_SECS + KEEP_FINISHED_SECS).unwrap();
 }
 
 #[tokio::test]
@@ -265,27 +206,15 @@ async fn a_changed_key_warns_and_is_not_sealed_to_silently() {
     let changed = run_pass(&host, &store, NOW + 1).await;
     assert_eq!(changed[0].state, HeldState::Warning);
     let st = store.get(ws).unwrap().status_json();
-    assert!(
-        st["warning"]
-            .as_str()
-            .unwrap()
-            .starts_with(UNVERIFIED_RECIPIENT),
-        "{st}"
-    );
+    assert!(st["warning"].as_str().unwrap().starts_with(UNVERIFIED_RECIPIENT), "{st}");
     assert_eq!(st["pending"], serde_json::json!(true));
     for i in 2..5 {
         run_pass(&host, &store, NOW + i).await;
     }
-    assert_eq!(
-        host.drops(),
-        0,
-        "held for the opener, never sealed to the new key"
-    );
+    assert_eq!(host.drops(), 0, "held for the opener, never sealed to the new key");
     // The opener confirms: sent to the current verified devices.
     let code = host.co_members()[0].safety_code().unwrap();
-    store
-        .confirm(ws, &host.co_members()[0], &code, NOW + 5)
-        .unwrap();
+    store.confirm(ws, &host.co_members()[0], &code, NOW + 5).unwrap();
     run_pass(&host, &store, NOW + 6).await;
     let drops = host.drops.lock().unwrap().clone();
     assert_eq!(drops.len(), 1);
@@ -298,18 +227,12 @@ async fn a_changed_account_key_warns() {
     host.set(|p| p.fingerprint = Some("ffeeddccbbaa99887766554433221100".into()));
     let changed = run_pass(&host, &store, NOW + 1).await;
     assert_eq!(changed[0].state, HeldState::Warning);
-    assert!(changed[0]
-        .note
-        .as_deref()
-        .unwrap()
-        .contains("account key changed"));
+    assert!(changed[0].note.as_deref().unwrap().contains("account key changed"));
     assert_eq!(host.drops(), 0);
     // A key conflict, too, holds it (and confirming is refused).
     host.set(|p| p.key_conflict = true);
     let code = host.co_members()[0].safety_code().unwrap();
-    assert!(store
-        .confirm(ws, &host.co_members()[0], &code, NOW + 2)
-        .is_err());
+    assert!(store.confirm(ws, &host.co_members()[0], &code, NOW + 2).is_err());
     assert_eq!(host.drops(), 0);
 }
 
@@ -328,10 +251,7 @@ async fn a_failed_drop_is_retried_with_backoff() {
     *host.outcome.lock().unwrap() = Delivery::NotYet("relay down".into());
     run_pass(&host, &store, NOW + 1).await;
     let h = store.get(ws).unwrap();
-    assert_eq!(
-        (h.state, h.attempts, h.next_try_at),
-        (HeldState::Waiting, 1, NOW + 1 + backoff_secs(1))
-    );
+    assert_eq!((h.state, h.attempts, h.next_try_at), (HeldState::Waiting, 1, NOW + 1 + backoff_secs(1)));
     *host.outcome.lock().unwrap() = Delivery::Delivered;
     run_pass(&host, &store, NOW + 2).await;
     assert_eq!(host.drops(), 0, "backing off");
@@ -355,10 +275,7 @@ async fn the_held_store_holds_no_plaintext_secret() {
     }
     walk(tmp.path(), &mut files);
     assert!(files.iter().any(|f| f == store.path()));
-    assert!(
-        files.len() >= 2,
-        "the list and the sealed secret: {files:?}"
-    );
+    assert!(files.len() >= 2, "the list and the sealed secret: {files:?}");
     for f in &files {
         let bytes = std::fs::read(f).unwrap();
         let text = String::from_utf8_lossy(&bytes);
@@ -367,13 +284,7 @@ async fn the_held_store_holds_no_plaintext_secret() {
         }
     }
     // It opens with this device's key and no other.
-    assert_eq!(
-        store
-            .open_invite(ws, &host.ka)
-            .as_deref()
-            .map(String::as_str),
-        Some(INVITE)
-    );
+    assert_eq!(store.open_invite(ws, &host.ka).as_deref().map(String::as_str), Some(INVITE));
     let other = KeyAgreementKeypair::from_seed(&[3; 32]).unwrap();
     assert!(store.open_invite(ws, &other).is_none());
 }
@@ -398,28 +309,15 @@ async fn confirming_is_bound_to_the_safety_code_the_opener_compared() {
     assert_eq!(store.get(ws).unwrap().state, HeldState::Warning);
     let compared = host.co_members()[0].safety_code().unwrap();
     host.set(|p| p.fingerprint = Some("abababababababababababababababab".into()));
-    let err = store
-        .confirm(ws, &host.co_members()[0], &compared, NOW + 2)
-        .unwrap_err();
+    let err = store.confirm(ws, &host.co_members()[0], &compared, NOW + 2).unwrap_err();
     assert!(err.starts_with(UNVERIFIED_RECIPIENT), "{err}");
-    assert!(
-        store
-            .confirm(ws, &host.co_members()[0], "", NOW + 2)
-            .is_err(),
-        "no code, no confirmation"
-    );
+    assert!(store.confirm(ws, &host.co_members()[0], "", NOW + 2).is_err(), "no code, no confirmation");
     run_pass(&host, &store, NOW + 3).await;
     assert_eq!(host.drops(), 0);
     assert_eq!(store.get(ws).unwrap().state, HeldState::Warning);
     // The code shown now (spacing and case as typed don't matter).
-    let now_code = host.co_members()[0]
-        .safety_code()
-        .unwrap()
-        .to_uppercase()
-        .replace(' ', "");
-    store
-        .confirm(ws, &host.co_members()[0], &now_code, NOW + 4)
-        .unwrap();
+    let now_code = host.co_members()[0].safety_code().unwrap().to_uppercase().replace(' ', "");
+    store.confirm(ws, &host.co_members()[0], &now_code, NOW + 4).unwrap();
     run_pass(&host, &store, NOW + 5).await;
     assert_eq!(host.drops(), 1);
 }
@@ -427,14 +325,9 @@ async fn confirming_is_bound_to_the_safety_code_the_opener_compared() {
 #[test]
 fn concurrent_holds_cannot_pass_the_cap() {
     let tmp = tempfile::tempdir().unwrap();
-    let store = Arc::new(HeldInvites::new(
-        tmp.path(),
-        Arc::new(File0600::new(tmp.path())),
-    ));
+    let store = Arc::new(HeldInvites::new(tmp.path(), Arc::new(File0600::new(tmp.path()))));
     let p = person(Uuid::new_v4(), vec![device(1)], false);
-    let ka = KeyAgreementKeypair::from_seed(&[9; 32])
-        .unwrap()
-        .public_key_bytes();
+    let ka = KeyAgreementKeypair::from_seed(&[9; 32]).unwrap().public_key_bytes();
     let n = MAX_HELD * 3;
     let gate = Arc::new(std::sync::Barrier::new(n));
     let threads: Vec<_> = (0..n)
@@ -442,30 +335,15 @@ fn concurrent_holds_cannot_pass_the_cap() {
             let (store, p, gate) = (store.clone(), p.clone(), gate.clone());
             std::thread::spawn(move || {
                 gate.wait();
-                store
-                    .hold(
-                        Uuid::new_v4(),
-                        &p,
-                        &p.seal_plan().unwrap(),
-                        INVITE,
-                        &ka,
-                        NOW,
-                    )
-                    .is_ok()
+                store.hold(Uuid::new_v4(), &p, &p.seal_plan().unwrap(), INVITE, &ka, NOW).is_ok()
             })
         })
         .collect();
-    let ok = threads
-        .into_iter()
-        .map(|t| t.join().unwrap())
-        .filter(|x| *x)
-        .count();
+    let ok = threads.into_iter().map(|t| t.join().unwrap()).filter(|x| *x).count();
     let held = store.list().iter().filter(|h| h.state.is_open()).count();
     assert!(held <= MAX_HELD, "{held} held, cap {MAX_HELD}");
     assert_eq!(ok, held, "every accepted hold is on the list");
-    let secrets = std::fs::read_dir(tmp.path().join("secrets").join(SCOPE))
-        .map(|d| d.count())
-        .unwrap_or(0);
+    let secrets = std::fs::read_dir(tmp.path().join("secrets").join(SCOPE)).map(|d| d.count()).unwrap_or(0);
     assert_eq!(secrets, held, "no secret without an entry");
 }
 
@@ -480,26 +358,8 @@ async fn a_device_revoked_during_a_pass_is_not_sealed_to() {
     let host = Fake::new(a.clone());
     host.people.lock().unwrap().push(b.clone());
     let own = host.ka.public_key_bytes();
-    store
-        .hold(
-            Uuid::new_v4(),
-            &a,
-            &a.seal_plan().unwrap(),
-            INVITE,
-            &own,
-            NOW,
-        )
-        .unwrap();
-    store
-        .hold(
-            Uuid::new_v4(),
-            &b,
-            &b.seal_plan().unwrap(),
-            INVITE,
-            &own,
-            NOW,
-        )
-        .unwrap();
+    store.hold(Uuid::new_v4(), &a, &a.seal_plan().unwrap(), INVITE, &own, NOW).unwrap();
+    store.hold(Uuid::new_v4(), &b, &b.seal_plan().unwrap(), INVITE, &own, NOW).unwrap();
     let b_acc = b.account_id;
     *host.during_drop.lock().unwrap() = Some(Box::new(move |people: &mut Vec<CoMember>| {
         let b = people.iter_mut().find(|p| p.account_id == b_acc).unwrap();
@@ -509,9 +369,5 @@ async fn a_device_revoked_during_a_pass_is_not_sealed_to() {
     run_pass(&host, &store, NOW + 1).await;
     let drops = host.drops.lock().unwrap().clone();
     assert_eq!(drops.len(), 2);
-    assert_eq!(
-        drops[1].0,
-        vec![device(2).ka_public],
-        "the revoked device got the invite"
-    );
+    assert_eq!(drops[1].0, vec![device(2).ka_public], "the revoked device got the invite");
 }

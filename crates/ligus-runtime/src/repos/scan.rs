@@ -13,26 +13,14 @@ pub const MAX_DEPTH: usize = 3;
 /// At most this many directories visited per root.
 pub const MAX_DIRS: usize = 2000;
 
-const SKIP: &[&str] = &[
-    "node_modules",
-    "target",
-    ".ligus",
-    ".git",
-    "vendor",
-    "Library",
-    ".cache",
-    ".Trash",
-];
+const SKIP: &[&str] = &["node_modules", "target", ".ligus", ".git", "vendor", "Library", ".cache", ".Trash"];
 
 /// Whether `p` is too broad or too sensitive to scan or adopt: the file
 /// system root, a top-level or system directory, or a home directory
 /// itself (the v1.10.2 launch-hang guard, shared).
 pub fn is_shallow_or_system_dir(p: &Path) -> bool {
     let p = super::git::canonical(p);
-    let comps = p
-        .components()
-        .filter(|c| matches!(c, std::path::Component::Normal(_)))
-        .count();
+    let comps = p.components().filter(|c| matches!(c, std::path::Component::Normal(_))).count();
     if comps <= 1 {
         return true;
     }
@@ -45,29 +33,10 @@ pub fn is_shallow_or_system_dir(p: &Path) -> bool {
     }
     let s = p.to_string_lossy().to_ascii_lowercase();
     const SYSTEM: &[&str] = &[
-        "/system",
-        "/usr",
-        "/bin",
-        "/sbin",
-        "/etc",
-        "/private/etc",
-        "/var/db",
-        "/private/var/db",
-        "/var/log",
-        "/library",
-        "/applications",
-        "/opt/homebrew",
-        "/proc",
-        "/sys",
-        "/dev",
-        "/boot",
-        "/snap",
-        "c:\\windows",
-        "c:\\program files",
+        "/system", "/usr", "/bin", "/sbin", "/etc", "/private/etc", "/var/db", "/private/var/db", "/var/log", "/library", "/applications",
+        "/opt/homebrew", "/proc", "/sys", "/dev", "/boot", "/snap", "c:\\windows", "c:\\program files",
     ];
-    SYSTEM
-        .iter()
-        .any(|d| s == *d || s.starts_with(&format!("{d}/")) || s.starts_with(&format!("{d}\\")))
+    SYSTEM.iter().any(|d| s == *d || s.starts_with(&format!("{d}/")) || s.starts_with(&format!("{d}\\")))
 }
 
 /// A checkout a scan found.
@@ -105,9 +74,7 @@ pub fn checkouts_under(root: &Path) -> Vec<PathBuf> {
         if depth >= MAX_DEPTH {
             continue;
         }
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for e in entries.flatten() {
             let Ok(ft) = e.file_type() else { continue };
             if !ft.is_dir() || ft.is_symlink() {
@@ -128,11 +95,7 @@ pub fn checkouts_under(root: &Path) -> Vec<PathBuf> {
 /// The checkouts under `roots` that cover one of `repos` (by `origin`, or
 /// `upstream` for a fork), with this device's aliases (a match through a
 /// synced alias is recorded unconfirmed like every other).
-pub fn scan(
-    roots: &[PathBuf],
-    repos: &[WorkspaceRepo],
-    aliases: &super::git::Aliases,
-) -> Vec<Found> {
+pub fn scan(roots: &[PathBuf], repos: &[WorkspaceRepo], aliases: &super::git::Aliases) -> Vec<Found> {
     let mut out = Vec::new();
     for root in roots {
         for dir in checkouts_under(root) {
@@ -142,11 +105,7 @@ pub fn scan(
             }
             for r in repos {
                 if let Some((via, _)) = super::git::match_repo_via(&remotes, r, aliases) {
-                    out.push(Found {
-                        path: dir.clone(),
-                        repo_id: r.id,
-                        via_fork: via == super::git::MatchVia::Upstream,
-                    });
+                    out.push(Found { path: dir.clone(), repo_id: r.id, via_fork: via == super::git::MatchVia::Upstream });
                     break;
                 }
             }
@@ -165,47 +124,16 @@ mod tests {
     fn scan_is_bounded_and_skips_worktrees_and_symlinks() {
         let t = tempfile::tempdir().unwrap();
         let root = t.path().join("apps");
-        repo_with_origin(
-            &root.join("WeFit"),
-            Some("git@github.com:zazulam/wefit.git"),
-        );
-        repo_with_origin(
-            &root.join("deep/a/b/c/Too"),
-            Some("git@github.com:zazulam/wefit.git"),
-        );
-        repo_with_origin(
-            &root.join("node_modules/x"),
-            Some("git@github.com:zazulam/wefit.git"),
-        );
-        sh(
-            &root.join("WeFit"),
-            &[
-                "worktree",
-                "add",
-                "-q",
-                &root.join("linked").to_string_lossy(),
-            ],
-        );
+        repo_with_origin(&root.join("WeFit"), Some("git@github.com:zazulam/wefit.git"));
+        repo_with_origin(&root.join("deep/a/b/c/Too"), Some("git@github.com:zazulam/wefit.git"));
+        repo_with_origin(&root.join("node_modules/x"), Some("git@github.com:zazulam/wefit.git"));
+        sh(&root.join("WeFit"), &["worktree", "add", "-q", &root.join("linked").to_string_lossy()]);
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("WeFit"), root.join("alias")).unwrap();
         let c = "github.com/zazulam/wefit";
-        let repo = WorkspaceRepo {
-            id: repo_id(c),
-            canonical: c.into(),
-            display_name: "WeFit".into(),
-            forge_kind: String::new(),
-            default_branch: String::new(),
-            root_commit: None,
-            scratch: false,
-        };
+        let repo = WorkspaceRepo { id: repo_id(c), canonical: c.into(), display_name: "WeFit".into(), forge_kind: String::new(), default_branch: String::new(), root_commit: None, scratch: false };
         let found = scan(std::slice::from_ref(&root), &[repo], &Default::default());
-        assert_eq!(
-            found
-                .iter()
-                .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
-                .collect::<Vec<_>>(),
-            vec!["WeFit"]
-        );
+        assert_eq!(found.iter().map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>(), vec!["WeFit"]);
     }
 
     #[test]

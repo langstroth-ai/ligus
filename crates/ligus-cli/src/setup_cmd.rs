@@ -15,12 +15,10 @@ use ligus_runtime::checks::{Check, Report, Status};
 use ligus_runtime::cli_detect::DetectEnv;
 use ligus_runtime::mcp::{McpServerSpec, McpTransport};
 use ligus_runtime::model_catalog::ModelList;
+use ligus_runtime::setup::{self, service, FieldKind, FlowId, Inputs, Outcome, Progress, RunOpts, Secrets, Surface};
 use ligus_runtime::setup::{
-    self, service, FieldKind, FlowId, Inputs, Outcome, Progress, RunOpts, Secrets, Surface,
-};
-use ligus_runtime::setup::{
-    AgentFact, BoxFact, FolderFact, HarnessFact, HostFact, InviteFact, McpFact, OpsError,
-    OpsResult, ProbeFact, RepoFact, RuntimeFact, RuntimeSpec, ServeFact, SetupOps, TestTurn,
+    AgentFact, BoxFact, FolderFact, HarnessFact, HostFact, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RuntimeFact, RuntimeSpec, ServeFact,
+    SetupOps, TestTurn,
 };
 use ligus_runtime::{ChatService, McpReach};
 use uuid::Uuid;
@@ -60,10 +58,8 @@ fn list(cfg: &Config, json: bool) -> Result<()> {
         let id = format!("{}.status", s.flow.id.as_str());
         let c = match s.progress {
             Progress::Done => Check::ok(&id, s.flow.title, s.detail),
-            Progress::Waiting => Check::warn(&id, s.flow.title, s.detail)
-                .fix(format!("ligus setup {}", s.flow.id.as_str())),
-            Progress::Todo => Check::skip(&id, s.flow.title, s.detail)
-                .fix(format!("ligus setup {}", s.flow.id.as_str())),
+            Progress::Waiting => Check::warn(&id, s.flow.title, s.detail).fix(format!("ligus setup {}", s.flow.id.as_str())),
+            Progress::Todo => Check::skip(&id, s.flow.title, s.detail).fix(format!("ligus setup {}", s.flow.id.as_str())),
             Progress::Unavailable => Check::skip(&id, s.flow.title, s.detail),
         };
         if s.progress == Progress::Todo && r.next.len() < 2 {
@@ -92,10 +88,7 @@ fn list(cfg: &Config, json: bool) -> Result<()> {
 /// exit with its code.
 fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
     let mut ops = CliOps::open(cfg)?;
-    let fields: Vec<setup::Field> = setup::form(flow, &ops, &Inputs::new())
-        .fields()
-        .cloned()
-        .collect();
+    let fields: Vec<setup::Field> = setup::form(flow, &ops, &Inputs::new()).fields().cloned().collect();
     let mut inputs = Inputs::new();
     let mut secrets = Secrets::new();
     let (mut json, mut dry_run) = (false, false);
@@ -112,14 +105,10 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
             // passkey (a workspace runtime, a repository): the CLI has no
             // passkey, so the recovery key confirms it, as for approvals.
             "--recovery-words-file" => {
-                let path = rest
-                    .get(i)
-                    .ok_or_else(|| help::usage_error("--recovery-words-file needs a path"))?;
+                let path = rest.get(i).ok_or_else(|| help::usage_error("--recovery-words-file needs a path"))?;
                 i += 1;
                 let key = crate::secret_arg::recovery_key_from_file(Path::new(path))?;
-                ops.svc.set_presence_provider(Some(std::sync::Arc::new(
-                    crate::admit::RecoveryPresence(key),
-                )));
+                ops.svc.set_presence_provider(Some(std::sync::Arc::new(crate::admit::RecoveryPresence(key))));
             }
             _ if !a.starts_with("--") => {
                 if !seen_flow && a == flow.as_str() {
@@ -135,10 +124,7 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
             _ => {
                 let name = &a[2..];
                 let Some(f) = fields.iter().find(|f| f.id == name) else {
-                    return Err(help::usage_error(format!(
-                        "`ligus setup {}` has no flag {a}",
-                        flow.as_str()
-                    )));
+                    return Err(help::usage_error(format!("`ligus setup {}` has no flag {a}", flow.as_str())));
                 };
                 match f.kind {
                     FieldKind::Toggle => inputs.set(f.id, "true"),
@@ -149,9 +135,7 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
                         secrets.set(f.id, secret);
                     }
                     _ => {
-                        let v = rest
-                            .get(i)
-                            .ok_or_else(|| help::usage_error(format!("{a} needs a value")))?;
+                        let v = rest.get(i).ok_or_else(|| help::usage_error(format!("{a} needs a value")))?;
                         i += 1;
                         inputs.set(f.id, v.clone());
                     }
@@ -159,16 +143,7 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
             }
         }
     }
-    let out = setup::run(
-        flow,
-        &mut ops,
-        &inputs,
-        &secrets,
-        &RunOpts {
-            dry_run,
-            ..Default::default()
-        },
-    );
+    let out = setup::run(flow, &mut ops, &inputs, &secrets, &RunOpts { dry_run, ..Default::default() });
     print_outcome(&out, json, dry_run);
     if out.exit != 0 {
         std::process::exit(out.exit);
@@ -179,11 +154,7 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
 /// A secret flag's value: `-` reads stdin, `@PATH` an owner-only file. A
 /// value on the command line is refused without being echoed (it is
 /// already in ps and the shell history: rotate it).
-fn read_secret(
-    flag: &str,
-    v: Option<String>,
-    stdin: &mut dyn FnMut() -> std::io::Result<String>,
-) -> Result<Zeroizing<String>> {
+fn read_secret(flag: &str, v: Option<String>, stdin: &mut dyn FnMut() -> std::io::Result<String>) -> Result<Zeroizing<String>> {
     match v.as_deref() {
         Some("-") => Ok(Zeroizing::new(stdin()?.trim().to_string())),
         Some(p) if p.starts_with('@') => Ok(Zeroizing::new(crate::secret_arg::read_owner_only(Path::new(&p[1..]), 64 * 1024)?.trim().to_string())),
@@ -204,21 +175,13 @@ fn print_outcome(o: &Outcome, json: bool, dry_run: bool) {
         print!("{}", Report::check_text_styled(c, color));
     }
     let head = if o.done && o.exit == 0 {
-        if dry_run {
-            "dry run: nothing was written".to_string()
-        } else {
-            "done".to_string()
-        }
+        if dry_run { "dry run: nothing was written".to_string() } else { "done".to_string() }
     } else if o.exit == setup::exit::PERSON {
         "waiting for a person".to_string()
     } else {
         o.report.summary()
     };
-    let next = if o.report.next.is_empty() {
-        String::new()
-    } else {
-        format!(" · next: {}", o.report.next.join(" ; "))
-    };
+    let next = if o.report.next.is_empty() { String::new() } else { format!(" · next: {}", o.report.next.join(" ; ")) };
     println!("{head}{next}");
 }
 
@@ -236,16 +199,8 @@ pub struct CliOps {
 impl CliOps {
     pub fn open(cfg: &Config) -> Result<Self> {
         let svc = crate::open_service(cfg)?;
-        let label = crate::env_opt("LIGUS_HOST_LABEL")
-            .or_else(|| crate::env_opt("HOSTNAME"))
-            .unwrap_or_else(|| "this host".into());
-        Ok(CliOps {
-            cfg: cfg.clone(),
-            ws: crate::uuid_of_room(&cfg.room),
-            svc,
-            env: DetectEnv::from_process(),
-            label,
-        })
+        let label = crate::env_opt("LIGUS_HOST_LABEL").or_else(|| crate::env_opt("HOSTNAME")).unwrap_or_else(|| "this host".into());
+        Ok(CliOps { cfg: cfg.clone(), ws: crate::uuid_of_room(&cfg.room), svc, env: DetectEnv::from_process(), label })
     }
 
     fn reach(&self) -> Result<McpReach, OpsError> {
@@ -259,14 +214,9 @@ impl CliOps {
 
 /// The desktop app's data dir on this OS (a box must never use it).
 pub fn desktop_data_dirs() -> Vec<PathBuf> {
-    let Some(home) = crate::env_opt("HOME").map(PathBuf::from) else {
-        return Vec::new();
-    };
+    let Some(home) = crate::env_opt("HOME").map(PathBuf::from) else { return Vec::new() };
     let id = ligus_core::names::DESKTOP_APP_ID;
-    let mut v = vec![
-        home.join("Library/Application Support").join(id),
-        home.join(".local/share").join(id),
-    ];
+    let mut v = vec![home.join("Library/Application Support").join(id), home.join(".local/share").join(id)];
     if let Some(x) = crate::env_opt("XDG_DATA_HOME") {
         v.push(PathBuf::from(x).join(id));
     }
@@ -321,13 +271,7 @@ impl SetupOps for CliOps {
                     id: r.id.clone(),
                     harness: h.into(),
                     model: r.model.clone(),
-                    endpoint: if gw {
-                        r.gateway.clone()
-                    } else if h == "local" {
-                        r.endpoint.clone()
-                    } else {
-                        String::new()
-                    },
+                    endpoint: if gw { r.gateway.clone() } else if h == "local" { r.endpoint.clone() } else { String::new() },
                 })
             })
             .collect()
@@ -336,28 +280,18 @@ impl SetupOps for CliOps {
         true
     }
     fn add_runtime(&mut self, spec: &RuntimeSpec) -> OpsResult<()> {
-        let kind = service::provider_of(&spec.harness)
-            .ok_or_else(|| OpsError::Failed(format!("unknown harness {}", spec.harness)))?;
-        let mut wr = WorkspaceRuntime::new(
-            spec.id.as_str(),
-            spec.name.as_str(),
-            kind,
-            spec.model.as_str(),
-        );
+        let kind = service::provider_of(&spec.harness).ok_or_else(|| OpsError::Failed(format!("unknown harness {}", spec.harness)))?;
+        let mut wr = WorkspaceRuntime::new(spec.id.as_str(), spec.name.as_str(), kind, spec.model.as_str());
         match spec.harness.as_str() {
             "local" => wr.endpoint = spec.endpoint.clone(),
             "gateway" => wr.gateway = spec.endpoint.clone(),
             _ => {}
         }
-        self.svc
-            .add_workspace_runtime(self.ws, wr)
-            .map_err(OpsError::from)
+        self.svc.add_workspace_runtime(self.ws, wr).map_err(OpsError::from)
     }
     fn remove_runtime(&mut self, id: &str) -> OpsResult<()> {
         // A compensating event: the runtime was synced with the agent flow.
-        self.svc
-            .remove_workspace_runtime(self.ws, id)
-            .map_err(OpsError::from)
+        self.svc.remove_workspace_runtime(self.ws, id).map_err(OpsError::from)
     }
     fn agents(&self) -> Vec<AgentFact> {
         service::agents(&self.svc, self.ws)
@@ -377,8 +311,7 @@ impl SetupOps for CliOps {
             .find(|r| r.id == runtime_id)
             .ok_or_else(|| OpsError::Failed(format!("no runtime '{runtime_id}'")))?;
         let rt = crate::workspace_runtime_resolved(&wr);
-        service::block_on(async move { service::ping(&rt, None).await })
-            .ok_or_else(|| OpsError::Failed("couldn't run the test turn".into()))
+        service::block_on(async move { service::ping(&rt, None).await }).ok_or_else(|| OpsError::Failed("couldn't run the test turn".into()))
     }
 
     // tool
@@ -388,17 +321,10 @@ impl SetupOps for CliOps {
             .unwrap_or_default()
             .into_iter()
             .map(|e| McpFact {
-                transport: if e.transport == "stdio" {
-                    "stdio".into()
-                } else {
-                    "http".into()
-                },
+                transport: if e.transport == "stdio" { "stdio".into() } else { "http".into() },
                 target: match &e.url {
                     Some(u) => setup::validate::origin(u),
-                    None => std::iter::once(e.command.clone().unwrap_or_default())
-                        .chain(e.args.clone())
-                        .collect::<Vec<_>>()
-                        .join(" "),
+                    None => std::iter::once(e.command.clone().unwrap_or_default()).chain(e.args.clone()).collect::<Vec<_>>().join(" "),
                 },
                 enabled: e.enabled,
                 has_secret: e.token_secret,
@@ -407,45 +333,32 @@ impl SetupOps for CliOps {
             })
             .collect()
     }
-    fn mcp_handshake(
-        &mut self,
-        spec: &McpServerSpec,
-        token: Option<&Zeroizing<String>>,
-    ) -> OpsResult<Vec<String>> {
+    fn mcp_handshake(&mut self, spec: &McpServerSpec, token: Option<&Zeroizing<String>>) -> OpsResult<Vec<String>> {
         service::mcp_handshake(spec, token)
     }
     fn put_mcp_secret(&mut self, id: &str, url: &str, secret: &Zeroizing<String>) -> OpsResult<()> {
         // Bound to the URL's origin, in the store (not the editable file).
         let store = ligus_runtime::secret_store::for_data_dir(&self.cfg.data_dir);
-        mcp_config::save_token(store.as_ref(), id, url, secret)
-            .map_err(|e| OpsError::Failed(format!("{e:#}")))
+        mcp_config::save_token(store.as_ref(), id, url, secret).map_err(|e| OpsError::Failed(format!("{e:#}")))
     }
     fn delete_mcp_secret(&mut self, id: &str, _url: &str) -> OpsResult<()> {
         let store = ligus_runtime::secret_store::for_data_dir(&self.cfg.data_dir);
         mcp_config::delete_token(store.as_ref(), id).map_err(|e| OpsError::Failed(format!("{e:#}")))
     }
     fn add_mcp_server(&mut self, spec: &McpServerSpec, reach: &[Uuid]) -> OpsResult<()> {
-        let mut entries =
-            mcp_config::managed_entries(&self.cfg.data_dir).map_err(OpsError::from)?;
+        let mut entries = mcp_config::managed_entries(&self.cfg.data_dir).map_err(OpsError::from)?;
         if entries.iter().any(|e| e.id == spec.id) {
-            return Err(OpsError::Failed(format!(
-                "'{}' is already in {}",
-                spec.id,
-                mcp_config::MANAGED_FILE
-            )));
+            return Err(OpsError::Failed(format!("'{}' is already in {}", spec.id, mcp_config::MANAGED_FILE)));
         }
         // A token counts only when it was saved for this URL's origin; one
         // left from an earlier server of the same id is dropped.
         let store = ligus_runtime::secret_store::for_data_dir(&self.cfg.data_dir);
         let has_token = match &spec.transport {
-            McpTransport::Http { url } => {
-                mcp_config::token_for(store.as_ref(), &spec.id, url).is_some()
-            }
+            McpTransport::Http { url } => mcp_config::token_for(store.as_ref(), &spec.id, url).is_some(),
             McpTransport::Stdio { .. } => false,
         };
         if !has_token {
-            mcp_config::delete_token(store.as_ref(), &spec.id)
-                .map_err(|e| OpsError::Failed(format!("{e:#}")))?;
+            mcp_config::delete_token(store.as_ref(), &spec.id).map_err(|e| OpsError::Failed(format!("{e:#}")))?;
         }
         let entry = match &spec.transport {
             McpTransport::Stdio { command, args } => mcp_config::ManagedEntry {
@@ -476,8 +389,7 @@ impl SetupOps for CliOps {
         mcp_config::save_managed(&self.cfg.data_dir, entries).map_err(OpsError::from)
     }
     fn remove_mcp_server(&mut self, id: &str) -> OpsResult<()> {
-        let mut entries =
-            mcp_config::managed_entries(&self.cfg.data_dir).map_err(OpsError::from)?;
+        let mut entries = mcp_config::managed_entries(&self.cfg.data_dir).map_err(OpsError::from)?;
         entries.retain(|e| e.id != id);
         mcp_config::save_managed(&self.cfg.data_dir, entries).map_err(OpsError::from)?;
         let store = ligus_runtime::secret_store::for_data_dir(&self.cfg.data_dir);
@@ -489,38 +401,24 @@ impl SetupOps for CliOps {
         service::repos(&self.svc, self.ws)
     }
     fn inspect_folder(&self, path: &str) -> FolderFact {
-        let abs = crate::repos_cmd::abs(path)
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| path.to_string());
+        let abs = crate::repos_cmd::abs(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
         service::inspect_folder(&self.svc, self.ws, &abs)
     }
     fn add_repo(&mut self, folder: &FolderFact, name: &str, branch: &str) -> OpsResult<String> {
         service::add_repo(&mut self.svc, self.ws, folder, name, branch)
     }
     fn bind_folder(&mut self, repo_id: &str, path: &str) -> OpsResult<()> {
-        let abs = crate::repos_cmd::abs(path)
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| path.to_string());
+        let abs = crate::repos_cmd::abs(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
         service::bind_folder(&self.svc, self.ws, &self.label, repo_id, &abs)
     }
     fn create_scratch(&mut self, name: &str) -> OpsResult<(String, String)> {
         let root = crate::scratch_cmd::default_root(&self.cfg.data_dir);
-        service::create_scratch(
-            &mut self.svc,
-            self.ws,
-            &self.label,
-            &root,
-            &crate::scratch_cmd::forbidden(),
-            name,
-        )
+        service::create_scratch(&mut self.svc, self.ws, &self.label, &root, &crate::scratch_cmd::forbidden(), name)
     }
 
     // box
     fn box_state(&self) -> OpsResult<BoxFact> {
-        let ids = ligus_runtime::IdentityStore::new(
-            &self.cfg.data_dir,
-            ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&self.cfg.data_dir),
-        );
+        let ids = ligus_runtime::IdentityStore::new(&self.cfg.data_dir, ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&self.cfg.data_dir));
         let person = ids.load().ok().flatten().is_some_and(|s| !s.service);
         if person && self.joined() {
             return Err(OpsError::Failed(
@@ -528,20 +426,14 @@ impl SetupOps for CliOps {
             ));
         }
         Ok(BoxFact {
-            desktop_data_dir: desktop_data_dirs()
-                .iter()
-                .any(|d| same_dir(d, &self.cfg.data_dir)),
+            desktop_data_dir: desktop_data_dirs().iter().any(|d| same_dir(d, &self.cfg.data_dir)),
             joined: self.joined(),
             workspace: (self.cfg.room != "default").then(|| self.cfg.room.clone()),
             relay: self.cfg.relay_url.clone(),
         })
     }
     fn join_request(&mut self, label: &str) -> OpsResult<(String, String)> {
-        let label = if label.is_empty() {
-            self.label.clone()
-        } else {
-            label.to_string()
-        };
+        let label = if label.is_empty() { self.label.clone() } else { label.to_string() };
         let r = crate::admit::join_request(&self.cfg, &label).map_err(OpsError::from)?;
         Ok((r.encode(), r.fingerprint()))
     }
@@ -550,14 +442,10 @@ impl SetupOps for CliOps {
         Ok(r.room)
     }
     fn serve_running(&self) -> ServeFact {
-        let listen = crate::env_opt("LIGUS_SERVE_LISTEN")
-            .unwrap_or_else(|| crate::serve::DEFAULT_LISTEN.into());
+        let listen = crate::env_opt("LIGUS_SERVE_LISTEN").unwrap_or_else(|| crate::serve::DEFAULT_LISTEN.into());
         let url = format!("http://{listen}/v1/health");
         let ok = service::block_on(async move {
-            let c = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(3))
-                .build()
-                .ok()?;
+            let c = reqwest::Client::builder().timeout(std::time::Duration::from_secs(3)).build().ok()?;
             Some(c.get(&url).send().await.ok()?.status().is_success())
         })
         .flatten()
@@ -578,21 +466,11 @@ impl SetupOps for CliOps {
         v.push(if self.joined() {
             Check::ok("phone.precheck.member", "box", "a member of the workspace")
         } else {
-            Check::fail(
-                "phone.precheck.member",
-                "box",
-                "this box isn't a member yet",
-            )
-            .fix("ligus setup box")
+            Check::fail("phone.precheck.member", "box", "this box isn't a member yet").fix("ligus setup box")
         });
         v.push(match self.serve_running() {
-            ServeFact::Running(at) => Check::ok(
-                "phone.precheck.serve",
-                "ligus serve",
-                format!("answering on {at}"),
-            ),
-            ServeFact::NotRunning(why) => Check::fail("phone.precheck.serve", "ligus serve", why)
-                .fix("deploy/local/ligus-local start --role serve"),
+            ServeFact::Running(at) => Check::ok("phone.precheck.serve", "ligus serve", format!("answering on {at}")),
+            ServeFact::NotRunning(why) => Check::fail("phone.precheck.serve", "ligus serve", why).fix("deploy/local/ligus-local start --role serve"),
         });
         Ok(v)
     }
@@ -609,29 +487,16 @@ impl SetupOps for CliOps {
     // relay
     fn probe_relay(&self, url: &str, token: Option<&Zeroizing<String>>) -> ProbeFact {
         // The saved access token goes only to the relay it was saved for.
-        let same = self
-            .cfg
-            .relay_url
-            .as_deref()
-            .is_some_and(|r| setup::validate::same_origin(r, url));
-        let token = token.cloned().or_else(|| {
-            same.then(|| self.cfg.token.clone().map(Zeroizing::new))
-                .flatten()
-        });
+        let same = self.cfg.relay_url.as_deref().is_some_and(|r| setup::validate::same_origin(r, url));
+        let token = token.cloned().or_else(|| same.then(|| self.cfg.token.clone().map(Zeroizing::new)).flatten());
         service::probe_relay(url, token.as_ref(), &self.cfg.room)
     }
     fn switch_relay(&mut self, url: &str, token: Option<&Zeroizing<String>>) -> OpsResult<()> {
         if crate::env_opt("LIGUS_RELAY_URL").is_some() {
-            return Err(OpsError::Failed(
-                "LIGUS_RELAY_URL is set and wins over config.toml: change it there".into(),
-            ));
+            return Err(OpsError::Failed("LIGUS_RELAY_URL is set and wins over config.toml: change it there".into()));
         }
         let mut f = crate::load_file_config(&self.cfg.data_dir);
-        let moved = !self
-            .cfg
-            .relay_url
-            .as_deref()
-            .is_some_and(|r| setup::validate::same_origin(r, url));
+        let moved = !self.cfg.relay_url.as_deref().is_some_and(|r| setup::validate::same_origin(r, url));
         f.relay_url = Some(url.to_string());
         match token {
             Some(t) => f.token = Some(t.to_string()),
@@ -667,18 +532,10 @@ mod tests {
         }
         for flow in FlowId::ALL {
             let name = format!("setup {}", flow.as_str());
-            let c = help::COMMANDS
-                .iter()
-                .find(|c| c.name == name)
-                .unwrap_or_else(|| panic!("no help for {name}"));
+            let c = help::COMMANDS.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("no help for {name}"));
             for f in setup::form(flow, &NoOps, &Inputs::new()).fields() {
                 let flag = format!("--{}", f.id);
-                assert!(
-                    c.flags
-                        .iter()
-                        .any(|h| h.flag.split([' ', ',']).any(|w| w == flag)),
-                    "{name}: {flag} isn't documented"
-                );
+                assert!(c.flags.iter().any(|h| h.flag.split([' ', ',']).any(|w| w == flag)), "{name}: {flag} isn't documented");
             }
         }
     }
@@ -686,24 +543,16 @@ mod tests {
     #[test]
     fn secrets_are_never_taken_from_argv() {
         let mut no_stdin = || -> std::io::Result<String> { panic!("stdin read") };
-        let e =
-            read_secret("--token", Some("hrt1-canary-value".into()), &mut no_stdin).unwrap_err();
+        let e = read_secret("--token", Some("hrt1-canary-value".into()), &mut no_stdin).unwrap_err();
         assert!(help::is_usage(&e));
         assert!(!format!("{e:#}").contains("hrt1-canary-value"), "{e:#}");
         let mut stdin = || Ok("  tok\n".to_string());
-        assert_eq!(
-            read_secret("--token", Some("-".into()), &mut stdin)
-                .unwrap()
-                .as_str(),
-            "tok"
-        );
+        assert_eq!(read_secret("--token", Some("-".into()), &mut stdin).unwrap().as_str(), "tok");
     }
 
     #[test]
     fn the_desktop_data_dir_is_known() {
         let dirs = desktop_data_dirs();
-        assert!(dirs
-            .iter()
-            .all(|d| d.ends_with(ligus_core::names::DESKTOP_APP_ID)));
+        assert!(dirs.iter().all(|d| d.ends_with(ligus_core::names::DESKTOP_APP_ID)));
     }
 }

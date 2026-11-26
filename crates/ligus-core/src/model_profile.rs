@@ -88,10 +88,7 @@ impl ReasoningStyle {
 
     /// Whether the model spends output tokens thinking even with thinking off.
     pub fn always_reasons(self) -> bool {
-        matches!(
-            self,
-            ReasoningStyle::AlwaysWithEffort | ReasoningStyle::Always
-        )
+        matches!(self, ReasoningStyle::AlwaysWithEffort | ReasoningStyle::Always)
     }
 }
 
@@ -286,15 +283,7 @@ mod tests {
 
     #[test]
     fn unknown_and_hosted_models_have_no_profile() {
-        for id in [
-            "",
-            "claude-sonnet-4",
-            "gpt-4o",
-            "gpt-5",
-            "llama3.1:8b",
-            "mistral",
-            "qwen2.5-coder",
-        ] {
+        for id in ["", "claude-sonnet-4", "gpt-4o", "gpt-5", "llama3.1:8b", "mistral", "qwen2.5-coder"] {
             assert_eq!(profile_for(id), None, "{id}");
         }
     }
@@ -326,14 +315,7 @@ mod tests {
 
     #[test]
     fn chat_models_plan_against_a_slot_and_retrieval_models_are_not_tools() {
-        for id in [
-            "gpt-oss:20b",
-            "gemma4:12b",
-            "lfm2:8b",
-            "lfm2.5",
-            "qwen3.6:35b-a3b",
-            "qwen3",
-        ] {
+        for id in ["gpt-oss:20b", "gemma4:12b", "lfm2:8b", "lfm2.5", "qwen3.6:35b-a3b", "qwen3"] {
             assert_eq!(profile_for(id).unwrap().context_window, 32_768, "{id}");
         }
         for id in ["embeddinggemma-300m", "bge-reranker-v2-m3"] {
@@ -350,11 +332,7 @@ mod tests {
         for (patterns, profile) in PROFILES {
             assert!(!profile.note.is_empty(), "{}", profile.family);
             for p in *patterns {
-                assert_eq!(
-                    profile_for(p).map(|x| x.family),
-                    Some(profile.family),
-                    "{p}"
-                );
+                assert_eq!(profile_for(p).map(|x| x.family), Some(profile.family), "{p}");
             }
         }
     }

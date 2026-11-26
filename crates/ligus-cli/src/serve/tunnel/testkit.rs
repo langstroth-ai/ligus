@@ -22,9 +22,7 @@ use tokio_tungstenite::WebSocketStream;
 
 use super::frame::{self, Frame, RequestHead, ResponseHead};
 use super::keys::{host_id_for, x25519_pub};
-use super::{
-    b64u, b64u_fixed, cred, ctx, noise, random_bytes, random_id, sha256, PairingSecret, SUBPROTOCOL,
-};
+use super::{b64u, b64u_fixed, cred, ctx, noise, random_bytes, random_id, sha256, PairingSecret, SUBPROTOCOL};
 
 /// A relay close: `(code, reason)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,18 +63,12 @@ fn test_devices() -> &'static Mutex<HashMap<uuid::Uuid, Vec<u8>>> {
 pub fn test_device_lookup(real: Option<super::DeviceLookupFn>) -> super::DeviceLookupFn {
     use super::device_bind::DeviceLookup;
     Arc::new(move |id| {
-        let r = real
-            .as_ref()
-            .map(|f| f(id))
-            .unwrap_or(DeviceLookup::Unknown);
+        let r = real.as_ref().map(|f| f(id)).unwrap_or(DeviceLookup::Unknown);
         if r != DeviceLookup::Unknown {
             return r;
         }
         match test_devices().lock().unwrap().get(&id) {
-            Some(pk) => DeviceLookup::Certified {
-                public_key: pk.clone(),
-                phone: true,
-            },
+            Some(pk) => DeviceLookup::Certified { public_key: pk.clone(), phone: true },
             None => DeviceLookup::Unknown,
         }
     })
@@ -85,15 +77,8 @@ pub fn test_device_lookup(real: Option<super::DeviceLookupFn>) -> super::DeviceL
 impl PhoneKeys {
     pub fn generate() -> Self {
         let device = ligus_core::testkit::Phone::new();
-        test_devices()
-            .lock()
-            .unwrap()
-            .insert(device.device_id, device.public_key());
-        Self {
-            auth: SigningKey::from_bytes(&random_bytes()),
-            static_priv: random_bytes(),
-            device: Arc::new(device),
-        }
+        test_devices().lock().unwrap().insert(device.device_id, device.public_key());
+        Self { auth: SigningKey::from_bytes(&random_bytes()), static_priv: random_bytes(), device: Arc::new(device) }
     }
     pub fn static_pub(&self) -> [u8; 32] {
         x25519_pub(&self.static_priv)
@@ -103,10 +88,7 @@ impl PhoneKeys {
     }
     /// The E3a device claim for this pairing on `host_id`.
     pub fn device_claim(&self, host_id: &str) -> Value {
-        let sig = ligus_core::crypto::sign_p256(
-            &self.device.key,
-            &super::device_bind::bind_message(host_id, &self.static_pub()),
-        );
+        let sig = ligus_core::crypto::sign_p256(&self.device.key, &super::device_bind::bind_message(host_id, &self.static_pub()));
         json!({ "id": self.device.device_id, "sig": b64u(sig) })
     }
 }
@@ -146,9 +128,7 @@ where
     loop {
         match ws.next().await {
             Some(Ok(Message::Text(t))) => return Ok(serde_json::from_str(&t)?),
-            Some(Ok(Message::Close(Some(f)))) => {
-                return Err(Closed(f.code.into(), f.reason.to_string()).into())
-            }
+            Some(Ok(Message::Close(Some(f)))) => return Err(Closed(f.code.into(), f.reason.to_string()).into()),
             Some(Ok(Message::Close(None))) | None => return Err(Closed(1005, String::new()).into()),
             Some(Ok(_)) => {}
             Some(Err(e)) => return Err(e.into()),
@@ -163,9 +143,7 @@ where
     loop {
         match ws.next().await {
             Some(Ok(Message::Binary(b))) => return Ok(b.to_vec()),
-            Some(Ok(Message::Close(Some(f)))) => {
-                return Err(Closed(f.code.into(), f.reason.to_string()).into())
-            }
+            Some(Ok(Message::Close(Some(f)))) => return Err(Closed(f.code.into(), f.reason.to_string()).into()),
             Some(Ok(Message::Close(None))) | None => return Err(Closed(1005, String::new()).into()),
             Some(Ok(_)) => {}
             Some(Err(e)) => return Err(e.into()),
@@ -198,49 +176,23 @@ where
         ws.send(Message::Binary(buf[..n].to_vec().into())).await?;
         let msg2 = next_bin(&mut ws).await?;
         let mut out = vec![0u8; noise::MAX_MSG];
-        hs.read_message(&msg2, &mut out)
-            .map_err(|e| anyhow!("msg2: {e}"))?;
-        Ok(Self {
-            ws,
-            ts: hs.into_transport_mode()?,
-            next_id: 1,
-            buf,
-        })
+        hs.read_message(&msg2, &mut out).map_err(|e| anyhow!("msg2: {e}"))?;
+        Ok(Self { ws, ts: hs.into_transport_mode()?, next_id: 1, buf })
     }
 
     /// Enrollment handshake (IKpsk1). Returns the conn, pid and credential.
     /// Enrollment with the phone's own device claim (E3a).
-    pub async fn enroll_handshake(
-        ws: S,
-        keys: &PhoneKeys,
-        host: &HostInfo,
-        ps: &PairingSecret,
-        name: &str,
-    ) -> Result<(Self, String, String)> {
+    pub async fn enroll_handshake(ws: S, keys: &PhoneKeys, host: &HostInfo, ps: &PairingSecret, name: &str) -> Result<(Self, String, String)> {
         let claim = keys.device_claim(&host.host_id);
         Self::enroll_handshake_with(ws, keys, host, ps, name, Some(claim)).await
     }
 
     /// Enrollment with the given device claim (`"device": {"id", "sig"}`),
     /// or none.
-    pub async fn enroll_handshake_with(
-        mut ws: S,
-        keys: &PhoneKeys,
-        host: &HostInfo,
-        ps: &PairingSecret,
-        name: &str,
-        device: Option<Value>,
-    ) -> Result<(Self, String, String)> {
-        let mut hs = noise::initiator(
-            &keys.static_priv,
-            &host.hs,
-            &host.host_id,
-            Some(&ps.psk),
-            None,
-        )?;
+    pub async fn enroll_handshake_with(mut ws: S, keys: &PhoneKeys, host: &HostInfo, ps: &PairingSecret, name: &str, device: Option<Value>) -> Result<(Self, String, String)> {
+        let mut hs = noise::initiator(&keys.static_priv, &host.hs, &host.host_id, Some(&ps.psk), None)?;
         let mut buf = vec![0u8; noise::MAX_MSG];
-        let mut payload =
-            json!({ "v": 1, "name": name, "pk": b64u(keys.auth.verifying_key().as_bytes()) });
+        let mut payload = json!({ "v": 1, "name": name, "pk": b64u(keys.auth.verifying_key().as_bytes()) });
         if let Some(d) = device {
             payload["device"] = d;
         }
@@ -249,24 +201,11 @@ where
         ws.send(Message::Binary(buf[..n].to_vec().into())).await?;
         let msg2 = next_bin(&mut ws).await?;
         let mut out = vec![0u8; noise::MAX_MSG];
-        let m = hs
-            .read_message(&msg2, &mut out)
-            .map_err(|e| anyhow!("msg2: {e}"))?;
+        let m = hs.read_message(&msg2, &mut out).map_err(|e| anyhow!("msg2: {e}"))?;
         let v: Value = serde_json::from_slice(&out[..m])?;
-        let pid = v["pid"]
-            .as_str()
-            .ok_or_else(|| anyhow!("no pid"))?
-            .to_string();
-        let credential = v["cred"]
-            .as_str()
-            .ok_or_else(|| anyhow!("no cred"))?
-            .to_string();
-        let mut conn = Self {
-            ws,
-            ts: hs.into_transport_mode()?,
-            next_id: 1,
-            buf,
-        };
+        let pid = v["pid"].as_str().ok_or_else(|| anyhow!("no pid"))?.to_string();
+        let credential = v["cred"].as_str().ok_or_else(|| anyhow!("no cred"))?.to_string();
+        let mut conn = Self { ws, ts: hs.into_transport_mode()?, next_id: 1, buf };
         // E4: the first transport message confirms the enrollment.
         conn.send(Frame::ping(*b"pairing!")).await?;
         let pong = conn.recv().await?;
@@ -279,33 +218,14 @@ where
     /// E3b: enroll as a phone this box doesn't know yet, with the device
     /// claim and its key (`enrollKey`). The host answers `{"v":1,
     /// "provisional":true}` and serves the add-a-phone routes only.
-    pub async fn provisional_handshake(
-        ws: S,
-        keys: &PhoneKeys,
-        host: &HostInfo,
-        ps: &PairingSecret,
-        name: &str,
-    ) -> Result<Self> {
+    pub async fn provisional_handshake(ws: S, keys: &PhoneKeys, host: &HostInfo, ps: &PairingSecret, name: &str) -> Result<Self> {
         let key = keys.device.public_key();
         Self::provisional_handshake_with(ws, keys, host, ps, name, &key).await
     }
 
     /// [`Self::provisional_handshake`] sending `enroll_key` as the key.
-    pub async fn provisional_handshake_with(
-        mut ws: S,
-        keys: &PhoneKeys,
-        host: &HostInfo,
-        ps: &PairingSecret,
-        name: &str,
-        enroll_key: &[u8],
-    ) -> Result<Self> {
-        let mut hs = noise::initiator(
-            &keys.static_priv,
-            &host.hs,
-            &host.host_id,
-            Some(&ps.psk),
-            None,
-        )?;
+    pub async fn provisional_handshake_with(mut ws: S, keys: &PhoneKeys, host: &HostInfo, ps: &PairingSecret, name: &str, enroll_key: &[u8]) -> Result<Self> {
+        let mut hs = noise::initiator(&keys.static_priv, &host.hs, &host.host_id, Some(&ps.psk), None)?;
         let mut buf = vec![0u8; noise::MAX_MSG];
         let payload = json!({
             "v": 1,
@@ -319,63 +239,39 @@ where
         ws.send(Message::Binary(buf[..n].to_vec().into())).await?;
         let msg2 = next_bin(&mut ws).await?;
         let mut out = vec![0u8; noise::MAX_MSG];
-        let m = hs
-            .read_message(&msg2, &mut out)
-            .map_err(|e| anyhow!("msg2: {e}"))?;
+        let m = hs.read_message(&msg2, &mut out).map_err(|e| anyhow!("msg2: {e}"))?;
         let v: Value = serde_json::from_slice(&out[..m])?;
         if v != json!({ "v": 1, "provisional": true }) {
             bail!("expected a provisional msg2, got {v}");
         }
-        Ok(Self {
-            ws,
-            ts: hs.into_transport_mode()?,
-            next_id: 1,
-            buf,
-        })
+        Ok(Self { ws, ts: hs.into_transport_mode()?, next_id: 1, buf })
     }
 
     pub async fn send(&mut self, f: Frame) -> Result<()> {
         let n = self.ts.write_message(&f.encode(), &mut self.buf)?;
-        self.ws
-            .send(Message::Binary(self.buf[..n].to_vec().into()))
-            .await?;
+        self.ws.send(Message::Binary(self.buf[..n].to_vec().into())).await?;
         Ok(())
     }
 
     pub async fn recv(&mut self) -> Result<Frame> {
         let b = next_bin(&mut self.ws).await?;
         let mut out = vec![0u8; noise::MAX_MSG];
-        let n = self
-            .ts
-            .read_message(&b, &mut out)
-            .map_err(|e| anyhow!("decrypt: {e}"))?;
+        let n = self.ts.read_message(&b, &mut out).map_err(|e| anyhow!("decrypt: {e}"))?;
         Frame::decode(&out[..n]).map_err(|_| anyhow!("short frame"))
     }
 
     pub async fn recv_timeout(&mut self, d: Duration) -> Result<Frame> {
-        tokio::time::timeout(d, self.recv())
-            .await
-            .map_err(|_| anyhow!("no frame within {d:?}"))?
+        tokio::time::timeout(d, self.recv()).await.map_err(|_| anyhow!("no frame within {d:?}"))?
     }
 
     /// Open a stream: OPEN (+ DATA) (+ FIN). Returns its id.
-    pub async fn open(
-        &mut self,
-        method: &str,
-        path: &str,
-        headers: &[(&str, &str)],
-        body: Option<&[u8]>,
-        fin: bool,
-    ) -> Result<u32> {
+    pub async fn open(&mut self, method: &str, path: &str, headers: &[(&str, &str)], body: Option<&[u8]>, fin: bool) -> Result<u32> {
         let id = self.next_id;
         self.next_id += 2;
         let head = RequestHead {
             method: method.into(),
             path: path.into(),
-            headers: headers
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
+            headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
         };
         self.send(Frame::open(id, &head)).await?;
         if let Some(b) = body {
@@ -415,28 +311,13 @@ where
             }
         }
         let head = head.ok_or_else(|| anyhow!("FIN before RESPONSE"))?;
-        Ok(Response1 {
-            status: head.status,
-            headers: head.headers,
-            body,
-        })
+        Ok(Response1 { status: head.status, headers: head.headers, body })
     }
 
-    pub async fn request(
-        &mut self,
-        method: &str,
-        path: &str,
-        body: Option<Value>,
-    ) -> Result<Response1> {
+    pub async fn request(&mut self, method: &str, path: &str, body: Option<Value>) -> Result<Response1> {
         let b = body.map(|v| v.to_string());
-        let headers: &[(&str, &str)] = if b.is_some() {
-            &[("content-type", "application/json")]
-        } else {
-            &[]
-        };
-        let id = self
-            .open(method, path, headers, b.as_deref().map(str::as_bytes), true)
-            .await?;
+        let headers: &[(&str, &str)] = if b.is_some() { &[("content-type", "application/json")] } else { &[] };
+        let id = self.open(method, path, headers, b.as_deref().map(str::as_bytes), true).await?;
         self.read_response(id).await
     }
 }
@@ -445,93 +326,47 @@ pub type ClientWs = WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>
 
 /// `GET /v1/tunnel/connect?host=…` up to the challenge nonce.
 async fn phone_dial(host: &HostInfo) -> Result<(ClientWs, [u8; 32])> {
-    let base = host
-        .relay
-        .replacen("http://", "ws://", 1)
-        .replacen("https://", "wss://", 1);
-    let mut ws =
-        super::control::dial(&format!("{base}/v1/tunnel/connect?host={}", host.host_id)).await?;
+    let base = host.relay.replacen("http://", "ws://", 1).replacen("https://", "wss://", 1);
+    let mut ws = super::control::dial(&format!("{base}/v1/tunnel/connect?host={}", host.host_id)).await?;
     let ch = next_text(&mut ws).await?;
     let nonce = b64u_fixed(ch["nonce"].as_str().unwrap_or_default())?;
     Ok((ws, nonce))
 }
 
 /// Enroll through the relay with the pairing secret from a link.
-pub async fn phone_enroll(
-    host: &HostInfo,
-    keys: &PhoneKeys,
-    ps: &PairingSecret,
-    name: &str,
-) -> Result<(PhoneConn<ClientWs>, String, String)> {
+pub async fn phone_enroll(host: &HostInfo, keys: &PhoneKeys, ps: &PairingSecret, name: &str) -> Result<(PhoneConn<ClientWs>, String, String)> {
     let (mut ws, _) = phone_dial(host).await?;
-    ws.send(Message::Text(
-        json!({ "t": "enroll", "eid": ps.eid, "tag": b64u(ps.tag) })
-            .to_string()
-            .into(),
-    ))
-    .await?;
+    ws.send(Message::Text(json!({ "t": "enroll", "eid": ps.eid, "tag": b64u(ps.tag) }).to_string().into())).await?;
     await_ready(&mut ws).await?;
     PhoneConn::enroll_handshake(ws, keys, host, ps, name).await
 }
 
 /// Enroll with the given device claim, or none.
-pub async fn phone_enroll_with_device(
-    host: &HostInfo,
-    keys: &PhoneKeys,
-    ps: &PairingSecret,
-    name: &str,
-    device: Option<Value>,
-) -> Result<(PhoneConn<ClientWs>, String, String)> {
+pub async fn phone_enroll_with_device(host: &HostInfo, keys: &PhoneKeys, ps: &PairingSecret, name: &str, device: Option<Value>) -> Result<(PhoneConn<ClientWs>, String, String)> {
     let (mut ws, _) = phone_dial(host).await?;
-    ws.send(Message::Text(
-        json!({ "t": "enroll", "eid": ps.eid, "tag": b64u(ps.tag) })
-            .to_string()
-            .into(),
-    ))
-    .await?;
+    ws.send(Message::Text(json!({ "t": "enroll", "eid": ps.eid, "tag": b64u(ps.tag) }).to_string().into())).await?;
     await_ready(&mut ws).await?;
     PhoneConn::enroll_handshake_with(ws, keys, host, ps, name, device).await
 }
 
 /// E3b: a provisional enrollment through the relay (see
 /// [`PhoneConn::provisional_handshake`]).
-pub async fn phone_enroll_provisional(
-    host: &HostInfo,
-    keys: &PhoneKeys,
-    ps: &PairingSecret,
-    name: &str,
-) -> Result<PhoneConn<ClientWs>> {
+pub async fn phone_enroll_provisional(host: &HostInfo, keys: &PhoneKeys, ps: &PairingSecret, name: &str) -> Result<PhoneConn<ClientWs>> {
     let (mut ws, _) = phone_dial(host).await?;
-    ws.send(Message::Text(
-        json!({ "t": "enroll", "eid": ps.eid, "tag": b64u(ps.tag) })
-            .to_string()
-            .into(),
-    ))
-    .await?;
+    ws.send(Message::Text(json!({ "t": "enroll", "eid": ps.eid, "tag": b64u(ps.tag) }).to_string().into())).await?;
     await_ready(&mut ws).await?;
     PhoneConn::provisional_handshake(ws, keys, host, ps, name).await
 }
 
 /// Open a session through the relay with a credential.
-pub async fn phone_session(
-    host: &HostInfo,
-    keys: &PhoneKeys,
-    credential: &str,
-) -> Result<PhoneConn<ClientWs>> {
+pub async fn phone_session(host: &HostInfo, keys: &PhoneKeys, credential: &str) -> Result<PhoneConn<ClientWs>> {
     phone_session_with(host, keys, credential, false).await
 }
 
 /// A session that also registers an APNs token with the relay (`apns`).
-pub async fn phone_session_with(
-    host: &HostInfo,
-    keys: &PhoneKeys,
-    credential: &str,
-    apns: bool,
-) -> Result<PhoneConn<ClientWs>> {
+pub async fn phone_session_with(host: &HostInfo, keys: &PhoneKeys, credential: &str, apns: bool) -> Result<PhoneConn<ClientWs>> {
     let (mut ws, nonce) = phone_dial(host).await?;
-    let sig = keys
-        .auth
-        .sign(&ctx("phone-auth", &[host.host_id.as_bytes(), &nonce]));
+    let sig = keys.auth.sign(&ctx("phone-auth", &[host.host_id.as_bytes(), &nonce]));
     let mut auth = json!({ "t": "auth", "cred": credential, "sig": b64u(sig.to_bytes()) });
     if apns {
         auth["apns"] = json!({ "token": "00ff", "env": "development" });
@@ -544,10 +379,7 @@ pub async fn phone_session_with(
 // ── In-memory WebSocket pair (no relay) ──────────────────────────────────────
 
 /// Two connected WebSockets over an in-memory pipe: (client side, server side).
-pub async fn ws_pair() -> (
-    WebSocketStream<tokio::io::DuplexStream>,
-    WebSocketStream<tokio::io::DuplexStream>,
-) {
+pub async fn ws_pair() -> (WebSocketStream<tokio::io::DuplexStream>, WebSocketStream<tokio::io::DuplexStream>) {
     use tokio_tungstenite::tungstenite::protocol::Role;
     let (a, b) = tokio::io::duplex(1 << 20);
     let client = WebSocketStream::from_raw_socket(a, Role::Client, None).await;
@@ -624,32 +456,18 @@ impl FakeRelay {
     }
 
     pub fn messages(&self, t: &str) -> Vec<Value> {
-        self.state
-            .log
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|m| m["t"] == t)
-            .cloned()
-            .collect()
+        self.state.log.lock().unwrap().iter().filter(|m| m["t"] == t).cloned().collect()
     }
 
     /// Wait for the host to send a `t` message matching `pred`.
-    pub async fn wait_for(
-        &self,
-        t: &str,
-        pred: impl Fn(&Value) -> bool,
-        within: Duration,
-    ) -> Result<Value> {
+    pub async fn wait_for(&self, t: &str, pred: impl Fn(&Value) -> bool, within: Duration) -> Result<Value> {
         let mut rx = self.log_tx.subscribe();
         if let Some(m) = self.messages(t).into_iter().find(|m| pred(m)) {
             return Ok(m);
         }
         let deadline = tokio::time::Instant::now() + within;
         loop {
-            let m = tokio::time::timeout_at(deadline, rx.recv())
-                .await
-                .map_err(|_| anyhow!("no {t} within {within:?}"))??;
+            let m = tokio::time::timeout_at(deadline, rx.recv()).await.map_err(|_| anyhow!("no {t} within {within:?}"))??;
             if m["t"] == t && pred(&m) {
                 return Ok(m);
             }
@@ -669,19 +487,8 @@ impl FakeRelay {
 }
 
 async fn close_with(ws: &mut WebSocketStream<TcpStream>, code: u16, name: &str) {
-    let _ = ws
-        .send(Message::Text(
-            json!({ "t": "error", "code": name, "message": name })
-                .to_string()
-                .into(),
-        ))
-        .await;
-    let _ = ws
-        .send(Message::Close(Some(CloseFrame {
-            code: CloseCode::from(code),
-            reason: name.to_string().into(),
-        })))
-        .await;
+    let _ = ws.send(Message::Text(json!({ "t": "error", "code": name, "message": name }).to_string().into())).await;
+    let _ = ws.send(Message::Close(Some(CloseFrame { code: CloseCode::from(code), reason: name.to_string().into() }))).await;
 }
 
 /// Answer one plain HTTP request (`POST /v1/tunnel/revoke`) like the relay.
@@ -697,11 +504,7 @@ async fn http_conn(mut tcp: TcpStream, st: Arc<RelayState>) -> Result<()> {
         buf.extend_from_slice(&chunk[..n]);
         if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
             let head = String::from_utf8_lossy(&buf[..i]).to_lowercase();
-            let len = head
-                .lines()
-                .find_map(|l| l.strip_prefix("content-length:"))
-                .and_then(|v| v.trim().parse::<usize>().ok())
-                .unwrap_or(0);
+            let len = head.lines().find_map(|l| l.strip_prefix("content-length:")).and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0);
             break (i + 4, len);
         }
     };
@@ -712,13 +515,9 @@ async fn http_conn(mut tcp: TcpStream, st: Arc<RelayState>) -> Result<()> {
         }
         buf.extend_from_slice(&chunk[..n]);
     }
-    let first = String::from_utf8_lossy(&buf[..buf.iter().position(|b| *b == b'\r').unwrap_or(0)])
-        .to_string();
-    let body: Value = serde_json::from_slice(&buf[head_end..(head_end + len).min(buf.len())])
-        .unwrap_or(Value::Null);
-    let (status, reply) = if !first.starts_with("POST /v1/tunnel/revoke ")
-        || st.http_revoke_off.load(std::sync::atomic::Ordering::SeqCst)
-    {
+    let first = String::from_utf8_lossy(&buf[..buf.iter().position(|b| *b == b'\r').unwrap_or(0)]).to_string();
+    let body: Value = serde_json::from_slice(&buf[head_end..(head_end + len).min(buf.len())]).unwrap_or(Value::Null);
+    let (status, reply) = if !first.starts_with("POST /v1/tunnel/revoke ") || st.http_revoke_off.load(std::sync::atomic::Ordering::SeqCst) {
         (404, json!({ "error": "not found" }))
     } else if let Some(code) = *st.http_revoke_fail.lock().unwrap() {
         (code, json!({ "error": "internal" }))
@@ -737,48 +536,24 @@ async fn http_conn(mut tcp: TcpStream, st: Arc<RelayState>) -> Result<()> {
 fn revoke_http(st: &RelayState, m: &Value) -> (u16, Value) {
     let s = |k: &str| m[k].as_str().unwrap_or_default().to_string();
     let (hid, pid) = (s("hostId"), s("pid"));
-    let (Some(exp), Some(ts)) = (m["exp"].as_u64(), m["ts"].as_u64()) else {
-        return (400, json!({ "error": "protocol" }));
-    };
-    let (Ok(nonce), Ok(sig)) = (b64u_fixed::<16>(&s("nonce")), b64u_fixed::<64>(&s("sig"))) else {
-        return (400, json!({ "error": "protocol" }));
-    };
-    let Some(key) = st.hosts.lock().unwrap().get(&hid).copied() else {
-        return (401, json!({ "error": "unauthorized" }));
-    };
+    let (Some(exp), Some(ts)) = (m["exp"].as_u64(), m["ts"].as_u64()) else { return (400, json!({ "error": "protocol" })) };
+    let (Ok(nonce), Ok(sig)) = (b64u_fixed::<16>(&s("nonce")), b64u_fixed::<64>(&s("sig"))) else { return (400, json!({ "error": "protocol" })) };
+    let Some(key) = st.hosts.lock().unwrap().get(&hid).copied() else { return (401, json!({ "error": "unauthorized" })) };
     let msg = super::revocation::host_revoke_message(&hid, &pid, exp, ts, &nonce);
-    if key
-        .verify_strict(&msg, &ed25519_dalek::Signature::from_bytes(&sig))
-        .is_err()
-    {
+    if key.verify_strict(&msg, &ed25519_dalek::Signature::from_bytes(&sig)).is_err() {
         return (401, json!({ "error": "unauthorized" }));
     }
-    let relay_now =
-        (super::now() as i64 + st.clock_offset.load(std::sync::atomic::Ordering::SeqCst)) as u64;
+    let relay_now = (super::now() as i64 + st.clock_offset.load(std::sync::atomic::Ordering::SeqCst)) as u64;
     if ts.abs_diff(relay_now) > 300 {
         return (401, json!({ "error": "clock_skew", "now": relay_now }));
     }
-    if !st
-        .nonces
-        .lock()
-        .unwrap()
-        .insert(format!("{hid}|{}", s("nonce")))
-    {
+    if !st.nonces.lock().unwrap().insert(format!("{hid}|{}", s("nonce"))) {
         return (409, json!({ "error": "replayed" }));
     }
     st.revoked.lock().unwrap().insert(pid.clone());
     let removed = st.push_tokens.lock().unwrap().remove(&pid);
-    let closed = st
-        .live
-        .lock()
-        .unwrap()
-        .remove(&pid)
-        .map(|v| v.len())
-        .unwrap_or(0);
-    (
-        200,
-        json!({ "ok": true, "pid": pid, "revokedUntil": exp, "sessionsClosed": closed, "pushTokenRemoved": removed }),
-    )
+    let closed = st.live.lock().unwrap().remove(&pid).map(|v| v.len()).unwrap_or(0);
+    (200, json!({ "ok": true, "pid": pid, "revokedUntil": exp, "sessionsClosed": closed, "pushTokenRemoved": removed }))
 }
 
 async fn conn(tcp: TcpStream, st: Arc<RelayState>, log_tx: broadcast::Sender<Value>) -> Result<()> {
@@ -790,28 +565,16 @@ async fn conn(tcp: TcpStream, st: Arc<RelayState>, log_tx: broadcast::Sender<Val
     let t2 = target.clone();
     let cb = move |req: &Request, mut resp: Response| {
         *t2.lock().unwrap() = req.uri().to_string();
-        let offered = req
-            .headers()
-            .get("sec-websocket-protocol")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
+        let offered = req.headers().get("sec-websocket-protocol").and_then(|v| v.to_str().ok()).unwrap_or("");
         if offered.split(',').any(|p| p.trim() == SUBPROTOCOL) {
-            resp.headers_mut().insert(
-                "sec-websocket-protocol",
-                HeaderValue::from_static(SUBPROTOCOL),
-            );
+            resp.headers_mut().insert("sec-websocket-protocol", HeaderValue::from_static(SUBPROTOCOL));
         }
         Ok(resp)
     };
     let mut ws = tokio_tungstenite::accept_hdr_async(tcp, cb).await?;
     let target = target.lock().unwrap().clone();
     let (path, query) = target.split_once('?').unwrap_or((&target, ""));
-    let param = |k: &str| {
-        query
-            .split('&')
-            .find_map(|kv| kv.strip_prefix(&format!("{k}=")))
-            .map(str::to_string)
-    };
+    let param = |k: &str| query.split('&').find_map(|kv| kv.strip_prefix(&format!("{k}="))).map(str::to_string);
     match path {
         "/v1/tunnel/host" => control_conn(ws, st, log_tx).await,
         "/v1/tunnel/accept" => {
@@ -832,39 +595,19 @@ async fn conn(tcp: TcpStream, st: Arc<RelayState>, log_tx: broadcast::Sender<Val
     }
 }
 
-async fn control_conn(
-    mut ws: WebSocketStream<TcpStream>,
-    st: Arc<RelayState>,
-    log_tx: broadcast::Sender<Value>,
-) -> Result<()> {
+async fn control_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, log_tx: broadcast::Sender<Value>) -> Result<()> {
     let nonce: [u8; 32] = random_bytes();
-    ws.send(Message::Text(
-        json!({ "t": "challenge", "v": 1, "nonce": b64u(nonce) })
-            .to_string()
-            .into(),
-    ))
-    .await?;
+    ws.send(Message::Text(json!({ "t": "challenge", "v": 1, "nonce": b64u(nonce) }).to_string().into())).await?;
     let hello = next_text(&mut ws).await?;
     let host_pub: [u8; 32] = b64u_fixed(hello["hostPub"].as_str().unwrap_or_default())?;
     let host_id = hello["hostId"].as_str().unwrap_or_default().to_string();
     let key = VerifyingKey::from_bytes(&host_pub)?;
-    let sig = ed25519_dalek::Signature::from_slice(&super::b64u_decode(
-        hello["sig"].as_str().unwrap_or_default(),
-    )?)?;
-    if host_id_for(&host_pub) != host_id
-        || key
-            .verify_strict(&ctx("host-auth", &[host_id.as_bytes(), &nonce]), &sig)
-            .is_err()
-    {
+    let sig = ed25519_dalek::Signature::from_slice(&super::b64u_decode(hello["sig"].as_str().unwrap_or_default())?)?;
+    if host_id_for(&host_pub) != host_id || key.verify_strict(&ctx("host-auth", &[host_id.as_bytes(), &nonce]), &sig).is_err() {
         close_with(&mut ws, 4001, "unauthorized").await;
         return Ok(());
     }
-    ws.send(Message::Text(
-        json!({ "t": "welcome", "status": "active", "maxSessions": 8, "push": false })
-            .to_string()
-            .into(),
-    ))
-    .await?;
+    ws.send(Message::Text(json!({ "t": "welcome", "status": "active", "maxSessions": 8, "push": false }).to_string().into())).await?;
     let (tx, mut rx) = mpsc::unbounded_channel();
     st.hosts.lock().unwrap().insert(host_id.clone(), key);
     *st.host.lock().unwrap() = Some(HostConn { host_id, key, tx });
@@ -929,36 +672,17 @@ async fn control_conn(
     Ok(())
 }
 
-async fn phone_conn(
-    mut ws: WebSocketStream<TcpStream>,
-    st: Arc<RelayState>,
-    host: String,
-) -> Result<()> {
+async fn phone_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, host: String) -> Result<()> {
     let nonce: [u8; 32] = random_bytes();
-    ws.send(Message::Text(
-        json!({ "t": "challenge", "v": 1, "nonce": b64u(nonce) })
-            .to_string()
-            .into(),
-    ))
-    .await?;
+    ws.send(Message::Text(json!({ "t": "challenge", "v": 1, "nonce": b64u(nonce) }).to_string().into())).await?;
     let m = next_text(&mut ws).await?;
     let (hid, key, tx) = match st.host.lock().unwrap().as_ref() {
         Some(h) => (h.host_id.clone(), h.key, h.tx.clone()),
-        None => (
-            String::new(),
-            VerifyingKey::from_bytes(&[0u8; 32])
-                .unwrap_or_else(|_| SigningKey::from_bytes(&[1; 32]).verifying_key()),
-            mpsc::unbounded_channel().0,
-        ),
+        None => (String::new(), VerifyingKey::from_bytes(&[0u8; 32]).unwrap_or_else(|_| SigningKey::from_bytes(&[1; 32]).verifying_key()), mpsc::unbounded_channel().0),
     };
     let open = match m["t"].as_str() {
         Some("auth") => {
-            let claims = match cred::verify(
-                m["cred"].as_str().unwrap_or_default(),
-                &host,
-                (!hid.is_empty()).then_some((hid.as_str(), &key)),
-                super::now(),
-            ) {
+            let claims = match cred::verify(m["cred"].as_str().unwrap_or_default(), &host, (!hid.is_empty()).then_some((hid.as_str(), &key)), super::now()) {
                 Ok(c) => c,
                 Err(e) => {
                     let code = match e {
@@ -975,13 +699,8 @@ async fn phone_conn(
                 return Ok(());
             }
             let pk = VerifyingKey::from_bytes(&claims.pk)?;
-            let sig = ed25519_dalek::Signature::from_slice(&super::b64u_decode(
-                m["sig"].as_str().unwrap_or_default(),
-            )?)?;
-            if pk
-                .verify_strict(&ctx("phone-auth", &[host.as_bytes(), &nonce]), &sig)
-                .is_err()
-            {
+            let sig = ed25519_dalek::Signature::from_slice(&super::b64u_decode(m["sig"].as_str().unwrap_or_default())?)?;
+            if pk.verify_strict(&ctx("phone-auth", &[host.as_bytes(), &nonce]), &sig).is_err() {
                 close_with(&mut ws, 4001, "unauthorized").await;
                 return Ok(());
             }
@@ -993,12 +712,7 @@ async fn phone_conn(
         Some("enroll") => {
             let eid = m["eid"].as_str().unwrap_or_default();
             let tag = super::b64u_decode(m["tag"].as_str().unwrap_or_default()).unwrap_or_default();
-            let ok = st
-                .windows
-                .lock()
-                .unwrap()
-                .get(eid)
-                .is_some_and(|h| *h == b64u(sha256(&tag)));
+            let ok = st.windows.lock().unwrap().get(eid).is_some_and(|h| *h == b64u(sha256(&tag)));
             if !ok {
                 close_with(&mut ws, 4001, "unauthorized").await;
                 return Ok(());
@@ -1031,18 +745,10 @@ async fn phone_conn(
             return Ok(());
         }
     };
-    ws.send(Message::Text(
-        json!({ "t": "ready", "sid": sid }).to_string().into(),
-    ))
-    .await?;
+    ws.send(Message::Text(json!({ "t": "ready", "sid": sid }).to_string().into())).await?;
     let (kill_tx, kill_rx) = oneshot::channel();
     if let Some(pid) = open["pid"].as_str() {
-        st.live
-            .lock()
-            .unwrap()
-            .entry(pid.to_string())
-            .or_default()
-            .push(kill_tx);
+        st.live.lock().unwrap().entry(pid.to_string()).or_default().push(kill_tx);
     }
     splice(ws, host_ws, kill_rx).await;
     Ok(())
@@ -1050,11 +756,7 @@ async fn phone_conn(
 
 /// Copy binary messages both ways, one at a time; a close ends both sides.
 /// `kill` resolving (its sender dropped by a revocation) closes both with 4003.
-async fn splice(
-    a: WebSocketStream<TcpStream>,
-    b: WebSocketStream<TcpStream>,
-    mut kill: oneshot::Receiver<()>,
-) {
+async fn splice(a: WebSocketStream<TcpStream>, b: WebSocketStream<TcpStream>, mut kill: oneshot::Receiver<()>) {
     let (mut a_tx, mut a_rx) = a.split();
     let (mut b_tx, mut b_rx) = b.split();
     loop {
@@ -1094,10 +796,7 @@ where
         if (3000..=4999).contains(&c) {
             f
         } else {
-            CloseFrame {
-                code: CloseCode::Normal,
-                reason: "".into(),
-            }
+            CloseFrame { code: CloseCode::Normal, reason: "".into() }
         }
     });
     let _ = to.send(Message::Close(frame)).await;
@@ -1108,14 +807,6 @@ pub fn open_push(key: &[u8; 32], hid: &str, pid: &str, ct: &[u8]) -> Value {
     use chacha20poly1305::aead::{Aead, KeyInit, Payload};
     let cipher = chacha20poly1305::ChaCha20Poly1305::new(key.into());
     let ad = ctx("push", &[hid.as_bytes(), pid.as_bytes()]);
-    let pt = cipher
-        .decrypt(
-            &chacha20poly1305::Nonce::try_from(&ct[..12]).unwrap(),
-            Payload {
-                msg: &ct[12..],
-                aad: &ad,
-            },
-        )
-        .expect("push decrypts");
+    let pt = cipher.decrypt(&chacha20poly1305::Nonce::try_from(&ct[..12]).unwrap(), Payload { msg: &ct[12..], aad: &ad }).expect("push decrypts");
     serde_json::from_slice(&pt).unwrap()
 }

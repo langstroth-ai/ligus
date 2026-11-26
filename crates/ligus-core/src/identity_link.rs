@@ -155,9 +155,7 @@ pub fn render_statement(link: &IdentityLink, workspace_id: Uuid, account_key: &[
 /// `s` without Unicode bidi controls and zero-width characters, for showing
 /// a name a forge (or a DID document) supplied.
 pub fn strip_bidi_controls(s: &str) -> String {
-    s.chars()
-        .filter(|c| !c.is_control() && !is_invisible_format(*c))
-        .collect()
+    s.chars().filter(|c| !c.is_control() && !is_invisible_format(*c)).collect()
 }
 
 /// Bidi embeddings, overrides, isolates and marks, zero-width and other
@@ -191,9 +189,7 @@ pub fn is_invisible_format(c: char) -> bool {
 fn token_ok(s: &str, max: usize, allow_space: bool) -> bool {
     !s.is_empty()
         && s.len() <= max
-        && s.chars().all(|c| {
-            !c.is_control() && !is_invisible_format(c) && (allow_space || !c.is_whitespace())
-        })
+        && s.chars().all(|c| !c.is_control() && !is_invisible_format(c) && (allow_space || !c.is_whitespace()))
         && s.trim() == s
 }
 
@@ -201,31 +197,22 @@ fn token_ok(s: &str, max: usize, allow_space: bool) -> bool {
 /// statement fields can't carry a line break (no field injection), the
 /// window is at most two years, and the proof fields match the method.
 pub fn check_shape(link: &IdentityLink) -> Result<(), String> {
-    let size = serde_json::to_vec(link)
-        .map(|v| v.len())
-        .unwrap_or(usize::MAX);
+    let size = serde_json::to_vec(link).map(|v| v.len()).unwrap_or(usize::MAX);
     if size > MAX_LINK_BYTES {
-        return Err(format!(
-            "an identity link is at most {MAX_LINK_BYTES} bytes"
-        ));
+        return Err(format!("an identity link is at most {MAX_LINK_BYTES} bytes"));
     }
     if link.link_id.is_nil() || link.account_id.is_nil() {
         return Err("an identity link names its id and account".into());
     }
     let provider_ok = !link.provider.is_empty()
         && link.provider.len() <= 32
-        && link
-            .provider
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        && link.provider.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
     if !provider_ok {
         return Err("malformed provider".into());
     }
     let host_ok = !link.host.is_empty()
         && link.host.len() <= 253
-        && link.host.bytes().all(|b| {
-            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-' | b':')
-        });
+        && link.host.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-' | b':'));
     if !host_ok {
         return Err("malformed host (lowercase host name, optional port)".into());
     }
@@ -246,16 +233,10 @@ pub fn check_shape(link: &IdentityLink) -> Result<(), String> {
     }
     match link.method {
         LinkMethod::SshSig => {
-            if link.statement.is_empty() || link.proof.is_empty() || link.key_fingerprint.is_empty()
-            {
-                return Err(
-                    "an SSH-signed link carries its statement, signature and key fingerprint"
-                        .into(),
-                );
+            if link.statement.is_empty() || link.proof.is_empty() || link.key_fingerprint.is_empty() {
+                return Err("an SSH-signed link carries its statement, signature and key fingerprint".into());
             }
-            let nonce_ok = base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .decode(&link.nonce)
-                .is_ok_and(|n| n.len() == 16);
+            let nonce_ok = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&link.nonce).is_ok_and(|n| n.len() == 16);
             if !nonce_ok {
                 return Err("an SSH-signed link carries a 16-byte nonce".into());
             }
@@ -279,11 +260,7 @@ pub fn check_shape(link: &IdentityLink) -> Result<(), String> {
 /// The fold's statement check for an `SshSig` link: the statement is exactly
 /// the rendering of the link's fields, in the workspace it is published in,
 /// under the account key in force at its position.
-pub fn check_statement(
-    link: &IdentityLink,
-    workspace_id: Uuid,
-    account_key: Option<&[u8]>,
-) -> Result<(), String> {
+pub fn check_statement(link: &IdentityLink, workspace_id: Uuid, account_key: Option<&[u8]>) -> Result<(), String> {
     if link.method != LinkMethod::SshSig {
         return Ok(());
     }
@@ -291,9 +268,7 @@ pub fn check_statement(
         return Err("the account's key isn't registered (undisputed) here".into());
     };
     if link.statement != render_statement(link, workspace_id, key) {
-        return Err(
-            "the statement doesn't match the link, its workspace or its account key".into(),
-        );
+        return Err("the statement doesn't match the link, its workspace or its account key".into());
     }
     Ok(())
 }
@@ -335,10 +310,7 @@ mod tests {
     #[test]
     fn link_namespace_is_frozen() {
         let hex: String = LINK_NAMESPACE.bytes().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(
-            hex,
-            "6c696775732d6964656e746974792d6c696e6b2d7631406c696775732e6169"
-        );
+        assert_eq!(hex, "6c696775732d6964656e746974792d6c696e6b2d7631406c696775732e6169");
         assert_eq!(STATEMENT_TAG, "ligus-identity-link-v1");
     }
 
@@ -360,10 +332,7 @@ mod tests {
         assert!(check_shape(&l).is_ok());
         let mut bad = l.clone();
         bad.handle_at_link = "alice\nsubject: 1".into();
-        assert!(
-            check_shape(&bad).is_err(),
-            "a newline can't forge a statement field"
-        );
+        assert!(check_shape(&bad).is_err(), "a newline can't forge a statement field");
         let mut bad = l.clone();
         bad.host = "GitHub.com".into();
         assert!(check_shape(&bad).is_err());
@@ -379,10 +348,7 @@ mod tests {
         kp.proof.clear();
         assert!(check_shape(&kp).is_ok());
         kp.provider = "forgejo".into();
-        assert!(
-            check_shape(&kp).is_err(),
-            "published key would grant push on Forgejo"
-        );
+        assert!(check_shape(&kp).is_err(), "published key would grant push on Forgejo");
     }
 
     /// Bidi overrides, isolates and zero-width characters (Unicode format
@@ -390,14 +356,7 @@ mod tests {
     /// would render as "alice", and "\u{202E}" can reorder what follows.
     #[test]
     fn shape_rejects_bidi_and_zero_width_in_handles() {
-        for bad in [
-            "alice\u{200B}",
-            "\u{202E}ecila",
-            "al\u{2066}ice\u{2069}",
-            "alice\u{FEFF}",
-            "a\u{200D}b",
-            "a\u{061C}b",
-        ] {
+        for bad in ["alice\u{200B}", "\u{202E}ecila", "al\u{2066}ice\u{2069}", "alice\u{FEFF}", "a\u{200D}b", "a\u{061C}b"] {
             let mut l = sample();
             l.statement = "x".into();
             l.handle_at_link = bad.into();
@@ -407,10 +366,7 @@ mod tests {
             l.subject_id = bad.into();
             assert!(check_shape(&l).is_err(), "subject {bad:?}");
         }
-        assert_eq!(
-            strip_bidi_controls("\u{202E}al\u{200B}ice\u{2069}"),
-            "alice"
-        );
+        assert_eq!(strip_bidi_controls("\u{202E}al\u{200B}ice\u{2069}"), "alice");
         assert_eq!(strip_bidi_controls("erin.example.com"), "erin.example.com");
     }
 
@@ -419,14 +375,8 @@ mod tests {
         let mut l = sample();
         l.statement = render_statement(&l, Uuid::from_u128(7), &[1u8; 32]);
         assert!(check_statement(&l, Uuid::from_u128(7), Some(&[1u8; 32])).is_ok());
-        assert!(
-            check_statement(&l, Uuid::from_u128(8), Some(&[1u8; 32])).is_err(),
-            "another workspace"
-        );
-        assert!(
-            check_statement(&l, Uuid::from_u128(7), Some(&[2u8; 32])).is_err(),
-            "another account key"
-        );
+        assert!(check_statement(&l, Uuid::from_u128(8), Some(&[1u8; 32])).is_err(), "another workspace");
+        assert!(check_statement(&l, Uuid::from_u128(7), Some(&[2u8; 32])).is_err(), "another account key");
         assert!(check_statement(&l, Uuid::from_u128(7), None).is_err());
     }
 
@@ -441,25 +391,11 @@ mod tests {
             let l: IdentityLink = serde_json::from_value(v).unwrap();
             assert_eq!(l.method, LinkMethod::Unknown, "{m}");
         }
-        let names: Vec<String> = [
-            LinkMethod::SshSig,
-            LinkMethod::KeyPublished,
-            LinkMethod::SelfAsserted,
-        ]
-        .iter()
-        .map(|m| {
-            serde_json::to_value(m)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_string()
-        })
-        .collect();
-        assert_eq!(
-            names,
-            ["sshSig", "keyPublished", "selfAsserted"],
-            "wire ids unchanged"
-        );
+        let names: Vec<String> = [LinkMethod::SshSig, LinkMethod::KeyPublished, LinkMethod::SelfAsserted]
+            .iter()
+            .map(|m| serde_json::to_value(m).unwrap().as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, ["sshSig", "keyPublished", "selfAsserted"], "wire ids unchanged");
     }
 
     #[test]

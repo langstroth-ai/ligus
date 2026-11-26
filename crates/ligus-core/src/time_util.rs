@@ -46,7 +46,10 @@ impl From<OffsetDateTime> for Timestamp {
 
 impl Serialize for Timestamp {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let s = self.0.format(&Rfc3339).map_err(serde::ser::Error::custom)?;
+        let s = self
+            .0
+            .format(&Rfc3339)
+            .map_err(serde::ser::Error::custom)?;
         serializer.serialize_str(&s)
     }
 }

@@ -116,19 +116,14 @@ impl IrohNode {
 
 impl PeerLink for IrohNode {
     async fn send(&self, to: &PeerId, data: Vec<u8>) -> Result<(), PeerError> {
-        let id: EndpointId =
-            to.0.parse()
-                .map_err(|_| PeerError::BadPeerId(to.0.clone()))?;
+        let id: EndpointId = to.0.parse().map_err(|_| PeerError::BadPeerId(to.0.clone()))?;
         let conn = self.connection(id).await?;
         let (mut send, _recv) = conn
             .open_bi()
             .await
             .map_err(|e| PeerError::Transport(e.to_string()))?;
-        send.write_all(&data)
-            .await
-            .map_err(|e| PeerError::Transport(e.to_string()))?;
-        send.finish()
-            .map_err(|e| PeerError::Transport(e.to_string()))?;
+        send.write_all(&data).await.map_err(|e| PeerError::Transport(e.to_string()))?;
+        send.finish().map_err(|e| PeerError::Transport(e.to_string()))?;
         // Wait for the peer to acknowledge so we don't reset the stream early.
         let _ = send.stopped().await;
         Ok(())

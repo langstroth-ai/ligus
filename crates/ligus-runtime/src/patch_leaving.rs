@@ -84,10 +84,7 @@ fn passing_re() -> &'static [Regex] {
 pub fn passing_tests(output: &str) -> Option<u64> {
     let res = passing_re();
     for re in &res[..2] {
-        let total: u64 = re
-            .captures_iter(output)
-            .filter_map(|c| c[1].parse::<u64>().ok())
-            .sum();
+        let total: u64 = re.captures_iter(output).filter_map(|c| c[1].parse::<u64>().ok()).sum();
         if total > 0 {
             return Some(total);
         }
@@ -107,10 +104,7 @@ fn fnv(s: &str) -> u64 {
 
 impl ProgressTracker {
     pub fn new(stall_limit: usize) -> Self {
-        Self {
-            stall_limit,
-            state: Mutex::new(State::default()),
-        }
+        Self { stall_limit, state: Mutex::new(State::default()) }
     }
 
     /// Before running a call: `Some(check-in text)` when the loop should stop.
@@ -119,8 +113,7 @@ impl ProgressTracker {
             return None;
         }
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if st.checked_in || (st.calls >= self.stall_limit && st.since_progress >= self.stall_limit)
-        {
+        if st.checked_in || (st.calls >= self.stall_limit && st.since_progress >= self.stall_limit) {
             st.checked_in = true;
             return Some(CHECK_IN);
         }
@@ -135,11 +128,7 @@ impl ProgressTracker {
         let mut progressed = false;
         if !is_error && (name == WRITE_FILE || name == EDIT_FILE) {
             // A write counts when it puts content we haven't seen at that path.
-            let path = input
-                .get("path")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+            let path = input.get("path").and_then(Value::as_str).unwrap_or("").to_string();
             let content = input
                 .get("content")
                 .or_else(|| input.get("new_string"))
@@ -174,10 +163,7 @@ impl ProgressTracker {
 
     /// Whether the rule made the agent check in this turn.
     pub fn checked_in(&self) -> bool {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .checked_in
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).checked_in
     }
 }
 
@@ -189,16 +175,8 @@ mod tests {
 
     #[test]
     fn counts_passing_tests_across_formats() {
-        assert_eq!(
-            passing_tests(
-                "test result: ok. 12 passed; 0 failed;\ntest result: ok. 3 passed; 0 failed;"
-            ),
-            Some(15)
-        );
-        assert_eq!(
-            passing_tests("==== 7 passed, 1 warning in 0.3s ===="),
-            Some(7)
-        );
+        assert_eq!(passing_tests("test result: ok. 12 passed; 0 failed;\ntest result: ok. 3 passed; 0 failed;"), Some(15));
+        assert_eq!(passing_tests("==== 7 passed, 1 warning in 0.3s ===="), Some(7));
         assert_eq!(passing_tests("--- PASS: TestA\n--- PASS: TestB\n"), Some(2));
         assert_eq!(passing_tests("compiling..."), None);
     }

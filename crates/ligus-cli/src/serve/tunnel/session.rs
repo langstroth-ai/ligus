@@ -23,10 +23,7 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tower::ServiceExt;
 
 use super::frame::{self, goaway, reset, Frame, RequestHead, ResponseHead};
-use super::{
-    b64u, b64u_fixed, cred, hkdf, noise, now, random_id, PhoneRecord, ProvisionalPeer, TunnelHost,
-    TunnelPeer,
-};
+use super::{b64u, b64u_fixed, cred, hkdf, noise, now, random_id, PhoneRecord, ProvisionalPeer, TunnelHost, TunnelPeer};
 
 /// Handshake must complete within this long of `ready` (§10).
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -52,10 +49,7 @@ pub struct Routers {
 
 impl From<Router> for Routers {
     fn from(api: Router) -> Self {
-        Self {
-            api,
-            provisional: None,
-        }
+        Self { api, provisional: None }
     }
 }
 
@@ -76,11 +70,7 @@ pub struct Timeouts {
 
 impl Default for Timeouts {
     fn default() -> Self {
-        Self {
-            handshake: HANDSHAKE_TIMEOUT,
-            idle: IDLE_TIMEOUT,
-            lifetime: MAX_LIFETIME,
-        }
+        Self { handshake: HANDSHAKE_TIMEOUT, idle: IDLE_TIMEOUT, lifetime: MAX_LIFETIME }
     }
 }
 
@@ -111,11 +101,7 @@ pub const PROVISIONAL_BUSY: (u16, &str) = (4043, "provisional_busy");
 
 impl EnrollRefusal {
     fn new((close, code): (u16, &'static str), detail: impl Into<String>) -> Self {
-        Self {
-            close,
-            code,
-            detail: detail.into(),
-        }
+        Self { close, code, detail: detail.into() }
     }
 }
 
@@ -166,10 +152,7 @@ impl ProvisionalSlot {
             if n >= MAX_PROVISIONAL {
                 return None;
             }
-            match host
-                .provisional
-                .compare_exchange(n, n + 1, Ordering::SeqCst, Ordering::SeqCst)
-            {
+            match host.provisional.compare_exchange(n, n + 1, Ordering::SeqCst, Ordering::SeqCst) {
                 Ok(_) => return Some(Self(host.clone())),
                 Err(now) => n = now,
             }
@@ -212,20 +195,9 @@ where
 
 /// Run one accepted connection to the end. Errors are already logged-worthy
 /// descriptions; the connection is closed either way.
-pub async fn run<S>(
-    host: Arc<TunnelHost>,
-    routers: impl Into<Routers>,
-    ws: S,
-    mode: Mode,
-    stop: watch::Receiver<bool>,
-    t: Timeouts,
-) -> Result<()>
+pub async fn run<S>(host: Arc<TunnelHost>, routers: impl Into<Routers>, ws: S, mode: Mode, stop: watch::Receiver<bool>, t: Timeouts) -> Result<()>
 where
-    S: Stream<Item = Result<Message, WsError>>
-        + Sink<Message, Error = WsError>
-        + Unpin
-        + Send
-        + 'static,
+    S: Stream<Item = Result<Message, WsError>> + Sink<Message, Error = WsError> + Unpin + Send + 'static,
 {
     let routers: Routers = routers.into();
     let (mut tx, mut rx) = ws.split();
@@ -381,14 +353,8 @@ where
             // E1: a wrong secret, an unknown static) is a normal close with
             // nothing more to say.
             let frame = match e.downcast_ref::<EnrollRefusal>() {
-                Some(r) => CloseFrame {
-                    code: CloseCode::from(r.close),
-                    reason: r.code.into(),
-                },
-                None => CloseFrame {
-                    code: CloseCode::Normal,
-                    reason: "".into(),
-                },
+                Some(r) => CloseFrame { code: CloseCode::from(r.close), reason: r.code.into() },
+                None => CloseFrame { code: CloseCode::Normal, reason: "".into() },
             };
             let _ = tx.send(Message::Close(Some(frame))).await;
             return Err(e);
@@ -399,37 +365,12 @@ where
             if pending.is_none() {
                 host.registry.touch(&pid);
             }
-            mux(
-                host,
-                routers.api,
-                tx,
-                rx,
-                ts,
-                PeerExt::Tunnel(TunnelPeer { pid }),
-                pending,
-                stop,
-                t,
-            )
-            .await
+            mux(host, routers.api, tx, rx, ts, PeerExt::Tunnel(TunnelPeer { pid }), pending, stop, t).await
         }
         Peer::Provisional(p, _slot) => {
             let router = routers.provisional.unwrap_or_else(Router::new);
-            let t = Timeouts {
-                lifetime: t.lifetime.min(PROVISIONAL_LIFETIME),
-                ..t
-            };
-            mux(
-                host,
-                router,
-                tx,
-                rx,
-                ts,
-                PeerExt::Provisional(p),
-                None,
-                stop,
-                t,
-            )
-            .await
+            let t = Timeouts { lifetime: t.lifetime.min(PROVISIONAL_LIFETIME), ..t };
+            mux(host, router, tx, rx, ts, PeerExt::Provisional(p), None, stop, t).await
         }
     }
 }
@@ -480,19 +421,11 @@ where
             match o {
                 Out::Frame(f) => {
                     let pt = f.encode();
-                    let n = match wts
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .write_message(&pt, &mut buf)
-                    {
+                    let n = match wts.lock().unwrap_or_else(|e| e.into_inner()).write_message(&pt, &mut buf) {
                         Ok(n) => n,
                         Err(_) => break,
                     };
-                    if tx
-                        .send(Message::Binary(buf[..n].to_vec().into()))
-                        .await
-                        .is_err()
-                    {
+                    if tx.send(Message::Binary(buf[..n].to_vec().into())).await.is_err() {
                         return;
                     }
                     sent += 1;
@@ -503,12 +436,7 @@ where
                 Out::Close => break,
             }
         }
-        let _ = tx
-            .send(Message::Close(Some(CloseFrame {
-                code: CloseCode::Normal,
-                reason: "".into(),
-            })))
-            .await;
+        let _ = tx.send(Message::Close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() }))).await;
         let _ = tx.close().await;
     });
 
@@ -658,11 +586,7 @@ async fn handle_frame(
     match f.ty {
         OPEN => {
             if id & 1 == 0 {
-                send(
-                    out,
-                    Frame::reset(id, reset::REFUSED, "even stream ids are reserved"),
-                )
-                .await;
+                send(out, Frame::reset(id, reset::REFUSED, "even stream ids are reserved")).await;
                 return Flow::Continue;
             }
             if id <= *last_open {
@@ -674,14 +598,13 @@ async fn handle_frame(
                 send(out, Frame::reset(id, reset::REFUSED, "too many streams")).await;
                 return Flow::Continue;
             }
-            let head: RequestHead =
-                match (f.payload.len() <= MAX_HEAD).then(|| serde_json::from_slice(&f.payload)) {
-                    Some(Ok(h)) => h,
-                    _ => {
-                        send(out, Frame::reset(id, reset::PROTOCOL, "bad request head")).await;
-                        return Flow::Continue;
-                    }
-                };
+            let head: RequestHead = match (f.payload.len() <= MAX_HEAD).then(|| serde_json::from_slice(&f.payload)) {
+                Some(Ok(h)) => h,
+                _ => {
+                    send(out, Frame::reset(id, reset::PROTOCOL, "bad request head")).await;
+                    return Flow::Continue;
+                }
+            };
             let recv_window = Arc::new(AtomicI64::new(INITIAL_WINDOW as i64));
             let send_window = Arc::new(Semaphore::new(INITIAL_WINDOW as usize));
             let (body_tx, body_rx) = mpsc::unbounded_channel();
@@ -698,20 +621,11 @@ async fn handle_frame(
             ));
             streams.insert(
                 id,
-                StreamCtl {
-                    recv_window,
-                    send_window,
-                    body_tx: Some(body_tx),
-                    task: task.abort_handle(),
-                    req_fin: false,
-                    resp_done: false,
-                },
+                StreamCtl { recv_window, send_window, body_tx: Some(body_tx), task: task.abort_handle(), req_fin: false, resp_done: false },
             );
         }
         DATA => {
-            let Some(s) = streams.get_mut(&id) else {
-                return Flow::Continue;
-            };
+            let Some(s) = streams.get_mut(&id) else { return Flow::Continue };
             let len = f.payload.len();
             if len == 0 || len > MAX_DATA || s.req_fin {
                 drop_stream(streams, id);
@@ -721,11 +635,7 @@ async fn handle_frame(
             let before = s.recv_window.fetch_sub(len as i64, Ordering::SeqCst);
             if before < len as i64 {
                 drop_stream(streams, id);
-                send(
-                    out,
-                    Frame::reset(id, reset::FLOW_CONTROL, "window exceeded"),
-                )
-                .await;
+                send(out, Frame::reset(id, reset::FLOW_CONTROL, "window exceeded")).await;
                 return Flow::Continue;
             }
             if let Some(b) = &s.body_tx {
@@ -733,9 +643,7 @@ async fn handle_frame(
             }
         }
         FIN => {
-            let Some(s) = streams.get_mut(&id) else {
-                return Flow::Continue;
-            };
+            let Some(s) = streams.get_mut(&id) else { return Flow::Continue };
             s.req_fin = true;
             s.body_tx = None;
             if s.resp_done {
@@ -744,9 +652,7 @@ async fn handle_frame(
         }
         RESET => drop_stream(streams, id),
         WINDOW => {
-            let Some(s) = streams.get(&id) else {
-                return Flow::Continue;
-            };
+            let Some(s) = streams.get(&id) else { return Flow::Continue };
             let inc = match (f.payload.len(), f.code()) {
                 (4, Some(inc)) if (1..=0x7fff_ffff).contains(&inc) => inc as usize,
                 _ => {
@@ -757,11 +663,7 @@ async fn handle_frame(
             };
             if s.send_window.available_permits() + inc > 0x7fff_ffff {
                 drop_stream(streams, id);
-                send(
-                    out,
-                    Frame::reset(id, reset::FLOW_CONTROL, "window overflow"),
-                )
-                .await;
+                send(out, Frame::reset(id, reset::FLOW_CONTROL, "window overflow")).await;
                 return Flow::Continue;
             }
             s.send_window.add_permits(inc);
@@ -769,11 +671,7 @@ async fn handle_frame(
         RESPONSE => {
             if streams.contains_key(&id) {
                 drop_stream(streams, id);
-                send(
-                    out,
-                    Frame::reset(id, reset::PROTOCOL, "RESPONSE from the phone"),
-                )
-                .await;
+                send(out, Frame::reset(id, reset::PROTOCOL, "RESPONSE from the phone")).await;
             }
         }
         PING => {
@@ -869,15 +767,8 @@ async fn serve_stream(
         .filter(|(k, _)| !frame::is_hop_by_hop(k.as_str()))
         .filter_map(|(k, v)| Some((k.as_str().to_string(), v.to_str().ok()?.to_string())))
         .collect();
-    let head = ResponseHead {
-        status: parts.status.as_u16(),
-        headers,
-    };
-    if out
-        .send(Out::Frame(Frame::response(id, &head)))
-        .await
-        .is_err()
-    {
+    let head = ResponseHead { status: parts.status.as_u16(), headers };
+    if out.send(Out::Frame(Frame::response(id, &head))).await.is_err() {
         return;
     }
     let mut body = body.into_data_stream();
@@ -885,13 +776,7 @@ async fn serve_stream(
         let chunk = match chunk {
             Ok(c) => c,
             Err(_) => {
-                let _ = out
-                    .send(Out::Frame(Frame::reset(
-                        id,
-                        reset::INTERNAL,
-                        "response body failed",
-                    )))
-                    .await;
+                let _ = out.send(Out::Frame(Frame::reset(id, reset::INTERNAL, "response body failed"))).await;
                 let _ = done_tx.send(id);
                 return;
             }
@@ -900,9 +785,7 @@ async fn serve_stream(
         while !rest.is_empty() {
             // Per-stream flow control: wait for at least one byte of window,
             // then send as much as the window (and a DATA frame) allows.
-            let Ok(first) = send_window.acquire().await else {
-                return;
-            };
+            let Ok(first) = send_window.acquire().await else { return };
             first.forget();
             let want = rest.len().min(frame::MAX_DATA) - 1;
             let more = want.min(send_window.available_permits());

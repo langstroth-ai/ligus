@@ -49,9 +49,7 @@ impl Notice {
     pub fn text(&self) -> String {
         let label = super::envelope::hint(&self.label);
         match self.kind {
-            NoticeKind::Mismatch => {
-                format!("Request from {label} didn't match. Nothing was granted.")
-            }
+            NoticeKind::Mismatch => format!("Request from {label} didn't match. Nothing was granted."),
             NoticeKind::DidntFinish => format!("Linking {label} didn't finish. Nothing was added."),
         }
     }
@@ -79,15 +77,12 @@ pub struct Notices {
 
 impl Notices {
     pub fn new(data_dir: &Path) -> Self {
-        Self {
-            path: data_dir.join(NOTICES_FILE),
-        }
+        Self { path: data_dir.join(NOTICES_FILE) }
     }
 
     fn load_all(&self) -> std::io::Result<Vec<Notice>> {
         match std::fs::read(&self.path) {
-            Ok(b) => serde_json::from_slice(&b)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Ok(b) => serde_json::from_slice(&b).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(e),
         }
@@ -95,11 +90,7 @@ impl Notices {
 
     /// The notices younger than a day at `now_ms`, newest first.
     pub fn live(&self, now_ms: i64) -> std::io::Result<Vec<Notice>> {
-        let mut all: Vec<Notice> = self
-            .load_all()?
-            .into_iter()
-            .filter(|n| now_ms.saturating_sub(n.at) <= NOTICE_TTL_MS)
-            .collect();
+        let mut all: Vec<Notice> = self.load_all()?.into_iter().filter(|n| now_ms.saturating_sub(n.at) <= NOTICE_TTL_MS).collect();
         all.sort_by_key(|n| std::cmp::Reverse(n.at));
         Ok(all)
     }
@@ -132,15 +123,7 @@ mod tests {
     use super::*;
 
     fn n(kind: NoticeKind, rid: &str, at: i64) -> Notice {
-        Notice {
-            kind,
-            workspace_id: Uuid::nil(),
-            rid: rid.into(),
-            request_kind: MatchKind::Box,
-            label: "build-1".into(),
-            at,
-            by: None,
-        }
+        Notice { kind, workspace_id: Uuid::nil(), rid: rid.into(), request_kind: MatchKind::Box, label: "build-1".into(), at, by: None }
     }
 
     #[test]
@@ -152,18 +135,9 @@ mod tests {
         s.record(n(NoticeKind::DidntFinish, "b", 3_000)).unwrap();
         let live = s.live(3_000).unwrap();
         assert_eq!(live.len(), 2);
-        assert_eq!(
-            live[0].text(),
-            "Linking build-1 didn't finish. Nothing was added."
-        );
-        assert_eq!(
-            live[1].text(),
-            "Request from build-1 didn't match. Nothing was granted."
-        );
-        assert!(
-            s.live(3_000 + NOTICE_TTL_MS + 2_000).unwrap().is_empty(),
-            "a day later"
-        );
+        assert_eq!(live[0].text(), "Linking build-1 didn't finish. Nothing was added.");
+        assert_eq!(live[1].text(), "Request from build-1 didn't match. Nothing was granted.");
+        assert!(s.live(3_000 + NOTICE_TTL_MS + 2_000).unwrap().is_empty(), "a day later");
         s.dismiss("b").unwrap();
         assert_eq!(s.live(3_000).unwrap().len(), 1);
     }

@@ -22,14 +22,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ligus_core::flow::FlowRecord;
-use ligus_core::memory::{
-    MemoryDecision, MemoryOp, MemoryProposal, MemoryRemoval, MemoryWrite, TaskStateUpdate,
-    TaskStatus, MAX_CONFLICTS,
-};
+use ligus_core::memory::{MemoryDecision, MemoryOp, MemoryProposal, MemoryRemoval, MemoryWrite, TaskStateUpdate, TaskStatus, MAX_CONFLICTS};
 use ligus_core::testkit::{Phone, SignedWorld};
 use ligus_core::{
-    sign_envelope, ActorIdentity, ActorKind, SessionEvent, SessionEventEnvelope, SigningKeypair,
-    Timestamp, Verdict, WorkspaceRole,
+    sign_envelope, ActorIdentity, ActorKind, SessionEvent, SessionEventEnvelope, SigningKeypair, Timestamp, Verdict, WorkspaceRole,
 };
 use proptest::prelude::*;
 use uuid::Uuid;
@@ -52,43 +48,22 @@ fn fixture() -> Fixture {
     w.publish_identity("eve");
     // An agent of mara's, hosted on her device, with its own certified key.
     let mara = &w.people["mara"];
-    let (host, dev) = (
-        mara.device_id,
-        SigningKeypair::from_seed(&mara.device.seed_bytes()).unwrap(),
-    );
+    let (host, dev) = (mara.device_id, SigningKeypair::from_seed(&mara.device.seed_bytes()).unwrap());
     let mut agent = ligus_core::WorkspaceAgent::new("coder", "gw");
     agent.owner_actor_id = "mara".into();
     agent.host_id = host.to_string();
     let agent_id = agent.id;
     w.push("owner", SessionEvent::AgentUpserted { agent });
     let akp = SigningKeypair::generate().unwrap();
-    let cert = ligus_core::AgentKeyCertificate::issue(
-        &dev,
-        host,
-        agent_id,
-        &akp.public_key_bytes(),
-        Timestamp::epoch(),
-    );
+    let cert = ligus_core::AgentKeyCertificate::issue(&dev, host, agent_id, &akp.public_key_bytes(), Timestamp::epoch());
     let key_id = cert.key_id;
     w.push_bare("mara", SessionEvent::AgentKeyCertified { cert });
-    assert!(
-        w.roster().valid_agent_key(key_id).is_some(),
-        "agent key certified"
-    );
+    assert!(w.roster().valid_agent_key(key_id).is_some(), "agent key certified");
     let phone = Phone::new();
     let pc = w.phone_certificate("mara", &phone);
-    w.push(
-        "mara",
-        SessionEvent::DeviceCertificateAdded { certificate: pc },
-    );
+    w.push("mara", SessionEvent::DeviceCertificateAdded { certificate: pc });
     let chat = w.chat("owner", "work");
-    Fixture {
-        w,
-        agent_id,
-        agent_key: (key_id, akp),
-        phone,
-        chat,
-    }
+    Fixture { w, agent_id, agent_key: (key_id, akp), phone, chat }
 }
 
 fn rec(r: FlowRecord) -> SessionEvent {
@@ -111,13 +86,7 @@ enum Via {
 impl Fixture {
     fn sign(&mut self, via: Via, chat: Option<Uuid>, payload: SessionEvent) -> Uuid {
         match via {
-            Via::Person(i) => self.w.write(
-                WRITERS[i],
-                chat,
-                payload,
-                None,
-                ligus_core::testkit::Proof::None,
-            ),
+            Via::Person(i) => self.w.write(WRITERS[i], chat, payload, None, ligus_core::testkit::Proof::None),
             Via::Agent => {
                 let mut env = self.w.draft("mara", chat, payload, None);
                 let s = env.actor_stamp.as_mut().unwrap();
@@ -151,38 +120,12 @@ impl Fixture {
 
 #[derive(Debug, Clone)]
 enum Op {
-    Create {
-        by: u8,
-        via: u8,
-    },
-    Edit {
-        by: u8,
-        via: u8,
-        entry: u8,
-        rev: u8,
-    },
-    Remove {
-        by: u8,
-        via: u8,
-        entry: u8,
-        rev: u8,
-    },
-    Resolve {
-        by: u8,
-        entry: u8,
-    },
-    Propose {
-        via: u8,
-        kind: u8,
-        entry: u8,
-        rev: u8,
-    },
-    Decide {
-        by: u8,
-        via: u8,
-        proposal: u8,
-        accept: bool,
-    },
+    Create { by: u8, via: u8 },
+    Edit { by: u8, via: u8, entry: u8, rev: u8 },
+    Remove { by: u8, via: u8, entry: u8, rev: u8 },
+    Resolve { by: u8, entry: u8 },
+    Propose { via: u8, kind: u8, entry: u8, rev: u8 },
+    Decide { by: u8, via: u8, proposal: u8, accept: bool },
 }
 
 fn via_of(by: u8, via: u8) -> Via {
@@ -197,39 +140,11 @@ fn via_of(by: u8, via: u8) -> Via {
 fn op() -> impl Strategy<Value = Op> {
     prop_oneof![
         (any::<u8>(), any::<u8>()).prop_map(|(by, via)| Op::Create { by, via }),
-        (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(by, via, entry, rev)| {
-            Op::Edit {
-                by,
-                via,
-                entry,
-                rev,
-            }
-        }),
-        (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(by, via, entry, rev)| {
-            Op::Remove {
-                by,
-                via,
-                entry,
-                rev,
-            }
-        }),
+        (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(by, via, entry, rev)| Op::Edit { by, via, entry, rev }),
+        (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(by, via, entry, rev)| Op::Remove { by, via, entry, rev }),
         (any::<u8>(), any::<u8>()).prop_map(|(by, entry)| Op::Resolve { by, entry }),
-        (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(via, kind, entry, rev)| {
-            Op::Propose {
-                via,
-                kind,
-                entry,
-                rev,
-            }
-        }),
-        (any::<u8>(), any::<u8>(), any::<u8>(), any::<bool>()).prop_map(
-            |(by, via, proposal, accept)| Op::Decide {
-                by,
-                via,
-                proposal,
-                accept
-            }
-        ),
+        (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(via, kind, entry, rev)| Op::Propose { via, kind, entry, rev }),
+        (any::<u8>(), any::<u8>(), any::<u8>(), any::<bool>()).prop_map(|(by, via, proposal, accept)| Op::Decide { by, via, proposal, accept }),
     ]
 }
 
@@ -260,51 +175,17 @@ fn run(ops: &[Op]) -> (Fixture, Log) {
             Op::Create { by, via } => {
                 let id = Uuid::new_v4();
                 log.entries.push(id);
-                (
-                    via_of(by, via),
-                    FlowRecord::MemoryWritten(MemoryWrite {
-                        entry_id: id,
-                        title: format!("note {n}"),
-                        body: format!("body {n}"),
-                        ..Default::default()
-                    }),
-                )
+                (via_of(by, via), FlowRecord::MemoryWritten(MemoryWrite { entry_id: id, title: format!("note {n}"), body: format!("body {n}"), ..Default::default() }))
             }
-            Op::Edit {
-                by,
-                via,
-                entry: e,
-                rev: r,
-            } => {
+            Op::Edit { by, via, entry: e, rev: r } => {
                 let Some(e) = entry(e) else { continue };
                 let base = rev(e, r).unwrap_or_else(Uuid::new_v4);
-                (
-                    via_of(by, via),
-                    FlowRecord::MemoryWritten(MemoryWrite {
-                        entry_id: e,
-                        base: Some(base),
-                        title: format!("edit {n}"),
-                        body: format!("edited {n}"),
-                        ..Default::default()
-                    }),
-                )
+                (via_of(by, via), FlowRecord::MemoryWritten(MemoryWrite { entry_id: e, base: Some(base), title: format!("edit {n}"), body: format!("edited {n}"), ..Default::default() }))
             }
-            Op::Remove {
-                by,
-                via,
-                entry: e,
-                rev: r,
-            } => {
+            Op::Remove { by, via, entry: e, rev: r } => {
                 let Some(e) = entry(e) else { continue };
                 let base = rev(e, r).unwrap_or_else(Uuid::new_v4);
-                (
-                    via_of(by, via),
-                    FlowRecord::MemoryRemoved(MemoryRemoval {
-                        entry_id: e,
-                        base,
-                        ..Default::default()
-                    }),
-                )
+                (via_of(by, via), FlowRecord::MemoryRemoved(MemoryRemoval { entry_id: e, base, ..Default::default() }))
             }
             Op::Resolve { by, entry: e } => {
                 let Some(e) = entry(e) else { continue };
@@ -312,22 +193,10 @@ fn run(ops: &[Op]) -> (Fixture, Log) {
                 let resolves = x.conflicts.iter().map(|c| c.rev).collect();
                 (
                     Via::Person(by as usize % WRITERS.len()),
-                    FlowRecord::MemoryWritten(MemoryWrite {
-                        entry_id: e,
-                        base: Some(x.head()),
-                        title: format!("merged {n}"),
-                        body: format!("merged {n}"),
-                        resolves,
-                        ..Default::default()
-                    }),
+                    FlowRecord::MemoryWritten(MemoryWrite { entry_id: e, base: Some(x.head()), title: format!("merged {n}"), body: format!("merged {n}"), resolves, ..Default::default() }),
                 )
             }
-            Op::Propose {
-                via,
-                kind,
-                entry: e,
-                rev: r,
-            } => {
+            Op::Propose { via, kind, entry: e, rev: r } => {
                 let via = match via % 4 {
                     0 => Via::Agent,
                     1 => Via::Runtime,
@@ -335,27 +204,13 @@ fn run(ops: &[Op]) -> (Fixture, Log) {
                     _ => Via::Person(2),
                 };
                 let op = match (kind % 3, entry(e)) {
-                    (1, Some(e)) => MemoryOp::Edit {
-                        entry_id: e,
-                        base: rev(e, r).unwrap_or_else(Uuid::new_v4),
-                        title: format!("prop {n}"),
-                        body: format!("proposed {n}"),
-                        tags: vec![],
-                    },
-                    (2, Some(e)) => MemoryOp::Remove {
-                        entry_id: e,
-                        base: rev(e, r).unwrap_or_else(Uuid::new_v4),
-                    },
+                    (1, Some(e)) => MemoryOp::Edit { entry_id: e, base: rev(e, r).unwrap_or_else(Uuid::new_v4), title: format!("prop {n}"), body: format!("proposed {n}"), tags: vec![] },
+                    (2, Some(e)) => MemoryOp::Remove { entry_id: e, base: rev(e, r).unwrap_or_else(Uuid::new_v4) },
                     _ => {
                         // A created entry is named by its proposal's id.
                         let id = Uuid::new_v4();
                         log.entries.push(id);
-                        MemoryOp::Create {
-                            entry_id: id,
-                            title: format!("prop {n}"),
-                            body: format!("proposed {n}"),
-                            tags: vec![],
-                        }
+                        MemoryOp::Create { entry_id: id, title: format!("prop {n}"), body: format!("proposed {n}"), tags: vec![] }
                     }
                 };
                 let proposal_id = match &op {
@@ -366,38 +221,14 @@ fn run(ops: &[Op]) -> (Fixture, Log) {
                     Via::Agent | Via::Runtime => f.agent_id.to_string(),
                     _ => String::new(),
                 };
-                (
-                    via,
-                    FlowRecord::MemoryProposed(MemoryProposal {
-                        proposal_id,
-                        op,
-                        proposer,
-                        source: Default::default(),
-                        rationale: String::new(),
-                    }),
-                )
+                (via, FlowRecord::MemoryProposed(MemoryProposal { proposal_id, op, proposer, source: Default::default(), rationale: String::new() }))
             }
-            Op::Decide {
-                by,
-                via,
-                proposal,
-                accept,
-            } => {
+            Op::Decide { by, via, proposal, accept } => {
                 let _ = accept;
                 let open: Vec<Uuid> = m.proposals.keys().copied().collect();
-                let Some(p) = pick(&open, proposal) else {
-                    continue;
-                };
+                let Some(p) = pick(&open, proposal) else { continue };
                 let resolves = vec![];
-                (
-                    via_of(by, via),
-                    FlowRecord::MemoryProposalDecided(MemoryDecision {
-                        proposal_id: p,
-                        accepted: accept,
-                        note: String::new(),
-                        resolves,
-                    }),
-                )
+                (via_of(by, via), FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: p, accepted: accept, note: String::new(), resolves }))
             }
         };
         let id = f.sign(via, None, rec(record.clone()));
@@ -591,24 +422,8 @@ proptest! {
 #[test]
 fn forbidden_writers_are_refused_with_reasons() {
     let mut f = fixture();
-    let w = |n: u32| {
-        FlowRecord::MemoryWritten(MemoryWrite {
-            entry_id: Uuid::new_v4(),
-            title: format!("t{n}"),
-            body: "b".into(),
-            ..Default::default()
-        })
-    };
-    for (i, via) in [
-        Via::Agent,
-        Via::Runtime,
-        Via::Phone,
-        Via::Person(3),
-        Via::Person(4),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    let w = |n: u32| FlowRecord::MemoryWritten(MemoryWrite { entry_id: Uuid::new_v4(), title: format!("t{n}"), body: "b".into(), ..Default::default() });
+    for (i, via) in [Via::Agent, Via::Runtime, Via::Phone, Via::Person(3), Via::Person(4)].into_iter().enumerate() {
         let id = f.sign(via, None, rec(w(i as u32)));
         assert_eq!(f.w.verdict(id), Verdict::Denied, "{via:?}");
     }
@@ -633,13 +448,7 @@ fn forbidden_writers_are_refused_with_reasons() {
     let chat = f.chat;
     let on_chat = f.sign(Via::Person(2), Some(chat), rec(w(10)));
     assert_eq!(f.w.verdict(on_chat), Verdict::Denied);
-    let t = TaskStateUpdate {
-        task_id: chat,
-        agent_key: f.agent_id.to_string(),
-        turn_id: Uuid::new_v4(),
-        summary: "s".into(),
-        ..Default::default()
-    };
+    let t = TaskStateUpdate { task_id: chat, agent_key: f.agent_id.to_string(), turn_id: Uuid::new_v4(), summary: "s".into(), ..Default::default() };
     let on_cfg = f.sign(Via::Agent, None, rec(FlowRecord::TaskState(t)));
     assert_eq!(f.w.verdict(on_cfg), Verdict::Denied);
 }
@@ -648,80 +457,25 @@ fn forbidden_writers_are_refused_with_reasons() {
 fn only_the_creator_or_an_admin_changes_an_entry_and_decides_for_it() {
     let mut f = fixture();
     let id = Uuid::new_v4();
-    let c = f.sign(
-        Via::Person(2),
-        None,
-        rec(FlowRecord::MemoryWritten(MemoryWrite {
-            entry_id: id,
-            title: "mara's".into(),
-            body: "b".into(),
-            ..Default::default()
-        })),
-    );
+    let c = f.sign(Via::Person(2), None, rec(FlowRecord::MemoryWritten(MemoryWrite { entry_id: id, title: "mara's".into(), body: "b".into(), ..Default::default() })));
     assert_eq!(f.w.verdict(c), Verdict::Allowed);
     // Another Contributor-level writer: the owner is fine (Owner > Admin).
     let mut w2 = SignedWorld::genesis(&["owner", "mara", "ivy"], None);
     w2.admit("owner", "mara", WorkspaceRole::Contributor);
     w2.admit("owner", "ivy", WorkspaceRole::Contributor);
     let e = Uuid::new_v4();
-    let make = w2.push_bare(
-        "mara",
-        rec(FlowRecord::MemoryWritten(MemoryWrite {
-            entry_id: e,
-            title: "t".into(),
-            body: "b".into(),
-            ..Default::default()
-        })),
-    );
-    let edit = |base: Uuid| {
-        rec(FlowRecord::MemoryWritten(MemoryWrite {
-            entry_id: e,
-            base: Some(base),
-            title: "t".into(),
-            body: "changed".into(),
-            ..Default::default()
-        }))
-    };
+    let make = w2.push_bare("mara", rec(FlowRecord::MemoryWritten(MemoryWrite { entry_id: e, title: "t".into(), body: "b".into(), ..Default::default() })));
+    let edit = |base: Uuid| rec(FlowRecord::MemoryWritten(MemoryWrite { entry_id: e, base: Some(base), title: "t".into(), body: "changed".into(), ..Default::default() }));
     let by_ivy = w2.push_bare("ivy", edit(make));
-    assert_eq!(
-        w2.verdict(by_ivy),
-        Verdict::Denied,
-        "another Contributor can't edit mara's entry"
-    );
+    assert_eq!(w2.verdict(by_ivy), Verdict::Denied, "another Contributor can't edit mara's entry");
     let by_owner = w2.push_bare("owner", edit(make));
     assert_eq!(w2.verdict(by_owner), Verdict::Allowed, "an Owner moderates");
     // Ivy accepting a proposal to remove mara's entry is refused too.
     let pid = Uuid::new_v4();
-    w2.push_bare(
-        "ivy",
-        rec(FlowRecord::MemoryProposed(MemoryProposal {
-            proposal_id: pid,
-            op: MemoryOp::Remove {
-                entry_id: e,
-                base: by_owner,
-            },
-            proposer: String::new(),
-            source: Default::default(),
-            rationale: String::new(),
-        })),
-    );
-    let accept = w2.push_bare(
-        "ivy",
-        rec(FlowRecord::MemoryProposalDecided(MemoryDecision {
-            proposal_id: pid,
-            accepted: true,
-            ..Default::default()
-        })),
-    );
+    w2.push_bare("ivy", rec(FlowRecord::MemoryProposed(MemoryProposal { proposal_id: pid, op: MemoryOp::Remove { entry_id: e, base: by_owner }, proposer: String::new(), source: Default::default(), rationale: String::new() })));
+    let accept = w2.push_bare("ivy", rec(FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: pid, accepted: true, ..Default::default() })));
     assert_eq!(w2.verdict(accept), Verdict::Denied);
-    let accept = w2.push_bare(
-        "mara",
-        rec(FlowRecord::MemoryProposalDecided(MemoryDecision {
-            proposal_id: pid,
-            accepted: true,
-            ..Default::default()
-        })),
-    );
+    let accept = w2.push_bare("mara", rec(FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: pid, accepted: true, ..Default::default() })));
     assert_eq!(w2.verdict(accept), Verdict::Allowed);
     assert!(!w2.config().flow.memory.entries[&e].live());
 }
@@ -732,29 +486,10 @@ fn a_service_member_never_writes_memory() {
     let mut w = SignedWorld::genesis(&["owner", "box"], None);
     w.kinds.insert("box".into(), ActorKind::Service);
     let m = w.member_of("box", WorkspaceRole::Contributor);
-    w.push(
-        "owner",
-        SessionEvent::MemberAdded {
-            member: m,
-            invite: None,
-            proof: None,
-        },
-    );
+    w.push("owner", SessionEvent::MemberAdded { member: m, invite: None, proof: None });
     w.publish_identity("box");
-    assert!(w
-        .roster()
-        .members
-        .get("box")
-        .is_some_and(|m| m.kind == ActorKind::Service));
-    let id = w.push_bare(
-        "box",
-        rec(FlowRecord::MemoryWritten(MemoryWrite {
-            entry_id: Uuid::new_v4(),
-            title: "t".into(),
-            body: "b".into(),
-            ..Default::default()
-        })),
-    );
+    assert!(w.roster().members.get("box").is_some_and(|m| m.kind == ActorKind::Service));
+    let id = w.push_bare("box", rec(FlowRecord::MemoryWritten(MemoryWrite { entry_id: Uuid::new_v4(), title: "t".into(), body: "b".into(), ..Default::default() })));
     assert_eq!(w.verdict(id), Verdict::Denied);
 }
 
@@ -766,24 +501,9 @@ fn a_service_member_never_writes_memory() {
 /// Re-stamp `env` as drafted just after `head` on `log` (a backdated or
 /// withheld draft), its `prev` the signer's newest older event, and re-sign
 /// it with `by`'s device.
-fn backdate(
-    w: &SignedWorld,
-    env: &mut SessionEventEnvelope,
-    log: &[SessionEventEnvelope],
-    head: Uuid,
-    by: &str,
-) {
-    let h = log
-        .iter()
-        .find(|e| e.event_id == head)
-        .expect("head on the log");
-    ligus_core::lamport::stamp_next(
-        env,
-        Some(ligus_core::CfgFrontier {
-            lamport: h.lamport,
-            event_id: h.event_id,
-        }),
-    );
+fn backdate(w: &SignedWorld, env: &mut SessionEventEnvelope, log: &[SessionEventEnvelope], head: Uuid, by: &str) {
+    let h = log.iter().find(|e| e.event_id == head).expect("head on the log");
+    ligus_core::lamport::stamp_next(env, Some(ligus_core::CfgFrontier { lamport: h.lamport, event_id: h.event_id }));
     let p = &w.people[by];
     let prev = log
         .iter()
@@ -796,44 +516,21 @@ fn backdate(
 }
 
 fn create(id: Uuid, title: &str) -> FlowRecord {
-    FlowRecord::MemoryWritten(MemoryWrite {
-        entry_id: id,
-        title: title.into(),
-        body: "b".into(),
-        ..Default::default()
-    })
+    FlowRecord::MemoryWritten(MemoryWrite { entry_id: id, title: title.into(), body: "b".into(), ..Default::default() })
 }
 
 /// A proposal under `id`; a create names the new entry by the proposal's id
 /// (the binding), whatever id `op` carried.
 fn proposal(id: Uuid, op: MemoryOp, proposer: String) -> FlowRecord {
     let op = match op {
-        MemoryOp::Create {
-            title, body, tags, ..
-        } => MemoryOp::Create {
-            entry_id: id,
-            title,
-            body,
-            tags,
-        },
+        MemoryOp::Create { title, body, tags, .. } => MemoryOp::Create { entry_id: id, title, body, tags },
         other => other,
     };
-    FlowRecord::MemoryProposed(MemoryProposal {
-        proposal_id: id,
-        op,
-        proposer,
-        source: Default::default(),
-        rationale: String::new(),
-    })
+    FlowRecord::MemoryProposed(MemoryProposal { proposal_id: id, op, proposer, source: Default::default(), rationale: String::new() })
 }
 
 fn new_note() -> MemoryOp {
-    MemoryOp::Create {
-        entry_id: Uuid::new_v4(),
-        title: "p".into(),
-        body: "b".into(),
-        tags: vec![],
-    }
+    MemoryOp::Create { entry_id: Uuid::new_v4(), title: "p".into(), body: "b".into(), tags: vec![] }
 }
 
 /// Risk 3: a runtime-effect proposal names the chat's runtime or an agent
@@ -850,11 +547,7 @@ fn a_runtime_proposal_names_only_primary_or_an_agent_on_its_device() {
         ("anything at all".to_string(), Verdict::Denied),
         (String::new(), Verdict::Denied),
     ] {
-        let id = f.sign(
-            Via::Runtime,
-            None,
-            rec(proposal(Uuid::new_v4(), new_note(), proposer.clone())),
-        );
+        let id = f.sign(Via::Runtime, None, rec(proposal(Uuid::new_v4(), new_note(), proposer.clone())));
         assert_eq!(f.w.verdict(id), want, "runtime proposal as {proposer:?}");
     }
 }
@@ -867,23 +560,11 @@ fn proposal_caps_count_per_signer() {
     let agent = f.agent_id.to_string();
     let mut allowed = 0;
     for i in 0..(2 * ligus_core::memory::MAX_OPEN_PROPOSALS_PER_PROPOSER) {
-        let proposer = if i % 2 == 0 {
-            "primary".to_string()
-        } else {
-            agent.clone()
-        };
-        let id = f.sign(
-            Via::Runtime,
-            None,
-            rec(proposal(Uuid::new_v4(), new_note(), proposer)),
-        );
+        let proposer = if i % 2 == 0 { "primary".to_string() } else { agent.clone() };
+        let id = f.sign(Via::Runtime, None, rec(proposal(Uuid::new_v4(), new_note(), proposer)));
         allowed += (f.w.verdict(id) == Verdict::Allowed) as usize;
     }
-    assert_eq!(
-        allowed,
-        ligus_core::memory::MAX_OPEN_PROPOSALS_PER_PROPOSER,
-        "one device's open proposals are capped together"
-    );
+    assert_eq!(allowed, ligus_core::memory::MAX_OPEN_PROPOSALS_PER_PROPOSER, "one device's open proposals are capped together");
 }
 
 /// A decision names a proposal by id. A member who files a backdated
@@ -895,50 +576,24 @@ fn a_backdated_proposal_cant_take_over_an_accepted_proposal_id() {
     let mut f = fixture();
     let x = Uuid::new_v4();
     let made = f.sign(Via::Person(1), None, rec(create(x, "adm's note")));
-    let filler = f.sign(
-        Via::Person(0),
-        None,
-        rec(create(Uuid::new_v4(), "owner's note")),
-    );
+    let filler = f.sign(Via::Person(0), None, rec(create(Uuid::new_v4(), "owner's note")));
     let _ = filler;
     let pid = Uuid::new_v4();
     let agent = f.agent_id.to_string();
     let honest = f.sign(Via::Agent, None, rec(proposal(pid, new_note(), agent)));
     assert_eq!(f.w.verdict(honest), Verdict::Allowed);
-    let accept = f.sign(
-        Via::Person(1),
-        None,
-        rec(FlowRecord::MemoryProposalDecided(MemoryDecision {
-            proposal_id: pid,
-            accepted: true,
-            ..Default::default()
-        })),
-    );
+    let accept = f.sign(Via::Person(1), None, rec(FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: pid, accepted: true, ..Default::default() })));
     assert_eq!(f.w.verdict(accept), Verdict::Allowed);
     // Mara (a Contributor) files her own proposal under that id, drafted
     // just after adm's entry so it sorts before the agent's.
-    let evil = proposal(
-        pid,
-        MemoryOp::Remove {
-            entry_id: x,
-            base: made,
-        },
-        String::new(),
-    );
+    let evil = proposal(pid, MemoryOp::Remove { entry_id: x, base: made }, String::new());
     let mut env = f.w.draft("mara", None, rec(evil), None);
     env.event_id = Uuid::new_v4();
     let cfg = f.w.cfg.clone();
     backdate(&f.w, &mut env, &cfg, made, "mara");
     let evil_id = f.w.push_env(None, env);
-    assert!(
-        f.memory().entries[&x].live(),
-        "adm's entry was removed by a swapped-in proposal"
-    );
-    assert_ne!(
-        f.w.verdict(evil_id),
-        Verdict::Allowed,
-        "a proposal is known by the event that filed it"
-    );
+    assert!(f.memory().entries[&x].live(), "adm's entry was removed by a swapped-in proposal");
+    assert_ne!(f.w.verdict(evil_id), Verdict::Allowed, "a proposal is known by the event that filed it");
 }
 
 /// The same for entry ids: a backdated create can't take another member's
@@ -957,16 +612,8 @@ fn a_backdated_create_cant_take_over_an_entry_id() {
     let cfg = w.cfg.clone();
     backdate(&w, &mut env, &cfg, anchor, "ivy");
     let squat = w.push_env(None, env);
-    assert_eq!(
-        w.config().flow.memory.entries[&e].created_by.id,
-        "mara",
-        "ivy took mara's entry over"
-    );
-    assert_ne!(
-        w.verdict(squat),
-        Verdict::Allowed,
-        "an entry is created by the event that names it"
-    );
+    assert_eq!(w.config().flow.memory.entries[&e].created_by.id, "mara", "ivy took mara's entry over");
+    assert_ne!(w.verdict(squat), Verdict::Allowed, "an entry is created by the event that names it");
     assert_eq!(w.verdict(theirs), Verdict::Allowed);
 }
 
@@ -978,48 +625,20 @@ fn a_backdated_runtime_update_cant_squat_the_primary_slot() {
     let mut f = fixture();
     let chat = f.chat;
     let seed = f.w.chats[&chat][0].event_id;
-    f.w.say(
-        chat,
-        "adm",
-        SessionEvent::SessionTitleChanged {
-            title: "filler".into(),
-        },
-    );
-    let t = |s: &str| {
-        rec(FlowRecord::TaskState(TaskStateUpdate {
-            task_id: chat,
-            agent_key: "primary".into(),
-            turn_id: Uuid::new_v4(),
-            summary: s.into(),
-            ..Default::default()
-        }))
-    };
+    f.w.say(chat, "adm", SessionEvent::SessionTitleChanged { title: "filler".into() });
+    let t = |s: &str| rec(FlowRecord::TaskState(TaskStateUpdate { task_id: chat, agent_key: "primary".into(), turn_id: Uuid::new_v4(), summary: s.into(), ..Default::default() }));
     let first = f.sign(Via::Runtime, Some(chat), t("reading"));
     let second = f.sign(Via::Runtime, Some(chat), t("writing"));
-    let mut env =
-        f.w.draft("owner", Some(chat), t("all done, nothing to see"), None);
+    let mut env = f.w.draft("owner", Some(chat), t("all done, nothing to see"), None);
     env.actor_stamp.as_mut().unwrap().runtime_effect = true;
     let log = f.w.chats[&chat].clone();
     backdate(&f.w, &mut env, &log, seed, "owner");
     f.w.push_env(Some(chat), env);
-    assert_eq!(
-        f.w.verdict(first),
-        Verdict::Allowed,
-        "the runtime's own update was refused"
-    );
-    assert_eq!(
-        f.w.verdict(second),
-        Verdict::Allowed,
-        "the runtime's own update was refused"
-    );
+    assert_eq!(f.w.verdict(first), Verdict::Allowed, "the runtime's own update was refused");
+    assert_eq!(f.w.verdict(second), Verdict::Allowed, "the runtime's own update was refused");
     let st = f.w.state(chat);
     let mara_device = f.w.people["mara"].device_id;
-    let mine = st
-        .flow
-        .tasks
-        .iter()
-        .find(|s| s.writer == mara_device)
-        .expect("the runtime's slot");
+    let mine = st.flow.tasks.iter().find(|s| s.writer == mara_device).expect("the runtime's slot");
     assert_eq!(mine.update.summary, "writing");
 }
 
@@ -1030,24 +649,12 @@ fn a_backdated_runtime_update_cant_squat_the_primary_slot() {
 fn a_host_then_its_agents_key_both_write_the_agents_slot() {
     let mut f = fixture();
     let chat = f.chat;
-    let t = |s: &str, agent: &str| {
-        rec(FlowRecord::TaskState(TaskStateUpdate {
-            task_id: chat,
-            agent_key: agent.into(),
-            turn_id: Uuid::new_v4(),
-            summary: s.into(),
-            ..Default::default()
-        }))
-    };
+    let t = |s: &str, agent: &str| rec(FlowRecord::TaskState(TaskStateUpdate { task_id: chat, agent_key: agent.into(), turn_id: Uuid::new_v4(), summary: s.into(), ..Default::default() }));
     let agent = f.agent_id.to_string();
     let by_host = f.sign(Via::Person(2), Some(chat), t("host", &agent));
     let by_key = f.sign(Via::Agent, Some(chat), t("key", &agent));
     assert_eq!(f.w.verdict(by_host), Verdict::Allowed);
-    assert_eq!(
-        f.w.verdict(by_key),
-        Verdict::Allowed,
-        "the agent's own key was locked out of its slot"
-    );
+    assert_eq!(f.w.verdict(by_key), Verdict::Allowed, "the agent's own key was locked out of its slot");
 }
 
 /// A person's resolution that races another edit of the entry (both from
@@ -1058,14 +665,7 @@ fn a_resolution_racing_an_edit_is_kept_as_a_conflict() {
     let e = Uuid::new_v4();
     let r0 = f.sign(Via::Person(2), None, rec(create(e, "mara's")));
     let edit = |base: Uuid, body: &str, resolves: Vec<Uuid>| {
-        rec(FlowRecord::MemoryWritten(MemoryWrite {
-            entry_id: e,
-            base: Some(base),
-            title: "t".into(),
-            body: body.into(),
-            resolves,
-            ..Default::default()
-        }))
+        rec(FlowRecord::MemoryWritten(MemoryWrite { entry_id: e, base: Some(base), title: "t".into(), body: body.into(), resolves, ..Default::default() }))
     };
     let r1 = f.sign(Via::Person(2), None, edit(r0, "443", vec![]));
     let c1 = f.sign(Via::Person(1), None, edit(r0, "8080", vec![]));
@@ -1077,28 +677,17 @@ fn a_resolution_racing_an_edit_is_kept_as_a_conflict() {
     a.event_id = Uuid::from_u128(1);
     let cfg = f.w.cfg.clone();
     backdate(&f.w, &mut a, &cfg, head, "adm");
-    let mut m =
-        f.w.draft("mara", None, edit(r1, "443 or 8080", vec![c1]), None);
+    let mut m = f.w.draft("mara", None, edit(r1, "443 or 8080", vec![c1]), None);
     m.event_id = Uuid::from_u128(u128::MAX);
     backdate(&f.w, &mut m, &cfg, head, "mara");
     let a = f.w.push_env(None, a);
     let m = f.w.push_env(None, m);
     assert_eq!(f.w.verdict(a), Verdict::Allowed);
-    assert_eq!(
-        f.w.verdict(m),
-        Verdict::Allowed,
-        "mara's resolution was refused, her merge lost"
-    );
+    assert_eq!(f.w.verdict(m), Verdict::Allowed, "mara's resolution was refused, her merge lost");
     let x = &f.memory().entries[&e];
     assert_eq!(x.head(), a);
-    assert!(
-        x.conflicts.iter().any(|c| c.rev == m),
-        "her merge is a conflict"
-    );
-    assert!(
-        !x.conflicts.iter().any(|c| c.rev == c1),
-        "the conflict she merged is settled"
-    );
+    assert!(x.conflicts.iter().any(|c| c.rev == m), "her merge is a conflict");
+    assert!(!x.conflicts.iter().any(|c| c.rev == c1), "the conflict she merged is settled");
 }
 
 /// Watermarks: a removed member's backdated memory write (drafted after
@@ -1113,48 +702,22 @@ fn a_removed_members_backdated_memory_write_is_refused() {
     signers.insert(f.agent_key.0);
     signers.insert(f.phone.device_id);
     let wid = f.w.wid;
-    let watermark = ligus_core::watermark::heads_of(
-        &f.w.cfg,
-        ligus_core::workspace_config_session_id(wid),
-        &signers,
-    );
-    f.w.push(
-        "owner",
-        SessionEvent::MemberRemoved {
-            member_id: "mara".into(),
-            watermark,
-        },
-    );
+    let watermark = ligus_core::watermark::heads_of(&f.w.cfg, ligus_core::workspace_config_session_id(wid), &signers);
+    f.w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark });
     assert!(!f.w.roster().members.contains_key("mara"));
-    let mut env = f.w.draft(
-        "mara",
-        None,
-        rec(create(Uuid::new_v4(), "after the cut")),
-        None,
-    );
+    let mut env = f.w.draft("mara", None, rec(create(Uuid::new_v4(), "after the cut")), None);
     let cfg = f.w.cfg.clone();
     backdate(&f.w, &mut env, &cfg, before, "mara");
     let id = f.w.push_env(None, env);
     assert_eq!(f.w.verdict(id), Verdict::Denied);
     // Her agent's backdated proposal too.
     let agent = f.agent_id.to_string();
-    let mut env = f.w.draft(
-        "mara",
-        None,
-        rec(proposal(Uuid::new_v4(), new_note(), agent)),
-        None,
-    );
+    let mut env = f.w.draft("mara", None, rec(proposal(Uuid::new_v4(), new_note(), agent)), None);
     let s = env.actor_stamp.as_mut().unwrap();
     s.actor = ActorIdentity::new(f.agent_id.to_string(), "coder", ActorKind::Agent);
     s.actor.device_id = Some(f.agent_key.0);
     let h = cfg.iter().find(|e| e.event_id == before).unwrap();
-    ligus_core::lamport::stamp_next(
-        &mut env,
-        Some(ligus_core::CfgFrontier {
-            lamport: h.lamport,
-            event_id: h.event_id,
-        }),
-    );
+    ligus_core::lamport::stamp_next(&mut env, Some(ligus_core::CfgFrontier { lamport: h.lamport, event_id: h.event_id }));
     env.actor_stamp.as_mut().unwrap().prev = None;
     env.clear_raw();
     sign_envelope(&mut env, f.agent_key.0, &f.agent_key.1);
@@ -1170,60 +733,23 @@ fn an_accepted_create_cant_be_pre_empted() {
     let mut f = fixture();
     let pid = Uuid::new_v4();
     let agent = f.agent_id.to_string();
-    let op = MemoryOp::Create {
-        entry_id: pid,
-        title: "Deploy day".into(),
-        body: "Thursdays".into(),
-        tags: vec![],
-    };
+    let op = MemoryOp::Create { entry_id: pid, title: "Deploy day".into(), body: "Thursdays".into(), tags: vec![] };
     let filed = f.sign(Via::Agent, None, rec(proposal(pid, op, agent)));
     assert_eq!(f.w.verdict(filed), Verdict::Allowed);
     // A create proposal names a new entry under its own id; any other id
     // could be taken first.
-    let other = MemoryOp::Create {
-        entry_id: Uuid::new_v4(),
-        title: "x".into(),
-        body: "y".into(),
-        tags: vec![],
-    };
-    let unbound = MemoryProposal {
-        proposal_id: Uuid::new_v4(),
-        op: other,
-        proposer: f.agent_id.to_string(),
-        source: Default::default(),
-        rationale: String::new(),
-    };
+    let other = MemoryOp::Create { entry_id: Uuid::new_v4(), title: "x".into(), body: "y".into(), tags: vec![] };
+    let unbound = MemoryProposal { proposal_id: Uuid::new_v4(), op: other, proposer: f.agent_id.to_string(), source: Default::default(), rationale: String::new() };
     let unbound = f.sign(Via::Agent, None, rec(FlowRecord::MemoryProposed(unbound)));
-    assert_eq!(
-        f.w.verdict(unbound),
-        Verdict::Denied,
-        "a create proposal names an entry id other than its own"
-    );
+    assert_eq!(f.w.verdict(unbound), Verdict::Denied, "a create proposal names an entry id other than its own");
     // Mara squats the entry id before adm accepts: as a direct create it
     // must carry the proposal's event id, an equivocation (a denial of
     // both, never a takeover).
     let squat = f.sign(Via::Person(2), None, rec(create(pid, "mara's squat")));
-    let accept = f.sign(
-        Via::Person(1),
-        None,
-        rec(FlowRecord::MemoryProposalDecided(MemoryDecision {
-            proposal_id: pid,
-            accepted: true,
-            ..Default::default()
-        })),
-    );
+    let accept = f.sign(Via::Person(1), None, rec(FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: pid, accepted: true, ..Default::default() })));
     let m = f.memory();
-    assert_ne!(
-        f.w.verdict(squat),
-        Verdict::Allowed,
-        "the squat was allowed"
-    );
-    assert!(
-        m.entries
-            .get(&pid)
-            .is_none_or(|e| e.created_by.id != "mara"),
-        "mara took the proposed entry over"
-    );
+    assert_ne!(f.w.verdict(squat), Verdict::Allowed, "the squat was allowed");
+    assert!(m.entries.get(&pid).is_none_or(|e| e.created_by.id != "mara"), "mara took the proposed entry over");
     let _ = accept;
 }
 
@@ -1234,37 +760,14 @@ fn a_squatted_create_proposal_never_lands_on_the_squatters_note() {
     let mut f = fixture();
     let (pid, e) = (Uuid::new_v4(), Uuid::new_v4());
     let agent = f.agent_id.to_string();
-    let op = MemoryOp::Create {
-        entry_id: e,
-        title: "Deploy day".into(),
-        body: "Thursdays".into(),
-        tags: vec![],
-    };
-    let p = MemoryProposal {
-        proposal_id: pid,
-        op,
-        proposer: agent,
-        source: Default::default(),
-        rationale: String::new(),
-    };
+    let op = MemoryOp::Create { entry_id: e, title: "Deploy day".into(), body: "Thursdays".into(), tags: vec![] };
+    let p = MemoryProposal { proposal_id: pid, op, proposer: agent, source: Default::default(), rationale: String::new() };
     let filed = f.sign(Via::Agent, None, rec(FlowRecord::MemoryProposed(p)));
     let squat = f.sign(Via::Person(2), None, rec(create(e, "mara's squat")));
-    let accept = f.sign(
-        Via::Person(1),
-        None,
-        rec(FlowRecord::MemoryProposalDecided(MemoryDecision {
-            proposal_id: pid,
-            accepted: true,
-            ..Default::default()
-        })),
-    );
+    let accept = f.sign(Via::Person(1), None, rec(FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: pid, accepted: true, ..Default::default() })));
     if f.w.verdict(filed) == Verdict::Allowed {
         assert_eq!(f.w.verdict(squat), Verdict::Allowed);
-        assert_eq!(
-            f.w.verdict(accept),
-            Verdict::Allowed,
-            "the person's acceptance was refused: the entry id was squatted"
-        );
+        assert_eq!(f.w.verdict(accept), Verdict::Allowed, "the person's acceptance was refused: the entry id was squatted");
     }
 }
 
@@ -1277,66 +780,22 @@ fn an_agent_moved_to_another_host_no_longer_speaks_through_the_old_one() {
     let mut f = fixture();
     let chat = f.chat;
     let agent = f.agent_id.to_string();
-    let before = f.sign(
-        Via::Agent,
-        None,
-        rec(proposal(Uuid::new_v4(), new_note(), agent.clone())),
-    );
+    let before = f.sign(Via::Agent, None, rec(proposal(Uuid::new_v4(), new_note(), agent.clone())));
     assert_eq!(f.w.verdict(before), Verdict::Allowed);
     // The owner moves the agent to the owner's own device.
-    let mut moved =
-        f.w.config()
-            .workspace_agents
-            .iter()
-            .find(|a| a.id == f.agent_id)
-            .unwrap()
-            .clone();
+    let mut moved = f.w.config().workspace_agents.iter().find(|a| a.id == f.agent_id).unwrap().clone();
     moved.host_id = f.w.people["owner"].device_id.to_string();
     f.w.push("owner", SessionEvent::AgentUpserted { agent: moved });
-    let by_key = f.sign(
-        Via::Agent,
-        None,
-        rec(proposal(Uuid::new_v4(), new_note(), agent.clone())),
-    );
-    let by_old_host = f.sign(
-        Via::Runtime,
-        None,
-        rec(proposal(Uuid::new_v4(), new_note(), agent.clone())),
-    );
-    let t = rec(FlowRecord::TaskState(TaskStateUpdate {
-        task_id: chat,
-        agent_key: agent.clone(),
-        turn_id: Uuid::new_v4(),
-        summary: "still here".into(),
-        ..Default::default()
-    }));
+    let by_key = f.sign(Via::Agent, None, rec(proposal(Uuid::new_v4(), new_note(), agent.clone())));
+    let by_old_host = f.sign(Via::Runtime, None, rec(proposal(Uuid::new_v4(), new_note(), agent.clone())));
+    let t = rec(FlowRecord::TaskState(TaskStateUpdate { task_id: chat, agent_key: agent.clone(), turn_id: Uuid::new_v4(), summary: "still here".into(), ..Default::default() }));
     let slot_by_old_host = f.sign(Via::Person(2), Some(chat), t.clone());
     let slot_by_key = f.sign(Via::Agent, Some(chat), t);
-    for (what, id) in [
-        ("key proposal", by_key),
-        ("old host proposal", by_old_host),
-        ("old host slot", slot_by_old_host),
-        ("key slot", slot_by_key),
-    ] {
+    for (what, id) in [("key proposal", by_key), ("old host proposal", by_old_host), ("old host slot", slot_by_old_host), ("key slot", slot_by_key)] {
         assert_eq!(f.w.verdict(id), Verdict::Denied, "{what} after the move");
     }
-    assert_eq!(
-        f.w.verdict(before),
-        Verdict::Allowed,
-        "a proposal filed before the move stays"
-    );
-    let accept = f.sign(
-        Via::Person(2),
-        None,
-        rec(FlowRecord::MemoryProposalDecided(MemoryDecision {
-            proposal_id: before,
-            accepted: true,
-            ..Default::default()
-        })),
-    );
+    assert_eq!(f.w.verdict(before), Verdict::Allowed, "a proposal filed before the move stays");
+    let accept = f.sign(Via::Person(2), None, rec(FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: before, accepted: true, ..Default::default() })));
     assert_eq!(f.w.verdict(accept), Verdict::Allowed);
-    assert!(
-        f.memory().entries[&before].live(),
-        "the accepted entry is named by its proposal"
-    );
+    assert!(f.memory().entries[&before].live(), "the accepted entry is named by its proposal");
 }

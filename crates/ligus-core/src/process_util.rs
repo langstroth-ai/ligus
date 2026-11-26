@@ -58,9 +58,7 @@ pub fn ligus_secret_env_names() -> Vec<std::ffi::OsString> {
         .filter(|k| {
             let n = k.to_string_lossy().to_ascii_uppercase();
             n.starts_with("LIGUS_")
-                && ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSPHRASE"]
-                    .iter()
-                    .any(|w| n.contains(w))
+                && ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSPHRASE"].iter().any(|w| n.contains(w))
         })
         .collect()
 }
@@ -91,40 +89,15 @@ pub struct ChildEnvSpec {
 
 /// Parent variables every child keeps (names, or `PREFIX*`).
 const ALWAYS: &[&str] = &[
-    "PATH",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "SHELL",
-    "LANG",
-    "LC_*",
-    "TZ",
-    "TERM",
-    "TMPDIR",
-    "SSL_CERT_FILE",
-    "SSL_CERT_DIR",
-    "NODE_EXTRA_CA_CERTS",
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_*", "TZ", "TERM", "TMPDIR",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
     // The CLIs' own config dirs, when the user set them.
-    "CLAUDE_CONFIG_DIR",
-    "CODEX_HOME",
-    "COPILOT_HOME",
-    "COPILOT_CONFIG_DIR",
+    "CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME", "COPILOT_CONFIG_DIR",
 ];
 #[cfg(target_os = "linux")]
 const PLATFORM: &[&str] = &["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"];
 #[cfg(windows)]
-const PLATFORM: &[&str] = &[
-    "SYSTEMROOT",
-    "SYSTEMDRIVE",
-    "WINDIR",
-    "TEMP",
-    "TMP",
-    "USERPROFILE",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "PATHEXT",
-    "COMSPEC",
-];
+const PLATFORM: &[&str] = &["SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PATHEXT", "COMSPEC"];
 #[cfg(not(any(target_os = "linux", windows)))]
 const PLATFORM: &[&str] = &[];
 /// Caller-supplied names that may pass.
@@ -160,10 +133,7 @@ pub fn child_env(spec: &ChildEnvSpec) -> Vec<(OsString, OsString)> {
 }
 
 /// [`child_env`] over an explicit parent environment (for tests).
-pub fn child_env_from(
-    parent: impl IntoIterator<Item = (OsString, OsString)>,
-    spec: &ChildEnvSpec,
-) -> Vec<(OsString, OsString)> {
+pub fn child_env_from(parent: impl IntoIterator<Item = (OsString, OsString)>, spec: &ChildEnvSpec) -> Vec<(OsString, OsString)> {
     let mut out: Vec<(OsString, OsString)> = parent
         .into_iter()
         .filter(|(k, _)| {
@@ -240,8 +210,7 @@ pub fn harden_git(cmd: &mut Command) {
     ];
     cmd.env("GIT_CONFIG_COUNT", OVERRIDES.len().to_string());
     for (i, (k, v)) in OVERRIDES.iter().enumerate() {
-        cmd.env(format!("GIT_CONFIG_KEY_{i}"), k)
-            .env(format!("GIT_CONFIG_VALUE_{i}"), v);
+        cmd.env(format!("GIT_CONFIG_KEY_{i}"), k).env(format!("GIT_CONFIG_VALUE_{i}"), v);
     }
 }
 
@@ -256,25 +225,9 @@ mod tests {
     #[test]
     fn git_drops_inherited_repo_redirecting_env() {
         let cmd = super::git();
-        let removed: Vec<String> = cmd
-            .get_envs()
-            .filter(|(_, v)| v.is_none())
-            .map(|(k, _)| k.to_string_lossy().into_owned())
-            .collect();
-        for k in [
-            "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_COMMON_DIR",
-            "GIT_INDEX_FILE",
-            "GIT_OBJECT_DIRECTORY",
-            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-            "GIT_NAMESPACE",
-            "GIT_EXTERNAL_DIFF",
-        ] {
-            assert!(
-                removed.iter().any(|r| r == k),
-                "{k} not removed: {removed:?}"
-            );
+        let removed: Vec<String> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_string_lossy().into_owned()).collect();
+        for k in ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_EXTERNAL_DIFF"] {
+            assert!(removed.iter().any(|r| r == k), "{k} not removed: {removed:?}");
         }
     }
 
@@ -283,32 +236,13 @@ mod tests {
         let cmd = super::git();
         let envs: std::collections::HashMap<String, String> = cmd
             .get_envs()
-            .filter_map(|(k, v)| {
-                Some((
-                    k.to_string_lossy().into_owned(),
-                    v?.to_string_lossy().into_owned(),
-                ))
-            })
+            .filter_map(|(k, v)| Some((k.to_string_lossy().into_owned(), v?.to_string_lossy().into_owned())))
             .collect();
         let n: usize = envs["GIT_CONFIG_COUNT"].parse().unwrap();
-        let pairs: Vec<(String, String)> = (0..n)
-            .map(|i| {
-                (
-                    envs[&format!("GIT_CONFIG_KEY_{i}")].clone(),
-                    envs[&format!("GIT_CONFIG_VALUE_{i}")].clone(),
-                )
-            })
-            .collect();
-        for want in [
-            ("protocol.file.allow", "user"),
-            ("submodule.recurse", "false"),
-            ("protocol.ext.allow", "never"),
-            ("core.hooksPath", "/dev/null"),
-        ] {
-            assert!(
-                pairs.iter().any(|(k, v)| k == want.0 && v == want.1),
-                "{want:?} in {pairs:?}"
-            );
+        let pairs: Vec<(String, String)> =
+            (0..n).map(|i| (envs[&format!("GIT_CONFIG_KEY_{i}")].clone(), envs[&format!("GIT_CONFIG_VALUE_{i}")].clone())).collect();
+        for want in [("protocol.file.allow", "user"), ("submodule.recurse", "false"), ("protocol.ext.allow", "never"), ("core.hooksPath", "/dev/null")] {
+            assert!(pairs.iter().any(|(k, v)| k == want.0 && v == want.1), "{want:?} in {pairs:?}");
         }
     }
 
@@ -337,46 +271,22 @@ mod tests {
         let spec = super::ChildEnvSpec {
             tmpdir: Some("/tmp/ligus-turn-x".into()),
             proxy: vec![("HTTPS_PROXY".into(), "http://ligus:t@127.0.0.1:9".into())],
-            extra: vec![
-                ("GIT_AUTHOR_NAME".into(), "Ana".into()),
-                ("OPENAI_API_KEY".into(), "smuggled".into()),
-            ],
+            extra: vec![("GIT_AUTHOR_NAME".into(), "Ana".into()), ("OPENAI_API_KEY".into(), "smuggled".into())],
             provider_key: Some(("ANTHROPIC_API_KEY".into(), "sk-ant-configured".into())),
         };
         let env = super::child_env_from(parent, &spec);
-        let get = |k: &str| {
-            env.iter()
-                .find(|(x, _)| x == k)
-                .map(|(_, v)| v.to_string_lossy().into_owned())
-        };
+        let get = |k: &str| env.iter().find(|(x, _)| x == k).map(|(_, v)| v.to_string_lossy().into_owned());
         assert_eq!(get("PATH").as_deref(), Some("/usr/bin"));
         assert_eq!(get("LC_ALL").as_deref(), Some("C"));
         assert_eq!(get("TMPDIR").as_deref(), Some("/tmp/ligus-turn-x"));
-        assert_eq!(
-            get("HTTPS_PROXY").as_deref(),
-            Some("http://ligus:t@127.0.0.1:9")
-        );
+        assert_eq!(get("HTTPS_PROXY").as_deref(), Some("http://ligus:t@127.0.0.1:9"));
         assert_eq!(get("GIT_AUTHOR_NAME").as_deref(), Some("Ana"));
-        assert_eq!(
-            get("ANTHROPIC_API_KEY").as_deref(),
-            Some("sk-ant-configured")
-        );
-        for k in [
-            "OPENAI_API_KEY",
-            "OPENROUTER_API_KEY",
-            "AWS_SECRET_ACCESS_KEY",
-            "GITHUB_TOKEN",
-            "LIGUS_RELAY_ACCESS_TOKEN",
-            "LIGUS_WORKSPACE_KEY",
-            "LIGUS_TOKEN",
-        ] {
+        assert_eq!(get("ANTHROPIC_API_KEY").as_deref(), Some("sk-ant-configured"));
+        for k in ["OPENAI_API_KEY", "OPENROUTER_API_KEY", "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "LIGUS_RELAY_ACCESS_TOKEN", "LIGUS_WORKSPACE_KEY", "LIGUS_TOKEN"] {
             assert_eq!(get(k), None, "{k} leaked");
         }
         // No provider key configured: none at all.
-        let env = super::child_env_from(
-            vec![(OsString::from("ANTHROPIC_API_KEY"), OsString::from("x"))],
-            &Default::default(),
-        );
+        let env = super::child_env_from(vec![(OsString::from("ANTHROPIC_API_KEY"), OsString::from("x"))], &Default::default());
         assert!(env.is_empty(), "{env:?}");
     }
 
@@ -388,47 +298,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join(".hooks")).unwrap();
         let run = |c: &mut std::process::Command| assert!(c.output().unwrap().status.success());
-        run(super::command("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["init", "-q"]));
+        run(super::command("git").arg("-C").arg(&dir).args(["init", "-q"]));
         let marker = dir.with_extension("ran");
         let _ = std::fs::remove_file(&marker);
         let hook = dir.join(".hooks/pre-commit");
-        std::fs::write(
-            &hook,
-            format!("#!/bin/sh\necho hook >> '{}'\n", marker.display()),
-        )
-        .unwrap();
+        std::fs::write(&hook, format!("#!/bin/sh\necho hook >> '{}'\n", marker.display())).unwrap();
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
         let fsm = dir.join("fsm.sh");
-        std::fs::write(
-            &fsm,
-            format!("#!/bin/sh\necho fsmonitor >> '{}'\n", marker.display()),
-        )
-        .unwrap();
+        std::fs::write(&fsm, format!("#!/bin/sh\necho fsmonitor >> '{}'\n", marker.display())).unwrap();
         std::fs::set_permissions(&fsm, std::fs::Permissions::from_mode(0o755)).unwrap();
-        for (k, v) in [
-            ("core.hooksPath", ".hooks"),
-            ("core.fsmonitor", fsm.to_str().unwrap()),
-            ("user.email", "t@t"),
-            ("user.name", "t"),
-        ] {
-            run(super::command("git")
-                .arg("-C")
-                .arg(&dir)
-                .args(["config", k, v]));
+        for (k, v) in [("core.hooksPath", ".hooks"), ("core.fsmonitor", fsm.to_str().unwrap()), ("user.email", "t@t"), ("user.name", "t")] {
+            run(super::command("git").arg("-C").arg(&dir).args(["config", k, v]));
         }
         std::fs::write(dir.join("a"), "a").unwrap();
         run(super::git().arg("-C").arg(&dir).args(["add", "-A"]));
-        run(super::git()
-            .arg("-C")
-            .arg(&dir)
-            .args(["status", "--porcelain"]));
-        run(super::git()
-            .arg("-C")
-            .arg(&dir)
-            .args(["commit", "-qm", "x"]));
+        run(super::git().arg("-C").arg(&dir).args(["status", "--porcelain"]));
+        run(super::git().arg("-C").arg(&dir).args(["commit", "-qm", "x"]));
         let ran = std::fs::read_to_string(&marker).unwrap_or_default();
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&marker);

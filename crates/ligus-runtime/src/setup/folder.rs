@@ -12,10 +12,7 @@ pub(crate) fn status(ops: &dyn SetupOps) -> (Progress, String) {
     let bound = repos.iter().filter(|r| r.bound_here.is_some()).count();
     match (repos.len(), bound) {
         (0, _) => (Progress::Todo, "no repositories yet".into()),
-        (n, 0) => (
-            Progress::Todo,
-            format!("{n} in the workspace, none bound here"),
-        ),
+        (n, 0) => (Progress::Todo, format!("{n} in the workspace, none bound here")),
         (n, b) => (Progress::Done, format!("{b} of {n} bound here")),
     }
 }
@@ -49,23 +46,14 @@ pub(crate) fn steps(_ops: &dyn SetupOps, inputs: &Inputs) -> Vec<StepDef> {
 
 pub(crate) fn preflight(ctx: &mut Ctx, _ops: &dyn SetupOps) {
     if !crate::repos::git::git(std::path::Path::new("."), &["--version"]).is_ok() {
-        ctx.fail(
-            "git",
-            "git",
-            "git isn't installed or isn't on PATH",
-            "install git, then run this again",
-            exit::FIXABLE,
-        );
+        ctx.fail("git", "git", "git isn't installed or isn't on PATH", "install git, then run this again", exit::FIXABLE);
     } else {
         ctx.ok("git", "git", "installed");
     }
 }
 
 pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
-    let fields: Vec<Field> = steps(ops, inputs)
-        .into_iter()
-        .flat_map(|s| s.fields)
-        .collect();
+    let fields: Vec<Field> = steps(ops, inputs).into_iter().flat_map(|s| s.fields).collect();
     if inputs.on("scratch") {
         return run_scratch(ctx, ops, inputs, &fields);
     }
@@ -74,31 +62,13 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
 
     // Every check `repos::bind` makes, before any write.
     if !f.exists {
-        return ctx.fail(
-            "folder",
-            "folder",
-            format!("{path}: no such folder"),
-            "pass --path with an existing folder",
-            exit::USAGE,
-        );
+        return ctx.fail("folder", "folder", format!("{path}: no such folder"), "pass --path with an existing folder", exit::USAGE);
     }
     if !f.is_checkout {
-        return ctx.fail(
-            "folder.git",
-            "git",
-            "that folder isn't a git checkout",
-            "git clone the repository there, or pick its checkout",
-            exit::USAGE,
-        );
+        return ctx.fail("folder.git", "git", "that folder isn't a git checkout", "git clone the repository there, or pick its checkout", exit::USAGE);
     }
     if f.linked_worktree {
-        return ctx.fail(
-            "folder.git",
-            "git",
-            "that folder is a linked worktree",
-            "pick its main checkout (git worktree list shows it)",
-            exit::USAGE,
-        );
+        return ctx.fail("folder.git", "git", "that folder is a linked worktree", "pick its main checkout (git worktree list shows it)", exit::USAGE);
     }
     if let Some(label) = &f.managed_elsewhere {
         return ctx.fail(
@@ -110,9 +80,7 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
         );
     }
     let canonical = f.canonical.clone();
-    let detail = canonical
-        .clone()
-        .unwrap_or_else(|| "a local repository (no forge remote)".into());
+    let detail = canonical.clone().unwrap_or_else(|| "a local repository (no forge remote)".into());
     ctx.ok("folder.git", "git", detail);
 
     // The workspace repository it is a checkout of.
@@ -120,58 +88,24 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
     let existing = canonical
         .as_ref()
         .and_then(|c| repos.iter().find(|r| &r.canonical == c))
-        .or_else(|| {
-            f.root_commit.as_ref().and_then(|root| {
-                repos
-                    .iter()
-                    .find(|r| r.canonical == format!("local:{root}"))
-            })
-        })
+        .or_else(|| f.root_commit.as_ref().and_then(|root| repos.iter().find(|r| r.canonical == format!("local:{root}"))))
         .cloned();
     if let Some(id) = &f.bound_to {
         if existing.as_ref().is_some_and(|r| &r.id == id) {
-            ctx.ok(
-                "bind",
-                "bound",
-                format!(
-                    "already bound to {}",
-                    existing
-                        .as_ref()
-                        .map(|r| r.display_name.as_str())
-                        .unwrap_or("it")
-                ),
-            );
+            ctx.ok("bind", "bound", format!("already bound to {}", existing.as_ref().map(|r| r.display_name.as_str()).unwrap_or("it")));
             ctx.result("repoId", id.clone());
             return ctx.done();
         }
-        return ctx.fail(
-            "folder.taken",
-            "folder",
-            "that folder is already bound to another repository here",
-            "unbind it in Settings > Repositories first",
-            exit::USAGE,
-        );
+        return ctx.fail("folder.taken", "folder", "that folder is already bound to another repository here", "unbind it in Settings > Repositories first", exit::USAGE);
     }
-    let branch = value(inputs, &fields, "branch")
-        .map(str::to_string)
-        .or(f.default_branch.clone())
-        .unwrap_or_default();
+    let branch = value(inputs, &fields, "branch").map(str::to_string).or(f.default_branch.clone()).unwrap_or_default();
     let repo_id = match existing {
         Some(r) => {
-            ctx.ok(
-                "repo",
-                "repository",
-                format!("{} is in the workspace", r.display_name),
-            );
+            ctx.ok("repo", "repository", format!("{} is in the workspace", r.display_name));
             r.id
         }
         None => {
-            if !gate::need(
-                ctx,
-                ops,
-                WorkspaceRole::Admin,
-                "adding a repository to the workspace",
-            ) {
+            if !gate::need(ctx, ops, WorkspaceRole::Admin, "adding a repository to the workspace") {
                 return;
             }
             let name = value(inputs, &fields, "name").unwrap_or("").to_string();
@@ -179,18 +113,7 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
                 return;
             }
             if ctx.dry_run() {
-                ctx.skip(
-                    "repo",
-                    "repository",
-                    format!(
-                        "would add it to the workspace (default branch {})",
-                        if branch.is_empty() {
-                            "unknown"
-                        } else {
-                            &branch
-                        }
-                    ),
-                );
+                ctx.skip("repo", "repository", format!("would add it to the workspace (default branch {})", if branch.is_empty() { "unknown" } else { &branch }));
                 ctx.skip("bind", "bind", format!("would bind {path}"));
                 return ctx.done();
             }
@@ -199,15 +122,7 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
                     ctx.ok("repo", "repository", "added to the workspace");
                     id
                 }
-                Err(e) => {
-                    return ctx.fail(
-                        "repo",
-                        "repository",
-                        format!("couldn't add it: {e}"),
-                        "fix what it says and run this again",
-                        ops_code(&e),
-                    )
-                }
+                Err(e) => return ctx.fail("repo", "repository", format!("couldn't add it: {e}"), "fix what it says and run this again", ops_code(&e)),
             }
         }
     };
@@ -223,30 +138,12 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
     ctx.commit();
     match ops.bind_folder(&repo_id, &path) {
         Ok(()) => ctx.ok("bind", "bound", path.clone()),
-        Err(e) => {
-            return ctx.fail(
-                "bind",
-                "bind",
-                e.to_string(),
-                "fix what it says and run this again",
-                ops_code(&e),
-            )
-        }
+        Err(e) => return ctx.fail("bind", "bind", e.to_string(), "fix what it says and run this again", ops_code(&e)),
     }
-    if ops
-        .repos()
-        .iter()
-        .any(|r| r.id == repo_id && r.bound_here.is_some())
-    {
+    if ops.repos().iter().any(|r| r.id == repo_id && r.bound_here.is_some()) {
         ctx.done();
     } else {
-        ctx.fail(
-            "verify",
-            "verify",
-            "the binding isn't listed",
-            "Settings > Repositories lists the bindings",
-            exit::FAILED,
-        );
+        ctx.fail("verify", "verify", "the binding isn't listed", "Settings > Repositories lists the bindings", exit::FAILED);
     }
 }
 
@@ -254,20 +151,9 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
 /// made by this host, bound here.
 fn run_scratch(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, fields: &[Field]) {
     if value(inputs, fields, "path").is_some_and(|p| !p.trim().is_empty()) {
-        return ctx.fail(
-            "folder",
-            "folder",
-            "pick a folder or a scratch repo, not both",
-            "drop --path, or drop --scratch",
-            exit::USAGE,
-        );
+        return ctx.fail("folder", "folder", "pick a folder or a scratch repo, not both", "drop --path, or drop --scratch", exit::USAGE);
     }
-    if !gate::need(
-        ctx,
-        ops,
-        WorkspaceRole::Admin,
-        "adding a scratch repository to the workspace",
-    ) {
+    if !gate::need(ctx, ops, WorkspaceRole::Admin, "adding a scratch repository to the workspace") {
         return;
     }
     let name = value(inputs, fields, "name").unwrap_or("").to_string();
@@ -275,48 +161,22 @@ fn run_scratch(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, fields: &
         return;
     }
     if ctx.dry_run() {
-        ctx.skip(
-            "repo",
-            "repository",
-            "would create an empty scratch repository here and add it to the workspace",
-        );
+        ctx.skip("repo", "repository", "would create an empty scratch repository here and add it to the workspace");
         ctx.skip("bind", "bind", "would bind it here");
         return ctx.done();
     }
     ctx.commit();
     let (repo_id, path) = match ops.create_scratch(&name) {
         Ok(x) => x,
-        Err(e) => {
-            return ctx.fail(
-                "repo",
-                "repository",
-                format!("couldn't start a scratch repository: {e}"),
-                "fix what it says and run this again",
-                ops_code(&e),
-            )
-        }
+        Err(e) => return ctx.fail("repo", "repository", format!("couldn't start a scratch repository: {e}"), "fix what it says and run this again", ops_code(&e)),
     };
-    ctx.ok(
-        "repo",
-        "repository",
-        "a scratch repository, added to the workspace",
-    );
+    ctx.ok("repo", "repository", "a scratch repository, added to the workspace");
     ctx.ok("bind", "bound", path);
     ctx.result("repoId", repo_id.clone());
     ctx.result("scratch", "true");
-    if ops
-        .repos()
-        .iter()
-        .any(|r| r.id == repo_id && r.bound_here.is_some())
-    {
+    if ops.repos().iter().any(|r| r.id == repo_id && r.bound_here.is_some()) {
         ctx.done();
     } else {
-        ctx.fail(
-            "verify",
-            "verify",
-            "the scratch repository isn't listed",
-            "Settings > Repositories lists the bindings",
-            exit::FAILED,
-        );
+        ctx.fail("verify", "verify", "the scratch repository isn't listed", "Settings > Repositories lists the bindings", exit::FAILED);
     }
 }

@@ -80,8 +80,7 @@ impl LeaseBeat {
 
     /// Verify against the holder device's public key.
     pub fn verify(&self, device_public_key: &[u8]) -> bool {
-        !self.signature.is_empty()
-            && ligus_core::verify(device_public_key, &self.preimage(), &self.signature).is_ok()
+        !self.signature.is_empty() && ligus_core::verify(device_public_key, &self.preimage(), &self.signature).is_ok()
     }
 }
 
@@ -125,25 +124,17 @@ pub fn open_lease_beats(
     let mut out = Vec::new();
     let floor = ring.authorized_head();
     for (slot, blob) in blobs {
-        let Some(sealed) = blob.get("leaseBeat") else {
-            continue;
-        };
-        let Ok(sealed) = serde_json::from_value::<SealedEnvelope>(sealed.clone()) else {
-            continue;
-        };
+        let Some(sealed) = blob.get("leaseBeat") else { continue };
+        let Ok(sealed) = serde_json::from_value::<SealedEnvelope>(sealed.clone()) else { continue };
         if sealed.version < floor {
             continue;
         }
-        let Some(plain) = ring
-            .keys_for(sealed.version, sealed.kid.as_deref())
-            .into_iter()
-            .find_map(|k| open_symmetric(k, &sealed).ok())
+        let Some(plain) =
+            ring.keys_for(sealed.version, sealed.kid.as_deref()).into_iter().find_map(|k| open_symmetric(k, &sealed).ok())
         else {
             continue;
         };
-        let Ok(mut beat) = serde_json::from_slice::<LeaseBeat>(&plain) else {
-            continue;
-        };
+        let Ok(mut beat) = serde_json::from_slice::<LeaseBeat>(&plain) else { continue };
         if *slot != lease_presence_slot(beat.scope, &beat.scope_id) {
             continue;
         }
@@ -162,22 +153,9 @@ pub fn open_lease_beats(
 }
 
 /// Publish a beat to the room's presence channel.
-pub async fn publish_lease_beat(
-    relay: &RelayClient,
-    room: &str,
-    ring: &KeyringEngine,
-    beat: &LeaseBeat,
-) -> Result<(), RelayError> {
-    let Some(blob) = seal_lease_beat(ring, beat) else {
-        return Ok(());
-    };
-    relay
-        .publish_presence(
-            room,
-            &lease_presence_slot(beat.scope, &beat.scope_id),
-            &blob,
-        )
-        .await
+pub async fn publish_lease_beat(relay: &RelayClient, room: &str, ring: &KeyringEngine, beat: &LeaseBeat) -> Result<(), RelayError> {
+    let Some(blob) = seal_lease_beat(ring, beat) else { return Ok(()) };
+    relay.publish_presence(room, &lease_presence_slot(beat.scope, &beat.scope_id), &blob).await
 }
 
 /// The newest verified beat seen per scope, shared between the poller and
@@ -198,9 +176,7 @@ impl LeaseBeats {
         let mut b = self.beats.lock().unwrap_or_else(|p| p.into_inner());
         let k = lease_key(beat.scope, &beat.scope_id);
         let newer = match b.get(&k) {
-            Some((old, _)) => {
-                (beat.epoch, beat.beat, beat.at_ms) > (old.epoch, old.beat, old.at_ms)
-            }
+            Some((old, _)) => (beat.epoch, beat.beat, beat.at_ms) > (old.epoch, old.beat, old.at_ms),
             None => true,
         };
         if newer {
@@ -211,18 +187,13 @@ impl LeaseBeats {
 
     /// The newest beat for a scope.
     pub fn get(&self, scope: LeaseScope, scope_id: &str) -> Option<(LeaseBeat, BeatTrust)> {
-        self.beats
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(&lease_key(scope, scope_id))
-            .cloned()
+        self.beats.lock().unwrap_or_else(|p| p.into_inner()).get(&lease_key(scope, scope_id)).cloned()
     }
 
     /// `(holder, epoch, at_ms)` of the newest beat, the shape
     /// `ligus_core::lease::lease_health` takes.
     pub fn last(&self, scope: LeaseScope, scope_id: &str) -> Option<(Uuid, u64, i64)> {
-        self.get(scope, scope_id)
-            .map(|(b, _)| (b.holder, b.epoch, b.at_ms))
+        self.get(scope, scope_id).map(|(b, _)| (b.holder, b.epoch, b.at_ms))
     }
 }
 
@@ -264,51 +235,30 @@ mod tests {
 
         let mut blobs = HashMap::new();
         let good = beat(holder, 2, 5).sign(&holder_kp);
-        blobs.insert(
-            lease_presence_slot(LeaseScope::WorkflowRun, "run"),
-            seal_lease_beat(&k, &good).unwrap(),
-        );
+        blobs.insert(lease_presence_slot(LeaseScope::WorkflowRun, "run"), seal_lease_beat(&k, &good).unwrap());
         let opened = open_lease_beats(&blobs, &k, 10_000, |d| (d == holder).then(|| pk.clone()));
         assert_eq!(opened.len(), 1);
         assert_eq!(opened[0].1, BeatTrust::Verified);
 
         // Another keyholder forges a beat to keep the holder's lease alive.
         let forged = beat(holder, 2, 6).sign(&mallory_kp);
-        blobs.insert(
-            lease_presence_slot(LeaseScope::WorkflowRun, "run"),
-            seal_lease_beat(&k, &forged).unwrap(),
-        );
-        assert!(
-            open_lease_beats(&blobs, &k, 10_000, |d| (d == holder).then(|| pk.clone())).is_empty()
-        );
+        blobs.insert(lease_presence_slot(LeaseScope::WorkflowRun, "run"), seal_lease_beat(&k, &forged).unwrap());
+        assert!(open_lease_beats(&blobs, &k, 10_000, |d| (d == holder).then(|| pk.clone())).is_empty());
 
         // Unsigned beat for a certified holder: dropped.
         let unsigned = beat(holder, 2, 7);
-        blobs.insert(
-            lease_presence_slot(LeaseScope::WorkflowRun, "run"),
-            seal_lease_beat(&k, &unsigned).unwrap(),
-        );
-        assert!(
-            open_lease_beats(&blobs, &k, 10_000, |d| (d == holder).then(|| pk.clone())).is_empty()
-        );
+        blobs.insert(lease_presence_slot(LeaseScope::WorkflowRun, "run"), seal_lease_beat(&k, &unsigned).unwrap());
+        assert!(open_lease_beats(&blobs, &k, 10_000, |d| (d == holder).then(|| pk.clone())).is_empty());
 
         // A tampered field breaks the signature.
         let mut tampered = beat(holder, 2, 8).sign(&holder_kp);
         tampered.epoch = 3;
-        blobs.insert(
-            lease_presence_slot(LeaseScope::WorkflowRun, "run"),
-            seal_lease_beat(&k, &tampered).unwrap(),
-        );
-        assert!(
-            open_lease_beats(&blobs, &k, 10_000, |d| (d == holder).then(|| pk.clone())).is_empty()
-        );
+        blobs.insert(lease_presence_slot(LeaseScope::WorkflowRun, "run"), seal_lease_beat(&k, &tampered).unwrap());
+        assert!(open_lease_beats(&blobs, &k, 10_000, |d| (d == holder).then(|| pk.clone())).is_empty());
 
         // A beat in another scope's slot is ignored; one under another key too.
         let mut blobs2 = HashMap::new();
-        blobs2.insert(
-            "lease:workflow_run:other".to_string(),
-            seal_lease_beat(&k, &good).unwrap(),
-        );
+        blobs2.insert("lease:workflow_run:other".to_string(), seal_lease_beat(&k, &good).unwrap());
         blobs2.insert(
             lease_presence_slot(LeaseScope::WorkflowRun, "run"),
             seal_lease_beat(&ring("other"), &good).unwrap(),
@@ -317,10 +267,7 @@ mod tests {
 
         // Uncertified holder: accepted as unverified.
         let mut blobs3 = HashMap::new();
-        blobs3.insert(
-            lease_presence_slot(LeaseScope::WorkflowRun, "run"),
-            seal_lease_beat(&k, &unsigned).unwrap(),
-        );
+        blobs3.insert(lease_presence_slot(LeaseScope::WorkflowRun, "run"), seal_lease_beat(&k, &unsigned).unwrap());
         let o = open_lease_beats(&blobs3, &k, 10_000, |_| None);
         assert_eq!(o[0].1, BeatTrust::Unverified);
         // The relay sees only ciphertext.
@@ -333,46 +280,34 @@ mod tests {
     /// future timestamp was clamped to "now" on every read, so it never aged.
     #[test]
     fn a_future_dated_beat_cannot_keep_a_dead_lease_alive() {
-        use ligus_core::lease::{
-            fold_claim, lease_health, CoordinatorLease, LeaseClaimReason, LeaseHealth, LeaseTable,
-        };
+        use ligus_core::lease::{fold_claim, lease_health, CoordinatorLease, LeaseClaimReason, LeaseHealth, LeaseTable};
         let k = ring("room secret");
         let kp = SigningKeypair::generate().unwrap();
         let holder = Uuid::new_v4();
         let pk = kp.public_key_bytes().to_vec();
         let t0: i64 = 1_800_000_000_000;
         let mut table = LeaseTable::new();
-        fold_claim(
-            &mut table,
-            &CoordinatorLease {
-                scope: LeaseScope::WorkflowRun,
-                scope_id: "run".into(),
-                holder,
-                epoch: 1,
-                lease_ms: 60_000,
-                reason: LeaseClaimReason::Initial,
-                claimed_at: ligus_core::Timestamp::from_unix_seconds(t0 / 1000),
-            },
-        );
+        fold_claim(&mut table, &CoordinatorLease {
+            scope: LeaseScope::WorkflowRun,
+            scope_id: "run".into(),
+            holder,
+            epoch: 1,
+            lease_ms: 60_000,
+            reason: LeaseClaimReason::Initial,
+            claimed_at: ligus_core::Timestamp::from_unix_seconds(t0 / 1000),
+        });
         let state = table.into_values().next().unwrap();
         let mut b = beat(holder, 1, 1);
         b.at_ms = t0 + 365 * 24 * 3600 * 1000;
         let mut blobs = HashMap::new();
-        blobs.insert(
-            lease_presence_slot(LeaseScope::WorkflowRun, "run"),
-            seal_lease_beat(&k, &b.sign(&kp)).unwrap(),
-        );
+        blobs.insert(lease_presence_slot(LeaseScope::WorkflowRun, "run"), seal_lease_beat(&k, &b.sign(&kp)).unwrap());
         // The holder died at t0; a reader looks ten minutes later.
         let now = t0 + 10 * 60_000;
         let last = open_lease_beats(&blobs, &k, now, |_| Some(pk.clone()))
             .into_iter()
             .map(|(b, _)| (b.holder, b.epoch, b.at_ms))
             .next();
-        assert_eq!(
-            lease_health(&state, last, now),
-            LeaseHealth::Lapsed,
-            "a replayed future beat kept the lease live"
-        );
+        assert_eq!(lease_health(&state, last, now), LeaseHealth::Lapsed, "a replayed future beat kept the lease live");
     }
 
     #[test]
@@ -381,10 +316,7 @@ mod tests {
         let h = Uuid::new_v4();
         assert!(s.record(beat(h, 1, 1), BeatTrust::Verified));
         assert!(s.record(beat(h, 1, 2), BeatTrust::Verified));
-        assert!(
-            !s.record(beat(h, 1, 1), BeatTrust::Verified),
-            "an older beat is not a fresh receipt"
-        );
+        assert!(!s.record(beat(h, 1, 1), BeatTrust::Verified), "an older beat is not a fresh receipt");
         assert!(s.record(beat(h, 2, 1), BeatTrust::Verified));
         assert_eq!(s.last(LeaseScope::WorkflowRun, "run").map(|x| x.1), Some(2));
     }
@@ -393,18 +325,12 @@ mod tests {
     async fn publish_and_list_through_the_relay() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, crate::test_relay::router())
-                .await
-                .unwrap()
-        });
+        tokio::spawn(async move { axum::serve(listener, crate::test_relay::router()).await.unwrap() });
         let relay = RelayClient::new(format!("http://{addr}"));
         let k = ring("room secret");
         let kp = SigningKeypair::generate().unwrap();
         let h = Uuid::new_v4();
-        publish_lease_beat(&relay, "room-a", &k, &beat(h, 1, 1).sign(&kp))
-            .await
-            .unwrap();
+        publish_lease_beat(&relay, "room-a", &k, &beat(h, 1, 1).sign(&kp)).await.unwrap();
         let blobs = relay.list_presence("room-a").await.unwrap();
         let pk = kp.public_key_bytes().to_vec();
         let got = open_lease_beats(&blobs, &k, i64::MAX, |_| Some(pk.clone()));

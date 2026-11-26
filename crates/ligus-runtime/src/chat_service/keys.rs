@@ -22,31 +22,20 @@ impl ChatService {
     pub(crate) fn pinned_config(
         &self,
         workspace_id: Uuid,
-    ) -> Result<(
-        Option<ligus_core::ChatSession>,
-        std::sync::Arc<ligus_core::authz::ConfigTimeline>,
-    )> {
+    ) -> Result<(Option<ligus_core::ChatSession>, std::sync::Arc<ligus_core::authz::ConfigTimeline>)> {
         let Some(pin) = self.store.workspace_pin(workspace_id)? else {
             return Err(ChatError::Unauthorized(
                 "this device has no founder pin for the workspace (join it from an invite)".into(),
             ));
         };
-        Ok(self.store.load_config(
-            workspace_id,
-            Some(&pin.founder_account.to_string()),
-            self.local_workspace_id,
-        )?)
+        Ok(self.store.load_config(workspace_id, Some(&pin.founder_account.to_string()), self.local_workspace_id)?)
     }
 
     /// Publish this device's own X25519 key-agreement key on `workspace_id`'s
     /// config log, unless the log already carries exactly that key for this
     /// device. Rotations seal only to keys published this way. Returns whether
     /// it published.
-    pub fn publish_key_agreement(
-        &mut self,
-        workspace_id: Uuid,
-        ka_public: [u8; 32],
-    ) -> Result<bool> {
+    pub fn publish_key_agreement(&mut self, workspace_id: Uuid, ka_public: [u8; 32]) -> Result<bool> {
         if self.local_workspace_id == Some(workspace_id) {
             return Ok(false);
         }
@@ -54,12 +43,7 @@ impl ChatService {
         if config.is_none() {
             return Ok(false);
         }
-        if timeline
-            .current()
-            .ka_keys
-            .get(&self.device_id)
-            .is_some_and(|k| k.as_slice() == ka_public)
-        {
+        if timeline.current().ka_keys.get(&self.device_id).is_some_and(|k| k.as_slice() == ka_public) {
             return Ok(false);
         }
         // The config log's roster must certify this device (a joiner may have
@@ -67,17 +51,9 @@ impl ChatService {
         // passkey: under rules v2 a new device of an account with one is
         // confirmed explicitly (`confirm_device`), and until then it publishes
         // no key.
-        if !timeline.current().device_trusted(self.device_id)
-            && !self.delegated
-            && self.author.account_id.is_some()
-        {
+        if !timeline.current().device_trusted(self.device_id) && !self.delegated && self.author.account_id.is_some() {
             let config_id = workspace_config_session_id(workspace_id);
-            let certified = self.store.has_device_certificate_in(
-                workspace_id,
-                config_id,
-                self.device_id,
-                self.author.account_id.unwrap_or_default(),
-            )?;
+            let certified = self.store.has_device_certificate_in(workspace_id, config_id, self.device_id, self.author.account_id.unwrap_or_default())?;
             if !certified {
                 self.publish_identity(config_id, workspace_id)?;
             }
@@ -90,10 +66,7 @@ impl ChatService {
         self.append_signed(
             workspace_config_session_id(workspace_id),
             workspace_id,
-            SessionEvent::DeviceKeyAgreementPublished {
-                device_id: self.device_id,
-                ka_public: ka_public.to_vec(),
-            },
+            SessionEvent::DeviceKeyAgreementPublished { device_id: self.device_id, ka_public: ka_public.to_vec() },
         )?;
         Ok(true)
     }
@@ -107,15 +80,11 @@ impl ChatService {
     /// behind.
     pub fn rotate_workspace_key(&mut self, workspace_id: Uuid) -> Result<RotationIssued> {
         if self.local_workspace_id == Some(workspace_id) {
-            return Err(ChatError::Unauthorized(
-                "the local workspace has no shared key".into(),
-            ));
+            return Err(ChatError::Unauthorized("the local workspace has no shared key".into()));
         }
         let (config, timeline) = self.pinned_config(workspace_id)?;
         if config.is_none() {
-            return Err(ChatError::Unauthorized(
-                "the workspace configuration hasn't synced to this device yet".into(),
-            ));
+            return Err(ChatError::Unauthorized("the workspace configuration hasn't synced to this device yet".into()));
         }
         if !timeline.current().ka_keys.contains_key(&self.device_id) {
             return Err(ChatError::Unauthorized(
@@ -127,15 +96,9 @@ impl ChatService {
         let envelope = self.append_signed(
             workspace_config_session_id(workspace_id),
             workspace_id,
-            SessionEvent::WorkspaceKeyRotated {
-                rotation: rotation.clone(),
-            },
+            SessionEvent::WorkspaceKeyRotated { rotation: rotation.clone() },
         )?;
-        Ok(RotationIssued {
-            rotation,
-            key,
-            envelope,
-        })
+        Ok(RotationIssued { rotation, key, envelope })
     }
 }
 
@@ -147,9 +110,7 @@ impl ChatService {
         workspace_id: Uuid,
         src: &crate::keyring::KeySource,
     ) -> Result<Vec<crate::keyring::DeliveredKey>> {
-        let Ok((config, timeline)) = self.pinned_config(workspace_id) else {
-            return Ok(Vec::new());
-        };
+        let Ok((config, timeline)) = self.pinned_config(workspace_id) else { return Ok(Vec::new()) };
         if config.is_none() {
             return Ok(Vec::new());
         }

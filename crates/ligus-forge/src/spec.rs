@@ -19,11 +19,7 @@ pub fn valid_host(h: &str) -> bool {
     !name.is_empty()
         && name.len() <= 253
         && name.split('.').all(|l| {
-            !l.is_empty()
-                && l.len() <= 63
-                && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-                && !l.starts_with('-')
-                && !l.ends_with('-')
+            !l.is_empty() && l.len() <= 63 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') && !l.starts_with('-') && !l.ends_with('-')
         })
 }
 
@@ -54,8 +50,7 @@ pub fn same_host(a: &str, b: &str) -> bool {
 /// not starting with `-` or `.`.
 pub fn valid_segment(s: &str) -> bool {
     (1..=100).contains(&s.len())
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
         && !s.starts_with('-')
         && !s.starts_with('.')
 }
@@ -63,12 +58,7 @@ pub fn valid_segment(s: &str) -> bool {
 /// A repository name: like a segment, but may start with `.` (`.github`),
 /// never `.` or `..`.
 pub fn valid_repo_name(s: &str) -> bool {
-    (1..=100).contains(&s.len())
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-        && s != "."
-        && s != ".."
-        && !s.starts_with('-')
+    (1..=100).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')) && s != "." && s != ".." && !s.starts_with('-')
 }
 
 /// A parsed spec: the host when a URL named one, and the repository.
@@ -83,8 +73,7 @@ pub struct RepoSpec {
 pub fn parse_repo_spec(input: &str, nested: bool) -> Result<RepoSpec> {
     let raw = input.trim();
     let bad = |m: &str| Err(ForgeError::Invalid(m.into()));
-    if raw.is_empty() || raw.len() > 300 || raw.chars().any(|c| c.is_whitespace() || c.is_control())
-    {
+    if raw.is_empty() || raw.len() > 300 || raw.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return bad("give a repository as owner/name or https://<host>/owner/name");
     }
     let (host, path) = if let Some(rest) = raw.strip_prefix("https://") {
@@ -99,10 +88,7 @@ pub fn parse_repo_spec(input: &str, nested: bool) -> Result<RepoSpec> {
         if path.contains(['?', '#']) {
             return bad("a repository URL can't carry a query or fragment");
         }
-        (
-            Some(host.strip_prefix("www.").unwrap_or(&host).to_string()),
-            path.trim_end_matches('/'),
-        )
+        (Some(host.strip_prefix("www.").unwrap_or(&host).to_string()), path.trim_end_matches('/'))
     } else if raw.contains("://") || raw.contains('@') || raw.contains(':') {
         return bad("only https://<host>/owner/name URLs (or owner/name) are accepted");
     } else {
@@ -112,23 +98,13 @@ pub fn parse_repo_spec(input: &str, nested: bool) -> Result<RepoSpec> {
     let segs: Vec<&str> = path.split('/').collect();
     let max = if nested { 20 } else { 2 };
     if segs.len() < 2 || segs.len() > max {
-        return bad(if nested {
-            "give a repository as group/name"
-        } else {
-            "give a repository as owner/name"
-        });
+        return bad(if nested { "give a repository as group/name" } else { "give a repository as owner/name" });
     }
     let (name, owner) = segs.split_last().expect("two or more");
-    if !owner.iter().all(|s| valid_segment(s))
-        || !valid_repo_name(name)
-        || owner.iter().any(|s| s.contains(".."))
-    {
+    if !owner.iter().all(|s| valid_segment(s)) || !valid_repo_name(name) || owner.iter().any(|s| s.contains("..")) {
         return bad(&format!("'{path}' isn't a valid repository name"));
     }
-    Ok(RepoSpec {
-        host,
-        repo: RepoRef::new(owner.join("/"), *name),
-    })
+    Ok(RepoSpec { host, repo: RepoRef::new(owner.join("/"), *name) })
 }
 
 /// A git remote URL (`https://[user[:pw]@]host/o/n(.git)`, `ssh://git@host[:port]/o/n`,
@@ -147,21 +123,10 @@ pub fn parse_remote(url: &str) -> Option<(String, RepoRef)> {
             return None;
         }
         let (auth_host, path) = rest.split_once('/')?;
-        let host = auth_host
-            .rsplit('@')
-            .next()?
-            .split(':')
-            .next()?
-            .to_ascii_lowercase();
+        let host = auth_host.rsplit('@').next()?.split(':').next()?.to_ascii_lowercase();
         (host, path.to_string())
-    } else if let Some((left, path)) = url
-        .split_once(':')
-        .filter(|(l, _)| !l.contains('/') && l.len() > 1)
-    {
-        (
-            left.rsplit('@').next()?.to_ascii_lowercase(),
-            path.to_string(),
-        )
+    } else if let Some((left, path)) = url.split_once(':').filter(|(l, _)| !l.contains('/') && l.len() > 1) {
+        (left.rsplit('@').next()?.to_ascii_lowercase(), path.to_string())
     } else {
         return None;
     };
@@ -192,10 +157,7 @@ pub fn encode_segment(s: &str) -> String {
 
 /// Percent-encode a file path, keeping `/` between segments.
 pub fn encode_path(p: &str) -> String {
-    p.split('/')
-        .map(encode_segment)
-        .collect::<Vec<_>>()
-        .join("/")
+    p.split('/').map(encode_segment).collect::<Vec<_>>().join("/")
 }
 
 /// A repository-relative file path an agent may ask for: no `..`, no
@@ -215,11 +177,7 @@ pub fn valid_git_ref(r: &str) -> bool {
         && r.len() <= 255
         && !r.starts_with('-')
         && !r.contains("..")
-        && !r.chars().any(|c| {
-            c.is_whitespace()
-                || c.is_control()
-                || matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\')
-        })
+        && !r.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\'))
 }
 
 #[cfg(test)]
@@ -229,34 +187,11 @@ mod tests {
     #[test]
     fn specs_accept_any_https_host_and_nothing_else() {
         let ok = |s: &str, nested: bool| parse_repo_spec(s, nested).unwrap();
-        assert_eq!(
-            ok("acme/web", false),
-            RepoSpec {
-                host: None,
-                repo: RepoRef::new("acme", "web")
-            }
-        );
-        assert_eq!(
-            ok("https://codeberg.org/forgejo/forgejo.git/", false)
-                .host
-                .as_deref(),
-            Some("codeberg.org")
-        );
-        assert_eq!(
-            ok("https://www.github.com/a/.github", false),
-            RepoSpec {
-                host: Some("github.com".into()),
-                repo: RepoRef::new("a", ".github")
-            }
-        );
-        assert_eq!(
-            ok("https://gitlab.example.com:8443/grp/sub/proj", true).repo,
-            RepoRef::new("grp/sub", "proj")
-        );
-        assert!(
-            parse_repo_spec("https://gitlab.com/grp/sub/proj", false).is_err(),
-            "nesting only where the forge has groups"
-        );
+        assert_eq!(ok("acme/web", false), RepoSpec { host: None, repo: RepoRef::new("acme", "web") });
+        assert_eq!(ok("https://codeberg.org/forgejo/forgejo.git/", false).host.as_deref(), Some("codeberg.org"));
+        assert_eq!(ok("https://www.github.com/a/.github", false), RepoSpec { host: Some("github.com".into()), repo: RepoRef::new("a", ".github") });
+        assert_eq!(ok("https://gitlab.example.com:8443/grp/sub/proj", true).repo, RepoRef::new("grp/sub", "proj"));
+        assert!(parse_repo_spec("https://gitlab.com/grp/sub/proj", false).is_err(), "nesting only where the forge has groups");
         for bad in [
             "",
             "ligus",
@@ -278,76 +213,32 @@ mod tests {
             "https://bad_host/a/b",
             "https://h/../a/b",
         ] {
-            assert!(
-                parse_repo_spec(bad, true).is_err(),
-                "{bad:?} should be refused"
-            );
+            assert!(parse_repo_spec(bad, true).is_err(), "{bad:?} should be refused");
         }
     }
 
     #[test]
     fn remotes_parse_drop_credentials_and_keep_subgroups() {
-        let (h, r) =
-            parse_remote("https://x-access-token:SECRET@github.com/Owner/Repo.git").unwrap();
-        assert_eq!(
-            (h.as_str(), r.full_name().as_str()),
-            ("github.com", "Owner/Repo")
-        );
+        let (h, r) = parse_remote("https://x-access-token:SECRET@github.com/Owner/Repo.git").unwrap();
+        assert_eq!((h.as_str(), r.full_name().as_str()), ("github.com", "Owner/Repo"));
         assert!(!format!("{r:?}").contains("SECRET"));
-        assert_eq!(
-            parse_remote("git@gitlab.com:grp/sub/p.git").unwrap().1,
-            RepoRef::new("grp/sub", "p")
-        );
-        assert_eq!(
-            parse_remote("ssh://git@codeberg.org:22/o/n").unwrap().0,
-            "codeberg.org"
-        );
+        assert_eq!(parse_remote("git@gitlab.com:grp/sub/p.git").unwrap().1, RepoRef::new("grp/sub", "p"));
+        assert_eq!(parse_remote("ssh://git@codeberg.org:22/o/n").unwrap().0, "codeberg.org");
         assert!(parse_remote("file:///tmp/o/n.git").is_none());
         assert!(parse_remote("/srv/git/o/n").is_none());
         // git connects to the host before `#`/`?`, never the one after `@`.
-        for spoof in [
-            "https://evil.example#@github.com/o/n",
-            "https://evil.example?@github.com/o/n",
-            "evil.example#@github.com:o/n",
-        ] {
-            assert!(
-                parse_remote(spoof).is_none_or(|(h, _)| h != "github.com"),
-                "{spoof}"
-            );
+        for spoof in ["https://evil.example#@github.com/o/n", "https://evil.example?@github.com/o/n", "evil.example#@github.com:o/n"] {
+            assert!(parse_remote(spoof).is_none_or(|(h, _)| h != "github.com"), "{spoof}");
         }
     }
 
     #[test]
     fn hosts_paths_and_refs_are_validated() {
-        assert!(
-            valid_host("git.example.com:3000")
-                && !valid_host("a..b")
-                && !valid_host("x:abc")
-                && !valid_host("-x.com")
-        );
-        assert!(
-            same_host("ssh.github.com", "github.com")
-                && same_host("www.codeberg.org", "codeberg.org:443")
-                && !same_host("gitlab.com", "github.com")
-        );
-        assert_eq!(
-            host_of("https://u@Git.Example.com:8443/x").as_deref(),
-            Some("git.example.com:8443")
-        );
-        assert!(
-            valid_file_path("src/lib.rs")
-                && !valid_file_path("../x")
-                && !valid_file_path("/etc")
-                && !valid_file_path("a//b")
-        );
-        assert!(
-            valid_git_ref("main")
-                && valid_git_ref("v1.2.3")
-                && valid_git_ref("abc123")
-                && !valid_git_ref("-x")
-                && !valid_git_ref("a..b")
-                && !valid_git_ref("a b")
-        );
+        assert!(valid_host("git.example.com:3000") && !valid_host("a..b") && !valid_host("x:abc") && !valid_host("-x.com"));
+        assert!(same_host("ssh.github.com", "github.com") && same_host("www.codeberg.org", "codeberg.org:443") && !same_host("gitlab.com", "github.com"));
+        assert_eq!(host_of("https://u@Git.Example.com:8443/x").as_deref(), Some("git.example.com:8443"));
+        assert!(valid_file_path("src/lib.rs") && !valid_file_path("../x") && !valid_file_path("/etc") && !valid_file_path("a//b"));
+        assert!(valid_git_ref("main") && valid_git_ref("v1.2.3") && valid_git_ref("abc123") && !valid_git_ref("-x") && !valid_git_ref("a..b") && !valid_git_ref("a b"));
         assert_eq!(encode_segment("grp/sub"), "grp%2Fsub");
         assert_eq!(encode_path("a b/c.rs"), "a%20b/c.rs");
     }

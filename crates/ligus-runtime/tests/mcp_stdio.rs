@@ -27,14 +27,8 @@ async fn refused_without_sandbox(registry: &McpRegistry) -> bool {
     if !ligus_runtime::executor::skip_without_sandbox("stdio MCP round trip") {
         return false;
     }
-    let err = registry
-        .list_tools("fixture")
-        .await
-        .expect_err("no sandbox, no stdio MCP server");
-    assert!(
-        matches!(&err, McpError::Transport(m) if m.contains("no agent sandbox")),
-        "{err:?}"
-    );
+    let err = registry.list_tools("fixture").await.expect_err("no sandbox, no stdio MCP server");
+    assert!(matches!(&err, McpError::Transport(m) if m.contains("no agent sandbox")), "{err:?}");
     true
 }
 
@@ -74,9 +68,7 @@ async fn stdio_disabled_server_stays_inert() {
         Err(McpError::Disabled)
     ));
     assert!(matches!(
-        registry
-            .call_tool("fixture", "echo", &json!({ "msg": "x" }))
-            .await,
+        registry.call_tool("fixture", "echo", &json!({ "msg": "x" })).await,
         Err(McpError::Disabled)
     ));
 }

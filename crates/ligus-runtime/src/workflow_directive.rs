@@ -10,13 +10,7 @@ use uuid::Uuid;
 
 /// Roster lookup for rendering a stage's agent by name.
 fn agent_name_in(session: &ChatSession) -> impl Fn(Uuid) -> Option<String> + '_ {
-    move |id| {
-        session
-            .workspace_agents
-            .iter()
-            .find(|a| a.id == id)
-            .map(|a| a.name.clone())
-    }
+    move |id| session.workspace_agents.iter().find(|a| a.id == id).map(|a| a.name.clone())
 }
 
 /// The lenient JSON shape agents emit. Friendlier than the wire DTO: stages
@@ -159,11 +153,7 @@ pub fn definition_from_directive(
                                     .collect();
                                 format!(
                                     "stage {id:?} names unknown agent {agent_name:?} (roster: {})",
-                                    if roster.is_empty() {
-                                        "empty".into()
-                                    } else {
-                                        roster.join(", ")
-                                    }
+                                    if roster.is_empty() { "empty".into() } else { roster.join(", ") }
                                 )
                             })?,
                     ),
@@ -183,9 +173,9 @@ pub fn definition_from_directive(
                     Some(DirectiveReject::Word(w)) => {
                         return Err(format!("gate {id:?}: unknown onReject {w:?}"))
                     }
-                    Some(DirectiveReject::Retry { retry_from }) => wf::GateRejectPolicy::RouteTo {
-                        node: retry_from.clone(),
-                    },
+                    Some(DirectiveReject::Retry { retry_from }) => {
+                        wf::GateRejectPolicy::RouteTo { node: retry_from.clone() }
+                    }
                 },
             },
             Some(other) => return Err(format!("stage {id:?}: unknown kind {other:?}")),
@@ -199,32 +189,22 @@ pub fn definition_from_directive(
             y: None,
         });
     }
-    let revised =
-        match dw
-            .revises
-            .as_deref()
-            .map(str::trim)
-            .filter(|r| !r.is_empty())
-        {
-            None => None,
-            Some(target) => Some(
-                session
-                    .workflow_definitions
-                    .iter()
-                    .find(|d| d.id.to_string() == target || d.name.eq_ignore_ascii_case(target))
-                    .ok_or_else(|| {
-                        let names: Vec<&str> = session
-                            .workflow_definitions
-                            .iter()
-                            .map(|d| d.name.as_str())
-                            .collect();
-                        format!(
+    let revised = match dw.revises.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        None => None,
+        Some(target) => Some(
+            session
+                .workflow_definitions
+                .iter()
+                .find(|d| d.id.to_string() == target || d.name.eq_ignore_ascii_case(target))
+                .ok_or_else(|| {
+                    let names: Vec<&str> = session.workflow_definitions.iter().map(|d| d.name.as_str()).collect();
+                    format!(
                         "\"revises\" names no workflow in this chat ({target:?}; workflows: {})",
                         if names.is_empty() { "none".into() } else { names.join(", ") }
                     )
-                    })?,
-            ),
-        };
+                })?,
+        ),
+    };
     if dw.name.trim().is_empty() {
         return Err("a workflow needs a \"name\"".into());
     }
@@ -261,8 +241,7 @@ pub fn file_workflow_proposal(
     let body = wf::describe_definition(&def, &agent_name_in(session));
     let mut proposal = ActionProposal::workflow(title.clone(), author_actor_id, body, def);
     proposal.producing_agent_id = producing_agent_id;
-    svc.upsert_proposal(session.id, workspace_id, proposal)
-        .map_err(|e| e.to_string())?;
+    svc.upsert_proposal(session.id, workspace_id, proposal).map_err(|e| e.to_string())?;
     Ok(title)
 }
 
@@ -280,9 +259,6 @@ pub fn slug(name: &str) -> String {
         }
     }
     let out = out.trim_end_matches('-').to_string();
-    if out.is_empty() {
-        "stage".into()
-    } else {
-        out
-    }
+    if out.is_empty() { "stage".into() } else { out }
 }
+

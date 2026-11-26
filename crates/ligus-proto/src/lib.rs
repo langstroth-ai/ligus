@@ -246,11 +246,7 @@ pub struct ProposalDto {
     #[ts(as = "Option<String>", optional)]
     pub author_kind: String,
     /// The author's display name (`@coder`, a person's name).
-    #[serde(
-        default,
-        skip_serializing_if = "String::is_empty",
-        serialize_with = "crate::names::ser_clean"
-    )]
+    #[serde(default, skip_serializing_if = "String::is_empty", serialize_with = "crate::names::ser_clean")]
     #[ts(as = "Option<String>", optional)]
     pub author_name: String,
     /// Who signed it: "agent" (the agent's own key), "host" (a host device
@@ -309,11 +305,7 @@ pub struct ProposalDto {
     #[ts(optional)]
     pub archived_at: Option<String>,
     /// Who archived it (the name of the account on the signed event).
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::names::ser_clean_opt"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "crate::names::ser_clean_opt")]
     #[ts(optional)]
     pub archived_by: Option<String>,
     /// When it settled (RFC 3339; the settling event's own time).

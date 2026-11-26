@@ -10,10 +10,7 @@ use base64::Engine as _;
 use ligus_core::crypto::{device_id_for, SigAlg, SigningKeypair};
 use ligus_core::e2ee::KeyAgreementKeypair;
 use ligus_core::match_code::{self as mc, hex, MailboxKeys, MatchKind, Transcript};
-use ligus_runtime::approval_mailbox::{
-    self as am, ApprovalAddress, MailboxAuth, MailboxClient, RequestSpec, Requester,
-    RequesterEvent, Signer, Verified,
-};
+use ligus_runtime::approval_mailbox::{self as am, ApprovalAddress, MailboxAuth, MailboxClient, RequestSpec, Requester, RequesterEvent, Signer, Verified};
 use ligus_runtime::box_admission::JoinRequest;
 use sha2::Digest as _;
 
@@ -24,9 +21,7 @@ fn b64(b: &[u8]) -> String {
 }
 
 fn unb64(s: &str) -> Vec<u8> {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(s)
-        .unwrap()
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).unwrap()
 }
 
 fn rand32() -> [u8; 32] {
@@ -47,13 +42,7 @@ impl BoxDev {
         let key = SigningKeypair::generate().unwrap();
         let ka = KeyAgreementKeypair::generate().unwrap();
         let pk = key.public_key_bytes();
-        let request = JoinRequest::new(
-            Uuid::new_v4(),
-            device_id_for(SigAlg::Ed25519, &pk),
-            &pk,
-            &ka.public_key_bytes(),
-            label,
-        );
+        let request = JoinRequest::new(Uuid::new_v4(), device_id_for(SigAlg::Ed25519, &pk), &pk, &ka.public_key_bytes(), label);
         Self { key, ka, request }
     }
     fn spec(&self) -> RequestSpec {
@@ -110,25 +99,15 @@ async fn world() -> World {
     let phone = ligus_core::testkit::Phone::new();
     let account = {
         let mut desk = open_service(&h.desktop).unwrap();
-        desk.certify_phone(ws, phone.device_id, &phone.public_key())
-            .unwrap();
+        desk.certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
         desk.author().account_id.unwrap()
     };
     sync_once(&h.desktop).await.unwrap();
     kick_until(&h, "the phone's certificate on the box", || {
-        h.handle.shared.lock().workspace_roster(ws).is_ok_and(|r| {
-            r.devices
-                .get(&phone.device_id)
-                .is_some_and(|d| d.phone && !d.revoked)
-        })
+        h.handle.shared.lock().workspace_roster(ws).is_ok_and(|r| r.devices.get(&phone.device_id).is_some_and(|d| d.phone && !d.revoked))
     })
     .await;
-    let keys = h
-        .handle
-        .shared
-        .lock()
-        .approval_epoch_keys(ws, &crate::key_source(&h.handle.shared.cfg).unwrap())
-        .unwrap();
+    let keys = h.handle.shared.lock().approval_epoch_keys(ws, &crate::key_source(&h.handle.shared.cfg).unwrap()).unwrap();
     let epoch = keys.iter().max_by_key(|e| e.epoch).unwrap().clone();
     let relay = MailboxClient::new(h.desktop.relay_url.as_deref().unwrap());
     let mailbox = MailboxKeys::derive(&epoch.key).mailbox();
@@ -145,29 +124,16 @@ async fn world() -> World {
     let counter = counter.expect("the box registered the approval mailbox");
     let fk = h.handle.shared.lock().founder_pin_hex(ws).unwrap().unwrap();
     let address = ApprovalAddress::derive(relay.relay(), ws, &fk, epoch.epoch, &epoch.key, counter);
-    World {
-        h,
-        ws,
-        relay,
-        epoch,
-        address,
-        phone,
-        account,
-    }
+    World { h, ws, relay, epoch, address, phone, account }
 }
 
 impl World {
     async fn post(&self, dev: &BoxDev) -> Requester {
-        Requester::post(self.relay.clone(), &self.address, dev.spec(), None)
-            .await
-            .unwrap()
+        Requester::post(self.relay.clone(), &self.address, dev.spec(), None).await.unwrap()
     }
 
     async fn approvals(&self) -> Vec<Value> {
-        self.h.get("/v1/approvals").await["approvals"]
-            .as_array()
-            .unwrap()
-            .clone()
+        self.h.get("/v1/approvals").await["approvals"].as_array().unwrap().clone()
     }
 
     async fn approval(&self, rid: &str) -> Value {
@@ -188,22 +154,11 @@ impl World {
     }
 
     async fn msgs(&self, rid: &str, after: u64) -> Vec<Value> {
-        self.h
-            .get(&format!("/v1/approvals/{rid}/msgs?after={after}"))
-            .await["msgs"]
-            .as_array()
-            .unwrap()
-            .clone()
+        self.h.get(&format!("/v1/approvals/{rid}/msgs?after={after}")).await["msgs"].as_array().unwrap().clone()
     }
 
     async fn post_msg(&self, rid: &str, what: &str, blob: &str, to: &str) -> (u16, Value) {
-        status_of(
-            &self.h,
-            reqwest::Method::POST,
-            &format!("/v1/approvals/{rid}/{what}"),
-            Some(json!({ "blob": blob, "to": to })),
-        )
-        .await
+        status_of(&self.h, reqwest::Method::POST, &format!("/v1/approvals/{rid}/{what}"), Some(json!({ "blob": blob, "to": to }))).await
     }
 
     fn member_keys(&self) -> MailboxKeys {
@@ -223,21 +178,12 @@ impl PhoneApprover {
     /// Parse and verify the listed request's envelope itself (never the
     /// box's preview).
     fn read(row: &Value) -> Self {
-        let v = Verified::parse(row["request"].as_str().unwrap().as_bytes())
-            .expect("the request's signature verifies on the phone");
+        let v = Verified::parse(row["request"].as_str().unwrap().as_bytes()).expect("the request's signature verifies on the phone");
         assert_eq!(v.t, am::MsgType::Request);
         let request: am::RequestBody = serde_json::from_str(&v.body).unwrap();
         let code = JoinRequest::decode(&request.code).unwrap();
-        assert_eq!(
-            code.device_public_key, v.key,
-            "signed by the key the code carries"
-        );
-        Self {
-            rid: request.rid.clone(),
-            request,
-            ka: KeyAgreementKeypair::generate().unwrap(),
-            n_a: rand32(),
-        }
+        assert_eq!(code.device_public_key, v.key, "signed by the key the code carries");
+        Self { rid: request.rid.clone(), request, ka: KeyAgreementKeypair::generate().unwrap(), n_a: rand32() }
     }
 
     fn requester_ka(&self) -> [u8; 32] {
@@ -259,43 +205,25 @@ impl PhoneApprover {
             "nA": b64(&self.n_a),
             "at": ligus_core::flow::now_ms(),
         });
-        am::seal_blob(
-            &self.requester_ka(),
-            phone_envelope("open", &body, phone).as_bytes(),
-        )
-        .unwrap()
+        am::seal_blob(&self.requester_ka(), phone_envelope("open", &body, phone).as_bytes()).unwrap()
     }
 
     /// The reveal's `nR`, checked against the request's commit.
     fn reveal(&self, blob: &str) -> [u8; 32] {
-        let plain = am::open_blob(&self.ka, blob)
-            .expect("the reveal is sealed to the phone's ephemeral key");
+        let plain = am::open_blob(&self.ka, blob).expect("the reveal is sealed to the phone's ephemeral key");
         let v = Verified::parse(&plain).unwrap();
         assert_eq!(v.t, am::MsgType::Reveal);
-        assert_eq!(
-            b64(&v.key),
-            b64(&JoinRequest::decode(&self.request.code)
-                .unwrap()
-                .device_public_key),
-            "signed by the requesting box"
-        );
+        assert_eq!(b64(&v.key), b64(&JoinRequest::decode(&self.request.code).unwrap().device_public_key), "signed by the requesting box");
         let body: am::RevealBody = serde_json::from_str(&v.body).unwrap();
         let n_r: [u8; 32] = unb64(&body.n_r).try_into().unwrap();
         let rid: [u8; 16] = mc::unhex(&self.rid).unwrap().try_into().unwrap();
-        assert_eq!(
-            b64(&mc::commit(&rid, &n_r)),
-            self.request.commit,
-            "the reveal matches the commit"
-        );
+        assert_eq!(b64(&mc::commit(&rid, &n_r)), self.request.commit, "the reveal matches the commit");
         n_r
     }
 
     fn code(&self, phone: &ligus_core::testkit::Phone, n_r: &[u8; 32]) -> u64 {
         let rid: [u8; 16] = mc::unhex(&self.rid).unwrap().try_into().unwrap();
-        let mailbox: [u8; 16] = mc::unhex(&self.request.mailbox)
-            .unwrap()
-            .try_into()
-            .unwrap();
+        let mailbox: [u8; 16] = mc::unhex(&self.request.mailbox).unwrap().try_into().unwrap();
         let commit: [u8; 32] = unb64(&self.request.commit).try_into().unwrap();
         let t = Transcript {
             kind: MatchKind::Box,
@@ -312,20 +240,10 @@ impl PhoneApprover {
         mc::code40(&t.digest(), n_r)
     }
 
-    fn result(
-        &self,
-        phone: &ligus_core::testkit::Phone,
-        outcome: &str,
-        grant: Option<&str>,
-    ) -> String {
+    fn result(&self, phone: &ligus_core::testkit::Phone, outcome: &str, grant: Option<&str>) -> String {
         let digest = grant.map(|g| hex(&sha2::Sha256::digest(g.as_bytes())));
-        let body =
-            json!({ "rid": self.rid, "outcome": outcome, "grant": grant, "grantDigest": digest });
-        am::seal_blob(
-            &self.requester_ka(),
-            phone_envelope("result", &body, phone).as_bytes(),
-        )
-        .unwrap()
+        let body = json!({ "rid": self.rid, "outcome": outcome, "grant": grant, "grantDigest": digest });
+        am::seal_blob(&self.requester_ka(), phone_envelope("result", &body, phone).as_bytes()).unwrap()
     }
 
     fn abort(&self, phone: &ligus_core::testkit::Phone, to: &[u8; 32]) -> String {
@@ -337,16 +255,11 @@ impl PhoneApprover {
 /// The phone's admission of the requesting box through the existing
 /// prepare, presence and commit: the sealed `ligusadmit1:` text.
 async fn admit(w: &World, request: &JoinRequest) -> String {
-    let prep =
-        w.h.send(
-            reqwest::Method::POST,
-            "/v1/admissions/prepare",
-            Some(json!({ "deviceId": w.phone.device_id, "request": request.encode() })),
-        )
+    let prep = w
+        .h
+        .send(reqwest::Method::POST, "/v1/admissions/prepare", Some(json!({ "deviceId": w.phone.device_id, "request": request.encode() })))
         .await;
-    let challenge: [u8; 32] = unb64(prep["challenge"].as_str().unwrap())
-        .try_into()
-        .unwrap();
+    let challenge: [u8; 32] = unb64(prep["challenge"].as_str().unwrap()).try_into().unwrap();
     let a = ligus_core::testkit::test_recovery_key(w.account).assert(&challenge);
     let id = prep["prepareId"].as_str().unwrap().to_string();
     let pre = w
@@ -357,21 +270,14 @@ async fn admit(w: &World, request: &JoinRequest) -> String {
             Some(json!({ "prepareId": id, "assertion": { "credentialId": a.credential_id, "authenticatorData": a.authenticator_data, "clientDataJSON": a.client_data_json, "signature": a.signature } })),
         )
         .await;
-    let sig =
-        ligus_core::crypto::sign_p256(&w.phone.key, &unb64(pre["preimage"].as_str().unwrap()));
-    let done =
-        w.h.send(
-            reqwest::Method::POST,
-            "/v1/admissions/commit",
-            Some(json!({ "prepareId": id, "signature": b64(&sig) })),
-        )
+    let sig = ligus_core::crypto::sign_p256(&w.phone.key, &unb64(pre["preimage"].as_str().unwrap()));
+    let done = w
+        .h
+        .send(reqwest::Method::POST, "/v1/admissions/commit", Some(json!({ "prepareId": id, "signature": b64(&sig) })))
         .await;
     assert_eq!(done["sealed"], json!(true));
     let code = done["code"].as_str().unwrap().to_string();
-    assert!(
-        code.starts_with(ligus_runtime::box_admission::SEALED_PREFIX),
-        "the commit hands back the sealed admission"
-    );
+    assert!(code.starts_with(ligus_runtime::box_admission::SEALED_PREFIX), "the commit hands back the sealed admission");
     code
 }
 
@@ -396,38 +302,19 @@ async fn a_phone_approves_a_box_through_serve_by_code() {
     assert_eq!(row["epoch"], json!(w.epoch.epoch));
     let seal_key: [u8; 32] = unb64(row["sealKey"].as_str().unwrap()).try_into().unwrap();
     assert_eq!(seal_key, w.address.seal_key);
-    assert!(
-        row["putAt"].as_i64().unwrap() > 0
-            && row["expiresAt"].as_i64().unwrap() > row["putAt"].as_i64().unwrap()
-    );
+    assert!(row["putAt"].as_i64().unwrap() > 0 && row["expiresAt"].as_i64().unwrap() > row["putAt"].as_i64().unwrap());
     assert!(row["workspaceName"].is_string());
     assert_eq!(row["claims"], json!([]));
     let p = PhoneApprover::read(&row);
     assert_eq!(p.rid, rid);
-    assert_eq!(
-        p.request.code,
-        dev.request.encode(),
-        "the request's code, unchanged"
-    );
+    assert_eq!(p.request.code, dev.request.encode(), "the request's code, unchanged");
 
     // One push for the request, however often it is listed.
-    kick_until(&w.h, "the push", || {
-        w.h.handle.shared.approvals.pushed().contains(&rid)
-    })
-    .await;
+    kick_until(&w.h, "the push", || w.h.handle.shared.approvals.pushed().contains(&rid)).await;
     w.approvals().await;
     w.h.handle.shared.approvals.kick.notify_one();
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        w.h.handle
-            .shared
-            .approvals
-            .pushed()
-            .iter()
-            .filter(|r| **r == rid)
-            .count(),
-        1
-    );
+    assert_eq!(w.h.handle.shared.approvals.pushed().iter().filter(|r| **r == rid).count(), 1);
 
     // Claim (to the members) and open (to the requester), sealed by the phone.
     let claim = p.claim(&w.phone, &seal_key);
@@ -438,43 +325,18 @@ async fn a_phone_approves_a_box_through_serve_by_code() {
     assert_eq!((c, v["seq"].as_u64()), (201, Some(2)), "{v}");
 
     // The relay holds the phone's bytes exactly.
-    let stored = w
-        .relay
-        .get_msgs(
-            MailboxAuth::Member(&w.member_keys()),
-            &w.address.mailbox,
-            &req.rid(),
-            0,
-            0,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        stored
-            .iter()
-            .map(|m| (m.blob.as_str(), m.to.as_str()))
-            .collect::<Vec<_>>(),
-        vec![(claim.as_str(), "members"), (open.as_str(), "requester")]
-    );
+    let stored = w.relay.get_msgs(MailboxAuth::Member(&w.member_keys()), &w.address.mailbox, &req.rid(), 0, 0).await.unwrap();
+    assert_eq!(stored.iter().map(|m| (m.blob.as_str(), m.to.as_str())).collect::<Vec<_>>(), vec![(claim.as_str(), "members"), (open.as_str(), "requester")]);
 
     // The claim shows, verified (the phone is a certified device).
     let row = w.fresh_approval(&rid).await;
-    assert_eq!(
-        row["claims"][0]["approverDeviceId"],
-        json!(w.phone.device_id)
-    );
+    assert_eq!(row["claims"][0]["approverDeviceId"], json!(w.phone.device_id));
     assert_eq!(row["claims"][0]["approverName"], "Ana's phone");
     assert_eq!(row["claims"][0]["verified"], true);
 
     // The requester answers the open with its reveal and shows the code.
     let events = req.poll(0).await.unwrap();
-    let Some(RequesterEvent::Opened {
-        code: box_code,
-        claimed,
-    }) = events.into_iter().next()
-    else {
-        panic!("no open")
-    };
+    let Some(RequesterEvent::Opened { code: box_code, claimed }) = events.into_iter().next() else { panic!("no open") };
     assert_eq!(claimed.device_id, w.phone.device_id);
 
     // The phone reads everything through the box: the claim opened for it
@@ -482,29 +344,17 @@ async fn a_phone_approves_a_box_through_serve_by_code() {
     let msgs = w.msgs(&rid, 0).await;
     assert_eq!(msgs.len(), 3);
     assert_eq!(msgs[0]["blob"], claim);
-    let plain = msgs[0]["plain"]
-        .as_str()
-        .expect("a members' blob is opened for the phone");
-    assert_eq!(
-        Verified::parse(plain.as_bytes()).unwrap().t,
-        am::MsgType::Claim
-    );
+    let plain = msgs[0]["plain"].as_str().expect("a members' blob is opened for the phone");
+    assert_eq!(Verified::parse(plain.as_bytes()).unwrap().t, am::MsgType::Claim);
     assert_eq!(msgs[1]["blob"], open);
-    assert!(
-        msgs[1]["plain"].is_null(),
-        "the open is sealed to the requester"
-    );
+    assert!(msgs[1]["plain"].is_null(), "the open is sealed to the requester");
     assert_eq!(msgs[2]["to"], "approver");
     assert!(msgs[2]["plain"].is_null(), "the box can't open the reveal");
     assert_eq!(msgs[2]["from"], "requester");
     assert!(msgs[2]["at"].as_i64().unwrap() > 0 && msgs[2]["seq"] == 3);
     assert_eq!(w.msgs(&rid, 2).await.len(), 1, "after=N");
     let n_r = p.reveal(msgs[2]["blob"].as_str().unwrap());
-    assert_eq!(
-        p.code(&w.phone, &n_r),
-        box_code.code40,
-        "both screens show the same code"
-    );
+    assert_eq!(p.code(&w.phone, &n_r), box_code.code40, "both screens show the same code");
 
     // Codes match: the phone admits the box and signs the result with the
     // admission's digest; the requester's checks 1 to 4 take it.
@@ -513,16 +363,8 @@ async fn a_phone_approves_a_box_through_serve_by_code() {
     let (c, _) = w.post_msg(&rid, "result", &result, "requester").await;
     assert_eq!(c, 201);
     let events = req.poll(0).await.unwrap();
-    let Some(RequesterEvent::Result(r)) = events.into_iter().next() else {
-        panic!("no result")
-    };
-    let checked = req
-        .check_grant(
-            &r,
-            am::GrantTarget::Box { ka: &dev.ka },
-            ligus_core::flow::now_ms(),
-        )
-        .expect("the grant passes checks 1 to 4");
+    let Some(RequesterEvent::Result(r)) = events.into_iter().next() else { panic!("no result") };
+    let checked = req.check_grant(&r, am::GrantTarget::Box { ka: &dev.ka }, ligus_core::flow::now_ms()).expect("the grant passes checks 1 to 4");
     assert!(matches!(checked, am::CheckedGrant::Box { .. }));
     w.h.handle.shutdown();
 }
@@ -549,51 +391,18 @@ async fn the_box_only_relays_what_the_phone_sealed() {
     assert_eq!(w.post_msg(&rid, "open", &claim, "members").await.0, 400);
     assert_eq!(w.post_msg(&rid, "result", &claim, "approver").await.0, 400);
     assert_eq!(w.post_msg(&rid, "claim", "", "members").await.0, 400);
-    assert_eq!(
-        w.post_msg(&rid, "claim", "not base64!", "members").await.0,
-        400
-    );
-    assert_eq!(
-        w.post_msg(&rid, "claim", &"A".repeat(am::MAX_MSG_BLOB + 4), "members")
-            .await
-            .0,
-        400
-    );
-    assert_eq!(
-        w.post_msg(&"0".repeat(32), "claim", &claim, "members")
-            .await
-            .0,
-        404,
-        "an unknown request"
-    );
-    assert_eq!(
-        w.post_msg(&rid, "reveal", &claim, "approver").await.0,
-        404,
-        "no such route"
-    );
-    assert_eq!(
-        status_of(
-            &w.h,
-            reqwest::Method::GET,
-            &format!("/v1/approvals/{}/msgs", "0".repeat(32)),
-            None
-        )
-        .await
-        .0,
-        404
-    );
+    assert_eq!(w.post_msg(&rid, "claim", "not base64!", "members").await.0, 400);
+    assert_eq!(w.post_msg(&rid, "claim", &"A".repeat(am::MAX_MSG_BLOB + 4), "members").await.0, 400);
+    assert_eq!(w.post_msg(&"0".repeat(32), "claim", &claim, "members").await.0, 404, "an unknown request");
+    assert_eq!(w.post_msg(&rid, "reveal", &claim, "approver").await.0, 404, "no such route");
+    assert_eq!(status_of(&w.h, reqwest::Method::GET, &format!("/v1/approvals/{}/msgs", "0".repeat(32)), None).await.0, 404);
 
     // A claim by a device the workspace never certified: unverified.
     let stranger = ligus_core::testkit::Phone::new();
-    let (c, _) = w
-        .post_msg(&rid, "claim", &p.claim(&stranger, &seal_key), "members")
-        .await;
+    let (c, _) = w.post_msg(&rid, "claim", &p.claim(&stranger, &seal_key), "members").await;
     assert_eq!(c, 201);
     let row = w.fresh_approval(&rid).await;
-    assert_eq!(
-        row["claims"][0]["approverDeviceId"],
-        json!(stranger.device_id)
-    );
+    assert_eq!(row["claims"][0]["approverDeviceId"], json!(stranger.device_id));
     assert_eq!(row["claims"][0]["verified"], false);
 
     // A tampered open: stored as posted, opened by nobody.
@@ -602,56 +411,21 @@ async fn the_box_only_relays_what_the_phone_sealed() {
     let last = bytes.len() - 1;
     bytes[last] ^= 1;
     let tampered = b64(&bytes);
-    assert_eq!(
-        w.post_msg(&rid, "open", &tampered, "requester").await.0,
-        201
-    );
-    let stored = w
-        .relay
-        .get_msgs(
-            MailboxAuth::Member(&w.member_keys()),
-            &w.address.mailbox,
-            &req.rid(),
-            1,
-            0,
-        )
-        .await
-        .unwrap();
+    assert_eq!(w.post_msg(&rid, "open", &tampered, "requester").await.0, 201);
+    let stored = w.relay.get_msgs(MailboxAuth::Member(&w.member_keys()), &w.address.mailbox, &req.rid(), 1, 0).await.unwrap();
     assert_eq!(stored[0].blob, tampered);
-    assert!(
-        req.poll(0).await.unwrap().is_empty(),
-        "a tampered open is nothing to the requester"
-    );
+    assert!(req.poll(0).await.unwrap().is_empty(), "a tampered open is nothing to the requester");
     assert!(req.code().is_none());
 
     // The codes didn't match: the phone ends it to the members and the requester.
-    let (c, _) = w
-        .post_msg(&rid, "abort", &p.abort(&w.phone, &seal_key), "members")
-        .await;
+    let (c, _) = w.post_msg(&rid, "abort", &p.abort(&w.phone, &seal_key), "members").await;
     assert_eq!(c, 201);
-    let (c, _) = w
-        .post_msg(
-            &rid,
-            "abort",
-            &p.abort(&w.phone, &p.requester_ka()),
-            "requester",
-        )
-        .await;
+    let (c, _) = w.post_msg(&rid, "abort", &p.abort(&w.phone, &p.requester_ka()), "requester").await;
     assert_eq!(c, 201);
     let msgs = w.msgs(&rid, 0).await;
-    let aborts: Vec<&Value> = msgs
-        .iter()
-        .filter(|m| {
-            m["plain"].as_str().is_some_and(|p| {
-                Verified::parse(p.as_bytes()).is_ok_and(|v| v.t == am::MsgType::Abort)
-            })
-        })
-        .collect();
+    let aborts: Vec<&Value> = msgs.iter().filter(|m| m["plain"].as_str().is_some_and(|p| Verified::parse(p.as_bytes()).is_ok_and(|v| v.t == am::MsgType::Abort))).collect();
     assert_eq!(aborts.len(), 1, "only the members' abort opens on the box");
-    assert!(matches!(
-        req.poll(0).await.unwrap().first(),
-        Some(RequesterEvent::Aborted { .. })
-    ));
+    assert!(matches!(req.poll(0).await.unwrap().first(), Some(RequesterEvent::Aborted { .. })));
     // Ended: listed no more (the listing is fresh after a second).
     tokio::time::sleep(Duration::from_millis(1100)).await;
     assert!(!w.approvals().await.iter().any(|a| a["rid"] == rid));
@@ -668,20 +442,11 @@ async fn a_relay_without_mailboxes_lists_nothing() {
     let bare = spawn(Router::new()).await;
     h.handle.shared.approvals.set_relay_for_test(&bare);
     // (A poll of the real relay may be in flight; the next looks at the bare one.)
-    kick_until(&h, "the box to see no mailbox routes", || {
-        h.handle.shared.approvals.no_routes()
-    })
-    .await;
+    kick_until(&h, "the box to see no mailbox routes", || h.handle.shared.approvals.no_routes()).await;
     let v = h.get("/v1/approvals").await;
     assert_eq!(v, json!({ "approvals": [] }));
     assert_eq!(h.get("/v1/approvals").await, json!({ "approvals": [] }));
-    let (c, _) = status_of(
-        &h,
-        reqwest::Method::GET,
-        &format!("/v1/approvals/{}/msgs", "a".repeat(32)),
-        None,
-    )
-    .await;
+    let (c, _) = status_of(&h, reqwest::Method::GET, &format!("/v1/approvals/{}/msgs", "a".repeat(32)), None).await;
     assert_eq!(c, 404);
     h.handle.shutdown();
 }
@@ -705,13 +470,7 @@ fn the_approval_push_carries_the_request_not_a_chat() {
         let pre = mc::message_preimage("request", &body).unwrap();
         json!({ "t": "request", "alg": "ed25519", "key": b64(&dev.key.public_key_bytes()), "body": body, "sig": b64(&dev.key.sign(&pre)) }).to_string()
     };
-    let request = am::VerifiedRequest::verify(
-        plain.as_bytes(),
-        &rid,
-        &keys.mailbox(),
-        ligus_core::flow::now_ms(),
-    )
-    .unwrap();
+    let request = am::VerifiedRequest::verify(plain.as_bytes(), &rid, &keys.mailbox(), ligus_core::flow::now_ms()).unwrap();
     let live = am::LiveRequest {
         relay: "https://relay.example".into(),
         epoch: 0,
@@ -736,9 +495,5 @@ fn the_approval_push_carries_the_request_not_a_chat() {
     assert_eq!(pt["requestKind"], "box");
     assert_eq!(pt["title"], "build-1 wants to join Acme");
     assert!(pt.get("chatId").is_none() && pt.get("preview").is_none());
-    assert_eq!(
-        content.collapse.as_deref(),
-        Some(format!("approvals:{ws}").as_str()),
-        "collapses per workspace"
-    );
+    assert_eq!(content.collapse.as_deref(), Some(format!("approvals:{ws}").as_str()), "collapses per workspace");
 }

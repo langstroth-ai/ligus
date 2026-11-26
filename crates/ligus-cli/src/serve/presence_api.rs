@@ -38,11 +38,7 @@ pub struct Pending(super::drafts::OwnedDrafts<PresenceDraft>);
 
 impl Default for Pending {
     fn default() -> Self {
-        Self(super::drafts::OwnedDrafts::new(
-            TTL,
-            PER_CALLER,
-            MAX_PENDING,
-        ))
+        Self(super::drafts::OwnedDrafts::new(TTL, PER_CALLER, MAX_PENDING))
     }
 }
 
@@ -74,8 +70,7 @@ pub async fn prepare(
         "approve" | "reject" => return Err(super::api::gone_to_phone_action("vote")),
         "lockdown_clear" => return Err(super::api::gone_to_phone_action("clearLockdown")),
         "agent_host" => {
-            let agent = uuid::Uuid::parse_str(req.target.trim())
-                .map_err(|_| ApiError::bad_request("agent id"))?;
+            let agent = uuid::Uuid::parse_str(req.target.trim()).map_err(|_| ApiError::bad_request("agent id"))?;
             let host = req.host_id.clone().unwrap_or_default();
             let mut svc = s.lock();
             svc.capture_presence(true);
@@ -110,14 +105,8 @@ pub async fn prepare(
     preview["origins"] = json!(r.policy.origins);
     preview["allowCredentials"] = json!(r.credential_ids);
     let challenge = b64url(&r.challenge);
-    let id = s
-        .presence_drafts
-        .0
-        .put(&super::api::caller().key(), draft)
-        .map_err(super::api::draft_refused)?;
-    Ok(Json(
-        json!({ "prepareId": id, "challenge": challenge, "preview": preview }),
-    ))
+    let id = s.presence_drafts.0.put(&super::api::caller().key(), draft).map_err(super::api::draft_refused)?;
+    Ok(Json(json!({ "prepareId": id, "challenge": challenge, "preview": preview })))
 }
 
 #[derive(Deserialize)]
@@ -151,8 +140,7 @@ pub async fn commit(
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
     // An invite prepared over the tunnel and committed over plain HTTP would
     // hand its code out there: refused before anything is appended.
-    if matches!(&draft.env.payload, ligus_core::SessionEvent::JoinApproved { subject, .. } if subject.starts_with("invite:"))
-    {
+    if matches!(&draft.env.payload, ligus_core::SessionEvent::JoinApproved { subject, .. } if subject.starts_with("invite:")) {
         super::identity_api::require_secret_channel(&s, peer.as_deref())?;
     }
     let a = PresenceAssertion {

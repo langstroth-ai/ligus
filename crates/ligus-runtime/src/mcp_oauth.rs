@@ -85,10 +85,7 @@ pub fn origin(url: &str) -> String {
 
 /// RFC 9728 protected-resource metadata URL for a resource server.
 pub fn well_known_protected_resource(server_url: &str) -> String {
-    format!(
-        "{}/.well-known/oauth-protected-resource",
-        origin(server_url)
-    )
+    format!("{}/.well-known/oauth-protected-resource", origin(server_url))
 }
 
 /// RFC 8414 authorization-server metadata URL for an issuer.
@@ -101,9 +98,7 @@ fn pct(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(b as char)
-            }
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -153,11 +148,7 @@ pub fn authorize_url(
     scope: &str,
     resource: &str,
 ) -> String {
-    let sep = if authorization_endpoint.contains('?') {
-        '&'
-    } else {
-        '?'
-    };
+    let sep = if authorization_endpoint.contains('?') { '&' } else { '?' };
     format!(
         "{authorization_endpoint}{sep}response_type=code&client_id={}&redirect_uri={}\
          &code_challenge={}&code_challenge_method=S256&state={}&scope={}&resource={}",
@@ -186,9 +177,7 @@ pub struct AsMetadata {
 /// malicious MCP server must not be able to name `file:`, a custom app
 /// scheme, or a plain-http host.
 pub fn endpoint_allowed(url: &str) -> bool {
-    let Ok(u) = reqwest::Url::parse(url) else {
-        return false;
-    };
+    let Ok(u) = reqwest::Url::parse(url) else { return false };
     match u.scheme() {
         "https" => u.host_str().is_some(),
         "http" => matches!(u.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")),
@@ -199,16 +188,10 @@ pub fn endpoint_allowed(url: &str) -> bool {
 /// Refuse authorization-server metadata with an endpoint [`endpoint_allowed`]
 /// rejects.
 pub fn check_metadata(meta: &AsMetadata) -> Result<(), OAuthError> {
-    let eps = [
-        Some(&meta.authorization_endpoint),
-        Some(&meta.token_endpoint),
-        meta.registration_endpoint.as_ref(),
-    ];
+    let eps = [Some(&meta.authorization_endpoint), Some(&meta.token_endpoint), meta.registration_endpoint.as_ref()];
     for ep in eps.into_iter().flatten() {
         if !endpoint_allowed(ep) {
-            return Err(OAuthError::Protocol(format!(
-                "refusing a non-https OAuth endpoint from the server: {ep}"
-            )));
+            return Err(OAuthError::Protocol(format!("refusing a non-https OAuth endpoint from the server: {ep}")));
         }
     }
     Ok(())
@@ -334,9 +317,7 @@ pub async fn refresh(
     refresh_token: &str,
 ) -> Result<TokenResponse, OAuthError> {
     if !endpoint_allowed(token_endpoint) {
-        return Err(OAuthError::Protocol(format!(
-            "refusing a non-https token endpoint: {token_endpoint}"
-        )));
+        return Err(OAuthError::Protocol(format!("refusing a non-https token endpoint: {token_endpoint}")));
     }
     let http = oauth_http();
     let mut form = vec![
@@ -354,10 +335,7 @@ pub async fn refresh(
         .await
         .map_err(|e| OAuthError::Transport(e.to_string()))?;
     if !resp.status().is_success() {
-        return Err(OAuthError::Protocol(format!(
-            "refresh returned {}",
-            resp.status()
-        )));
+        return Err(OAuthError::Protocol(format!("refresh returned {}", resp.status())));
     }
     resp.json::<TokenResponse>()
         .await
@@ -367,11 +345,7 @@ pub async fn refresh(
 /// Discover the authorization server: protected-resource metadata → issuer →
 /// AS metadata. Falls back to treating the server's own origin as the issuer.
 async fn discover(http: &reqwest::Client, server_url: &str) -> Result<AsMetadata, OAuthError> {
-    let issuer = match http
-        .get(well_known_protected_resource(server_url))
-        .send()
-        .await
-    {
+    let issuer = match http.get(well_known_protected_resource(server_url)).send().await {
         Ok(r) if r.status().is_success() => r
             .json::<ProtectedResourceMetadata>()
             .await
@@ -405,10 +379,7 @@ async fn register_client(
     redirect_uri: &str,
     scope: &str,
 ) -> Result<String, OAuthError> {
-    let endpoint = meta
-        .registration_endpoint
-        .as_ref()
-        .ok_or(OAuthError::NeedsClientId)?;
+    let endpoint = meta.registration_endpoint.as_ref().ok_or(OAuthError::NeedsClientId)?;
     let body = serde_json::json!({
         "client_name": "Ligus",
         "redirect_uris": [redirect_uri],
@@ -424,15 +395,9 @@ async fn register_client(
         .await
         .map_err(|e| OAuthError::Transport(e.to_string()))?;
     if !resp.status().is_success() {
-        return Err(OAuthError::Protocol(format!(
-            "registration returned {}",
-            resp.status()
-        )));
+        return Err(OAuthError::Protocol(format!("registration returned {}", resp.status())));
     }
-    let v: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| OAuthError::Protocol(e.to_string()))?;
+    let v: serde_json::Value = resp.json().await.map_err(|e| OAuthError::Protocol(e.to_string()))?;
     v.get("client_id")
         .and_then(|c| c.as_str())
         .map(str::to_string)
@@ -446,15 +411,9 @@ async fn await_redirect(
     expected_state: &str,
 ) -> Result<String, OAuthError> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let (mut stream, _) = listener
-        .accept()
-        .await
-        .map_err(|e| OAuthError::Io(e.to_string()))?;
+    let (mut stream, _) = listener.accept().await.map_err(|e| OAuthError::Io(e.to_string()))?;
     let mut buf = [0u8; 4096];
-    let n = stream
-        .read(&mut buf)
-        .await
-        .map_err(|e| OAuthError::Io(e.to_string()))?;
+    let n = stream.read(&mut buf).await.map_err(|e| OAuthError::Io(e.to_string()))?;
     let req = String::from_utf8_lossy(&buf[..n]);
     let query = req
         .lines()
@@ -482,9 +441,7 @@ async fn await_redirect(
     let _ = stream.shutdown().await;
 
     if state.as_deref() != Some(expected_state) {
-        return Err(OAuthError::Protocol(
-            "state mismatch (possible CSRF)".into(),
-        ));
+        return Err(OAuthError::Protocol("state mismatch (possible CSRF)".into()));
     }
     code.ok_or_else(|| OAuthError::Protocol("no authorization code in redirect".into()))
 }
@@ -517,10 +474,7 @@ async fn exchange_code(
         .await
         .map_err(|e| OAuthError::Transport(e.to_string()))?;
     if !resp.status().is_success() {
-        return Err(OAuthError::Protocol(format!(
-            "token endpoint returned {}",
-            resp.status()
-        )));
+        return Err(OAuthError::Protocol(format!("token endpoint returned {}", resp.status())));
     }
     resp.json::<TokenResponse>()
         .await
@@ -548,36 +502,21 @@ mod tests {
             "http://evil.example/token",
             "not a url",
         ] {
-            let m = AsMetadata {
-                authorization_endpoint: bad.into(),
-                ..ok.clone()
-            };
+            let m = AsMetadata { authorization_endpoint: bad.into(), ..ok.clone() };
             assert!(check_metadata(&m).is_err(), "authorization_endpoint {bad}");
-            let m = AsMetadata {
-                token_endpoint: bad.into(),
-                ..ok.clone()
-            };
+            let m = AsMetadata { token_endpoint: bad.into(), ..ok.clone() };
             assert!(check_metadata(&m).is_err(), "token_endpoint {bad}");
-            let m = AsMetadata {
-                registration_endpoint: Some(bad.into()),
-                ..ok.clone()
-            };
+            let m = AsMetadata { registration_endpoint: Some(bad.into()), ..ok.clone() };
             assert!(check_metadata(&m).is_err(), "registration_endpoint {bad}");
         }
-        assert!(
-            endpoint_allowed("http://127.0.0.1:8080/token"),
-            "local development"
-        );
+        assert!(endpoint_allowed("http://127.0.0.1:8080/token"), "local development");
     }
 
     #[test]
     fn pkce_challenge_is_s256_base64url() {
         // RFC 7636 Appendix B worked example.
         let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-        assert_eq!(
-            pkce_challenge(verifier),
-            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-        );
+        assert_eq!(pkce_challenge(verifier), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
     }
 
     #[test]
@@ -591,10 +530,7 @@ mod tests {
 
     #[test]
     fn origin_strips_path() {
-        assert_eq!(
-            origin("https://mcp.linear.app/sse"),
-            "https://mcp.linear.app"
-        );
+        assert_eq!(origin("https://mcp.linear.app/sse"), "https://mcp.linear.app");
         assert_eq!(origin("https://h:8443/a/b?x=1"), "https://h:8443");
         assert_eq!(origin("https://h"), "https://h");
     }
@@ -629,10 +565,7 @@ mod tests {
         assert!(u.contains("scope=read%20write"));
         assert!(u.contains("resource=https%3A%2F%2Fmcp.linear.app%2Fsse"));
         // Appends with & when the endpoint already has a query.
-        assert!(
-            authorize_url("https://a/x?foo=1", "c", "r", "ch", "s", "sc", "rs")
-                .contains("?foo=1&response_type=code")
-        );
+        assert!(authorize_url("https://a/x?foo=1", "c", "r", "ch", "s", "sc", "rs").contains("?foo=1&response_type=code"));
     }
 
     #[test]

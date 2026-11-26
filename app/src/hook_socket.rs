@@ -24,13 +24,7 @@ impl LigusHost for HookHost {
 
     fn ask_posted(&self, chat_id: Uuid, ask: &HumanAsk) {
         let _ = self.app.emit("workspace://synced", 1);
-        crate::notices::ask_posted(
-            &self.app,
-            &self.app.state::<AppState>(),
-            chat_id,
-            ask.turn_id,
-            ask.ask_id,
-        );
+        crate::notices::ask_posted(&self.app, &self.app.state::<AppState>(), chat_id, ask.turn_id, ask.ask_id);
     }
 }
 

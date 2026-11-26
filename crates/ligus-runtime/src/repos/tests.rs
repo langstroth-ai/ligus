@@ -10,38 +10,20 @@ use proptest::prelude::*;
 const WEFIT: &str = "github.com/zazulam/wefit";
 
 fn wefit() -> WorkspaceRepo {
-    WorkspaceRepo {
-        id: repo_id(WEFIT),
-        canonical: WEFIT.into(),
-        display_name: "WeFit".into(),
-        forge_kind: "github".into(),
-        default_branch: "main".into(),
-        root_commit: None,
-        scratch: false,
-    }
+    WorkspaceRepo { id: repo_id(WEFIT), canonical: WEFIT.into(), display_name: "WeFit".into(), forge_kind: "github".into(), default_branch: "main".into(), root_commit: None, scratch: false }
 }
 
 fn roster(repos: &[WorkspaceRepo]) -> RosterState {
     let mut r = RosterState::default();
     for x in repos {
-        r.repos.insert(
-            x.id,
-            RepoEntry {
-                repo: x.clone(),
-                removed: false,
-            },
-        );
+        r.repos.insert(x.id, RepoEntry { repo: x.clone(), removed: false });
     }
     r
 }
 
 fn chat(ws: Uuid, repo: Option<Uuid>) -> ChatSession {
     let mut s = ChatSession::new("c", ws, "anthropic");
-    s.repo = repo.map(|r| ChatRepo {
-        repo_id: Some(r),
-        base_branch: String::new(),
-        base_commit: None,
-    });
+    s.repo = repo.map(|r| ChatRepo { repo_id: Some(r), base_branch: String::new(), base_commit: None });
     s
 }
 
@@ -63,56 +45,17 @@ fn env() -> Env {
     let seed = t.path().join("seed");
     repo_with_origin(&seed, None);
     let forge = t.path().join("forge.git");
-    sh(
-        t.path(),
-        &[
-            "clone",
-            "-q",
-            "--bare",
-            &seed.to_string_lossy(),
-            &forge.to_string_lossy(),
-        ],
-    );
+    sh(t.path(), &["clone", "-q", "--bare", &seed.to_string_lossy(), &forge.to_string_lossy()]);
     let checkout = t.path().join("apps/WeFit");
     std::fs::create_dir_all(checkout.parent().unwrap()).unwrap();
-    sh(
-        t.path(),
-        &[
-            "clone",
-            "-q",
-            &forge.to_string_lossy(),
-            &checkout.to_string_lossy(),
-        ],
-    );
+    sh(t.path(), &["clone", "-q", &forge.to_string_lossy(), &checkout.to_string_lossy()]);
     sh(&checkout, &["config", "user.email", "t@example.com"]);
     sh(&checkout, &["config", "user.name", "t"]);
     sh(&checkout, &["remote", "rename", "origin", "forge"]);
-    sh(
-        &checkout,
-        &[
-            "remote",
-            "add",
-            "origin",
-            "git@github.com:zazulam/WeFit.git",
-        ],
-    );
+    sh(&checkout, &["remote", "add", "origin", "git@github.com:zazulam/WeFit.git"]);
     sh(&checkout, &["fetch", "-q", "forge"]);
-    sh(
-        &checkout,
-        &[
-            "update-ref",
-            "refs/remotes/origin/main",
-            "refs/remotes/forge/main",
-        ],
-    );
-    Env {
-        _t: t,
-        store: EventStore::open_in_memory().unwrap(),
-        ws: Uuid::new_v4(),
-        me: Uuid::new_v4(),
-        checkout,
-        forge,
-    }
+    sh(&checkout, &["update-ref", "refs/remotes/origin/main", "refs/remotes/forge/main"]);
+    Env { _t: t, store: EventStore::open_in_memory().unwrap(), ws: Uuid::new_v4(), me: Uuid::new_v4(), checkout, forge }
 }
 
 const DIFF_A: &str = "diff --git a/a.txt b/a.txt\nnew file mode 100644\n--- /dev/null\n+++ b/a.txt\n@@ -0,0 +1 @@\n+a\n";
@@ -122,112 +65,29 @@ const DIFF_README: &str = "diff --git a/README.md b/README.md\n--- a/README.md\n
 #[test]
 fn bind_requires_the_repo_and_records_a_confirmed_primary() {
     let e = env();
-    let m = bind(
-        &e.store,
-        e.me,
-        "Mac app",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
+    let m = bind(&e.store, e.me, "Mac app", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
     assert!(m.confirmed && m.primary && !m.via_fork);
-    let other = WorkspaceRepo {
-        canonical: "github.com/zazulam/infra".into(),
-        id: repo_id("github.com/zazulam/infra"),
-        ..wefit()
-    };
-    let r = bind(
-        &e.store,
-        e.me,
-        "Mac app",
-        e.ws,
-        &other,
-        &e.checkout,
-        CheckoutSource::Bound,
-    );
-    assert_eq!(
-        r,
-        Err(BindError::NotThisRepo {
-            found: Some(WEFIT.into())
-        })
-    );
-    assert!(matches!(
-        bind(
-            &e.store,
-            e.me,
-            "x",
-            e.ws,
-            &wefit(),
-            &e.forge.join("nope"),
-            CheckoutSource::Bound
-        ),
-        Err(BindError::NotACheckout)
-    ));
+    let other = WorkspaceRepo { canonical: "github.com/zazulam/infra".into(), id: repo_id("github.com/zazulam/infra"), ..wefit() };
+    let r = bind(&e.store, e.me, "Mac app", e.ws, &other, &e.checkout, CheckoutSource::Bound);
+    assert_eq!(r, Err(BindError::NotThisRepo { found: Some(WEFIT.into()) }));
+    assert!(matches!(bind(&e.store, e.me, "x", e.ws, &wefit(), &e.forge.join("nope"), CheckoutSource::Bound), Err(BindError::NotACheckout)));
 }
 
 #[test]
 fn second_host_refuses_foreign_managed_checkout() {
     let e = env();
-    bind(
-        &e.store,
-        e.me,
-        "Mac app",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
+    bind(&e.store, e.me, "Mac app", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
     // The box on the same Mac: another device id, its own store.
     let box_store = EventStore::open_in_memory().unwrap();
-    let r = bind(
-        &box_store,
-        Uuid::new_v4(),
-        "mac-test",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    );
-    assert_eq!(
-        r,
-        Err(BindError::ManagedElsewhere {
-            label: "Mac app".into()
-        })
-    );
+    let r = bind(&box_store, Uuid::new_v4(), "mac-test", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound);
+    assert_eq!(r, Err(BindError::ManagedElsewhere { label: "Mac app".into() }));
     // And its turn gate refuses a checkout it somehow maps.
     box_store
-        .put_repo_mapping(&RepoMapping {
-            workspace_id: e.ws,
-            repo_id: wefit().id,
-            path: e.checkout.clone(),
-            source: CheckoutSource::Bound,
-            primary: true,
-            confirmed: true,
-            via_fork: false,
-        })
+        .put_repo_mapping(&RepoMapping { workspace_id: e.ws, repo_id: wefit().id, path: e.checkout.clone(), source: CheckoutSource::Bound, primary: true, confirmed: true, via_fork: false })
         .unwrap();
     let s = chat(e.ws, Some(wefit().id));
-    let t = turn_checkout(
-        &box_store,
-        Uuid::new_v4(),
-        "mac-test",
-        &s,
-        &roster(&[wefit()]),
-        &HashSet::new(),
-    );
-    assert!(
-        matches!(
-            t,
-            TurnCheckout::Refused {
-                code: "managed_elsewhere",
-                ..
-            }
-        ),
-        "{t:?}"
-    );
+    let t = turn_checkout(&box_store, Uuid::new_v4(), "mac-test", &s, &roster(&[wefit()]), &HashSet::new());
+    assert!(matches!(t, TurnCheckout::Refused { code: "managed_elsewhere", .. }), "{t:?}");
 }
 
 #[test]
@@ -240,26 +100,11 @@ fn detected_checkout_requires_confirmation() {
     let r = roster(&[wefit()]);
     // Found but not confirmed: coverage says missing/unconfirmed, the turn is refused.
     let cov = coverage(&e.store, e.ws, &[wefit()], &HashSet::new());
-    assert_eq!(
-        (cov[0].state.as_str(), cov[0].code.as_str()),
-        ("missing", "unconfirmed")
-    );
-    assert!(matches!(
-        turn_checkout(&e.store, e.me, "box", &s, &r, &HashSet::new()),
-        TurnCheckout::Refused {
-            code: "no_checkout",
-            ..
-        }
-    ));
+    assert_eq!((cov[0].state.as_str(), cov[0].code.as_str()), ("missing", "unconfirmed"));
+    assert!(matches!(turn_checkout(&e.store, e.me, "box", &s, &r, &HashSet::new()), TurnCheckout::Refused { code: "no_checkout", .. }));
     confirm(&e.store, e.me, "box", e.ws, &wefit(), &found[0].path).unwrap();
-    assert!(matches!(
-        turn_checkout(&e.store, e.me, "box", &s, &r, &HashSet::new()),
-        TurnCheckout::Ready(_)
-    ));
-    assert_eq!(
-        coverage(&e.store, e.ws, &[wefit()], &HashSet::new())[0].state,
-        "present"
-    );
+    assert!(matches!(turn_checkout(&e.store, e.me, "box", &s, &r, &HashSet::new()), TurnCheckout::Ready(_)));
+    assert_eq!(coverage(&e.store, e.ws, &[wefit()], &HashSet::new())[0].state, "present");
 }
 
 #[test]
@@ -268,96 +113,29 @@ fn host_refuses_turn_without_matching_checkout_and_remote_changed_drops_coverage
     let s = chat(e.ws, Some(wefit().id));
     let r = roster(&[wefit()]);
     let t = turn_checkout(&e.store, e.me, "mac-test", &s, &r, &HashSet::new());
-    assert_eq!(
-        t,
-        TurnCheckout::Refused {
-            code: "no_checkout",
-            reason: "No checkout of WeFit on mac-test. Clone it here or bind a folder.".into()
-        }
-    );
-    assert_eq!(
-        turn_checkout(&e.store, e.me, "h", &chat(e.ws, None), &r, &HashSet::new()),
-        TurnCheckout::NoRepo
-    );
-    assert!(matches!(
-        turn_checkout(
-            &e.store,
-            e.me,
-            "h",
-            &s,
-            &r,
-            &[wefit().id].into_iter().collect()
-        ),
-        TurnCheckout::Cloning { .. }
-    ));
-    bind(
-        &e.store,
-        e.me,
-        "h",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
-    assert!(matches!(
-        turn_checkout(&e.store, e.me, "h", &s, &r, &HashSet::new()),
-        TurnCheckout::Ready(_)
-    ));
+    assert_eq!(t, TurnCheckout::Refused { code: "no_checkout", reason: "No checkout of WeFit on mac-test. Clone it here or bind a folder.".into() });
+    assert_eq!(turn_checkout(&e.store, e.me, "h", &chat(e.ws, None), &r, &HashSet::new()), TurnCheckout::NoRepo);
+    assert!(matches!(turn_checkout(&e.store, e.me, "h", &s, &r, &[wefit().id].into_iter().collect()), TurnCheckout::Cloning { .. }));
+    bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    assert!(matches!(turn_checkout(&e.store, e.me, "h", &s, &r, &HashSet::new()), TurnCheckout::Ready(_)));
     // The remote is repointed: no longer WeFit.
-    sh(
-        &e.checkout,
-        &[
-            "remote",
-            "set-url",
-            "origin",
-            "https://github.com/evil/wefit",
-        ],
-    );
-    assert!(matches!(
-        turn_checkout(&e.store, e.me, "h", &s, &r, &HashSet::new()),
-        TurnCheckout::Refused {
-            code: "remote_mismatch",
-            ..
-        }
-    ));
+    sh(&e.checkout, &["remote", "set-url", "origin", "https://github.com/evil/wefit"]);
+    assert!(matches!(turn_checkout(&e.store, e.me, "h", &s, &r, &HashSet::new()), TurnCheckout::Refused { code: "remote_mismatch", .. }));
     let cov = coverage(&e.store, e.ws, &[wefit()], &HashSet::new());
-    assert_eq!(
-        (cov[0].state.as_str(), cov[0].code.as_str()),
-        ("error", "remote_mismatch")
-    );
+    assert_eq!((cov[0].state.as_str(), cov[0].code.as_str()), ("error", "remote_mismatch"));
     // A removed repo refuses with its own reason.
     let mut gone = r.clone();
     gone.repos.get_mut(&wefit().id).unwrap().removed = true;
-    assert!(matches!(
-        turn_checkout(&e.store, e.me, "h", &s, &gone, &HashSet::new()),
-        TurnCheckout::Refused {
-            code: "repo_removed",
-            ..
-        }
-    ));
+    assert!(matches!(turn_checkout(&e.store, e.me, "h", &s, &gone, &HashSet::new()), TurnCheckout::Refused { code: "repo_removed", .. }));
 }
 
 #[test]
 fn coverage_has_no_paths_and_opt_out_is_remembered() {
     let e = env();
-    bind(
-        &e.store,
-        e.me,
-        "h",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
-    let json =
-        serde_json::to_string(&coverage(&e.store, e.ws, &[wefit()], &HashSet::new())).unwrap();
+    bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let json = serde_json::to_string(&coverage(&e.store, e.ws, &[wefit()], &HashSet::new())).unwrap();
     assert!(!json.contains('/') || !json.contains(&*e.checkout.to_string_lossy()));
-    assert!(
-        !json.contains("Users") && !json.contains("WeFit") && !json.contains("github"),
-        "{json}"
-    );
+    assert!(!json.contains("Users") && !json.contains("WeFit") && !json.contains("github"), "{json}");
     assert!(coverage_reporting(&e.store, e.ws, true));
     set_coverage_reporting(&e.store, e.ws, Some(false)).unwrap();
     assert!(!coverage_reporting(&e.store, e.ws, true));
@@ -370,50 +148,20 @@ fn fork_checkout_bases_chat_on_upstream_default() {
     let e = env();
     // The person's own fork is origin; the workspace repo is upstream.
     sh(&e.checkout, &["remote", "rename", "origin", "upstream"]);
-    sh(
-        &e.checkout,
-        &["remote", "add", "origin", "https://github.com/alice/wefit"],
-    );
+    sh(&e.checkout, &["remote", "add", "origin", "https://github.com/alice/wefit"]);
     // upstream/main is ahead of the fork's main.
-    sh(
-        &e.checkout,
-        &[
-            "update-ref",
-            "refs/remotes/upstream/main",
-            "refs/remotes/forge/main",
-        ],
-    );
+    sh(&e.checkout, &["update-ref", "refs/remotes/upstream/main", "refs/remotes/forge/main"]);
     std::fs::write(e.checkout.join("up.txt"), "up").unwrap();
     sh(&e.checkout, &["add", "-A"]);
     sh(&e.checkout, &["commit", "-qm", "upstream work"]);
     let up = sh(&e.checkout, &["rev-parse", "HEAD"]);
-    sh(
-        &e.checkout,
-        &["update-ref", "refs/remotes/upstream/main", &up],
-    );
+    sh(&e.checkout, &["update-ref", "refs/remotes/upstream/main", &up]);
     sh(&e.checkout, &["reset", "-q", "--hard", "HEAD~1"]);
-    let m = bind(
-        &e.store,
-        e.me,
-        "h",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
     assert!(m.via_fork);
-    let ready = ReadyCheckout {
-        repo: wefit(),
-        path: m.path.clone(),
-        via_fork: true,
-    };
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: true };
     let p = prepare_chat(&ready, &chat(e.ws, Some(wefit().id)), "h").unwrap();
-    assert_eq!(
-        p.pin.as_deref(),
-        Some(up.as_str()),
-        "pinned at upstream/main"
-    );
+    assert_eq!(p.pin.as_deref(), Some(up.as_str()), "pinned at upstream/main");
     assert_eq!(p.tip, up);
 }
 
@@ -430,21 +178,8 @@ fn applied_proposal(s: &mut ChatSession, diff: &str) -> Uuid {
 #[test]
 fn ledger_replay_brings_chat_branch_up_to_date_and_is_idempotent() {
     let e = env();
-    let m = bind(
-        &e.store,
-        e.me,
-        "h",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
-    let ready = ReadyCheckout {
-        repo: wefit(),
-        path: m.path,
-        via_fork: false,
-    };
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path, via_fork: false };
     let mut s = chat(e.ws, Some(wefit().id));
     let first = prepare_chat(&ready, &s, "h").unwrap();
     assert!(first.pin.is_some());
@@ -455,17 +190,9 @@ fn ledger_replay_brings_chat_branch_up_to_date_and_is_idempotent() {
     let p = prepare_chat(&ready, &s, "h").unwrap();
     assert_eq!((p.replayed, p.pin), (2, None));
     assert!(p.chat_worktree.join("a.txt").exists() && p.chat_worktree.join("b.txt").exists());
-    assert_eq!(
-        prepare_chat(&ready, &s, "h").unwrap().replayed,
-        0,
-        "idempotent"
-    );
+    assert_eq!(prepare_chat(&ready, &s, "h").unwrap().replayed, 0, "idempotent");
     // A revert takes it back out, once.
-    s.proposals
-        .iter_mut()
-        .find(|x| x.id == pb)
-        .unwrap()
-        .reverted = true;
+    s.proposals.iter_mut().find(|x| x.id == pb).unwrap().reverted = true;
     assert_eq!(prepare_chat(&ready, &s, "h").unwrap().replayed, 1);
     assert!(!p.chat_worktree.join("b.txt").exists());
     assert_eq!(prepare_chat(&ready, &s, "h").unwrap().replayed, 0);
@@ -474,21 +201,8 @@ fn ledger_replay_brings_chat_branch_up_to_date_and_is_idempotent() {
 #[test]
 fn ledger_replay_conflict_stops_turn() {
     let e = env();
-    let m = bind(
-        &e.store,
-        e.me,
-        "h",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
-    let ready = ReadyCheckout {
-        repo: wefit(),
-        path: m.path,
-        via_fork: false,
-    };
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path, via_fork: false };
     let mut s = chat(e.ws, Some(wefit().id));
     let p = prepare_chat(&ready, &s, "h").unwrap();
     // A local commit on the chat branch that the ledger entry conflicts with.
@@ -514,18 +228,8 @@ fn apply_conflict_leaves_chat_branch_and_worktree_byte_identical() {
     assert!(matches!(r, Err(ApplyError::Conflict(_))), "{r:?}");
     assert_eq!(sh(&wt, &["rev-parse", "HEAD"]), tip);
     assert_eq!(sh(&wt, &["status", "--porcelain"]), "");
-    assert_eq!(
-        std::fs::read_to_string(wt.join("README.md"))
-            .unwrap()
-            .replace("\r\n", "\n"),
-        "mine\n"
-    );
-    assert!(
-        sh(&e.checkout, &["worktree", "list"])
-            .lines()
-            .all(|l| !l.contains("ligus-3way")),
-        "scratch tree removed"
-    );
+    assert_eq!(std::fs::read_to_string(wt.join("README.md")).unwrap().replace("\r\n", "\n"), "mine\n");
+    assert!(sh(&e.checkout, &["worktree", "list"]).lines().all(|l| !l.contains("ligus-3way")), "scratch tree removed");
 }
 
 #[test]
@@ -537,41 +241,21 @@ fn apply_cas_fails_if_chat_tip_moved_and_three_way_on_other_base_is_clean() {
     std::fs::write(wt.join("other.txt"), "o").unwrap();
     sh(&wt, &["add", "-A"]);
     sh(&wt, &["commit", "-qm", "moved"]);
-    assert_eq!(
-        apply_to_chat_branch(&e.checkout, &chat_id, DIFF_A, "m", false, Some(&tip)),
-        Err(ApplyError::Moved)
-    );
+    assert_eq!(apply_to_chat_branch(&e.checkout, &chat_id, DIFF_A, "m", false, Some(&tip)), Err(ApplyError::Moved));
     // A diff made on an older base still applies (three-way when needed).
-    let a = apply_to_chat_branch(
-        &e.checkout,
-        &chat_id,
-        DIFF_A,
-        &apply_message("t", Uuid::nil(), &[]),
-        false,
-        None,
-    )
-    .unwrap();
+    let a = apply_to_chat_branch(&e.checkout, &chat_id, DIFF_A, &apply_message("t", Uuid::nil(), &[]), false, None).unwrap();
     assert_eq!(sh(&wt, &["rev-parse", "HEAD"]), a.commit);
     assert!(wt.join("a.txt").exists());
-    assert!(branch_has_trailer(
-        &e.checkout,
-        &chat_id,
-        ligus_core::workspace_repo::PROPOSAL_TRAILER,
-        Uuid::nil()
-    ));
+    assert!(branch_has_trailer(&e.checkout, &chat_id, ligus_core::workspace_repo::PROPOSAL_TRAILER, Uuid::nil()));
 }
 
 #[test]
 fn reference_clone_survives_source_deletion() {
     let e = env();
     let dest = e.checkout.parent().unwrap().join("box-clone");
-    super::clone::clone_local_reference(&e.forge.to_string_lossy(), &dest, Some(&e.checkout))
-        .unwrap();
+    super::clone::clone_local_reference(&e.forge.to_string_lossy(), &dest, Some(&e.checkout)).unwrap();
     std::fs::remove_dir_all(&e.checkout).unwrap();
-    assert!(
-        !dest.join(".git/objects/info/alternates").exists(),
-        "dissociated"
-    );
+    assert!(!dest.join(".git/objects/info/alternates").exists(), "dissociated");
     sh(&dest, &["fsck", "--no-progress"]);
     assert!(!sh(&dest, &["rev-parse", "HEAD"]).is_empty());
 }
@@ -632,37 +316,19 @@ fn coverage_from_revoked_device_dropped_after_revocation() {
     use ligus_core::{HostKind, WorkspaceHost};
     let device = Uuid::new_v4();
     let mut r = RosterState::default();
-    r.devices.insert(
-        device,
-        ligus_core::authz::timeline::DeviceState {
-            revoked: false,
-            accounts: [Uuid::new_v4()].into_iter().collect(),
-            ..Default::default()
-        },
-    );
+    r.devices.insert(device, ligus_core::authz::timeline::DeviceState { revoked: false, accounts: [Uuid::new_v4()].into_iter().collect(), ..Default::default() });
     let host = WorkspaceHost::new(device.to_string(), HostKind::Device, "laptop");
     let p = crate::HostPresence::new();
-    p.record_beat(
-        &ligus_core::workspace_repo::HostBeat {
-            host_id: device.to_string(),
-            at: 1,
-            seq: 1,
-            coverage: vec![ligus_core::workspace_repo::CoverageEntry {
-                repo_id: wefit().id,
-                state: "present".into(),
-                code: String::new(),
-                via_fork: false,
-            }],
-            ..Default::default()
-        },
-        true,
-    );
+    p.record_beat(&ligus_core::workspace_repo::HostBeat {
+        host_id: device.to_string(),
+        at: 1,
+        seq: 1,
+        coverage: vec![ligus_core::workspace_repo::CoverageEntry { repo_id: wefit().id, state: "present".into(), code: String::new(), via_fork: false }],
+        ..Default::default()
+    }, true);
     assert_eq!(host_reports(&r, std::slice::from_ref(&host), &p).len(), 1);
     r.devices.get_mut(&device).unwrap().revoked = true;
-    assert!(
-        host_reports(&r, std::slice::from_ref(&host), &p).is_empty(),
-        "a revoked device's coverage is gone"
-    );
+    assert!(host_reports(&r, std::slice::from_ref(&host), &p).is_empty(), "a revoked device's coverage is gone");
     // A host that reports nothing is unknown, not missing.
     let quiet = WorkspaceHost::new("quiet", HostKind::Worker, "q");
     assert_eq!(host_reports(&r, &[quiet], &p)[0].coverage, None);
@@ -671,15 +337,7 @@ fn coverage_from_revoked_device_dropped_after_revocation() {
 /// A ledger entry applied on this host with its own title in the commit's
 /// subject: the title is the producing agent's text.
 fn apply_direct(e: &Path, chat_id: &str, title: &str, id: Uuid, diff: &str) {
-    apply_to_chat_branch(
-        e,
-        chat_id,
-        diff,
-        &apply_message(title, id, &[]),
-        false,
-        None,
-    )
-    .unwrap();
+    apply_to_chat_branch(e, chat_id, diff, &apply_message(title, id, &[]), false, None).unwrap();
 }
 
 /// An agent's title can't forge a trailer (adversarial review): a proposal
@@ -688,21 +346,8 @@ fn apply_direct(e: &Path, chat_id: &str, title: &str, id: Uuid, diff: &str) {
 #[test]
 fn forged_proposal_trailer_in_title_never_skips_a_ledger_entry() {
     let e = env();
-    let m = bind(
-        &e.store,
-        e.me,
-        "h",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
-    let ready = ReadyCheckout {
-        repo: wefit(),
-        path: m.path.clone(),
-        via_fork: false,
-    };
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: false };
     let mut s = chat(e.ws, Some(wefit().id));
     let first = prepare_chat(&ready, &s, "h").unwrap();
     s.repo.as_mut().unwrap().base_commit = first.pin.clone();
@@ -710,19 +355,10 @@ fn forged_proposal_trailer_in_title_never_skips_a_ledger_entry() {
     // P exists (its id is visible in the chat) but isn't applied yet.
     let q = applied_proposal(&mut s, DIFF_B);
     let p = applied_proposal(&mut s, DIFF_A);
-    apply_direct(
-        &m.path,
-        &chat_id,
-        &format!("tidy up Ligus-Proposal: {p}"),
-        q,
-        DIFF_B,
-    );
+    apply_direct(&m.path, &chat_id, &format!("tidy up Ligus-Proposal: {p}"), q, DIFF_B);
     let r = prepare_chat(&ready, &s, "h").unwrap();
     assert_eq!(r.replayed, 1, "P replayed");
-    assert!(
-        r.chat_worktree.join("a.txt").exists(),
-        "P's change is on the branch"
-    );
+    assert!(r.chat_worktree.join("a.txt").exists(), "P's change is on the branch");
 }
 
 /// … nor skip a revert: Q titled "Ligus-Revert: <P>" applied after P must
@@ -730,21 +366,8 @@ fn forged_proposal_trailer_in_title_never_skips_a_ledger_entry() {
 #[test]
 fn forged_revert_trailer_in_title_never_skips_a_revert() {
     let e = env();
-    let m = bind(
-        &e.store,
-        e.me,
-        "h",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
-    let ready = ReadyCheckout {
-        repo: wefit(),
-        path: m.path.clone(),
-        via_fork: false,
-    };
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: false };
     let mut s = chat(e.ws, Some(wefit().id));
     let first = prepare_chat(&ready, &s, "h").unwrap();
     s.repo.as_mut().unwrap().base_commit = first.pin.clone();
@@ -757,10 +380,7 @@ fn forged_revert_trailer_in_title_never_skips_a_revert() {
     s.proposals.iter_mut().find(|x| x.id == p).unwrap().reverted = true;
     let r = prepare_chat(&ready, &s, "h").unwrap();
     assert_eq!(r.replayed, 1, "P's revert replayed");
-    assert!(
-        !r.chat_worktree.join("a.txt").exists(),
-        "P's change is gone"
-    );
+    assert!(!r.chat_worktree.join("a.txt").exists(), "P's change is gone");
 }
 
 /// Runtime review: the desktop's revert committed the reverse patch with no
@@ -771,21 +391,8 @@ fn forged_revert_trailer_in_title_never_skips_a_revert() {
 #[test]
 fn a_desktop_revert_is_seen_by_ledger_replay() {
     let e = env();
-    let m = bind(
-        &e.store,
-        e.me,
-        "h",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
-    let ready = ReadyCheckout {
-        repo: wefit(),
-        path: m.path.clone(),
-        via_fork: false,
-    };
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: false };
     let mut s = chat(e.ws, Some(wefit().id));
     let first = prepare_chat(&ready, &s, "h").unwrap();
     s.repo.as_mut().unwrap().base_commit = first.pin.clone();
@@ -793,33 +400,10 @@ fn a_desktop_revert_is_seen_by_ledger_replay() {
     let p = applied_proposal(&mut s, DIFF_A);
     apply_direct(&m.path, &chat_id, "p", p, DIFF_A);
     let other = Uuid::new_v4();
-    revert_on_chat_branch(
-        &m.path,
-        &chat_id,
-        DIFF_A,
-        &format!("p\n\nLigus-Revert: {other}"),
-        p,
-    )
-    .unwrap();
-    assert!(branch_has_trailer(
-        &m.path,
-        &chat_id,
-        ligus_core::workspace_repo::REVERT_TRAILER,
-        p
-    ));
-    assert!(
-        !branch_has_trailer(
-            &m.path,
-            &chat_id,
-            ligus_core::workspace_repo::REVERT_TRAILER,
-            other
-        ),
-        "a title forges no trailer"
-    );
-    assert!(
-        revert_on_chat_branch(&m.path, &chat_id, DIFF_A, "p", p).is_err(),
-        "never reverted twice"
-    );
+    revert_on_chat_branch(&m.path, &chat_id, DIFF_A, &format!("p\n\nLigus-Revert: {other}"), p).unwrap();
+    assert!(branch_has_trailer(&m.path, &chat_id, ligus_core::workspace_repo::REVERT_TRAILER, p));
+    assert!(!branch_has_trailer(&m.path, &chat_id, ligus_core::workspace_repo::REVERT_TRAILER, other), "a title forges no trailer");
+    assert!(revert_on_chat_branch(&m.path, &chat_id, DIFF_A, "p", p).is_err(), "never reverted twice");
     s.proposals.iter_mut().find(|x| x.id == p).unwrap().reverted = true;
     let r = prepare_chat(&ready, &s, "h").unwrap();
     assert_eq!(r.replayed, 0, "the replay sees the revert");
@@ -833,21 +417,8 @@ fn a_desktop_revert_is_seen_by_ledger_replay() {
 #[test]
 fn existing_branch_not_on_the_pinned_base_refuses() {
     let e = env();
-    let m = bind(
-        &e.store,
-        e.me,
-        "h",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
-    let ready = ReadyCheckout {
-        repo: wefit(),
-        path: m.path.clone(),
-        via_fork: false,
-    };
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: false };
     let mut s = chat(e.ws, Some(wefit().id));
     let first = prepare_chat(&ready, &s, "h").unwrap();
     // Another commit in the checkout (another host's base).
@@ -879,21 +450,9 @@ fn hostile_gitmodules_file_url_is_never_followed() {
     let evil = t.path().join("evil");
     repo_with_origin(&evil, None);
     let url = secret.to_string_lossy().replace('\\', "/");
-    std::fs::write(
-        evil.join(".gitmodules"),
-        format!("[submodule \"s\"]\n\tpath = s\n\turl = {url}\n"),
-    )
-    .unwrap();
+    std::fs::write(evil.join(".gitmodules"), format!("[submodule \"s\"]\n\tpath = s\n\turl = {url}\n")).unwrap();
     let head = sh(&secret, &["rev-parse", "HEAD"]);
-    sh(
-        &evil,
-        &[
-            "update-index",
-            "--add",
-            "--cacheinfo",
-            &format!("160000,{head},s"),
-        ],
-    );
+    sh(&evil, &["update-index", "--add", "--cacheinfo", &format!("160000,{head},s")]);
     sh(&evil, &["add", ".gitmodules"]);
     sh(&evil, &["commit", "-qm", "submodule"]);
     // A clone Ligus names itself (a local mirror) works…
@@ -905,20 +464,8 @@ fn hostile_gitmodules_file_url_is_never_followed() {
     assert!(r.is_err(), "submodule update must fail: {r:?}");
     assert!(!dest.join("s/key.txt").exists());
     let rec = t.path().join("rec");
-    let r = super::git::git(
-        t.path(),
-        &[
-            "clone",
-            "-q",
-            "--recurse-submodules",
-            &evil.to_string_lossy(),
-            &rec.to_string_lossy(),
-        ],
-    );
-    assert!(
-        !rec.join("s/key.txt").exists(),
-        "recursive clone fetched a file:// submodule: {r:?}"
-    );
+    let r = super::git::git(t.path(), &["clone", "-q", "--recurse-submodules", &evil.to_string_lossy(), &rec.to_string_lossy()]);
+    assert!(!rec.join("s/key.txt").exists(), "recursive clone fetched a file:// submodule: {r:?}");
 }
 
 /// A hostile repo's own config never runs code while Ligus scans, matches,
@@ -947,11 +494,7 @@ fn hostile_repo_config_runs_nothing_during_scan_and_coverage() {
     assert_eq!(found.len(), 1);
     let _ = git::root_commit(&e.checkout);
     let _ = coverage(&e.store, e.ws, &[wefit()], &HashSet::new());
-    let local = WorkspaceRepo {
-        canonical: format!("local:{}", "a".repeat(40)),
-        id: repo_id(&format!("local:{}", "a".repeat(40))),
-        ..wefit()
-    };
+    let local = WorkspaceRepo { canonical: format!("local:{}", "a".repeat(40)), id: repo_id(&format!("local:{}", "a".repeat(40))), ..wefit() };
     let _ = checkout_matches(&e.checkout, &local, &Default::default());
     assert!(!pwn.exists(), "repo config ran a command");
 }
@@ -967,10 +510,7 @@ fn legacy_apply_title_never_carries_a_trailer_block() {
     let chat_id = Uuid::new_v4().to_string();
     let wt = crate::git_worktree::chat_worktree(&e.checkout, &chat_id).unwrap();
     let victim = Uuid::new_v4();
-    let title = format!(
-        "tidy up\n\n{}: {victim}",
-        ligus_core::workspace_repo::PROPOSAL_TRAILER
-    );
+    let title = format!("tidy up\n\n{}: {victim}", ligus_core::workspace_repo::PROPOSAL_TRAILER);
     let commit = |msg: &str, file: &str| {
         std::fs::write(wt.join(file), "x").unwrap();
         sh(&wt, &["add", "-A"]);
@@ -978,23 +518,10 @@ fn legacy_apply_title_never_carries_a_trailer_block() {
     };
     // What the legacy path wrote before: the whole title.
     commit(&format!("Apply proposal: {title}"), "one.txt");
-    assert!(
-        branch_has_trailer(
-            &e.checkout,
-            &chat_id,
-            ligus_core::workspace_repo::PROPOSAL_TRAILER,
-            victim
-        ),
-        "the old message forges a trailer"
-    );
+    assert!(branch_has_trailer(&e.checkout, &chat_id, ligus_core::workspace_repo::PROPOSAL_TRAILER, victim), "the old message forges a trailer");
     sh(&wt, &["reset", "-q", "--hard", "HEAD~1"]);
     commit(&legacy_apply_message(&title), "two.txt");
-    assert!(!branch_has_trailer(
-        &e.checkout,
-        &chat_id,
-        ligus_core::workspace_repo::PROPOSAL_TRAILER,
-        victim
-    ));
+    assert!(!branch_has_trailer(&e.checkout, &chat_id, ligus_core::workspace_repo::PROPOSAL_TRAILER, victim));
 }
 
 // ── Workspace-synced aliases (design 12) ─────────────────────────────────
@@ -1005,89 +532,29 @@ fn legacy_apply_title_never_carries_a_trailer_block() {
 #[test]
 fn synced_alias_unused_until_accepted() {
     let e = env();
-    let moved = WorkspaceRepo {
-        id: repo_id("github.com/neworg/wefit"),
-        canonical: "github.com/neworg/wefit".into(),
-        ..wefit()
-    };
+    let moved = WorkspaceRepo { id: repo_id("github.com/neworg/wefit"), canonical: "github.com/neworg/wefit".into(), ..wefit() };
     let mut r = roster(std::slice::from_ref(&moved));
     r.repo_aliases.insert(moved.id, vec![WEFIT.into()]);
     let s = chat(e.ws, Some(moved.id));
     let al = aliases(&e.store, e.ws, Some(&r));
     assert!(checkout_matches(&e.checkout, &moved, &al).is_none());
-    assert!(matches!(
-        bind(
-            &e.store,
-            e.me,
-            "h",
-            e.ws,
-            &moved,
-            &e.checkout,
-            CheckoutSource::Bound
-        ),
-        Err(BindError::NotThisRepo { .. })
-    ));
+    assert!(matches!(bind(&e.store, e.me, "h", e.ws, &moved, &e.checkout, CheckoutSource::Bound), Err(BindError::NotThisRepo { .. })));
     // Accept it here.
-    e.store
-        .set_alias_accepted(e.ws, "repo", WEFIT, &moved.id.to_string(), true)
-        .unwrap();
+    e.store.set_alias_accepted(e.ws, "repo", WEFIT, &moved.id.to_string(), true).unwrap();
     let al = aliases(&e.store, e.ws, Some(&r));
-    assert_eq!(
-        checkout_match(&e.checkout, &moved, &al),
-        Some((MatchVia::Origin, true)),
-        "via alias"
-    );
+    assert_eq!(checkout_match(&e.checkout, &moved, &al), Some((MatchVia::Origin, true)), "via alias");
     // Review: an acceptance counts only while the workspace names the alias;
     // this store's own workspace (no config log here) names none, so a bind
     // that reads it refuses, and one against the roster that names it binds.
-    assert!(
-        aliases(&e.store, e.ws, None).repos.is_empty(),
-        "no roster: device aliases only"
-    );
-    assert!(matches!(
-        bind(
-            &e.store,
-            e.me,
-            "h",
-            e.ws,
-            &moved,
-            &e.checkout,
-            CheckoutSource::Bound
-        ),
-        Err(BindError::NotThisRepo { .. })
-    ));
-    bind_in(
-        &e.store,
-        Some(&r),
-        e.me,
-        "h",
-        e.ws,
-        &moved,
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
-    assert!(matches!(
-        turn_checkout(&e.store, e.me, "h", &s, &r, &HashSet::new()),
-        TurnCheckout::Ready(_)
-    ));
-    assert_eq!(
-        dispatch_coverage(&e.store, e.me, &s, &r, &HashSet::new()),
-        ligus_core::dispatch::Coverage::Present
-    );
+    assert!(aliases(&e.store, e.ws, None).repos.is_empty(), "no roster: device aliases only");
+    assert!(matches!(bind(&e.store, e.me, "h", e.ws, &moved, &e.checkout, CheckoutSource::Bound), Err(BindError::NotThisRepo { .. })));
+    bind_in(&e.store, Some(&r), e.me, "h", e.ws, &moved, &e.checkout, CheckoutSource::Bound).unwrap();
+    assert!(matches!(turn_checkout(&e.store, e.me, "h", &s, &r, &HashSet::new()), TurnCheckout::Ready(_)));
+    assert_eq!(dispatch_coverage(&e.store, e.me, &s, &r, &HashSet::new()), ligus_core::dispatch::Coverage::Present);
     // The Admin drops the alias: the accepted one no longer counts.
     r.repo_aliases.clear();
-    assert!(matches!(
-        turn_checkout(&e.store, e.me, "h", &s, &r, &HashSet::new()),
-        TurnCheckout::Refused {
-            code: "remote_mismatch",
-            ..
-        }
-    ));
-    assert_eq!(
-        dispatch_coverage(&e.store, e.me, &s, &r, &HashSet::new()),
-        ligus_core::dispatch::Coverage::Missing
-    );
+    assert!(matches!(turn_checkout(&e.store, e.me, "h", &s, &r, &HashSet::new()), TurnCheckout::Refused { code: "remote_mismatch", .. }));
+    assert_eq!(dispatch_coverage(&e.store, e.me, &s, &r, &HashSet::new()), ligus_core::dispatch::Coverage::Missing);
 }
 
 /// A self-hosted forge's SSH host: the synced host alias maps it for
@@ -1105,47 +572,21 @@ fn changed_alias_target_needs_new_acceptance_and_clone_url_never_from_alias() {
         root_commit: None,
         scratch: false,
     };
-    sh(
-        &e.checkout,
-        &[
-            "remote",
-            "set-url",
-            "origin",
-            "git@ssh.git.example.com:ops/infra.git",
-        ],
-    );
+    sh(&e.checkout, &["remote", "set-url", "origin", "git@ssh.git.example.com:ops/infra.git"]);
     let mut r = roster(std::slice::from_ref(&infra));
-    r.host_aliases
-        .insert("ssh.git.example.com".into(), "git.example.com".into());
-    assert!(
-        checkout_matches(&e.checkout, &infra, &aliases(&e.store, e.ws, Some(&r))).is_none(),
-        "not accepted yet"
-    );
-    e.store
-        .set_alias_accepted(e.ws, "host", "ssh.git.example.com", "git.example.com", true)
-        .unwrap();
-    assert_eq!(
-        checkout_match(&e.checkout, &infra, &aliases(&e.store, e.ws, Some(&r))),
-        Some((MatchVia::Origin, true))
-    );
+    r.host_aliases.insert("ssh.git.example.com".into(), "git.example.com".into());
+    assert!(checkout_matches(&e.checkout, &infra, &aliases(&e.store, e.ws, Some(&r))).is_none(), "not accepted yet");
+    e.store.set_alias_accepted(e.ws, "host", "ssh.git.example.com", "git.example.com", true).unwrap();
+    assert_eq!(checkout_match(&e.checkout, &infra, &aliases(&e.store, e.ws, Some(&r))), Some((MatchVia::Origin, true)));
     // The Admin points the alias elsewhere: the acceptance was for the old target.
-    r.host_aliases
-        .insert("ssh.git.example.com".into(), "git.other.example".into());
+    r.host_aliases.insert("ssh.git.example.com".into(), "git.other.example".into());
     assert!(checkout_matches(&e.checkout, &infra, &aliases(&e.store, e.ws, Some(&r))).is_none());
     // This device's own SSH alias for the same host wins over a synced one.
-    e.store
-        .set_ssh_host_alias("ssh.git.example.com", Some("git.example.com"))
-        .unwrap();
-    assert_eq!(
-        checkout_match(&e.checkout, &infra, &aliases(&e.store, e.ws, Some(&r))),
-        Some((MatchVia::Origin, false))
-    );
+    e.store.set_ssh_host_alias("ssh.git.example.com", Some("git.example.com")).unwrap();
+    assert_eq!(checkout_match(&e.checkout, &infra, &aliases(&e.store, e.ws, Some(&r))), Some((MatchVia::Origin, false)));
     // A clone by id reads the canonical only.
     let (host, rr) = clone::clone_target(&infra).unwrap();
-    assert_eq!(
-        (host.as_str(), rr.owner.as_str(), rr.name.as_str()),
-        ("git.example.com", "ops", "infra")
-    );
+    assert_eq!((host.as_str(), rr.owner.as_str(), rr.name.as_str()), ("git.example.com", "ops", "infra"));
 }
 
 /// The desktop's "Clone into…" (4.3): the same safe clone by id as the
@@ -1163,76 +604,32 @@ fn clone_into_is_the_safe_clone_by_id() {
     let url = e.forge.to_string_lossy().into_owned();
 
     let c = super::clone::clone_into(&repo, &url, &parent, None, &[]).unwrap();
-    assert_eq!(
-        c.path.file_name().unwrap().to_string_lossy(),
-        clone_dir_name(&repo)
-    );
+    assert_eq!(c.path.file_name().unwrap().to_string_lossy(), clone_dir_name(&repo));
     assert_eq!(c.root_matches, Some(true));
     // The configured URL (`get-url` would show the insteadOf rewrite).
-    assert_eq!(
-        sh(&c.path, &["config", "--get", "remote.origin.url"]),
-        "https://github.com/zazulam/wefit.git"
-    );
+    assert_eq!(sh(&c.path, &["config", "--get", "remote.origin.url"]), "https://github.com/zazulam/wefit.git");
     // Fetches still reach the source (a local insteadOf); identity doesn't follow it.
     sh(&c.path, &["fetch", "-q", "origin"]);
     let aliases = Default::default();
-    assert!(
-        checkout_matches(&c.path, &repo, &aliases).is_some(),
-        "the clone counts as WeFit"
-    );
-    assert!(
-        std::fs::read_dir(&parent)
-            .unwrap()
-            .flatten()
-            .all(|d| !d.file_name().to_string_lossy().starts_with(".ligus-clone")),
-        "no temp dir left"
-    );
+    assert!(checkout_matches(&c.path, &repo, &aliases).is_some(), "the clone counts as WeFit");
+    assert!(std::fs::read_dir(&parent).unwrap().flatten().all(|d| !d.file_name().to_string_lossy().starts_with(".ligus-clone")), "no temp dir left");
 
     // Again into the same folder: refused, nothing touched.
     let again = super::clone::clone_into(&repo, &url, &parent, None, &[]);
     assert!(again.is_err_and(|e| e.contains("already exists")));
     // A failing clone leaves nothing behind.
-    let other = WorkspaceRepo {
-        id: repo_id("github.com/zazulam/other"),
-        canonical: "github.com/zazulam/other".into(),
-        display_name: "Other".into(),
-        ..wefit()
-    };
-    assert!(super::clone::clone_into(
-        &other,
-        &parent.join("nope.git").to_string_lossy(),
-        &parent,
-        None,
-        &[]
-    )
-    .is_err());
-    assert!(
-        std::fs::read_dir(&parent)
-            .unwrap()
-            .flatten()
-            .all(|d| d.file_name().to_string_lossy() == clone_dir_name(&repo)),
-        "only the first clone"
-    );
+    let other = WorkspaceRepo { id: repo_id("github.com/zazulam/other"), canonical: "github.com/zazulam/other".into(), display_name: "Other".into(), ..wefit() };
+    assert!(super::clone::clone_into(&other, &parent.join("nope.git").to_string_lossy(), &parent, None, &[]).is_err());
+    assert!(std::fs::read_dir(&parent).unwrap().flatten().all(|d| d.file_name().to_string_lossy() == clone_dir_name(&repo)), "only the first clone");
     // Refusals.
     assert!(super::clone::clone_into(&repo, &url, Path::new("relative/dir"), None, &[]).is_err());
     assert!(super::clone::clone_into(&repo, &url, &parent.join("missing"), None, &[]).is_err());
-    let local = WorkspaceRepo {
-        canonical: format!("local:{}", "a".repeat(40)),
-        ..wefit()
-    };
+    let local = WorkspaceRepo { canonical: format!("local:{}", "a".repeat(40)), ..wefit() };
     assert!(super::clone::clone_into(&local, &url, &parent, None, &[]).is_err());
     // A hostile display name never leaves the chosen folder.
-    let up = WorkspaceRepo {
-        display_name: "../../..\\..\\x".into(),
-        id: repo_id("github.com/zazulam/up"),
-        canonical: "github.com/zazulam/up".into(),
-        ..wefit()
-    };
+    let up = WorkspaceRepo { display_name: "../../..\\..\\x".into(), id: repo_id("github.com/zazulam/up"), canonical: "github.com/zazulam/up".into(), ..wefit() };
     let c2 = super::clone::clone_into(&up, &url, &parent, None, &[]).unwrap();
-    assert_eq!(
-        c2.path.parent().map(super::git::canonical),
-        Some(super::git::canonical(&parent))
-    );
+    assert_eq!(c2.path.parent().map(super::git::canonical), Some(super::git::canonical(&parent)));
     assert!(!c2.path.to_string_lossy().contains(".."));
     std::fs::remove_dir_all(&c2.path).unwrap();
     // A link where the clone would go is refused, never followed.
@@ -1241,24 +638,14 @@ fn clone_into_is_the_safe_clone_by_id() {
         let target = parent.join("elsewhere");
         std::fs::create_dir_all(&target).unwrap();
         std::os::unix::fs::symlink(&target, parent.join(clone_dir_name(&up))).unwrap();
-        assert!(super::clone::clone_into(&up, &url, &parent, None, &[])
-            .is_err_and(|e| e.contains("already exists")));
+        assert!(super::clone::clone_into(&up, &url, &parent, None, &[]).is_err_and(|e| e.contains("already exists")));
         assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
         std::fs::remove_file(parent.join(clone_dir_name(&up))).unwrap();
         std::fs::remove_dir(&target).unwrap();
     }
     // A claimed root the clone doesn't have is reported, not hidden.
-    let wrong = WorkspaceRepo {
-        root_commit: Some("b".repeat(40)),
-        display_name: "Wrong".into(),
-        ..wefit()
-    };
-    assert_eq!(
-        super::clone::clone_into(&wrong, &url, &parent, None, &[])
-            .unwrap()
-            .root_matches,
-        Some(false)
-    );
+    let wrong = WorkspaceRepo { root_commit: Some("b".repeat(40)), display_name: "Wrong".into(), ..wefit() };
+    assert_eq!(super::clone::clone_into(&wrong, &url, &parent, None, &[]).unwrap().root_matches, Some(false));
 }
 
 /// "Ask the agent to rebase" carries the conflict this device sees, found
@@ -1272,30 +659,19 @@ fn conflict_probe_reports_without_changing_anything() {
     std::fs::write(wt.join("README.md"), "mine\n").unwrap();
     sh(&wt, &["commit", "-qam", "mine"]);
     let tip = sh(&wt, &["rev-parse", "HEAD"]);
-    let why = conflict_probe(&e.checkout, &chat_id, DIFF_README)
-        .unwrap()
-        .expect("a conflict");
+    let why = conflict_probe(&e.checkout, &chat_id, DIFF_README).unwrap().expect("a conflict");
     assert!(why.contains("README.md") || why.contains("apply"), "{why}");
     assert_eq!(conflict_probe(&e.checkout, &chat_id, DIFF_A).unwrap(), None);
     assert_eq!(sh(&wt, &["rev-parse", "HEAD"]), tip);
     assert_eq!(sh(&wt, &["status", "--porcelain"]), "");
-    assert!(
-        sh(&e.checkout, &["worktree", "list"])
-            .lines()
-            .all(|l| !l.contains("ligus-3way")),
-        "scratch tree removed"
-    );
-    assert!(
-        conflict_probe(&e.checkout, &Uuid::new_v4().to_string(), DIFF_A).is_err(),
-        "no branch here"
-    );
+    assert!(sh(&e.checkout, &["worktree", "list"]).lines().all(|l| !l.contains("ligus-3way")), "scratch tree removed");
+    assert!(conflict_probe(&e.checkout, &Uuid::new_v4().to_string(), DIFF_A).is_err(), "no branch here");
 }
 
 /// Pin the chat to `bases` (oldest first), as the fold would after a first
 /// pin and re-pins.
 fn set_bases(s: &mut ChatSession, bases: &[&str]) {
-    s.repo_bases
-        .insert(wefit().id, bases.iter().map(|b| b.to_string()).collect());
+    s.repo_bases.insert(wefit().id, bases.iter().map(|b| b.to_string()).collect());
     s.repo.as_mut().unwrap().base_commit = bases.last().map(|b| b.to_string());
 }
 
@@ -1315,60 +691,28 @@ fn upstream_commit(checkout: &Path, file: &str) -> String {
 #[test]
 fn a_repin_is_followed_by_rebuilding_the_branch_from_the_ledger() {
     let e = env();
-    let m = bind(
-        &e.store,
-        e.me,
-        "h",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
-    let ready = ReadyCheckout {
-        repo: wefit(),
-        path: m.path.clone(),
-        via_fork: false,
-    };
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: false };
     let mut s = chat(e.ws, Some(wefit().id));
     let first = prepare_chat(&ready, &s, "h").unwrap();
     let a = first.pin.clone().unwrap();
     set_bases(&mut s, &[&a]);
     applied_proposal(&mut s, DIFF_A);
     let gone = applied_proposal(&mut s, DIFF_B);
-    s.proposals
-        .iter_mut()
-        .find(|p| p.id == gone)
-        .unwrap()
-        .reverted = true;
+    s.proposals.iter_mut().find(|p| p.id == gone).unwrap().reverted = true;
     let r = prepare_chat(&ready, &s, "h").unwrap();
     assert!(r.chat_worktree.join("a.txt").exists() && !r.chat_worktree.join("b.txt").exists());
     let chat_id = s.id.to_string();
-    assert_eq!(
-        branch_cut_point(&m.path, &chat_id).as_deref(),
-        Some(a.as_str())
-    );
+    assert_eq!(branch_cut_point(&m.path, &chat_id).as_deref(), Some(a.as_str()));
 
     // Re-pinned to a newer upstream commit.
     let b = upstream_commit(&m.path, "upstream.txt");
     set_bases(&mut s, &[&a, &b]);
     let r = prepare_chat(&ready, &s, "h").unwrap();
-    assert!(
-        r.chat_worktree.join("a.txt").exists(),
-        "the ledger replayed onto the new base"
-    );
-    assert!(
-        r.chat_worktree.join("upstream.txt").exists(),
-        "on the new base"
-    );
-    assert!(
-        !r.chat_worktree.join("b.txt").exists(),
-        "the reverted entry stays out"
-    );
-    assert_eq!(
-        branch_cut_point(&m.path, &chat_id).as_deref(),
-        Some(b.as_str())
-    );
+    assert!(r.chat_worktree.join("a.txt").exists(), "the ledger replayed onto the new base");
+    assert!(r.chat_worktree.join("upstream.txt").exists(), "on the new base");
+    assert!(!r.chat_worktree.join("b.txt").exists(), "the reverted entry stays out");
+    assert_eq!(branch_cut_point(&m.path, &chat_id).as_deref(), Some(b.as_str()));
     assert_eq!(sh(&r.chat_worktree, &["status", "--porcelain"]), "");
     // Idempotent: the next turn changes nothing.
     let again = prepare_chat(&ready, &s, "h").unwrap();
@@ -1377,15 +721,9 @@ fn a_repin_is_followed_by_rebuilding_the_branch_from_the_ledger() {
     // Re-pinned back onto the older commit (an ancestor of the branch).
     set_bases(&mut s, &[&a, &b, &a]);
     let r = prepare_chat(&ready, &s, "h").unwrap();
-    assert!(
-        !r.chat_worktree.join("upstream.txt").exists(),
-        "rebuilt on the older base"
-    );
+    assert!(!r.chat_worktree.join("upstream.txt").exists(), "rebuilt on the older base");
     assert!(r.chat_worktree.join("a.txt").exists());
-    assert_eq!(
-        branch_cut_point(&m.path, &chat_id).as_deref(),
-        Some(a.as_str())
-    );
+    assert_eq!(branch_cut_point(&m.path, &chat_id).as_deref(), Some(a.as_str()));
 }
 
 /// A re-pin the branch can't follow changes nothing and says why: work on
@@ -1396,21 +734,8 @@ fn a_repin_is_followed_by_rebuilding_the_branch_from_the_ledger() {
 #[test]
 fn a_repin_the_branch_cant_follow_changes_nothing_and_says_why() {
     let e = env();
-    let m = bind(
-        &e.store,
-        e.me,
-        "h",
-        e.ws,
-        &wefit(),
-        &e.checkout,
-        CheckoutSource::Bound,
-    )
-    .unwrap();
-    let ready = ReadyCheckout {
-        repo: wefit(),
-        path: m.path.clone(),
-        via_fork: false,
-    };
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: false };
     let mut s = chat(e.ws, Some(wefit().id));
     let a = prepare_chat(&ready, &s, "h").unwrap().pin.unwrap();
     set_bases(&mut s, &[&a]);
@@ -1426,10 +751,7 @@ fn a_repin_the_branch_cant_follow_changes_nothing_and_says_why() {
     let b = sh(&m.path, &["rev-parse", "HEAD"]);
     set_bases(&mut s, &[&a, &b]);
     let err = prepare_chat(&ready, &s, "h").unwrap_err();
-    assert!(
-        err.contains("re-pinned") && err.contains("doesn't apply"),
-        "{err}"
-    );
+    assert!(err.contains("re-pinned") && err.contains("doesn't apply"), "{err}");
     assert_eq!(sh(&wt, &["rev-parse", "HEAD"]), tip, "nothing moved");
 
     // A non-conflicting new base, but local changes in the chat's worktree.
@@ -1460,21 +782,12 @@ fn a_repin_the_branch_cant_follow_changes_nothing_and_says_why() {
     // Cut from a base that was never one of the chat's pins: refused as before.
     set_bases(&mut s, &[&c]);
     let err = prepare_chat(&ready, &s, "h").unwrap_err();
-    assert!(
-        err.contains("wasn't cut from the chat's pinned base"),
-        "{err}"
-    );
+    assert!(err.contains("wasn't cut from the chat's pinned base"), "{err}");
     assert_eq!(sh(&wt, &["rev-parse", "HEAD"]), tip);
 
     // And with the follow possible, it follows.
     set_bases(&mut s, &[&a, &c]);
     let r = prepare_chat(&ready, &s, "h").unwrap();
     assert!(r.chat_worktree.join("other.txt").exists());
-    assert_eq!(
-        std::fs::read_to_string(r.chat_worktree.join("README.md"))
-            .unwrap()
-            .trim_end(),
-        "changed",
-        "core.autocrlf may add a CR"
-    );
+    assert_eq!(std::fs::read_to_string(r.chat_worktree.join("README.md")).unwrap().trim_end(), "changed", "core.autocrlf may add a CR");
 }

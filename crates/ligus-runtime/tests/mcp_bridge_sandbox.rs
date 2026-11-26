@@ -33,17 +33,10 @@ impl LigusHost for Host {
 async fn run_bridge(socket_in_plan: bool) -> Result<Vec<Value>, String> {
     let dir = tempfile::tempdir().unwrap();
     let store = EventStore::open(dir.path().join("ligus.db")).unwrap();
-    let mut svc = ChatService::new(
-        store,
-        SigningKeypair::generate().unwrap(),
-        SigningKeypair::generate().unwrap(),
-        ActorIdentity::new("u", "U", ActorKind::Human),
-    );
+    let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ActorIdentity::new("u", "U", ActorKind::Human));
     let wid = Uuid::new_v4();
     let chat = svc.create_chat("A", wid, "rt").unwrap();
-    let reply = svc
-        .begin_assistant_message(chat.id, wid, "ligus", "rt", None, None)
-        .unwrap();
+    let reply = svc.begin_assistant_message(chat.id, wid, "ligus", "rt", None, None).unwrap();
     let mcp = LigusMcp::new(Arc::new(Host(Mutex::new(svc))));
     let turn = mcp.begin_turn(TurnSpec {
         workspace_id: wid,
@@ -56,27 +49,18 @@ async fn run_bridge(socket_in_plan: bool) -> Result<Vec<Value>, String> {
         ttl: Duration::from_secs(60),
     });
     let socket = turn.listen().unwrap();
-    let envelope = SandboxEnvelope::workspace_default().tighten(
-        TightenedBy::Lockdown,
-        EgressPolicy::Closed,
-        false,
-    );
+    let envelope = SandboxEnvelope::workspace_default().tighten(TightenedBy::Lockdown, EgressPolicy::Closed, false);
     let mut policy = TurnPolicy::new(HostKind::Desktop, envelope, GatePlan::ReadOnly);
     if socket_in_plan {
         policy.ligus_mcp_socket = Some(socket.clone());
     }
     let mut env = vec![
-        (
-            "LIGUS_MCP_SOCKET".to_string(),
-            socket.to_string_lossy().into_owned(),
-        ),
+        ("LIGUS_MCP_SOCKET".to_string(), socket.to_string_lossy().into_owned()),
         ("LIGUS_TURN_CRED".to_string(), turn.credential().to_string()),
     ];
     // Under bubblewrap the bridge goes through the helper's forwarder, under
     // the Landlock tier through the endpoint's loopback listener (C-10).
-    env.extend(ligus_runtime::ligus_mcp::bridge::sandbox_tcp_env_for(
-        &socket,
-    ));
+    env.extend(ligus_runtime::ligus_mcp::bridge::sandbox_tcp_env_for(&socket));
     let work = tempfile::tempdir().unwrap();
     let out = executor::with_turn(policy, async {
         let spec = SpawnSpec::new(Purpose::Agent(ModelProviderKind::ClaudeCode), BRIDGE, Vec::<String>::new()).cwd(Some(work.path())).env(&env);
@@ -127,17 +111,10 @@ async fn mcp_bridge_reachable_inside_seatbelt_and_bwrap() {
     let got = run_bridge(true).await.expect("bridge reaches the socket");
     assert_eq!(got[0]["result"]["serverInfo"]["name"], "ligus");
     let tools = got[1]["result"]["tools"].as_array().unwrap();
-    assert_eq!(
-        tools.len(),
-        ligus_runtime::ligus_mcp::tools::TOOLS.len(),
-        "the full set, code-host reads included"
-    );
+    assert_eq!(tools.len(), ligus_runtime::ligus_mcp::tools::TOOLS.len(), "the full set, code-host reads included");
     assert_eq!(got[2]["result"]["isError"], false);
 
     // macOS: without the socket in the plan, the profile denies the connect.
     #[cfg(target_os = "macos")]
-    assert!(
-        run_bridge(false).await.is_err(),
-        "Seatbelt only allows the plan's socket"
-    );
+    assert!(run_bridge(false).await.is_err(), "Seatbelt only allows the plan's socket");
 }

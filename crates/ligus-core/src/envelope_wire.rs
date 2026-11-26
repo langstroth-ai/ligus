@@ -74,10 +74,7 @@ impl Routing {
 
 impl fmt::Debug for RawSigned {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawSigned")
-            .field("bytes", &self.whole.get().len())
-            .field("extra", &self.extra_keys())
-            .finish()
+        f.debug_struct("RawSigned").field("bytes", &self.whole.get().len()).field("extra", &self.extra_keys()).finish()
     }
 }
 
@@ -107,10 +104,7 @@ impl RawSigned {
     }
     /// The raw JSON of an unknown top-level key.
     pub fn extra(&self, key: &str) -> Option<&str> {
-        self.extra
-            .iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, r)| self.slice(r))
+        self.extra.iter().find(|(k, _)| k == key).map(|(_, r)| self.slice(r))
     }
 }
 
@@ -211,8 +205,7 @@ fn from_raw(whole: Box<RawValue>) -> Result<SessionEventEnvelope, serde_json::Er
     let payload_raw = need("payload")?;
     // A kind this build knows but cannot parse (a newer build widened it) is
     // inert here, like an unknown kind; the bytes are kept either way.
-    let payload: SessionEvent =
-        serde_json::from_str(payload_raw.get()).unwrap_or(SessionEvent::Unknown);
+    let payload: SessionEvent = serde_json::from_str(payload_raw.get()).unwrap_or(SessionEvent::Unknown);
     let scope: EventScope = match get("scope") {
         Some(v) => parse("scope", v)?,
         None => EventScope::Session,
@@ -268,11 +261,7 @@ fn from_raw(whole: Box<RawValue>) -> Result<SessionEventEnvelope, serde_json::Er
 
 /// `missing_field` wants a `&'static str`; the keys are the fixed names above.
 fn leak(key: &str) -> &'static str {
-    KNOWN
-        .iter()
-        .find(|k| **k == key)
-        .copied()
-        .unwrap_or("field")
+    KNOWN.iter().find(|k| **k == key).copied().unwrap_or("field")
 }
 
 /// A JSON fragment written verbatim (a received signed field or unknown key).
@@ -368,14 +357,7 @@ mod tests {
 
     #[test]
     fn duplicate_keys_are_rejected() {
-        let env = SessionEventEnvelope::new(
-            Uuid::nil(),
-            Uuid::nil(),
-            1,
-            SessionEvent::MessageRemoved {
-                message_id: Uuid::nil(),
-            },
-        );
+        let env = SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), 1, SessionEvent::MessageRemoved { message_id: Uuid::nil() });
         let json = serde_json::to_string(&env).unwrap();
         let dup = json.replacen("{", "{\"payload\":{\"kind\":\"unknown\"},", 1);
         assert!(serde_json::from_str::<SessionEventEnvelope>(&dup).is_err());
@@ -386,14 +368,7 @@ mod tests {
     /// parse; past a small bound of keys it is refused outright.
     #[test]
     fn many_top_level_keys_are_refused_fast() {
-        let env = SessionEventEnvelope::new(
-            Uuid::nil(),
-            Uuid::nil(),
-            1,
-            SessionEvent::MessageRemoved {
-                message_id: Uuid::nil(),
-            },
-        );
+        let env = SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), 1, SessionEvent::MessageRemoved { message_id: Uuid::nil() });
         let json = serde_json::to_string(&env).unwrap();
         let mut pad = String::from("{");
         for i in 0..60_000 {
@@ -404,22 +379,12 @@ mod tests {
         let r = serde_json::from_str::<SessionEventEnvelope>(&stuffed);
         let took = t.elapsed();
         assert!(r.is_err(), "an envelope with 60k unknown keys was accepted");
-        assert!(
-            took < std::time::Duration::from_millis(500),
-            "parsing took {took:?}"
-        );
+        assert!(took < std::time::Duration::from_millis(500), "parsing took {took:?}");
     }
 
     #[test]
     fn received_text_round_trips_exactly() {
-        let env = SessionEventEnvelope::new(
-            Uuid::nil(),
-            Uuid::nil(),
-            1,
-            SessionEvent::MessageRemoved {
-                message_id: Uuid::nil(),
-            },
-        );
+        let env = SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), 1, SessionEvent::MessageRemoved { message_id: Uuid::nil() });
         let json = serde_json::to_string(&env).unwrap();
         let odd = json.replacen("{", "{ \"zFuture\" : [1, {\"a\":2}] ,", 1);
         let back: SessionEventEnvelope = serde_json::from_str(&odd).unwrap();

@@ -32,10 +32,7 @@ struct Pending {
 /// Clear `pending` only when it is still the sign-in `device_code` belongs
 /// to: a slow poll of an older sign-in must not cancel a newer one.
 fn finish_pending(pending: &mut Option<Pending>, device_code: &str) {
-    if pending
-        .as_ref()
-        .is_some_and(|p| p.device_code == device_code)
-    {
+    if pending.as_ref().is_some_and(|p| p.device_code == device_code) {
         *pending = None;
     }
 }
@@ -45,10 +42,7 @@ fn finish_pending(pending: &mut Option<Pending>, device_code: &str) {
 /// The langstroth-auth token goes only to the relay its session was signed in
 /// for (E-5); any other relay gets the static token.
 pub(crate) fn effective(relay_url: Option<&str>, static_token: Option<String>) -> Option<String> {
-    relay_url
-        .and_then(|u| CELL.get_for(u))
-        .filter(|t| !t.is_empty())
-        .or(static_token)
+    relay_url.and_then(|u| CELL.get_for(u)).filter(|t| !t.is_empty()).or(static_token)
 }
 
 fn signer(state: &AppState) -> Result<Arc<dyn DeviceSigner>, String> {
@@ -118,13 +112,7 @@ pub async fn ligus_auth_start(
     let ds = ligus_auth::start_device(&ligus_auth::http_client(), &base, CLIENT_ID, &label)
         .await
         .map_err(|e| e.to_string())?;
-    let relay_origin = state
-        .settings
-        .lock()
-        .unwrap()
-        .relay_url
-        .as_deref()
-        .and_then(ligus_auth::origin_of);
+    let relay_origin = state.settings.lock().unwrap().relay_url.as_deref().and_then(ligus_auth::origin_of);
     *PENDING.lock().unwrap() = Some(Pending {
         auth_url: base,
         device_code: ds.device_code.clone(),
@@ -142,13 +130,12 @@ pub async fn ligus_auth_start(
 /// One poll: "pending" | "slowDown" | "denied" | "expired" | "success" | "none".
 #[tauri::command]
 pub async fn ligus_auth_poll(state: State<'_, AppState>) -> Result<String, String> {
-    let Some((url, code, relay_origin)) = PENDING.lock().unwrap().as_ref().map(|p| {
-        (
-            p.auth_url.clone(),
-            p.device_code.clone(),
-            p.relay_origin.clone(),
-        )
-    }) else {
+    let Some((url, code, relay_origin)) = PENDING
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|p| (p.auth_url.clone(), p.device_code.clone(), p.relay_origin.clone()))
+    else {
         return Ok("none".into());
     };
     let signer = signer(&state)?;
@@ -195,13 +182,7 @@ mod pending_tests {
 
     #[test]
     fn an_old_poll_never_cancels_a_newer_sign_in() {
-        let p = |code: &str| {
-            Some(Pending {
-                auth_url: "https://auth.example".into(),
-                device_code: code.into(),
-                relay_origin: Some("https://relay-a.example".into()),
-            })
-        };
+        let p = |code: &str| Some(Pending { auth_url: "https://auth.example".into(), device_code: code.into(), relay_origin: Some("https://relay-a.example".into()) });
         let mut pending = p("new");
         finish_pending(&mut pending, "old");
         assert!(pending.is_some());

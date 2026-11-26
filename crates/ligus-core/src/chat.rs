@@ -182,9 +182,7 @@ impl ChatMessage {
     /// reply's completion (its final text), else when it was appended. Never
     /// before `created_at`.
     pub fn posted_at(&self) -> Timestamp {
-        self.completed_at
-            .filter(|c| *c > self.created_at)
-            .unwrap_or(self.created_at)
+        self.completed_at.filter(|c| *c > self.created_at).unwrap_or(self.created_at)
     }
 }
 

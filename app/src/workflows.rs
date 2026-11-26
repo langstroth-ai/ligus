@@ -27,8 +27,8 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 use crate::{
-    map_err, responder_for, rfc3339, run_prepared_turn, windowed_context, AppState, Responder,
-    TurnOutcome,
+    map_err, responder_for, rfc3339, run_prepared_turn, windowed_context,
+    AppState, Responder, TurnOutcome,
 };
 
 /// How long a gate suspension sleeps between proposal re-checks. Local votes
@@ -76,10 +76,7 @@ impl SessionBusyGuard {
         if !inflight.insert(session_id) {
             return Err("another response or workflow is already running in this chat".into());
         }
-        Ok(Self {
-            app: app.clone(),
-            session_id,
-        })
+        Ok(Self { app: app.clone(), session_id })
     }
 }
 
@@ -106,11 +103,7 @@ impl Drop for DriverRegistration {
     fn drop(&mut self) {
         let state = self.app.state::<AppState>();
         state.run_wakers.lock().unwrap().remove(&self.run_id);
-        state
-            .gate_runs
-            .lock()
-            .unwrap()
-            .retain(|_, r| *r != self.run_id);
+        state.gate_runs.lock().unwrap().retain(|_, r| *r != self.run_id);
         state.canceled_runs.lock().unwrap().remove(&self.run_id);
         crate::guards::forget_run(&state, self.run_id);
     }
@@ -150,18 +143,11 @@ pub(crate) async fn drive_run(
     if !crate::guards::lease_before_driving(&app, session_id, workspace_id, run_id).await {
         return;
     }
-    let _registration = DriverRegistration {
-        app: app.clone(),
-        run_id,
-    };
+    let _registration = DriverRegistration { app: app.clone(), run_id };
     let waker = Arc::new(Notify::new());
     {
         let state = app.state::<AppState>();
-        state
-            .run_wakers
-            .lock()
-            .unwrap()
-            .insert(run_id, waker.clone());
+        state.run_wakers.lock().unwrap().insert(run_id, waker.clone());
     }
 
     if let Err(e) = drive_run_inner(&app, session_id, workspace_id, run_id, &waker).await {
@@ -222,16 +208,9 @@ async fn drive_run_inner(
             if run.nodes[i].status != NodeRunStatus::AwaitingApproval {
                 continue;
             }
-            let Some(pid) = run.nodes[i].proposal_id else {
-                continue;
-            };
+            let Some(pid) = run.nodes[i].proposal_id else { continue };
             let node_id = run.nodes[i].node_id.clone();
-            match session
-                .proposals
-                .iter()
-                .find(|p| p.id == pid)
-                .map(|p| p.status)
-            {
+            match session.proposals.iter().find(|p| p.id == pid).map(|p| p.status) {
                 Some(ProposalStatus::Approved) | Some(ProposalStatus::Applied) => {
                     wf::apply_gate_outcome(&mut run, &node_id, true);
                     state.gate_runs.lock().unwrap().remove(&pid);
@@ -266,10 +245,8 @@ async fn drive_run_inner(
 
         let ready: Vec<_> = wf::ready_nodes(&run).into_iter().cloned().collect();
         if ready.is_empty() {
-            let awaiting = run
-                .nodes
-                .iter()
-                .any(|n| n.status == NodeRunStatus::AwaitingApproval);
+            let awaiting =
+                run.nodes.iter().any(|n| n.status == NodeRunStatus::AwaitingApproval);
             if !awaiting {
                 // No ready stages, no gates, not terminal: wedged (should be
                 // unreachable — Running nodes never persist across driver
@@ -293,8 +270,7 @@ async fn drive_run_inner(
         // match the single synced answer, silently dropping one prompt's result.
         // Claim one stage per agent this iteration; the rest stay ready and run
         // next round (once the first completes).
-        let mut claimed_agents: std::collections::HashSet<Option<Uuid>> =
-            std::collections::HashSet::new();
+        let mut claimed_agents: std::collections::HashSet<Option<Uuid>> = std::collections::HashSet::new();
         for node in &ready {
             match &node.kind {
                 WorkflowNodeKind::Gate {
@@ -315,8 +291,7 @@ async fn drive_run_inner(
                     let pid = proposal.id;
                     {
                         let mut svc = state.service.lock().unwrap();
-                        svc.upsert_proposal(session_id, workspace_id, proposal)
-                            .map_err(map_err)?;
+                        svc.upsert_proposal(session_id, workspace_id, proposal).map_err(map_err)?;
                     }
                     let s = run.node_state_mut(&node.id).expect("node state exists");
                     s.status = NodeRunStatus::AwaitingApproval;
@@ -328,9 +303,8 @@ async fn drive_run_inner(
                     if !claimed_agents.insert(*agent_id) {
                         continue;
                     }
-                    run.node_state_mut(&node.id)
-                        .expect("node state exists")
-                        .status = NodeRunStatus::Running;
+                    run.node_state_mut(&node.id).expect("node state exists").status =
+                        NodeRunStatus::Running;
                     agent_nodes.push(node.clone());
                 }
             }
@@ -364,18 +338,10 @@ async fn drive_run_inner(
             let state = &state;
             async move {
                 let result = match p {
-                    PreparedStage::Local {
-                        responder,
-                        session,
-                        system,
-                        turns,
-                    } => {
+                    PreparedStage::Local { responder, session, system, turns } => {
                         // Staggered throttle: a workflow stage waits while its
                         // runtime's plan window is past this agent's threshold.
-                        let agent_key = responder
-                            .agent_id
-                            .map(|a| a.to_string())
-                            .unwrap_or_else(|| responder.author.clone());
+                        let agent_key = responder.agent_id.map(|a| a.to_string()).unwrap_or_else(|| responder.author.clone());
                         match crate::guards::wait_for_capacity(
                             app,
                             responder.runtime.provider,
@@ -401,15 +367,8 @@ async fn drive_run_inner(
                             }
                         }
                     }
-                    PreparedStage::Remote {
-                        agent_author,
-                        prompt_message_id,
-                        host_id,
-                    } => {
-                        let wait = RemoteWait {
-                            host_id: &host_id,
-                            reference: format!("{run_id}:{node_id}"),
-                        };
+                    PreparedStage::Remote { agent_author, prompt_message_id, host_id } => {
+                        let wait = RemoteWait { host_id: &host_id, reference: format!("{run_id}:{node_id}") };
                         await_remote_stage(
                             app,
                             state,
@@ -491,11 +450,7 @@ async fn prepare_stage(
     node: &wf::WorkflowNode,
 ) -> Result<PreparedStage, String> {
     let _ = app;
-    let WorkflowNodeKind::Agent {
-        agent_id,
-        prompt_template,
-    } = &node.kind
-    else {
+    let WorkflowNodeKind::Agent { agent_id, prompt_template } = &node.kind else {
         return Err("not an agent stage".into());
     };
 
@@ -505,9 +460,7 @@ async fn prepare_stage(
     // classify the stage before deciding how to post its prompt.
     let before = {
         let svc = state.service.lock().unwrap();
-        svc.load_in(workspace_id, session_id)
-            .map_err(map_err)?
-            .ok_or("unknown session")?
+        svc.load_in(workspace_id, session_id).map_err(map_err)?.ok_or("unknown session")?
     };
     let outputs = collect_outputs(run, &before);
     let rendered = wf::render_template(prompt_template, &run.input, &outputs);
@@ -530,14 +483,7 @@ async fn prepare_stage(
     // An agent sent to another host runs there: a Remote stage, answered by
     // that host's worker like any other mention.
     let binding = crate::host_binding(&responder.host_id, &state.local_host_id());
-    if !crate::runs_here_linked(
-        local_only,
-        &links,
-        &before,
-        &local_actor_id,
-        &responder.owner_actor_id,
-        binding,
-    ) {
+    if !crate::runs_here_linked(local_only, &links, &before, &local_actor_id, &responder.owner_actor_id, binding) {
         let prompt = format!(
             "{} **[Workflow · {} → {}]**\n\n{rendered}",
             stage_mention_token(agent.as_ref()),
@@ -546,8 +492,7 @@ async fn prepare_stage(
         );
         let posted = {
             let mut svc = state.service.lock().unwrap();
-            svc.post_workflow_stage_prompt(session_id, workspace_id, &prompt, run.id)
-                .map_err(map_err)?
+            svc.post_workflow_stage_prompt(session_id, workspace_id, &prompt, run.id).map_err(map_err)?
         };
         return Ok(PreparedStage::Remote {
             agent_author: responder.author.clone(),
@@ -564,40 +509,21 @@ async fn prepare_stage(
     );
     let prompt_id = {
         let mut svc = state.service.lock().unwrap();
-        svc.post_workflow_stage_prompt(session_id, workspace_id, &prompt, run.id)
-            .map_err(map_err)?
-            .id
+        svc.post_workflow_stage_prompt(session_id, workspace_id, &prompt, run.id).map_err(map_err)?.id
     };
     let session = {
         let svc = state.service.lock().unwrap();
-        svc.load_in(workspace_id, session_id)
-            .map_err(map_err)?
-            .ok_or("unknown session")?
+        svc.load_in(workspace_id, session_id).map_err(map_err)?.ok_or("unknown session")?
     };
     let agent = resolve_stage_agent(&session, agent_id, &node.name)?;
     let responder = responder_for(state, &session, agent.as_ref());
     // Agent access controls before any model call (the context summary
     // included): the stage's agent must be open to the run's initiator.
-    if !crate::agent_turn_allowed(
-        state,
-        session_id,
-        workspace_id,
-        prompt_id,
-        &responder,
-        false,
-    ) {
-        return Err(format!(
-            "{} isn't available to the person who started this run",
-            responder.author
-        ));
+    if !crate::agent_turn_allowed(state, session_id, workspace_id, prompt_id, &responder, false) {
+        return Err(format!("{} isn't available to the person who started this run", responder.author));
     }
     let (system, turns) = windowed_context(state, session_id, &session, &responder).await;
-    Ok(PreparedStage::Local {
-        responder,
-        session,
-        system,
-        turns,
-    })
+    Ok(PreparedStage::Local { responder, session, system, turns })
 }
 
 /// Resolve a stage's agent from the roster (`None` ⇒ the session's primary
@@ -681,31 +607,19 @@ async fn await_remote_stage(
         }
         let messages = {
             let svc = state.service.lock().unwrap();
-            svc.load_resolving(session_id)
-                .map_err(map_err)?
-                .ok_or("unknown session")?
-                .messages
+            svc.load_resolving(session_id).map_err(map_err)?.ok_or("unknown session")?.messages
         };
         if let Some((message_id, body)) =
             match_stage_reply(&messages, prompt_message_id, agent_author)
         {
-            crate::flow::record_stage_wait(
-                state,
-                session_id,
-                prompt_message_id,
-                message_id,
-                wait.host_id,
-                wait.reference.clone(),
-            );
+            crate::flow::record_stage_wait(state, session_id, prompt_message_id, message_id, wait.host_id, wait.reference.clone());
             return Ok(TurnOutcome { message_id, body });
         }
         // Opt-in backpressure: a stage queued on a busy or offline host may
         // be taken by this device when it is idle and can run the agent.
         if !offered && started.elapsed() >= crate::flow::IDLE_OFFER_AFTER {
             offered = true;
-            if let Some(responder) =
-                crate::flow::offer_stage_here(state, session_id, prompt_message_id, agent_author)
-            {
+            if let Some(responder) = crate::flow::offer_stage_here(state, session_id, prompt_message_id, agent_author) {
                 let workspace_id = state
                     .service
                     .lock()
@@ -713,15 +627,7 @@ async fn await_remote_stage(
                     .workspace_of(session_id)
                     .map_err(map_err)?
                     .ok_or("unknown session")?;
-                return crate::run_turn_answering(
-                    app,
-                    state,
-                    session_id,
-                    workspace_id,
-                    &responder,
-                    Some(prompt_message_id),
-                )
-                .await;
+                return crate::run_turn_answering(app, state, session_id, workspace_id, &responder, Some(prompt_message_id)).await;
             }
         }
         if Instant::now() >= deadline {
@@ -775,10 +681,7 @@ fn load_run(
     run_id: Uuid,
 ) -> Result<(wf::WorkflowRun, ChatSession), String> {
     let svc = state.service.lock().unwrap();
-    let session = svc
-        .load_resolving(session_id)
-        .map_err(map_err)?
-        .ok_or("unknown session")?;
+    let session = svc.load_resolving(session_id).map_err(map_err)?.ok_or("unknown session")?;
     let run = session
         .workflow_runs
         .iter()
@@ -816,8 +719,7 @@ fn persist_run(
     run.lease_epoch = crate::guards::epoch_for(state, run.id);
     {
         let mut svc = state.service.lock().unwrap();
-        svc.upsert_workflow_run(session_id, workspace_id, run.clone())
-            .map_err(map_err)?;
+        svc.upsert_workflow_run(session_id, workspace_id, run.clone()).map_err(map_err)?;
     }
     let _ = app.emit(
         WorkflowRunEvent::EVENT,
@@ -840,9 +742,7 @@ fn mark_run_failed(
     error: &str,
 ) {
     let state = app.state::<AppState>();
-    let Ok((mut run, _)) = load_run(&state, session_id, run_id) else {
-        return;
-    };
+    let Ok((mut run, _)) = load_run(&state, session_id, run_id) else { return };
     for n in &mut run.nodes {
         if n.status == NodeRunStatus::Running {
             n.status = NodeRunStatus::Failed;
@@ -888,17 +788,13 @@ fn close_orphaned_gates(
     }
     {
         let mut svc = state.service.lock().unwrap();
-        let session = svc
-            .load_in(workspace_id, session_id)
-            .map_err(map_err)?
-            .ok_or("unknown session")?;
+        let session = svc.load_in(workspace_id, session_id).map_err(map_err)?.ok_or("unknown session")?;
         for pid in &orphans {
             if let Some(p) = session.proposals.iter().find(|p| p.id == *pid) {
                 if p.status == ProposalStatus::Open {
                     let mut withdrawn = p.clone();
                     withdrawn.status = ProposalStatus::Rejected;
-                    svc.upsert_proposal(session_id, workspace_id, withdrawn)
-                        .map_err(map_err)?;
+                    svc.upsert_proposal(session_id, workspace_id, withdrawn).map_err(map_err)?;
                 }
             }
         }
@@ -917,19 +813,13 @@ fn close_orphaned_gates(
 
 pub(crate) use ligus_runtime::workflow_directive::definition_from_directive;
 #[cfg(test)]
-use ligus_runtime::workflow_directive::relax_json;
-#[cfg(test)]
 use ligus_runtime::workflow_directive::slug;
+#[cfg(test)]
+use ligus_runtime::workflow_directive::relax_json;
 
 /// Roster lookup for rendering a stage's agent by name.
 pub(crate) fn agent_name_in(session: &ChatSession) -> impl Fn(Uuid) -> Option<String> + '_ {
-    move |id| {
-        session
-            .workspace_agents
-            .iter()
-            .find(|a| a.id == id)
-            .map(|a| a.name.clone())
-    }
+    move |id| session.workspace_agents.iter().find(|a| a.id == id).map(|a| a.name.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -974,21 +864,13 @@ fn node_dto(n: &wf::WorkflowNode) -> WorkflowNodeDto {
         reject_target: None,
     };
     match &n.kind {
-        WorkflowNodeKind::Agent {
-            agent_id,
-            prompt_template,
-        } => WorkflowNodeDto {
+        WorkflowNodeKind::Agent { agent_id, prompt_template } => WorkflowNodeDto {
             kind: "agent".into(),
             agent_id: agent_id.map(|u| u.to_string()),
             prompt_template: Some(prompt_template.clone()),
             ..base
         },
-        WorkflowNodeKind::Gate {
-            title_template,
-            body_template,
-            required_approvals,
-            on_reject,
-        } => {
+        WorkflowNodeKind::Gate { title_template, body_template, required_approvals, on_reject } => {
             let (on_reject_str, target) = match on_reject {
                 wf::GateRejectPolicy::Halt => ("halt".to_string(), None),
                 wf::GateRejectPolicy::RouteTo { node } => {
@@ -1035,9 +917,7 @@ pub(crate) fn run_dto(run: &wf::WorkflowRun, driver_alive: bool) -> WorkflowRunD
                 let node = run.definition.nodes.iter().find(|n| n.id == s.node_id);
                 WorkflowNodeRunDto {
                     node_id: s.node_id.clone(),
-                    name: node
-                        .map(|n| crate::shown(&n.name))
-                        .unwrap_or_else(|| s.node_id.clone()),
+                    name: node.map(|n| crate::shown(&n.name)).unwrap_or_else(|| s.node_id.clone()),
                     kind: match node.map(|n| &n.kind) {
                         Some(WorkflowNodeKind::Gate { .. }) => "gate".into(),
                         _ => "agent".into(),
@@ -1060,14 +940,8 @@ pub(crate) fn run_dto(run: &wf::WorkflowRun, driver_alive: bool) -> WorkflowRunD
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub(crate) async fn list_workflows(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-) -> Result<Vec<WorkflowDefinitionDto>, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        list_workflows_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)
-    })
-    .await
+pub(crate) async fn list_workflows(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<WorkflowDefinitionDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_workflows_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
 }
 
 pub(crate) fn list_workflows_sync(
@@ -1084,19 +958,8 @@ pub(crate) fn list_workflows_sync(
 }
 
 #[tauri::command(async)]
-pub(crate) async fn remove_workflow(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-    workflow_id: String,
-) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        remove_workflow_sync(
-            tauri::Manager::state::<AppState>(ligus_app),
-            session_id,
-            workflow_id,
-        )
-    })
-    .await
+pub(crate) async fn remove_workflow(ligus_app: tauri::AppHandle, session_id: String, workflow_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| remove_workflow_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, workflow_id)).await
 }
 
 pub(crate) fn remove_workflow_sync(
@@ -1107,28 +970,14 @@ pub(crate) fn remove_workflow_sync(
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let wfid = Uuid::parse_str(&workflow_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    svc.remove_workflow_definition(sid, state.active_workspace_id(), wfid)
-        .map_err(map_err)
+    svc.remove_workflow_definition(sid, state.active_workspace_id(), wfid).map_err(map_err)
 }
 
 /// Pause (`enabled: false`) or resume a workflow. A paused workflow stays
 /// listed but can't start a run; runs already going are unaffected.
 #[tauri::command]
-pub(crate) async fn set_workflow_enabled(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-    workflow_id: String,
-    enabled: bool,
-) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        set_workflow_enabled_sync(
-            tauri::Manager::state::<AppState>(ligus_app),
-            session_id,
-            workflow_id,
-            enabled,
-        )
-    })
-    .await
+pub(crate) async fn set_workflow_enabled(ligus_app: tauri::AppHandle, session_id: String, workflow_id: String, enabled: bool) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_workflow_enabled_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, workflow_id, enabled)).await
 }
 
 pub(crate) fn set_workflow_enabled_sync(
@@ -1140,8 +989,7 @@ pub(crate) fn set_workflow_enabled_sync(
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let wfid = Uuid::parse_str(&workflow_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    svc.set_workflow_enabled(sid, state.active_workspace_id(), wfid, enabled)
-        .map_err(map_err)
+    svc.set_workflow_enabled(sid, state.active_workspace_id(), wfid, enabled).map_err(map_err)
 }
 
 /// The chat message behind "Ask an agent to change this": the person's
@@ -1150,21 +998,8 @@ pub(crate) fn set_workflow_enabled_sync(
 /// pane sends it like any message, so whichever agent answers files the
 /// revision for review.
 #[tauri::command]
-pub(crate) async fn workflow_change_request(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-    workflow_id: String,
-    request: String,
-) -> Result<String, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        workflow_change_request_sync(
-            tauri::Manager::state::<AppState>(ligus_app),
-            session_id,
-            workflow_id,
-            request,
-        )
-    })
-    .await
+pub(crate) async fn workflow_change_request(ligus_app: tauri::AppHandle, session_id: String, workflow_id: String, request: String) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| workflow_change_request_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, workflow_id, request)).await
 }
 
 pub(crate) fn workflow_change_request_sync(
@@ -1180,23 +1015,12 @@ pub(crate) fn workflow_change_request_sync(
         return Err("say what should change".into());
     }
     let svc = state.service.lock().unwrap();
-    let session = svc
-        .load_resolving(sid)
-        .map_err(map_err)?
-        .ok_or("unknown session")?;
-    let def = session
-        .workflow_definitions
-        .iter()
-        .find(|d| d.id == wfid)
-        .ok_or("unknown workflow")?;
+    let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
+    let def = session.workflow_definitions.iter().find(|d| d.id == wfid).ok_or("unknown workflow")?;
     Ok(change_request_message(&session, def, request))
 }
 
-pub(crate) fn change_request_message(
-    session: &ChatSession,
-    def: &wf::WorkflowDefinition,
-    request: &str,
-) -> String {
+pub(crate) fn change_request_message(session: &ChatSession, def: &wf::WorkflowDefinition, request: &str) -> String {
     let json = serde_json::to_string_pretty(&wf::directive_json(def, &agent_name_in(session)))
         .unwrap_or_default();
     format!(
@@ -1208,14 +1032,8 @@ pub(crate) fn change_request_message(
 }
 
 #[tauri::command]
-pub(crate) async fn list_workflow_runs(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-) -> Result<Vec<WorkflowRunDto>, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        list_workflow_runs_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)
-    })
-    .await
+pub(crate) async fn list_workflow_runs(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<WorkflowRunDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_workflow_runs_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
 }
 
 pub(crate) fn list_workflow_runs_sync(
@@ -1244,22 +1062,8 @@ pub(crate) fn list_workflow_runs_sync(
 }
 
 #[tauri::command]
-pub(crate) async fn start_workflow_run(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-    workflow_id: String,
-    input: String,
-) -> Result<String, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        start_workflow_run_sync(
-            ligus_app.clone(),
-            tauri::Manager::state::<AppState>(ligus_app),
-            session_id,
-            workflow_id,
-            input,
-        )
-    })
-    .await
+pub(crate) async fn start_workflow_run(ligus_app: tauri::AppHandle, session_id: String, workflow_id: String, input: String) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| start_workflow_run_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id, workflow_id, input)).await
 }
 
 pub(crate) fn start_workflow_run_sync(
@@ -1275,10 +1079,7 @@ pub(crate) fn start_workflow_run_sync(
 
     let (def, session) = {
         let svc = state.service.lock().unwrap();
-        let session = svc
-            .load_in(workspace_id, sid)
-            .map_err(map_err)?
-            .ok_or("unknown session")?;
+        let session = svc.load_in(workspace_id, sid).map_err(map_err)?.ok_or("unknown session")?;
         let def = session
             .workflow_definitions
             .iter()
@@ -1288,10 +1089,7 @@ pub(crate) fn start_workflow_run_sync(
         (def, session)
     };
     if def.disabled {
-        return Err(format!(
-            "\u{201c}{}\u{201d} is paused \u{2014} resume it to run it",
-            def.name
-        ));
+        return Err(format!("\u{201c}{}\u{201d} is paused \u{2014} resume it to run it", def.name));
     }
     wf::validate(&def)?;
     ensure_stages_runnable(&session, &def)?;
@@ -1303,8 +1101,7 @@ pub(crate) fn start_workflow_run_sync(
     let guard = SessionBusyGuard::acquire(&app, sid)?;
     {
         let mut svc = state.service.lock().unwrap();
-        svc.upsert_workflow_run(sid, workspace_id, run)
-            .map_err(map_err)?;
+        svc.upsert_workflow_run(sid, workspace_id, run).map_err(map_err)?;
     }
     crate::guards::acquire_run_lease(&state, sid, workspace_id, run_id)?;
     let _ = app.emit(
@@ -1320,20 +1117,8 @@ pub(crate) fn start_workflow_run_sync(
 }
 
 #[tauri::command]
-pub(crate) async fn cancel_workflow_run(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-    run_id: String,
-) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        cancel_workflow_run_sync(
-            ligus_app.clone(),
-            tauri::Manager::state::<AppState>(ligus_app),
-            session_id,
-            run_id,
-        )
-    })
-    .await
+pub(crate) async fn cancel_workflow_run(ligus_app: tauri::AppHandle, session_id: String, run_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| cancel_workflow_run_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id, run_id)).await
 }
 
 pub(crate) fn cancel_workflow_run_sync(
@@ -1361,10 +1146,7 @@ pub(crate) fn cancel_workflow_run_sync(
     // No live driver (e.g. the app restarted mid-run): settle the record directly.
     let workspace_id = state.active_workspace_id();
     let (mut run, _) = load_run(&state, sid, rid)?;
-    if !matches!(
-        run.status,
-        WorkflowRunStatus::Running | WorkflowRunStatus::AwaitingGate
-    ) {
+    if !matches!(run.status, WorkflowRunStatus::Running | WorkflowRunStatus::AwaitingGate) {
         return Err("this run already finished".into());
     }
     for n in &mut run.nodes {
@@ -1377,20 +1159,8 @@ pub(crate) fn cancel_workflow_run_sync(
 }
 
 #[tauri::command]
-pub(crate) async fn resume_workflow_run(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-    run_id: String,
-) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        resume_workflow_run_sync(
-            ligus_app.clone(),
-            tauri::Manager::state::<AppState>(ligus_app),
-            session_id,
-            run_id,
-        )
-    })
-    .await
+pub(crate) async fn resume_workflow_run(ligus_app: tauri::AppHandle, session_id: String, run_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| resume_workflow_run_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id, run_id)).await
 }
 
 pub(crate) fn resume_workflow_run_sync(
@@ -1406,10 +1176,7 @@ pub(crate) fn resume_workflow_run_sync(
     }
     let workspace_id = state.active_workspace_id();
     let (mut run, session) = load_run(&state, sid, rid)?;
-    if !matches!(
-        run.status,
-        WorkflowRunStatus::Running | WorkflowRunStatus::AwaitingGate
-    ) {
+    if !matches!(run.status, WorkflowRunStatus::Running | WorkflowRunStatus::AwaitingGate) {
         return Err("only an interrupted run can be resumed".into());
     }
     ensure_stages_runnable(&session, &run.definition)?;
@@ -1448,9 +1215,7 @@ fn ensure_stages_runnable(
     def: &wf::WorkflowDefinition,
 ) -> Result<(), String> {
     for node in &def.nodes {
-        let WorkflowNodeKind::Agent { agent_id, .. } = &node.kind else {
-            continue;
-        };
+        let WorkflowNodeKind::Agent { agent_id, .. } = &node.kind else { continue };
         if let Some(id) = agent_id {
             if !session.workspace_agents.iter().any(|a| a.id == *id) {
                 return Err(format!(
@@ -1466,39 +1231,15 @@ fn ensure_stages_runnable(
 /// For a chat with a repo, fail up front when a stage's agent is pinned to a
 /// host that says it has no checkout of it, naming the stage and the host
 /// (advisory coverage; the host refuses at turn time anyway, 5.2).
-fn ensure_stages_covered(
-    state: &AppState,
-    session: &ChatSession,
-    def: &wf::WorkflowDefinition,
-) -> Result<(), String> {
-    let Some(repo) = session.repo.as_ref().and_then(|r| r.repo_id) else {
-        return Ok(());
-    };
+fn ensure_stages_covered(state: &AppState, session: &ChatSession, def: &wf::WorkflowDefinition) -> Result<(), String> {
+    let Some(repo) = session.repo.as_ref().and_then(|r| r.repo_id) else { return Ok(()) };
     let here = state.service.lock().unwrap().device_id().to_string();
     for node in &def.nodes {
-        let WorkflowNodeKind::Agent {
-            agent_id: Some(id), ..
-        } = &node.kind
-        else {
-            continue;
-        };
-        let Some(a) = session.workspace_agents.iter().find(|a| a.id == *id) else {
-            continue;
-        };
-        if !a.host_id.is_empty()
-            && a.host_id != here
-            && crate::repos_ui::host_lacks_repo(state, &a.host_id, repo)
-        {
-            let label = session
-                .workspace_hosts
-                .iter()
-                .find(|h| h.id == a.host_id)
-                .map(|h| h.label.clone())
-                .unwrap_or_else(|| a.host_id.clone());
-            return Err(format!(
-                "stage '{}': @{} runs on {label}, which has no checkout of this chat's repository",
-                node.name, a.name
-            ));
+        let WorkflowNodeKind::Agent { agent_id: Some(id), .. } = &node.kind else { continue };
+        let Some(a) = session.workspace_agents.iter().find(|a| a.id == *id) else { continue };
+        if !a.host_id.is_empty() && a.host_id != here && crate::repos_ui::host_lacks_repo(state, &a.host_id, repo) {
+            let label = session.workspace_hosts.iter().find(|h| h.id == a.host_id).map(|h| h.label.clone()).unwrap_or_else(|| a.host_id.clone());
+            return Err(format!("stage '{}': @{} runs on {label}, which has no checkout of this chat's repository", node.name, a.name));
         }
     }
     Ok(())
@@ -1561,17 +1302,11 @@ mod directive_tests {
         // Missing id defaults to the slugified name.
         assert_eq!(def.nodes[1].id, "fix-it");
         match &def.nodes[2].kind {
-            wf::WorkflowNodeKind::Gate {
-                required_approvals,
-                on_reject,
-                ..
-            } => {
+            wf::WorkflowNodeKind::Gate { required_approvals, on_reject, .. } => {
                 assert_eq!(*required_approvals, 2);
                 assert_eq!(
                     *on_reject,
-                    wf::GateRejectPolicy::RouteTo {
-                        node: "fix-it".into()
-                    }
+                    wf::GateRejectPolicy::RouteTo { node: "fix-it".into() }
                 );
             }
             _ => panic!("expected gate stage"),

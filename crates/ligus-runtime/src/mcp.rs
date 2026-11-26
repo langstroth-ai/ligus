@@ -63,13 +63,7 @@ pub struct McpServerSpec {
 impl McpServerSpec {
     /// A disabled server with no token and every agent's reach.
     pub fn new(id: impl Into<String>, transport: McpTransport) -> Self {
-        McpServerSpec {
-            id: id.into(),
-            transport,
-            enabled: false,
-            auth: None,
-            agents: Vec::new(),
-        }
+        McpServerSpec { id: id.into(), transport, enabled: false, auth: None, agents: Vec::new() }
     }
 
     /// Whether a turn of `agent` (`None`: not a workspace agent, the
@@ -84,9 +78,7 @@ impl McpServerSpec {
 /// (`<data dir>/mcp-reach.json`), never synced or committed. A server not
 /// listed reaches every agent.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct McpReach(
-    pub std::collections::BTreeMap<uuid::Uuid, std::collections::BTreeMap<String, Vec<uuid::Uuid>>>,
-);
+pub struct McpReach(pub std::collections::BTreeMap<uuid::Uuid, std::collections::BTreeMap<String, Vec<uuid::Uuid>>>);
 
 impl McpReach {
     pub const FILE: &'static str = "mcp-reach.json";
@@ -105,16 +97,11 @@ impl McpReach {
     /// Write it (owner-only, atomically).
     pub fn save(&self, data_dir: &std::path::Path) -> Result<(), String> {
         let bytes = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
-        crate::private_file::write_private_atomic(&data_dir.join(Self::FILE), &bytes)
-            .map_err(|e| e.to_string())
+        crate::private_file::write_private_atomic(&data_dir.join(Self::FILE), &bytes).map_err(|e| e.to_string())
     }
 
     pub fn get(&self, ws: uuid::Uuid, server: &str) -> Vec<uuid::Uuid> {
-        self.0
-            .get(&ws)
-            .and_then(|m| m.get(server))
-            .cloned()
-            .unwrap_or_default()
+        self.0.get(&ws).and_then(|m| m.get(server)).cloned().unwrap_or_default()
     }
 
     /// Set (empty: every agent) one server's reach.
@@ -250,24 +237,8 @@ pub fn parse_tools(result: &Value) -> Vec<McpTool> {
 /// something else, so this flags the common ones, it doesn't prove absence.
 pub fn is_shell_tool(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    let words: Vec<&str> = n
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .collect();
-    const WORDS: &[&str] = &[
-        "bash",
-        "sh",
-        "zsh",
-        "fish",
-        "shell",
-        "powershell",
-        "pwsh",
-        "cmd",
-        "terminal",
-        "exec",
-        "subprocess",
-        "repl",
-    ];
+    let words: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    const WORDS: &[&str] = &["bash", "sh", "zsh", "fish", "shell", "powershell", "pwsh", "cmd", "terminal", "exec", "subprocess", "repl"];
     if words.iter().any(|w| WORDS.contains(w)) {
         return true;
     }
@@ -289,18 +260,12 @@ pub fn is_shell_tool(name: &str) -> bool {
     .iter()
     .any(|f| joined == *f || joined.starts_with(f) || joined.ends_with(f))
         || joined == "execute"
-        || ["bash", "shell", "terminal", "powershell"]
-            .iter()
-            .any(|f| joined.contains(f))
+        || ["bash", "shell", "terminal", "powershell"].iter().any(|f| joined.contains(f))
 }
 
 /// The tools in `tools` that run shell commands ([`is_shell_tool`]).
 pub fn shell_tool_names(tools: &[McpTool]) -> Vec<String> {
-    tools
-        .iter()
-        .filter(|t| is_shell_tool(&t.name))
-        .map(|t| t.name.clone())
-        .collect()
+    tools.iter().filter(|t| is_shell_tool(&t.name)).map(|t| t.name.clone()).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -356,9 +321,7 @@ impl McpRegistry {
         tool: &str,
         arguments: &Value,
     ) -> Result<String, McpError> {
-        Ok(parse_tool_result(
-            &self.call_tool_result(server_id, tool, arguments).await?,
-        ))
+        Ok(parse_tool_result(&self.call_tool_result(server_id, tool, arguments).await?))
     }
 
     /// Call a tool on an enabled server (gate-enforced) and return the whole
@@ -431,10 +394,7 @@ async fn http_send(
 ) -> Result<(Value, Option<String>), McpError> {
     let mut req = http
         .post(url)
-        .header(
-            reqwest::header::ACCEPT,
-            "application/json, text/event-stream",
-        )
+        .header(reqwest::header::ACCEPT, "application/json, text/event-stream")
         .json(request);
     if let Some(token) = auth {
         req = req.bearer_auth(token);
@@ -443,10 +403,7 @@ async fn http_send(
         req = req.header("Mcp-Session-Id", sid);
     }
     // Without the URL: a check or a log line must never carry a path or query.
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| McpError::Transport(e.without_url().to_string()))?;
+    let resp = req.send().await.map_err(|e| McpError::Transport(e.without_url().to_string()))?;
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
         // OAuth hook (task #147): a 401 here is where we'd run the auth flow.
         return Err(McpError::Transport(
@@ -468,14 +425,10 @@ async fn http_send(
         .map(|c| c.contains("text/event-stream"))
         .unwrap_or(false);
     let want_id = request.get("id").and_then(Value::as_u64);
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| McpError::Transport(e.without_url().to_string()))?;
+    let body = resp.text().await.map_err(|e| McpError::Transport(e.without_url().to_string()))?;
     let value = if is_sse {
-        parse_sse_jsonrpc(&body, want_id).ok_or_else(|| {
-            McpError::Protocol("no matching JSON-RPC response in SSE stream".into())
-        })?
+        parse_sse_jsonrpc(&body, want_id)
+            .ok_or_else(|| McpError::Protocol("no matching JSON-RPC response in SSE stream".into()))?
     } else {
         serde_json::from_str(&body).map_err(|e| McpError::Protocol(e.to_string()))?
     };
@@ -503,9 +456,7 @@ pub fn parse_sse_jsonrpc(body: &str, id: Option<u64>) -> Option<Value> {
         events.push(data);
     }
     for ev in events {
-        let Ok(v) = serde_json::from_str::<Value>(&ev) else {
-            continue;
-        };
+        let Ok(v) = serde_json::from_str::<Value>(&ev) else { continue };
         match id {
             None => return Some(v),
             Some(want) if v.get("id").and_then(Value::as_u64) == Some(want) => return Some(v),
@@ -517,22 +468,10 @@ pub fn parse_sse_jsonrpc(body: &str, id: Option<u64>) -> Option<Value> {
 
 async fn list_tools_http(url: &str, auth: Option<&str>) -> Result<Vec<McpTool>, McpError> {
     let http = ligus_forge::new_http_client();
-    let (_, session) = http_send(
-        &http,
-        url,
-        auth,
-        None,
-        &jsonrpc_request(1, "initialize", initialize_params()),
-    )
-    .await?;
-    let (value, _) = http_send(
-        &http,
-        url,
-        auth,
-        session.as_deref(),
-        &jsonrpc_request(2, "tools/list", json!({})),
-    )
-    .await?;
+    let (_, session) =
+        http_send(&http, url, auth, None, &jsonrpc_request(1, "initialize", initialize_params())).await?;
+    let (value, _) =
+        http_send(&http, url, auth, session.as_deref(), &jsonrpc_request(2, "tools/list", json!({}))).await?;
     let result = value
         .get("result")
         .ok_or_else(|| McpError::Protocol("missing result".into()))?;
@@ -546,14 +485,8 @@ async fn call_tool_http(
     arguments: &Value,
 ) -> Result<Value, McpError> {
     let http = ligus_forge::new_http_client();
-    let (_, session) = http_send(
-        &http,
-        url,
-        auth,
-        None,
-        &jsonrpc_request(1, "initialize", initialize_params()),
-    )
-    .await?;
+    let (_, session) =
+        http_send(&http, url, auth, None, &jsonrpc_request(1, "initialize", initialize_params())).await?;
     let (value, _) = http_send(
         &http,
         url,
@@ -572,10 +505,7 @@ fn rpc_result(mut value: Value) -> Result<Value, McpError> {
     }
     match value.get("error") {
         Some(e) => Err(McpError::Protocol(
-            e.get("message")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| e.to_string()),
+            e.get("message").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| e.to_string()),
         )),
         None => Err(McpError::Protocol("missing result".into())),
     }
@@ -593,20 +523,14 @@ async fn call_tool_stdio(
     // env, writes only in its scratch dir (its cwd). A caller that gives up
     // (a timeout drops this future) must not leave the server running.
     let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::McpServer, command, args);
-    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec)
-        .map_err(|e| McpError::Transport(format!("sandbox {command}: {e}")))?;
-    cmd.stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .kill_on_drop(true);
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| McpError::Transport(format!("sandbox {command}: {e}")))?;
+    cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).kill_on_drop(true);
     crate::provider::subprocess::suppress_console_window(&mut cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| McpError::Transport(format!("spawn {command}: {e}")))?;
 
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| McpError::Transport("no stdin".into()))?;
+    let mut stdin = child.stdin.take().ok_or_else(|| McpError::Transport("no stdin".into()))?;
     for msg in [
         jsonrpc_request(1, "initialize", initialize_params()),
         json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }),
@@ -620,10 +544,7 @@ async fn call_tool_stdio(
     }
     stdin.flush().await.ok();
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| McpError::Transport("no stdout".into()))?;
+    let stdout = child.stdout.take().ok_or_else(|| McpError::Transport("no stdout".into()))?;
     let mut lines = BufReader::new(stdout).lines();
     while let Some(line) = lines
         .next_line()
@@ -648,20 +569,14 @@ async fn list_tools_stdio(command: &str, args: &[String]) -> Result<Vec<McpTool>
     // env, writes only in its scratch dir (its cwd). A caller that gives up
     // (a timeout drops this future) must not leave the server running.
     let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::McpServer, command, args);
-    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec)
-        .map_err(|e| McpError::Transport(format!("sandbox {command}: {e}")))?;
-    cmd.stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .kill_on_drop(true);
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| McpError::Transport(format!("sandbox {command}: {e}")))?;
+    cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).kill_on_drop(true);
     crate::provider::subprocess::suppress_console_window(&mut cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| McpError::Transport(format!("spawn {command}: {e}")))?;
 
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| McpError::Transport("no stdin".into()))?;
+    let mut stdin = child.stdin.take().ok_or_else(|| McpError::Transport("no stdin".into()))?;
     for msg in [
         jsonrpc_request(1, "initialize", initialize_params()),
         json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }),
@@ -675,10 +590,7 @@ async fn list_tools_stdio(command: &str, args: &[String]) -> Result<Vec<McpTool>
     }
     stdin.flush().await.ok();
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| McpError::Transport("no stdout".into()))?;
+    let stdout = child.stdout.take().ok_or_else(|| McpError::Transport("no stdout".into()))?;
     let mut lines = BufReader::new(stdout).lines();
     while let Some(line) = lines
         .next_line()
@@ -721,18 +633,11 @@ mod tests {
 
     #[test]
     fn rpc_result_takes_the_result_or_the_error_message() {
-        let ok = rpc_result(
-            json!({"jsonrpc": "2.0", "id": 2, "result": {"content": [], "isError": false}}),
-        )
-        .unwrap();
+        let ok = rpc_result(json!({"jsonrpc": "2.0", "id": 2, "result": {"content": [], "isError": false}})).unwrap();
         assert_eq!(ok, json!({"content": [], "isError": false}));
-        let err = rpc_result(
-            json!({"jsonrpc": "2.0", "id": 2, "error": {"code": -32602, "message": "unknown tool"}}),
-        );
+        let err = rpc_result(json!({"jsonrpc": "2.0", "id": 2, "error": {"code": -32602, "message": "unknown tool"}}));
         assert!(matches!(err, Err(McpError::Protocol(m)) if m == "unknown tool"));
-        assert!(
-            matches!(rpc_result(json!({"id": 2})), Err(McpError::Protocol(m)) if m == "missing result")
-        );
+        assert!(matches!(rpc_result(json!({"id": 2})), Err(McpError::Protocol(m)) if m == "missing result"));
     }
 
     #[test]
@@ -772,10 +677,7 @@ mod tests {
             agents: Vec::new(),
         }]);
         // The gate must trip before any spawn attempt.
-        assert!(matches!(
-            reg.list_tools("fs").await,
-            Err(McpError::Disabled)
-        ));
+        assert!(matches!(reg.list_tools("fs").await, Err(McpError::Disabled)));
         assert_eq!(reg.enabled().count(), 0);
     }
 
@@ -795,9 +697,7 @@ mod tests {
     async fn call_tool_gate_blocks_disabled_server() {
         let reg = McpRegistry::new(vec![McpServerSpec {
             id: "fs".into(),
-            transport: McpTransport::Http {
-                url: "http://x".into(),
-            },
+            transport: McpTransport::Http { url: "http://x".into() },
             enabled: false,
             auth: None,
             agents: Vec::new(),
@@ -828,9 +728,7 @@ mod tests {
     fn auth_is_never_serialized_but_still_deserializes() {
         let spec = McpServerSpec {
             id: "rdna".into(),
-            transport: McpTransport::Http {
-                url: "http://x/mcp".into(),
-            },
+            transport: McpTransport::Http { url: "http://x/mcp".into() },
             enabled: true,
             auth: Some("s3cret-token".into()),
             agents: Vec::new(),
@@ -843,8 +741,7 @@ mod tests {
         assert!(!dbg.contains("s3cret-token"), "{dbg}");
         assert!(dbg.contains("<redacted>"));
         // Back-compat: an old catalog carrying `auth` still loads.
-        let old =
-            r#"{"id":"a","transport":{"kind":"http","url":"http://y"},"enabled":true,"auth":"t"}"#;
+        let old = r#"{"id":"a","transport":{"kind":"http","url":"http://y"},"enabled":true,"auth":"t"}"#;
         let parsed: McpServerSpec = serde_json::from_str(old).unwrap();
         assert_eq!(parsed.auth.as_deref(), Some("t"));
         // And one without it loads unchanged.
@@ -856,39 +753,18 @@ mod tests {
 
     #[test]
     fn bearer_precedence_static_then_spec_then_oauth() {
-        assert_eq!(
-            resolve_bearer(Some("st"), Some("sp"), Some("oa")).as_deref(),
-            Some("st")
-        );
-        assert_eq!(
-            resolve_bearer(None, Some("sp"), Some("oa")).as_deref(),
-            Some("sp")
-        );
-        assert_eq!(
-            resolve_bearer(None, None, Some("oa")).as_deref(),
-            Some("oa")
-        );
-        assert_eq!(
-            resolve_bearer(Some("  "), Some(""), Some("oa")).as_deref(),
-            Some("oa")
-        );
+        assert_eq!(resolve_bearer(Some("st"), Some("sp"), Some("oa")).as_deref(), Some("st"));
+        assert_eq!(resolve_bearer(None, Some("sp"), Some("oa")).as_deref(), Some("sp"));
+        assert_eq!(resolve_bearer(None, None, Some("oa")).as_deref(), Some("oa"));
+        assert_eq!(resolve_bearer(Some("  "), Some(""), Some("oa")).as_deref(), Some("oa"));
         assert_eq!(resolve_bearer(None, None, None), None);
     }
 
     #[test]
     fn normalizes_user_entered_tokens() {
-        assert_eq!(
-            normalize_bearer_token("  abc123 \n").unwrap().as_deref(),
-            Some("abc123")
-        );
-        assert_eq!(
-            normalize_bearer_token("Bearer abc").unwrap().as_deref(),
-            Some("abc")
-        );
-        assert_eq!(
-            normalize_bearer_token("bearer   abc").unwrap().as_deref(),
-            Some("abc")
-        );
+        assert_eq!(normalize_bearer_token("  abc123 \n").unwrap().as_deref(), Some("abc123"));
+        assert_eq!(normalize_bearer_token("Bearer abc").unwrap().as_deref(), Some("abc"));
+        assert_eq!(normalize_bearer_token("bearer   abc").unwrap().as_deref(), Some("abc"));
         assert_eq!(normalize_bearer_token("").unwrap(), None);
         assert_eq!(normalize_bearer_token("Bearer ").unwrap(), None);
         assert!(normalize_bearer_token("ébearer x").is_err());
@@ -903,18 +779,14 @@ mod tests {
         let reg = McpRegistry::new(vec![
             McpServerSpec {
                 id: "a".into(),
-                transport: McpTransport::Http {
-                    url: "http://x".into(),
-                },
+                transport: McpTransport::Http { url: "http://x".into() },
                 enabled: true,
                 auth: None,
                 agents: Vec::new(),
             },
             McpServerSpec {
                 id: "b".into(),
-                transport: McpTransport::Http {
-                    url: "http://y".into(),
-                },
+                transport: McpTransport::Http { url: "http://y".into() },
                 enabled: false,
                 auth: None,
                 agents: Vec::new(),
@@ -934,41 +806,13 @@ mod shell_tool_tests {
     #[test]
     fn shell_tools_are_flagged_by_name() {
         for n in [
-            "bash",
-            "Bash",
-            "shell",
-            "run_shell",
-            "exec",
-            "exec_command",
-            "execute_command",
-            "run_command",
-            "runCommand",
-            "terminal",
-            "run_in_terminal",
-            "terminal_execute",
-            "powershell",
-            "cmd",
-            "shell_exec",
-            "start_process",
-            "run_script",
-            "subprocess_run",
+            "bash", "Bash", "shell", "run_shell", "exec", "exec_command", "execute_command", "run_command", "runCommand", "terminal",
+            "run_in_terminal", "terminal_execute", "powershell", "cmd", "shell_exec", "start_process", "run_script", "subprocess_run",
             "execute",
         ] {
             assert!(is_shell_tool(n), "{n}");
         }
-        for n in [
-            "read_file",
-            "list_issues",
-            "search",
-            "create_issue",
-            "get_weather",
-            "fetch",
-            "query_db",
-            "write_file",
-            "commit",
-            "execute_query",
-            "spawn_agent",
-        ] {
+        for n in ["read_file", "list_issues", "search", "create_issue", "get_weather", "fetch", "query_db", "write_file", "commit", "execute_query", "spawn_agent"] {
             assert!(!is_shell_tool(n), "{n}");
         }
     }
@@ -980,13 +824,7 @@ mod reach_tests {
     use uuid::Uuid;
 
     fn stdio(id: &str) -> McpServerSpec {
-        let mut s = McpServerSpec::new(
-            id,
-            McpTransport::Stdio {
-                command: "/bin/true".into(),
-                args: vec![],
-            },
-        );
+        let mut s = McpServerSpec::new(id, McpTransport::Stdio { command: "/bin/true".into(), args: vec![] });
         s.enabled = true;
         s
     }
@@ -1019,10 +857,7 @@ mod reach_tests {
         let open = stdio("open");
         assert!(limited.reaches(Some(a)));
         assert!(!limited.reaches(Some(Uuid::new_v4())));
-        assert!(
-            !limited.reaches(None),
-            "fail-closed for a turn with no workspace agent"
-        );
+        assert!(!limited.reaches(None), "fail-closed for a turn with no workspace agent");
         assert!(open.reaches(None) && open.reaches(Some(a)));
     }
 

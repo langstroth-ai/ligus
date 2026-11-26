@@ -33,19 +33,13 @@ impl LockdownView {
     /// The ids of the raise events a clear names (each signal the person was
     /// shown).
     pub fn raise_ids(&self) -> Vec<Uuid> {
-        self.signals
-            .iter()
-            .filter_map(|l| l.raise_event_id)
-            .collect()
+        self.signals.iter().filter_map(|l| l.raise_event_id).collect()
     }
 }
 
 /// `chat_id`'s lockdown as `me` sees it, from its projected session.
 pub fn chat_lockdown(session: &ChatSession, chat_id: Uuid, me: &str) -> LockdownView {
-    LockdownView {
-        signals: session.guards.lockdowns_of(chat_id).to_vec(),
-        can_clear: can_clear(&session.members, me),
-    }
+    LockdownView { signals: session.guards.lockdowns_of(chat_id).to_vec(), can_clear: can_clear(&session.members, me) }
 }
 
 #[cfg(test)]
@@ -82,8 +76,7 @@ mod tests {
     #[test]
     fn an_unlocked_chat_has_no_signals() {
         let mut s = ChatSession::new("t", Uuid::new_v4(), "");
-        s.members
-            .push(member("ana", ActorKind::Human, WorkspaceRole::Admin));
+        s.members.push(member("ana", ActorKind::Human, WorkspaceRole::Admin));
         let v = chat_lockdown(&s, s.id, "ana");
         assert!(!v.active());
         assert!(v.can_clear);

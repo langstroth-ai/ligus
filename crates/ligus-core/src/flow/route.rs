@@ -156,10 +156,7 @@ impl FailureKind {
     pub fn is_severe(self) -> bool {
         matches!(
             self,
-            FailureKind::RateLimited
-                | FailureKind::WindowExhausted
-                | FailureKind::ProviderDown
-                | FailureKind::Unreachable
+            FailureKind::RateLimited | FailureKind::WindowExhausted | FailureKind::ProviderDown | FailureKind::Unreachable
         )
     }
 
@@ -168,10 +165,7 @@ impl FailureKind {
     pub fn is_runtime_wide(self) -> bool {
         matches!(
             self,
-            FailureKind::RateLimited
-                | FailureKind::WindowExhausted
-                | FailureKind::ProviderDown
-                | FailureKind::Unreachable
+            FailureKind::RateLimited | FailureKind::WindowExhausted | FailureKind::ProviderDown | FailureKind::Unreachable
         )
     }
 }
@@ -180,55 +174,17 @@ impl FailureKind {
 pub fn classify_failure(error: &str) -> FailureKind {
     let e = error.to_lowercase();
     let any = |words: &[&str]| words.iter().any(|w| e.contains(w));
-    if any(&[
-        "usage limit",
-        "window",
-        "limit reached",
-        "quota exceeded",
-        "out of credits",
-        "credit balance",
-    ]) {
+    if any(&["usage limit", "window", "limit reached", "quota exceeded", "out of credits", "credit balance"]) {
         FailureKind::WindowExhausted
-    } else if any(&[
-        "429",
-        "rate limit",
-        "rate-limit",
-        "too many requests",
-        "ratelimit",
-    ]) {
+    } else if any(&["429", "rate limit", "rate-limit", "too many requests", "ratelimit"]) {
         FailureKind::RateLimited
-    } else if any(&[
-        "500",
-        "502",
-        "503",
-        "504",
-        "529",
-        "overloaded",
-        "internal server error",
-        "bad gateway",
-        "service unavailable",
-    ]) {
+    } else if any(&["500", "502", "503", "504", "529", "overloaded", "internal server error", "bad gateway", "service unavailable"]) {
         FailureKind::ProviderDown
-    } else if any(&[
-        "connection refused",
-        "couldn't connect",
-        "could not connect",
-        "unreachable",
-        "dns",
-        "no route to host",
-        "error sending request",
-    ]) {
+    } else if any(&["connection refused", "couldn't connect", "could not connect", "unreachable", "dns", "no route to host", "error sending request"]) {
         FailureKind::Unreachable
     } else if any(&["timed out", "timeout", "deadline"]) {
         FailureKind::Timeout
-    } else if any(&[
-        "i can't help",
-        "i cannot help",
-        "i can’t help",
-        "refuse",
-        "content policy",
-        "safety",
-    ]) {
+    } else if any(&["i can't help", "i cannot help", "i can’t help", "refuse", "content policy", "safety"]) {
         FailureKind::Refusal
     } else {
         FailureKind::Other
@@ -313,12 +269,7 @@ pub struct RoutePolicy {
 
 impl Default for RoutePolicy {
     fn default() -> Self {
-        Self {
-            epsilon_min: 0.05,
-            epsilon_max: 0.30,
-            min_weight: 3.0,
-            sharpness: 1.0,
-        }
+        Self { epsilon_min: 0.05, epsilon_max: 0.30, min_weight: 3.0, sharpness: 1.0 }
     }
 }
 
@@ -391,25 +342,16 @@ pub fn decide(input: &RouteInput<'_>) -> Option<RouteDecision> {
             eligible.push(c);
         }
     }
-    let scores: BTreeMap<String, f64> = input
-        .candidates
-        .iter()
-        .map(|c| (c.agent.clone(), input.scores.value(&c.agent, &class)))
-        .collect();
+    let scores: BTreeMap<String, f64> =
+        input.candidates.iter().map(|c| (c.agent.clone(), input.scores.value(&c.agent, &class))).collect();
     let primary = super::PRIMARY.to_string();
     let incumbent = eligible
         .iter()
-        .max_by(|a, b| {
-            scores[&a.agent]
-                .total_cmp(&scores[&b.agent])
-                .then_with(|| b.agent.cmp(&a.agent))
-        })
+        .max_by(|a, b| scores[&a.agent].total_cmp(&scores[&b.agent]).then_with(|| b.agent.cmp(&a.agent)))
         .map(|c| c.agent.clone());
     let (pick, reason, explore, epsilon) = match &incumbent {
         None => (primary.clone(), RouteReason::Fallback, false, 0.0),
-        Some(_) if eligible.len() == 1 => {
-            (eligible[0].agent.clone(), RouteReason::Only, false, 0.0)
-        }
+        Some(_) if eligible.len() == 1 => (eligible[0].agent.clone(), RouteReason::Only, false, 0.0),
         Some(best) => {
             let in_play = |a: &str| eligible.iter().any(|c| c.agent == a);
             if let Some(a) = input.thread_memory.filter(|a| in_play(a)) {
@@ -418,25 +360,16 @@ pub fn decide(input: &RouteInput<'_>) -> Option<RouteDecision> {
                 (a.to_string(), RouteReason::FileMemory, false, 0.0)
             } else {
                 let d = input.scores.get(best, &class);
-                let (s, r, w) = d.map(|d| (d.score, d.recent, d.weight)).unwrap_or((
-                    input.scores.params.prior_mean,
-                    input.scores.params.prior_mean,
-                    0.0,
-                ));
+                let (s, r, w) = d.map(|d| (d.score, d.recent, d.weight)).unwrap_or((input.scores.params.prior_mean, input.scores.params.prior_mean, 0.0));
                 let eps = adaptive_epsilon(s, r, w, &input.policy);
                 let mut draw = Draw::seeded(input.trigger_id);
                 if draw.next_f64() < eps {
-                    let others: Vec<&&Candidate> =
-                        eligible.iter().filter(|c| &c.agent != best).collect();
-                    let i =
-                        ((draw.next_f64() * others.len() as f64) as usize).min(others.len() - 1);
+                    let others: Vec<&&Candidate> = eligible.iter().filter(|c| &c.agent != best).collect();
+                    let i = ((draw.next_f64() * others.len() as f64) as usize).min(others.len() - 1);
                     (others[i].agent.clone(), RouteReason::Explore, true, eps)
                 } else {
                     let k = input.policy.sharpness.max(0.1);
-                    let weights: Vec<f64> = eligible
-                        .iter()
-                        .map(|c| scores[&c.agent].max(0.01).powf(k))
-                        .collect();
+                    let weights: Vec<f64> = eligible.iter().map(|c| scores[&c.agent].max(0.01).powf(k)).collect();
                     let total: f64 = weights.iter().sum();
                     let mut x = draw.next_f64() * total;
                     let mut chosen = eligible[eligible.len() - 1].agent.clone();
@@ -475,23 +408,21 @@ pub fn decide(input: &RouteInput<'_>) -> Option<RouteDecision> {
 /// File paths a message names (tokens with a `/` or a file extension), for
 /// file memory.
 pub fn named_paths(text: &str) -> Vec<String> {
-    text.split(|c: char| {
-        c.is_whitespace() || matches!(c, '`' | '(' | ')' | ',' | '"' | '\'' | '<' | '>')
-    })
-    .map(|t| t.trim_matches(|c: char| matches!(c, '.' | ':' | ';' | '!' | '?')))
-    .filter(|t| !t.is_empty() && !t.starts_with("http") && !t.starts_with('@'))
-    .filter(|t| {
-        let ext = t.rsplit_once('.').map(|(stem, e)| {
-            !stem.is_empty()
-                && (1..=5).contains(&e.len())
-                && e.chars().all(|c| c.is_ascii_alphanumeric())
-                && e.chars().any(|c| c.is_ascii_alphabetic())
-        });
-        t.contains('/') || ext == Some(true)
-    })
-    .filter(|t| t.chars().any(|c| c.is_ascii_alphabetic()))
-    .map(|t| t.trim_start_matches("./").to_string())
-    .collect()
+    text.split(|c: char| c.is_whitespace() || matches!(c, '`' | '(' | ')' | ',' | '"' | '\'' | '<' | '>'))
+        .map(|t| t.trim_matches(|c: char| matches!(c, '.' | ':' | ';' | '!' | '?')))
+        .filter(|t| !t.is_empty() && !t.starts_with("http") && !t.starts_with('@'))
+        .filter(|t| {
+            let ext = t.rsplit_once('.').map(|(stem, e)| {
+                !stem.is_empty()
+                    && (1..=5).contains(&e.len())
+                    && e.chars().all(|c| c.is_ascii_alphanumeric())
+                    && e.chars().any(|c| c.is_ascii_alphabetic())
+            });
+            t.contains('/') || ext == Some(true)
+        })
+        .filter(|t| t.chars().any(|c| c.is_ascii_alphabetic()))
+        .map(|t| t.trim_start_matches("./").to_string())
+        .collect()
 }
 
 #[cfg(test)]
@@ -502,11 +433,7 @@ mod tests {
     const DAY: i64 = 86_400_000;
 
     fn cand(a: &str) -> Candidate {
-        Candidate {
-            agent: a.into(),
-            runtime_id: format!("rt-{a}"),
-            low_risk_only: false,
-        }
+        Candidate { agent: a.into(), runtime_id: format!("rt-{a}"), low_risk_only: false }
     }
 
     fn book(entries: &[(&str, f64, usize)], now: i64) -> ScoreBook {
@@ -601,11 +528,7 @@ mod tests {
         let stops = BTreeMap::new();
         let n = 4000;
         let explored = (0..n)
-            .filter(|_| {
-                decide(&input(Uuid::new_v4(), &c, &b, &stops, RouteMode::Live))
-                    .unwrap()
-                    .explore
-            })
+            .filter(|_| decide(&input(Uuid::new_v4(), &c, &b, &stops, RouteMode::Live)).unwrap().explore)
             .count();
         let share = explored as f64 / n as f64;
         // A strong, steady incumbent: near the floor of 5 %.
@@ -635,14 +558,7 @@ mod tests {
         let mut stops = BTreeMap::new();
         stops.insert(
             "a".to_string(),
-            RouteStop {
-                route: "a".into(),
-                reason: FailureKind::RateLimited,
-                until_ms: 11 * DAY,
-                failures: 1,
-                host_id: String::new(),
-                at_ms: 10 * DAY,
-            },
+            RouteStop { route: "a".into(), reason: FailureKind::RateLimited, until_ms: 11 * DAY, failures: 1, host_id: String::new(), at_ms: 10 * DAY },
         );
         for _ in 0..50 {
             let d = decide(&input(Uuid::new_v4(), &c, &b, &stops, RouteMode::Live)).unwrap();
@@ -653,14 +569,7 @@ mod tests {
         let mut stops = BTreeMap::new();
         stops.insert(
             runtime_route("rt-b"),
-            RouteStop {
-                route: runtime_route("rt-b"),
-                reason: FailureKind::ProviderDown,
-                until_ms: 11 * DAY,
-                failures: 1,
-                host_id: String::new(),
-                at_ms: 0,
-            },
+            RouteStop { route: runtime_route("rt-b"), reason: FailureKind::ProviderDown, until_ms: 11 * DAY, failures: 1, host_id: String::new(), at_ms: 0 },
         );
         let d = decide(&input(Uuid::new_v4(), &c, &b, &stops, RouteMode::Live)).unwrap();
         assert_eq!(d.chosen, "a");
@@ -668,14 +577,7 @@ mod tests {
         let mut stops = BTreeMap::new();
         stops.insert(
             "a".to_string(),
-            RouteStop {
-                route: "a".into(),
-                reason: FailureKind::RateLimited,
-                until_ms: DAY,
-                failures: 1,
-                host_id: String::new(),
-                at_ms: 0,
-            },
+            RouteStop { route: "a".into(), reason: FailureKind::RateLimited, until_ms: DAY, failures: 1, host_id: String::new(), at_ms: 0 },
         );
         let d = decide(&input(Uuid::new_v4(), &c, &b, &stops, RouteMode::Live)).unwrap();
         assert!(d.excluded.is_empty());
@@ -686,17 +588,7 @@ mod tests {
         let c = [cand("a")];
         let b = book(&[], 0);
         let mut stops = BTreeMap::new();
-        stops.insert(
-            "a".to_string(),
-            RouteStop {
-                route: "a".into(),
-                reason: FailureKind::Refusal,
-                until_ms: i64::MAX,
-                failures: 2,
-                host_id: String::new(),
-                at_ms: 0,
-            },
-        );
+        stops.insert("a".to_string(), RouteStop { route: "a".into(), reason: FailureKind::Refusal, until_ms: i64::MAX, failures: 2, host_id: String::new(), at_ms: 0 });
         let d = decide(&input(Uuid::new_v4(), &c, &b, &stops, RouteMode::Live)).unwrap();
         assert_eq!(d.chosen, crate::flow::PRIMARY);
         assert_eq!(d.reason, RouteReason::Fallback);
@@ -710,26 +602,13 @@ mod tests {
         let mut i = input(Uuid::new_v4(), &c, &b, &stops, RouteMode::Live);
         i.thread_memory = Some("b");
         let d = decide(&i).unwrap();
-        assert_eq!(
-            (d.chosen.as_str(), d.reason),
-            ("b", RouteReason::ThreadMemory)
-        );
+        assert_eq!((d.chosen.as_str(), d.reason), ("b", RouteReason::ThreadMemory));
         i.thread_memory = None;
         i.file_memory = Some("b");
         assert_eq!(decide(&i).unwrap().reason, RouteReason::FileMemory);
         // Memory of a stopped agent doesn't override the stop.
         let mut stops = BTreeMap::new();
-        stops.insert(
-            "b".to_string(),
-            RouteStop {
-                route: "b".into(),
-                reason: FailureKind::Refusal,
-                until_ms: i64::MAX,
-                failures: 2,
-                host_id: String::new(),
-                at_ms: 0,
-            },
-        );
+        stops.insert("b".to_string(), RouteStop { route: "b".into(), reason: FailureKind::Refusal, until_ms: i64::MAX, failures: 2, host_id: String::new(), at_ms: 0 });
         let mut i = input(Uuid::new_v4(), &c, &b, &stops, RouteMode::Live);
         i.thread_memory = Some("b");
         assert_eq!(decide(&i).unwrap().chosen, "a");
@@ -752,52 +631,21 @@ mod tests {
 
     #[test]
     fn failures_classify_and_stop() {
-        assert_eq!(
-            classify_failure("HTTP 429 Too Many Requests"),
-            FailureKind::RateLimited
-        );
-        assert_eq!(
-            classify_failure("Claude usage limit reached"),
-            FailureKind::WindowExhausted
-        );
-        assert_eq!(
-            classify_failure("503 Service Unavailable"),
-            FailureKind::ProviderDown
-        );
-        assert_eq!(
-            classify_failure("error sending request: connection refused"),
-            FailureKind::Unreachable
-        );
+        assert_eq!(classify_failure("HTTP 429 Too Many Requests"), FailureKind::RateLimited);
+        assert_eq!(classify_failure("Claude usage limit reached"), FailureKind::WindowExhausted);
+        assert_eq!(classify_failure("503 Service Unavailable"), FailureKind::ProviderDown);
+        assert_eq!(classify_failure("error sending request: connection refused"), FailureKind::Unreachable);
         assert_eq!(classify_failure("stream timed out"), FailureKind::Timeout);
         assert_eq!(classify_failure("weird"), FailureKind::Other);
 
         let min = 60_000;
         // Severe: stop on the first.
-        let s =
-            stop_after_failure("a", FailureKind::RateLimited, 0, None, 15 * min, 10 * min).unwrap();
+        let s = stop_after_failure("a", FailureKind::RateLimited, 0, None, 15 * min, 10 * min).unwrap();
         assert_eq!(s.until_ms, 15 * min);
         // Mild: only on a repeat inside the window.
-        assert!(
-            stop_after_failure("a", FailureKind::Timeout, 0, None, 15 * min, 10 * min).is_none()
-        );
-        assert!(stop_after_failure(
-            "a",
-            FailureKind::Timeout,
-            20 * min,
-            Some(0),
-            15 * min,
-            10 * min
-        )
-        .is_none());
-        assert!(stop_after_failure(
-            "a",
-            FailureKind::Timeout,
-            5 * min,
-            Some(0),
-            15 * min,
-            10 * min
-        )
-        .is_some());
+        assert!(stop_after_failure("a", FailureKind::Timeout, 0, None, 15 * min, 10 * min).is_none());
+        assert!(stop_after_failure("a", FailureKind::Timeout, 20 * min, Some(0), 15 * min, 10 * min).is_none());
+        assert!(stop_after_failure("a", FailureKind::Timeout, 5 * min, Some(0), 15 * min, 10 * min).is_some());
         // Cool-down of zero disables stops.
         assert!(stop_after_failure("a", FailureKind::RateLimited, 0, None, 0, 10 * min).is_none());
     }

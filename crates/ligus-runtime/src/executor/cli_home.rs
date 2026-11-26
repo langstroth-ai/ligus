@@ -64,13 +64,8 @@ pub fn credential_files(kind: ModelProviderKind) -> &'static [&'static str] {
     match kind {
         ModelProviderKind::ClaudeCode => &[".claude/.credentials.json"],
         ModelProviderKind::Codex => &[".codex/auth.json"],
-        ModelProviderKind::Copilot => &[
-            ".config/github-copilot/apps.json",
-            ".config/github-copilot/hosts.json",
-        ],
-        ModelProviderKind::Antigravity => {
-            &[".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
-        }
+        ModelProviderKind::Copilot => &[".config/github-copilot/apps.json", ".config/github-copilot/hosts.json"],
+        ModelProviderKind::Antigravity => &[".gemini/oauth_creds.json", ".gemini/google_accounts.json"],
         _ => &[],
     }
 }
@@ -105,11 +100,7 @@ fn real_path(kind: ModelProviderKind, real_home: &Path, rel: &str) -> PathBuf {
 /// never a shipped binary). Another crate's tests and the integration tests
 /// count too: they reach this crate with `cfg(test)` off.
 pub fn in_test_binary() -> bool {
-    cfg!(test)
-        || std::env::var_os("NEXTEST").is_some()
-        || std::env::current_exe()
-            .ok()
-            .is_some_and(|e| ligus_forge::http::is_cargo_test_binary(&e))
+    cfg!(test) || std::env::var_os("NEXTEST").is_some() || std::env::current_exe().ok().is_some_and(|e| ligus_forge::http::is_cargo_test_binary(&e))
 }
 
 /// Whether turn homes may carry the real user's sign-ins (a CLI's
@@ -136,9 +127,7 @@ fn is_real_home(dir: &Path) -> bool {
 }
 
 fn copy_file(from: &Path, to: &Path) {
-    let Ok(meta) = std::fs::symlink_metadata(from) else {
-        return;
-    };
+    let Ok(meta) = std::fs::symlink_metadata(from) else { return };
     if !meta.is_file() || meta.len() > MAX_COPY_BYTES {
         return;
     }
@@ -174,8 +163,7 @@ fn is_json_object(b: &[u8]) -> bool {
 /// Whether `kind`'s sign-in is a file in the turn home `home` (so the turn
 /// doesn't need the login keychain).
 pub fn signed_in_by_file(kind: ModelProviderKind, home: &Path) -> bool {
-    sign_in_file(kind)
-        .is_some_and(|f| std::fs::symlink_metadata(home.join(f)).is_ok_and(|m| m.is_file()))
+    sign_in_file(kind).is_some_and(|f| std::fs::symlink_metadata(home.join(f)).is_ok_and(|m| m.is_file()))
 }
 
 /// The file `kind` signs in with, relative to its home.
@@ -193,9 +181,7 @@ pub fn sign_in_file(kind: ModelProviderKind) -> Option<&'static str> {
 /// keychain item [`populate_with`] bridges into one. For `ligus doctor
 /// --sandbox` and Settings; it reads no keychain item.
 pub fn expects_file_sign_in(kind: ModelProviderKind, real_home: &Path) -> bool {
-    let Some(f) = sign_in_file(kind) else {
-        return false;
-    };
+    let Some(f) = sign_in_file(kind) else { return false };
     #[cfg(target_os = "macos")]
     let bridged = kind == ModelProviderKind::ClaudeCode && is_user_home(real_home);
     #[cfg(not(target_os = "macos"))]
@@ -214,20 +200,12 @@ mod keychain {
 
     /// The item's account and secret.
     pub fn read(service: &str) -> Option<(String, Vec<u8>)> {
-        let attrs = Command::new(SECURITY)
-            .args(["find-generic-password", "-s", service])
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
+        let attrs = Command::new(SECURITY).args(["find-generic-password", "-s", service]).stderr(Stdio::null()).output().ok()?;
         if !attrs.status.success() {
             return None;
         }
         let acct = account(&String::from_utf8_lossy(&attrs.stdout))?;
-        let out = Command::new(SECURITY)
-            .args(["find-generic-password", "-s", service, "-a", &acct, "-w"])
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
+        let out = Command::new(SECURITY).args(["find-generic-password", "-s", service, "-a", &acct, "-w"]).stderr(Stdio::null()).output().ok()?;
         if !out.status.success() {
             return None;
         }
@@ -240,48 +218,27 @@ mod keychain {
 
     /// The `acct` attribute of `security find-generic-password` output.
     pub fn account(attrs: &str) -> Option<String> {
-        let line = attrs
-            .lines()
-            .find(|l| l.trim_start().starts_with("\"acct\"<blob>=\""))?;
-        let v = line
-            .trim()
-            .strip_prefix("\"acct\"<blob>=\"")?
-            .strip_suffix('"')?;
+        let line = attrs.lines().find(|l| l.trim_start().starts_with("\"acct\"<blob>=\""))?;
+        let v = line.trim().strip_prefix("\"acct\"<blob>=\"")?.strip_suffix('"')?;
         (!v.is_empty() && !v.contains(['"', '\\', '\n'])).then(|| v.to_string())
     }
 
     /// The `security -i` command that updates the item (the secret as hex,
     /// so it never sits on a command line).
     pub fn update_command(service: &str, acct: &str, secret: &[u8]) -> Option<String> {
-        if [service, acct]
-            .iter()
-            .any(|s| s.contains(['"', '\\', '\n']))
-        {
+        if [service, acct].iter().any(|s| s.contains(['"', '\\', '\n'])) {
             return None;
         }
         let hex: String = secret.iter().map(|b| format!("{b:02x}")).collect();
-        Some(format!(
-            "add-generic-password -U -a \"{acct}\" -s \"{service}\" -X {hex}\n"
-        ))
+        Some(format!("add-generic-password -U -a \"{acct}\" -s \"{service}\" -X {hex}\n"))
     }
 
     pub fn write(service: &str, acct: &str, secret: &[u8]) -> bool {
-        let Some(cmd) = update_command(service, acct, secret) else {
+        let Some(cmd) = update_command(service, acct, secret) else { return false };
+        let Ok(mut child) = Command::new(SECURITY).arg("-i").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else {
             return false;
         };
-        let Ok(mut child) = Command::new(SECURITY)
-            .arg("-i")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        else {
-            return false;
-        };
-        let ok = child
-            .stdin
-            .take()
-            .is_some_and(|mut i| i.write_all(cmd.as_bytes()).is_ok());
+        let ok = child.stdin.take().is_some_and(|mut i| i.write_all(cmd.as_bytes()).is_ok());
         child.wait().is_ok_and(|s| s.success()) && ok
     }
 }
@@ -310,10 +267,7 @@ pub fn git_identity(real_home: &Path) -> Vec<(&'static str, String)> {
             let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
             // One plain line: nothing that could close the value and open
             // another section.
-            if !v.is_empty()
-                && v.len() <= 256
-                && !v.chars().any(|c| c.is_control() || c == '"' || c == '\\')
-            {
+            if !v.is_empty() && v.len() <= 256 && !v.chars().any(|c| c.is_control() || c == '"' || c == '\\') {
                 out.push((key, v));
             }
         }
@@ -353,20 +307,14 @@ fn write_git_identity(real_home: &Path, home: &Path) {
     let ids = {
         let c = CACHE.get_or_init(Default::default);
         let mut m = c.lock().unwrap_or_else(|e| e.into_inner());
-        m.entry(real_home.to_path_buf())
-            .or_insert_with(|| git_identity(real_home))
-            .clone()
+        m.entry(real_home.to_path_buf()).or_insert_with(|| git_identity(real_home)).clone()
     };
     if ids.is_empty() {
         return;
     }
     let mut text = String::from("[user]\n");
     for (k, v) in ids {
-        text.push_str(&format!(
-            "\t{} = \"{}\"\n",
-            k.trim_start_matches("user."),
-            v
-        ));
+        text.push_str(&format!("\t{} = \"{}\"\n", k.trim_start_matches("user."), v));
     }
     let _ = crate::private_file::write_private_atomic(&home.join(".gitconfig"), text.as_bytes());
 }
@@ -387,19 +335,13 @@ pub fn populate(kind: ModelProviderKind, real_home: &Path, home: &Path) -> std::
 /// [`populate`]; `user_config` = the workspace opted its CLI agents into the
 /// user's own setup (Claude Code's plugins, skills, agents and commands are
 /// then linked in).
-pub fn populate_with(
-    kind: ModelProviderKind,
-    real_home: &Path,
-    home: &Path,
-    user_config: bool,
-) -> std::io::Result<()> {
+pub fn populate_with(kind: ModelProviderKind, real_home: &Path, home: &Path, user_config: bool) -> std::io::Result<()> {
     std::fs::create_dir_all(home)?;
     write_git_identity(real_home, home);
     // A test run against the real home copies no sign-in (opt in with
     // `LIGUS_TEST_KEYCHAIN=1`).
     let no_sign_in = !real_sign_ins_allowed() && is_real_home(real_home);
-    let is_sign_in =
-        |rel: &Path| no_sign_in && credential_files(kind).iter().any(|c| Path::new(c) == rel);
+    let is_sign_in = |rel: &Path| no_sign_in && credential_files(kind).iter().any(|c| Path::new(c) == rel);
     for d in config_dirs(kind) {
         let src = real_path(kind, real_home, d);
         let dst = home.join(d);
@@ -427,9 +369,7 @@ pub fn populate_with(
     if kind == ModelProviderKind::ClaudeCode && is_user_home(real_home) && real_sign_ins_allowed() {
         let dst = home.join(CLAUDE_CREDENTIALS);
         if !dst.exists() {
-            if let Some((_, secret)) =
-                keychain::read(CLAUDE_KEYCHAIN_SERVICE).filter(|(_, s)| is_json_object(s))
-            {
+            if let Some((_, secret)) = keychain::read(CLAUDE_KEYCHAIN_SERVICE).filter(|(_, s)| is_json_object(s)) {
                 let _ = crate::private_file::write_private_atomic(&dst, &secret);
             }
         }
@@ -452,13 +392,9 @@ pub fn populate_with(
         // paths (the profile keeps them unwritable).
         let lib = home.join("Library");
         let _ = std::fs::create_dir_all(lib.join("Preferences"));
-        let _ =
-            std::os::unix::fs::symlink(real_home.join("Library/Keychains"), lib.join("Keychains"));
+        let _ = std::os::unix::fs::symlink(real_home.join("Library/Keychains"), lib.join("Keychains"));
         for p in ["com.apple.security.plist", "com.apple.security.KCN.plist"] {
-            let _ = std::os::unix::fs::symlink(
-                real_home.join("Library/Preferences").join(p),
-                lib.join("Preferences").join(p),
-            );
+            let _ = std::os::unix::fs::symlink(real_home.join("Library/Preferences").join(p), lib.join("Preferences").join(p));
         }
     }
     Ok(())
@@ -472,11 +408,7 @@ pub fn populate_with(
 /// A file that isn't a JSON object is replaced.
 fn harden_claude_settings(path: &Path) {
     use serde_json::{json, Value};
-    let mut v: Value = std::fs::read(path)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}));
+    let mut v: Value = std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}));
     let deny = v
         .as_object_mut()
         .map(|m| m.entry("permissions").or_insert_with(|| json!({})))
@@ -502,12 +434,7 @@ fn harden_claude_settings(path: &Path) {
 /// `HOME` and the XDG dirs pointing into a turn home.
 pub fn home_env(home: &Path) -> Vec<(OsString, OsString)> {
     let mut v: Vec<(OsString, OsString)> = vec![("HOME".into(), home.as_os_str().to_owned())];
-    for (k, rel) in [
-        ("XDG_CONFIG_HOME", ".config"),
-        ("XDG_DATA_HOME", ".local/share"),
-        ("XDG_STATE_HOME", ".local/state"),
-        ("XDG_CACHE_HOME", ".cache"),
-    ] {
+    for (k, rel) in [("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share"), ("XDG_STATE_HOME", ".local/state"), ("XDG_CACHE_HOME", ".cache")] {
         v.push((k.into(), home.join(rel).into_os_string()));
     }
     v
@@ -556,9 +483,7 @@ fn read_turn_file(home: &Path, rel: &str) -> Option<Vec<u8>> {
 fn jwt_claims(token: &str) -> Option<serde_json::Value> {
     use base64::Engine;
     let payload = token.split('.').nth(1)?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload.trim_end_matches('='))
-        .ok()?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
@@ -625,10 +550,7 @@ pub fn same_sign_in(old: &serde_json::Value, new: &serde_json::Value) -> Result<
         let mut ks: Vec<(String, Vec<String>)> = m
             .iter()
             .map(|(k, x)| {
-                let mut inner: Vec<String> = x
-                    .as_object()
-                    .map(|o| o.keys().cloned().collect())
-                    .unwrap_or_default();
+                let mut inner: Vec<String> = x.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
                 inner.sort();
                 (k.clone(), inner)
             })
@@ -666,34 +588,21 @@ fn copy_back_files(kind: ModelProviderKind, real_home: &Path, home: &Path, keych
     let _ = keychain_ok;
     for f in credential_files(kind) {
         let real = real_path(kind, real_home, f);
-        let (Some(new), old) = (read_turn_file(home, f), std::fs::read(&real).ok()) else {
-            continue;
-        };
+        let (Some(new), old) = (read_turn_file(home, f), std::fs::read(&real).ok()) else { continue };
         if old.as_deref() == Some(new.as_slice()) || new.len() as u64 > MAX_COPY_BYTES {
             continue;
         }
-        let Some(new_v) = serde_json::from_slice::<serde_json::Value>(&new)
-            .ok()
-            .filter(|v| v.is_object())
-        else {
-            continue;
-        };
+        let Some(new_v) = serde_json::from_slice::<serde_json::Value>(&new).ok().filter(|v| v.is_object()) else { continue };
         // Only a file the user already had (a sign-in this turn didn't make),
         // and only a refresh of that same sign-in: an agent can write a valid
         // sign-in for another account into its turn home, and copying it
         // back would sign the user's CLI into that account.
         #[cfg(target_os = "macos")]
-        if old.is_none()
-            && kind == ModelProviderKind::ClaudeCode
-            && *f == CLAUDE_CREDENTIALS
-            && is_user_home(real_home)
-            && keychain_ok
-        {
+        if old.is_none() && kind == ModelProviderKind::ClaudeCode && *f == CLAUDE_CREDENTIALS && is_user_home(real_home) && keychain_ok {
             // Bridged in from the keychain (`populate_with`): a refresh of
             // that same sign-in goes back there.
             if let Some((acct, kc)) = keychain::read(CLAUDE_KEYCHAIN_SERVICE) {
-                let kc_v = serde_json::from_slice::<serde_json::Value>(&kc)
-                    .unwrap_or(serde_json::Value::Null);
+                let kc_v = serde_json::from_slice::<serde_json::Value>(&kc).unwrap_or(serde_json::Value::Null);
                 match same_sign_in(&kc_v, &new_v) {
                     Ok(()) if kc != new => {
                         if !keychain::write(CLAUDE_KEYCHAIN_SERVICE, &acct, &new) {
@@ -701,16 +610,13 @@ fn copy_back_files(kind: ModelProviderKind, real_home: &Path, home: &Path, keych
                         }
                     }
                     Ok(()) => {}
-                    Err(why) => {
-                        tracing::warn!(target: "sandbox", cli = ?kind, "not copying back a changed CLI sign-in: {why}")
-                    }
+                    Err(why) => tracing::warn!(target: "sandbox", cli = ?kind, "not copying back a changed CLI sign-in: {why}"),
                 }
             }
             continue;
         }
         let Some(old) = old else { continue };
-        let old_v =
-            serde_json::from_slice::<serde_json::Value>(&old).unwrap_or(serde_json::Value::Null);
+        let old_v = serde_json::from_slice::<serde_json::Value>(&old).unwrap_or(serde_json::Value::Null);
         if let Err(why) = same_sign_in(&old_v, &new_v) {
             tracing::warn!(target: "sandbox", cli = ?kind, file = %f, "not copying back a changed CLI sign-in: {why}");
             continue;
@@ -729,8 +635,7 @@ mod tests {
         let attrs = "keychain: \"/x\"\nattributes:\n    \"acct\"<blob>=\"me\"\n    \"svce\"<blob>=\"Claude Code-credentials\"\n";
         assert_eq!(keychain::account(attrs).as_deref(), Some("me"));
         assert_eq!(keychain::account("    \"acct\"<blob>=<NULL>\n"), None);
-        let cmd =
-            keychain::update_command("Claude Code-credentials", "me", b"{\"a\":\" \"}").unwrap();
+        let cmd = keychain::update_command("Claude Code-credentials", "me", b"{\"a\":\" \"}").unwrap();
         assert_eq!(cmd, "add-generic-password -U -a \"me\" -s \"Claude Code-credentials\" -X 7b2261223a2220227d\n");
         assert!(keychain::update_command("s", "a\" -s x", b"{}").is_none());
     }
@@ -760,19 +665,9 @@ mod tests {
         assert!(!home.join(".claude/hooks").exists());
         // The settings copy denies the out-of-turn tools (a nested `claude`
         // from the agent's shell reads it).
-        let v: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(home.join(".claude/settings.json")).unwrap())
-                .unwrap();
-        let deny: Vec<&str> = v["permissions"]["deny"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|x| x.as_str())
-            .collect();
-        assert!(
-            deny.contains(&"RemoteTrigger") && deny.contains(&"CronCreate"),
-            "{deny:?}"
-        );
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(".claude/settings.json")).unwrap()).unwrap();
+        let deny: Vec<&str> = v["permissions"]["deny"].as_array().unwrap().iter().filter_map(|x| x.as_str()).collect();
+        assert!(deny.contains(&"RemoteTrigger") && deny.contains(&"CronCreate"), "{deny:?}");
         let e = env(ModelProviderKind::ClaudeCode, &home);
         assert!(e.iter().any(|(k, v)| k == "HOME" && *v == home.as_os_str()));
     }
@@ -785,51 +680,30 @@ mod tests {
         let real = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(real.path().join(".claude/plugins")).unwrap();
         std::fs::create_dir_all(real.path().join(".claude/skills/s")).unwrap();
-        std::fs::write(
-            real.path().join(".claude/settings.json"),
-            r#"{"permissions":{"deny":["Bash(rm *)"]},"model":"x"}"#,
-        )
-        .unwrap();
+        std::fs::write(real.path().join(".claude/settings.json"), r#"{"permissions":{"deny":["Bash(rm *)"]},"model":"x"}"#).unwrap();
         let turn = tempfile::tempdir().unwrap();
         let off = turn.path().join("off");
         populate(ModelProviderKind::ClaudeCode, real.path(), &off).unwrap();
         assert!(!off.join(".claude/plugins").exists() && !off.join(".claude/skills").exists());
-        let v: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(off.join(".claude/settings.json")).unwrap())
-                .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(off.join(".claude/settings.json")).unwrap()).unwrap();
         assert_eq!(v["model"], "x");
         assert_eq!(v["permissions"]["deny"][0], "Bash(rm *)");
         let on = turn.path().join("on");
         populate_with(ModelProviderKind::ClaudeCode, real.path(), &on, true).unwrap();
-        assert!(std::fs::symlink_metadata(on.join(".claude/plugins"))
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        assert!(std::fs::symlink_metadata(on.join(".claude/plugins")).unwrap().file_type().is_symlink());
         assert!(on.join(".claude/skills/s").is_dir());
     }
 
     fn jwt(claims: serde_json::Value) -> String {
         use base64::Engine;
         let e = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        format!(
-            "{}.{}.sig",
-            e.encode(b"{\"alg\":\"none\"}"),
-            e.encode(claims.to_string())
-        )
+        format!("{}.{}.sig", e.encode(b"{\"alg\":\"none\"}"), e.encode(claims.to_string()))
     }
 
     /// Per first-class CLI: (credential file, the user's sign-in, a refresh
     /// of it, the same shape signed in as someone else, a shape with keys
     /// added or removed).
-    fn shapes(
-        kind: ModelProviderKind,
-    ) -> (
-        &'static str,
-        serde_json::Value,
-        serde_json::Value,
-        serde_json::Value,
-        serde_json::Value,
-    ) {
+    fn shapes(kind: ModelProviderKind) -> (&'static str, serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value) {
         use serde_json::json;
         match kind {
             // No identity field in the file: the key sets must match.
@@ -872,26 +746,17 @@ mod tests {
     /// copied back.
     #[test]
     fn copy_back_rejects_account_swap() {
-        let oauth = |sub: &str| serde_json::json!({"access_token": "a", "refresh_token": "r", "scope": "s", "token_type": "Bearer", "id_token": jwt(serde_json::json!({"email": sub, "sub": sub})), "expiry_date": 1});
-        let mut cases: Vec<(
-            ModelProviderKind,
-            &str,
-            serde_json::Value,
-            serde_json::Value,
-            serde_json::Value,
-            serde_json::Value,
-        )> = [
-            ModelProviderKind::ClaudeCode,
-            ModelProviderKind::Codex,
-            ModelProviderKind::Copilot,
-            ModelProviderKind::Antigravity,
-        ]
-        .into_iter()
-        .map(|k| {
-            let (f, a, b, c, d) = shapes(k);
-            (k, f, a, b, c, d)
-        })
-        .collect();
+        let oauth = |sub: &str| {
+            serde_json::json!({"access_token": "a", "refresh_token": "r", "scope": "s", "token_type": "Bearer", "id_token": jwt(serde_json::json!({"email": sub, "sub": sub})), "expiry_date": 1})
+        };
+        let mut cases: Vec<(ModelProviderKind, &str, serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value)> =
+            [ModelProviderKind::ClaudeCode, ModelProviderKind::Codex, ModelProviderKind::Copilot, ModelProviderKind::Antigravity]
+                .into_iter()
+                .map(|k| {
+                    let (f, a, b, c, d) = shapes(k);
+                    (k, f, a, b, c, d)
+                })
+                .collect();
         cases.push((
             ModelProviderKind::Antigravity,
             ".gemini/oauth_creds.json",
@@ -916,12 +781,7 @@ mod tests {
             std::fs::write(&real_file, mine.to_string()).unwrap();
             let home = turn.path().join("home");
             populate(kind, real.path(), &home).unwrap();
-            let read = || {
-                serde_json::from_str::<serde_json::Value>(
-                    &std::fs::read_to_string(&real_file).unwrap(),
-                )
-                .unwrap()
-            };
+            let read = || serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&real_file).unwrap()).unwrap();
             for bad in [&swapped, &reshaped] {
                 std::fs::write(home.join(file), bad.to_string()).unwrap();
                 copy_back(kind, real.path(), &home);
@@ -929,11 +789,7 @@ mod tests {
             }
             std::fs::write(home.join(file), refreshed.to_string()).unwrap();
             copy_back(kind, real.path(), &home);
-            assert_eq!(
-                read(),
-                refreshed,
-                "{kind:?} {file}: a same-account refresh is kept"
-            );
+            assert_eq!(read(), refreshed, "{kind:?} {file}: a same-account refresh is kept");
         }
     }
 
@@ -942,37 +798,20 @@ mod tests {
         let real = tempfile::tempdir().unwrap();
         let turn = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(real.path().join(".codex")).unwrap();
-        std::fs::write(
-            real.path().join(".codex/auth.json"),
-            "{\"refresh\":\"old\"}",
-        )
-        .unwrap();
+        std::fs::write(real.path().join(".codex/auth.json"), "{\"refresh\":\"old\"}").unwrap();
         std::fs::write(real.path().join(".codex/config.toml"), "model='x'").unwrap();
         let home = turn.path().join("home");
         populate(ModelProviderKind::Codex, real.path(), &home).unwrap();
         // The CLI rotates its token and an agent edits the config.
         std::fs::write(home.join(".codex/auth.json"), "{\"refresh\":\"new\"}").unwrap();
-        std::fs::write(
-            home.join(".codex/config.toml"),
-            "[mcp_servers.evil]\ncommand='sh'",
-        )
-        .unwrap();
+        std::fs::write(home.join(".codex/config.toml"), "[mcp_servers.evil]\ncommand='sh'").unwrap();
         copy_back(ModelProviderKind::Codex, real.path(), &home);
-        assert_eq!(
-            std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(),
-            "{\"refresh\":\"new\"}"
-        );
-        assert_eq!(
-            std::fs::read_to_string(real.path().join(".codex/config.toml")).unwrap(),
-            "model='x'"
-        );
+        assert_eq!(std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(), "{\"refresh\":\"new\"}");
+        assert_eq!(std::fs::read_to_string(real.path().join(".codex/config.toml")).unwrap(), "model='x'");
         // Not JSON: not copied back.
         std::fs::write(home.join(".codex/auth.json"), "#!/bin/sh").unwrap();
         copy_back(ModelProviderKind::Codex, real.path(), &home);
-        assert_eq!(
-            std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(),
-            "{\"refresh\":\"new\"}"
-        );
+        assert_eq!(std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(), "{\"refresh\":\"new\"}");
     }
 
     /// The host copies back with its own (unsandboxed) reads, so a credential
@@ -986,11 +825,7 @@ mod tests {
         let real = tempfile::tempdir().unwrap();
         let turn = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(real.path().join(".codex")).unwrap();
-        std::fs::write(
-            real.path().join(".codex/auth.json"),
-            "{\"refresh\":\"old\"}",
-        )
-        .unwrap();
+        std::fs::write(real.path().join(".codex/auth.json"), "{\"refresh\":\"old\"}").unwrap();
         let secret = real.path().join("other-tool-creds.json");
         std::fs::write(&secret, "{\"token\":\"not-for-agents\"}").unwrap();
         let home = turn.path().join("home");
@@ -999,35 +834,19 @@ mod tests {
         std::fs::remove_file(&planted).unwrap();
         std::os::unix::fs::symlink(&secret, &planted).unwrap();
         copy_back(ModelProviderKind::Codex, real.path(), &home);
-        assert_eq!(
-            std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(),
-            "{\"refresh\":\"old\"}",
-            "symlink followed"
-        );
+        assert_eq!(std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(), "{\"refresh\":\"old\"}", "symlink followed");
         std::fs::remove_file(&planted).unwrap();
         std::fs::hard_link(&secret, &planted).unwrap();
         copy_back(ModelProviderKind::Codex, real.path(), &home);
-        assert_eq!(
-            std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(),
-            "{\"refresh\":\"old\"}",
-            "hard link followed"
-        );
+        assert_eq!(std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(), "{\"refresh\":\"old\"}", "hard link followed");
         // A symlinked config dir in the turn home is refused too.
         std::fs::remove_file(&planted).unwrap();
         std::fs::remove_dir_all(home.join(".codex")).unwrap();
         let elsewhere = real.path().join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
-        std::fs::write(
-            elsewhere.join("auth.json"),
-            "{\"token\":\"not-for-agents\"}",
-        )
-        .unwrap();
+        std::fs::write(elsewhere.join("auth.json"), "{\"token\":\"not-for-agents\"}").unwrap();
         std::os::unix::fs::symlink(&elsewhere, home.join(".codex")).unwrap();
         copy_back(ModelProviderKind::Codex, real.path(), &home);
-        assert_eq!(
-            std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(),
-            "{\"refresh\":\"old\"}",
-            "symlinked dir followed"
-        );
+        assert_eq!(std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(), "{\"refresh\":\"old\"}", "symlinked dir followed");
     }
 }

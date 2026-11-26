@@ -69,11 +69,7 @@ impl ResolvedRuntime {
         }
         if self.provider == ModelProviderKind::ClaudeCode {
             if let Some(i) = self.args.iter().rposition(|a| a == "--model") {
-                return self
-                    .args
-                    .get(i + 1)
-                    .map(|m| m.trim().to_string())
-                    .unwrap_or_default();
+                return self.args.get(i + 1).map(|m| m.trim().to_string()).unwrap_or_default();
             }
         }
         String::new()
@@ -140,10 +136,7 @@ pub fn ollama_uses_openai_shim() -> bool {
 /// *start* of the prompt — the system prompt — while the planner believes it
 /// fits. Thinking is off unless the runtime opts in; when the probe says the
 /// model can't think, the field is omitted entirely.
-pub fn ollama_chat_options(
-    rt: &ResolvedRuntime,
-    caps: Option<&super::ollama::ModelCapabilities>,
-) -> ChatOptions {
+pub fn ollama_chat_options(rt: &ResolvedRuntime, caps: Option<&super::ollama::ModelCapabilities>) -> ChatOptions {
     let mut num_ctx = rt.context_window();
     if let Some(max) = caps.and_then(|c| c.context_length) {
         num_ctx = num_ctx.min(max);
@@ -153,21 +146,14 @@ pub fn ollama_chat_options(
         (Some(t), _) => Some(t),
         (None, _) => Some(false),
     };
-    ChatOptions {
-        num_ctx: Some(num_ctx),
-        keep_alive: rt.keep_alive.clone().filter(|s| !s.trim().is_empty()),
-        think,
-    }
+    ChatOptions { num_ctx: Some(num_ctx), keep_alive: rt.keep_alive.clone().filter(|s| !s.trim().is_empty()), think }
 }
 
 /// Whether a native-Ollama turn may carry tool definitions: the runtime opted
 /// in AND the probe says the model can call tools. No probe (server
 /// unreachable at probe time, or an old server without `capabilities`) means
 /// no tools — a model that can't parse them would answer with junk.
-pub fn ollama_tools_allowed(
-    rt: &ResolvedRuntime,
-    caps: Option<&super::ollama::ModelCapabilities>,
-) -> bool {
+pub fn ollama_tools_allowed(rt: &ResolvedRuntime, caps: Option<&super::ollama::ModelCapabilities>) -> bool {
     rt.tools && caps.map(|c| c.tools).unwrap_or(false)
 }
 
@@ -199,10 +185,7 @@ pub fn openai_tools_allowed(rt: &ResolvedRuntime) -> bool {
 /// the 1024 the Anthropic path passes.
 pub fn openai_request_extras(rt: &ResolvedRuntime) -> Map<String, Value> {
     let mut extra = Map::new();
-    if !matches!(
-        rt.provider,
-        ModelProviderKind::Custom | ModelProviderKind::LigusDaemon
-    ) {
+    if !matches!(rt.provider, ModelProviderKind::Custom | ModelProviderKind::LigusDaemon) {
         return extra;
     }
     use ligus_core::model_profile::{profile_for, ReasoningStyle};
@@ -211,10 +194,7 @@ pub fn openai_request_extras(rt: &ResolvedRuntime) -> Map<String, Value> {
     // ignores it.
     let reasoning = profile_for(&rt.model).map(|p| p.reasoning);
     if reasoning != Some(ReasoningStyle::None) {
-        extra.insert(
-            "chat_template_kwargs".into(),
-            json!({ "enable_thinking": think }),
-        );
+        extra.insert("chat_template_kwargs".into(), json!({ "enable_thinking": think }));
     }
     if !think && reasoning == Some(ReasoningStyle::AlwaysWithEffort) {
         extra.insert("reasoning_effort".into(), json!("low"));
@@ -247,17 +227,11 @@ pub async fn warm_context_probe(rt: &ResolvedRuntime) {
 /// TLS client and credential), or one an exclusive host refuses (the probe
 /// would reach an unlisted endpoint, with the runtime's key, before the turn
 /// is refused), is not.
-pub async fn warm_context_probe_on(
-    gws: &crate::model_gateway::ModelGateways,
-    rt: &ResolvedRuntime,
-) {
+pub async fn warm_context_probe_on(gws: &crate::model_gateway::ModelGateways, rt: &ResolvedRuntime) {
     if !rt.probes_server_props() || rt.context_window_tokens.is_some_and(|n| n > 0) {
         return;
     }
-    if !matches!(
-        gws.route(rt.provider, &rt.endpoint, rt.gateway.as_ref()),
-        Ok(None)
-    ) {
+    if !matches!(gws.route(rt.provider, &rt.endpoint, rt.gateway.as_ref()), Ok(None)) {
         return;
     }
     OpenAiClient::new(&rt.endpoint)
@@ -274,9 +248,7 @@ impl ResolvedRuntime {
     /// the `num_ctx` Ollama allocates, and the profiles' 32k (a llama.cpp
     /// gateway slot) would quadruple an existing 8k runtime's KV cache.
     pub fn context_window(&self) -> u32 {
-        use ligus_core::context_budget::model_context_window::{
-            name_table_window, tokens_for_model,
-        };
+        use ligus_core::context_budget::model_context_window::{name_table_window, tokens_for_model};
         match self.context_window_tokens {
             Some(n) if n > 0 => n,
             _ if self.provider == ModelProviderKind::Ollama => name_table_window(&self.model),
@@ -292,10 +264,7 @@ impl ResolvedRuntime {
     /// for its window. Hosted providers (OpenAI, OpenRouter, Azure) and
     /// Ollama (native probe) are excluded.
     pub fn probes_server_props(&self) -> bool {
-        matches!(
-            self.provider,
-            ModelProviderKind::Custom | ModelProviderKind::LigusDaemon
-        ) && !self.endpoint.is_empty()
+        matches!(self.provider, ModelProviderKind::Custom | ModelProviderKind::LigusDaemon) && !self.endpoint.is_empty()
     }
 
     /// True for runtimes reached over an HTTP model endpoint with no tool loop
@@ -323,9 +292,7 @@ impl ResolvedRuntime {
         self.tools
             && matches!(
                 self.provider,
-                ModelProviderKind::Custom
-                    | ModelProviderKind::LigusDaemon
-                    | ModelProviderKind::Ollama
+                ModelProviderKind::Custom | ModelProviderKind::LigusDaemon | ModelProviderKind::Ollama
             )
     }
 
@@ -367,9 +334,7 @@ pub enum StreamActivity {
     Thinking { text: String },
     /// The runtime reported its subscription plan window (Claude Code's
     /// rate-limit events). Feeds the staggered throttles.
-    RateLimit {
-        window: ligus_core::throttle::PlanWindow,
-    },
+    RateLimit { window: ligus_core::throttle::PlanWindow },
 }
 
 /// Error-message label for an OpenAI-wire provider kind.
@@ -410,18 +375,8 @@ pub async fn stream(
     // OpenAI-wire providers emit reasoning fragments.
     on_activity: impl FnMut(StreamActivity),
 ) -> Result<String, ProviderError> {
-    stream_with_tools(
-        rt,
-        system,
-        turns,
-        working_dir,
-        extra_env,
-        max_tokens,
-        None::<ToolSet<'_, NoTools>>,
-        on_delta,
-        on_activity,
-    )
-    .await
+    stream_with_tools(rt, system, turns, working_dir, extra_env, max_tokens, None::<ToolSet<'_, NoTools>>, on_delta, on_activity)
+        .await
 }
 
 /// [`stream`], with `tools` on offer. A native-Ollama runtime runs the tool
@@ -453,17 +408,7 @@ pub async fn stream_with_tools<E: ToolExecutor>(
     };
     crate::executor::with_runtime(
         scope,
-        stream_with_tools_inner(
-            rt,
-            system,
-            turns,
-            working_dir,
-            extra_env,
-            max_tokens,
-            tools,
-            on_delta,
-            on_activity,
-        ),
+        stream_with_tools_inner(rt, system, turns, working_dir, extra_env, max_tokens, tools, on_delta, on_activity),
     )
     .await
 }
@@ -487,10 +432,7 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
     // (Track D1); an ACP start failure falls back to the legacy adapter once.
     if matches!(
         rt.provider,
-        ModelProviderKind::ClaudeCode
-            | ModelProviderKind::Codex
-            | ModelProviderKind::Antigravity
-            | ModelProviderKind::Copilot
+        ModelProviderKind::ClaudeCode | ModelProviderKind::Codex | ModelProviderKind::Antigravity | ModelProviderKind::Copilot
     ) {
         let restricted = !crate::executor::agent_policy().envelope.egress.is_open();
         match super::acp::resolve(rt, restricted) {
@@ -525,51 +467,21 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
                     Err(super::acp::AcpFailure::Turn(e)) => return Err(e),
                     Err(super::acp::AcpFailure::Init(why)) if !produced => {
                         tracing::warn!(target: "dispatch", provider = ?rt.provider, %why, "ACP start failed; using the legacy adapter for this turn");
-                        crate::agent_turn::note(format!(
-                            "acp_fallback:{}",
-                            provider_label(rt.provider)
-                        ));
+                        crate::agent_turn::note(format!("acp_fallback:{}", provider_label(rt.provider)));
                         // The prompt taught the Ligus tools; a legacy adapter
                         // that can't take the server gets the directives back.
-                        let lost_tools = crate::agent_turn::current()
-                            .is_some_and(|s| s.mcp.is_some())
+                        let lost_tools = crate::agent_turn::current().is_some_and(|s| s.mcp.is_some())
                             && !crate::ligus_mcp::attach::legacy_attaches(rt.provider);
-                        let with_directives = system.map(|s| {
-                            format!("{s}\n\n{}", crate::prompt::directive_fallback_guidance())
-                        });
-                        let system = if lost_tools {
-                            with_directives.as_deref()
-                        } else {
-                            system
-                        };
-                        return legacy_cli(
-                            rt,
-                            system,
-                            turns,
-                            working_dir,
-                            extra_env,
-                            on_delta,
-                            on_activity,
-                        )
-                        .await;
+                        let with_directives = system.map(|s| format!("{s}\n\n{}", crate::prompt::directive_fallback_guidance()));
+                        let system = if lost_tools { with_directives.as_deref() } else { system };
+                        return legacy_cli(rt, system, turns, working_dir, extra_env, on_delta, on_activity).await;
                     }
-                    Err(super::acp::AcpFailure::Init(why)) => {
-                        return Err(ProviderError::Subprocess(why))
-                    }
+                    Err(super::acp::AcpFailure::Init(why)) => return Err(ProviderError::Subprocess(why)),
                 }
             }
             Err(reason) => {
                 tracing::debug!(target: "dispatch", provider = ?rt.provider, ?reason, "legacy CLI adapter");
-                return legacy_cli(
-                    rt,
-                    system,
-                    turns,
-                    working_dir,
-                    extra_env,
-                    on_delta,
-                    on_activity,
-                )
-                .await;
+                return legacy_cli(rt, system, turns, working_dir, extra_env, on_delta, on_activity).await;
             }
         }
     }
@@ -578,28 +490,14 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
             let key = rt.api_key.as_deref().unwrap_or_default();
             let client = match &route {
                 Some(r) => {
-                    let http = r
-                        .gateway
-                        .client()
-                        .await
-                        .map_err(|e| ProviderError::Gateway(e.to_string()))?;
-                    let c = AnthropicClient::new().with_gateway(
-                        r.gateway.clone(),
-                        r.attribution.clone(),
-                        http,
-                    );
+                    let http = r.gateway.client().await.map_err(|e| ProviderError::Gateway(e.to_string()))?;
+                    let c = AnthropicClient::new().with_gateway(r.gateway.clone(), r.attribution.clone(), http);
                     // A runtime that named an endpoint on the gateway keeps it.
-                    if rt.gateway.is_none() && !rt.endpoint.is_empty() {
-                        c.with_endpoint(&rt.endpoint)
-                    } else {
-                        c
-                    }
+                    if rt.gateway.is_none() && !rt.endpoint.is_empty() { c.with_endpoint(&rt.endpoint) } else { c }
                 }
                 None => AnthropicClient::new(),
             };
-            client
-                .stream_reply(key, &rt.model, system, turns, max_tokens, on_delta)
-                .await
+            client.stream_reply(key, &rt.model, system, turns, max_tokens, on_delta).await
         }
         ModelProviderKind::Ollama if !ollama_uses_openai_shim() && route.is_none() => {
             // Native API: carries num_ctx / keep_alive / think, which the `/v1`
@@ -657,21 +555,9 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
             // `api-key` header instead of a bearer token.
             let client = match &route {
                 Some(r) => {
-                    let http = r
-                        .gateway
-                        .client()
-                        .await
-                        .map_err(|e| ProviderError::Gateway(e.to_string()))?;
-                    let endpoint = if rt.gateway.is_some() || rt.endpoint.is_empty() {
-                        r.gateway.chat_endpoint()
-                    } else {
-                        rt.endpoint.clone()
-                    };
-                    OpenAiClient::new(endpoint).with_gateway(
-                        r.gateway.clone(),
-                        r.attribution.clone(),
-                        http,
-                    )
+                    let http = r.gateway.client().await.map_err(|e| ProviderError::Gateway(e.to_string()))?;
+                    let endpoint = if rt.gateway.is_some() || rt.endpoint.is_empty() { r.gateway.chat_endpoint() } else { rt.endpoint.clone() };
+                    OpenAiClient::new(endpoint).with_gateway(r.gateway.clone(), r.attribution.clone(), http)
                 }
                 None => OpenAiClient::new(&rt.endpoint),
             };
@@ -682,12 +568,7 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
                 .with_context_window(tool_loop_context_window(rt))
                 // Hosted APIs bill per token: their reported usage is charged
                 // to the turn's maxSpendUsd. Local and custom servers are free.
-                .with_spend_metering(matches!(
-                    rt.provider,
-                    ModelProviderKind::OpenAI
-                        | ModelProviderKind::OpenRouter
-                        | ModelProviderKind::Azure
-                ));
+                .with_spend_metering(matches!(rt.provider, ModelProviderKind::OpenAI | ModelProviderKind::OpenRouter | ModelProviderKind::Azure));
             match tools.filter(|t| !t.defs.is_empty()) {
                 Some(t) if openai_tools_allowed(rt) => {
                     tracing::info!(target: "dispatch", provider = provider_label(rt.provider), host = %client.host(), model = %rt.model, tools = t.defs.len(), "openai-wire turn with tools");
@@ -756,15 +637,13 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
             args.push(prompt);
 
             // Bootstrap a provider config dir if a base URL is configured.
-            let config_dir = rt
-                .model_base_url
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .and_then(|base_url| {
+            let config_dir = rt.model_base_url.as_deref().filter(|s| !s.is_empty()).and_then(
+                |base_url| {
                     subprocess::bootstrap_pi_provider(&provider_id, base_url, &[rt.model.clone()])
                         .map_err(|e| eprintln!("pi: failed to write provider config: {e}"))
                         .ok()
-                });
+                },
+            );
             let mut envs: Vec<(String, String)> = config_dir
                 .as_ref()
                 .map(|d| vec![("PI_CODING_AGENT_DIR".to_string(), d.display().to_string())])
@@ -800,20 +679,8 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
             )
             .await
         }
-        ModelProviderKind::ClaudeCode
-        | ModelProviderKind::Codex
-        | ModelProviderKind::Antigravity
-        | ModelProviderKind::Copilot => {
-            legacy_cli(
-                rt,
-                system,
-                turns,
-                working_dir,
-                extra_env,
-                on_delta,
-                on_activity,
-            )
-            .await
+        ModelProviderKind::ClaudeCode | ModelProviderKind::Codex | ModelProviderKind::Antigravity | ModelProviderKind::Copilot => {
+            legacy_cli(rt, system, turns, working_dir, extra_env, on_delta, on_activity).await
         }
         ModelProviderKind::Hermes => {
             // Generic stdin-driven CLI agent: feed the rendered prompt on stdin
@@ -821,11 +688,7 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
             // and any flags (`args`) configured on the runtime. This is the same
             // shape as aider, so any prompt-on-stdin agent works with no new code.
             let input = subprocess::render_prompt(system, turns);
-            let program = if rt.endpoint.is_empty() {
-                "hermes"
-            } else {
-                &rt.endpoint
-            };
+            let program = if rt.endpoint.is_empty() { "hermes" } else { &rt.endpoint };
             subprocess::run_with(
                 ModelProviderKind::Hermes,
                 program,
@@ -843,9 +706,7 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
 /// The turn's model route on this host ([`crate::model_gateway::ModelGateways::route`]),
 /// with the gateway's credential checked up front so a missing or unreadable
 /// token fails the turn with a clear message instead of a gateway 401.
-pub fn model_route(
-    rt: &ResolvedRuntime,
-) -> Result<Option<crate::model_gateway::ResolvedGateway>, ProviderError> {
+pub fn model_route(rt: &ResolvedRuntime) -> Result<Option<crate::model_gateway::ResolvedGateway>, ProviderError> {
     let endpoint = if rt.provider.is_cli_agent() {
         String::new()
     } else if rt.endpoint.is_empty() {
@@ -856,13 +717,9 @@ pub fn model_route(
     } else {
         rt.endpoint.clone()
     };
-    let route = crate::model_gateway::host()
-        .route(rt.provider, &endpoint, rt.gateway.as_ref())
-        .map_err(ProviderError::Gateway)?;
+    let route = crate::model_gateway::host().route(rt.provider, &endpoint, rt.gateway.as_ref()).map_err(ProviderError::Gateway)?;
     if let Some(r) = &route {
-        r.gateway
-            .auth_headers()
-            .map_err(|e| ProviderError::Gateway(e.to_string()))?;
+        r.gateway.auth_headers().map_err(|e| ProviderError::Gateway(e.to_string()))?;
     }
     Ok(route)
 }
@@ -1008,8 +865,7 @@ pub const LOCAL_GATEWAY_ENDPOINT: &str = "http://<host>:8080/v1/chat/completions
 pub const MLX_ENDPOINT: &str = "http://localhost:8080/v1/chat/completions";
 
 /// The Gemini API's OpenAI-compatible endpoint (no new provider kind).
-pub const GEMINI_OPENAI_ENDPOINT: &str =
-    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+pub const GEMINI_OPENAI_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
 /// Known OpenAI-compatible endpoints offered as presets. They all route through
 /// the OpenAI-compatible client; Gemini/LM Studio/Groq/Together need only a base
@@ -1017,86 +873,26 @@ pub const GEMINI_OPENAI_ENDPOINT: &str =
 pub fn provider_presets() -> Vec<ProviderPreset> {
     use ModelProviderKind::*;
     vec![
-        ProviderPreset {
-            label: "OpenAI",
-            provider: OpenAI,
-            endpoint: "https://api.openai.com/v1/chat/completions",
-            needs_key: true,
-            tools: true,
-        },
-        ProviderPreset {
-            label: "OpenRouter",
-            provider: OpenRouter,
-            endpoint: "https://openrouter.ai/api/v1/chat/completions",
-            needs_key: true,
-            tools: true,
-        },
-        ProviderPreset {
-            label: "Ollama (local)",
-            provider: Ollama,
-            endpoint: "http://localhost:11434/v1/chat/completions",
-            needs_key: false,
-            tools: true,
-        },
+        ProviderPreset { label: "OpenAI", provider: OpenAI, endpoint: "https://api.openai.com/v1/chat/completions", needs_key: true, tools: true },
+        ProviderPreset { label: "OpenRouter", provider: OpenRouter, endpoint: "https://openrouter.ai/api/v1/chat/completions", needs_key: true, tools: true },
+        ProviderPreset { label: "Ollama (local)", provider: Ollama, endpoint: "http://localhost:11434/v1/chat/completions", needs_key: false, tools: true },
         // llama.cpp behind an OpenAI-compatible gateway: the fast local path
         // (5.8x Ollama's prefill on ROCm in Ligus's lab), tool calls verified.
-        ProviderPreset {
-            label: "Local gateway (llama.cpp, OpenAI-compatible)",
-            provider: Custom,
-            endpoint: LOCAL_GATEWAY_ENDPOINT,
-            needs_key: false,
-            tools: true,
-        },
-        ProviderPreset {
-            label: "LM Studio (local)",
-            provider: Custom,
-            endpoint: "http://localhost:1234/v1/chat/completions",
-            needs_key: false,
-            tools: true,
-        },
+        ProviderPreset { label: "Local gateway (llama.cpp, OpenAI-compatible)", provider: Custom, endpoint: LOCAL_GATEWAY_ENDPOINT, needs_key: false, tools: true },
+        ProviderPreset { label: "LM Studio (local)", provider: Custom, endpoint: "http://localhost:1234/v1/chat/completions", needs_key: false, tools: true },
         // Apple Silicon: `mlx_lm.server` speaks the OpenAI wire (default port 8080).
-        ProviderPreset {
-            label: "MLX (local, mlx_lm.server)",
-            provider: Custom,
-            endpoint: MLX_ENDPOINT,
-            needs_key: false,
-            tools: true,
-        },
-        ProviderPreset {
-            label: "Google Gemini",
-            provider: Custom,
-            endpoint: GEMINI_OPENAI_ENDPOINT,
-            needs_key: true,
-            tools: true,
-        },
-        ProviderPreset {
-            label: "Groq",
-            provider: Custom,
-            endpoint: "https://api.groq.com/openai/v1/chat/completions",
-            needs_key: true,
-            tools: true,
-        },
-        ProviderPreset {
-            label: "Together",
-            provider: Custom,
-            endpoint: "https://api.together.xyz/v1/chat/completions",
-            needs_key: true,
-            tools: true,
-        },
-        ProviderPreset {
-            label: "Azure OpenAI",
-            provider: Azure,
-            endpoint: "",
-            needs_key: true,
-            tools: true,
-        },
+        ProviderPreset { label: "MLX (local, mlx_lm.server)", provider: Custom, endpoint: MLX_ENDPOINT, needs_key: false, tools: true },
+        ProviderPreset { label: "Google Gemini", provider: Custom, endpoint: GEMINI_OPENAI_ENDPOINT, needs_key: true, tools: true },
+        ProviderPreset { label: "Groq", provider: Custom, endpoint: "https://api.groq.com/openai/v1/chat/completions", needs_key: true, tools: true },
+        ProviderPreset { label: "Together", provider: Custom, endpoint: "https://api.together.xyz/v1/chat/completions", needs_key: true, tools: true },
+        ProviderPreset { label: "Azure OpenAI", provider: Azure, endpoint: "", needs_key: true, tools: true },
     ]
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::ollama::ModelCapabilities;
     use super::*;
+    use super::super::ollama::ModelCapabilities;
 
     /// The first-class runtime matrix's API and local rows (D.2.4) are all
     /// one-click presets over the OpenAI-compatible provider (no new kind).
@@ -1105,18 +901,12 @@ mod tests {
         let presets = provider_presets();
         let gemini = presets.iter().find(|p| p.label == "Google Gemini").unwrap();
         assert_eq!(gemini.provider, ModelProviderKind::Custom);
-        assert!(gemini
-            .endpoint
-            .starts_with("https://generativelanguage.googleapis.com/v1beta/openai/"));
+        assert!(gemini.endpoint.starts_with("https://generativelanguage.googleapis.com/v1beta/openai/"));
         assert!(gemini.needs_key);
         let mlx = presets.iter().find(|p| p.label.starts_with("MLX")).unwrap();
         assert_eq!(mlx.provider, ModelProviderKind::Custom);
         assert!(!mlx.needs_key && mlx.endpoint.ends_with("/v1/chat/completions"));
-        for label in [
-            "OpenAI",
-            "Ollama (local)",
-            "Local gateway (llama.cpp, OpenAI-compatible)",
-        ] {
+        for label in ["OpenAI", "Ollama (local)", "Local gateway (llama.cpp, OpenAI-compatible)"] {
             assert!(presets.iter().any(|p| p.label == label), "{label}");
         }
     }
@@ -1146,10 +936,7 @@ mod tests {
         let mut rt = ollama_rt();
         assert_eq!(rt.effective_model(), "qwen3.5");
         rt.set_model(" gpt-oss:20b ");
-        assert_eq!(
-            (rt.model.as_str(), rt.effective_model()),
-            ("gpt-oss:20b", "gpt-oss:20b".to_string())
-        );
+        assert_eq!((rt.model.as_str(), rt.effective_model()), ("gpt-oss:20b", "gpt-oss:20b".to_string()));
         rt.set_model("");
         assert_eq!(rt.model, "gpt-oss:20b", "an empty choice changes nothing");
 
@@ -1157,27 +944,14 @@ mod tests {
         let mut cc = ResolvedRuntime {
             provider: ModelProviderKind::ClaudeCode,
             model: String::new(),
-            args: vec![
-                "--permission-mode".into(),
-                "acceptEdits".into(),
-                "--model".into(),
-                "opus".into(),
-            ],
+            args: vec!["--permission-mode".into(), "acceptEdits".into(), "--model".into(), "opus".into()],
             ..ollama_rt()
         };
         assert_eq!(cc.effective_model(), "opus");
         cc.set_model("haiku");
-        assert_eq!(
-            cc.args,
-            ["--permission-mode", "acceptEdits", "--model", "haiku"]
-        );
+        assert_eq!(cc.args, ["--permission-mode", "acceptEdits", "--model", "haiku"]);
         assert_eq!(cc.effective_model(), "haiku");
-        let mut bare = ResolvedRuntime {
-            provider: ModelProviderKind::ClaudeCode,
-            model: String::new(),
-            args: vec![],
-            ..ollama_rt()
-        };
+        let mut bare = ResolvedRuntime { provider: ModelProviderKind::ClaudeCode, model: String::new(), args: vec![], ..ollama_rt() };
         assert_eq!(bare.effective_model(), "", "no --model: the CLI's default");
         bare.set_model("sonnet");
         assert_eq!(bare.args, ["--model", "sonnet"]);
@@ -1198,31 +972,13 @@ mod tests {
         // Existing native-Ollama runtimes with no override: num_ctx stays what
         // it was (8k for gemma, the fallback for gpt-oss/lfm2), not the
         // llama.cpp slot size the model profiles carry.
-        let caps = ModelCapabilities {
-            context_length: Some(131_072),
-            ..Default::default()
-        };
+        let caps = ModelCapabilities { context_length: Some(131_072), ..Default::default() };
         for model in ["gemma3:27b", "gemma4:12b", "gpt-oss:20b", "lfm2:8b"] {
-            let rt = ResolvedRuntime {
-                model: model.into(),
-                ..ollama_rt()
-            };
-            assert_eq!(
-                ollama_chat_options(&rt, Some(&caps)).num_ctx,
-                Some(8_192),
-                "{model}"
-            );
-            assert_eq!(
-                rt.context_window(),
-                8_192,
-                "{model}: the planner budgets the same window"
-            );
+            let rt = ResolvedRuntime { model: model.into(), ..ollama_rt() };
+            assert_eq!(ollama_chat_options(&rt, Some(&caps)).num_ctx, Some(8_192), "{model}");
+            assert_eq!(rt.context_window(), 8_192, "{model}: the planner budgets the same window");
             // The same model behind a llama.cpp gateway gets its slot size.
-            let gw = ResolvedRuntime {
-                provider: ModelProviderKind::Custom,
-                endpoint: "http://10.11.12.13:9/v1/chat/completions".into(),
-                ..rt
-            };
+            let gw = ResolvedRuntime { provider: ModelProviderKind::Custom, endpoint: "http://10.11.12.13:9/v1/chat/completions".into(), ..rt };
             assert_eq!(gw.context_window(), 32_768, "{model}");
         }
     }
@@ -1233,17 +989,9 @@ mod tests {
         rt.context_window_tokens = Some(131_072);
         rt.think = Some(true);
         rt.keep_alive = Some("-1".into());
-        let caps = ModelCapabilities {
-            thinking: true,
-            context_length: Some(40_960),
-            ..Default::default()
-        };
+        let caps = ModelCapabilities { thinking: true, context_length: Some(40_960), ..Default::default() };
         let o = ollama_chat_options(&rt, Some(&caps));
-        assert_eq!(
-            o.num_ctx,
-            Some(40_960),
-            "override capped at the model's max"
-        );
+        assert_eq!(o.num_ctx, Some(40_960), "override capped at the model's max");
         assert_eq!(o.think, Some(true));
         assert_eq!(o.keep_alive.as_deref(), Some("-1"));
         // Blank keep-alive is dropped.
@@ -1255,10 +1003,7 @@ mod tests {
     fn ollama_options_omit_think_when_the_model_cannot() {
         let mut rt = ollama_rt();
         rt.think = Some(true);
-        let caps = ModelCapabilities {
-            thinking: false,
-            ..Default::default()
-        };
+        let caps = ModelCapabilities { thinking: false, ..Default::default() };
         assert_eq!(ollama_chat_options(&rt, Some(&caps)).think, None);
     }
 
@@ -1337,16 +1082,10 @@ mod tests {
             ..ollama_rt()
         };
         // Nothing probed yet: the name table (fallback for an unknown name).
-        assert_eq!(
-            rt.context_window(),
-            ligus_core::context_budget::model_context_window::FALLBACK
-        );
+        assert_eq!(rt.context_window(), ligus_core::context_budget::model_context_window::FALLBACK);
         // A probe that found nothing changes nothing.
         super::super::openai::seed_context_probe(endpoint, "some-local-gguf", None);
-        assert_eq!(
-            rt.context_window(),
-            ligus_core::context_budget::model_context_window::FALLBACK
-        );
+        assert_eq!(rt.context_window(), ligus_core::context_budget::model_context_window::FALLBACK);
         // The server's per-slot window beats the name guess…
         super::super::openai::seed_context_probe(endpoint, "some-local-gguf", Some(16_384));
         assert_eq!(rt.context_window(), 16_384);
@@ -1356,18 +1095,12 @@ mod tests {
         // Hosted providers never consult the probe cache.
         rt.context_window_tokens = None;
         rt.provider = ModelProviderKind::OpenAI;
-        assert_eq!(
-            rt.context_window(),
-            ligus_core::context_budget::model_context_window::FALLBACK
-        );
+        assert_eq!(rt.context_window(), ligus_core::context_budget::model_context_window::FALLBACK);
     }
 
     #[test]
     fn openai_wire_tools_follow_the_runtime_switch() {
-        let mut rt = ResolvedRuntime {
-            provider: ModelProviderKind::Custom,
-            ..ollama_rt()
-        };
+        let mut rt = ResolvedRuntime { provider: ModelProviderKind::Custom, ..ollama_rt() };
         assert!(!openai_tools_allowed(&rt), "off unless opted in");
         rt.tools = true;
         assert!(openai_tools_allowed(&rt));
@@ -1392,26 +1125,13 @@ mod tests {
 
     #[test]
     fn request_extras_map_think_for_local_servers_only() {
-        let mut rt = ResolvedRuntime {
-            provider: ModelProviderKind::Custom,
-            model: "gemma4:12b".into(),
-            ..ollama_rt()
-        };
+        let mut rt = ResolvedRuntime { provider: ModelProviderKind::Custom, model: "gemma4:12b".into(), ..ollama_rt() };
         // Ligus's default (unset) is thinking off.
         let e = openai_request_extras(&rt);
-        assert_eq!(
-            e["chat_template_kwargs"],
-            json!({ "enable_thinking": false })
-        );
-        assert!(
-            !e.contains_key("reasoning_effort"),
-            "only gpt-oss gets reasoning_effort"
-        );
+        assert_eq!(e["chat_template_kwargs"], json!({ "enable_thinking": false }));
+        assert!(!e.contains_key("reasoning_effort"), "only gpt-oss gets reasoning_effort");
         rt.think = Some(true);
-        assert_eq!(
-            openai_request_extras(&rt)["chat_template_kwargs"],
-            json!({ "enable_thinking": true })
-        );
+        assert_eq!(openai_request_extras(&rt)["chat_template_kwargs"], json!({ "enable_thinking": true }));
         // gpt-oss always reasons: low effort when thinking is off, its default otherwise.
         rt.model = "gpt-oss:20b".into();
         assert!(!openai_request_extras(&rt).contains_key("reasoning_effort"));
@@ -1420,12 +1140,7 @@ mod tests {
         rt.provider = ModelProviderKind::LigusDaemon;
         assert_eq!(openai_request_extras(&rt)["reasoning_effort"], "low");
         // Hosted APIs (and the Ollama shim) get nothing they might reject.
-        for p in [
-            ModelProviderKind::OpenAI,
-            ModelProviderKind::OpenRouter,
-            ModelProviderKind::Azure,
-            ModelProviderKind::Ollama,
-        ] {
+        for p in [ModelProviderKind::OpenAI, ModelProviderKind::OpenRouter, ModelProviderKind::Azure, ModelProviderKind::Ollama] {
             rt.provider = p;
             assert!(openai_request_extras(&rt).is_empty(), "{p:?}");
         }
@@ -1433,21 +1148,13 @@ mod tests {
 
     #[test]
     fn tool_loop_guards_local_windows_only() {
-        let mut rt = ResolvedRuntime {
-            provider: ModelProviderKind::Custom,
-            model: "unknown-gguf".into(),
-            ..ollama_rt()
-        };
+        let mut rt = ResolvedRuntime { provider: ModelProviderKind::Custom, model: "unknown-gguf".into(), ..ollama_rt() };
         rt.context_window_tokens = Some(32_768);
         assert_eq!(tool_loop_context_window(&rt), 32_768);
         rt.provider = ModelProviderKind::Ollama;
         assert_eq!(tool_loop_context_window(&rt), 32_768);
         rt.provider = ModelProviderKind::OpenAI;
-        assert_eq!(
-            tool_loop_context_window(&rt),
-            0,
-            "hosted windows aren't guessed at"
-        );
+        assert_eq!(tool_loop_context_window(&rt), 0, "hosted windows aren't guessed at");
     }
 
     #[test]
@@ -1460,29 +1167,21 @@ mod tests {
     fn presets_cover_gemini_lmstudio_azure() {
         let ps = provider_presets();
         let gemini = ps.iter().find(|p| p.label == "Google Gemini").unwrap();
-        assert!(gemini
-            .endpoint
-            .contains("generativelanguage.googleapis.com"));
+        assert!(gemini.endpoint.contains("generativelanguage.googleapis.com"));
         assert_eq!(gemini.provider, ModelProviderKind::Custom);
 
         let azure = ps.iter().find(|p| p.label == "Azure OpenAI").unwrap();
         assert_eq!(azure.provider, ModelProviderKind::Azure);
         assert!(azure.endpoint.is_empty()); // deployment-specific; user fills it
 
-        let lm = ps
-            .iter()
-            .find(|p| p.label.starts_with("LM Studio"))
-            .unwrap();
+        let lm = ps.iter().find(|p| p.label.starts_with("LM Studio")).unwrap();
         assert!(!lm.needs_key); // local server
     }
 
     #[test]
     fn local_gateway_preset_is_a_keyless_custom_runtime_with_tools() {
         let ps = provider_presets();
-        let gw = ps
-            .iter()
-            .find(|p| p.label.starts_with("Local gateway"))
-            .unwrap();
+        let gw = ps.iter().find(|p| p.label.starts_with("Local gateway")).unwrap();
         assert_eq!(gw.provider, ModelProviderKind::Custom);
         assert_eq!(gw.endpoint, "http://<host>:8080/v1/chat/completions");
         assert!(!gw.needs_key);
@@ -1494,11 +1193,7 @@ mod tests {
 
     #[test]
     fn request_extras_follow_the_model_profile() {
-        let mut rt = ResolvedRuntime {
-            provider: ModelProviderKind::Custom,
-            model: "lfm2:8b".into(),
-            ..ollama_rt()
-        };
+        let mut rt = ResolvedRuntime { provider: ModelProviderKind::Custom, model: "lfm2:8b".into(), ..ollama_rt() };
         // A family that never reasons gets no thinking fields at all.
         assert!(openai_request_extras(&rt).is_empty());
         rt.model = "bge-reranker-v2-m3".into();
@@ -1506,10 +1201,7 @@ mod tests {
         // LFM2.5 always reasons with no effort knob: kwargs only.
         rt.model = "lfm2.5:1.2b".into();
         let e = openai_request_extras(&rt);
-        assert_eq!(
-            e["chat_template_kwargs"],
-            json!({ "enable_thinking": false })
-        );
+        assert_eq!(e["chat_template_kwargs"], json!({ "enable_thinking": false }));
         assert!(!e.contains_key("reasoning_effort"));
         // Unknown models keep the kwargs (templates ignore unknown flags).
         rt.model = "mystery-7b".into();
@@ -1542,9 +1234,7 @@ mod live_cli {
             Ok("claude-code") | Ok("claude") => ModelProviderKind::ClaudeCode,
             _ => return,
         };
-        let driver = ligus_core::Driver::parse(
-            &ligus_core::names::var("LIGUS_LIVE_DRIVER").unwrap_or_default(),
-        );
+        let driver = ligus_core::Driver::parse(&ligus_core::names::var("LIGUS_LIVE_DRIVER").unwrap_or_default());
         let args = match provider {
             ModelProviderKind::Antigravity => super::super::antigravity::permission_args("default"),
             ModelProviderKind::Copilot => super::super::copilot::permission_args("default"),
@@ -1559,9 +1249,7 @@ mod live_cli {
             provider,
             model: ligus_core::names::var("LIGUS_LIVE_MODEL").unwrap_or_default(),
             endpoint: endpoint.into(),
-            api_key: ligus_core::names::var("LIGUS_LIVE_KEY")
-                .ok()
-                .filter(|k| !k.is_empty()),
+            api_key: ligus_core::names::var("LIGUS_LIVE_KEY").ok().filter(|k| !k.is_empty()),
             args,
             model_provider_id: None,
             model_base_url: None,
@@ -1583,32 +1271,16 @@ mod live_cli {
         let scope = crate::agent_turn::AgentTurnScope::default();
         let notes = scope.notes.clone();
         let dir = tempfile::tempdir().unwrap();
-        let turns = vec![ChatTurn {
-            role: "user".into(),
-            content: "Reply with the word ok and nothing else.".into(),
-        }];
+        let turns = vec![ChatTurn { role: "user".into(), content: "Reply with the word ok and nothing else.".into() }];
         let mut deltas = 0;
         let mut acts = 0;
         let started = std::time::Instant::now();
         let out = crate::agent_turn::with_agent_turn(
             scope,
-            stream(
-                &rt,
-                None,
-                &turns,
-                dir.path().to_str(),
-                &[],
-                256,
-                |_| deltas += 1,
-                |_| acts += 1,
-            ),
+            stream(&rt, None, &turns, dir.path().to_str(), &[], 256, |_| deltas += 1, |_| acts += 1),
         )
         .await;
-        let fell_back = notes
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|n| n.starts_with("acp_fallback"));
+        let fell_back = notes.lock().unwrap().iter().any(|n| n.starts_with("acp_fallback"));
         println!(
             "MATRIX {provider:?} driver={} result={} in {:?} ({deltas} deltas, {acts} activity events) {:?}",
             driver.as_str(),
@@ -1616,10 +1288,7 @@ mod live_cli {
             started.elapsed(),
             out
         );
-        assert!(
-            !(driver == ligus_core::Driver::Acp && fell_back),
-            "ACP failed to start and the turn fell back to the legacy adapter"
-        );
+        assert!(!(driver == ligus_core::Driver::Acp && fell_back), "ACP failed to start and the turn fell back to the legacy adapter");
         assert!(out.unwrap().to_lowercase().contains("ok"));
     }
 }

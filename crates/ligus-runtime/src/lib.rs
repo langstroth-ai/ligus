@@ -10,20 +10,18 @@
 // optimized build that has it is a mistake this refuses to compile
 // (scripts/check-no-test-presence.sh checks the shipped graphs in CI).
 #[cfg(all(feature = "test-presence", not(debug_assertions)))]
-compile_error!(
-    "ligus-runtime's `test-presence` feature must never be in an optimized (release) build"
-);
+compile_error!("ligus-runtime's `test-presence` feature must never be in an optimized (release) build");
 
+pub mod agent_tools;
+pub mod agent_turn;
+pub mod ask_view;
+pub mod apply_host;
+pub mod approval_mailbox;
+pub mod attachment_blob;
+pub mod attachment_safety;
 pub mod agent_access;
 #[cfg(test)]
 mod agent_access_tests;
-pub mod agent_tools;
-pub mod agent_turn;
-pub mod apply_host;
-pub mod approval_mailbox;
-pub mod ask_view;
-pub mod attachment_blob;
-pub mod attachment_safety;
 pub mod author_gate;
 pub mod box_admission;
 pub mod builtin_tools;
@@ -32,30 +30,32 @@ pub mod checks;
 pub mod cli_detect;
 pub mod computer_link;
 pub mod connection_settings;
-pub mod contacts;
 pub mod context;
 pub mod device_binding;
 pub mod device_enroll;
-pub mod directives;
 pub mod directory_trust;
 pub mod display;
 pub mod dm;
 pub mod dm_delivery;
+pub mod contacts;
+pub mod directives;
 pub mod effects;
 pub mod egress;
-pub mod envelope_verifier;
-pub mod event_store;
-pub mod executor;
 pub mod facts;
 pub mod finalize;
 pub mod forge_secrets;
-pub mod frozen_ns;
+pub mod envelope_verifier;
+pub mod event_store;
+pub mod executor;
 pub mod git_attribution;
 pub mod git_worktree;
+pub mod frozen_ns;
 pub mod guard_scan;
-pub mod hook;
 pub mod host_presence;
+pub mod revocation_status;
+pub mod role_refusal;
 pub mod human_presence;
+pub mod hook;
 pub mod hygiene;
 pub mod identity_links;
 pub mod identity_store;
@@ -63,9 +63,9 @@ pub mod identity_verifier;
 pub mod invite_sig;
 pub mod keyring;
 pub mod lease_presence;
+pub mod lockdown_view;
 pub mod ligus_auth;
 pub mod ligus_mcp;
-pub mod lockdown_view;
 pub mod mcp;
 pub mod mcp_oauth;
 pub mod mentions;
@@ -73,29 +73,27 @@ pub mod model_catalog;
 pub mod model_gateway;
 pub mod patch_leaving;
 pub mod peer;
+pub mod phone_enroll;
+pub mod profiles;
+pub mod phone_enroll_qr;
 #[cfg(feature = "p2p")]
 pub mod peer_iroh;
-pub mod phone_enroll;
-pub mod phone_enroll_qr;
 pub mod private_file;
-pub mod profiles;
 pub mod prompt;
+pub mod repos;
 pub mod proposal_preflight;
 pub mod provider;
 pub mod relay_client;
 pub mod relay_refusal;
 pub mod remote_manifest;
-pub mod repos;
 pub mod retrieval;
 pub mod review;
-pub mod revocation_status;
-pub mod role_refusal;
 pub mod safe_fs;
 pub mod sandbox;
-pub mod secret_redact;
-pub mod secret_store;
 pub mod setup;
 pub mod spend;
+pub mod secret_redact;
+pub mod secret_store;
 pub mod sse;
 pub mod sync_engine;
 pub mod sync_service;
@@ -110,56 +108,53 @@ pub mod workspace_trust;
 
 // The in-process mock relay: this crate's tests, and other clients' tests
 // through the `test-relay` feature (a dev-dependency only).
+#[cfg(any(test, feature = "test-relay"))]
+pub mod test_relay;
 #[cfg(test)]
 mod computer_link_tests;
 #[cfg(test)]
 mod dearth_roster_tests;
 #[cfg(test)]
-mod keyring_tests;
-#[cfg(test)]
 mod ligus_auth_membership_tests;
+#[cfg(test)]
+mod keyring_tests;
 #[cfg(test)]
 mod presence_tests;
 #[cfg(test)]
 mod relay_refusal_tests;
-#[cfg(any(test, feature = "test-relay"))]
-pub mod test_relay;
 
 pub use builtin_tools::{BuiltinTools, Policy as BuiltinToolPolicy};
 pub use chat_service::{
-    cascade_target, claim_receiver, empty_reply_notice, pending_mentions, pending_turns,
-    resolve_workspace_credential, turns_for, turns_from, turns_with_summary, ChatService,
-    DispatchCtx, PendingMention, SUMMARY_TURN_HEADER,
+    cascade_target, claim_receiver, empty_reply_notice, pending_mentions, pending_turns, resolve_workspace_credential, turns_for, turns_from, turns_with_summary,
+    ChatService, DispatchCtx, PendingMention, SUMMARY_TURN_HEADER,
 };
-pub use context::{CompactionResult, Compactor, Summarizer};
-pub use host_presence::HostPresence;
-pub use mcp::{
-    is_shell_tool, normalize_bearer_token, resolve_bearer, shell_tool_names, McpReach, McpRegistry,
-    McpServerSpec, McpTool, McpTransport,
+pub use context::{Compactor, CompactionResult, Summarizer};
+pub use mcp::{McpReach, 
+    is_shell_tool, normalize_bearer_token, resolve_bearer, shell_tool_names, McpRegistry, McpServerSpec, McpTool, McpTransport,
 };
-pub use mentions::{
-    message_mentions, parse_mentions, requester_from, requester_of, MentionTargets, Requester,
-};
-pub use provider::dispatch::{self, ResolvedRuntime};
-pub use provider::{AnthropicClient, ChatTurn, OpenAiClient, ProviderError};
+pub use mentions::{message_mentions, parse_mentions, requester_from, requester_of, MentionTargets, Requester};
 pub use relay_client::{
-    token_subject, EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry,
-    RelayClient, RelayError, RelayProbe, RosterState, ENVELOPE_PAGE_LIMIT,
-    UNIDENTIFIED_ROSTER_MESSAGE,
+    token_subject, EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry, RelayClient,
+    RelayError, RelayProbe, RosterState, ENVELOPE_PAGE_LIMIT, UNIDENTIFIED_ROSTER_MESSAGE,
 };
 pub use relay_refusal::{RefusalClass, RelayRefusal};
 pub use remote_manifest::resolve_manifest_url;
 pub use sse::{next_backoff, parse_seq, SseConnectError, SseDecoder, SseStream};
+pub use host_presence::HostPresence;
 pub use sync_engine::{SyncAttention, SyncEngine, SyncError};
+pub use provider::dispatch::{self, ResolvedRuntime};
+pub use provider::{AnthropicClient, ChatTurn, OpenAiClient, ProviderError};
 
 pub use envelope_verifier::{
     verify_stream, DeviceKeyResolver, DeviceRoster, QuarantineReason, VerificationOutcome,
 };
-pub use event_store::{EventStore, EventStoreError, StoredCompaction};
-pub use identity_store::{FileKeyVault, IdentityError, IdentityStore, KeyVault, StoredIdentity};
 pub use identity_verifier::{
     gate_ingest, shared_cache, FetchOutcome, IdentityCache, IdentityMode, IdentityVerdict,
     IngestAction, SharedIdentityCache,
+};
+pub use event_store::{EventStore, EventStoreError, StoredCompaction};
+pub use identity_store::{
+    FileKeyVault, IdentityError, IdentityStore, KeyVault, StoredIdentity,
 };
 
 use ligus_proto::AppInfo;
@@ -170,12 +165,7 @@ pub fn app_info() -> AppInfo {
     AppInfo {
         name: "Ligus".to_string(),
         core_version: ligus_core::VERSION.to_string(),
-        build_profile: if cfg!(debug_assertions) {
-            "debug"
-        } else {
-            "release"
-        }
-        .to_string(),
+        build_profile: if cfg!(debug_assertions) { "debug" } else { "release" }.to_string(),
         sandbox_tier: sandbox.tier().to_string(),
         sandbox_summary: sandbox.summary,
         sandbox_notes: sandbox.notes,
@@ -198,11 +188,7 @@ mod tests {
 /// "mac-mini.local"): the OS's own name, else `$HOSTNAME`/`$COMPUTERNAME`.
 pub fn machine_hostname() -> Option<String> {
     let clean = |s: String| {
-        let s = s
-            .trim()
-            .trim_end_matches(".local")
-            .trim_end_matches(".lan")
-            .to_string();
+        let s = s.trim().trim_end_matches(".local").trim_end_matches(".lan").to_string();
         (!s.is_empty() && s != "localhost").then_some(s)
     };
     #[cfg(unix)]
@@ -212,19 +198,12 @@ pub fn machine_hostname() -> Option<String> {
         // within it on success (we also cap at the first NUL).
         if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0 {
             let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
-            if let Some(h) = std::str::from_utf8(&buf[..end])
-                .ok()
-                .map(str::to_string)
-                .and_then(clean)
-            {
+            if let Some(h) = std::str::from_utf8(&buf[..end]).ok().map(str::to_string).and_then(clean) {
                 return Some(h);
             }
         }
     }
-    std::env::var("HOSTNAME")
-        .ok()
-        .or_else(|| std::env::var("COMPUTERNAME").ok())
-        .and_then(clean)
+    std::env::var("HOSTNAME").ok().or_else(|| std::env::var("COMPUTERNAME").ok()).and_then(clean)
 }
 
 #[cfg(test)]
@@ -232,10 +211,7 @@ mod hostname_tests {
     #[test]
     fn machine_hostname_is_a_plain_name() {
         if let Some(h) = super::machine_hostname() {
-            assert!(
-                !h.is_empty() && !h.ends_with(".local") && h != "localhost",
-                "{h}"
-            );
+            assert!(!h.is_empty() && !h.ends_with(".local") && h != "localhost", "{h}");
         }
     }
 }

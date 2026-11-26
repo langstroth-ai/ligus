@@ -109,13 +109,9 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use ligus_core::chat::{ChatMessage, MessageRole};
-use ligus_core::context_budget::{
-    plan_with_hysteresis, DEFAULT_HIGH_WATERMARK, DEFAULT_LOW_WATERMARK,
-};
+use ligus_core::context_budget::{plan_with_hysteresis, DEFAULT_HIGH_WATERMARK, DEFAULT_LOW_WATERMARK};
 use ligus_core::ModelProviderKind;
-use ligus_runtime::agent_tools::{
-    builtin_policy, tool_round_budget, CompositeTools, MAX_OFFERED_TOOLS,
-};
+use ligus_runtime::agent_tools::{builtin_policy, tool_round_budget, CompositeTools, MAX_OFFERED_TOOLS};
 use ligus_runtime::chat_service::turns_with_summary;
 use ligus_runtime::git_worktree::{chat_worktree, Worktree};
 use ligus_runtime::provider::dispatch::{self, NoTools, ResolvedRuntime, StreamActivity, ToolSet};
@@ -129,10 +125,7 @@ use serde_json::{json, Value};
 // ---------------------------------------------------------------------------
 
 fn env(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+    std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
 fn env_num<T: std::str::FromStr>(name: &str, default: T) -> T {
@@ -249,26 +242,15 @@ async fn drive<E: ToolExecutor>(
         |act| {
             let mut t = trace.lock().unwrap();
             match act {
-                StreamActivity::Tool {
-                    name, input_json, ..
-                } => {
-                    eprintln!(
-                        "    -> {name} {}",
-                        input_json.chars().take(200).collect::<String>()
-                    );
+                StreamActivity::Tool { name, input_json, .. } => {
+                    eprintln!("    -> {name} {}", input_json.chars().take(200).collect::<String>());
                     t.calls.push((name, input_json));
                 }
-                StreamActivity::ToolResult {
-                    is_error, content, ..
-                } => {
+                StreamActivity::ToolResult { is_error, content, .. } => {
                     eprintln!(
                         "    <- {}{}",
                         if is_error { "ERROR " } else { "" },
-                        content
-                            .chars()
-                            .take(160)
-                            .collect::<String>()
-                            .replace('\n', " | ")
+                        content.chars().take(160).collect::<String>().replace('\n', " | ")
                     );
                     t.errors += usize::from(is_error);
                 }
@@ -279,11 +261,7 @@ async fn drive<E: ToolExecutor>(
     )
     .await
     .map_err(|e| e.to_string());
-    (
-        out,
-        trace.into_inner().unwrap(),
-        start.elapsed().as_secs_f64(),
-    )
+    (out, trace.into_inner().unwrap(), start.elapsed().as_secs_f64())
 }
 
 fn round1(secs: f64) -> f64 {
@@ -309,10 +287,7 @@ struct Recorder {
 
 impl ToolExecutor for Recorder {
     async fn call(&self, name: &str, input: &Value) -> (String, bool) {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((name.to_string(), input.clone()));
+        self.calls.lock().unwrap().push((name.to_string(), input.clone()));
         match name {
             "convert_currency" => (
                 json!({"amount": 125, "from": "EUR", "to": "JPY", "rate": 171.32, "result": 21415.0}).to_string(),
@@ -359,11 +334,7 @@ fn tool_call_defs() -> Vec<Value> {
 
 /// The arguments are right: the number 125 (not a string), EUR → JPY.
 fn currency_args_ok(args: &Value) -> bool {
-    let code = |k: &str| {
-        args.get(k)
-            .and_then(Value::as_str)
-            .map(|s| s.trim().to_uppercase())
-    };
+    let code = |k: &str| args.get(k).and_then(Value::as_str).map(|s| s.trim().to_uppercase());
     args.get("amount").and_then(Value::as_f64) == Some(125.0)
         && code("from").as_deref() == Some("EUR")
         && code("to").as_deref() == Some("JPY")
@@ -371,10 +342,7 @@ fn currency_args_ok(args: &Value) -> bool {
 
 /// The answer quotes the tool's result (21415, any thousands separator).
 fn quotes_result(reply: &str) -> bool {
-    let digits: String = reply
-        .chars()
-        .filter(|c| !matches!(c, ',' | ' ' | '\u{a0}' | '\u{202f}' | '.'))
-        .collect();
+    let digits: String = reply.chars().filter(|c| !matches!(c, ',' | ' ' | '\u{a0}' | '\u{202f}' | '.')).collect();
     digits.contains("21415")
 }
 
@@ -384,16 +352,12 @@ async fn scenario_tool_call(rt: &ResolvedRuntime) -> Outcome {
     let (out, trace, secs) = drive(
         rt,
         &system_prompt(rt),
-        &[ChatTurn::user(
-            "How much is 125 euros in Japanese yen at today's rate?",
-        )],
+        &[ChatTurn::user("How much is 125 euros in Japanese yen at today's rate?")],
         Some((&defs, &rec)),
     )
     .await;
     let calls = rec.calls.into_inner().unwrap();
-    let first_ok = calls
-        .first()
-        .is_some_and(|(n, a)| n == "convert_currency" && currency_args_ok(a));
+    let first_ok = calls.first().is_some_and(|(n, a)| n == "convert_currency" && currency_args_ok(a));
     let answered = out.as_deref().is_ok_and(quotes_result);
     Outcome {
         pass: out.is_ok() && first_ok && calls.len() == 1 && answered,
@@ -415,14 +379,7 @@ async fn scenario_tool_call(rt: &ResolvedRuntime) -> Outcome {
 // ---------------------------------------------------------------------------
 
 fn git(dir: &Path, args: &[&str]) {
-    let ok = ligus_core::process_util::command("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .unwrap()
-        .status
-        .success();
+    let ok = ligus_core::process_util::command("git").arg("-C").arg(dir).args(args).output().unwrap().status.success();
     assert!(ok, "git {args:?} failed");
 }
 
@@ -466,8 +423,7 @@ fn planted_repo(tag: &str) -> PathBuf {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir.join("check.sh"), std::fs::Permissions::from_mode(0o755))
-            .unwrap();
+        std::fs::set_permissions(dir.join("check.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
@@ -478,20 +434,9 @@ const BUG_PROMPT: &str =
     "Running `./check.sh` fails. The tests are correct; find the bug in the project's code and fix it.";
 
 fn check_passes(dir: &Path) -> (bool, String) {
-    let out = std::process::Command::new("sh")
-        .arg("check.sh")
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    (
-        out.status.success(),
-        text.trim().chars().take(300).collect(),
-    )
+    let out = std::process::Command::new("sh").arg("check.sh").current_dir(dir).output().unwrap();
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    (out.status.success(), text.trim().chars().take(300).collect())
 }
 
 async fn scenario_bug_fix(rt: &ResolvedRuntime, run: usize) -> Outcome {
@@ -503,15 +448,9 @@ async fn scenario_bug_fix(rt: &ResolvedRuntime, run: usize) -> Outcome {
     assert!(!check_passes(&wt.path).0, "the planted bug must fail first");
 
     let builtin = BuiltinTools::new(builtin_policy(&wt.path, true, false, commands)).unwrap();
-    let tools: CompositeTools<NoTools> =
-        CompositeTools::new(Some(builtin), None, MAX_OFFERED_TOOLS);
-    let (out, trace, secs) = drive(
-        rt,
-        &system_prompt(rt),
-        &[ChatTurn::user(BUG_PROMPT)],
-        Some((tools.defs(), &tools)),
-    )
-    .await;
+    let tools: CompositeTools<NoTools> = CompositeTools::new(Some(builtin), None, MAX_OFFERED_TOOLS);
+    let (out, trace, secs) =
+        drive(rt, &system_prompt(rt), &[ChatTurn::user(BUG_PROMPT)], Some((tools.defs(), &tools))).await;
     let (passes, check_out) = check_passes(&wt.path);
     let files = wt.changed_files().unwrap_or_default();
     let only_code = files == ["inventory/stock.py"];
@@ -530,10 +469,7 @@ async fn scenario_bug_fix(rt: &ResolvedRuntime, run: usize) -> Outcome {
     });
     let _ = wt.remove();
     let _ = std::fs::remove_dir_all(&repo);
-    Outcome {
-        pass: out.is_ok() && passes && only_code,
-        detail,
-    }
+    Outcome { pass: out.is_ok() && passes && only_code, detail }
 }
 
 // ---------------------------------------------------------------------------
@@ -542,40 +478,16 @@ async fn scenario_bug_fix(rt: &ResolvedRuntime, run: usize) -> Outcome {
 
 /// Built-in summary instruction — the app's `DEFAULT_CONTEXT_SUMMARY_PROMPT`
 /// (app/src/lib.rs), copied so the eval measures what users get by default.
-const SUMMARY_INSTRUCTION: &str =
-    "Summarize the conversation for context continuity: decisions, open \
+const SUMMARY_INSTRUCTION: &str = "Summarize the conversation for context continuity: decisions, open \
 questions, action items, file/code changes, and owners. Be concise (<=200 words).";
 
 /// (planted message, accepted answer spellings — any one matches, lowercased)
 const FACTS: &[(&str, &[&str])] = &[
-    (
-        "Heads up: the staging database now listens on port 6543, not the default.",
-        &["6543"],
-    ),
-    (
-        "We agreed the release codename is Bluefinch.",
-        &["bluefinch"],
-    ),
-    (
-        "Priya Raman owns the billing migration end to end.",
-        &["priya"],
-    ),
-    (
-        "The new ledger code ships behind the feature flag enable_split_ledger.",
-        &["enable_split_ledger", "split_ledger"],
-    ),
-    (
-        "Hard deadline for the release is March 14.",
-        &[
-            "march 14",
-            "14 march",
-            "mar 14",
-            "march 14th",
-            "14th of march",
-            "03-14",
-            "3/14",
-        ],
-    ),
+    ("Heads up: the staging database now listens on port 6543, not the default.", &["6543"]),
+    ("We agreed the release codename is Bluefinch.", &["bluefinch"]),
+    ("Priya Raman owns the billing migration end to end.", &["priya"]),
+    ("The new ledger code ships behind the feature flag enable_split_ledger.", &["enable_split_ledger", "split_ledger"]),
+    ("Hard deadline for the release is March 14.", &["march 14", "14 march", "mar 14", "march 14th", "14th of march", "03-14", "3/14"]),
 ];
 
 const RECALL_QUESTION: &str = "Quick check before I write the handoff doc. From our conversation: \
@@ -611,9 +523,7 @@ fn synthetic_history() -> (Vec<ChatMessage>, Vec<uuid::Uuid>) {
     let mut fact_ids = Vec::new();
     let user = |b: String| ChatMessage::new(MessageRole::User, "Dana", b);
     let ligus = |b: String| ChatMessage::new(MessageRole::Assistant, "Ligus", b);
-    history.push(user(
-        "Kicking off release planning; I'll drop the key facts as we go.".into(),
-    ));
+    history.push(user("Kicking off release planning; I'll drop the key facts as we go.".into()));
     history.push(ligus("Sounds good — I'll keep track.".into()));
     for (i, (fact, _)) in FACTS.iter().enumerate() {
         let m = user(fact.to_string());
@@ -631,27 +541,16 @@ fn synthetic_history() -> (Vec<ChatMessage>, Vec<uuid::Uuid>) {
 
 fn recalled(text: &str) -> Vec<bool> {
     let t = text.to_lowercase();
-    FACTS
-        .iter()
-        .map(|(_, keys)| keys.iter().any(|k| t.contains(k)))
-        .collect()
+    FACTS.iter().map(|(_, keys)| keys.iter().any(|k| t.contains(k))).collect()
 }
 
 async fn scenario_compaction_recall(rt: &ResolvedRuntime) -> Outcome {
     let (history, fact_ids) = synthetic_history();
     let budget: i64 = env_num("LIGUS_EVAL_HISTORY_BUDGET", 3000);
-    let plan = plan_with_hysteresis(
-        &history,
-        budget,
-        None,
-        DEFAULT_HIGH_WATERMARK,
-        DEFAULT_LOW_WATERMARK,
-    );
+    let plan = plan_with_hysteresis(&history, budget, None, DEFAULT_HIGH_WATERMARK, DEFAULT_LOW_WATERMARK);
     assert!(plan.moved, "the synthetic history must overflow the budget");
     assert!(
-        fact_ids
-            .iter()
-            .all(|id| plan.plan.overflow.iter().any(|m| m.id == *id)),
+        fact_ids.iter().all(|id| plan.plan.overflow.iter().any(|m| m.id == *id)),
         "every planted fact must be beyond the window"
     );
 
@@ -661,18 +560,9 @@ async fn scenario_compaction_recall(rt: &ResolvedRuntime) -> Outcome {
         body.push_str(&format!("{}: {}\n", m.author, m.body));
     }
     let start = Instant::now();
-    let summary = dispatch::stream(
-        rt,
-        Some(SUMMARY_INSTRUCTION),
-        &[ChatTurn::user(body)],
-        None,
-        &[],
-        512,
-        |_| {},
-        |_| {},
-    )
-    .await
-    .map_err(|e| e.to_string());
+    let summary = dispatch::stream(rt, Some(SUMMARY_INSTRUCTION), &[ChatTurn::user(body)], None, &[], 512, |_| {}, |_| {})
+        .await
+        .map_err(|e| e.to_string());
     let summary_secs = start.elapsed().as_secs_f64();
     let Ok(summary) = summary else {
         return Outcome {
@@ -685,10 +575,7 @@ async fn scenario_compaction_recall(rt: &ResolvedRuntime) -> Outcome {
     let turns = turns_with_summary(&plan.plan.kept, None, "Ligus", Some(&summary));
     let (out, trace, answer_secs) = drive::<NoTools>(rt, &system_prompt(rt), &turns, None).await;
     let in_summary = recalled(&summary);
-    let in_answer = out
-        .as_deref()
-        .map(recalled)
-        .unwrap_or_else(|_| vec![false; FACTS.len()]);
+    let in_answer = out.as_deref().map(recalled).unwrap_or_else(|_| vec![false; FACTS.len()]);
     let score = in_answer.iter().filter(|b| **b).count();
     Outcome {
         pass: out.is_ok() && score == FACTS.len(),
@@ -767,18 +654,12 @@ async fn rust_stable_version() -> Option<String> {
         .await
         .ok()?;
     let after = text.split("[pkg.rust]").nth(1)?;
-    let line = after
-        .lines()
-        .find(|l| l.trim_start().starts_with("version"))?;
+    let line = after.lines().find(|l| l.trim_start().starts_with("version"))?;
     let quoted = line.split('"').nth(1)?;
     quoted.split_whitespace().next().map(str::to_string)
 }
 
-async fn scenario_web_search(
-    rt: &ResolvedRuntime,
-    mcp: &(Vec<Value>, McpExec),
-    truth: Option<&str>,
-) -> Outcome {
+async fn scenario_web_search(rt: &ResolvedRuntime, mcp: &(Vec<Value>, McpExec), truth: Option<&str>) -> Outcome {
     // MCP tools alone (no built-ins), as a chat outside a workspace gets them.
     let (defs, exec) = mcp;
     let (out, trace, secs) = drive(
@@ -788,10 +669,7 @@ async fn scenario_web_search(
         Some((defs.as_slice(), exec)),
     )
     .await;
-    let used_web = trace
-        .names()
-        .iter()
-        .any(|n| n.ends_with("__web_search") || n.ends_with("__fetch_url"));
+    let used_web = trace.names().iter().any(|n| n.ends_with("__web_search") || n.ends_with("__fetch_url"));
     let reply = out.clone().unwrap_or_default();
     // Exact (1.99.1) or at least the minor line (1.99) — search snippets lag
     // point releases by a few days.
@@ -830,19 +708,11 @@ async fn local_harness_eval() {
     };
     let runs: usize = env_num("LIGUS_EVAL_RUNS", 1usize).max(1);
     let timeout = Duration::from_secs(env_num("LIGUS_EVAL_TIMEOUT_SECS", 600u64));
-    let mcp = if wants("web_search") {
-        live_mcp().await
-    } else {
-        None
-    };
+    let mcp = if wants("web_search") { live_mcp().await } else { None };
     if wants("web_search") && mcp.is_none() {
         eprintln!("LIGUS_EVAL_MCP_URL unset or no tools listed; skipping web_search");
     }
-    let truth = if mcp.is_some() {
-        rust_stable_version().await
-    } else {
-        None
-    };
+    let truth = if mcp.is_some() { rust_stable_version().await } else { None };
 
     for model in models() {
         let rt = runtime(&endpoint, &model);
@@ -863,17 +733,13 @@ async fn local_harness_eval() {
                         "tool_call" => scenario_tool_call(&rt).await,
                         "bug_fix" => scenario_bug_fix(&rt, run).await,
                         "compaction_recall" => scenario_compaction_recall(&rt).await,
-                        _ => {
-                            scenario_web_search(&rt, mcp.as_ref().unwrap(), truth.as_deref()).await
-                        }
+                        _ => scenario_web_search(&rt, mcp.as_ref().unwrap(), truth.as_deref()).await,
                     }
                 };
-                let outcome = tokio::time::timeout(timeout, fut)
-                    .await
-                    .unwrap_or_else(|_| Outcome {
-                        pass: false,
-                        detail: json!({"error": format!("timed out after {}s", timeout.as_secs())}),
-                    });
+                let outcome = tokio::time::timeout(timeout, fut).await.unwrap_or_else(|_| Outcome {
+                    pass: false,
+                    detail: json!({"error": format!("timed out after {}s", timeout.as_secs())}),
+                });
                 let secs = start.elapsed().as_secs_f64();
                 secs_total += secs;
                 total += 1;
@@ -917,9 +783,7 @@ async fn pi_smoke_fixes_a_planted_bug() {
         eprintln!("LIGUS_EVAL_ENDPOINT or LIGUS_EVAL_PI unset; skipping the pi smoke test");
         return;
     };
-    let base_url = chat_url(&endpoint)
-        .trim_end_matches("/chat/completions")
-        .to_string();
+    let base_url = chat_url(&endpoint).trim_end_matches("/chat/completions").to_string();
     let model = env("LIGUS_EVAL_PI_MODEL").unwrap_or_else(|| models().remove(0));
     let program = if pi == "1" { "pi".to_string() } else { pi };
     let rt = ResolvedRuntime {
@@ -991,86 +855,40 @@ async fn pi_smoke_fixes_a_planted_bug() {
 
 #[test]
 fn scoring_helpers() {
-    assert_eq!(
-        chat_url("http://h:8080"),
-        "http://h:8080/v1/chat/completions"
-    );
-    assert_eq!(
-        chat_url("http://h:8080/v1/"),
-        "http://h:8080/v1/chat/completions"
-    );
-    assert_eq!(
-        chat_url("http://h/v1/chat/completions"),
-        "http://h/v1/chat/completions"
-    );
+    assert_eq!(chat_url("http://h:8080"), "http://h:8080/v1/chat/completions");
+    assert_eq!(chat_url("http://h:8080/v1/"), "http://h:8080/v1/chat/completions");
+    assert_eq!(chat_url("http://h/v1/chat/completions"), "http://h/v1/chat/completions");
 
-    assert!(currency_args_ok(
-        &json!({"amount": 125, "from": "eur", "to": "JPY"})
-    ));
-    assert!(
-        !currency_args_ok(&json!({"amount": "125", "from": "EUR", "to": "JPY"})),
-        "a string amount is wrong"
-    );
-    assert!(!currency_args_ok(
-        &json!({"amount": 125, "from": "JPY", "to": "EUR"})
-    ));
-    assert!(
-        quotes_result("about 21,415.00 yen")
-            && quotes_result("21 415 JPY")
-            && !quotes_result("21,400")
-    );
+    assert!(currency_args_ok(&json!({"amount": 125, "from": "eur", "to": "JPY"})));
+    assert!(!currency_args_ok(&json!({"amount": "125", "from": "EUR", "to": "JPY"})), "a string amount is wrong");
+    assert!(!currency_args_ok(&json!({"amount": 125, "from": "JPY", "to": "EUR"})));
+    assert!(quotes_result("about 21,415.00 yen") && quotes_result("21 415 JPY") && !quotes_result("21,400"));
 
     let r = recalled("1. 6543 2. Bluefinch 3. Priya Raman 4. `enable_split_ledger` 5. March 14");
     assert_eq!(r, vec![true; FACTS.len()]);
-    assert_eq!(
-        recalled("port 5432, flag ledger-v2")
-            .iter()
-            .filter(|b| **b)
-            .count(),
-        0
-    );
+    assert_eq!(recalled("port 5432, flag ledger-v2").iter().filter(|b| **b).count(), 0);
 }
 
 #[test]
 fn planted_facts_fall_beyond_the_default_window() {
     let (history, fact_ids) = synthetic_history();
-    let plan = plan_with_hysteresis(
-        &history,
-        3000,
-        None,
-        DEFAULT_HIGH_WATERMARK,
-        DEFAULT_LOW_WATERMARK,
-    );
+    let plan = plan_with_hysteresis(&history, 3000, None, DEFAULT_HIGH_WATERMARK, DEFAULT_LOW_WATERMARK);
     assert!(plan.moved);
-    assert!(fact_ids
-        .iter()
-        .all(|id| plan.plan.overflow.iter().any(|m| m.id == *id)));
-    assert_eq!(
-        plan.plan.kept.last().map(|m| m.body.as_str()),
-        Some(RECALL_QUESTION)
-    );
+    assert!(fact_ids.iter().all(|id| plan.plan.overflow.iter().any(|m| m.id == *id)));
+    assert_eq!(plan.plan.kept.last().map(|m| m.body.as_str()), Some(RECALL_QUESTION));
 }
 
 #[test]
 fn planted_repo_fails_its_check_until_fixed() {
-    if std::process::Command::new("python3")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
+    if std::process::Command::new("python3").arg("--version").output().is_err() {
         eprintln!("python3 missing; skipping");
         return;
     }
     let repo = planted_repo("selftest");
     assert!(!check_passes(&repo).0);
     let stock = repo.join("inventory/stock.py");
-    let fixed = std::fs::read_to_string(&stock)
-        .unwrap()
-        .replace("on_hand > item", "on_hand <= item");
+    let fixed = std::fs::read_to_string(&stock).unwrap().replace("on_hand > item", "on_hand <= item");
     std::fs::write(&stock, fixed).unwrap();
-    assert!(
-        check_passes(&repo).0,
-        "the one-line fix makes the check pass"
-    );
+    assert!(check_passes(&repo).0, "the one-line fix makes the check pass");
     let _ = std::fs::remove_dir_all(&repo);
 }

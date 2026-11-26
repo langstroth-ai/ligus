@@ -32,12 +32,7 @@ fn agent_cannot_persist_cli_config() {
     let real = executor::canonical(real.path());
     std::env::set_var("HOME", &real);
     let work = tempfile::tempdir().unwrap();
-    for kind in [
-        ModelProviderKind::ClaudeCode,
-        ModelProviderKind::Codex,
-        ModelProviderKind::Copilot,
-        ModelProviderKind::Antigravity,
-    ] {
+    for kind in [ModelProviderKind::ClaudeCode, ModelProviderKind::Codex, ModelProviderKind::Copilot, ModelProviderKind::Antigravity] {
         let (cfg, extra) = targets(kind);
         let cfg_real = real.join(cfg);
         std::fs::create_dir_all(cfg_real.parent().unwrap()).unwrap();
@@ -53,24 +48,14 @@ fn agent_cannot_persist_cli_config() {
             extra_real.display(),
             real.display()
         );
-        let mut policy = TurnPolicy::new(
-            HostKind::Desktop,
-            SandboxEnvelope::workspace_default(),
-            GatePlan::Full,
-        );
+        let mut policy = TurnPolicy::new(HostKind::Desktop, SandboxEnvelope::workspace_default(), GatePlan::Full);
         policy.worktree_is_isolated = true;
         let out = executor::with_turn_sync(policy, || {
-            let mut spec = SpawnSpec::new(Purpose::Agent(kind), "/bin/sh", ["-c", script.as_str()])
-                .cwd(Some(work.path()));
+            let mut spec = SpawnSpec::new(Purpose::Agent(kind), "/bin/sh", ["-c", script.as_str()]).cwd(Some(work.path()));
             spec.writes = Some(true);
             let executor::Prepared { mut command, guard } = executor::prepare(spec).unwrap();
             assert_ne!(guard.kind(), executor::ExecutorKind::Unconfined);
-            let out = command
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
-                .unwrap();
+            let out = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).output().unwrap();
             drop(guard);
             out
         });
@@ -78,28 +63,12 @@ fn agent_cannot_persist_cli_config() {
         if kind == ModelProviderKind::ClaudeCode {
             // Claude Code's copy is hardened: a settings file that isn't a
             // JSON object is replaced by one that denies the out-of-turn tools.
-            assert!(
-                stdout.contains("RemoteTrigger"),
-                "{kind:?}: the turn reads a hardened copy of its settings: {stdout}"
-            );
+            assert!(stdout.contains("RemoteTrigger"), "{kind:?}: the turn reads a hardened copy of its settings: {stdout}");
         } else {
-            assert!(
-                stdout.contains("ORIGINAL"),
-                "{kind:?}: the turn reads a copy of its config: {stdout}"
-            );
+            assert!(stdout.contains("ORIGINAL"), "{kind:?}: the turn reads a copy of its config: {stdout}");
         }
-        assert_eq!(
-            std::fs::read_to_string(&cfg_real).unwrap(),
-            "ORIGINAL",
-            "{kind:?}: real config untouched"
-        );
-        assert!(
-            !extra_real.exists(),
-            "{kind:?}: no hook or MCP file in the real config"
-        );
-        assert!(
-            !real.join(".claude/hooks").exists(),
-            "{kind:?}: no hooks dir"
-        );
+        assert_eq!(std::fs::read_to_string(&cfg_real).unwrap(), "ORIGINAL", "{kind:?}: real config untouched");
+        assert!(!extra_real.exists(), "{kind:?}: no hook or MCP file in the real config");
+        assert!(!real.join(".claude/hooks").exists(), "{kind:?}: no hooks dir");
     }
 }

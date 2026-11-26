@@ -80,10 +80,7 @@ impl DetectEnv {
     }
 
     fn var(&self, k: &str) -> Option<&str> {
-        self.vars
-            .get(k)
-            .map(String::as_str)
-            .filter(|v| !v.trim().is_empty())
+        self.vars.get(k).map(String::as_str).filter(|v| !v.trim().is_empty())
     }
 }
 
@@ -96,11 +93,7 @@ fn home_dir() -> PathBuf {
 
 /// Locate `bin` on `path` (Windows extensions included).
 pub fn find_on_path(bin: &str, path: &OsString) -> Option<PathBuf> {
-    let exts: &[&str] = if cfg!(windows) {
-        &[".exe", ".cmd", ".bat", ""]
-    } else {
-        &[""]
-    };
+    let exts: &[&str] = if cfg!(windows) { &[".exe", ".cmd", ".bat", ""] } else { &[""] };
     std::env::split_paths(path).find_map(|dir| {
         exts.iter()
             .map(|ext| dir.join(format!("{bin}{ext}")))
@@ -111,12 +104,7 @@ pub fn find_on_path(bin: &str, path: &OsString) -> Option<PathBuf> {
 /// Run `program args…` with stdin closed, killing it after `timeout`.
 /// Returns (exited successfully, stdout + stderr) or `None` if it couldn't
 /// start or timed out.
-fn run_bounded(
-    program: &Path,
-    args: &[&str],
-    env: &DetectEnv,
-    timeout: Duration,
-) -> Option<(bool, String)> {
+fn run_bounded(program: &Path, args: &[&str], env: &DetectEnv, timeout: Duration) -> Option<(bool, String)> {
     run_bounded_split(program, args, env, timeout).map(|(ok, mut out, err)| {
         out.push_str(&err);
         (ok, out)
@@ -125,12 +113,7 @@ fn run_bounded(
 
 /// [`run_bounded`] with stdout and stderr kept apart: (exited successfully,
 /// stdout, stderr).
-pub(crate) fn run_bounded_split(
-    program: &Path,
-    args: &[&str],
-    env: &DetectEnv,
-    timeout: Duration,
-) -> Option<(bool, String, String)> {
+pub(crate) fn run_bounded_split(program: &Path, args: &[&str], env: &DetectEnv, timeout: Duration) -> Option<(bool, String, String)> {
     run_bounded_split_in(program, args, env, timeout, None)
 }
 
@@ -183,11 +166,7 @@ pub(crate) fn run_bounded_split_in(
             }
         }
     };
-    Some((
-        status.success(),
-        t_out.join().unwrap_or_default(),
-        t_err.join().unwrap_or_default(),
-    ))
+    Some((status.success(), t_out.join().unwrap_or_default(), t_err.join().unwrap_or_default()))
 }
 
 /// The first version-looking token (`1.5.1`, `1.0.106-6`) in `--version`
@@ -238,16 +217,9 @@ pub fn copilot_login(env: &DetectEnv) -> (LoginState, String) {
         return (LoginState::NotLoggedIn, "no Copilot CLI login found".into());
     };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&strip_line_comments(&raw)) else {
-        return (
-            LoginState::Unknown,
-            "couldn't read the Copilot CLI config".into(),
-        );
+        return (LoginState::Unknown, "couldn't read the Copilot CLI config".into());
     };
-    let users = v
-        .get("loggedInUsers")
-        .and_then(|u| u.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let users = v.get("loggedInUsers").and_then(|u| u.as_array()).cloned().unwrap_or_default();
     if users.is_empty() {
         return (LoginState::NotLoggedIn, "no Copilot CLI login found".into());
     }
@@ -280,39 +252,20 @@ fn agy_probe(path: &Path, env: &DetectEnv) -> (LoginState, String, Vec<String>) 
         Some((true, out)) => {
             let models = parse_agy_models(&out);
             if models.is_empty() {
-                (
-                    LoginState::Unknown,
-                    "`agy models` listed no models".into(),
-                    models,
-                )
+                (LoginState::Unknown, "`agy models` listed no models".into(), models)
             } else {
-                (
-                    LoginState::LoggedIn,
-                    format!("signed in — {} models available", models.len()),
-                    models,
-                )
+                (LoginState::LoggedIn, format!("signed in — {} models available", models.len()), models)
             }
         }
         Some((false, out)) => match classify_failure(&out) {
-            CliFailure::NotLoggedIn => (
-                LoginState::NotLoggedIn,
-                "agy reports no Google sign-in".into(),
-                Vec::new(),
-            ),
+            CliFailure::NotLoggedIn => (LoginState::NotLoggedIn, "agy reports no Google sign-in".into(), Vec::new()),
             _ => (
                 LoginState::Unknown,
-                format!(
-                    "`agy models` failed: {}",
-                    out.trim().chars().take(200).collect::<String>()
-                ),
+                format!("`agy models` failed: {}", out.trim().chars().take(200).collect::<String>()),
                 Vec::new(),
             ),
         },
-        None => (
-            LoginState::Unknown,
-            "`agy models` didn't answer within 20s".into(),
-            Vec::new(),
-        ),
+        None => (LoginState::Unknown, "`agy models` didn't answer within 20s".into(), Vec::new()),
     }
 }
 
@@ -353,11 +306,7 @@ pub fn detect_cli_agents(env: &DetectEnv, probe_sign_in: bool) -> Vec<DetectedCl
     // GitHub Copilot CLI.
     let kind = CliKind::Copilot;
     let path = find_on_path("copilot", &env.path);
-    let (login, login_detail) = if path.is_some() {
-        copilot_login(env)
-    } else {
-        (LoginState::Unknown, String::new())
-    };
+    let (login, login_detail) = if path.is_some() { copilot_login(env) } else { (LoginState::Unknown, String::new()) };
     out.push(DetectedCli {
         id: "copilot".into(),
         provider: Some("copilot".into()),
@@ -420,11 +369,7 @@ mod tests {
     fn env_for(bin: &Path, home: &Path) -> DetectEnv {
         let mut path = OsString::from(bin);
         path.push(":/usr/bin:/bin");
-        DetectEnv {
-            path,
-            home: home.to_path_buf(),
-            vars: HashMap::new(),
-        }
+        DetectEnv { path, home: home.to_path_buf(), vars: HashMap::new() }
     }
 
     #[test]
@@ -445,11 +390,7 @@ mod tests {
             "agy",
             r#"case "$1" in --version) echo 1.5.1;; models) printf 'Fetching available models...\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\ngemini-4-argon-high\tGemini 4 Argon (High)\n';; *) exit 2;; esac"#,
         );
-        fake_bin(
-            bin.path(),
-            "copilot",
-            r#"[ "$1" = --version ] && printf "GitHub Copilot CLI 1.0.106-6.\nRun 'copilot update' to check for updates.\n""#,
-        );
+        fake_bin(bin.path(), "copilot", r#"[ "$1" = --version ] && printf "GitHub Copilot CLI 1.0.106-6.\nRun 'copilot update' to check for updates.\n""#);
         std::fs::create_dir_all(home.path().join(".copilot")).unwrap();
         std::fs::write(
             home.path().join(".copilot/config.json"),
@@ -462,11 +403,7 @@ mod tests {
         let agy = passive.iter().find(|c| c.id == "antigravity").unwrap();
         assert!(agy.installed && agy.supported);
         assert_eq!(agy.version.as_deref(), Some("1.5.1"));
-        assert_eq!(
-            agy.login,
-            LoginState::Unknown,
-            "passive scan never runs agy models"
-        );
+        assert_eq!(agy.login, LoginState::Unknown, "passive scan never runs agy models");
         let cp = passive.iter().find(|c| c.id == "copilot").unwrap();
         assert_eq!(cp.version.as_deref(), Some("1.0.106-6"));
         assert_eq!(cp.login, LoginState::LoggedIn);
@@ -475,21 +412,14 @@ mod tests {
         let probed = detect_cli_agents(&env, true);
         let agy = probed.iter().find(|c| c.id == "antigravity").unwrap();
         assert_eq!(agy.login, LoginState::LoggedIn);
-        assert_eq!(
-            agy.models,
-            vec!["gemini-3.8-flash-low", "gemini-4-argon-high"]
-        );
+        assert_eq!(agy.models, vec!["gemini-3.8-flash-low", "gemini-4-argon-high"]);
     }
 
     #[test]
     fn signed_out_states() {
         let bin = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
-        fake_bin(
-            bin.path(),
-            "agy",
-            r#"[ "$1" = models ] && { echo "Error: not signed in" >&2; exit 1; }; echo 1.5.1"#,
-        );
+        fake_bin(bin.path(), "agy", r#"[ "$1" = models ] && { echo "Error: not signed in" >&2; exit 1; }; echo 1.5.1"#);
         fake_bin(bin.path(), "copilot", "echo 1.0.0");
         let mut env = env_for(bin.path(), home.path());
         let found = detect_cli_agents(&env, true);
@@ -501,8 +431,7 @@ mod tests {
         // An env token counts (presence only); a classic PAT does not.
         env.vars.insert("GH_TOKEN".into(), "gho_example".into());
         assert_eq!(copilot_login(&env).0, LoginState::LoggedIn);
-        env.vars
-            .insert("COPILOT_GITHUB_TOKEN".into(), "ghp_example".into());
+        env.vars.insert("COPILOT_GITHUB_TOKEN".into(), "ghp_example".into());
         let (state, detail) = copilot_login(&env);
         assert_eq!(state, LoginState::NotLoggedIn);
         assert!(!detail.contains("ghp_example"), "never echo a token");
@@ -533,15 +462,9 @@ mod tests {
 
     #[test]
     fn parses_versions() {
-        assert_eq!(
-            parse_version("GitHub Copilot CLI 1.0.106-6.\nRun 'copilot update'").as_deref(),
-            Some("1.0.106-6")
-        );
+        assert_eq!(parse_version("GitHub Copilot CLI 1.0.106-6.\nRun 'copilot update'").as_deref(), Some("1.0.106-6"));
         assert_eq!(parse_version("1.5.1\n").as_deref(), Some("1.5.1"));
-        assert_eq!(
-            parse_version("agy version v2.0.0").as_deref(),
-            Some("2.0.0")
-        );
+        assert_eq!(parse_version("agy version v2.0.0").as_deref(), Some("2.0.0"));
         assert_eq!(parse_version("unknown flag: --version"), None);
     }
 }

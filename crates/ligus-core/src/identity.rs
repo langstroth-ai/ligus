@@ -148,8 +148,7 @@ pub struct ActorStamp {
     /// [`crate::presence`]): a human was there. Inside the preimage, so it
     /// can't be stripped or moved. Left out when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub presence: Option<crate::presence::PresenceAssertion>,
-    /// The event is an effect of the chat's primary runtime's tool loop,
+    pub presence: Option<crate::presence::PresenceAssertion>,    /// The event is an effect of the chat's primary runtime's tool loop,
     /// signed by its host (Phase 0, B3): under rules v2 it is judged at the
     /// Agent tier ([`crate::authz::agent::runtime_tier_allows`]). Left out
     /// when false.

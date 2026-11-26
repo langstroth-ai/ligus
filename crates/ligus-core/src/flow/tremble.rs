@@ -25,10 +25,7 @@ pub struct TremblePolicy {
 
 impl Default for TremblePolicy {
     fn default() -> Self {
-        Self {
-            queue_limit: 5,
-            long_wait_ms: 2 * 3_600_000,
-        }
+        Self { queue_limit: 5, long_wait_ms: 2 * 3_600_000 }
     }
 }
 
@@ -75,12 +72,7 @@ pub fn gate_queue(sessions: &[ChatSession], policy: &TremblePolicy, now_ms: i64)
             if waiting(p) {
                 waits.push((now_ms - created).max(0));
             } else if p.status != ProposalStatus::Open {
-                let at = p
-                    .approvals
-                    .iter()
-                    .map(|a| ms(&a.created_at))
-                    .max()
-                    .unwrap_or(created);
+                let at = p.approvals.iter().map(|a| ms(&a.created_at)).max().unwrap_or(created);
                 if now_ms - at <= 3_600_000 {
                     decided += 1;
                 }
@@ -92,11 +84,7 @@ pub fn gate_queue(sessions: &[ChatSession], policy: &TremblePolicy, now_ms: i64)
     GateQueue {
         open,
         oldest_wait_ms: waits.iter().copied().max().unwrap_or(0),
-        tremble_share: if waits.is_empty() {
-            0.0
-        } else {
-            long as f64 / waits.len() as f64
-        },
+        tremble_share: if waits.is_empty() { 0.0 } else { long as f64 / waits.len() as f64 },
         median_wait_ms: median(waits),
         opened_last_hour: opened,
         decided_last_hour: decided,
@@ -120,20 +108,12 @@ pub fn edge_stats(waits: &[&EdgeWait], policy: &TremblePolicy, since_ms: i64) ->
     ["gate", "stage", "handoff"]
         .iter()
         .map(|edge| {
-            let v: Vec<i64> = waits
-                .iter()
-                .filter(|w| w.edge == *edge && w.at_ms >= since_ms)
-                .map(|w| w.wait_ms)
-                .collect();
+            let v: Vec<i64> = waits.iter().filter(|w| w.edge == *edge && w.at_ms >= since_ms).map(|w| w.wait_ms).collect();
             let long = v.iter().filter(|w| **w > policy.long_wait_ms).count();
             EdgeStats {
                 edge: edge.to_string(),
                 samples: v.len() as u32,
-                tremble_share: if v.is_empty() {
-                    0.0
-                } else {
-                    long as f64 / v.len() as f64
-                },
+                tremble_share: if v.is_empty() { 0.0 } else { long as f64 / v.len() as f64 },
                 median_wait_ms: median(v),
             }
         })
@@ -152,11 +132,7 @@ fn human(ms: i64) -> String {
 
 /// The two-sided bottleneck alert: names where to add capacity and where to
 /// slow down. `None` when nothing is backed up.
-pub fn bottleneck_alert(
-    gate: &GateQueue,
-    edges: &[EdgeStats],
-    policy: &TremblePolicy,
-) -> Option<String> {
+pub fn bottleneck_alert(gate: &GateQueue, edges: &[EdgeStats], policy: &TremblePolicy) -> Option<String> {
     if gate.over_limit || (gate.open > 0 && gate.tremble_share >= 0.5) {
         return Some(format!(
             "The review gate is the bottleneck: {} proposal(s) waiting, median wait {}, oldest {}. \
@@ -171,9 +147,7 @@ pub fn bottleneck_alert(
     }
     let worst = edges
         .iter()
-        .filter(|e| {
-            e.edge != "gate" && e.samples >= 3 && e.median_wait_ms > policy.long_wait_ms / 4
-        })
+        .filter(|e| e.edge != "gate" && e.samples >= 3 && e.median_wait_ms > policy.long_wait_ms / 4)
         .max_by_key(|e| e.median_wait_ms)?;
     Some(match worst.edge.as_str() {
         "stage" => format!(
@@ -217,8 +191,7 @@ pub fn eligible_approvers(sessions: &[ChatSession]) -> Vec<String> {
     for s in sessions.iter().filter(|s| !s.archived) {
         for p in s.proposals.iter().filter(|p| waiting(p)) {
             for m in &s.members {
-                let qualifies = m.role.rank() >= p.approval_role_floor.rank()
-                    && m.role != WorkspaceRole::Viewer;
+                let qualifies = m.role.rank() >= p.approval_role_floor.rank() && m.role != WorkspaceRole::Viewer;
                 let voted = p.approvals.iter().any(|a| a.actor_id == m.id);
                 if qualifies && !voted && m.id != p.author_actor_id && !out.contains(&m.id) {
                     out.push(m.id.clone());
@@ -240,11 +213,7 @@ mod tests {
     fn chat_with(n: usize) -> ChatSession {
         let mut s = ChatSession::new("c", Uuid::nil(), "rt");
         for i in 0..n {
-            s.proposals.push(ActionProposal::new(
-                format!("p{i}"),
-                ProposalKind::Decision,
-                "coder",
-            ));
+            s.proposals.push(ActionProposal::new(format!("p{i}"), ProposalKind::Decision, "coder"));
         }
         s
     }
@@ -275,21 +244,13 @@ mod tests {
     #[test]
     fn stage_edges_name_the_stage_bottleneck() {
         let waits: Vec<EdgeWait> = (0..4)
-            .map(|i| EdgeWait {
-                edge: "stage".into(),
-                reference: format!("r:{i}"),
-                wait_ms: H,
-                host_id: "box".into(),
-                at_ms: 10,
-            })
+            .map(|i| EdgeWait { edge: "stage".into(), reference: format!("r:{i}"), wait_ms: H, host_id: "box".into(), at_ms: 10 })
             .collect();
         let refs: Vec<&EdgeWait> = waits.iter().collect();
         let stats = edge_stats(&refs, &TremblePolicy::default(), 0);
         assert_eq!(stats.iter().find(|e| e.edge == "stage").unwrap().samples, 4);
         let g = GateQueue::default();
-        assert!(bottleneck_alert(&g, &stats, &TremblePolicy::default())
-            .unwrap()
-            .contains("Workflow stages are queuing"));
+        assert!(bottleneck_alert(&g, &stats, &TremblePolicy::default()).unwrap().contains("Workflow stages are queuing"));
     }
 
     #[test]
@@ -304,11 +265,7 @@ mod tests {
             index: 0,
             joined_at: crate::Timestamp::now(),
         };
-        s.members = vec![
-            member("coder", WorkspaceRole::Admin),
-            member("ana", WorkspaceRole::Admin),
-            member("v", WorkspaceRole::Viewer),
-        ];
+        s.members = vec![member("coder", WorkspaceRole::Admin), member("ana", WorkspaceRole::Admin), member("v", WorkspaceRole::Viewer)];
         assert_eq!(eligible_approvers(&[s]), vec!["ana".to_string()]);
     }
 

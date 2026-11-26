@@ -94,11 +94,7 @@ pub struct PasskeyKey {
 
 impl From<&PasskeyCredential> for PasskeyKey {
     fn from(c: &PasskeyCredential) -> Self {
-        Self {
-            alg: c.alg,
-            public_key: c.public_key.clone(),
-            recovery: c.recovery,
-        }
+        Self { alg: c.alg, public_key: c.public_key.clone(), recovery: c.recovery }
     }
 }
 
@@ -130,11 +126,7 @@ pub struct Policy<'a> {
 
 impl Policy<'static> {
     pub const fn ligus() -> Self {
-        Self {
-            rp_id: RP_ID,
-            origins: DEFAULT_ORIGINS,
-            require_uv: true,
-        }
+        Self { rp_id: RP_ID, origins: DEFAULT_ORIGINS, require_uv: true }
     }
 }
 
@@ -171,18 +163,12 @@ impl Default for PresencePolicy {
 impl PresencePolicy {
     /// The owner's deployment: RP `ligus.ai`, origin `https://ligus.ai`.
     pub fn ligus() -> Self {
-        Self {
-            rp_id: RP_ID.into(),
-            origins: DEFAULT_ORIGINS.iter().map(|o| (*o).to_string()).collect(),
-        }
+        Self { rp_id: RP_ID.into(), origins: DEFAULT_ORIGINS.iter().map(|o| (*o).to_string()).collect() }
     }
 
     /// A policy for `rp_id` with its own `https://` origin.
     pub fn for_rp(rp_id: &str) -> Self {
-        Self {
-            rp_id: rp_id.to_string(),
-            origins: vec![format!("https://{rp_id}")],
-        }
+        Self { rp_id: rp_id.to_string(), origins: vec![format!("https://{rp_id}")] }
     }
 
     /// Well formed: a lowercase ASCII domain RP id, and 1 to 8 origins that
@@ -193,12 +179,7 @@ impl PresencePolicy {
         let host_ok = |h: &str| {
             !h.is_empty()
                 && h.len() <= 253
-                && h.split('.').all(|l| {
-                    !l.is_empty()
-                        && l.len() <= 63
-                        && l.bytes()
-                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-                })
+                && h.split('.').all(|l| !l.is_empty() && l.len() <= 63 && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
         };
         if !host_ok(rp) {
             return Err(err("bad relying party id"));
@@ -216,15 +197,9 @@ impl PresencePolicy {
                 }
                 continue;
             }
-            let Some(rest) = o.strip_prefix("https://") else {
-                return Err(err("an origin is https"));
-            };
-            let host = rest
-                .split_once(':')
-                .map(|(h, port)| (h, port.parse::<u16>().is_ok()))
-                .unwrap_or((rest, true));
-            if !host.1 || !host_ok(host.0) || !(host.0 == rp || host.0.ends_with(&format!(".{rp}")))
-            {
+            let Some(rest) = o.strip_prefix("https://") else { return Err(err("an origin is https")) };
+            let host = rest.split_once(':').map(|(h, port)| (h, port.parse::<u16>().is_ok())).unwrap_or((rest, true));
+            if !host.1 || !host_ok(host.0) || !(host.0 == rp || host.0.ends_with(&format!(".{rp}"))) {
                 return Err(err("an origin must be on the relying party's domain"));
             }
         }
@@ -234,11 +209,7 @@ impl PresencePolicy {
     /// The origin of this deployment's hand-off page: its first `https://`
     /// origin (`https://<rp id>` when it lists none).
     pub fn page_origin(&self) -> String {
-        self.origins
-            .iter()
-            .find(|o| o.starts_with("https://"))
-            .cloned()
-            .unwrap_or_else(|| format!("https://{}", self.rp_id))
+        self.origins.iter().find(|o| o.starts_with("https://")).cloned().unwrap_or_else(|| format!("https://{}", self.rp_id))
     }
 
     /// The URL of this deployment's hand-off page (`<first https origin>/presence`).
@@ -257,11 +228,7 @@ impl PresencePolicy {
     /// Run `f` with the verifier [`Policy`] for this workspace.
     pub fn with<R>(&self, f: impl FnOnce(&Policy<'_>) -> R) -> R {
         let origins: Vec<&str> = self.origins.iter().map(String::as_str).collect();
-        f(&Policy {
-            rp_id: &self.rp_id,
-            origins: &origins,
-            require_uv: true,
-        })
+        f(&Policy { rp_id: &self.rp_id, origins: &origins, require_uv: true })
     }
 }
 
@@ -285,9 +252,7 @@ pub fn challenge(env: &SessionEventEnvelope) -> [u8; 32] {
         .and_then(|s| s.cfg_frontier)
         .map(|f| serde_json::to_vec(&f).expect("serialize frontier"))
         .unwrap_or_default();
-    let account = stamp
-        .and_then(|s| s.actor.account_id)
-        .unwrap_or_else(Uuid::nil);
+    let account = stamp.and_then(|s| s.actor.account_id).unwrap_or_else(Uuid::nil);
     let mut h = Sha256::new();
     h.update(PRESENCE_CONTEXT);
     h.update(env.workspace_id.as_bytes());
@@ -312,12 +277,7 @@ pub fn challenge(env: &SessionEventEnvelope) -> [u8; 32] {
 /// member order of WebAuthn's limited serialization.
 pub fn client_data_json(ty: &str, challenge: &[u8], origin: &str) -> String {
     let q = |s: &str| serde_json::to_string(s).expect("serialize a string");
-    format!(
-        r#"{{"type":{},"challenge":"{}","origin":{},"crossOrigin":false}}"#,
-        q(ty),
-        b64url(challenge),
-        q(origin)
-    )
+    format!(r#"{{"type":{},"challenge":"{}","origin":{},"crossOrigin":false}}"#, q(ty), b64url(challenge), q(origin))
 }
 
 /// The challenge a returned `clientDataJSON` (base64url) names: what a
@@ -421,9 +381,7 @@ impl Cbor {
 pub fn cbor_decode(data: &[u8]) -> Result<(Cbor, usize), PresenceError> {
     fn arg(data: &[u8], pos: &mut usize, info: u8) -> Result<u64, PresenceError> {
         let take = |pos: &mut usize, n: usize| -> Result<u64, PresenceError> {
-            let s = data
-                .get(*pos..*pos + n)
-                .ok_or_else(|| err("truncated CBOR"))?;
+            let s = data.get(*pos..*pos + n).ok_or_else(|| err("truncated CBOR"))?;
             *pos += n;
             Ok(s.iter().fold(0u64, |a, b| (a << 8) | *b as u64))
         };
@@ -443,11 +401,7 @@ pub fn cbor_decode(data: &[u8]) -> Result<(Cbor, usize), PresenceError> {
         let b = *data.get(*pos).ok_or_else(|| err("truncated CBOR"))?;
         *pos += 1;
         let (major, info) = (b >> 5, b & 0x1f);
-        let n = if major == 7 {
-            info as u64
-        } else {
-            arg(data, pos, info)?
-        };
+        let n = if major == 7 { info as u64 } else { arg(data, pos, info)? };
         let len = |n: u64| -> Result<usize, PresenceError> {
             let n = usize::try_from(n).map_err(|_| err("CBOR length"))?;
             if n > data.len() {
@@ -460,10 +414,7 @@ pub fn cbor_decode(data: &[u8]) -> Result<(Cbor, usize), PresenceError> {
             1 => Cbor::Int(-1 - n as i128),
             2 | 3 => {
                 let n = len(n)?;
-                let s = data
-                    .get(*pos..*pos + n)
-                    .ok_or_else(|| err("truncated CBOR"))?
-                    .to_vec();
+                let s = data.get(*pos..*pos + n).ok_or_else(|| err("truncated CBOR"))?.to_vec();
                 *pos += n;
                 if major == 2 {
                     Cbor::Bytes(s)
@@ -503,44 +454,31 @@ pub fn cbor_decode(data: &[u8]) -> Result<(Cbor, usize), PresenceError> {
 
 /// The algorithm and raw public key of a COSE key (EC2 P-256 or OKP Ed25519).
 pub fn cose_public_key(key: &Cbor) -> Result<(i32, Vec<u8>), PresenceError> {
-    let kty = key
-        .get(&Cbor::Int(1))
-        .and_then(Cbor::int)
-        .ok_or_else(|| err("COSE key without kty"))?;
-    let alg = key
-        .get(&Cbor::Int(3))
-        .and_then(Cbor::int)
-        .ok_or_else(|| err("COSE key without alg"))?;
+    let kty = key.get(&Cbor::Int(1)).and_then(Cbor::int).ok_or_else(|| err("COSE key without kty"))?;
+    let alg = key.get(&Cbor::Int(3)).and_then(Cbor::int).ok_or_else(|| err("COSE key without alg"))?;
     let crv = key.get(&Cbor::Int(-1)).and_then(Cbor::int);
     let x = key.get(&Cbor::Int(-2)).and_then(Cbor::bytes);
     match (kty, alg) {
         (2, -7) => {
             let y = key.get(&Cbor::Int(-3)).and_then(Cbor::bytes);
-            let (Some(x), Some(y), Some(1)) = (x, y, crv) else {
-                return Err(err("bad P-256 COSE key"));
-            };
+            let (Some(x), Some(y), Some(1)) = (x, y, crv) else { return Err(err("bad P-256 COSE key")) };
             if x.len() != 32 || y.len() != 32 {
                 return Err(err("bad P-256 coordinates"));
             }
             let mut pk = vec![0x04];
             pk.extend_from_slice(x);
             pk.extend_from_slice(y);
-            p256::ecdsa::VerifyingKey::from_sec1_bytes(&pk)
-                .map_err(|_| err("P-256 point not on the curve"))?;
+            p256::ecdsa::VerifyingKey::from_sec1_bytes(&pk).map_err(|_| err("P-256 point not on the curve"))?;
             Ok((ES256, pk))
         }
         (1, -8) => {
-            let (Some(x), Some(6)) = (x, crv) else {
-                return Err(err("bad Ed25519 COSE key"));
-            };
+            let (Some(x), Some(6)) = (x, crv) else { return Err(err("bad Ed25519 COSE key")) };
             if x.len() != 32 {
                 return Err(err("bad Ed25519 key length"));
             }
             Ok((EDDSA, x.to_vec()))
         }
-        _ => Err(err(format!(
-            "unsupported COSE key (kty {kty}, alg {alg}): ES256 or EdDSA only"
-        ))),
+        _ => Err(err(format!("unsupported COSE key (kty {kty}, alg {alg}): ES256 or EdDSA only"))),
     }
 }
 
@@ -577,19 +515,11 @@ pub fn parse_auth_data(data: &[u8]) -> Result<AuthData, PresenceError> {
             return Err(err("attested credential data too short"));
         }
         let id_len = u16::from_be_bytes([rest[16], rest[17]]) as usize;
-        let id = rest
-            .get(18..18 + id_len)
-            .ok_or_else(|| err("credential id past the end"))?
-            .to_vec();
+        let id = rest.get(18..18 + id_len).ok_or_else(|| err("credential id past the end"))?.to_vec();
         let (key, _) = cbor_decode(&rest[18 + id_len..])?;
         attested = Some((id, key));
     }
-    Ok(AuthData {
-        rp_id_hash,
-        flags,
-        sign_count,
-        attested,
-    })
+    Ok(AuthData { rp_id_hash, flags, sign_count, attested })
 }
 
 #[derive(Deserialize)]
@@ -602,19 +532,10 @@ struct ClientData {
     cross_origin: Option<bool>,
 }
 
-fn check_client_data(
-    raw: &[u8],
-    ty: &str,
-    challenge: &[u8],
-    policy: &Policy<'_>,
-) -> Result<(), PresenceError> {
-    let cd: ClientData =
-        serde_json::from_slice(raw).map_err(|_| err("clientDataJSON isn't the expected JSON"))?;
+fn check_client_data(raw: &[u8], ty: &str, challenge: &[u8], policy: &Policy<'_>) -> Result<(), PresenceError> {
+    let cd: ClientData = serde_json::from_slice(raw).map_err(|_| err("clientDataJSON isn't the expected JSON"))?;
     if cd.ty != ty {
-        return Err(err(format!(
-            "clientDataJSON type is {}, expected {ty}",
-            cd.ty
-        )));
+        return Err(err(format!("clientDataJSON type is {}, expected {ty}", cd.ty)));
     }
     if unb64url(&cd.challenge)? != challenge {
         return Err(err("the assertion signs a different challenge"));
@@ -643,35 +564,21 @@ fn check_rp_and_flags(ad: &AuthData, policy: &Policy<'_>) -> Result<(), Presence
 }
 
 /// Verify a signature by a credential key.
-pub fn verify_signature(
-    alg: i32,
-    public_key: &[u8],
-    message: &[u8],
-    signature: &[u8],
-) -> Result<(), PresenceError> {
+pub fn verify_signature(alg: i32, public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(), PresenceError> {
     match alg {
         ES256 => {
             use p256::ecdsa::signature::Verifier;
-            let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(public_key)
-                .map_err(|_| err("bad ES256 key"))?;
-            let sig = p256::ecdsa::Signature::from_der(signature)
-                .map_err(|_| err("bad ES256 signature encoding"))?;
-            key.verify(message, &sig)
-                .map_err(|_| err("ES256 signature doesn't verify"))
+            let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(public_key).map_err(|_| err("bad ES256 key"))?;
+            let sig = p256::ecdsa::Signature::from_der(signature).map_err(|_| err("bad ES256 signature encoding"))?;
+            key.verify(message, &sig).map_err(|_| err("ES256 signature doesn't verify"))
         }
-        EDDSA => crate::crypto::verify(public_key, message, signature)
-            .map_err(|_| err("EdDSA signature doesn't verify")),
+        EDDSA => crate::crypto::verify(public_key, message, signature).map_err(|_| err("EdDSA signature doesn't verify")),
         other => Err(err(format!("unsupported algorithm {other}"))),
     }
 }
 
 /// Verify a `webauthn.get` assertion by `key` over `challenge`.
-pub fn verify_get(
-    a: &PresenceAssertion,
-    key: &PasskeyKey,
-    challenge: &[u8],
-    policy: &Policy<'_>,
-) -> Result<(), PresenceError> {
+pub fn verify_get(a: &PresenceAssertion, key: &PasskeyKey, challenge: &[u8], policy: &Policy<'_>) -> Result<(), PresenceError> {
     if key.recovery {
         return verify_recovery(a, key, challenge);
     }
@@ -687,11 +594,7 @@ pub fn verify_get(
 }
 
 /// A recovery-key assertion: `Ed25519(sk, "ligus-recovery-v1\0" || challenge)`.
-pub fn verify_recovery(
-    a: &PresenceAssertion,
-    key: &PasskeyKey,
-    challenge: &[u8],
-) -> Result<(), PresenceError> {
+pub fn verify_recovery(a: &PresenceAssertion, key: &PasskeyKey, challenge: &[u8]) -> Result<(), PresenceError> {
     if !key.recovery || key.alg != EDDSA {
         return Err(err("not a recovery key"));
     }
@@ -708,11 +611,7 @@ pub fn verify_recovery(
 /// whose statement is not checked: Ligus asks for `attestation: "none"`).
 /// Device-local: it never verifies an event. Returns the attested credential:
 /// (credential id, alg, public key).
-pub fn verify_create(
-    a: &PresenceAssertion,
-    challenge: &[u8],
-    policy: &Policy<'_>,
-) -> Result<(Vec<u8>, i32, Vec<u8>), PresenceError> {
+pub fn verify_create(a: &PresenceAssertion, challenge: &[u8], policy: &Policy<'_>) -> Result<(Vec<u8>, i32, Vec<u8>), PresenceError> {
     let att = unb64url(&a.authenticator_data)?;
     let client_data = unb64url(&a.client_data_json)?;
     let (obj, _) = cbor_decode(&att)?;
@@ -742,15 +641,10 @@ pub fn credential_well_formed(c: &PasskeyCredential) -> Result<(), PresenceError
     }
     match (c.alg, c.public_key.len(), c.recovery) {
         (ES256, 65, false) => {
-            p256::ecdsa::VerifyingKey::from_sec1_bytes(&c.public_key)
-                .map_err(|_| err("bad ES256 key"))?;
+            p256::ecdsa::VerifyingKey::from_sec1_bytes(&c.public_key).map_err(|_| err("bad ES256 key"))?;
         }
         (EDDSA, 32, _) => {}
-        _ => {
-            return Err(err(
-                "credential: ES256 (65-byte SEC1 key) or EdDSA (32 bytes); a recovery key is EdDSA",
-            ))
-        }
+        _ => return Err(err("credential: ES256 (65-byte SEC1 key) or EdDSA (32 bytes); a recovery key is EdDSA")),
     }
     Ok(())
 }
@@ -761,12 +655,8 @@ pub fn recovery_credential_id(public_key: &[u8; 32]) -> String {
 }
 
 /// The stamped presence of `env`, if any, within the size cap.
-pub fn presence_of(
-    env: &SessionEventEnvelope,
-) -> Result<Option<&PresenceAssertion>, PresenceError> {
-    let Some(p) = env.actor_stamp.as_ref().and_then(|s| s.presence.as_ref()) else {
-        return Ok(None);
-    };
+pub fn presence_of(env: &SessionEventEnvelope) -> Result<Option<&PresenceAssertion>, PresenceError> {
+    let Some(p) = env.actor_stamp.as_ref().and_then(|s| s.presence.as_ref()) else { return Ok(None) };
     let size = serde_json::to_vec(p).map(|v| v.len()).unwrap_or(usize::MAX);
     if size > MAX_PRESENCE_BYTES {
         return Err(err("presence larger than 4 KiB"));
@@ -804,26 +694,18 @@ impl RecoveryKey {
     }
     /// The 24 words (shown once).
     pub fn words(&self) -> String {
-        bip39::Mnemonic::from_entropy(&self.seed)
-            .expect("32 bytes of entropy")
-            .to_string()
+        bip39::Mnemonic::from_entropy(&self.seed).expect("32 bytes of entropy").to_string()
     }
     /// From the 24 words (checksum verified).
     pub fn from_words(words: &str) -> Result<Self, PresenceError> {
-        let mut normalized = words
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .to_lowercase();
+        let mut normalized = words.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
         let m = bip39::Mnemonic::parse_normalized(&normalized);
         zeroize::Zeroize::zeroize(&mut normalized);
         let m = m.map_err(|_| err("those aren't 24 valid recovery words"))?;
         let mut e = m.to_entropy();
         let seed: Result<[u8; 32], _> = e.as_slice().try_into();
         zeroize::Zeroize::zeroize(&mut e);
-        Ok(Self {
-            seed: seed.map_err(|_| err("a recovery key is 24 words"))?,
-        })
+        Ok(Self { seed: seed.map_err(|_| err("a recovery key is 24 words"))? })
     }
     fn keypair(&self) -> crate::crypto::SigningKeypair {
         crate::crypto::SigningKeypair::from_seed(&self.seed).expect("32-byte seed")
@@ -893,10 +775,7 @@ pub mod soft {
             }
         }
         pub fn ed25519() -> Self {
-            Self {
-                key: Key::Ed25519(crate::crypto::SigningKeypair::generate().unwrap()),
-                ..Self::es256()
-            }
+            Self { key: Key::Ed25519(crate::crypto::SigningKeypair::generate().unwrap()), ..Self::es256() }
         }
         pub fn alg(&self) -> i32 {
             match self.key {
@@ -1031,34 +910,19 @@ mod tests {
     #[test]
     fn domain_strings_are_pinned() {
         // As hex, so a rename can't "update" the expectation.
-        assert_eq!(
-            hex(PRESENCE_CONTEXT),
-            "6c696775732d70726573656e63652d763100"
-        );
-        assert_eq!(
-            hex(RECOVERY_CONTEXT),
-            "6c696775732d7265636f766572792d763100"
-        );
+        assert_eq!(hex(PRESENCE_CONTEXT), "6c696775732d70726573656e63652d763100");
+        assert_eq!(hex(RECOVERY_CONTEXT), "6c696775732d7265636f766572792d763100");
     }
 
     #[test]
     fn soft_authenticator_round_trips_both_algorithms() {
-        for a in [
-            soft::SoftAuthenticator::es256(),
-            soft::SoftAuthenticator::ed25519(),
-        ] {
+        for a in [soft::SoftAuthenticator::es256(), soft::SoftAuthenticator::ed25519()] {
             let c = [7u8; 32];
             let key = PasskeyKey::from(&a.credential(Uuid::nil(), "t"));
             verify_get(&a.get(&c), &key, &c, &Policy::ligus()).unwrap();
             let (id, alg, pk) = verify_create(&a.create(&c), &c, &Policy::ligus()).unwrap();
-            assert_eq!(
-                (id, alg, pk),
-                (a.credential_id.clone(), a.alg(), a.public_key())
-            );
-            assert!(
-                verify_get(&a.get(&[8u8; 32]), &key, &c, &Policy::ligus()).is_err(),
-                "wrong challenge"
-            );
+            assert_eq!((id, alg, pk), (a.credential_id.clone(), a.alg(), a.public_key()));
+            assert!(verify_get(&a.get(&[8u8; 32]), &key, &c, &Policy::ligus()).is_err(), "wrong challenge");
         }
     }
 
@@ -1078,11 +942,7 @@ mod tests {
             ))
         );
         // An origin can't break out of its string.
-        let odd = client_data_json(
-            "webauthn.get",
-            &c,
-            "https://x\",\"crossOrigin\":true,\"a\":\"",
-        );
+        let odd = client_data_json("webauthn.get", &c, "https://x\",\"crossOrigin\":true,\"a\":\"");
         let v: serde_json::Value = serde_json::from_str(&odd).unwrap();
         assert_eq!(v["crossOrigin"], false);
         assert_eq!(returned_challenge(&b64url(odd.as_bytes())).unwrap(), c);
@@ -1093,20 +953,10 @@ mod tests {
     /// Which origin each native path uses, per workspace policy.
     #[test]
     fn native_origins() {
-        assert_eq!(
-            PresencePolicy::ligus().apple_native_origin().as_deref(),
-            Some("https://ligus.ai")
-        );
+        assert_eq!(PresencePolicy::ligus().apple_native_origin().as_deref(), Some("https://ligus.ai"));
         assert_eq!(PresencePolicy::ligus().page_origin(), "https://ligus.ai");
-        let sub = PresencePolicy {
-            rp_id: "example.com".into(),
-            origins: vec!["https://auth.example.com".into()],
-        };
-        assert_eq!(
-            sub.apple_native_origin(),
-            None,
-            "Apple names https://<rp id>, which this policy doesn't accept"
-        );
+        let sub = PresencePolicy { rp_id: "example.com".into(), origins: vec!["https://auth.example.com".into()] };
+        assert_eq!(sub.apple_native_origin(), None, "Apple names https://<rp id>, which this policy doesn't accept");
         assert_eq!(sub.page_origin(), "https://auth.example.com");
         assert_eq!(sub.page_url(), "https://auth.example.com/presence");
     }
@@ -1115,10 +965,7 @@ mod tests {
     /// returns, and the same verifiers accept it.
     #[test]
     fn native_results_verify_like_the_hand_off() {
-        for a in [
-            soft::SoftAuthenticator::es256(),
-            soft::SoftAuthenticator::ed25519(),
-        ] {
+        for a in [soft::SoftAuthenticator::es256(), soft::SoftAuthenticator::ed25519()] {
             let c = [9u8; 32];
             let got = a.get(&c);
             let raw = native::RawAssertion {
@@ -1155,11 +1002,7 @@ mod tests {
         let mut w: Vec<&str> = words.split_whitespace().collect();
         w.swap(0, 1);
         if w[0] != w[1] {
-            assert!(
-                RecoveryKey::from_words(&w.join(" ")).is_err()
-                    || RecoveryKey::from_words(&w.join(" ")).unwrap().public_key()
-                        != k.public_key()
-            );
+            assert!(RecoveryKey::from_words(&w.join(" ")).is_err() || RecoveryKey::from_words(&w.join(" ")).unwrap().public_key() != k.public_key());
         }
     }
 }

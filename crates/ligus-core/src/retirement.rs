@@ -46,38 +46,13 @@ pub fn retirement_preimage(workspace_id: Uuid, old: Uuid, new: Uuid, device: Uui
 impl MemberRetirement {
     /// `A_old` (holding `old_account`) retires `member_id` into `new`, for
     /// the linked `device` in `workspace_id`.
-    pub fn sign(
-        old_account: &SigningKeypair,
-        workspace_id: Uuid,
-        member_id: &str,
-        old: Uuid,
-        new: Uuid,
-        device: Uuid,
-    ) -> Self {
-        let signature = old_account
-            .sign(&retirement_preimage(workspace_id, old, new, device))
-            .to_vec();
-        Self {
-            member_id: member_id.to_string(),
-            account_id: old,
-            successor_account_id: new,
-            device_id: device,
-            signature,
-        }
+    pub fn sign(old_account: &SigningKeypair, workspace_id: Uuid, member_id: &str, old: Uuid, new: Uuid, device: Uuid) -> Self {
+        let signature = old_account.sign(&retirement_preimage(workspace_id, old, new, device)).to_vec();
+        Self { member_id: member_id.to_string(), account_id: old, successor_account_id: new, device_id: device, signature }
     }
 
     /// Whether the account signature verifies under `old_key` for `workspace_id`.
     pub fn verifies(&self, workspace_id: Uuid, old_key: &[u8]) -> bool {
-        verify(
-            old_key,
-            &retirement_preimage(
-                workspace_id,
-                self.account_id,
-                self.successor_account_id,
-                self.device_id,
-            ),
-            &self.signature,
-        )
-        .is_ok()
+        verify(old_key, &retirement_preimage(workspace_id, self.account_id, self.successor_account_id, self.device_id), &self.signature).is_ok()
     }
 }

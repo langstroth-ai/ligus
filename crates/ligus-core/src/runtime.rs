@@ -214,15 +214,9 @@ mod tests {
 
     #[test]
     fn cli_runtime_kinds_round_trip() {
-        for (kind, raw) in [
-            (ModelProviderKind::Antigravity, "\"antigravity\""),
-            (ModelProviderKind::Copilot, "\"copilot\""),
-        ] {
+        for (kind, raw) in [(ModelProviderKind::Antigravity, "\"antigravity\""), (ModelProviderKind::Copilot, "\"copilot\"")] {
             assert_eq!(serde_json::to_string(&kind).unwrap(), raw);
-            assert_eq!(
-                serde_json::from_str::<ModelProviderKind>(raw).unwrap(),
-                kind
-            );
+            assert_eq!(serde_json::from_str::<ModelProviderKind>(raw).unwrap(), kind);
             assert!(kind.is_cli_agent() && kind.follows_permission_mode());
         }
         assert!(!ModelProviderKind::Ollama.is_cli_agent());
@@ -258,17 +252,9 @@ mod tests {
     #[test]
     fn driver_is_skipped_when_auto() {
         let ws = crate::WorkspaceRuntime::new("r", "R", ModelProviderKind::Copilot, "m");
-        assert!(
-            !serde_json::to_string(&ws).unwrap().contains("driver"),
-            "auto is omitted"
-        );
-        let acp = crate::WorkspaceRuntime {
-            driver: Driver::Acp,
-            ..ws
-        };
-        assert!(serde_json::to_string(&acp)
-            .unwrap()
-            .contains("\"driver\":\"acp\""));
+        assert!(!serde_json::to_string(&ws).unwrap().contains("driver"), "auto is omitted");
+        let acp = crate::WorkspaceRuntime { driver: Driver::Acp, ..ws };
+        assert!(serde_json::to_string(&acp).unwrap().contains("\"driver\":\"acp\""));
         assert_eq!(serde_json::to_string(&Driver::Acp).unwrap(), "\"acp\"");
         assert_eq!(Driver::parse("LEGACY"), Driver::Legacy);
         assert_eq!(Driver::parse("whatever"), Driver::Auto);

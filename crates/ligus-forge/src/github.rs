@@ -36,21 +36,14 @@ impl GitHub {
                 base: conn.api_base(),
                 style: AuthStyle::Bearer,
                 creds,
-                headers: vec![
-                    ("Accept", "application/vnd.github+json"),
-                    ("X-GitHub-Api-Version", "2022-11-28"),
-                ],
+                headers: vec![("Accept", "application/vnd.github+json"), ("X-GitHub-Api-Version", "2022-11-28")],
             },
             login_hint: conn.login.clone(),
         }
     }
 
     fn repo_path(r: &RepoRef) -> String {
-        format!(
-            "repos/{}/{}",
-            spec::encode_segment(&r.owner),
-            spec::encode_segment(&r.name)
-        )
+        format!("repos/{}/{}", spec::encode_segment(&r.owner), spec::encode_segment(&r.name))
     }
 }
 
@@ -60,11 +53,7 @@ fn summary(v: &Value) -> Option<RepoSummary> {
         description: s(v, "description"),
         private: v["private"].as_bool().unwrap_or(false),
         default_branch: s(v, "default_branch"),
-        updated_at: v["pushed_at"]
-            .as_str()
-            .or(v["updated_at"].as_str())
-            .unwrap_or("")
-            .to_string(),
+        updated_at: v["pushed_at"].as_str().or(v["updated_at"].as_str()).unwrap_or("").to_string(),
         web_url: s(v, "html_url"),
         fork: v["fork"].as_bool().unwrap_or(false),
     })
@@ -72,16 +61,7 @@ fn summary(v: &Value) -> Option<RepoSummary> {
 
 pub(crate) fn meta(v: &Value) -> Option<RepoMeta> {
     let parent = v["parent"].as_object().and_then(|p| {
-        Some((
-            RepoRef::new(
-                p.get("owner")?.get("login")?.as_str()?,
-                p.get("name")?.as_str()?,
-            ),
-            p.get("default_branch")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
-        ))
+        Some((RepoRef::new(p.get("owner")?.get("login")?.as_str()?, p.get("name")?.as_str()?), p.get("default_branch").and_then(Value::as_str).unwrap_or("").to_string()))
     });
     Some(RepoMeta {
         repo: RepoRef::new(v["owner"]["login"].as_str()?, v["name"].as_str()?),
@@ -107,11 +87,7 @@ fn pr(v: &Value) -> ChangeRequest {
         state,
         draft: v["draft"].as_bool().unwrap_or(false),
         author: s(&v["user"], "login"),
-        head: v["head"]["label"]
-            .as_str()
-            .or(v["head"]["ref"].as_str())
-            .unwrap_or("")
-            .to_string(),
+        head: v["head"]["label"].as_str().or(v["head"]["ref"].as_str()).unwrap_or("").to_string(),
         base: s(&v["base"], "ref"),
         url: s(v, "html_url"),
         updated_at: s(v, "updated_at"),
@@ -127,14 +103,7 @@ fn issue(v: &Value) -> Issue {
         state: s(v, "state"),
         author: s(&v["user"], "login"),
         url: s(v, "html_url"),
-        labels: v["labels"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|l| l["name"].as_str().or(l.as_str()).map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default(),
+        labels: v["labels"].as_array().map(|a| a.iter().filter_map(|l| l["name"].as_str().or(l.as_str()).map(str::to_string)).collect()).unwrap_or_default(),
         body: cap_text(v["body"].as_str().unwrap_or(""), MAX_TEXT_CHARS).0,
         updated_at: s(v, "updated_at"),
     }
@@ -150,10 +119,7 @@ fn status_state(st: &str) -> CiState {
 }
 
 fn check_state(v: &Value) -> CiState {
-    match (
-        v["status"].as_str().unwrap_or(""),
-        v["conclusion"].as_str().unwrap_or(""),
-    ) {
+    match (v["status"].as_str().unwrap_or(""), v["conclusion"].as_str().unwrap_or("")) {
         ("completed", "success" | "neutral" | "skipped") => CiState::Success,
         ("completed", "cancelled") => CiState::Cancelled,
         ("completed", _) => CiState::Failure,
@@ -181,39 +147,14 @@ impl ForgeReader for GitHub {
         &self.id
     }
 
-    async fn list_change_requests(
-        &self,
-        r: &RepoRef,
-        state: StateFilter,
-        limit: u32,
-    ) -> Result<Vec<ChangeRequest>> {
-        let q = [
-            ("state", state_param(state)),
-            ("per_page", limit.clamp(1, 100).to_string()),
-            ("sort", "updated".into()),
-            ("direction", "desc".into()),
-        ];
-        let v = self
-            .api
-            .get(&format!("{}/pulls", Self::repo_path(r)), &q)
-            .await?;
-        Ok(v.as_array()
-            .map(|a| a.iter().map(pr).collect())
-            .unwrap_or_default())
+    async fn list_change_requests(&self, r: &RepoRef, state: StateFilter, limit: u32) -> Result<Vec<ChangeRequest>> {
+        let q = [("state", state_param(state)), ("per_page", limit.clamp(1, 100).to_string()), ("sort", "updated".into()), ("direction", "desc".into())];
+        let v = self.api.get(&format!("{}/pulls", Self::repo_path(r)), &q).await?;
+        Ok(v.as_array().map(|a| a.iter().map(pr).collect()).unwrap_or_default())
     }
 
     async fn change_request(&self, r: &RepoRef, number: &str) -> Result<ChangeRequest> {
-        Ok(pr(&self
-            .api
-            .get(
-                &format!(
-                    "{}/pulls/{}",
-                    Self::repo_path(r),
-                    spec::encode_segment(number)
-                ),
-                &[],
-            )
-            .await?))
+        Ok(pr(&self.api.get(&format!("{}/pulls/{}", Self::repo_path(r), spec::encode_segment(number)), &[]).await?))
     }
 
     async fn review_comments(&self, r: &RepoRef, number: &str) -> Result<Vec<ReviewComment>> {
@@ -222,124 +163,47 @@ impl ForgeReader for GitHub {
         let mut out = Vec::new();
         let body = |v: &Value| cap_text(v["body"].as_str().unwrap_or(""), 8000).0;
         // Review summaries (approve / request changes with a body).
-        for v in self
-            .api
-            .get(&format!("{}/pulls/{n}/reviews", Self::repo_path(r)), &page)
-            .await?
-            .as_array()
-            .into_iter()
-            .flatten()
-        {
+        for v in self.api.get(&format!("{}/pulls/{n}/reviews", Self::repo_path(r)), &page).await?.as_array().into_iter().flatten() {
             if v["body"].as_str().is_some_and(|b| !b.trim().is_empty()) {
-                out.push(ReviewComment {
-                    author: s(&v["user"], "login"),
-                    body: body(v),
-                    path: None,
-                    line: None,
-                    created_at: s(v, "submitted_at"),
-                    resolved: None,
-                });
+                out.push(ReviewComment { author: s(&v["user"], "login"), body: body(v), path: None, line: None, created_at: s(v, "submitted_at"), resolved: None });
             }
         }
         // Inline comments on the diff.
-        for v in self
-            .api
-            .get(&format!("{}/pulls/{n}/comments", Self::repo_path(r)), &page)
-            .await?
-            .as_array()
-            .into_iter()
-            .flatten()
-        {
+        for v in self.api.get(&format!("{}/pulls/{n}/comments", Self::repo_path(r)), &page).await?.as_array().into_iter().flatten() {
             out.push(ReviewComment {
                 author: s(&v["user"], "login"),
                 body: body(v),
                 path: v["path"].as_str().map(str::to_string),
-                line: v["line"]
-                    .as_u64()
-                    .or(v["original_line"].as_u64())
-                    .map(|l| l as u32),
+                line: v["line"].as_u64().or(v["original_line"].as_u64()).map(|l| l as u32),
                 created_at: s(v, "created_at"),
                 resolved: None,
             });
         }
         // The conversation.
-        for v in self
-            .api
-            .get(
-                &format!("{}/issues/{n}/comments", Self::repo_path(r)),
-                &page,
-            )
-            .await?
-            .as_array()
-            .into_iter()
-            .flatten()
-        {
-            out.push(ReviewComment {
-                author: s(&v["user"], "login"),
-                body: body(v),
-                path: None,
-                line: None,
-                created_at: s(v, "created_at"),
-                resolved: None,
-            });
+        for v in self.api.get(&format!("{}/issues/{n}/comments", Self::repo_path(r)), &page).await?.as_array().into_iter().flatten() {
+            out.push(ReviewComment { author: s(&v["user"], "login"), body: body(v), path: None, line: None, created_at: s(v, "created_at"), resolved: None });
         }
         out.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         Ok(out)
     }
 
     async fn issues(&self, r: &RepoRef, state: StateFilter, limit: u32) -> Result<Vec<Issue>> {
-        let q = [
-            ("state", state_param(state)),
-            ("per_page", limit.clamp(1, 100).to_string()),
-            ("sort", "updated".into()),
-        ];
-        let v = self
-            .api
-            .get(&format!("{}/issues", Self::repo_path(r)), &q)
-            .await?;
+        let q = [("state", state_param(state)), ("per_page", limit.clamp(1, 100).to_string()), ("sort", "updated".into())];
+        let v = self.api.get(&format!("{}/issues", Self::repo_path(r)), &q).await?;
         // The issues endpoint lists pull requests too.
-        Ok(v.as_array()
-            .map(|a| {
-                a.iter()
-                    .filter(|i| i.get("pull_request").is_none())
-                    .map(issue)
-                    .collect()
-            })
-            .unwrap_or_default())
+        Ok(v.as_array().map(|a| a.iter().filter(|i| i.get("pull_request").is_none()).map(issue).collect()).unwrap_or_default())
     }
 
     async fn issue(&self, r: &RepoRef, number: &str) -> Result<Issue> {
-        Ok(issue(
-            &self
-                .api
-                .get(
-                    &format!(
-                        "{}/issues/{}",
-                        Self::repo_path(r),
-                        spec::encode_segment(number)
-                    ),
-                    &[],
-                )
-                .await?,
-        ))
+        Ok(issue(&self.api.get(&format!("{}/issues/{}", Self::repo_path(r), spec::encode_segment(number)), &[]).await?))
     }
 
     async fn ci_status(&self, r: &RepoRef, git_ref: &str) -> Result<CiStatus> {
         let gr = spec::encode_path(git_ref);
         let mut checks = Vec::new();
-        let combined = self
-            .api
-            .get(
-                &format!("{}/commits/{gr}/status", Self::repo_path(r)),
-                &[("per_page", "100".into())],
-            )
-            .await?;
+        let combined = self.api.get(&format!("{}/commits/{gr}/status", Self::repo_path(r)), &[("per_page", "100".into())]).await?;
         for st in combined["statuses"].as_array().into_iter().flatten() {
-            checks.push(CiCheck {
-                name: s(st, "context"),
-                state: status_state(st["state"].as_str().unwrap_or("")),
-                url: st["target_url"].as_str().map(str::to_string),
-            });
+            checks.push(CiCheck { name: s(st, "context"), state: status_state(st["state"].as_str().unwrap_or("")), url: st["target_url"].as_str().map(str::to_string) });
         }
         let note = match self.api.get(&format!("{}/commits/{gr}/check-runs", Self::repo_path(r)), &[("per_page", "100".into())]).await {
             Ok(v) => {
@@ -357,15 +221,7 @@ impl ForgeReader for GitHub {
     async fn file_at(&self, r: &RepoRef, path: &str, git_ref: &str) -> Result<FileAtRef> {
         let text = self
             .api
-            .get_text(
-                &format!(
-                    "{}/contents/{}",
-                    Self::repo_path(r),
-                    spec::encode_path(path)
-                ),
-                &[("ref", git_ref.to_string())],
-                Some("application/vnd.github.raw+json"),
-            )
+            .get_text(&format!("{}/contents/{}", Self::repo_path(r), spec::encode_path(path)), &[("ref", git_ref.to_string())], Some("application/vnd.github.raw+json"))
             .await?;
         file_result(path, git_ref, &text)
     }
@@ -376,12 +232,7 @@ pub(crate) fn file_result(path: &str, git_ref: &str, text: &str) -> Result<FileA
         return Err(ForgeError::Unsupported(format!("{path} is a binary file")));
     }
     let (text, truncated) = cap_text(text, MAX_TEXT_CHARS);
-    Ok(FileAtRef {
-        path: path.to_string(),
-        git_ref: git_ref.to_string(),
-        text,
-        truncated,
-    })
+    Ok(FileAtRef { path: path.to_string(), git_ref: git_ref.to_string(), text, truncated })
 }
 
 #[async_trait]
@@ -390,15 +241,7 @@ impl Forge for GitHub {
         &self.web
     }
     fn capabilities(&self) -> ForgeCaps {
-        ForgeCaps {
-            draft_cr: true,
-            fork_api: true,
-            ci_status: true,
-            review_threads: true,
-            issues: true,
-            api_open_cr: true,
-            device_flow: true,
-        }
+        ForgeCaps { draft_cr: true, fork_api: true, ci_status: true, review_threads: true, issues: true, api_open_cr: true, device_flow: true }
     }
     fn creds(&self) -> &Arc<dyn CredentialSource> {
         &self.api.creds
@@ -409,18 +252,11 @@ impl Forge for GitHub {
             return Ok(None);
         }
         let v = self.api.get("user", &[]).await?;
-        Ok(Some(ForgeUser {
-            id: id_str(&v["id"]),
-            login: s(&v, "login"),
-            name: s(&v, "name"),
-        }))
+        Ok(Some(ForgeUser { id: id_str(&v["id"]), login: s(&v, "login"), name: s(&v, "name") }))
     }
 
     async fn list_repos(&self, q: &RepoQuery, login: &str) -> Result<Vec<RepoSummary>> {
-        let page = vec![
-            ("per_page", q.per_page.clamp(1, 100).to_string()),
-            ("page", q.page.max(1).to_string()),
-        ];
+        let page = vec![("per_page", q.per_page.clamp(1, 100).to_string()), ("page", q.page.max(1).to_string())];
         let items: Vec<Value> = if let Some(text) = q.q.as_deref() {
             let scope = q.owner.as_deref().unwrap_or(login);
             let mut p = page.clone();
@@ -433,27 +269,16 @@ impl Forge for GitHub {
             p.push(("sort", "updated".into()));
             let v = match q.owner.as_deref() {
                 None => {
-                    p.push((
-                        "affiliation",
-                        "owner,collaborator,organization_member".into(),
-                    ));
+                    p.push(("affiliation", "owner,collaborator,organization_member".into()));
                     self.api.get("user/repos", &p).await?
                 }
                 Some(o) if o.eq_ignore_ascii_case(login) => {
                     p.push(("affiliation", "owner".into()));
                     self.api.get("user/repos", &p).await?
                 }
-                Some(o) => match self
-                    .api
-                    .get(&format!("orgs/{}/repos", spec::encode_segment(o)), &p)
-                    .await
-                {
+                Some(o) => match self.api.get(&format!("orgs/{}/repos", spec::encode_segment(o)), &p).await {
                     Ok(v) => v,
-                    Err(_) => {
-                        self.api
-                            .get(&format!("users/{}/repos", spec::encode_segment(o)), &p)
-                            .await?
-                    }
+                    Err(_) => self.api.get(&format!("users/{}/repos", spec::encode_segment(o)), &p).await?,
                 },
             };
             v.as_array().cloned().unwrap_or_default()
@@ -462,73 +287,37 @@ impl Forge for GitHub {
     }
 
     async fn owners(&self, login: &str) -> Result<Vec<String>> {
-        let orgs = self
-            .api
-            .get("user/orgs", &[("per_page", "100".into())])
-            .await?;
+        let orgs = self.api.get("user/orgs", &[("per_page", "100".into())]).await?;
         let mut out = vec![login.to_string()];
-        out.extend(
-            orgs.as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|o| o["login"].as_str().map(str::to_string)),
-        );
+        out.extend(orgs.as_array().into_iter().flatten().filter_map(|o| o["login"].as_str().map(str::to_string)));
         Ok(out)
     }
 
     async fn repo(&self, r: &RepoRef) -> Result<Option<RepoMeta>> {
-        Ok(self
-            .api
-            .get_opt(&Self::repo_path(r), &[])
-            .await?
-            .as_ref()
-            .and_then(meta))
+        Ok(self.api.get_opt(&Self::repo_path(r), &[]).await?.as_ref().and_then(meta))
     }
 
     async fn create_fork(&self, upstream: &RepoRef) -> Result<RepoRef> {
-        let (status, v) = self
-            .api
-            .write(
-                Method::POST,
-                &format!("{}/forks", Self::repo_path(upstream)),
-                &json!({}),
-            )
-            .await?;
+        let (status, v) = self.api.write(Method::POST, &format!("{}/forks", Self::repo_path(upstream)), &json!({})).await?;
         if !status.is_success() {
-            return Err(ForgeError::Rejected(format!(
-                "GitHub didn't create the fork: {}",
-                v.as_str().unwrap_or("")
-            )));
+            return Err(ForgeError::Rejected(format!("GitHub didn't create the fork: {}", v.as_str().unwrap_or(""))));
         }
-        meta(&v)
-            .map(|m| m.repo)
-            .ok_or_else(|| ForgeError::Transport("GitHub's fork answer had no repository".into()))
+        meta(&v).map(|m| m.repo).ok_or_else(|| ForgeError::Transport("GitHub's fork answer had no repository".into()))
     }
 
     async fn create_private_repo(&self, owner: &str, login: &str, name: &str) -> Result<RepoRef> {
-        if !spec::valid_segment(name)
-            || name.ends_with(".git")
-            || (!owner.is_empty() && !spec::valid_segment(owner))
-        {
+        if !spec::valid_segment(name) || name.ends_with(".git") || (!owner.is_empty() && !spec::valid_segment(owner)) {
             return Err(ForgeError::Invalid("not a repository name".into()));
         }
         // Always private, never initialised (the scratch repo's history is
         // pushed into it as it is).
         let body = json!({ "name": name, "private": true, "auto_init": false, "has_wiki": false });
-        let path = if owner.is_empty() || owner.eq_ignore_ascii_case(login) {
-            "user/repos".to_string()
-        } else {
-            format!("orgs/{}/repos", spec::encode_segment(owner))
-        };
+        let path = if owner.is_empty() || owner.eq_ignore_ascii_case(login) { "user/repos".to_string() } else { format!("orgs/{}/repos", spec::encode_segment(owner)) };
         let (status, v) = self.api.write(Method::POST, &path, &body).await?;
         if !status.is_success() {
-            return Err(ForgeError::Rejected(format!(
-                "GitHub didn't create the repository: {}",
-                v.as_str().unwrap_or("")
-            )));
+            return Err(ForgeError::Rejected(format!("GitHub didn't create the repository: {}", v.as_str().unwrap_or(""))));
         }
-        let m = meta(&v)
-            .ok_or_else(|| ForgeError::Transport("GitHub's answer had no repository".into()))?;
+        let m = meta(&v).ok_or_else(|| ForgeError::Transport("GitHub's answer had no repository".into()))?;
         // GitHub created it private; refuse to go on if it says otherwise
         // (an Enterprise "internal" repository also says private: true).
         let visibility = v["visibility"].as_str();
@@ -543,11 +332,7 @@ impl Forge for GitHub {
 
     async fn open_change_request(&self, d: &ChangeRequestDraft) -> Result<ChangeRequestOutcome> {
         let cross = !d.head.same(&d.base);
-        let head = if cross {
-            format!("{}:{}", d.head.owner, d.head_branch)
-        } else {
-            d.head_branch.clone()
-        };
+        let head = if cross { format!("{}:{}", d.head.owner, d.head_branch) } else { d.head_branch.clone() };
         let mut body = json!({ "title": d.title, "body": d.body, "head": head, "base": d.base_branch, "draft": d.draft });
         // A fork in the same org as its parent needs head_repo to say which.
         if cross && d.head.owner.eq_ignore_ascii_case(&d.base.owner) {
@@ -558,42 +343,23 @@ impl Forge for GitHub {
         let (mut status, mut v) = self.api.write(Method::POST, &path, &body).await?;
         let mut draft = d.draft;
         // Some plans have no draft PRs: open it as a normal PR then.
-        if status == StatusCode::UNPROCESSABLE_ENTITY
-            && d.draft
-            && v.as_str()
-                .is_some_and(|m| m.to_ascii_lowercase().contains("draft"))
-        {
+        if status == StatusCode::UNPROCESSABLE_ENTITY && d.draft && v.as_str().is_some_and(|m| m.to_ascii_lowercase().contains("draft")) {
             body["draft"] = json!(false);
             draft = false;
             (status, v) = self.api.write(Method::POST, &path, &body).await?;
         }
         if status.is_success() {
-            return Ok(ChangeRequestOutcome::Opened {
-                number: id_str(&v["number"]),
-                url: s(&v, "html_url"),
-                draft_supported: draft || !d.draft,
-                existing: false,
-            });
+            return Ok(ChangeRequestOutcome::Opened { number: id_str(&v["number"]), url: s(&v, "html_url"), draft_supported: draft || !d.draft, existing: false });
         }
         let msg = v.as_str().unwrap_or("").to_string();
         if status == StatusCode::UNPROCESSABLE_ENTITY && msg.contains("already exists") {
-            let q = [
-                ("head", format!("{}:{}", d.head.owner, d.head_branch)),
-                ("state", "open".to_string()),
-            ];
+            let q = [("head", format!("{}:{}", d.head.owner, d.head_branch)), ("state", "open".to_string())];
             let list = self.api.get(&path, &q).await?;
             if let Some(p) = list.as_array().and_then(|a| a.first()) {
-                return Ok(ChangeRequestOutcome::Opened {
-                    number: id_str(&p["number"]),
-                    url: s(p, "html_url"),
-                    draft_supported: true,
-                    existing: true,
-                });
+                return Ok(ChangeRequestOutcome::Opened { number: id_str(&p["number"]), url: s(p, "html_url"), draft_supported: true, existing: true });
             }
         }
-        Err(ForgeError::Rejected(format!(
-            "GitHub didn't open the pull request: {msg}"
-        )))
+        Err(ForgeError::Rejected(format!("GitHub didn't open the pull request: {msg}")))
     }
 
     fn git_auth_args(&self) -> Vec<String> {
@@ -612,15 +378,8 @@ impl GitHub {
 
     /// Anonymous identity-link reads: id → current login.
     pub async fn resolve_user(&self, subject_id: &str) -> Result<ForgeUser> {
-        let v = self
-            .api
-            .get(&format!("user/{}", spec::encode_segment(subject_id)), &[])
-            .await?;
-        Ok(ForgeUser {
-            id: id_str(&v["id"]),
-            login: s(&v, "login"),
-            name: s(&v, "name"),
-        })
+        let v = self.api.get(&format!("user/{}", spec::encode_segment(subject_id)), &[]).await?;
+        Ok(ForgeUser { id: id_str(&v["id"]), login: s(&v, "login"), name: s(&v, "name") })
     }
 
     /// The account's public SSH keys (authentication and signing).
@@ -628,23 +387,10 @@ impl GitHub {
         let u = self.resolve_user(subject_id).await?;
         let login = spec::encode_segment(&u.login);
         let mut out = Vec::new();
-        for (path, usage) in [
-            (format!("users/{login}/keys"), KeyUsage::Auth),
-            (format!("users/{login}/ssh_signing_keys"), KeyUsage::Signing),
-        ] {
-            for k in self
-                .api
-                .get(&path, &[("per_page", "100".into())])
-                .await?
-                .as_array()
-                .into_iter()
-                .flatten()
-            {
+        for (path, usage) in [(format!("users/{login}/keys"), KeyUsage::Auth), (format!("users/{login}/ssh_signing_keys"), KeyUsage::Signing)] {
+            for k in self.api.get(&path, &[("per_page", "100".into())]).await?.as_array().into_iter().flatten() {
                 if let Some(key) = k["key"].as_str() {
-                    out.push(PublicKeyEntry {
-                        openssh: key.to_string(),
-                        usage,
-                    });
+                    out.push(PublicKeyEntry { openssh: key.to_string(), usage });
                 }
             }
         }

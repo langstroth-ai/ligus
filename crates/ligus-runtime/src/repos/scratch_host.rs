@@ -59,10 +59,7 @@ type Result<T> = std::result::Result<T, HostError>;
 /// The account id of this device's person (`""` when none), for the
 /// per-member limit (identity model v2: who is an account id).
 pub fn my_account(svc: &ChatService) -> String {
-    svc.author()
-        .account_id
-        .map(|a| a.to_string())
-        .unwrap_or_default()
+    svc.author().account_id.map(|a| a.to_string()).unwrap_or_default()
 }
 
 /// Create a scratch repository for `chat` (or none) on this device: the
@@ -83,9 +80,7 @@ pub fn create(
     // The role first: a member who can't add repositories gets the reason
     // before anything is made on disk.
     let roster = svc.workspace_roster(workspace_id)?;
-    let admin = roster
-        .role_of(&svc.author().id)
-        .is_some_and(|r| r.rank() >= ligus_core::WorkspaceRole::Admin.rank());
+    let admin = roster.role_of(&svc.author().id).is_some_and(|r| r.rank() >= ligus_core::WorkspaceRole::Admin.rank());
     if !admin {
         return Err(HostError::Refused(
             "only an Admin can add a repository to this workspace, scratch ones too; ask an Admin, or use the phone's home host".into(),
@@ -104,16 +99,8 @@ pub fn create(
         recorded = true;
         let repo = svc.add_scratch_workspace_repo(workspace_id, &entry.root_commit, &entry.name)?;
         let e = scratch::set_repo_id(svc.store(), entry.id, Some(repo.id))?;
-        super::bind(
-            svc.store(),
-            svc.device_id(),
-            host_label,
-            workspace_id,
-            &repo,
-            &e.path,
-            CheckoutSource::Bound,
-        )
-        .map_err(|b| HostError::Other(b.to_string()))?;
+        super::bind(svc.store(), svc.device_id(), host_label, workspace_id, &repo, &e.path, CheckoutSource::Bound)
+            .map_err(|b| HostError::Other(b.to_string()))?;
         let e = match chat {
             Some(c) => {
                 svc.set_chat_repo(c, workspace_id, Some(repo.id), "main")?;
@@ -139,16 +126,11 @@ pub fn create(
 /// those still in the workspace and still scratch there. Returns how many.
 /// Each that the workspace refuses stays pending.
 pub fn retire_removed(svc: &mut ChatService, workspace_id: Uuid) -> usize {
-    let Ok(roster) = svc.workspace_roster(workspace_id) else {
-        return 0;
-    };
+    let Ok(roster) = svc.workspace_roster(workspace_id) else { return 0 };
     let mut n = 0;
     for e in scratch::retire_pending(svc.store(), workspace_id) {
         let Some(repo_id) = e.repo_id else { continue };
-        let live_scratch = roster
-            .repos
-            .get(&repo_id)
-            .is_some_and(|r| !r.removed && r.repo.is_scratch());
+        let live_scratch = roster.repos.get(&repo_id).is_some_and(|r| !r.removed && r.repo.is_scratch());
         // Someone kept it elsewhere (no longer scratch), or it's gone already.
         if !live_scratch || svc.remove_workspace_repo(workspace_id, repo_id).is_ok() {
             let _ = scratch::mark_retired(svc.store(), e.id);
@@ -159,27 +141,11 @@ pub fn retire_removed(svc: &mut ChatService, workspace_id: Uuid) -> usize {
 }
 
 /// Point `chat` at an existing live scratch repository of this device.
-pub fn use_in_chat(
-    svc: &mut ChatService,
-    workspace_id: Uuid,
-    id: Uuid,
-    chat: Uuid,
-) -> Result<ScratchRepo> {
-    let e = scratch::list(svc.store(), workspace_id)
-        .into_iter()
-        .find(|e| e.id == id && e.is_live())
-        .ok_or(ScratchError::NotFound)?;
-    let repo = e
-        .repo_id
-        .ok_or_else(|| HostError::Other("that scratch repository isn't in the workspace".into()))?;
+pub fn use_in_chat(svc: &mut ChatService, workspace_id: Uuid, id: Uuid, chat: Uuid) -> Result<ScratchRepo> {
+    let e = scratch::list(svc.store(), workspace_id).into_iter().find(|e| e.id == id && e.is_live()).ok_or(ScratchError::NotFound)?;
+    let repo = e.repo_id.ok_or_else(|| HostError::Other("that scratch repository isn't in the workspace".into()))?;
     svc.set_chat_repo(chat, workspace_id, Some(repo), "main")?;
-    Ok(scratch::set_chat(
-        svc.store(),
-        id,
-        chat,
-        true,
-        scratch::now(),
-    )?)
+    Ok(scratch::set_chat(svc.store(), id, chat, true, scratch::now())?)
 }
 
 /// Keep a scratch repository: move it to `dest`, bind it there instead,
@@ -194,45 +160,18 @@ pub fn keep(
     forbidden: &[PathBuf],
     host_label: &str,
 ) -> Result<(ScratchRepo, bool)> {
-    let e = scratch::list(svc.store(), workspace_id)
-        .into_iter()
-        .find(|e| e.id == id && e.is_live())
-        .ok_or(ScratchError::NotFound)?;
+    let e = scratch::list(svc.store(), workspace_id).into_iter().find(|e| e.id == id && e.is_live()).ok_or(ScratchError::NotFound)?;
     let new_path = scratch::keep_dir(&e, dest, forbidden)?;
     let kept = scratch::mark_kept(svc.store(), id, &new_path)?;
     let mut flag_dropped = false;
     if let Some(repo_id) = e.repo_id {
         let roster = svc.workspace_roster(workspace_id)?;
-        if let Some(repo) = roster
-            .repos
-            .get(&repo_id)
-            .filter(|r| !r.removed)
-            .map(|r| r.repo.clone())
-        {
+        if let Some(repo) = roster.repos.get(&repo_id).filter(|r| !r.removed).map(|r| r.repo.clone()) {
             let _ = super::unbind(svc.store(), svc.device_id(), workspace_id, repo_id, &e.path);
-            super::bind(
-                svc.store(),
-                svc.device_id(),
-                host_label,
-                workspace_id,
-                &repo,
-                &new_path,
-                CheckoutSource::Bound,
-            )
-            .map_err(|b| {
-                HostError::Other(format!(
-                    "moved to {}, but couldn't bind it there: {b}",
-                    new_path.display()
-                ))
-            })?;
+            super::bind(svc.store(), svc.device_id(), host_label, workspace_id, &repo, &new_path, CheckoutSource::Bound)
+                .map_err(|b| HostError::Other(format!("moved to {}, but couldn't bind it there: {b}", new_path.display())))?;
             for c in &e.chats {
-                if svc
-                    .store()
-                    .chat_checkout(*c, repo_id)
-                    .ok()
-                    .flatten()
-                    .is_some()
-                {
+                if svc.store().chat_checkout(*c, repo_id).ok().flatten().is_some() {
                     let _ = svc.store().set_chat_checkout(*c, repo_id, Some(&new_path));
                 }
             }
@@ -247,33 +186,18 @@ pub fn keep(
 /// repository and a note; history (proposals, diffs) stays in the chats.
 /// The workspace entry stays (removing it needs an Admin's passkey); it
 /// shows as scratch with no checkout.
-pub fn remove(
-    svc: &mut ChatService,
-    workspace_id: Uuid,
-    id: Uuid,
-    host_label: &str,
-    note: Option<&str>,
-) -> Result<ScratchRepo> {
-    let e = scratch::list(svc.store(), workspace_id)
-        .into_iter()
-        .find(|e| e.id == id && e.is_live())
-        .ok_or(ScratchError::NotFound)?;
+pub fn remove(svc: &mut ChatService, workspace_id: Uuid, id: Uuid, host_label: &str, note: Option<&str>) -> Result<ScratchRepo> {
+    let e = scratch::list(svc.store(), workspace_id).into_iter().find(|e| e.id == id && e.is_live()).ok_or(ScratchError::NotFound)?;
     scratch::remove_dir_checked(&e)?;
     let removed = scratch::mark_removed(svc.store(), id, scratch::now())?;
     if let Some(repo_id) = e.repo_id {
         let _ = super::unbind(svc.store(), svc.device_id(), workspace_id, repo_id, &e.path);
         for c in &e.chats {
-            let on_it = svc
-                .load_in(workspace_id, *c)
-                .ok()
-                .flatten()
-                .is_some_and(|s| s.repo.as_ref().and_then(|r| r.repo_id) == Some(repo_id));
+            let on_it = svc.load_in(workspace_id, *c).ok().flatten().is_some_and(|s| s.repo.as_ref().and_then(|r| r.repo_id) == Some(repo_id));
             if on_it {
                 let _ = svc.set_chat_repo(*c, workspace_id, None, "");
             }
-            let text = note
-                .map(str::to_string)
-                .unwrap_or_else(|| scratch::removed_text(&e, host_label));
+            let text = note.map(str::to_string).unwrap_or_else(|| scratch::removed_text(&e, host_label));
             let _ = svc.post_system_note(*c, workspace_id, text);
         }
     }
@@ -290,13 +214,7 @@ pub struct SweepReport {
 
 /// One cleanup pass at `now`: notices to chats entering the last
 /// [`scratch::NOTICE_DAYS`] days, removal of those past their time.
-pub fn sweep(
-    svc: &mut ChatService,
-    workspace_id: Uuid,
-    settings: &Settings,
-    host_label: &str,
-    now: i64,
-) -> SweepReport {
+pub fn sweep(svc: &mut ChatService, workspace_id: Uuid, settings: &Settings, host_label: &str, now: i64) -> SweepReport {
     let mut out = SweepReport::default();
     let due = scratch::due(svc.store(), workspace_id, settings, now);
     for (e, x) in due.notice {
@@ -323,37 +241,22 @@ pub fn sweep(
 /// (what the confirmation showed); never public, never a force push, and
 /// only from the repository itself (its own top level, its own root commit).
 /// Returns the web URL.
-pub async fn publish(
-    forge: &dyn ligus_forge::Forge,
-    entry: &ScratchRepo,
-    owner: &str,
-    name: &str,
-    confirm: &str,
-) -> std::result::Result<String, String> {
+pub async fn publish(forge: &dyn ligus_forge::Forge, entry: &ScratchRepo, owner: &str, name: &str, confirm: &str) -> std::result::Result<String, String> {
     let owner = owner.trim();
     let name = name.trim();
     let dir = entry.path.clone();
     if confirm.trim() != format!("{owner}/{name}") {
         return Err("confirm the account and the repository name first (they must match what you confirmed)".into());
     }
-    if !ligus_forge::spec::valid_segment(owner)
-        || !ligus_forge::spec::valid_segment(name)
-        || name.ends_with(".git")
-    {
+    if !ligus_forge::spec::valid_segment(owner) || !ligus_forge::spec::valid_segment(name) || name.ends_with(".git") {
         return Err("not a valid account and repository name".into());
     }
     if !forge.has_write() {
-        return Err(forge.signed_out_reason().unwrap_or_else(|| {
-            "this host has no write access to that code host; sign in first".into()
-        }));
+        return Err(forge.signed_out_reason().unwrap_or_else(|| "this host has no write access to that code host; sign in first".into()));
     }
     // This very repository, never one around the folder it was kept in.
-    let top = super::git::git(&dir, &["rev-parse", "--show-toplevel"])
-        .map(|t| super::git::canonical(Path::new(&t)))
-        .ok();
-    if top.as_deref() != Some(super::git::canonical(&dir).as_path())
-        || !super::git::has_root(&dir, &entry.root_commit)
-    {
+    let top = super::git::git(&dir, &["rev-parse", "--show-toplevel"]).map(|t| super::git::canonical(Path::new(&t))).ok();
+    if top.as_deref() != Some(super::git::canonical(&dir).as_path()) || !super::git::has_root(&dir, &entry.root_commit) {
         return Err("its folder isn't the kept repository any more".into());
     }
     if super::git::git(&dir, &["remote", "get-url", "origin"]).is_ok() {
@@ -369,43 +272,17 @@ pub async fn publish(
     let mut refs = vec!["refs/heads/main:refs/heads/main".to_string()];
     for c in &entry.chats {
         let b = crate::git_worktree::chat_branch_name(&c.to_string());
-        if super::git::git(
-            &dir,
-            &[
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                &format!("refs/heads/{b}"),
-            ],
-        )
-        .is_ok()
-        {
+        if super::git::git(&dir, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{b}")]).is_ok() {
             refs.push(format!("refs/heads/{b}:refs/heads/{b}"));
         }
     }
-    let login = forge
-        .whoami()
-        .await
-        .map_err(|e| e.summary())?
-        .map(|u| u.login)
-        .ok_or_else(|| "this host isn't signed in to that code host".to_string())?;
-    let created = forge
-        .create_private_repo(owner, &login, name)
-        .await
-        .map_err(|e| e.summary())?;
-    let left = |what: String| {
-        format!("created the private repository {} (still empty), but {what}; push to it yourself or delete it", created.full_name())
-    };
+    let login = forge.whoami().await.map_err(|e| e.summary())?.map(|u| u.login).ok_or_else(|| "this host isn't signed in to that code host".to_string())?;
+    let created = forge.create_private_repo(owner, &login, name).await.map_err(|e| e.summary())?;
+    let left = |what: String| format!("created the private repository {} (still empty), but {what}; push to it yourself or delete it", created.full_name());
     let url = forge.clone_url(&created, ligus_forge::Transport::Https);
-    super::git::git(&dir, &["remote", "add", "origin", &url])
-        .map_err(|e| left(format!("couldn't add it as origin: {e}")))?;
+    super::git::git(&dir, &["remote", "add", "origin", &url]).map_err(|e| left(format!("couldn't add it as origin: {e}")))?;
     let mut cmd = ligus_core::process_util::git();
-    cmd.args(forge.git_auth_args())
-        .arg("-C")
-        .arg(&dir)
-        .args(["push", "--quiet", "origin"])
-        .args(&refs)
-        .env("GIT_TERMINAL_PROMPT", "0");
+    cmd.args(forge.git_auth_args()).arg("-C").arg(&dir).args(["push", "--quiet", "origin"]).args(&refs).env("GIT_TERMINAL_PROMPT", "0");
     let push = tokio::task::spawn_blocking(move || cmd.output());
     let out = match tokio::time::timeout(std::time::Duration::from_secs(300), push).await {
         Ok(Ok(Ok(o))) => o,
@@ -414,16 +291,9 @@ pub async fn publish(
         Err(_) => return Err(left("the push took longer than 5 minutes".into())),
     };
     if !out.status.success() {
-        return Err(left(format!(
-            "the push failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
+        return Err(left(format!("the push failed: {}", String::from_utf8_lossy(&out.stderr).trim())));
     }
-    Ok(format!(
-        "{}/{}",
-        forge.web_base().trim_end_matches('/'),
-        created.full_name()
-    ))
+    Ok(format!("{}/{}", forge.web_base().trim_end_matches('/'), created.full_name()))
 }
 
 /// The first key in the repository's own config (local, and a worktree's
@@ -449,29 +319,17 @@ pub fn unsafe_local_config(dir: &Path) -> Option<String> {
             .lines()
             .map(|l| l.trim().to_ascii_lowercase())
             .filter(|k| !k.is_empty())
-            .find(|k| {
-                !(PLAIN.contains(&k.as_str())
-                    || k.starts_with("branch.")
-                    || k.starts_with("ligus."))
-            })
+            .find(|k| !(PLAIN.contains(&k.as_str()) || k.starts_with("branch.") || k.starts_with("ligus.")))
     };
-    let local =
-        super::git::git(dir, &["config", "--local", "--name-only", "--list"]).unwrap_or_default();
+    let local = super::git::git(dir, &["config", "--local", "--name-only", "--list"]).unwrap_or_default();
     if let Some(k) = bad(local) {
         return Some(k);
     }
     // Per-worktree config, when the repository turned it on (without it,
     // `--worktree` is the local config again).
-    let on = super::git::git(
-        dir,
-        &["config", "--local", "--bool", "extensions.worktreeConfig"],
-    )
-    .is_ok_and(|v| v == "true");
+    let on = super::git::git(dir, &["config", "--local", "--bool", "extensions.worktreeConfig"]).is_ok_and(|v| v == "true");
     if on {
-        return bad(
-            super::git::git(dir, &["config", "--worktree", "--name-only", "--list"])
-                .unwrap_or_default(),
-        );
+        return bad(super::git::git(dir, &["config", "--worktree", "--name-only", "--list"]).unwrap_or_default());
     }
     None
 }

@@ -66,19 +66,12 @@ fn clip(s: &str) -> String {
 }
 
 fn clip_list(v: &[String]) -> Vec<String> {
-    v.iter()
-        .map(|s| clip(s))
-        .filter(|s| !s.is_empty())
-        .take(PARCEL_MAX_ITEMS)
-        .collect()
+    v.iter().map(|s| clip(s)).filter(|s| !s.is_empty()).take(PARCEL_MAX_ITEMS).collect()
 }
 
 impl ContextParcel {
     pub fn is_empty(&self) -> bool {
-        self.key_files.is_empty()
-            && self.decisions.is_empty()
-            && self.ruled_out.is_empty()
-            && self.notes.trim().is_empty()
+        self.key_files.is_empty() && self.decisions.is_empty() && self.ruled_out.is_empty() && self.notes.trim().is_empty()
     }
 
     /// Bounded copy: trims, caps list lengths and text sizes.
@@ -180,22 +173,13 @@ impl HandoffCard {
             out.push_str(&format!("Branch: {}\n", self.branch));
         }
         if !self.files.is_empty() {
-            let shown: Vec<&str> = self
-                .files
-                .iter()
-                .take(PARCEL_MAX_ITEMS)
-                .map(String::as_str)
-                .collect();
+            let shown: Vec<&str> = self.files.iter().take(PARCEL_MAX_ITEMS).map(String::as_str).collect();
             out.push_str(&format!("Files: {}\n", shown.join(", ")));
         }
         let q = &self.quality;
         let mut facts = Vec::new();
         if let Some(t) = q.tests_passed {
-            facts.push(if t {
-                "tests passed".to_string()
-            } else {
-                "tests failing".to_string()
-            });
+            facts.push(if t { "tests passed".to_string() } else { "tests failing".to_string() });
         }
         if !q.proposal_status.is_empty() {
             facts.push(format!("proposal {}", q.proposal_status));
@@ -275,10 +259,7 @@ mod tests {
     #[test]
     fn task_line_prefers_the_mentioning_sentence() {
         let body = "I changed the parser.\n@Reviewer can you check the edge cases?\nThanks";
-        assert_eq!(
-            task_line(body, "reviewer"),
-            "@Reviewer can you check the edge cases?"
-        );
+        assert_eq!(task_line(body, "reviewer"), "@Reviewer can you check the edge cases?");
         assert_eq!(task_line("Only line", "x"), "Only line");
     }
 }

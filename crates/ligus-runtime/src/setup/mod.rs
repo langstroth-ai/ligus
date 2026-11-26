@@ -73,15 +73,8 @@ pub enum FlowId {
 }
 
 impl FlowId {
-    pub const ALL: [FlowId; 7] = [
-        FlowId::Agent,
-        FlowId::Tool,
-        FlowId::Folder,
-        FlowId::Box,
-        FlowId::Phone,
-        FlowId::Invite,
-        FlowId::Relay,
-    ];
+    pub const ALL: [FlowId; 7] =
+        [FlowId::Agent, FlowId::Tool, FlowId::Folder, FlowId::Box, FlowId::Phone, FlowId::Invite, FlowId::Relay];
 
     /// The flow's id on the command line (`ligus setup <id>`).
     pub fn as_str(self) -> &'static str {
@@ -234,18 +227,12 @@ pub fn flow(id: &str) -> Option<&'static FlowDef> {
 pub enum FieldKind {
     Text,
     /// One of `options` (the CLI takes the option's `value`).
-    Choice {
-        options: Vec<Choice>,
-    },
+    Choice { options: Vec<Choice> },
     /// Several of `options`, comma-separated on the command line.
-    Multi {
-        options: Vec<Choice>,
-    },
+    Multi { options: Vec<Choice> },
     /// Free text, with `options` offered (a model list that may be
     /// incomplete).
-    Suggest {
-        options: Vec<Choice>,
-    },
+    Suggest { options: Vec<Choice> },
     /// Masked; never echoed, logged or returned. The CLI reads it from stdin
     /// (`-`) or an owner-only file (`@PATH`), never from the command line.
     Secret,
@@ -271,12 +258,7 @@ pub struct Choice {
 
 impl Choice {
     pub fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
-        Choice {
-            value: value.into(),
-            label: label.into(),
-            hint: None,
-            disabled: false,
-        }
+        Choice { value: value.into(), label: label.into(), hint: None, disabled: false }
     }
     pub fn hint(mut self, h: impl Into<String>) -> Self {
         let h = h.into();
@@ -312,15 +294,7 @@ pub struct Field {
 
 impl Field {
     fn new(id: &'static str, label: &'static str, kind: FieldKind) -> Self {
-        Field {
-            id,
-            label,
-            kind,
-            required: false,
-            default: None,
-            help: "",
-            when: None,
-        }
+        Field { id, label, kind, required: false, default: None, help: "", when: None }
     }
     fn required(mut self) -> Self {
         self.required = true;
@@ -381,31 +355,13 @@ pub struct StepDef {
 
 impl StepDef {
     fn input(id: &'static str, title: &'static str, fields: Vec<Field>) -> Self {
-        StepDef {
-            id,
-            title,
-            kind: StepKind::Input,
-            fields,
-            where_: "",
-        }
+        StepDef { id, title, kind: StepKind::Input, fields, where_: "" }
     }
     fn person(id: &'static str, title: &'static str, where_: &'static str) -> Self {
-        StepDef {
-            id,
-            title,
-            kind: StepKind::Person,
-            fields: Vec::new(),
-            where_,
-        }
+        StepDef { id, title, kind: StepKind::Person, fields: Vec::new(), where_ }
     }
     fn verify(id: &'static str, title: &'static str) -> Self {
-        StepDef {
-            id,
-            title,
-            kind: StepKind::Verify,
-            fields: Vec::new(),
-            where_: "",
-        }
+        StepDef { id, title, kind: StepKind::Verify, fields: Vec::new(), where_: "" }
     }
 }
 
@@ -479,19 +435,13 @@ impl Secrets {
     }
     /// The ids that hold a value (never the values).
     pub fn ids(&self) -> Vec<&str> {
-        self.0
-            .iter()
-            .filter(|(_, v)| !v.trim().is_empty())
-            .map(|(k, _)| k.as_str())
-            .collect()
+        self.0.iter().filter(|(_, v)| !v.trim().is_empty()).map(|(k, _)| k.as_str()).collect()
     }
 }
 
 impl std::fmt::Debug for Secrets {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_map()
-            .entries(self.0.keys().map(|k| (k, "***")))
-            .finish()
+        f.debug_map().entries(self.0.keys().map(|k| (k, "***"))).finish()
     }
 }
 
@@ -588,11 +538,7 @@ pub fn status(ops: &dyn SetupOps) -> Vec<FlowStatus> {
                     FlowId::Relay => relay::status(ops),
                 },
             };
-            FlowStatus {
-                flow: f.def(),
-                progress,
-                detail,
-            }
+            FlowStatus { flow: f.def(), progress, detail }
         })
         .collect()
 }
@@ -615,12 +561,7 @@ pub fn form(flow: FlowId, ops: &dyn SetupOps, inputs: &Inputs) -> Form {
         FlowId::Invite => human::invite_steps(ops),
         FlowId::Relay => relay::steps(ops, inputs),
     };
-    Form {
-        flow: flow.def(),
-        blocked: ctx.stopped(),
-        preflight: ctx.checks,
-        steps,
-    }
+    Form { flow: flow.def(), blocked: ctx.stopped(), preflight: ctx.checks, steps }
 }
 
 fn preflight(flow: FlowId, ctx: &mut Ctx, ops: &dyn SetupOps, inputs: &Inputs) {
@@ -637,13 +578,7 @@ fn preflight(flow: FlowId, ctx: &mut Ctx, ops: &dyn SetupOps, inputs: &Inputs) {
 
 /// Run a flow: gate, preflight, validation, the steps (each skipped when
 /// already done), verify. See the module docs.
-pub fn run(
-    flow: FlowId,
-    ops: &mut dyn SetupOps,
-    inputs: &Inputs,
-    secrets: &Secrets,
-    opts: &RunOpts,
-) -> Outcome {
+pub fn run(flow: FlowId, ops: &mut dyn SetupOps, inputs: &Inputs, secrets: &Secrets, opts: &RunOpts) -> Outcome {
     let mut ctx = Ctx::new(flow, opts);
     ctx.surface = Some(ops.surface());
     gate::driver_gate(&mut ctx, secrets);
@@ -754,13 +689,7 @@ impl Ctx {
         self.checks.push(Check::ok(&id, title, detail));
     }
 
-    pub(crate) fn warn(
-        &mut self,
-        id: &str,
-        title: &str,
-        detail: impl Into<String>,
-        fix: Option<String>,
-    ) {
+    pub(crate) fn warn(&mut self, id: &str, title: &str, detail: impl Into<String>, fix: Option<String>) {
         let id = self.id(id);
         let mut c = Check::warn(&id, title, detail);
         if let Some(f) = fix {
@@ -777,14 +706,7 @@ impl Ctx {
     /// A blocking failure: the run stops with `code`. A write the rules
     /// hold for its author's passkey is a person's step instead (exit 4),
     /// with the one line that says where to confirm it.
-    pub(crate) fn fail(
-        &mut self,
-        id: &str,
-        title: &str,
-        detail: impl Into<String>,
-        fix: impl Into<String>,
-        code: i32,
-    ) {
+    pub(crate) fn fail(&mut self, id: &str, title: &str, detail: impl Into<String>, fix: impl Into<String>, code: i32) {
         let detail = detail.into();
         if is_presence_refusal(&detail) {
             let what = presence_fix(self.surface);
@@ -796,17 +718,10 @@ impl Ctx {
     }
 
     /// A step only a person can do: a warning, `next` says what, exit 4.
-    pub(crate) fn person(
-        &mut self,
-        id: &str,
-        title: &str,
-        detail: impl Into<String>,
-        what: impl Into<String>,
-    ) {
+    pub(crate) fn person(&mut self, id: &str, title: &str, detail: impl Into<String>, what: impl Into<String>) {
         let what = what.into();
         let id = self.id(id);
-        self.checks
-            .push(Check::warn(&id, title, detail).fix(what.clone()));
+        self.checks.push(Check::warn(&id, title, detail).fix(what.clone()));
         self.next.push(what);
         self.stop(exit::PERSON);
     }
@@ -866,22 +781,11 @@ impl Ctx {
         if self.stopped {
             return true;
         }
-        if self
-            .cancel
-            .as_ref()
-            .is_some_and(|c| c.load(Ordering::SeqCst))
-        {
+        if self.cancel.as_ref().is_some_and(|c| c.load(Ordering::SeqCst)) {
             let id = self.id("cancelled");
             self.checks.push(
-                Check::warn(
-                    &id,
-                    "cancelled",
-                    "stopped before the next step; this run's own writes are undone",
-                )
-                .fix(format!(
-                    "run `ligus setup {}` again to finish",
-                    self.flow.as_str()
-                )),
+                Check::warn(&id, "cancelled", "stopped before the next step; this run's own writes are undone")
+                    .fix(format!("run `ligus setup {}` again to finish", self.flow.as_str())),
             );
             self.stop(exit::FAILED);
             return true;
@@ -904,22 +808,11 @@ impl Ctx {
             }
             let id = self.id("rolled-back");
             if failed.is_empty() {
-                self.checks.push(Check::ok(
-                    &id,
-                    "rolled back",
-                    format!("undid {}", undone.join(", ")),
-                ));
+                self.checks.push(Check::ok(&id, "rolled back", format!("undid {}", undone.join(", "))));
             } else {
                 self.checks.push(
-                    Check::fail(
-                        &id,
-                        "rolled back",
-                        format!("could not undo {}", failed.join("; ")),
-                    )
-                    .fix(format!(
-                        "remove it by hand; `ligus setup {}` lists what is set up",
-                        self.flow.as_str()
-                    )),
+                    Check::fail(&id, "rolled back", format!("could not undo {}", failed.join("; ")))
+                        .fix(format!("remove it by hand; `ligus setup {}` lists what is set up", self.flow.as_str())),
                 );
             }
         }
@@ -936,12 +829,6 @@ impl Ctx {
         for n in self.next {
             report.next(n);
         }
-        Outcome {
-            flow: self.flow,
-            report,
-            exit: self.exit,
-            done: self.done,
-            results: self.results,
-        }
+        Outcome { flow: self.flow, report, exit: self.exit, done: self.done, results: self.results }
     }
 }

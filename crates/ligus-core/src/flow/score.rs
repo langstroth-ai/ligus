@@ -65,37 +65,22 @@ fn proposal_class(s: &ChatSession, p: &crate::proposals::ActionProposal) -> Stri
         .iter()
         .find(|t| t.proposal_ids.contains(&p.id))
         .map(|t| t.task_class.clone())
-        .unwrap_or_else(|| {
-            task_class::classify_proposal(&p.title, &p.body, &p.changed_files).to_string()
-        })
+        .unwrap_or_else(|| task_class::classify_proposal(&p.title, &p.body, &p.changed_files).to_string())
 }
 
 fn outcomes_of(s: &ChatSession, out: &mut Vec<OutcomeSample>) {
     // Proposals produced by an agent turn. Workflow gates (no author) and
     // human-authored proposals measure no agent.
-    let agent_names: BTreeMap<&str, uuid::Uuid> = s
-        .workspace_agents
-        .iter()
-        .map(|a| (a.name.as_str(), a.id))
-        .collect();
+    let agent_names: BTreeMap<&str, uuid::Uuid> =
+        s.workspace_agents.iter().map(|a| (a.name.as_str(), a.id)).collect();
     for p in &s.proposals {
         // Producer: the recorded producing agent, else the turn that filed it
         // (an authorless diff from the primary), else an agent author by name.
         let producer = p
             .producing_agent_id
             .map(|id| agent_key(Some(id)))
-            .or_else(|| {
-                s.flow
-                    .turns
-                    .iter()
-                    .find(|t| t.proposal_ids.contains(&p.id))
-                    .map(|t| t.agent.clone())
-            })
-            .or_else(|| {
-                agent_names
-                    .get(p.author_actor_id.as_str())
-                    .map(|id| agent_key(Some(*id)))
-            });
+            .or_else(|| s.flow.turns.iter().find(|t| t.proposal_ids.contains(&p.id)).map(|t| t.agent.clone()))
+            .or_else(|| agent_names.get(p.author_actor_id.as_str()).map(|id| agent_key(Some(*id))));
         let Some(agent) = producer else { continue };
         let class = proposal_class(s, p);
         let decided_at = p
@@ -133,18 +118,9 @@ fn outcomes_of(s: &ChatSession, out: &mut Vec<OutcomeSample>) {
     // Workflow agent stages.
     for run in &s.workflow_runs {
         for node in &run.definition.nodes {
-            let WorkflowNodeKind::Agent {
-                agent_id,
-                prompt_template,
-            } = &node.kind
-            else {
-                continue;
-            };
-            let Some(state) = run.node_state(&node.id) else {
-                continue;
-            };
-            let class =
-                task_class::classify(&format!("{}\n{}", node.name, prompt_template)).to_string();
+            let WorkflowNodeKind::Agent { agent_id, prompt_template } = &node.kind else { continue };
+            let Some(state) = run.node_state(&node.id) else { continue };
+            let class = task_class::classify(&format!("{}\n{}", node.name, prompt_template)).to_string();
             let agent = agent_key(*agent_id);
             let at = ms(&run.updated_at);
             // Extra attempts (a rejecting gate sent the stage back) are revise loops.
@@ -205,9 +181,7 @@ pub fn turns_spent(sessions: &[ChatSession]) -> BTreeMap<(String, String), (f64,
     let mut out: BTreeMap<(String, String), (f64, f64)> = BTreeMap::new();
     for s in sessions {
         for t in &s.flow.turns {
-            let e = out
-                .entry((t.agent.clone(), t.task_class.clone()))
-                .or_default();
+            let e = out.entry((t.agent.clone(), t.task_class.clone())).or_default();
             e.0 += 1.0;
             e.1 += t.cost_usd;
         }
@@ -219,33 +193,25 @@ pub fn turns_spent(sessions: &[ChatSession]) -> BTreeMap<(String, String), (f64,
 /// tags are device-local facts, so a host sees its own turns as facts and
 /// everyone else's as these summaries). `this_host`'s own summaries are
 /// skipped: its facts already count.
-pub fn summary_outcomes(
-    summaries: &BTreeMap<String, Vec<AgentOutcomeSummary>>,
-    this_host: &str,
-) -> Vec<OutcomeSample> {
+pub fn summary_outcomes(summaries: &BTreeMap<String, Vec<AgentOutcomeSummary>>, this_host: &str) -> Vec<OutcomeSample> {
     let mut out = Vec::new();
-    for sum in summaries
-        .values()
-        .flatten()
-        .filter(|s| s.host_id != this_host)
-    {
+    for sum in summaries.values().flatten().filter(|s| s.host_id != this_host) {
         // At most MAX_SUMMARY_COUNT samples per summary, whatever it claims.
         let mut budget = super::MAX_SUMMARY_COUNT;
-        let mut push =
-            |class: &String, n: u32, quality: f64, success: bool, source: OutcomeSource| {
-                let n = n.min(budget);
-                budget -= n;
-                for _ in 0..n {
-                    out.push(OutcomeSample {
-                        agent: sum.agent_key.clone(),
-                        task_class: class.clone(),
-                        at_ms: sum.window_start,
-                        quality,
-                        success,
-                        source,
-                    });
-                }
-            };
+        let mut push = |class: &String, n: u32, quality: f64, success: bool, source: OutcomeSource| {
+            let n = n.min(budget);
+            budget -= n;
+            for _ in 0..n {
+                out.push(OutcomeSample {
+                    agent: sum.agent_key.clone(),
+                    task_class: class.clone(),
+                    at_ms: sum.window_start,
+                    quality,
+                    success,
+                    source,
+                });
+            }
+        };
         for (class, n) in &sum.errors_by_class {
             push(class, *n, 0.0, false, OutcomeSource::TurnError);
         }
@@ -261,21 +227,12 @@ pub fn summary_outcomes(
 
 /// Turns spent per (agent, class) from other hosts' summaries; see
 /// [`summary_outcomes`].
-pub fn summary_turns_spent(
-    summaries: &BTreeMap<String, Vec<AgentOutcomeSummary>>,
-    this_host: &str,
-) -> BTreeMap<(String, String), (f64, f64)> {
+pub fn summary_turns_spent(summaries: &BTreeMap<String, Vec<AgentOutcomeSummary>>, this_host: &str) -> BTreeMap<(String, String), (f64, f64)> {
     let mut out: BTreeMap<(String, String), (f64, f64)> = BTreeMap::new();
-    for sum in summaries
-        .values()
-        .flatten()
-        .filter(|s| s.host_id != this_host)
-    {
+    for sum in summaries.values().flatten().filter(|s| s.host_id != this_host) {
         let total: u32 = sum.task_class_counts.values().sum();
         for (class, n) in &sum.task_class_counts {
-            let e = out
-                .entry((sum.agent_key.clone(), class.clone()))
-                .or_default();
+            let e = out.entry((sum.agent_key.clone(), class.clone())).or_default();
             e.0 += *n as f64;
             if total > 0 {
                 e.1 += sum.cost_usd * (*n as f64) / total as f64;
@@ -287,11 +244,7 @@ pub fn summary_turns_spent(
 
 /// Every outcome a host can score from: the chats (proposals, stages, this
 /// host's turn facts) plus the other hosts' summaries.
-pub fn outcomes_with_summaries(
-    sessions: &[ChatSession],
-    summaries: &BTreeMap<String, Vec<AgentOutcomeSummary>>,
-    this_host: &str,
-) -> Vec<OutcomeSample> {
+pub fn outcomes_with_summaries(sessions: &[ChatSession], summaries: &BTreeMap<String, Vec<AgentOutcomeSummary>>, this_host: &str) -> Vec<OutcomeSample> {
     let mut out = outcomes(sessions);
     out.extend(summary_outcomes(summaries, this_host));
     out.sort_by_key(|o| o.at_ms);
@@ -315,41 +268,17 @@ pub fn turns_spent_with_summaries(
 
 /// A host's daily summary for `agent` built from its own turn tags of that
 /// day (and the proposals those turns filed, by status).
-pub fn summarize_day(
-    agent: &str,
-    host_id: &str,
-    day_start: i64,
-    tags: &[TurnTag],
-    proposals: &[&crate::proposals::ActionProposal],
-) -> AgentOutcomeSummary {
-    let mut sum = AgentOutcomeSummary {
-        agent_key: agent.into(),
-        host_id: host_id.into(),
-        window_start: day_start,
-        ..Default::default()
-    };
-    for t in tags
-        .iter()
-        .filter(|t| t.agent == agent && super::utc_day(t.at_ms) == day_start)
-    {
+pub fn summarize_day(agent: &str, host_id: &str, day_start: i64, tags: &[TurnTag], proposals: &[&crate::proposals::ActionProposal]) -> AgentOutcomeSummary {
+    let mut sum = AgentOutcomeSummary { agent_key: agent.into(), host_id: host_id.into(), window_start: day_start, ..Default::default() };
+    for t in tags.iter().filter(|t| t.agent == agent && super::utc_day(t.at_ms) == day_start) {
         sum.turns += 1;
-        *sum.task_class_counts
-            .entry(t.task_class.clone())
-            .or_default() += 1;
+        *sum.task_class_counts.entry(t.task_class.clone()).or_default() += 1;
         if t.error {
             *sum.errors_by_class.entry(t.task_class.clone()).or_default() += 1;
         }
         match t.tests_passed {
-            Some(true) => {
-                *sum.tests_passed_by_class
-                    .entry(t.task_class.clone())
-                    .or_default() += 1
-            }
-            Some(false) => {
-                *sum.tests_failed_by_class
-                    .entry(t.task_class.clone())
-                    .or_default() += 1
-            }
+            Some(true) => *sum.tests_passed_by_class.entry(t.task_class.clone()).or_default() += 1,
+            Some(false) => *sum.tests_failed_by_class.entry(t.task_class.clone()).or_default() += 1,
             None => {}
         }
         sum.cost_usd += t.cost_usd;
@@ -382,11 +311,7 @@ pub struct ScoreParams {
 
 impl Default for ScoreParams {
     fn default() -> Self {
-        Self {
-            half_life_days: 14.0,
-            prior_mean: 0.5,
-            prior_weight: 2.0,
-        }
+        Self { half_life_days: 14.0, prior_mean: 0.5, prior_weight: 2.0 }
     }
 }
 
@@ -439,9 +364,7 @@ pub fn dance_scores(
     }
     let mut acc: BTreeMap<(String, String), Acc> = BTreeMap::new();
     for s in samples {
-        let a = acc
-            .entry((s.agent.clone(), s.task_class.clone()))
-            .or_default();
+        let a = acc.entry((s.agent.clone(), s.task_class.clone())).or_default();
         let w = decay(now_ms - s.at_ms, params.half_life_days);
         let rw = decay(now_ms - s.at_ms, params.half_life_days / 4.0);
         a.w += w;
@@ -460,9 +383,9 @@ pub fn dance_scores(
             let shrink = |w: f64, wq: f64| {
                 (wq + params.prior_mean * params.prior_weight) / (w + params.prior_weight)
             };
-            let turns_per_success = turns
-                .get(&(agent.clone(), class.clone()))
-                .and_then(|(t, _)| (a.succ > 0).then(|| (t / a.succ as f64).max(1.0)));
+            let turns_per_success = turns.get(&(agent.clone(), class.clone())).and_then(|(t, _)| {
+                (a.succ > 0).then(|| (t / a.succ as f64).max(1.0))
+            });
             DanceScore {
                 score: shrink(a.w, a.wq),
                 recent: shrink(a.rw, a.rwq),
@@ -488,12 +411,7 @@ pub struct ScoreBook {
 }
 
 impl ScoreBook {
-    pub fn new(
-        samples: &[OutcomeSample],
-        turns: &BTreeMap<(String, String), (f64, f64)>,
-        params: ScoreParams,
-        now_ms: i64,
-    ) -> Self {
+    pub fn new(samples: &[OutcomeSample], turns: &BTreeMap<(String, String), (f64, f64)>, params: ScoreParams, now_ms: i64) -> Self {
         let by_class = dance_scores(samples, turns, params, now_ms)
             .into_iter()
             .map(|d| ((d.agent.clone(), d.task_class.clone()), d))
@@ -501,10 +419,7 @@ impl ScoreBook {
         // All-class view: same samples, class erased.
         let any: Vec<OutcomeSample> = samples
             .iter()
-            .map(|s| OutcomeSample {
-                task_class: ANY.into(),
-                ..s.clone()
-            })
+            .map(|s| OutcomeSample { task_class: ANY.into(), ..s.clone() })
             .collect();
         let mut turns_any: BTreeMap<(String, String), (f64, f64)> = BTreeMap::new();
         for ((agent, _), (t, c)) in turns {
@@ -516,25 +431,17 @@ impl ScoreBook {
             .into_iter()
             .map(|d| (d.agent.clone(), d))
             .collect();
-        Self {
-            by_class,
-            by_agent,
-            params,
-        }
+        Self { by_class, by_agent, params }
     }
 
     /// The score routing uses for `agent` on `class`.
     pub fn get(&self, agent: &str, class: &str) -> Option<&DanceScore> {
-        self.by_class
-            .get(&(agent.to_string(), class.to_string()))
-            .or_else(|| self.by_agent.get(agent))
+        self.by_class.get(&(agent.to_string(), class.to_string())).or_else(|| self.by_agent.get(agent))
     }
 
     /// Score value, or the prior when nothing is known.
     pub fn value(&self, agent: &str, class: &str) -> f64 {
-        self.get(agent, class)
-            .map(|d| d.score)
-            .unwrap_or(self.params.prior_mean)
+        self.get(agent, class).map(|d| d.score).unwrap_or(self.params.prior_mean)
     }
 
     pub fn all(&self) -> impl Iterator<Item = &DanceScore> {
@@ -594,24 +501,16 @@ mod tests {
     fn old_outcomes_fade() {
         let now = 200 * DAY;
         // Failures long ago, successes lately.
-        let mut s: Vec<_> = (0..10)
-            .map(|i| sample("a", 0.0, now - 150 * DAY - i * DAY))
-            .collect();
+        let mut s: Vec<_> = (0..10).map(|i| sample("a", 0.0, now - 150 * DAY - i * DAY)).collect();
         s.extend((0..3).map(|i| sample("a", 1.0, now - i * DAY)));
         let book = ScoreBook::new(&s, &BTreeMap::new(), ScoreParams::default(), now);
-        assert!(
-            book.value("a", "refactor") > 0.7,
-            "{}",
-            book.value("a", "refactor")
-        );
+        assert!(book.value("a", "refactor") > 0.7, "{}", book.value("a", "refactor"));
     }
 
     #[test]
     fn recent_tracks_a_fall() {
         let now = 60 * DAY;
-        let mut s: Vec<_> = (0..20)
-            .map(|i| sample("a", 1.0, now - 20 * DAY - i * DAY))
-            .collect();
+        let mut s: Vec<_> = (0..20).map(|i| sample("a", 1.0, now - 20 * DAY - i * DAY)).collect();
         s.extend((0..4).map(|i| sample("a", 0.0, now - i * DAY)));
         let d = &dance_scores(&s, &BTreeMap::new(), ScoreParams::default(), now)[0];
         assert!(d.recent < d.score, "recent {} score {}", d.recent, d.score);
@@ -641,12 +540,7 @@ mod tests {
         let agent = WorkspaceAgent::new("coder", "rt");
         s.workspace_agents.push(agent.clone());
 
-        let mut approved = ActionProposal::file_diff(
-            "Rename parser",
-            "coder",
-            "diff".into(),
-            vec!["src/a.rs".into()],
-        );
+        let mut approved = ActionProposal::file_diff("Rename parser", "coder", "diff".into(), vec!["src/a.rs".into()]);
         approved.producing_agent_id = Some(agent.id);
         approved.status = ProposalStatus::Applied;
         let mut revised = ActionProposal::new("First try", ProposalKind::FileDiff, "coder");
@@ -657,8 +551,7 @@ mod tests {
         let mut gate = ActionProposal::new("Gate", ProposalKind::Decision, "");
         gate.status = ProposalStatus::Approved;
         // An authorless diff from the primary, known through its turn tag.
-        let mut primary_diff =
-            ActionProposal::file_diff("Docs", "", "d".into(), vec!["README.md".into()]);
+        let mut primary_diff = ActionProposal::file_diff("Docs", "", "d".into(), vec!["README.md".into()]);
         primary_diff.status = ProposalStatus::Applied;
         s.flow.turns.push(TurnTag {
             message_id: uuid::Uuid::new_v4(),
@@ -686,16 +579,10 @@ mod tests {
         let key = agent_key(Some(agent.id));
         assert_eq!(out.len(), 4, "{out:?}");
         assert_eq!(out.iter().filter(|o| o.agent == key).count(), 3);
-        assert!(out
-            .iter()
-            .any(|o| o.agent == crate::flow::PRIMARY && o.task_class == "docs" && o.success));
+        assert!(out.iter().any(|o| o.agent == crate::flow::PRIMARY && o.task_class == "docs" && o.success));
         assert!(out.iter().any(|o| o.source == OutcomeSource::Revision));
-        assert!(out.iter().any(|o| o.source == OutcomeSource::Proposal
-            && o.quality == 1.0
-            && o.task_class == "refactor"));
-        assert!(out
-            .iter()
-            .any(|o| o.source == OutcomeSource::Proposal && o.quality == 0.0));
+        assert!(out.iter().any(|o| o.source == OutcomeSource::Proposal && o.quality == 1.0 && o.task_class == "refactor"));
+        assert!(out.iter().any(|o| o.source == OutcomeSource::Proposal && o.quality == 0.0));
     }
 
     #[test]
@@ -722,12 +609,8 @@ mod tests {
         };
         let out = samples_from_turns(&[tag(true, None), tag(false, Some(true)), tag(false, None)]);
         assert_eq!(out.len(), 2);
-        assert!(out
-            .iter()
-            .any(|o| o.source == OutcomeSource::TurnError && o.quality == 0.0));
-        assert!(out
-            .iter()
-            .any(|o| o.source == OutcomeSource::Tests && o.success));
+        assert!(out.iter().any(|o| o.source == OutcomeSource::TurnError && o.quality == 0.0));
+        assert!(out.iter().any(|o| o.source == OutcomeSource::Tests && o.success));
     }
 
     /// P0.5: a host that only sees another host's daily summaries scores
@@ -766,19 +649,11 @@ mod tests {
         let mut legacy = ChatSession::new("", uuid::Uuid::nil(), "");
         legacy.flow.turns = tags.clone();
         let now = day + 3 * 86_400_000;
-        let legacy_book = ScoreBook::new(
-            &outcomes(&[legacy.clone()]),
-            &turns_spent(&[legacy]),
-            ScoreParams::default(),
-            now,
-        );
+        let legacy_book = ScoreBook::new(&outcomes(&[legacy.clone()]), &turns_spent(&[legacy]), ScoreParams::default(), now);
         // Summaries: what worker-1 syncs, seen from another host.
         let mut summaries: BTreeMap<String, Vec<AgentOutcomeSummary>> = BTreeMap::new();
         for agent in ["a", "b"] {
-            summaries
-                .entry(agent.into())
-                .or_default()
-                .push(summarize_day(agent, "worker-1", day, &tags, &[]));
+            summaries.entry(agent.into()).or_default().push(summarize_day(agent, "worker-1", day, &tags, &[]));
         }
         let empty = ChatSession::new("", uuid::Uuid::nil(), "");
         let sum_book = ScoreBook::new(
@@ -791,14 +666,8 @@ mod tests {
         let sum_all: Vec<_> = sum_book.all().cloned().collect();
         assert_eq!(legacy_all.len(), sum_all.len());
         for (l, s) in legacy_all.iter().zip(&sum_all) {
-            assert_eq!(
-                (&l.agent, &l.task_class, l.outcomes, l.successes),
-                (&s.agent, &s.task_class, s.outcomes, s.successes)
-            );
-            assert!(
-                (l.score - s.score).abs() < 1e-12 && (l.recent - s.recent).abs() < 1e-12,
-                "{l:?} vs {s:?}"
-            );
+            assert_eq!((&l.agent, &l.task_class, l.outcomes, l.successes), (&s.agent, &s.task_class, s.outcomes, s.successes));
+            assert!((l.score - s.score).abs() < 1e-12 && (l.recent - s.recent).abs() < 1e-12, "{l:?} vs {s:?}");
             assert_eq!(l.turns_per_success, s.turns_per_success);
         }
         // Its own summaries don't double-count on the host that wrote them.

@@ -139,10 +139,7 @@ mod tests {
             path: "README.md".into(),
             branch: "HEAD".into(),
         };
-        assert_eq!(
-            s.raw_url(),
-            "https://gitlab.com/group/proj/-/raw/HEAD/README.md"
-        );
+        assert_eq!(s.raw_url(), "https://gitlab.com/group/proj/-/raw/HEAD/README.md");
     }
 
     #[test]

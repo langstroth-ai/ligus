@@ -39,9 +39,7 @@ pub async fn generate_reply(
     working_dir: Option<&str>,
 ) -> Result<String> {
     if allow_mcp_tools {
-        if let Some(text) =
-            try_tool_loop(rt, system, turns, &ligus_core::sandbox::EgressPolicy::Open).await?
-        {
+        if let Some(text) = try_tool_loop(rt, system, turns, &ligus_core::sandbox::EgressPolicy::Open).await? {
             return Ok(text);
         }
     }
@@ -49,18 +47,9 @@ pub async fn generate_reply(
     // worker is isolating this turn, else the plain workspace root.
     // The CLI is headless — it prints the final reply, so tool/thinking activity
     // (the second callback) is dropped; only the desktop UI renders it live.
-    dispatch::stream(
-        rt,
-        Some(system),
-        turns,
-        working_dir,
-        &[],
-        MAX_TOKENS,
-        |_| {},
-        |_| {},
-    )
-    .await
-    .map_err(|e| anyhow!("provider: {e}"))
+    dispatch::stream(rt, Some(system), turns, working_dir, &[], MAX_TOKENS, |_| {}, |_| {})
+        .await
+        .map_err(|e| anyhow!("provider: {e}"))
 }
 
 /// What a headless turn's tools may do — the CLI's equivalent of the app's
@@ -97,19 +86,13 @@ impl Default for ToolSettings {
             allow_remote_file_tools: false,
             mcp_after_reads: false,
             mcp_egress: ligus_core::sandbox::EgressPolicy::Open,
-            protected_dirs: ligus_core::sandbox::PROTECTED_DIRS
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            protected_dirs: ligus_core::sandbox::PROTECTED_DIRS.iter().map(|s| s.to_string()).collect(),
         }
     }
 }
 
 pub fn env_flag(name: &str, default: bool) -> bool {
-    match ligus_core::names::var(name)
-        .ok()
-        .map(|v| v.trim().to_ascii_lowercase())
-    {
+    match ligus_core::names::var(name).ok().map(|v| v.trim().to_ascii_lowercase()) {
         Some(v) if matches!(v.as_str(), "1" | "true" | "on" | "yes") => true,
         Some(v) if matches!(v.as_str(), "0" | "false" | "off" | "no") => false,
         _ => default,
@@ -122,10 +105,7 @@ impl ToolSettings {
         Self {
             builtin_tools: env_flag("LIGUS_BUILTIN_TOOLS", d.builtin_tools),
             run_command: env_flag("LIGUS_BUILTIN_RUN_COMMAND", d.run_command),
-            allow_remote_file_tools: env_flag(
-                "LIGUS_ALLOW_REMOTE_FILE_TOOLS",
-                d.allow_remote_file_tools,
-            ),
+            allow_remote_file_tools: env_flag("LIGUS_ALLOW_REMOTE_FILE_TOOLS", d.allow_remote_file_tools),
             mcp_after_reads: env_flag("LIGUS_MCP_AFTER_READS", d.mcp_after_reads),
             mcp_egress: d.mcp_egress,
             protected_dirs: d.protected_dirs,
@@ -174,10 +154,7 @@ async fn try_tool_loop(
     // No config / no enabled servers → fall back to streaming. Servers
     // outside the envelope's egress policy are never offered, and without
     // the shell no tool that runs shell commands is.
-    let specs: Vec<_> = mcp_config::load_from_env()?
-        .into_iter()
-        .filter(|s| egress.allows_mcp(&s.id))
-        .collect();
+    let specs: Vec<_> = mcp_config::load_from_env()?.into_iter().filter(|s| egress.allows_mcp(&s.id)).collect();
     let shell = ligus_runtime::executor::turn_shell_allowed();
     // No workspace agent here: only servers every agent may reach.
     let Some((defs, executor)) = mcp::tool_set(specs, None, shell, None, |_| {}).await else {
@@ -190,15 +167,9 @@ async fn try_tool_loop(
         system: Some(system.to_string()),
         max_tokens: MAX_TOKENS,
     };
-    let text = tool_loop::run_with_messages(
-        &model,
-        &executor,
-        mcp::turns_to_messages(turns),
-        defs,
-        MAX_TOOL_ITERS,
-    )
-    .await
-    .map_err(|e| anyhow!("tool loop: {e}"))?;
+    let text = tool_loop::run_with_messages(&model, &executor, mcp::turns_to_messages(turns), defs, MAX_TOOL_ITERS)
+        .await
+        .map_err(|e| anyhow!("tool loop: {e}"))?;
     Ok(Some(text))
 }
 
@@ -210,12 +181,7 @@ mod tests {
         ligus_runtime::author_gate::min_role_from(v, write_capable)
     }
     fn mcp_allowed_for(author_role: Option<WorkspaceRole>, min_role: WorkspaceRole) -> bool {
-        ligus_runtime::author_gate::gate(
-            ligus_core::ModelProviderKind::Ollama,
-            author_role,
-            min_role,
-        )
-        .allows_tools()
+        ligus_runtime::author_gate::gate(ligus_core::ModelProviderKind::Ollama, author_role, min_role).allows_tools()
     }
 
     #[test]
@@ -227,10 +193,7 @@ mod tests {
 
     #[test]
     fn contributor_allowed_at_the_read_only_default() {
-        assert!(mcp_allowed_for(
-            Some(Contributor),
-            parse_min_role(None, false)
-        ));
+        assert!(mcp_allowed_for(Some(Contributor), parse_min_role(None, false)));
         assert!(mcp_allowed_for(Some(Admin), parse_min_role(None, false)));
         assert!(mcp_allowed_for(Some(Owner), parse_min_role(None, false)));
     }
@@ -270,9 +233,6 @@ mod tests {
     #[test]
     fn unresolved_author_is_denied() {
         assert!(!mcp_allowed_for(None, parse_min_role(None, false)));
-        assert!(!mcp_allowed_for(
-            None,
-            parse_min_role(Some("viewer"), false)
-        ));
+        assert!(!mcp_allowed_for(None, parse_min_role(Some("viewer"), false)));
     }
 }

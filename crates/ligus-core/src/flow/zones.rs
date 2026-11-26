@@ -61,10 +61,7 @@ pub fn glob_match_counted(pattern: &str, path: &str) -> (bool, u64) {
         return (path.starts_with(&pattern), pattern.len() as u64);
     }
     if !pattern.contains('*') {
-        return (
-            path == pattern || path.starts_with(&format!("{pattern}/")),
-            pattern.len() as u64,
-        );
+        return (path == pattern || path.starts_with(&format!("{pattern}/")), pattern.len() as u64);
     }
     let p: Vec<&str> = pattern.split('/').collect();
     let s: Vec<&str> = path.split('/').collect();
@@ -142,45 +139,20 @@ pub const CORE_DEFAULT_APPROVALS: u32 = 2;
 /// What a change touching `files` needs: (floor, approvals, zone kind) —
 /// the strictest zone among the files; low-bar only when *every* file is in
 /// a low-bar zone.
-pub fn review_bar(
-    zones: &[PathZone],
-    files: &[String],
-) -> Option<(Option<WorkspaceRole>, Option<u32>, ZoneKind)> {
+pub fn review_bar(zones: &[PathZone], files: &[String]) -> Option<(Option<WorkspaceRole>, Option<u32>, ZoneKind)> {
     if zones.is_empty() || files.is_empty() {
         return None;
     }
     let hits: Vec<Option<&PathZone>> = files.iter().map(|f| zone_of(zones, f)).collect();
-    let core: Vec<&PathZone> = hits
-        .iter()
-        .flatten()
-        .filter(|z| z.kind == ZoneKind::Core)
-        .copied()
-        .collect();
+    let core: Vec<&PathZone> = hits.iter().flatten().filter(|z| z.kind == ZoneKind::Core).copied().collect();
     if !core.is_empty() {
-        let floor = core
-            .iter()
-            .map(|z| z.approval_floor.unwrap_or(CORE_DEFAULT_FLOOR))
-            .max_by_key(|r| r.rank());
-        let approvals = core
-            .iter()
-            .map(|z| z.required_approvals.unwrap_or(CORE_DEFAULT_APPROVALS))
-            .max();
+        let floor = core.iter().map(|z| z.approval_floor.unwrap_or(CORE_DEFAULT_FLOOR)).max_by_key(|r| r.rank());
+        let approvals = core.iter().map(|z| z.required_approvals.unwrap_or(CORE_DEFAULT_APPROVALS)).max();
         return Some((floor, approvals, ZoneKind::Core));
     }
-    if hits
-        .iter()
-        .all(|z| z.is_some_and(|z| z.kind == ZoneKind::LowBar))
-    {
-        let floor = hits
-            .iter()
-            .flatten()
-            .filter_map(|z| z.approval_floor)
-            .max_by_key(|r| r.rank());
-        let approvals = hits
-            .iter()
-            .flatten()
-            .filter_map(|z| z.required_approvals)
-            .max();
+    if hits.iter().all(|z| z.is_some_and(|z| z.kind == ZoneKind::LowBar)) {
+        let floor = hits.iter().flatten().filter_map(|z| z.approval_floor).max_by_key(|r| r.rank());
+        let approvals = hits.iter().flatten().filter_map(|z| z.required_approvals).max();
         return Some((floor, approvals, ZoneKind::LowBar));
     }
     None
@@ -193,11 +165,7 @@ pub fn review_bar(
 /// `protected`: the change is under a workspace guard's human gate (dearth
 /// brood paths, a chat lockdown; see `guard::guards_protect`). Then the
 /// strictest bar wins and a low-bar zone can't lower anything.
-pub fn apply_review_bar(
-    proposal: &mut ActionProposal,
-    zones: &[PathZone],
-    protected: bool,
-) -> Option<ZoneKind> {
+pub fn apply_review_bar(proposal: &mut ActionProposal, zones: &[PathZone], protected: bool) -> Option<ZoneKind> {
     // Every path it may write, its diff included: the declared list alone
     // could put a core change under a low bar.
     let (floor, approvals, kind) = review_bar(zones, &crate::guard::touched_paths(proposal))?;
@@ -233,27 +201,13 @@ mod tests {
     use crate::proposals::ActionProposal;
 
     fn zone(pattern: &str, kind: ZoneKind) -> PathZone {
-        PathZone {
-            id: Uuid::new_v4(),
-            pattern: pattern.into(),
-            kind,
-            approval_floor: None,
-            required_approvals: None,
-            note: String::new(),
-            at_ms: 0,
-        }
+        PathZone { id: Uuid::new_v4(), pattern: pattern.into(), kind, approval_floor: None, required_approvals: None, note: String::new(), at_ms: 0 }
     }
 
     #[test]
     fn globs() {
-        assert!(glob_match(
-            "crates/ligus-core/",
-            "crates/ligus-core/src/lib.rs"
-        ));
-        assert!(glob_match(
-            "crates/ligus-core",
-            "crates/ligus-core/src/lib.rs"
-        ));
+        assert!(glob_match("crates/ligus-core/", "crates/ligus-core/src/lib.rs"));
+        assert!(glob_match("crates/ligus-core", "crates/ligus-core/src/lib.rs"));
         assert!(!glob_match("crates/ligus-core", "crates/ligus-core-x/a.rs"));
         assert!(glob_match("**/*.md", "README.md"));
         assert!(glob_match("**/*.md", "docs/a/b.md"));
@@ -265,20 +219,9 @@ mod tests {
 
     #[test]
     fn core_raises_the_bar_and_wins_over_low_bar() {
-        let zones = vec![
-            zone("crates/ligus-core/", ZoneKind::Core),
-            zone("**/*.md", ZoneKind::LowBar),
-        ];
-        let mut p = ActionProposal::file_diff(
-            "x",
-            "a",
-            "d".into(),
-            vec!["crates/ligus-core/src/crypto.rs".into(), "README.md".into()],
-        );
-        assert_eq!(
-            apply_review_bar(&mut p, &zones, false),
-            Some(ZoneKind::Core)
-        );
+        let zones = vec![zone("crates/ligus-core/", ZoneKind::Core), zone("**/*.md", ZoneKind::LowBar)];
+        let mut p = ActionProposal::file_diff("x", "a", "d".into(), vec!["crates/ligus-core/src/crypto.rs".into(), "README.md".into()]);
+        assert_eq!(apply_review_bar(&mut p, &zones, false), Some(ZoneKind::Core));
         assert_eq!(p.approval_role_floor, WorkspaceRole::Admin);
         assert_eq!(p.required_approvals, 2);
     }
@@ -288,20 +231,11 @@ mod tests {
         let mut z = zone("**/*.md", ZoneKind::LowBar);
         z.required_approvals = Some(0);
         let zones = vec![z];
-        let mut docs = ActionProposal::file_diff(
-            "x",
-            "a",
-            "d".into(),
-            vec!["a.md".into(), "docs/b.md".into()],
-        );
+        let mut docs = ActionProposal::file_diff("x", "a", "d".into(), vec!["a.md".into(), "docs/b.md".into()]);
         docs.required_approvals = 2;
-        assert_eq!(
-            apply_review_bar(&mut docs, &zones, false),
-            Some(ZoneKind::LowBar)
-        );
+        assert_eq!(apply_review_bar(&mut docs, &zones, false), Some(ZoneKind::LowBar));
         assert_eq!(docs.required_approvals, 1, "never below one approval");
-        let mut mixed =
-            ActionProposal::file_diff("x", "a", "d".into(), vec!["a.md".into(), "src/x.rs".into()]);
+        let mut mixed = ActionProposal::file_diff("x", "a", "d".into(), vec!["a.md".into(), "src/x.rs".into()]);
         mixed.required_approvals = 2;
         assert_eq!(apply_review_bar(&mut mixed, &zones, false), None);
         assert_eq!(mixed.required_approvals, 2);
@@ -328,42 +262,21 @@ mod tests {
         let mut docs = ActionProposal::file_diff("x", "a", "d".into(), vec!["docs/a.md".into()]);
         docs.required_approvals = 2;
         docs.approval_role_floor = WorkspaceRole::Contributor;
-        assert_eq!(
-            apply_review_bar(&mut docs, std::slice::from_ref(&low), true),
-            None
-        );
-        assert_eq!(
-            (docs.required_approvals, docs.approval_role_floor),
-            (2, WorkspaceRole::Contributor)
-        );
+        assert_eq!(apply_review_bar(&mut docs, std::slice::from_ref(&low), true), None);
+        assert_eq!((docs.required_approvals, docs.approval_role_floor), (2, WorkspaceRole::Contributor));
         // Unguarded, the same zone lowers it.
-        assert_eq!(
-            apply_review_bar(&mut docs, std::slice::from_ref(&low), false),
-            Some(ZoneKind::LowBar)
-        );
-        assert_eq!(
-            (docs.required_approvals, docs.approval_role_floor),
-            (1, WorkspaceRole::Viewer)
-        );
+        assert_eq!(apply_review_bar(&mut docs, std::slice::from_ref(&low), false), Some(ZoneKind::LowBar));
+        assert_eq!((docs.required_approvals, docs.approval_role_floor), (1, WorkspaceRole::Viewer));
         // A core zone still raises a guarded change.
         let mut p = ActionProposal::file_diff("x", "a", "d".into(), vec!["src/a.rs".into()]);
-        assert_eq!(
-            apply_review_bar(&mut p, &[zone("src/", ZoneKind::Core)], true),
-            Some(ZoneKind::Core)
-        );
+        assert_eq!(apply_review_bar(&mut p, &[zone("src/", ZoneKind::Core)], true), Some(ZoneKind::Core));
         assert_eq!(p.approval_role_floor, WorkspaceRole::Admin);
     }
 
     #[test]
     fn longest_pattern_wins() {
-        let zones = vec![
-            zone("src/", ZoneKind::Core),
-            zone("src/generated/", ZoneKind::LowBar),
-        ];
-        assert_eq!(
-            zone_of(&zones, "src/generated/a.rs").unwrap().kind,
-            ZoneKind::LowBar
-        );
+        let zones = vec![zone("src/", ZoneKind::Core), zone("src/generated/", ZoneKind::LowBar)];
+        assert_eq!(zone_of(&zones, "src/generated/a.rs").unwrap().kind, ZoneKind::LowBar);
         assert_eq!(zone_of(&zones, "src/a.rs").unwrap().kind, ZoneKind::Core);
     }
 }

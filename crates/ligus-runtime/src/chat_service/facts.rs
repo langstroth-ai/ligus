@@ -18,16 +18,10 @@ const SUMMARY_MARK: &str = "summaryEmitted";
 
 impl ChatService {
     /// Store a measurement record as a device-local fact on `session_id`.
-    pub(super) fn record_fact(
-        &self,
-        session_id: Uuid,
-        workspace_id: Uuid,
-        record: &FlowRecord,
-    ) -> Result<()> {
+    pub(super) fn record_fact(&self, session_id: Uuid, workspace_id: Uuid, record: &FlowRecord) -> Result<()> {
         let at_ms = crate::facts::record_at_ms(record).unwrap_or_else(ligus_core::flow::now_ms);
         let json = serde_json::to_string(record).unwrap_or_default();
-        self.store
-            .record_fact(workspace_id, session_id, at_ms, record.type_str(), &json)?;
+        self.store.record_fact(workspace_id, session_id, at_ms, record.type_str(), &json)?;
         Ok(())
     }
 
@@ -38,15 +32,8 @@ impl ChatService {
 
     /// Fold this device's facts for the log (`workspace_id`, `session_id`)
     /// onto `flow`: another workspace's facts under the same id never do.
-    pub(super) fn overlay_facts_on(
-        &self,
-        workspace_id: Uuid,
-        session_id: Uuid,
-        flow: &mut ligus_core::flow::FlowState,
-    ) {
-        let Ok(rows) = self.store.session_facts(workspace_id, session_id) else {
-            return;
-        };
+    pub(super) fn overlay_facts_on(&self, workspace_id: Uuid, session_id: Uuid, flow: &mut ligus_core::flow::FlowState) {
+        let Ok(rows) = self.store.session_facts(workspace_id, session_id) else { return };
         for (_, _, kind, json) in rows {
             if kind == SUMMARY_MARK {
                 continue;
@@ -62,12 +49,7 @@ impl ChatService {
     /// Emit this host's daily outcome summaries for every complete UTC day
     /// (before today) that has turn facts and wasn't summarized yet: at most
     /// one per agent, per day, per host. Returns how many were emitted.
-    pub fn emit_daily_summaries(
-        &mut self,
-        workspace_id: Uuid,
-        host_id: &str,
-        now_ms: i64,
-    ) -> Result<usize> {
+    pub fn emit_daily_summaries(&mut self, workspace_id: Uuid, host_id: &str, now_ms: i64) -> Result<usize> {
         let today = ligus_core::flow::utc_day(now_ms);
         let rows = self.store.facts_since(today - 14 * 86_400_000)?;
         let ws = workspace_id.to_string();
@@ -79,10 +61,7 @@ impl ChatService {
             }
             if kind == SUMMARY_MARK {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
-                    done.insert((
-                        v["agent"].as_str().unwrap_or_default().to_string(),
-                        v["day"].as_i64().unwrap_or_default(),
-                    ));
+                    done.insert((v["agent"].as_str().unwrap_or_default().to_string(), v["day"].as_i64().unwrap_or_default()));
                 }
                 continue;
             }
@@ -101,40 +80,17 @@ impl ChatService {
         }
         let mut emitted = 0;
         for (agent, day) in todo {
-            let day_tags: Vec<TurnTag> = tags
-                .iter()
-                .filter(|(_, t)| t.agent == agent)
-                .map(|(_, t)| t.clone())
-                .collect();
-            let chats: std::collections::BTreeSet<Uuid> = tags
-                .iter()
-                .filter(|(_, t)| t.agent == agent)
-                .map(|(s, _)| *s)
-                .collect();
-            let sessions: Vec<ligus_core::ChatSession> = chats
-                .iter()
-                .filter_map(|c| self.load_in(workspace_id, *c).ok().flatten())
-                .collect();
-            let proposals: Vec<&ligus_core::ActionProposal> =
-                sessions.iter().flat_map(|s| s.proposals.iter()).collect();
-            let sum =
-                ligus_core::flow::score::summarize_day(&agent, host_id, day, &day_tags, &proposals);
+            let day_tags: Vec<TurnTag> = tags.iter().filter(|(_, t)| t.agent == agent).map(|(_, t)| t.clone()).collect();
+            let chats: std::collections::BTreeSet<Uuid> = tags.iter().filter(|(_, t)| t.agent == agent).map(|(s, _)| *s).collect();
+            let sessions: Vec<ligus_core::ChatSession> = chats.iter().filter_map(|c| self.load_in(workspace_id, *c).ok().flatten()).collect();
+            let proposals: Vec<&ligus_core::ActionProposal> = sessions.iter().flat_map(|s| s.proposals.iter()).collect();
+            let sum = ligus_core::flow::score::summarize_day(&agent, host_id, day, &day_tags, &proposals);
             if sum.turns == 0 {
                 continue;
             }
-            self.record_flow(
-                Uuid::nil(),
-                workspace_id,
-                FlowRecord::AgentOutcomeSummary(sum),
-            )?;
+            self.record_flow(Uuid::nil(), workspace_id, FlowRecord::AgentOutcomeSummary(sum))?;
             let mark = serde_json::json!({ "agent": agent, "day": day }).to_string();
-            self.store.record_fact(
-                workspace_id,
-                ligus_core::workspace_config_session_id(workspace_id),
-                day,
-                SUMMARY_MARK,
-                &mark,
-            )?;
+            self.store.record_fact(workspace_id, ligus_core::workspace_config_session_id(workspace_id), day, SUMMARY_MARK, &mark)?;
             emitted += 1;
         }
         Ok(emitted)
@@ -152,9 +108,7 @@ impl ChatService {
                 out.extend(crate::facts::tool_call_line(row, &ws, &sid, at_ms, &json));
                 continue;
             }
-            let Ok(record) = serde_json::from_str::<FlowRecord>(&json) else {
-                continue;
-            };
+            let Ok(record) = serde_json::from_str::<FlowRecord>(&json) else { continue };
             if let Some(v) = crate::facts::export_line(row, &ws, &sid, at_ms, &record) {
                 out.push(v);
             }
@@ -169,11 +123,7 @@ impl ChatService {
     /// and observes every chat; a cursor reads only rows after it and the
     /// chats whose logs changed since. A cursor ahead of a table (the data
     /// dir was recreated) reads that table from the start.
-    pub fn export_facts_since(
-        &self,
-        since: crate::facts::Since,
-        now_ms: i64,
-    ) -> Result<Vec<String>> {
+    pub fn export_facts_since(&self, since: crate::facts::Since, now_ms: i64) -> Result<Vec<String>> {
         use crate::facts::{Cursor, Since};
         let (mut from, since_ms) = match since {
             Since::UnixMs(ms) => (Cursor::default(), ms),
@@ -209,20 +159,12 @@ impl ChatService {
                 out.extend(crate::facts::tool_call_line(row, &ws, &sid, at_ms, &json));
                 continue;
             }
-            let Ok(record) = serde_json::from_str::<FlowRecord>(&json) else {
-                continue;
-            };
+            let Ok(record) = serde_json::from_str::<FlowRecord>(&json) else { continue };
             out.extend(crate::facts::export_line(row, &ws, &sid, at_ms, &record));
         }
         for (row, ws, sid, at_ms, json) in self.store.signals_after(from.signals, since_ms)? {
             next.signals = next.signals.max(row);
-            out.extend(crate::facts::signal_line(
-                row,
-                &ws,
-                sid.as_deref(),
-                at_ms,
-                &json,
-            ));
+            out.extend(crate::facts::signal_line(row, &ws, sid.as_deref(), at_ms, &json));
         }
         if next.events > from.events || next.equivocations > from.equivocations {
             // A chat's fold also changes without a row in its own log: an
@@ -234,30 +176,15 @@ impl ChatService {
             // workspace also stamped is another log.
             let mut changed = self.store.logs_changed_after(from.events)?;
             changed.extend(self.store.logs_equivocated_after(from.equivocations)?);
-            for ws in self
-                .store
-                .trust_changed_workspaces_after(from.events, from.equivocations)?
-            {
-                changed.extend(
-                    self.store
-                        .sessions_of_workspace(ws)?
-                        .into_iter()
-                        .map(|sid| (ws, sid)),
-                );
+            for ws in self.store.trust_changed_workspaces_after(from.events, from.equivocations)? {
+                changed.extend(self.store.sessions_of_workspace(ws)?.into_iter().map(|sid| (ws, sid)));
             }
             let mut seen = std::collections::HashSet::new();
             changed.retain(|log| seen.insert(*log));
             for (ws, sid) in changed {
-                let Ok(Some(session)) = self.load_in(ws, sid) else {
-                    continue;
-                };
+                let Ok(Some(session)) = self.load_in(ws, sid) else { continue };
                 let config = sid == ligus_core::workspace_config_session_id(session.workspace_id);
-                out.extend(crate::facts::state_lines(
-                    next.events,
-                    now_ms,
-                    &session,
-                    config,
-                ));
+                out.extend(crate::facts::state_lines(next.events, now_ms, &session, config));
             }
         }
         out.push(crate::facts::cursor_line(now_ms, &next));

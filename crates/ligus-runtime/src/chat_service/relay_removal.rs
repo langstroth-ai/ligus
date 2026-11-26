@@ -39,11 +39,7 @@ pub enum RelaySubject {
     /// issued alongside: the box's service member when the admission was
     /// redeemed and the box is still on the roster, and the redemption's
     /// event id when there is one.
-    Box {
-        invite: Uuid,
-        member: Option<String>,
-        redemption: Option<Uuid>,
-    },
+    Box { invite: Uuid, member: Option<String>, redemption: Option<Uuid> },
     /// No workspace member this device can match. `box_like` when the
     /// subject has a box's shape (`ligus-box:`, or `ligus:` with an id that
     /// is no account here).
@@ -83,34 +79,21 @@ impl ChatService {
     pub fn relay_subject_target(&self, workspace_id: Uuid, subject: &str) -> Result<RelaySubject> {
         let config_id = workspace_config_session_id(workspace_id);
         let config = self.load_in(workspace_id, config_id)?;
-        let members = config
-            .as_ref()
-            .map(|c| c.members.as_slice())
-            .unwrap_or_default();
+        let members = config.as_ref().map(|c| c.members.as_slice()).unwrap_or_default();
         let subject = subject.trim();
 
         if let Some(invite) = self.store.box_relay_admission(workspace_id, subject)? {
             let redemption = self.admission_redemption(workspace_id, invite)?;
             let member = redemption.as_ref().and_then(|(_, id)| {
-                members
-                    .iter()
-                    .find(|m| m.id == *id && m.actor.kind == ActorKind::Service)
-                    .map(|m| m.id.clone())
+                members.iter().find(|m| m.id == *id && m.actor.kind == ActorKind::Service).map(|m| m.id.clone())
             });
-            return Ok(RelaySubject::Box {
-                invite,
-                member,
-                redemption: redemption.map(|(e, _)| e),
-            });
+            return Ok(RelaySubject::Box { invite, member, redemption: redemption.map(|(e, _)| e) });
         }
 
         if subject.starts_with(BOX_SUBJECT_PREFIX) {
             return Ok(RelaySubject::Unmapped { box_like: true });
         }
-        let Some(account) = subject
-            .strip_prefix("ligus:")
-            .and_then(|s| Uuid::parse_str(s.trim()).ok())
-        else {
+        let Some(account) = subject.strip_prefix("ligus:").and_then(|s| Uuid::parse_str(s.trim()).ok()) else {
             return Ok(RelaySubject::Unmapped { box_like: false });
         };
         let id = account.to_string();
@@ -131,38 +114,18 @@ impl ChatService {
     /// then, for a box, close its admission (`AdmissionClosed`, naming the
     /// redemption when there is one, so it is never spent again). Writes
     /// nothing for an unmapped subject. A failed write stops here.
-    pub fn remove_for_relay_subject(
-        &mut self,
-        workspace_id: Uuid,
-        target: &RelaySubject,
-    ) -> Result<RelayRemoval> {
-        let mut out = RelayRemoval {
-            target: target.clone(),
-            removed: Vec::new(),
-            closed_admission: None,
-        };
+    pub fn remove_for_relay_subject(&mut self, workspace_id: Uuid, target: &RelaySubject) -> Result<RelayRemoval> {
+        let mut out = RelayRemoval { target: target.clone(), removed: Vec::new(), closed_admission: None };
         match target {
             RelaySubject::Person { members } => {
                 for id in members {
-                    self.remove_member(
-                        workspace_config_session_id(workspace_id),
-                        workspace_id,
-                        id.clone(),
-                    )?;
+                    self.remove_member(workspace_config_session_id(workspace_id), workspace_id, id.clone())?;
                     out.removed.push(id.clone());
                 }
             }
-            RelaySubject::Box {
-                invite,
-                member,
-                redemption,
-            } => {
+            RelaySubject::Box { invite, member, redemption } => {
                 if let Some(id) = member {
-                    self.remove_member(
-                        workspace_config_session_id(workspace_id),
-                        workspace_id,
-                        id.clone(),
-                    )?;
+                    self.remove_member(workspace_config_session_id(workspace_id), workspace_id, id.clone())?;
                     out.removed.push(id.clone());
                 }
                 let closed = self
@@ -172,10 +135,7 @@ impl ChatService {
                     self.append_signed(
                         workspace_config_session_id(workspace_id),
                         workspace_id,
-                        SessionEvent::AdmissionClosed {
-                            invite: *invite,
-                            redeemed: *redemption,
-                        },
+                        SessionEvent::AdmissionClosed { invite: *invite, redeemed: *redemption },
                     )?;
                     out.closed_admission = Some(*invite);
                 }
@@ -193,9 +153,7 @@ impl ChatService {
         workspace_id: Uuid,
         target: &RelaySubject,
     ) -> std::result::Result<(RelayRemoval, RotationIssued), RelayRemovalError> {
-        let removal = self
-            .remove_for_relay_subject(workspace_id, target)
-            .map_err(RelayRemovalError::Removal)?;
+        let removal = self.remove_for_relay_subject(workspace_id, target).map_err(RelayRemovalError::Removal)?;
         match self.rotate_workspace_key(workspace_id) {
             Ok(issued) => Ok((removal, issued)),
             Err(e) => Err(RelayRemovalError::Rotation(e)),
@@ -205,11 +163,7 @@ impl ChatService {
     /// The allowed redemption of box admission `invite` on `workspace_id`'s
     /// config log, if any: its event id and the member it added (signed by
     /// that member).
-    pub(crate) fn admission_redemption(
-        &self,
-        workspace_id: Uuid,
-        invite: Uuid,
-    ) -> Result<Option<(Uuid, String)>> {
+    pub(crate) fn admission_redemption(&self, workspace_id: Uuid, invite: Uuid) -> Result<Option<(Uuid, String)>> {
         let envelopes = self.store.config_envelopes(workspace_id)?;
         let verdicts = ligus_core::fold_copy_decisions(
             &envelopes,
@@ -217,20 +171,17 @@ impl ChatService {
             self.local_workspace_id,
             ligus_core::WorkspaceAuthz::Unchecked,
         );
-        Ok(envelopes.iter().find_map(|e| match &e.payload {
-            SessionEvent::MemberAdded {
-                member,
-                invite: Some(i),
-                ..
-            } if *i == invite
-                && verdicts.get(e) == Some(ligus_core::Verdict::Allowed)
-                && e.actor_stamp
-                    .as_ref()
-                    .is_some_and(|s| s.actor.id == member.id) =>
-            {
-                Some((e.event_id, member.id.clone()))
-            }
-            _ => None,
-        }))
+        Ok(envelopes
+            .iter()
+            .find_map(|e| match &e.payload {
+                SessionEvent::MemberAdded { member, invite: Some(i), .. }
+                    if *i == invite
+                        && verdicts.get(e) == Some(ligus_core::Verdict::Allowed)
+                        && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == member.id) =>
+                {
+                    Some((e.event_id, member.id.clone()))
+                }
+                _ => None,
+            }))
     }
 }

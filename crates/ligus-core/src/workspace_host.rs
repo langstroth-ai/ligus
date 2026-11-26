@@ -67,9 +67,7 @@ impl HostModelGateway {
     pub fn valid_name(name: &str) -> bool {
         !name.is_empty()
             && name.len() <= MAX_GATEWAY_NAME
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
             && !name.starts_with('-')
             && !name.ends_with('-')
     }
@@ -98,10 +96,7 @@ impl WorkspaceHost {
     /// The well-formed gateways this host offers (bounded; malformed names
     /// dropped).
     pub fn offered_gateways(&self) -> impl Iterator<Item = &HostModelGateway> {
-        self.model_gateways
-            .iter()
-            .take(MAX_HOST_GATEWAYS)
-            .filter(|g| HostModelGateway::valid_name(&g.name))
+        self.model_gateways.iter().take(MAX_HOST_GATEWAYS).filter(|g| HostModelGateway::valid_name(&g.name))
     }
 
     /// Whether this host offers gateway `name`.

@@ -29,6 +29,7 @@ use ligus_core::ModelProviderKind;
 use ligus_runtime::{ChatTurn, ResolvedRuntime};
 use serde_json::{json, Value};
 
+
 const RAN: &str = "LIGUS_PROBE_RAN";
 const LEAK: &str = "LIGUS_PROBE_LEAK";
 
@@ -49,22 +50,14 @@ impl TurnReport {
 
 /// The shell script the stub model asks `run_command` to run. Each check
 /// prints a marker; `LEAK_*` markers mean the sandbox let something through.
-fn probe_script(
-    parent_pid: u32,
-    host_pid_ns: &str,
-    data_dir: &Path,
-    secrets: &[PathBuf],
-) -> String {
+fn probe_script(parent_pid: u32, host_pid_ns: &str, data_dir: &Path, secrets: &[PathBuf]) -> String {
     let q = |p: &Path| format!("'{}'", p.display().to_string().replace('\'', "'\\''"));
     let mut s = String::new();
     s.push_str(&format!("echo {RAN}\n"));
     // A pid in the host's pid namespace: under bubblewrap's own namespace
     // pid 1 is bubblewrap (whose environment is the turn's), and the host's
     // pids name nothing, so a readable environ there is no leak.
-    s.push_str(&format!(
-        "hostns={}; myns=$(readlink /proc/self/ns/pid 2>/dev/null)\n",
-        q(Path::new(host_pid_ns))
-    ));
+    s.push_str(&format!("hostns={}; myns=$(readlink /proc/self/ns/pid 2>/dev/null)\n", q(Path::new(host_pid_ns))));
     for pid in ["1".to_string(), parent_pid.to_string()] {
         s.push_str(&format!(
             "n=$(cat /proc/{pid}/environ 2>/dev/null | wc -c); if [ \"$n\" -gt 0 ] && [ \"$myns\" = \"$hostns\" ]; then echo {LEAK}_ENVIRON_{pid}; else echo DENIED_ENVIRON_{pid}; fi\n"
@@ -92,10 +85,7 @@ struct Stub {
 }
 
 fn sse(d: Value) -> String {
-    format!(
-        "data: {}\n\n",
-        json!({"choices": [{"index": 0, "delta": d}]})
-    )
+    format!("data: {}\n\n", json!({"choices": [{"index": 0, "delta": d}]}))
 }
 
 /// OpenAI-wire chat completions, streamed: round one calls `run_command`,
@@ -122,12 +112,7 @@ async fn stub_chat(State(s): State<Stub>, body: String) -> axum::response::Respo
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<()> {
-    let out = ligus_core::process_util::command("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .context("running git")?;
+    let out = ligus_core::process_util::command("git").arg("-C").arg(dir).args(args).output().context("running git")?;
     if !out.status.success() {
         bail!("git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     }
@@ -136,15 +121,12 @@ fn git(dir: &Path, args: &[&str]) -> Result<()> {
 
 /// The text of the tool result the stub received back.
 fn tool_output(bodies: &[Value]) -> Option<String> {
-    bodies
-        .iter()
-        .flat_map(|b| b["messages"].as_array().cloned().unwrap_or_default())
-        .find_map(|m| {
-            (m["role"] == "tool").then(|| match &m["content"] {
-                Value::String(s) => s.clone(),
-                other => other.to_string(),
-            })
+    bodies.iter().flat_map(|b| b["messages"].as_array().cloned().unwrap_or_default()).find_map(|m| {
+        (m["role"] == "tool").then(|| match &m["content"] {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
         })
+    })
 }
 
 /// The secret files this process loaded (`*_FILE`, `LIGUS_WS_SECRET_DIR`,
@@ -165,10 +147,7 @@ fn secret_files() -> Vec<PathBuf> {
     ];
     for d in dirs.into_iter().flatten() {
         if let Ok(rd) = std::fs::read_dir(&d) {
-            v.extend(rd.flatten().map(|e| e.path()).filter(|p| {
-                p.file_name()
-                    .is_some_and(|n| !n.to_string_lossy().starts_with('.'))
-            }));
+            v.extend(rd.flatten().map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| !n.to_string_lossy().starts_with('.'))));
         }
     }
     v
@@ -177,19 +156,12 @@ fn secret_files() -> Vec<PathBuf> {
 pub async fn turn_test(data_dir: &Path) -> Result<TurnReport> {
     let tier = ligus_runtime::executor::sandbox_status().tier();
     let secrets = secret_files();
-    let host_pid_ns = std::fs::read_link("/proc/self/ns/pid")
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
+    let host_pid_ns = std::fs::read_link("/proc/self/ns/pid").map(|p| p.display().to_string()).unwrap_or_default();
     let script = probe_script(std::process::id(), &host_pid_ns, data_dir, &secrets);
-    let stub = Stub {
-        script: Arc::new(script),
-        bodies: Default::default(),
-    };
+    let stub = Stub { script: Arc::new(script), bodies: Default::default() };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
-    let app = Router::new()
-        .route("/v1/chat/completions", post(stub_chat))
-        .with_state(stub.clone());
+    let app = Router::new().route("/v1/chat/completions", post(stub_chat)).with_state(stub.clone());
     let server = tokio::spawn(async move { axum::serve(listener, app).await });
 
     // A throwaway repository for the turn's worktree, outside the data dir.
@@ -200,18 +172,7 @@ pub async fn turn_test(data_dir: &Path) -> Result<TurnReport> {
         git(&repo, &["init", "-q"])?;
         std::fs::write(repo.join("README.md"), "turn test\n")?;
         git(&repo, &["add", "-A"])?;
-        git(
-            &repo,
-            &[
-                "-c",
-                "user.email=turn-test@ligus.invalid",
-                "-c",
-                "user.name=turn-test",
-                "commit",
-                "-qm",
-                "init",
-            ],
-        )?;
+        git(&repo, &["-c", "user.email=turn-test@ligus.invalid", "-c", "user.name=turn-test", "commit", "-qm", "init"])?;
 
         let rt = ResolvedRuntime {
             provider: ModelProviderKind::Custom,
@@ -233,22 +194,10 @@ pub async fn turn_test(data_dir: &Path) -> Result<TurnReport> {
         // The device owner's own probe, with no other member's words in it:
         // a turn whose shell is on (outside a turn there is none). It runs
         // through the turn engine, in a throwaway chat.
-        let policy = ligus_runtime::executor::TurnPolicy {
-            shell_allowed: true,
-            ..ligus_runtime::executor::TurnPolicy::baseline(
-                ligus_runtime::executor::HostKind::Desktop,
-            )
-        };
+        let policy = ligus_runtime::executor::TurnPolicy { shell_allowed: true, ..ligus_runtime::executor::TurnPolicy::baseline(ligus_runtime::executor::HostKind::Desktop) };
         let (svc, ws, chat) = probe_chat()?;
-        let session = svc
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .load_in(ws, chat)?
-            .ok_or_else(|| anyhow!("probe chat missing"))?;
-        let host = ProbeHost {
-            svc,
-            repo: repo.clone(),
-        };
+        let session = svc.lock().unwrap_or_else(|e| e.into_inner()).load_in(ws, chat)?.ok_or_else(|| anyhow!("probe chat missing"))?;
+        let host = ProbeHost { svc, repo: repo.clone() };
         let input = ligus_runtime::turn_engine::TurnInput {
             workspace_id: ws,
             chat_id: chat,
@@ -268,20 +217,14 @@ pub async fn turn_test(data_dir: &Path) -> Result<TurnReport> {
             shell_allowed: true,
             policy,
             executor: ligus_runtime::executor::default_executor(),
-            tools: ligus_runtime::turn_engine::ToolOptions {
-                builtin: true,
-                run_command: true,
-                ..Default::default()
-            },
+            tools: ligus_runtime::turn_engine::ToolOptions { builtin: true, run_command: true, ..Default::default() },
             write_capable: false,
             require_isolation: true,
             stop: None,
             timeout: ligus_runtime::turn_engine::turn_timeout(),
             options: Default::default(),
         };
-        ligus_runtime::turn_engine::run(&host, input)
-            .await
-            .map_err(|e| anyhow!("{e}"))?;
+        ligus_runtime::turn_engine::run(&host, input).await.map_err(|e| anyhow!("{e}"))?;
         Ok::<_, anyhow::Error>(())
     }
     .await;
@@ -289,69 +232,32 @@ pub async fn turn_test(data_dir: &Path) -> Result<TurnReport> {
     let _ = std::fs::remove_dir_all(&tmp);
     result?;
 
-    let bodies = stub
-        .bodies
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
+    let bodies = stub.bodies.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if bodies.is_empty() {
         return Err(anyhow!("the turn never called the stub model"));
     }
-    let offered = bodies[0]["tools"]
-        .as_array()
-        .is_some_and(|t| t.iter().any(|t| t["function"]["name"] == "run_command"));
+    let offered = bodies[0]["tools"].as_array().is_some_and(|t| t.iter().any(|t| t["function"]["name"] == "run_command"));
     let out = tool_output(&bodies).unwrap_or_default();
     let ran = out.lines().any(|l| l.trim() == RAN);
-    let leaks: Vec<String> = out
-        .lines()
-        .filter(|l| l.trim().starts_with(LEAK))
-        .map(|l| l.trim().to_string())
-        .collect();
+    let leaks: Vec<String> = out.lines().filter(|l| l.trim().starts_with(LEAK)).map(|l| l.trim().to_string()).collect();
     let mut lines = vec![format!("agent sandbox: {tier}")];
-    lines.push(format!(
-        "run_command offered: {}",
-        if offered { "yes" } else { "no" }
-    ));
-    lines.push(format!(
-        "run_command ran: {}",
-        if ran { "yes" } else { "no" }
-    ));
-    for l in out
-        .lines()
-        .map(str::trim)
-        .filter(|l| l.starts_with("DENIED_") || l.starts_with(LEAK))
-    {
+    lines.push(format!("run_command offered: {}", if offered { "yes" } else { "no" }));
+    lines.push(format!("run_command ran: {}", if ran { "yes" } else { "no" }));
+    for l in out.lines().map(str::trim).filter(|l| l.starts_with("DENIED_") || l.starts_with(LEAK)) {
         lines.push(l.to_string());
     }
     if !ran {
-        lines.push(format!(
-            "tool output: {}",
-            out.chars().take(600).collect::<String>()
-        ));
+        lines.push(format!("tool output: {}", out.chars().take(600).collect::<String>()));
     }
-    Ok(TurnReport {
-        tier,
-        lines,
-        ran,
-        leaks,
-    })
+    Ok(TurnReport { tier, lines, ran, leaks })
 }
 
 /// A throwaway chat service and chat for the probe turn.
 fn probe_chat() -> Result<(Mutex<ligus_runtime::ChatService>, uuid::Uuid, uuid::Uuid)> {
-    let author = ligus_core::ActorIdentity::new(
-        "turn-test".to_string(),
-        "turn-test".to_string(),
-        ligus_core::ActorKind::Human,
-    );
+    let author = ligus_core::ActorIdentity::new("turn-test".to_string(), "turn-test".to_string(), ligus_core::ActorKind::Human);
     let kp = ligus_core::SigningKeypair::generate()?;
     let account = ligus_core::SigningKeypair::generate()?;
-    let mut svc = ligus_runtime::ChatService::new(
-        ligus_runtime::EventStore::open_in_memory()?,
-        kp,
-        account,
-        author,
-    );
+    let mut svc = ligus_runtime::ChatService::new(ligus_runtime::EventStore::open_in_memory()?, kp, account, author);
     let ws = uuid::Uuid::new_v4();
     svc.ensure_workspace_config(ws)?;
     let chat = svc.create_chat("turn test", ws, "")?.id;
@@ -368,17 +274,8 @@ impl ligus_runtime::turn_engine::TurnHost for ProbeHost {
     fn service(&self) -> &Mutex<ligus_runtime::ChatService> {
         &self.svc
     }
-    fn checkout(
-        &self,
-        _s: &ligus_core::ChatSession,
-        _m: uuid::Uuid,
-    ) -> impl std::future::Future<
-        Output = std::result::Result<ligus_runtime::turn_engine::Checkout, String>,
-    > + Send {
-        let c = ligus_runtime::turn_engine::Checkout {
-            repo_root: Some(self.repo.clone()),
-            ..Default::default()
-        };
+    fn checkout(&self, _s: &ligus_core::ChatSession, _m: uuid::Uuid) -> impl std::future::Future<Output = std::result::Result<ligus_runtime::turn_engine::Checkout, String>> + Send {
+        let c = ligus_runtime::turn_engine::Checkout { repo_root: Some(self.repo.clone()), ..Default::default() };
         async move { Ok(c) }
     }
 }
@@ -389,12 +286,7 @@ mod tests {
 
     #[test]
     fn probe_script_quotes_paths_and_marks_each_check() {
-        let s = probe_script(
-            42,
-            "pid:[4026531836]",
-            Path::new("/var/lib/li'gus"),
-            &[PathBuf::from("/etc/ligus/secrets/key")],
-        );
+        let s = probe_script(42, "pid:[4026531836]", Path::new("/var/lib/li'gus"), &[PathBuf::from("/etc/ligus/secrets/key")]);
         assert!(s.contains("/proc/1/environ") && s.contains("/proc/42/environ"));
         assert!(s.contains("'/var/lib/li'\\''gus'"));
         assert!(s.contains("LIGUS_PROBE_LEAK_SECRET_0"));
@@ -409,57 +301,25 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn probe_script_reports_only_real_leaks() {
-        let run = |s: &str| {
-            String::from_utf8_lossy(
-                &std::process::Command::new("/bin/sh")
-                    .arg("-c")
-                    .arg(s)
-                    .output()
-                    .unwrap()
-                    .stdout,
-            )
-            .into_owned()
-        };
+        let run = |s: &str| String::from_utf8_lossy(&std::process::Command::new("/bin/sh").arg("-c").arg(s).output().unwrap().stdout).into_owned();
         let empty = tempfile::tempdir().unwrap();
-        let out = run(&probe_script(
-            1,
-            "pid:[not-this-namespace]",
-            empty.path(),
-            &[],
-        ));
-        assert!(
-            out.contains("LIGUS_PROBE_RAN") && !out.contains("LIGUS_PROBE_LEAK"),
-            "{out}"
-        );
+        let out = run(&probe_script(1, "pid:[not-this-namespace]", empty.path(), &[]));
+        assert!(out.contains("LIGUS_PROBE_RAN") && !out.contains("LIGUS_PROBE_LEAK"), "{out}");
         let full = tempfile::tempdir().unwrap();
         std::fs::write(full.path().join("keys"), "x").unwrap();
-        let out = run(&probe_script(
-            1,
-            "pid:[not-this-namespace]",
-            full.path(),
-            &[],
-        ));
+        let out = run(&probe_script(1, "pid:[not-this-namespace]", full.path(), &[]));
         assert!(out.contains("LIGUS_PROBE_LEAK_DATA_DIR"), "{out}");
         #[cfg(target_os = "linux")]
         {
             // A child of ours, not this process: another test in this binary
             // (`hardening::not_dumpable_after_hardening`) may already have
             // made this process not dumpable, which hides its environ.
-            let mut child = std::process::Command::new("sleep")
-                .arg("30")
-                .spawn()
-                .unwrap();
-            let ns = std::fs::read_link("/proc/self/ns/pid")
-                .unwrap()
-                .display()
-                .to_string();
+            let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+            let ns = std::fs::read_link("/proc/self/ns/pid").unwrap().display().to_string();
             let out = run(&probe_script(child.id(), &ns, empty.path(), &[]));
             let _ = child.kill();
             let _ = child.wait();
-            assert!(
-                out.contains(&format!("LIGUS_PROBE_LEAK_ENVIRON_{}", child.id())),
-                "{out}"
-            );
+            assert!(out.contains(&format!("LIGUS_PROBE_LEAK_ENVIRON_{}", child.id())), "{out}");
         }
     }
 
@@ -472,19 +332,14 @@ mod tests {
                 {"role": "tool", "content": "LIGUS_PROBE_RAN\nDENIED_DATA_DIR"}
             ]}),
         ];
-        assert_eq!(
-            tool_output(&bodies).unwrap(),
-            "LIGUS_PROBE_RAN\nDENIED_DATA_DIR"
-        );
+        assert_eq!(tool_output(&bodies).unwrap(), "LIGUS_PROBE_RAN\nDENIED_DATA_DIR");
     }
 
     /// The whole probe on this machine's own sandbox (Seatbelt on macOS,
     /// bwrap or Landlock on Linux). Skips where there is none.
     #[tokio::test]
     async fn a_real_turn_runs_confined() {
-        if ligus_runtime::executor::sandbox_status().kind
-            == ligus_runtime::executor::ExecutorKind::Unconfined
-        {
+        if ligus_runtime::executor::sandbox_status().kind == ligus_runtime::executor::ExecutorKind::Unconfined {
             eprintln!("SKIPPED: no agent sandbox on this host");
             return;
         }
@@ -496,17 +351,9 @@ mod tests {
         #[cfg(target_os = "linux")]
         {
             let exe = std::env::current_exe().ok();
-            let Some(helper) = exe.as_deref().and_then(|e| {
-                ligus_runtime::executor::linux::find_built_helper(
-                    e,
-                    &["ligus", "ligus-sandbox-helper"],
-                )
-            }) else {
+            let Some(helper) = exe.as_deref().and_then(|e| ligus_runtime::executor::linux::find_built_helper(e, &["ligus", "ligus-sandbox-helper"])) else {
                 let why = "no ligus or ligus-sandbox-helper binary built near the test harness (run the workspace tests)";
-                assert!(
-                    std::env::var("LIGUS_REQUIRE_SANDBOX").map_or(true, |v| v.trim() != "1"),
-                    "LIGUS_REQUIRE_SANDBOX=1 but {why}"
-                );
+                assert!(std::env::var("LIGUS_REQUIRE_SANDBOX").map_or(true, |v| v.trim() != "1"), "LIGUS_REQUIRE_SANDBOX=1 but {why}");
                 eprintln!("SKIPPED: {why}");
                 return;
             };

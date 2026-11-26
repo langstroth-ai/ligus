@@ -15,20 +15,8 @@ fn register(w: &mut SignedWorld, who: &str, auth: &SoftAuthenticator) -> uuid::U
 
 /// A presence-gated event by the Owner, confirmed with `auth`.
 fn confirm_with(w: &mut SignedWorld, auth: &SoftAuthenticator) -> uuid::Uuid {
-    let change = MemberRoleChange {
-        member_id: "owner".into(),
-        old_role: WorkspaceRole::Owner,
-        new_role: WorkspaceRole::Owner,
-    };
-    let mut env = w.draft(
-        "owner",
-        None,
-        SessionEvent::MemberRoleChanged {
-            change,
-            watermark: Vec::new(),
-        },
-        None,
-    );
+    let change = MemberRoleChange { member_id: "owner".into(), old_role: WorkspaceRole::Owner, new_role: WorkspaceRole::Owner };
+    let mut env = w.draft("owner", None, SessionEvent::MemberRoleChanged { change, watermark: Vec::new() }, None);
     let a = auth.get(&ligus_core::presence::challenge(&env));
     w.finish(&mut env, "owner", Some(a));
     w.push_env(None, env)
@@ -52,11 +40,7 @@ fn presence_verifies_under_the_workspaces_rp_and_not_another() {
     let ok = confirm_with(&mut w, &ours);
     let wrong = confirm_with(&mut w, &theirs);
     assert_eq!(w.verdict(ok), Verdict::Allowed);
-    assert_eq!(
-        w.verdict(wrong),
-        Verdict::Denied,
-        "a ligus.ai assertion doesn't verify in an example.org workspace"
-    );
+    assert_eq!(w.verdict(wrong), Verdict::Denied, "a ligus.ai assertion doesn't verify in an example.org workspace");
 }
 
 #[test]
@@ -82,10 +66,7 @@ fn the_rp_changes_only_with_presence_under_the_old_rp() {
     let new = soft_for("example.org");
     register(&mut w, "owner", &old);
     register(&mut w, "owner", &new);
-    let to_new = SessionEvent::WorkspaceRulesSet {
-        version: 2,
-        presence: Some(PresencePolicy::for_rp("example.org")),
-    };
+    let to_new = SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) };
     let bare = w.push_bare("owner", to_new.clone());
     assert_eq!(w.verdict(bare), Verdict::Denied, "no presence");
     let confirm = |w: &mut SignedWorld, auth: &SoftAuthenticator| {
@@ -95,51 +76,26 @@ fn the_rp_changes_only_with_presence_under_the_old_rp() {
         w.push_env(None, env)
     };
     let under_new = confirm(&mut w, &new);
-    assert_eq!(
-        w.verdict(under_new),
-        Verdict::Denied,
-        "presence under the new RP doesn't authorize the switch"
-    );
+    assert_eq!(w.verdict(under_new), Verdict::Denied, "presence under the new RP doesn't authorize the switch");
     assert_eq!(w.roster().presence_policy.rp_id, "corp.example");
     let under_old = confirm(&mut w, &old);
     assert_eq!(w.verdict(under_old), Verdict::Allowed);
     assert_eq!(w.roster().presence_policy.rp_id, "example.org");
     // From here the new RP's passkey verifies and the old one doesn't.
     let (a, b) = (confirm_with(&mut w, &new), confirm_with(&mut w, &old));
-    assert_eq!(
-        (w.verdict(a), w.verdict(b)),
-        (Verdict::Allowed, Verdict::Denied)
-    );
+    assert_eq!((w.verdict(a), w.verdict(b)), (Verdict::Allowed, Verdict::Denied));
 }
 
 #[test]
 fn a_malformed_policy_is_refused() {
     let mut w = SignedWorld::genesis(&["owner"], None);
     for bad in [
-        PresencePolicy {
-            rp_id: "Ligus.AI".into(),
-            origins: vec!["https://ligus.ai".into()],
-        },
-        PresencePolicy {
-            rp_id: "ligus.ai".into(),
-            origins: vec![],
-        },
-        PresencePolicy {
-            rp_id: "ligus.ai".into(),
-            origins: vec!["http://ligus.ai".into()],
-        },
-        PresencePolicy {
-            rp_id: "ligus.ai".into(),
-            origins: vec!["https://evil.example".into()],
-        },
+        PresencePolicy { rp_id: "Ligus.AI".into(), origins: vec!["https://ligus.ai".into()] },
+        PresencePolicy { rp_id: "ligus.ai".into(), origins: vec![] },
+        PresencePolicy { rp_id: "ligus.ai".into(), origins: vec!["http://ligus.ai".into()] },
+        PresencePolicy { rp_id: "ligus.ai".into(), origins: vec!["https://evil.example".into()] },
     ] {
-        let id = w.push(
-            "owner",
-            SessionEvent::WorkspaceRulesSet {
-                version: 2,
-                presence: Some(bad.clone()),
-            },
-        );
+        let id = w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(bad.clone()) });
         assert_eq!(w.verdict(id), Verdict::Denied, "{bad:?}");
     }
     assert_eq!(w.roster().presence_policy, PresencePolicy::ligus());
@@ -153,56 +109,16 @@ fn only_the_owner_sets_the_policy_or_the_version() {
     let mut w = SignedWorld::genesis(&["owner", "ada", "mara"], None);
     w.admit("owner", "ada", WorkspaceRole::Admin);
     w.admit("owner", "mara", WorkspaceRole::Contributor);
-    let policy = w.push(
-        "ada",
-        SessionEvent::WorkspaceRulesSet {
-            version: 2,
-            presence: Some(PresencePolicy::for_rp("example.org")),
-        },
-    );
+    let policy = w.push("ada", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) });
     assert_eq!(w.verdict(policy), Verdict::Denied);
-    let same = w.push(
-        "ada",
-        SessionEvent::WorkspaceRulesSet {
-            version: 2,
-            presence: Some(PresencePolicy::ligus()),
-        },
-    );
-    assert_eq!(
-        w.verdict(same),
-        Verdict::Allowed,
-        "restating the policy in force changes nothing"
-    );
-    let by_owner_rp = w.push(
-        "owner",
-        SessionEvent::WorkspaceRulesSet {
-            version: 2,
-            presence: Some(PresencePolicy::for_rp("example.org")),
-        },
-    );
+    let same = w.push("ada", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::ligus()) });
+    assert_eq!(w.verdict(same), Verdict::Allowed, "restating the policy in force changes nothing");
+    let by_owner_rp = w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) });
     assert_eq!(w.verdict(by_owner_rp), Verdict::Allowed);
-    let version = w.push(
-        "ada",
-        SessionEvent::WorkspaceRulesSet {
-            version: 3,
-            presence: None,
-        },
-    );
+    let version = w.push("ada", SessionEvent::WorkspaceRulesSet { version: 3, presence: None });
     assert_eq!(w.verdict(version), Verdict::Denied);
-    let by_contributor = w.push(
-        "mara",
-        SessionEvent::WorkspaceRulesSet {
-            version: 2,
-            presence: Some(PresencePolicy::for_rp("example.org")),
-        },
-    );
+    let by_contributor = w.push("mara", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) });
     assert_eq!(w.verdict(by_contributor), Verdict::Denied);
-    let by_owner = w.push(
-        "owner",
-        SessionEvent::WorkspaceRulesSet {
-            version: 3,
-            presence: None,
-        },
-    );
+    let by_owner = w.push("owner", SessionEvent::WorkspaceRulesSet { version: 3, presence: None });
     assert_eq!(w.verdict(by_owner), Verdict::Allowed);
 }

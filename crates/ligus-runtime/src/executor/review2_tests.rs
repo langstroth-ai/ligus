@@ -9,42 +9,18 @@ use super::*;
 use ligus_core::sandbox::PathGrants;
 
 #[cfg(unix)]
-const PURPOSES: &[Purpose] = &[
-    Purpose::Agent(ModelProviderKind::ClaudeCode),
-    Purpose::Agent(ModelProviderKind::Codex),
-    Purpose::Tool,
-];
+const PURPOSES: &[Purpose] = &[Purpose::Agent(ModelProviderKind::ClaudeCode), Purpose::Agent(ModelProviderKind::Codex), Purpose::Tool];
 
 /// `script` in the decoy's worktree; `None` when the spawn is refused.
 #[cfg(unix)]
-fn try_run(
-    e: &dyn TurnExecutor,
-    d: &DecoyHome,
-    purpose: Purpose,
-    script: &str,
-) -> Option<(bool, String)> {
-    let policy = TurnPolicy {
-        worktree_is_isolated: true,
-        ..TurnPolicy::baseline(HostKind::Desktop)
-    };
+fn try_run(e: &dyn TurnExecutor, d: &DecoyHome, purpose: Purpose, script: &str) -> Option<(bool, String)> {
+    let policy = TurnPolicy { worktree_is_isolated: true, ..TurnPolicy::baseline(HostKind::Desktop) };
     with_turn_sync(policy, || {
-        let spec = SpawnSpec::new(
-            purpose,
-            "/bin/sh",
-            ["-c", script, "sh", "--permission-mode", "acceptEdits"],
-        )
-        .cwd(Some(&d.worktree));
+        let spec = SpawnSpec::new(purpose, "/bin/sh", ["-c", script, "sh", "--permission-mode", "acceptEdits"]).cwd(Some(&d.worktree));
         let mut p = prepare_in(e, spec, &d.home, d.host()).ok()?;
         let out = p.command.output().expect("spawn");
         drop(p.guard);
-        Some((
-            out.status.success(),
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ),
-        ))
+        Some((out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))))
     })
 }
 
@@ -57,38 +33,20 @@ fn try_run(
 #[cfg(unix)]
 #[test]
 fn review2_protected_symlink_out_of_the_worktree_opens_nothing_live() {
-    let Some(e) = super::tests::real_executor() else {
-        return;
-    };
+    let Some(e) = super::tests::real_executor() else { return };
     let d = DecoyHome::new();
     std::os::unix::fs::symlink(d.home.join(".ssh"), d.worktree.join(".envrc")).unwrap();
-    std::os::unix::fs::symlink(
-        d.home.join("Documents"),
-        d.worktree.join("ligus.config.toml"),
-    )
-    .unwrap();
+    std::os::unix::fs::symlink(d.home.join("Documents"), d.worktree.join("ligus.config.toml")).unwrap();
     let h = d.home.display().to_string();
     for purpose in PURPOSES {
         let script = format!(
             "cat .envrc/id_ed25519 '{h}/.ssh/id_ed25519' ligus.config.toml/taxes.txt '{h}/Documents/taxes.txt'; ls .envrc/; rm -f .envrc && echo EVIL > .envrc && echo REPLACED"
         );
         if let Some((_, out)) = try_run(&*e, &d, *purpose, &script) {
-            assert!(
-                !out.contains("DECOY") && !out.contains("id_ed25519"),
-                "{purpose:?} read through a protected symlink: {out}"
-            );
-            assert!(
-                !out.contains("REPLACED"),
-                "{purpose:?} replaced a protected symlink: {out}"
-            );
+            assert!(!out.contains("DECOY") && !out.contains("id_ed25519"), "{purpose:?} read through a protected symlink: {out}");
+            assert!(!out.contains("REPLACED"), "{purpose:?} replaced a protected symlink: {out}");
         }
-        assert!(
-            std::fs::symlink_metadata(d.worktree.join(".envrc"))
-                .unwrap()
-                .file_type()
-                .is_symlink(),
-            "{purpose:?}"
-        );
+        assert!(std::fs::symlink_metadata(d.worktree.join(".envrc")).unwrap().file_type().is_symlink(), "{purpose:?}");
     }
 }
 
@@ -99,34 +57,17 @@ fn review2_protected_symlink_out_of_the_worktree_opens_nothing_live() {
 #[cfg(unix)]
 #[test]
 fn review2_a_turn_never_reads_another_turns_scratch_live() {
-    let Some(e) = super::tests::real_executor() else {
-        return;
-    };
+    let Some(e) = super::tests::real_executor() else { return };
     let other = make_turn_tmp().unwrap();
     let cred = other.path().join("home/.config/github-copilot/hosts.json");
     std::fs::create_dir_all(cred.parent().unwrap()).unwrap();
     std::fs::write(&cred, "DECOY-OTHER-TURN-TOKEN").unwrap();
     let d = DecoyHome::new();
     for purpose in PURPOSES {
-        let (_, out) = run_in(
-            &*e,
-            &d,
-            *purpose,
-            &format!("cat '{}'; ls '{}'", cred.display(), other.path().display()),
-            PathGrants::default(),
-        );
-        assert!(
-            !out.contains("DECOY") && !out.contains(".ligus-owner"),
-            "{purpose:?} read another turn's scratch dir: {out}"
-        );
+        let (_, out) = run_in(&*e, &d, *purpose, &format!("cat '{}'; ls '{}'", cred.display(), other.path().display()), PathGrants::default());
+        assert!(!out.contains("DECOY") && !out.contains(".ligus-owner"), "{purpose:?} read another turn's scratch dir: {out}");
         // Its own scratch dir still works.
-        let (ok, out) = run_in(
-            &*e,
-            &d,
-            *purpose,
-            "echo mine > \"$TMPDIR/x\" && cat \"$TMPDIR/x\"",
-            PathGrants::default(),
-        );
+        let (ok, out) = run_in(&*e, &d, *purpose, "echo mine > \"$TMPDIR/x\" && cat \"$TMPDIR/x\"", PathGrants::default());
         assert!(ok && out.contains("mine"), "{purpose:?}: {out}");
     }
 }
@@ -139,19 +80,10 @@ fn review2_a_turn_never_reads_another_turns_scratch_live() {
 #[cfg(target_os = "macos")]
 #[test]
 fn review2_rw_grant_case_variants_never_reach_code_or_denied_paths_live() {
-    let Some(e) = super::tests::real_executor() else {
-        return;
-    };
+    let Some(e) = super::tests::real_executor() else { return };
     let d = DecoyHome::new();
     std::fs::remove_dir_all(d.home.join(".ssh")).unwrap();
-    let grants = PathGrants {
-        read_only: vec![],
-        read_write: vec![
-            "~/Library/launchagents".into(),
-            "~/.SSH".into(),
-            "~/.Zshrc.d".into(),
-        ],
-    };
+    let grants = PathGrants { read_only: vec![], read_write: vec!["~/Library/launchagents".into(), "~/.SSH".into(), "~/.Zshrc.d".into()] };
     let h = d.home.display().to_string();
     let script = format!(
         "mkdir -p '{h}/Library/launchagents' && echo x > '{h}/Library/launchagents/evil.plist' && echo PLANTED-AGENT; mkdir -p '{h}/.SSH' && echo k > '{h}/.SSH/authorized_keys' && echo PLANTED-SSH"
@@ -159,11 +91,7 @@ fn review2_rw_grant_case_variants_never_reach_code_or_denied_paths_live() {
     for purpose in PURPOSES {
         let (_, out) = run_in(&*e, &d, *purpose, &script, grants.clone());
         assert!(!out.contains("PLANTED"), "{purpose:?}: {out}");
-        assert!(
-            !d.home.join("Library/LaunchAgents/evil.plist").exists()
-                && !d.home.join(".ssh/authorized_keys").exists(),
-            "{purpose:?}"
-        );
+        assert!(!d.home.join("Library/LaunchAgents/evil.plist").exists() && !d.home.join(".ssh/authorized_keys").exists(), "{purpose:?}");
     }
 }
 
@@ -232,45 +160,18 @@ fn review2_rw_grants_never_open_more_code_paths() {
         ".deno",
         ".bun",
     ];
-    let grants = PathGrants {
-        read_only: vec![],
-        read_write: rw.iter().map(|r| format!("~/{r}")).collect(),
-    };
+    let grants = PathGrants { read_only: vec![], read_write: rw.iter().map(|r| format!("~/{r}")).collect() };
     let p = plan_for(&d.home, &d.host(), Purpose::Tool, &grants);
-    let open: Vec<&&str> = rw
-        .iter()
-        .filter(|r| p.write_extra.contains(&d.home.join(r)))
-        .collect();
+    let open: Vec<&&str> = rw.iter().filter(|r| p.write_extra.contains(&d.home.join(r))).collect();
     assert!(open.is_empty(), "granted read-write: {open:?}");
     // Absolute prefixes of user-writable installs on `PATH` (Homebrew).
-    let abs = PathGrants {
-        read_only: vec![],
-        read_write: vec![
-            "/opt/homebrew".into(),
-            "/usr/local".into(),
-            "/usr/local/bin".into(),
-        ],
-    };
+    let abs = PathGrants { read_only: vec![], read_write: vec!["/opt/homebrew".into(), "/usr/local".into(), "/usr/local/bin".into()] };
     let p = plan_for(&d.home, &d.host(), Purpose::Tool, &abs);
-    assert!(
-        p.write_extra
-            .iter()
-            .all(|w| !w.starts_with("/opt/homebrew") && !w.starts_with("/usr/local")),
-        "{:?}",
-        p.write_extra
-    );
+    assert!(p.write_extra.iter().all(|w| !w.starts_with("/opt/homebrew") && !w.starts_with("/usr/local")), "{:?}", p.write_extra);
     // A data grant beside them still opens read-write.
-    let ok = PathGrants {
-        read_only: vec![],
-        read_write: vec!["~/granted/rw".into(), "~/datasets".into()],
-    };
+    let ok = PathGrants { read_only: vec![], read_write: vec!["~/granted/rw".into(), "~/datasets".into()] };
     let p = plan_for(&d.home, &d.host(), Purpose::Tool, &ok);
-    assert!(
-        p.write_extra.contains(&d.home.join("granted/rw"))
-            && p.write_extra.contains(&d.home.join("datasets")),
-        "{:?}",
-        p.write_extra
-    );
+    assert!(p.write_extra.contains(&d.home.join("granted/rw")) && p.write_extra.contains(&d.home.join("datasets")), "{:?}", p.write_extra);
 }
 
 /// A path is judged where it resolves when the plan is made; the Linux
@@ -283,41 +184,20 @@ fn review2_rw_grants_never_open_more_code_paths() {
 fn review2_a_path_swapped_after_the_plan_opens_nothing() {
     let d = DecoyHome::new();
     std::fs::create_dir_all(d.home.join("shared/cache")).unwrap();
-    let grants = PathGrants {
-        read_only: vec!["~/shared/cache".into()],
-        read_write: vec!["~/granted/rw".into()],
-    };
+    let grants = PathGrants { read_only: vec!["~/shared/cache".into()], read_write: vec!["~/granted/rw".into()] };
     let p = plan_for(&d.home, &d.host(), Purpose::Tool, &grants);
-    assert!(
-        p.home_read
-            .iter()
-            .any(|r| canonical(r) == canonical(&d.home.join("shared/cache"))),
-        "{:?}",
-        p.home_read
-    );
+    assert!(p.home_read.iter().any(|r| canonical(r) == canonical(&d.home.join("shared/cache"))), "{:?}", p.home_read);
     // The swap, after the plan.
     for g in ["shared/cache", "granted/rw"] {
         std::fs::rename(d.home.join(g), d.home.join(format!("{g}-old"))).unwrap();
         std::os::unix::fs::symlink(d.home.join(".ssh"), d.home.join(g)).unwrap();
     }
     let ssh = canonical(&d.home.join(".ssh"));
-    let a: Vec<String> = super::linux::bwrap_args(&p, &d.worktree)
-        .iter()
-        .map(|x| x.to_string_lossy().into_owned())
-        .collect();
-    let bound = a
-        .windows(2)
-        .any(|w| (w[0] == "--ro-bind" || w[0] == "--bind") && Path::new(&w[1]).starts_with(&ssh));
+    let a: Vec<String> = super::linux::bwrap_args(&p, &d.worktree).iter().map(|x| x.to_string_lossy().into_owned()).collect();
+    let bound = a.windows(2).any(|w| (w[0] == "--ro-bind" || w[0] == "--bind") && Path::new(&w[1]).starts_with(&ssh));
     assert!(!bound, "bubblewrap binds ~/.ssh: {a:?}");
     let r = super::landlock_rules::rules(&p, Some(&d.home), None, None);
-    assert!(
-        !r.read
-            .iter()
-            .chain(r.write.iter())
-            .any(|x| x.starts_with(&ssh)),
-        "Landlock opens ~/.ssh: {:?}",
-        r.read
-    );
+    assert!(!r.read.iter().chain(r.write.iter()).any(|x| x.starts_with(&ssh)), "Landlock opens ~/.ssh: {:?}", r.read);
 }
 
 /// `HOME` that isn't the user's home (unset, or pointing elsewhere) left the
@@ -328,69 +208,26 @@ fn review2_a_path_swapped_after_the_plan_opens_nothing() {
 fn review2_a_wrong_home_still_denies_the_real_one_live() {
     assert!(passwd_home().is_some(), "no home in the password database");
     let wrong = canonical(&tempfile::tempdir().unwrap().keep());
-    assert_eq!(
-        other_homes(Some(&wrong), Some(Path::new("/home/u"))),
-        vec![PathBuf::from("/home/u")]
-    );
-    assert_eq!(
-        other_homes(None, Some(Path::new("/home/u"))),
-        vec![PathBuf::from("/home/u")]
-    );
+    assert_eq!(other_homes(Some(&wrong), Some(Path::new("/home/u"))), vec![PathBuf::from("/home/u")]);
+    assert_eq!(other_homes(None, Some(Path::new("/home/u"))), vec![PathBuf::from("/home/u")]);
     assert!(other_homes(Some(Path::new("/home/u")), Some(Path::new("/home/u"))).is_empty());
-    let Some(e) = super::tests::real_executor() else {
-        return;
-    };
+    let Some(e) = super::tests::real_executor() else { return };
     let d = DecoyHome::new();
-    let host = HostPaths {
-        other_homes: vec![d.home.clone()],
-        ..d.host()
-    };
+    let host = HostPaths { other_homes: vec![d.home.clone()], ..d.host() };
     let p = plan_for(&wrong, &host, Purpose::Tool, &PathGrants::default());
-    assert!(
-        p.deny_read.contains(&d.home) && p.deny_read.contains(&d.home.join(".ssh")),
-        "{:?}",
-        p.deny_read
-    );
+    assert!(p.deny_read.contains(&d.home) && p.deny_read.contains(&d.home.join(".ssh")), "{:?}", p.deny_read);
     for purpose in PURPOSES {
-        let policy = TurnPolicy {
-            worktree_is_isolated: true,
-            ..TurnPolicy::baseline(HostKind::Desktop)
-        };
+        let policy = TurnPolicy { worktree_is_isolated: true, ..TurnPolicy::baseline(HostKind::Desktop) };
         let out = with_turn_sync(policy, || {
-            let script = format!(
-                "cat '{}' '{}'; cat README.md",
-                d.home.join("Documents/taxes.txt").display(),
-                d.home.join(".ssh/id_ed25519").display()
-            );
-            let spec = SpawnSpec::new(
-                *purpose,
-                "/bin/sh",
-                [
-                    "-c",
-                    script.as_str(),
-                    "sh",
-                    "--permission-mode",
-                    "acceptEdits",
-                ],
-            )
-            .cwd(Some(&d.worktree));
+            let script = format!("cat '{}' '{}'; cat README.md", d.home.join("Documents/taxes.txt").display(), d.home.join(".ssh/id_ed25519").display());
+            let spec = SpawnSpec::new(*purpose, "/bin/sh", ["-c", script.as_str(), "sh", "--permission-mode", "acceptEdits"]).cwd(Some(&d.worktree));
             let mut p = prepare_in(&*e, spec, &wrong, host.clone()).expect("prepare");
             let out = p.command.output().expect("spawn");
             drop(p.guard);
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            )
+            format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
         });
-        assert!(
-            !out.contains("DECOY"),
-            "{purpose:?} read the real home under a wrong HOME: {out}"
-        );
-        assert!(
-            out.contains("hello"),
-            "{purpose:?}: the worktree inside it stays readable: {out}"
-        );
+        assert!(!out.contains("DECOY"), "{purpose:?} read the real home under a wrong HOME: {out}");
+        assert!(out.contains("hello"), "{purpose:?}: the worktree inside it stays readable: {out}");
     }
 }
 
@@ -400,25 +237,14 @@ fn review2_a_wrong_home_still_denies_the_real_one_live() {
 #[cfg(unix)]
 #[test]
 fn review2_a_grant_of_a_tool_dir_never_opens_its_tokens_live() {
-    let Some(e) = super::tests::real_executor() else {
-        return;
-    };
+    let Some(e) = super::tests::real_executor() else { return };
     let d = DecoyHome::new();
-    for (f, body) in [
-        (".m2/settings.xml", "DECOY-MAVEN"),
-        (".pypirc", "DECOY-PYPI"),
-        (".gradle/gradle.properties", "DECOY-GRADLE"),
-    ] {
+    for (f, body) in [(".m2/settings.xml", "DECOY-MAVEN"), (".pypirc", "DECOY-PYPI"), (".gradle/gradle.properties", "DECOY-GRADLE")] {
         std::fs::create_dir_all(d.home.join(f).parent().unwrap()).unwrap();
         std::fs::write(d.home.join(f), body).unwrap();
     }
     let grants = PathGrants {
-        read_only: vec![
-            "~/.cargo".into(),
-            "~/.m2".into(),
-            "~/.npmrc".into(),
-            "~/.pypirc".into(),
-        ],
+        read_only: vec!["~/.cargo".into(), "~/.m2".into(), "~/.npmrc".into(), "~/.pypirc".into()],
         read_write: vec!["~/.gradle".into()],
     };
     let h = d.home.display().to_string();
@@ -433,10 +259,7 @@ fn review2_a_grant_of_a_tool_dir_never_opens_its_tokens_live() {
         assert!(!out.contains("DECOY"), "{purpose:?}: {out}");
         // The rest of a granted dir reads (the Landlock tier can't list a dir
         // that holds a denied file, but reads what is in it).
-        assert!(
-            out.contains("TOOLCHAIN-OK"),
-            "{purpose:?}: the rest of a granted dir reads: {out}"
-        );
+        assert!(out.contains("TOOLCHAIN-OK"), "{purpose:?}: the rest of a granted dir reads: {out}");
     }
 }
 
@@ -448,34 +271,14 @@ fn review2_a_grant_of_a_tool_dir_never_opens_its_tokens_live() {
 fn review2_outside_a_turn_a_cli_has_no_shell() {
     use crate::provider::dispatch::outside_turn_args;
     let a = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    let copilot = outside_turn_args(
-        ModelProviderKind::Copilot,
-        a(&[
-            "--allow-tool=read",
-            "--allow-tool=write",
-            "--allow-tool=shell",
-            "--allow-all-tools",
-        ]),
-    );
-    assert!(
-        !copilot
-            .iter()
-            .any(|x| x == "--allow-tool=shell" || x == "--allow-all-tools")
-            && copilot.contains(&"--deny-tool=shell".to_string()),
-        "{copilot:?}"
-    );
+    let copilot = outside_turn_args(ModelProviderKind::Copilot, a(&["--allow-tool=read", "--allow-tool=write", "--allow-tool=shell", "--allow-all-tools"]));
+    assert!(!copilot.iter().any(|x| x == "--allow-tool=shell" || x == "--allow-all-tools") && copilot.contains(&"--deny-tool=shell".to_string()), "{copilot:?}");
     let agy = outside_turn_args(ModelProviderKind::Antigravity, a(&["--mode", "auto"]));
     assert!(!agy.contains(&"auto".to_string()), "{agy:?}");
     let pi = outside_turn_args(ModelProviderKind::Pi, a(&[]));
-    assert!(
-        pi.windows(2).any(|w| w == ["--exclude-tools", "bash"]),
-        "{pi:?}"
-    );
+    assert!(pi.windows(2).any(|w| w == ["--exclude-tools", "bash"]), "{pi:?}");
     // One with no switch keeps its args (and runs read-only, model only).
-    assert_eq!(
-        outside_turn_args(ModelProviderKind::Codex, a(&["-m", "x"])),
-        a(&["-m", "x"])
-    );
+    assert_eq!(outside_turn_args(ModelProviderKind::Codex, a(&["-m", "x"])), a(&["-m", "x"]));
 }
 
 /// Tests never copy the real user's sign-ins into a turn home, nor read the
@@ -497,31 +300,13 @@ fn review2_tests_never_carry_real_sign_ins() {
 #[test]
 fn review2_rw_grant_of_the_git_hooks_dir_is_read_only() {
     let d = DecoyHome::new();
-    std::fs::write(
-        d.home.join(".gitconfig"),
-        "[core]\n\thooksPath = ~/.githooks\n",
-    )
-    .unwrap();
+    std::fs::write(d.home.join(".gitconfig"), "[core]\n\thooksPath = ~/.githooks\n").unwrap();
     std::fs::create_dir_all(d.home.join(".githooks")).unwrap();
     let dirs = cli_home::git_exec_dirs(&d.home);
     assert!(dirs.contains(&d.home.join(".githooks")), "{dirs:?}");
-    let host = HostPaths {
-        exec_dirs: dirs,
-        ..d.host()
-    };
-    let grants = PathGrants {
-        read_only: vec![],
-        read_write: vec!["~/.githooks".into(), "~/datasets".into()],
-    };
+    let host = HostPaths { exec_dirs: dirs, ..d.host() };
+    let grants = PathGrants { read_only: vec![], read_write: vec!["~/.githooks".into(), "~/datasets".into()] };
     let p = plan_for(&d.home, &host, Purpose::Tool, &grants);
-    assert!(
-        !p.write_extra.iter().any(|w| w.ends_with(".githooks")),
-        "{:?}",
-        p.write_extra
-    );
-    assert!(
-        p.write_extra.contains(&d.home.join("datasets")),
-        "{:?}",
-        p.write_extra
-    );
+    assert!(!p.write_extra.iter().any(|w| w.ends_with(".githooks")), "{:?}", p.write_extra);
+    assert!(p.write_extra.contains(&d.home.join("datasets")), "{:?}", p.write_extra);
 }

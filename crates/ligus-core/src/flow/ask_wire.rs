@@ -39,10 +39,7 @@ impl<'de> Deserialize<'de> for Entries {
 
 /// Split `entries` into the 0.3 fields (a duplicate is an error, as 0.3's
 /// derived decoder makes it) and the rest (first value wins).
-fn split<E: serde::de::Error>(
-    entries: Entries,
-    old: &[&'static str],
-) -> Result<(Map<String, Value>, Map<String, Value>), E> {
+fn split<E: serde::de::Error>(entries: Entries, old: &[&'static str]) -> Result<(Map<String, Value>, Map<String, Value>), E> {
     let mut known = Map::new();
     let mut rest = Map::new();
     for (k, v) in entries.0 {
@@ -61,10 +58,7 @@ fn split<E: serde::de::Error>(
 /// A field 0.4 added: its first value, or its default when this build
 /// can't read it.
 fn lenient<T: DeserializeOwned + Default>(rest: &Map<String, Value>, key: &str) -> T {
-    rest.get(key)
-        .cloned()
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default()
+    rest.get(key).cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
 }
 
 /// [`HumanAsk`] exactly as 0.3 decodes it.
@@ -86,17 +80,7 @@ struct AskV1 {
     permission: bool,
 }
 
-const ASK_V1: [&str; 9] = [
-    "askId",
-    "turnId",
-    "agentKey",
-    "question",
-    "options",
-    "expiresAtMs",
-    "closed",
-    "atMs",
-    "permission",
-];
+const ASK_V1: [&str; 9] = ["askId", "turnId", "agentKey", "question", "options", "expiresAtMs", "closed", "atMs", "permission"];
 
 impl<'de> Deserialize<'de> for HumanAsk {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -141,8 +125,7 @@ const ANSWERED_V1: [&str; 5] = ["askId", "answer", "optionIndex", "by", "atMs"];
 impl<'de> Deserialize<'de> for HumanAnswered {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let (known, rest) = split::<D::Error>(Entries::deserialize(d)?, &ANSWERED_V1)?;
-        let b: AnsweredV1 =
-            serde_json::from_value(Value::Object(known)).map_err(D::Error::custom)?;
+        let b: AnsweredV1 = serde_json::from_value(Value::Object(known)).map_err(D::Error::custom)?;
         Ok(HumanAnswered {
             ask_id: b.ask_id,
             answer: b.answer,

@@ -38,12 +38,7 @@ impl DesktopHost<'_> {
     fn stream_event(&self, message_id: Uuid, phase: &str, text: String) {
         let _ = self.app.emit(
             ChatStreamEvent::EVENT,
-            ChatStreamEvent {
-                session_id: self.session_id.to_string(),
-                message_id: message_id.to_string(),
-                phase: phase.into(),
-                text,
-            },
+            ChatStreamEvent { session_id: self.session_id.to_string(), message_id: message_id.to_string(), phase: phase.into(), text },
         );
     }
 }
@@ -53,11 +48,7 @@ impl TurnHost for DesktopHost<'_> {
         &self.state.service
     }
 
-    fn mcp_servers(
-        &self,
-        egress: &EgressPolicy,
-        _shell: bool,
-    ) -> impl Future<Output = Vec<McpServerSpec>> + Send {
+    fn mcp_servers(&self, egress: &EgressPolicy, _shell: bool) -> impl Future<Output = Vec<McpServerSpec>> + Send {
         let egress = egress.clone();
         async move {
             // Renew any near-expiry remote-server tokens first. The turn's
@@ -86,11 +77,7 @@ impl TurnHost for DesktopHost<'_> {
         crate::flow::directive_guidance().to_vec()
     }
 
-    fn checkout(
-        &self,
-        _session: &ChatSession,
-        _message_id: Uuid,
-    ) -> impl Future<Output = Result<Checkout, String>> + Send {
+    fn checkout(&self, _session: &ChatSession, _message_id: Uuid) -> impl Future<Output = Result<Checkout, String>> + Send {
         // Resolved with the host-side repo gate (repos-and-checkouts 5.3,
         // review F8) before the engine ran (`crate::turn_scope`): a repo chat
         // runs only in this device's checkout of it, in its own chat
@@ -99,12 +86,7 @@ impl TurnHost for DesktopHost<'_> {
         async move { Ok(checkout) }
     }
 
-    fn cut_worktree(
-        &self,
-        repo_root: &Path,
-        chat_id: &str,
-        turn_id: &str,
-    ) -> std::io::Result<Worktree> {
+    fn cut_worktree(&self, repo_root: &Path, chat_id: &str, turn_id: &str) -> std::io::Result<Worktree> {
         crate::flow::cut_turn_worktree(self.state, repo_root, chat_id, turn_id)
     }
 
@@ -116,46 +98,22 @@ impl TurnHost for DesktopHost<'_> {
         crate::flow::release_worktree(self.state, wt, chat_id);
     }
 
-    fn workflow_tool(
-        &self,
-        session: &ChatSession,
-    ) -> Option<ligus_runtime::workflow_tool::WorkflowTool> {
+    fn workflow_tool(&self, session: &ChatSession) -> Option<ligus_runtime::workflow_tool::WorkflowTool> {
         let session = session.clone();
-        Some(ligus_runtime::workflow_tool::WorkflowTool::new(Box::new(
-            move |json: &str| {
-                crate::workflows::definition_from_directive(json, &session).map(|d| d.name)
-            },
-        )))
+        Some(ligus_runtime::workflow_tool::WorkflowTool::new(Box::new(move |json: &str| {
+            crate::workflows::definition_from_directive(json, &session).map(|d| d.name)
+        })))
     }
 
     fn finalize(&self, svc: &mut ChatService, a: FinalizeArgs<'_>) -> Result<String, String> {
         // The turn's own chat directory (review F14), not the window's.
         let root = self.checkout.workspace_root.clone().unwrap_or_default();
-        let Some(mid) = a.ctx.message_id else {
-            return Err("no reply to finalize".into());
-        };
-        crate::finalize_reply_with(
-            svc,
-            a.ctx.session_id,
-            a.ctx.workspace_id,
-            mid,
-            &a.ctx.author,
-            a.ctx.agent_id,
-            &root,
-            a.full,
-            a.edits_in_review,
-            a.mcp,
-        )
+        let Some(mid) = a.ctx.message_id else { return Err("no reply to finalize".into()) };
+        crate::finalize_reply_with(svc, a.ctx.session_id, a.ctx.workspace_id, mid, &a.ctx.author, a.ctx.agent_id, &root, a.full, a.edits_in_review, a.mcp)
     }
 
     fn before_file_proposal(&self, proposal: &mut ActionProposal) {
-        crate::flow::before_file_proposal(
-            self.state,
-            self.session_id,
-            self.workspace_id,
-            self.agent_id,
-            proposal,
-        );
+        crate::flow::before_file_proposal(self.state, self.session_id, self.workspace_id, self.agent_id, proposal);
     }
 
     fn proposal_filed(&self, svc: &mut ChatService, proposal: Uuid) {
@@ -183,33 +141,9 @@ impl TurnHost for DesktopHost<'_> {
             is_error: false,
         };
         let ev = match act.clone() {
-            StreamActivity::Tool {
-                id,
-                name,
-                input_json,
-            } => ChatActivityEvent {
-                kind: "tool".into(),
-                id,
-                name,
-                input_json,
-                ..base
-            },
-            StreamActivity::ToolResult {
-                call_id,
-                is_error,
-                content,
-            } => ChatActivityEvent {
-                kind: "result".into(),
-                id: call_id,
-                content,
-                is_error,
-                ..base
-            },
-            StreamActivity::Thinking { text } => ChatActivityEvent {
-                kind: "thinking".into(),
-                content: text,
-                ..base
-            },
+            StreamActivity::Tool { id, name, input_json } => ChatActivityEvent { kind: "tool".into(), id, name, input_json, ..base },
+            StreamActivity::ToolResult { call_id, is_error, content } => ChatActivityEvent { kind: "result".into(), id: call_id, content, is_error, ..base },
+            StreamActivity::Thinking { text } => ChatActivityEvent { kind: "thinking".into(), content: text, ..base },
             // Plan-window telemetry: feeds the staggered throttles, not the UI.
             StreamActivity::RateLimit { window } => {
                 crate::guards::record_plan_window(self.state, self.provider, window);
@@ -225,13 +159,7 @@ impl TurnHost for DesktopHost<'_> {
             Phase::Error => "error",
         };
         self.stream_event(message_id, p, text.to_string());
-        crate::notices::turn_ended(
-            self.app,
-            self.state,
-            self.session_id,
-            message_id,
-            phase == Phase::Error,
-        );
+        crate::notices::turn_ended(self.app, self.state, self.session_id, message_id, phase == Phase::Error);
     }
 
     fn locked_down(&self) {
@@ -239,12 +167,7 @@ impl TurnHost for DesktopHost<'_> {
     }
 
     fn tools_selected(&self, per_server: &[(String, u32, u32)]) {
-        crate::guards::record_tools_selected(
-            self.state,
-            self.workspace_id,
-            self.session_id,
-            per_server,
-        );
+        crate::guards::record_tools_selected(self.state, self.workspace_id, self.session_id, per_server);
     }
 
     fn progress(&self, progress: &ligus_runtime::patch_leaving::ProgressTracker) {
@@ -252,12 +175,7 @@ impl TurnHost for DesktopHost<'_> {
     }
 
     fn egress_denials(&self, denied: &[ligus_runtime::egress::HostPort]) {
-        crate::guards::record_sandbox_egress_denials(
-            self.state,
-            self.workspace_id,
-            self.session_id,
-            denied,
-        );
+        crate::guards::record_sandbox_egress_denials(self.state, self.workspace_id, self.session_id, denied);
     }
 
     fn agent_used(&self, agent: &str, use_: &ligus_runtime::agent_access::AgentUse) {
@@ -268,9 +186,7 @@ impl TurnHost for DesktopHost<'_> {
         }
         let who = {
             let svc = self.state.service.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(s) = svc.load_resolving(self.session_id).ok().flatten() else {
-                return;
-            };
+            let Some(s) = svc.load_resolving(self.session_id).ok().flatten() else { return };
             // Only on the owner's own device (an agent sent to another
             // member's machine as its host doesn't notify that member).
             let links = svc.device_links(self.workspace_id).unwrap_or_default();
@@ -282,25 +198,10 @@ impl TurnHost for DesktopHost<'_> {
             if !mine {
                 return;
             }
-            s.members
-                .into_iter()
-                .find(|m| links.person(&m.id) == use_.requester)
-                .map(|m| m.actor.display_name)
-                .unwrap_or_else(|| "Someone".into())
+            s.members.into_iter().find(|m| links.person(&m.id) == use_.requester).map(|m| m.actor.display_name).unwrap_or_else(|| "Someone".into())
         };
-        let line = format!(
-            "{} is using {}",
-            ligus_runtime::display::shown(&who),
-            ligus_runtime::display::shown(agent)
-        );
-        crate::notices::post(
-            self.app,
-            crate::notices::Notice::new(
-                crate::notices::NoticeKind::Used,
-                Some(self.session_id),
-                line,
-            ),
-        );
+        let line = format!("{} is using {}", ligus_runtime::display::shown(&who), ligus_runtime::display::shown(agent));
+        crate::notices::post(self.app, crate::notices::Notice::new(crate::notices::NoticeKind::Used, Some(self.session_id), line));
     }
 
     fn usage_error(&self, provider: ModelProviderKind, message: &str) {

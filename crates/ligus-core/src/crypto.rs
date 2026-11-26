@@ -82,13 +82,10 @@ impl SigningKeypair {
 /// Verify a detached signature against a raw public key.
 pub fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(), CryptoError> {
     let key_bytes: [u8; KEY_LEN] = public_key.try_into().map_err(|_| CryptoError::BadKey)?;
-    let sig_bytes: [u8; SIG_LEN] = signature
-        .try_into()
-        .map_err(|_| CryptoError::BadSignature)?;
+    let sig_bytes: [u8; SIG_LEN] = signature.try_into().map_err(|_| CryptoError::BadSignature)?;
     let key = VerifyingKey::from_bytes(&key_bytes).map_err(|_| CryptoError::BadKey)?;
     let sig = Signature::from_bytes(&sig_bytes);
-    key.verify(message, &sig)
-        .map_err(|_| CryptoError::VerifyFailed)
+    key.verify(message, &sig).map_err(|_| CryptoError::VerifyFailed)
 }
 
 // ---------------------------------------------------------------------------
@@ -188,10 +185,7 @@ fn received_matches_typed(env: &SessionEventEnvelope) -> bool {
     fn same<T: Serialize>(raw: Option<&str>, typed: &T) -> bool {
         match raw {
             None => true,
-            Some(r) => match (
-                serde_json::from_str::<serde_json::Value>(r),
-                serde_json::to_value(typed),
-            ) {
+            Some(r) => match (serde_json::from_str::<serde_json::Value>(r), serde_json::to_value(typed)) {
                 (Ok(a), Ok(b)) => a == b,
                 _ => false,
             },
@@ -218,23 +212,16 @@ pub fn sign_envelope(env: &mut SessionEventEnvelope, device_id: Uuid, keypair: &
 /// keys) but mean exactly the typed value, the typed preimage is accepted.
 /// Bytes that carry anything the typed value drops never take the fallback,
 /// so nothing unsigned can ride along.
-pub fn verify_envelope(
-    env: &SessionEventEnvelope,
-    device_public_key: &[u8],
-) -> Result<(), CryptoError> {
+pub fn verify_envelope(env: &SessionEventEnvelope, device_public_key: &[u8]) -> Result<(), CryptoError> {
     let signature = env.signature.as_ref().ok_or(CryptoError::Unsigned)?;
     // The stamp names the signer's algorithm (inside the preimage); absent =
     // Ed25519. A P-256 key never verifies an Ed25519 signature or vice versa
     // (the key lengths differ).
-    let check: fn(&[u8], &[u8], &[u8]) -> Result<(), CryptoError> = match env
-        .actor_stamp
-        .as_ref()
-        .map(|s| s.sig_alg)
-        .unwrap_or_default()
-    {
-        SigAlg::Ed25519 => verify,
-        SigAlg::P256 => verify_p256,
-    };
+    let check: fn(&[u8], &[u8], &[u8]) -> Result<(), CryptoError> =
+        match env.actor_stamp.as_ref().map(|s| s.sig_alg).unwrap_or_default() {
+            SigAlg::Ed25519 => verify,
+            SigAlg::P256 => verify_p256,
+        };
     match check(device_public_key, &envelope_preimage(env), signature) {
         Ok(()) => Ok(()),
         Err(e) if env.raw().is_none() => Err(e),
@@ -250,11 +237,7 @@ pub fn verify_envelope(
 
 /// Sign an envelope with a phone's P-256 key: tags the stamp `sigAlg:
 /// p256` (inside the preimage) first. The envelope needs an actor stamp.
-pub fn sign_envelope_p256(
-    env: &mut SessionEventEnvelope,
-    device_id: Uuid,
-    key: &p256::ecdsa::SigningKey,
-) {
+pub fn sign_envelope_p256(env: &mut SessionEventEnvelope, device_id: Uuid, key: &p256::ecdsa::SigningKey) {
     if let Some(s) = env.actor_stamp.as_mut() {
         s.sig_alg = SigAlg::P256;
     }
@@ -364,18 +347,15 @@ pub fn verify_p256(public_key: &[u8], message: &[u8], signature: &[u8]) -> Resul
     if public_key.len() != 65 || public_key[0] != 0x04 {
         return Err(CryptoError::BadKey);
     }
-    let key =
-        p256::ecdsa::VerifyingKey::from_sec1_bytes(public_key).map_err(|_| CryptoError::BadKey)?;
+    let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(public_key).map_err(|_| CryptoError::BadKey)?;
     if signature.len() != 64 {
         return Err(CryptoError::BadSignature);
     }
-    let sig =
-        p256::ecdsa::Signature::from_slice(signature).map_err(|_| CryptoError::BadSignature)?;
+    let sig = p256::ecdsa::Signature::from_slice(signature).map_err(|_| CryptoError::BadSignature)?;
     if sig.normalize_s() != sig {
         return Err(CryptoError::BadSignature);
     }
-    key.verify(message, &sig)
-        .map_err(|_| CryptoError::VerifyFailed)
+    key.verify(message, &sig).map_err(|_| CryptoError::VerifyFailed)
 }
 
 /// Sign with a P-256 key the way a phone must: ECDSA-SHA256, low S, 64-byte
@@ -474,12 +454,7 @@ impl DeviceCertificate {
     pub fn phone_consent_ok(&self, workspace_id: Uuid) -> bool {
         self.alg == SigAlg::P256
             && self.phone_consent.as_ref().is_some_and(|sig| {
-                verify_p256(
-                    &self.device_public_key,
-                    &phone_consent_preimage(workspace_id, self.account_id, self.device_id),
-                    sig,
-                )
-                .is_ok()
+                verify_p256(&self.device_public_key, &phone_consent_preimage(workspace_id, self.account_id, self.device_id), sig).is_ok()
             })
     }
 
@@ -489,13 +464,7 @@ impl DeviceCertificate {
         account_id: Uuid,
         issued_at: Timestamp,
     ) -> Vec<u8> {
-        Self::preimage_alg(
-            device_id,
-            device_public_key,
-            account_id,
-            issued_at,
-            SigAlg::Ed25519,
-        )
+        Self::preimage_alg(device_id, device_public_key, account_id, issued_at, SigAlg::Ed25519)
     }
 
     fn preimage_alg(
@@ -527,19 +496,8 @@ impl DeviceCertificate {
     /// Issue a certificate for a phone's P-256 (Secure Enclave) key, signed
     /// by the account keypair. The device id is the one the key derives
     /// ([`device_id_for`]).
-    pub fn issue_p256(
-        account_keypair: &SigningKeypair,
-        account_id: Uuid,
-        device_public_key: &[u8],
-        issued_at: Timestamp,
-    ) -> Self {
-        Self::issue_p256_for_id(
-            account_keypair,
-            account_id,
-            device_id_for(SigAlg::P256, device_public_key),
-            device_public_key,
-            issued_at,
-        )
+    pub fn issue_p256(account_keypair: &SigningKeypair, account_id: Uuid, device_public_key: &[u8], issued_at: Timestamp) -> Self {
+        Self::issue_p256_for_id(account_keypair, account_id, device_id_for(SigAlg::P256, device_public_key), device_public_key, issued_at)
     }
 
     /// [`DeviceCertificate::issue_p256`] under a chosen device id: a
@@ -553,41 +511,16 @@ impl DeviceCertificate {
         device_public_key: &[u8],
         issued_at: Timestamp,
     ) -> Self {
-        let preimage = Self::preimage_alg(
-            device_id,
-            device_public_key,
-            account_id,
-            issued_at,
-            SigAlg::P256,
-        );
+        let preimage = Self::preimage_alg(device_id, device_public_key, account_id, issued_at, SigAlg::P256);
         let signature = account_keypair.sign(&preimage).to_vec();
-        Self {
-            device_id,
-            device_public_key: device_public_key.to_vec(),
-            account_id,
-            issued_at,
-            signature,
-            alg: SigAlg::P256,
-            phone_consent: None,
-        }
+        Self { device_id, device_public_key: device_public_key.to_vec(), account_id, issued_at, signature, alg: SigAlg::P256, phone_consent: None }
     }
 
     /// Issue a certificate for an Ed25519 `device_public_key`, signed by the
     /// account keypair. The device id is the one the key derives
     /// ([`device_id_for`]).
-    pub fn issue(
-        account_keypair: &SigningKeypair,
-        account_id: Uuid,
-        device_public_key: &[u8],
-        issued_at: Timestamp,
-    ) -> Self {
-        Self::issue_for_id(
-            account_keypair,
-            account_id,
-            device_id_for(SigAlg::Ed25519, device_public_key),
-            device_public_key,
-            issued_at,
-        )
+    pub fn issue(account_keypair: &SigningKeypair, account_id: Uuid, device_public_key: &[u8], issued_at: Timestamp) -> Self {
+        Self::issue_for_id(account_keypair, account_id, device_id_for(SigAlg::Ed25519, device_public_key), device_public_key, issued_at)
     }
 
     /// [`DeviceCertificate::issue`] under a chosen device id: a certificate
@@ -640,13 +573,8 @@ impl DeviceCertificate {
         if self.alg == SigAlg::Ed25519 && self.device_public_key.len() != 32 {
             return Err(CryptoError::BadKey);
         }
-        let preimage = Self::preimage_alg(
-            self.device_id,
-            &self.device_public_key,
-            self.account_id,
-            self.issued_at,
-            self.alg,
-        );
+        let preimage =
+            Self::preimage_alg(self.device_id, &self.device_public_key, self.account_id, self.issued_at, self.alg);
         verify(account_public_key, &preimage, &self.signature)
     }
 }
@@ -668,13 +596,7 @@ pub struct AgentKeyCertificate {
 }
 
 impl AgentKeyCertificate {
-    fn preimage(
-        agent_id: Uuid,
-        key_id: Uuid,
-        pk: &[u8],
-        host: Uuid,
-        issued_at: Timestamp,
-    ) -> Vec<u8> {
+    fn preimage(agent_id: Uuid, key_id: Uuid, pk: &[u8], host: Uuid, issued_at: Timestamp) -> Vec<u8> {
         let mut out = Vec::with_capacity(128);
         // Phase 0 domain tag (section 0.1).
         out.extend_from_slice(b"ligus-agent-cert-v1\0");
@@ -694,47 +616,18 @@ impl AgentKeyCertificate {
     }
 
     /// Certify `agent_key` for `agent_id`, signed by the host device's key.
-    pub fn issue(
-        host: &SigningKeypair,
-        host_device_id: Uuid,
-        agent_id: Uuid,
-        agent_key: &[u8],
-        issued_at: Timestamp,
-    ) -> Self {
+    pub fn issue(host: &SigningKeypair, host_device_id: Uuid, agent_id: Uuid, agent_key: &[u8], issued_at: Timestamp) -> Self {
         let key_id = Self::key_id_for(agent_id, agent_key);
-        let signature = host
-            .sign(&Self::preimage(
-                agent_id,
-                key_id,
-                agent_key,
-                host_device_id,
-                issued_at,
-            ))
-            .to_vec();
-        Self {
-            agent_id,
-            key_id,
-            signing_public_key: agent_key.to_vec(),
-            host_device_id,
-            issued_at,
-            signature,
-        }
+        let signature = host.sign(&Self::preimage(agent_id, key_id, agent_key, host_device_id, issued_at)).to_vec();
+        Self { agent_id, key_id, signing_public_key: agent_key.to_vec(), host_device_id, issued_at, signature }
     }
 
     /// Verify against the host device's public key.
     pub fn verify(&self, host_public_key: &[u8]) -> Result<(), CryptoError> {
-        if self.signing_public_key.len() != KEY_LEN
-            || self.key_id != Self::key_id_for(self.agent_id, &self.signing_public_key)
-        {
+        if self.signing_public_key.len() != KEY_LEN || self.key_id != Self::key_id_for(self.agent_id, &self.signing_public_key) {
             return Err(CryptoError::BadKey);
         }
-        let pre = Self::preimage(
-            self.agent_id,
-            self.key_id,
-            &self.signing_public_key,
-            self.host_device_id,
-            self.issued_at,
-        );
+        let pre = Self::preimage(self.agent_id, self.key_id, &self.signing_public_key, self.host_device_id, self.issued_at);
         verify(host_public_key, &pre, &self.signature)
     }
 }
@@ -790,8 +683,7 @@ mod tests {
         let env = envelope_preimage(&sample_envelope());
         assert_eq!(hex(&env[..17]), "686976652d656e76656c6f70652d763300");
         // b"hive-device-cert-v1\0"
-        let ts: Timestamp =
-            serde_json::from_value(serde_json::json!("2026-01-01T00:00:00Z")).unwrap();
+        let ts: Timestamp = serde_json::from_value(serde_json::json!("2026-01-01T00:00:00Z")).unwrap();
         let cert = DeviceCertificate::preimage(Uuid::nil(), &[9u8; 32], Uuid::nil(), ts);
         assert_eq!(hex(&cert[..20]), "686976652d6465766963652d636572742d763100");
         // Known-answer: a fixed seed signing the fixed cert preimage.
@@ -841,19 +733,9 @@ mod tests {
         // v2 preimage: forging the claimed author (actor_stamp) breaks it too.
         let mut spoofed = env.clone();
         spoofed.actor_stamp = Some(crate::identity::ActorStamp {
-            actor: crate::identity::ActorIdentity::new(
-                "mallory",
-                "Mallory",
-                crate::identity::ActorKind::Human,
-            ),
-            recorded_at: crate::time_util::Timestamp::epoch(),
-            cfg_frontier: None,
-            presence: None,
-            runtime_effect: false,
-            prev: None,
-            sig_alg: Default::default(),
-            log_head: None,
-        });
+            actor: crate::identity::ActorIdentity::new("mallory", "Mallory", crate::identity::ActorKind::Human),
+            recorded_at: crate::time_util::Timestamp::epoch(), cfg_frontier: None,
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         assert!(verify_envelope(&spoofed, &kp.public_key_bytes()).is_err());
 
         // wrong key -> fails
@@ -876,16 +758,8 @@ mod tests {
         let account_id = Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
 
-        let cert = DeviceCertificate::issue(
-            &account,
-            account_id,
-            &device.public_key_bytes(),
-            Timestamp::epoch(),
-        );
-        assert_eq!(
-            cert.device_id,
-            device_id_for(SigAlg::Ed25519, &device.public_key_bytes())
-        );
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
+        assert_eq!(cert.device_id, device_id_for(SigAlg::Ed25519, &device.public_key_bytes()));
         assert!(cert.verify(&account.public_key_bytes()).is_ok());
 
         // a different account key cannot have issued it

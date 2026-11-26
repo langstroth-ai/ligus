@@ -24,8 +24,7 @@ use crate::secret_store::{SecretId, SecretStore};
 pub const SCHEMA_VERSION: i64 = 1;
 
 /// What a build says when its database was written by a newer one.
-pub const NEWER_DATA_MESSAGE: &str =
-    "this data was written by a newer Ligus; update or use another data dir";
+pub const NEWER_DATA_MESSAGE: &str = "this data was written by a newer Ligus; update or use another data dir";
 
 /// How long a person invite's seed stays after this build first put it in
 /// the secret store, when nothing on the log closes the invite (only its
@@ -41,20 +40,13 @@ pub(super) const SYNC_BACKUP_MARK: &str = ".bak-sync-v2-";
 /// holds the redeem key seeds the database held when it was taken. Nothing
 /// deletes one by itself; `ligus doctor` lists them.
 pub fn seed_backups(db: &Path) -> Vec<PathBuf> {
-    let (Some(dir), Some(name)) = (db.parent(), db.file_name().and_then(|n| n.to_str())) else {
-        return Vec::new();
-    };
+    let (Some(dir), Some(name)) = (db.parent(), db.file_name().and_then(|n| n.to_str())) else { return Vec::new() };
     let prefix = format!("{name}.bak-");
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut out: Vec<PathBuf> = entries
         .flatten()
         .filter(|e| {
-            e.file_name().to_str().is_some_and(|f| {
-                f.starts_with(&prefix)
-                    && !["-wal", "-shm", "-journal"].iter().any(|s| f.ends_with(s))
-            })
+            e.file_name().to_str().is_some_and(|f| f.starts_with(&prefix) && !["-wal", "-shm", "-journal"].iter().any(|s| f.ends_with(s)))
         })
         .map(|e| e.path())
         .collect();
@@ -121,10 +113,7 @@ pub(super) fn user_version(conn: &Connection) -> rusqlite::Result<i64> {
 }
 
 pub(super) fn now_ms() -> i64 {
-    (std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()) as i64
+    (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()) as i64
 }
 
 // ---------------------------------------------------------------------------
@@ -143,10 +132,7 @@ impl SyncKey {
     /// The key for `workspace_id` on the relay at `relay_url` (any form of
     /// its URL: see [`relay_origin`]).
     pub fn new(relay_url: &str, workspace_id: Uuid) -> Self {
-        Self {
-            relay_origin: relay_origin(relay_url),
-            workspace_id,
-        }
+        Self { relay_origin: relay_origin(relay_url), workspace_id }
     }
     fn ws(&self) -> String {
         self.workspace_id.to_string()
@@ -187,13 +173,7 @@ fn lock_path(db: &Path) -> PathBuf {
 /// timeout) for an M1 another process is running; past that the store opens
 /// without it (SQLite's own locks still keep the file consistent).
 pub(super) fn shared_lock(db: &Path) -> Option<std::fs::File> {
-    let f = match std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(lock_path(db))
-    {
+    let f = match std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(lock_path(db)) {
         Ok(f) => f,
         Err(e) => {
             tracing::warn!(target: "event_store", "can't open the store's lock file: {e}");
@@ -227,11 +207,7 @@ pub enum SyncMigration {
     /// Migrated: the rooms whose state was copied (exactly one connection
     /// names each) and the rooms that start again from 0, with the backup
     /// taken first (none when the old tables were empty).
-    Migrated {
-        copied: Vec<String>,
-        reset: Vec<String>,
-        backup: Option<PathBuf>,
-    },
+    Migrated { copied: Vec<String>, reset: Vec<String>, backup: Option<PathBuf> },
     /// Another process has the store open: M1 waits for a start that has it
     /// alone. Sync state starts from 0 meanwhile, which is safe.
     Busy,
@@ -261,33 +237,15 @@ pub(super) fn stamp_if_nothing_to_migrate(conn: &Connection) -> rusqlite::Result
 /// A copy of the whole database next to it before M1 (`VACUUM INTO`); none
 /// in memory. One that fails part way is removed again.
 fn sync_backup(conn: &Connection) -> Result<Option<PathBuf>> {
-    let Some(db) = db_path(conn) else {
-        return Ok(None);
-    };
+    let Some(db) = db_path(conn) else { return Ok(None) };
     super::check_upgrade_space(&db)?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let mut name = db.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    name.push(format!(
-        "{SYNC_BACKUP_MARK}{}-{:09}-{}",
-        now.as_secs(),
-        now.subsec_nanos(),
-        std::process::id()
-    ));
+    name.push(format!("{SYNC_BACKUP_MARK}{}-{:09}-{}", now.as_secs(), now.subsec_nanos(), std::process::id()));
     let path = db.with_file_name(name);
-    let copied = conn
-        .execute("VACUUM INTO ?1", [path.to_string_lossy()])
-        .map(|_| ());
+    let copied = conn.execute("VACUUM INTO ?1", [path.to_string_lossy()]).map(|_| ());
     #[cfg(test)]
-    let copied = if super::test_hooks::fails("m1-backup") {
-        Err(rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
-            None,
-        ))
-    } else {
-        copied
-    };
+    let copied = if super::test_hooks::fails("m1-backup") { Err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL), None)) } else { copied };
     if let Err(e) = copied {
         remove_backup(&path);
         return Err(e.into());
@@ -300,10 +258,7 @@ fn sync_backup(conn: &Connection) -> Result<Option<PathBuf>> {
 /// parked bodies are copied only when exactly one relay is named for it by
 /// `connections`; any other room starts from 0 on every relay (fetching
 /// again is safe, and the relay's idempotency key folds a second push).
-fn copy_sync_state(
-    tx: &Connection,
-    connections: &[(String, String)],
-) -> Result<(Vec<String>, Vec<String>)> {
+fn copy_sync_state(tx: &Connection, connections: &[(String, String)]) -> Result<(Vec<String>, Vec<String>)> {
     let (mut copied, mut reset) = (Vec::new(), Vec::new());
     for room in legacy_rooms(tx)? {
         let relays: BTreeSet<String> = connections
@@ -328,21 +283,14 @@ fn copy_sync_state(
         )?;
         #[cfg(test)]
         if super::test_hooks::fails("m1") {
-            return Err(rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
-                None,
-            )
-            .into());
+            return Err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL), None).into());
         }
         tx.execute(
             "INSERT OR IGNORE INTO parked_bodies_v2 (relay_origin, workspace_id, seq, body, priority) \
              SELECT ?1, ?2, seq, body, priority FROM parked_bodies WHERE workspace = ?3",
             rusqlite::params![origin, ws, room],
         )?;
-        tx.execute(
-            "INSERT OR IGNORE INTO sync_v2_rooms (room) VALUES (?1)",
-            [&room],
-        )?;
+        tx.execute("INSERT OR IGNORE INTO sync_v2_rooms (room) VALUES (?1)", [&room])?;
         copied.push(room);
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -384,13 +332,7 @@ impl EventStore {
         let lock = match (&self.lock, &db) {
             (Some(l), _) => Some(l),
             (None, Some(db)) => {
-                fresh = std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create(true)
-                    .truncate(false)
-                    .open(lock_path(db))
-                    .ok();
+                fresh = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(lock_path(db)).ok();
                 fresh.as_ref()
             }
             (None, None) => None,
@@ -414,21 +356,12 @@ impl EventStore {
         result
     }
 
-    fn migrate_sync_tables_locked(
-        &self,
-        connections: &[(String, String)],
-    ) -> Result<SyncMigration> {
-        let _upgrade = super::upgrade_lock()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+    fn migrate_sync_tables_locked(&self, connections: &[(String, String)]) -> Result<SyncMigration> {
+        let _upgrade = super::upgrade_lock().lock().unwrap_or_else(|p| p.into_inner());
         if user_version(&self.conn)? >= SCHEMA_VERSION {
             return Ok(SyncMigration::AlreadyDone);
         }
-        let backup = if legacy_rooms(&self.conn)?.is_empty() {
-            None
-        } else {
-            sync_backup(&self.conn)?
-        };
+        let backup = if legacy_rooms(&self.conn)?.is_empty() { None } else { sync_backup(&self.conn)? };
         let run = || -> Result<(Vec<String>, Vec<String>)> {
             let tx = write_tx(&self.conn)?;
             let out = copy_sync_state(&tx, connections)?;
@@ -438,11 +371,7 @@ impl EventStore {
         match run() {
             Ok((copied, reset)) => {
                 tracing::info!(target: "event_store", copied = copied.len(), reset = reset.len(), "sync state is now kept per relay and workspace");
-                Ok(SyncMigration::Migrated {
-                    copied,
-                    reset,
-                    backup,
-                })
+                Ok(SyncMigration::Migrated { copied, reset, backup })
             }
             Err(e) => {
                 if let Some(path) = &backup {
@@ -493,9 +422,7 @@ impl EventStore {
     /// sync engine's in-memory dedup cache.
     pub fn pushed_ids(&self, key: &SyncKey) -> Result<Vec<Uuid>> {
         let mut stmt = self.conn.prepare("SELECT event_id FROM pushed_v2 WHERE relay_origin = ?1 AND workspace_id = ?2 ORDER BY event_id")?;
-        let rows = stmt.query_map(rusqlite::params![key.relay_origin, key.ws()], |row| {
-            row.get::<_, String>(0)
-        })?;
+        let rows = stmt.query_map(rusqlite::params![key.relay_origin, key.ws()], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
         for s in rows {
             if let Ok(id) = Uuid::parse_str(&s?) {
@@ -517,11 +444,7 @@ impl EventStore {
     /// per relay and workspace: past that the lowest priority goes first,
     /// oldest first within a priority (B-11: a flood of junk can't evict a
     /// body waiting for an authorized rotation).
-    pub fn park_bodies(
-        &self,
-        key: &SyncKey,
-        bodies: &[(u64, &serde_json::Value, u8)],
-    ) -> Result<()> {
+    pub fn park_bodies(&self, key: &SyncKey, bodies: &[(u64, &serde_json::Value, u8)]) -> Result<()> {
         if bodies.is_empty() {
             return Ok(());
         }
@@ -592,22 +515,13 @@ impl EventStore {
 
     /// Forget an old-table parked body ([`EventStore::legacy_parked_bodies`]).
     pub fn legacy_unpark(&self, room: &str, seq: u64) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM parked_bodies WHERE workspace = ?1 AND seq = ?2",
-            rusqlite::params![room, seq as i64],
-        )?;
+        self.conn.execute("DELETE FROM parked_bodies WHERE workspace = ?1 AND seq = ?2", rusqlite::params![room, seq as i64])?;
         Ok(())
     }
 
-    fn parked_rows(
-        &self,
-        sql: &str,
-        params: impl rusqlite::Params,
-    ) -> Result<Vec<(u64, serde_json::Value)>> {
+    fn parked_rows(&self, sql: &str, params: impl rusqlite::Params) -> Result<Vec<(u64, serde_json::Value)>> {
         let mut stmt = self.conn.prepare(sql)?;
-        let rows = stmt.query_map(params, |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-        })?;
+        let rows = stmt.query_map(params, |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
         let mut out = Vec::new();
         for row in rows {
             let (seq, body) = row?;
@@ -647,8 +561,7 @@ fn seed32(bytes: &[u8]) -> Option<[u8; 32]> {
 type SeedRow = (SecretId, Uuid, Option<Uuid>, [u8; 32]);
 
 fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
-    conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?
-        .exists([name])
+    conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?.exists([name])
 }
 
 /// Every seed still in the old tables.
@@ -659,31 +572,17 @@ fn seed_rows(conn: &Connection) -> rusqlite::Result<Vec<SeedRow>> {
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         for row in rows {
             let (ws, hex) = row?;
-            if let (Ok(ws), Some(seed)) = (
-                Uuid::parse_str(&ws),
-                crate::box_admission::seed_from_hex(&hex),
-            ) {
+            if let (Ok(ws), Some(seed)) = (Uuid::parse_str(&ws), crate::box_admission::seed_from_hex(&hex)) {
                 out.push((redeem_secret(ws), ws, None, seed));
             }
         }
     }
     if table_exists(conn, "issued_invite_keys")? {
-        let mut stmt =
-            conn.prepare("SELECT workspace_id, invite_id, seed FROM issued_invite_keys")?;
-        let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        })?;
+        let mut stmt = conn.prepare("SELECT workspace_id, invite_id, seed FROM issued_invite_keys")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
         for row in rows {
             let (ws, inv, hex) = row?;
-            if let (Ok(ws), Ok(inv), Some(seed)) = (
-                Uuid::parse_str(&ws),
-                Uuid::parse_str(&inv),
-                crate::box_admission::seed_from_hex(&hex),
-            ) {
+            if let (Ok(ws), Ok(inv), Some(seed)) = (Uuid::parse_str(&ws), Uuid::parse_str(&inv), crate::box_admission::seed_from_hex(&hex)) {
                 out.push((invite_secret(ws, inv), ws, Some(inv), seed));
             }
         }
@@ -693,15 +592,7 @@ fn seed_rows(conn: &Connection) -> rusqlite::Result<Vec<SeedRow>> {
 
 /// Put `seed` in the store under `id` and read it back. With `fresh`, a
 /// seed this device didn't hold before: its keep-time starts now.
-fn put_and_check(
-    conn: &Connection,
-    store: &dyn SecretStore,
-    id: &SecretId,
-    ws: Uuid,
-    invite: Option<Uuid>,
-    seed: &[u8; 32],
-    now: i64,
-) -> bool {
+fn put_and_check(conn: &Connection, store: &dyn SecretStore, id: &SecretId, ws: Uuid, invite: Option<Uuid>, seed: &[u8; 32], now: i64) -> bool {
     let stored = store.get(id).ok().flatten().and_then(|v| seed32(&v));
     let fresh = stored != Some(*seed);
     if fresh {
@@ -719,15 +610,7 @@ fn put_and_check(
     } else {
         "INSERT OR IGNORE INTO seed_copies (secret, workspace_id, invite_id, first_ms) VALUES (?1, ?2, ?3, ?4)"
     };
-    let _ = conn.execute(
-        sql,
-        rusqlite::params![
-            id.account(),
-            ws.to_string(),
-            invite.map(|i| i.to_string()),
-            now
-        ],
-    );
+    let _ = conn.execute(sql, rusqlite::params![id.account(), ws.to_string(), invite.map(|i| i.to_string()), now]);
     true
 }
 
@@ -742,34 +625,25 @@ pub(super) fn copy_seeds(conn: &Connection, store: &dyn SecretStore, now: i64) -
         return Ok(0);
     }
     init_seed_copies(conn)?;
-    Ok(rows
-        .iter()
-        .filter(|(id, ws, inv, seed)| put_and_check(conn, store, id, *ws, *inv, seed, now))
-        .count())
+    Ok(rows.iter().filter(|(id, ws, inv, seed)| put_and_check(conn, store, id, *ws, *inv, seed, now)).count())
 }
 
 /// The data dirs whose seeds this process moved already (M2 runs once per
 /// start, on the first open).
 fn seeds_moved() -> &'static Mutex<std::collections::HashSet<PathBuf>> {
-    static S: std::sync::OnceLock<Mutex<std::collections::HashSet<PathBuf>>> =
-        std::sync::OnceLock::new();
+    static S: std::sync::OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = std::sync::OnceLock::new();
     S.get_or_init(Default::default)
 }
 
 /// Whether this is this process's first open of `db` (M2's turn).
 pub(super) fn first_open(db: &Path) -> bool {
-    seeds_moved()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .insert(db.to_path_buf())
+    seeds_moved().lock().unwrap_or_else(|p| p.into_inner()).insert(db.to_path_buf())
 }
 
 /// Run `f` with `PRAGMA secure_delete` on: content it deletes or overwrites
 /// is zeroed in the file, not left in free space.
 fn securely<T>(conn: &Connection, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let was: i64 = conn
-        .pragma_query_value(None, "secure_delete", |r| r.get(0))
-        .unwrap_or(0);
+    let was: i64 = conn.pragma_query_value(None, "secure_delete", |r| r.get(0)).unwrap_or(0);
     conn.pragma_update(None, "secure_delete", 1)?;
     let out = f();
     let _ = conn.pragma_update(None, "secure_delete", was);
@@ -805,9 +679,7 @@ impl EventStore {
     /// first copied [`PERSON_SEED_KEEP_MS`] ago. A row whose copy failed is
     /// never deleted. Returns (seeds in the store, rows deleted).
     pub fn move_seeds_at(&self, now: i64) -> Result<(usize, usize)> {
-        let Some(store) = self.secrets.clone() else {
-            return Ok((0, 0));
-        };
+        let Some(store) = self.secrets.clone() else { return Ok((0, 0)) };
         if self.newer.is_some() {
             return Ok((0, 0));
         }
@@ -822,17 +694,9 @@ impl EventStore {
     /// Whether the invite or admission a seed proves is done with: used,
     /// closed or expired on `ws`'s config log, or (a person invite, or one
     /// this device can't see on the log) first copied long enough ago.
-    fn seed_closed(
-        &self,
-        ws: Uuid,
-        invite: Option<Uuid>,
-        first_ms: Option<i64>,
-        now: i64,
-    ) -> Result<bool> {
+    fn seed_closed(&self, ws: Uuid, invite: Option<Uuid>, first_ms: Option<i64>, now: i64) -> Result<bool> {
         if let Some(inv) = invite {
-            let founder = self
-                .workspace_pin(ws)?
-                .map(|p| p.founder_account.to_string());
+            let founder = self.workspace_pin(ws)?.map(|p| p.founder_account.to_string());
             if let (Some(config), _) = self.load_config(ws, founder.as_deref(), None)? {
                 let g = &config.guards;
                 if g.used_invites.contains(&inv) || g.closed_admissions.contains_key(&inv) {
@@ -850,14 +714,7 @@ impl EventStore {
         if !table_exists(&self.conn, "seed_copies")? {
             return Ok(None);
         }
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT first_ms FROM seed_copies WHERE secret = ?1",
-                [id.account()],
-                |r| r.get(0),
-            )
-            .optional()?)
+        Ok(self.conn.query_row("SELECT first_ms FROM seed_copies WHERE secret = ?1", [id.account()], |r| r.get(0)).optional()?)
     }
 
     /// M2, the deletions: rows whose copy reads back and whose invite is
@@ -882,35 +739,16 @@ impl EventStore {
         // their invite is closed too.
         let mut orphans: Vec<(String, Uuid, Option<Uuid>, i64)> = Vec::new();
         if table_exists(&self.conn, "seed_copies")? {
-            let live: BTreeSet<String> = seed_rows(&self.conn)?
-                .iter()
-                .map(|(id, ..)| id.account())
-                .collect();
-            let mut stmt = self
-                .conn
-                .prepare("SELECT secret, workspace_id, invite_id, first_ms FROM seed_copies")?;
-            let rows = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                    r.get::<_, i64>(3)?,
-                ))
-            })?;
+            let live: BTreeSet<String> = seed_rows(&self.conn)?.iter().map(|(id, ..)| id.account()).collect();
+            let mut stmt = self.conn.prepare("SELECT secret, workspace_id, invite_id, first_ms FROM seed_copies")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, i64>(3)?)))?;
             for row in rows {
                 let (secret, ws, inv, first) = row?;
                 if live.contains(&secret) {
                     continue;
                 }
-                let Ok(ws) = Uuid::parse_str(&ws) else {
-                    continue;
-                };
-                orphans.push((
-                    secret,
-                    ws,
-                    inv.and_then(|i| Uuid::parse_str(&i).ok()),
-                    first,
-                ));
+                let Ok(ws) = Uuid::parse_str(&ws) else { continue };
+                orphans.push((secret, ws, inv.and_then(|i| Uuid::parse_str(&i).ok()), first));
             }
         }
         let mut gone_copies: Vec<SecretId> = Vec::new();
@@ -953,12 +791,9 @@ impl EventStore {
         for id in doomed.iter().map(|(id, ..)| id).chain(&gone_copies) {
             match store.delete(id) {
                 Ok(()) => {
-                    self.conn
-                        .execute("DELETE FROM seed_copies WHERE secret = ?1", [id.account()])?;
+                    self.conn.execute("DELETE FROM seed_copies WHERE secret = ?1", [id.account()])?;
                 }
-                Err(e) => {
-                    tracing::warn!(target: "event_store", secret = %id.account(), "couldn't delete a used redeem key seed from the secret store: {e}")
-                }
+                Err(e) => tracing::warn!(target: "event_store", secret = %id.account(), "couldn't delete a used redeem key seed from the secret store: {e}"),
             }
         }
         let n = doomed.len() + gone_copies.len();
@@ -971,26 +806,15 @@ impl EventStore {
     /// Copy a seed to the secret store and read it back; whether it is
     /// there.
     fn store_seed(&self, id: &SecretId, ws: Uuid, invite: Option<Uuid>, seed: &[u8; 32]) -> bool {
-        let Some(store) = &self.secrets else {
-            return false;
-        };
-        init_seed_copies(&self.conn).is_ok()
-            && put_and_check(&self.conn, store.as_ref(), id, ws, invite, seed, now_ms())
+        let Some(store) = &self.secrets else { return false };
+        init_seed_copies(&self.conn).is_ok() && put_and_check(&self.conn, store.as_ref(), id, ws, invite, seed, now_ms())
     }
 
     /// A seed: the store's copy, unless its table row says otherwise (a 0.3
     /// process on this data dir writes only the table, so a row that
     /// differs is newer and overwrites the copy); else the row.
-    fn read_seed(
-        &self,
-        id: &SecretId,
-        ws: Uuid,
-        invite: Option<Uuid>,
-        row: Option<[u8; 32]>,
-    ) -> Option<[u8; 32]> {
-        let Some(store) = &self.secrets else {
-            return row;
-        };
+    fn read_seed(&self, id: &SecretId, ws: Uuid, invite: Option<Uuid>, row: Option<[u8; 32]>) -> Option<[u8; 32]> {
+        let Some(store) = &self.secrets else { return row };
         let stored = store.get(id).ok().flatten().and_then(|v| seed32(&v));
         match (stored, row) {
             (Some(s), None) => Some(s),
@@ -1005,12 +829,7 @@ impl EventStore {
 
     /// Forget a seed in both places: the row with secure delete, then the
     /// store copy.
-    fn forget_seed(
-        &self,
-        id: &SecretId,
-        delete_row: &str,
-        params: &[&dyn rusqlite::ToSql],
-    ) -> Result<()> {
+    fn forget_seed(&self, id: &SecretId, delete_row: &str, params: &[&dyn rusqlite::ToSql]) -> Result<()> {
         securely(&self.conn, || {
             self.conn.execute(delete_row, params)?;
             Ok(())
@@ -1021,13 +840,10 @@ impl EventStore {
                 // (One the store won't delete stays listed: tried again on
                 // the next start.)
                 Ok(()) if table_exists(&self.conn, "seed_copies")? => {
-                    self.conn
-                        .execute("DELETE FROM seed_copies WHERE secret = ?1", [id.account()])?;
+                    self.conn.execute("DELETE FROM seed_copies WHERE secret = ?1", [id.account()])?;
                 }
                 Ok(()) => {}
-                Err(e) => {
-                    tracing::warn!(target: "event_store", secret = %id.account(), "couldn't delete a redeem key seed from the secret store: {e}")
-                }
+                Err(e) => tracing::warn!(target: "event_store", secret = %id.account(), "couldn't delete a redeem key seed from the secret store: {e}"),
             }
         }
         Ok(())
@@ -1038,17 +854,10 @@ impl EventStore {
     /// 10.3: a seed this build writes never reaches SQLite), or in its table
     /// when there is no secret store or it didn't keep the seed.
     pub fn set_join_redeem_key(&self, workspace_id: Uuid, seed: &[u8; 32]) -> Result<()> {
-        if self.newer.is_none()
-            && self.store_seed(&redeem_secret(workspace_id), workspace_id, None, seed)
-        {
+        if self.newer.is_none() && self.store_seed(&redeem_secret(workspace_id), workspace_id, None, seed) {
             // A stale row from before would shadow it: gone, securely.
             let ws = workspace_id.to_string();
-            securely(&self.conn, || {
-                Ok(self.conn.execute(
-                    "DELETE FROM join_redeem_keys WHERE workspace_id = ?1",
-                    [&ws],
-                )?)
-            })?;
+            securely(&self.conn, || Ok(self.conn.execute("DELETE FROM join_redeem_keys WHERE workspace_id = ?1", [&ws])?))?;
             checkpoint(&self.conn);
             return Ok(());
         }
@@ -1078,22 +887,14 @@ impl EventStore {
     /// it admits no one else, and is kept no longer than needed.
     pub fn clear_join_redeem_key(&self, workspace_id: Uuid) -> Result<()> {
         let ws = workspace_id.to_string();
-        self.forget_seed(
-            &redeem_secret(workspace_id),
-            "DELETE FROM join_redeem_keys WHERE workspace_id = ?1",
-            &[&ws],
-        )
+        self.forget_seed(&redeem_secret(workspace_id), "DELETE FROM join_redeem_keys WHERE workspace_id = ?1", &[&ws])
     }
 
     /// The redeem key seed this device proves its admission with, if any.
     pub fn join_redeem_key(&self, workspace_id: Uuid) -> Result<Option<[u8; 32]>> {
         let row: Option<String> = self
             .conn
-            .query_row(
-                "SELECT seed FROM join_redeem_keys WHERE workspace_id = ?1",
-                [workspace_id.to_string()],
-                |r| r.get(0),
-            )
+            .query_row("SELECT seed FROM join_redeem_keys WHERE workspace_id = ?1", [workspace_id.to_string()], |r| r.get(0))
             .optional()?;
         let row = row.and_then(|h| crate::box_admission::seed_from_hex(&h));
         Ok(self.read_seed(&redeem_secret(workspace_id), workspace_id, None, row))
@@ -1102,20 +903,8 @@ impl EventStore {
     /// Keep the redeem key seed of person invite `invite_id` this device
     /// issued, for its code: in the secret store only (design 10.3), or in
     /// its table when there is no secret store or it didn't keep the seed.
-    pub fn set_issued_invite_key(
-        &self,
-        workspace_id: Uuid,
-        invite_id: Uuid,
-        seed: &[u8; 32],
-    ) -> Result<()> {
-        if self.newer.is_none()
-            && self.store_seed(
-                &invite_secret(workspace_id, invite_id),
-                workspace_id,
-                Some(invite_id),
-                seed,
-            )
-        {
+    pub fn set_issued_invite_key(&self, workspace_id: Uuid, invite_id: Uuid, seed: &[u8; 32]) -> Result<()> {
+        if self.newer.is_none() && self.store_seed(&invite_secret(workspace_id, invite_id), workspace_id, Some(invite_id), seed) {
             return Ok(());
         }
         securely(&self.conn, || {
@@ -1125,22 +914,13 @@ impl EventStore {
             )?;
             Ok(())
         })?;
-        let _ = self.store_seed(
-            &invite_secret(workspace_id, invite_id),
-            workspace_id,
-            Some(invite_id),
-            seed,
-        );
+        let _ = self.store_seed(&invite_secret(workspace_id, invite_id), workspace_id, Some(invite_id), seed);
         Ok(())
     }
 
     /// The redeem key seed of person invite `invite_id` this device issued,
     /// forgotten here: its code carries it from now on.
-    pub fn take_issued_invite_key(
-        &self,
-        workspace_id: Uuid,
-        invite_id: Uuid,
-    ) -> Result<Option<[u8; 32]>> {
+    pub fn take_issued_invite_key(&self, workspace_id: Uuid, invite_id: Uuid) -> Result<Option<[u8; 32]>> {
         let seed = self.issued_invite_key(workspace_id, invite_id)?;
         let (ws, inv) = (workspace_id.to_string(), invite_id.to_string());
         self.forget_seed(
@@ -1152,11 +932,7 @@ impl EventStore {
     }
 
     /// The redeem key seed of person invite `invite_id` this device issued.
-    pub fn issued_invite_key(
-        &self,
-        workspace_id: Uuid,
-        invite_id: Uuid,
-    ) -> Result<Option<[u8; 32]>> {
+    pub fn issued_invite_key(&self, workspace_id: Uuid, invite_id: Uuid) -> Result<Option<[u8; 32]>> {
         let row: Option<String> = self
             .conn
             .query_row(
@@ -1166,12 +942,7 @@ impl EventStore {
             )
             .optional()?;
         let row = row.and_then(|h| crate::box_admission::seed_from_hex(&h));
-        Ok(self.read_seed(
-            &invite_secret(workspace_id, invite_id),
-            workspace_id,
-            Some(invite_id),
-            row,
-        ))
+        Ok(self.read_seed(&invite_secret(workspace_id, invite_id), workspace_id, Some(invite_id), row))
     }
 }
 

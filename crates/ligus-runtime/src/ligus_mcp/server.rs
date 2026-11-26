@@ -47,17 +47,7 @@ pub struct Budgets {
 
 impl Default for Budgets {
     fn default() -> Self {
-        Self {
-            max_tool_calls: 64,
-            max_proposals: 8,
-            max_handoffs: 2,
-            max_asks: 3,
-            max_read_messages: 500,
-            max_forge_calls: 16,
-            max_memory_proposals: 4,
-            max_spend_usd: None,
-            cascade: CascadeBudgets::default(),
-        }
+        Self { max_tool_calls: 64, max_proposals: 8, max_handoffs: 2, max_asks: 3, max_read_messages: 500, max_forge_calls: 16, max_memory_proposals: 4, max_spend_usd: None, cascade: CascadeBudgets::default() }
     }
 }
 
@@ -76,12 +66,7 @@ pub struct CascadeBudgets {
 
 impl Default for CascadeBudgets {
     fn default() -> Self {
-        Self {
-            max_tool_calls: 192,
-            max_proposals: 12,
-            max_handoffs: 6,
-            max_asks: 6,
-        }
+        Self { max_tool_calls: 192, max_proposals: 12, max_handoffs: 6, max_asks: 6 }
     }
 }
 
@@ -90,12 +75,7 @@ impl CascadeBudgets {
     /// (`LIGUS_MCP_MAX_CASCADE_TOOL_CALLS`, `…_PROPOSALS`, `…_HANDOFFS`,
     /// `…_ASKS`).
     pub fn from_env() -> Self {
-        let n = |k: &str, d: u32| {
-            ligus_core::names::var(k)
-                .ok()
-                .and_then(|v| v.trim().parse().ok())
-                .unwrap_or(d)
-        };
+        let n = |k: &str, d: u32| ligus_core::names::var(k).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(d);
         let d = Self::default();
         Self {
             max_tool_calls: n("LIGUS_MCP_MAX_CASCADE_TOOL_CALLS", d.max_tool_calls),
@@ -111,12 +91,7 @@ impl Budgets {
     /// `…_PROPOSALS`, `…_HANDOFFS`, `…_ASKS`, `…_READ_MESSAGES`,
     /// `LIGUS_MCP_MAX_SPEND_USD`).
     pub fn from_env() -> Self {
-        let n = |k: &str, d: u32| {
-            ligus_core::names::var(k)
-                .ok()
-                .and_then(|v| v.trim().parse().ok())
-                .unwrap_or(d)
-        };
+        let n = |k: &str, d: u32| ligus_core::names::var(k).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(d);
         let d = Self::default();
         Self {
             max_tool_calls: n("LIGUS_MCP_MAX_TOOL_CALLS", d.max_tool_calls),
@@ -126,10 +101,7 @@ impl Budgets {
             max_read_messages: n("LIGUS_MCP_MAX_READ_MESSAGES", d.max_read_messages),
             max_forge_calls: n("LIGUS_MCP_MAX_FORGE_CALLS", d.max_forge_calls),
             max_memory_proposals: n("LIGUS_MCP_MAX_MEMORY_PROPOSALS", d.max_memory_proposals),
-            max_spend_usd: ligus_core::names::var("LIGUS_MCP_MAX_SPEND_USD")
-                .ok()
-                .and_then(|v| v.trim().parse().ok())
-                .filter(|x: &f64| *x > 0.0),
+            max_spend_usd: ligus_core::names::var("LIGUS_MCP_MAX_SPEND_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|x: &f64| *x > 0.0),
             cascade: CascadeBudgets::from_env(),
         }
     }
@@ -156,12 +128,7 @@ pub trait LigusHost: Send + Sync {
     /// offered in, until a person approves that proposal, when this host
     /// uploads it (issue #118). Only offers this host staged are ever
     /// uploaded. A host that can't keep files refuses offers.
-    fn stage_attachment(
-        &self,
-        _proposal_id: Uuid,
-        _sha256: &str,
-        _bytes: &[u8],
-    ) -> Result<(), String> {
+    fn stage_attachment(&self, _proposal_id: Uuid, _sha256: &str, _bytes: &[u8]) -> Result<(), String> {
         Err("this host can't offer files".into())
     }
 }
@@ -253,18 +220,10 @@ pub struct ToolResult {
 
 impl ToolResult {
     fn ok(v: Value) -> Self {
-        Self {
-            text: v.to_string(),
-            is_error: false,
-            outcome: Outcome::Ok,
-        }
+        Self { text: v.to_string(), is_error: false, outcome: Outcome::Ok }
     }
     fn err(outcome: Outcome, v: Value) -> Self {
-        Self {
-            text: v.to_string(),
-            is_error: true,
-            outcome,
-        }
+        Self { text: v.to_string(), is_error: true, outcome }
     }
 }
 
@@ -301,9 +260,7 @@ struct CascadeCounters {
 fn cascade_root(session: &ChatSession, turn: Uuid) -> Uuid {
     let mut cur = turn;
     for _ in 0..64 {
-        let Some(m) = session.messages.iter().find(|m| m.id == cur) else {
-            return cur;
-        };
+        let Some(m) = session.messages.iter().find(|m| m.id == cur) else { return cur };
         if m.role == ligus_core::MessageRole::User {
             return cur;
         }
@@ -339,23 +296,13 @@ fn agent_cred_id(agent: Option<Uuid>) -> Uuid {
 
 impl LigusMcp {
     pub fn new(host: Arc<dyn LigusHost>) -> Arc<Self> {
-        Arc::new(Self {
-            key: cred::host_key(),
-            turns: Mutex::new(HashMap::new()),
-            host,
-            cascades: Mutex::new(Default::default()),
-        })
+        Arc::new(Self { key: cred::host_key(), turns: Mutex::new(HashMap::new()), host, cascades: Mutex::new(Default::default()) })
     }
 
     /// Register a turn and mint its credential.
     pub fn begin_turn(self: &Arc<Self>, spec: TurnSpec) -> TurnHandle {
         let expires = cred::now_unix() + spec.ttl.as_secs().max(1);
-        let binding = TurnBinding {
-            turn_id: spec.message_id,
-            chat_id: spec.chat_id,
-            agent_id: agent_cred_id(spec.agent_id),
-            expires_unix: expires,
-        };
+        let binding = TurnBinding { turn_id: spec.message_id, chat_id: spec.chat_id, agent_id: agent_cred_id(spec.agent_id), expires_unix: expires };
         let credential = cred::mint(&self.key, &binding);
         let spend = crate::agent_turn::SpendMeter::new(spec.budgets.max_spend_usd);
         let cascade = self.cascade_for(spec.chat_id, spec.message_id);
@@ -369,17 +316,8 @@ impl LigusMcp {
             spend,
             report: Mutex::new(None),
         });
-        self.turns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(binding.turn_id, state.clone());
-        TurnHandle {
-            mcp: self.clone(),
-            state,
-            cred: credential,
-            socket: Mutex::new(None),
-            finished: AtomicBool::new(false),
-        }
+        self.turns.lock().unwrap_or_else(|e| e.into_inner()).insert(binding.turn_id, state.clone());
+        TurnHandle { mcp: self.clone(), state, cred: credential, socket: Mutex::new(None), finished: AtomicBool::new(false) }
     }
 
     /// The counters of the cascade `turn` (a reply in `chat`) belongs to.
@@ -408,15 +346,8 @@ impl LigusMcp {
     /// Check a credential: MAC, expiry, a live (not revoked) turn, and the
     /// chat and agent it binds.
     pub(crate) fn authorize(&self, credential: &str) -> Result<Arc<TurnState>, AuthError> {
-        let b =
-            cred::verify(&self.key, credential, cred::now_unix()).map_err(AuthError::Credential)?;
-        let st = self
-            .turns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&b.turn_id)
-            .cloned()
-            .ok_or(AuthError::UnknownTurn)?;
+        let b = cred::verify(&self.key, credential, cred::now_unix()).map_err(AuthError::Credential)?;
+        let st = self.turns.lock().unwrap_or_else(|e| e.into_inner()).get(&b.turn_id).cloned().ok_or(AuthError::UnknownTurn)?;
         if st.revoked.load(Ordering::SeqCst) {
             return Err(AuthError::Revoked);
         }
@@ -427,23 +358,13 @@ impl LigusMcp {
     }
 
     fn revoke(&self, turn_id: Uuid) {
-        if let Some(st) = self
-            .turns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&turn_id)
-        {
+        if let Some(st) = self.turns.lock().unwrap_or_else(|e| e.into_inner()).remove(&turn_id) {
             st.revoked.store(true, Ordering::SeqCst);
         }
     }
 
     /// Call `tool` with `args` under `credential`. Every call is audited.
-    pub async fn call(
-        &self,
-        credential: &str,
-        tool: &str,
-        args: &Value,
-    ) -> Result<ToolResult, AuthError> {
+    pub async fn call(&self, credential: &str, tool: &str, args: &Value) -> Result<ToolResult, AuthError> {
         let st = self.authorize(credential)?;
         let started = Instant::now();
         // Every call counts toward maxToolCalls, unknown tools included: past
@@ -479,14 +400,7 @@ impl LigusMcp {
     }
 
     /// One device-local, content-free audit fact per call (D.3.5).
-    fn audit(
-        &self,
-        st: &TurnState,
-        tool: &str,
-        outcome: Outcome,
-        latency: Duration,
-        read_chat: Option<Uuid>,
-    ) {
+    fn audit(&self, st: &TurnState, tool: &str, outcome: Outcome, latency: Duration, read_chat: Option<Uuid>) {
         let mut rec = json!({
             "ts": flow::now_ms(),
             "turnId": st.spec.message_id.to_string(),
@@ -555,11 +469,7 @@ impl LigusMcp {
             c.memory_proposals += 1;
         }
         let kind = match tool {
-            "ligus_propose_diff"
-            | "ligus_propose_decision"
-            | "ligus_propose_command"
-            | "ligus_propose_workflow"
-            | "ligus_open_alternatives"
+            "ligus_propose_diff" | "ligus_propose_decision" | "ligus_propose_command" | "ligus_propose_workflow" | "ligus_open_alternatives"
             | "ligus_offer_file" => Some(0),
             "ligus_handoff" => Some(1),
             "ligus_ask_human" | "ligus_ask_person" | "ligus_ask_room" => Some(2),
@@ -567,43 +477,13 @@ impl LigusMcp {
         };
         if let Some(k) = kind {
             let (n, max, name, cn, cmax, cname) = match k {
-                0 => (
-                    &mut c.proposals,
-                    b.max_proposals,
-                    "maxProposals",
-                    &mut cc.proposals,
-                    cb.max_proposals,
-                    "cascadeProposals",
-                ),
-                1 => (
-                    &mut c.handoffs,
-                    b.max_handoffs,
-                    "maxHandoffs",
-                    &mut cc.handoffs,
-                    cb.max_handoffs,
-                    "cascadeHandoffs",
-                ),
-                _ => (
-                    &mut c.asks,
-                    b.max_asks,
-                    "maxAsks",
-                    &mut cc.asks,
-                    cb.max_asks,
-                    "cascadeAsks",
-                ),
+                0 => (&mut c.proposals, b.max_proposals, "maxProposals", &mut cc.proposals, cb.max_proposals, "cascadeProposals"),
+                1 => (&mut c.handoffs, b.max_handoffs, "maxHandoffs", &mut cc.handoffs, cb.max_handoffs, "cascadeHandoffs"),
+                _ => (&mut c.asks, b.max_asks, "maxAsks", &mut cc.asks, cb.max_asks, "cascadeAsks"),
             };
             // A card past the asks budget posts nothing (section 4.1).
             let card = matches!(tool, "ligus_ask_person" | "ligus_ask_room");
-            let over = |name: &str| {
-                if card {
-                    ToolResult::err(
-                        Outcome::Budget,
-                        json!({"error": "ask_budget", "budget": name}),
-                    )
-                } else {
-                    exhausted(name)
-                }
-            };
+            let over = |name: &str| if card { ToolResult::err(Outcome::Budget, json!({"error": "ask_budget", "budget": name})) } else { exhausted(name) };
             if *n >= max {
                 return Err(over(name));
             }
@@ -656,22 +536,11 @@ impl LigusMcp {
         Ok(())
     }
 
-    async fn dispatch(
-        &self,
-        st: &Arc<TurnState>,
-        tool: &str,
-        args: &Value,
-    ) -> (ToolResult, Option<Uuid>) {
+    async fn dispatch(&self, st: &Arc<TurnState>, tool: &str, args: &Value) -> (ToolResult, Option<Uuid>) {
         if !super::tools::TOOLS.iter().any(|(n, _)| *n == tool) {
             // Unknown, or an attempt at something the server never offers
             // (apply, vote, admin): refused and audited as denied.
-            return (
-                ToolResult::err(
-                    Outcome::Denied,
-                    json!({"error": "unknown_tool", "message": format!("Ligus has no tool {tool:?}; agents can only propose, never apply or vote.")}),
-                ),
-                None,
-            );
+            return (ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool", "message": format!("Ligus has no tool {tool:?}; agents can only propose, never apply or vote.")})), None);
         }
         if let Err(r) = Self::charge(st, tool) {
             return (r, None);
@@ -679,43 +548,21 @@ impl LigusMcp {
         if super::forge_tools::is_forge_tool(tool) {
             return (self.forge_tool(st, tool, args).await, None);
         }
-        let s = |k: &str| {
-            args.get(k)
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .unwrap_or("")
-                .to_string()
-        };
+        let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
         let strs = |k: &str| -> Vec<String> {
-            args.get(k)
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default()
+            args.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default()
         };
         let ctx = Self::ctx(st);
         let denied_or_err = |e: String| {
             let lower = e.to_ascii_lowercase();
-            let outcome = if lower.contains("agent tier")
-                || lower.contains("unauthorized")
-                || lower.contains("not allowed")
-                || lower.contains("can't")
-            {
+            let outcome = if lower.contains("agent tier") || lower.contains("unauthorized") || lower.contains("not allowed") || lower.contains("can't") {
                 Outcome::Denied
             } else {
                 Outcome::Error
             };
-            ToolResult::err(
-                outcome,
-                json!({"error": if outcome == Outcome::Denied { "denied" } else { "failed" }, "message": e}),
-            )
+            ToolResult::err(outcome, json!({"error": if outcome == Outcome::Denied { "denied" } else { "failed" }, "message": e}))
         };
-        let log = |f: &mut dyn FnMut(&mut McpEffectsLog)| {
-            f(&mut st.effects.lock().unwrap_or_else(|e| e.into_inner()))
-        };
+        let log = |f: &mut dyn FnMut(&mut McpEffectsLog)| f(&mut st.effects.lock().unwrap_or_else(|e| e.into_inner()));
         match tool {
             "ligus_propose_diff" => {
                 let title = s("title");
@@ -723,12 +570,7 @@ impl LigusMcp {
                     return (denied_or_err("a title is required".into()), None);
                 }
                 let Some(wt) = st.spec.worktree.clone() else {
-                    return (
-                        denied_or_err(
-                            "this turn has no worktree, so there is no diff to propose".into(),
-                        ),
-                        None,
-                    );
+                    return (denied_or_err("this turn has no worktree, so there is no diff to propose".into()), None);
                 };
                 let files = worktree_changes(&wt);
                 if files.is_empty() {
@@ -737,35 +579,23 @@ impl LigusMcp {
                 let tc = Some(s("taskClass")).filter(|t| !t.is_empty());
                 log(&mut |l| l.diff_intent = Some((title.clone(), s("body"), tc.clone())));
                 (
-                    ToolResult::ok(
-                        json!({"ok": true, "files": files.len(), "message": format!("Your changes to {} file(s) will be filed for review as \u{201c}{title}\u{201d} when your turn ends. A human approves and applies them.", files.len())}),
-                    ),
+                    ToolResult::ok(json!({"ok": true, "files": files.len(), "message": format!("Your changes to {} file(s) will be filed for review as \u{201c}{title}\u{201d} when your turn ends. A human approves and applies them.", files.len())})),
                     None,
                 )
             }
             "ligus_propose_decision" | "ligus_propose_command" => {
                 let command = if tool == "ligus_propose_command" {
                     let cwd = Some(s("cwd")).filter(|c| !c.is_empty() && c != ".");
-                    Some(ProposedCommand {
-                        argv: strs("argv"),
-                        cwd,
-                    })
+                    Some(ProposedCommand { argv: strs("argv"), cwd })
                 } else {
                     None
                 };
-                let kind = if command.is_some() {
-                    ProposalKind::Command
-                } else {
-                    ProposalKind::Decision
-                };
+                let kind = if command.is_some() { ProposalKind::Command } else { ProposalKind::Decision };
                 let np = NewProposal {
                     title: s("title"),
                     body: s("body"),
                     kind: Some(kind),
-                    required_approvals: args
-                        .get("requiredApprovals")
-                        .and_then(Value::as_u64)
-                        .map(|n| n.min(16) as u32),
+                    required_approvals: args.get("requiredApprovals").and_then(Value::as_u64).map(|n| n.min(16) as u32),
                     command,
                     task_class: None,
                 };
@@ -775,20 +605,12 @@ impl LigusMcp {
                         log(&mut |l| {
                             l.proposals.insert((kind_key(kind), title.clone()));
                         });
-                        (
-                            ToolResult::ok(
-                                json!({"ok": true, "proposalId": id.to_string(), "status": "open", "message": "Filed for human review. It is not executed until a person approves and implements it."}),
-                            ),
-                            None,
-                        )
+                        (ToolResult::ok(json!({"ok": true, "proposalId": id.to_string(), "status": "open", "message": "Filed for human review. It is not executed until a person approves and implements it."})), None)
                     }
                     Err(e) => (denied_or_err(e), None),
                 }
             }
-            "ligus_offer_file" => (
-                self.offer_file(st, &ctx, &s("path"), &s("title"), &s("body")),
-                None,
-            ),
+            "ligus_offer_file" => (self.offer_file(st, &ctx, &s("path"), &s("title"), &s("body")), None),
             "ligus_propose_workflow" => {
                 let Some(def) = args.get("definition").filter(|d| d.is_object()) else {
                     return (denied_or_err("definition must be an object".into()), None);
@@ -799,12 +621,7 @@ impl LigusMcp {
                         log(&mut |l| {
                             l.workflows.insert(name.trim().to_lowercase());
                         });
-                        (
-                            ToolResult::ok(
-                                json!({"ok": true, "workflow": name, "message": "Filed for review; a human approves it before it can run."}),
-                            ),
-                            None,
-                        )
+                        (ToolResult::ok(json!({"ok": true, "workflow": name, "message": "Filed for review; a human approves it before it can run."})), None)
                     }
                     Err(e) => (denied_or_err(e), None),
                 }
@@ -816,16 +633,8 @@ impl LigusMcp {
                     .map(|a| {
                         a.iter()
                             .map(|o| crate::directives::ParsedAlternative {
-                                title: o
-                                    .get("title")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("")
-                                    .to_string(),
-                                body: o
-                                    .get("body")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("")
-                                    .to_string(),
+                                title: o.get("title").and_then(Value::as_str).unwrap_or("").to_string(),
+                                body: o.get("body").and_then(Value::as_str).unwrap_or("").to_string(),
                                 kind: None,
                             })
                             .collect()
@@ -838,19 +647,12 @@ impl LigusMcp {
                     question: s("question"),
                     body: s("body"),
                     task_class: Some(s("taskClass")).filter(|t| !t.is_empty()),
-                    agent_quorum: args
-                        .get("agentQuorum")
-                        .and_then(Value::as_u64)
-                        .map(|n| n.min(8) as u32),
+                    agent_quorum: args.get("agentQuorum").and_then(Value::as_u64).map(|n| n.min(8) as u32),
                     options,
                 };
                 let q = alts.question.to_lowercase();
                 let r = self.svc(|svc| {
-                    let trigger = svc
-                        .load_in(ctx.workspace_id, ctx.session_id)
-                        .ok()
-                        .flatten()
-                        .and_then(|sess| effects::trigger_of(&sess, ctx.message_id));
+                    let trigger = svc.load_in(ctx.workspace_id, ctx.session_id).ok().flatten().and_then(|sess| effects::trigger_of(&sess, ctx.message_id));
                     effects::open_alternatives(svc, &ctx, &alts, trigger, None)
                 });
                 match r {
@@ -858,10 +660,7 @@ impl LigusMcp {
                         log(&mut |l| {
                             l.set_questions.insert(q.clone());
                         });
-                        (
-                            ToolResult::ok(json!({"ok": true, "setId": set.to_string()})),
-                            None,
-                        )
+                        (ToolResult::ok(json!({"ok": true, "setId": set.to_string()})), None)
                     }
                     Err(e) => (denied_or_err(e), None),
                 }
@@ -870,11 +669,7 @@ impl LigusMcp {
                 let set = Uuid::parse_str(&s("setId")).ok();
                 let a = crate::directives::ParsedAssessment {
                     alternative: s("alternative"),
-                    score: args
-                        .get("score")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0)
-                        .min(100) as u32,
+                    score: args.get("score").and_then(Value::as_u64).unwrap_or(0).min(100) as u32,
                     rationale: s("rationale"),
                 };
                 match self.svc(|svc| effects::assess(svc, &ctx, set, &a)) {
@@ -882,63 +677,29 @@ impl LigusMcp {
                         log(&mut |l| {
                             l.assessed.insert(a.alternative.clone());
                         });
-                        let _ = self.svc(|svc| {
-                            svc.settle_proposal_set(
-                                ctx.session_id,
-                                ctx.workspace_id,
-                                set,
-                                ligus_core::Timestamp::now(),
-                            )
-                        });
-                        (
-                            ToolResult::ok(
-                                json!({"ok": true, "setId": set.to_string(), "proposalId": pid.to_string()}),
-                            ),
-                            None,
-                        )
+                        let _ = self.svc(|svc| svc.settle_proposal_set(ctx.session_id, ctx.workspace_id, set, ligus_core::Timestamp::now()));
+                        (ToolResult::ok(json!({"ok": true, "setId": set.to_string(), "proposalId": pid.to_string()})), None)
                     }
                     Err(e) => (denied_or_err(e), None),
                 }
             }
             "ligus_handoff" => {
                 let to = s("to");
-                let parcel = ContextParcel {
-                    key_files: strs("keyFiles"),
-                    decisions: strs("decisions"),
-                    ruled_out: strs("ruledOut"),
-                    notes: s("notes"),
-                };
-                let deep = self.svc(|svc| {
-                    svc.load_in(ctx.workspace_id, ctx.session_id)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|sess| sess.cascade_depth() >= ligus_core::MAX_CASCADE_DEPTH)
-                });
+                let parcel = ContextParcel { key_files: strs("keyFiles"), decisions: strs("decisions"), ruled_out: strs("ruledOut"), notes: s("notes") };
+                let deep = self.svc(|svc| svc.load_in(ctx.workspace_id, ctx.session_id).ok().flatten().is_some_and(|sess| sess.cascade_depth() >= ligus_core::MAX_CASCADE_DEPTH));
                 if deep {
-                    return (
-                        denied_or_err(
-                            "the hand-off chain is too deep; let a person take it from here".into(),
-                        ),
-                        None,
-                    );
+                    return (denied_or_err("the hand-off chain is too deep; let a person take it from here".into()), None);
                 }
                 match self.svc(|svc| effects::handoff(svc, &ctx, &to, parcel.clone())) {
                     Ok(h) => {
                         log(&mut |l| {
-                            l.handoffs_to
-                                .insert(to.trim_start_matches('@').to_lowercase());
+                            l.handoffs_to.insert(to.trim_start_matches('@').to_lowercase());
                         });
                         if let Some(agent) = h.agent {
-                            self.host
-                                .start_turn(ctx.session_id, agent, st.spec.message_id);
+                            self.host.start_turn(ctx.session_id, agent, st.spec.message_id);
                         }
                         let started = h.agent.is_some();
-                        (
-                            ToolResult::ok(
-                                json!({"ok": true, "handoffId": h.card.id.to_string(), "receiverStarted": started}),
-                            ),
-                            None,
-                        )
+                        (ToolResult::ok(json!({"ok": true, "handoffId": h.card.id.to_string(), "receiverStarted": started})), None)
                     }
                     Err(e) => (denied_or_err(e), None),
                 }
@@ -950,30 +711,17 @@ impl LigusMcp {
                     "review" => MarkKind::NeedsReview,
                     _ => return (denied_or_err("kind is claim, lock or review".into()), None),
                 };
-                let lines = args.get("lines").and_then(Value::as_array).and_then(|a| {
-                    match (
-                        a.first().and_then(Value::as_u64),
-                        a.get(1).and_then(Value::as_u64),
-                    ) {
-                        (Some(x), Some(y)) if x >= 1 && y >= x => Some((x as u32, y as u32)),
-                        _ => None,
-                    }
+                let lines = args.get("lines").and_then(Value::as_array).and_then(|a| match (a.first().and_then(Value::as_u64), a.get(1).and_then(Value::as_u64)) {
+                    (Some(x), Some(y)) if x >= 1 && y >= x => Some((x as u32, y as u32)),
+                    _ => None,
                 });
-                let m = MarkDirective {
-                    kind,
-                    path: s("path"),
-                    lines,
-                    note: s("note"),
-                };
+                let m = MarkDirective { kind, path: s("path"), lines, note: s("note") };
                 match self.svc(|svc| effects::mark(svc, &ctx, &m)) {
                     Ok(id) => {
                         log(&mut |l| {
                             l.mark_paths.insert(m.path.clone());
                         });
-                        (
-                            ToolResult::ok(json!({"ok": true, "markId": id.to_string()})),
-                            None,
-                        )
+                        (ToolResult::ok(json!({"ok": true, "markId": id.to_string()})), None)
                     }
                     Err(e) => (denied_or_err(e), None),
                 }
@@ -985,11 +733,7 @@ impl LigusMcp {
                     "review" => Some(MarkKind::NeedsReview),
                     _ => None,
                 };
-                let u = UnmarkDirective {
-                    id: Uuid::parse_str(&s("id")).ok(),
-                    path: Some(s("path")).filter(|p| !p.is_empty()),
-                    kind,
-                };
+                let u = UnmarkDirective { id: Uuid::parse_str(&s("id")).ok(), path: Some(s("path")).filter(|p| !p.is_empty()), kind };
                 match self.svc(|svc| effects::unmark(svc, &ctx, &u)) {
                     Ok(n) => (ToolResult::ok(json!({"ok": true, "cleared": n})), None),
                     Err(e) => (denied_or_err(e), None),
@@ -1011,95 +755,44 @@ impl LigusMcp {
                 }
             }
             "ligus_list_chats" => {
-                let limit = args
-                    .get("limit")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(20)
-                    .clamp(1, 50) as usize;
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20).clamp(1, 50) as usize;
                 let channel = s("channel").to_lowercase();
                 let ws = st.spec.workspace_id;
                 let chats = self.svc(|svc| list_chats(svc, ws, &channel, limit));
-                (
-                    ToolResult::ok(json!({"header": READ_HEADER, "chats": chats})),
-                    None,
-                )
+                (ToolResult::ok(json!({"header": READ_HEADER, "chats": chats})), None)
             }
             "ligus_read_chat" => {
                 let chat = Uuid::parse_str(&s("chatId")).unwrap_or(st.spec.chat_id);
                 let since = Uuid::parse_str(&s("sinceMessageId")).ok();
-                let limit = args
-                    .get("limit")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(50)
-                    .clamp(1, 100) as usize;
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(50).clamp(1, 100) as usize;
                 let ws = st.spec.workspace_id;
-                let Some(session) = self
-                    .svc(|svc| svc.load_in(ws, chat).ok().flatten())
-                    .filter(|sess| sess.workspace_id == ws)
-                else {
-                    return (
-                        ToolResult::err(
-                            Outcome::Denied,
-                            json!({"error": "denied", "message": "no such chat in this workspace"}),
-                        ),
-                        Some(chat),
-                    );
+                let Some(session) = self.svc(|svc| svc.load_in(ws, chat).ok().flatten()).filter(|sess| sess.workspace_id == ws) else {
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "no such chat in this workspace"})), Some(chat));
                 };
                 if !self.cross_read_allowed(st, &session) {
-                    return (
-                        ToolResult::err(
-                            Outcome::Denied,
-                            json!({"error": "denied", "message": "that chat is more restricted than this one (locked down or allow-listed); its content can't be read from here"}),
-                        ),
-                        Some(chat),
-                    );
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "that chat is more restricted than this one (locked down or allow-listed); its content can't be read from here"})), Some(chat));
                 }
                 let msgs = read_messages(&session, since, limit);
                 if let Err(r) = Self::charge_reads(st, msgs.len() as u32) {
                     return (r, Some(chat));
                 }
-                (
-                    ToolResult::ok(
-                        json!({"header": READ_HEADER, "chatId": chat.to_string(), "title": session.title, "messages": msgs}),
-                    ),
-                    Some(chat),
-                )
+                (ToolResult::ok(json!({"header": READ_HEADER, "chatId": chat.to_string(), "title": session.title, "messages": msgs})), Some(chat))
             }
             "ligus_read_proposals" => {
                 let chat = Uuid::parse_str(&s("chatId")).unwrap_or(st.spec.chat_id);
                 let ws = st.spec.workspace_id;
-                let Some(session) = self
-                    .svc(|svc| svc.load_in(ws, chat).ok().flatten())
-                    .filter(|sess| sess.workspace_id == ws)
-                else {
-                    return (
-                        ToolResult::err(
-                            Outcome::Denied,
-                            json!({"error": "denied", "message": "no such chat in this workspace"}),
-                        ),
-                        Some(chat),
-                    );
+                let Some(session) = self.svc(|svc| svc.load_in(ws, chat).ok().flatten()).filter(|sess| sess.workspace_id == ws) else {
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "no such chat in this workspace"})), Some(chat));
                 };
                 if !self.cross_read_allowed(st, &session) {
-                    return (
-                        ToolResult::err(
-                            Outcome::Denied,
-                            json!({"error": "denied", "message": "that chat is more restricted than this one (locked down or allow-listed); its content can't be read from here"}),
-                        ),
-                        Some(chat),
-                    );
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "that chat is more restricted than this one (locked down or allow-listed); its content can't be read from here"})), Some(chat));
                 }
                 let status = s("status");
                 let set = Uuid::parse_str(&s("setId")).ok();
                 // Archived and hidden-here proposals stay out of an agent's
                 // context unless it asks for them.
-                let with_archived = args
-                    .get("archived")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let hidden = self
-                    .svc(|svc| svc.hidden_proposals(ws).ok())
-                    .unwrap_or_default();
+                let with_archived = args.get("archived").and_then(Value::as_bool).unwrap_or(false);
+                let hidden = self.svc(|svc| svc.hidden_proposals(ws).ok()).unwrap_or_default();
                 let now = ligus_core::Timestamp::now();
                 let list: Vec<Value> = session
                     .proposals
@@ -1123,20 +816,12 @@ impl LigusMcp {
                 if let Err(r) = Self::charge_reads(st, list.len() as u32) {
                     return (r, Some(chat));
                 }
-                (
-                    ToolResult::ok(json!({"header": READ_HEADER, "proposals": list})),
-                    (chat != st.spec.chat_id).then_some(chat),
-                )
+                (ToolResult::ok(json!({"header": READ_HEADER, "proposals": list})), (chat != st.spec.chat_id).then_some(chat))
             }
             "ligus_read_board" => {
                 let ws = st.spec.workspace_id;
                 let chat = st.spec.chat_id;
-                let (config, session) = self.svc(|svc| {
-                    (
-                        svc.flow_config(ws).unwrap_or_default(),
-                        svc.load_in(ws, chat).ok().flatten(),
-                    )
-                });
+                let (config, session) = self.svc(|svc| (svc.flow_config(ws).unwrap_or_default(), svc.load_in(ws, chat).ok().flatten()));
                 let marks: Vec<Value> = config
                     .marks
                     .values()
@@ -1150,18 +835,11 @@ impl LigusMcp {
                         (h, a)
                     })
                     .unwrap_or_default();
-                (
-                    ToolResult::ok(
-                        json!({"header": READ_HEADER, "marks": marks, "handoffs": handoffs, "openAsks": asks}),
-                    ),
-                    None,
-                )
+                (ToolResult::ok(json!({"header": READ_HEADER, "marks": marks, "handoffs": handoffs, "openAsks": asks})), None)
             }
-            "ligus_memory_search"
-            | "ligus_memory_read"
-            | "ligus_memory_propose"
-            | "ligus_task_update"
-            | "ligus_task_state" => self.memory_tool(st, tool, args),
+            "ligus_memory_search" | "ligus_memory_read" | "ligus_memory_propose" | "ligus_task_update" | "ligus_task_state" => {
+                self.memory_tool(st, tool, args)
+            }
             // Boxed: their waits are large futures, and inlined into this
             // one they overflow a default-sized tokio worker's stack.
             "ligus_ask_human" => Box::pin(self.ask_human(st, &ctx, args)).await,
@@ -1170,43 +848,20 @@ impl LigusMcp {
             "ligus_report" => {
                 let status = s("status");
                 if !matches!(status.as_str(), "done" | "blocked" | "needsReview") {
-                    return (
-                        denied_or_err("status is done, blocked or needsReview".into()),
-                        None,
-                    );
+                    return (denied_or_err("status is done, blocked or needsReview".into()), None);
                 }
                 // Posted by the host as a system note: one line, bounded, so it
                 // can't pass for the host's own messages or flood the chat.
                 let one_line = |t: &str, max: usize| -> String {
-                    t.split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                        .chars()
-                        .filter(|c| !c.is_control())
-                        .take(max)
-                        .collect()
+                    t.split_whitespace().collect::<Vec<_>>().join(" ").chars().filter(|c| !c.is_control()).take(max).collect()
                 };
                 let summary = one_line(&s("summary"), 400);
-                let files: Vec<String> = strs("filesTouched")
-                    .iter()
-                    .take(32)
-                    .map(|f| one_line(f, 256))
-                    .filter(|f| !f.is_empty())
-                    .collect();
-                let confidence = Some(s("confidence"))
-                    .filter(|c| matches!(c.as_str(), "low" | "medium" | "high"));
-                *st.report.lock().unwrap_or_else(|e| e.into_inner()) = Some(SelfReport {
-                    status,
-                    summary,
-                    files_touched: files,
-                    confidence,
-                });
+                let files: Vec<String> = strs("filesTouched").iter().take(32).map(|f| one_line(f, 256)).filter(|f| !f.is_empty()).collect();
+                let confidence = Some(s("confidence")).filter(|c| matches!(c.as_str(), "low" | "medium" | "high"));
+                *st.report.lock().unwrap_or_else(|e| e.into_inner()) = Some(SelfReport { status, summary, files_touched: files, confidence });
                 (ToolResult::ok(json!({"ok": true})), None)
             }
-            _ => (
-                ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool"})),
-                None,
-            ),
+            _ => (ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool"})), None),
         }
     }
 
@@ -1215,48 +870,29 @@ impl LigusMcp {
     /// content, size, archive bombs) and never carrying one of this device's
     /// secrets, then staged on this host and filed as a proposal. Nothing is
     /// uploaded until a person approves it.
-    fn offer_file(
-        &self,
-        st: &TurnState,
-        ctx: &EffectCtx,
-        path: &str,
-        title: &str,
-        body: &str,
-    ) -> ToolResult {
-        let fail = |outcome: Outcome, m: String| {
-            ToolResult::err(
-                outcome,
-                json!({"error": if outcome == Outcome::Denied { "denied" } else { "failed" }, "message": m}),
-            )
-        };
+    fn offer_file(&self, st: &TurnState, ctx: &EffectCtx, path: &str, title: &str, body: &str) -> ToolResult {
+        let fail = |outcome: Outcome, m: String| ToolResult::err(outcome, json!({"error": if outcome == Outcome::Denied { "denied" } else { "failed" }, "message": m}));
         if title.is_empty() {
             return fail(Outcome::Error, "a title is required".into());
         }
         let Some(wt) = st.spec.worktree.clone() else {
-            return fail(
-                Outcome::Denied,
-                "this turn has no worktree to offer a file from".into(),
-            );
+            return fail(Outcome::Denied, "this turn has no worktree to offer a file from".into());
         };
         let rules = match self.svc(|svc| svc.attachment_rules(ctx.workspace_id)) {
             Ok(r) => r,
             Err(e) => return fail(Outcome::Error, e.to_string()),
         };
         if !rules.policy.enabled || !rules.policy.agents {
-            return fail(
-                Outcome::Denied,
-                "this workspace doesn't let agents offer files".into(),
-            );
+            return fail(Outcome::Denied, "this workspace doesn't let agents offer files".into());
         }
         // Inside the worktree only: the file is opened first (no symlink as
         // its last component) and the path of what was opened is checked,
         // so swapping a directory for a symlink between a check and the read
         // can't reach outside the worktree.
-        let (bytes, name) =
-            match crate::attachment_safety::read_inside(&wt, path, rules.policy.max_bytes) {
-                Ok(x) => x,
-                Err(e) => return fail(Outcome::Denied, e),
-            };
+        let (bytes, name) = match crate::attachment_safety::read_inside(&wt, path, rules.policy.max_bytes) {
+            Ok(x) => x,
+            Err(e) => return fail(Outcome::Denied, e),
+        };
         // Never let a credential leave in a file: this device's own secrets,
         // private keys and environment files.
         if let Some(why) = crate::attachment_safety::credential_in(&name, &bytes) {
@@ -1267,10 +903,7 @@ impl LigusMcp {
             Err(e) => return fail(Outcome::Denied, e),
         };
         let proposal_id = Uuid::new_v4();
-        if let Err(e) =
-            self.host
-                .stage_attachment(proposal_id, &prepared.sha256, &prepared.plaintext)
-        {
+        if let Err(e) = self.host.stage_attachment(proposal_id, &prepared.sha256, &prepared.plaintext) {
             return fail(Outcome::Denied, e);
         }
         let offer = ligus_core::attachment::AttachmentRef {
@@ -1286,23 +919,10 @@ impl LigusMcp {
         };
         let author = ctx.author_id();
         let r = self.svc(|svc| {
-            svc.as_agent(ctx.agent_id, |svc| {
-                svc.file_attachment_offer(
-                    ctx.session_id,
-                    ctx.workspace_id,
-                    title,
-                    body,
-                    &author,
-                    ctx.agent_id,
-                    offer.clone(),
-                    proposal_id,
-                )
-            })
+            svc.as_agent(ctx.agent_id, |svc| svc.file_attachment_offer(ctx.session_id, ctx.workspace_id, title, body, &author, ctx.agent_id, offer.clone(), proposal_id))
         });
         match r {
-            Ok(id) => ToolResult::ok(
-                json!({"ok": true, "proposalId": id.to_string(), "name": offer.name, "message": "Filed for review. The file is shared only after a person approves it."}),
-            ),
+            Ok(id) => ToolResult::ok(json!({"ok": true, "proposalId": id.to_string(), "name": offer.name, "message": "Filed for review. The file is shared only after a person approves it."})),
             Err(e) => fail(Outcome::Denied, e.to_string()),
         }
     }
@@ -1313,47 +933,21 @@ impl LigusMcp {
     /// filed as the agent's effect; a task update writes the agent's own slot.
     fn memory_tool(&self, st: &TurnState, tool: &str, args: &Value) -> (ToolResult, Option<Uuid>) {
         use ligus_core::memory::{self as mem, MemoryOp, MemorySource, TaskStateUpdate};
-        let s = |k: &str| {
-            args.get(k)
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .unwrap_or("")
-                .to_string()
-        };
+        let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
         let strs = |k: &str| -> Vec<String> {
-            args.get(k)
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default()
+            args.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default()
         };
         let uuid = |k: &str| Uuid::parse_str(&s(k)).ok();
-        let bad =
-            |m: &str| ToolResult::err(Outcome::Error, json!({"error": "failed", "message": m}));
+        let bad = |m: &str| ToolResult::err(Outcome::Error, json!({"error": "failed", "message": m}));
         let refused = |e: String| {
-            let outcome =
-                if e.to_ascii_lowercase().contains("unauthorized") || e.contains("agent tier") {
-                    Outcome::Denied
-                } else {
-                    Outcome::Error
-                };
-            ToolResult::err(
-                outcome,
-                json!({"error": if outcome == Outcome::Denied { "denied" } else { "failed" }, "message": e}),
-            )
+            let outcome = if e.to_ascii_lowercase().contains("unauthorized") || e.contains("agent tier") { Outcome::Denied } else { Outcome::Error };
+            ToolResult::err(outcome, json!({"error": if outcome == Outcome::Denied { "denied" } else { "failed" }, "message": e}))
         };
         let ws = st.spec.workspace_id;
         let nonce = mem::fresh_nonce();
         match tool {
             "ligus_memory_search" => {
-                let limit = args
-                    .get("limit")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(10)
-                    .clamp(1, mem::MAX_SEARCH_RESULTS as u64) as usize;
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, mem::MAX_SEARCH_RESULTS as u64) as usize;
                 let m = self.svc(|svc| svc.memory(ws).unwrap_or_default());
                 let visible = self.memory_visibility(st, &m);
                 let hits = mem::search_where(&m, &s("query"), &strs("tags"), limit, |e| visible(e));
@@ -1368,29 +962,14 @@ impl LigusMcp {
                     .iter()
                     .map(|h| json!({"entryId": h.entry.id.to_string(), "rev": h.entry.head().to_string(), "score": h.score}))
                     .collect();
-                (
-                    ToolResult::ok(
-                        json!({"header": READ_HEADER, "count": hits.len(), "entries": list, "content": text}),
-                    ),
-                    None,
-                )
+                (ToolResult::ok(json!({"header": READ_HEADER, "count": hits.len(), "entries": list, "content": text})), None)
             }
             "ligus_memory_read" => {
-                let Some(id) = uuid("entryId") else {
-                    return (bad("entryId is an entry's id"), None);
-                };
+                let Some(id) = uuid("entryId") else { return (bad("entryId is an entry's id"), None) };
                 let m = self.svc(|svc| svc.memory(ws).unwrap_or_default());
-                let Some(e) = m.entries.get(&id).filter(|e| e.live()) else {
-                    return (bad("no such memory entry"), None);
-                };
+                let Some(e) = m.entries.get(&id).filter(|e| e.live()) else { return (bad("no such memory entry"), None) };
                 if !self.memory_visibility(st, &m)(e) {
-                    return (
-                        ToolResult::err(
-                            Outcome::Denied,
-                            json!({"error": "denied", "message": "that note was written under stricter egress than this turn's"}),
-                        ),
-                        None,
-                    );
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "that note was written under stricter egress than this turn's"})), None);
                 }
                 if let Err(r) = Self::charge_reads(st, 1 + e.conflicts.len() as u32) {
                     return (r, None);
@@ -1398,17 +977,8 @@ impl LigusMcp {
                 let mut text = mem::memory_header(&nonce);
                 text.push_str(&mem::render_entry(e, &nonce, true));
                 for c in &e.conflicts {
-                    let shadow = mem::MemoryEntry {
-                        id: e.id,
-                        current: c.clone(),
-                        created_by: e.created_by.clone(),
-                        ..Default::default()
-                    };
-                    text.push_str(&format!(
-                        "Unresolved {} (made from rev {}):\n",
-                        if c.removal { "removal" } else { "edit" },
-                        c.base.map(|b| b.to_string()).unwrap_or_default()
-                    ));
+                    let shadow = mem::MemoryEntry { id: e.id, current: c.clone(), created_by: e.created_by.clone(), ..Default::default() };
+                    text.push_str(&format!("Unresolved {} (made from rev {}):\n", if c.removal { "removal" } else { "edit" }, c.base.map(|b| b.to_string()).unwrap_or_default()));
                     text.push_str(&mem::render_entry(&shadow, &nonce, !c.removal));
                 }
                 let source = &e.current.source;
@@ -1428,73 +998,30 @@ impl LigusMcp {
             "ligus_memory_propose" => {
                 let entry = uuid("entryId");
                 let base = uuid("base");
-                let (title, body, tags) = (
-                    s("title"),
-                    args.get("body")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    strs("tags"),
-                );
+                let (title, body, tags) = (s("title"), args.get("body").and_then(Value::as_str).unwrap_or("").to_string(), strs("tags"));
                 let op = match s("op").as_str() {
-                    "create" => MemoryOp::Create {
-                        entry_id: Uuid::new_v4(),
-                        title,
-                        body,
-                        tags,
-                    },
+                    "create" => MemoryOp::Create { entry_id: Uuid::new_v4(), title, body, tags },
                     "edit" => match (entry, base) {
-                        (Some(entry_id), Some(base)) => MemoryOp::Edit {
-                            entry_id,
-                            base,
-                            title,
-                            body,
-                            tags,
-                        },
-                        _ => {
-                            return (
-                                bad("an edit names entryId and base (the rev you read)"),
-                                None,
-                            )
-                        }
+                        (Some(entry_id), Some(base)) => MemoryOp::Edit { entry_id, base, title, body, tags },
+                        _ => return (bad("an edit names entryId and base (the rev you read)"), None),
                     },
                     "remove" => match (entry, base) {
                         (Some(entry_id), Some(base)) => MemoryOp::Remove { entry_id, base },
-                        _ => {
-                            return (
-                                bad("a removal names entryId and base (the rev you read)"),
-                                None,
-                            )
-                        }
+                        _ => return (bad("a removal names entryId and base (the rev you read)"), None),
                     },
                     _ => return (bad("op is create, edit or remove"), None),
                 };
-                if let MemoryOp::Create {
-                    title, body, tags, ..
-                }
-                | MemoryOp::Edit {
-                    title, body, tags, ..
-                } = &op
-                {
+                if let MemoryOp::Create { title, body, tags, .. } | MemoryOp::Edit { title, body, tags, .. } = &op {
                     if let Err(why) = mem::content_ok(title, body, &mem::normalize_tags(tags)) {
                         return (bad(why), None);
                     }
                 }
-                let source = MemorySource {
-                    chat_id: Some(st.spec.chat_id),
-                    message_id: None,
-                    turn_id: Some(st.spec.message_id),
-                    egress: None,
-                };
+                let source = MemorySource { chat_id: Some(st.spec.chat_id), message_id: None, turn_id: Some(st.spec.message_id), egress: None };
                 let rationale = s("rationale");
                 let agent = st.spec.agent_id;
-                match self.svc(|svc| {
-                    svc.propose_memory_as_agent(ws, agent, op.clone(), &rationale, source.clone())
-                }) {
+                match self.svc(|svc| svc.propose_memory_as_agent(ws, agent, op.clone(), &rationale, source.clone())) {
                     Ok(pid) => (
-                        ToolResult::ok(
-                            json!({"ok": true, "proposalId": pid.to_string(), "message": "Filed for a person to accept or reject; memory doesn't change until then."}),
-                        ),
+                        ToolResult::ok(json!({"ok": true, "proposalId": pid.to_string(), "message": "Filed for a person to accept or reject; memory doesn't change until then."})),
                         None,
                     ),
                     Err(e) => (refused(e.to_string()), None),
@@ -1502,34 +1029,22 @@ impl LigusMcp {
             }
             "ligus_task_update" => {
                 let Some(status) = mem::TaskStatus::parse(&s("status")) else {
-                    return (
-                        bad("status is working, blocked, waiting, done or abandoned"),
-                        None,
-                    );
+                    return (bad("status is working, blocked, waiting, done or abandoned"), None);
                 };
                 let task_id = uuid("taskId").unwrap_or(st.spec.chat_id);
-                let ttl_ms = args
-                    .get("ttlSecs")
-                    .and_then(Value::as_i64)
-                    .map(|x| x.clamp(60, mem::MAX_TASK_TTL_MS / 1000) * 1000);
+                let ttl_ms = args.get("ttlSecs").and_then(Value::as_i64).map(|x| x.clamp(60, mem::MAX_TASK_TTL_MS / 1000) * 1000);
                 let update = TaskStateUpdate {
                     task_id,
                     agent_key: String::new(),
                     turn_id: st.spec.message_id,
                     status,
                     summary: s("summary"),
-                    progress: args
-                        .get("progress")
-                        .and_then(Value::as_u64)
-                        .map(|p| p.min(100) as u8),
+                    progress: args.get("progress").and_then(Value::as_u64).map(|p| p.min(100) as u8),
                     open_questions: strs("openQuestions"),
                     partial_results: strs("partialResults"),
                     ttl_ms,
                 };
-                if let Err(why) = mem::task_shape_ok(&TaskStateUpdate {
-                    agent_key: "x".into(),
-                    ..update.clone()
-                }) {
+                if let Err(why) = mem::task_shape_ok(&TaskStateUpdate { agent_key: "x".into(), ..update.clone() }) {
                     return (bad(why), None);
                 }
                 let (chat, agent) = (st.spec.chat_id, st.spec.agent_id);
@@ -1540,28 +1055,14 @@ impl LigusMcp {
             }
             "ligus_task_state" => {
                 let chat = uuid("chatId").unwrap_or(st.spec.chat_id);
-                let Some(session) = self
-                    .svc(|svc| svc.load_in(ws, chat).ok().flatten())
-                    .filter(|c| c.workspace_id == ws)
-                else {
+                let Some(session) = self.svc(|svc| svc.load_in(ws, chat).ok().flatten()).filter(|c| c.workspace_id == ws) else {
                     return (bad("no such chat in this workspace"), None);
                 };
                 if !self.cross_read_allowed(st, &session) {
-                    return (
-                        ToolResult::err(
-                            Outcome::Denied,
-                            json!({"error": "denied", "message": "that chat's egress is stricter than this turn's"}),
-                        ),
-                        None,
-                    );
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "that chat's egress is stricter than this turn's"})), None);
                 }
                 let now = flow::now_ms();
-                let mut slots: Vec<&mem::TaskSlot> = session
-                    .flow
-                    .tasks
-                    .iter()
-                    .filter(|t| !t.stale(now))
-                    .collect();
+                let mut slots: Vec<&mem::TaskSlot> = session.flow.tasks.iter().filter(|t| !t.stale(now)).collect();
                 slots.sort_by_key(|a| std::cmp::Reverse(a.at_ms));
                 if let Err(r) = Self::charge_reads(st, slots.len() as u32) {
                     return (r, Some(chat));
@@ -1571,16 +1072,11 @@ impl LigusMcp {
                     text.push_str(&mem::render_slot(t, &nonce));
                 }
                 (
-                    ToolResult::ok(
-                        json!({"header": READ_HEADER, "chatId": chat.to_string(), "slots": slots.len(), "content": text}),
-                    ),
+                    ToolResult::ok(json!({"header": READ_HEADER, "chatId": chat.to_string(), "slots": slots.len(), "content": text})),
                     (chat != st.spec.chat_id).then_some(chat),
                 )
             }
-            _ => (
-                ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool"})),
-                None,
-            ),
+            _ => (ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool"})), None),
         }
     }
 
@@ -1591,33 +1087,15 @@ impl LigusMcp {
     /// egress is at least as strict (the cross-chat read rule). An entry
     /// with no recorded tier and no source chat is the workspace default,
     /// which every turn satisfies.
-    fn memory_visibility(
-        &self,
-        st: &TurnState,
-        m: &ligus_core::memory::MemoryState,
-    ) -> impl Fn(&ligus_core::memory::MemoryEntry) -> bool {
+    fn memory_visibility(&self, st: &TurnState, m: &ligus_core::memory::MemoryState) -> impl Fn(&ligus_core::memory::MemoryEntry) -> bool {
         use ligus_core::sandbox::{envelope_for_session, EgressPolicy};
         let ws = st.spec.workspace_id;
-        let chats: std::collections::BTreeSet<Uuid> = m
-            .live()
-            .flat_map(ligus_core::memory::source_chats)
-            .collect();
+        let chats: std::collections::BTreeSet<Uuid> = m.live().flat_map(ligus_core::memory::source_chats).collect();
         let (reader, now) = self.svc(|svc| {
-            let reader = svc
-                .load_in(st.spec.workspace_id, st.spec.chat_id)
-                .ok()
-                .flatten()
-                .map(|c| envelope_for_session(&c).egress)
-                .unwrap_or(EgressPolicy::Open);
+            let reader = svc.load_in(st.spec.workspace_id, st.spec.chat_id).ok().flatten().map(|c| envelope_for_session(&c).egress).unwrap_or(EgressPolicy::Open);
             let now: std::collections::BTreeMap<Uuid, EgressPolicy> = chats
                 .iter()
-                .filter_map(|c| {
-                    svc.load_in(ws, *c)
-                        .ok()
-                        .flatten()
-                        .filter(|s| s.workspace_id == ws)
-                        .map(|s| (*c, envelope_for_session(&s).egress))
-                })
+                .filter_map(|c| svc.load_in(ws, *c).ok().flatten().filter(|s| s.workspace_id == ws).map(|s| (*c, envelope_for_session(&s).egress)))
                 .collect();
             (reader, now)
         });
@@ -1635,28 +1113,15 @@ impl LigusMcp {
     /// A read-only code-host call: the egress tier, the forge budget, the
     /// host's binding for this chat, then the read itself.
     async fn forge_tool(&self, st: &TurnState, tool: &str, args: &Value) -> ToolResult {
-        let deny =
-            |m: &str| ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": m}));
-        let egress = self
-            .svc(|svc| {
-                svc.load_in(st.spec.workspace_id, st.spec.chat_id)
-                    .ok()
-                    .flatten()
-            })
-            .map(|s| ligus_core::sandbox::envelope_for_session(&s).egress);
-        if !egress
-            .as_ref()
-            .is_some_and(super::forge_tools::egress_allows)
-        {
+        let deny = |m: &str| ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": m}));
+        let egress = self.svc(|svc| svc.load_in(st.spec.workspace_id, st.spec.chat_id).ok().flatten()).map(|s| ligus_core::sandbox::envelope_for_session(&s).egress);
+        if !egress.as_ref().is_some_and(super::forge_tools::egress_allows) {
             return deny("this chat's sandbox doesn't allow code-host reads (its egress is closed, or its allow-list doesn't name ligus.forge)");
         }
         {
             let mut c = st.counters.lock().unwrap_or_else(|e| e.into_inner());
             if c.forge_calls >= st.spec.budgets.max_forge_calls {
-                return ToolResult::err(
-                    Outcome::Budget,
-                    json!({"error": "budget_exhausted", "budget": "maxForgeCalls", "message": crate::tool_loop::FINAL_ROUND_NUDGE}),
-                );
+                return ToolResult::err(Outcome::Budget, json!({"error": "budget_exhausted", "budget": "maxForgeCalls", "message": crate::tool_loop::FINAL_ROUND_NUDGE}));
             }
             c.forge_calls += 1;
         }
@@ -1675,13 +1140,7 @@ impl LigusMcp {
         if target.id == st.spec.chat_id {
             return true;
         }
-        let Some(reader) = self.svc(|svc| {
-            svc.load_in(st.spec.workspace_id, st.spec.chat_id)
-                .ok()
-                .flatten()
-        }) else {
-            return false;
-        };
+        let Some(reader) = self.svc(|svc| svc.load_in(st.spec.workspace_id, st.spec.chat_id).ok().flatten()) else { return false };
         let mine = ligus_core::sandbox::envelope_for_session(&reader).egress;
         let theirs = ligus_core::sandbox::envelope_for_session(target).egress;
         mine.stricter(&theirs) == mine
@@ -1689,66 +1148,22 @@ impl LigusMcp {
 
     /// `ligus_ask_human`: post the ask, pause the turn, wait for the first
     /// human answer (or the timeout), and return it.
-    async fn ask_human(
-        &self,
-        st: &Arc<TurnState>,
-        ctx: &EffectCtx,
-        args: &Value,
-    ) -> (ToolResult, Option<Uuid>) {
-        let question: String = args
-            .get("question")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .chars()
-            .take(flow::MAX_ASK_QUESTION_CHARS)
-            .collect();
+    async fn ask_human(&self, st: &Arc<TurnState>, ctx: &EffectCtx, args: &Value) -> (ToolResult, Option<Uuid>) {
+        let question: String = args.get("question").and_then(Value::as_str).unwrap_or("").trim().chars().take(flow::MAX_ASK_QUESTION_CHARS).collect();
         if question.is_empty() {
-            return (
-                ToolResult::err(
-                    Outcome::Error,
-                    json!({"error": "failed", "message": "a question is required"}),
-                ),
-                None,
-            );
+            return (ToolResult::err(Outcome::Error, json!({"error": "failed", "message": "a question is required"})), None);
         }
         let options: Vec<String> = args
             .get("options")
             .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(|o| {
-                        o.trim()
-                            .chars()
-                            .take(flow::MAX_ASK_OPTION_CHARS)
-                            .collect::<String>()
-                    })
-                    .filter(|o| !o.is_empty())
-                    .take(flow::MAX_ASK_OPTIONS)
-                    .collect()
-            })
+            .map(|a| a.iter().filter_map(|v| v.as_str()).map(|o| o.trim().chars().take(flow::MAX_ASK_OPTION_CHARS).collect::<String>()).filter(|o| !o.is_empty()).take(flow::MAX_ASK_OPTIONS).collect())
             .unwrap_or_default();
-        let timeout = Duration::from_secs(
-            args.get("timeoutSecs")
-                .and_then(Value::as_u64)
-                .unwrap_or(600)
-                .clamp(1, 3600),
-        );
+        let timeout = Duration::from_secs(args.get("timeoutSecs").and_then(Value::as_u64).unwrap_or(600).clamp(1, 3600));
         // The same guards as the decision cards: no option posing as a
         // Ligus control, and the open caps.
-        if options
-            .iter()
-            .any(|o| ligus_proto::ask_text::is_reserved(o))
-        {
+        if options.iter().any(|o| ligus_proto::ask_text::is_reserved(o)) {
             Self::refund_ask(st);
-            return (
-                ToolResult::err(
-                    Outcome::Denied,
-                    json!({"error": "option_reserved", "message": "an option is one of Ligus's own control labels; word it differently"}),
-                ),
-                None,
-            );
+            return (ToolResult::err(Outcome::Denied, json!({"error": "option_reserved", "message": "an option is one of Ligus's own control labels; word it differently"})), None);
         }
         let mut caps = Ok(());
         self.host.with_service(&mut |svc| {
@@ -1760,52 +1175,27 @@ impl LigusMcp {
             Self::refund_ask(st);
             return (r.result(), None);
         }
-        let posted = match post_ask(
-            &*self.host,
-            ctx,
-            st.spec.message_id,
-            question,
-            options,
-            timeout,
-        ) {
+        let posted = match post_ask(&*self.host, ctx, st.spec.message_id, question, options, timeout) {
             Ok(a) => a,
-            Err(e) => {
-                return (
-                    ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": e})),
-                    None,
-                )
-            }
+            Err(e) => return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": e})), None),
         };
         let _pause = crate::agent_turn::pause_counter(&st.paused);
         let ask_id = posted.ask_id;
-        match wait_answer(&*self.host, ctx.session_id, &posted.ask, timeout, || {
-            st.revoked.load(Ordering::SeqCst)
-        })
-        .await
-        {
+        match wait_answer(&*self.host, ctx.session_id, &posted.ask, timeout, || st.revoked.load(Ordering::SeqCst)).await {
             Some(ans) => (
-                ToolResult::ok(
-                    json!({"answer": ans.answer, "optionIndex": ans.option_index, "answeredBy": ans.by}),
-                ),
+                ToolResult::ok(json!({"answer": ans.answer, "optionIndex": ans.option_index, "answeredBy": ans.by})),
                 None,
             ),
             None => {
                 close_ask(&*self.host, ctx, st.spec.message_id, ask_id);
-                (
-                    ToolResult::err(Outcome::Ok, json!({"error": "no_answer"})),
-                    None,
-                )
+                (ToolResult::err(Outcome::Ok, json!({"error": "no_answer"})), None)
             }
         }
     }
 
     /// The turn's summary so far (content-free).
     fn summary(&self, st: &TurnState) -> TurnToolSummary {
-        let c = st
-            .counters
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let c = st.counters.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let mut calls = c.calls;
         while calls.len() > flow::MAX_SUMMARY_TOOLS {
             let k = calls.keys().next_back().cloned().unwrap_or_default();
@@ -1835,34 +1225,16 @@ fn list_chats(svc: &ChatService, ws: Uuid, channel: &str, limit: usize) -> Vec<V
     let config_id = ligus_core::workspace_config_session_id(ws);
     let channels = svc.list_channels(ws).unwrap_or_default();
     let mut out: Vec<(i64, Value)> = Vec::new();
-    for id in svc
-        .session_ids()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|id| *id != config_id)
-        .take(2000)
-    {
-        let Ok(Some(sess)) = svc.load_in(ws, id) else {
-            continue;
-        };
+    for id in svc.session_ids().unwrap_or_default().into_iter().filter(|id| *id != config_id).take(2000) {
+        let Ok(Some(sess)) = svc.load_in(ws, id) else { continue };
         if sess.workspace_id != ws {
             continue;
         }
-        let ch = channels
-            .iter()
-            .find(|c| c.id == sess.channel_id)
-            .map(|c| c.name.clone())
-            .unwrap_or_default();
+        let ch = channels.iter().find(|c| c.id == sess.channel_id).map(|c| c.name.clone()).unwrap_or_default();
         if !channel.is_empty() && ch.to_lowercase() != channel {
             continue;
         }
-        let last = sess
-            .messages
-            .iter()
-            .rev()
-            .find(|m| !m.superseded)
-            .map(|m| flow::ms(&m.created_at))
-            .unwrap_or(0);
+        let last = sess.messages.iter().rev().find(|m| !m.superseded).map(|m| flow::ms(&m.created_at)).unwrap_or(0);
         let count = sess.messages.iter().filter(|m| !m.superseded).count();
         out.push((last, json!({"chatId": id.to_string(), "title": sess.title, "channel": ch, "messages": count})));
     }
@@ -1871,19 +1243,9 @@ fn list_chats(svc: &ChatService, ws: Uuid, channel: &str, limit: usize) -> Vec<V
 }
 
 fn read_messages(session: &ChatSession, since: Option<Uuid>, limit: usize) -> Vec<Value> {
-    let start = since
-        .and_then(|id| session.messages.iter().position(|m| m.id == id))
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let msgs: Vec<_> = session.messages[start..]
-        .iter()
-        .filter(|m| !m.is_streaming && !m.superseded)
-        .collect();
-    let tail = if since.is_some() {
-        &msgs[..msgs.len().min(limit)]
-    } else {
-        &msgs[msgs.len().saturating_sub(limit)..]
-    };
+    let start = since.and_then(|id| session.messages.iter().position(|m| m.id == id)).map(|i| i + 1).unwrap_or(0);
+    let msgs: Vec<_> = session.messages[start..].iter().filter(|m| !m.is_streaming && !m.superseded).collect();
+    let tail = if since.is_some() { &msgs[..msgs.len().min(limit)] } else { &msgs[msgs.len().saturating_sub(limit)..] };
     tail.iter()
         .map(|m| {
             json!({
@@ -1898,17 +1260,9 @@ fn read_messages(session: &ChatSession, since: Option<Uuid>, limit: usize) -> Ve
 
 /// The files a worktree changed (staged or not, untracked included).
 fn worktree_changes(wt: &std::path::Path) -> Vec<String> {
-    let out = ligus_core::process_util::git()
-        .arg("-C")
-        .arg(wt)
-        .args(["status", "--porcelain", "--untracked-files=all"])
-        .output();
+    let out = ligus_core::process_util::git().arg("-C").arg(wt).args(["status", "--porcelain", "--untracked-files=all"]).output();
     match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .filter_map(|l| l.get(3..))
-            .map(str::to_owned)
-            .collect(),
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).lines().filter_map(|l| l.get(3..)).map(str::to_owned).collect(),
         _ => Vec::new(),
     }
 }
@@ -1921,27 +1275,12 @@ pub struct PostedAsk {
 }
 
 /// Post a [`HumanAsk`] as the agent (Agent tier) and tell the host.
-pub fn post_ask(
-    host: &dyn LigusHost,
-    ctx: &EffectCtx,
-    turn_id: Uuid,
-    question: String,
-    options: Vec<String>,
-    timeout: Duration,
-) -> Result<PostedAsk, String> {
+pub fn post_ask(host: &dyn LigusHost, ctx: &EffectCtx, turn_id: Uuid, question: String, options: Vec<String>, timeout: Duration) -> Result<PostedAsk, String> {
     post_ask_as(host, ctx, turn_id, question, options, timeout, false)
 }
 
 /// [`post_ask`], marked as a permission escalation when `permission`.
-pub fn post_ask_as(
-    host: &dyn LigusHost,
-    ctx: &EffectCtx,
-    turn_id: Uuid,
-    question: String,
-    options: Vec<String>,
-    timeout: Duration,
-    permission: bool,
-) -> Result<PostedAsk, String> {
+pub fn post_ask_as(host: &dyn LigusHost, ctx: &EffectCtx, turn_id: Uuid, question: String, options: Vec<String>, timeout: Duration, permission: bool) -> Result<PostedAsk, String> {
     let ask = HumanAsk {
         permission,
         ask_id: Uuid::new_v4(),
@@ -1956,42 +1295,18 @@ pub fn post_ask_as(
     };
     let mut r = Ok(());
     host.with_service(&mut |svc| {
-        r = svc
-            .as_agent(ctx.agent_id, |svc| {
-                svc.record_flow(
-                    ctx.session_id,
-                    ctx.workspace_id,
-                    FlowRecord::HumanAsk(ask.clone()),
-                )
-            })
-            .map_err(|e| e.to_string());
+        r = svc.as_agent(ctx.agent_id, |svc| svc.record_flow(ctx.session_id, ctx.workspace_id, FlowRecord::HumanAsk(ask.clone()))).map_err(|e| e.to_string());
     });
     r?;
     host.ask_posted(ctx.session_id, &ask);
-    Ok(PostedAsk {
-        ask_id: ask.ask_id,
-        ask,
-    })
+    Ok(PostedAsk { ask_id: ask.ask_id, ask })
 }
 
 /// Close an unanswered ask (timeout, cancel).
 pub fn close_ask(host: &dyn LigusHost, ctx: &EffectCtx, turn_id: Uuid, ask_id: Uuid) {
-    let close = HumanAsk {
-        ask_id,
-        turn_id,
-        agent_key: ctx.agent_key(),
-        closed: true,
-        at_ms: flow::now_ms(),
-        ..Default::default()
-    };
+    let close = HumanAsk { ask_id, turn_id, agent_key: ctx.agent_key(), closed: true, at_ms: flow::now_ms(), ..Default::default() };
     host.with_service(&mut |svc| {
-        let _ = svc.as_agent(ctx.agent_id, |svc| {
-            svc.record_flow(
-                ctx.session_id,
-                ctx.workspace_id,
-                FlowRecord::HumanAsk(close.clone()),
-            )
-        });
+        let _ = svc.as_agent(ctx.agent_id, |svc| svc.record_flow(ctx.session_id, ctx.workspace_id, FlowRecord::HumanAsk(close.clone())));
     });
 }
 
@@ -2002,13 +1317,7 @@ pub fn close_ask(host: &dyn LigusHost, ctx: &EffectCtx, turn_id: Uuid, ask_id: U
 /// question, options and turn, signed here): someone who got a record under
 /// the same id in first owns the id in the fold, and an answer to their ask
 /// is never taken as an answer to this one.
-pub async fn wait_answer(
-    host: &dyn LigusHost,
-    chat: Uuid,
-    posted: &HumanAsk,
-    timeout: Duration,
-    cancelled: impl Fn() -> bool,
-) -> Option<flow::HumanAnswered> {
+pub async fn wait_answer(host: &dyn LigusHost, chat: Uuid, posted: &HumanAsk, timeout: Duration, cancelled: impl Fn() -> bool) -> Option<flow::HumanAnswered> {
     let deadline = Instant::now() + timeout;
     let ask_id = posted.ask_id;
     loop {
@@ -2016,14 +1325,7 @@ pub async fn wait_answer(
         let mut foreign = false;
         host.with_service(&mut |svc| {
             let device = svc.device_id();
-            let Some(st) = svc
-                .load(chat)
-                .ok()
-                .flatten()
-                .and_then(|s| s.flow.asks.get(&ask_id).cloned())
-            else {
-                return;
-            };
+            let Some(st) = svc.load(chat).ok().flatten().and_then(|s| s.flow.asks.get(&ask_id).cloned()) else { return };
             let ours = st.posted_by.is_none()
                 && st.host.is_none_or(|h| h == device)
                 && st.ask.turn_id == posted.turn_id
@@ -2075,57 +1377,34 @@ impl TurnHandle {
     pub async fn call(&self, tool: &str, args: &Value) -> ToolResult {
         let (name, args) = match super::tools::unfold(tool, args) {
             Ok(x) => x,
-            Err(e) => {
-                return ToolResult::err(Outcome::Error, json!({"error": "failed", "message": e}))
-            }
+            Err(e) => return ToolResult::err(Outcome::Error, json!({"error": "failed", "message": e})),
         };
         match self.mcp.call(&self.cred, &name, &args).await {
             Ok(r) => r,
-            Err(e) => ToolResult::err(
-                Outcome::Denied,
-                json!({"error": "denied", "message": e.to_string()}),
-            ),
+            Err(e) => ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": e.to_string()})),
         }
     }
 
     /// What the tools did (for finalize's dedupe and the diff intent).
     pub fn effects(&self) -> McpEffectsLog {
-        self.state
-            .effects
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.state.effects.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// The agent's self-report, if it made one.
     pub fn report(&self) -> Option<SelfReport> {
-        self.state
-            .report
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.state.report.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Whether any Ligus tool was called.
     pub fn used(&self) -> bool {
-        self.state
-            .counters
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .total
-            > 0
+        self.state.counters.lock().unwrap_or_else(|e| e.into_inner()).total > 0
     }
 
     /// The agent turn scope for adapters: the MCP attach (when a socket is
     /// serving), the pause counter, and the spend sink.
     pub fn scope(&self) -> crate::agent_turn::AgentTurnScope {
         crate::agent_turn::AgentTurnScope {
-            mcp: self
-                .socket
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_ref()
-                .map(|s| s.attach(&self.cred)),
+            mcp: self.socket.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|s| s.attach(&self.cred)),
             paused: self.state.paused.clone(),
             spend: Some(self.state.spend.clone()),
             ..Default::default()
@@ -2151,9 +1430,7 @@ impl TurnHandle {
             let spec = self.state.spec.clone();
             let rec = FlowRecord::TurnToolSummary(summary.clone());
             self.mcp.host.with_service(&mut |svc| {
-                if let Err(e) = svc.as_agent(spec.agent_id, |svc| {
-                    svc.record_flow(spec.chat_id, spec.workspace_id, rec.clone())
-                }) {
+                if let Err(e) = svc.as_agent(spec.agent_id, |svc| svc.record_flow(spec.chat_id, spec.workspace_id, rec.clone())) {
                     tracing::warn!(target: "ligus_mcp", "turn tool summary not recorded: {e}");
                 }
             });
@@ -2194,30 +1471,14 @@ pub struct HostAsker {
 }
 
 impl crate::agent_turn::HumanAsker for HostAsker {
-    fn ask_grant(
-        &self,
-        req: crate::agent_turn::GrantRequest,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Option<crate::agent_turn::HumanAnswer>> + Send + '_>,
-    > {
+    fn ask_grant(&self, req: crate::agent_turn::GrantRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<crate::agent_turn::HumanAnswer>> + Send + '_>> {
         Box::pin(async move {
-            if self
-                .turn
-                .as_ref()
-                .is_some_and(|st| !LigusMcp::charge_escalation(st))
-            {
+            if self.turn.as_ref().is_some_and(|st| !LigusMcp::charge_escalation(st)) {
                 return None;
             }
             let ask = self.grant_card(&req)?;
             let posted = decision::post_card(&*self.host, &self.ctx, ask).ok()?;
-            let outcome = Box::pin(decision::wait_card(
-                &*self.host,
-                self.ctx.session_id,
-                &posted,
-                req.timeout,
-                || self.revoked(),
-            ))
-            .await;
+            let outcome = Box::pin(decision::wait_card(&*self.host, self.ctx.session_id, &posted, req.timeout, || self.revoked())).await;
             match outcome {
                 // The fold counted it (the named people, their passkey where
                 // needed, the digest of this card); the host checks the
@@ -2229,10 +1490,7 @@ impl crate::agent_turn::HumanAsker for HostAsker {
                     if req.too_large || !self.answered_by_approver(&a) {
                         return None;
                     }
-                    Some(crate::agent_turn::HumanAnswer {
-                        answer: a.answer,
-                        option_index: a.option_index.map(|i| i as usize),
-                    })
+                    Some(crate::agent_turn::HumanAnswer { answer: a.answer, option_index: a.option_index.map(|i| i as usize) })
                 }
                 decision::CardOutcome::Foreign => None,
                 _ => {
@@ -2243,55 +1501,23 @@ impl crate::agent_turn::HumanAsker for HostAsker {
         })
     }
 
-    fn ask(
-        &self,
-        question: String,
-        options: Vec<String>,
-        timeout: Duration,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Option<crate::agent_turn::HumanAnswer>> + Send + '_>,
-    > {
+    fn ask(&self, question: String, options: Vec<String>, timeout: Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<crate::agent_turn::HumanAnswer>> + Send + '_>> {
         Box::pin(async move {
             // It asks the chat's people like ligus_ask_human: past the
             // question budgets (the turn's maxAsks, the cascade's) it is
             // denied without asking.
-            if self
-                .turn
-                .as_ref()
-                .is_some_and(|st| !LigusMcp::charge_escalation(st))
-            {
+            if self.turn.as_ref().is_some_and(|st| !LigusMcp::charge_escalation(st)) {
                 return None;
             }
-            let q: String = question
-                .chars()
-                .take(flow::MAX_ASK_QUESTION_CHARS)
-                .collect();
-            let posted = post_ask_as(
-                &*self.host,
-                &self.ctx,
-                self.turn_id,
-                q,
-                options,
-                timeout,
-                true,
-            )
-            .ok()?;
-            match wait_answer(
-                &*self.host,
-                self.ctx.session_id,
-                &posted.ask,
-                timeout,
-                || self.revoked(),
-            )
-            .await
-            {
+            let q: String = question.chars().take(flow::MAX_ASK_QUESTION_CHARS).collect();
+            let posted = post_ask_as(&*self.host, &self.ctx, self.turn_id, q, options, timeout, true).ok()?;
+            match wait_answer(&*self.host, self.ctx.session_id, &posted.ask, timeout, || self.revoked()).await {
                 // A permission answer authorizes a run on this host: it counts
                 // only from the host's own person or the agent's owner. Any
                 // other first answer (a teammate on another device) denies.
-                Some(a) if self.answered_by_approver(&a) => Some(crate::agent_turn::HumanAnswer {
-                    answer: a.answer,
-                    option_index: a.option_index.map(|i| i as usize),
-                }),
+                Some(a) if self.answered_by_approver(&a) => {
+                    Some(crate::agent_turn::HumanAnswer { answer: a.answer, option_index: a.option_index.map(|i| i as usize) })
+                }
                 Some(_) => None,
                 None => {
                     close_ask(&*self.host, &self.ctx, self.turn_id, posted.ask_id);
@@ -2305,9 +1531,7 @@ impl crate::agent_turn::HumanAsker for HostAsker {
 impl HostAsker {
     /// The turn was revoked (stopped or ended): a wait stops.
     fn revoked(&self) -> bool {
-        self.turn
-            .as_ref()
-            .is_some_and(|st| st.revoked.load(Ordering::SeqCst))
+        self.turn.as_ref().is_some_and(|st| st.revoked.load(Ordering::SeqCst))
     }
 
     /// The grant card for `req` (section 6.2): Ligus's words and labels, the
@@ -2318,36 +1542,18 @@ impl HostAsker {
         let ctx = &self.ctx;
         let mut out = None;
         self.host.with_service(&mut |svc| {
-            let Some(session) = svc.load_in(ctx.workspace_id, ctx.session_id).ok().flatten() else {
-                return;
-            };
+            let Some(session) = svc.load_in(ctx.workspace_id, ctx.session_id).ok().flatten() else { return };
             let mut people = vec![svc.author().id.clone()];
-            if let Some(owner) = ctx
-                .agent_id
-                .and_then(|id| session.workspace_agents.iter().find(|a| a.id == id))
-                .map(|a| a.owner_actor_id.clone())
-            {
+            if let Some(owner) = ctx.agent_id.and_then(|id| session.workspace_agents.iter().find(|a| a.id == id)).map(|a| a.owner_actor_id.clone()) {
                 if !owner.is_empty() && !people.contains(&owner) {
                     people.push(owner);
                 }
             }
-            let guarded =
-                !session.guards.lockdowns.is_empty() || session.guards.dearth_on().is_some();
-            let presence = if guarded || req.outside_sandbox {
-                flow::PRESENCE_REQUIRED
-            } else {
-                "none"
-            };
-            let labels = if req.standing {
-                ligus_proto::ask_text::STANDING_GRANT_LABELS
-            } else {
-                ligus_proto::ask_text::GRANT_LABELS
-            };
+            let guarded = !session.guards.lockdowns.is_empty() || session.guards.dearth_on().is_some();
+            let presence = if guarded || req.outside_sandbox { flow::PRESENCE_REQUIRED } else { "none" };
+            let labels = if req.standing { ligus_proto::ask_text::STANDING_GRANT_LABELS } else { ligus_proto::ask_text::GRANT_LABELS };
             let question = if req.standing {
-                format!(
-                    "{} asks permission to run this for the rest of its session.",
-                    req.agent_label
-                )
+                format!("{} asks permission to run this for the rest of its session.", req.agent_label)
             } else {
                 format!("{} asks permission to run this once.", req.agent_label)
             };
@@ -2366,10 +1572,7 @@ impl HostAsker {
                 effect: Some(flow::AskEffect {
                     kind: flow::EFFECT_PERMISSION.into(),
                     tool: req.tool.clone(),
-                    title: ligus_proto::ask_text::cut(
-                        &ligus_proto::ask_text::clean_option(&req.title),
-                        200,
-                    ),
+                    title: ligus_proto::ask_text::cut(&ligus_proto::ask_text::clean_option(&req.title), 200),
                     detail: req.detail.clone(),
                     cwd: req.cwd.clone(),
                     host_device_id: Some(svc.device_id()),
@@ -2378,10 +1581,7 @@ impl HostAsker {
                     too_large: req.too_large,
                     ..Default::default()
                 }),
-                origin: req.subagent.then(|| flow::AskOrigin {
-                    via: flow::ORIGIN_SUBAGENT.into(),
-                    ..Default::default()
-                }),
+                origin: req.subagent.then(|| flow::AskOrigin { via: flow::ORIGIN_SUBAGENT.into(), ..Default::default() }),
                 ..Default::default()
             });
         });
@@ -2394,22 +1594,11 @@ impl HostAsker {
         let mut ok = false;
         let ctx = &self.ctx;
         self.host.with_service(&mut |svc| {
-            let Some(author) = svc.flow_answer_author(ctx.session_id, ans) else {
-                return;
-            };
+            let Some(author) = svc.flow_answer_author(ctx.session_id, ans) else { return };
             let owner = ctx.agent_id.and_then(|id| {
-                svc.load_in(ctx.workspace_id, ctx.session_id)
-                    .ok()
-                    .flatten()
-                    .and_then(|s| {
-                        s.workspace_agents
-                            .iter()
-                            .find(|a| a.id == id)
-                            .map(|a| a.owner_actor_id.clone())
-                    })
+                svc.load_in(ctx.workspace_id, ctx.session_id).ok().flatten().and_then(|s| s.workspace_agents.iter().find(|a| a.id == id).map(|a| a.owner_actor_id.clone()))
             });
-            ok = !author.is_empty()
-                && (author == svc.author().id || owner.as_deref() == Some(author.as_str()));
+            ok = !author.is_empty() && (author == svc.author().id || owner.as_deref() == Some(author.as_str()));
         });
         ok
     }
@@ -2418,20 +1607,12 @@ impl HostAsker {
 impl TurnHandle {
     /// An asker for this turn's ACP permission escalations.
     pub fn asker(&self) -> Arc<dyn crate::agent_turn::HumanAsker> {
-        Arc::new(HostAsker {
-            host: self.mcp.host.clone(),
-            ctx: LigusMcp::ctx(&self.state),
-            turn_id: self.state.spec.message_id,
-            turn: Some(self.state.clone()),
-        })
+        Arc::new(HostAsker { host: self.mcp.host.clone(), ctx: LigusMcp::ctx(&self.state), turn_id: self.state.spec.message_id, turn: Some(self.state.clone()) })
     }
 
     /// [`Self::scope`] with the asker set: what a host wraps a CLI turn in.
     pub fn agent_scope(&self) -> crate::agent_turn::AgentTurnScope {
-        crate::agent_turn::AgentTurnScope {
-            asker: Some(self.asker()),
-            ..self.scope()
-        }
+        crate::agent_turn::AgentTurnScope { asker: Some(self.asker()), ..self.scope() }
     }
 }
 
@@ -2452,10 +1633,7 @@ impl<E: crate::tool_loop::ToolExecutor> crate::tool_loop::ToolExecutor for WithL
         }
         match self.inner {
             Some(e) => e.call(name, input).await,
-            None => (
-                format!("Error: unknown tool {name:?}. Use only the tools you were given."),
-                true,
-            ),
+            None => (format!("Error: unknown tool {name:?}. Use only the tools you were given."), true),
         }
     }
 }

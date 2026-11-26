@@ -30,13 +30,7 @@ use tokio::time::{Instant, Sleep};
 const DRAIN: Duration = Duration::from_secs(5);
 
 /// Serve `app` on `listener` until `stop` turns true.
-pub async fn serve(
-    listener: TcpListener,
-    app: Router,
-    header_read: Duration,
-    idle: Duration,
-    mut stop: watch::Receiver<bool>,
-) {
+pub async fn serve(listener: TcpListener, app: Router, header_read: Duration, idle: Duration, mut stop: watch::Receiver<bool>) {
     let (close, closing) = watch::channel(false);
     loop {
         let stream = tokio::select! {
@@ -57,9 +51,7 @@ pub async fn serve(
         let mut closing = closing.clone();
         tokio::spawn(async move {
             let mut b = hyper::server::conn::http1::Builder::new();
-            b.timer(TokioTimer::new())
-                .header_read_timeout(header_read)
-                .keep_alive(true);
+            b.timer(TokioTimer::new()).header_read_timeout(header_read).keep_alive(true);
             let conn = b.serve_connection(io, svc);
             let mut conn = std::pin::pin!(conn);
             tokio::select! {
@@ -90,11 +82,7 @@ pub struct IdleIo<T> {
 
 impl<T> IdleIo<T> {
     pub fn new(inner: T, idle: Duration) -> Self {
-        Self {
-            inner,
-            idle,
-            deadline: Box::pin(tokio::time::sleep(idle)),
-        }
+        Self { inner, idle, deadline: Box::pin(tokio::time::sleep(idle)) }
     }
 
     fn moved(&mut self) {
@@ -112,11 +100,7 @@ fn timed_out() -> io::Error {
 }
 
 impl<T: AsyncRead + Unpin> AsyncRead for IdleIo<T> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
         let before = buf.filled().len();
         match Pin::new(&mut self.inner).poll_read(cx, buf) {
             Poll::Ready(r) => {
@@ -132,11 +116,7 @@ impl<T: AsyncRead + Unpin> AsyncRead for IdleIo<T> {
 }
 
 impl<T: AsyncWrite + Unpin> AsyncWrite for IdleIo<T> {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        data: &[u8],
-    ) -> Poll<io::Result<usize>> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, data: &[u8]) -> Poll<io::Result<usize>> {
         match Pin::new(&mut self.inner).poll_write(cx, data) {
             Poll::Ready(Ok(n)) => {
                 if n > 0 {
@@ -158,11 +138,7 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for IdleIo<T> {
         Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 
-    fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bufs: &[io::IoSlice<'_>],
-    ) -> Poll<io::Result<usize>> {
+    fn poll_write_vectored(mut self: Pin<&mut Self>, cx: &mut Context<'_>, bufs: &[io::IoSlice<'_>]) -> Poll<io::Result<usize>> {
         match Pin::new(&mut self.inner).poll_write_vectored(cx, bufs) {
             Poll::Ready(Ok(n)) => {
                 if n > 0 {
@@ -196,16 +172,9 @@ mod tests {
         for _ in 0..4 {
             tokio::time::sleep(Duration::from_millis(150)).await;
             b.write_all(b"x").await.unwrap();
-            assert_eq!(
-                io.read(&mut buf).await.unwrap(),
-                1,
-                "traffic resets the clock"
-            );
+            assert_eq!(io.read(&mut buf).await.unwrap(), 1, "traffic resets the clock");
         }
-        let err = tokio::time::timeout(Duration::from_secs(5), io.read(&mut buf))
-            .await
-            .expect("ends by itself")
-            .unwrap_err();
+        let err = tokio::time::timeout(Duration::from_secs(5), io.read(&mut buf)).await.expect("ends by itself").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
     }
 }

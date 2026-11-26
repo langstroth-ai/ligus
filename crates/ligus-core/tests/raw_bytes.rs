@@ -16,10 +16,7 @@ use ligus_core::{verify_envelope, SessionEventEnvelope};
 const GOLDEN: &str = include_str!("golden/envelopes_v3.jsonl");
 
 fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-        .collect()
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
 }
 
 /// (label, public key, the envelope's exact wire text) per golden line.
@@ -43,8 +40,7 @@ fn golden_envelopes_verify() {
     let vectors = golden();
     assert!(vectors.len() >= 24);
     for (label, pk, wire) in vectors {
-        let env: SessionEventEnvelope =
-            serde_json::from_str(&wire).unwrap_or_else(|e| panic!("{label}: {e}"));
+        let env: SessionEventEnvelope = serde_json::from_str(&wire).unwrap_or_else(|e| panic!("{label}: {e}"));
         verify_envelope(&env, &pk).unwrap_or_else(|e| panic!("{label} no longer verifies: {e}"));
     }
 }
@@ -55,13 +51,8 @@ fn golden_envelopes_verify() {
 fn golden_envelopes_verify_byte_for_byte() {
     for (label, pk, wire) in golden() {
         let env: SessionEventEnvelope = serde_json::from_str(&wire).unwrap();
-        assert_eq!(
-            serde_json::to_string(&env).unwrap(),
-            wire,
-            "{label}: re-emitted bytes differ"
-        );
-        let again: SessionEventEnvelope =
-            serde_json::from_str(&serde_json::to_string(&env).unwrap()).unwrap();
+        assert_eq!(serde_json::to_string(&env).unwrap(), wire, "{label}: re-emitted bytes differ");
+        let again: SessionEventEnvelope = serde_json::from_str(&serde_json::to_string(&env).unwrap()).unwrap();
         verify_envelope(&again, &pk).unwrap_or_else(|e| panic!("{label}: {e}"));
         assert!(env.raw().is_some());
     }
@@ -113,20 +104,11 @@ fn inject(v: &mut Value, extra: &Value, pick: &mut impl Iterator<Item = bool>, d
 
 fn sample_events() -> Vec<SessionEvent> {
     let mut msg = ligus_core::ChatMessage::new(ligus_core::MessageRole::User, "Mara", "hi");
-    msg.actor_identity = Some(ligus_core::ActorIdentity::new(
-        "m",
-        "Mara",
-        ligus_core::ActorKind::Human,
-    ));
+    msg.actor_identity = Some(ligus_core::ActorIdentity::new("m", "Mara", ligus_core::ActorKind::Human));
     vec![
         SessionEvent::MessageAppended { message: msg },
         SessionEvent::ProposalUpserted {
-            proposal: ligus_core::ActionProposal::file_diff(
-                "p",
-                "m",
-                "diff".into(),
-                vec!["a".into()],
-            ),
+            proposal: ligus_core::ActionProposal::file_diff("p", "m", "diff".into(), vec!["a".into()]),
         },
         SessionEvent::SessionTitleChanged { title: "t".into() },
     ]
@@ -134,34 +116,14 @@ fn sample_events() -> Vec<SessionEvent> {
 
 /// Sign `payload` (arbitrary JSON) the way a newer encoder would: over the
 /// bytes it puts on the wire. Returns the wire text.
-fn newer_encoder(
-    kp: &SigningKeypair,
-    sid: Uuid,
-    payload: &Value,
-    top_extra: &Value,
-    lamport: u64,
-) -> String {
+fn newer_encoder(kp: &SigningKeypair, sid: Uuid, payload: &Value, top_extra: &Value, lamport: u64) -> String {
     newer_encoder_after(kp, sid, payload, top_extra, lamport, None)
 }
 
 /// [`newer_encoder`] for an event that names `head` as its log head (an
 /// unstamped event can only be a log's first, at lamport 1).
-fn newer_encoder_after(
-    kp: &SigningKeypair,
-    sid: Uuid,
-    payload: &Value,
-    top_extra: &Value,
-    lamport: u64,
-    head: Option<&SessionEventEnvelope>,
-) -> String {
-    let base = SessionEventEnvelope::new(
-        sid,
-        Uuid::nil(),
-        lamport as i64,
-        SessionEvent::SessionTitleChanged {
-            title: String::new(),
-        },
-    );
+fn newer_encoder_after(kp: &SigningKeypair, sid: Uuid, payload: &Value, top_extra: &Value, lamport: u64, head: Option<&SessionEventEnvelope>) -> String {
+    let base = SessionEventEnvelope::new(sid, Uuid::nil(), lamport as i64, SessionEvent::SessionTitleChanged { title: String::new() });
     let mut v = serde_json::to_value(&base).unwrap();
     v["payload"] = payload.clone();
     v["lamport"] = json!(lamport);

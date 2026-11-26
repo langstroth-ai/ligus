@@ -26,10 +26,7 @@ const DEFAULT_TEMPS: &[(&str, &str)] = &[
 pub fn temp_queries() -> Vec<(String, String)> {
     match crate::env_opt("LIGUS_LAB_TEMPS") {
         Some(spec) => parse_temp_spec(&spec),
-        None => DEFAULT_TEMPS
-            .iter()
-            .map(|(n, q)| (n.to_string(), q.to_string()))
-            .collect(),
+        None => DEFAULT_TEMPS.iter().map(|(n, q)| (n.to_string(), q.to_string())).collect(),
     }
 }
 
@@ -47,13 +44,7 @@ type Sample = (Map<String, Value>, f64);
 /// Run one instant query. `None` on any failure.
 async fn query(client: &reqwest::Client, base: &str, promql: &str) -> Option<Vec<Sample>> {
     let url = format!("{}/api/v1/query", base.trim_end_matches('/'));
-    let resp = client
-        .get(url)
-        .query(&[("query", promql)])
-        .timeout(QUERY_TIMEOUT)
-        .send()
-        .await
-        .ok()?;
+    let resp = client.get(url).query(&[("query", promql)]).timeout(QUERY_TIMEOUT).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
     }
@@ -70,11 +61,7 @@ pub fn parse_vector(v: &Value) -> Option<Vec<Sample>> {
     Some(
         rows.iter()
             .filter_map(|r| {
-                let labels = r
-                    .get("metric")
-                    .and_then(Value::as_object)
-                    .cloned()
-                    .unwrap_or_default();
+                let labels = r.get("metric").and_then(Value::as_object).cloned().unwrap_or_default();
                 let val = r.pointer("/value/1")?.as_str()?.parse::<f64>().ok()?;
                 val.is_finite().then_some((labels, val))
             })
@@ -87,24 +74,14 @@ fn scalar(samples: Option<Vec<Sample>>) -> Option<f64> {
 }
 
 /// Run a range query over the last `hours` at one-hour steps: (unix seconds, value).
-async fn query_hourly(
-    client: &reqwest::Client,
-    base: &str,
-    promql: &str,
-    hours: i64,
-) -> Option<Vec<(i64, f64)>> {
+async fn query_hourly(client: &reqwest::Client, base: &str, promql: &str, hours: i64) -> Option<Vec<(i64, f64)>> {
     let url = format!("{}/api/v1/query_range", base.trim_end_matches('/'));
     let end = time::OffsetDateTime::now_utc().unix_timestamp() / 3600 * 3600;
     let start = (end - hours * 3600).to_string();
     let end = end.to_string();
     let resp = client
         .get(url)
-        .query(&[
-            ("query", promql),
-            ("start", &start),
-            ("end", &end),
-            ("step", "3600"),
-        ])
+        .query(&[("query", promql), ("start", &start), ("end", &end), ("step", "3600")])
         .timeout(QUERY_TIMEOUT)
         .send()
         .await
@@ -187,21 +164,14 @@ pub fn solar_json(s: &Solar, rate: Option<f64>) -> Option<Value> {
         _ => None,
     };
     put("labOffset24h", offset, 3);
-    put(
-        "labSolarValue24h",
-        s.lab_solar_kwh_24h.zip(rate).map(|(k, r)| k * r),
-        4,
-    );
+    put("labSolarValue24h", s.lab_solar_kwh_24h.zip(rate).map(|(k, r)| k * r), 4);
     let history: Vec<Value> = s
         .history
         .iter()
         .map(|(t, sol, lab)| {
             let iso = time::OffsetDateTime::from_unix_timestamp(*t)
                 .ok()
-                .and_then(|d| {
-                    d.format(&time::format_description::well_known::Rfc3339)
-                        .ok()
-                })
+                .and_then(|d| d.format(&time::format_description::well_known::Rfc3339).ok())
                 .unwrap_or_default();
             let mut p = json!({ "t": iso });
             if let Some(v) = sol {
@@ -222,22 +192,7 @@ pub fn solar_json(s: &Solar, rate: Option<f64>) -> Option<Value> {
 /// Query everything the solar pane shows.
 async fn solar(client: &reqwest::Client, base: &str) -> Solar {
     let q = |promql: &'static str| query(client, base, promql);
-    let (
-        up,
-        prod,
-        cons,
-        grid,
-        share,
-        lab_sol,
-        produced,
-        house,
-        lab,
-        lab_solar,
-        import,
-        export,
-        hist_sol,
-        hist_lab,
-    ) = tokio::join!(
+    let (up, prod, cons, grid, share, lab_sol, produced, house, lab, lab_solar, import, export, hist_sol, hist_lab) = tokio::join!(
         q("envoy_up"),
         q("envoy_production_watts"),
         q("envoy_consumption_watts"),
@@ -250,18 +205,8 @@ async fn solar(client: &reqwest::Client, base: &str) -> Solar {
         q("sum_over_time(lab:solar_watts[24h:1m]) / 60 / 1000"),
         q("sum_over_time(clamp_min(envoy_grid_watts, 0)[24h:1m]) / 60 / 1000"),
         q("sum_over_time(clamp_min(-envoy_grid_watts, 0)[24h:1m]) / 60 / 1000"),
-        query_hourly(
-            client,
-            base,
-            "avg_over_time(clamp_min(envoy_production_watts, 0)[1h:1m])",
-            24
-        ),
-        query_hourly(
-            client,
-            base,
-            "avg_over_time(lab:power_watts:sum[1h:1m])",
-            24
-        ),
+        query_hourly(client, base, "avg_over_time(clamp_min(envoy_production_watts, 0)[1h:1m])", 24),
+        query_hourly(client, base, "avg_over_time(lab:power_watts:sum[1h:1m])", 24),
     );
     Solar {
         up: scalar(up),
@@ -281,17 +226,12 @@ async fn solar(client: &reqwest::Client, base: &str) -> Solar {
 }
 
 /// Join two hourly series on their timestamps.
-pub fn merge_hourly(
-    sol: Vec<(i64, f64)>,
-    lab: Vec<(i64, f64)>,
-) -> Vec<(i64, Option<f64>, Option<f64>)> {
+pub fn merge_hourly(sol: Vec<(i64, f64)>, lab: Vec<(i64, f64)>) -> Vec<(i64, Option<f64>, Option<f64>)> {
     let mut ts: Vec<i64> = sol.iter().chain(lab.iter()).map(|(t, _)| *t).collect();
     ts.sort_unstable();
     ts.dedup();
     let find = |s: &[(i64, f64)], t: i64| s.iter().find(|(x, _)| *x == t).map(|(_, v)| *v);
-    ts.into_iter()
-        .map(|t| (t, find(&sol, t), find(&lab, t)))
-        .collect()
+    ts.into_iter().map(|t| (t, find(&sol, t), find(&lab, t))).collect()
 }
 
 /// Assemble the status object from the query results.
@@ -314,9 +254,7 @@ pub fn assemble(
     workers.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     let temps: Vec<Value> = temps
         .into_iter()
-        .filter_map(|(name, v)| {
-            v.map(|c| json!({ "name": name, "celsius": (c * 10.0).round() / 10.0 }))
-        })
+        .filter_map(|(name, v)| v.map(|c| json!({ "name": name, "celsius": (c * 10.0).round() / 10.0 })))
         .collect();
     let mut out = json!({
         "workers": workers,
@@ -342,8 +280,7 @@ pub fn assemble(
 /// Query Prometheus and build the `/v1/lab/status` body.
 pub async fn status(client: &reqwest::Client, base: &str) -> Value {
     let temp_qs = temp_queries();
-    let temps_fut =
-        futures_util::future::join_all(temp_qs.iter().map(|(_, q)| query(client, base, q)));
+    let temps_fut = futures_util::future::join_all(temp_qs.iter().map(|(_, q)| query(client, base, q)));
     let (workers, power, cost, rate, temps, solar) = tokio::join!(
         query(client, base, "rdnagw_worker_up"),
         query(client, base, "lab:power_watts:sum"),
@@ -357,14 +294,7 @@ pub async fn status(client: &reqwest::Client, base: &str) -> Value {
         .zip(temps)
         .map(|((name, _), r)| (name, scalar(r)))
         .collect();
-    assemble(
-        workers,
-        scalar(power),
-        scalar(cost),
-        scalar(rate),
-        temps,
-        &solar,
-    )
+    assemble(workers, scalar(power), scalar(cost), scalar(rate), temps, &solar)
 }
 
 #[cfg(test)]
@@ -386,10 +316,7 @@ mod tests {
             vec![("Server".into(), Some(49.25)), ("Jetson".into(), None)],
             &Solar::default(),
         );
-        assert_eq!(
-            out["workers"][0],
-            json!({"name":"desktop-6900xt","up":false})
-        );
+        assert_eq!(out["workers"][0], json!({"name":"desktop-6900xt","up":false}));
         assert_eq!(out["workers"][1], json!({"name":"server-cpu","up":true}));
         assert_eq!(out["powerWatts"], json!(184.6));
         assert!(out.get("costPerHour").is_none());
@@ -412,11 +339,7 @@ mod tests {
         };
         let j = solar_json(&s, Some(0.25)).unwrap();
         assert_eq!(j["up"], json!(true));
-        assert_eq!(
-            j["productionWatts"],
-            json!(0.0),
-            "night-time meter noise reads as zero"
-        );
+        assert_eq!(j["productionWatts"], json!(0.0), "night-time meter noise reads as zero");
         assert_eq!(j["gridWatts"], json!(-1200.0));
         assert_eq!(j["labOffset24h"], json!(0.625));
         assert_eq!(j["labSolarValue24h"], json!(0.3125));
@@ -428,11 +351,7 @@ mod tests {
         assert_eq!(h[1]["labWatts"], json!(190.0));
         assert!(h[0]["t"].as_str().unwrap().ends_with('Z'));
 
-        let none = Solar {
-            up: None,
-            production_w: Some(100.0),
-            ..Solar::default()
-        };
+        let none = Solar { up: None, production_w: Some(100.0), ..Solar::default() };
         assert!(solar_json(&none, None).is_none());
     }
 
@@ -440,10 +359,7 @@ mod tests {
     fn matrix_first_series_parses() {
         let body = json!({"status":"success","data":{"resultType":"matrix","result":[
             {"metric":{},"values":[[3600,"1.5"],[7200,"NaN"],[10800,"2"]]}]}});
-        assert_eq!(
-            parse_matrix_first(&body),
-            Some(vec![(3600, 1.5), (10800, 2.0)])
-        );
+        assert_eq!(parse_matrix_first(&body), Some(vec![(3600, 1.5), (10800, 2.0)]));
     }
 
     #[test]
@@ -454,10 +370,7 @@ mod tests {
     #[test]
     fn temp_spec_parses() {
         let v = parse_temp_spec("A=max(x); B = y ;bad;=z");
-        assert_eq!(
-            v,
-            vec![("A".into(), "max(x)".into()), ("B".into(), "y".into())]
-        );
+        assert_eq!(v, vec![("A".into(), "max(x)".into()), ("B".into(), "y".into())]);
     }
 
     #[tokio::test]

@@ -28,23 +28,13 @@ pub(super) fn init(conn: &Connection) -> rusqlite::Result<()> {
 impl EventStore {
     /// The proposals hidden on this device in `workspace_id`.
     pub fn hidden_proposals(&self, workspace_id: Uuid) -> Result<BTreeSet<Uuid>> {
-        let mut st = self
-            .conn
-            .prepare("SELECT proposal_id FROM hidden_proposals WHERE workspace_id = ?1")?;
+        let mut st = self.conn.prepare("SELECT proposal_id FROM hidden_proposals WHERE workspace_id = ?1")?;
         let rows = st.query_map([workspace_id.to_string()], |r| r.get::<_, String>(0))?;
-        Ok(rows
-            .filter_map(|r| r.ok())
-            .filter_map(|s| Uuid::parse_str(&s).ok())
-            .collect())
+        Ok(rows.filter_map(|r| r.ok()).filter_map(|s| Uuid::parse_str(&s).ok()).collect())
     }
 
     /// Hide (or, with `hidden` false, show again) proposals on this device.
-    pub fn set_proposals_hidden(
-        &self,
-        workspace_id: Uuid,
-        proposal_ids: &[Uuid],
-        hidden: bool,
-    ) -> Result<()> {
+    pub fn set_proposals_hidden(&self, workspace_id: Uuid, proposal_ids: &[Uuid], hidden: bool) -> Result<()> {
         let ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
@@ -78,10 +68,7 @@ mod tests {
         store.set_proposals_hidden(a, &[p], true).unwrap();
         store.set_proposals_hidden(a, &[p], true).unwrap();
         assert_eq!(store.hidden_proposals(a).unwrap(), BTreeSet::from([p]));
-        assert!(
-            store.hidden_proposals(b).unwrap().is_empty(),
-            "another workspace keeps its own"
-        );
+        assert!(store.hidden_proposals(b).unwrap().is_empty(), "another workspace keeps its own");
         store.set_proposals_hidden(a, &[p], false).unwrap();
         assert!(store.hidden_proposals(a).unwrap().is_empty());
     }

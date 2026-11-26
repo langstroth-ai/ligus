@@ -16,12 +16,7 @@ fn env() -> Env {
     let t = tempfile::tempdir().unwrap();
     let store = EventStore::open_in_memory().unwrap();
     let settings = settings(&store, &t.path().join("data").join("scratch"));
-    Env {
-        t,
-        store,
-        ws: Uuid::new_v4(),
-        settings,
-    }
+    Env { t, store, ws: Uuid::new_v4(), settings }
 }
 
 fn mk(e: &Env, name: &str, who: &str, now: i64) -> ScratchRepo {
@@ -34,29 +29,12 @@ fn creates_an_empty_repo_on_main_under_the_root() {
     let r = mk(&e, "Try a parser", "acct-1", 1_000);
     let root = super::super::git::canonical(&e.t.path().join("data/scratch"));
     assert_eq!(r.path.parent(), Some(root.as_path()));
-    assert!(
-        r.dir_name.starts_with("try-a-parser-") && r.dir_name.len() == "try-a-parser-".len() + 8,
-        "{}",
-        r.dir_name
-    );
+    assert!(r.dir_name.starts_with("try-a-parser-") && r.dir_name.len() == "try-a-parser-".len() + 8, "{}", r.dir_name);
     assert_eq!(r.name, "Try a parser");
-    assert_eq!(
-        super::super::git::git(&r.path, &["symbolic-ref", "--short", "HEAD"]).unwrap(),
-        "main"
-    );
-    assert_eq!(
-        super::super::git::git(&r.path, &["rev-list", "--count", "HEAD"]).unwrap(),
-        "1"
-    );
-    assert_eq!(
-        super::super::git::git(&r.path, &["ls-tree", "HEAD"]).unwrap(),
-        "",
-        "the first commit is empty"
-    );
-    assert_eq!(
-        super::super::git::root_commit(&r.path).as_deref(),
-        Some(r.root_commit.as_str())
-    );
+    assert_eq!(super::super::git::git(&r.path, &["symbolic-ref", "--short", "HEAD"]).unwrap(), "main");
+    assert_eq!(super::super::git::git(&r.path, &["rev-list", "--count", "HEAD"]).unwrap(), "1");
+    assert_eq!(super::super::git::git(&r.path, &["ls-tree", "HEAD"]).unwrap(), "", "the first commit is empty");
+    assert_eq!(super::super::git::root_commit(&r.path).as_deref(), Some(r.root_commit.as_str()));
     assert!(has_marker(&r.path, r.id));
     assert_eq!(by_path(&e.store, &r.path).map(|x| x.id), Some(r.id));
     assert_eq!(live(&e.store, e.ws).len(), 1);
@@ -73,10 +51,7 @@ fn creates_an_empty_repo_on_main_under_the_root() {
 #[test]
 fn bad_names_and_roots_are_refused() {
     let e = env();
-    assert!(matches!(
-        create(&e.store, &e.settings, &[], e.ws, "We\u{202E}Fit", "", 0),
-        Err(ScratchError::Invalid(_))
-    ));
+    assert!(matches!(create(&e.store, &e.settings, &[], e.ws, "We\u{202E}Fit", "", 0), Err(ScratchError::Invalid(_))));
     assert_eq!(slug("../../etc/passwd"), "etc-passwd");
     assert_eq!(slug("..."), "scratch");
     // A relative root, a root inside a checkout, a root in the desktop's
@@ -86,10 +61,7 @@ fn bad_names_and_roots_are_refused() {
     std::fs::create_dir_all(&repo).unwrap();
     super::super::git::git(&repo, &["init", "-q"]).unwrap();
     let err = check_root(&repo.join("scratch"), &[]).unwrap_err();
-    assert!(
-        err.to_string().contains("inside another repository"),
-        "{err}"
-    );
+    assert!(err.to_string().contains("inside another repository"), "{err}");
     let desk = e.t.path().join("desktop-data");
     std::fs::create_dir_all(&desk).unwrap();
     assert!(check_root(&desk.join("scratch"), std::slice::from_ref(&desk)).is_err());
@@ -102,10 +74,7 @@ fn bad_names_and_roots_are_refused() {
         assert!(check_root(&e.t.path().join("link"), &[]).is_err());
     }
     assert!(set_root(&e.store, Some(&repo.join("x")), &[]).is_err());
-    assert!(
-        settings(&e.store, Path::new("/d")).root_is_default,
-        "a refused root is never stored"
-    );
+    assert!(settings(&e.store, Path::new("/d")).root_is_default, "a refused root is never stored");
 }
 
 #[test]
@@ -119,13 +88,7 @@ fn limits_per_host_and_per_member() {
     let err = create(&e.store, &s, &[], e.ws, "c", "ana", 0).unwrap_err();
     assert_eq!(err.code(), "scratch_limit");
     create(&e.store, &s, &[], e.ws, "c", "ben", 0).unwrap();
-    assert_eq!(
-        create(&e.store, &s, &[], e.ws, "d", "cy", 0)
-            .unwrap_err()
-            .code(),
-        "scratch_limit",
-        "the host's cap"
-    );
+    assert_eq!(create(&e.store, &s, &[], e.ws, "d", "cy", 0).unwrap_err().code(), "scratch_limit", "the host's cap");
     // Nothing was left behind by the refused ones.
     let dirs = std::fs::read_dir(&s.root).unwrap().count();
     assert_eq!(dirs, 3);
@@ -148,10 +111,7 @@ fn cleanup_notices_then_removes_and_can_be_off() {
     let fresh = expiry(&r, &e.settings, t0).unwrap();
     assert_eq!(e.settings.cleanup_days, Some(DEFAULT_CLEANUP_DAYS));
     let act = activity(&r, now());
-    assert!(
-        act >= now() - 60,
-        "the repo's own git dir counts as activity"
-    );
+    assert!(act >= now() - 60, "the repo's own git dir counts as activity");
     assert!(fresh.remove_at >= t0 + 14 * DAY_S);
     let x = expiry(&r, &e.settings, act + 12 * DAY_S + 1).unwrap();
     assert!(x.notice, "{x:?}");
@@ -162,12 +122,7 @@ fn cleanup_notices_then_removes_and_can_be_off() {
     assert!(d.remove.is_empty());
     assert!(notice_text(&d.notice[0].0, &d.notice[0].1, "box").contains("will be removed on"));
     mark_noticed(&e.store, r.id, act + 12 * DAY_S + 1).unwrap();
-    assert!(
-        due(&e.store, e.ws, &e.settings, act + 12 * DAY_S + 2)
-            .notice
-            .is_empty(),
-        "noticed once"
-    );
+    assert!(due(&e.store, e.ws, &e.settings, act + 12 * DAY_S + 2).notice.is_empty(), "noticed once");
     // Activity resets the notice.
     assert!(touch(&e.store, &r.path, act + 13 * DAY_S));
     let r = by_path(&e.store, &r.path).unwrap();
@@ -206,44 +161,20 @@ fn removal_refuses_traversal_symlinks_and_foreign_folders() {
     // A traversal in the recorded name or path.
     let r = mk(&e, "t", "", 0);
     for bad in [
-        ScratchRepo {
-            dir_name: "..".into(),
-            ..r.clone()
-        },
-        ScratchRepo {
-            dir_name: "../precious".into(),
-            ..r.clone()
-        },
-        ScratchRepo {
-            path: victim.clone(),
-            ..r.clone()
-        },
-        ScratchRepo {
-            root: e.t.path().to_path_buf(),
-            dir_name: "precious".into(),
-            path: super::super::git::canonical(&victim),
-            ..r.clone()
-        },
+        ScratchRepo { dir_name: "..".into(), ..r.clone() },
+        ScratchRepo { dir_name: "../precious".into(), ..r.clone() },
+        ScratchRepo { path: victim.clone(), ..r.clone() },
+        ScratchRepo { root: e.t.path().to_path_buf(), dir_name: "precious".into(), path: super::super::git::canonical(&victim), ..r.clone() },
     ] {
         assert!(remove_dir_checked(&bad).is_err(), "{bad:?}");
     }
     assert!(victim.join("keep.txt").exists());
 
     // Not live: refused.
-    assert_eq!(
-        remove_dir_checked(&ScratchRepo {
-            state: ScratchState::Kept,
-            ..r.clone()
-        })
-        .unwrap_err(),
-        ScratchError::NotFound
-    );
+    assert_eq!(remove_dir_checked(&ScratchRepo { state: ScratchState::Kept, ..r.clone() }).unwrap_err(), ScratchError::NotFound);
 
     // The marker must be this entry's own.
-    let other = ScratchRepo {
-        id: Uuid::new_v4(),
-        ..r.clone()
-    };
+    let other = ScratchRepo { id: Uuid::new_v4(), ..r.clone() };
     assert!(remove_dir_checked(&other).is_err());
     assert!(r.path.exists());
 
@@ -266,19 +197,12 @@ fn removal_refuses_traversal_symlinks_and_foreign_folders() {
         std::os::unix::fs::symlink(&victim, r3.path.join("escape")).unwrap();
         remove_dir_checked(&r3).unwrap();
         assert!(!r3.path.exists());
-        assert!(
-            victim.join("keep.txt").exists(),
-            "a symlink's target survives"
-        );
+        assert!(victim.join("keep.txt").exists(), "a symlink's target survives");
 
         // A .git that is a gitfile pointing at another repository's git dir.
         let r4 = mk(&e, "gitfile", "", 0);
         std::fs::remove_dir_all(r4.path.join(".git")).unwrap();
-        std::fs::write(
-            r4.path.join(".git"),
-            format!("gitdir: {}\n", common.display()),
-        )
-        .unwrap();
+        std::fs::write(r4.path.join(".git"), format!("gitdir: {}\n", common.display())).unwrap();
         assert!(remove_dir_checked(&r4).is_err());
         assert!(r4.path.exists());
     }
@@ -290,10 +214,7 @@ fn removal_refuses_traversal_symlinks_and_foreign_folders() {
     {
         let link = e.t.path().join("root-link");
         std::os::unix::fs::symlink(&r5.root, &link).unwrap();
-        let moved = ScratchRepo {
-            root: link,
-            ..r5.clone()
-        };
+        let moved = ScratchRepo { root: link, ..r5.clone() };
         assert!(remove_dir_checked(&moved).is_err());
     }
     remove_dir_checked(&r5).unwrap();
@@ -326,28 +247,13 @@ fn keep_moves_it_out_with_its_worktrees() {
     assert_eq!(dest, super::super::git::canonical(&home.join("parser")));
     assert!(!has_marker(&dest, r.id), "no longer scratch");
     let moved_wt = dest.join(wt.strip_prefix(&r.path).unwrap());
-    assert_eq!(
-        std::fs::read_to_string(moved_wt.join("a.txt")).unwrap(),
-        "hello"
-    );
-    assert_eq!(
-        super::super::git::git(&moved_wt, &["rev-parse", "--show-toplevel"])
-            .map(PathBuf::from)
-            .map(|p| super::super::git::canonical(&p))
-            .unwrap(),
-        super::super::git::canonical(&moved_wt),
-        "the worktree link was repaired"
-    );
+    assert_eq!(std::fs::read_to_string(moved_wt.join("a.txt")).unwrap(), "hello");
+    assert_eq!(super::super::git::git(&moved_wt, &["rev-parse", "--show-toplevel"]).map(PathBuf::from).map(|p| super::super::git::canonical(&p)).unwrap(), super::super::git::canonical(&moved_wt), "the worktree link was repaired");
     let k = mark_kept(&e.store, r.id, &dest).unwrap();
     assert_eq!(k.state, ScratchState::Kept);
-    assert!(
-        by_path(&e.store, &dest).is_none(),
-        "kept ones aren't live scratch repos"
-    );
+    assert!(by_path(&e.store, &dest).is_none(), "kept ones aren't live scratch repos");
     // A kept repo is never due.
-    assert!(due(&e.store, e.ws, &e.settings, i64::MAX / 2)
-        .remove
-        .is_empty());
+    assert!(due(&e.store, e.ws, &e.settings, i64::MAX / 2).remove.is_empty());
 }
 
 #[test]
@@ -358,10 +264,7 @@ fn chats_and_lookup() {
     set_chat(&e.store, r.id, c, true, 5).unwrap();
     set_chat(&e.store, r.id, c, true, 6).unwrap();
     assert_eq!(by_path(&e.store, &r.path).unwrap().chats, vec![c]);
-    assert_eq!(
-        find(&e.store, e.ws, &r.short_id()).map(|x| x.id),
-        Some(r.id)
-    );
+    assert_eq!(find(&e.store, e.ws, &r.short_id()).map(|x| x.id), Some(r.id));
     assert_eq!(find(&e.store, e.ws, &r.dir_name).map(|x| x.id), Some(r.id));
     assert_eq!(find(&e.store, e.ws, "lookup").map(|x| x.id), Some(r.id));
     assert!(find(&e.store, e.ws, "abc").is_none(), "too short a prefix");
@@ -389,17 +292,10 @@ fn an_unwritable_tree_is_still_removed() {
     remove_dir_checked(&r).unwrap();
     mark_removed(&e.store, r.id, 1).unwrap();
     assert!(!r.path.exists());
-    assert!(
-        live(&e.store, e.ws).is_empty(),
-        "no live entry holds a slot"
-    );
+    assert!(live(&e.store, e.ws).is_empty(), "no live entry holds a slot");
     assert_eq!(purge_trash(&e.store), 0);
     assert!(pending_trash(&e.store).is_empty());
-    assert_eq!(
-        std::fs::read_dir(&r.root).unwrap().count(),
-        0,
-        "no trash left behind"
-    );
+    assert_eq!(std::fs::read_dir(&r.root).unwrap().count(), 0, "no trash left behind");
 }
 
 #[cfg(unix)]
@@ -419,34 +315,14 @@ fn a_root_anyone_may_write_to_is_refused() {
 fn the_scratch_hint_shows_on_local_repos_only() {
     use ligus_core::workspace_repo::{repo_id, WorkspaceRepo};
     let c = format!("local:{}", "a".repeat(40));
-    let local = WorkspaceRepo {
-        id: repo_id(&c),
-        canonical: c,
-        display_name: "s".into(),
-        forge_kind: String::new(),
-        default_branch: "main".into(),
-        root_commit: None,
-        scratch: true,
-    };
+    let local = WorkspaceRepo { id: repo_id(&c), canonical: c, display_name: "s".into(), forge_kind: String::new(), default_branch: "main".into(), root_commit: None, scratch: true };
     assert!(local.is_scratch());
-    let real = WorkspaceRepo {
-        id: repo_id("github.com/a/b"),
-        canonical: "github.com/a/b".into(),
-        ..local.clone()
-    };
-    assert!(
-        !real.is_scratch(),
-        "nobody labels a forge repository throwaway"
-    );
+    let real = WorkspaceRepo { id: repo_id("github.com/a/b"), canonical: "github.com/a/b".into(), ..local.clone() };
+    assert!(!real.is_scratch(), "nobody labels a forge repository throwaway");
     // Additive on the wire: absent when false, absent fields decode as false.
-    let plain = WorkspaceRepo {
-        scratch: false,
-        ..local.clone()
-    };
+    let plain = WorkspaceRepo { scratch: false, ..local.clone() };
     assert!(!serde_json::to_string(&plain).unwrap().contains("scratch"));
     let old: WorkspaceRepo = serde_json::from_str(&serde_json::to_string(&plain).unwrap()).unwrap();
     assert!(!old.scratch);
-    assert!(serde_json::to_string(&local)
-        .unwrap()
-        .contains("\"scratch\":true"));
+    assert!(serde_json::to_string(&local).unwrap().contains("\"scratch\":true"));
 }

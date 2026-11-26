@@ -36,13 +36,7 @@ fn world() -> SignedWorld {
 
 /// A config event by `by`, drafted as if they held the log only up to
 /// `back` events before its newest (a backdated draft), with `proof`.
-fn push_back(
-    w: &mut SignedWorld,
-    by: &str,
-    payload: SessionEvent,
-    back: usize,
-    proof: Proof,
-) -> Uuid {
+fn push_back(w: &mut SignedWorld, by: &str, payload: SessionEvent, back: usize, proof: Proof) -> Uuid {
     let mut env = w.draft(by, None, payload, None);
     ligus_core::lamport::stamp_back(&mut env, &w.cfg, back);
     // The lowest id: it sorts first among the events of its lamport.
@@ -56,12 +50,7 @@ fn push_back(
 }
 
 fn active_raises(w: &SignedWorld, chat: Uuid) -> Vec<(Uuid, LockdownSignal)> {
-    w.config()
-        .guards
-        .lockdowns_of(chat)
-        .iter()
-        .map(|l| (l.raise_event_id.unwrap(), l.signal))
-        .collect()
+    w.config().guards.lockdowns_of(chat).iter().map(|l| (l.raise_event_id.unwrap(), l.signal)).collect()
 }
 
 /// Lockdowns x author-chosen ids x backdating: a Viewer who reuses the id
@@ -73,49 +62,19 @@ fn a_reused_lockdown_id_never_hides_or_lifts_another_raise() {
     let mut w = world();
     let chat = w.chat("owner", "c");
     let l = Uuid::new_v4();
-    let real = w.push_bare(
-        "ada",
-        SessionEvent::ChatLockdownRaised {
-            chat_id: chat,
-            lockdown: lockdown(l, LockdownSignal::SecretInDiff, "ada"),
-        },
-    );
-    assert_eq!(
-        active_raises(&w, chat),
-        vec![(real, LockdownSignal::SecretInDiff)]
-    );
+    let real = w.push_bare("ada", SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(l, LockdownSignal::SecretInDiff, "ada") });
+    assert_eq!(active_raises(&w, chat), vec![(real, LockdownSignal::SecretInDiff)]);
     // mal (a Viewer: may raise, may not clear) re-raises the same lockdown
     // id as a harmless manual lockdown, drafted before the Admin's raise.
-    let fake = push_back(
-        &mut w,
-        "mal",
-        SessionEvent::ChatLockdownRaised {
-            chat_id: chat,
-            lockdown: lockdown(l, LockdownSignal::Manual, "mal"),
-        },
-        1,
-        Proof::None,
-    );
+    let fake = push_back(&mut w, "mal", SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(l, LockdownSignal::Manual, "mal") }, 1, Proof::None);
     let shown = active_raises(&w, chat);
-    assert!(
-        shown.contains(&(real, LockdownSignal::SecretInDiff)),
-        "the Admin's raise stays in force and visible: {shown:?}"
-    );
+    assert!(shown.contains(&(real, LockdownSignal::SecretInDiff)), "the Admin's raise stays in force and visible: {shown:?}");
     // A Contributor clears what they were shown of mal's (its raise id only).
     if shown.iter().any(|(r, _)| *r == fake) {
-        w.push(
-            "con",
-            SessionEvent::ChatLockdownCleared {
-                chat_id: chat,
-                raises: vec![fake],
-            },
-        );
+        w.push("con", SessionEvent::ChatLockdownCleared { chat_id: chat, raises: vec![fake] });
     }
     let after = active_raises(&w, chat);
-    assert!(
-        after.contains(&(real, LockdownSignal::SecretInDiff)),
-        "a clear that never named the Admin's raise lifted it: {after:?}"
-    );
+    assert!(after.contains(&(real, LockdownSignal::SecretInDiff)), "a clear that never named the Admin's raise lifted it: {after:?}");
     assert_eq!(w.verdict(real), Verdict::Allowed);
 }
 
@@ -125,23 +84,9 @@ fn a_reused_lockdown_id_never_hides_or_lifts_another_raise() {
 fn a_copy_under_a_raise_id_never_lifts_it() {
     let mut w = world();
     let chat = w.chat("owner", "c");
-    let real = w.push_bare(
-        "ada",
-        SessionEvent::ChatLockdownRaised {
-            chat_id: chat,
-            lockdown: lockdown(Uuid::new_v4(), LockdownSignal::SecretInDiff, "ada"),
-        },
-    );
+    let real = w.push_bare("ada", SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(Uuid::new_v4(), LockdownSignal::SecretInDiff, "ada") });
     let orig = w.cfg.iter().find(|e| e.event_id == real).unwrap().clone();
-    let mut copy: SessionEventEnvelope = w.draft(
-        "mal",
-        None,
-        SessionEvent::ChatLockdownRaised {
-            chat_id: chat,
-            lockdown: lockdown(Uuid::new_v4(), LockdownSignal::Manual, "mal"),
-        },
-        None,
-    );
+    let mut copy: SessionEventEnvelope = w.draft("mal", None, SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(Uuid::new_v4(), LockdownSignal::Manual, "mal") }, None);
     copy.event_id = real;
     copy.lamport = orig.lamport;
     if let Some(s) = copy.actor_stamp.as_mut() {
@@ -151,10 +96,7 @@ fn a_copy_under_a_raise_id_never_lifts_it() {
     w.push_env(None, copy);
     assert_eq!(w.verdict(real), Verdict::Allowed);
     let after = active_raises(&w, chat);
-    assert!(
-        after.contains(&(real, LockdownSignal::SecretInDiff)),
-        "{after:?}"
-    );
+    assert!(after.contains(&(real, LockdownSignal::SecretInDiff)), "{after:?}");
 }
 
 /// Sign `env` (drafted for `by`) with another device of theirs, `device`.
@@ -169,25 +111,14 @@ fn resign_with(env: &mut SessionEventEnvelope, device: Uuid, key: &ligus_core::S
 /// A config event by `by` through `device` (not their testkit device),
 /// with their recovery presence when `present`, its `prev` the device's
 /// own previous event, drafted `back` events behind the head.
-fn write_via(
-    w: &mut SignedWorld,
-    by: &str,
-    device: Uuid,
-    key: &ligus_core::SigningKeypair,
-    payload: SessionEvent,
-    present: bool,
-    back: usize,
-) -> Uuid {
+fn write_via(w: &mut SignedWorld, by: &str, device: Uuid, key: &ligus_core::SigningKeypair, payload: SessionEvent, present: bool, back: usize) -> Uuid {
     let mut env = w.draft(by, None, payload, None);
     ligus_core::lamport::stamp_back(&mut env, &w.cfg, back);
     let log_head = env.actor_stamp.as_ref().and_then(|s| s.log_head);
     let prev = w
         .cfg
         .iter()
-        .filter(|e| {
-            e.signer_device_id == Some(device)
-                && log_head.is_some_and(|h| (e.lamport, e.event_id) <= (h.lamport, h.event_id))
-        })
+        .filter(|e| e.signer_device_id == Some(device) && log_head.is_some_and(|h| (e.lamport, e.event_id) <= (h.lamport, h.event_id)))
         .max_by_key(|e| (e.lamport, e.event_id))
         .map(|e| e.event_id);
     if let Some(s) = env.actor_stamp.as_mut() {
@@ -219,91 +150,35 @@ fn a_revoked_anchor_device_cannot_re_anchor_its_account() {
     let owner_acct = w.people["owner"].account_id;
     let genuine = w.people["owner"].account.public_key_bytes().to_vec();
     let stolen = w.people["owner"].device_id;
-    let stolen_key =
-        ligus_core::SigningKeypair::from_seed(&w.people["owner"].device.seed_bytes()).unwrap();
+    let stolen_key = ligus_core::SigningKeypair::from_seed(&w.people["owner"].device.seed_bytes()).unwrap();
     // The founder's second device, certified with their presence.
     let d2 = ligus_core::SigningKeypair::generate().unwrap();
     let d2_id = device_id_for(SigAlg::Ed25519, &d2.public_key_bytes());
-    let cert2 = DeviceCertificate::issue(
-        &w.people["owner"].account,
-        owner_acct,
-        &d2.public_key_bytes(),
-        Timestamp::epoch(),
-    );
-    w.push(
-        "owner",
-        SessionEvent::DeviceCertificateAdded { certificate: cert2 },
-    );
+    let cert2 = DeviceCertificate::issue(&w.people["owner"].account, owner_acct, &d2.public_key_bytes(), Timestamp::epoch());
+    w.push("owner", SessionEvent::DeviceCertificateAdded { certificate: cert2 });
     assert!(w.roster().account_certified(owner_acct, d2_id));
-    assert_eq!(
-        w.roster().account_keys.get(&owner_acct),
-        Some(&genuine),
-        "before the attack"
-    );
+    assert_eq!(w.roster().account_keys.get(&owner_acct), Some(&genuine), "before the attack");
     // Revoke the stolen anchor device from the second one: its watermark
     // covers everything it signed.
     let signers = [stolen].into_iter().collect();
-    let wm = ligus_core::watermark::heads_of(
-        &w.cfg,
-        ligus_core::workspace_config_session_id(w.wid),
-        &signers,
-    );
-    let rev = write_via(
-        &mut w,
-        "owner",
-        d2_id,
-        &d2,
-        SessionEvent::DeviceRevoked {
-            device_id: stolen,
-            watermark: wm,
-        },
-        true,
-        0,
-    );
-    assert_eq!(
-        w.verdict(rev),
-        Verdict::Allowed,
-        "the founder revokes the stolen device"
-    );
-    assert_eq!(
-        w.roster().account_keys.get(&owner_acct),
-        Some(&genuine),
-        "after the revocation"
-    );
+    let wm = ligus_core::watermark::heads_of(&w.cfg, ligus_core::workspace_config_session_id(w.wid), &signers);
+    let rev = write_via(&mut w, "owner", d2_id, &d2, SessionEvent::DeviceRevoked { device_id: stolen, watermark: wm }, true, 0);
+    assert_eq!(w.verdict(rev), Verdict::Allowed, "the founder revokes the stolen device");
+    assert_eq!(w.roster().account_keys.get(&owner_acct), Some(&genuine), "after the revocation");
     // The thief, with the stolen device's key, re-certifies it under a key
     // of their own and registers that key for the founder's account, both
     // drafted right after the seed (before the genuine registration).
     let thief = ligus_core::SigningKeypair::generate().unwrap();
     let depth = w.cfg.len();
-    let fake_cert = DeviceCertificate::issue(
-        &thief,
-        owner_acct,
-        &stolen_key.public_key_bytes(),
-        Timestamp::epoch(),
-    );
-    let mut reg = w.draft(
-        "owner",
-        None,
-        SessionEvent::AccountKeyRegistered {
-            account_id: owner_acct,
-            signing_public_key: thief.public_key_bytes().to_vec(),
-        },
-        None,
-    );
+    let fake_cert = DeviceCertificate::issue(&thief, owner_acct, &stolen_key.public_key_bytes(), Timestamp::epoch());
+    let mut reg = w.draft("owner", None, SessionEvent::AccountKeyRegistered { account_id: owner_acct, signing_public_key: thief.public_key_bytes().to_vec() }, None);
     ligus_core::lamport::stamp_back(&mut reg, &w.cfg, depth);
     if let Some(s) = reg.actor_stamp.as_mut() {
         s.prev = None;
     }
     resign_with(&mut reg, stolen, &stolen_key);
     // A low event id so it sorts first among its lamport.
-    let mut cert_env = w.draft(
-        "owner",
-        None,
-        SessionEvent::DeviceCertificateAdded {
-            certificate: fake_cert,
-        },
-        None,
-    );
+    let mut cert_env = w.draft("owner", None, SessionEvent::DeviceCertificateAdded { certificate: fake_cert }, None);
     ligus_core::lamport::stamp_back(&mut cert_env, &w.cfg, depth);
     if let Some(s) = cert_env.actor_stamp.as_mut() {
         s.prev = None;
@@ -315,47 +190,16 @@ fn a_revoked_anchor_device_cannot_re_anchor_its_account() {
     w.push_env(None, cert_env);
     w.push_env(None, reg);
     let roster = w.roster();
-    assert_eq!(
-        w.verdict(rev),
-        Verdict::Allowed,
-        "the revocation stands: the thief's backdated events don't decide it"
-    );
-    assert_eq!(
-        w.verdict(Uuid::from_u128(1)),
-        Verdict::Denied,
-        "the revoked device's uncovered registration"
-    );
-    assert_eq!(
-        roster.account_keys.get(&owner_acct),
-        Some(&genuine),
-        "the founder's account key never moves to the thief's"
-    );
-    assert!(
-        roster.account_certified(owner_acct, d2_id),
-        "the founder's second device stays certified"
-    );
+    assert_eq!(w.verdict(rev), Verdict::Allowed, "the revocation stands: the thief's backdated events don't decide it");
+    assert_eq!(w.verdict(Uuid::from_u128(1)), Verdict::Denied, "the revoked device's uncovered registration");
+    assert_eq!(roster.account_keys.get(&owner_acct), Some(&genuine), "the founder's account key never moves to the thief's");
+    assert!(roster.account_certified(owner_acct, d2_id), "the founder's second device stays certified");
     // The thief certifies a fresh device of theirs for the founder.
     let d3 = ligus_core::SigningKeypair::generate().unwrap();
     let d3_id = device_id_for(SigAlg::Ed25519, &d3.public_key_bytes());
-    let cert3 = DeviceCertificate::issue(
-        &thief,
-        owner_acct,
-        &d3.public_key_bytes(),
-        Timestamp::epoch(),
-    );
-    write_via(
-        &mut w,
-        "owner",
-        d3_id,
-        &d3,
-        SessionEvent::DeviceCertificateAdded { certificate: cert3 },
-        false,
-        0,
-    );
-    assert!(
-        !w.roster().account_certified(owner_acct, d3_id),
-        "a device certified by the thief's key never acts for the founder"
-    );
+    let cert3 = DeviceCertificate::issue(&thief, owner_acct, &d3.public_key_bytes(), Timestamp::epoch());
+    write_via(&mut w, "owner", d3_id, &d3, SessionEvent::DeviceCertificateAdded { certificate: cert3 }, false, 0);
+    assert!(!w.roster().account_certified(owner_acct, d3_id), "a device certified by the thief's key never acts for the founder");
     assert!(w.roster().members.contains_key("owner"));
 }
 
@@ -368,31 +212,11 @@ fn a_revoked_anchor_device_cannot_re_anchor_its_account() {
 fn a_member_device_never_signs_as_another_member() {
     let mut w = world();
     let chat = w.chat("owner", "c");
-    let mal = (
-        w.people["mal"].device_id,
-        ligus_core::SigningKeypair::from_seed(&w.people["mal"].device.seed_bytes()).unwrap(),
-    );
-    let raise = w.push_bare(
-        "ada",
-        SessionEvent::ChatLockdownRaised {
-            chat_id: chat,
-            lockdown: lockdown(Uuid::new_v4(), LockdownSignal::SecretInDiff, "ada"),
-        },
-    );
+    let mal = (w.people["mal"].device_id, ligus_core::SigningKeypair::from_seed(&w.people["mal"].device.seed_bytes()).unwrap());
+    let raise = w.push_bare("ada", SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(Uuid::new_v4(), LockdownSignal::SecretInDiff, "ada") });
     for own_account in [false, true] {
         // A chat message stamped as the Owner.
-        let mut m = w.draft(
-            "owner",
-            Some(chat),
-            SessionEvent::MessageAppended {
-                message: ligus_core::ChatMessage::new(
-                    ligus_core::MessageRole::User,
-                    "owner",
-                    "forged",
-                ),
-            },
-            None,
-        );
+        let mut m = w.draft("owner", Some(chat), SessionEvent::MessageAppended { message: ligus_core::ChatMessage::new(ligus_core::MessageRole::User, "owner", "forged") }, None);
         if let Some(s) = m.actor_stamp.as_mut() {
             s.prev = None;
             if own_account {
@@ -401,24 +225,10 @@ fn a_member_device_never_signs_as_another_member() {
         }
         resign_with(&mut m, mal.0, &mal.1);
         let m = w.push_env(Some(chat), m);
-        assert_eq!(
-            w.verdict(m),
-            Verdict::Denied,
-            "a message signed by mal's device folded as the Owner's (own account: {own_account})"
-        );
+        assert_eq!(w.verdict(m), Verdict::Denied, "a message signed by mal's device folded as the Owner's (own account: {own_account})");
         // A memory entry stamped as the Admin, on the config log.
-        let rec = ligus_core::flow::FlowRecord::MemoryWritten(ligus_core::memory::MemoryWrite {
-            entry_id: Uuid::new_v4(),
-            title: "t".into(),
-            body: "b".into(),
-            ..Default::default()
-        });
-        let mut e = w.draft(
-            "ada",
-            None,
-            SessionEvent::FlowRecorded { record: rec },
-            None,
-        );
+        let rec = ligus_core::flow::FlowRecord::MemoryWritten(ligus_core::memory::MemoryWrite { entry_id: Uuid::new_v4(), title: "t".into(), body: "b".into(), ..Default::default() });
+        let mut e = w.draft("ada", None, SessionEvent::FlowRecorded { record: rec }, None);
         if let Some(s) = e.actor_stamp.as_mut() {
             s.prev = None;
             if own_account {
@@ -459,12 +269,7 @@ mod combined {
             w.admit("owner", "mal", WorkspaceRole::Contributor);
             w.admit("owner", "vic", WorkspaceRole::Viewer);
             w.publish_identity("eve");
-            w.push(
-                "ada",
-                SessionEvent::AttachmentPolicySet {
-                    policy: ligus_core::attachment::AttachmentPolicy::recommended(),
-                },
-            );
+            w.push("ada", SessionEvent::AttachmentPolicySet { policy: ligus_core::attachment::AttachmentPolicy::recommended() });
             let chat = w.chat("owner", "c");
             (w, chat)
         })
@@ -472,65 +277,26 @@ mod combined {
 
     #[derive(Debug, Clone)]
     enum Op {
-        Post {
-            by: u8,
-        },
-        Answer {
-            by: u8,
-            to: u8,
-        },
-        Claim {
-            by: u8,
-            to: u8,
-        },
-        Raise {
-            by: u8,
-            id: u8,
-        },
-        Clear {
-            by: u8,
-            which: u8,
-        },
-        MemCreate {
-            by: u8,
-        },
-        MemEdit {
-            by: u8,
-            which: u8,
-        },
-        Remove {
-            who: u8,
-            covered: bool,
-        },
+        Post { by: u8 },
+        Answer { by: u8, to: u8 },
+        Claim { by: u8, to: u8 },
+        Raise { by: u8, id: u8 },
+        Clear { by: u8, which: u8 },
+        MemCreate { by: u8 },
+        MemEdit { by: u8, which: u8 },
+        Remove { who: u8, covered: bool },
         /// mal signs another payload under someone's event id.
-        Copy {
-            which: u16,
-            cfg: bool,
-        },
+        Copy { which: u16, cfg: bool },
         /// Someone signs a second, different envelope under their own id.
-        Equivocate {
-            which: u16,
-        },
+        Equivocate { which: u16 },
         /// A post drafted `back` events behind the chat's head.
-        Backdated {
-            by: u8,
-            back: u8,
-        },
+        Backdated { by: u8, back: u8 },
         /// mal's device signs an event stamped as someone else.
-        Forge {
-            victim: u8,
-            cfg: bool,
-        },
+        Forge { victim: u8, cfg: bool },
         /// Someone shares a file (on their own message, or none).
-        Share {
-            by: u8,
-            on: Option<u8>,
-        },
+        Share { by: u8, on: Option<u8> },
         /// Someone deletes a shared file.
-        Unshare {
-            by: u8,
-            which: u8,
-        },
+        Unshare { by: u8, which: u8 },
     }
 
     fn op() -> impl Strategy<Value = Op> {
@@ -586,94 +352,42 @@ mod combined {
                 Op::Post { by } => {
                     let m = msg(MessageRole::User, who(by), format!("m{n}"));
                     self.users.push(m.id);
-                    self.w
-                        .say(chat, who(by), SessionEvent::MessageAppended { message: m });
+                    self.w.say(chat, who(by), SessionEvent::MessageAppended { message: m });
                 }
                 Op::Answer { by, to } => {
-                    let Some(t) = pick(&self.users, to) else {
-                        return;
-                    };
+                    let Some(t) = pick(&self.users, to) else { return };
                     let by = who(by);
                     let mut m = msg(MessageRole::Assistant, by, format!("a{n}"));
                     m.reply_to_message_id = Some(t);
                     m.origin_device_id = Some(self.w.people[by].device_id);
-                    self.w
-                        .say(chat, by, SessionEvent::MessageAppended { message: m });
+                    self.w.say(chat, by, SessionEvent::MessageAppended { message: m });
                 }
                 Op::Claim { by, to } => {
-                    let Some(t) = pick(&self.users, to) else {
-                        return;
-                    };
+                    let Some(t) = pick(&self.users, to) else { return };
                     let by = who(by);
                     let device_id = self.w.people[by].device_id;
-                    self.w.say(
-                        chat,
-                        by,
-                        SessionEvent::TurnClaimed {
-                            trigger_id: t,
-                            device_id,
-                            epoch: 1,
-                            supersedes: None,
-                            repo_id: None,
-                        },
-                    );
+                    self.w.say(chat, by, SessionEvent::TurnClaimed { trigger_id: t, device_id, epoch: 1, supersedes: None, repo_id: None });
                 }
                 Op::Raise { by, id } => {
-                    let l = lockdown(
-                        self.lockdown_ids[id as usize],
-                        LockdownSignal::SecretInDiff,
-                        who(by),
-                    );
-                    let id = self.w.push_bare(
-                        who(by),
-                        SessionEvent::ChatLockdownRaised {
-                            chat_id: chat,
-                            lockdown: l,
-                        },
-                    );
+                    let l = lockdown(self.lockdown_ids[id as usize], LockdownSignal::SecretInDiff, who(by));
+                    let id = self.w.push_bare(who(by), SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: l });
                     self.raises.push(id);
                 }
                 Op::Clear { by, which } => {
-                    let Some(r) = pick(&self.raises, which) else {
-                        return;
-                    };
-                    self.w.push(
-                        who(by),
-                        SessionEvent::ChatLockdownCleared {
-                            chat_id: chat,
-                            raises: vec![r],
-                        },
-                    );
+                    let Some(r) = pick(&self.raises, which) else { return };
+                    self.w.push(who(by), SessionEvent::ChatLockdownCleared { chat_id: chat, raises: vec![r] });
                 }
                 Op::MemCreate { by } => {
-                    let rec = FlowRecord::MemoryWritten(MemoryWrite {
-                        entry_id: Uuid::new_v4(),
-                        title: format!("t{n}"),
-                        body: format!("b{n}"),
-                        ..Default::default()
-                    });
-                    let id = self
-                        .w
-                        .push_bare(who(by), SessionEvent::FlowRecorded { record: rec });
+                    let rec = FlowRecord::MemoryWritten(MemoryWrite { entry_id: Uuid::new_v4(), title: format!("t{n}"), body: format!("b{n}"), ..Default::default() });
+                    let id = self.w.push_bare(who(by), SessionEvent::FlowRecorded { record: rec });
                     self.entries.push(id);
                 }
                 Op::MemEdit { by, which } => {
-                    let Some(e) = pick(&self.entries, which) else {
-                        return;
-                    };
+                    let Some(e) = pick(&self.entries, which) else { return };
                     let m = self.w.config().flow.memory;
-                    let Some(head) = m.entries.get(&e).map(|x| x.head()) else {
-                        return;
-                    };
-                    let rec = FlowRecord::MemoryWritten(MemoryWrite {
-                        entry_id: e,
-                        base: Some(head),
-                        title: format!("e{n}"),
-                        body: format!("e{n}"),
-                        ..Default::default()
-                    });
-                    self.w
-                        .push_bare(who(by), SessionEvent::FlowRecorded { record: rec });
+                    let Some(head) = m.entries.get(&e).map(|x| x.head()) else { return };
+                    let rec = FlowRecord::MemoryWritten(MemoryWrite { entry_id: e, base: Some(head), title: format!("e{n}"), body: format!("e{n}"), ..Default::default() });
+                    self.w.push_bare(who(by), SessionEvent::FlowRecorded { record: rec });
                 }
                 Op::Remove { who: x, covered } => {
                     let target = ["con", "mal", "vic"][x as usize % 3];
@@ -681,55 +395,22 @@ mod combined {
                         return;
                     }
                     let watermark = if covered {
-                        let signers: BTreeSet<Uuid> =
-                            [self.w.people[target].device_id].into_iter().collect();
-                        let mut wm = ligus_core::watermark::heads_of(
-                            &self.w.cfg,
-                            ligus_core::workspace_config_session_id(self.w.wid),
-                            &signers,
-                        );
-                        wm.extend(ligus_core::watermark::heads_of(
-                            &self.w.chats[&chat],
-                            chat,
-                            &signers,
-                        ));
+                        let signers: BTreeSet<Uuid> = [self.w.people[target].device_id].into_iter().collect();
+                        let mut wm = ligus_core::watermark::heads_of(&self.w.cfg, ligus_core::workspace_config_session_id(self.w.wid), &signers);
+                        wm.extend(ligus_core::watermark::heads_of(&self.w.chats[&chat], chat, &signers));
                         wm
                     } else {
                         Vec::new()
                     };
-                    self.w.push(
-                        "owner",
-                        SessionEvent::MemberRemoved {
-                            member_id: target.into(),
-                            watermark,
-                        },
-                    );
+                    self.w.push("owner", SessionEvent::MemberRemoved { member_id: target.into(), watermark });
                 }
                 Op::Copy { which, cfg } => {
-                    let log = if cfg {
-                        &self.w.cfg
-                    } else {
-                        &self.w.chats[&chat]
-                    };
-                    let Some(orig) = pick(
-                        &log.iter()
-                            .skip(1)
-                            .filter(|e| e.signer_device_id != Some(self.w.people["mal"].device_id))
-                            .cloned()
-                            .collect::<Vec<_>>(),
-                        which,
-                    ) else {
-                        return;
-                    };
+                    let log = if cfg { &self.w.cfg } else { &self.w.chats[&chat] };
+                    let Some(orig) = pick(&log.iter().skip(1).filter(|e| e.signer_device_id != Some(self.w.people["mal"].device_id)).cloned().collect::<Vec<_>>(), which) else { return };
                     let payload = if cfg {
-                        SessionEvent::ChatLockdownRaised {
-                            chat_id: chat,
-                            lockdown: lockdown(Uuid::new_v4(), LockdownSignal::Manual, "mal"),
-                        }
+                        SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(Uuid::new_v4(), LockdownSignal::Manual, "mal") }
                     } else {
-                        SessionEvent::MessageAppended {
-                            message: msg(MessageRole::User, "mal", format!("copy{n}")),
-                        }
+                        SessionEvent::MessageAppended { message: msg(MessageRole::User, "mal", format!("copy{n}")) }
                     };
                     let target = if cfg { None } else { Some(chat) };
                     let mut c = self.w.draft("mal", target, payload, None);
@@ -744,24 +425,9 @@ mod combined {
                 }
                 Op::Equivocate { which } => {
                     let log = &self.w.chats[&chat];
-                    let Some(orig) = pick(&log.iter().skip(1).cloned().collect::<Vec<_>>(), which)
-                    else {
-                        return;
-                    };
-                    let Some(by) = PEOPLE
-                        .iter()
-                        .find(|p| Some(self.w.people[**p].device_id) == orig.signer_device_id)
-                    else {
-                        return;
-                    };
-                    let mut twin = self.w.draft(
-                        by,
-                        Some(chat),
-                        SessionEvent::MessageAppended {
-                            message: msg(MessageRole::User, by, format!("twin{n}")),
-                        },
-                        None,
-                    );
+                    let Some(orig) = pick(&log.iter().skip(1).cloned().collect::<Vec<_>>(), which) else { return };
+                    let Some(by) = PEOPLE.iter().find(|p| Some(self.w.people[**p].device_id) == orig.signer_device_id) else { return };
+                    let mut twin = self.w.draft(by, Some(chat), SessionEvent::MessageAppended { message: msg(MessageRole::User, by, format!("twin{n}")) }, None);
                     twin.event_id = orig.event_id;
                     twin.lamport = orig.lamport;
                     if let Some(s) = twin.actor_stamp.as_mut() {
@@ -777,24 +443,14 @@ mod combined {
                     let by = who(by);
                     let m = msg(MessageRole::User, by, format!("old{n}"));
                     let id = m.id;
-                    let mut env = self.w.draft(
-                        by,
-                        Some(chat),
-                        SessionEvent::MessageAppended { message: m },
-                        None,
-                    );
+                    let mut env = self.w.draft(by, Some(chat), SessionEvent::MessageAppended { message: m }, None);
                     let log = self.w.chats[&chat].clone();
                     ligus_core::lamport::stamp_back(&mut env, &log, back as usize);
                     let head = env.actor_stamp.as_ref().and_then(|s| s.log_head);
                     let device = self.w.people[by].device_id;
                     let prev = log
                         .iter()
-                        .filter(|e| {
-                            e.signer_device_id == Some(device)
-                                && head.is_some_and(|h| {
-                                    (e.lamport, e.event_id) <= (h.lamport, h.event_id)
-                                })
-                        })
+                        .filter(|e| e.signer_device_id == Some(device) && head.is_some_and(|h| (e.lamport, e.event_id) <= (h.lamport, h.event_id)))
                         .max_by_key(|e| (e.lamport, e.event_id))
                         .map(|e| e.event_id);
                     if let Some(s) = env.actor_stamp.as_mut() {
@@ -810,8 +466,7 @@ mod combined {
                     let a = ligus_core::attachment::AttachmentRef {
                         id: ligus_core::attachment::share_id(self.w.people[by].device_id, &blob_id),
                         blob_id,
-                        sha256: "1111111111111111111111111111111111111111111111111111111111111111"
-                            .into(),
+                        sha256: "1111111111111111111111111111111111111111111111111111111111111111".into(),
                         size: 10,
                         content_type: "application/octet-stream".into(),
                         name: format!("f{n}.txt"),
@@ -819,41 +474,26 @@ mod combined {
                         proposal_id: None,
                     };
                     self.files.push(a.id);
-                    self.w
-                        .say(chat, by, SessionEvent::AttachmentShared { attachment: a });
+                    self.w.say(chat, by, SessionEvent::AttachmentShared { attachment: a });
                 }
                 Op::Unshare { by, which } => {
-                    let Some(f) = pick(&self.files, which) else {
-                        return;
-                    };
-                    self.w.say(
-                        chat,
-                        who(by),
-                        SessionEvent::AttachmentDeleted { attachment_id: f },
-                    );
+                    let Some(f) = pick(&self.files, which) else { return };
+                    self.w.say(chat, who(by), SessionEvent::AttachmentDeleted { attachment_id: f });
                 }
                 Op::Forge { victim, cfg } => {
                     let victim = ["owner", "ada", "con", "vic"][victim as usize % 4];
                     let target = if cfg { None } else { Some(chat) };
                     let payload = if cfg {
-                        SessionEvent::ChatLockdownCleared {
-                            chat_id: chat,
-                            raises: self.raises.last().copied().into_iter().collect(),
-                        }
+                        SessionEvent::ChatLockdownCleared { chat_id: chat, raises: self.raises.last().copied().into_iter().collect() }
                     } else {
-                        SessionEvent::MessageAppended {
-                            message: msg(MessageRole::User, victim, format!("forged{n}")),
-                        }
+                        SessionEvent::MessageAppended { message: msg(MessageRole::User, victim, format!("forged{n}")) }
                     };
                     if cfg && self.raises.is_empty() {
                         return;
                     }
                     let mut env = self.w.draft(victim, target, payload, None);
                     let mal = &self.w.people["mal"];
-                    let (d, k) = (
-                        mal.device_id,
-                        ligus_core::SigningKeypair::from_seed(&mal.device.seed_bytes()).unwrap(),
-                    );
+                    let (d, k) = (mal.device_id, ligus_core::SigningKeypair::from_seed(&mal.device.seed_bytes()).unwrap());
                     if let Some(s) = env.actor_stamp.as_mut() {
                         s.prev = None;
                     }
@@ -880,45 +520,17 @@ mod combined {
     }
 
     /// Config and chat verdicts, both folds (as JSON) and the held events.
-    type Outcome = (
-        BTreeMap<Uuid, Verdict>,
-        BTreeMap<Uuid, Verdict>,
-        serde_json::Value,
-        serde_json::Value,
-        Vec<Uuid>,
-    );
+    type Outcome = (BTreeMap<Uuid, Verdict>, BTreeMap<Uuid, Verdict>, serde_json::Value, serde_json::Value, Vec<Uuid>);
 
     /// Everything the folds decide, in an order-free form.
     fn outcome(cfg: &[SessionEventEnvelope], chat: &[SessionEventEnvelope]) -> Outcome {
         let (c, t) = ligus_core::events::project_config(cfg, None, None);
-        let cv = ligus_core::events::fold_decisions(
-            cfg,
-            None,
-            None,
-            ligus_core::WorkspaceAuthz::Unchecked,
-        );
-        let hv = ligus_core::events::fold_decisions(
-            chat,
-            None,
-            None,
-            ligus_core::WorkspaceAuthz::Timeline(&t),
-        );
-        let s = ligus_core::events::project_authorized(
-            chat,
-            None,
-            None,
-            ligus_core::WorkspaceAuthz::Timeline(&t),
-        )
-        .unwrap();
+        let cv = ligus_core::events::fold_decisions(cfg, None, None, ligus_core::WorkspaceAuthz::Unchecked);
+        let hv = ligus_core::events::fold_decisions(chat, None, None, ligus_core::WorkspaceAuthz::Timeline(&t));
+        let s = ligus_core::events::project_authorized(chat, None, None, ligus_core::WorkspaceAuthz::Timeline(&t)).unwrap();
         let mut held: Vec<Uuid> = s.authz.held.iter().map(|h| h.event_id).collect();
         held.sort();
-        (
-            cv,
-            hv,
-            serde_json::to_value(c.unwrap()).unwrap(),
-            serde_json::to_value(&s).unwrap(),
-            held,
-        )
+        (cv, hv, serde_json::to_value(c.unwrap()).unwrap(), serde_json::to_value(&s).unwrap(), held)
     }
 
     proptest! {

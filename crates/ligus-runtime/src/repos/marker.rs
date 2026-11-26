@@ -34,13 +34,7 @@ fn marker_path(dir: &Path) -> Option<PathBuf> {
 fn parse(text: &str) -> Option<(Uuid, String)> {
     let mut lines = text.lines();
     let id = Uuid::parse_str(lines.next()?.trim()).ok()?;
-    let label: String = lines
-        .next()
-        .unwrap_or("")
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(80)
-        .collect();
+    let label: String = lines.next().unwrap_or("").chars().filter(|c| !c.is_control()).take(80).collect();
     Some((id, label))
 }
 
@@ -48,14 +42,7 @@ fn parse(text: &str) -> Option<(Uuid, String)> {
 pub fn manager_of(dir: &Path, me: Uuid) -> Option<Manager> {
     let text = std::fs::read_to_string(marker_path(dir)?).ok()?;
     let (id, label) = parse(&text)?;
-    Some(if id == me {
-        Manager::Me
-    } else {
-        Manager::Other {
-            device_id: id,
-            label,
-        }
-    })
+    Some(if id == me { Manager::Me } else { Manager::Other { device_id: id, label } })
 }
 
 fn write_new(path: &Path, me: Uuid, label: &str) -> std::io::Result<()> {
@@ -100,14 +87,8 @@ pub fn claim(dir: &Path, me: Uuid, label: &str) -> std::io::Result<Manager> {
             let text = std::fs::read_to_string(&path).unwrap_or_default();
             Ok(match parse(&text) {
                 Some((id, _)) if id == me => Manager::Me,
-                Some((id, label)) => Manager::Other {
-                    device_id: id,
-                    label,
-                },
-                None => Manager::Other {
-                    device_id: Uuid::nil(),
-                    label: "an unreadable marker".into(),
-                },
+                Some((id, label)) => Manager::Other { device_id: id, label },
+                None => Manager::Other { device_id: Uuid::nil(), label: "an unreadable marker".into() },
             })
         }
         Err(e) => Err(e),
@@ -143,24 +124,14 @@ pub struct ManageLock {
 
 /// Lock the checkout for a git operation, waiting at most `wait`.
 pub fn lock(dir: &Path, wait: std::time::Duration) -> std::io::Result<ManageLock> {
-    let path = marker_path(dir)
-        .ok_or_else(|| std::io::Error::other("not a git checkout"))?
-        .with_extension("lock");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)?;
+    let path = marker_path(dir).ok_or_else(|| std::io::Error::other("not a git checkout"))?.with_extension("lock");
+    let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path)?;
     let start = std::time::Instant::now();
     loop {
         match file.try_lock() {
             Ok(()) => return Ok(ManageLock { _file: file }),
-            Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < wait => {
-                std::thread::sleep(std::time::Duration::from_millis(50))
-            }
-            Err(std::fs::TryLockError::WouldBlock) => {
-                return Err(std::io::Error::other("the checkout is busy"))
-            }
+            Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < wait => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(std::fs::TryLockError::WouldBlock) => return Err(std::io::Error::other("the checkout is busy")),
             Err(std::fs::TryLockError::Error(e)) => return Err(e),
         }
     }
@@ -178,36 +149,19 @@ mod tests {
         repo_with_origin(&a, None);
         let ids: Vec<Uuid> = (0..8).map(|_| Uuid::new_v4()).collect();
         let wins: Vec<bool> = std::thread::scope(|s| {
-            let hs: Vec<_> = ids
-                .iter()
-                .map(|id| {
-                    let a = a.clone();
-                    let id = *id;
-                    s.spawn(move || claim(&a, id, "h").unwrap() == Manager::Me)
-                })
-                .collect();
+            let hs: Vec<_> = ids.iter().map(|id| { let a = a.clone(); let id = *id; s.spawn(move || claim(&a, id, "h").unwrap() == Manager::Me) }).collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
         assert_eq!(wins.iter().filter(|w| **w).count(), 1);
         let winner = ids[wins.iter().position(|w| *w).unwrap()];
-        assert_eq!(
-            claim(&a, winner, "h").unwrap(),
-            Manager::Me,
-            "idempotent for the owner"
-        );
+        assert_eq!(claim(&a, winner, "h").unwrap(), Manager::Me, "idempotent for the owner");
         let other = ids.iter().find(|i| **i != winner).unwrap();
-        assert!(
-            matches!(claim(&a, *other, "x").unwrap(), Manager::Other { device_id, .. } if device_id == winner)
-        );
+        assert!(matches!(claim(&a, *other, "x").unwrap(), Manager::Other { device_id, .. } if device_id == winner));
         // Take-over is explicit and then sticks.
         take_over(&a, *other, "box").unwrap();
         assert_eq!(manager_of(&a, *other), Some(Manager::Me));
         release(&a, winner);
-        assert_eq!(
-            manager_of(&a, *other),
-            Some(Manager::Me),
-            "only the owner releases"
-        );
+        assert_eq!(manager_of(&a, *other), Some(Manager::Me), "only the owner releases");
     }
 
     #[test]
@@ -222,16 +176,8 @@ mod tests {
         take_over(&a, box_, "box").unwrap();
         assert_eq!(managed_elsewhere(&a, me).as_deref(), Some("box"));
         // A linked worktree of that checkout shares its common dir.
-        assert_eq!(
-            managed_elsewhere(&t.path().join("nope"), me),
-            None,
-            "not a checkout"
-        );
-        std::fs::write(
-            super::super::git::git_common_dir(&a).unwrap().join(MARKER),
-            "garbage",
-        )
-        .unwrap();
+        assert_eq!(managed_elsewhere(&t.path().join("nope"), me), None, "not a checkout");
+        std::fs::write(super::super::git::git_common_dir(&a).unwrap().join(MARKER), "garbage").unwrap();
         assert!(managed_elsewhere(&a, me).is_some(), "garbage is foreign");
     }
 

@@ -27,9 +27,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use ligus_core::ModelProviderKind;
-use ligus_runtime::agent_tools::{
-    builtin_policy, tool_round_budget, CompositeTools, MAX_OFFERED_TOOLS,
-};
+use ligus_runtime::agent_tools::{builtin_policy, tool_round_budget, CompositeTools, MAX_OFFERED_TOOLS};
 use ligus_runtime::git_worktree::{chat_worktree, Worktree};
 use ligus_runtime::provider::dispatch::{self, NoTools, ResolvedRuntime, StreamActivity, ToolSet};
 use ligus_runtime::provider::ChatTurn;
@@ -51,15 +49,11 @@ fn live_rt() -> Option<ResolvedRuntime> {
         provider: ModelProviderKind::Custom,
         model: std::env::var("LIGUS_AGENTIC_LIVE_MODEL").unwrap_or_else(|_| "gemma4:12b".into()),
         endpoint,
-        api_key: std::env::var("LIGUS_AGENTIC_LIVE_API_KEY")
-            .ok()
-            .filter(|k| !k.is_empty()),
+        api_key: std::env::var("LIGUS_AGENTIC_LIVE_API_KEY").ok().filter(|k| !k.is_empty()),
         args: vec![],
         model_provider_id: None,
         model_base_url: None,
-        context_window_tokens: std::env::var("LIGUS_AGENTIC_LIVE_WINDOW")
-            .ok()
-            .and_then(|v| v.parse().ok()),
+        context_window_tokens: std::env::var("LIGUS_AGENTIC_LIVE_WINDOW").ok().and_then(|v| v.parse().ok()),
         keep_alive: None,
         think: None,
         tools: true,
@@ -71,14 +65,7 @@ fn live_rt() -> Option<ResolvedRuntime> {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let ok = ligus_core::process_util::command("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .unwrap()
-        .status
-        .success();
+    let ok = ligus_core::process_util::command("git").arg("-C").arg(dir).args(args).output().unwrap().status.success();
     assert!(ok, "git {args:?} failed");
 }
 
@@ -91,11 +78,7 @@ fn planted_repo() -> PathBuf {
     git(&dir, &["init", "-q"]);
     git(&dir, &["config", "user.email", "t@t"]);
     git(&dir, &["config", "user.name", "t"]);
-    std::fs::write(
-        dir.join("README.md"),
-        "# shop\n\nPricing helpers. Run `python3 test_pricing.py` to test.\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join("README.md"), "# shop\n\nPricing helpers. Run `python3 test_pricing.py` to test.\n").unwrap();
     std::fs::write(dir.join("shop/__init__.py"), "").unwrap();
     std::fs::write(
         dir.join("shop/pricing.py"),
@@ -113,16 +96,8 @@ fn planted_repo() -> PathBuf {
 }
 
 fn python_test_passes(dir: &Path) -> (bool, String) {
-    let out = std::process::Command::new("python3")
-        .arg("test_pricing.py")
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let out = std::process::Command::new("python3").arg("test_pricing.py").current_dir(dir).output().unwrap();
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     (out.status.success(), text.trim().to_string())
 }
 
@@ -148,9 +123,7 @@ async fn live_mcp() -> Option<(Vec<Value>, McpExec)> {
     let url = std::env::var("LIGUS_AGENTIC_LIVE_MCP_URL").ok()?;
     let token = std::env::var("LIGUS_AGENTIC_LIVE_MCP_TOKEN")
         .ok()
-        .or_else(|| {
-            std::fs::read_to_string(std::env::var("LIGUS_AGENTIC_LIVE_MCP_TOKEN_FILE").ok()?).ok()
-        })
+        .or_else(|| std::fs::read_to_string(std::env::var("LIGUS_AGENTIC_LIVE_MCP_TOKEN_FILE").ok()?).ok())
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
     let registry = McpRegistry::new(vec![McpServerSpec {
@@ -179,11 +152,7 @@ struct Trace {
 }
 
 /// Drive one turn through the dispatcher, the way `run_prepared_turn` does.
-async fn drive<M: ToolExecutor>(
-    rt: &ResolvedRuntime,
-    tools: &CompositeTools<M>,
-    user: &str,
-) -> (Result<String, String>, Trace, f64, usize) {
+async fn drive<M: ToolExecutor>(rt: &ResolvedRuntime, tools: &CompositeTools<M>, user: &str) -> (Result<String, String>, Trace, f64, usize) {
     let system = format!(
         "You are @ligus, a coding agent in the user's project.\n\n{}",
         ligus_runtime::prompt::runtime_identity_block(rt, "agentic live test")
@@ -198,11 +167,7 @@ async fn drive<M: ToolExecutor>(
         None,
         &[],
         1024,
-        Some(ToolSet {
-            defs: tools.defs(),
-            executor: tools,
-            max_rounds: rounds,
-        }),
+        Some(ToolSet { defs: tools.defs(), executor: tools, max_rounds: rounds }),
         |_| {
             let mut t = trace.lock().unwrap();
             if t.first_delta.is_none() {
@@ -212,27 +177,12 @@ async fn drive<M: ToolExecutor>(
         |act| {
             let mut t = trace.lock().unwrap();
             match act {
-                StreamActivity::Tool {
-                    name, input_json, ..
-                } => {
-                    eprintln!(
-                        "  -> {name} {}",
-                        input_json.chars().take(200).collect::<String>()
-                    );
+                StreamActivity::Tool { name, input_json, .. } => {
+                    eprintln!("  -> {name} {}", input_json.chars().take(200).collect::<String>());
                     t.calls.push((name, input_json));
                 }
-                StreamActivity::ToolResult {
-                    is_error, content, ..
-                } => {
-                    eprintln!(
-                        "  <- {}{}",
-                        if is_error { "ERROR " } else { "" },
-                        content
-                            .chars()
-                            .take(160)
-                            .collect::<String>()
-                            .replace('\n', " | ")
-                    );
+                StreamActivity::ToolResult { is_error, content, .. } => {
+                    eprintln!("  <- {}{}", if is_error { "ERROR " } else { "" }, content.chars().take(160).collect::<String>().replace('\n', " | "));
                     t.errors += usize::from(is_error);
                 }
                 StreamActivity::Thinking { text } => t.thinking_chars += text.len(),
@@ -242,12 +192,7 @@ async fn drive<M: ToolExecutor>(
     )
     .await
     .map_err(|e| e.to_string());
-    (
-        out,
-        trace.into_inner().unwrap(),
-        start.elapsed().as_secs_f64(),
-        rounds,
-    )
+    (out, trace.into_inner().unwrap(), start.elapsed().as_secs_f64(), rounds)
 }
 
 #[tokio::test]
@@ -256,31 +201,21 @@ async fn fixes_a_planted_bug_with_builtin_tools() {
         eprintln!("LIGUS_AGENTIC_LIVE_ENDPOINT unset; skipping live agentic test");
         return;
     };
-    let commands = std::env::var("LIGUS_AGENTIC_LIVE_COMMANDS")
-        .map(|v| v == "1")
-        .unwrap_or(false);
+    let commands = std::env::var("LIGUS_AGENTIC_LIVE_COMMANDS").map(|v| v == "1").unwrap_or(false);
     let repo = planted_repo();
     let chat = "live-chat";
     chat_worktree(&repo, chat).unwrap();
     let wt = Worktree::create_from(&repo, chat, &format!("ligus/chat/{chat}")).unwrap();
-    assert!(
-        !python_test_passes(&wt.path).0,
-        "the planted bug must fail first"
-    );
+    assert!(!python_test_passes(&wt.path).0, "the planted bug must fail first");
 
     let builtin = BuiltinTools::new(builtin_policy(&wt.path, true, false, commands)).unwrap();
-    let tools: CompositeTools<NoTools> =
-        CompositeTools::new(Some(builtin), None, MAX_OFFERED_TOOLS);
+    let tools: CompositeTools<NoTools> = CompositeTools::new(Some(builtin), None, MAX_OFFERED_TOOLS);
     eprintln!(
         "model {} @ {} window {} tools {:?}",
         rt.model,
         rt.endpoint,
         rt.context_window(),
-        tools
-            .defs()
-            .iter()
-            .filter_map(|d| d["name"].as_str())
-            .collect::<Vec<_>>()
+        tools.defs().iter().filter_map(|d| d["name"].as_str()).collect::<Vec<_>>()
     );
     let (out, trace, secs, rounds) = drive(
         &rt,
@@ -301,30 +236,13 @@ async fn fixes_a_planted_bug_with_builtin_tools() {
         out.as_ref().map(|s| s.chars().take(400).collect::<String>()),
     );
     assert!(out.is_ok(), "turn failed: {out:?}");
-    assert!(
-        names.contains(&"read_file"),
-        "model should read before editing: {names:?}"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|n| *n == "edit_file" || *n == "write_file"),
-        "model should edit: {names:?}"
-    );
+    assert!(names.contains(&"read_file"), "model should read before editing: {names:?}");
+    assert!(names.iter().any(|n| *n == "edit_file" || *n == "write_file"), "model should edit: {names:?}");
     assert!(trace.calls.len() < rounds * 4, "stayed within the budget");
-    assert!(
-        passes,
-        "the fix must make the test pass: {test_out}\n{diff}"
-    );
-    assert_eq!(
-        files,
-        ["shop/pricing.py"],
-        "only the code changed, not the test"
-    );
+    assert!(passes, "the fix must make the test pass: {test_out}\n{diff}");
+    assert_eq!(files, ["shop/pricing.py"], "only the code changed, not the test");
     // The main tree is untouched: the change is a reviewable proposal.
-    assert!(std::fs::read_to_string(repo.join("shop/pricing.py"))
-        .unwrap()
-        .contains("price * percent / 100"));
+    assert!(std::fs::read_to_string(repo.join("shop/pricing.py")).unwrap().contains("price * percent / 100"));
     wt.remove().unwrap();
     let _ = std::fs::remove_dir_all(&repo);
 }
@@ -339,30 +257,18 @@ async fn calls_an_mcp_tool_through_the_same_loop() {
         eprintln!("LIGUS_AGENTIC_LIVE_MCP_URL unset; skipping live agentic MCP test");
         return;
     };
-    assert!(
-        !mcp_defs.is_empty(),
-        "the MCP server listed no tools (auth?)"
-    );
-    let tool =
-        std::env::var("LIGUS_AGENTIC_LIVE_MCP_TOOL").unwrap_or_else(|_| "search_docs".into());
-    let collection =
-        std::env::var("LIGUS_AGENTIC_LIVE_MCP_COLLECTION").unwrap_or_else(|_| "rdna-docs".into());
+    assert!(!mcp_defs.is_empty(), "the MCP server listed no tools (auth?)");
+    let tool = std::env::var("LIGUS_AGENTIC_LIVE_MCP_TOOL").unwrap_or_else(|_| "search_docs".into());
+    let collection = std::env::var("LIGUS_AGENTIC_LIVE_MCP_COLLECTION").unwrap_or_else(|_| "rdna-docs".into());
     let want = format!("rdnamcp__{tool}");
     // Read-only built-ins alongside the MCP tools, as an in-place turn gets.
     let dir = std::env::temp_dir().join(format!("ligus-agentic-live-mcp-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let builtin = BuiltinTools::new(builtin_policy(&dir, false, false, false)).unwrap();
     let tools = CompositeTools::new(Some(builtin), Some((mcp_defs, mcp)), MAX_OFFERED_TOOLS);
-    let offered: Vec<&str> = tools
-        .defs()
-        .iter()
-        .filter_map(|d| d["name"].as_str())
-        .collect();
+    let offered: Vec<&str> = tools.defs().iter().filter_map(|d| d["name"].as_str()).collect();
     eprintln!("offered {offered:?} dropped {:?}", tools.dropped());
-    assert!(
-        offered.contains(&want.as_str()),
-        "{want} not offered: {offered:?}"
-    );
+    assert!(offered.contains(&want.as_str()), "{want} not offered: {offered:?}");
     let (out, trace, secs, _) = drive(
         &rt,
         &tools,
@@ -380,10 +286,7 @@ async fn calls_an_mcp_tool_through_the_same_loop() {
         out.as_ref().map(|s| s.chars().take(600).collect::<String>()),
     );
     assert!(out.is_ok(), "turn failed: {out:?}");
-    assert!(
-        names.contains(&want.as_str()),
-        "model never called {want}: {names:?}"
-    );
+    assert!(names.contains(&want.as_str()), "model never called {want}: {names:?}");
     assert!(!out.unwrap().trim().is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }

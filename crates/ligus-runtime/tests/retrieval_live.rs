@@ -14,10 +14,8 @@ use std::time::Instant;
 
 fn live() -> Option<RetrievalConfig> {
     let url = std::env::var("LIGUS_RETRIEVAL_LIVE_URL").ok()?;
-    let embed = std::env::var("LIGUS_RETRIEVAL_LIVE_EMBED_MODEL")
-        .unwrap_or_else(|_| "embeddinggemma-300m".into());
-    let rerank = std::env::var("LIGUS_RETRIEVAL_LIVE_RERANK_MODEL")
-        .unwrap_or_else(|_| "bge-reranker-v2-m3".into());
+    let embed = std::env::var("LIGUS_RETRIEVAL_LIVE_EMBED_MODEL").unwrap_or_else(|_| "embeddinggemma-300m".into());
+    let rerank = std::env::var("LIGUS_RETRIEVAL_LIVE_RERANK_MODEL").unwrap_or_else(|_| "bge-reranker-v2-m3".into());
     Some(RetrievalConfig {
         embed_url: url.clone(),
         embed_model: embed,
@@ -52,11 +50,7 @@ fn corpus() -> Vec<(String, String)> {
     let gpu = "GPU notes: the RDNA2 cards run llama.cpp with the ROCm backend. Wavefront size is \
                64 on these cards, and flash attention is enabled for the 32k context slots."
         .to_string();
-    vec![
-        ("ops.md".into(), ops),
-        ("style.md".into(), style),
-        ("gpu.md".into(), gpu),
-    ]
+    vec![("ops.md".into(), ops), ("style.md".into(), style), ("gpu.md".into(), gpu)]
 }
 
 #[tokio::test]
@@ -67,32 +61,13 @@ async fn right_passage_ranks_first() {
     };
     let r = Retriever::new();
     let cases = [
-        (
-            "How long does a full database restore take?",
-            "ops.md",
-            "forty minutes",
-        ),
-        (
-            "What line width does rustfmt use here?",
-            "style.md",
-            "width of 100",
-        ),
-        (
-            "Which library handles server state in the web UI?",
-            "style.md",
-            "TanStack Query",
-        ),
+        ("How long does a full database restore take?", "ops.md", "forty minutes"),
+        ("What line width does rustfmt use here?", "style.md", "width of 100"),
+        ("Which library handles server state in the web UI?", "style.md", "TanStack Query"),
         ("how do I roll back a bad release", "ops.md", "Rollbacks"),
-        (
-            "What is the wavefront size on the GPUs?",
-            "gpu.md",
-            "Wavefront size",
-        ),
+        ("What is the wavefront size on the GPUs?", "gpu.md", "Wavefront size"),
     ];
-    let chunks: usize = corpus()
-        .iter()
-        .map(|(_, t)| ligus_runtime::retrieval::chunk_text(t, 1200, 200).len())
-        .sum();
+    let chunks: usize = corpus().iter().map(|(_, t)| ligus_runtime::retrieval::chunk_text(t, 1200, 200).len()).sum();
     eprintln!("corpus: {chunks} chunks");
     assert!(chunks >= 6, "the corpus splits into several chunks per doc");
     for (n, (q, source, needle)) in cases.iter().enumerate() {
@@ -108,19 +83,12 @@ async fn right_passage_ranks_first() {
             got[0].text.chars().take(90).collect::<String>()
         );
         assert_eq!(got[0].source, *source, "case {n}: {q}");
-        assert!(
-            got[0].text.contains(needle),
-            "case {n}: top passage lacks {needle:?}: {}",
-            got[0].text
-        );
+        assert!(got[0].text.contains(needle), "case {n}: top passage lacks {needle:?}: {}", got[0].text);
         assert!(got.len() <= 3);
     }
     // Cosine-only (no reranker) still finds the obvious one.
     let mut cos = cfg.clone();
     cos.rerank_url.clear();
-    let got = r
-        .retrieve(&cos, &corpus(), "nightly backup schedule time")
-        .await
-        .expect("retrieve");
+    let got = r.retrieve(&cos, &corpus(), "nightly backup schedule time").await.expect("retrieve");
     assert!(got[0].text.contains("02:30"), "{}", got[0].text);
 }

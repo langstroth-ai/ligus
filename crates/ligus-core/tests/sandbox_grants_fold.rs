@@ -34,13 +34,7 @@ fn paths(ro: &[&str], rw: &[&str]) -> SandboxGrants {
 
 fn shell_for(id: Uuid) -> SandboxGrants {
     let mut g = SandboxGrants::default();
-    g.agents.insert(
-        id,
-        AgentGrant {
-            shell: true,
-            ..Default::default()
-        },
-    );
+    g.agents.insert(id, AgentGrant { shell: true, ..Default::default() });
     g
 }
 
@@ -69,27 +63,15 @@ fn only_the_owner_grants_or_withdraws_a_shell() {
     let mut w = world();
     let a = agent(1);
     let by_admin = w.push("adm", set(&shell_for(a)));
-    assert_eq!(
-        w.verdict(by_admin),
-        Verdict::Denied,
-        "an Admin can't grant a shell"
-    );
+    assert_eq!(w.verdict(by_admin), Verdict::Denied, "an Admin can't grant a shell");
     let by_owner_bare = w.push_bare("owner", set(&shell_for(a)));
-    assert_eq!(
-        w.verdict(by_owner_bare),
-        Verdict::Denied,
-        "the Owner needs presence too"
-    );
+    assert_eq!(w.verdict(by_owner_bare), Verdict::Denied, "the Owner needs presence too");
     let by_owner = w.push("owner", set(&shell_for(a)));
     assert_eq!(w.verdict(by_owner), Verdict::Allowed);
     assert!(w.config().guards.sandbox_grants.shell_granted(a));
     // An Admin may change paths while keeping the shell grant as it is ...
     let mut keep = shell_for(a);
-    keep.agents
-        .get_mut(&a)
-        .unwrap()
-        .read_only
-        .push("/opt/data".into());
+    keep.agents.get_mut(&a).unwrap().read_only.push("/opt/data".into());
     let keeps = w.push("adm", set(&keep));
     assert_eq!(w.verdict(keeps), Verdict::Allowed);
     // ... but can't withdraw it either (dropping the agent's entry is a
@@ -111,13 +93,7 @@ fn agents_chats_and_malformed_sets_are_refused() {
     assert_eq!(w.verdict(by_agent), Verdict::Denied);
     // On a chat log.
     let chat = w.chat("owner", "c");
-    let on_chat = w.write(
-        "owner",
-        Some(chat),
-        set(&paths(&["~/x"], &[])),
-        None,
-        Proof::Recovery,
-    );
+    let on_chat = w.write("owner", Some(chat), set(&paths(&["~/x"], &[])), None, Proof::Recovery);
     assert_ne!(w.verdicts().get(&on_chat), Some(&Verdict::Allowed));
     // Malformed paths.
     for bad in ["~", "/", "rel", "~/../etc", "/a//b"] {
@@ -155,39 +131,21 @@ fn arb_grants() -> impl Strategy<Value = SandboxGrants> {
     (
         proptest::collection::vec(arb_path(), 0..3),
         proptest::collection::vec(arb_path(), 0..2),
-        proptest::collection::vec(
-            (
-                0u128..3,
-                any::<bool>(),
-                proptest::collection::vec(arb_path(), 0..2),
-            ),
-            0..3,
-        ),
+        proptest::collection::vec((0u128..3, any::<bool>(), proptest::collection::vec(arb_path(), 0..2)), 0..3),
     )
         .prop_map(|(ro, rw, agents)| {
             let mut g = SandboxGrants::default();
             g.workspace.read_only = ro;
             g.workspace.read_write = rw;
             for (i, shell, ro) in agents {
-                g.agents.insert(
-                    agent(i),
-                    AgentGrant {
-                        read_only: ro,
-                        read_write: Vec::new(),
-                        shell,
-                    },
-                );
+                g.agents.insert(agent(i), AgentGrant { read_only: ro, read_write: Vec::new(), shell });
             }
             g
         })
 }
 
 fn arb_step() -> impl Strategy<Value = Step> {
-    (0usize..4, any::<bool>(), arb_grants()).prop_map(|(by, presence, grants)| Step {
-        by,
-        presence,
-        grants,
-    })
+    (0usize..4, any::<bool>(), arb_grants()).prop_map(|(by, presence, grants)| Step { by, presence, grants })
 }
 
 const WHO: [&str; 4] = ["owner", "adm", "mara", "bot"];

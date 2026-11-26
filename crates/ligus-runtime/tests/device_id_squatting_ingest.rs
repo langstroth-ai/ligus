@@ -11,9 +11,7 @@
 use ligus_core::crypto::{sign_envelope, DeviceCertificate, SigningKeypair};
 use ligus_core::testkit::SignedWorld;
 use ligus_core::{ChatMessage, MessageRole, SessionEvent, Timestamp, WorkspaceRole};
-use ligus_runtime::envelope_verifier::{
-    build_roster, verdict_for, DeviceKeyResolver, QuarantineReason, Verdict,
-};
+use ligus_runtime::envelope_verifier::{build_roster, verdict_for, DeviceKeyResolver, QuarantineReason, Verdict};
 
 fn world() -> SignedWorld {
     let mut w = SignedWorld::genesis(&["owner", "con", "mal"], None);
@@ -23,9 +21,7 @@ fn world() -> SignedWorld {
 }
 
 fn post(by: &str, body: &str) -> SessionEvent {
-    SessionEvent::MessageAppended {
-        message: ChatMessage::new(MessageRole::User, by, body),
-    }
+    SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, by, body) }
 }
 
 #[test]
@@ -33,60 +29,25 @@ fn a_backdated_squat_neither_erases_nor_impersonates_at_ingest() {
     let mut w = world();
     let key = SigningKeypair::generate().unwrap();
     let (mal_account, con_device) = (w.people["mal"].account_id, w.people["con"].device_id);
-    let cert = DeviceCertificate::issue_for_id(
-        &w.people["mal"].account,
-        mal_account,
-        con_device,
-        &key.public_key_bytes(),
-        Timestamp::epoch(),
-    );
-    w.push(
-        "mal",
-        SessionEvent::DeviceCertificateAdded {
-            certificate: cert.clone(),
-        },
-    );
+    let cert = DeviceCertificate::issue_for_id(&w.people["mal"].account, mal_account, con_device, &key.public_key_bytes(), Timestamp::epoch());
+    w.push("mal", SessionEvent::DeviceCertificateAdded { certificate: cert.clone() });
     // A second publication of it, backdated to sort before con's own.
-    let mut early = w.draft(
-        "mal",
-        None,
-        SessionEvent::DeviceCertificateAdded { certificate: cert },
-        None,
-    );
+    let mut early = w.draft("mal", None, SessionEvent::DeviceCertificateAdded { certificate: cert }, None);
     early.lamport = 2;
     w.finish(&mut early, "mal", None);
     w.push_env(None, early);
     let chat = w.chat("owner", "c");
     let genuine = w.say(chat, "con", post("con", "mine"));
-    let genuine = w.chats[&chat]
-        .iter()
-        .find(|e| e.event_id == genuine)
-        .unwrap()
-        .clone();
+    let genuine = w.chats[&chat].iter().find(|e| e.event_id == genuine).unwrap().clone();
     let mut forged = w.draft("con", Some(chat), post("con", "not mine"), None);
     forged.clear_raw();
     sign_envelope(&mut forged, con_device, &key);
 
     let roster = build_roster(&w.cfg);
-    assert_eq!(
-        roster.public_key(con_device),
-        Some(&w.people["con"].device.public_key_bytes()[..]),
-        "the squat changed the id's key"
-    );
-    assert!(
-        !roster.device_signs_for(con_device, mal_account),
-        "the squat certified the id for mal"
-    );
-    assert_eq!(
-        verdict_for(&roster, &genuine),
-        Verdict::Valid,
-        "the victim's own event is refused"
-    );
-    assert_eq!(
-        verdict_for(&roster, &forged),
-        Verdict::Quarantine(QuarantineReason::BadSignature),
-        "the squatter signed as the victim"
-    );
+    assert_eq!(roster.public_key(con_device), Some(&w.people["con"].device.public_key_bytes()[..]), "the squat changed the id's key");
+    assert!(!roster.device_signs_for(con_device, mal_account), "the squat certified the id for mal");
+    assert_eq!(verdict_for(&roster, &genuine), Verdict::Valid, "the victim's own event is refused");
+    assert_eq!(verdict_for(&roster, &forged), Verdict::Quarantine(QuarantineReason::BadSignature), "the squatter signed as the victim");
 }
 
 /// Arrival order: a device that holds a member's certificate of the victim's
@@ -96,24 +57,12 @@ fn a_backdated_squat_neither_erases_nor_impersonates_at_ingest() {
 fn a_victims_event_before_its_certificate_is_held_not_refused_after_an_adoption() {
     let mut w = world();
     let (mal_account, con_device) = (w.people["mal"].account_id, w.people["con"].device_id);
-    let cert = DeviceCertificate::issue(
-        &w.people["mal"].account,
-        mal_account,
-        &w.people["con"].device.public_key_bytes(),
-        Timestamp::epoch(),
-    );
+    let cert = DeviceCertificate::issue(&w.people["mal"].account, mal_account, &w.people["con"].device.public_key_bytes(), Timestamp::epoch());
     assert_eq!(cert.device_id, con_device);
-    w.push(
-        "mal",
-        SessionEvent::DeviceCertificateAdded { certificate: cert },
-    );
+    w.push("mal", SessionEvent::DeviceCertificateAdded { certificate: cert });
     let chat = w.chat("owner", "c");
     let genuine = w.say(chat, "con", post("con", "mine"));
-    let genuine = w.chats[&chat]
-        .iter()
-        .find(|e| e.event_id == genuine)
-        .unwrap()
-        .clone();
+    let genuine = w.chats[&chat].iter().find(|e| e.event_id == genuine).unwrap().clone();
     // This device hasn't received con's own certificate yet.
     let con_account = w.people["con"].account_id;
     let partial: Vec<_> = w
@@ -123,20 +72,14 @@ fn a_victims_event_before_its_certificate_is_held_not_refused_after_an_adoption(
         .cloned()
         .collect();
     let v = verdict_for(&build_roster(&partial), &genuine);
-    assert!(
-        matches!(v, Verdict::Unverifiable(_)),
-        "the victim's event was refused for good before its certificate arrived: {v:?}"
-    );
+    assert!(matches!(v, Verdict::Unverifiable(_)), "the victim's event was refused for good before its certificate arrived: {v:?}");
     assert_eq!(verdict_for(&build_roster(&w.cfg), &genuine), Verdict::Valid);
     // Someone signing under the victim's id with another key is refused outright.
     let key = SigningKeypair::generate().unwrap();
     let mut forged = w.draft("con", Some(chat), post("con", "not mine"), None);
     forged.clear_raw();
     sign_envelope(&mut forged, con_device, &key);
-    assert_eq!(
-        verdict_for(&build_roster(&partial), &forged),
-        Verdict::Quarantine(QuarantineReason::BadSignature)
-    );
+    assert_eq!(verdict_for(&build_roster(&partial), &forged), Verdict::Quarantine(QuarantineReason::BadSignature));
 }
 
 /// A device that published its own certificate for one account, signing as
@@ -149,31 +92,22 @@ fn a_device_signing_as_another_member_is_held_until_that_member_certifies_it() {
     let mut w = world();
     let chat = w.chat("owner", "c");
     let mal = &w.people["mal"];
-    let (mal_device, mal_key) = (
-        mal.device_id,
-        SigningKeypair::from_seed(&mal.device.seed_bytes()).unwrap(),
-    );
+    let (mal_device, mal_key) = (mal.device_id, SigningKeypair::from_seed(&mal.device.seed_bytes()).unwrap());
     let mut forged = w.draft("con", Some(chat), post("con", "as con"), None);
     forged.clear_raw();
     sign_envelope(&mut forged, mal_device, &mal_key);
     let v = verdict_for(&build_roster(&w.cfg), &forged);
-    assert_eq!(
-        v,
-        Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
-    );
-    assert!(
-        matches!(
-            ligus_runtime::identity_verifier::gate_ingest(
-                ligus_runtime::identity_verifier::IdentityMode::Relay,
-                v,
-                None,
-                None,
-                &ligus_runtime::identity_verifier::IdentityCache::new()
-            ),
-            ligus_runtime::identity_verifier::IngestAction::Hold(_)
+    assert_eq!(v, Verdict::Unverifiable(QuarantineReason::UncertifiedDevice));
+    assert!(matches!(
+        ligus_runtime::identity_verifier::gate_ingest(
+            ligus_runtime::identity_verifier::IdentityMode::Relay,
+            v,
+            None,
+            None,
+            &ligus_runtime::identity_verifier::IdentityCache::new()
         ),
-        "held, never applied"
-    );
+        ligus_runtime::identity_verifier::IngestAction::Hold(_)
+    ), "held, never applied");
 }
 
 /// Someone who knows a person's device key (it is the same device in every
@@ -199,50 +133,25 @@ fn an_adoption_before_a_person_joins_never_locks_them_out() {
             continue;
         }
         let v = verdict_for(&build_roster(&w.cfg[..i]), e);
-        assert!(
-            !matches!(v, Verdict::Quarantine(_)),
-            "con's {:?} refused for good: {v:?}",
-            e.payload
-        );
+        assert!(!matches!(v, Verdict::Quarantine(_)), "con's {:?} refused for good: {v:?}", e.payload);
     }
     let chat = w.chat("owner", "c");
     let id = w.say(chat, "con", post("con", "hello"));
-    let env = w.chats[&chat]
-        .iter()
-        .find(|e| e.event_id == id)
-        .unwrap()
-        .clone();
+    let env = w.chats[&chat].iter().find(|e| e.event_id == id).unwrap().clone();
     assert_eq!(verdict_for(&build_roster(&w.cfg), &env), Verdict::Valid);
 }
 
 /// The signing device's certificate for the stamped account, published by
 /// `by` (with presence): an adoption when `by` isn't the device's holder.
 fn adopt(w: &mut SignedWorld, by: &str, device_of: &str) {
-    let cert = DeviceCertificate::issue(
-        &w.people[by].account,
-        w.people[by].account_id,
-        &w.people[device_of].device.public_key_bytes(),
-        Timestamp::epoch(),
-    );
-    w.push(
-        by,
-        SessionEvent::DeviceCertificateAdded { certificate: cert },
-    );
+    let cert = DeviceCertificate::issue(&w.people[by].account, w.people[by].account_id, &w.people[device_of].device.public_key_bytes(), Timestamp::epoch());
+    w.push(by, SessionEvent::DeviceCertificateAdded { certificate: cert });
 }
 
 /// `device_of`'s device signs `payload` on `chat` stamped as `as_whom`.
-fn signed_by_device_as(
-    w: &mut SignedWorld,
-    chat: uuid::Uuid,
-    device_of: &str,
-    as_whom: &str,
-    body: &str,
-) -> ligus_core::SessionEventEnvelope {
+fn signed_by_device_as(w: &mut SignedWorld, chat: uuid::Uuid, device_of: &str, as_whom: &str, body: &str) -> ligus_core::SessionEventEnvelope {
     let p = &w.people[device_of];
-    let (device, key) = (
-        p.device_id,
-        SigningKeypair::from_seed(&p.device.seed_bytes()).unwrap(),
-    );
+    let (device, key) = (p.device_id, SigningKeypair::from_seed(&p.device.seed_bytes()).unwrap());
     let mut env = w.draft(as_whom, Some(chat), post(as_whom, body), None);
     env.clear_raw();
     sign_envelope(&mut env, device, &key);
@@ -272,10 +181,7 @@ fn a_vouched_devices_event_for_an_account_whose_certificate_comes_later_is_held_
         .cloned()
         .collect();
     let early = verdict_for(&build_roster(&before), &env);
-    assert!(
-        !matches!(early, Verdict::Quarantine(_)),
-        "refused for good before con's certificate arrived, valid after: {early:?}"
-    );
+    assert!(!matches!(early, Verdict::Quarantine(_)), "refused for good before con's certificate arrived, valid after: {early:?}");
 }
 
 /// The same for an account this device doesn't know yet: mal certified
@@ -288,11 +194,7 @@ fn an_honest_event_before_its_accounts_key_arrives_is_held_not_refused_after_an_
     adopt(&mut w, "mal", "con");
     let chat = w.chat("owner", "c");
     let id = w.say(chat, "con", post("con", "mine"));
-    let env = w.chats[&chat]
-        .iter()
-        .find(|e| e.event_id == id)
-        .unwrap()
-        .clone();
+    let env = w.chats[&chat].iter().find(|e| e.event_id == id).unwrap().clone();
     assert_eq!(verdict_for(&build_roster(&w.cfg), &env), Verdict::Valid);
     let con_account = w.people["con"].account_id;
     let before: Vec<_> = w
@@ -300,18 +202,13 @@ fn an_honest_event_before_its_accounts_key_arrives_is_held_not_refused_after_an_
         .iter()
         .filter(|e| match &e.payload {
             SessionEvent::AccountKeyRegistered { account_id, .. } => *account_id != con_account,
-            SessionEvent::DeviceCertificateAdded { certificate } => {
-                certificate.account_id != con_account
-            }
+            SessionEvent::DeviceCertificateAdded { certificate } => certificate.account_id != con_account,
             _ => true,
         })
         .cloned()
         .collect();
     let early = verdict_for(&build_roster(&before), &env);
-    assert!(
-        !matches!(early, Verdict::Quarantine(_)),
-        "con's own event refused for good before con's key arrived: {early:?}"
-    );
+    assert!(!matches!(early, Verdict::Quarantine(_)), "con's own event refused for good before con's key arrived: {early:?}");
 }
 
 mod convergence {
@@ -327,10 +224,7 @@ mod convergence {
     const NAMES: [&str; 4] = ["owner", "a", "b", "c"];
 
     fn cases() -> u32 {
-        std::env::var("PROPTEST_CASES")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(64)
+        std::env::var("PROPTEST_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(64)
     }
 
     proptest! {

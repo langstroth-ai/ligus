@@ -7,15 +7,10 @@
 //! displace, invalidate or shadow a verified event.
 
 use ligus_core::crypto::{sign_envelope, SigningKeypair};
-use ligus_core::events::{
-    fold_copy_decisions, fold_decisions, project_authorized, project_config, WorkspaceAuthz,
-};
+use ligus_core::events::{fold_copy_decisions, fold_decisions, project_authorized, project_config, WorkspaceAuthz};
 use ligus_core::testkit::{Phone, SignedWorld};
 use ligus_core::watermark::heads_of;
-use ligus_core::{
-    workspace_config_session_id, ChatMessage, MessageRole, SessionEvent, SessionEventEnvelope,
-    Verdict, WorkspaceRole,
-};
+use ligus_core::{workspace_config_session_id, ChatMessage, MessageRole, SessionEvent, SessionEventEnvelope, Verdict, WorkspaceRole};
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -25,9 +20,7 @@ fn title(t: &str) -> SessionEvent {
 }
 
 fn msg(by: &str, body: &str) -> SessionEvent {
-    SessionEvent::MessageAppended {
-        message: ChatMessage::new(MessageRole::User, by, body),
-    }
+    SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, by, body) }
 }
 
 fn find(w: &SignedWorld, chat: Option<Uuid>, id: Uuid) -> SessionEventEnvelope {
@@ -54,26 +47,14 @@ enum Forgery {
     Insider,
 }
 
-const FORGERIES: [Forgery; 5] = [
-    Forgery::UnsignedStampless,
-    Forgery::UnsignedStamped,
-    Forgery::WrongKey,
-    Forgery::Stranger,
-    Forgery::Insider,
-];
+const FORGERIES: [Forgery; 5] =
+    [Forgery::UnsignedStampless, Forgery::UnsignedStamped, Forgery::WrongKey, Forgery::Stranger, Forgery::Insider];
 
 /// A copy of `orig` (on `chat`) with `payload`, forged as `how`. It keeps
 /// the original lamport when `same_lamport`; else a stranger's or insider's
 /// copy counts from its signer's own view of the log (plausible), and any
 /// other sits a little past the original.
-fn forge(
-    w: &mut SignedWorld,
-    chat: Option<Uuid>,
-    orig: &SessionEventEnvelope,
-    payload: SessionEvent,
-    how: Forgery,
-    same_lamport: bool,
-) -> SessionEventEnvelope {
+fn forge(w: &mut SignedWorld, chat: Option<Uuid>, orig: &SessionEventEnvelope, payload: SessionEvent, how: Forgery, same_lamport: bool) -> SessionEventEnvelope {
     let mut f = orig.clone();
     f.payload = payload.clone();
     if !same_lamport {
@@ -96,11 +77,7 @@ fn forge(
             sign_envelope(&mut f, device, &k);
         }
         Forgery::Stranger | Forgery::Insider => {
-            let by = if matches!(how, Forgery::Stranger) {
-                "eve"
-            } else {
-                "mal"
-            };
+            let by = if matches!(how, Forgery::Stranger) { "eve" } else { "mal" };
             f = w.draft(by, chat, payload, None);
             f.event_id = orig.event_id;
             if same_lamport {
@@ -137,18 +114,12 @@ fn world() -> (SignedWorld, Uuid) {
     (w, chat)
 }
 
-fn chat_fold(
-    cfg: &[SessionEventEnvelope],
-    log: &[SessionEventEnvelope],
-) -> ligus_core::ChatSession {
+fn chat_fold(cfg: &[SessionEventEnvelope], log: &[SessionEventEnvelope]) -> ligus_core::ChatSession {
     let t = project_config(cfg, None, None).1;
     project_authorized(log, None, None, WorkspaceAuthz::Timeline(&t)).unwrap()
 }
 
-fn chat_verdicts(
-    cfg: &[SessionEventEnvelope],
-    log: &[SessionEventEnvelope],
-) -> BTreeMap<Uuid, Verdict> {
+fn chat_verdicts(cfg: &[SessionEventEnvelope], log: &[SessionEventEnvelope]) -> BTreeMap<Uuid, Verdict> {
     let t = project_config(cfg, None, None).1;
     fold_decisions(log, None, None, WorkspaceAuthz::Timeline(&t))
 }
@@ -163,14 +134,7 @@ fn a_forged_copy_never_erases_an_honest_title_change() {
             w.say(chat, "con", title("before"));
             let id = w.say(chat, "con", title("honest"));
             let orig = find(&w, Some(chat), id);
-            let forged = forge(
-                &mut w,
-                Some(chat),
-                &orig,
-                forged_payload(how),
-                how,
-                same_lamport,
-            );
+            let forged = forge(&mut w, Some(chat), &orig, forged_payload(how), how, same_lamport);
             let mut log = w.chats[&chat].clone();
             log.push(forged.clone());
             let mut rev = w.chats[&chat].clone();
@@ -194,26 +158,10 @@ fn a_forged_copy_never_erases_a_removal() {
             w.admit("owner", "dan", WorkspaceRole::Contributor);
             let signers: BTreeSet<Uuid> = [w.people["dan"].device_id].into_iter().collect();
             let wm = heads_of(&w.cfg, workspace_config_session_id(w.wid), &signers);
-            let removal = w.push(
-                "owner",
-                SessionEvent::MemberRemoved {
-                    member_id: "dan".into(),
-                    watermark: wm,
-                },
-            );
+            let removal = w.push("owner", SessionEvent::MemberRemoved { member_id: "dan".into(), watermark: wm });
             assert_eq!(w.verdict(removal), Verdict::Allowed);
             let orig = find(&w, None, removal);
-            let forged = forge(
-                &mut w,
-                None,
-                &orig,
-                SessionEvent::WorkspaceRulesSet {
-                    version: 2,
-                    presence: None,
-                },
-                how,
-                same_lamport,
-            );
+            let forged = forge(&mut w, None, &orig, SessionEvent::WorkspaceRulesSet { version: 2, presence: None }, how, same_lamport);
             let mut cfg = w.cfg.clone();
             cfg.push(forged.clone());
             let mut rev = w.cfg.clone();
@@ -221,22 +169,9 @@ fn a_forged_copy_never_erases_a_removal() {
             rev.insert(at, forged);
             for c in [&cfg, &rev] {
                 let v = fold_decisions(c, None, None, WorkspaceAuthz::Unchecked);
-                assert_eq!(
-                    v[&removal],
-                    Verdict::Allowed,
-                    "{how:?} same_lamport={same_lamport}: the removal was erased"
-                );
-                let members: Vec<String> = project_config(c, None, None)
-                    .0
-                    .unwrap()
-                    .members
-                    .into_iter()
-                    .map(|m| m.id)
-                    .collect();
-                assert!(
-                    !members.contains(&"dan".to_string()),
-                    "{how:?}: the removed member is back: {members:?}"
-                );
+                assert_eq!(v[&removal], Verdict::Allowed, "{how:?} same_lamport={same_lamport}: the removal was erased");
+                let members: Vec<String> = project_config(c, None, None).0.unwrap().members.into_iter().map(|m| m.id).collect();
+                assert!(!members.contains(&"dan".to_string()), "{how:?}: the removed member is back: {members:?}");
             }
         }
     }
@@ -245,11 +180,7 @@ fn a_forged_copy_never_erases_a_removal() {
 /// A forged copy of the config seed's id doesn't take the workspace down.
 #[test]
 fn a_forged_copy_of_the_seed_leaves_the_workspace_standing() {
-    for how in [
-        Forgery::UnsignedStampless,
-        Forgery::UnsignedStamped,
-        Forgery::WrongKey,
-    ] {
+    for how in [Forgery::UnsignedStampless, Forgery::UnsignedStamped, Forgery::WrongKey] {
         let (w, chat) = world();
         let seed = w.cfg[0].clone();
         let mut forged = seed.clone();
@@ -258,11 +189,7 @@ fn a_forged_copy_of_the_seed_leaves_the_workspace_standing() {
         }
         forged.clear_raw();
         match how {
-            Forgery::WrongKey => sign_envelope(
-                &mut forged,
-                seed.signer_device_id.unwrap(),
-                &SigningKeypair::generate().unwrap(),
-            ),
+            Forgery::WrongKey => sign_envelope(&mut forged, seed.signer_device_id.unwrap(), &SigningKeypair::generate().unwrap()),
             _ => {
                 forged.signature = None;
                 forged.signer_device_id = None;
@@ -274,24 +201,10 @@ fn a_forged_copy_of_the_seed_leaves_the_workspace_standing() {
         let mut cfg = w.cfg.clone();
         cfg.push(forged);
         let (s, _) = project_config(&cfg, None, None);
-        let members: Vec<String> = s
-            .expect("the workspace still folds")
-            .members
-            .into_iter()
-            .map(|m| m.id)
-            .collect();
-        assert!(
-            members.contains(&"owner".to_string()) && members.contains(&"con".to_string()),
-            "{how:?}: {members:?}"
-        );
+        let members: Vec<String> = s.expect("the workspace still folds").members.into_iter().map(|m| m.id).collect();
+        assert!(members.contains(&"owner".to_string()) && members.contains(&"con".to_string()), "{how:?}: {members:?}");
         // The chats still fold against it.
-        assert!(project_authorized(
-            &w.chats[&chat],
-            None,
-            None,
-            WorkspaceAuthz::Timeline(&project_config(&cfg, None, None).1)
-        )
-        .is_some());
+        assert!(project_authorized(&w.chats[&chat], None, None, WorkspaceAuthz::Timeline(&project_config(&cfg, None, None).1)).is_some());
     }
 }
 
@@ -299,56 +212,20 @@ fn a_forged_copy_of_the_seed_leaves_the_workspace_standing() {
 /// chat events that name the real one as their frontier look forged.
 #[test]
 fn a_forged_copy_of_a_frontier_does_not_deny_the_events_that_name_it() {
-    for how in [
-        Forgery::Stranger,
-        Forgery::Insider,
-        Forgery::UnsignedStamped,
-        Forgery::WrongKey,
-    ] {
+    for how in [Forgery::Stranger, Forgery::Insider, Forgery::UnsignedStamped, Forgery::WrongKey] {
         let (mut w, chat) = world();
-        let anchor = w.push(
-            "owner",
-            SessionEvent::WorkspaceRulesSet {
-                version: 2,
-                presence: None,
-            },
-        );
+        let anchor = w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
         let orig = find(&w, None, anchor);
-        let posts: Vec<Uuid> = (0..3)
-            .map(|i| w.say(chat, "con", msg("con", &format!("p{i}"))))
-            .collect();
+        let posts: Vec<Uuid> = (0..3).map(|i| w.say(chat, "con", msg("con", &format!("p{i}")))).collect();
         // The posts name the anchor as their frontier.
-        assert!(posts.iter().all(|p| find(&w, Some(chat), *p)
-            .actor_stamp
-            .unwrap()
-            .cfg_frontier
-            .unwrap()
-            .event_id
-            == anchor));
-        let forged = forge(
-            &mut w,
-            None,
-            &orig,
-            SessionEvent::WorkspaceRulesSet {
-                version: 2,
-                presence: None,
-            },
-            how,
-            false,
-        );
-        assert_ne!(
-            forged.lamport, orig.lamport,
-            "{how:?}: a copy under another lamport"
-        );
+        assert!(posts.iter().all(|p| find(&w, Some(chat), *p).actor_stamp.unwrap().cfg_frontier.unwrap().event_id == anchor));
+        let forged = forge(&mut w, None, &orig, SessionEvent::WorkspaceRulesSet { version: 2, presence: None }, how, false);
+        assert_ne!(forged.lamport, orig.lamport, "{how:?}: a copy under another lamport");
         let mut cfg = w.cfg.clone();
         cfg.push(forged);
         let v = chat_verdicts(&cfg, &w.chats[&chat]);
         for p in &posts {
-            assert_eq!(
-                v[p],
-                Verdict::Allowed,
-                "{how:?}: a post naming the real frontier was refused"
-            );
+            assert_eq!(v[p], Verdict::Allowed, "{how:?}: a post naming the real frontier was refused");
         }
     }
 }
@@ -360,26 +237,12 @@ fn an_insiders_copy_under_an_honest_id_folds_beside_it() {
     let (mut w, chat) = world();
     let id = w.say(chat, "con", msg("con", "honest"));
     let orig = find(&w, Some(chat), id);
-    let forged = forge(
-        &mut w,
-        Some(chat),
-        &orig,
-        msg("mal", "insider"),
-        Forgery::Insider,
-        true,
-    );
+    let forged = forge(&mut w, Some(chat), &orig, msg("mal", "insider"), Forgery::Insider, true);
     let mut log = w.chats[&chat].clone();
     log.push(forged);
-    let bodies: Vec<String> = chat_fold(&w.cfg, &log)
-        .messages
-        .into_iter()
-        .map(|m| m.body)
-        .collect();
+    let bodies: Vec<String> = chat_fold(&w.cfg, &log).messages.into_iter().map(|m| m.body).collect();
     assert!(bodies.contains(&"honest".to_string()), "{bodies:?}");
-    assert!(
-        bodies.contains(&"insider".to_string()),
-        "the insider's own signed event is theirs: {bodies:?}"
-    );
+    assert!(bodies.contains(&"insider".to_string()), "the insider's own signed event is theirs: {bodies:?}");
 }
 
 /// The owner's decision stands for what it was meant for: the same signer
@@ -410,10 +273,7 @@ fn same_signer_equivocation_is_still_denied_with_forged_copies_around() {
         rev.insert(1, twin);
         for l in [&log, &rev] {
             let s = chat_fold(&w.cfg, l);
-            assert_eq!(
-                s.title, "before",
-                "{how:?}: neither of the signer's copies folds, nor the forgery"
-            );
+            assert_eq!(s.title, "before", "{how:?}: neither of the signer's copies folds, nor the forgery");
             let v = chat_verdicts(&w.cfg, l);
             if !matches!(how, Forgery::Insider | Forgery::Stranger) {
                 assert_eq!(v[&id], Verdict::Denied, "{how:?}");
@@ -429,10 +289,7 @@ fn a_forged_copy_never_erases_a_phone_signed_event() {
         let (mut w, chat) = world();
         let phone = Phone::new();
         let cert = w.phone_certificate("con", &phone);
-        w.push_bare(
-            "con",
-            SessionEvent::DeviceCertificateAdded { certificate: cert },
-        );
+        w.push_bare("con", SessionEvent::DeviceCertificateAdded { certificate: cert });
         w.say(chat, "con", title("before"));
         let id = w.phone_write("con", &phone, Some(chat), title("from the phone"));
         assert_eq!(w.verdict(id), Verdict::Allowed, "control");
@@ -469,20 +326,12 @@ fn plan() -> impl Strategy<Value = Plan> {
         proptest::collection::vec((any::<u8>(), 0u8..5, any::<bool>(), any::<bool>()), 0..10),
         proptest::collection::vec((any::<u64>(), any::<u64>()), 2..=4),
     )
-        .prop_map(|(n_chat, n_cfg, twins, forgeries, devices)| Plan {
-            n_chat,
-            n_cfg,
-            twins,
-            forgeries,
-            devices,
-        })
+        .prop_map(|(n_chat, n_cfg, twins, forgeries, devices)| Plan { n_chat, n_cfg, twins, forgeries, devices })
 }
 
 fn shuffle<T>(v: &mut [T], mut s: u64) {
     for i in (1..v.len()).rev() {
-        s = s
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         v.swap(i, (s >> 33) as usize % (i + 1));
     }
 }
@@ -511,24 +360,13 @@ impl Outcome {
 fn outcome(cfg: &[SessionEventEnvelope], log: &[SessionEventEnvelope]) -> Outcome {
     let (config, t) = project_config(cfg, None, None);
     let mut verdicts = fold_decisions(cfg, None, None, WorkspaceAuthz::Unchecked);
-    verdicts.extend(fold_decisions(
-        log,
-        None,
-        None,
-        WorkspaceAuthz::Timeline(&t),
-    ));
+    verdicts.extend(fold_decisions(log, None, None, WorkspaceAuthz::Timeline(&t)));
     let s = project_authorized(log, None, None, WorkspaceAuthz::Timeline(&t)).unwrap();
     let copies = (
         fold_copy_decisions(cfg, None, None, WorkspaceAuthz::Unchecked),
         fold_copy_decisions(log, None, None, WorkspaceAuthz::Timeline(&t)),
     );
-    let mut members: Vec<(String, u8)> = config
-        .as_ref()
-        .unwrap()
-        .members
-        .iter()
-        .map(|m| (m.id.clone(), m.role.rank()))
-        .collect();
+    let mut members: Vec<(String, u8)> = config.as_ref().unwrap().members.iter().map(|m| (m.id.clone(), m.role.rank())).collect();
     members.sort();
     Outcome {
         verdicts,
@@ -668,16 +506,7 @@ fn a_re_encoded_copy_is_the_same_event_not_an_equivocation() {
             w.say(chat, "con", title("before"));
             (Some(chat), w.say(chat, "con", title("honest")))
         } else {
-            (
-                None,
-                w.push(
-                    "owner",
-                    SessionEvent::WorkspaceRulesSet {
-                        version: 2,
-                        presence: None,
-                    },
-                ),
-            )
+            (None, w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: None }))
         };
         let orig = find(&w, log_of, id);
         let wire = serde_json::to_string(&orig).unwrap();
@@ -685,44 +514,24 @@ fn a_re_encoded_copy_is_the_same_event_not_an_equivocation() {
         let mut re = wire.clone();
         re.insert(p + "\"payload\":{".len(), ' ');
         let reencoded: SessionEventEnvelope = serde_json::from_str(&re).unwrap();
-        assert_ne!(
-            ligus_core::crypto::envelope_preimage(&reencoded),
-            ligus_core::crypto::envelope_preimage(&orig),
-            "control: other bytes"
-        );
-        let key = &w.people[if chat_side { "con" } else { "owner" }]
-            .device
-            .public_key_bytes();
-        assert!(
-            ligus_core::crypto::verify_envelope(&reencoded, key).is_ok(),
-            "control: it still verifies"
-        );
+        assert_ne!(ligus_core::crypto::envelope_preimage(&reencoded), ligus_core::crypto::envelope_preimage(&orig), "control: other bytes");
+        let key = &w.people[if chat_side { "con" } else { "owner" }].device.public_key_bytes();
+        assert!(ligus_core::crypto::verify_envelope(&reencoded, key).is_ok(), "control: it still verifies");
         let orig_wire: SessionEventEnvelope = serde_json::from_str(&wire).unwrap();
-        assert!(
-            !ligus_core::events::equivocates(&orig_wire, &reencoded),
-            "one event, two encodings"
-        );
+        assert!(!ligus_core::events::equivocates(&orig_wire, &reencoded), "one event, two encodings");
         if chat_side {
             let mut log = w.chats[&chat].clone();
             let at = log.iter().position(|e| e.event_id == id).unwrap();
             log[at] = orig_wire;
             log.push(reencoded);
-            assert_eq!(
-                chat_fold(&w.cfg, &log).title,
-                "honest",
-                "a re-encoded copy erased the event"
-            );
+            assert_eq!(chat_fold(&w.cfg, &log).title, "honest", "a re-encoded copy erased the event");
             assert_eq!(chat_verdicts(&w.cfg, &log)[&id], Verdict::Allowed);
         } else {
             let mut cfg = w.cfg.clone();
             let at = cfg.iter().position(|e| e.event_id == id).unwrap();
             cfg[at] = orig_wire;
             cfg.push(reencoded);
-            assert_eq!(
-                fold_decisions(&cfg, None, None, WorkspaceAuthz::Unchecked)[&id],
-                Verdict::Allowed,
-                "a re-encoded copy erased the config event"
-            );
+            assert_eq!(fold_decisions(&cfg, None, None, WorkspaceAuthz::Unchecked)[&id], Verdict::Allowed, "a re-encoded copy erased the config event");
         }
     }
 }
@@ -808,26 +617,11 @@ fn a_second_registration_of_an_account_attests_nothing() {
     let (mut w, chat) = world();
     let fake = SigningKeypair::generate().unwrap();
     let con_account = w.people["con"].account_id;
-    w.push_bare(
-        "eve",
-        SessionEvent::AccountKeyRegistered {
-            account_id: con_account,
-            signing_public_key: fake.public_key_bytes().to_vec(),
-        },
-    );
+    w.push_bare("eve", SessionEvent::AccountKeyRegistered { account_id: con_account, signing_public_key: fake.public_key_bytes().to_vec() });
     let device = SigningKeypair::generate().unwrap();
     let con_device = w.people["con"].device_id;
-    let cert = ligus_core::crypto::DeviceCertificate::issue_for_id(
-        &fake,
-        con_account,
-        con_device,
-        &device.public_key_bytes(),
-        ligus_core::Timestamp::epoch(),
-    );
-    w.push_bare(
-        "eve",
-        SessionEvent::DeviceCertificateAdded { certificate: cert },
-    );
+    let cert = ligus_core::crypto::DeviceCertificate::issue_for_id(&fake, con_account, con_device, &device.public_key_bytes(), ligus_core::Timestamp::epoch());
+    w.push_bare("eve", SessionEvent::DeviceCertificateAdded { certificate: cert });
     let id = w.say(chat, "con", msg("con", "honest"));
     let mut forged = find(&w, Some(chat), id);
     forged.payload = msg("con", "forged");
@@ -835,13 +629,6 @@ fn a_second_registration_of_an_account_attests_nothing() {
     sign_envelope(&mut forged, con_device, &device);
     let mut log = w.chats[&chat].clone();
     log.push(forged);
-    let bodies: Vec<String> = chat_fold(&w.cfg, &log)
-        .messages
-        .into_iter()
-        .map(|m| m.body)
-        .collect();
-    assert!(
-        !bodies.contains(&"forged".to_string()),
-        "a copy under a forged registration folded as the member's: {bodies:?}"
-    );
+    let bodies: Vec<String> = chat_fold(&w.cfg, &log).messages.into_iter().map(|m| m.body).collect();
+    assert!(!bodies.contains(&"forged".to_string()), "a copy under a forged registration folded as the member's: {bodies:?}");
 }

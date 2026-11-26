@@ -14,14 +14,13 @@
 //! `reject` like any proposal. Tuning the dial, pre-flight, apply and deciding
 //! a set stay on the desktop: there is no route here that writes a set.
 
+use ligus_runtime::display::shown;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use ligus_core::proposal_sets::{
-    is_self_assessment, CheckOutcome, CheckStatus, ProposalSet, QuorumDial, QuorumKnobs, SetPhase,
-    StopReason,
+    is_self_assessment, CheckOutcome, CheckStatus, ProposalSet, QuorumDial, QuorumKnobs, SetPhase, StopReason,
 };
 use ligus_core::{ChatSession, Timestamp};
-use ligus_runtime::display::shown;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -70,14 +69,10 @@ fn dial_of(set: &ProposalSet) -> &'static str {
         required_approvals: set.required_approvals,
         quality_bar: set.quality_bar,
     };
-    [
-        (QuorumDial::Fast, "fast"),
-        (QuorumDial::Balanced, "balanced"),
-        (QuorumDial::Careful, "careful"),
-    ]
-    .into_iter()
-    .find(|(d, _)| d.knobs() == now)
-    .map_or("custom", |(_, n)| n)
+    [(QuorumDial::Fast, "fast"), (QuorumDial::Balanced, "balanced"), (QuorumDial::Careful, "careful")]
+        .into_iter()
+        .find(|(d, _)| d.knobs() == now)
+        .map_or("custom", |(_, n)| n)
 }
 
 /// One set as the phone shows it. `me` is who is asking ([`api::viewer`]).
@@ -201,9 +196,7 @@ fn wants_all(f: &SetFilter) -> ApiResult<bool> {
     match f.status.as_deref().map(str::trim) {
         None | Some("") | Some("open") => Ok(false),
         Some("all") => Ok(true),
-        Some(other) => Err(ApiError::bad_request(format!(
-            "status must be open or all (got '{other}')"
-        ))),
+        Some(other) => Err(ApiError::bad_request(format!("status must be open or all (got '{other}')"))),
     }
 }
 
@@ -234,17 +227,11 @@ pub async fn list_sets(State(s): S, Query(f): Query<SetFilter>) -> ApiResult<Jso
 
 /// `GET /v1/chats/:id/proposal-sets?status=open|all`: one chat's sets
 /// (all of them by default, as the desktop's set view lists them).
-pub async fn chat_sets(
-    State(s): S,
-    Path(id): Path<String>,
-    Query(f): Query<SetFilter>,
-) -> ApiResult<Json<Value>> {
+pub async fn chat_sets(State(s): S, Path(id): Path<String>, Query(f): Query<SetFilter>) -> ApiResult<Json<Value>> {
     let all = f.status.is_none() || wants_all(&f)?;
     let chat = load_chat(&s, &id)?;
     let me = api::viewer(&s);
-    Ok(Json(
-        json!({ "sets": newest_first(sets_of(&chat, all, &me)) }),
-    ))
+    Ok(Json(json!({ "sets": newest_first(sets_of(&chat, all, &me)) })))
 }
 
 /// `GET /v1/proposal-sets/:id`: one set.

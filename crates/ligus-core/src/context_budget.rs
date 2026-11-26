@@ -204,16 +204,8 @@ pub fn plan_with_hysteresis(
     if history.is_empty() {
         return unchanged(0, None);
     }
-    let high = if high.is_finite() {
-        high.clamp(f64::MIN_POSITIVE, 1.0)
-    } else {
-        1.0
-    };
-    let low = if low.is_finite() {
-        low.clamp(f64::MIN_POSITIVE, high)
-    } else {
-        high
-    };
+    let high = if high.is_finite() { high.clamp(f64::MIN_POSITIVE, 1.0) } else { 1.0 };
+    let low = if low.is_finite() { low.clamp(f64::MIN_POSITIVE, high) } else { high };
     let budget = budget_tokens.max(0) as f64;
     let high_limit = (budget * high).floor() as i64;
     let low_limit = (budget * low).floor() as i64;
@@ -267,11 +259,7 @@ pub fn messages_fingerprint(messages: &[ChatMessage]) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     for m in messages {
-        for part in [
-            m.id.as_bytes().as_slice(),
-            m.author.as_bytes(),
-            m.body.as_bytes(),
-        ] {
+        for part in [m.id.as_bytes().as_slice(), m.author.as_bytes(), m.body.as_bytes()] {
             h.update((part.len() as u64).to_le_bytes());
             h.update(part);
         }
@@ -303,11 +291,7 @@ impl SummaryBackoff {
 
     /// Record a failure at `now`, after `prior` consecutive ones (if any).
     pub fn after_failure(prior: Option<&SummaryBackoff>, now: std::time::Instant) -> Self {
-        Self {
-            failures: prior.map_or(0, |p| p.failures).saturating_add(1),
-            skipped: 0,
-            since: now,
-        }
+        Self { failures: prior.map_or(0, |p| p.failures).saturating_add(1), skipped: 0, since: now }
     }
 
     /// Consecutive failures so far.
@@ -317,25 +301,19 @@ impl SummaryBackoff {
 
     /// Turns to skip before the next attempt.
     pub fn skip_turns(&self) -> u32 {
-        1u32.checked_shl(self.failures.min(31))
-            .unwrap_or(u32::MAX)
-            .min(Self::MAX_SKIPPED_TURNS)
+        1u32.checked_shl(self.failures.min(31)).unwrap_or(u32::MAX).min(Self::MAX_SKIPPED_TURNS)
     }
 
     /// Time to wait before the next attempt.
     pub fn delay(&self) -> std::time::Duration {
-        let factor = 1u32
-            .checked_shl(self.failures.saturating_sub(1).min(31))
-            .unwrap_or(u32::MAX);
+        let factor = 1u32.checked_shl(self.failures.saturating_sub(1).min(31)).unwrap_or(u32::MAX);
         Self::BASE_DELAY.saturating_mul(factor).min(Self::MAX_DELAY)
     }
 
     /// Whether this turn may call the summarizer again. When it may not, the
     /// turn counts as skipped.
     pub fn try_attempt(&mut self, now: std::time::Instant) -> bool {
-        if self.skipped >= self.skip_turns()
-            || now.saturating_duration_since(self.since) >= self.delay()
-        {
+        if self.skipped >= self.skip_turns() || now.saturating_duration_since(self.since) >= self.delay() {
             return true;
         }
         self.skipped += 1;
@@ -353,10 +331,7 @@ mod tests {
         use std::time::Duration;
         let t0 = std::time::Instant::now();
         let mut b = SummaryBackoff::after_failure(None, t0);
-        assert_eq!(
-            (b.failures(), b.skip_turns(), b.delay()),
-            (1, 2, Duration::from_secs(120))
-        );
+        assert_eq!((b.failures(), b.skip_turns(), b.delay()), (1, 2, Duration::from_secs(120)));
         // Fast chat: two skipped turns, then a retry.
         assert!(!b.try_attempt(t0 + Duration::from_secs(5)));
         assert!(!b.try_attempt(t0 + Duration::from_secs(10)));
@@ -367,10 +342,7 @@ mod tests {
 
         // Consecutive failures double both, up to the caps.
         let b2 = SummaryBackoff::after_failure(Some(&b), t0);
-        assert_eq!(
-            (b2.failures(), b2.skip_turns(), b2.delay()),
-            (2, 4, Duration::from_secs(240))
-        );
+        assert_eq!((b2.failures(), b2.skip_turns(), b2.delay()), (2, 4, Duration::from_secs(240)));
         let mut many = b2.clone();
         for _ in 0..40 {
             many = SummaryBackoff::after_failure(Some(&many), t0);
@@ -379,10 +351,7 @@ mod tests {
         assert_eq!(many.delay(), SummaryBackoff::MAX_DELAY);
         let mut m = many.clone();
         for i in 0..SummaryBackoff::MAX_SKIPPED_TURNS {
-            assert!(
-                !m.try_attempt(t0 + Duration::from_secs(u64::from(i))),
-                "turn {i}"
-            );
+            assert!(!m.try_attempt(t0 + Duration::from_secs(u64::from(i))), "turn {i}");
         }
         assert!(m.try_attempt(t0 + Duration::from_secs(60)));
         let mut m = many;
@@ -396,19 +365,11 @@ mod tests {
         let fp = messages_fingerprint(&[a.clone(), b.clone()]);
         assert_eq!(fp.len(), 64);
         assert_eq!(fp, messages_fingerprint(&[a.clone(), b.clone()]), "stable");
-        assert_ne!(
-            fp,
-            messages_fingerprint(&[b.clone(), a.clone()]),
-            "order matters"
-        );
+        assert_ne!(fp, messages_fingerprint(&[b.clone(), a.clone()]), "order matters");
         let mut edited = b.clone();
         edited.body = "beta, edited".into();
         assert_ne!(fp, messages_fingerprint(&[a.clone(), edited]));
-        assert_ne!(
-            fp,
-            messages_fingerprint(&[a.clone(), msg("beta")]),
-            "a different message with the same text"
-        );
+        assert_ne!(fp, messages_fingerprint(&[a.clone(), msg("beta")]), "a different message with the same text");
         assert_ne!(fp, messages_fingerprint(&[a]));
     }
 
@@ -427,23 +388,11 @@ mod tests {
 
     #[test]
     fn model_window_table_matches_swift() {
-        assert_eq!(
-            model_context_window::tokens_for_model("claude-opus-4"),
-            200_000
-        );
-        assert_eq!(
-            model_context_window::tokens_for_model("gemini-2.0"),
-            1_000_000
-        );
-        assert_eq!(
-            model_context_window::tokens_for_model("gpt-4o-mini"),
-            128_000
-        );
+        assert_eq!(model_context_window::tokens_for_model("claude-opus-4"), 200_000);
+        assert_eq!(model_context_window::tokens_for_model("gemini-2.0"), 1_000_000);
+        assert_eq!(model_context_window::tokens_for_model("gpt-4o-mini"), 128_000);
         assert_eq!(model_context_window::tokens_for_model("qwen2.5"), 32_768);
-        assert_eq!(
-            model_context_window::tokens_for_model("something-else"),
-            8_192
-        );
+        assert_eq!(model_context_window::tokens_for_model("something-else"), 8_192);
     }
 
     #[test]
@@ -464,34 +413,19 @@ mod tests {
         // Older Gemma generations and other local families keep their entries.
         assert_eq!(model_context_window::tokens_for_model("gemma2:9b"), 8_192);
         assert_eq!(model_context_window::tokens_for_model("llama3.1:8b"), 8_192);
-        assert_eq!(
-            model_context_window::tokens_for_model("qwen3.6:35b-a3b"),
-            32_768
-        );
+        assert_eq!(model_context_window::tokens_for_model("qwen3.6:35b-a3b"), 32_768);
         // Hosted GPT entries are untouched.
         assert_eq!(model_context_window::tokens_for_model("gpt-4o"), 128_000);
         assert_eq!(model_context_window::tokens_for_model("gpt-4"), 8_192);
         // Native Ollama sizes num_ctx from the name table alone: the windows
         // these families had before the profiles existed.
-        for (id, want) in [
-            ("gemma3:27b", 8_192),
-            ("gemma4:12b", 8_192),
-            ("gpt-oss:20b", model_context_window::FALLBACK),
-            ("lfm2:8b", model_context_window::FALLBACK),
-            ("qwen3.5", 32_768),
-        ] {
+        for (id, want) in [("gemma3:27b", 8_192), ("gemma4:12b", 8_192), ("gpt-oss:20b", model_context_window::FALLBACK), ("lfm2:8b", model_context_window::FALLBACK), ("qwen3.5", 32_768)] {
             assert_eq!(model_context_window::name_table_window(id), want, "{id}");
         }
         assert_eq!(model_context_window::name_table_window("gpt-4o"), 128_000);
         // Retrieval models plan against their own (small) windows, not a slot.
-        assert_eq!(
-            model_context_window::tokens_for_model("embeddinggemma-300m"),
-            2_048
-        );
-        assert_eq!(
-            model_context_window::tokens_for_model("bge-reranker-v2-m3"),
-            8_192
-        );
+        assert_eq!(model_context_window::tokens_for_model("embeddinggemma-300m"), 2_048);
+        assert_eq!(model_context_window::tokens_for_model("bge-reranker-v2-m3"), 8_192);
     }
 
     #[test]
@@ -618,11 +552,7 @@ mod tests {
         let history: Vec<_> = (0..9).map(|_| sized(10)).collect();
         let p = plan_with_hysteresis(&history, 100, None, H, L);
         let boundary = p.boundary.unwrap();
-        let without: Vec<_> = history
-            .iter()
-            .filter(|m| m.id != boundary)
-            .cloned()
-            .collect();
+        let without: Vec<_> = history.iter().filter(|m| m.id != boundary).cloned().collect();
         // What remains still exceeds the high watermark → a fresh batch plan.
         let mut long = without.clone();
         long.extend((0..2).map(|_| sized(10)));
@@ -643,18 +573,10 @@ mod tests {
         // 60 messages, ~30k tokens: a 25k-budget responder compacts…
         let history: Vec<_> = (0..60).map(|_| sized(504)).collect();
         let small = plan_with_hysteresis(&history, 25_000, None, H, L);
-        assert!(
-            small.moved && small.plan.overflow.len() > 30,
-            "{}",
-            small.plan.overflow.len()
-        );
+        assert!(small.moved && small.plan.overflow.len() > 30, "{}", small.plan.overflow.len());
         // …a 120k-budget responder handed that boundary keeps everything.
         let big = plan_with_hysteresis(&history, 120_000, small.boundary, H, L);
-        assert!(
-            big.plan.overflow.is_empty(),
-            "inherited {} overflow",
-            big.plan.overflow.len()
-        );
+        assert!(big.plan.overflow.is_empty(), "inherited {} overflow", big.plan.overflow.len());
         assert_eq!(big.boundary, None);
         // A window that grew but still can't hold everything re-plans to its
         // own low watermark instead of keeping the small window's cut.

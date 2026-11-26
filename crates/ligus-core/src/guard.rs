@@ -131,10 +131,7 @@ pub struct GuardState {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub closed_admissions: BTreeMap<Uuid, Vec<Option<Uuid>>>,
     /// The sandbox grants in force (`WorkspaceSandboxSet`). Config log.
-    #[serde(
-        default,
-        skip_serializing_if = "crate::sandbox::SandboxGrants::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "crate::sandbox::SandboxGrants::is_empty")]
     pub sandbox_grants: crate::sandbox::SandboxGrants,
     /// Approvals cast through a vote whose stated voter is the event's signed
     /// author (proposal id → voter ids). Approvals carried inside a proposal
@@ -200,16 +197,12 @@ impl GuardState {
     /// Whether this chat is locked down (self-medication). Only meaningful on
     /// a chat session the config overlay has stamped with its `chat_id`.
     pub fn lockdown_active(&self) -> bool {
-        self.chat_id
-            .is_some_and(|c| self.lockdowns.get(&c).is_some_and(|l| !l.is_empty()))
+        self.chat_id.is_some_and(|c| self.lockdowns.get(&c).is_some_and(|l| !l.is_empty()))
     }
 
     /// The active lockdown signals of a chat.
     pub fn lockdowns_of(&self, chat_id: Uuid) -> &[ChatLockdown] {
-        self.lockdowns
-            .get(&chat_id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        self.lockdowns.get(&chat_id).map(Vec::as_slice).unwrap_or(&[])
     }
 }
 
@@ -217,11 +210,7 @@ impl GuardState {
 /// `ChatSession::apply` doesn't see). Called from projection after the event
 /// passed authorization. Returns true when the event was fully consumed here
 /// (so `apply` must not run).
-pub fn fold_authored(
-    session: &mut crate::ChatSession,
-    event: &crate::SessionEvent,
-    author: &str,
-) -> bool {
+pub fn fold_authored(session: &mut crate::ChatSession, event: &crate::SessionEvent, author: &str) -> bool {
     use crate::SessionEvent;
     match event {
         // Dearth mode: a new member added by an Admin waits for a second Admin.
@@ -238,51 +227,21 @@ pub fn fold_authored(
                 .get(&member.id)
                 .is_some_and(|a| a.iter().any(|x| x != author));
             if approved {
-                session
-                    .guards
-                    .pending_members
-                    .retain(|p| p.member.id != member.id);
+                session.guards.pending_members.retain(|p| p.member.id != member.id);
                 return false;
             }
-            session
-                .guards
-                .pending_members
-                .retain(|p| p.member.id != member.id);
-            session.guards.pending_members.push(PendingMember {
-                member: member.clone(),
-                added_by: author.to_string(),
-            });
+            session.guards.pending_members.retain(|p| p.member.id != member.id);
+            session.guards.pending_members.push(PendingMember { member: member.clone(), added_by: author.to_string() });
             true
         }
-        SessionEvent::JoinApproved {
-            subject,
-            admission,
-            redeem_key,
-        } => {
+        SessionEvent::JoinApproved { subject, admission, redeem_key } => {
             if let (Some(a), Some(id)) = (admission, crate::admission::invite_of_subject(subject)) {
-                session
-                    .guards
-                    .service_invites
-                    .entry(id)
-                    .or_insert_with(|| a.clone());
+                session.guards.service_invites.entry(id).or_insert_with(|| a.clone());
             }
-            if let (None, Some(k), Some(id)) = (
-                admission,
-                redeem_key,
-                crate::admission::invite_of_subject(subject),
-            ) {
-                session
-                    .guards
-                    .invite_keys
-                    .entry(id)
-                    .or_insert_with(|| k.clone());
+            if let (None, Some(k), Some(id)) = (admission, redeem_key, crate::admission::invite_of_subject(subject)) {
+                session.guards.invite_keys.entry(id).or_insert_with(|| k.clone());
             }
-            session
-                .guards
-                .join_approvals
-                .entry(subject.clone())
-                .or_default()
-                .insert(author.to_string());
+            session.guards.join_approvals.entry(subject.clone()).or_default().insert(author.to_string());
             if let Some(i) = session
                 .guards
                 .pending_members
@@ -299,16 +258,9 @@ pub fn fold_authored(
         }
         // A vote counts toward a human gate only when the voter it names is
         // the author who signed it.
-        SessionEvent::ProposalVoteCast {
-            proposal_id,
-            approval,
-        } => {
+        SessionEvent::ProposalVoteCast { proposal_id, approval } => {
             if !author.is_empty() && approval.actor_id == author {
-                let set = session
-                    .guards
-                    .verified_approvals
-                    .entry(*proposal_id)
-                    .or_default();
+                let set = session.guards.verified_approvals.entry(*proposal_id).or_default();
                 if approval.approved {
                     set.insert(author.to_string());
                 } else {
@@ -324,35 +276,25 @@ pub fn fold_authored(
 /// Whether `proposal_id` has an approval from a human member, cast and signed
 /// by that member themself (see [`GuardState::verified_approvals`]).
 pub fn has_human_approval(session: &crate::ChatSession, proposal_id: Uuid) -> bool {
-    let producing_agent = session
-        .proposals
-        .iter()
-        .find(|p| p.id == proposal_id)
-        .and_then(|p| p.producing_agent_id);
+    let producing_agent = session.proposals.iter().find(|p| p.id == proposal_id).and_then(|p| p.producing_agent_id);
     session
         .guards
         .verified_approvals
         .get(&proposal_id)
         .is_some_and(|voters| {
             voters.iter().any(|v| {
-                is_human_member(&session.members, v)
-                    && producing_agent.is_none_or(|a| a.to_string() != *v)
+                is_human_member(&session.members, v) && producing_agent.is_none_or(|a| a.to_string() != *v)
             })
         })
 }
 
 /// Why a proposal may not be applied without a human approval, if it can't.
-pub fn human_gate_reason(
-    session: &crate::ChatSession,
-    proposal: &crate::ActionProposal,
-) -> Option<String> {
+pub fn human_gate_reason(session: &crate::ChatSession, proposal: &crate::ActionProposal) -> Option<String> {
     if has_human_approval(session, proposal.id) {
         return None;
     }
     if session.guards.lockdown_active() {
-        return Some(
-            "this chat is locked down: every proposal needs a human member's approval".into(),
-        );
+        return Some("this chat is locked down: every proposal needs a human member's approval".into());
     }
     if let Some(d) = session.guards.dearth_on() {
         if touches_any(&d.brood_paths, &touched_paths(proposal)) {
@@ -375,11 +317,7 @@ pub fn touched_paths(proposal: &crate::ActionProposal) -> Vec<String> {
         if p.is_empty() || p == "/dev/null" {
             return;
         }
-        for cand in [
-            p,
-            p.strip_prefix("a/").unwrap_or(p),
-            p.strip_prefix("b/").unwrap_or(p),
-        ] {
+        for cand in [p, p.strip_prefix("a/").unwrap_or(p), p.strip_prefix("b/").unwrap_or(p)] {
             if !out.iter().any(|x| x == cand) {
                 out.push(cand.to_string());
             }
@@ -413,11 +351,7 @@ pub fn touched_paths(proposal: &crate::ActionProposal) -> Vec<String> {
 /// change's review bar may be raised but never lowered (see
 /// `flow::zones::apply_review_bar`).
 pub fn guards_protect(session: &crate::ChatSession, files: &[String]) -> bool {
-    session.guards.lockdown_active()
-        || session
-            .guards
-            .dearth_on()
-            .is_some_and(|d| touches_any(&d.brood_paths, files))
+    session.guards.lockdown_active() || session.guards.dearth_on().is_some_and(|d| touches_any(&d.brood_paths, files))
 }
 
 /// Match a workspace-relative path against a glob: `**` spans directories,
@@ -431,8 +365,7 @@ pub fn glob_match(pattern: &str, path: &str) -> bool {
     }
     if !pattern.contains('/') {
         let name = path.rsplit('/').next().unwrap_or(path);
-        return seg_match(pattern.as_bytes(), name.as_bytes())
-            || seg_match(pattern.as_bytes(), path.as_bytes());
+        return seg_match(pattern.as_bytes(), name.as_bytes()) || seg_match(pattern.as_bytes(), path.as_bytes());
     }
     let pat: Vec<&str> = pattern.split('/').collect();
     let segs: Vec<&str> = path.split('/').collect();
@@ -443,20 +376,14 @@ fn match_segments(pat: &[&str], segs: &[&str]) -> bool {
     match pat.first() {
         None => segs.is_empty(),
         Some(&"**") => (0..=segs.len()).any(|i| match_segments(&pat[1..], &segs[i..])),
-        Some(p) => {
-            !segs.is_empty()
-                && seg_match(p.as_bytes(), segs[0].as_bytes())
-                && match_segments(&pat[1..], &segs[1..])
-        }
+        Some(p) => !segs.is_empty() && seg_match(p.as_bytes(), segs[0].as_bytes()) && match_segments(&pat[1..], &segs[1..]),
     }
 }
 
 fn seg_match(p: &[u8], s: &[u8]) -> bool {
     match (p.first(), s.first()) {
         (None, None) => true,
-        (Some(b'*'), _) => {
-            seg_match(&p[1..], s) || (!s.is_empty() && s[0] != b'/' && seg_match(p, &s[1..]))
-        }
+        (Some(b'*'), _) => seg_match(&p[1..], s) || (!s.is_empty() && s[0] != b'/' && seg_match(p, &s[1..])),
         (Some(b'?'), Some(c)) if *c != b'/' => seg_match(&p[1..], &s[1..]),
         (Some(a), Some(b)) if a == b => seg_match(&p[1..], &s[1..]),
         _ => false,
@@ -477,9 +404,7 @@ pub fn touches_any(patterns: &[String], paths: &[String]) -> bool {
 /// Whether `actor_id` is a human member at Contributor or above in `members`.
 pub fn is_human_member(members: &[WorkspaceMember], actor_id: &str) -> bool {
     members.iter().any(|m| {
-        m.id == actor_id
-            && m.actor.kind == ActorKind::Human
-            && m.role.rank() >= WorkspaceRole::Contributor.rank()
+        m.id == actor_id && m.actor.kind == ActorKind::Human && m.role.rank() >= WorkspaceRole::Contributor.rank()
     })
 }
 
@@ -501,10 +426,7 @@ mod tests {
         assert!(glob_match("*.lock", "Cargo.lock"));
         assert!(!glob_match("", "x"));
         let brood: Vec<String> = DEFAULT_BROOD_PATHS.iter().map(|s| s.to_string()).collect();
-        assert!(touches_any(
-            &brood,
-            &["README.md".into(), ".github/workflows/release.yml".into()]
-        ));
+        assert!(touches_any(&brood, &["README.md".into(), ".github/workflows/release.yml".into()]));
         assert!(!touches_any(&brood, &["src/lib.rs".into()]));
     }
 }

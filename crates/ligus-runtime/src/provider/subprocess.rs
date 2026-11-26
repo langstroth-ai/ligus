@@ -73,16 +73,7 @@ pub async fn run(
     input: &str,
     on_delta: impl FnMut(String),
 ) -> Result<String, ProviderError> {
-    run_with(
-        ligus_core::ModelProviderKind::Hermes,
-        program,
-        args,
-        working_dir,
-        &[],
-        PromptInput::Stdin(input),
-        on_delta,
-    )
-    .await
+    run_with(ligus_core::ModelProviderKind::Hermes, program, args, working_dir, &[], PromptInput::Stdin(input), on_delta).await
 }
 
 /// Like [`run`], but the caller chooses whether the prompt is delivered on
@@ -98,17 +89,12 @@ pub async fn run_with(
     prompt: PromptInput<'_>,
     mut on_delta: impl FnMut(String),
 ) -> Result<String, ProviderError> {
-    let spec =
-        crate::executor::SpawnSpec::new(crate::executor::Purpose::Agent(kind), program, args)
-            .cwd(working_dir.map(std::path::Path::new))
-            .env(envs);
-    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec)
-        .map_err(|e| ProviderError::Subprocess(format!("sandbox {program}: {e}")))?;
+    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Agent(kind), program, args)
+        .cwd(working_dir.map(std::path::Path::new))
+        .env(envs);
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| ProviderError::Subprocess(format!("sandbox {program}: {e}")))?;
     // Kill the agent if this future is dropped (Stop button aborts the turn).
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     suppress_console_window(&mut cmd);
 
     let mut child = cmd
@@ -301,20 +287,12 @@ mod tests {
         std::env::set_var("LIGUS_WS_SECRET_SCRUBTEST", "ws-secret-value");
         std::env::set_var("LIGUS_SCRUBTEST_ACCESS_TOKEN", "relay-token-value");
         std::env::set_var("LIGUS_SCRUBTEST_PLAIN", "kept");
-        let out = run("sh", &["-c".into(), "env".into()], None, "", |_| {})
-            .await
-            .unwrap();
+        let out = run("sh", &["-c".into(), "env".into()], None, "", |_| {}).await.unwrap();
         std::env::remove_var("LIGUS_WS_SECRET_SCRUBTEST");
         std::env::remove_var("LIGUS_SCRUBTEST_ACCESS_TOKEN");
         std::env::remove_var("LIGUS_SCRUBTEST_PLAIN");
-        assert!(
-            !out.contains("ws-secret-value"),
-            "workspace secret reached the agent"
-        );
-        assert!(
-            !out.contains("relay-token-value"),
-            "token reached the agent"
-        );
+        assert!(!out.contains("ws-secret-value"), "workspace secret reached the agent");
+        assert!(!out.contains("relay-token-value"), "token reached the agent");
         // An allow-list, not a scrub: other Ligus settings don't pass either.
         assert!(!out.contains("LIGUS_SCRUBTEST_PLAIN"), "{out}");
         assert!(out.contains("PATH="), "the allow-listed basics pass");
@@ -327,17 +305,10 @@ mod tests {
         if crate::executor::skip_without_sandbox("nonzero_exit_is_an_error") {
             return;
         }
-        let err = run("sh", &["-c".into(), "exit 3".into()], None, "", |_| {})
-            .await
-            .expect_err("exit 3 is an error");
+        let err = run("sh", &["-c".into(), "exit 3".into()], None, "", |_| {}).await.expect_err("exit 3 is an error");
         // The exit itself, not a refusal to spawn.
         let msg = err.to_string();
-        assert!(
-            matches!(err, ProviderError::Subprocess(_))
-                && msg.contains("sh exited with")
-                && msg.contains('3'),
-            "{msg}"
-        );
+        assert!(matches!(err, ProviderError::Subprocess(_)) && msg.contains("sh exited with") && msg.contains('3'), "{msg}");
     }
 
     #[tokio::test]
@@ -401,18 +372,9 @@ mod tests {
 
     #[test]
     fn normalizes_base_url_to_v1() {
-        assert_eq!(
-            normalize_openai_base_url("http://localhost:11434"),
-            "http://localhost:11434/v1"
-        );
-        assert_eq!(
-            normalize_openai_base_url("http://localhost:11434/"),
-            "http://localhost:11434/v1"
-        );
-        assert_eq!(
-            normalize_openai_base_url("http://localhost:11434/v1"),
-            "http://localhost:11434/v1"
-        );
+        assert_eq!(normalize_openai_base_url("http://localhost:11434"), "http://localhost:11434/v1");
+        assert_eq!(normalize_openai_base_url("http://localhost:11434/"), "http://localhost:11434/v1");
+        assert_eq!(normalize_openai_base_url("http://localhost:11434/v1"), "http://localhost:11434/v1");
     }
 
     #[test]

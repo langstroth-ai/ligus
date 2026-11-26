@@ -101,11 +101,7 @@ pub fn read_token(path: &Path) -> Option<String> {
 
 fn same_token(a: &str, b: &str) -> bool {
     // Constant time over the shorter's length; lengths are public.
-    a.len() == b.len()
-        && a.bytes()
-            .zip(b.bytes())
-            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-            == 0
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// What the hook sends.
@@ -139,11 +135,7 @@ pub struct HookReply {
 
 impl HookReply {
     fn none(reason: impl Into<String>) -> Self {
-        Self {
-            decision: "none".into(),
-            reason: Some(reason.into()),
-            ..Default::default()
-        }
+        Self { decision: "none".into(), reason: Some(reason.into()), ..Default::default() }
     }
 }
 
@@ -154,11 +146,7 @@ pub fn claude_output(reply: Option<&HookReply>) -> Option<String> {
     let decision = match r.decision.as_str() {
         "allow" => serde_json::json!({"behavior": "allow"}),
         "deny" => {
-            let by =
-                r.by.as_deref()
-                    .map(ligus_proto::names::clean_display_name)
-                    .filter(|n| !n.is_empty())
-                    .unwrap_or_else(|| "you".into());
+            let by = r.by.as_deref().map(ligus_proto::names::clean_display_name).filter(|n| !n.is_empty()).unwrap_or_else(|| "you".into());
             serde_json::json!({"behavior": "deny", "message": format!("Denied from Ligus by {by}"), "interrupt": false})
         }
         _ => return None,
@@ -184,33 +172,14 @@ fn cut_bytes(s: &str, max: usize) -> String {
 /// [`MAX_DETAIL_BYTES`] the card offers no Allow. `permission_suggestions`
 /// and `mcp_server` follow under "Details", shown and never applied.
 pub fn outside_detail(input: &Value) -> OutsidePrompt {
-    let tool = input
-        .get("tool_name")
-        .and_then(Value::as_str)
-        .unwrap_or("a tool")
-        .to_string();
+    let tool = input.get("tool_name").and_then(Value::as_str).unwrap_or("a tool").to_string();
     let ti = input.get("tool_input").cloned().unwrap_or(Value::Null);
     let s = |k: &str| ti.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     // Every key the card doesn't already show, as JSON: Allow once covers the
     // whole call, so nothing in it goes unseen.
     let rest_of = |shown: &[&str]| -> String {
-        let rest: serde_json::Map<String, Value> = ti
-            .as_object()
-            .map(|o| {
-                o.iter()
-                    .filter(|(k, _)| !shown.contains(&k.as_str()))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if rest.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "\n\n{}",
-                serde_json::to_string_pretty(&Value::Object(rest)).unwrap_or_default()
-            )
-        }
+        let rest: serde_json::Map<String, Value> = ti.as_object().map(|o| o.iter().filter(|(k, _)| !shown.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+        if rest.is_empty() { String::new() } else { format!("\n\n{}", serde_json::to_string_pretty(&Value::Object(rest)).unwrap_or_default()) }
     };
     // Something with no content to show (an empty or non-string command, no
     // path) offers no Allow: nothing to show is nothing to allow.
@@ -229,50 +198,25 @@ pub fn outside_detail(input: &Value) -> OutsidePrompt {
         }
         "Write" => {
             empty = s("file_path").is_empty();
-            format!(
-                "{}\n\n{}{}",
-                s("file_path"),
-                s("content"),
-                rest_of(&["file_path", "content"])
-            )
+            format!("{}\n\n{}{}", s("file_path"), s("content"), rest_of(&["file_path", "content"]))
         }
         "Edit" => {
             empty = s("file_path").is_empty();
-            format!(
-                "{}\n--- old\n{}\n+++ new\n{}{}",
-                s("file_path"),
-                s("old_string"),
-                s("new_string"),
-                rest_of(&["file_path", "old_string", "new_string"])
-            )
+            format!("{}\n--- old\n{}\n+++ new\n{}{}", s("file_path"), s("old_string"), s("new_string"), rest_of(&["file_path", "old_string", "new_string"]))
         }
         "MultiEdit" => {
             empty = s("file_path").is_empty();
             let mut d = s("file_path");
-            for e in ti
-                .get("edits")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
+            for e in ti.get("edits").and_then(Value::as_array).into_iter().flatten() {
                 let g = |k: &str| e.get(k).and_then(Value::as_str).unwrap_or("");
-                d.push_str(&format!(
-                    "\n--- old\n{}\n+++ new\n{}",
-                    g("old_string"),
-                    g("new_string")
-                ));
+                d.push_str(&format!("\n--- old\n{}\n+++ new\n{}", g("old_string"), g("new_string")));
             }
             d.push_str(&rest_of(&["file_path", "edits"]));
             d
         }
         "NotebookEdit" => {
             empty = s("notebook_path").is_empty();
-            format!(
-                "{}\n\n{}{}",
-                s("notebook_path"),
-                s("new_source"),
-                rest_of(&["notebook_path", "new_source"])
-            )
+            format!("{}\n\n{}{}", s("notebook_path"), s("new_source"), rest_of(&["notebook_path", "new_source"]))
         }
         _ => {
             empty = ti.as_object().is_none_or(|o| o.is_empty()) && !ti.is_string();
@@ -283,46 +227,21 @@ pub fn outside_detail(input: &Value) -> OutsidePrompt {
     let mut detail = cut_bytes(&main, MAX_DETAIL_BYTES);
     let mut extra = String::new();
     if let Some(sug) = input.get("permission_suggestions").filter(|v| !v.is_null()) {
-        extra.push_str(&format!(
-            "\nSuggested by Claude Code (never applied by Ligus): {}",
-            serde_json::to_string(sug).unwrap_or_default()
-        ));
+        extra.push_str(&format!("\nSuggested by Claude Code (never applied by Ligus): {}", serde_json::to_string(sug).unwrap_or_default()));
     }
     if let Some(m) = input.get("mcp_server").filter(|v| !v.is_null()) {
-        extra.push_str(&format!(
-            "\nMCP server: {}",
-            serde_json::to_string(m).unwrap_or_default()
-        ));
+        extra.push_str(&format!("\nMCP server: {}", serde_json::to_string(m).unwrap_or_default()));
     }
     if !extra.is_empty() {
         detail.push_str("\n\nDetails");
         detail.push_str(&cut_bytes(&extra, 2048));
     }
-    let cwd = input
-        .get("cwd")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let label = Path::new(&cwd)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| "a folder".into());
+    let cwd = input.get("cwd").and_then(Value::as_str).unwrap_or("").to_string();
+    let label = Path::new(&cwd).file_name().map(|n| n.to_string_lossy().into_owned()).filter(|n| !n.is_empty()).unwrap_or_else(|| "a folder".into());
     // Claude Code names the sub-agent a prompt came from (`agent_type`,
     // with `agent_id`; checked against Claude Code 2.1.332).
-    let subagent = input
-        .get("agent_type")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    OutsidePrompt {
-        tool,
-        detail,
-        cwd,
-        label,
-        too_large,
-        subagent,
-    }
+    let subagent = input.get("agent_type").and_then(Value::as_str).unwrap_or("").to_string();
+    OutsidePrompt { tool, detail, cwd, label, too_large, subagent }
 }
 
 /// The install's limits: asks per minute and open at once.
@@ -337,10 +256,7 @@ impl Limits {
     fn take(&self) -> Result<OpenSlot<'_>, &'static str> {
         let now = Instant::now();
         let mut r = self.recent.lock().unwrap_or_else(|e| e.into_inner());
-        while r
-            .front()
-            .is_some_and(|t| now.duration_since(*t) > Duration::from_secs(60))
-        {
+        while r.front().is_some_and(|t| now.duration_since(*t) > Duration::from_secs(60)) {
             r.pop_front();
         }
         if r.len() >= MAX_PER_MINUTE {
@@ -391,16 +307,12 @@ pub enum Answerer {
 #[cfg(unix)]
 pub fn listen(data_dir: &Path, answerer: Answerer) -> std::io::Result<HookServer> {
     let token_file = ensure_token(data_dir)?;
-    let token =
-        read_token(&token_file).ok_or_else(|| std::io::Error::other("hook token unreadable"))?;
+    let token = read_token(&token_file).ok_or_else(|| std::io::Error::other("hook token unreadable"))?;
     let path = socket_path(data_dir);
     // A socket a crashed run left behind.
     if path.exists() {
         if std::os::unix::net::UnixStream::connect(&path).is_ok() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AddrInUse,
-                "another Ligus process holds this data dir's hook socket",
-            ));
+            return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "another Ligus process holds this data dir's hook socket"));
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -414,20 +326,13 @@ pub fn listen(data_dir: &Path, answerer: Answerer) -> std::io::Result<HookServer
     let me = unsafe { libc::geteuid() };
     let task = tokio::spawn(async move {
         loop {
-            let Ok((stream, _)) = listener.accept().await else {
-                break;
-            };
+            let Ok((stream, _)) = listener.accept().await else { break };
             // Only this user: the socket's mode already says so; the peer's
             // uid says it again.
             if stream.peer_cred().map(|c| c.uid()).ok() != Some(me) {
                 continue;
             }
-            let (token, answerer, limits, warned) = (
-                token.clone(),
-                answerer.clone(),
-                limits.clone(),
-                warned.clone(),
-            );
+            let (token, answerer, limits, warned) = (token.clone(), answerer.clone(), limits.clone(), warned.clone());
             tokio::spawn(async move {
                 let _ = serve_conn(stream, &token, answerer, &limits, &warned).await;
             });
@@ -442,24 +347,12 @@ pub fn listen(_data_dir: &Path, _answerer: Answerer) -> std::io::Result<HookServ
 }
 
 #[cfg(unix)]
-async fn serve_conn(
-    stream: tokio::net::UnixStream,
-    token: &str,
-    answerer: Answerer,
-    limits: &Limits,
-    warned: &Mutex<std::collections::HashSet<Uuid>>,
-) -> std::io::Result<()> {
+async fn serve_conn(stream: tokio::net::UnixStream, token: &str, answerer: Answerer, limits: &Limits, warned: &Mutex<std::collections::HashSet<Uuid>>) -> std::io::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     let (r, mut w) = stream.into_split();
     let mut reader = BufReader::new(r);
     let mut line = Vec::new();
-    let read = tokio::time::timeout(
-        Duration::from_secs(10),
-        (&mut reader)
-            .take(MAX_REQUEST_BYTES as u64)
-            .read_until(b'\n', &mut line),
-    )
-    .await;
+    let read = tokio::time::timeout(Duration::from_secs(10), (&mut reader).take(MAX_REQUEST_BYTES as u64).read_until(b'\n', &mut line)).await;
     let reply = match read {
         Ok(Ok(n)) if n > 0 => match serde_json::from_slice::<HookRequest>(&line) {
             Ok(req) if same_token(&req.token, token) => {
@@ -499,10 +392,7 @@ async fn handle(
         Answerer::Refuse(why) => return HookReply::none(why.clone()),
         Answerer::Host(h) => h.clone(),
     };
-    let (Ok(ws), Ok(chat)) = (
-        Uuid::parse_str(req.workspace.trim()),
-        Uuid::parse_str(req.chat.trim()),
-    ) else {
+    let (Ok(ws), Ok(chat)) = (Uuid::parse_str(req.workspace.trim()), Uuid::parse_str(req.chat.trim())) else {
         return HookReply::none("--workspace and --chat are ids (see `ligus chats --json`)");
     };
     let _slot = match limits.take() {
@@ -514,9 +404,7 @@ async fn handle(
     let mut posted: Result<(ligus_core::flow::HumanAsk, String), String> = Err("no service".into());
     let mut others = 0usize;
     host.with_service(&mut |svc| {
-        posted = svc
-            .post_outside_ask(ws, chat, &prompt, timeout)
-            .map_err(|e| e.to_string());
+        posted = svc.post_outside_ask(ws, chat, &prompt, timeout).map_err(|e| e.to_string());
         others = svc.others_in_chat(ws, chat).unwrap_or(0);
     });
     let (ask, digest) = match posted {
@@ -532,24 +420,13 @@ async fn handle(
         let mut seen = None;
         host.with_service(&mut |svc| {
             let device = svc.device_id();
-            let Some(st) = svc
-                .load_in(ws, chat)
-                .ok()
-                .flatten()
-                .and_then(|s| s.flow.asks.get(&ask.ask_id).cloned())
-            else {
-                return;
-            };
-            let ours =
-                st.host == Some(device) && st.digest == digest && st.ask.agent_key == ask.agent_key;
+            let Some(st) = svc.load_in(ws, chat).ok().flatten().and_then(|s| s.flow.asks.get(&ask.ask_id).cloned()) else { return };
+            let ours = st.host == Some(device) && st.digest == digest && st.ask.agent_key == ask.agent_key;
             seen = Some((st, ours));
         });
         if let Some((st, ours)) = &seen {
             if !ours {
-                return HookReply {
-                    warning,
-                    ..HookReply::none("the prompt's id is held by another record")
-                };
+                return HookReply { warning, ..HookReply::none("the prompt's id is held by another record") };
             }
             if st.answer.is_some() || st.declined || st.ask.closed {
                 outcome = seen;
@@ -574,16 +451,8 @@ async fn handle(
             settled_by = v.event_id;
             let name = host_name(&*host, ws, chat, &v.member_id).unwrap_or_else(|| v.name.clone());
             reply = match a.option_index {
-                Some(0) if !prompt.too_large && st.grant().is_some() => HookReply {
-                    decision: "allow".into(),
-                    by: Some(name),
-                    ..Default::default()
-                },
-                Some(_) => HookReply {
-                    decision: "deny".into(),
-                    by: Some(name),
-                    ..Default::default()
-                },
+                Some(0) if !prompt.too_large && st.grant().is_some() => HookReply { decision: "allow".into(), by: Some(name), ..Default::default() },
+                Some(_) => HookReply { decision: "deny".into(), by: Some(name), ..Default::default() },
                 None => HookReply::none("no option chosen"),
             };
         } else if st.declined {
@@ -601,12 +470,7 @@ async fn handle(
 fn host_name(host: &dyn LigusHost, ws: Uuid, chat: Uuid, member: &str) -> Option<String> {
     let mut out = None;
     host.with_service(&mut |svc| {
-        out = svc.load_in(ws, chat).ok().flatten().and_then(|s| {
-            s.members
-                .iter()
-                .find(|m| m.id == member)
-                .map(|m| m.actor.display_name.clone())
-        });
+        out = svc.load_in(ws, chat).ok().flatten().and_then(|s| s.members.iter().find(|m| m.id == member).map(|m| m.actor.display_name.clone()));
     });
     out
 }
@@ -617,8 +481,7 @@ fn host_name(host: &dyn LigusHost, ws: Uuid, chat: Uuid, member: &str) -> Option
 pub fn ask(socket: &Path, req: &HookRequest, timeout: Duration) -> Option<HookReply> {
     use std::io::{BufRead, Write};
     let mut s = std::os::unix::net::UnixStream::connect(socket).ok()?;
-    s.set_read_timeout(Some(timeout + Duration::from_secs(5)))
-        .ok()?;
+    s.set_read_timeout(Some(timeout + Duration::from_secs(5))).ok()?;
     let mut line = serde_json::to_vec(req).ok()?;
     line.push(b'\n');
     s.write_all(&line).ok()?;
@@ -641,83 +504,32 @@ mod tests {
     /// Q-T9: the documented output shapes, and never a standing rule.
     #[test]
     fn output_matches_claude_codes_decision_control() {
-        let allow = claude_output(Some(&HookReply {
-            decision: "allow".into(),
-            by: Some("Ana".into()),
-            ..Default::default()
-        }))
-        .unwrap();
-        assert_eq!(
-            allow,
-            r#"{"hookSpecificOutput":{"decision":{"behavior":"allow"},"hookEventName":"PermissionRequest"}}"#
-        );
-        let deny = claude_output(Some(&HookReply {
-            decision: "deny".into(),
-            by: Some("Ana\u{202E}".into()),
-            ..Default::default()
-        }))
-        .unwrap();
+        let allow = claude_output(Some(&HookReply { decision: "allow".into(), by: Some("Ana".into()), ..Default::default() })).unwrap();
+        assert_eq!(allow, r#"{"hookSpecificOutput":{"decision":{"behavior":"allow"},"hookEventName":"PermissionRequest"}}"#);
+        let deny = claude_output(Some(&HookReply { decision: "deny".into(), by: Some("Ana\u{202E}".into()), ..Default::default() })).unwrap();
         let v: Value = serde_json::from_str(&deny).unwrap();
-        assert_eq!(
-            v,
-            json!({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "deny", "message": "Denied from Ligus by Ana", "interrupt": false}}})
-        );
+        assert_eq!(v, json!({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "deny", "message": "Denied from Ligus by Ana", "interrupt": false}}}));
         for out in [&allow, &deny] {
             assert!(!out.contains("updatedInput") && !out.contains("updatedPermissions"));
         }
-        assert_eq!(
-            claude_output(Some(&HookReply::none("timeout"))),
-            None,
-            "no decision prints nothing"
-        );
-        assert_eq!(
-            claude_output(None),
-            None,
-            "no running process prints nothing"
-        );
+        assert_eq!(claude_output(Some(&HookReply::none("timeout"))), None, "no decision prints nothing");
+        assert_eq!(claude_output(None), None, "no running process prints nothing");
     }
 
     #[test]
     fn detail_is_the_calls_own_content() {
-        let d = outside_detail(
-            &json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf node_modules"}, "cwd": "/home/ana/shop"}),
-        );
-        assert_eq!(
-            (
-                d.tool.as_str(),
-                d.detail.as_str(),
-                d.label.as_str(),
-                d.too_large
-            ),
-            ("Bash", "rm -rf node_modules", "shop", false)
-        );
-        let d = outside_detail(
-            &json!({"tool_name": "Edit", "tool_input": {"file_path": "a.rs", "old_string": "x", "new_string": "y"}}),
-        );
+        let d = outside_detail(&json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf node_modules"}, "cwd": "/home/ana/shop"}));
+        assert_eq!((d.tool.as_str(), d.detail.as_str(), d.label.as_str(), d.too_large), ("Bash", "rm -rf node_modules", "shop", false));
+        let d = outside_detail(&json!({"tool_name": "Edit", "tool_input": {"file_path": "a.rs", "old_string": "x", "new_string": "y"}}));
         assert_eq!(d.detail, "a.rs\n--- old\nx\n+++ new\ny");
-        let d = outside_detail(
-            &json!({"tool_name": "Edit", "tool_input": {"file_path": "a.rs", "old_string": "x", "new_string": "y", "replace_all": true}}),
-        );
-        assert!(
-            d.detail.contains("\"replace_all\": true"),
-            "every key Allow covers is shown"
-        );
-        let d = outside_detail(
-            &json!({"tool_name": "Write", "tool_input": {"file_path": "big.txt", "content": "z".repeat(9000)}}),
-        );
+        let d = outside_detail(&json!({"tool_name": "Edit", "tool_input": {"file_path": "a.rs", "old_string": "x", "new_string": "y", "replace_all": true}}));
+        assert!(d.detail.contains("\"replace_all\": true"), "every key Allow covers is shown");
+        let d = outside_detail(&json!({"tool_name": "Write", "tool_input": {"file_path": "big.txt", "content": "z".repeat(9000)}}));
         assert!(d.too_large, "a write over 8 KiB offers no Allow");
         assert!(d.detail.len() <= MAX_DETAIL_BYTES + 4);
-        let d = outside_detail(
-            &json!({"tool_name": "mcp__gh__issue", "tool_input": {"n": 1}, "mcp_server": {"name": "gh"}, "permission_suggestions": [{"type": "addRules"}]}),
-        );
-        assert!(
-            d.detail.contains("\"n\": 1")
-                && d.detail.contains("never applied")
-                && d.detail.contains("MCP server")
-        );
-        let d = outside_detail(
-            &json!({"tool_name": "Bash", "tool_input": {"command": "touch sub1.txt"}, "agent_id": "aed5aacb28d201d4a", "agent_type": "general-purpose"}),
-        );
+        let d = outside_detail(&json!({"tool_name": "mcp__gh__issue", "tool_input": {"n": 1}, "mcp_server": {"name": "gh"}, "permission_suggestions": [{"type": "addRules"}]}));
+        assert!(d.detail.contains("\"n\": 1") && d.detail.contains("never applied") && d.detail.contains("MCP server"));
+        let d = outside_detail(&json!({"tool_name": "Bash", "tool_input": {"command": "touch sub1.txt"}, "agent_id": "aed5aacb28d201d4a", "agent_type": "general-purpose"}));
         assert_eq!(d.subagent, "general-purpose");
     }
 
@@ -726,55 +538,19 @@ mod tests {
     /// no Allow when there is nothing to show.
     #[test]
     fn the_card_shows_the_whole_call() {
-        let d = outside_detail(
-            &json!({"tool_name": "Bash", "tool_input": {"command": "make", "description": "build", "timeout": 600000, "run_in_background": true, "dangerouslyDisableSandbox": true}}),
-        );
-        assert!(
-            d.detail
-                .starts_with("Runs outside Claude Code's sandbox\n\nmake"),
-            "{}",
-            d.detail
-        );
-        assert!(
-            d.detail.contains("\"timeout\": 600000")
-                && d.detail.contains("\"run_in_background\": true")
-                && d.detail.contains("dangerouslyDisableSandbox")
-        );
-        assert!(
-            d.detail.contains("\"description\": \"build\""),
-            "every other key, the agent's description too"
-        );
+        let d = outside_detail(&json!({"tool_name": "Bash", "tool_input": {"command": "make", "description": "build", "timeout": 600000, "run_in_background": true, "dangerouslyDisableSandbox": true}}));
+        assert!(d.detail.starts_with("Runs outside Claude Code's sandbox\n\nmake"), "{}", d.detail);
+        assert!(d.detail.contains("\"timeout\": 600000") && d.detail.contains("\"run_in_background\": true") && d.detail.contains("dangerouslyDisableSandbox"));
+        assert!(d.detail.contains("\"description\": \"build\""), "every other key, the agent's description too");
         assert!(!d.too_large);
-        for ti in [
-            json!({"command": ""}),
-            json!({"command": "   "}),
-            json!({"command": ["rm", "-rf"]}),
-            json!({}),
-        ] {
-            assert!(
-                outside_detail(&json!({"tool_name": "Bash", "tool_input": ti})).too_large,
-                "no command, no Allow: {ti}"
-            );
+        for ti in [json!({"command": ""}), json!({"command": "   "}), json!({"command": ["rm", "-rf"]}), json!({})] {
+            assert!(outside_detail(&json!({"tool_name": "Bash", "tool_input": ti})).too_large, "no command, no Allow: {ti}");
         }
-        assert!(
-            outside_detail(&json!({"tool_name": "Write", "tool_input": {"content": "x"}}))
-                .too_large,
-            "a write with no path"
-        );
-        assert!(
-            outside_detail(&json!({"tool_name": "mcp__x__y", "tool_input": {}})).too_large,
-            "an empty call"
-        );
-        assert!(
-            outside_detail(&json!({"tool_name": "mcp__x__y"})).too_large,
-            "no input at all"
-        );
-        let d = outside_detail(
-            &json!({"tool_name": "WebFetch", "tool_input": {"url": "https://example.com", "prompt": "p"}}),
-        );
-        assert!(
-            d.detail.contains("example.com") && d.detail.contains("\"prompt\"") && !d.too_large
-        );
+        assert!(outside_detail(&json!({"tool_name": "Write", "tool_input": {"content": "x"}})).too_large, "a write with no path");
+        assert!(outside_detail(&json!({"tool_name": "mcp__x__y", "tool_input": {}})).too_large, "an empty call");
+        assert!(outside_detail(&json!({"tool_name": "mcp__x__y"})).too_large, "no input at all");
+        let d = outside_detail(&json!({"tool_name": "WebFetch", "tool_input": {"url": "https://example.com", "prompt": "p"}}));
+        assert!(d.detail.contains("example.com") && d.detail.contains("\"prompt\"") && !d.too_large);
     }
 
     #[test]
@@ -800,18 +576,8 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&p).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-            assert_eq!(
-                std::fs::metadata(hook_dir(dir.path()))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o700
-            );
+            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(std::fs::metadata(hook_dir(dir.path())).unwrap().permissions().mode() & 0o777, 0o700);
         }
         assert!(same_token(&t, &t) && !same_token(&t, &t[1..]) && !same_token(&t, &"0".repeat(64)));
     }

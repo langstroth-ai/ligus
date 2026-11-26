@@ -6,10 +6,7 @@
 use ligus_core::WorkspaceRole;
 
 use super::agent::ops_code;
-use super::{
-    exit, gate, Ctx, Field, FieldKind, Inputs, Progress, Secrets, ServeFact, SetupOps, StepDef,
-    Surface,
-};
+use super::{exit, gate, Ctx, Field, FieldKind, Inputs, Progress, Secrets, ServeFact, SetupOps, StepDef, Surface};
 
 const ADMIT_WHERE: &str = "the desktop: workspace menu > Admit a box (or the phone)";
 
@@ -27,10 +24,7 @@ pub(crate) fn box_status(ops: &dyn SetupOps) -> (Progress, String) {
         }
         _ => match ops.box_state() {
             Ok(b) if b.joined => (Progress::Done, "this box is a member".into()),
-            Ok(b) if b.desktop_data_dir => (
-                Progress::Unavailable,
-                "this is the desktop app's data dir".into(),
-            ),
+            Ok(b) if b.desktop_data_dir => (Progress::Unavailable, "this is the desktop app's data dir".into()),
             Ok(_) => (Progress::Todo, "this box isn't admitted yet".into()),
             Err(_) => (Progress::Unavailable, "run it on the box".into()),
         },
@@ -68,37 +62,17 @@ pub(crate) fn box_preflight(ctx: &mut Ctx, ops: &dyn SetupOps) {
                 return;
             }
             if ops.my_role().is_none() {
-                return ctx.fail(
-                    "workspace",
-                    "workspace",
-                    "no workspace yet",
-                    "create or join a workspace first",
-                    exit::FIXABLE,
-                );
+                return ctx.fail("workspace", "workspace", "no workspace yet", "create or join a workspace first", exit::FIXABLE);
             }
             match ops.relay_url() {
                 Some(r) => ctx.ok("relay", "relay", super::validate::origin(&r)),
-                None => ctx.fail(
-                    "relay",
-                    "relay",
-                    "this workspace has no relay, so a box can't reach it",
-                    "set up a relay first (Set up a relay)",
-                    exit::FIXABLE,
-                ),
+                None => ctx.fail("relay", "relay", "this workspace has no relay, so a box can't reach it", "set up a relay first (Set up a relay)", exit::FIXABLE),
             }
         }
         _ => {
             let b = match ops.box_state() {
                 Ok(b) => b,
-                Err(e) => {
-                    return ctx.fail(
-                        "box",
-                        "box",
-                        e.to_string(),
-                        "run `ligus setup box` on the box itself",
-                        exit::FIXABLE,
-                    )
-                }
+                Err(e) => return ctx.fail("box", "box", e.to_string(), "run `ligus setup box` on the box itself", exit::FIXABLE),
             };
             if b.desktop_data_dir {
                 return ctx.fail(
@@ -140,25 +114,10 @@ pub(crate) fn box_run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, se
     }
     let b = match ops.box_state() {
         Ok(b) => b,
-        Err(e) => {
-            return ctx.fail(
-                "box",
-                "box",
-                e.to_string(),
-                "run `ligus setup box` on the box itself",
-                exit::FIXABLE,
-            )
-        }
+        Err(e) => return ctx.fail("box", "box", e.to_string(), "run `ligus setup box` on the box itself", exit::FIXABLE),
     };
     if b.joined {
-        ctx.ok(
-            "joined",
-            "member",
-            format!(
-                "this box is a member of {}",
-                b.workspace.as_deref().unwrap_or("its workspace")
-            ),
-        );
+        ctx.ok("joined", "member", format!("this box is a member of {}", b.workspace.as_deref().unwrap_or("its workspace")));
         return verify_serving(ctx, ops);
     }
     if let Some(code) = secrets.get("code") {
@@ -166,19 +125,11 @@ pub(crate) fn box_run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, se
             return;
         }
         if ctx.dry_run() {
-            ctx.skip(
-                "redeem",
-                "admission",
-                "would keep the admission for this box",
-            );
+            ctx.skip("redeem", "admission", "would keep the admission for this box");
             return ctx.done();
         }
         match ops.redeem(code) {
-            Ok(ws) => ctx.ok(
-                "redeem",
-                "admission",
-                format!("kept for {ws}; the box joins when it starts"),
-            ),
+            Ok(ws) => ctx.ok("redeem", "admission", format!("kept for {ws}; the box joins when it starts")),
             Err(e) => {
                 return ctx.fail(
                     "redeem",
@@ -194,20 +145,12 @@ pub(crate) fn box_run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, se
     }
     let label = inputs.get("label").unwrap_or("").to_string();
     if ctx.dry_run() {
-        ctx.skip(
-            "request",
-            "join request",
-            "would print this box's join request",
-        );
+        ctx.skip("request", "join request", "would print this box's join request");
         return ctx.done();
     }
     match ops.join_request(&label) {
         Ok((request, fingerprint)) => {
-            ctx.ok(
-                "request",
-                "join request",
-                format!("fingerprint {fingerprint}"),
-            );
+            ctx.ok("request", "join request", format!("fingerprint {fingerprint}"));
             // Public key material and a label: safe to show and to log.
             ctx.notes(vec![request.clone()]);
             ctx.result("joinRequest", request);
@@ -219,13 +162,7 @@ pub(crate) fn box_run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, se
                 "when they send the sealed code back: ligus setup box --code - (or --code @FILE)",
             );
         }
-        Err(e) => ctx.fail(
-            "request",
-            "join request",
-            e.to_string(),
-            "ligus admit request prints it too",
-            ops_code(&e),
-        ),
+        Err(e) => ctx.fail("request", "join request", e.to_string(), "ligus admit request prints it too", ops_code(&e)),
     }
 }
 
@@ -240,9 +177,7 @@ fn verify_serving(ctx: &mut Ctx, ops: &dyn SetupOps) {
                 "serve",
                 "ligus serve",
                 format!("not answering: {why}"),
-                Some(
-                    "start it: deploy/local/ligus-local start --role serve (or ligus serve)".into(),
-                ),
+                Some("start it: deploy/local/ligus-local start --role serve (or ligus serve)".into()),
             );
             ctx.next("deploy/local/ligus-local start --role serve");
             ctx.done();
@@ -263,39 +198,24 @@ pub(crate) fn phone_status(ops: &dyn SetupOps) -> (Progress, String) {
 pub(crate) fn phone_steps(ops: &dyn SetupOps) -> Vec<StepDef> {
     match ops.surface() {
         Surface::Desktop => vec![
-            StepDef::person(
-                "pair",
-                "Pair",
-                "Add a phone: scan the code in this window with the phone app",
-            ),
+            StepDef::person("pair", "Pair", "Add a phone: scan the code in this window with the phone app"),
             StepDef::verify("verify", "Paired"),
         ],
-        _ => vec![
-            StepDef::person("pair", "Pair", "your own terminal on the box: ligus pair"),
-            StepDef::verify("verify", "Paired"),
-        ],
+        _ => vec![StepDef::person("pair", "Pair", "your own terminal on the box: ligus pair"), StepDef::verify("verify", "Paired")],
     }
 }
 
 pub(crate) fn phone_preflight(ctx: &mut Ctx, ops: &dyn SetupOps) {
     match ops.phone_precheck() {
         Ok(checks) => {
-            let blocked = checks
-                .iter()
-                .any(|c| c.status == crate::checks::Status::Fail);
+            let blocked = checks.iter().any(|c| c.status == crate::checks::Status::Fail);
             ctx.checks.extend(checks);
             if blocked {
                 ctx.stop(exit::FIXABLE);
             }
         }
         Err(super::OpsError::Unsupported) => {}
-        Err(e) => ctx.fail(
-            "precheck",
-            "precheck",
-            e.to_string(),
-            "ligus doctor checks this device",
-            ops_code(&e),
-        ),
+        Err(e) => ctx.fail("precheck", "precheck", e.to_string(), "ligus doctor checks this device", ops_code(&e)),
     }
 }
 
@@ -311,12 +231,7 @@ pub(crate) fn phone_run(ctx: &mut Ctx, ops: &mut dyn SetupOps) {
     // The pairing secret is shown only in the person's own window: never by
     // this flow, never in its output.
     match ops.surface() {
-        Surface::Desktop => ctx.person(
-            "pair",
-            "pair",
-            "pairing shows a code only in this window",
-            "open Add a phone and scan the code with the phone app",
-        ),
+        Surface::Desktop => ctx.person("pair", "pair", "pairing shows a code only in this window", "open Add a phone and scan the code with the phone app"),
         _ => ctx.person(
             "pair",
             "pair",
@@ -344,27 +259,14 @@ pub(crate) fn invite_status(ops: &dyn SetupOps) -> (Progress, String) {
 }
 
 pub(crate) fn invite_steps(ops: &dyn SetupOps) -> Vec<StepDef> {
-    let where_ = if ops.surface() == Surface::Desktop {
-        "this window: the code is shown once, to copy"
-    } else {
-        "the desktop: People > Invite someone"
-    };
-    vec![
-        StepDef::person("create", "Create the invite", where_),
-        StepDef::verify("track", "Accepted"),
-    ]
+    let where_ = if ops.surface() == Surface::Desktop { "this window: the code is shown once, to copy" } else { "the desktop: People > Invite someone" };
+    vec![StepDef::person("create", "Create the invite", where_), StepDef::verify("track", "Accepted")]
 }
 
 pub(crate) fn invite_preflight(ctx: &mut Ctx, ops: &dyn SetupOps) {
     match ops.relay_url() {
         Some(r) => ctx.ok("relay", "relay", super::validate::origin(&r)),
-        None => ctx.fail(
-            "relay",
-            "relay",
-            "this workspace has no relay, so nobody else could reach it",
-            "set up a relay first (ligus setup relay)",
-            exit::FIXABLE,
-        ),
+        None => ctx.fail("relay", "relay", "this workspace has no relay, so nobody else could reach it", "set up a relay first (ligus setup relay)", exit::FIXABLE),
     }
 }
 
@@ -375,11 +277,7 @@ pub(crate) fn invite_run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs)
     let waiting = inv.iter().filter(|i| !i.used && !i.closed).count();
     let used = inv.iter().filter(|i| i.used).count();
     if used > 0 || waiting > 0 {
-        ctx.ok(
-            "track",
-            "invites",
-            format!("{waiting} waiting, {used} accepted"),
-        );
+        ctx.ok("track", "invites", format!("{waiting} waiting, {used} accepted"));
     }
     if ctx.dry_run() {
         ctx.skip("create", "invite", "would hand over to creating an invite");

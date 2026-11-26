@@ -112,11 +112,7 @@ impl Typing {
     /// Tests: whether the box still holds `chat` as typing (not expired).
     #[cfg(test)]
     pub fn is_typing(&self, chat: Uuid) -> bool {
-        self.mine
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&chat)
-            .is_some_and(|e| e.typing)
+        self.mine.lock().unwrap_or_else(|e| e.into_inner()).get(&chat).is_some_and(|e| e.typing)
     }
 
     /// Count one request against the window; false when over budget.
@@ -137,16 +133,9 @@ impl Typing {
     /// Record a ping from the phone and decide whether to publish.
     pub fn ping(&self, chat: Uuid, workspace: Uuid, typing: bool, now: Instant) -> Decision {
         let mut m = self.mine.lock().unwrap_or_else(|e| e.into_inner());
-        let e = m.entry(chat).or_insert(Mine {
-            workspace,
-            last_ping: now,
-            last_publish: None,
-            typing: false,
-        });
+        let e = m.entry(chat).or_insert(Mine { workspace, last_ping: now, last_publish: None, typing: false });
         e.last_ping = now;
-        let due = !e.typing
-            || e.last_publish
-                .is_none_or(|t| now.duration_since(t) >= REPUBLISH_EVERY);
+        let due = !e.typing || e.last_publish.is_none_or(|t| now.duration_since(t) >= REPUBLISH_EVERY);
         let d = match (typing, e.typing) {
             (true, _) if due => Decision::Publish(true),
             (true, _) => Decision::Skip,
@@ -194,67 +183,40 @@ impl Typing {
     }
 
     fn others_in(&self, chat: Uuid) -> Option<Vec<(String, String)>> {
-        self.others
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&chat)
-            .cloned()
+        self.others.lock().unwrap_or_else(|e| e.into_inner()).get(&chat).cloned()
     }
 
     fn chats_with_others(&self) -> Vec<Uuid> {
-        self.others
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .keys()
-            .copied()
-            .collect()
+        self.others.lock().unwrap_or_else(|e| e.into_inner()).keys().copied().collect()
     }
 }
 
 /// The relay, room and keyring a chat's presence lives on: the box's own
 /// workspace room, or the DM's. `None` when there's no relay, no seal key or
 /// (for a DM) its relay isn't allowed.
-pub(super) async fn room_of(
-    s: &Shared,
-    workspace: Uuid,
-) -> Option<(RelayClient, String, KeyringEngine)> {
+pub(super) async fn room_of(s: &Shared, workspace: Uuid) -> Option<(RelayClient, String, KeyringEngine)> {
     if workspace == s.ws {
         let relay = crate::relay_client(&s.cfg).ok()?;
         let ring = match crate::key_source(&s.cfg) {
             Ok(src) => KeyringEngine::from_store(s.lock().store(), s.ws, &src),
-            Err(_) => KeyringEngine::passphrase(
-                s.ws,
-                ligus_core::derive_workspace_key(s.cfg.key.as_deref()?),
-            ),
+            Err(_) => KeyringEngine::passphrase(s.ws, ligus_core::derive_workspace_key(s.cfg.key.as_deref()?)),
         };
         ring.seal_key()?;
         return Some((relay, s.cfg.room.clone(), ring));
     }
-    let conn = s
-        .dms
-        .list()
-        .into_iter()
-        .find(|d| d.workspace_id() == workspace)?;
-    super::dms::foreign_relay_check(&s.cfg, &conn.relay_url)
-        .await
-        .ok()?;
+    let conn = s.dms.list().into_iter().find(|d| d.workspace_id() == workspace)?;
+    super::dms::foreign_relay_check(&s.cfg, &conn.relay_url).await.ok()?;
     let cfg = s.dms.config_for(&s.cfg, &conn);
     let src = crate::key_source(&cfg).ok()?;
     let ring = KeyringEngine::from_store(s.lock().store(), workspace, &src);
     ring.seal_key()?;
-    Some((
-        super::dms::relay_client_for(&s.cfg, &conn.relay_url),
-        conn.room,
-        ring,
-    ))
+    Some((super::dms::relay_client_for(&s.cfg, &conn.relay_url), conn.room, ring))
 }
 
 /// Publish the box's typing beat for `chat` (best effort; false when nothing
 /// could be published).
 async fn publish(s: &Shared, chat: Uuid, workspace: Uuid, typing: bool) -> bool {
-    let Some((relay, room, ring)) = room_of(s, workspace).await else {
-        return false;
-    };
+    let Some((relay, room, ring)) = room_of(s, workspace).await else { return false };
     let beat = {
         let svc = s.lock();
         let a = svc.author();
@@ -267,9 +229,7 @@ async fn publish(s: &Shared, chat: Uuid, workspace: Uuid, typing: bool) -> bool 
             ts: human_presence::now_ms(),
         }
     };
-    human_presence::publish_human_beat(&relay, &room, &ring, &beat)
-        .await
-        .is_ok()
+    human_presence::publish_human_beat(&relay, &room, &ring, &beat).await.is_ok()
 }
 
 #[derive(Deserialize)]
@@ -285,10 +245,7 @@ pub async fn post_typing(
 ) -> ApiResult<Json<Value>> {
     let chat = load_phone_chat(&s, &id)?;
     if !s.typing.admit(s.typing.now()) {
-        return Err(ApiError::new(
-            StatusCode::TOO_MANY_REQUESTS,
-            "typing pings too often",
-        ));
+        return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "typing pings too often"));
     }
     let in_dm = chat.workspace_id != s.ws;
     // Nothing can be written there yet: nor typing.
@@ -296,13 +253,9 @@ pub async fn post_typing(
     if waiting {
         return Err(ApiError::waiting_for_founder(founder));
     }
-    let blocked =
-        s.lock().write_block().is_some() || (in_dm && s.dms.is_archived(chat.workspace_id));
+    let blocked = s.lock().write_block().is_some() || (in_dm && s.dms.is_archived(chat.workspace_id));
     let typing = req.typing && !blocked;
-    let published = match s
-        .typing
-        .ping(chat.id, chat.workspace_id, typing, s.typing.now())
-    {
+    let published = match s.typing.ping(chat.id, chat.workspace_id, typing, s.typing.now()) {
         Decision::Publish(t) => publish(&s, chat.id, chat.workspace_id, t).await,
         Decision::Skip => false,
     };
@@ -310,22 +263,12 @@ pub async fn post_typing(
 }
 
 /// `GET /v1/chats/{id}/typing` → `{chatId, typing: [{actorId, name}]}`.
-pub async fn get_typing(
-    State(s): State<Arc<Shared>>,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
+pub async fn get_typing(State(s): State<Arc<Shared>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let chat = load_phone_chat(&s, &id)?;
     let list = match s.typing.others_in(chat.id) {
         Some(l) => l,
         None => match room_of(&s, chat.workspace_id).await {
-            Some((relay, room, ring)) => match human_presence::fetch_human_beats(
-                &relay,
-                &room,
-                &ring,
-                human_presence::now_ms(),
-            )
-            .await
-            {
+            Some((relay, room, ring)) => match human_presence::fetch_human_beats(&relay, &room, &ring, human_presence::now_ms()).await {
                 Ok(beats) => others_typing(&s, &chat, &beats),
                 Err(_) => Vec::new(),
             },
@@ -389,21 +332,15 @@ pub async fn typing_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
 
 /// One read of every room's presence; emits `typing` for chats whose list changed.
 async fn poll_others(shared: &Shared) {
-    let Ok(chats) = shared.phone_chats() else {
-        return;
-    };
+    let Ok(chats) = shared.phone_chats() else { return };
     let mut by_ws: HashMap<Uuid, Vec<ChatSession>> = HashMap::new();
     for c in chats {
         by_ws.entry(c.workspace_id).or_default().push(c);
     }
     let now = human_presence::now_ms();
     for (ws, chats) in by_ws {
-        let Some((relay, room, ring)) = room_of(shared, ws).await else {
-            continue;
-        };
-        let Ok(beats) = human_presence::fetch_human_beats(&relay, &room, &ring, now).await else {
-            continue;
-        };
+        let Some((relay, room, ring)) = room_of(shared, ws).await else { continue };
+        let Ok(beats) = human_presence::fetch_human_beats(&relay, &room, &ring, now).await else { continue };
         for chat in &chats {
             let list = others_typing(shared, chat, &beats);
             if shared.typing.set_others(chat.id, list.clone()) {
@@ -423,36 +360,11 @@ mod tests {
         let (c, w) = (Uuid::new_v4(), Uuid::new_v4());
         let t0 = Instant::now();
         assert_eq!(t.ping(c, w, true, t0), Decision::Publish(true));
-        assert_eq!(
-            t.ping(c, w, true, t0 + Duration::from_secs(1)),
-            Decision::Skip
-        );
-        assert_eq!(
-            t.ping(c, w, true, t0 + REPUBLISH_EVERY),
-            Decision::Publish(true)
-        );
-        assert_eq!(
-            t.ping(
-                c,
-                w,
-                false,
-                t0 + REPUBLISH_EVERY + Duration::from_millis(10)
-            ),
-            Decision::Publish(false)
-        );
-        assert_eq!(
-            t.ping(
-                c,
-                w,
-                false,
-                t0 + REPUBLISH_EVERY + Duration::from_millis(20)
-            ),
-            Decision::Skip
-        );
-        assert_eq!(
-            t.ping(c, w, true, t0 + REPUBLISH_EVERY + Duration::from_millis(30)),
-            Decision::Publish(true)
-        );
+        assert_eq!(t.ping(c, w, true, t0 + Duration::from_secs(1)), Decision::Skip);
+        assert_eq!(t.ping(c, w, true, t0 + REPUBLISH_EVERY), Decision::Publish(true));
+        assert_eq!(t.ping(c, w, false, t0 + REPUBLISH_EVERY + Duration::from_millis(10)), Decision::Publish(false));
+        assert_eq!(t.ping(c, w, false, t0 + REPUBLISH_EVERY + Duration::from_millis(20)), Decision::Skip);
+        assert_eq!(t.ping(c, w, true, t0 + REPUBLISH_EVERY + Duration::from_millis(30)), Decision::Publish(true));
     }
 
     #[test]

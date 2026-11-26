@@ -40,16 +40,7 @@ pub fn diff_digest(p: &ActionProposal) -> String {
     let base = p.base_commit.as_deref().unwrap_or("").as_bytes().to_vec();
     let mut h = Sha256::new();
     h.update(PROPOSAL_DIGEST_TAG);
-    for part in [
-        kind.as_bytes(),
-        &diff,
-        &files,
-        &workflow,
-        &command,
-        p.id.as_bytes(),
-        &repo,
-        &base,
-    ] {
+    for part in [kind.as_bytes(), &diff, &files, &workflow, &command, p.id.as_bytes(), &repo, &base] {
         h.update((part.len() as u32).to_le_bytes());
         h.update(part);
     }
@@ -69,10 +60,7 @@ pub fn diff_digest(p: &ActionProposal) -> String {
 /// to their signer); a content change clears them, since they were cast for
 /// other content. Status is re-derived from the counted votes; `Applied` only
 /// comes from `ProposalApplied`, and `reverted` only from `ProposalReverted`.
-pub fn normalize_upsert(
-    existing: Option<&ActionProposal>,
-    incoming: &ActionProposal,
-) -> ActionProposal {
+pub fn normalize_upsert(existing: Option<&ActionProposal>, incoming: &ActionProposal) -> ActionProposal {
     let mut p = incoming.clone();
     match existing {
         Some(old) => {
@@ -80,16 +68,8 @@ pub fn normalize_upsert(
             // it, so it can't make a vote for one repo count for another.
             p.repo_id = old.repo_id;
             let same_content = diff_digest(old) == diff_digest(&p);
-            p.approvals = if same_content {
-                old.approvals.clone()
-            } else {
-                Vec::new()
-            };
-            p.status = if old.status == ProposalStatus::Applied {
-                ProposalStatus::Applied
-            } else {
-                ProposalStatus::Open
-            };
+            p.approvals = if same_content { old.approvals.clone() } else { Vec::new() };
+            p.status = if old.status == ProposalStatus::Applied { ProposalStatus::Applied } else { ProposalStatus::Open };
             p.reverted = old.reverted;
         }
         None => {
@@ -108,9 +88,7 @@ pub fn normalize_upsert(
 /// lower it there); the fold only makes sure nobody filed below a core bar.
 pub fn hold_to_core_bar(p: &mut ActionProposal, zones: &[crate::flow::PathZone]) {
     let touched = crate::guard::touched_paths(p);
-    let Some((floor, approvals, crate::flow::ZoneKind::Core)) =
-        crate::flow::zones::review_bar(zones, &touched)
-    else {
+    let Some((floor, approvals, crate::flow::ZoneKind::Core)) = crate::flow::zones::review_bar(zones, &touched) else {
         return;
     };
     let floor = floor.unwrap_or(crate::flow::zones::CORE_DEFAULT_FLOOR);
@@ -139,20 +117,11 @@ mod tests {
     fn the_structured_command_is_bound_into_the_digest() {
         let mut p = ActionProposal::new("run", ProposalKind::Command, "a");
         let none = diff_digest(&p);
-        p.command = Some(ProposedCommand {
-            argv: vec!["cargo".into(), "test".into()],
-            cwd: None,
-        });
+        p.command = Some(ProposedCommand { argv: vec!["cargo".into(), "test".into()], cwd: None });
         let a = diff_digest(&p);
-        p.command = Some(ProposedCommand {
-            argv: vec!["cargo".into(), "test".into(), "--all".into()],
-            cwd: None,
-        });
+        p.command = Some(ProposedCommand { argv: vec!["cargo".into(), "test".into(), "--all".into()], cwd: None });
         let b = diff_digest(&p);
-        assert!(
-            none != a && a != b,
-            "a vote for one argv never counts for another"
-        );
+        assert!(none != a && a != b, "a vote for one argv never counts for another");
         p.command = None;
         assert_eq!(diff_digest(&p), none, "no command keeps the pre-D4 digest");
     }
@@ -160,20 +129,11 @@ mod tests {
     /// Phase A: the proposal id, the repo and the base are bound in.
     #[test]
     fn proposal_repo_and_base_are_bound_into_the_digest() {
-        let mut a = ActionProposal::file_diff(
-            "p",
-            "a",
-            "diff --git a/f b/f\n+1\n".into(),
-            vec!["f".into()],
-        );
+        let mut a = ActionProposal::file_diff("p", "a", "diff --git a/f b/f\n+1\n".into(), vec!["f".into()]);
         let mut b = a.clone();
         b.id = Uuid::from_u128(2);
         a.id = Uuid::from_u128(1);
-        assert_ne!(
-            diff_digest(&a),
-            diff_digest(&b),
-            "the same patch in another proposal"
-        );
+        assert_ne!(diff_digest(&a), diff_digest(&b), "the same patch in another proposal");
         let plain = diff_digest(&a);
         a.repo_id = Some(Uuid::from_u128(7));
         let with_repo = diff_digest(&a);
@@ -186,12 +146,7 @@ mod tests {
     /// implementations, the iOS app's included, check against).
     #[test]
     fn digest_vector() {
-        let mut p = ActionProposal::file_diff(
-            "p",
-            "a",
-            "diff --git a/f b/f\n+1\n".into(),
-            vec!["f".into()],
-        );
+        let mut p = ActionProposal::file_diff("p", "a", "diff --git a/f b/f\n+1\n".into(), vec!["f".into()]);
         p.id = Uuid::from_u128(0x1111_2222_3333_4444_5555_6666_7777_8888);
         p.repo_id = Some(Uuid::from_u128(0x9999_aaaa_bbbb_cccc_dddd_eeee_ffff_0000));
         p.base_commit = Some("0123456789abcdef0123456789abcdef01234567".into());
@@ -203,28 +158,13 @@ mod tests {
 
     #[test]
     fn command_shape_is_checked() {
-        let ok = ProposedCommand {
-            argv: vec!["make".into()],
-            cwd: Some("crates/x".into()),
-        };
+        let ok = ProposedCommand { argv: vec!["make".into()], cwd: Some("crates/x".into()) };
         assert!(ok.validate().is_ok());
         for bad in [
-            ProposedCommand {
-                argv: vec![],
-                cwd: None,
-            },
-            ProposedCommand {
-                argv: vec!["make".into()],
-                cwd: Some("../x".into()),
-            },
-            ProposedCommand {
-                argv: vec!["make".into()],
-                cwd: Some("/etc".into()),
-            },
-            ProposedCommand {
-                argv: vec!["a\0b".into()],
-                cwd: None,
-            },
+            ProposedCommand { argv: vec![], cwd: None },
+            ProposedCommand { argv: vec!["make".into()], cwd: Some("../x".into()) },
+            ProposedCommand { argv: vec!["make".into()], cwd: Some("/etc".into()) },
+            ProposedCommand { argv: vec!["a\0b".into()], cwd: None },
         ] {
             assert!(bad.validate().is_err(), "{bad:?}");
         }

@@ -28,8 +28,7 @@ use ligus_core::process_util::command;
 // ---------------------------------------------------------------------------
 
 fn in_use_set() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
-    static IN_USE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
-        std::sync::OnceLock::new();
+    static IN_USE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> = std::sync::OnceLock::new();
     IN_USE.get_or_init(Default::default)
 }
 
@@ -38,20 +37,14 @@ fn canonical(path: &Path) -> PathBuf {
 }
 
 fn mark_in_use(path: &Path) {
-    in_use_set()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(canonical(path));
+    in_use_set().lock().unwrap_or_else(|e| e.into_inner()).insert(canonical(path));
 }
 
 /// Release an in-use mark. `key` is from [`in_use_key`], taken while the
 /// worktree was still at its path (a moved or removed tree can't be
 /// canonicalized any more).
 fn unmark_in_use(key: &Path) {
-    in_use_set()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(key);
+    in_use_set().lock().unwrap_or_else(|e| e.into_inner()).remove(key);
 }
 
 fn in_use_key(path: &Path) -> PathBuf {
@@ -102,14 +95,8 @@ pub fn is_git_repo(root: &Path) -> bool {
 // all its worktrees): different repositories never wait on each other.
 // ---------------------------------------------------------------------------
 
-fn held_repos() -> &'static (
-    std::sync::Mutex<std::collections::HashSet<PathBuf>>,
-    std::sync::Condvar,
-) {
-    static HELD: std::sync::OnceLock<(
-        std::sync::Mutex<std::collections::HashSet<PathBuf>>,
-        std::sync::Condvar,
-    )> = std::sync::OnceLock::new();
+fn held_repos() -> &'static (std::sync::Mutex<std::collections::HashSet<PathBuf>>, std::sync::Condvar) {
+    static HELD: std::sync::OnceLock<(std::sync::Mutex<std::collections::HashSet<PathBuf>>, std::sync::Condvar)> = std::sync::OnceLock::new();
     HELD.get_or_init(Default::default)
 }
 
@@ -125,9 +112,7 @@ pub struct RepoLock {
 impl Drop for RepoLock {
     fn drop(&mut self) {
         let (held, cv) = held_repos();
-        held.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.key);
+        held.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key);
         cv.notify_all();
     }
 }
@@ -135,11 +120,7 @@ impl Drop for RepoLock {
 /// The repository `dir` belongs to: its common git dir (the same for a
 /// checkout and all its worktrees), else `dir` itself.
 pub fn repo_key(dir: &Path) -> PathBuf {
-    let out = ligus_core::process_util::git()
-        .arg("-C")
-        .arg(dir)
-        .args(["rev-parse", "--git-common-dir"])
-        .output();
+    let out = ligus_core::process_util::git().arg("-C").arg(dir).args(["rev-parse", "--git-common-dir"]).output();
     match out {
         Ok(o) if o.status.success() => {
             let raw = String::from_utf8_lossy(&o.stdout).trim().to_string();
@@ -172,16 +153,9 @@ pub fn mutates_worktrees_or_branches(args: &[&str]) -> bool {
     let rest = args.get(1..).unwrap_or_default();
     match args.first().copied() {
         Some("worktree") => rest.first().is_none_or(|sub| *sub != "list"),
-        Some("branch") => {
-            !(rest.is_empty()
-                || rest
-                    .iter()
-                    .any(|a| matches!(*a, "--list" | "-l" | "--show-current")))
-        }
+        Some("branch") => !(rest.is_empty() || rest.iter().any(|a| matches!(*a, "--list" | "-l" | "--show-current"))),
         Some("update-ref") => true,
-        Some("checkout") | Some("switch") => rest
-            .iter()
-            .any(|a| matches!(*a, "-b" | "-B" | "-c" | "-C" | "--orphan")),
+        Some("checkout") | Some("switch") => rest.iter().any(|a| matches!(*a, "-b" | "-B" | "-c" | "-C" | "--orphan")),
         Some("fetch") => rest.iter().any(|a| a.contains(":refs/heads/")),
         _ => false,
     }
@@ -203,21 +177,12 @@ fn chat_worktree_lock(repo_root: &Path) -> RepoLock {
 /// `git worktree remove --force <path>` in `repo_root`, best effort.
 fn force_remove_worktree(repo_root: &Path, path: &Path) {
     let _guard = repo_lock(repo_root);
-    let _ = ligus_core::process_util::git()
-        .arg("-C")
-        .arg(repo_root)
-        .args(["worktree", "remove", "--force"])
-        .arg(path)
-        .output();
+    let _ = ligus_core::process_util::git().arg("-C").arg(repo_root).args(["worktree", "remove", "--force"]).arg(path).output();
 }
 
 fn git(dir: &Path, args: &[&str]) -> io::Result<String> {
     let _guard = lock_if_mutating(dir, args);
-    let out = ligus_core::process_util::git()
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()?;
+    let out = ligus_core::process_util::git().arg("-C").arg(dir).args(args).output()?;
     if !out.status.success() {
         return Err(io::Error::other(format!(
             "git {}: {}",
@@ -232,13 +197,7 @@ fn git(dir: &Path, args: &[&str]) -> io::Result<String> {
 fn slug(turn_id: &str) -> String {
     turn_id
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
         .collect()
 }
 
@@ -293,17 +252,7 @@ pub fn chat_worktree_at(repo_root: &Path, chat_id: &str, base: &str) -> io::Resu
         std::fs::create_dir_all(parent)?;
     }
     force_remove_worktree(repo_root, &path);
-    git(
-        repo_root,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            &branch,
-            &path.to_string_lossy(),
-            base,
-        ],
-    )?;
+    git(repo_root, &["worktree", "add", "-b", &branch, &path.to_string_lossy(), base])?;
     Ok(path)
 }
 
@@ -353,10 +302,7 @@ fn chat_worktree_locked(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> 
     } else {
         // Fresh chat: cut the base branch off the configured base, else HEAD.
         let base = chat_base(repo_root);
-        git(
-            repo_root,
-            &["worktree", "add", "-b", &branch, &path_str, &base],
-        )?;
+        git(repo_root, &["worktree", "add", "-b", &branch, &path_str, &base])?;
     }
     Ok(path)
 }
@@ -379,20 +325,7 @@ pub fn chat_base(repo_root: &Path) -> String {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|b| !b.is_empty() && !b.starts_with('-'));
     match configured {
-        Some(b)
-            if git(
-                repo_root,
-                &[
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    &format!("{b}^{{commit}}"),
-                ],
-            )
-            .is_ok() =>
-        {
-            b
-        }
+        Some(b) if git(repo_root, &["rev-parse", "--verify", "--quiet", &format!("{b}^{{commit}}")]).is_ok() => b,
         _ => "HEAD".to_string(),
     }
 }
@@ -408,10 +341,7 @@ pub fn remove_chat_worktree(repo_root: &Path, chat_id: &str) -> io::Result<()> {
     let _ = git(repo_root, &["branch", "-D", &branch]);
     // And any turn worktrees parked for reuse.
     for parked in pooled(repo_root, chat_id) {
-        let _ = git(
-            repo_root,
-            &["worktree", "remove", "--force", &parked.to_string_lossy()],
-        );
+        let _ = git(repo_root, &["worktree", "remove", "--force", &parked.to_string_lossy()]);
     }
     Ok(())
 }
@@ -436,8 +366,7 @@ impl Worktree {
     pub fn create_from(repo_root: &Path, turn_id: &str, base_ref: &str) -> io::Result<Worktree> {
         let slug = slug(turn_id);
         let branch = format!("ligus/turn-{slug}");
-        let path =
-            ligus_core::names::workspace_state_path(repo_root, Path::new("worktrees").join(&slug))?;
+        let path = ligus_core::names::workspace_state_path(repo_root, Path::new("worktrees").join(&slug))?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -446,9 +375,7 @@ impl Worktree {
         // unique per turn, so this only ever meets a leftover, never a live
         // turn's tree; say so when it throws edits away.
         if path.exists() {
-            let dirty = git(&path, &["status", "--porcelain"])
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false);
+            let dirty = git(&path, &["status", "--porcelain"]).map(|s| !s.trim().is_empty()).unwrap_or(false);
             tracing::warn!(target: "worktree", path = %path.display(), dirty, "clearing a stale turn worktree");
         }
         force_remove_worktree(repo_root, &path);
@@ -460,11 +387,7 @@ impl Worktree {
             &["worktree", "add", "-b", &branch, &path_str, base_ref],
         )?;
         mark_in_use(&path);
-        Ok(Worktree {
-            path,
-            branch,
-            repo_root: repo_root.to_path_buf(),
-        })
+        Ok(Worktree { path, branch, repo_root: repo_root.to_path_buf() })
     }
 
     /// The unified diff of everything the turn changed vs the branch point,
@@ -473,21 +396,14 @@ impl Worktree {
     /// it's local to this worktree's index and never touches the main tree.
     pub fn diff(&self) -> io::Result<String> {
         git(&self.path, &["add", "-A"])?;
-        git(
-            &self.path,
-            &["diff", "--cached", "--no-ext-diff", "--no-textconv", "HEAD"],
-        )
+        git(&self.path, &["diff", "--cached", "--no-ext-diff", "--no-textconv", "HEAD"])
     }
 
     /// Paths the turn changed (name-only), for a compact review summary.
     pub fn changed_files(&self) -> io::Result<Vec<String>> {
         git(&self.path, &["add", "-A"])?;
         let out = git(&self.path, &["diff", "--cached", "--name-only", "HEAD"])?;
-        Ok(out
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(str::to_owned)
-            .collect())
+        Ok(out.lines().filter(|l| !l.trim().is_empty()).map(str::to_owned).collect())
     }
 
     /// Remove the worktree checkout and delete its task branch. Call after the
@@ -498,10 +414,7 @@ impl Worktree {
         // fails to go is left for the hygiene sweep).
         let key = in_use_key(&self.path);
         let path_str = self.path.to_string_lossy().into_owned();
-        let removed = git(
-            &self.repo_root,
-            &["worktree", "remove", "--force", &path_str],
-        );
+        let removed = git(&self.repo_root, &["worktree", "remove", "--force", &path_str]);
         unmark_in_use(&key);
         removed?;
         let _ = git(&self.repo_root, &["branch", "-D", &self.branch]);
@@ -557,19 +470,12 @@ struct LazyTurnState {
 impl LazyTurnWorktree {
     /// `turn_id` names the worktree and its branch; it must be unique per
     /// turn (see [`cut_turn_worktree`]).
-    pub fn new(
-        repo_root: impl Into<PathBuf>,
-        chat_id: impl Into<String>,
-        turn_id: impl Into<String>,
-    ) -> Self {
+    pub fn new(repo_root: impl Into<PathBuf>, chat_id: impl Into<String>, turn_id: impl Into<String>) -> Self {
         Self {
             repo_root: repo_root.into(),
             chat_id: chat_id.into(),
             turn_id: turn_id.into(),
-            state: std::sync::Mutex::new(LazyTurnState {
-                worktree: None,
-                closed: false,
-            }),
+            state: std::sync::Mutex::new(LazyTurnState { worktree: None, closed: false }),
             reuse: false,
         }
     }
@@ -582,19 +488,12 @@ impl LazyTurnWorktree {
 
     /// Where a stopped turn's unfinished edits are saved (see `Drop`).
     pub fn stopped_patch_path(repo_root: &Path, turn_id: &str) -> io::Result<PathBuf> {
-        ligus_core::names::workspace_state_path(
-            repo_root,
-            Path::new("stopped-turns").join(format!("{}.patch", slug(turn_id))),
-        )
+        ligus_core::names::workspace_state_path(repo_root, Path::new("stopped-turns").join(format!("{}.patch", slug(turn_id))))
     }
 
     /// The worktree cut so far, if any (without taking it).
     pub fn current(&self) -> Option<Worktree> {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .worktree
-            .clone()
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).worktree.clone()
     }
 
     /// Close and take the worktree this turn cut, if it wrote at all. Waits
@@ -616,13 +515,8 @@ impl crate::builtin_tools::WriteRoot for LazyTurnWorktree {
         if st.closed {
             return Err("the turn has ended".into());
         }
-        let cut = if self.reuse {
-            cut_turn_worktree_reusing
-        } else {
-            cut_turn_worktree
-        };
-        let wt = cut(&self.repo_root, &self.chat_id, &self.turn_id)
-            .map_err(|e| format!("isolation unavailable: {e}"))?;
+        let cut = if self.reuse { cut_turn_worktree_reusing } else { cut_turn_worktree };
+        let wt = cut(&self.repo_root, &self.chat_id, &self.turn_id).map_err(|e| format!("isolation unavailable: {e}"))?;
         tracing::info!(target: "worktree", path = %wt.path.display(), "turn wrote: cut its worktree");
         let path = wt.path.clone();
         st.worktree = Some(wt);
@@ -649,15 +543,9 @@ impl Drop for LazyTurnWorktree {
                     return;
                 }
             };
-            let saved = patch
-                .parent()
-                .map(std::fs::create_dir_all)
-                .transpose()
-                .and_then(|_| std::fs::write(&patch, &diff));
+            let saved = patch.parent().map(std::fs::create_dir_all).transpose().and_then(|_| std::fs::write(&patch, &diff));
             match saved {
-                Ok(()) => {
-                    tracing::warn!(target: "worktree", patch = %patch.display(), "turn stopped mid-edit: saved its changes as a patch")
-                }
+                Ok(()) => tracing::warn!(target: "worktree", patch = %patch.display(), "turn stopped mid-edit: saved its changes as a patch"),
                 Err(e) => {
                     tracing::warn!(target: "worktree", path = %wt.path.display(), "turn stopped mid-edit; could not save its patch ({e}), keeping the worktree");
                     return;
@@ -691,9 +579,7 @@ fn pool_prefix(chat_id: &str) -> String {
 /// Parked worktrees for a chat, oldest name first.
 fn pooled(repo_root: &Path, chat_id: &str) -> Vec<PathBuf> {
     let prefix = pool_prefix(chat_id);
-    let Ok(dir) = pool_dir(repo_root) else {
-        return Vec::new();
-    };
+    let Ok(dir) = pool_dir(repo_root) else { return Vec::new() };
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|rd| {
             rd.filter_map(|e| e.ok())
@@ -722,20 +608,8 @@ impl Worktree {
             git(&self.path, &["reset", "-q", "--hard"])?;
             git(&self.path, &["clean", "-q", "-fd"])?;
             let _ = git(&self.repo_root, &["branch", "-D", &self.branch]);
-            let dest = pool_dir(&self.repo_root)?.join(format!(
-                "{}{}",
-                pool_prefix(chat_id),
-                slug(&uuid_like_suffix(&self.path))
-            ));
-            git(
-                &self.repo_root,
-                &[
-                    "worktree",
-                    "move",
-                    &self.path.to_string_lossy(),
-                    &dest.to_string_lossy(),
-                ],
-            )?;
+            let dest = pool_dir(&self.repo_root)?.join(format!("{}{}", pool_prefix(chat_id), slug(&uuid_like_suffix(&self.path))));
+            git(&self.repo_root, &["worktree", "move", &self.path.to_string_lossy(), &dest.to_string_lossy()])?;
             Ok(())
         })();
         if parked.is_err() {
@@ -764,42 +638,21 @@ pub fn parked_chat_slug(path: &Path) -> Option<String> {
 }
 
 fn uuid_like_suffix(path: &Path) -> String {
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 /// Like [`cut_turn_worktree`], but reuse a parked worktree of the same chat
 /// when there is one (warm caches, built artefacts): it is moved to the
 /// turn's path and its new turn branch is checked out at the chat branch tip.
 /// Falls back to a fresh worktree on any failure.
-pub fn cut_turn_worktree_reusing(
-    repo_root: &Path,
-    chat_id: &str,
-    turn_id: &str,
-) -> io::Result<Worktree> {
+pub fn cut_turn_worktree_reusing(repo_root: &Path, chat_id: &str, turn_id: &str) -> io::Result<Worktree> {
     for parked in pooled(repo_root, chat_id) {
         let slug_id = slug(turn_id);
         let branch = format!("ligus/turn-{slug_id}");
-        let Ok(path) = ligus_core::names::workspace_state_path(
-            repo_root,
-            Path::new("worktrees").join(&slug_id),
-        ) else {
-            break;
-        };
+        let Ok(path) = ligus_core::names::workspace_state_path(repo_root, Path::new("worktrees").join(&slug_id)) else { break };
         // Moving it out of the pool claims it; a concurrent turn that loses
         // the race gets an error and tries the next one.
-        if git(
-            repo_root,
-            &[
-                "worktree",
-                "move",
-                &parked.to_string_lossy(),
-                &path.to_string_lossy(),
-            ],
-        )
-        .is_err()
-        {
+        if git(repo_root, &["worktree", "move", &parked.to_string_lossy(), &path.to_string_lossy()]).is_err() {
             continue;
         }
         mark_in_use(&path);
@@ -810,11 +663,7 @@ pub fn cut_turn_worktree_reusing(
         let ready = git(&path, &["checkout", "-q", "-B", &branch, &base])
             .and_then(|_| git(&path, &["reset", "-q", "--hard"]))
             .and_then(|_| git(&path, &["clean", "-q", "-fd"]));
-        let wt = Worktree {
-            path,
-            branch,
-            repo_root: repo_root.to_path_buf(),
-        };
+        let wt = Worktree { path, branch, repo_root: repo_root.to_path_buf() };
         match ready {
             Ok(_) => {
                 tracing::info!(target: "worktree", path = %wt.path.display(), "reused a parked turn worktree");
@@ -834,25 +683,14 @@ mod reuse_tests {
     use super::*;
 
     fn run(dir: &Path, args: &[&str]) {
-        let ok = command("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .output()
-            .unwrap()
-            .status
-            .success();
+        let ok = command("git").arg("-C").arg(dir).args(args).output().unwrap().status.success();
         assert!(ok, "git {args:?} failed");
     }
 
     fn repo() -> PathBuf {
         use std::sync::atomic::{AtomicU32, Ordering};
         static N: AtomicU32 = AtomicU32::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "ligus-pool-{}-{}",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        ));
+        let dir = std::env::temp_dir().join(format!("ligus-pool-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         run(&dir, &["init", "-q"]);
@@ -883,14 +721,8 @@ mod reuse_tests {
         assert_eq!(wt2.branch, "ligus/turn-turn-2");
         assert!(pooled(&root, "chat1").is_empty(), "claimed out of the pool");
         // The ignored cache survived; tracked edits and untracked junk did not.
-        assert_eq!(
-            std::fs::read_to_string(wt2.path.join("target/cache.bin")).unwrap(),
-            "warm"
-        );
-        assert_eq!(
-            std::fs::read_to_string(wt2.path.join("a.txt")).unwrap(),
-            "hello\n"
-        );
+        assert_eq!(std::fs::read_to_string(wt2.path.join("target/cache.bin")).unwrap(), "warm");
+        assert_eq!(std::fs::read_to_string(wt2.path.join("a.txt")).unwrap(), "hello\n");
         assert!(!wt2.path.join("scratch.txt").exists());
         assert!(wt2.diff().unwrap().trim().is_empty());
         // Another chat never takes this chat's parked trees.
@@ -930,9 +762,7 @@ mod reuse_tests {
     #[test]
     fn pool_is_capped() {
         let root = repo();
-        let trees: Vec<Worktree> = (0..POOL_PER_CHAT + 1)
-            .map(|i| cut_turn_worktree(&root, "c", &format!("t{i}")).unwrap())
-            .collect();
+        let trees: Vec<Worktree> = (0..POOL_PER_CHAT + 1).map(|i| cut_turn_worktree(&root, "c", &format!("t{i}")).unwrap()).collect();
         for t in trees {
             t.park("c").unwrap();
         }
@@ -980,26 +810,10 @@ mod tests {
 
     #[test]
     fn mutations_are_classified() {
-        for m in [
-            &["worktree", "add", "x"][..],
-            &["worktree", "prune"],
-            &["branch", "-D", "b"],
-            &["branch", "new"],
-            &["update-ref", "refs/heads/x", "a", "b"],
-            &["checkout", "-q", "-B", "b", "base"],
-            &["fetch", ".", "a:refs/heads/main"],
-        ] {
+        for m in [&["worktree", "add", "x"][..], &["worktree", "prune"], &["branch", "-D", "b"], &["branch", "new"], &["update-ref", "refs/heads/x", "a", "b"], &["checkout", "-q", "-B", "b", "base"], &["fetch", ".", "a:refs/heads/main"]] {
             assert!(mutates_worktrees_or_branches(m), "{m:?}");
         }
-        for r in [
-            &["worktree", "list", "--porcelain"][..],
-            &["branch"],
-            &["branch", "--list", "ligus/*"],
-            &["rev-parse", "HEAD"],
-            &["checkout", "-q", "--detach"],
-            &["fetch", "--prune", "origin"],
-            &["status"],
-        ] {
+        for r in [&["worktree", "list", "--porcelain"][..], &["branch"], &["branch", "--list", "ligus/*"], &["rev-parse", "HEAD"], &["checkout", "-q", "--detach"], &["fetch", "--prune", "origin"], &["status"]] {
             assert!(!mutates_worktrees_or_branches(r), "{r:?}");
         }
     }
@@ -1010,11 +824,7 @@ mod tests {
     fn the_mutation_lock_is_per_repository() {
         let (a, b) = (temp_repo(), temp_repo());
         let wt = Worktree::create(&a, "00000000-lockkey").unwrap();
-        assert_eq!(
-            repo_key(&a),
-            repo_key(&wt.path),
-            "a worktree shares its repo's key"
-        );
+        assert_eq!(repo_key(&a), repo_key(&wt.path), "a worktree shares its repo's key");
         assert_ne!(repo_key(&a), repo_key(&b));
         let held = repo_lock(&a);
         let other = std::thread::spawn(move || {
@@ -1022,10 +832,7 @@ mod tests {
         });
         let t0 = std::time::Instant::now();
         while !other.is_finished() {
-            assert!(
-                t0.elapsed() < std::time::Duration::from_secs(10),
-                "another repo waited"
-            );
+            assert!(t0.elapsed() < std::time::Duration::from_secs(10), "another repo waited");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let path = wt.path.clone();
@@ -1034,14 +841,9 @@ mod tests {
             let _g = repo_lock(&path);
             tx.send(()).unwrap();
         });
-        assert!(
-            rx.recv_timeout(std::time::Duration::from_millis(300))
-                .is_err(),
-            "the same repo waits"
-        );
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(300)).is_err(), "the same repo waits");
         drop(held);
-        rx.recv_timeout(std::time::Duration::from_secs(10))
-            .expect("released");
+        rx.recv_timeout(std::time::Duration::from_secs(10)).expect("released");
         same.join().unwrap();
         wt.remove().unwrap();
     }
@@ -1057,22 +859,17 @@ mod tests {
             let r = repo.clone();
             threads.push(std::thread::spawn(move || {
                 for i in 0..4 {
-                    let wt =
-                        cut_turn_worktree(&r, &format!("chat-{k}"), &format!("{k:08}-turn-{i}"))
-                            .expect("turn cut");
+                    let wt = cut_turn_worktree(&r, &format!("chat-{k}"), &format!("{k:08}-turn-{i}")).expect("turn cut");
                     wt.remove().expect("turn removed");
                 }
             }));
             let r = repo.clone();
             threads.push(std::thread::spawn(move || {
                 for i in 0..8 {
-                    let scratch = std::env::temp_dir()
-                        .join(format!("ligus-lock-scratch-{}-{k}-{i}", std::process::id()));
+                    let scratch = std::env::temp_dir().join(format!("ligus-lock-scratch-{}-{k}-{i}", std::process::id()));
                     let s = scratch.to_string_lossy().into_owned();
-                    crate::repos::git::git(&r, &["worktree", "add", "-q", "--detach", &s, "HEAD"])
-                        .expect("scratch add");
-                    crate::repos::git::git(&r, &["worktree", "remove", "--force", &s])
-                        .expect("scratch remove");
+                    crate::repos::git::git(&r, &["worktree", "add", "-q", "--detach", &s, "HEAD"]).expect("scratch add");
+                    crate::repos::git::git(&r, &["worktree", "remove", "--force", &s]).expect("scratch remove");
                 }
             }));
             let r = repo.clone();
@@ -1086,23 +883,8 @@ mod tests {
         for t in threads {
             t.join().expect("no thread failed");
         }
-        let list = String::from_utf8(
-            command("git")
-                .arg("-C")
-                .arg(&repo)
-                .args(["worktree", "list", "--porcelain"])
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .unwrap();
-        assert_eq!(
-            list.lines()
-                .filter(|l| l.starts_with("worktree ") && l.contains("/chat-"))
-                .count(),
-            32,
-            "8 chats of the turns, 24 of their own: {list}"
-        );
+        let list = String::from_utf8(command("git").arg("-C").arg(&repo).args(["worktree", "list", "--porcelain"]).output().unwrap().stdout).unwrap();
+        assert_eq!(list.lines().filter(|l| l.starts_with("worktree ") && l.contains("/chat-")).count(), 32, "8 chats of the turns, 24 of their own: {list}");
     }
 
     /// A file-write-only agent plants a hook in its turn tree (husky-style
@@ -1119,37 +901,20 @@ mod tests {
         let _ = std::fs::remove_file(&marker);
         let wt = Worktree::create(&repo, "00000000-hook").unwrap();
         std::fs::create_dir_all(wt.path.join(".hooks")).unwrap();
-        for hook in [
-            "post-checkout",
-            "pre-commit",
-            "post-merge",
-            "reference-transaction",
-        ] {
+        for hook in ["post-checkout", "pre-commit", "post-merge", "reference-transaction"] {
             let h = wt.path.join(".hooks").join(hook);
-            std::fs::write(
-                &h,
-                format!("#!/bin/sh\necho {hook} >> '{}'\n", marker.display()),
-            )
-            .unwrap();
+            std::fs::write(&h, format!("#!/bin/sh\necho {hook} >> '{}'\n", marker.display())).unwrap();
             std::fs::set_permissions(&h, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let _ = wt.diff();
         let _ = wt.changed_files();
         wt.park("11111111-2222-3333-4444-555555555555").unwrap();
-        let reused = cut_turn_worktree_reusing(
-            &repo,
-            "11111111-2222-3333-4444-555555555555",
-            "00000000-hook2",
-        )
-        .unwrap();
+        let reused = cut_turn_worktree_reusing(&repo, "11111111-2222-3333-4444-555555555555", "00000000-hook2").unwrap();
         let _ = reused.remove();
         let ran = std::fs::read_to_string(&marker).unwrap_or_default();
         let _ = std::fs::remove_file(&marker);
         let _ = std::fs::remove_dir_all(&repo);
-        assert!(
-            ran.is_empty(),
-            "repo hooks ran during Ligus's git calls: {ran}"
-        );
+        assert!(ran.is_empty(), "repo hooks ran during Ligus's git calls: {ran}");
     }
 
     #[test]
@@ -1175,24 +940,15 @@ mod tests {
         std::fs::write(wt.path.join("b.txt"), "new file\n").unwrap();
 
         let diff = wt.diff().unwrap();
-        assert!(
-            diff.contains("a.txt") && diff.contains("+world"),
-            "tracked edit in diff"
-        );
-        assert!(
-            diff.contains("b.txt") && diff.contains("+new file"),
-            "untracked file in diff"
-        );
+        assert!(diff.contains("a.txt") && diff.contains("+world"), "tracked edit in diff");
+        assert!(diff.contains("b.txt") && diff.contains("+new file"), "untracked file in diff");
 
         let mut files = wt.changed_files().unwrap();
         files.sort();
         assert_eq!(files, vec!["a.txt".to_string(), "b.txt".to_string()]);
 
         // The MAIN tree is untouched by the worktree's edits.
-        assert_eq!(
-            std::fs::read_to_string(repo.join("a.txt")).unwrap(),
-            "hello\n"
-        );
+        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "hello\n");
         assert!(!repo.join("b.txt").exists());
 
         wt.remove().unwrap();
@@ -1222,24 +978,10 @@ mod tests {
             .stdin(Stdio::piped())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(diff.as_bytes())
-            .unwrap();
-        assert!(
-            child.wait().unwrap().success(),
-            "captured diff applies to base tree"
-        );
-        assert_eq!(
-            std::fs::read_to_string(repo.join("a.txt")).unwrap(),
-            "hello\nworld\n"
-        );
-        assert_eq!(
-            std::fs::read_to_string(repo.join("b.txt")).unwrap(),
-            "new\n"
-        );
+        child.stdin.take().unwrap().write_all(diff.as_bytes()).unwrap();
+        assert!(child.wait().unwrap().success(), "captured diff applies to base tree");
+        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "hello\nworld\n");
+        assert_eq!(std::fs::read_to_string(repo.join("b.txt")).unwrap(), "new\n");
         let _ = std::fs::remove_dir_all(&repo);
     }
 
@@ -1273,10 +1015,7 @@ mod tests {
             "hello\nfrom-chat\n"
         );
         // And its diff is empty until it edits (i.e. base is the chat tip).
-        assert!(
-            wt.diff().unwrap().trim().is_empty(),
-            "no diff vs chat tip yet"
-        );
+        assert!(wt.diff().unwrap().trim().is_empty(), "no diff vs chat tip yet");
         wt.remove().unwrap();
         let _ = std::fs::remove_dir_all(&repo);
     }
@@ -1284,49 +1023,27 @@ mod tests {
     #[test]
     fn chat_branch_starts_from_the_configured_base() {
         let repo = temp_repo();
-        let head = git(&repo, &["rev-parse", "HEAD"])
-            .unwrap()
-            .trim()
-            .to_string();
+        let head = git(&repo, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
         // A second line of history, as an upstream remote-tracking ref.
         git(&repo, &["checkout", "-q", "-b", "side"]).unwrap();
         std::fs::write(repo.join("side.txt"), "s\n").unwrap();
         git(&repo, &["add", "-A"]).unwrap();
         git(&repo, &["commit", "-qm", "side"]).unwrap();
-        let side = git(&repo, &["rev-parse", "HEAD"])
-            .unwrap()
-            .trim()
-            .to_string();
+        let side = git(&repo, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
         git(&repo, &["update-ref", "refs/remotes/upstream/main", &side]).unwrap();
         git(&repo, &["checkout", "-q", "-"]).unwrap();
         git(&repo, &["branch", "-D", "side"]).unwrap();
         // Unset or unresolvable: HEAD.
         assert_eq!(chat_base(&repo), "HEAD");
-        git(
-            &repo,
-            &["config", CHAT_BASE_CONFIG, "refs/remotes/upstream/nope"],
-        )
-        .unwrap();
+        git(&repo, &["config", CHAT_BASE_CONFIG, "refs/remotes/upstream/nope"]).unwrap();
         assert_eq!(chat_base(&repo), "HEAD");
         let a = chat_worktree(&repo, "chatBaseA").unwrap();
         assert_eq!(git(&a, &["rev-parse", "HEAD"]).unwrap().trim(), head);
         // Set: fresh chats start there; existing chat branches don't move.
-        git(
-            &repo,
-            &["config", CHAT_BASE_CONFIG, "refs/remotes/upstream/main"],
-        )
-        .unwrap();
+        git(&repo, &["config", CHAT_BASE_CONFIG, "refs/remotes/upstream/main"]).unwrap();
         let b = chat_worktree(&repo, "chatBaseB").unwrap();
         assert_eq!(git(&b, &["rev-parse", "HEAD"]).unwrap().trim(), side);
-        assert_eq!(
-            git(
-                &chat_worktree(&repo, "chatBaseA").unwrap(),
-                &["rev-parse", "HEAD"]
-            )
-            .unwrap()
-            .trim(),
-            head
-        );
+        assert_eq!(git(&chat_worktree(&repo, "chatBaseA").unwrap(), &["rev-parse", "HEAD"]).unwrap().trim(), head);
         let _ = std::fs::remove_dir_all(&repo);
     }
 
@@ -1381,16 +1098,8 @@ mod tests {
             .stdin(Stdio::piped())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(diff.as_bytes())
-            .unwrap();
-        assert!(
-            child.wait().unwrap().success(),
-            "diff applies into chat worktree"
-        );
+        child.stdin.take().unwrap().write_all(diff.as_bytes()).unwrap();
+        assert!(child.wait().unwrap().success(), "diff applies into chat worktree");
         run(&chat, "git", &["add", "-A"]);
         run(&chat, "git", &["commit", "-qm", "apply proposal"]);
 
@@ -1400,10 +1109,7 @@ mod tests {
             "hello\nworld\n"
         );
         // The main tree is untouched.
-        assert_eq!(
-            std::fs::read_to_string(repo.join("a.txt")).unwrap(),
-            "hello\n"
-        );
+        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "hello\n");
         let _ = std::fs::remove_dir_all(&repo);
     }
 

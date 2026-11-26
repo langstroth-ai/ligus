@@ -76,10 +76,7 @@ pub(crate) fn info_for_repo(state: &AppState, repo: Uuid) -> Option<Value> {
 
 #[tauri::command]
 pub async fn list_scratch_repos(ligus_app: tauri::AppHandle) -> Result<Value, String> {
-    crate::off_main(ligus_app, move |a| {
-        list_scratch_repos_sync(tauri::Manager::state::<AppState>(a))
-    })
-    .await
+    crate::off_main(ligus_app, move |a| list_scratch_repos_sync(tauri::Manager::state::<AppState>(a))).await
 }
 
 pub fn list_scratch_repos_sync(state: State<AppState>) -> Result<Value, String> {
@@ -89,64 +86,29 @@ pub fn list_scratch_repos_sync(state: State<AppState>) -> Result<Value, String> 
     let all = scratch::list(svc.store(), ws);
     let live = all.iter().filter(|e| e.is_live()).count();
     let now = scratch::now();
-    Ok(
-        json!({ "scratch": all.iter().rev().map(|e| dto(e, &st, now)).collect::<Vec<_>>(), "settings": settings_dto(&st, live) }),
-    )
+    Ok(json!({ "scratch": all.iter().rev().map(|e| dto(e, &st, now)).collect::<Vec<_>>(), "settings": settings_dto(&st, live) }))
 }
 
 /// "New scratch repo": for `session_id` (or none, from Settings).
 #[tauri::command]
-pub async fn create_scratch_repo(
-    ligus_app: tauri::AppHandle,
-    session_id: Option<String>,
-    name: Option<String>,
-) -> Result<Value, String> {
-    crate::off_main(ligus_app, move |a| {
-        create_scratch_repo_sync(tauri::Manager::state::<AppState>(a), session_id, name)
-    })
-    .await
+pub async fn create_scratch_repo(ligus_app: tauri::AppHandle, session_id: Option<String>, name: Option<String>) -> Result<Value, String> {
+    crate::off_main(ligus_app, move |a| create_scratch_repo_sync(tauri::Manager::state::<AppState>(a), session_id, name)).await
 }
 
-pub fn create_scratch_repo_sync(
-    state: State<AppState>,
-    session_id: Option<String>,
-    name: Option<String>,
-) -> Result<Value, String> {
-    let chat = session_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(parse)
-        .transpose()?;
+pub fn create_scratch_repo_sync(state: State<AppState>, session_id: Option<String>, name: Option<String>) -> Result<Value, String> {
+    let chat = session_id.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(parse).transpose()?;
     let st = settings(&state);
     let mut svc = state.service.lock().unwrap();
     let ws = match chat {
-        Some(c) => svc
-            .workspace_of(c)
-            .map_err(map_err)?
-            .ok_or("unknown chat")?,
+        Some(c) => svc.workspace_of(c).map_err(map_err)?.ok_or("unknown chat")?,
         None => ws_of(&state),
     };
-    let (e, repo) = scratch_host::create(
-        &mut svc,
-        ws,
-        chat,
-        &st,
-        &[],
-        name.as_deref().unwrap_or(""),
-        &crate::repos_ui::host_label(),
-    )
-    .map_err(map_err)?;
+    let (e, repo) = scratch_host::create(&mut svc, ws, chat, &st, &[], name.as_deref().unwrap_or(""), &crate::repos_ui::host_label()).map_err(map_err)?;
     if let Some(c) = chat {
         let _ = svc.post_system_note(
             c,
             ws,
-            format!(
-                "This chat now works in a new scratch repository, {}, on {} (branch {}).",
-                e.name,
-                crate::repos_ui::host_label(),
-                ligus_runtime::git_worktree::chat_branch_name(&c.to_string())
-            ),
+            format!("This chat now works in a new scratch repository, {}, on {} (branch {}).", e.name, crate::repos_ui::host_label(), ligus_runtime::git_worktree::chat_branch_name(&c.to_string())),
         );
     }
     let mut v = dto(&e, &st, scratch::now());
@@ -158,24 +120,11 @@ pub fn create_scratch_repo_sync(
 /// outside the scratch root and other repositories), bind it there, and
 /// drop the workspace's scratch flag.
 #[tauri::command]
-pub async fn keep_scratch_repo(
-    ligus_app: tauri::AppHandle,
-    id: String,
-    path: String,
-    name: Option<String>,
-) -> Result<Value, String> {
-    crate::off_main(ligus_app, move |a| {
-        keep_scratch_repo_sync(tauri::Manager::state::<AppState>(a), id, path, name)
-    })
-    .await
+pub async fn keep_scratch_repo(ligus_app: tauri::AppHandle, id: String, path: String, name: Option<String>) -> Result<Value, String> {
+    crate::off_main(ligus_app, move |a| keep_scratch_repo_sync(tauri::Manager::state::<AppState>(a), id, path, name)).await
 }
 
-pub fn keep_scratch_repo_sync(
-    state: State<AppState>,
-    id: String,
-    path: String,
-    name: Option<String>,
-) -> Result<Value, String> {
+pub fn keep_scratch_repo_sync(state: State<AppState>, id: String, path: String, name: Option<String>) -> Result<Value, String> {
     let id = parse(&id)?;
     let dest = PathBuf::from(path.trim());
     if !dest.is_absolute() {
@@ -184,16 +133,7 @@ pub fn keep_scratch_repo_sync(
     let st = settings(&state);
     let ws = ws_of(&state);
     let mut svc = state.service.lock().unwrap();
-    let (k, dropped) = scratch_host::keep(
-        &mut svc,
-        ws,
-        id,
-        &dest,
-        name.as_deref(),
-        &[],
-        &crate::repos_ui::host_label(),
-    )
-    .map_err(map_err)?;
+    let (k, dropped) = scratch_host::keep(&mut svc, ws, id, &dest, name.as_deref(), &[], &crate::repos_ui::host_label()).map_err(map_err)?;
     let mut v = dto(&k, &st, scratch::now());
     v["workspaceFlagDropped"] = json!(dropped);
     Ok(v)
@@ -202,29 +142,17 @@ pub fn keep_scratch_repo_sync(
 /// "Publish to GitHub (private)", for a kept scratch repository, after the
 /// confirmation that named `owner/name` (`confirm` repeats it).
 #[tauri::command]
-pub async fn publish_scratch_repo(
-    state: State<'_, AppState>,
-    id: String,
-    owner: String,
-    name: String,
-    confirm: String,
-    forge: Option<String>,
-) -> Result<Value, String> {
+pub async fn publish_scratch_repo(state: State<'_, AppState>, id: String, owner: String, name: String, confirm: String, forge: Option<String>) -> Result<Value, String> {
     let id = parse(&id)?;
     let ws = ws_of(&state);
     let e = {
         let svc = state.service.lock().unwrap();
-        scratch::list(svc.store(), ws)
-            .into_iter()
-            .find(|e| e.id == id)
-            .ok_or("no such scratch repository on this device")?
+        scratch::list(svc.store(), ws).into_iter().find(|e| e.id == id).ok_or("no such scratch repository on this device")?
     };
     if e.state != scratch::ScratchState::Kept {
         return Err("keep it as a repo first; only a kept scratch repository is published".into());
     }
-    let f = crate::forges::forge_for(&state.data_dir, forge.as_deref()).ok_or(
-        "no code host connection for that on this device: add GitHub under Settings > Code hosts",
-    )?;
+    let f = crate::forges::forge_for(&state.data_dir, forge.as_deref()).ok_or("no code host connection for that on this device: add GitHub under Settings > Code hosts")?;
     let url = scratch_host::publish(f.as_ref(), &e, &owner, &name, &confirm).await?;
     {
         let svc = state.service.lock().unwrap();
@@ -236,10 +164,7 @@ pub async fn publish_scratch_repo(
 /// "Remove now".
 #[tauri::command]
 pub async fn remove_scratch_repo(ligus_app: tauri::AppHandle, id: String) -> Result<(), String> {
-    crate::off_main(ligus_app, move |a| {
-        remove_scratch_repo_sync(tauri::Manager::state::<AppState>(a), id)
-    })
-    .await
+    crate::off_main(ligus_app, move |a| remove_scratch_repo_sync(tauri::Manager::state::<AppState>(a), id)).await
 }
 
 pub fn remove_scratch_repo_sync(state: State<AppState>, id: String) -> Result<(), String> {
@@ -247,10 +172,7 @@ pub fn remove_scratch_repo_sync(state: State<AppState>, id: String) -> Result<()
     let ws = ws_of(&state);
     let mut svc = state.service.lock().unwrap();
     let label = crate::repos_ui::host_label();
-    let e = scratch::list(svc.store(), ws)
-        .into_iter()
-        .find(|e| e.id == id && e.is_live())
-        .ok_or("no such scratch repository on this device")?;
+    let e = scratch::list(svc.store(), ws).into_iter().find(|e| e.id == id && e.is_live()).ok_or("no such scratch repository on this device")?;
     let note = format!("The scratch repository {} was removed from {label}. This chat has no repository now; its proposals and diffs stay in the chat.", e.name);
     scratch_host::remove(&mut svc, ws, id, &label, Some(&note)).map_err(map_err)?;
     // A person's explicit act: its workspace entry goes too (an Admin's,
@@ -267,29 +189,11 @@ pub fn remove_scratch_repo_sync(state: State<AppState>, id: String) -> Result<()
 /// The cleanup (`cleanup_days`: 1 to 365, 0 off, none the default) and the
 /// scratch root (`root`: a folder, "" back to the default).
 #[tauri::command]
-pub async fn set_scratch_settings(
-    ligus_app: tauri::AppHandle,
-    cleanup_days: Option<u32>,
-    reset_days: Option<bool>,
-    root: Option<String>,
-) -> Result<Value, String> {
-    crate::off_main(ligus_app, move |a| {
-        set_scratch_settings_sync(
-            tauri::Manager::state::<AppState>(a),
-            cleanup_days,
-            reset_days,
-            root,
-        )
-    })
-    .await
+pub async fn set_scratch_settings(ligus_app: tauri::AppHandle, cleanup_days: Option<u32>, reset_days: Option<bool>, root: Option<String>) -> Result<Value, String> {
+    crate::off_main(ligus_app, move |a| set_scratch_settings_sync(tauri::Manager::state::<AppState>(a), cleanup_days, reset_days, root)).await
 }
 
-pub fn set_scratch_settings_sync(
-    state: State<AppState>,
-    cleanup_days: Option<u32>,
-    reset_days: Option<bool>,
-    root: Option<String>,
-) -> Result<Value, String> {
+pub fn set_scratch_settings_sync(state: State<AppState>, cleanup_days: Option<u32>, reset_days: Option<bool>, root: Option<String>) -> Result<Value, String> {
     {
         let svc = state.service.lock().unwrap();
         if reset_days == Some(true) {
@@ -324,10 +228,7 @@ pub(crate) async fn run_sweep_loop(app: tauri::AppHandle) {
             let label = crate::repos_ui::host_label();
             let trash = {
                 let mut svc = state.service.lock().unwrap();
-                let workspaces: std::collections::BTreeSet<Uuid> = scratch::live_all(svc.store())
-                    .into_iter()
-                    .map(|e| e.workspace_id)
-                    .collect();
+                let workspaces: std::collections::BTreeSet<Uuid> = scratch::live_all(svc.store()).into_iter().map(|e| e.workspace_id).collect();
                 for ws in workspaces {
                     let r = scratch_host::sweep(&mut svc, ws, &st, &label, scratch::now());
                     for (id, e) in r.failed {

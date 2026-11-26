@@ -5,9 +5,7 @@
 
 use std::sync::Arc;
 
-use ligus_forge::tokens::{
-    AuthSource, GhCredentials, MemoryTokens, Purpose, Secret, StoreCredentials, TokenStore,
-};
+use ligus_forge::tokens::{AuthSource, GhCredentials, MemoryTokens, Purpose, Secret, StoreCredentials, TokenStore};
 use ligus_forge::*;
 
 #[tokio::test]
@@ -16,11 +14,7 @@ async fn tests_never_reach_real_code_hosts_or_gh() {
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("gh-ran");
     let gh = dir.path().join("gh");
-    std::fs::write(
-        &gh,
-        format!("#!/bin/sh\ntouch '{}'\necho gho_fake\n", marker.display()),
-    )
-    .unwrap();
+    std::fs::write(&gh, format!("#!/bin/sh\ntouch '{}'\necho gho_fake\n", marker.display())).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -41,33 +35,16 @@ async fn tests_never_reach_real_code_hosts_or_gh() {
     assert_eq!(implicit.auth, AuthSource::Gh);
     let creds = implicit.credentials(Arc::new(MemoryTokens::default()), None, None);
     assert!(creds.token(Purpose::Read).await.unwrap().is_none());
-    assert!(
-        !marker.exists(),
-        "a test build ran gh through the implicit connection"
-    );
+    assert!(!marker.exists(), "a test build ran gh through the implicit connection");
 
     // No request leaves for a real host, with or without a token.
-    for (kind, base) in [
-        (ForgeKind::Gitea, "https://codeberg.org"),
-        (ForgeKind::GitHub, "https://github.com"),
-        (ForgeKind::GitLab, "https://gitlab.com"),
-    ] {
+    for (kind, base) in [(ForgeKind::Gitea, "https://codeberg.org"), (ForgeKind::GitHub, "https://github.com"), (ForgeKind::GitLab, "https://gitlab.com")] {
         let c = Connection::new(kind, base, AuthSource::Token).unwrap();
         let store = Arc::new(MemoryTokens::default());
-        store
-            .put(&c.id, Purpose::Read, &Secret::new("fake-token-never-sent"))
-            .unwrap();
-        let creds = Arc::new(StoreCredentials::new(
-            store,
-            c.id.clone(),
-            AuthSource::Token,
-            None,
-        ));
+        store.put(&c.id, Purpose::Read, &Secret::new("fake-token-never-sent")).unwrap();
+        let creds = Arc::new(StoreCredentials::new(store, c.id.clone(), AuthSource::Token, None));
         let err = c.build(creds).whoami().await.unwrap_err().to_string();
-        assert!(
-            err.contains("test builds never reach a real code host"),
-            "{base}: {err}"
-        );
+        assert!(err.contains("test builds never reach a real code host"), "{base}: {err}");
     }
     let ep = device::DeviceEndpoints {
         device_url: "https://github.com/login/device/code".into(),
@@ -77,8 +54,5 @@ async fn tests_never_reach_real_code_hosts_or_gh() {
         internal: false,
     };
     let err = device::start(&ep).await.unwrap_err().to_string();
-    assert!(
-        err.contains("test builds never reach a real code host"),
-        "{err}"
-    );
+    assert!(err.contains("test builds never reach a real code host"), "{err}");
 }

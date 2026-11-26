@@ -35,13 +35,13 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::{
-    agent_from_key, AskEffect, AskPoster, AskState, AskVote, FlowRecord, FlowState, HumanAnswered,
-    HumanAsk, EFFECT_PERMISSION, EFFECT_SECRET, MAX_ASKS_PER_CHAT, MAX_AUDIENCE_PEOPLE,
-    MAX_COUNTED_ANSWERS, MAX_EFFECT_DETAIL_BYTES, MAX_FOLDED_TEXT_CHARS, ORIGIN_OUTSIDE, PRIMARY,
+    agent_from_key, AskEffect, AskPoster, AskState, AskVote, FlowRecord, FlowState, HumanAnswered, HumanAsk, MAX_FOLDED_TEXT_CHARS,
+    EFFECT_PERMISSION, EFFECT_SECRET, MAX_ASKS_PER_CHAT, MAX_AUDIENCE_PEOPLE, MAX_COUNTED_ANSWERS,
+    MAX_EFFECT_DETAIL_BYTES, ORIGIN_OUTSIDE, PRIMARY,
 };
+use crate::identity::{ActorKind, CfgFrontier};
 use crate::authz::RosterState;
 use crate::events::SessionEventEnvelope;
-use crate::identity::{ActorKind, CfgFrontier};
 use crate::session::ChatSession;
 
 /// The digest a v2 ask seeded from a snapshot carries: no answer names it.
@@ -145,9 +145,9 @@ pub fn signed_payload(env: &SessionEventEnvelope) -> Vec<u8> {
 /// The digest of the ask `env` posts, when it carries one.
 pub fn envelope_ask_digest(env: &SessionEventEnvelope) -> Option<String> {
     match &env.payload {
-        crate::events::SessionEvent::FlowRecorded {
-            record: FlowRecord::HumanAsk(a),
-        } => Some(ask_digest(a.ask_id, &signed_payload(env))),
+        crate::events::SessionEvent::FlowRecorded { record: FlowRecord::HumanAsk(a) } => {
+            Some(ask_digest(a.ask_id, &signed_payload(env)))
+        }
         _ => None,
     }
 }
@@ -259,9 +259,7 @@ impl AskProvenance {
                     None => true,
                     Some(e) => {
                         effect_well_formed(e)
-                            && ((p.from_host
-                                && e.host_device_id.is_some()
-                                && e.host_device_id == host)
+                            && ((p.from_host && e.host_device_id.is_some() && e.host_device_id == host)
                                 || outside_ok(a, e, env, roster, &p))
                     }
                 };
@@ -295,13 +293,7 @@ fn effect_well_formed(e: &AskEffect) -> bool {
 
 /// An outside prompt (section 8.2): a person's own device raises it, as
 /// that person, to that person alone, naming that device as its host.
-fn outside_ok(
-    a: &HumanAsk,
-    e: &AskEffect,
-    env: &SessionEventEnvelope,
-    roster: &RosterState,
-    p: &AskProvenance,
-) -> bool {
+fn outside_ok(a: &HumanAsk, e: &AskEffect, env: &SessionEventEnvelope, roster: &RosterState, p: &AskProvenance) -> bool {
     let Some(device) = p.signer else { return false };
     let human = env
         .actor_stamp
@@ -320,13 +312,7 @@ fn outside_ok(
 }
 
 /// Why `ans` doesn't count for `st` (`None`: it counts).
-fn answer_why(
-    st: &AskState,
-    ans: &HumanAnswered,
-    env: &SessionEventEnvelope,
-    roster: &RosterState,
-    p: &AskProvenance,
-) -> Option<String> {
+fn answer_why(st: &AskState, ans: &HumanAnswered, env: &SessionEventEnvelope, roster: &RosterState, p: &AskProvenance) -> Option<String> {
     let grant = st.grant();
     if !st.is_v2() && grant.is_none() {
         // The older rule: any answer counts.
@@ -337,13 +323,8 @@ fn answer_why(
     }
     let author = p.by.id.as_str();
     let account = roster.members.get(author).and_then(|m| m.account_id);
-    let Some(account) = account else {
-        return Some("not a person in this workspace".into());
-    };
-    if !p
-        .signer
-        .is_some_and(|d| roster.account_certified(account, d))
-    {
+    let Some(account) = account else { return Some("not a person in this workspace".into()) };
+    if !p.signer.is_some_and(|d| roster.account_certified(account, d)) {
         return Some("not signed by a device of theirs".into());
     }
     if st.is_v2() {
@@ -356,16 +337,12 @@ fn answer_why(
         }
         match st.ask.audience.as_ref() {
             Some(au) if au.kind == super::AUDIENCE_PEOPLE => {
-                if au.member_ids.len() > MAX_AUDIENCE_PEOPLE
-                    || !au.member_ids.iter().any(|m| m == author)
-                {
+                if au.member_ids.len() > MAX_AUDIENCE_PEOPLE || !au.member_ids.iter().any(|m| m == author) {
                     return Some("not asked".into());
                 }
             }
             Some(au) if au.kind == super::AUDIENCE_ROOM => {
-                let Some(floor) = au.floor() else {
-                    return Some("not asked".into());
-                };
+                let Some(floor) = au.floor() else { return Some("not asked".into()) };
                 let floor = floor.rank().max(crate::WorkspaceRole::Contributor.rank());
                 if roster.role_of(author).is_none_or(|r| r.rank() < floor) {
                     return Some("below the role it asks".into());
@@ -373,20 +350,13 @@ fn answer_why(
             }
             Some(_) => return Some("not asked".into()),
             None => {
-                if roster
-                    .role_of(author)
-                    .is_none_or(|r| r.rank() < crate::WorkspaceRole::Contributor.rank())
-                {
+                if roster.role_of(author).is_none_or(|r| r.rank() < crate::WorkspaceRole::Contributor.rank()) {
                     return Some("below the role it asks".into());
                 }
             }
         }
         if !st.digest.is_empty() && ans.ask_digest != st.digest {
-            return Some(if ans.ask_digest.is_empty() {
-                "answered on an older version".into()
-            } else {
-                "answers another question".into()
-            });
+            return Some(if ans.ask_digest.is_empty() { "answered on an older version".into() } else { "answers another question".into() });
         }
     }
     if let Some(e) = grant {
@@ -394,9 +364,7 @@ fn answer_why(
             return Some("not the host's person or the agent's owner".into());
         }
         if e.needs_presence() || st.grant_needs_presence() {
-            let present = crate::authz::passkeys::verify_stamped(env, roster)
-                .ok()
-                .flatten();
+            let present = crate::authz::passkeys::verify_stamped(env, roster).ok().flatten();
             if present != Some(account) {
                 return Some("no passkey".into());
             }
@@ -452,9 +420,7 @@ fn may_grant(st: &AskState, roster: &RosterState, author: &str, signer: Option<U
     if author.is_empty() {
         return false;
     }
-    let Some(account) = roster.members.get(author).and_then(|m| m.account_id) else {
-        return false;
-    };
+    let Some(account) = roster.members.get(author).and_then(|m| m.account_id) else { return false };
     if !signer.is_some_and(|d| roster.account_certified(account, d)) {
         return false;
     }
@@ -577,20 +543,12 @@ impl AskState {
     fn answer_with(&mut self, ans: &HumanAnswered, p: &AskProvenance) {
         let vote = AskVote {
             member_id: p.by.id.clone(),
-            name: if p.by.name.is_empty() {
-                ans.by.clone()
-            } else {
-                p.by.name.clone()
-            },
+            name: if p.by.name.is_empty() { ans.by.clone() } else { p.by.name.clone() },
             event_id: p.event_id,
             device_id: p.signer,
             option_index: ans.option_index,
             answer: ans.answer.chars().take(MAX_FOLDED_TEXT_CHARS).collect(),
-            text: if self.ask.allow_text || !self.is_v2() {
-                ans.text.chars().take(MAX_FOLDED_TEXT_CHARS).collect()
-            } else {
-                String::new()
-            },
+            text: if self.ask.allow_text || !self.is_v2() { ans.text.chars().take(MAX_FOLDED_TEXT_CHARS).collect() } else { String::new() },
             decline: ans.decline,
             at_ms: ans.at_ms,
             why: String::new(),
@@ -598,17 +556,8 @@ impl AskState {
         let counts = p.legacy || (p.why.is_empty() && p.may_grant);
         if !counts {
             if self.uncounted.len() < MAX_COUNTED_ANSWERS {
-                let why = if p.why.is_empty() {
-                    "not the host's person or the agent's owner".into()
-                } else {
-                    p.why.clone()
-                };
-                self.uncounted.push(AskVote {
-                    why,
-                    text: String::new(),
-                    answer: String::new(),
-                    ..vote
-                });
+                let why = if p.why.is_empty() { "not the host's person or the agent's owner".into() } else { p.why.clone() };
+                self.uncounted.push(AskVote { why, text: String::new(), answer: String::new(), ..vote });
             }
             return;
         }
@@ -624,19 +573,11 @@ impl AskState {
             self.answered_by = vec![vote];
             return;
         }
-        let has_option = ans
-            .option_index
-            .is_some_and(|i| (i as usize) < self.ask.options.len());
-        let text_only =
-            ans.option_index.is_none() && self.ask.allow_text && !ans.text.trim().is_empty();
+        let has_option = ans.option_index.is_some_and(|i| (i as usize) < self.ask.options.len());
+        let text_only = ans.option_index.is_none() && self.ask.allow_text && !ans.text.trim().is_empty();
         if !ans.decline && !has_option && !text_only {
             if self.uncounted.len() < MAX_COUNTED_ANSWERS {
-                self.uncounted.push(AskVote {
-                    why: "no option chosen".into(),
-                    text: String::new(),
-                    answer: String::new(),
-                    ..vote
-                });
+                self.uncounted.push(AskVote { why: "no option chosen".into(), text: String::new(), answer: String::new(), ..vote });
             }
             return;
         }
@@ -648,10 +589,7 @@ impl AskState {
         // the ask settled is kept (the asker may have acted on it: see
         // `settledBy`) but settles nothing.
         let settled = self.answer.is_some();
-        let known = self
-            .counted
-            .iter()
-            .position(|v| v.member_id == vote.member_id);
+        let known = self.counted.iter().position(|v| v.member_id == vote.member_id);
         match known {
             Some(i) => {
                 self.counted.remove(i);
@@ -666,8 +604,7 @@ impl AskState {
         if ans.decline {
             // "Not now" closes an ask put to one person; in a room it is
             // that person's abstention.
-            if self.ask.audience.as_ref().and_then(|a| a.single()) == Some(vote.member_id.as_str())
-            {
+            if self.ask.audience.as_ref().and_then(|a| a.single()) == Some(vote.member_id.as_str()) {
                 self.declined = true;
                 self.answered_by = vec![vote];
             }
@@ -685,12 +622,7 @@ impl AskState {
             return;
         }
         let pick = ans.option_index;
-        let voters: Vec<AskVote> = self
-            .counted
-            .iter()
-            .filter(|v| !v.decline && v.option_index == pick)
-            .cloned()
-            .collect();
+        let voters: Vec<AskVote> = self.counted.iter().filter(|v| !v.decline && v.option_index == pick).cloned().collect();
         if voters.len() >= q {
             // Settled at the first position it is reached, and frozen.
             self.answer = Some(ans.clone());
@@ -703,26 +635,17 @@ impl AskState {
         if self.answered_by.iter().any(|v| v.event_id == Some(e)) {
             return;
         }
-        let Some(v) = self.counted.iter().find(|v| v.event_id == Some(e)).cloned() else {
-            return;
-        };
+        let Some(v) = self.counted.iter().find(|v| v.event_id == Some(e)).cloned() else { return };
         let pick = v.option_index;
         let voters: Vec<AskVote> = if v.decline {
             vec![v.clone()]
         } else {
-            self.counted
-                .iter()
-                .filter(|x| !x.decline && x.option_index == pick)
-                .cloned()
-                .collect()
+            self.counted.iter().filter(|x| !x.decline && x.option_index == pick).cloned().collect()
         };
         // Only an answer that settles the ask on its own terms: a decline
         // by the one person asked, or an option with its quorum.
-        let single =
-            self.ask.audience.as_ref().and_then(|a| a.single()) == Some(v.member_id.as_str());
-        if (v.decline && !single)
-            || (!v.decline && pick.is_some() && voters.len() < self.quorum() as usize)
-        {
+        let single = self.ask.audience.as_ref().and_then(|a| a.single()) == Some(v.member_id.as_str());
+        if (v.decline && !single) || (!v.decline && pick.is_some() && voters.len() < self.quorum() as usize) {
             return;
         }
         if v.decline {

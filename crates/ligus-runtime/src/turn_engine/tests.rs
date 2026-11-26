@@ -13,9 +13,7 @@ use axum::routing::post;
 use axum::Router;
 use ligus_core::crypto::SigningKeypair;
 use ligus_core::sandbox::{EgressPolicy, SandboxEnvelope};
-use ligus_core::{
-    ActorIdentity, ActorKind, ChatSession, ModelProviderKind, ProposalKind, WorkspaceAgent,
-};
+use ligus_core::{ActorIdentity, ActorKind, ChatSession, ModelProviderKind, ProposalKind, WorkspaceAgent};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -47,9 +45,7 @@ fn text(s: &str) -> Vec<String> {
 
 fn call(id: &str, name: &str, args: Value) -> Vec<String> {
     let args = args.to_string();
-    vec![delta(
-        json!({"tool_calls": [{"index": 0, "id": id, "type": "function", "function": {"name": name, "arguments": args}}]}),
-    )]
+    vec![delta(json!({"tool_calls": [{"index": 0, "id": id, "type": "function", "function": {"name": name, "arguments": args}}]}))]
 }
 
 async fn chat(State(m): State<Model>, body: String) -> axum::response::Response {
@@ -59,21 +55,13 @@ async fn chat(State(m): State<Model>, body: String) -> axum::response::Response 
         b.push(v);
         b.len() - 1
     };
-    let lines = m
-        .rounds
-        .get(n)
-        .or_else(|| m.rounds.last())
-        .cloned()
-        .unwrap_or_default();
+    let lines = m.rounds.get(n).or_else(|| m.rounds.last()).cloned().unwrap_or_default();
     if lines.first().map(String::as_str) == Some(HANG) {
         tokio::time::sleep(Duration::from_secs(120)).await;
     }
     let mut out: String = lines.iter().map(|l| format!("{l}\n\n")).collect();
     out.push_str("data: [DONE]\n\n");
-    axum::response::Response::builder()
-        .header("content-type", "text/event-stream")
-        .body(Body::from(out))
-        .unwrap()
+    axum::response::Response::builder().header("content-type", "text/event-stream").body(Body::from(out)).unwrap()
 }
 
 async fn serve(router: Router) -> String {
@@ -84,16 +72,8 @@ async fn serve(router: Router) -> String {
 }
 
 async fn spawn_model(rounds: Vec<Vec<String>>) -> (String, Model) {
-    let m = Model {
-        bodies: Default::default(),
-        rounds: Arc::new(rounds),
-    };
-    let base = serve(
-        Router::new()
-            .route("/v1/chat/completions", post(chat))
-            .with_state(m.clone()),
-    )
-    .await;
+    let m = Model { bodies: Default::default(), rounds: Arc::new(rounds) };
+    let base = serve(Router::new().route("/v1/chat/completions", post(chat)).with_state(m.clone())).await;
     (format!("{base}/v1/chat/completions"), m)
 }
 
@@ -103,23 +83,14 @@ async fn spawn_mcp() -> String {
         let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
         let id = v["id"].clone();
         let result = match v["method"].as_str().unwrap_or("") {
-            "initialize" => {
-                json!({"protocolVersion": "2025-03-26", "capabilities": {"tools": {}}, "serverInfo": {"name": "stub", "version": "1"}})
-            }
-            "tools/list" => {
-                json!({"tools": [{"name": "echo", "description": "Echo the text back.", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}]})
-            }
-            "tools/call" => {
-                json!({"content": [{"type": "text", "text": format!("echo: {}", v["params"]["arguments"]["text"].as_str().unwrap_or(""))}]})
-            }
+            "initialize" => json!({"protocolVersion": "2025-03-26", "capabilities": {"tools": {}}, "serverInfo": {"name": "stub", "version": "1"}}),
+            "tools/list" => json!({"tools": [{"name": "echo", "description": "Echo the text back.", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}]}),
+            "tools/call" => json!({"content": [{"type": "text", "text": format!("echo: {}", v["params"]["arguments"]["text"].as_str().unwrap_or(""))}]}),
             _ => json!({}),
         };
         axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result}))
     }
-    format!(
-        "{}/mcp",
-        serve(Router::new().route("/mcp", post(rpc))).await
-    )
+    format!("{}/mcp", serve(Router::new().route("/mcp", post(rpc))).await)
 }
 
 // ── The recording executor ─────────────────────────────────────────────────
@@ -133,14 +104,7 @@ impl TurnExecutor for Recording {
     fn kind(&self) -> ExecutorKind {
         ExecutorKind::Seatbelt
     }
-    fn confine(
-        &self,
-        program: &OsStr,
-        args: &[OsString],
-        cwd: &Path,
-        plan: &EnforcementPlan,
-        proxy: Option<&EgressProxy>,
-    ) -> std::io::Result<std::process::Command> {
+    fn confine(&self, program: &OsStr, args: &[OsString], cwd: &Path, plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> std::io::Result<std::process::Command> {
         self.0.lock().unwrap().push(plan.clone());
         Unconfined.confine(program, args, cwd, plan, proxy)
     }
@@ -180,26 +144,15 @@ impl TurnHost for Host {
     fn service(&self) -> &Mutex<ChatService> {
         &self.inner.svc
     }
-    fn mcp_servers(
-        &self,
-        _egress: &EgressPolicy,
-        _shell: bool,
-    ) -> impl Future<Output = Vec<McpServerSpec>> + Send {
+    fn mcp_servers(&self, _egress: &EgressPolicy, _shell: bool) -> impl Future<Output = Vec<McpServerSpec>> + Send {
         let s = self.servers.clone();
         async move { s }
     }
     fn ligus(&self) -> Option<Arc<LigusMcp>> {
         Some(self.mcp.clone())
     }
-    fn checkout(
-        &self,
-        _s: &ChatSession,
-        _m: Uuid,
-    ) -> impl Future<Output = Result<Checkout, String>> + Send {
-        let c = Checkout {
-            repo_root: self.repo.clone(),
-            ..Default::default()
-        };
+    fn checkout(&self, _s: &ChatSession, _m: Uuid) -> impl Future<Output = Result<Checkout, String>> + Send {
+        let c = Checkout { repo_root: self.repo.clone(), ..Default::default() };
         if let Some(f) = &self.on_checkout {
             f();
         }
@@ -219,15 +172,7 @@ impl TurnHost for Host {
             return Err("finalize failed".into());
         }
         let (sid, wid, mid) = (a.ctx.session_id, a.ctx.workspace_id, a.ctx.message_id);
-        let input = crate::finalize::FinalizeInput {
-            ctx: a.ctx,
-            workspace_root: "",
-            full: a.full,
-            edits_in_review: a.edits_in_review,
-            mcp: a.mcp,
-            base_commit: None,
-            apply_flow: true,
-        };
+        let input = crate::finalize::FinalizeInput { ctx: a.ctx, workspace_root: "", full: a.full, edits_in_review: a.edits_in_review, mcp: a.mcp, base_commit: None, apply_flow: true };
         match crate::finalize::finalize_reply(svc, input) {
             Ok(f) => Ok(f.cleaned),
             Err(e) => {
@@ -251,17 +196,8 @@ struct World {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = ligus_core::process_util::git()
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let out = ligus_core::process_util::git().arg("-C").arg(dir).args(args).output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
 
 /// A workspace with a chat, an agent `coder` bound to this device (its own
@@ -270,56 +206,31 @@ fn git(dir: &Path, args: &[&str]) {
 fn world(servers: Vec<McpServerSpec>) -> World {
     let dir = tempfile::tempdir().unwrap();
     let store = EventStore::open(dir.path().join("ligus.db")).unwrap();
-    let mut svc = ChatService::new(
-        store,
-        SigningKeypair::generate().unwrap(),
-        SigningKeypair::generate().unwrap(),
-        ActorIdentity::new("x", "Alex", ActorKind::Human),
-    );
+    let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ActorIdentity::new("x", "Alex", ActorKind::Human));
     let account = Uuid::new_v4().to_string();
     svc.set_author_account(account.clone(), "Alex", None);
     let ws = Uuid::new_v4();
     let chat = svc.create_chat("A", ws, "rt").unwrap();
-    svc.set_agent_vault(Box::new(crate::identity_store::FileKeyVault::new(
-        dir.path(),
-    )));
+    svc.set_agent_vault(Box::new(crate::identity_store::FileKeyVault::new(dir.path())));
     let mut agent = WorkspaceAgent::new("coder", "rt");
     agent.owner_actor_id = account.clone();
     let coder = agent.id;
     svc.add_agent(chat.id, ws, agent).unwrap();
-    svc.set_agent_host(ws, coder, &svc.device_id().to_string())
-        .unwrap();
+    svc.set_agent_host(ws, coder, &svc.device_id().to_string()).unwrap();
     let mut rev = WorkspaceAgent::new("reviewer", "rt");
     rev.owner_actor_id = account;
     let reviewer = rev.id;
     svc.add_agent(chat.id, ws, rev).unwrap();
-    let trigger = svc
-        .post_user_message(chat.id, ws, "@coder please add a greeting")
-        .unwrap()
-        .id;
+    let trigger = svc.post_user_message(chat.id, ws, "@coder please add a greeting").unwrap().id;
 
     let repo = dir.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
     std::fs::write(repo.join("README.md"), "# demo\n").unwrap();
     git(&repo, &["add", "-A"]);
-    git(
-        &repo,
-        &[
-            "-c",
-            "user.email=t@example.com",
-            "-c",
-            "user.name=t",
-            "commit",
-            "-qm",
-            "init",
-        ],
-    );
+    git(&repo, &["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "init"]);
 
-    let inner = Arc::new(Inner {
-        svc: Mutex::new(svc),
-        started: Mutex::new(Vec::new()),
-    });
+    let inner = Arc::new(Inner { svc: Mutex::new(svc), started: Mutex::new(Vec::new()) });
     let mcp = LigusMcp::new(inner.clone());
     let host = Host {
         inner,
@@ -332,15 +243,7 @@ fn world(servers: Vec<McpServerSpec>) -> World {
         fail_finalize: false,
         on_checkout: None,
     };
-    World {
-        host,
-        ws,
-        chat: chat.id,
-        coder,
-        reviewer,
-        trigger,
-        _dir: dir,
-    }
+    World { host, ws, chat: chat.id, coder, reviewer, trigger, _dir: dir }
 }
 
 fn runtime(endpoint: &str) -> ResolvedRuntime {
@@ -363,21 +266,8 @@ fn runtime(endpoint: &str) -> ResolvedRuntime {
     }
 }
 
-fn input(
-    w: &World,
-    rt: ResolvedRuntime,
-    shell: bool,
-    executor: Arc<dyn TurnExecutor>,
-) -> TurnInput {
-    let session = w
-        .host
-        .inner
-        .svc
-        .lock()
-        .unwrap()
-        .load(w.chat)
-        .unwrap()
-        .unwrap();
+fn input(w: &World, rt: ResolvedRuntime, shell: bool, executor: Arc<dyn TurnExecutor>) -> TurnInput {
+    let session = w.host.inner.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
     let envelope = SandboxEnvelope::default();
     let mut policy = TurnPolicy::new(HostKind::Desktop, envelope.clone(), GatePlan::Full);
     policy.shell_allowed = shell;
@@ -386,13 +276,7 @@ fn input(
         chat_id: w.chat,
         session,
         reply_to: Some(w.trigger),
-        responder: Responder {
-            author: "coder".into(),
-            effect_author: "coder".into(),
-            runtime_id: "rt".into(),
-            agent_id: Some(w.coder),
-            runtime: rt,
-        },
+        responder: Responder { author: "coder".into(), effect_author: "coder".into(), runtime_id: "rt".into(), agent_id: Some(w.coder), runtime: rt },
         system: "You are @coder.".into(),
         turns: vec![ChatTurn::user("please add a greeting")],
         gate: GatePlan::Full,
@@ -400,42 +284,21 @@ fn input(
         shell_allowed: shell,
         policy,
         executor,
-        tools: ToolOptions {
-            builtin: true,
-            run_command: true,
-            ..Default::default()
-        },
+        tools: ToolOptions { builtin: true, run_command: true, ..Default::default() },
         write_capable: false,
         require_isolation: true,
         stop: None,
         timeout: Duration::from_secs(60),
-        options: EngineOptions {
-            scan_injections: true,
-            ..Default::default()
-        },
+        options: EngineOptions { scan_injections: true, ..Default::default() },
     }
 }
 
 fn offered(m: &Model, round: usize) -> Vec<String> {
-    m.bodies.lock().unwrap()[round]["tools"]
-        .as_array()
-        .map(|t| {
-            t.iter()
-                .filter_map(|t| t["function"]["name"].as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
+    m.bodies.lock().unwrap()[round]["tools"].as_array().map(|t| t.iter().filter_map(|t| t["function"]["name"].as_str().map(str::to_string)).collect()).unwrap_or_default()
 }
 
 fn load(w: &World) -> ChatSession {
-    w.host
-        .inner
-        .svc
-        .lock()
-        .unwrap()
-        .load(w.chat)
-        .unwrap()
-        .unwrap()
+    w.host.inner.svc.lock().unwrap().load(w.chat).unwrap().unwrap()
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -446,63 +309,22 @@ fn load(w: &World) -> ChatSession {
 /// `run_command` is never offered, even with the setting on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_loop_edits_in_a_turn_worktree_and_files_a_proposal() {
-    let (endpoint, model) = spawn_model(vec![
-        call(
-            "c1",
-            "write_file",
-            json!({"path": "hello.txt", "content": "hello\n"}),
-        ),
-        text("Added hello.txt."),
-    ])
-    .await;
+    let (endpoint, model) =
+        spawn_model(vec![call("c1", "write_file", json!({"path": "hello.txt", "content": "hello\n"})), text("Added hello.txt.")]).await;
     let w = world(Vec::new());
-    let out = run(
-        &w.host,
-        input(
-            &w,
-            runtime(&endpoint),
-            false,
-            Arc::new(Recording::default()),
-        ),
-    )
-    .await
-    .expect("the turn runs");
+    let out = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.expect("the turn runs");
     assert_eq!(out.body, "Added hello.txt.");
-    assert_eq!(
-        model.bodies.lock().unwrap().len(),
-        2,
-        "one tool round, then the answer"
-    );
+    assert_eq!(model.bodies.lock().unwrap().len(), 2, "one tool round, then the answer");
     let tools = offered(&model, 0);
-    assert!(
-        tools.iter().any(|t| t == "write_file") && tools.iter().any(|t| t == "read_file"),
-        "{tools:?}"
-    );
-    assert!(
-        !tools.iter().any(|t| t == "run_command"),
-        "no shell without the Owner's rule: {tools:?}"
-    );
-    assert!(
-        tools.iter().any(|t| t == "ligus_propose"),
-        "the folded Ligus tools ride along: {tools:?}"
-    );
+    assert!(tools.iter().any(|t| t == "write_file") && tools.iter().any(|t| t == "read_file"), "{tools:?}");
+    assert!(!tools.iter().any(|t| t == "run_command"), "no shell without the Owner's rule: {tools:?}");
+    assert!(tools.iter().any(|t| t == "ligus_propose"), "the folded Ligus tools ride along: {tools:?}");
     // The checkout is untouched; the change is a proposal.
-    assert!(
-        !w.host.repo.as_ref().unwrap().join("hello.txt").exists(),
-        "never written in place"
-    );
+    assert!(!w.host.repo.as_ref().unwrap().join("hello.txt").exists(), "never written in place");
     let s = load(&w);
-    let p = s
-        .proposals
-        .iter()
-        .find(|p| Some(p.id) == out.proposal)
-        .expect("the proposal was filed");
+    let p = s.proposals.iter().find(|p| Some(p.id) == out.proposal).expect("the proposal was filed");
     assert_eq!(p.kind, ProposalKind::FileDiff);
-    assert!(
-        p.diff.as_deref().unwrap_or("").contains("+hello"),
-        "{:?}",
-        p.diff
-    );
+    assert!(p.diff.as_deref().unwrap_or("").contains("+hello"), "{:?}", p.diff);
     assert_eq!(p.changed_files, vec!["hello.txt".to_string()]);
     assert_eq!(p.producing_agent_id, Some(w.coder));
     let reply = s.messages.iter().find(|m| m.id == out.message_id).unwrap();
@@ -510,13 +332,7 @@ async fn tool_loop_edits_in_a_turn_worktree_and_files_a_proposal() {
     assert_eq!(reply.reply_to_message_id, Some(w.trigger));
     // The host saw the stream, the tool activity and the end.
     assert_eq!(*w.host.deltas.lock().unwrap(), "Added hello.txt.");
-    assert!(w
-        .host
-        .activity
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|a| matches!(a, StreamActivity::Tool { name, .. } if name == "write_file")));
+    assert!(w.host.activity.lock().unwrap().iter().any(|a| matches!(a, StreamActivity::Tool { name, .. } if name == "write_file")));
     assert_eq!(*w.host.phases.lock().unwrap(), vec![Phase::Completed]);
 }
 
@@ -525,52 +341,23 @@ async fn tool_loop_edits_in_a_turn_worktree_and_files_a_proposal() {
 /// under a plan whose home dir is denied.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_command_goes_through_the_given_executor_with_home_denied() {
-    let (endpoint, model) = spawn_model(vec![
-        call(
-            "c1",
-            "run_command",
-            json!({"command": "echo ran > ran.txt"}),
-        ),
-        text("Ran it."),
-    ])
-    .await;
+    let (endpoint, model) = spawn_model(vec![call("c1", "run_command", json!({"command": "echo ran > ran.txt"})), text("Ran it.")]).await;
     let w = world(Vec::new());
     let exec = Arc::new(Recording::default());
-    let out = run(&w.host, input(&w, runtime(&endpoint), true, exec.clone()))
-        .await
-        .expect("the turn runs");
+    let out = run(&w.host, input(&w, runtime(&endpoint), true, exec.clone())).await.expect("the turn runs");
     assert_eq!(out.body, "Ran it.");
     assert!(offered(&model, 0).iter().any(|t| t == "run_command"));
     let plans = exec.0.lock().unwrap();
-    assert_eq!(
-        plans.len(),
-        1,
-        "the command was confined by the given executor"
-    );
+    assert_eq!(plans.len(), 1, "the command was confined by the given executor");
     let plan = &plans[0];
     if let Some(home) = crate::executor::home_dir() {
-        assert_eq!(
-            plan.home.as_deref(),
-            Some(home.as_path()),
-            "the home dir is default-deny: {plan:?}"
-        );
-        assert!(
-            !plan.home_read.contains(&home),
-            "the home dir itself is never readable: {plan:?}"
-        );
+        assert_eq!(plan.home.as_deref(), Some(home.as_path()), "the home dir is default-deny: {plan:?}");
+        assert!(!plan.home_read.contains(&home), "the home dir itself is never readable: {plan:?}");
     }
     // The command ran in the turn's worktree: its file came back as a diff.
     let s = load(&w);
-    let p = s
-        .proposals
-        .iter()
-        .find(|p| Some(p.id) == out.proposal)
-        .expect("the command's file came back as a proposal");
-    assert!(
-        p.changed_files.contains(&"ran.txt".to_string()),
-        "{:?}",
-        p.changed_files
-    );
+    let p = s.proposals.iter().find(|p| Some(p.id) == out.proposal).expect("the command's file came back as a proposal");
+    assert!(p.changed_files.contains(&"ran.txt".to_string()), "{:?}", p.changed_files);
 }
 
 /// An MCP tool call through a stub HTTP MCP server: offered under its
@@ -578,43 +365,14 @@ async fn run_command_goes_through_the_given_executor_with_home_denied() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_tool_call_through_a_stub_server() {
     let url = spawn_mcp().await;
-    let (endpoint, model) = spawn_model(vec![
-        call("c1", "stub__echo", json!({"text": "ping"})),
-        text("It said pong."),
-    ])
-    .await;
-    let server = McpServerSpec {
-        id: "stub".into(),
-        transport: McpTransport::Http { url },
-        enabled: true,
-        auth: None,
-        agents: Vec::new(),
-    };
+    let (endpoint, model) = spawn_model(vec![call("c1", "stub__echo", json!({"text": "ping"})), text("It said pong.")]).await;
+    let server = McpServerSpec { id: "stub".into(), transport: McpTransport::Http { url }, enabled: true, auth: None, agents: Vec::new() };
     let mut w = world(vec![server]);
     w.host.repo = None;
-    let out = run(
-        &w.host,
-        input(
-            &w,
-            runtime(&endpoint),
-            false,
-            Arc::new(Recording::default()),
-        ),
-    )
-    .await
-    .expect("the turn runs");
+    let out = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.expect("the turn runs");
     assert_eq!(out.body, "It said pong.");
-    assert!(
-        offered(&model, 0).iter().any(|t| t == "stub__echo"),
-        "{:?}",
-        offered(&model, 0)
-    );
-    assert!(
-        model.bodies.lock().unwrap()[1]
-            .to_string()
-            .contains("echo: ping"),
-        "the tool's result reached the model"
-    );
+    assert!(offered(&model, 0).iter().any(|t| t == "stub__echo"), "{:?}", offered(&model, 0));
+    assert!(model.bodies.lock().unwrap()[1].to_string().contains("echo: ping"), "the tool's result reached the model");
     assert!(out.proposal.is_none(), "nothing to review");
 }
 
@@ -630,32 +388,14 @@ async fn a_handoff_starts_the_receiver_through_the_host() {
     ])
     .await;
     let w = world(Vec::new());
-    let out = run(
-        &w.host,
-        input(
-            &w,
-            runtime(&endpoint),
-            false,
-            Arc::new(Recording::default()),
-        ),
-    )
-    .await
-    .expect("the turn runs");
+    let out = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.expect("the turn runs");
     assert_eq!(out.body, "Handed off.");
     let started = w.host.inner.started.lock().unwrap().clone();
     assert_eq!(started.len(), 1, "{started:?}");
     assert_eq!((started[0].0, started[0].1), (w.chat, w.reviewer));
     let s = load(&w);
-    assert!(s
-        .flow
-        .handoffs
-        .iter()
-        .any(|c| c.to_name == "reviewer" && c.via == "tool"));
-    let decision = s
-        .proposals
-        .iter()
-        .find(|p| p.title == "Greet in English")
-        .expect("the agent's proposal");
+    assert!(s.flow.handoffs.iter().any(|c| c.to_name == "reviewer" && c.via == "tool"));
+    let decision = s.proposals.iter().find(|p| p.title == "Greet in English").expect("the agent's proposal");
     assert_eq!(decision.producing_agent_id, Some(w.coder));
 }
 
@@ -666,12 +406,7 @@ async fn the_stop_signal_cancels_a_running_turn() {
     let (endpoint, _model) = spawn_model(vec![vec![HANG.to_string()]]).await;
     let w = world(Vec::new());
     let stop = StopSignal::new();
-    let mut i = input(
-        &w,
-        runtime(&endpoint),
-        false,
-        Arc::new(Recording::default()),
-    );
+    let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
     i.stop = Some(stop.clone());
     let s2 = stop.clone();
     tokio::spawn(async move {
@@ -681,16 +416,9 @@ async fn the_stop_signal_cancels_a_running_turn() {
     let started = std::time::Instant::now();
     let err = run(&w.host, i).await.expect_err("stopped");
     assert!(err.stopped, "{err:?}");
-    assert!(
-        started.elapsed() < Duration::from_secs(30),
-        "stopped promptly"
-    );
+    assert!(started.elapsed() < Duration::from_secs(30), "stopped promptly");
     let s = load(&w);
-    let reply = s
-        .messages
-        .iter()
-        .find(|m| Some(m.id) == err.message_id)
-        .unwrap();
+    let reply = s.messages.iter().find(|m| Some(m.id) == err.message_id).unwrap();
     assert!(!reply.is_streaming && reply.body.is_empty(), "{reply:?}");
     assert_eq!(*w.host.phases.lock().unwrap(), vec![Phase::Completed]);
 }
@@ -705,29 +433,14 @@ async fn a_stop_pressed_before_the_turn_waits_is_honoured() {
     let stop = StopSignal::new();
     let s2 = stop.clone();
     w.host.on_checkout = Some(Box::new(move || s2.stop()));
-    let mut i = input(
-        &w,
-        runtime(&endpoint),
-        false,
-        Arc::new(Recording::default()),
-    );
+    let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
     i.stop = Some(stop);
     let started = std::time::Instant::now();
-    let err = tokio::time::timeout(Duration::from_secs(20), run(&w.host, i))
-        .await
-        .expect("the early Stop was seen")
-        .expect_err("stopped");
+    let err = tokio::time::timeout(Duration::from_secs(20), run(&w.host, i)).await.expect("the early Stop was seen").expect_err("stopped");
     assert!(err.stopped, "{err:?}");
     assert!(started.elapsed() < Duration::from_secs(10));
-    assert!(
-        model.bodies.lock().unwrap().is_empty(),
-        "the model was never asked"
-    );
-    let reply = load(&w)
-        .messages
-        .into_iter()
-        .find(|m| Some(m.id) == err.message_id)
-        .expect("the placeholder");
+    assert!(model.bodies.lock().unwrap().is_empty(), "the model was never asked");
+    let reply = load(&w).messages.into_iter().find(|m| Some(m.id) == err.message_id).expect("the placeholder");
     assert!(!reply.is_streaming && reply.body.is_empty(), "{reply:?}");
     assert_eq!(*w.host.phases.lock().unwrap(), vec![Phase::Completed]);
 }
@@ -739,23 +452,12 @@ async fn a_stop_pressed_before_the_turn_starts_is_honoured() {
     let w = world(Vec::new());
     let stop = StopSignal::new();
     stop.stop();
-    let mut i = input(
-        &w,
-        runtime(&endpoint),
-        false,
-        Arc::new(Recording::default()),
-    );
+    let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
     i.stop = Some(stop);
-    let err = tokio::time::timeout(Duration::from_secs(20), run(&w.host, i))
-        .await
-        .expect("seen")
-        .expect_err("stopped");
+    let err = tokio::time::timeout(Duration::from_secs(20), run(&w.host, i)).await.expect("seen").expect_err("stopped");
     assert!(err.stopped, "{err:?}");
     assert!(model.bodies.lock().unwrap().is_empty());
-    assert!(
-        !load(&w).messages.iter().any(|m| m.is_streaming),
-        "no live placeholder"
-    );
+    assert!(!load(&w).messages.iter().any(|m| m.is_streaming), "no live placeholder");
 }
 
 /// Two turns in one chat: stopping one (by its reply) leaves the other
@@ -767,29 +469,11 @@ async fn stopping_one_of_two_concurrent_turns_stops_only_that_one() {
     let stops = TurnStops::new();
     let (ga, gb) = (stops.register(w.chat), stops.register(w.chat));
     let (sa, sb) = (ga.signal(), gb.signal());
-    let mut ia = input(
-        &w,
-        runtime(&endpoint),
-        false,
-        Arc::new(Recording::default()),
-    );
+    let mut ia = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
     ia.stop = Some(sa.clone());
     // Each turn answers its own message (one trigger's second answer is fenced).
-    let second = w
-        .host
-        .inner
-        .svc
-        .lock()
-        .unwrap()
-        .post_user_message(w.chat, w.ws, "@coder another task")
-        .unwrap()
-        .id;
-    let mut ib = input(
-        &w,
-        runtime(&endpoint),
-        false,
-        Arc::new(Recording::default()),
-    );
+    let second = w.host.inner.svc.lock().unwrap().post_user_message(w.chat, w.ws, "@coder another task").unwrap().id;
+    let mut ib = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
     ib.reply_to = Some(second);
     ib.stop = Some(sb.clone());
     let (wa, wb) = (w.clone(), w.clone());
@@ -803,21 +487,13 @@ async fn stopping_one_of_two_concurrent_turns_stops_only_that_one() {
     }
     let mb = sb.message_id().expect("turn B began its reply");
     assert_eq!(stops.stop(w.chat, Some(mb)), 1);
-    let eb = tokio::time::timeout(Duration::from_secs(20), tb)
-        .await
-        .expect("B stops")
-        .unwrap()
-        .expect_err("stopped");
+    let eb = tokio::time::timeout(Duration::from_secs(20), tb).await.expect("B stops").unwrap().expect_err("stopped");
     assert!(eb.stopped && eb.message_id == Some(mb), "{eb:?}");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(!ta.is_finished(), "turn A still runs");
     assert!(!sa.is_stopped());
     stops.stop(w.chat, None);
-    let ea = tokio::time::timeout(Duration::from_secs(20), ta)
-        .await
-        .expect("A stops")
-        .unwrap()
-        .expect_err("stopped");
+    let ea = tokio::time::timeout(Duration::from_secs(20), ta).await.expect("A stops").unwrap().expect_err("stopped");
     assert!(ea.stopped, "{ea:?}");
     drop((ga, gb));
     assert_eq!(stops.running(w.chat), 0);
@@ -837,11 +513,7 @@ async fn a_writing_cli_without_a_worktree_is_refused() {
     let err = run(&w.host, i).await.expect_err("refused");
     assert!(err.message.contains("isolated git worktree"), "{err:?}");
     assert!(exec.0.lock().unwrap().is_empty(), "nothing was spawned");
-    let reply = load(&w)
-        .messages
-        .into_iter()
-        .find(|m| Some(m.id) == err.message_id)
-        .unwrap();
+    let reply = load(&w).messages.into_iter().find(|m| Some(m.id) == err.message_id).unwrap();
     assert!(!reply.is_streaming && reply.body.contains("isolated git worktree"));
     // The host hears it, so no live placeholder is left in its UI.
     assert_eq!(*w.host.phases.lock().unwrap(), vec![Phase::Error]);
@@ -868,27 +540,14 @@ fn decide_gate_fails_closed_for_an_unknown_author() {
     let w = world(Vec::new());
     let svc = w.host.inner.svc.lock().unwrap();
     let session = svc.load(w.chat).unwrap().unwrap();
-    let g = decide_gate(
-        &svc,
-        &session,
-        Uuid::new_v4(),
-        Some(w.coder),
-        runtime("http://127.0.0.1:9/v1/chat/completions"),
-        None,
-    )
-    .expect("an HTTP model always may");
+    let g = decide_gate(&svc, &session, Uuid::new_v4(), Some(w.coder), runtime("http://127.0.0.1:9/v1/chat/completions"), None).expect("an HTTP model always may");
     assert_eq!(g.gate, GatePlan::ReadOnly);
     assert!(!g.shell_allowed);
 }
 
 /// Worktrees Ligus keeps for `repo` (besides the checkout itself).
 fn turn_worktrees(repo: &Path) -> Vec<String> {
-    let out = ligus_core::process_util::git()
-        .arg("-C")
-        .arg(repo)
-        .args(["worktree", "list", "--porcelain"])
-        .output()
-        .unwrap();
+    let out = ligus_core::process_util::git().arg("-C").arg(repo).args(["worktree", "list", "--porcelain"]).output().unwrap();
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter_map(|l| l.strip_prefix("worktree "))
@@ -902,23 +561,10 @@ fn turn_worktrees(repo: &Path) -> Vec<String> {
 /// untouched, and the turn's worktree is gone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stopped_turn_files_nothing_partial_and_drops_its_worktree() {
-    let (endpoint, model) = spawn_model(vec![
-        call(
-            "c1",
-            "write_file",
-            json!({"path": "half.txt", "content": "half\n"}),
-        ),
-        vec![HANG.to_string()],
-    ])
-    .await;
+    let (endpoint, model) = spawn_model(vec![call("c1", "write_file", json!({"path": "half.txt", "content": "half\n"})), vec![HANG.to_string()]]).await;
     let w = world(Vec::new());
     let stop = StopSignal::new();
-    let mut i = input(
-        &w,
-        runtime(&endpoint),
-        false,
-        Arc::new(Recording::default()),
-    );
+    let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
     i.stop = Some(stop.clone());
     let (s2, m2) = (stop.clone(), model.clone());
     tokio::spawn(async move {
@@ -937,51 +583,23 @@ async fn a_stopped_turn_files_nothing_partial_and_drops_its_worktree() {
     let repo = w.host.repo.clone().unwrap();
     assert!(!repo.join("half.txt").exists(), "never written in place");
     let s = load(&w);
-    assert!(
-        !s.proposals.iter().any(|p| p.kind == ProposalKind::FileDiff),
-        "a stopped turn files no diff: {:?}",
-        s.proposals
-    );
-    assert!(
-        turn_worktrees(&repo).is_empty(),
-        "the turn's worktree is gone: {:?}",
-        turn_worktrees(&repo)
-    );
+    assert!(!s.proposals.iter().any(|p| p.kind == ProposalKind::FileDiff), "a stopped turn files no diff: {:?}", s.proposals);
+    assert!(turn_worktrees(&repo).is_empty(), "the turn's worktree is gone: {:?}", turn_worktrees(&repo));
 }
 
 /// The streaming backstop works the same: a timed-out turn fails, files
 /// nothing and leaves no live placeholder.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_timed_out_turn_files_nothing_and_completes_its_placeholder() {
-    let (endpoint, _model) = spawn_model(vec![
-        call(
-            "c1",
-            "write_file",
-            json!({"path": "late.txt", "content": "late\n"}),
-        ),
-        vec![HANG.to_string()],
-    ])
-    .await;
+    let (endpoint, _model) = spawn_model(vec![call("c1", "write_file", json!({"path": "late.txt", "content": "late\n"})), vec![HANG.to_string()]]).await;
     let w = world(Vec::new());
-    let mut i = input(
-        &w,
-        runtime(&endpoint),
-        false,
-        Arc::new(Recording::default()),
-    );
+    let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
     i.timeout = Duration::from_secs(3);
     let err = run(&w.host, i).await.expect_err("timed out");
     assert!(!err.stopped && err.message.contains("timed out"), "{err:?}");
     let s = load(&w);
-    let reply = s
-        .messages
-        .iter()
-        .find(|m| Some(m.id) == err.message_id)
-        .unwrap();
-    assert!(
-        !reply.is_streaming && reply.body.starts_with("[error]"),
-        "{reply:?}"
-    );
+    let reply = s.messages.iter().find(|m| Some(m.id) == err.message_id).unwrap();
+    assert!(!reply.is_streaming && reply.body.starts_with("[error]"), "{reply:?}");
     assert!(!s.proposals.iter().any(|p| p.kind == ProposalKind::FileDiff));
     assert!(turn_worktrees(w.host.repo.as_ref().unwrap()).is_empty());
     assert_eq!(*w.host.phases.lock().unwrap(), vec![Phase::Error]);
@@ -994,22 +612,8 @@ async fn a_finalize_failure_completes_the_placeholder() {
     let (endpoint, _model) = spawn_model(vec![text("Done.")]).await;
     let mut w = world(Vec::new());
     w.host.fail_finalize = true;
-    let err = run(
-        &w.host,
-        input(
-            &w,
-            runtime(&endpoint),
-            false,
-            Arc::new(Recording::default()),
-        ),
-    )
-    .await
-    .expect_err("finalize failed");
-    let reply = load(&w)
-        .messages
-        .into_iter()
-        .find(|m| Some(m.id) == err.message_id)
-        .unwrap();
+    let err = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.expect_err("finalize failed");
+    let reply = load(&w).messages.into_iter().find(|m| Some(m.id) == err.message_id).unwrap();
     assert!(!reply.is_streaming && reply.body == "Done.", "{reply:?}");
     assert_eq!(*w.host.phases.lock().unwrap(), vec![Phase::Error]);
 }
@@ -1019,27 +623,13 @@ async fn a_finalize_failure_completes_the_placeholder() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_listing_spawns_stdio_servers_through_the_turns_executor() {
     let (endpoint, _model) = spawn_model(vec![text("No tools needed.")]).await;
-    let server = McpServerSpec {
-        id: "local".into(),
-        transport: McpTransport::Stdio {
-            command: "/bin/sh".into(),
-            args: vec!["-c".into(), "exit 0".into()],
-        },
-        enabled: true,
-        auth: None,
-        agents: Vec::new(),
-    };
+    let server = McpServerSpec { id: "local".into(), transport: McpTransport::Stdio { command: "/bin/sh".into(), args: vec!["-c".into(), "exit 0".into()] }, enabled: true, auth: None, agents: Vec::new() };
     let mut w = world(vec![server]);
     w.host.repo = None;
     let exec = Arc::new(Recording::default());
-    let out = run(&w.host, input(&w, runtime(&endpoint), false, exec.clone()))
-        .await
-        .expect("the turn runs");
+    let out = run(&w.host, input(&w, runtime(&endpoint), false, exec.clone())).await.expect("the turn runs");
     assert_eq!(out.body, "No tools needed.");
-    assert!(
-        !exec.0.lock().unwrap().is_empty(),
-        "the stdio server was confined by the turn's executor"
-    );
+    assert!(!exec.0.lock().unwrap().is_empty(), "the stdio server was confined by the turn's executor");
 }
 
 /// Concurrent turns (each with Ligus tool calls, a write and a proposal)
@@ -1055,15 +645,7 @@ async fn concurrent_turns_and_ui_reads_never_deadlock() {
         std::thread::spawn(move || {
             let mut n = 0u64;
             while !done.load(std::sync::atomic::Ordering::SeqCst) {
-                let s = w
-                    .host
-                    .inner
-                    .svc
-                    .lock()
-                    .unwrap()
-                    .load(w.chat)
-                    .unwrap()
-                    .unwrap();
+                let s = w.host.inner.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
                 n += s.messages.len() as u64;
                 std::thread::yield_now();
             }
@@ -1073,48 +655,22 @@ async fn concurrent_turns_and_ui_reads_never_deadlock() {
     let mut turns = Vec::new();
     for k in 0..4 {
         let (endpoint, _model) = spawn_model(vec![
-            call(
-                "c1",
-                "ligus_propose",
-                json!({"kind": "decision", "title": format!("Option {k}"), "body": "b"}),
-            ),
-            call(
-                "c2",
-                "write_file",
-                json!({"path": format!("f{k}.txt"), "content": "x\n"}),
-            ),
+            call("c1", "ligus_propose", json!({"kind": "decision", "title": format!("Option {k}"), "body": "b"})),
+            call("c2", "write_file", json!({"path": format!("f{k}.txt"), "content": "x\n"})),
             text(&format!("Turn {k} done.")),
         ])
         .await;
         // Each turn answers its own message: two answers to one trigger
         // are a duplicate the dispatcher fences (repos-and-checkouts 11.5).
-        let trigger = w
-            .host
-            .inner
-            .svc
-            .lock()
-            .unwrap()
-            .post_user_message(w.chat, w.ws, &format!("@coder task {k}"))
-            .unwrap()
-            .id;
+        let trigger = w.host.inner.svc.lock().unwrap().post_user_message(w.chat, w.ws, &format!("@coder task {k}")).unwrap().id;
         let w = w.clone();
         turns.push(tokio::spawn(async move {
-            let mut i = input(
-                &w,
-                runtime(&endpoint),
-                false,
-                Arc::new(Recording::default()),
-            );
+            let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
             i.reply_to = Some(trigger);
             run(&w.host, i).await
         }));
     }
-    let all = tokio::time::timeout(
-        Duration::from_secs(120),
-        futures_util::future::join_all(turns),
-    )
-    .await
-    .expect("no deadlock: every turn finished");
+    let all = tokio::time::timeout(Duration::from_secs(120), futures_util::future::join_all(turns)).await.expect("no deadlock: every turn finished");
     done.store(true, std::sync::atomic::Ordering::SeqCst);
     reader.join().unwrap();
     for r in all {
@@ -1123,17 +679,8 @@ async fn concurrent_turns_and_ui_reads_never_deadlock() {
         assert!(out.proposal.is_some(), "each turn filed its diff");
     }
     let s = load(&w);
-    assert_eq!(
-        s.proposals
-            .iter()
-            .filter(|p| p.kind == ProposalKind::FileDiff)
-            .count(),
-        4
-    );
-    assert!(
-        !s.messages.iter().any(|m| m.is_streaming),
-        "no live placeholder left"
-    );
+    assert_eq!(s.proposals.iter().filter(|p| p.kind == ProposalKind::FileDiff).count(), 4);
+    assert!(!s.messages.iter().any(|m| m.is_streaming), "no live placeholder left");
 }
 
 /// The placeholder is the dispatcher's commit (repos-and-checkouts 11.5): a
@@ -1145,33 +692,14 @@ async fn a_fenced_placeholder_stops_the_turn() {
     let w = world(Vec::new());
     {
         let mut svc = w.host.inner.svc.lock().unwrap();
-        let first = svc
-            .begin_assistant_message(w.chat, w.ws, "coder", "rt", Some(w.coder), Some(w.trigger))
-            .unwrap();
-        svc.complete_assistant_message(w.chat, w.ws, first, "The first answer.")
-            .unwrap();
+        let first = svc.begin_assistant_message(w.chat, w.ws, "coder", "rt", Some(w.coder), Some(w.trigger)).unwrap();
+        svc.complete_assistant_message(w.chat, w.ws, first, "The first answer.").unwrap();
     }
-    let err = run(
-        &w.host,
-        input(
-            &w,
-            runtime(&endpoint),
-            false,
-            Arc::new(Recording::default()),
-        ),
-    )
-    .await
-    .expect_err("fenced");
+    let err = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.expect_err("fenced");
     assert_eq!(err.message, TURN_FENCED);
-    assert!(
-        model.bodies.lock().unwrap().is_empty(),
-        "no model call for a fenced turn"
-    );
+    assert!(model.bodies.lock().unwrap().is_empty(), "no model call for a fenced turn");
     let s = load(&w);
-    assert!(
-        !s.messages.iter().any(|m| m.is_streaming),
-        "no live placeholder left"
-    );
+    assert!(!s.messages.iter().any(|m| m.is_streaming), "no live placeholder left");
 }
 
 /// Agent access controls, the engine's backstop: a teammate's mention of an
@@ -1202,73 +730,25 @@ async fn a_refused_agent_turn_never_calls_the_model() {
         SigningKeypair::generate().unwrap(),
         ActorIdentity::new("mate", "Mate", ActorKind::Human),
     );
-    w.trigger = mate
-        .post_user_message(w.chat, w.ws, "@coder please add a greeting")
-        .unwrap()
-        .id;
-    let err = run(
-        &w.host,
-        input(
-            &w,
-            runtime(&endpoint),
-            false,
-            Arc::new(Recording::default()),
-        ),
-    )
-    .await
-    .unwrap_err();
+    w.trigger = mate.post_user_message(w.chat, w.ws, "@coder please add a greeting").unwrap().id;
+    let err = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.unwrap_err();
     assert_eq!(err.message, "coder is only available to its owner.");
     assert!(model.bodies.lock().unwrap().is_empty(), "no model call");
     let s = load(&w);
-    let notes: Vec<_> = s
-        .messages
-        .iter()
-        .filter(|m| m.reply_to_message_id == Some(w.trigger))
-        .collect();
+    let notes: Vec<_> = s.messages.iter().filter(|m| m.reply_to_message_id == Some(w.trigger)).collect();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].body, "coder is only available to its owner.");
-    let usage = w
-        .host
-        .inner
-        .svc
-        .lock()
-        .unwrap()
-        .agent_usage_view(w.coder)
-        .unwrap();
+    let usage = w.host.inner.svc.lock().unwrap().agent_usage_view(w.coder).unwrap();
     assert!(usage.today.is_empty(), "nothing counted");
 
     // The owner's own request runs and is counted against the owner.
     w.trigger = own_trigger;
-    let out = run(
-        &w.host,
-        input(
-            &w,
-            runtime(&endpoint),
-            false,
-            Arc::new(Recording::default()),
-        ),
-    )
-    .await
-    .expect("the owner's turn runs");
+    let out = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.expect("the owner's turn runs");
     assert_eq!(out.body, "Done.");
     assert_eq!(model.bodies.lock().unwrap().len(), 1);
-    let usage = w
-        .host
-        .inner
-        .svc
-        .lock()
-        .unwrap()
-        .agent_usage_view(w.coder)
-        .unwrap();
+    let usage = w.host.inner.svc.lock().unwrap().agent_usage_view(w.coder).unwrap();
     let owner = w.host.inner.svc.lock().unwrap().author().id.clone();
-    assert_eq!(
-        usage
-            .today
-            .iter()
-            .map(|r| (r.member.clone(), r.turns))
-            .collect::<Vec<_>>(),
-        vec![(owner, 1)]
-    );
+    assert_eq!(usage.today.iter().map(|r| (r.member.clone(), r.turns)).collect::<Vec<_>>(), vec![(owner, 1)]);
 }
 
 /// The primary runtime (`@ligus`, no agent id) runs on this device's
@@ -1297,19 +777,10 @@ async fn a_teammates_primary_turn_never_calls_the_model() {
         SigningKeypair::generate().unwrap(),
         ActorIdentity::new("mate", "Mate", ActorKind::Human),
     );
-    w.trigger = mate
-        .post_user_message(w.chat, w.ws, "@ligus hello")
-        .unwrap()
-        .id;
+    w.trigger = mate.post_user_message(w.chat, w.ws, "@ligus hello").unwrap().id;
     let primary = |w: &World, open: bool| {
         let mut i = input(w, runtime(&endpoint), false, Arc::new(Recording::default()));
-        i.responder = Responder {
-            author: "Ligus".into(),
-            effect_author: "Ligus".into(),
-            runtime_id: "rt".into(),
-            agent_id: None,
-            runtime: runtime(&endpoint),
-        };
+        i.responder = Responder { author: "Ligus".into(), effect_author: "Ligus".into(), runtime_id: "rt".into(), agent_id: None, runtime: runtime(&endpoint) };
         i.options.primary_open_to_members = open;
         i
     };
@@ -1317,13 +788,8 @@ async fn a_teammates_primary_turn_never_calls_the_model() {
     assert!(err.message.contains("only"), "{}", err.message);
     assert!(model.bodies.lock().unwrap().is_empty(), "no model call");
     // Opened: it runs.
-    let mate2 = mate
-        .post_user_message(w.chat, w.ws, "@ligus hello again")
-        .unwrap()
-        .id;
+    let mate2 = mate.post_user_message(w.chat, w.ws, "@ligus hello again").unwrap().id;
     w.trigger = mate2;
-    run(&w.host, primary(&w, true))
-        .await
-        .expect("opened to members");
+    run(&w.host, primary(&w, true)).await.expect("opened to members");
     assert_eq!(model.bodies.lock().unwrap().len(), 1);
 }

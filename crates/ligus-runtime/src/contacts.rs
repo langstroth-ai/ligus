@@ -52,16 +52,13 @@ pub fn relay_write_key(master: &str, relay_base: &str) -> String {
     let hk = hkdf::Hkdf::<sha2::Sha256>::new(None, master.as_bytes());
     let mut out = [0u8; 32];
     let info = format!("ligus-contact-write-key-v1\0{relay}");
-    hk.expand(info.as_bytes(), &mut out)
-        .expect("32 bytes is a valid HKDF-SHA256 length");
+    hk.expand(info.as_bytes(), &mut out).expect("32 bytes is a valid HKDF-SHA256 length");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(out)
 }
 
 /// Whether `s` is a well-formed contact id (base64url of exactly 16 bytes).
 pub fn valid_cid(s: &str) -> bool {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(s)
-        .is_ok_and(|b| b.len() == 16)
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).is_ok_and(|b| b.len() == 16)
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -163,10 +160,7 @@ const MAX_SMALL_BODY: usize = 64 * 1024;
 
 /// Read a response body up to `cap` bytes and parse it as JSON; a longer
 /// body is refused without being read to the end.
-async fn json_capped<T: serde::de::DeserializeOwned>(
-    mut resp: reqwest::Response,
-    cap: usize,
-) -> Result<T, ContactsError> {
+async fn json_capped<T: serde::de::DeserializeOwned>(mut resp: reqwest::Response, cap: usize) -> Result<T, ContactsError> {
     if resp.content_length().is_some_and(|n| n as usize > cap) {
         return Err(ContactsError::TooLarge);
     }
@@ -177,8 +171,7 @@ async fn json_capped<T: serde::de::DeserializeOwned>(
         }
         body.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&body)
-        .map_err(|e| ContactsError::Transport(format!("malformed answer: {e}")))
+    serde_json::from_slice(&body).map_err(|e| ContactsError::Transport(format!("malformed answer: {e}")))
 }
 
 fn status_err(code: u16, unsupported_on_404: bool) -> ContactsError {
@@ -210,18 +203,8 @@ impl RelayClient {
     ) -> Result<ContactPutResponse, ContactsError> {
         let url = self.contact_url(cid, "")?;
         let write_key = &relay_write_key(write_key, self.base_url());
-        let body = PutBody {
-            record,
-            write_key: first.then_some(write_key.as_str()),
-        };
-        let resp = self
-            .send_retrying(|| {
-                self.http_client()
-                    .put(&url)
-                    .header(CONTACT_KEY_HEADER, write_key)
-                    .json(&body)
-            })
-            .await?;
+        let body = PutBody { record, write_key: first.then_some(write_key.as_str()) };
+        let resp = self.send_retrying(|| self.http_client().put(&url).header(CONTACT_KEY_HEADER, write_key).json(&body)).await?;
         let code = resp.status().as_u16();
         if !resp.status().is_success() {
             return Err(status_err(code, true));
@@ -231,10 +214,7 @@ impl RelayClient {
 
     /// Read someone's record. `Ok(None)` when there is none (or the relay
     /// has no contact routes: a reader can't tell, and needn't).
-    pub async fn contact_get(
-        &self,
-        cid: &str,
-    ) -> Result<Option<ContactRecordResponse>, ContactsError> {
+    pub async fn contact_get(&self, cid: &str) -> Result<Option<ContactRecordResponse>, ContactsError> {
         let url = self.contact_url(cid, "")?;
         let resp = self.send_retrying(|| self.http_client().get(&url)).await?;
         match resp.status().as_u16() {
@@ -248,13 +228,7 @@ impl RelayClient {
     pub async fn contact_delete(&self, cid: &str, write_key: &str) -> Result<(), ContactsError> {
         let url = self.contact_url(cid, "")?;
         let write_key = relay_write_key(write_key, self.base_url());
-        let resp = self
-            .send_retrying(|| {
-                self.http_client()
-                    .delete(&url)
-                    .header(CONTACT_KEY_HEADER, &write_key)
-            })
-            .await?;
+        let resp = self.send_retrying(|| self.http_client().delete(&url).header(CONTACT_KEY_HEADER, &write_key)).await?;
         if !resp.status().is_success() {
             return Err(status_err(resp.status().as_u16(), false));
         }
@@ -263,16 +237,10 @@ impl RelayClient {
 
     /// Drop a blob (already sealed to the owner's key-agreement keys) into
     /// someone's box.
-    pub async fn contact_drop(
-        &self,
-        cid: &str,
-        blob: &serde_json::Value,
-    ) -> Result<(), ContactsError> {
+    pub async fn contact_drop(&self, cid: &str, blob: &serde_json::Value) -> Result<(), ContactsError> {
         let url = self.contact_url(cid, "/drop")?;
         let body = serde_json::json!({ "blob": blob });
-        let resp = self
-            .send_retrying(|| self.http_client().post(&url).json(&body))
-            .await?;
+        let resp = self.send_retrying(|| self.http_client().post(&url).json(&body)).await?;
         if !resp.status().is_success() {
             return Err(status_err(resp.status().as_u16(), false));
         }
@@ -280,21 +248,10 @@ impl RelayClient {
     }
 
     /// Read this account's box past `after` (non-destructive).
-    pub async fn contact_drops(
-        &self,
-        cid: &str,
-        write_key: &str,
-        after: u64,
-    ) -> Result<ContactDropPage, ContactsError> {
+    pub async fn contact_drops(&self, cid: &str, write_key: &str, after: u64) -> Result<ContactDropPage, ContactsError> {
         let url = self.contact_url(cid, &format!("/drop?after={after}"))?;
         let write_key = relay_write_key(write_key, self.base_url());
-        let resp = self
-            .send_retrying(|| {
-                self.http_client()
-                    .get(&url)
-                    .header(CONTACT_KEY_HEADER, &write_key)
-            })
-            .await?;
+        let resp = self.send_retrying(|| self.http_client().get(&url).header(CONTACT_KEY_HEADER, &write_key)).await?;
         if !resp.status().is_success() {
             return Err(status_err(resp.status().as_u16(), false));
         }
@@ -303,11 +260,7 @@ impl RelayClient {
 
     /// Read this account's whole box, page by page (at most 64 pages; a
     /// relay that doesn't advance the seqs stops the read).
-    pub async fn contact_drops_all(
-        &self,
-        cid: &str,
-        write_key: &str,
-    ) -> Result<Vec<ContactDrop>, ContactsError> {
+    pub async fn contact_drops_all(&self, cid: &str, write_key: &str) -> Result<Vec<ContactDrop>, ContactsError> {
         let mut out: Vec<ContactDrop> = Vec::new();
         let mut after = 0u64;
         for _ in 0..64 {
@@ -324,27 +277,17 @@ impl RelayClient {
 
     /// Delete every drop up to and including `through` from this account's
     /// box.
-    pub async fn contact_drops_ack(
-        &self,
-        cid: &str,
-        write_key: &str,
-        through: u64,
-    ) -> Result<(), ContactsError> {
+    pub async fn contact_drops_ack(&self, cid: &str, write_key: &str, through: u64) -> Result<(), ContactsError> {
         let url = self.contact_url(cid, &format!("/drop?through={through}"))?;
         let write_key = relay_write_key(write_key, self.base_url());
-        let resp = self
-            .send_retrying(|| {
-                self.http_client()
-                    .delete(&url)
-                    .header(CONTACT_KEY_HEADER, &write_key)
-            })
-            .await?;
+        let resp = self.send_retrying(|| self.http_client().delete(&url).header(CONTACT_KEY_HEADER, &write_key)).await?;
         if !resp.status().is_success() {
             return Err(status_err(resp.status().as_u16(), false));
         }
         Ok(())
     }
 }
+
 
 // ── The record (spec §3.2): a bundle of objects that already exist ─────────
 
@@ -411,10 +354,7 @@ pub fn build_record(
     ContactRecord {
         v: 1,
         cid: cid.to_string(),
-        account: RecordAccount {
-            account_id,
-            signing_public_key: b64(account_public_key),
-        },
+        account: RecordAccount { account_id, signing_public_key: b64(account_public_key) },
         devices,
         links: Vec::new(),
         issued_at: now,
@@ -459,8 +399,7 @@ pub fn verify_record(
     newest_seen: Option<ligus_core::Timestamp>,
     now: ligus_core::Timestamp,
 ) -> Result<VerifiedContact, String> {
-    let rec: ContactRecord = serde_json::from_value(record.clone())
-        .map_err(|e| format!("malformed contact record: {e}"))?;
+    let rec: ContactRecord = serde_json::from_value(record.clone()).map_err(|e| format!("malformed contact record: {e}"))?;
     if rec.v != 1 {
         return Err(format!("unsupported contact record version {}", rec.v));
     }
@@ -491,9 +430,7 @@ pub fn verify_record(
         if d.certificate.account_id != rec.account.account_id {
             return Err("a device certificate names another account".into());
         }
-        d.certificate
-            .verify(&key)
-            .map_err(|_| "a device certificate doesn't verify".to_string())?;
+        d.certificate.verify(&key).map_err(|_| "a device certificate doesn't verify".to_string())?;
         let env = &d.ka_publication;
         if env.workspace_id != workspace {
             return Err("a key publication belongs to another contact".into());
@@ -501,18 +438,9 @@ pub fn verify_record(
         ligus_core::crypto::verify_envelope(env, &d.certificate.device_public_key)
             .map_err(|_| "a key publication doesn't verify".to_string())?;
         match &env.payload {
-            ligus_core::SessionEvent::DeviceKeyAgreementPublished {
-                device_id,
-                ka_public,
-            } if *device_id == d.certificate.device_id => {
-                let k: [u8; 32] = ka_public
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| "a key-agreement key is malformed".to_string())?;
-                devices.push(crate::directory_trust::Recipient {
-                    device_id: device_id.to_string(),
-                    ka_public: k,
-                });
+            ligus_core::SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public } if *device_id == d.certificate.device_id => {
+                let k: [u8; 32] = ka_public.as_slice().try_into().map_err(|_| "a key-agreement key is malformed".to_string())?;
+                devices.push(crate::directory_trust::Recipient { device_id: device_id.to_string(), ka_public: k });
             }
             _ => return Err("a key publication names another device".into()),
         }
@@ -522,44 +450,19 @@ pub fn verify_record(
     // Links: a bad one is dropped, never the contact.
     let mut links = Vec::new();
     for env in rec.links.iter().take(RECORD_MAX_LINKS) {
-        let ligus_core::SessionEvent::IdentityLinkPublished { link } = &env.payload else {
-            continue;
-        };
-        let Some(device) = rec
-            .devices
-            .iter()
-            .find(|d| Some(d.certificate.device_id) == env.signer_device_id)
-        else {
-            continue;
-        };
+        let ligus_core::SessionEvent::IdentityLinkPublished { link } = &env.payload else { continue };
+        let Some(device) = rec.devices.iter().find(|d| Some(d.certificate.device_id) == env.signer_device_id) else { continue };
         let ok = env.workspace_id == workspace
             && link.account_id == rec.account.account_id
-            && env.actor_stamp.as_ref().is_some_and(|s| {
-                s.actor.account_id == Some(link.account_id)
-                    && s.actor.kind == ligus_core::ActorKind::Human
-            })
-            && ligus_core::crypto::verify_envelope(env, &device.certificate.device_public_key)
-                .is_ok()
+            && env.actor_stamp.as_ref().is_some_and(|s| s.actor.account_id == Some(link.account_id) && s.actor.kind == ligus_core::ActorKind::Human)
+            && ligus_core::crypto::verify_envelope(env, &device.certificate.device_public_key).is_ok()
             && ligus_core::identity_link::check_shape(link).is_ok()
             && ligus_core::identity_link::check_statement(link, workspace, Some(&key)).is_ok();
-        if ok
-            && !links
-                .iter()
-                .any(|l: &ligus_core::identity_link::IdentityLink| {
-                    l.subject_key() == link.subject_key()
-                })
-        {
+        if ok && !links.iter().any(|l: &ligus_core::identity_link::IdentityLink| l.subject_key() == link.subject_key()) {
             links.push(link.clone());
         }
     }
-    Ok(VerifiedContact {
-        account_id: rec.account.account_id,
-        fingerprint,
-        devices,
-        issued_at: rec.issued_at,
-        anchored,
-        links,
-    })
+    Ok(VerifiedContact { account_id: rec.account.account_id, fingerprint, devices, issued_at: rec.issued_at, anchored, links })
 }
 
 /// Read and check the record at `cid` (§3.2) the way every production read
@@ -575,9 +478,7 @@ pub async fn fetch_verified_contact(
     expected_fk: Option<&str>,
     revoked: &dyn Fn(uuid::Uuid) -> bool,
 ) -> Result<Option<VerifiedContact>, String> {
-    let Some(resp) = client.contact_get(cid).await.map_err(|e| e.to_string())? else {
-        return Ok(None);
-    };
+    let Some(resp) = client.contact_get(cid).await.map_err(|e| e.to_string())? else { return Ok(None) };
     accept_contact_record(store, cid, &resp.record, expected_fk, revoked).map(Some)
 }
 
@@ -591,25 +492,13 @@ pub fn accept_contact_record(
     revoked: &dyn Fn(uuid::Uuid) -> bool,
 ) -> Result<VerifiedContact, String> {
     let newest = store.contact_newest_seen(cid).map_err(|e| e.to_string())?;
-    let mut v = verify_record(
-        record,
-        cid,
-        expected_fk,
-        newest,
-        ligus_core::Timestamp::now(),
-    )?;
+    let mut v = verify_record(record, cid, expected_fk, newest, ligus_core::Timestamp::now())?;
     let before = v.devices.len();
-    v.devices.retain(|d| {
-        uuid::Uuid::parse_str(&d.device_id)
-            .map(|id| !revoked(id))
-            .unwrap_or(false)
-    });
+    v.devices.retain(|d| uuid::Uuid::parse_str(&d.device_id).map(|id| !revoked(id)).unwrap_or(false));
     if before > 0 && v.devices.is_empty() {
         return Err("every device in the contact record was revoked".into());
     }
-    store
-        .note_contact_seen(cid, v.issued_at)
-        .map_err(|e| e.to_string())?;
+    store.note_contact_seen(cid, v.issued_at).map_err(|e| e.to_string())?;
     Ok(v)
 }
 
@@ -618,10 +507,7 @@ pub fn accept_contact_record(
 /// Seal `plaintext` (a `hivews1:` invite) once per recipient key, as the
 /// opaque drop blob `{"v":1,"sealed":[…]}`. The blob names no device: the
 /// recipient tries each part.
-pub fn seal_drop(
-    plaintext: &[u8],
-    recipients: &[crate::directory_trust::Recipient],
-) -> Result<serde_json::Value, String> {
+pub fn seal_drop(plaintext: &[u8], recipients: &[crate::directory_trust::Recipient]) -> Result<serde_json::Value, String> {
     let mut parts = Vec::new();
     for r in recipients {
         let blob = ligus_core::e2ee::seal(&r.ka_public, plaintext).map_err(|e| e.to_string())?;
@@ -635,10 +521,7 @@ pub fn seal_drop(
 
 /// Open a drop blob with this device's key-agreement key. `None` when no
 /// part opens (not for this device, or garbage).
-pub fn open_drop(
-    blob: &serde_json::Value,
-    ka: &ligus_core::e2ee::KeyAgreementKeypair,
-) -> Option<Vec<u8>> {
+pub fn open_drop(blob: &serde_json::Value, ka: &ligus_core::e2ee::KeyAgreementKeypair) -> Option<Vec<u8>> {
     blob.get("sealed")?.as_array()?.iter().find_map(|p| {
         let b: ligus_core::e2ee::SealedBlob = serde_json::from_value(p.clone()).ok()?;
         ligus_core::e2ee::open(ka, &b).ok()
@@ -659,11 +542,7 @@ pub fn rotate_cid_after_refusal(refused: usize, holding: usize) -> bool {
 /// sorted; `pending` are seqs still waiting for the person.
 pub fn ack_through(handled: &[u64], pending: &[u64]) -> Option<u64> {
     let first_pending = pending.iter().min().copied();
-    handled
-        .iter()
-        .copied()
-        .filter(|h| first_pending.is_none_or(|p| *h < p))
-        .max()
+    handled.iter().copied().filter(|h| first_pending.is_none_or(|p| *h < p)).max()
 }
 
 #[cfg(test)]
@@ -685,21 +564,12 @@ mod tests {
     type S = Arc<Mutex<Fake>>;
 
     fn key_of(h: &HeaderMap) -> Option<String> {
-        h.get(CONTACT_KEY_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string)
+        h.get(CONTACT_KEY_HEADER).and_then(|v| v.to_str().ok()).map(str::to_string)
     }
 
-    async fn put_rec(
-        State(s): State<S>,
-        Path(cid): Path<String>,
-        h: HeaderMap,
-        Json(b): Json<serde_json::Value>,
-    ) -> (StatusCode, Json<serde_json::Value>) {
+    async fn put_rec(State(s): State<S>, Path(cid): Path<String>, h: HeaderMap, Json(b): Json<serde_json::Value>) -> (StatusCode, Json<serde_json::Value>) {
         let mut f = s.lock().unwrap();
-        let key = key_of(&h)
-            .or_else(|| b["writeKey"].as_str().map(str::to_string))
-            .unwrap_or_default();
+        let key = key_of(&h).or_else(|| b["writeKey"].as_str().map(str::to_string)).unwrap_or_default();
         let created = !f.records.contains_key(&cid);
         if let Some((k, _)) = f.records.get(&cid) {
             if *k != key {
@@ -707,28 +577,15 @@ mod tests {
             }
         }
         f.records.insert(cid, (key, b["record"].clone()));
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({ "created": created, "updatedAt": 1, "expiresAt": 2 })),
-        )
+        (StatusCode::OK, Json(serde_json::json!({ "created": created, "updatedAt": 1, "expiresAt": 2 })))
     }
-    async fn get_rec(
-        State(s): State<S>,
-        Path(cid): Path<String>,
-    ) -> (StatusCode, Json<serde_json::Value>) {
+    async fn get_rec(State(s): State<S>, Path(cid): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
         match s.lock().unwrap().records.get(&cid) {
-            Some((_, r)) => (
-                StatusCode::OK,
-                Json(serde_json::json!({ "record": r, "updatedAt": 1 })),
-            ),
+            Some((_, r)) => (StatusCode::OK, Json(serde_json::json!({ "record": r, "updatedAt": 1 }))),
             None => (StatusCode::NOT_FOUND, Json(serde_json::json!({}))),
         }
     }
-    async fn post_drop(
-        State(s): State<S>,
-        Path(cid): Path<String>,
-        Json(b): Json<serde_json::Value>,
-    ) -> StatusCode {
+    async fn post_drop(State(s): State<S>, Path(cid): Path<String>, Json(b): Json<serde_json::Value>) -> StatusCode {
         let mut f = s.lock().unwrap();
         if !f.records.contains_key(&cid) {
             return StatusCode::NOT_FOUND;
@@ -743,9 +600,7 @@ mod tests {
         Query(q): Query<HashMap<String, String>>,
     ) -> (StatusCode, Json<serde_json::Value>) {
         let f = s.lock().unwrap();
-        let Some((k, _)) = f.records.get(&cid) else {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({})));
-        };
+        let Some((k, _)) = f.records.get(&cid) else { return (StatusCode::NOT_FOUND, Json(serde_json::json!({}))) };
         if key_of(&h).as_deref() != Some(k.as_str()) {
             return (StatusCode::FORBIDDEN, Json(serde_json::json!({})));
         }
@@ -753,18 +608,9 @@ mod tests {
         let items: Vec<_> = f
             .drops
             .get(&cid)
-            .map(|v| {
-                v.iter()
-                    .enumerate()
-                    .skip(after)
-                    .map(|(i, b)| serde_json::json!({ "seq": i + 1, "blob": b, "createdAt": 3 }))
-                    .collect()
-            })
+            .map(|v| v.iter().enumerate().skip(after).map(|(i, b)| serde_json::json!({ "seq": i + 1, "blob": b, "createdAt": 3 })).collect())
             .unwrap_or_default();
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({ "items": items, "more": false })),
-        )
+        (StatusCode::OK, Json(serde_json::json!({ "items": items, "more": false })))
     }
 
     async fn spawn(router: Router) -> String {
@@ -776,10 +622,7 @@ mod tests {
 
     #[test]
     fn one_refusing_relay_does_not_orphan_the_others() {
-        assert!(
-            !rotate_cid_after_refusal(1, 1),
-            "another relay still holds the record"
-        );
+        assert!(!rotate_cid_after_refusal(1, 1), "another relay still holds the record");
         assert!(!rotate_cid_after_refusal(0, 0));
         assert!(rotate_cid_after_refusal(2, 0));
     }
@@ -806,45 +649,17 @@ mod tests {
         let stranger = RelayClient::new(&base);
         let (cid, key) = (new_cid(), new_write_key());
         let rec = serde_json::json!({ "v": 1, "cid": cid });
-        assert!(
-            owner
-                .contact_put(&cid, &key, &rec, true)
-                .await
-                .unwrap()
-                .created
-        );
-        assert_eq!(
-            stranger.contact_get(&cid).await.unwrap().unwrap().record,
-            rec
-        );
+        assert!(owner.contact_put(&cid, &key, &rec, true).await.unwrap().created);
+        assert_eq!(stranger.contact_get(&cid).await.unwrap().unwrap().record, rec);
         // Someone else can't overwrite it or read the box.
-        let err = stranger
-            .contact_put(&cid, &new_write_key(), &rec, false)
-            .await
-            .unwrap_err();
+        let err = stranger.contact_put(&cid, &new_write_key(), &rec, false).await.unwrap_err();
         assert_eq!(err, ContactsError::Unauthorized);
-        stranger
-            .contact_drop(&cid, &serde_json::json!({ "sealed": {} }))
-            .await
-            .unwrap();
-        assert_eq!(
-            stranger
-                .contact_drops(&cid, &new_write_key(), 0)
-                .await
-                .unwrap_err(),
-            ContactsError::Unauthorized
-        );
+        stranger.contact_drop(&cid, &serde_json::json!({ "sealed": {} })).await.unwrap();
+        assert_eq!(stranger.contact_drops(&cid, &new_write_key(), 0).await.unwrap_err(), ContactsError::Unauthorized);
         let page = owner.contact_drops(&cid, &key, 0).await.unwrap();
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].seq, 1);
-        assert_eq!(
-            stranger
-                .contact_get(&new_cid())
-                .await
-                .unwrap()
-                .map(|r| r.record),
-            None
-        );
+        assert_eq!(stranger.contact_get(&new_cid()).await.unwrap().map(|r| r.record), None);
     }
 
     /// The write key is a bearer capability every relay sees in clear on each
@@ -865,14 +680,8 @@ mod tests {
         let (a, b) = (spawn(ra).await, spawn(rb).await);
         let (cid, master) = (new_cid(), new_write_key());
         let rec = serde_json::json!({ "v": 1, "cid": cid });
-        RelayClient::new(&a)
-            .contact_put(&cid, &master, &rec, true)
-            .await
-            .unwrap();
-        RelayClient::new(&b)
-            .contact_put(&cid, &master, &rec, true)
-            .await
-            .unwrap();
+        RelayClient::new(&a).contact_put(&cid, &master, &rec, true).await.unwrap();
+        RelayClient::new(&b).contact_put(&cid, &master, &rec, true).await.unwrap();
         let ka = sa.lock().unwrap().records[&cid].0.clone();
         let kb = sb.lock().unwrap().records[&cid].0.clone();
         assert_ne!(ka, master, "relay A saw the master key");
@@ -888,15 +697,9 @@ mod tests {
             .unwrap();
         assert_eq!(raw.status().as_u16(), 403);
         // The owner still reads and writes both with the one master key.
-        assert!(RelayClient::new(&a)
-            .contact_drops(&cid, &master, 0)
-            .await
-            .is_ok());
+        assert!(RelayClient::new(&a).contact_drops(&cid, &master, 0).await.is_ok());
         assert!(stolen.contact_drops(&cid, &master, 0).await.is_ok());
-        assert!(RelayClient::new(&b)
-            .contact_put(&cid, &master, &rec, false)
-            .await
-            .is_ok());
+        assert!(RelayClient::new(&b).contact_put(&cid, &master, &rec, false).await.is_ok());
     }
 
     /// A box with more drops than one page (junk sealed to the owner's public
@@ -904,44 +707,22 @@ mod tests {
     /// owner reads every page.
     #[tokio::test]
     async fn drop_flood_does_not_hide_later_invites() {
-        async fn paged(
-            State(s): State<S>,
-            Path(cid): Path<String>,
-            Query(q): Query<HashMap<String, String>>,
-        ) -> Json<serde_json::Value> {
+        async fn paged(State(s): State<S>, Path(cid): Path<String>, Query(q): Query<HashMap<String, String>>) -> Json<serde_json::Value> {
             let f = s.lock().unwrap();
             let after: usize = q.get("after").and_then(|a| a.parse().ok()).unwrap_or(0);
             let all = f.drops.get(&cid).cloned().unwrap_or_default();
-            let items: Vec<_> = all
-                .iter()
-                .enumerate()
-                .skip(after)
-                .take(3)
-                .map(|(i, b)| serde_json::json!({ "seq": i + 1, "blob": b }))
-                .collect();
+            let items: Vec<_> = all.iter().enumerate().skip(after).take(3).map(|(i, b)| serde_json::json!({ "seq": i + 1, "blob": b })).collect();
             Json(serde_json::json!({ "items": items, "more": after + 3 < all.len() }))
         }
         let s: S = Arc::default();
         let cid = new_cid();
-        let mut drops: Vec<serde_json::Value> =
-            (0..7).map(|i| serde_json::json!({ "junk": i })).collect();
+        let mut drops: Vec<serde_json::Value> = (0..7).map(|i| serde_json::json!({ "junk": i })).collect();
         drops.push(serde_json::json!({ "real": true }));
         s.lock().unwrap().drops.insert(cid.clone(), drops);
-        let base = spawn(
-            Router::new()
-                .route("/v1/contacts/{cid}/drop", get(paged))
-                .with_state(s),
-        )
-        .await;
-        let items = RelayClient::new(&base)
-            .contact_drops_all(&cid, &new_write_key())
-            .await
-            .unwrap();
+        let base = spawn(Router::new().route("/v1/contacts/{cid}/drop", get(paged)).with_state(s)).await;
+        let items = RelayClient::new(&base).contact_drops_all(&cid, &new_write_key()).await.unwrap();
         assert_eq!(items.len(), 8);
-        assert_eq!(
-            items.last().unwrap().blob,
-            serde_json::json!({ "real": true })
-        );
+        assert_eq!(items.last().unwrap().blob, serde_json::json!({ "real": true }));
     }
 
     /// S15: a 0.1 client against a relay without the contact routes (v0.2)
@@ -950,16 +731,9 @@ mod tests {
     async fn client_degrades_without_contacts_routes() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, crate::test_relay::router())
-                .await
-                .unwrap()
-        });
+        tokio::spawn(async move { axum::serve(listener, crate::test_relay::router()).await.unwrap() });
         let client = RelayClient::new(format!("http://{addr}"));
-        let err = client
-            .contact_put(&new_cid(), &new_write_key(), &serde_json::json!({}), true)
-            .await
-            .unwrap_err();
+        let err = client.contact_put(&new_cid(), &new_write_key(), &serde_json::json!({}), true).await.unwrap_err();
         assert_eq!(err, ContactsError::Unsupported);
         assert_eq!(err.to_string(), "this relay doesn't support contacts");
         assert!(client.contact_get(&new_cid()).await.unwrap().is_none());
@@ -976,52 +750,27 @@ mod tests {
     }
 
     /// [`record`] issued at `at`, also returning its account and device ids.
-    fn record_at(
-        cid: &str,
-        at: ligus_core::Timestamp,
-    ) -> (serde_json::Value, String, [u8; 32], uuid::Uuid, uuid::Uuid) {
+    fn record_at(cid: &str, at: ligus_core::Timestamp) -> (serde_json::Value, String, [u8; 32], uuid::Uuid, uuid::Uuid) {
         use ligus_core::crypto::DeviceCertificate;
         use ligus_core::e2ee::KeyAgreementKeypair;
         use ligus_core::SigningKeypair;
         let account = SigningKeypair::generate().unwrap();
         let account_id = uuid::Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = ligus_core::crypto::device_id_for(
-            ligus_core::crypto::SigAlg::Ed25519,
-            &device.public_key_bytes(),
-        );
-        let cert =
-            DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), now());
+        let device_id = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), now());
         let ka = KeyAgreementKeypair::generate().unwrap().public_key_bytes();
         let ws = contact_workspace_id(cid);
         let mut env = ligus_core::SessionEventEnvelope::new(
             ws,
             ws,
             1,
-            ligus_core::SessionEvent::DeviceKeyAgreementPublished {
-                device_id,
-                ka_public: ka.to_vec(),
-            },
+            ligus_core::SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public: ka.to_vec() },
         );
         ligus_core::crypto::sign_envelope(&mut env, device_id, &device);
-        let rec = build_record(
-            cid,
-            account_id,
-            &account.public_key_bytes(),
-            vec![RecordDevice {
-                certificate: cert,
-                ka_publication: env,
-            }],
-            at,
-        );
+        let rec = build_record(cid, account_id, &account.public_key_bytes(), vec![RecordDevice { certificate: cert, ka_publication: env }], at);
         let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes());
-        (
-            serde_json::to_value(rec).unwrap(),
-            fk,
-            ka,
-            account_id,
-            device_id,
-        )
+        (serde_json::to_value(rec).unwrap(), fk, ka, account_id, device_id)
     }
 
     fn fake_relay(s: S) -> Router {
@@ -1043,31 +792,16 @@ mod tests {
         let client = RelayClient::new(&base);
         let cid = new_cid();
         let (newer, fk, _, account, _) = record_at(&cid, now());
-        s.lock()
-            .unwrap()
-            .records
-            .insert(cid.clone(), ("k".into(), newer));
+        s.lock().unwrap().records.insert(cid.clone(), ("k".into(), newer));
         {
             let store = crate::EventStore::open(&db).unwrap();
-            let v = fetch_verified_contact(&client, &store, &cid, Some(&fk), &|_| false)
-                .await
-                .unwrap()
-                .unwrap();
+            let v = fetch_verified_contact(&client, &store, &cid, Some(&fk), &|_| false).await.unwrap().unwrap();
             assert_eq!(v.account_id, account);
         }
-        let older = record_at(
-            &cid,
-            ligus_core::Timestamp(now().0 - time::Duration::hours(1)),
-        )
-        .0;
-        s.lock()
-            .unwrap()
-            .records
-            .insert(cid.clone(), ("k".into(), older));
+        let older = record_at(&cid, ligus_core::Timestamp(now().0 - time::Duration::hours(1))).0;
+        s.lock().unwrap().records.insert(cid.clone(), ("k".into(), older));
         let store = crate::EventStore::open(&db).unwrap();
-        let err = fetch_verified_contact(&client, &store, &cid, None, &|_| false)
-            .await
-            .unwrap_err();
+        let err = fetch_verified_contact(&client, &store, &cid, None, &|_| false).await.unwrap_err();
         assert!(err.contains("rollback"), "{err}");
     }
 
@@ -1081,13 +815,8 @@ mod tests {
         let store = crate::EventStore::open_in_memory().unwrap();
         let cid = new_cid();
         let (rec, fk, _, _, device) = record_at(&cid, now());
-        s.lock()
-            .unwrap()
-            .records
-            .insert(cid.clone(), ("k".into(), rec));
-        let err = fetch_verified_contact(&client, &store, &cid, Some(&fk), &|d| d == device)
-            .await
-            .unwrap_err();
+        s.lock().unwrap().records.insert(cid.clone(), ("k".into(), rec));
+        let err = fetch_verified_contact(&client, &store, &cid, Some(&fk), &|d| d == device).await.unwrap_err();
         assert!(err.contains("revoked"), "{err}");
     }
 
@@ -1099,27 +828,13 @@ mod tests {
             format!("{{\"record\":\"{}\"}}", "x".repeat(MAX_RECORD_BODY + 1))
         }
         async fn huge_page() -> String {
-            format!(
-                "{{\"items\":[],\"pad\":\"{}\"}}",
-                "x".repeat(MAX_DROP_PAGE_BODY + 1)
-            )
+            format!("{{\"items\":[],\"pad\":\"{}\"}}", "x".repeat(MAX_DROP_PAGE_BODY + 1))
         }
-        let base = spawn(
-            Router::new()
-                .route("/v1/contacts/{cid}", get(huge))
-                .route("/v1/contacts/{cid}/drop", get(huge_page)),
-        )
-        .await;
+        let base = spawn(Router::new().route("/v1/contacts/{cid}", get(huge)).route("/v1/contacts/{cid}/drop", get(huge_page))).await;
         let client = RelayClient::new(&base);
         let cid = new_cid();
-        assert!(matches!(
-            client.contact_get(&cid).await,
-            Err(ContactsError::TooLarge)
-        ));
-        assert!(matches!(
-            client.contact_drops(&cid, &new_write_key(), 0).await,
-            Err(ContactsError::TooLarge)
-        ));
+        assert!(matches!(client.contact_get(&cid).await, Err(ContactsError::TooLarge)));
+        assert!(matches!(client.contact_drops(&cid, &new_write_key(), 0).await, Err(ContactsError::TooLarge)));
     }
 
     /// Opt-in identity links ride a record as signed envelopes: one signed
@@ -1131,45 +846,18 @@ mod tests {
     fn record_links_are_opt_in_and_checked() {
         use ligus_core::crypto::DeviceCertificate;
         use ligus_core::identity_link::{render_statement, IdentityLink, LinkMethod};
-        use ligus_core::{
-            ActorIdentity, ActorKind, ActorStamp, SessionEvent, SessionEventEnvelope,
-            SigningKeypair,
-        };
+        use ligus_core::{ActorIdentity, ActorKind, ActorStamp, SessionEvent, SessionEventEnvelope, SigningKeypair};
         let cid = new_cid();
         let ws = contact_workspace_id(&cid);
         let account = SigningKeypair::generate().unwrap();
         let account_id = uuid::Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = ligus_core::crypto::device_id_for(
-            ligus_core::crypto::SigAlg::Ed25519,
-            &device.public_key_bytes(),
-        );
-        let cert =
-            DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), now());
-        let mut ka = SessionEventEnvelope::new(
-            ws,
-            ws,
-            1,
-            SessionEvent::DeviceKeyAgreementPublished {
-                device_id,
-                ka_public: vec![1; 32],
-            },
-        );
+        let device_id = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), now());
+        let mut ka = SessionEventEnvelope::new(ws, ws, 1, SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public: vec![1; 32] });
         ligus_core::crypto::sign_envelope(&mut ka, device_id, &device);
-        let mut rec = build_record(
-            &cid,
-            account_id,
-            &account.public_key_bytes(),
-            vec![RecordDevice {
-                certificate: cert,
-                ka_publication: ka,
-            }],
-            now(),
-        );
-        assert!(
-            !serde_json::to_string(&rec).unwrap().contains("\"links\""),
-            "skip-empty"
-        );
+        let mut rec = build_record(&cid, account_id, &account.public_key_bytes(), vec![RecordDevice { certificate: cert, ka_publication: ka }], now());
+        assert!(!serde_json::to_string(&rec).unwrap().contains("\"links\""), "skip-empty");
         let link = |subject: &str, in_ws: uuid::Uuid| {
             let t = ligus_core::Timestamp::from_unix_seconds(1_800_000_000);
             let mut l = IdentityLink {
@@ -1191,24 +879,10 @@ mod tests {
             l
         };
         let env = |l: IdentityLink, key: &SigningKeypair| {
-            let mut e = SessionEventEnvelope::new(
-                ws,
-                ws,
-                1,
-                SessionEvent::IdentityLinkPublished { link: l },
-            );
+            let mut e = SessionEventEnvelope::new(ws, ws, 1, SessionEvent::IdentityLinkPublished { link: l });
             let mut actor = ActorIdentity::new(account_id.to_string(), "Ana", ActorKind::Human);
             actor.account_id = Some(account_id);
-            e.actor_stamp = Some(ActorStamp {
-                actor,
-                recorded_at: now(),
-                cfg_frontier: None,
-                presence: None,
-                runtime_effect: false,
-                prev: None,
-                sig_alg: Default::default(),
-                log_head: None,
-            });
+            e.actor_stamp = Some(ActorStamp { actor, recorded_at: now(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
             ligus_core::crypto::sign_envelope(&mut e, device_id, key);
             e
         };
@@ -1218,21 +892,8 @@ mod tests {
             env(link("3", uuid::Uuid::new_v4()), &device),
         ];
         let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes());
-        let v = verify_record(
-            &serde_json::to_value(&rec).unwrap(),
-            &cid,
-            Some(&fk),
-            None,
-            now(),
-        )
-        .unwrap();
-        assert_eq!(
-            v.links
-                .iter()
-                .map(|l| l.subject_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["1"]
-        );
+        let v = verify_record(&serde_json::to_value(&rec).unwrap(), &cid, Some(&fk), None, now()).unwrap();
+        assert_eq!(v.links.iter().map(|l| l.subject_id.as_str()).collect::<Vec<_>>(), vec!["1"]);
     }
 
     #[test]
@@ -1242,14 +903,8 @@ mod tests {
         let v = verify_record(&rec, &cid, Some(&fk), None, now()).unwrap();
         assert!(v.anchored);
         assert_eq!(v.fingerprint, fk);
-        assert_eq!(
-            v.devices.iter().map(|d| d.ka_public).collect::<Vec<_>>(),
-            vec![ka]
-        );
-        assert!(
-            verify_record(&rec, &new_cid(), Some(&fk), None, now()).is_err(),
-            "bound to its cid"
-        );
+        assert_eq!(v.devices.iter().map(|d| d.ka_public).collect::<Vec<_>>(), vec![ka]);
+        assert!(verify_record(&rec, &new_cid(), Some(&fk), None, now()).is_err(), "bound to its cid");
     }
 
     /// S6 `contact_record_wrong_fk_unverified`: a record whose account key
@@ -1258,20 +913,9 @@ mod tests {
     fn contact_record_wrong_fk_unverified() {
         let cid = new_cid();
         let (rec, _, _) = record(&cid);
-        let v = verify_record(
-            &rec,
-            &cid,
-            Some("00112233445566778899aabbccddeeff"),
-            None,
-            now(),
-        )
-        .unwrap();
+        let v = verify_record(&rec, &cid, Some("00112233445566778899aabbccddeeff"), None, now()).unwrap();
         assert!(!v.anchored);
-        assert!(
-            !verify_record(&rec, &cid, None, None, now())
-                .unwrap()
-                .anchored
-        );
+        assert!(!verify_record(&rec, &cid, None, None, now()).unwrap().anchored);
     }
 
     /// S6 `contact_record_rollback_rejected`: an older record than the newest
@@ -1280,16 +924,12 @@ mod tests {
     fn contact_record_rollback_rejected() {
         let cid = new_cid();
         let (rec, fk, _) = record(&cid);
-        let issued: ligus_core::Timestamp =
-            serde_json::from_value(rec["issuedAt"].clone()).unwrap();
+        let issued: ligus_core::Timestamp = serde_json::from_value(rec["issuedAt"].clone()).unwrap();
         let later = ligus_core::Timestamp(issued.0 + time::Duration::seconds(10));
         let err = verify_record(&rec, &cid, Some(&fk), Some(later), now()).unwrap_err();
         assert!(err.contains("rollback"), "{err}");
         let future = ligus_core::Timestamp(now().0 + time::Duration::days(31));
-        assert!(
-            verify_record(&rec, &cid, Some(&fk), None, future).is_err(),
-            "expired"
-        );
+        assert!(verify_record(&rec, &cid, Some(&fk), None, future).is_err(), "expired");
     }
 
     /// A relay that swaps in its own key-agreement key (re-signing the
@@ -1301,15 +941,8 @@ mod tests {
         // Edit the received bytes the way a relay could: swap the published
         // key-agreement key for its own.
         let text = rec.to_string();
-        let ka: Vec<u8> = match &serde_json::from_value::<ContactRecord>(rec.clone())
-            .unwrap()
-            .devices[0]
-            .ka_publication
-            .payload
-        {
-            ligus_core::SessionEvent::DeviceKeyAgreementPublished { ka_public, .. } => {
-                ka_public.clone()
-            }
+        let ka: Vec<u8> = match &serde_json::from_value::<ContactRecord>(rec.clone()).unwrap().devices[0].ka_publication.payload {
+            ligus_core::SessionEvent::DeviceKeyAgreementPublished { ka_public, .. } => ka_public.clone(),
             _ => unreachable!(),
         };
         let orig = serde_json::to_string(&ka).unwrap();
@@ -1324,15 +957,9 @@ mod tests {
         use ligus_core::e2ee::KeyAgreementKeypair;
         let bob = KeyAgreementKeypair::generate().unwrap();
         let eve = KeyAgreementKeypair::generate().unwrap();
-        let r = crate::directory_trust::Recipient {
-            device_id: "b".into(),
-            ka_public: bob.public_key_bytes(),
-        };
+        let r = crate::directory_trust::Recipient { device_id: "b".into(), ka_public: bob.public_key_bytes() };
         let blob = seal_drop(b"hivews1:abc", &[r]).unwrap();
-        assert!(
-            !blob.to_string().contains("\"b\""),
-            "the blob names no device"
-        );
+        assert!(!blob.to_string().contains("\"b\""), "the blob names no device");
         assert_eq!(open_drop(&blob, &bob).as_deref(), Some(&b"hivews1:abc"[..]));
         assert_eq!(open_drop(&blob, &eve), None);
         assert_eq!(open_drop(&serde_json::json!({"junk": 1}), &bob), None);

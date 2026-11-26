@@ -38,11 +38,7 @@ pub enum RelayError {
     /// `no_workspace`, …) and a message. A `429`/`507` is [`Self::Refused`]
     /// instead (a short rate limit was already retried in place).
     #[error("{message} (relay: HTTP {status} {code})")]
-    BlobRefused {
-        status: u16,
-        code: String,
-        message: String,
-    },
+    BlobRefused { status: u16, code: String, message: String },
 }
 
 /// What the relay answers to a blob upload.
@@ -83,29 +79,13 @@ async fn refusal(status: u16, resp: reqwest::Response) -> RelayError {
         Ok(b) if !b.error.is_empty() => {
             let message = match (b.error.as_str(), status) {
                 ("blob_too_large", _) => "the file is larger than the relay accepts".to_string(),
-                ("no_workspace", _) => {
-                    "the relay holds nothing for this workspace yet; sync first".to_string()
-                }
+                ("no_workspace", _) => "the relay holds nothing for this workspace yet; sync first".to_string(),
                 (_, 507) => "the relay's storage for this workspace is full".to_string(),
                 (_, 429) => "too many uploads; try again in a moment".to_string(),
-                _ if !b.message.is_empty() => b
-                    .message
-                    .chars()
-                    .take(200)
-                    .filter(|c| !c.is_control())
-                    .collect(),
+                _ if !b.message.is_empty() => b.message.chars().take(200).filter(|c| !c.is_control()).collect(),
                 _ => format!("refused ({})", b.error),
             };
-            RelayError::BlobRefused {
-                status,
-                code: b
-                    .error
-                    .chars()
-                    .take(64)
-                    .filter(|c| c.is_ascii_graphic())
-                    .collect(),
-                message,
-            }
+            RelayError::BlobRefused { status, code: b.error.chars().take(64).filter(|c| c.is_ascii_graphic()).collect(), message }
         }
         _ => RelayError::Status(status),
     }
@@ -118,9 +98,7 @@ fn unavailable(resp: &reqwest::Response) -> RelayError {
         status: 503,
         code: "unavailable".into(),
         message: String::new(),
-        retry_after: retry_after_header(resp)
-            .unwrap_or(std::time::Duration::from_secs(5))
-            .max(std::time::Duration::from_secs(1)),
+        retry_after: retry_after_header(resp).unwrap_or(std::time::Duration::from_secs(5)).max(std::time::Duration::from_secs(1)),
     })
 }
 
@@ -140,11 +118,7 @@ pub(crate) fn retry_after_header(resp: &reqwest::Response) -> Option<std::time::
 fn http_error_text(e: &reqwest::Error) -> String {
     if e.is_builder() {
         let url = e.url().map(|u| u.to_string()).unwrap_or_default();
-        let shown = if url.is_empty() {
-            String::new()
-        } else {
-            format!(" ({url})")
-        };
+        let shown = if url.is_empty() { String::new() } else { format!(" ({url})") };
         return format!("the relay URL{shown} is missing or not an http(s) address; set the workspace's Relay URL ({e})");
     }
     e.to_string()
@@ -190,12 +164,7 @@ async fn roster_error(resp: reqwest::Response) -> RelayError {
         return status_error(resp).await;
     }
     let text = resp.text().await.unwrap_or_default();
-    let reason: String = text
-        .trim()
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(200)
-        .collect();
+    let reason: String = text.trim().chars().filter(|c| !c.is_control()).take(200).collect();
     if code == 401 {
         // The roster routes 401 only for a caller the relay can't name; the
         // access gate's 401 ("relay requires a valid access token") is a
@@ -243,10 +212,7 @@ pub fn idempotency_key(secret: &[u8; 32], event_id: uuid::Uuid) -> String {
     h.update(b"ligus-push-idempotency-v1\0");
     h.update(secret);
     h.update(event_id.as_bytes());
-    h.finalize()[..16]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    h.finalize()[..16].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Envelopes per page a client asks the relay for. The relay also caps a page
@@ -345,14 +311,10 @@ Sign in to the relay, or paste a token from its operator, under Settings → Tea
 pub fn token_subject(token: &str, now_unix: u64) -> Option<String> {
     use base64::Engine;
     let mut parts = token.trim().split('.');
-    let (Some("hrt1"), Some(claims), Some(_sig), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
+    let (Some("hrt1"), Some(claims), Some(_sig), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
         return None;
     };
-    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(claims)
-        .ok()?;
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(claims).ok()?;
     let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
     let exp = v.get("exp").and_then(|e| e.as_u64()).unwrap_or(0);
     if exp != 0 && now_unix >= exp {
@@ -459,13 +421,7 @@ impl RelayClient {
             .pool_idle_timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_else(|_| ligus_forge::new_http_client());
-        Self {
-            http,
-            base: base.into().trim_end_matches('/').to_string(),
-            auth: None,
-            auth_cell: None,
-            request_timeout: ENVELOPE_REQUEST_TIMEOUT,
-        }
+        Self { http, base: base.into().trim_end_matches('/').to_string(), auth: None, auth_cell: None, request_timeout: ENVELOPE_REQUEST_TIMEOUT }
     }
 
     /// Set the relay access token (for a token-gated relay). Empty = none.
@@ -500,11 +456,7 @@ impl RelayClient {
     pub(crate) fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         // A langstroth-auth token goes only to the relay its session is bound to
         // (E-5); any other relay gets the static token, if one is configured.
-        let fresh = self
-            .auth_cell
-            .as_ref()
-            .and_then(|c| c.get_for(&self.base))
-            .filter(|t| !t.is_empty());
+        let fresh = self.auth_cell.as_ref().and_then(|c| c.get_for(&self.base)).filter(|t| !t.is_empty());
         match fresh.as_ref().or(self.auth.as_ref()) {
             Some(t) => rb.bearer_auth(t),
             None => rb,
@@ -517,10 +469,7 @@ impl RelayClient {
     /// the wait is at most [`crate::relay_refusal::MAX_INLINE_WAIT`]. Any
     /// other `429`/`507` (or a rate limit past those bounds) is returned as
     /// [`RelayError::Refused`]; every other response comes back as is.
-    pub(crate) async fn send_retrying(
-        &self,
-        make: impl Fn() -> reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, RelayError> {
+    pub(crate) async fn send_retrying(&self, make: impl Fn() -> reqwest::RequestBuilder) -> Result<reqwest::Response, RelayError> {
         use crate::relay_refusal::{MAX_INLINE_RETRIES, MAX_INLINE_WAIT};
         let mut tries = 0u32;
         loop {
@@ -529,10 +478,7 @@ impl RelayClient {
                 Err(resp) => return Ok(resp),
                 Ok(r) => r,
             };
-            if refusal.class() == RefusalClass::RateLimited
-                && tries < MAX_INLINE_RETRIES
-                && refusal.retry_after <= MAX_INLINE_WAIT
-            {
+            if refusal.class() == RefusalClass::RateLimited && tries < MAX_INLINE_RETRIES && refusal.retry_after <= MAX_INLINE_WAIT {
                 tries += 1;
                 tracing::debug!(target: "sync", code = %refusal.code, wait = ?refusal.retry_after, "relay rate limit: retrying the same request");
                 tokio::time::sleep(refusal.retry_after).await;
@@ -575,11 +521,7 @@ impl RelayClient {
         let url = format!("{}/v1/workspaces/{}/envelopes", self.base, workspace);
         let resp = self
             .send_retrying(|| {
-                let rb = self
-                    .http
-                    .post(&url)
-                    .json(body)
-                    .timeout(self.request_timeout);
+                let rb = self.http.post(&url).json(body).timeout(self.request_timeout);
                 match key {
                     Some(k) => rb.header("Idempotency-Key", k),
                     None => rb,
@@ -587,10 +529,7 @@ impl RelayClient {
             })
             .await?;
         let value: serde_json::Value = json_ok(resp).await?;
-        Ok(value
-            .get("seq")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0))
+        Ok(value.get("seq").and_then(serde_json::Value::as_u64).unwrap_or(0))
     }
 
     /// Upload a sealed attachment to the workspace's blob channel
@@ -600,11 +539,7 @@ impl RelayClient {
     /// Its refusals (413 too large, 507 a quota, 429 a rate, 404 a relay
     /// without the channel or a workspace with nothing stored yet) come back
     /// as [`RelayError::Refused`] with the relay's code and message.
-    pub async fn post_blob(
-        &self,
-        workspace: &str,
-        bytes: Vec<u8>,
-    ) -> Result<BlobUploaded, RelayError> {
+    pub async fn post_blob(&self, workspace: &str, bytes: Vec<u8>) -> Result<BlobUploaded, RelayError> {
         let url = format!("{}/v1/workspaces/{}/blobs", self.base, workspace);
         let resp = self
             .send_retrying(|| {
@@ -631,12 +566,7 @@ impl RelayClient {
     /// sends more is refused before it is buffered). `Ok(None)` = the relay
     /// has no such blob (never uploaded, expired, deleted, or a relay
     /// without the channel).
-    pub async fn get_blob(
-        &self,
-        workspace: &str,
-        id: &str,
-        max_bytes: u64,
-    ) -> Result<Option<Vec<u8>>, RelayError> {
+    pub async fn get_blob(&self, workspace: &str, id: &str, max_bytes: u64) -> Result<Option<Vec<u8>>, RelayError> {
         use futures_util::StreamExt;
         let url = format!("{}/v1/workspaces/{}/blobs/{}", self.base, workspace, id);
         let resp = self.send_retrying(|| self.http.get(&url)).await?;
@@ -654,18 +584,14 @@ impl RelayClient {
             return Err(refusal(status, resp).await);
         }
         if resp.content_length().is_some_and(|n| n > max_bytes) {
-            return Err(RelayError::Message(
-                "the relay sent a larger blob than the attachment names".into(),
-            ));
+            return Err(RelayError::Message("the relay sent a larger blob than the attachment names".into()));
         }
         let mut out = Vec::new();
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
             if out.len() as u64 + chunk.len() as u64 > max_bytes {
-                return Err(RelayError::Message(
-                    "the relay sent a larger blob than the attachment names".into(),
-                ));
+                return Err(RelayError::Message("the relay sent a larger blob than the attachment names".into()));
             }
             out.extend_from_slice(&chunk);
         }
@@ -702,30 +628,18 @@ impl RelayClient {
             #[serde(default)]
             error: String,
         }
-        let url = format!(
-            "{}/v1/workspaces/{}/blobs/{}/retain",
-            self.base, workspace, id
-        );
-        let resp = self
-            .send_retrying(|| self.http.post(&url).timeout(self.request_timeout))
-            .await?;
+        let url = format!("{}/v1/workspaces/{}/blobs/{}/retain", self.base, workspace, id);
+        let resp = self.send_retrying(|| self.http.post(&url).timeout(self.request_timeout)).await?;
         let status = resp.status().as_u16();
         match status {
             200..=299 => {
                 let b: Body = resp.json().await?;
-                Ok(BlobRetained::Renewed {
-                    expires_at: b.expires_at,
-                })
+                Ok(BlobRetained::Renewed { expires_at: b.expires_at })
             }
             404 => {
                 let text = resp.text().await.unwrap_or_default();
-                let gone =
-                    serde_json::from_str::<Body>(&text).is_ok_and(|b| b.error == "blob_not_found");
-                Ok(if gone {
-                    BlobRetained::Gone
-                } else {
-                    BlobRetained::Unsupported
-                })
+                let gone = serde_json::from_str::<Body>(&text).is_ok_and(|b| b.error == "blob_not_found");
+                Ok(if gone { BlobRetained::Gone } else { BlobRetained::Unsupported })
             }
             405 => Ok(BlobRetained::Unsupported),
             401 | 403 => Err(RelayError::Unauthorized),
@@ -738,17 +652,10 @@ impl RelayClient {
     /// Never errors — maps every failure to a `RelayProbe` the UI can render.
     pub async fn probe(&self, workspace: &str) -> RelayProbe {
         // limit=1: a probe only needs the status, never the room's history.
-        let url = format!(
-            "{}/v1/workspaces/{}/envelopes?after=0&limit=1",
-            self.base, workspace
-        );
+        let url = format!("{}/v1/workspaces/{}/envelopes?after=0&limit=1", self.base, workspace);
         // Bounded like every envelope request, so a relay that accepts and
         // never answers can't hang `ligus doctor` or the settings check.
-        match self
-            .authed(self.http.get(url).timeout(self.request_timeout))
-            .send()
-            .await
-        {
+        match self.authed(self.http.get(url).timeout(self.request_timeout)).send().await {
             Ok(resp) => {
                 let code = resp.status().as_u16();
                 if resp.status().is_success() {
@@ -791,9 +698,7 @@ impl RelayClient {
             "{}/v1/workspaces/{}/envelopes?after={}&limit={}",
             self.base, workspace, after, limit
         );
-        let resp = self
-            .send_retrying(|| self.http.get(&url).timeout(self.request_timeout))
-            .await?;
+        let resp = self.send_retrying(|| self.http.get(&url).timeout(self.request_timeout)).await?;
         let header = |name: &str| {
             resp.headers()
                 .get(name)
@@ -801,8 +706,7 @@ impl RelayClient {
                 .map(str::trim)
                 .map(str::to_owned)
         };
-        let more =
-            header("x-hive-more").is_some_and(|v| v.eq_ignore_ascii_case("true") || v == "1");
+        let more = header("x-hive-more").is_some_and(|v| v.eq_ignore_ascii_case("true") || v == "1");
         let next_header = header("x-hive-next-after").and_then(|v| v.parse::<u64>().ok());
         let rows: Vec<serde_json::Value> = json_ok(resp).await?;
         // A row without a sequence, or at or below the one asked after, is
@@ -811,10 +715,7 @@ impl RelayClient {
         let rows: Vec<(u64, serde_json::Value)> = rows
             .into_iter()
             .filter_map(|row| {
-                let seq = row
-                    .get("seq")
-                    .and_then(serde_json::Value::as_u64)
-                    .filter(|&s| s > after)?;
+                let seq = row.get("seq").and_then(serde_json::Value::as_u64).filter(|&s| s > after)?;
                 let body = row.get("body").cloned().unwrap_or(serde_json::Value::Null);
                 Some((seq, body))
             })
@@ -826,11 +727,7 @@ impl RelayClient {
         // A page that claims "more" but can't move the cursor would loop
         // forever; treat it as caught up and let the next round retry.
         let more = more && next_after > after;
-        Ok(EnvelopePage {
-            rows,
-            more,
-            next_after,
-        })
+        Ok(EnvelopePage { rows, more, next_after })
     }
 
     /// Fetch raw opaque bodies past `after`, with their server sequences.
@@ -843,18 +740,11 @@ impl RelayClient {
             "{}/v1/workspaces/{}/envelopes?after={}",
             self.base, workspace, after
         );
-        let rows: Vec<serde_json::Value> = json_ok(
-            self.send_retrying(|| self.http.get(&url).timeout(self.request_timeout))
-                .await?,
-        )
-        .await?;
+        let rows: Vec<serde_json::Value> = json_ok(self.send_retrying(|| self.http.get(&url).timeout(self.request_timeout)).await?).await?;
         Ok(rows
             .into_iter()
             .map(|row| {
-                let seq = row
-                    .get("seq")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
+                let seq = row.get("seq").and_then(serde_json::Value::as_u64).unwrap_or(0);
                 let body = row.get("body").cloned().unwrap_or(serde_json::Value::Null);
                 (seq, body)
             })
@@ -871,17 +761,10 @@ impl RelayClient {
             "{}/v1/workspaces/{}/envelopes?after={}",
             self.base, workspace, after
         );
-        let rows: Vec<serde_json::Value> = json_ok(
-            self.send_retrying(|| self.http.get(&url).timeout(self.request_timeout))
-                .await?,
-        )
-        .await?;
+        let rows: Vec<serde_json::Value> = json_ok(self.send_retrying(|| self.http.get(&url).timeout(self.request_timeout)).await?).await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            let seq = row
-                .get("seq")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
+            let seq = row.get("seq").and_then(serde_json::Value::as_u64).unwrap_or(0);
             if let Some(body) = row.get("body") {
                 let envelope: SessionEventEnvelope = serde_json::from_value(body.clone())?;
                 out.push(FetchedEnvelope { seq, envelope });
@@ -987,19 +870,14 @@ impl RelayClient {
     ) -> Result<(String, u64), RelayError> {
         let url = format!("{}/v1/pair", self.base);
         let body = serde_json::json!({ "payload": payload, "ttl_secs": ttl_secs });
-        let resp = self
-            .send_retrying(|| self.http.post(&url).json(&body))
-            .await?;
+        let resp = self.send_retrying(|| self.http.post(&url).json(&body)).await?;
         let value: serde_json::Value = json_ok(resp).await?;
         let code = value
             .get("code")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_string();
-        let expires_in = value
-            .get("expires_in")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
+        let expires_in = value.get("expires_in").and_then(serde_json::Value::as_u64).unwrap_or(0);
         Ok((code, expires_in))
     }
 
@@ -1048,8 +926,7 @@ impl RelayClient {
         let body = serde_json::to_value(rotation)?;
         // A refusal (a full keyring) is an error; any other answer is
         // ignored as before (the config log carries the rotation either way).
-        self.send_retrying(|| self.http.post(&url).json(&body))
-            .await?;
+        self.send_retrying(|| self.http.post(&url).json(&body)).await?;
         Ok(())
     }
 
@@ -1059,15 +936,9 @@ impl RelayClient {
     /// the signed envelope, so the relay learns nothing about its author). A
     /// full keyring (507) is an error the caller may ignore: the config log
     /// carries the rotation either way.
-    pub async fn publish_keyring_row(
-        &self,
-        workspace: &str,
-        body: &serde_json::Value,
-    ) -> Result<(), RelayError> {
+    pub async fn publish_keyring_row(&self, workspace: &str, body: &serde_json::Value) -> Result<(), RelayError> {
         let url = format!("{}/v1/workspaces/{}/keyring", self.base, workspace);
-        let resp = self
-            .send_retrying(|| self.http.post(&url).json(body))
-            .await?;
+        let resp = self.send_retrying(|| self.http.post(&url).json(body)).await?;
         if !resp.status().is_success() {
             return Err(status_error(resp).await);
         }
@@ -1075,10 +946,7 @@ impl RelayClient {
     }
 
     /// Every raw row of a workspace's keyring route (opaque JSON).
-    pub async fn fetch_keyring_rows(
-        &self,
-        workspace: &str,
-    ) -> Result<Vec<serde_json::Value>, RelayError> {
+    pub async fn fetch_keyring_rows(&self, workspace: &str) -> Result<Vec<serde_json::Value>, RelayError> {
         let url = format!("{}/v1/workspaces/{}/keyring", self.base, workspace);
         json_ok(self.send_retrying(|| self.http.get(&url)).await?).await
     }
@@ -1089,11 +957,7 @@ impl RelayClient {
         workspace: &str,
     ) -> Result<Vec<ligus_core::e2ee::WorkspaceKeyRotation>, RelayError> {
         let url = format!("{}/v1/workspaces/{}/keyring", self.base, workspace);
-        let rows: Vec<serde_json::Value> = json_ok(
-            self.send_retrying(|| self.http.get(&url).timeout(self.request_timeout))
-                .await?,
-        )
-        .await?;
+        let rows: Vec<serde_json::Value> = json_ok(self.send_retrying(|| self.http.get(&url).timeout(self.request_timeout)).await?).await?;
         Ok(rows
             .into_iter()
             .filter_map(|v| serde_json::from_value(v).ok())
@@ -1117,10 +981,7 @@ impl RelayClient {
 
     /// List a workspace's members (membership-enforcing relays only). `Ok(None)`
     /// if the workspace is unmanaged or the relay doesn't support membership.
-    pub async fn list_members(
-        &self,
-        workspace: &str,
-    ) -> Result<Option<Vec<MemberEntry>>, RelayError> {
+    pub async fn list_members(&self, workspace: &str) -> Result<Option<Vec<MemberEntry>>, RelayError> {
         let url = format!("{}/v1/workspaces/{}/members", self.base, workspace);
         let resp = self.authed(self.http.get(url)).send().await?;
         if !resp.status().is_success() {
@@ -1139,11 +1000,7 @@ impl RelayClient {
         match resp.status().as_u16() {
             200..=299 => {
                 let members: Vec<MemberEntry> = resp.json().await?;
-                Ok(if members.is_empty() {
-                    RosterState::Unclaimed
-                } else {
-                    RosterState::Members(members)
-                })
+                Ok(if members.is_empty() { RosterState::Unclaimed } else { RosterState::Members(members) })
             }
             404 => Ok(RosterState::Unsupported),
             403 => Ok(RosterState::Hidden),
@@ -1173,10 +1030,7 @@ impl RelayClient {
     /// an Admin, the last Owner, membership off) is an error, so a caller never
     /// goes on to rotate as if the relay had removed them.
     pub async fn remove_member(&self, workspace: &str, account: &str) -> Result<(), RelayError> {
-        let url = format!(
-            "{}/v1/workspaces/{}/members/{}",
-            self.base, workspace, account
-        );
+        let url = format!("{}/v1/workspaces/{}/members/{}", self.base, workspace, account);
         let resp = self.authed(self.http.delete(url)).send().await?;
         if !resp.status().is_success() {
             return Err(roster_error(resp).await);
@@ -1209,10 +1063,7 @@ impl RelayClient {
 
     /// List a workspace's invites (metadata only; never the codes). `Ok(None)`
     /// if unsupported or unauthorized.
-    pub async fn list_invites(
-        &self,
-        workspace: &str,
-    ) -> Result<Option<Vec<InviteEntry>>, RelayError> {
+    pub async fn list_invites(&self, workspace: &str) -> Result<Option<Vec<InviteEntry>>, RelayError> {
         let url = format!("{}/v1/workspaces/{}/invites", self.base, workspace);
         let resp = self.authed(self.http.get(url)).send().await?;
         if !resp.status().is_success() {
@@ -1223,10 +1074,7 @@ impl RelayClient {
 
     /// Revoke an invite by id (caller must be `Admin`+).
     pub async fn revoke_invite(&self, workspace: &str, invite_id: &str) -> Result<(), RelayError> {
-        let url = format!(
-            "{}/v1/workspaces/{}/invites/{}",
-            self.base, workspace, invite_id
-        );
+        let url = format!("{}/v1/workspaces/{}/invites/{}", self.base, workspace, invite_id);
         let resp = self.authed(self.http.delete(url)).send().await?;
         if !resp.status().is_success() {
             return Err(roster_error(resp).await);
@@ -1293,10 +1141,7 @@ mod tests {
         // Leading/trailing whitespace trimmed.
         assert_eq!(normalize_access_token("  bob:tok  "), "tok");
         // A mispasted URL is not treated as name:token (rest has '/').
-        assert_eq!(
-            normalize_access_token("https://relay.example"),
-            "https://relay.example"
-        );
+        assert_eq!(normalize_access_token("https://relay.example"), "https://relay.example");
     }
 
     /// Final review (area B): rows with no sequence, a zero one or one at
@@ -1311,10 +1156,7 @@ mod tests {
         tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let c = RelayClient::new(format!("http://{addr}"));
         let page = c.fetch_page("ws", 3, 10).await.unwrap();
-        assert_eq!(
-            page.rows.iter().map(|(s, _)| *s).collect::<Vec<_>>(),
-            vec![5]
-        );
+        assert_eq!(page.rows.iter().map(|(s, _)| *s).collect::<Vec<_>>(), vec![5]);
         assert_eq!(page.next_after, 5);
     }
 
@@ -1331,15 +1173,9 @@ mod tests {
                 conns.push(c);
             }
         });
-        let c = RelayClient::new(format!("http://{addr}"))
-            .with_request_timeout(std::time::Duration::from_millis(300));
-        let r = tokio::time::timeout(std::time::Duration::from_secs(5), c.fetch_page("ws", 0, 10))
-            .await;
-        assert!(
-            matches!(r, Ok(Err(_))),
-            "a stalled relay hung the fetch: {:?}",
-            r.map(|x| x.map(|p| p.rows.len()))
-        );
+        let c = RelayClient::new(format!("http://{addr}")).with_request_timeout(std::time::Duration::from_millis(300));
+        let r = tokio::time::timeout(std::time::Duration::from_secs(5), c.fetch_page("ws", 0, 10)).await;
+        assert!(matches!(r, Ok(Err(_))), "a stalled relay hung the fetch: {:?}", r.map(|x| x.map(|p| p.rows.len())));
         held.abort();
     }
 
@@ -1356,13 +1192,9 @@ mod tests {
                 conns.push(c);
             }
         });
-        let c = RelayClient::new(format!("http://{addr}"))
-            .with_request_timeout(std::time::Duration::from_millis(300));
+        let c = RelayClient::new(format!("http://{addr}")).with_request_timeout(std::time::Duration::from_millis(300));
         let r = tokio::time::timeout(std::time::Duration::from_secs(5), c.probe("ws")).await;
-        assert!(
-            matches!(r, Ok(RelayProbe::Unreachable(_))),
-            "a stalled relay hung the probe"
-        );
+        assert!(matches!(r, Ok(RelayProbe::Unreachable(_))), "a stalled relay hung the probe");
         held.abort();
     }
 
@@ -1370,9 +1202,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            axum::serve(listener, crate::test_relay::router())
-                .await
-                .unwrap();
+            axum::serve(listener, crate::test_relay::router()).await.unwrap();
         });
         format!("http://{addr}")
     }
@@ -1392,16 +1222,9 @@ mod tests {
                 let headers = req
                     .headers()
                     .iter()
-                    .map(|(k, v)| {
-                        (
-                            k.as_str().to_ascii_lowercase(),
-                            v.to_str().unwrap_or("").to_string(),
-                        )
-                    })
+                    .map(|(k, v)| (k.as_str().to_ascii_lowercase(), v.to_str().unwrap_or("").to_string()))
                     .collect();
-                rec.lock()
-                    .unwrap()
-                    .push((format!("{} {}", req.method(), req.uri().path()), headers));
+                rec.lock().unwrap().push((format!("{} {}", req.method(), req.uri().path()), headers));
                 axum::Json(serde_json::json!([]))
             }
         });
@@ -1414,9 +1237,7 @@ mod tests {
             Uuid::new_v4(),
             Uuid::new_v4(),
             1,
-            SessionEvent::MessageAppended {
-                message: ChatMessage::new(MessageRole::User, "A", "hi"),
-            },
+            SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "A", "hi") },
         );
         let _ = c.push(&ws, &env).await;
         let _ = c.fetch_page(&ws, 0, 10).await;
@@ -1444,41 +1265,22 @@ mod tests {
         let _ = c.open_event_stream(&ws).await;
         let cid = crate::contacts::new_cid();
         let key = crate::contacts::new_write_key();
-        let _ = c
-            .contact_put(&cid, &key, &serde_json::json!({}), true)
-            .await;
+        let _ = c.contact_put(&cid, &key, &serde_json::json!({}), true).await;
         let _ = c.contact_get(&cid).await;
         let _ = c.contact_drop(&cid, &serde_json::json!({})).await;
         let _ = c.contact_drops(&cid, &key, 0).await;
         let _ = c.contact_drops_ack(&cid, &key, 1).await;
         let _ = c.contact_delete(&cid, &key).await;
         let seen = seen.lock().unwrap();
-        assert!(
-            seen.len() >= 27,
-            "every call reached the recorder ({})",
-            seen.len()
-        );
+        assert!(seen.len() >= 27, "every call reached the recorder ({})", seen.len());
         for (route, headers) in seen.iter() {
             for (name, value) in headers {
                 assert!(
-                    ![
-                        "github",
-                        "gitlab",
-                        "gitea",
-                        "forgejo",
-                        "forge-token",
-                        "codeberg",
-                        "srht"
-                    ]
-                    .iter()
-                    .any(|f| name.contains(f)),
+                    !["github", "gitlab", "gitea", "forgejo", "forge-token", "codeberg", "srht"].iter().any(|f| name.contains(f)),
                     "{route} sent a forge header {name}"
                 );
                 if name == "authorization" {
-                    assert_eq!(
-                        value, "Bearer relay-bearer-1",
-                        "{route}: only the relay bearer"
-                    );
+                    assert_eq!(value, "Bearer relay-bearer-1", "{route}: only the relay bearer");
                 }
             }
         }
@@ -1506,35 +1308,12 @@ mod tests {
             let code = status.as_u16();
             let carries = |what: &str, e: RelayError| {
                 let msg = e.to_string();
-                assert!(
-                    msg.contains(&code.to_string()) && msg.contains(reason),
-                    "{what} on {code}: {msg}"
-                );
+                assert!(msg.contains(&code.to_string()) && msg.contains(reason), "{what} on {code}: {msg}");
             };
-            carries(
-                "remove_member",
-                c.remove_member(&ws, "ligus:a")
-                    .await
-                    .expect_err("remove_member refused"),
-            );
-            carries(
-                "upsert_member",
-                c.upsert_member(&ws, "ligus:a", "A", "viewer")
-                    .await
-                    .expect_err("upsert_member refused"),
-            );
-            carries(
-                "revoke_invite",
-                c.revoke_invite(&ws, "i")
-                    .await
-                    .expect_err("revoke_invite refused"),
-            );
-            carries(
-                "create_invite",
-                c.create_invite(&ws, "viewer", 60, 1)
-                    .await
-                    .expect_err("create_invite refused"),
-            );
+            carries("remove_member", c.remove_member(&ws, "ligus:a").await.expect_err("remove_member refused"));
+            carries("upsert_member", c.upsert_member(&ws, "ligus:a", "A", "viewer").await.expect_err("upsert_member refused"));
+            carries("revoke_invite", c.revoke_invite(&ws, "i").await.expect_err("revoke_invite refused"));
+            carries("create_invite", c.create_invite(&ws, "viewer", 60, 1).await.expect_err("create_invite refused"));
             match c.claim_membership(&ws).await {
                 // 409 is "already claimed", a normal answer.
                 Ok(false) if code == 409 => {}
@@ -1553,19 +1332,14 @@ mod tests {
     /// A relay without membership (404) is still "unsupported", not an error.
     #[tokio::test]
     async fn roster_helpers_treat_404_as_unsupported() {
-        let router = axum::Router::new()
-            .fallback(|| async { (axum::http::StatusCode::NOT_FOUND, "404 page not found") });
+        let router = axum::Router::new().fallback(|| async { (axum::http::StatusCode::NOT_FOUND, "404 page not found") });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let c = RelayClient::new(format!("http://{addr}"));
         let ws = Uuid::new_v4().to_string();
         assert!(!c.claim_membership(&ws).await.unwrap());
-        assert!(c
-            .create_invite(&ws, "viewer", 60, 1)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(c.create_invite(&ws, "viewer", 60, 1).await.unwrap().is_none());
         assert!(c.join_via_invite(&ws, "code", "").await.unwrap().is_none());
         assert!(c.list_members(&ws).await.unwrap().is_none());
     }
@@ -1576,29 +1350,19 @@ mod tests {
     #[tokio::test]
     async fn roster_401_without_identity_explains_the_fix() {
         use axum::http::StatusCode;
-        for (body, unidentified) in [
-            ("requires an identified access token", true),
-            ("relay requires a valid access token", false),
-        ] {
-            let router = axum::Router::new()
-                .fallback(move || async move { (StatusCode::UNAUTHORIZED, body) });
+        for (body, unidentified) in [("requires an identified access token", true), ("relay requires a valid access token", false)] {
+            let router = axum::Router::new().fallback(move || async move { (StatusCode::UNAUTHORIZED, body) });
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr = listener.local_addr().unwrap();
             tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
             let c = RelayClient::new(format!("http://{addr}"));
             let ws = Uuid::new_v4().to_string();
-            let e = c
-                .claim_membership(&ws)
-                .await
-                .expect_err("a 401 claim is an error");
+            let e = c.claim_membership(&ws).await.expect_err("a 401 claim is an error");
             let msg = e.to_string();
             assert!(!msg.contains("HTTP 401"), "no raw HTTP text: {msg}");
             if unidentified {
                 assert_eq!(msg, UNIDENTIFIED_ROSTER_MESSAGE);
-                let e = c
-                    .upsert_member(&ws, "ligus:a", "A", "viewer")
-                    .await
-                    .expect_err("refused");
+                let e = c.upsert_member(&ws, "ligus:a", "A", "viewer").await.expect_err("refused");
                 assert_eq!(e.to_string(), UNIDENTIFIED_ROSTER_MESSAGE);
             } else {
                 assert!(matches!(e, RelayError::Unauthorized), "{msg}");
@@ -1617,10 +1381,7 @@ mod tests {
                 match case {
                     "off" => (StatusCode::NOT_FOUND, "404 page not found").into_response(),
                     "unclaimed" => axum::Json(serde_json::json!([])).into_response(),
-                    "claimed" => axum::Json(
-                        serde_json::json!([{"account": "ligus:a", "login": "", "role": "owner"}]),
-                    )
-                    .into_response(),
+                    "claimed" => axum::Json(serde_json::json!([{"account": "ligus:a", "login": "", "role": "owner"}])).into_response(),
                     _ => (StatusCode::FORBIDDEN, "forbidden").into_response(),
                 }
             });
@@ -1630,9 +1391,7 @@ mod tests {
             let c = RelayClient::new(format!("http://{addr}"));
             let got = c.roster_state(&Uuid::new_v4().to_string()).await.unwrap();
             let ok = match (case, &got) {
-                ("off", RosterState::Unsupported)
-                | ("unclaimed", RosterState::Unclaimed)
-                | ("hidden", RosterState::Hidden) => true,
+                ("off", RosterState::Unsupported) | ("unclaimed", RosterState::Unclaimed) | ("hidden", RosterState::Hidden) => true,
                 ("claimed", RosterState::Members(m)) => m.len() == 1 && m[0].role == "owner",
                 _ => false,
             };
@@ -1644,38 +1403,15 @@ mod tests {
     fn token_subject_reads_only_an_unexpired_named_hrt1() {
         use base64::Engine;
         let tok = |claims: serde_json::Value| {
-            let b = base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .encode(serde_json::to_vec(&claims).unwrap());
+            let b = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
             format!("hrt1.{b}.c2ln")
         };
         let now = 1_000;
-        assert_eq!(
-            token_subject(&tok(serde_json::json!({"sub": "ligus:a", "exp": 0})), now).as_deref(),
-            Some("ligus:a")
-        );
-        assert_eq!(
-            token_subject(
-                &tok(serde_json::json!({"sub": "ligus:a", "exp": 2_000})),
-                now
-            )
-            .as_deref(),
-            Some("ligus:a")
-        );
-        assert_eq!(
-            token_subject(&tok(serde_json::json!({"sub": "ligus:a", "exp": 999})), now),
-            None,
-            "expired"
-        );
-        assert_eq!(
-            token_subject(&tok(serde_json::json!({"sub": "  ", "exp": 0})), now),
-            None,
-            "blank subject"
-        );
-        assert_eq!(
-            token_subject(&tok(serde_json::json!({"plan": "free"})), now),
-            None,
-            "no subject"
-        );
+        assert_eq!(token_subject(&tok(serde_json::json!({"sub": "ligus:a", "exp": 0})), now).as_deref(), Some("ligus:a"));
+        assert_eq!(token_subject(&tok(serde_json::json!({"sub": "ligus:a", "exp": 2_000})), now).as_deref(), Some("ligus:a"));
+        assert_eq!(token_subject(&tok(serde_json::json!({"sub": "ligus:a", "exp": 999})), now), None, "expired");
+        assert_eq!(token_subject(&tok(serde_json::json!({"sub": "  ", "exp": 0})), now), None, "blank subject");
+        assert_eq!(token_subject(&tok(serde_json::json!({"plan": "free"})), now), None, "no subject");
         assert_eq!(token_subject("an-opaque-allowlist-token", now), None);
         assert_eq!(token_subject("hrt1.not-base64!.sig", now), None);
         assert_eq!(token_subject("hrt1.a.b.c", now), None);
@@ -1768,11 +1504,7 @@ mod tests {
     #[tokio::test]
     async fn a_relayless_client_names_the_url_problem() {
         for base in ["", "relay.example", "ftp://relay.example"] {
-            let err = RelayClient::new(base)
-                .fetch_keyring_rows("w")
-                .await
-                .unwrap_err()
-                .to_string();
+            let err = RelayClient::new(base).fetch_keyring_rows("w").await.unwrap_err().to_string();
             assert!(err.contains("relay URL"), "{base:?}: {err}");
         }
     }

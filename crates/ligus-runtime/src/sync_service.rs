@@ -24,10 +24,7 @@ use crate::event_store::EventStore;
 use crate::sync_engine::{SyncEngine, SyncError};
 
 /// One push + pull round: (pushed, pulled).
-pub async fn sync_round(
-    engine: &mut SyncEngine,
-    store: &mut EventStore,
-) -> Result<(usize, usize), SyncError> {
+pub async fn sync_round(engine: &mut SyncEngine, store: &mut EventStore) -> Result<(usize, usize), SyncError> {
     let to_push = engine.take_unpushed(store)?;
     let pushed = to_push.len();
     engine.push_envelopes(&to_push).await?;
@@ -50,11 +47,7 @@ pub struct RoundReport {
 
 /// [`sync_round`], then publish every session the pull changed to `feed` as
 /// [`ChangeOrigin::Synced`].
-pub async fn sync_round_notify(
-    engine: &mut SyncEngine,
-    store: &mut EventStore,
-    feed: &ChangeFeed,
-) -> Result<RoundReport, SyncError> {
+pub async fn sync_round_notify(engine: &mut SyncEngine, store: &mut EventStore, feed: &ChangeFeed) -> Result<RoundReport, SyncError> {
     let before = store.max_row_id()?;
     let (pushed, pulled) = sync_round(engine, store).await?;
     let mut changed = Vec::new();
@@ -68,11 +61,7 @@ pub async fn sync_round_notify(
             changed.push((sid, ws));
         }
     }
-    Ok(RoundReport {
-        pushed,
-        pulled,
-        changed,
-    })
+    Ok(RoundReport { pushed, pulled, changed })
 }
 
 /// What the loop reports after each round.
@@ -99,11 +88,7 @@ pub struct SyncLoop {
 
 impl SyncLoop {
     /// Run until `stop` fires, calling `status` after each round.
-    pub async fn run(
-        mut self,
-        mut stop: tokio::sync::watch::Receiver<bool>,
-        mut status: impl FnMut(SyncStatus) + Send,
-    ) {
+    pub async fn run(mut self, mut stop: tokio::sync::watch::Receiver<bool>, mut status: impl FnMut(SyncStatus) + Send) {
         let mut local = self.feed.subscribe();
         let mut sse = None;
         loop {
@@ -161,10 +146,7 @@ pub struct ApplyTick {
 impl ApplyTick {
     /// The requests that got an outcome, as `(request, outcome)`.
     pub fn outcomes(&self) -> Vec<(Uuid, crate::apply_host::Outcome)> {
-        self.results
-            .iter()
-            .filter_map(|(r, _, o)| o.as_ref().ok().map(|o| (*r, o.clone())))
-            .collect()
+        self.results.iter().filter_map(|(r, _, o)| o.as_ref().ok().map(|o| (*r, o.clone()))).collect()
     }
 }
 
@@ -204,20 +186,10 @@ pub fn apply_tick(
         // A proposal with a repo applies only in this host's checkout of that
         // repo (apply_host::checkout_for); one without, in the legacy
         // binding `repo_for` resolves.
-        let legacy = if job.proposal.repo_id.is_none() {
-            repo_for(job.chat_id)
-        } else {
-            None
-        };
-        let repo = crate::apply_host::checkout_for(
-            &crate::apply_host::Pinned::new(svc, job.founder.as_deref()),
-            &job,
-            legacy,
-        );
-        let outcome =
-            crate::apply_host::fulfil(svc, &job, repo.as_deref()).map_err(|e| e.to_string());
-        tick.results
-            .push((job.request.id, job.proposal.id, outcome));
+        let legacy = if job.proposal.repo_id.is_none() { repo_for(job.chat_id) } else { None };
+        let repo = crate::apply_host::checkout_for(&crate::apply_host::Pinned::new(svc, job.founder.as_deref()), &job, legacy);
+        let outcome = crate::apply_host::fulfil(svc, &job, repo.as_deref()).map_err(|e| e.to_string());
+        tick.results.push((job.request.id, job.proposal.id, outcome));
     }
     tick
 }
@@ -226,44 +198,21 @@ pub fn apply_tick(
 mod tests {
     use super::*;
     use crate::relay_client::RelayClient;
-    use ligus_core::{
-        ActorIdentity, ActorKind, ChatMessage, ChatSession, MessageRole, SessionEvent,
-        SessionEventEnvelope, SigningKeypair,
-    };
+    use ligus_core::{ActorIdentity, ActorKind, ChatMessage, ChatSession, MessageRole, SessionEvent, SessionEventEnvelope, SigningKeypair};
 
     async fn spawn_relay() -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, crate::test_relay::router())
-                .await
-                .unwrap()
-        });
+        tokio::spawn(async move { axum::serve(listener, crate::test_relay::router()).await.unwrap() });
         format!("http://{addr}")
     }
 
     fn seed(store: &mut EventStore, wid: Uuid) -> Uuid {
         let session = ChatSession::new("Chat", wid, "rt");
         let sid = session.id;
-        store
-            .ingest_next(&SessionEventEnvelope::new(
-                sid,
-                wid,
-                1,
-                SessionEvent::SessionSnapshot {
-                    session: Box::new(session),
-                },
-            ))
-            .unwrap();
+        store.ingest_next(&SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(session) })).unwrap();
         let message = ChatMessage::new(MessageRole::User, "Alex", "hello");
-        store
-            .ingest_next(&SessionEventEnvelope::new(
-                sid,
-                wid,
-                2,
-                SessionEvent::MessageAppended { message },
-            ))
-            .unwrap();
+        store.ingest_next(&SessionEventEnvelope::new(sid, wid, 2, SessionEvent::MessageAppended { message })).unwrap();
         sid
     }
 
@@ -293,14 +242,8 @@ mod tests {
         assert_eq!((r.pushed, r.pulled), (0, 2));
         assert_eq!(r.changed, vec![(sid, wid)]);
         let c = rx_b.try_recv().unwrap();
-        assert_eq!(
-            (c.session_id, c.workspace_id, c.origin, c.event.is_none()),
-            (sid, wid, ChangeOrigin::Synced, true)
-        );
-        assert_eq!(
-            sync_round_notify(&mut eb, &mut b, &feed_b).await.unwrap(),
-            RoundReport::default()
-        );
+        assert_eq!((c.session_id, c.workspace_id, c.origin, c.event.is_none()), (sid, wid, ChangeOrigin::Synced, true));
+        assert_eq!(sync_round_notify(&mut eb, &mut b, &feed_b).await.unwrap(), RoundReport::default());
         assert!(rx_b.try_recv().is_err());
         // The plain round is the same push + pull.
         assert_eq!(sync_round(&mut eb, &mut b).await.unwrap(), (0, 0));
@@ -314,14 +257,8 @@ mod tests {
     async fn a_foreign_event_through_another_room_never_reports_the_chat() {
         let base = spawn_relay().await;
         let (room_a, room_b) = ("room-ws-log-a", "room-ws-log-b");
-        let (wa, wb) = (
-            ligus_core::room_workspace_id(room_a),
-            ligus_core::room_workspace_id(room_b),
-        );
-        let (ka, kb) = (
-            ligus_core::derive_workspace_key("ws log a"),
-            ligus_core::derive_workspace_key("ws log b"),
-        );
+        let (wa, wb) = (ligus_core::room_workspace_id(room_a), ligus_core::room_workspace_id(room_b));
+        let (ka, kb) = (ligus_core::derive_workspace_key("ws log a"), ligus_core::derive_workspace_key("ws log b"));
 
         let mut a = EventStore::open_in_memory().unwrap();
         let sid = seed(&mut a, wa);
@@ -332,23 +269,9 @@ mod tests {
         let mut m = EventStore::open_in_memory().unwrap();
         let mut forged = ChatSession::new("Forged", wb, "rt");
         forged.id = sid;
-        m.ingest_next(&SessionEventEnvelope::new(
-            sid,
-            wb,
-            1,
-            SessionEvent::SessionSnapshot {
-                session: Box::new(forged),
-            },
-        ))
-        .unwrap();
+        m.ingest_next(&SessionEventEnvelope::new(sid, wb, 1, SessionEvent::SessionSnapshot { session: Box::new(forged) })).unwrap();
         let message = ChatMessage::new(MessageRole::User, "Mallory", "forged");
-        m.ingest_next(&SessionEventEnvelope::new(
-            sid,
-            wb,
-            2,
-            SessionEvent::MessageAppended { message },
-        ))
-        .unwrap();
+        m.ingest_next(&SessionEventEnvelope::new(sid, wb, 2, SessionEvent::MessageAppended { message })).unwrap();
         let mut em = SyncEngine::new(RelayClient::new(&base), room_b).with_key(kb);
         sync_round(&mut em, &mut m).await.unwrap();
 
@@ -368,40 +291,19 @@ mod tests {
                 reports.push((room, r.changed));
             }
             for (room, changed) in &reports {
-                let want = if *room == 0 {
-                    vec![(sid, wa)]
-                } else {
-                    vec![(sid, wb)]
-                };
+                let want = if *room == 0 { vec![(sid, wa)] } else { vec![(sid, wb)] };
                 assert_eq!(changed, &want, "b_first={b_first} room={room}");
             }
             let mut seen = Vec::new();
             while let Ok(c) = rx.try_recv() {
                 seen.push((c.session_id, c.workspace_id));
             }
-            assert_eq!(
-                seen.iter().filter(|c| **c == (sid, wa)).count(),
-                1,
-                "the chat is reported once, by its own room"
-            );
+            assert_eq!(seen.iter().filter(|c| **c == (sid, wa)).count(), 1, "the chat is reported once, by its own room");
             let chat = v.load_session_in(wa, sid).unwrap().unwrap();
             assert_eq!(chat.workspace_id, wa);
-            assert_eq!(
-                chat.messages
-                    .iter()
-                    .map(|m| m.body.as_str())
-                    .collect::<Vec<_>>(),
-                vec!["hello"]
-            );
+            assert_eq!(chat.messages.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(), vec!["hello"]);
             let other = v.load_session_in(wb, sid).unwrap().unwrap();
-            assert_eq!(
-                other
-                    .messages
-                    .iter()
-                    .map(|m| m.body.as_str())
-                    .collect::<Vec<_>>(),
-                vec!["forged"]
-            );
+            assert_eq!(other.messages.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(), vec!["forged"]);
         }
     }
 
@@ -425,15 +327,9 @@ mod tests {
             let _ = tx.send(s);
         }));
         assert!(matches!(seen.recv().await, Some(SyncStatus::Synced(_))));
-        assert!(
-            matches!(seen.recv().await, Some(SyncStatus::Synced(_))),
-            "and again on the timer"
-        );
+        assert!(matches!(seen.recv().await, Some(SyncStatus::Synced(_))), "and again on the timer");
         stop.send(true).unwrap();
-        tokio::time::timeout(Duration::from_secs(5), task)
-            .await
-            .unwrap()
-            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap();
     }
 
     /// A device that can't write applies nothing; with no request naming it,
@@ -450,22 +346,11 @@ mod tests {
         let svc = Mutex::new(svc);
         let ws = Uuid::new_v4();
         let tick = apply_tick(&svc, ws, None, &|_| None);
-        assert!(
-            tick.listing_error.is_none() && tick.results.is_empty() && tick.outcomes().is_empty()
-        );
+        assert!(tick.listing_error.is_none() && tick.results.is_empty() && tick.outcomes().is_empty());
         // The tick works under the pin it was given and puts the service's back.
-        svc.lock()
-            .unwrap()
-            .set_trusted_founder(Some("other-workspace-founder".into()));
-        assert!(
-            apply_tick(&svc, ws, Some("this-workspace-founder"), &|_| None)
-                .results
-                .is_empty()
-        );
-        assert_eq!(
-            svc.lock().unwrap().trusted_founder(),
-            Some("other-workspace-founder")
-        );
+        svc.lock().unwrap().set_trusted_founder(Some("other-workspace-founder".into()));
+        assert!(apply_tick(&svc, ws, Some("this-workspace-founder"), &|_| None).results.is_empty());
+        assert_eq!(svc.lock().unwrap().trusted_founder(), Some("other-workspace-founder"));
         svc.lock().unwrap().set_write_block(Some("revoked".into()));
         assert!(apply_tick(&svc, ws, None, &|_| None).results.is_empty());
     }

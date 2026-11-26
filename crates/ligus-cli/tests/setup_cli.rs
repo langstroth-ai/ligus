@@ -15,29 +15,15 @@ struct Box_ {
 fn fresh() -> Box_ {
     let home = tempfile::tempdir().unwrap();
     let data = home.path().join("data");
-    Box_ {
-        data,
-        home: home.path().to_path_buf(),
-        _home: home,
-    }
+    Box_ { data, home: home.path().to_path_buf(), _home: home }
 }
 
 /// A clean environment that still runs on every OS: Windows needs its
 /// system variables (Winsock can't load its providers without `SystemRoot`,
 /// so every socket fails), the rest only `PATH`.
 fn clean_env(c: &mut Command) -> &mut Command {
-    c.env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default());
-    for k in [
-        "SystemRoot",
-        "SYSTEMROOT",
-        "windir",
-        "SystemDrive",
-        "TEMP",
-        "TMP",
-        "ComSpec",
-        "PATHEXT",
-    ] {
+    c.env_clear().env("PATH", std::env::var("PATH").unwrap_or_default());
+    for k in ["SystemRoot", "SYSTEMROOT", "windir", "SystemDrive", "TEMP", "TMP", "ComSpec", "PATHEXT"] {
         if let Ok(v) = std::env::var(k) {
             c.env(k, v);
         }
@@ -68,12 +54,7 @@ fn ligus(b: &Box_, args: &[&str], stdin: Option<&str>) -> Output {
 
 fn doc(o: &Output) -> Value {
     let out = String::from_utf8_lossy(&o.stdout);
-    serde_json::from_str(out.trim()).unwrap_or_else(|e| {
-        panic!(
-            "not one JSON document ({e}): {out}\nstderr: {}",
-            String::from_utf8_lossy(&o.stderr)
-        )
-    })
+    serde_json::from_str(out.trim()).unwrap_or_else(|e| panic!("not one JSON document ({e}): {out}\nstderr: {}", String::from_utf8_lossy(&o.stderr)))
 }
 
 fn code(o: &Output) -> i32 {
@@ -92,24 +73,8 @@ fn the_list_is_one_checks_report_of_seven_flows() {
     let d = doc(&o);
     assert_eq!(d["schema"], "ligus.checks.v1");
     assert_eq!(d["command"], "setup");
-    let ids: Vec<&str> = d["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        ids,
-        [
-            "agent.status",
-            "tool.status",
-            "folder.status",
-            "box.status",
-            "phone.status",
-            "invite.status",
-            "relay.status"
-        ]
-    );
+    let ids: Vec<&str> = d["checks"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["agent.status", "tool.status", "folder.status", "box.status", "phone.status", "invite.status", "relay.status"]);
     let text = ligus(&b, &["setup"], None);
     assert_eq!(code(&text), 0);
     assert!(String::from_utf8_lossy(&text.stdout).contains("Set up an agent"));
@@ -124,42 +89,14 @@ fn usage_errors_exit_2_with_the_flag_named() {
     assert_eq!(code(&o), 2);
     assert_eq!(doc(&o)["schema"], "ligus.error.v1");
     // A reserved name: the engine's check, in the flow's report.
-    let o = ligus(
-        &b,
-        &[
-            "setup",
-            "agent",
-            "--harness",
-            "local",
-            "--model",
-            "m",
-            "--name",
-            "ligus",
-            "--endpoint",
-            "http://localhost:9",
-            "--json",
-        ],
-        None,
-    );
+    let o = ligus(&b, &["setup", "agent", "--harness", "local", "--model", "m", "--name", "ligus", "--endpoint", "http://localhost:9", "--json"], None);
     assert_eq!(code(&o), 2, "{}", String::from_utf8_lossy(&o.stdout));
     let d = doc(&o);
     assert_eq!(d["command"], "setup agent");
     assert_eq!(d["exitCode"], 2);
     assert_eq!(check(&d, "agent.input.name").unwrap()["status"], "fail");
     // Plain http to another host is refused.
-    let o = ligus(
-        &b,
-        &[
-            "setup",
-            "relay",
-            "--kind",
-            "own",
-            "--url",
-            "http://relay.example.com",
-            "--json",
-        ],
-        None,
-    );
+    let o = ligus(&b, &["setup", "relay", "--kind", "own", "--url", "http://relay.example.com", "--json"], None);
     assert_eq!(code(&o), 2);
     assert!(check(&doc(&o), "relay.input.url").is_some());
 }
@@ -168,23 +105,13 @@ fn usage_errors_exit_2_with_the_flag_named() {
 fn a_secret_on_the_command_line_is_refused_and_never_echoed() {
     let b = fresh();
     for args in [
-        &[
-            "setup",
-            "relay",
-            "--token",
-            "hrt1-canary-0123456789",
-            "--json",
-        ][..],
+        &["setup", "relay", "--token", "hrt1-canary-0123456789", "--json"][..],
         &["setup", "relay", "--token=hrt1-canary-0123456789", "--json"][..],
         &["setup", "box", "--code", "hrt1-canary-0123456789"][..],
     ] {
         let o = ligus(&b, args, None);
         assert_eq!(code(&o), 2, "{args:?}");
-        let all = format!(
-            "{}{}",
-            String::from_utf8_lossy(&o.stdout),
-            String::from_utf8_lossy(&o.stderr)
-        );
+        let all = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
         assert!(!all.contains("hrt1-canary-0123456789"), "{all}");
     }
 }
@@ -200,15 +127,8 @@ fn person_steps_exit_4_and_never_print_their_secret() {
     let d = doc(&o);
     match code(&o) {
         4 => {
-            assert!(d["results"]["joinRequest"]
-                .as_str()
-                .unwrap()
-                .starts_with("ligusjoin1:"));
-            assert!(d["next"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|n| n.as_str().unwrap().contains("--code -")));
+            assert!(d["results"]["joinRequest"].as_str().unwrap().starts_with("ligusjoin1:"));
+            assert!(d["next"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("--code -")));
         }
         3 => assert_eq!(check(&d, "box.sandbox").unwrap()["status"], "fail"),
         c => panic!("exit {c}: {d}"),
@@ -218,20 +138,7 @@ fn person_steps_exit_4_and_never_print_their_secret() {
 #[test]
 fn dry_run_writes_no_server() {
     let b = fresh();
-    let o = ligus(
-        &b,
-        &[
-            "setup",
-            "tool",
-            "--id",
-            "notes",
-            "--command",
-            "/bin/echo hi",
-            "--dry-run",
-            "--json",
-        ],
-        None,
-    );
+    let o = ligus(&b, &["setup", "tool", "--id", "notes", "--command", "/bin/echo hi", "--dry-run", "--json"], None);
     let d = doc(&o);
     assert!(matches!(code(&o), 0 | 3), "{d}");
     assert_eq!(d["dryRun"], true);
@@ -256,19 +163,13 @@ fn the_access_token_never_goes_to_another_relay() {
             match listener.accept() {
                 Ok((mut s, _)) => {
                     s.set_nonblocking(false).unwrap();
-                    s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                        .unwrap();
+                    s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
                     let mut buf = [0u8; 8192];
                     let n = s.read(&mut buf).unwrap_or(0);
-                    let _ = s.write_all(
-                        b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-                    );
+                    let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
                     return Some(String::from_utf8_lossy(&buf[..n]).into_owned());
                 }
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        && std::time::Instant::now() < deadline =>
-                {
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
                 Err(_) => return None,
@@ -279,16 +180,7 @@ fn the_access_token_never_goes_to_another_relay() {
     let url = format!("http://127.0.0.1:{port}");
     let mut c = Command::new(env!("CARGO_BIN_EXE_ligus"));
     clean_env(&mut c)
-        .args([
-            "setup",
-            "relay",
-            "--kind",
-            "own",
-            "--url",
-            &url,
-            "--dry-run",
-            "--json",
-        ])
+        .args(["setup", "relay", "--kind", "own", "--url", &url, "--dry-run", "--json"])
         .env("HOME", &b.home)
         .env("LIGUS_DATA_DIR", &b.data)
         .env("LIGUS_SECRET_BACKEND", "file")
@@ -303,15 +195,8 @@ fn the_access_token_never_goes_to_another_relay() {
             String::from_utf8_lossy(&o.stderr)
         );
     };
-    assert!(
-        request.starts_with("GET "),
-        "the relay was probed: {request:?} / {}",
-        String::from_utf8_lossy(&o.stdout)
-    );
-    assert!(
-        !request.contains("hrt1CANARYOLDRELAY"),
-        "the token went to another relay: {request}"
-    );
+    assert!(request.starts_with("GET "), "the relay was probed: {request:?} / {}", String::from_utf8_lossy(&o.stdout));
+    assert!(!request.contains("hrt1CANARYOLDRELAY"), "the token went to another relay: {request}");
 }
 
 #[test]
@@ -319,10 +204,6 @@ fn a_stray_argument_is_never_echoed() {
     let b = fresh();
     let o = ligus(&b, &["setup", "box", "ligusadmit1:CANARYSECRET456"], None);
     assert_eq!(code(&o), 2);
-    let all = format!(
-        "{}{}",
-        String::from_utf8_lossy(&o.stdout),
-        String::from_utf8_lossy(&o.stderr)
-    );
+    let all = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
     assert!(!all.contains("CANARYSECRET456"), "{all}");
 }

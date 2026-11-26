@@ -62,9 +62,7 @@ fn b64(b: &[u8]) -> String {
 }
 
 fn unb64(s: &str) -> Option<Vec<u8>> {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(s.trim().as_bytes())
-        .ok()
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s.trim().as_bytes()).ok()
 }
 
 /// What the device signs: the tag, then each field NUL-terminated (an absent
@@ -100,41 +98,25 @@ pub fn sign(
     account_public_key: &[u8],
 ) -> InviteSignature {
     let s = device.sign(&preimage(claims, at));
-    InviteSignature {
-        k: b64(account_public_key),
-        cert: cert.clone(),
-        at,
-        s: b64(&s),
-    }
+    InviteSignature { k: b64(account_public_key), cert: cert.clone(), at, s: b64(&s) }
 }
 
 /// Check `sig` over `claims`. On success, the founder account it proves.
 /// `revoked` answers whether a device is revoked on the reader's logs.
-pub fn verify(
-    sig: &InviteSignature,
-    claims: &InviteClaims<'_>,
-    revoked: &dyn Fn(Uuid) -> bool,
-) -> Result<Uuid, String> {
+pub fn verify(sig: &InviteSignature, claims: &InviteClaims<'_>, revoked: &dyn Fn(Uuid) -> bool) -> Result<Uuid, String> {
     let founder = claims
         .founder
         .and_then(|f| Uuid::parse_str(f.trim()).ok())
         .ok_or("the invite names no founder account")?;
-    let fk = claims
-        .fk
-        .map(|f| f.trim().to_ascii_lowercase())
-        .ok_or("the invite carries no fingerprint")?;
-    let key = unb64(&sig.k)
-        .filter(|k| k.len() == 32)
-        .ok_or("the signature's account key is malformed")?;
+    let fk = claims.fk.map(|f| f.trim().to_ascii_lowercase()).ok_or("the invite carries no fingerprint")?;
+    let key = unb64(&sig.k).filter(|k| k.len() == 32).ok_or("the signature's account key is malformed")?;
     if FounderPin::fingerprint_hex(&key) != fk {
         return Err("the signing account key isn't the invite's fingerprint".into());
     }
     if sig.cert.account_id != founder {
         return Err("the signing device is certified for another account".into());
     }
-    sig.cert
-        .verify(&key)
-        .map_err(|_| "the signing device's certificate doesn't verify".to_string())?;
+    sig.cert.verify(&key).map_err(|_| "the signing device's certificate doesn't verify".to_string())?;
     if revoked(sig.cert.device_id) {
         return Err("the signing device was revoked".into());
     }
@@ -160,18 +142,8 @@ mod tests {
         let account_id = Uuid::new_v4();
         let account = SigningKeypair::generate().unwrap();
         let device = SigningKeypair::generate().unwrap();
-        let cert = DeviceCertificate::issue(
-            &account,
-            account_id,
-            &device.public_key_bytes(),
-            Timestamp::epoch(),
-        );
-        Founder {
-            account_id,
-            account,
-            device,
-            cert,
-        }
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
+        Founder { account_id, account, device, cert }
     }
 
     #[test]
@@ -182,10 +154,7 @@ mod tests {
     #[test]
     fn founder_signature_verifies_and_binds_every_field() {
         let f = founder();
-        let (founder_s, fk) = (
-            f.account_id.to_string(),
-            FounderPin::fingerprint_hex(&f.account.public_key_bytes()),
-        );
+        let (founder_s, fk) = (f.account_id.to_string(), FounderPin::fingerprint_hex(&f.account.public_key_bytes()));
         let claims = InviteClaims {
             name: "Team",
             relay_url: "https://relay.example",
@@ -196,41 +165,17 @@ mod tests {
             inv: Some("inv"),
             ..Default::default()
         };
-        let sig = sign(
-            &claims,
-            100,
-            &f.device,
-            &f.cert,
-            &f.account.public_key_bytes(),
-        );
+        let sig = sign(&claims, 100, &f.device, &f.cert, &f.account.public_key_bytes());
         let none = |_| false;
         assert_eq!(verify(&sig, &claims, &none), Ok(f.account_id));
         // Any field changed: no longer the founder's.
         for changed in [
-            InviteClaims {
-                relay_url: "https://evil.example",
-                ..claims
-            },
-            InviteClaims {
-                room: "room2",
-                ..claims
-            },
-            InviteClaims {
-                key: Some("other"),
-                ..claims
-            },
-            InviteClaims {
-                name: "Other",
-                ..claims
-            },
-            InviteClaims {
-                inv: None,
-                ..claims
-            },
-            InviteClaims {
-                ek_json: b"[1]",
-                ..claims
-            },
+            InviteClaims { relay_url: "https://evil.example", ..claims },
+            InviteClaims { room: "room2", ..claims },
+            InviteClaims { key: Some("other"), ..claims },
+            InviteClaims { name: "Other", ..claims },
+            InviteClaims { inv: None, ..claims },
+            InviteClaims { ek_json: b"[1]", ..claims },
         ] {
             assert!(verify(&sig, &changed, &none).is_err());
         }
@@ -238,22 +183,10 @@ mod tests {
         assert!(verify(&sig, &claims, &|d| d == f.cert.device_id).is_err());
         // Another account's valid signature, relabelled as this founder's.
         let m = founder();
-        let msig = sign(
-            &claims,
-            100,
-            &m.device,
-            &m.cert,
-            &m.account.public_key_bytes(),
-        );
-        assert!(
-            verify(&msig, &claims, &none).is_err(),
-            "fingerprint mismatch"
-        );
+        let msig = sign(&claims, 100, &m.device, &m.cert, &m.account.public_key_bytes());
+        assert!(verify(&msig, &claims, &none).is_err(), "fingerprint mismatch");
         let mut swapped = msig.clone();
         swapped.k = sig.k.clone();
-        assert!(
-            verify(&swapped, &claims, &none).is_err(),
-            "the certificate is for another account"
-        );
+        assert!(verify(&swapped, &claims, &none).is_err(), "the certificate is for another account");
     }
 }

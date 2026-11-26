@@ -30,8 +30,7 @@ pub const REPEAT_CALL_LIMIT: usize = 3;
 /// prompt, gemma4:12b's final round leaked the markup 5/5 times with no nudge
 /// and 5/5 with the nudge appended to the tool result, but answered 12/12
 /// with it as a trailing user message.
-pub const FINAL_ROUND_NUDGE: &str =
-    "[Tool budget for this turn is used up. Do not call any more tools: \
+pub const FINAL_ROUND_NUDGE: &str = "[Tool budget for this turn is used up. Do not call any more tools: \
 write your final answer now from the results above, and say what you could not check.]";
 
 /// Longest slice of an earlier result quoted back to a repeated call.
@@ -42,18 +41,12 @@ const REPEAT_ECHO_CHARS: usize = 1_500;
 /// it invalidates the remembered results. Matched on the tool's own name —
 /// after an MCP `server__` prefix — by its leading verb.
 pub fn is_lookup_tool(name: &str) -> bool {
-    let bare = name
-        .rsplit("__")
-        .next()
-        .unwrap_or(name)
-        .to_ascii_lowercase();
+    let bare = name.rsplit("__").next().unwrap_or(name).to_ascii_lowercase();
     const VERBS: [&str; 14] = [
-        "read", "list", "search", "get", "fetch", "find", "recall", "query", "lookup", "grep",
-        "glob", "view", "show", "describe",
+        "read", "list", "search", "get", "fetch", "find", "recall", "query", "lookup", "grep", "glob", "view", "show",
+        "describe",
     ];
-    VERBS
-        .iter()
-        .any(|v| bare == *v || bare.starts_with(&format!("{v}_")))
+    VERBS.iter().any(|v| bare == *v || bare.starts_with(&format!("{v}_")))
         || bare.ends_with("_search")
 }
 
@@ -113,12 +106,7 @@ impl Default for RepeatGuard {
 impl RepeatGuard {
     /// `limit`: repeats allowed per call (see [`REPEAT_CALL_LIMIT`]).
     pub fn new(limit: usize) -> Self {
-        Self {
-            limit: limit.max(1),
-            epoch: 0,
-            seen: HashMap::new(),
-            tripped: false,
-        }
+        Self { limit: limit.max(1), epoch: 0, seen: HashMap::new(), tripped: false }
     }
 
     /// Before running a call: `Some(reply)` when it repeats one already
@@ -126,10 +114,7 @@ impl RepeatGuard {
     /// `None`: run it, then [`Self::record`] the result.
     pub fn check(&mut self, name: &str, args: &Value) -> Option<String> {
         let epoch = self.epoch;
-        let seen = self
-            .seen
-            .get_mut(&call_key(name, args))
-            .filter(|s| s.epoch == epoch)?;
+        let seen = self.seen.get_mut(&call_key(name, args)).filter(|s| s.epoch == epoch)?;
         seen.count += 1;
         // `count` includes the first, real call.
         let stop = seen.count > self.limit;
@@ -138,11 +123,7 @@ impl RepeatGuard {
             return None;
         }
         let earlier: String = seen.result.chars().take(REPEAT_ECHO_CHARS).collect();
-        let clipped = if earlier.len() < seen.result.len() {
-            " (start shown)"
-        } else {
-            ""
-        };
+        let clipped = if earlier.len() < seen.result.len() { " (start shown)" } else { "" };
         let next = if stop {
             "You keep repeating this call. Stop calling tools and write your final answer now from the results you have."
         } else {
@@ -170,12 +151,7 @@ impl RepeatGuard {
                     s.count = 0;
                 }
             })
-            .or_insert(SeenCall {
-                epoch,
-                count: 0,
-                result: String::new(),
-                is_error,
-            });
+            .or_insert(SeenCall { epoch, count: 0, result: String::new(), is_error });
         entry.epoch = epoch;
         entry.count = entry.count.max(1);
         entry.result = result.to_string();
@@ -207,11 +183,7 @@ pub fn is_final_round_nudge(message: &Value) -> bool {
 /// return the model's response (text and/or tool_use blocks).
 #[allow(async_fn_in_trait)] // used generically, never as `dyn`
 pub trait MessagesApi {
-    async fn run(
-        &self,
-        messages: &[Value],
-        tools: &[Value],
-    ) -> Result<AnthropicResponse, ProviderError>;
+    async fn run(&self, messages: &[Value], tools: &[Value]) -> Result<AnthropicResponse, ProviderError>;
 }
 
 /// Executes a tool call, returning `(content, is_error)`.
@@ -286,11 +258,7 @@ mod tests {
         calls: RefCell<usize>,
     }
     impl MessagesApi for ScriptedModel {
-        async fn run(
-            &self,
-            messages: &[Value],
-            tools: &[Value],
-        ) -> Result<AnthropicResponse, ProviderError> {
+        async fn run(&self, messages: &[Value], tools: &[Value]) -> Result<AnthropicResponse, ProviderError> {
             let n = *self.calls.borrow();
             *self.calls.borrow_mut() += 1;
             if n == 0 {
@@ -328,16 +296,10 @@ mod tests {
 
     #[tokio::test]
     async fn loops_through_tool_then_returns_final_text() {
-        let model = ScriptedModel {
-            calls: RefCell::new(0),
-        };
-        let exec = FakeExecutor {
-            calls: RefCell::new(vec![]),
-        };
+        let model = ScriptedModel { calls: RefCell::new(0) };
+        let exec = FakeExecutor { calls: RefCell::new(vec![]) };
         let tools = vec![json!({ "name": "search", "description": "", "input_schema": {} })];
-        let out = run_tool_loop(&model, &exec, "find x", tools, 5)
-            .await
-            .unwrap();
+        let out = run_tool_loop(&model, &exec, "find x", tools, 5).await.unwrap();
         assert_eq!(out, "final answer");
         assert_eq!(exec.calls.borrow().as_slice(), &["search".to_string()]);
     }
@@ -345,19 +307,11 @@ mod tests {
     /// A model that always asks for a tool — must be bounded by max_iters.
     struct LoopingModel;
     impl MessagesApi for LoopingModel {
-        async fn run(
-            &self,
-            _messages: &[Value],
-            _tools: &[Value],
-        ) -> Result<AnthropicResponse, ProviderError> {
+        async fn run(&self, _messages: &[Value], _tools: &[Value]) -> Result<AnthropicResponse, ProviderError> {
             Ok(AnthropicResponse {
                 content: json!([{ "type": "tool_use", "id": "t", "name": "x", "input": {} }]),
                 text: "still working".into(),
-                tool_uses: vec![ToolUse {
-                    id: "t".into(),
-                    name: "x".into(),
-                    input: json!({}),
-                }],
+                tool_uses: vec![ToolUse { id: "t".into(), name: "x".into(), input: json!({}) }],
                 stop_reason: Some("tool_use".into()),
             })
         }
@@ -365,51 +319,19 @@ mod tests {
 
     #[test]
     fn call_keys_ignore_key_order_and_padding() {
-        let a = call_key(
-            "read_file",
-            &json!({"path": "src/a.rs", "offset": 1, "opts": {"b": 1, "a": [" x "]}}),
-        );
-        let b = call_key(
-            "read_file",
-            &json!({"opts": {"a": ["x"], "b": 1}, "offset": 1, "path": " src/a.rs"}),
-        );
+        let a = call_key("read_file", &json!({"path": "src/a.rs", "offset": 1, "opts": {"b": 1, "a": [" x "]}}));
+        let b = call_key("read_file", &json!({"opts": {"a": ["x"], "b": 1}, "offset": 1, "path": " src/a.rs"}));
         assert_eq!(a, b);
-        assert_ne!(
-            a,
-            call_key(
-                "read_file",
-                &json!({"path": "src/a.rs", "offset": 2, "opts": {"a": ["x"], "b": 1}})
-            )
-        );
-        assert_ne!(
-            call_key("read_file", &json!({})),
-            call_key("list_dir", &json!({}))
-        );
+        assert_ne!(a, call_key("read_file", &json!({"path": "src/a.rs", "offset": 2, "opts": {"a": ["x"], "b": 1}})));
+        assert_ne!(call_key("read_file", &json!({})), call_key("list_dir", &json!({})));
     }
 
     #[test]
     fn lookups_are_told_apart_from_actions() {
-        for n in [
-            "read_file",
-            "list_dir",
-            "search",
-            "rdna__web_search",
-            "rdna__fetch_url",
-            "rdna__search_docs",
-            "mem__recall",
-            "get_weather",
-        ] {
+        for n in ["read_file", "list_dir", "search", "rdna__web_search", "rdna__fetch_url", "rdna__search_docs", "mem__recall", "get_weather"] {
             assert!(is_lookup_tool(n), "{n}");
         }
-        for n in [
-            "write_file",
-            "edit_file",
-            "run_command",
-            "rdna__remember",
-            "rdna__index_document",
-            "deploy",
-            "readme_writer",
-        ] {
+        for n in ["write_file", "edit_file", "run_command", "rdna__remember", "rdna__index_document", "deploy", "readme_writer"] {
             assert!(!is_lookup_tool(n), "{n}");
         }
     }
@@ -420,27 +342,16 @@ mod tests {
         let args = json!({"path": "inventory/stock.py"});
         assert_eq!(g.check("read_file", &args), None, "first call runs");
         g.record("read_file", &args, "1\tdef low(x): return x > 3", false);
-        let second = g
-            .check("read_file", &json!({"path": " inventory/stock.py "}))
-            .expect("a repeat");
-        assert!(
-            second.contains("already called read_file") && second.contains("def low(x)"),
-            "{second}"
-        );
+        let second = g.check("read_file", &json!({"path": " inventory/stock.py "})).expect("a repeat");
+        assert!(second.contains("already called read_file") && second.contains("def low(x)"), "{second}");
         assert!(second.contains("Take the next step") && !g.tripped());
         // A different call doesn't count against this one.
         assert_eq!(g.check("read_file", &json!({"path": "other.py"})), None);
         g.record("read_file", &json!({"path": "other.py"}), "x", false);
         let third = g.check("read_file", &args).expect("still a repeat");
-        assert!(
-            third.contains("Take the next step") && !g.tripped(),
-            "two repeats are allowed: {third}"
-        );
+        assert!(third.contains("Take the next step") && !g.tripped(), "two repeats are allowed: {third}");
         let fourth = g.check("read_file", &args).expect("still a repeat");
-        assert!(
-            fourth.contains("final answer") && g.tripped(),
-            "the third repeat ends the loop: {fourth}"
-        );
+        assert!(fourth.contains("final answer") && g.tripped(), "the third repeat ends the loop: {fourth}");
     }
 
     #[test]
@@ -452,11 +363,7 @@ mod tests {
         let edit = json!({"path": "a.py", "old_string": "a", "new_string": "b"});
         assert_eq!(g.check("edit_file", &edit), None);
         g.record("edit_file", &edit, "edited", false);
-        assert_eq!(
-            g.check("read_file", &read),
-            None,
-            "the file may have changed: read it for real"
-        );
+        assert_eq!(g.check("read_file", &read), None, "the file may have changed: read it for real");
         g.record("read_file", &read, "new", false);
         assert!(g.check("read_file", &read).unwrap().contains("new"));
         // The same edit again, with only a read since, is an action already done.
@@ -480,47 +387,27 @@ mod tests {
             assert_eq!(g.check("run_command", &cmd), None, "run {n} goes through");
             g.record("run_command", &cmd, "exit 1: FAILED", true);
         }
-        assert!(
-            g.tripped(),
-            "four identical failing runs with nothing changed in between"
-        );
+        assert!(g.tripped(), "four identical failing runs with nothing changed in between");
     }
 
     #[test]
     fn the_nudge_follows_the_last_tool_result_once() {
-        let mut msgs = vec![
-            json!({"role": "user", "content": "go"}),
-            json!({"role": "tool", "content": "42"}),
-        ];
+        let mut msgs = vec![json!({"role": "user", "content": "go"}), json!({"role": "tool", "content": "42"})];
         nudge_final_round(&mut msgs);
         nudge_final_round(&mut msgs);
         assert_eq!(msgs.len(), 3);
-        assert_eq!(
-            msgs[1]["content"], "42",
-            "the tool result is left as reported"
-        );
+        assert_eq!(msgs[1]["content"], "42", "the tool result is left as reported");
         assert!(is_final_round_nudge(&msgs[2]));
         let mut plain = vec![json!({"role": "user", "content": "go"})];
         nudge_final_round(&mut plain);
-        assert_eq!(
-            plain[0]["content"], "go",
-            "no tool result: nothing to nudge"
-        );
+        assert_eq!(plain[0]["content"], "go", "no tool result: nothing to nudge");
     }
 
     #[tokio::test]
     async fn max_iters_guards_runaway_loops() {
-        let exec = FakeExecutor {
-            calls: RefCell::new(vec![]),
-        };
-        let out = run_tool_loop(&LoopingModel, &exec, "go", vec![], 3)
-            .await
-            .unwrap();
+        let exec = FakeExecutor { calls: RefCell::new(vec![]) };
+        let out = run_tool_loop(&LoopingModel, &exec, "go", vec![], 3).await.unwrap();
         assert_eq!(out, "still working");
-        assert_eq!(
-            exec.calls.borrow().len(),
-            3,
-            "executed once per bounded iteration"
-        );
+        assert_eq!(exec.calls.borrow().len(), 3, "executed once per bounded iteration");
     }
 }

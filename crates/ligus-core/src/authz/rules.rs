@@ -10,12 +10,7 @@ use super::RosterState;
 
 /// Whether `event`, authored by `author`, needs presence under rules v2,
 /// judged against the roster at its position and its log's fold so far.
-pub fn requires_presence(
-    event: &SessionEvent,
-    author: &str,
-    roster: &RosterState,
-    fold: &ChatSession,
-) -> bool {
+pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterState, fold: &ChatSession) -> bool {
     match event {
         // Membership and roles. Adding yourself (the founder's own seed
         // member, or redeeming an Admin's invite) is the bootstrap exception.
@@ -36,12 +31,8 @@ pub fn requires_presence(
         // A phone (P-256 key) is enrolled only with its person's passkey,
         // always.
         SessionEvent::DeviceCertificateAdded { certificate: c } => {
-            (c.alg == crate::crypto::SigAlg::P256
-                && !roster.account_certified(c.account_id, c.device_id))
-                || (roster
-                    .passkeys
-                    .get(&c.account_id)
-                    .is_some_and(|m| !m.is_empty())
+            (c.alg == crate::crypto::SigAlg::P256 && !roster.account_certified(c.account_id, c.device_id))
+                || (roster.passkeys.get(&c.account_id).is_some_and(|m| !m.is_empty())
                     && !roster.account_certified(c.account_id, c.device_id))
         }
         // Keys. A passkey registration has its own rule (`authz::passkeys`):
@@ -52,9 +43,7 @@ pub fn requires_presence(
         | SessionEvent::AccountKeyRotated { .. } => true,
         SessionEvent::PasskeyRegistered { .. } => false,
         // A link grants nothing, so it needs no presence (§2.2).
-        SessionEvent::IdentityLinkPublished { .. } | SessionEvent::IdentityLinkRemoved { .. } => {
-            false
-        }
+        SessionEvent::IdentityLinkPublished { .. } | SessionEvent::IdentityLinkRemoved { .. } => false,
         // Names and pictures are render-only (identity model v2, 5.2, 6.2).
         SessionEvent::ProfileUpdated { .. } | SessionEvent::DeviceLabelSet { .. } => false,
         // The old account's own key signs it; it holds no passkey to give.
@@ -70,37 +59,22 @@ pub fn requires_presence(
         // someone else owns.
         // Opening an agent to everyone (its owner's credentials, spent on
         // other people's requests) too.
-        SessionEvent::AgentUpserted { agent } => {
-            agent_rebinds(agent, fold) || agent_opens(agent, fold)
-        }
+        SessionEvent::AgentUpserted { agent } => agent_rebinds(agent, fold) || agent_opens(agent, fold),
         SessionEvent::AgentRosterUpdated { agents } => {
-            agents
-                .iter()
-                .any(|a| agent_rebinds(a, fold) || agent_opens(a, fold))
-                || fold
-                    .workspace_agents
-                    .iter()
-                    .any(|old| !agents.iter().any(|a| a.id == old.id))
+            agents.iter().any(|a| agent_rebinds(a, fold) || agent_opens(a, fold))
+                || fold.workspace_agents.iter().any(|old| !agents.iter().any(|a| a.id == old.id))
         }
         SessionEvent::AgentRemoved { .. } => true,
         SessionEvent::WorkspaceRuntimesUpdated { .. }
         | SessionEvent::WorkspaceRuntimeUpserted { .. }
         | SessionEvent::WorkspaceRuntimeRemoved { .. } => true,
-        SessionEvent::WorkspaceHostUpserted { host } => {
-            host.owner_actor_id != author || foreign_host(fold, &host.id, author)
+        SessionEvent::WorkspaceHostUpserted { host } => host.owner_actor_id != author || foreign_host(fold, &host.id, author),
+        SessionEvent::WorkspaceHostRemoved { host_id } => {
+            fold.workspace_hosts.iter().any(|h| &h.id == host_id && h.owner_actor_id != author)
         }
-        SessionEvent::WorkspaceHostRemoved { host_id } => fold
-            .workspace_hosts
-            .iter()
-            .any(|h| &h.id == host_id && h.owner_actor_id != author),
         SessionEvent::WorkspaceHostsUpdated { hosts } => {
-            hosts
-                .iter()
-                .any(|h| h.owner_actor_id != author || foreign_host(fold, &h.id, author))
-                || fold
-                    .workspace_hosts
-                    .iter()
-                    .any(|h| h.owner_actor_id != author && !hosts.iter().any(|n| n.id == h.id))
+            hosts.iter().any(|h| h.owner_actor_id != author || foreign_host(fold, &h.id, author))
+                || fold.workspace_hosts.iter().any(|h| h.owner_actor_id != author && !hosts.iter().any(|n| n.id == h.id))
         }
         // Gates and quorum.
         SessionEvent::ProposalSetTuned { .. } | SessionEvent::WorkspaceRulesSet { .. } => true,
@@ -109,65 +83,44 @@ pub fn requires_presence(
         // Auto-archive only changes what the inbox shows (nothing is
         // deleted or decided), so it needs no presence.
         SessionEvent::ProposalArchivePolicySet { .. } => false,
-        SessionEvent::ProposalUpserted { proposal } => fold
-            .proposals
-            .iter()
-            .find(|p| p.id == proposal.id)
-            .is_some_and(|old| {
-                proposal.required_approvals < old.required_approvals
-                    || proposal.approval_role_floor.rank() < old.approval_role_floor.rank()
-            }),
+        SessionEvent::ProposalUpserted { proposal } => fold.proposals.iter().find(|p| p.id == proposal.id).is_some_and(|old| {
+            proposal.required_approvals < old.required_approvals
+                || proposal.approval_role_floor.rank() < old.approval_role_floor.rank()
+        }),
         // Human-gated decisions.
         SessionEvent::ProposalVoteCast { proposal_id, .. } => fold
             .proposals
             .iter()
             .find(|p| p.id == *proposal_id)
             .is_some_and(|p| p.workflow.is_some() || human_gated(fold, p)),
-        SessionEvent::ProposalSetDecided { .. } => roster
-            .members
-            .get(author)
-            .is_some_and(|m| m.kind == ActorKind::Human),
+        SessionEvent::ProposalSetDecided { .. } => {
+            roster.members.get(author).is_some_and(|m| m.kind == ActorKind::Human)
+        }
         // A host fulfilling a person's apply request carries no presence of
         // its own: the request carried the person's.
-        SessionEvent::ProposalApplied {
-            request_id: Some(_),
-            ..
-        } => false,
-        SessionEvent::ProposalApplied { proposal_id, .. } => fold
-            .proposals
-            .iter()
-            .find(|p| p.id == *proposal_id)
-            .is_some_and(|p| human_gated(fold, p)),
-        SessionEvent::ProposalApplyRequested { request } => fold
-            .proposals
-            .iter()
-            .find(|p| p.id == request.proposal_id)
-            .is_some_and(|p| human_gated(fold, p)),
-        // A host's failure report and a withdrawal only close a request.
-        SessionEvent::ProposalApplyFailed { .. } | SessionEvent::ProposalApplyWithdrawn { .. } => {
-            false
+        SessionEvent::ProposalApplied { request_id: Some(_), .. } => false,
+        SessionEvent::ProposalApplied { proposal_id, .. } => {
+            fold.proposals.iter().find(|p| p.id == *proposal_id).is_some_and(|p| human_gated(fold, p))
         }
+        SessionEvent::ProposalApplyRequested { request } => {
+            fold.proposals.iter().find(|p| p.id == request.proposal_id).is_some_and(|p| human_gated(fold, p))
+        }
+        // A host's failure report and a withdrawal only close a request.
+        SessionEvent::ProposalApplyFailed { .. } | SessionEvent::ProposalApplyWithdrawn { .. } => false,
         // Repos: adding or removing one steers clones and chats (repos
         // review F7); renaming is cosmetic; using one in a chat is content.
         SessionEvent::WorkspaceRepoAdded { .. } | SessionEvent::WorkspaceRepoRemoved { .. } => true,
         // Aliases change identity matching (repos review F6, R2): as add.
-        SessionEvent::WorkspaceRepoAliasesSet { .. }
-        | SessionEvent::WorkspaceHostAliasSet { .. } => true,
-        SessionEvent::WorkspaceRepoUpdated { .. }
-        | SessionEvent::ChatRepoSet { .. }
-        | SessionEvent::ChatBasePinned { .. } => false,
+        SessionEvent::WorkspaceRepoAliasesSet { .. } | SessionEvent::WorkspaceHostAliasSet { .. } => true,
+        SessionEvent::WorkspaceRepoUpdated { .. } | SessionEvent::ChatRepoSet { .. } | SessionEvent::ChatBasePinned { .. } => false,
         // Moving a chat's pinned base rewrites every host's chat branch.
         SessionEvent::ChatBaseRepinned { .. } => true,
         // Attachments (issue #118): the policy decides who shares what, so
         // changing it is a person's, with presence; lifting a block widens
         // it too. Blocking a hash only narrows; sharing and deleting are
         // content, judged by the policy.
-        SessionEvent::AttachmentPolicySet { .. } | SessionEvent::AttachmentHashUnblocked { .. } => {
-            true
-        }
-        SessionEvent::AttachmentHashBlocked { .. }
-        | SessionEvent::AttachmentShared { .. }
-        | SessionEvent::AttachmentDeleted { .. } => false,
+        SessionEvent::AttachmentPolicySet { .. } | SessionEvent::AttachmentHashUnblocked { .. } => true,
+        SessionEvent::AttachmentHashBlocked { .. } | SessionEvent::AttachmentShared { .. } | SessionEvent::AttachmentDeleted { .. } => false,
         // Everything else is content, coordination or a self-validating
         // publication.
         SessionEvent::SessionSnapshot { .. }
@@ -213,9 +166,7 @@ pub fn requires_presence(
 /// Whether host `id` exists in the fold and someone other than `author` owns
 /// it (re-owning it under the same id touches it).
 fn foreign_host(fold: &ChatSession, id: &str, author: &str) -> bool {
-    fold.workspace_hosts
-        .iter()
-        .any(|h| h.id == id && h.owner_actor_id != author)
+    fold.workspace_hosts.iter().any(|h| h.id == id && h.owner_actor_id != author)
 }
 
 fn agent_rebinds(agent: &crate::agent::WorkspaceAgent, fold: &ChatSession) -> bool {
@@ -245,8 +196,6 @@ pub fn human_gated(fold: &ChatSession, p: &crate::ActionProposal) -> bool {
         return true;
     }
     fold.guards.dearth_on().is_some_and(|d| {
-        crate::guard::touched_paths(p)
-            .iter()
-            .any(|t| crate::guard::touches_any(&d.brood_paths, std::slice::from_ref(t)))
+        crate::guard::touched_paths(p).iter().any(|t| crate::guard::touches_any(&d.brood_paths, std::slice::from_ref(t)))
     })
 }

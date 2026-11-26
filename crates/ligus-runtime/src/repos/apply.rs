@@ -35,13 +35,9 @@ pub enum ApplyError {
 impl std::fmt::Display for ApplyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ApplyError::Conflict(e) => {
-                write!(f, "the change doesn't apply on this chat's branch ({e})")
-            }
+            ApplyError::Conflict(e) => write!(f, "the change doesn't apply on this chat's branch ({e})"),
             ApplyError::Moved => f.write_str("the chat's branch moved while applying"),
-            ApplyError::Dirty(e) => {
-                write!(f, "the chat's checkout has local changes in the way ({e})")
-            }
+            ApplyError::Dirty(e) => write!(f, "the chat's checkout has local changes in the way ({e})"),
             ApplyError::Other(e) => f.write_str(e),
         }
     }
@@ -59,38 +55,16 @@ pub struct Applied {
 }
 
 fn branch_ref(chat_id: &str) -> String {
-    format!(
-        "refs/heads/{}",
-        crate::git_worktree::chat_branch_name(chat_id)
-    )
+    format!("refs/heads/{}", crate::git_worktree::chat_branch_name(chat_id))
 }
 
-fn run_with_index(
-    dir: &Path,
-    index: &Path,
-    args: &[&str],
-    input: Option<&str>,
-) -> Result<String, String> {
+fn run_with_index(dir: &Path, index: &Path, args: &[&str], input: Option<&str>) -> Result<String, String> {
     let mut cmd = ligus_core::process_util::git();
-    cmd.arg("-C")
-        .arg(dir)
-        .args(args)
-        .env("GIT_INDEX_FILE", index);
-    cmd.stdin(if input.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    })
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
+    cmd.arg("-C").arg(dir).args(args).env("GIT_INDEX_FILE", index);
+    cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     if let Some(text) = input {
-        child
-            .stdin
-            .take()
-            .ok_or("no stdin")?
-            .write_all(text.as_bytes())
-            .map_err(|e| e.to_string())?;
+        child.stdin.take().ok_or("no stdin")?.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
     }
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if out.status.success() {
@@ -102,19 +76,9 @@ fn run_with_index(
 
 fn with_input(dir: &Path, args: &[&str], input: &str) -> Result<String, String> {
     let mut cmd = ligus_core::process_util::git();
-    cmd.arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.arg("-C").arg(dir).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    child
-        .stdin
-        .take()
-        .ok_or("no stdin")?
-        .write_all(input.as_bytes())
-        .map_err(|e| e.to_string())?;
+    child.stdin.take().ok_or("no stdin")?.write_all(input.as_bytes()).map_err(|e| e.to_string())?;
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -139,23 +103,16 @@ pub fn tree_for(checkout: &Path, base: &str, diff: &str, reverse: bool) -> Resul
 }
 
 fn three_way_tree(checkout: &Path, base: &str, diff: &str) -> Result<String, ApplyError> {
-    let scratch: PathBuf =
-        std::env::temp_dir().join(format!("ligus-3way-{}", Uuid::new_v4().simple()));
+    let scratch: PathBuf = std::env::temp_dir().join(format!("ligus-3way-{}", Uuid::new_v4().simple()));
     let s = scratch.to_string_lossy().into_owned();
     git(checkout, &["worktree", "add", "-q", "--detach", &s, base]).map_err(ApplyError::Other)?;
     let result = (|| {
         if let Err(e) = with_input(&scratch, &["apply", "--3way", "--whitespace=nowarn"], diff) {
-            return Err(ApplyError::Conflict(
-                e.lines().last().unwrap_or("conflict").to_string(),
-            ));
+            return Err(ApplyError::Conflict(e.lines().last().unwrap_or("conflict").to_string()));
         }
-        let unmerged = git(&scratch, &["diff", "--name-only", "--diff-filter=U"])
-            .map_err(ApplyError::Other)?;
+        let unmerged = git(&scratch, &["diff", "--name-only", "--diff-filter=U"]).map_err(ApplyError::Other)?;
         if !unmerged.is_empty() {
-            return Err(ApplyError::Conflict(format!(
-                "conflicts in {}",
-                unmerged.lines().collect::<Vec<_>>().join(", ")
-            )));
+            return Err(ApplyError::Conflict(format!("conflicts in {}", unmerged.lines().collect::<Vec<_>>().join(", "))));
         }
         git(&scratch, &["add", "-A"]).map_err(ApplyError::Other)?;
         git(&scratch, &["write-tree"]).map_err(ApplyError::Other)
@@ -167,11 +124,7 @@ fn three_way_tree(checkout: &Path, base: &str, diff: &str) -> Result<String, App
 
 fn commit_tree(checkout: &Path, tree: &str, parent: &str, message: &str) -> Result<String, String> {
     let named = git(checkout, &["config", "user.email"]).is_ok_and(|e| !e.is_empty());
-    let mut args: Vec<&str> = if named {
-        vec![]
-    } else {
-        vec!["-c", "user.name=Ligus", "-c", "user.email=ligus@localhost"]
-    };
+    let mut args: Vec<&str> = if named { vec![] } else { vec!["-c", "user.name=Ligus", "-c", "user.email=ligus@localhost"] };
     args.extend(["commit-tree", tree, "-p", parent, "-F", "-"]);
     with_input(checkout, &args, message)
 }
@@ -186,13 +139,9 @@ fn advance(checkout: &Path, chat_id: &str, old: &str, new: &str) -> Result<(), A
         if head != old {
             return Err(ApplyError::Moved);
         }
-        return git(&wt, &["merge", "--ff-only", "-q", new])
-            .map(|_| ())
-            .map_err(|e| ApplyError::Dirty(e.lines().next().unwrap_or("").to_string()));
+        return git(&wt, &["merge", "--ff-only", "-q", new]).map(|_| ()).map_err(|e| ApplyError::Dirty(e.lines().next().unwrap_or("").to_string()));
     }
-    git(checkout, &["update-ref", &branch_ref(chat_id), new, old])
-        .map(|_| ())
-        .map_err(|_| ApplyError::Moved)
+    git(checkout, &["update-ref", &branch_ref(chat_id), new, old]).map(|_| ()).map_err(|_| ApplyError::Moved)
 }
 
 /// Apply `diff` (or take it back out, `reverse`) as one commit on the chat's
@@ -206,8 +155,7 @@ pub fn apply_to_chat_branch(
     reverse: bool,
     expected_tip: Option<&str>,
 ) -> Result<Applied, ApplyError> {
-    let tip = git(checkout, &["rev-parse", "--verify", &branch_ref(chat_id)])
-        .map_err(|_| ApplyError::Other("this chat has no branch here yet".into()))?;
+    let tip = git(checkout, &["rev-parse", "--verify", &branch_ref(chat_id)]).map_err(|_| ApplyError::Other("this chat has no branch here yet".into()))?;
     if expected_tip.is_some_and(|e| e != tip) {
         return Err(ApplyError::Moved);
     }
@@ -218,25 +166,15 @@ pub fn apply_to_chat_branch(
     };
     let commit = commit_tree(checkout, &tree, &tip, message).map_err(ApplyError::Other)?;
     advance(checkout, chat_id, &tip, &commit)?;
-    Ok(Applied {
-        base: tip,
-        commit,
-        tree,
-        three_way,
-    })
+    Ok(Applied { base: tip, commit, tree, three_way })
 }
 
 /// Whether `diff` applies on the chat's branch in `checkout` now, without
 /// changing anything: `Ok(None)` when it does (exactly, or three-way),
 /// `Ok(Some(why))` with the conflict when it doesn't, for "Ask the agent to
 /// rebase". The three-way try runs in a scratch tree that is thrown away.
-pub fn conflict_probe(
-    checkout: &Path,
-    chat_id: &str,
-    diff: &str,
-) -> Result<Option<String>, String> {
-    let tip = git(checkout, &["rev-parse", "--verify", &branch_ref(chat_id)])
-        .map_err(|_| "this chat has no branch here yet".to_string())?;
+pub fn conflict_probe(checkout: &Path, chat_id: &str, diff: &str) -> Result<Option<String>, String> {
+    let tip = git(checkout, &["rev-parse", "--verify", &branch_ref(chat_id)]).map_err(|_| "this chat has no branch here yet".to_string())?;
     if tree_for(checkout, &tip, diff, false).is_ok() {
         return Ok(None);
     }
@@ -254,12 +192,7 @@ pub fn conflict_probe(
 /// subject carries the proposal's title, which its producing agent wrote,
 /// so a plain message grep would let a title such as "Ligus-Revert: <id>"
 /// make a replay skip another proposal or its revert.
-pub fn branch_trailer_values(
-    checkout: &Path,
-    chat_id: &str,
-    trailer: &str,
-    base: Option<&str>,
-) -> HashSet<String> {
+pub fn branch_trailer_values(checkout: &Path, chat_id: &str, trailer: &str, base: Option<&str>) -> HashSet<String> {
     let branch = branch_ref(chat_id);
     let range = match base.filter(|b| ligus_core::workspace_repo::is_commit_id(b)) {
         Some(b) => format!("{b}..{branch}"),
@@ -267,13 +200,7 @@ pub fn branch_trailer_values(
     };
     let format = format!("--format=%(trailers:key={trailer},valueonly,separator=%x0a)");
     git(checkout, &["log", &format, &range, "--"])
-        .map(|out| {
-            out.lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
+        .map(|out| out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
         .unwrap_or_default()
 }
 
@@ -295,10 +222,7 @@ pub fn legacy_apply_message(title: &str) -> String {
 
 /// The message of an apply commit for proposal `id` (with extra trailers).
 pub fn apply_message(title: &str, id: Uuid, extra: &[(&str, String)]) -> String {
-    let mut m = format!(
-        "Apply proposal: {}\n\n{PROPOSAL_TRAILER}: {id}\n",
-        title.lines().next().unwrap_or("")
-    );
+    let mut m = format!("Apply proposal: {}\n\n{PROPOSAL_TRAILER}: {id}\n", title.lines().next().unwrap_or(""));
     for (k, v) in extra {
         m.push_str(&format!("{k}: {v}\n"));
     }
@@ -310,36 +234,18 @@ pub fn apply_message(title: &str, id: Uuid, extra: &[(&str, String)]) -> String 
 /// end in a trailer block), and the `Ligus-Revert` trailer a ledger replay
 /// reads ([`replay_ledger`]), so the revert is never replayed twice.
 pub fn revert_message(title: &str, id: Uuid) -> String {
-    format!(
-        "Revert proposal: {}\n\n{REVERT_TRAILER}: {id}\n",
-        title.lines().next().unwrap_or("")
-    )
+    format!("Revert proposal: {}\n\n{REVERT_TRAILER}: {id}\n", title.lines().next().unwrap_or(""))
 }
 
 /// A person's revert of applied proposal `id` on the chat's branch in
 /// `checkout`: the reverse patch as one commit with the `Ligus-Revert`
 /// trailer, by compare-and-swap like any apply. Refused when the branch
 /// already carries that revert.
-pub fn revert_on_chat_branch(
-    checkout: &Path,
-    chat_id: &str,
-    diff: &str,
-    title: &str,
-    id: Uuid,
-) -> Result<Applied, ApplyError> {
+pub fn revert_on_chat_branch(checkout: &Path, chat_id: &str, diff: &str, title: &str, id: Uuid) -> Result<Applied, ApplyError> {
     if branch_has_trailer(checkout, chat_id, REVERT_TRAILER, id) {
-        return Err(ApplyError::Other(
-            "this change was already reverted on the chat's branch".into(),
-        ));
+        return Err(ApplyError::Other("this change was already reverted on the chat's branch".into()));
     }
-    apply_to_chat_branch(
-        checkout,
-        chat_id,
-        diff,
-        &revert_message(title, id),
-        true,
-        None,
-    )
+    apply_to_chat_branch(checkout, chat_id, diff, &revert_message(title, id), true, None)
 }
 
 /// The message of a legacy revert commit (a proposal without a repo, in the
@@ -355,26 +261,11 @@ pub fn legacy_revert_message(title: &str) -> String {
 /// branch, or past a bound of commits.
 pub fn branch_cut_point(checkout: &Path, chat_id: &str) -> Option<String> {
     let format = format!("--format=%H%x00%(trailers:key={PROPOSAL_TRAILER},valueonly,separator=%x2c)%x00%(trailers:key={REVERT_TRAILER},valueonly,separator=%x2c)%x1e");
-    let log = git(
-        checkout,
-        &[
-            "log",
-            "--first-parent",
-            "--max-count=10000",
-            &format,
-            &branch_ref(chat_id),
-            "--",
-        ],
-    )
-    .ok()?;
-    log.split('\x1e')
-        .map(str::trim)
-        .filter(|r| !r.is_empty())
-        .find_map(|rec| {
-            let parts: Vec<&str> = rec.split('\0').collect();
-            (parts.len() < 3 || (parts[1].trim().is_empty() && parts[2].trim().is_empty()))
-                .then(|| parts[0].to_string())
-        })
+    let log = git(checkout, &["log", "--first-parent", "--max-count=10000", &format, &branch_ref(chat_id), "--"]).ok()?;
+    log.split('\x1e').map(str::trim).filter(|r| !r.is_empty()).find_map(|rec| {
+        let parts: Vec<&str> = rec.split('\0').collect();
+        (parts.len() < 3 || (parts[1].trim().is_empty() && parts[2].trim().is_empty())).then(|| parts[0].to_string())
+    })
 }
 
 /// Follow a re-pin of the chat's base (`ChatBaseRepinned`, review residual
@@ -390,25 +281,15 @@ pub fn branch_cut_point(checkout: &Path, chat_id: &str) -> Option<String> {
 /// is checked out, must be clean and still at the tip it had; the move is
 /// `reset --keep` there, else `update-ref <new> <old>`. Returns how many
 /// entries it replayed.
-pub fn rebase_onto_repin(
-    checkout: &Path,
-    chat_id: &str,
-    old_base: &str,
-    new_base: &str,
-    entries: &[LedgerEntry],
-) -> Result<usize, String> {
+pub fn rebase_onto_repin(checkout: &Path, chat_id: &str, old_base: &str, new_base: &str, entries: &[LedgerEntry]) -> Result<usize, String> {
     let id_ok = |c: &str| ligus_core::workspace_repo::is_commit_id(c);
     if !id_ok(old_base) || !id_ok(new_base) {
         return Err("bad base".into());
     }
     let branch = branch_ref(chat_id);
-    let tip = git(checkout, &["rev-parse", "--verify", &branch])
-        .map_err(|_| "this chat has no branch here".to_string())?;
+    let tip = git(checkout, &["rev-parse", "--verify", &branch]).map_err(|_| "this chat has no branch here".to_string())?;
     let format = format!("--format=%H%x00%(trailers:key={PROPOSAL_TRAILER},valueonly,separator=%x2c)%x00%(trailers:key={REVERT_TRAILER},valueonly,separator=%x2c)%x1e");
-    let log = git(
-        checkout,
-        &["log", &format, &format!("{old_base}..{tip}"), "--"],
-    )?;
+    let log = git(checkout, &["log", &format, &format!("{old_base}..{tip}"), "--"])?;
     for rec in log.split('\x1e').map(str::trim).filter(|r| !r.is_empty()) {
         let parts: Vec<&str> = rec.split('\0').collect();
         if parts.len() < 3 || (parts[1].trim().is_empty() && parts[2].trim().is_empty()) {
@@ -420,26 +301,17 @@ pub fn rebase_onto_repin(
     let mut made = 0;
     for e in entries.iter().filter(|e| !e.reverted) {
         let short: String = e.proposal_id.to_string().chars().take(8).collect();
-        if tree_for(checkout, &head, &e.diff, true).is_ok()
-            && tree_for(checkout, &head, &e.diff, false).is_err()
-        {
+        if tree_for(checkout, &head, &e.diff, true).is_ok() && tree_for(checkout, &head, &e.diff, false).is_err() {
             continue; // the new base already has it
         }
         let tree = match tree_for(checkout, &head, &e.diff, false) {
             Ok(t) => t,
-            Err(_) => three_way_tree(checkout, &head, &e.diff)
-                .map_err(|err| format!("proposal {short} doesn't apply on the new base ({err})"))?,
+            Err(_) => three_way_tree(checkout, &head, &e.diff).map_err(|err| format!("proposal {short} doesn't apply on the new base ({err})"))?,
         };
-        head = commit_tree(
-            checkout,
-            &tree,
-            &head,
-            &apply_message("replayed onto the chat's new base", e.proposal_id, &[]),
-        )?;
+        head = commit_tree(checkout, &tree, &head, &apply_message("replayed onto the chat's new base", e.proposal_id, &[]))?;
         made += 1;
     }
-    let wt = crate::git_worktree::chat_worktree_path_of(checkout, chat_id)
-        .filter(|w| w.join(".git").exists());
+    let wt = crate::git_worktree::chat_worktree_path_of(checkout, chat_id).filter(|w| w.join(".git").exists());
     match wt {
         Some(wt) => {
             let at = git(&wt, &["rev-parse", "HEAD"])?;
@@ -448,17 +320,12 @@ pub fn rebase_onto_repin(
             }
             let dirty = git(&wt, &["status", "--porcelain", "--untracked-files=no"])?;
             if !dirty.is_empty() {
-                return Err(
-                    ApplyError::Dirty(dirty.lines().next().unwrap_or("").to_string()).to_string(),
-                );
+                return Err(ApplyError::Dirty(dirty.lines().next().unwrap_or("").to_string()).to_string());
             }
-            git(&wt, &["reset", "-q", "--keep", &head]).map_err(|e| {
-                ApplyError::Dirty(e.lines().next().unwrap_or("").to_string()).to_string()
-            })?;
+            git(&wt, &["reset", "-q", "--keep", &head]).map_err(|e| ApplyError::Dirty(e.lines().next().unwrap_or("").to_string()).to_string())?;
         }
         None => {
-            git(checkout, &["update-ref", &branch, &head, &tip])
-                .map_err(|_| ApplyError::Moved.to_string())?;
+            git(checkout, &["update-ref", &branch, &head, &tip]).map_err(|_| ApplyError::Moved.to_string())?;
         }
     }
     Ok(made)
@@ -471,12 +338,7 @@ pub fn rebase_onto_repin(
 /// crash mid-way picks up at the next one. A patch whose content is already
 /// on the branch (applied before trailers existed) counts as present.
 /// Returns how many commits it made; an entry that conflicts stops it.
-pub fn replay_ledger(
-    checkout: &Path,
-    chat_id: &str,
-    entries: &[LedgerEntry],
-    base: Option<&str>,
-) -> Result<usize, String> {
+pub fn replay_ledger(checkout: &Path, chat_id: &str, entries: &[LedgerEntry], base: Option<&str>) -> Result<usize, String> {
     let mut applied_ids = branch_trailer_values(checkout, chat_id, PROPOSAL_TRAILER, base);
     let mut reverted_ids = branch_trailer_values(checkout, chat_id, REVERT_TRAILER, base);
     let mut made = 0;
@@ -485,20 +347,11 @@ pub fn replay_ledger(
         let applied = applied_ids.contains(&id);
         if !e.reverted && !applied {
             let tip = git(checkout, &["rev-parse", &branch_ref(chat_id)])?;
-            if tree_for(checkout, &tip, &e.diff, true).is_ok()
-                && tree_for(checkout, &tip, &e.diff, false).is_err()
-            {
+            if tree_for(checkout, &tip, &e.diff, true).is_ok() && tree_for(checkout, &tip, &e.diff, false).is_err() {
                 continue; // already there, without a trailer
             }
-            apply_to_chat_branch(
-                checkout,
-                chat_id,
-                &e.diff,
-                &apply_message("replayed from the chat's ledger", e.proposal_id, &[]),
-                false,
-                None,
-            )
-            .map_err(|err| format!("proposal {} ({err})", &id[..8]))?;
+            apply_to_chat_branch(checkout, chat_id, &e.diff, &apply_message("replayed from the chat's ledger", e.proposal_id, &[]), false, None)
+                .map_err(|err| format!("proposal {} ({err})", &id[..8]))?;
             applied_ids.insert(id);
             made += 1;
         } else if e.reverted && applied && !reverted_ids.contains(&id) {

@@ -109,23 +109,15 @@ pub(super) fn init(conn: &Connection) -> rusqlite::Result<()> {
     // Columns added after the table first shipped on a branch build: the
     // relay sequence a held event came at (none over P2P) and the account
     // it claims, and the count of dropped events given up for good.
-    for (table, col, ty) in [
-        ("held_events", "seq", "INTEGER"),
-        ("held_events", "claimed", "TEXT NOT NULL DEFAULT ''"),
-        ("held_dropped", "lost", "INTEGER NOT NULL DEFAULT 0"),
-    ] {
+    for (table, col, ty) in [("held_events", "seq", "INTEGER"), ("held_events", "claimed", "TEXT NOT NULL DEFAULT ''"), ("held_dropped", "lost", "INTEGER NOT NULL DEFAULT 0")] {
         let has: bool = conn
-            .prepare(&format!(
-                "SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"
-            ))?
+            .prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))?
             .exists([col])?;
         if !has {
             conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {ty}"))?;
         }
     }
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_held_events_seq ON held_events (workspace_id, seq)",
-    )
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_held_events_seq ON held_events (workspace_id, seq)")
 }
 
 /// The caps held events are kept under.
@@ -171,9 +163,7 @@ pub struct RefetchRow {
 /// that is one.
 pub fn claimed_account(env: &SessionEventEnvelope) -> Option<Uuid> {
     let s = env.actor_stamp.as_ref()?;
-    s.actor
-        .account_id
-        .or_else(|| Uuid::parse_str(&s.actor.id).ok())
+    s.actor.account_id.or_else(|| Uuid::parse_str(&s.actor.id).ok())
 }
 
 /// One held event, as it arrived.
@@ -209,32 +199,18 @@ pub struct HeldStats {
 
 fn digest(text: &str) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(text.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl EventStore {
     /// Hold `items` of `workspace` (see the module docs), at `now_ms`.
     /// Returns how many are held now (a re-delivery of one already held
     /// counts, and keeps its first time).
-    pub fn hold_events(
-        &self,
-        workspace: Uuid,
-        items: &[HoldItem<'_>],
-        now_ms: i64,
-    ) -> Result<usize> {
+    pub fn hold_events(&self, workspace: Uuid, items: &[HoldItem<'_>], now_ms: i64) -> Result<usize> {
         self.hold_events_capped(workspace, items, now_ms, &Caps::DEFAULT)
     }
 
-    fn hold_events_capped(
-        &self,
-        workspace: Uuid,
-        items: &[HoldItem<'_>],
-        now_ms: i64,
-        caps: &Caps,
-    ) -> Result<usize> {
+    fn hold_events_capped(&self, workspace: Uuid, items: &[HoldItem<'_>], now_ms: i64, caps: &Caps) -> Result<usize> {
         if items.is_empty() {
             return Ok(0);
         }
@@ -246,22 +222,14 @@ impl EventStore {
             let json = serde_json::to_string(item.env)?;
             let d = digest(&json);
             let exists: bool = tx
-                .prepare_cached(
-                    "SELECT 1 FROM held_events WHERE workspace_id = ?1 AND digest = ?2",
-                )?
+                .prepare_cached("SELECT 1 FROM held_events WHERE workspace_id = ?1 AND digest = ?2")?
                 .exists(rusqlite::params![ws, d])?;
             if exists {
                 held += 1;
                 continue;
             }
-            let signer = item
-                .env
-                .signer_device_id
-                .map(|s| s.to_string())
-                .unwrap_or_default();
-            let claimed = claimed_account(item.env)
-                .map(|a| a.to_string())
-                .unwrap_or_default();
+            let signer = item.env.signer_device_id.map(|s| s.to_string()).unwrap_or_default();
+            let claimed = claimed_account(item.env).map(|a| a.to_string()).unwrap_or_default();
             let bytes = json.len() as i64;
             if !make_room(&tx, &ws, &signer, bytes, caps, now_ms)? {
                 dropped += 1;
@@ -302,23 +270,14 @@ impl EventStore {
             "SELECT digest, envelope_json, sealed_epoch, held_ms FROM held_events WHERE workspace_id = ?1 ORDER BY held_ms ASC, digest ASC",
         )?;
         let rows = stmt.query_map([workspace.to_string()], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, Option<i64>>(2)?,
-                r.get::<_, i64>(3)?,
-            ))
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, i64>(3)?))
         })?;
         let mut out = Vec::new();
         for row in rows {
             let (digest, json, epoch, held_ms) = row?;
             if let Ok(mut env) = serde_json::from_str::<SessionEventEnvelope>(&json) {
                 env.set_sealed_epoch(epoch.map(|e| e as u32));
-                out.push(HeldEvent {
-                    digest,
-                    env,
-                    held_ms,
-                });
+                out.push(HeldEvent { digest, env, held_ms });
             }
         }
         Ok(out)
@@ -326,9 +285,7 @@ impl EventStore {
 
     /// Every workspace with held events.
     pub fn held_workspaces(&self) -> Result<Vec<Uuid>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT DISTINCT workspace_id FROM held_events ORDER BY workspace_id")?;
+        let mut stmt = self.conn.prepare("SELECT DISTINCT workspace_id FROM held_events ORDER BY workspace_id")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for r in rows {
@@ -350,9 +307,7 @@ impl EventStore {
              'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
              'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved',\
              'workspaceRulesSet','passkeyRegistered','passkeyRemoved'))";
-        let (n, max): (i64, i64) = self.conn.query_row(q, rusqlite::params![ws, cfg], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })?;
+        let (n, max): (i64, i64) = self.conn.query_row(q, rusqlite::params![ws, cfg], |r| Ok((r.get(0)?, r.get(1)?)))?;
         let eq: (i64, i64) = self.conn.query_row(
             "SELECT COUNT(*), COALESCE(MAX(row_id), 0) FROM equivocations WHERE workspace_id = ?1",
             [&ws],
@@ -374,10 +329,7 @@ impl EventStore {
                 "DELETE FROM held_refetch WHERE workspace_id = ?1 AND seq = (SELECT seq FROM held_events WHERE workspace_id = ?1 AND digest = ?2)",
                 rusqlite::params![ws, d],
             )?;
-            tx.execute(
-                "DELETE FROM held_events WHERE workspace_id = ?1 AND digest = ?2",
-                rusqlite::params![ws, d],
-            )?;
+            tx.execute("DELETE FROM held_events WHERE workspace_id = ?1 AND digest = ?2", rusqlite::params![ws, d])?;
         }
         tx.commit()?;
         Ok(())
@@ -390,24 +342,13 @@ impl EventStore {
             "SELECT seq, signer, claimed FROM held_refetch r WHERE workspace_id = ?1 AND due = 0 AND attempts < ?2 \
              AND NOT EXISTS (SELECT 1 FROM held_events h WHERE h.workspace_id = r.workspace_id AND h.seq = r.seq) ORDER BY seq",
         )?;
-        let rows = stmt.query_map(
-            rusqlite::params![workspace.to_string(), HELD_REFETCH_TRIES],
-            |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            },
-        )?;
+        let rows = stmt.query_map(rusqlite::params![workspace.to_string(), HELD_REFETCH_TRIES], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })?;
         let mut out = Vec::new();
         for row in rows {
             let (seq, signer, claimed) = row?;
-            out.push(RefetchRow {
-                seq: seq as u64,
-                signer: Uuid::parse_str(&signer).ok(),
-                claimed: Uuid::parse_str(&claimed).ok(),
-            });
+            out.push(RefetchRow { seq: seq as u64, signer: Uuid::parse_str(&signer).ok(), claimed: Uuid::parse_str(&claimed).ok() });
         }
         Ok(out)
     }
@@ -417,10 +358,7 @@ impl EventStore {
         let ws = workspace.to_string();
         let tx = super::write_tx(&self.conn)?;
         for s in seqs {
-            tx.execute(
-                "UPDATE held_refetch SET due = 1 WHERE workspace_id = ?1 AND seq = ?2",
-                rusqlite::params![ws, *s as i64],
-            )?;
+            tx.execute("UPDATE held_refetch SET due = 1 WHERE workspace_id = ?1 AND seq = ?2", rusqlite::params![ws, *s as i64])?;
         }
         tx.commit()?;
         Ok(())
@@ -430,15 +368,8 @@ impl EventStore {
     /// lowest first.
     pub fn held_refetch_due(&self, workspace: Uuid, limit: usize) -> Result<Vec<u64>> {
         let mut stmt = self.conn.prepare("SELECT seq FROM held_refetch WHERE workspace_id = ?1 AND due = 1 ORDER BY seq LIMIT ?2")?;
-        let rows = stmt.query_map(
-            rusqlite::params![workspace.to_string(), limit as i64],
-            |r| r.get::<_, i64>(0),
-        )?;
-        Ok(rows
-            .collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(|s| s as u64)
-            .collect())
+        let rows = stmt.query_map(rusqlite::params![workspace.to_string(), limit as i64], |r| r.get::<_, i64>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?.into_iter().map(|s| s as u64).collect())
     }
 
     /// `seqs` of `workspace` are being fetched again: one try spent each,
@@ -459,10 +390,7 @@ impl EventStore {
     /// The event fetched again at `seq` was judged (applied or refused):
     /// nothing more to fetch.
     pub fn held_refetch_done(&self, workspace: Uuid, seq: u64) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM held_refetch WHERE workspace_id = ?1 AND seq = ?2",
-            rusqlite::params![workspace.to_string(), seq as i64],
-        )?;
+        self.conn.execute("DELETE FROM held_refetch WHERE workspace_id = ?1 AND seq = ?2", rusqlite::params![workspace.to_string(), seq as i64])?;
         Ok(())
     }
 
@@ -490,9 +418,7 @@ impl EventStore {
         let tx = super::write_tx(&self.conn)?;
         let per_ws: Vec<(String, i64)> = {
             let mut stmt = tx.prepare("SELECT workspace_id, COUNT(*) FROM held_events WHERE held_ms < ?1 GROUP BY workspace_id")?;
-            let rows = stmt.query_map([cutoff], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-            })?;
+            let rows = stmt.query_map([cutoff], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
             rows.collect::<rusqlite::Result<_>>()?
         };
         let n = tx.execute("DELETE FROM held_events WHERE held_ms < ?1", [cutoff])?;
@@ -503,9 +429,7 @@ impl EventStore {
         // expired it too).
         let stale: Vec<(String, i64)> = {
             let mut stmt = tx.prepare("SELECT workspace_id, COUNT(*) FROM held_refetch WHERE noted_ms < ?1 GROUP BY workspace_id")?;
-            let rows = stmt.query_map([cutoff], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-            })?;
+            let rows = stmt.query_map([cutoff], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
             rows.collect::<rusqlite::Result<_>>()?
         };
         tx.execute("DELETE FROM held_refetch WHERE noted_ms < ?1", [cutoff])?;
@@ -526,33 +450,16 @@ impl EventStore {
         )?;
         let (dropped, expired, lost): (i64, i64, i64) = self
             .conn
-            .query_row(
-                "SELECT dropped, expired, lost FROM held_dropped WHERE workspace_id = ?1",
-                [&ws],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
+            .query_row("SELECT dropped, expired, lost FROM held_dropped WHERE workspace_id = ?1", [&ws], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .unwrap_or((0, 0, 0));
-        let refetch: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM held_refetch WHERE workspace_id = ?1",
-            [&ws],
-            |r| r.get(0),
-        )?;
+        let refetch: i64 = self.conn.query_row("SELECT COUNT(*) FROM held_refetch WHERE workspace_id = ?1", [&ws], |r| r.get(0))?;
         let mut stmt = self.conn.prepare(
             "SELECT reason, COUNT(*) FROM held_events WHERE workspace_id = ?1 GROUP BY reason ORDER BY COUNT(*) DESC, reason ASC",
         )?;
         let reasons = stmt
             .query_map([&ws], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(HeldStats {
-            held,
-            signers,
-            bytes,
-            dropped,
-            expired,
-            refetch,
-            lost,
-            reasons,
-        })
+        Ok(HeldStats { held, signers, bytes, dropped, expired, refetch, lost, reasons })
     }
 }
 
@@ -566,26 +473,14 @@ fn note_lost(conn: &Connection, ws: &str, lost: i64) -> rusqlite::Result<()> {
 
 /// Remember a dropped relay event (`seq`) of `ws` for fetching again, within
 /// the cap (past it, lost). An event dropped again keeps its tries.
-fn note_refetch(
-    conn: &Connection,
-    ws: &str,
-    seq: u64,
-    signer: &str,
-    claimed: &str,
-    now_ms: i64,
-    caps: &Caps,
-) -> rusqlite::Result<()> {
+fn note_refetch(conn: &Connection, ws: &str, seq: u64, signer: &str, claimed: &str, now_ms: i64, caps: &Caps) -> rusqlite::Result<()> {
     let known: bool = conn
         .prepare_cached("SELECT 1 FROM held_refetch WHERE workspace_id = ?1 AND seq = ?2")?
         .exists(rusqlite::params![ws, seq as i64])?;
     if known {
         return Ok(());
     }
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM held_refetch WHERE workspace_id = ?1",
-        [ws],
-        |r| r.get(0),
-    )?;
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM held_refetch WHERE workspace_id = ?1", [ws], |r| r.get(0))?;
     if n >= caps.refetch_per_workspace {
         return note_lost(conn, ws, 1);
     }
@@ -610,14 +505,7 @@ fn note_dropped(conn: &Connection, ws: &str, dropped: i64, expired: i64) -> rusq
 /// each by evicting the newest event of the signer holding the most (only a
 /// signer strictly heavier than this one would become). `false`: no room,
 /// drop the new one.
-fn make_room(
-    conn: &Connection,
-    ws: &str,
-    signer: &str,
-    bytes: i64,
-    caps: &Caps,
-    now_ms: i64,
-) -> rusqlite::Result<bool> {
+fn make_room(conn: &Connection, ws: &str, signer: &str, bytes: i64, caps: &Caps, now_ms: i64) -> rusqlite::Result<bool> {
     let mine: i64 = conn.query_row(
         "SELECT COUNT(*) FROM held_events WHERE workspace_id = ?1 AND signer = ?2",
         rusqlite::params![ws, signer],
@@ -663,9 +551,7 @@ fn make_room(
                     )
                     .ok(),
             };
-            let Some((hws, hsigner, count)) = heaviest else {
-                return Ok(false);
-            };
+            let Some((hws, hsigner, count)) = heaviest else { return Ok(false) };
             // Only a signer strictly heavier than this one would become gives
             // way: first come stays.
             if count <= mine + 1 {
@@ -692,39 +578,18 @@ mod tests {
     use ligus_core::{SessionEvent, SessionEventEnvelope};
 
     fn env(signer: Uuid, n: u64) -> SessionEventEnvelope {
-        let mut e = SessionEventEnvelope::new(
-            Uuid::nil(),
-            Uuid::nil(),
-            n as i64,
-            SessionEvent::SessionTitleChanged {
-                title: format!("t{n}"),
-            },
-        );
+        let mut e = SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), n as i64, SessionEvent::SessionTitleChanged { title: format!("t{n}") });
         e.signer_device_id = Some(signer);
         e.signature = Some(vec![0; 64]);
         e
     }
 
     fn hold(store: &EventStore, ws: Uuid, envs: &[SessionEventEnvelope], now: i64, caps: &Caps) {
-        let items: Vec<HoldItem<'_>> = envs
-            .iter()
-            .map(|e| HoldItem {
-                env: e,
-                reason: "test",
-                seq: None,
-            })
-            .collect();
+        let items: Vec<HoldItem<'_>> = envs.iter().map(|e| HoldItem { env: e, reason: "test", seq: None }).collect();
         store.hold_events_capped(ws, &items, now, caps).unwrap();
     }
 
-    const SMALL: Caps = Caps {
-        per_signer: 5,
-        per_workspace: 12,
-        bytes_per_workspace: 1 << 20,
-        total: 20,
-        bytes_total: 1 << 20,
-        refetch_per_workspace: 30,
-    };
+    const SMALL: Caps = Caps { per_signer: 5, per_workspace: 12, bytes_per_workspace: 1 << 20, total: 20, bytes_total: 1 << 20, refetch_per_workspace: 30 };
 
     #[test]
     fn a_redelivery_is_one_row_and_keeps_its_first_time() {
@@ -751,15 +616,7 @@ mod tests {
         let st = store.held_stats(ws).unwrap();
         assert_eq!(st.held, 2 + SMALL.per_signer);
         assert_eq!(st.dropped, 50 - SMALL.per_signer);
-        assert_eq!(
-            store
-                .held_events(ws)
-                .unwrap()
-                .iter()
-                .filter(|h| h.env.signer_device_id == Some(honest))
-                .count(),
-            2
-        );
+        assert_eq!(store.held_events(ws).unwrap().iter().filter(|h| h.env.signer_device_id == Some(honest)).count(), 2);
     }
 
     #[test]
@@ -770,29 +627,15 @@ mod tests {
         hold(&store, ws, &[env(honest, 0)], 1, &SMALL);
         // A heavy flooder first, then many one-event signers.
         let heavy = Uuid::new_v4();
-        hold(
-            &store,
-            ws,
-            &(0..5).map(|n| env(heavy, n)).collect::<Vec<_>>(),
-            2,
-            &SMALL,
-        );
+        hold(&store, ws, &(0..5).map(|n| env(heavy, n)).collect::<Vec<_>>(), 2, &SMALL);
         let many: Vec<_> = (0..40).map(|n| env(Uuid::new_v4(), n)).collect();
         hold(&store, ws, &many, 3, &SMALL);
         let st = store.held_stats(ws).unwrap();
         assert_eq!(st.held, SMALL.per_workspace, "the workspace cap holds");
         let held = store.held_events(ws).unwrap();
-        assert!(
-            held.iter().any(|h| h.env.signer_device_id == Some(honest)),
-            "first come stays"
-        );
+        assert!(held.iter().any(|h| h.env.signer_device_id == Some(honest)), "first come stays");
         // The heavy signer gave way to the newcomers down to one event each.
-        assert!(
-            held.iter()
-                .filter(|h| h.env.signer_device_id == Some(heavy))
-                .count()
-                <= 1
-        );
+        assert!(held.iter().filter(|h| h.env.signer_device_id == Some(heavy)).count() <= 1);
         assert_eq!(st.dropped, 1 + 5 + 40 - SMALL.per_workspace);
     }
 
@@ -804,10 +647,7 @@ mod tests {
             let envs: Vec<_> = (0..10).map(|n| env(Uuid::new_v4(), n)).collect();
             hold(&store, ws, &envs, 1, &SMALL);
         }
-        let total: i64 = store
-            .conn
-            .query_row("SELECT COUNT(*) FROM held_events", [], |r| r.get(0))
-            .unwrap();
+        let total: i64 = store.conn.query_row("SELECT COUNT(*) FROM held_events", [], |r| r.get(0)).unwrap();
         assert_eq!(total, SMALL.total);
     }
 
@@ -816,20 +656,8 @@ mod tests {
         let store = EventStore::open_in_memory().unwrap();
         let ws = Uuid::new_v4();
         let now = 100 * 24 * 60 * 60 * 1000;
-        hold(
-            &store,
-            ws,
-            &[env(Uuid::new_v4(), 0)],
-            now - HELD_TTL_MS - 1,
-            &SMALL,
-        );
-        hold(
-            &store,
-            ws,
-            &[env(Uuid::new_v4(), 1)],
-            now - HELD_TTL_MS + 1000,
-            &SMALL,
-        );
+        hold(&store, ws, &[env(Uuid::new_v4(), 0)], now - HELD_TTL_MS - 1, &SMALL);
+        hold(&store, ws, &[env(Uuid::new_v4(), 1)], now - HELD_TTL_MS + 1000, &SMALL);
         assert_eq!(store.expire_held(now).unwrap(), 1);
         let st = store.held_stats(ws).unwrap();
         assert_eq!((st.held, st.expired), (1, 1));
@@ -843,9 +671,6 @@ mod tests {
         let mut e = env(Uuid::new_v4(), 0);
         e.set_sealed_epoch(Some(3));
         hold(&store, ws, &[e], 1, &SMALL);
-        assert_eq!(
-            store.held_events(ws).unwrap()[0].env.sealed_epoch(),
-            Some(3)
-        );
+        assert_eq!(store.held_events(ws).unwrap()[0].env.sealed_epoch(), Some(3));
     }
 }

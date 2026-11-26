@@ -12,13 +12,11 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use ligus_core::proposal_sets::{
-    is_self_assessment, CheckOutcome, CheckStatus, PreflightReport, ProposalSet, QuorumDial,
-    QuorumKnobs, ScoutAssessment, SetPhase, StopReason,
+    is_self_assessment, CheckOutcome, CheckStatus, PreflightReport, ProposalSet, QuorumDial, QuorumKnobs,
+    ScoutAssessment, SetPhase, StopReason,
 };
 use ligus_core::{ActionProposal, ChatSession, ProposalKind, ProposalStatus, Timestamp};
-use ligus_proto::{
-    PreflightCheckDto, PreflightDto, ProposalSetDto, ScoutAssessmentDto, SetAlternativeDto,
-};
+use ligus_proto::{PreflightCheckDto, PreflightDto, ProposalSetDto, ScoutAssessmentDto, SetAlternativeDto};
 use ligus_runtime::chat_service::{ChatService, QuorumOutcome};
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
@@ -73,10 +71,7 @@ fn check_dto(c: &CheckOutcome) -> PreflightCheckDto {
         CheckStatus::Skipped => "skipped",
         CheckStatus::Unknown => "unknown",
     };
-    PreflightCheckDto {
-        status: status.into(),
-        note: c.note.clone(),
-    }
+    PreflightCheckDto { status: status.into(), note: c.note.clone() }
 }
 
 fn dial_of(set: &ProposalSet) -> &'static str {
@@ -85,23 +80,14 @@ fn dial_of(set: &ProposalSet) -> &'static str {
         required_approvals: set.required_approvals,
         quality_bar: set.quality_bar,
     };
-    [
-        (QuorumDial::Fast, "fast"),
-        (QuorumDial::Balanced, "balanced"),
-        (QuorumDial::Careful, "careful"),
-    ]
-    .into_iter()
-    .find(|(d, _)| d.knobs() == now)
-    .map_or("custom", |(_, n)| n)
+    [(QuorumDial::Fast, "fast"), (QuorumDial::Balanced, "balanced"), (QuorumDial::Careful, "careful")]
+        .into_iter()
+        .find(|(d, _)| d.knobs() == now)
+        .map_or("custom", |(_, n)| n)
 }
 
 pub(crate) fn set_dto(set: &ProposalSet, session: &ChatSession) -> ProposalSetDto {
-    let pending = pending()
-        .lock()
-        .unwrap()
-        .get(&set.id)
-        .cloned()
-        .unwrap_or_default();
+    let pending = pending().lock().unwrap().get(&set.id).cloned().unwrap_or_default();
     let alternatives = set
         .alternatives
         .iter()
@@ -199,36 +185,19 @@ pub(crate) fn set_dto(set: &ProposalSet, session: &ChatSession) -> ProposalSetDt
 }
 
 fn label_of(set: &ProposalSet, id: Uuid) -> String {
-    set.alternatives
-        .iter()
-        .position(|a| *a == id)
-        .map(label)
-        .unwrap_or_else(|| "?".into())
+    set.alternatives.iter().position(|a| *a == id).map(label).unwrap_or_else(|| "?".into())
 }
 
 fn title_of(session: &ChatSession, id: Uuid) -> String {
-    session
-        .proposals
-        .iter()
-        .find(|p| p.id == id)
-        .map(|p| crate::shown(&p.title))
-        .unwrap_or_default()
+    session.proposals.iter().find(|p| p.id == id).map(|p| crate::shown(&p.title)).unwrap_or_default()
 }
 
 /// Post the chat notes for a settled quorum: the front-runner, the frozen
 /// rivals, and a stop signal naming each rival's scouts.
 fn announce(svc: &mut ChatService, sid: Uuid, wid: Uuid, set_id: Uuid, out: &QuorumOutcome) {
-    let Ok(Some(session)) = svc.load_in(wid, sid) else {
-        return;
-    };
-    let Some(set) = session.proposal_sets.iter().find(|s| s.id == set_id) else {
-        return;
-    };
-    let lead = format!(
-        "{} \u{201c}{}\u{201d}",
-        label_of(set, out.front_runner),
-        title_of(&session, out.front_runner)
-    );
+    let Ok(Some(session)) = svc.load_in(wid, sid) else { return };
+    let Some(set) = session.proposal_sets.iter().find(|s| s.id == set_id) else { return };
+    let lead = format!("{} \u{201c}{}\u{201d}", label_of(set, out.front_runner), title_of(&session, out.front_runner));
     let how = if out.tie_break {
         "nothing reached quorum by the deadline, and it has the most support".to_string()
     } else {
@@ -275,30 +244,19 @@ pub(crate) fn assessments_arrived(author: &str, recorded: &[(Uuid, Uuid)]) {
 /// when that request asked for options. Joins an existing set for the same
 /// trigger, or opens one once a second producer has proposed.
 pub(crate) fn group_same_trigger(svc: &mut ChatService, sid: Uuid, wid: Uuid, new_id: Uuid) {
-    let Ok(Some(session)) = svc.load_in(wid, sid) else {
-        return;
-    };
-    let Some(new) = session.proposals.iter().find(|p| p.id == new_id) else {
-        return;
-    };
+    let Ok(Some(session)) = svc.load_in(wid, sid) else { return };
+    let Some(new) = session.proposals.iter().find(|p| p.id == new_id) else { return };
     if new.set_id.is_some() || new.workflow.is_some() || new.parent_id.is_some() {
         return;
     }
-    let Some(trigger) = session
-        .messages
-        .iter()
-        .rev()
-        .find(|m| m.role == ligus_core::MessageRole::User)
-    else {
+    let Some(trigger) = session.messages.iter().rev().find(|m| m.role == ligus_core::MessageRole::User) else {
         return;
     };
     if !ligus_core::proposal_sets::wants_options(&trigger.body) {
         return;
     }
     let producer = |p: &ActionProposal| {
-        p.producing_agent_id
-            .map(|a| a.to_string())
-            .unwrap_or_else(|| p.author_actor_id.clone())
+        p.producing_agent_id.map(|a| a.to_string()).unwrap_or_else(|| p.author_actor_id.clone())
     };
     if let Some(set) = session
         .proposal_sets
@@ -353,20 +311,14 @@ pub(crate) struct Scout {
 /// alternative it produced; scouts on a runtime not yet used for that
 /// alternative go first (diversity stands in for numbers), then the least
 /// loaded. Deterministic.
-pub(crate) fn plan_scouts(
-    set: &ProposalSet,
-    proposals: &[ActionProposal],
-    scouts: &[Scout],
-) -> Vec<(Uuid, usize)> {
+pub(crate) fn plan_scouts(set: &ProposalSet, proposals: &[ActionProposal], scouts: &[Scout]) -> Vec<(Uuid, usize)> {
     let mut load = vec![0usize; scouts.len()];
     let mut plan = Vec::new();
     for pid in &set.alternatives {
         if !set.is_active(proposals, *pid) || set.is_frozen(*pid) {
             continue;
         }
-        let Some(p) = proposals.iter().find(|p| p.id == *pid) else {
-            continue;
-        };
+        let Some(p) = proposals.iter().find(|p| p.id == *pid) else { continue };
         let fresh: Vec<&ScoutAssessment> = set
             .assessments
             .iter()
@@ -394,9 +346,7 @@ pub(crate) fn plan_scouts(
             .collect();
         for _ in 0..needed {
             candidates.sort_by_key(|&i| (used.contains(&scouts[i].runtime), load[i], i));
-            let Some(&pick) = candidates.first() else {
-                break;
-            };
+            let Some(&pick) = candidates.first() else { break };
             candidates.retain(|&i| i != pick);
             used.push(scouts[pick].runtime.clone());
             load[pick] += 1;
@@ -410,25 +360,14 @@ fn scouts_for(session: &ChatSession) -> Vec<Scout> {
     let mut agents: Vec<&ligus_core::WorkspaceAgent> = session
         .workspace_agents
         .iter()
-        .filter(|a| {
-            session.participant_agent_ids.is_empty()
-                || session.participant_agent_ids.contains(&a.id)
-        })
+        .filter(|a| session.participant_agent_ids.is_empty() || session.participant_agent_ids.contains(&a.id))
         .collect();
     agents.sort_by(|a, b| a.name.cmp(&b.name));
     let mut out: Vec<Scout> = agents
         .into_iter()
-        .map(|a| Scout {
-            agent_id: Some(a.id),
-            name: a.name.clone(),
-            runtime: a.runtime_id.clone(),
-        })
+        .map(|a| Scout { agent_id: Some(a.id), name: a.name.clone(), runtime: a.runtime_id.clone() })
         .collect();
-    out.push(Scout {
-        agent_id: None,
-        name: "Ligus".into(),
-        runtime: session.runtime_id.clone(),
-    });
+    out.push(Scout { agent_id: None, name: "Ligus".into(), runtime: session.runtime_id.clone() });
     out
 }
 
@@ -475,15 +414,8 @@ pub(crate) async fn send_scouts(
     let set_id = Uuid::parse_str(&set_id).map_err(map_err)?;
     let (prompts, names) = {
         let svc = state.service.lock().unwrap();
-        let session = svc
-            .load_resolving(sid)
-            .map_err(map_err)?
-            .ok_or("unknown session")?;
-        let set = session
-            .proposal_sets
-            .iter()
-            .find(|s| s.id == set_id)
-            .ok_or("unknown proposal set")?;
+        let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
+        let set = session.proposal_sets.iter().find(|s| s.id == set_id).ok_or("unknown proposal set")?;
         if set.phase != SetPhase::Scouting {
             return Err("scouts only go out while the set is scouting".into());
         }
@@ -492,9 +424,7 @@ pub(crate) async fn send_scouts(
         let mut prompts = Vec::new();
         let mut names = Vec::new();
         for (pid, i) in plan {
-            let Some(p) = session.proposals.iter().find(|p| p.id == pid) else {
-                continue;
-            };
+            let Some(p) = session.proposals.iter().find(|p| p.id == pid) else { continue };
             prompts.push(scout_prompt(set, p, &scouts[i]));
             names.push((pid, scouts[i].name.clone()));
         }
@@ -503,20 +433,13 @@ pub(crate) async fn send_scouts(
     if prompts.is_empty() {
         return Err("no scouts are available: every alternative already has fresh assessments, or only its own producer could assess it".into());
     }
-    pending()
-        .lock()
-        .unwrap()
-        .entry(set_id)
-        .or_default()
-        .extend(names);
+    pending().lock().unwrap().entry(set_id).or_default().extend(names);
     let n = prompts.len() as u32;
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         for body in prompts {
             let state = app2.state::<AppState>();
-            if let Err(e) =
-                crate::send_message(app2.clone(), state, sid.to_string(), body, None).await
-            {
+            if let Err(e) = crate::send_message(app2.clone(), state, sid.to_string(), body, None).await {
                 tracing::warn!(target: "proposal_sets", "scout turn failed: {e}");
             }
             let _ = app2.emit("workspace://synced", 1);
@@ -526,25 +449,14 @@ pub(crate) async fn send_scouts(
 }
 
 #[tauri::command]
-pub(crate) async fn list_proposal_sets(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-) -> Result<Vec<ProposalSetDto>, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        list_proposal_sets_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)
-    })
-    .await
+pub(crate) async fn list_proposal_sets(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<ProposalSetDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_proposal_sets_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
 }
 
-pub(crate) fn list_proposal_sets_sync(
-    state: State<AppState>,
-    session_id: String,
-) -> Result<Vec<ProposalSetDto>, String> {
+pub(crate) fn list_proposal_sets_sync(state: State<AppState>, session_id: String) -> Result<Vec<ProposalSetDto>, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let Some(mut session) = svc.load_resolving(sid).map_err(map_err)? else {
-        return Ok(Vec::new());
-    };
+    let Some(mut session) = svc.load_resolving(sid).map_err(map_err)? else { return Ok(Vec::new()) };
     // A scouting deadline that passed with a leader: settle it now (any
     // device may; the first tie-break in canonical order wins).
     let now = Timestamp::now();
@@ -561,55 +473,21 @@ pub(crate) fn list_proposal_sets_sync(
                 announce(&mut svc, sid, wid, set_id, &out);
             }
         }
-        session = svc
-            .load_in(wid, sid)
-            .map_err(map_err)?
-            .ok_or("unknown session")?;
+        session = svc.load_in(wid, sid).map_err(map_err)?.ok_or("unknown session")?;
     }
-    Ok(session
-        .proposal_sets
-        .iter()
-        .rev()
-        .map(|s| set_dto(s, &session))
-        .collect())
+    Ok(session.proposal_sets.iter().rev().map(|s| set_dto(s, &session)).collect())
 }
 
 fn one_set(svc: &ChatService, sid: Uuid, set_id: Uuid) -> Result<ProposalSetDto, String> {
-    let session = svc
-        .load_resolving(sid)
-        .map_err(map_err)?
-        .ok_or("unknown session")?;
-    let set = session
-        .proposal_sets
-        .iter()
-        .find(|s| s.id == set_id)
-        .ok_or("unknown proposal set")?;
+    let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
+    let set = session.proposal_sets.iter().find(|s| s.id == set_id).ok_or("unknown proposal set")?;
     Ok(set_dto(set, &session))
 }
 
 /// The "fast ↔ careful" dial (`dial`), or explicit knobs.
 #[tauri::command]
-pub(crate) async fn tune_proposal_set(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-    set_id: String,
-    dial: Option<String>,
-    agent_quorum: Option<u32>,
-    required_approvals: Option<u32>,
-    quality_bar: Option<u32>,
-) -> Result<ProposalSetDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        tune_proposal_set_sync(
-            tauri::Manager::state::<AppState>(ligus_app),
-            session_id,
-            set_id,
-            dial,
-            agent_quorum,
-            required_approvals,
-            quality_bar,
-        )
-    })
-    .await
+pub(crate) async fn tune_proposal_set(ligus_app: tauri::AppHandle, session_id: String, set_id: String, dial: Option<String>, agent_quorum: Option<u32>, required_approvals: Option<u32>, quality_bar: Option<u32>) -> Result<ProposalSetDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| tune_proposal_set_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, set_id, dial, agent_quorum, required_approvals, quality_bar)).await
 }
 
 pub(crate) fn tune_proposal_set_sync(
@@ -624,15 +502,8 @@ pub(crate) fn tune_proposal_set_sync(
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let set_id = Uuid::parse_str(&set_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let session = svc
-        .load_resolving(sid)
-        .map_err(map_err)?
-        .ok_or("unknown session")?;
-    let set = session
-        .proposal_sets
-        .iter()
-        .find(|s| s.id == set_id)
-        .ok_or("unknown proposal set")?;
+    let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
+    let set = session.proposal_sets.iter().find(|s| s.id == set_id).ok_or("unknown proposal set")?;
     let mut knobs = match dial.as_deref() {
         Some("fast") => QuorumDial::Fast.knobs(),
         Some("careful") => QuorumDial::Careful.knobs(),
@@ -646,12 +517,9 @@ pub(crate) fn tune_proposal_set_sync(
     knobs.agent_quorum = agent_quorum.unwrap_or(knobs.agent_quorum);
     knobs.required_approvals = required_approvals.unwrap_or(knobs.required_approvals);
     knobs.quality_bar = quality_bar.unwrap_or(knobs.quality_bar);
-    svc.tune_proposal_set(sid, session.workspace_id, set_id, knobs)
-        .map_err(map_err)?;
+    svc.tune_proposal_set(sid, session.workspace_id, set_id, knobs).map_err(map_err)?;
     // A lower bar may have reached quorum.
-    if let Ok(Some(out)) =
-        svc.settle_proposal_set(sid, session.workspace_id, set_id, Timestamp::now())
-    {
+    if let Ok(Some(out)) = svc.settle_proposal_set(sid, session.workspace_id, set_id, Timestamp::now()) {
         announce(&mut svc, sid, session.workspace_id, set_id, &out);
     }
     one_set(&svc, sid, set_id)
@@ -660,19 +528,8 @@ pub(crate) fn tune_proposal_set_sync(
 /// New evidence: advance the round (agent support decays) so scouts
 /// re-evaluate. Also called when a person comments on an alternative.
 #[tauri::command]
-pub(crate) async fn advance_proposal_set_round(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-    set_id: String,
-) -> Result<ProposalSetDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        advance_proposal_set_round_sync(
-            tauri::Manager::state::<AppState>(ligus_app),
-            session_id,
-            set_id,
-        )
-    })
-    .await
+pub(crate) async fn advance_proposal_set_round(ligus_app: tauri::AppHandle, session_id: String, set_id: String) -> Result<ProposalSetDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| advance_proposal_set_round_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, set_id)).await
 }
 
 pub(crate) fn advance_proposal_set_round_sync(
@@ -683,42 +540,23 @@ pub(crate) fn advance_proposal_set_round_sync(
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let set_id = Uuid::parse_str(&set_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let wid = svc
-        .workspace_of(sid)
-        .map_err(map_err)?
-        .ok_or("unknown session")?;
-    svc.advance_set_round(sid, wid, set_id, "re-evaluate")
-        .map_err(map_err)?;
+    let wid = svc.workspace_of(sid).map_err(map_err)?.ok_or("unknown session")?;
+    svc.advance_set_round(sid, wid, set_id, "re-evaluate").map_err(map_err)?;
     one_set(&svc, sid, set_id)
 }
 
 /// A person commented on (or asked for changes to) an alternative: that is
 /// new evidence, so the set's round advances.
-pub(crate) fn on_alternative_feedback(
-    svc: &mut ChatService,
-    sid: Uuid,
-    wid: Uuid,
-    proposal_id: Uuid,
-) {
-    let Ok(Some(session)) = svc.load_in(wid, sid) else {
-        return;
-    };
-    if let Some(set) = session
-        .proposal_sets
-        .iter()
-        .find(|s| s.is_open() && s.contains(proposal_id))
-    {
+pub(crate) fn on_alternative_feedback(svc: &mut ChatService, sid: Uuid, wid: Uuid, proposal_id: Uuid) {
+    let Ok(Some(session)) = svc.load_in(wid, sid) else { return };
+    if let Some(set) = session.proposal_sets.iter().find(|s| s.is_open() && s.contains(proposal_id)) {
         let _ = svc.advance_set_round(sid, wid, set.id, "comment");
     }
 }
 
 /// Refuse agent work on a frozen alternative (a rival while piping, or stopped).
 pub(crate) fn ensure_not_frozen(session: &ChatSession, proposal_id: Uuid) -> Result<(), String> {
-    match session
-        .proposal_sets
-        .iter()
-        .find(|s| s.contains(proposal_id))
-    {
+    match session.proposal_sets.iter().find(|s| s.contains(proposal_id)) {
         Some(set) if set.is_frozen(proposal_id) && set.phase != SetPhase::Decided => {
             Err("this alternative is frozen while another is the front-runner".into())
         }
@@ -727,21 +565,9 @@ pub(crate) fn ensure_not_frozen(session: &ChatSession, proposal_id: Uuid) -> Res
 }
 
 /// After a revision turn: put the new version in its parent's set.
-pub(crate) fn link_revision(
-    svc: &mut ChatService,
-    sid: Uuid,
-    wid: Uuid,
-    parent: Uuid,
-    child: Uuid,
-) {
-    let Ok(Some(session)) = svc.load_in(wid, sid) else {
-        return;
-    };
-    if let Some(set) = session
-        .proposal_sets
-        .iter()
-        .find(|s| s.is_open() && s.contains(parent))
-    {
+pub(crate) fn link_revision(svc: &mut ChatService, sid: Uuid, wid: Uuid, parent: Uuid, child: Uuid) {
+    let Ok(Some(session)) = svc.load_in(wid, sid) else { return };
+    if let Some(set) = session.proposal_sets.iter().find(|s| s.is_open() && s.contains(parent)) {
         let _ = svc.add_set_alternative(sid, wid, set.id, child, Some(parent));
     }
 }
@@ -749,28 +575,12 @@ pub(crate) fn link_revision(
 /// Whether `proposal_id` must go through its set's two-phase commit rather
 /// than a plain Implement.
 pub(crate) fn guarded_by_open_set(session: &ChatSession, proposal_id: Uuid) -> bool {
-    session
-        .proposal_sets
-        .iter()
-        .any(|s| s.is_open() && s.contains(proposal_id))
+    session.proposal_sets.iter().any(|s| s.is_open() && s.contains(proposal_id))
 }
 
 #[tauri::command]
-pub(crate) async fn withdraw_set_alternative(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-    set_id: String,
-    proposal_id: String,
-) -> Result<ProposalSetDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        withdraw_set_alternative_sync(
-            tauri::Manager::state::<AppState>(ligus_app),
-            session_id,
-            set_id,
-            proposal_id,
-        )
-    })
-    .await
+pub(crate) async fn withdraw_set_alternative(ligus_app: tauri::AppHandle, session_id: String, set_id: String, proposal_id: String) -> Result<ProposalSetDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| withdraw_set_alternative_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, set_id, proposal_id)).await
 }
 
 pub(crate) fn withdraw_set_alternative_sync(
@@ -783,30 +593,15 @@ pub(crate) fn withdraw_set_alternative_sync(
     let set_id = Uuid::parse_str(&set_id).map_err(map_err)?;
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let wid = svc
-        .workspace_of(sid)
-        .map_err(map_err)?
-        .ok_or("unknown session")?;
-    svc.withdraw_set_alternative(sid, wid, set_id, pid)
-        .map_err(map_err)?;
+    let wid = svc.workspace_of(sid).map_err(map_err)?.ok_or("unknown session")?;
+    svc.withdraw_set_alternative(sid, wid, set_id, pid).map_err(map_err)?;
     one_set(&svc, sid, set_id)
 }
 
 /// Close the set without choosing.
 #[tauri::command]
-pub(crate) async fn close_proposal_set(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-    set_id: String,
-) -> Result<ProposalSetDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        close_proposal_set_sync(
-            tauri::Manager::state::<AppState>(ligus_app),
-            session_id,
-            set_id,
-        )
-    })
-    .await
+pub(crate) async fn close_proposal_set(ligus_app: tauri::AppHandle, session_id: String, set_id: String) -> Result<ProposalSetDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| close_proposal_set_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, set_id)).await
 }
 
 pub(crate) fn close_proposal_set_sync(
@@ -817,12 +612,8 @@ pub(crate) fn close_proposal_set_sync(
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let set_id = Uuid::parse_str(&set_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let wid = svc
-        .workspace_of(sid)
-        .map_err(map_err)?
-        .ok_or("unknown session")?;
-    svc.decide_proposal_set(sid, wid, set_id, None)
-        .map_err(map_err)?;
+    let wid = svc.workspace_of(sid).map_err(map_err)?.ok_or("unknown session")?;
+    svc.decide_proposal_set(sid, wid, set_id, None).map_err(map_err)?;
     one_set(&svc, sid, set_id)
 }
 
@@ -850,22 +641,9 @@ pub(crate) async fn preflight_proposal_set(
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
     let (wid, set, proposal, agent_host, session) = {
         let svc = state.service.lock().unwrap();
-        let session = svc
-            .load_resolving(sid)
-            .map_err(map_err)?
-            .ok_or("unknown session")?;
-        let set = session
-            .proposal_sets
-            .iter()
-            .find(|s| s.id == set_id)
-            .cloned()
-            .ok_or("unknown proposal set")?;
-        let p = session
-            .proposals
-            .iter()
-            .find(|p| p.id == pid)
-            .cloned()
-            .ok_or("unknown proposal")?;
+        let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
+        let set = session.proposal_sets.iter().find(|s| s.id == set_id).cloned().ok_or("unknown proposal set")?;
+        let p = session.proposals.iter().find(|p| p.id == pid).cloned().ok_or("unknown proposal")?;
         if !set.is_open() || !set.is_active(&session.proposals, pid) {
             return Err("that alternative isn't live in an open set".into());
         }
@@ -892,38 +670,18 @@ pub(crate) async fn preflight_proposal_set(
     // the settings).
     let policy = {
         let envelope = ligus_core::sandbox::envelope_for_session(&session);
-        crate::guards::turn_sandbox_policy_with(
-            &state,
-            &session,
-            &envelope,
-            &ligus_runtime::author_gate::GatePlan::Full,
-            true,
-            &[],
-        )
+        crate::guards::turn_sandbox_policy_with(&state, &session, &envelope, &ligus_runtime::author_gate::GatePlan::Full, true, &[])
     };
     // A proposal for a workspace repo is checked against this device's
     // checkout of that repo (5.7), never the workspace's bound folder.
     let repo = match proposal.repo_id {
         Some(r) => {
             let svc = state.service.lock().unwrap();
-            svc.store()
-                .chat_checkout(sid, r)
-                .ok()
-                .flatten()
-                .or_else(|| {
-                    svc.store()
-                        .primary_checkout(wid, r)
-                        .ok()
-                        .flatten()
-                        .map(|m| m.path)
-                })
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default()
+            svc.store().chat_checkout(sid, r).ok().flatten().or_else(|| svc.store().primary_checkout(wid, r).ok().flatten().map(|m| m.path)).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
         }
         None => state.workspace_repo_root(),
     };
-    let repo_ok = !repo.trim().is_empty()
-        && ligus_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo));
+    let repo_ok = !repo.trim().is_empty() && ligus_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo));
     let mut hosts = Vec::new();
     if proposal.diff.is_some() {
         hosts.push(("this device".to_string(), true));
@@ -946,20 +704,14 @@ pub(crate) async fn preflight_proposal_set(
             test_timeout: None,
             hosts,
         };
-        ligus_runtime::executor::with_turn_sync(policy, || {
-            ligus_runtime::proposal_preflight::run(
-                &inputs,
-                &format!("preflight-{}", Uuid::new_v4()),
-            )
-        })
+        ligus_runtime::executor::with_turn_sync(policy, || ligus_runtime::proposal_preflight::run(&inputs, &format!("preflight-{}", Uuid::new_v4())))
     })
     .await
     .map_err(map_err)?;
     let passed = report.passed();
     let dto = {
         let mut svc = state.service.lock().unwrap();
-        svc.record_set_preflight(sid, wid, set_id, pid, report)
-            .map_err(map_err)?;
+        svc.record_set_preflight(sid, wid, set_id, pid, report).map_err(map_err)?;
         if !passed {
             let _ = svc.post_system_note(
                 sid,
@@ -992,15 +744,8 @@ pub(crate) async fn apply_proposal_set(
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
     let wid = {
         let svc = state.service.lock().unwrap();
-        let session = svc
-            .load_resolving(sid)
-            .map_err(map_err)?
-            .ok_or("unknown session")?;
-        let set = session
-            .proposal_sets
-            .iter()
-            .find(|s| s.id == set_id)
-            .ok_or("unknown proposal set")?;
+        let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
+        let set = session.proposal_sets.iter().find(|s| s.id == set_id).ok_or("unknown proposal set")?;
         if !set.can_decide_for(&session.proposals, pid) {
             return Err("run a passing pre-flight on an approved alternative first".into());
         }
@@ -1011,25 +756,14 @@ pub(crate) async fn apply_proposal_set(
         }
         // Authorize the decision before touching the code.
         let actor = crate::local_actor(&state);
-        let probe = ligus_core::SessionEvent::ProposalSetDecided {
-            set_id,
-            winner: Some(pid),
-            at: Timestamp::now(),
-        };
+        let probe = ligus_core::SessionEvent::ProposalSetDecided { set_id, winner: Some(pid), at: Timestamp::now() };
         let d = ligus_core::authorize(&probe, &actor.id, session.role_of(&actor.id), &session);
         if !d.allowed {
             return Err(d.summary);
         }
         session.workspace_id
     };
-    if let Err(e) = crate::implement_proposal_inner(
-        app.clone(),
-        state.clone(),
-        session_id.clone(),
-        proposal_id.clone(),
-    )
-    .await
-    {
+    if let Err(e) = crate::implement_proposal_inner(app.clone(), state.clone(), session_id.clone(), proposal_id.clone()).await {
         let mut svc = state.service.lock().unwrap();
         let report = PreflightReport {
             tests: CheckOutcome::skipped("not run"),
@@ -1041,13 +775,8 @@ pub(crate) async fn apply_proposal_set(
     }
     let dto = {
         let mut svc = state.service.lock().unwrap();
-        let set = svc
-            .decide_proposal_set(sid, wid, set_id, Some(pid))
-            .map_err(map_err)?;
-        let session = svc
-            .load_in(wid, sid)
-            .map_err(map_err)?
-            .ok_or("unknown session")?;
+        let set = svc.decide_proposal_set(sid, wid, set_id, Some(pid)).map_err(map_err)?;
+        let session = svc.load_in(wid, sid).map_err(map_err)?.ok_or("unknown session")?;
         let _ = svc.post_system_note(
             sid,
             wid,
@@ -1083,40 +812,22 @@ pub(crate) async fn revert_proposal(
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
     let (session, p) = {
         let svc = state.service.lock().unwrap();
-        let session = svc
-            .load_resolving(sid)
-            .map_err(map_err)?
-            .ok_or("unknown session")?;
-        let p = session
-            .proposals
-            .iter()
-            .find(|p| p.id == pid)
-            .cloned()
-            .ok_or("unknown proposal")?;
+        let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
+        let p = session.proposals.iter().find(|p| p.id == pid).cloned().ok_or("unknown proposal")?;
         (session, p)
     };
     let wid = session.workspace_id;
     if p.status != ProposalStatus::Applied || p.reverted {
         return Err("only an applied change that hasn't been reverted can be reverted".into());
     }
-    let diff = p
-        .diff
-        .clone()
-        .ok_or("only file changes can be reverted here")?;
+    let diff = p.diff.clone().ok_or("only file changes can be reverted here")?;
     let title = p.title.clone();
     match revert_target(p.repo_id, session.repo.as_ref().and_then(|r| r.repo_id))? {
         RevertTarget::Repo => {
-            let prepared = crate::repos_ui::turn_repo(&state, &session)?
-                .ok_or("this chat has no repository on this device")?;
+            let prepared = crate::repos_ui::turn_repo(&state, &session)?.ok_or("this chat has no repository on this device")?;
             let checkout = prepared.checkout.clone();
             tauri::async_runtime::spawn_blocking(move || {
-                ligus_runtime::repos::apply::revert_on_chat_branch(
-                    &checkout,
-                    &sid.to_string(),
-                    &diff,
-                    &title,
-                    pid,
-                )
+                ligus_runtime::repos::apply::revert_on_chat_branch(&checkout, &sid.to_string(), &diff, &title, pid)
             })
             .await
             .map_err(map_err)?
@@ -1130,18 +841,13 @@ pub(crate) async fn revert_proposal(
             tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
                 let repo_path = std::path::Path::new(&repo);
                 let chat = ligus_runtime::git_worktree::is_git_repo(repo_path)
-                    .then(|| {
-                        ligus_runtime::git_worktree::chat_worktree(repo_path, &sid.to_string()).ok()
-                    })
+                    .then(|| ligus_runtime::git_worktree::chat_worktree(repo_path, &sid.to_string()).ok())
                     .flatten();
                 match chat {
                     Some(wt) => {
                         let wt = wt.to_string_lossy().into_owned();
                         reverse_patch(&wt, &diff)?;
-                        crate::commit_worktree(
-                            &wt,
-                            &ligus_runtime::repos::apply::legacy_revert_message(&title),
-                        )
+                        crate::commit_worktree(&wt, &ligus_runtime::repos::apply::legacy_revert_message(&title))
                     }
                     None => reverse_patch(&repo, &diff),
                 }
@@ -1153,11 +859,7 @@ pub(crate) async fn revert_proposal(
     {
         let mut svc = state.service.lock().unwrap();
         svc.mark_proposal_reverted(sid, wid, pid).map_err(map_err)?;
-        let _ = svc.post_system_note(
-            sid,
-            wid,
-            format!("\u{21a9}\u{fe0f} Reverted \u{201c}{}\u{201d}.", p.title),
-        );
+        let _ = svc.post_system_note(sid, wid, format!("\u{21a9}\u{fe0f} Reverted \u{201c}{}\u{201d}.", p.title));
     }
     let _ = app.emit("workspace://synced", 1);
     Ok(())
@@ -1175,17 +877,11 @@ pub(crate) enum RevertTarget {
 /// A proposal made in a repository reverts only in that repository's
 /// checkout, never the workspace folder (as its apply, review F1); a chat
 /// that moved to another repository can't revert it here.
-pub(crate) fn revert_target(
-    proposal_repo: Option<Uuid>,
-    chat_repo: Option<Uuid>,
-) -> Result<RevertTarget, String> {
+pub(crate) fn revert_target(proposal_repo: Option<Uuid>, chat_repo: Option<Uuid>) -> Result<RevertTarget, String> {
     match proposal_repo {
         None => Ok(RevertTarget::Legacy),
         Some(r) if chat_repo == Some(r) => Ok(RevertTarget::Repo),
-        Some(_) => Err(
-            "This chat now works in another repository; switch it back to revert this change."
-                .into(),
-        ),
+        Some(_) => Err("This chat now works in another repository; switch it back to revert this change.".into()),
     }
 }
 
@@ -1201,12 +897,7 @@ fn reverse_patch(dir: &str, diff: &str) -> Result<(), String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("git apply: {e}"))?;
-    child
-        .stdin
-        .take()
-        .ok_or("git apply: no stdin")?
-        .write_all(diff.as_bytes())
-        .map_err(map_err)?;
+    child.stdin.take().ok_or("git apply: no stdin")?.write_all(diff.as_bytes()).map_err(map_err)?;
     let out = child.wait_with_output().map_err(map_err)?;
     if out.status.success() {
         Ok(())
@@ -1234,29 +925,15 @@ mod tests {
     fn service() -> ChatService {
         let store = EventStore::open_in_memory().unwrap();
         let author = ActorIdentity::new("u1", "Mara", ActorKind::Human);
-        let mut svc = ChatService::new(
-            store,
-            SigningKeypair::generate().unwrap(),
-            SigningKeypair::generate().unwrap(),
-            author,
-        );
+        let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
         svc.enable_test_presence();
         svc
     }
 
     const ALTS: &str = r#"Here are three. [[alternatives: {"question": "Which cache?", "taskClass": "design", "options": [{"title": "Redis"}, {"title": "In-process LRU"}, {"title": "No cache"}]}]]"#;
 
-    fn finalize(
-        svc: &mut ChatService,
-        sid: Uuid,
-        wid: Uuid,
-        who: &str,
-        agent: Option<Uuid>,
-        body: &str,
-    ) -> String {
-        let mid = svc
-            .begin_assistant_message(sid, wid, who, "rt", agent, None)
-            .unwrap();
+    fn finalize(svc: &mut ChatService, sid: Uuid, wid: Uuid, who: &str, agent: Option<Uuid>, body: &str) -> String {
+        let mid = svc.begin_assistant_message(sid, wid, who, "rt", agent, None).unwrap();
         crate::finalize_reply(svc, sid, wid, mid, who, agent, "", body, false).unwrap()
     }
 
@@ -1280,69 +957,30 @@ mod tests {
         let set = s.proposal_sets[0].clone();
         assert_eq!(set.alternatives.len(), 3);
         assert_eq!(set.task_class.as_deref(), Some("design"));
-        assert!(s
-            .proposals
-            .iter()
-            .all(|p| p.producing_agent_id == Some(pl) && p.set_id == Some(set.id)));
+        assert!(s.proposals.iter().all(|p| p.producing_agent_id == Some(pl) && p.set_id == Some(set.id)));
 
         // The producer's own assessment never counts; the visible reply is
         // replaced so the next scout can't read the score.
         let b = set.alternatives[1];
         let own = format!(r#"Mine is great. [[assess: {{"alternative": "{b}", "score": 100}}]]"#);
         let shown = finalize(&mut svc, sid, wid, "planner", Some(pl), &own);
-        assert!(
-            shown.contains("scout assessment") && !shown.contains("100"),
-            "{shown}"
-        );
-        let r1 = format!(
-            r#"It scores 88 from me. [[assess: {{"alternative": "{b}", "score": 88, "rationale": "simple"}}]]"#
-        );
+        assert!(shown.contains("scout assessment") && !shown.contains("100"), "{shown}");
+        let r1 = format!(r#"It scores 88 from me. [[assess: {{"alternative": "{b}", "score": 88, "rationale": "simple"}}]]"#);
         let shown = finalize(&mut svc, sid, wid, "coder", Some(co), &r1);
-        assert!(
-            !shown.contains("88"),
-            "the score never reaches the transcript: {shown}"
-        );
+        assert!(!shown.contains("88"), "the score never reaches the transcript: {shown}");
         let s = svc.load_in(wid, sid).unwrap().unwrap();
-        assert_eq!(
-            s.proposal_sets[0].phase,
-            SetPhase::Scouting,
-            "one counting scout < k=2"
-        );
+        assert_eq!(s.proposal_sets[0].phase, SetPhase::Scouting, "one counting scout < k=2");
         // A letter works when one set is open.
-        finalize(
-            &mut svc,
-            sid,
-            wid,
-            "reviewer",
-            Some(re),
-            r#"[[assess: {"alternative": "B", "score": 75}]]"#,
-        );
+        finalize(&mut svc, sid, wid, "reviewer", Some(re), r#"[[assess: {"alternative": "B", "score": 75}]]"#);
         let s = svc.load_in(wid, sid).unwrap().unwrap();
         let set = &s.proposal_sets[0];
         assert_eq!(set.phase, SetPhase::Piping);
         assert_eq!(set.front_runner, Some(b));
-        assert_eq!(
-            set.assessments
-                .iter()
-                .find(|a| a.scout_name == "coder")
-                .unwrap()
-                .scout_runtime,
-            "ollama"
-        );
+        assert_eq!(set.assessments.iter().find(|a| a.scout_name == "coder").unwrap().scout_runtime, "ollama");
         assert!(s.messages.iter().any(|m| m.body.contains("Quorum on")));
         // Agents can't approve or decide: nothing an agent writes moves it on.
-        finalize(
-            &mut svc,
-            sid,
-            wid,
-            "coder",
-            Some(co),
-            "[[propose: {\"title\": \"decide B\"}]] [[vote: 👍]]",
-        );
-        assert_eq!(
-            svc.load_in(wid, sid).unwrap().unwrap().proposal_sets[0].phase,
-            SetPhase::Piping
-        );
+        finalize(&mut svc, sid, wid, "coder", Some(co), "[[propose: {\"title\": \"decide B\"}]] [[vote: 👍]]");
+        assert_eq!(svc.load_in(wid, sid).unwrap().unwrap().proposal_sets[0].phase, SetPhase::Piping);
     }
 
     #[test]
@@ -1352,12 +990,7 @@ mod tests {
         svc.ensure_workspace_config(wid).unwrap();
         let sid = svc.create_chat("A", wid, "anthropic").unwrap().id;
         let (a1, a2) = (Uuid::new_v4(), Uuid::new_v4());
-        svc.post_user_message(
-            sid,
-            wid,
-            "@coder @local explore options for the retry logic",
-        )
-        .unwrap();
+        svc.post_user_message(sid, wid, "@coder @local explore options for the retry logic").unwrap();
         let mut p1 = ActionProposal::new("Exponential backoff", ProposalKind::Decision, "coder");
         p1.producing_agent_id = Some(a1);
         // (An agent files a proposal as itself: the Agent tier.)
@@ -1365,14 +998,7 @@ mod tests {
         let id1 = p1.id;
         svc.upsert_proposal(sid, wid, p1).unwrap();
         group_same_trigger(&mut svc, sid, wid, id1);
-        assert!(
-            svc.load_in(wid, sid)
-                .unwrap()
-                .unwrap()
-                .proposal_sets
-                .is_empty(),
-            "one producer: no set yet"
-        );
+        assert!(svc.load_in(wid, sid).unwrap().unwrap().proposal_sets.is_empty(), "one producer: no set yet");
         let mut p2 = ActionProposal::new("Circuit breaker", ProposalKind::Decision, "local");
         p2.producing_agent_id = Some(a2);
         p2.author_actor_id = a2.to_string();
@@ -1385,8 +1011,7 @@ mod tests {
 
         // A plain request (complementary work) is never grouped.
         let sid2 = svc.create_chat("B", wid, "anthropic").unwrap().id;
-        svc.post_user_message(sid2, wid, "@coder fix the bug and @docs update the readme")
-            .unwrap();
+        svc.post_user_message(sid2, wid, "@coder fix the bug and @docs update the readme").unwrap();
         for who in ["coder", "docs"] {
             let mut p = ActionProposal::new(who, ProposalKind::Decision, who);
             let agent = Uuid::new_v4();
@@ -1396,12 +1021,7 @@ mod tests {
             svc.upsert_proposal(sid2, wid, p).unwrap();
             group_same_trigger(&mut svc, sid2, wid, id);
         }
-        assert!(svc
-            .load_in(wid, sid2)
-            .unwrap()
-            .unwrap()
-            .proposal_sets
-            .is_empty());
+        assert!(svc.load_in(wid, sid2).unwrap().unwrap().proposal_sets.is_empty());
     }
 
     /// Runtime review: a revert ignored the proposal's repository and
@@ -1411,16 +1031,10 @@ mod tests {
         let (r, other) = (Uuid::new_v4(), Uuid::new_v4());
         assert_eq!(revert_target(Some(r), Some(r)), Ok(RevertTarget::Repo));
         assert!(revert_target(Some(r), Some(other)).is_err());
-        assert!(
-            revert_target(Some(r), None).is_err(),
-            "never the bound folder"
-        );
+        assert!(revert_target(Some(r), None).is_err(), "never the bound folder");
         assert_eq!(revert_target(None, Some(r)), Ok(RevertTarget::Legacy));
         let msg = ligus_runtime::repos::apply::legacy_revert_message("x\n\nLigus-Revert: y");
-        assert!(
-            !msg.contains('\n'),
-            "a legacy revert's message is one line: {msg}"
-        );
+        assert!(!msg.contains('\n'), "a legacy revert's message is one line: {msg}");
     }
 
     #[test]
@@ -1433,43 +1047,18 @@ mod tests {
         let mut set = ProposalSet::new("Q", "x", vec![a.id, b.id]);
         set.agent_quorum = 2;
         let scouts = vec![
-            Scout {
-                agent_id: Some(producer),
-                name: "maker".into(),
-                runtime: "claude-code".into(),
-            },
-            Scout {
-                agent_id: Some(Uuid::new_v4()),
-                name: "twin".into(),
-                runtime: "claude-code".into(),
-            },
-            Scout {
-                agent_id: Some(Uuid::new_v4()),
-                name: "local".into(),
-                runtime: "ollama".into(),
-            },
+            Scout { agent_id: Some(producer), name: "maker".into(), runtime: "claude-code".into() },
+            Scout { agent_id: Some(Uuid::new_v4()), name: "twin".into(), runtime: "claude-code".into() },
+            Scout { agent_id: Some(Uuid::new_v4()), name: "local".into(), runtime: "ollama".into() },
         ];
         let plan = plan_scouts(&set, &props, &scouts);
-        let for_a: Vec<usize> = plan
-            .iter()
-            .filter(|(p, _)| *p == a.id)
-            .map(|(_, i)| *i)
-            .collect();
+        let for_a: Vec<usize> = plan.iter().filter(|(p, _)| *p == a.id).map(|(_, i)| *i).collect();
         assert_eq!(for_a.len(), 2);
-        assert!(
-            !for_a.contains(&0),
-            "the producer never scouts its own alternative"
-        );
-        let for_b: Vec<&str> = plan
-            .iter()
-            .filter(|(p, _)| *p == b.id)
-            .map(|(_, i)| scouts[*i].runtime.as_str())
-            .collect();
+        assert!(!for_a.contains(&0), "the producer never scouts its own alternative");
+        let for_b: Vec<&str> =
+            plan.iter().filter(|(p, _)| *p == b.id).map(|(_, i)| scouts[*i].runtime.as_str()).collect();
         assert_eq!(for_b.len(), 2);
-        assert!(
-            for_b.contains(&"ollama") && for_b.contains(&"claude-code"),
-            "two runtimes, not two of one: {for_b:?}"
-        );
+        assert!(for_b.contains(&"ollama") && for_b.contains(&"claude-code"), "two runtimes, not two of one: {for_b:?}");
     }
 
     #[test]
@@ -1478,23 +1067,12 @@ mod tests {
         let wid = Uuid::new_v4();
         svc.ensure_workspace_config(wid).unwrap();
         let sid = svc.create_chat("A", wid, "anthropic").unwrap().id;
-        let mut alt = ActionProposal::file_diff(
-            "A",
-            "",
-            "diff".into(),
-            vec!["crates/ligus-core/src/crypto.rs".into()],
-        );
+        let mut alt = ActionProposal::file_diff("A", "", "diff".into(), vec!["crates/ligus-core/src/crypto.rs".into()]);
         let agent = Uuid::new_v4();
         alt.producing_agent_id = Some(agent);
         let pid = alt.id;
         let other = ActionProposal::new("B", ProposalKind::Decision, "planner");
-        svc.open_proposal_set(
-            sid,
-            wid,
-            ProposalSet::new("Q", "planner", vec![]),
-            vec![alt, other],
-        )
-        .unwrap();
+        svc.open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), vec![alt, other]).unwrap();
         let mut s = svc.load_in(wid, sid).unwrap().unwrap();
         let p = s.proposals.iter().find(|p| p.id == pid).cloned().unwrap();
         assert!(guard_block(&s, &p).is_none(), "no guard on: nothing extra");
@@ -1526,24 +1104,10 @@ mod tests {
         );
         assert!(guard_block(&s, &p).unwrap().contains("locked down"));
         // The producing agent's vote never counts; a human member's does.
-        let me = s
-            .members
-            .iter()
-            .find(|m| m.actor.kind == ligus_core::ActorKind::Human)
-            .unwrap()
-            .id
-            .clone();
-        s.guards
-            .verified_approvals
-            .entry(pid)
-            .or_default()
-            .insert(agent.to_string());
+        let me = s.members.iter().find(|m| m.actor.kind == ligus_core::ActorKind::Human).unwrap().id.clone();
+        s.guards.verified_approvals.entry(pid).or_default().insert(agent.to_string());
         assert!(guard_block(&s, &p).is_some());
-        s.guards
-            .verified_approvals
-            .entry(pid)
-            .or_default()
-            .insert(me);
+        s.guards.verified_approvals.entry(pid).or_default().insert(me);
         assert!(guard_block(&s, &p).is_none());
     }
 
@@ -1553,27 +1117,15 @@ mod tests {
         let wid = Uuid::new_v4();
         svc.ensure_workspace_config(wid).unwrap();
         let sid = svc.create_chat("A", wid, "anthropic").unwrap().id;
-        let alts: Vec<ActionProposal> = ["A", "B"]
-            .iter()
-            .map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner"))
-            .collect();
+        let alts: Vec<ActionProposal> =
+            ["A", "B"].iter().map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner")).collect();
         let (a, b) = (alts[0].id, alts[1].id);
-        let set = svc
-            .open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), alts)
-            .unwrap();
-        svc.tune_proposal_set(sid, wid, set.id, QuorumDial::Fast.knobs())
-            .unwrap();
+        let set = svc.open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), alts).unwrap();
+        svc.tune_proposal_set(sid, wid, set.id, QuorumDial::Fast.knobs()).unwrap();
         let s = svc.load_in(wid, sid).unwrap().unwrap();
         assert!(guarded_by_open_set(&s, a));
         assert!(ensure_not_frozen(&s, b).is_ok());
-        let cleaned = finalize(
-            &mut svc,
-            sid,
-            wid,
-            "coder",
-            Some(Uuid::new_v4()),
-            &format!(r#"[[assess: {{"alternative": "{a}", "score": 90}}]]"#),
-        );
+        let cleaned = finalize(&mut svc, sid, wid, "coder", Some(Uuid::new_v4()), &format!(r#"[[assess: {{"alternative": "{a}", "score": 90}}]]"#));
         assert!(cleaned.contains("scout assessment"));
         let s = svc.load_in(wid, sid).unwrap().unwrap();
         assert_eq!(s.proposal_sets[0].front_runner, Some(a));
@@ -1581,11 +1133,7 @@ mod tests {
         let dto = set_dto(&s.proposal_sets[0], &s);
         assert_eq!(dto.phase, "piping");
         assert_eq!(dto.dial, "fast");
-        assert_eq!(
-            dto.alternatives[1].stop_reason.as_deref(),
-            Some("quorum"),
-            "every live rival is stopped"
-        );
+        assert_eq!(dto.alternatives[1].stop_reason.as_deref(), Some("quorum"), "every live rival is stopped");
         assert!(dto.alternatives[1].frozen);
     }
 }

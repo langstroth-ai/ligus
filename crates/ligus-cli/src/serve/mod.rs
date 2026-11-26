@@ -22,9 +22,7 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use ligus_core::{
-    workspace_config_session_id, ChatSession, HostKind, MessageRole, Timestamp, WorkspaceHost,
-};
+use ligus_core::{workspace_config_session_id, ChatSession, HostKind, MessageRole, Timestamp, WorkspaceHost};
 use ligus_runtime::device_enroll::Standing;
 use ligus_runtime::ChatService;
 use serde_json::json;
@@ -36,9 +34,9 @@ use crate::worker::{self, TurnSink, TurnState, WorkerCtx};
 use crate::{env_opt, open_service, sync_once, uuid_of_room, Config};
 
 pub mod admissions_api;
+pub mod approvals_api;
 pub mod api;
 pub mod appearance;
-pub mod approvals_api;
 pub mod contacts_api;
 pub mod dashboard;
 pub mod dashboard_ligus;
@@ -160,14 +158,9 @@ impl ServeOptions {
         // Phase B: the box is its own service member; acting for a person
         // (`LIGUS_SERVE_OWNER`) is gone, and says so rather than being ignored.
         if env_opt("LIGUS_SERVE_OWNER").is_some() {
-            bail!(
-                "LIGUS_SERVE_OWNER is no longer supported: {}",
-                crate::admit::OWNER_MODE_REMOVED
-            );
+            bail!("LIGUS_SERVE_OWNER is no longer supported: {}", crate::admit::OWNER_MODE_REMOVED);
         }
-        let listen_raw = listen
-            .or_else(|| env_opt("LIGUS_SERVE_LISTEN"))
-            .unwrap_or_else(|| DEFAULT_LISTEN.into());
+        let listen_raw = listen.or_else(|| env_opt("LIGUS_SERVE_LISTEN")).unwrap_or_else(|| DEFAULT_LISTEN.into());
         let listen: SocketAddr = listen_raw
             .parse()
             .with_context(|| format!("--listen must be IP:PORT (got '{listen_raw}')"))?;
@@ -200,12 +193,10 @@ impl ServeOptions {
                 .unwrap_or_else(|| "home host".into()),
             name: name.or_else(|| env_opt("LIGUS_SERVE_NAME")),
             pair,
-            prometheus_url: env_opt("LIGUS_PROMETHEUS_URL")
-                .unwrap_or_else(|| "http://127.0.0.1:9090".into()),
+            prometheus_url: env_opt("LIGUS_PROMETHEUS_URL").unwrap_or_else(|| "http://127.0.0.1:9090".into()),
             prometheus_configured: env_opt("LIGUS_PROMETHEUS_URL").is_some(),
             dashboard_file: dashboard::config_path(&cfg.data_dir),
-            default_agent: env_opt("LIGUS_SERVE_DEFAULT_AGENT")
-                .map(|a| a.trim().trim_start_matches('@').to_string()),
+            default_agent: env_opt("LIGUS_SERVE_DEFAULT_AGENT").map(|a| a.trim().trim_start_matches('@').to_string()),
             sync_every: Duration::from_secs(3),
             remote: None,
             appearance: appearance::AppearanceConfig::from_env(),
@@ -216,9 +207,7 @@ impl ServeOptions {
 
     /// The base URL the phone uses.
     pub fn server_url(&self) -> String {
-        self.public_url
-            .clone()
-            .unwrap_or_else(|| pair::default_server_url(self.listen))
+        self.public_url.clone().unwrap_or_else(|| pair::default_server_url(self.listen))
     }
 }
 
@@ -236,14 +225,8 @@ async fn test_person_start(cfg: &Config) -> Result<(ChatService, bool)> {
 /// Register this box as an always-on host of the workspace it joined as its
 /// own service member ([`crate::admit::prepare_box`] made it a member).
 fn register_own(svc: &mut ChatService, ws: Uuid, host_id: &str, opts: &ServeOptions) -> Result<()> {
-    let host = crate::with_gateways(WorkspaceHost::new(
-        host_id.to_string(),
-        HostKind::Worker,
-        opts.label.clone(),
-    ));
-    svc.ensure_host(ws, host)
-        .map(|_| ())
-        .context("registering this box as a workspace host")?;
+    let host = crate::with_gateways(WorkspaceHost::new(host_id.to_string(), HostKind::Worker, opts.label.clone()));
+    svc.ensure_host(ws, host).map(|_| ()).context("registering this box as a workspace host")?;
     // Its synced device name (identity model v2, 6.3): what My devices and
     // People show for it.
     let device = svc.device_id();
@@ -385,10 +368,7 @@ pub fn chats_of(svc: &ChatService, ws: Uuid) -> Result<Vec<ChatSession>> {
             continue;
         }
         if let Ok(Some(s)) = svc.load_in(ws, id) {
-            if s.workspace_id == ws
-                && !s.archived
-                && id != workspace_config_session_id(s.workspace_id)
-            {
+            if s.workspace_id == ws && !s.archived && id != workspace_config_session_id(s.workspace_id) {
                 out.push(s);
             }
         }
@@ -424,53 +404,33 @@ pub fn ligus_snapshot(
         })
         .collect();
     let me = svc.author().id.clone();
-    Ok(dashboard_ligus::LigusSnapshot::compute(
-        &dashboard_ligus::LigusInputs {
-            now: now.inner(),
-            offset: dashboard_ligus::local_offset(),
-            me: &me,
-            this_host_id,
-            this_host_label,
-            chats: &chats,
-            config: &config,
-            hosts: &hosts,
-            busy_here,
-            host,
-        },
-    ))
+    Ok(dashboard_ligus::LigusSnapshot::compute(&dashboard_ligus::LigusInputs {
+        now: now.inner(),
+        offset: dashboard_ligus::local_offset(),
+        me: &me,
+        this_host_id,
+        this_host_label,
+        chats: &chats,
+        config: &config,
+        hosts: &hosts,
+        busy_here,
+        host,
+    }))
 }
 
 impl dashboard::LigusProvider for Shared {
     fn snapshot(&self) -> Result<Arc<dashboard_ligus::LigusSnapshot>> {
-        let mut cached = self
-            .ligus_snapshot
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut cached = self.ligus_snapshot.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((at, snap)) = cached.as_ref() {
             if at.elapsed() < LIGUS_SNAPSHOT_TTL {
                 return Ok(snap.clone());
             }
         }
-        let busy: HashSet<Uuid> = self
-            .busy
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .map(|(_, a)| *a)
-            .collect();
-        let (last_ok, err) = self
-            .sync_status
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let busy: HashSet<Uuid> = self.busy.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(_, a)| *a).collect();
+        let (last_ok, err) = self.sync_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let remote = self.tunnel.as_ref().map(|t| {
             let live = t.live_status();
-            let phones: Vec<_> = t
-                .registry
-                .list()
-                .into_iter()
-                .filter(|p| p.is_active())
-                .collect();
+            let phones: Vec<_> = t.registry.list().into_iter().filter(|p| p.is_active()).collect();
             dashboard_ligus::RemoteState {
                 connected: live.connected,
                 push: t.push_available.load(Ordering::SeqCst),
@@ -488,15 +448,7 @@ impl dashboard::LigusProvider for Shared {
         };
         let snap = {
             let svc = self.lock();
-            Arc::new(ligus_snapshot(
-                &svc,
-                self.ws,
-                &self.host_id,
-                &self.opts.label,
-                &self.presence,
-                &busy,
-                host,
-            )?)
+            Arc::new(ligus_snapshot(&svc, self.ws, &self.host_id, &self.opts.label, &self.presence, &busy, host)?)
         };
         *cached = Some((std::time::Instant::now(), snap.clone()));
         Ok(snap)
@@ -515,16 +467,12 @@ impl Shared {
     }
 
     fn sync_ok(&self) {
-        *self.sync_status.lock().unwrap_or_else(|e| e.into_inner()) =
-            (Some(time::OffsetDateTime::now_utc()), None);
+        *self.sync_status.lock().unwrap_or_else(|e| e.into_inner()) = (Some(time::OffsetDateTime::now_utc()), None);
     }
 
     fn sync_failed(&self, e: &str) {
         #[cfg(test)]
-        self.sync_failures
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(e.to_string());
+        self.sync_failures.lock().unwrap_or_else(|e| e.into_inner()).push(e.to_string());
         self.sync_status.lock().unwrap_or_else(|e| e.into_inner()).1 = Some(e.to_string());
     }
 
@@ -542,9 +490,7 @@ impl Shared {
 /// The MCP servers dashboard panels may use (see [`Shared::dashboard_mcp`]).
 pub fn dashboard_mcp_registry() -> std::result::Result<ligus_runtime::McpRegistry, String> {
     match crate::mcp_config::load_from_env() {
-        Ok(specs) if specs.is_empty() => {
-            Err("no MCP servers are configured on this host (LIGUS_MCP_CONFIG)".into())
-        }
+        Ok(specs) if specs.is_empty() => Err("no MCP servers are configured on this host (LIGUS_MCP_CONFIG)".into()),
         Ok(specs) => Ok(ligus_runtime::McpRegistry::new(specs)),
         Err(e) => Err(format!("LIGUS_MCP_CONFIG: {e:#}")),
     }
@@ -570,46 +516,26 @@ impl Shared {
 
     /// The operator's token (`serve.operator.token`).
     pub fn operator_token(&self) -> String {
-        self.operator_token
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.operator_token.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Re-read the operator token file (the operator replaced it).
     fn reload_operator_token(&self) {
-        let Ok(t) = std::fs::read_to_string(operator_token_path(&self.cfg.data_dir)) else {
-            return;
-        };
+        let Ok(t) = std::fs::read_to_string(operator_token_path(&self.cfg.data_dir)) else { return };
         let t = t.trim();
-        if t.len() >= 32
-            && t != self.token()
-            && *self
-                .operator_token
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                != t
-        {
+        if t.len() >= 32 && t != self.token() && *self.operator_token.read().unwrap_or_else(|e| e.into_inner()) != t {
             ligus_runtime::secret_redact::register(t);
-            *self
-                .operator_token
-                .write()
-                .unwrap_or_else(|e| e.into_inner()) = t.to_string();
+            *self.operator_token.write().unwrap_or_else(|e| e.into_inner()) = t.to_string();
             println!("ligus serve: the operator token changed on disk; using the new one.");
         }
     }
 
     /// Re-read the token file; a rotated token takes effect at once.
     fn reload_token(&self) {
-        let Ok(t) = std::fs::read_to_string(&self.opts.token_file) else {
-            return;
-        };
+        let Ok(t) = std::fs::read_to_string(&self.opts.token_file) else { return };
         let t = t.trim();
         // Never the operator's: the phones would get it from the tunnel.
-        if t.len() >= 32
-            && t != self.operator_token()
-            && *self.token.read().unwrap_or_else(|e| e.into_inner()) != t
-        {
+        if t.len() >= 32 && t != self.operator_token() && *self.token.read().unwrap_or_else(|e| e.into_inner()) != t {
             *self.token.write().unwrap_or_else(|e| e.into_inner()) = t.to_string();
             self.token_gen.send_modify(|g| *g += 1);
             println!("ligus serve: the bearer token changed on disk; using the new one.");
@@ -627,10 +553,7 @@ impl Shared {
 
     /// Whose device this box currently is.
     pub fn standing(&self) -> Standing {
-        self.standing
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.standing.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// `identity` for `GET /v1/health`: who the phone posts as.
@@ -642,10 +565,7 @@ impl Shared {
     pub fn identity_json(&self) -> serde_json::Value {
         let (actor, fingerprint) = {
             let svc = self.lock();
-            (
-                svc.author().clone(),
-                ligus_runtime::device_enroll::fingerprint(&svc.device_public_key()),
-            )
+            (svc.author().clone(), ligus_runtime::device_enroll::fingerprint(&svc.device_public_key()))
         };
         let mode = match self.standing() {
             // Never reached: a box enrolled as a person's device refuses to
@@ -654,11 +574,7 @@ impl Shared {
             Standing::Revoked => "revoked",
             Standing::Own => "member",
         };
-        let foreign = self
-            .foreign_certifiers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let foreign = self.foreign_certifiers.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let mut v = json!({ "mode": mode, "actorId": actor.id, "displayName": ligus_proto::names::clean_display_name(&actor.display_name), "deviceFingerprint": fingerprint });
         if !foreign.is_empty() {
             v["alsoCertifiedBy"] = json!(foreign);
@@ -684,15 +600,9 @@ impl Shared {
                 return false;
             }
         };
-        let names: Vec<String> = foreign
-            .iter()
-            .map(|a| ligus_proto::names::clean_display_name(&a.display_name))
-            .collect();
+        let names: Vec<String> = foreign.iter().map(|a| ligus_proto::names::clean_display_name(&a.display_name)).collect();
         {
-            let mut known = self
-                .foreign_certifiers
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut known = self.foreign_certifiers.lock().unwrap_or_else(|e| e.into_inner());
             if *known != names {
                 for n in names.iter().filter(|n| !known.contains(n)) {
                     println!("ligus serve: {n}'s account also certified this box's device key. That gives {n} nothing over this box; it keeps working as itself.");
@@ -716,21 +626,14 @@ impl Shared {
                 // rather than keep that identity. A certificate alone never
                 // gets here (see `device_enroll::standing`).
                 (_, Standing::OwnerDevice(owner)) => {
-                    let why = format!(
-                        "this box's device acted as {}'s device (it signed as them); {}",
-                        owner.display_name,
-                        crate::admit::OWNER_MODE_REMOVED
-                    );
+                    let why = format!("this box's device acted as {}'s device (it signed as them); {}", owner.display_name, crate::admit::OWNER_MODE_REMOVED);
                     eprintln!("ligus serve: {why}");
                     svc.set_write_block(Some(why));
                 }
                 (Standing::OwnerDevice(_), Standing::Own) => {
                     // The owner's certificate no longer counts (the owner left the
                     // workspace): don't keep writing as them.
-                    svc.set_write_block(Some(
-                        "this box is no longer enrolled as its owner's device; restart ligus serve"
-                            .into(),
-                    ));
+                    svc.set_write_block(Some("this box is no longer enrolled as its owner's device; restart ligus serve".into()));
                     eprintln!("ligus serve: no longer enrolled as the owner's device; writes are paused until a restart.");
                 }
                 _ => {}
@@ -750,25 +653,14 @@ impl Shared {
     /// whatever wrote the event ([`revocation_watch`]). Returns the pairings
     /// revoked.
     pub fn revoke_phones_of_revoked_devices(&self) -> Vec<String> {
-        let (revoked, revoked_phones): (
-            std::collections::BTreeSet<Uuid>,
-            std::collections::BTreeSet<Uuid>,
-        ) = {
+        let (revoked, revoked_phones): (std::collections::BTreeSet<Uuid>, std::collections::BTreeSet<Uuid>) = {
             let svc = self.lock();
             match svc.store().load_config(self.ws, None, None) {
                 Ok((_, t)) => {
                     let devices = &t.current().devices;
                     (
-                        devices
-                            .iter()
-                            .filter(|(_, d)| d.revoked)
-                            .map(|(id, _)| *id)
-                            .collect(),
-                        devices
-                            .iter()
-                            .filter(|(_, d)| d.revoked && d.phone)
-                            .map(|(id, _)| *id)
-                            .collect(),
+                        devices.iter().filter(|(_, d)| d.revoked).map(|(id, _)| *id).collect(),
+                        devices.iter().filter(|(_, d)| d.revoked && d.phone).map(|(id, _)| *id).collect(),
                     )
                 }
                 Err(_) => return Vec::new(),
@@ -778,13 +670,7 @@ impl Shared {
         // here is bound to.
         let mut revoked_phones = revoked_phones;
         if let Some(t) = self.tunnel.as_ref() {
-            revoked_phones.extend(
-                t.registry
-                    .list()
-                    .into_iter()
-                    .filter_map(|r| r.device_id)
-                    .filter(|d| revoked.contains(d)),
-            );
+            revoked_phones.extend(t.registry.list().into_iter().filter_map(|r| r.device_id).filter(|d| revoked.contains(d)));
         }
         // This box's own device revoked (Phase B: a box is its own service
         // member, and an Admin revokes its device like any other): it can no
@@ -793,34 +679,19 @@ impl Shared {
         // was cut off, perhaps for being compromised), and the direct-path
         // token rotates once. Pairings made later are cut as they appear (the
         // watch re-checks whenever the registry changes).
-        let own = Uuid::parse_str(&self.host_id)
-            .ok()
-            .filter(|d| revoked.contains(d));
+        let own = Uuid::parse_str(&self.host_id).ok().filter(|d| revoked.contains(d));
         if let Some(d) = own {
             revoked_phones.insert(d);
         }
         self.rotate_token_for(&revoked_phones);
-        let Some(tunnel) = self.tunnel.as_ref() else {
-            return Vec::new();
-        };
+        let Some(tunnel) = self.tunnel.as_ref() else { return Vec::new() };
         let pids = match own {
-            Some(_) => tunnel
-                .registry
-                .list()
-                .into_iter()
-                .filter(|r| r.is_active())
-                .map(|r| r.pid)
-                .collect(),
+            Some(_) => tunnel.registry.list().into_iter().filter(|r| r.is_active()).map(|r| r.pid).collect(),
             None => tunnel.registry.pairings_of_revoked(&revoked),
         };
-        let mut by_device: std::collections::BTreeMap<Uuid, Vec<String>> =
-            std::collections::BTreeMap::new();
+        let mut by_device: std::collections::BTreeMap<Uuid, Vec<String>> = std::collections::BTreeMap::new();
         for pid in &pids {
-            let bound = tunnel
-                .registry
-                .get(pid)
-                .and_then(|r| r.device_id)
-                .filter(|d| revoked.contains(d));
+            let bound = tunnel.registry.get(pid).and_then(|r| r.device_id).filter(|d| revoked.contains(d));
             if let Some(d) = bound.or(own) {
                 by_device.entry(d).or_default().push(pid.clone());
             }
@@ -845,10 +716,8 @@ impl Shared {
         static ROTATING: Mutex<()> = Mutex::new(());
         let _one = ROTATING.lock().unwrap_or_else(|e| e.into_inner());
         let file = self.cfg.data_dir.join("serve-token-revocations.json");
-        let done: std::collections::BTreeSet<Uuid> = std::fs::read(&file)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let done: std::collections::BTreeSet<Uuid> =
+            std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         let fresh: Vec<Uuid> = revoked_phones.difference(&done).copied().collect();
         if fresh.is_empty() {
             return;
@@ -873,10 +742,7 @@ impl Shared {
             Ok((_, t)) => match t.current().devices.get(&id) {
                 None => DeviceLookup::Unknown,
                 Some(d) if d.revoked => DeviceLookup::Revoked,
-                Some(d) => DeviceLookup::Certified {
-                    public_key: d.public_key.clone(),
-                    phone: d.phone,
-                },
+                Some(d) => DeviceLookup::Certified { public_key: d.public_key.clone(), phone: d.phone },
             },
             Err(_) => DeviceLookup::Unknown,
         }
@@ -901,10 +767,7 @@ impl Shared {
         s.messages[start.min(s.messages.len())..]
             .iter()
             .filter(|m| m.role != MessageRole::System && !m.superseded)
-            .filter(|m| {
-                !(m.role == MessageRole::User
-                    && m.actor_identity.as_ref().is_some_and(|a| a.id == me))
-            })
+            .filter(|m| !(m.role == MessageRole::User && m.actor_identity.as_ref().is_some_and(|a| a.id == me)))
             .count()
     }
 
@@ -912,9 +775,7 @@ impl Shared {
     pub fn mark_read(&self, s: &ChatSession, message: Uuid) {
         let mut marks = self.read_marks.lock().unwrap_or_else(|e| e.into_inner());
         let new_idx = s.messages.iter().position(|m| m.id == message);
-        let old_idx = marks
-            .get(&s.id)
-            .and_then(|old| s.messages.iter().position(|m| m.id == *old));
+        let old_idx = marks.get(&s.id).and_then(|old| s.messages.iter().position(|m| m.id == *old));
         if new_idx.is_some() && new_idx >= old_idx {
             marks.insert(s.id, message);
             let body = json!({ "readMarks": &*marks });
@@ -934,11 +795,7 @@ impl Shared {
     pub fn refresh(&self) {
         let (author, links, viewer) = {
             let svc = self.lock();
-            (
-                svc.author().clone(),
-                svc.device_links(self.ws).unwrap_or_default(),
-                api::Viewer::of(&svc),
-            )
+            (svc.author().clone(), svc.device_links(self.ws).unwrap_or_default(), api::Viewer::of(&svc))
         };
         let me = author.id.clone();
         // Who a "you" notice is for: each paired phone's person, and this
@@ -960,54 +817,24 @@ impl Shared {
             for change in differ.diff(&sessions) {
                 use hub::Change;
                 match change {
-                    Change::MessageDelta {
-                        chat,
-                        message,
-                        from,
-                    } => {
-                        if self
-                            .local_streams
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .contains(&message)
-                        {
+                    Change::MessageDelta { chat, message, from } => {
+                        if self.local_streams.lock().unwrap_or_else(|e| e.into_inner()).contains(&message) {
                             continue;
                         }
-                        let Some(s) = sessions.iter().find(|s| s.id == chat) else {
-                            continue;
-                        };
-                        let Some(m) = s.messages.iter().find(|m| m.id == message && !m.superseded)
-                        else {
-                            continue;
-                        };
+                        let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
+                        let Some(m) = s.messages.iter().find(|m| m.id == message && !m.superseded) else { continue };
                         if let Some(text) = m.body.get(from..) {
-                            self.hub.emit(
-                                "message.delta",
-                                json!({ "chatId": chat, "messageId": message, "text": text }),
-                            );
+                            self.hub.emit("message.delta", json!({ "chatId": chat, "messageId": message, "text": text }));
                         }
                     }
-                    Change::MessageCreated { chat, message }
-                    | Change::MessageDone { chat, message } => {
+                    Change::MessageCreated { chat, message } | Change::MessageDone { chat, message } => {
                         let done = matches!(change, Change::MessageDone { .. });
                         if done {
-                            self.local_streams
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .remove(&message);
+                            self.local_streams.lock().unwrap_or_else(|e| e.into_inner()).remove(&message);
                         }
-                        let Some(s) = sessions.iter().find(|s| s.id == chat) else {
-                            continue;
-                        };
-                        let Some(m) = s.messages.iter().find(|m| m.id == message && !m.superseded)
-                        else {
-                            continue;
-                        };
-                        let name = if done {
-                            "message.done"
-                        } else {
-                            "message.created"
-                        };
+                        let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
+                        let Some(m) = s.messages.iter().find(|m| m.id == message && !m.superseded) else { continue };
+                        let name = if done { "message.done" } else { "message.created" };
                         let me = notify::Me::in_chat(&author, s, &links);
                         let mut dto = api::message_dto(chat, m, viewer);
                         api::add_requester(&mut dto, s, m, &me);
@@ -1017,55 +844,33 @@ impl Shared {
                         if self.fresh(m.created_at) {
                             for au in &audiences {
                                 let me = notify::Me::in_chat(&au.who, s, &links);
-                                notices.extend(
-                                    notify::for_message(s, m, done, &me)
-                                        .map(|n| Outgoing::to(n, au)),
-                                );
+                                notices.extend(notify::for_message(s, m, done, &me).map(|n| Outgoing::to(n, au)));
                             }
                         }
                     }
                     Change::ProposalCreated { chat, proposal } => {
-                        let Some(s) = sessions.iter().find(|s| s.id == chat) else {
-                            continue;
-                        };
-                        let Some(p) = s.proposals.iter().find(|p| p.id == proposal) else {
-                            continue;
-                        };
+                        let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
+                        let Some(p) = s.proposals.iter().find(|p| p.id == proposal) else { continue };
                         created.push((chat, proposal));
-                        self.hub.emit(
-                            "proposal.created",
-                            hub::wrap("proposal", api::proposal_dto_as(s, p, &me)),
-                        );
+                        self.hub.emit("proposal.created", hub::wrap("proposal", api::proposal_dto_as(s, p, &me)));
                         if self.fresh(p.created_at) {
                             notices.extend(notify::for_proposal(s, p).map(Outgoing::everyone));
                         }
                     }
                     Change::WorkflowApproval { chat, run, node } => {
-                        let Some(s) = sessions.iter().find(|s| s.id == chat) else {
-                            continue;
-                        };
-                        let Some(r) = s.workflow_runs.iter().find(|r| r.id == run) else {
-                            continue;
-                        };
+                        let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
+                        let Some(r) = s.workflow_runs.iter().find(|r| r.id == run) else { continue };
                         if self.fresh(r.updated_at) {
-                            notices.extend(
-                                notify::for_workflow_gate(s, r, &node).map(Outgoing::everyone),
-                            );
+                            notices.extend(notify::for_workflow_gate(s, r, &node).map(Outgoing::everyone));
                         }
                     }
                     Change::RecruitApprovers { chat, recruit } => {
-                        let Some(s) = sessions.iter().find(|s| s.id == chat) else {
-                            continue;
-                        };
-                        let Some(r) = s.flow.recruits.iter().find(|r| r.id == recruit) else {
-                            continue;
-                        };
+                        let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
+                        let Some(r) = s.flow.recruits.iter().find(|r| r.id == recruit) else { continue };
                         // One recruit push per refresh: recruits are Contributor
                         // records any member or agent can write, every one points
                         // at the same waiting proposal, and ntfy has no rate limit.
-                        if !recruit_pushed
-                            && self.fresh(ligus_core::Timestamp::from_unix_seconds(r.at_ms / 1000))
-                        {
+                        if !recruit_pushed && self.fresh(ligus_core::Timestamp::from_unix_seconds(r.at_ms / 1000)) {
                             for au in &audiences {
                                 let me = notify::Me::in_chat(&au.who, s, &links);
                                 if let Some(n) = notify::for_recruit(&sessions, s, r, &me) {
@@ -1076,41 +881,24 @@ impl Shared {
                         }
                     }
                     Change::AskPending { chat, ask } => {
-                        let Some(s) = sessions.iter().find(|s| s.id == chat) else {
-                            continue;
-                        };
-                        let Some(a) = s.flow.asks.get(&ask) else {
-                            continue;
-                        };
+                        let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
+                        let Some(a) = s.flow.asks.get(&ask) else { continue };
                         let dto = api::ask_card_dto(&self.lock(), s, a, &me);
                         self.hub.emit("ask.pending", json!({ "ask": dto }));
-                        if self.fresh(ligus_core::Timestamp::from_unix_seconds(a.ask.at_ms / 1000))
-                        {
+                        if self.fresh(ligus_core::Timestamp::from_unix_seconds(a.ask.at_ms / 1000)) {
                             // One push per ask, only to the people it asks
                             // (each phone's own person, not this box's
                             // identity), and at most 10 an hour (agent
                             // questions 6.5).
                             let asked: Vec<_> = audiences
                                 .iter()
-                                .filter_map(|au| {
-                                    notify::for_ask(s, a, &notify::Me::in_chat(&au.who, s, &links))
-                                        .map(|n| (n, au))
-                                })
+                                .filter_map(|au| notify::for_ask(s, a, &notify::Me::in_chat(&au.who, s, &links)).map(|n| (n, au)))
                                 .collect();
                             if !asked.is_empty() {
-                                match self
-                                    .ask_pushes
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner())
-                                    .admit(std::time::Instant::now())
-                                {
-                                    notify::AskPush::Send => notices.extend(
-                                        asked.into_iter().map(|(n, au)| Outgoing::to(n, au)),
-                                    ),
+                                match self.ask_pushes.lock().unwrap_or_else(|e| e.into_inner()).admit(std::time::Instant::now()) {
+                                    notify::AskPush::Send => notices.extend(asked.into_iter().map(|(n, au)| Outgoing::to(n, au))),
                                     notify::AskPush::Summary => {
-                                        notices.extend(asked.into_iter().map(|(_, au)| {
-                                            Outgoing::to(notify::several_asking(s), au)
-                                        }))
+                                        notices.extend(asked.into_iter().map(|(_, au)| Outgoing::to(notify::several_asking(s), au)))
                                     }
                                     notify::AskPush::Hold => {}
                                 }
@@ -1118,25 +906,15 @@ impl Shared {
                         }
                     }
                     Change::ProposalUpdated { chat, proposal } => {
-                        let Some(s) = sessions.iter().find(|s| s.id == chat) else {
-                            continue;
-                        };
-                        let Some(p) = s.proposals.iter().find(|p| p.id == proposal) else {
-                            continue;
-                        };
-                        self.hub.emit(
-                            "proposal.updated",
-                            hub::wrap("proposal", api::proposal_dto_as(s, p, &me)),
-                        );
+                        let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
+                        let Some(p) = s.proposals.iter().find(|p| p.id == proposal) else { continue };
+                        self.hub.emit("proposal.updated", hub::wrap("proposal", api::proposal_dto_as(s, p, &me)));
                     }
                     Change::ChatUpdated { chat } => {
-                        let Some(s) = sessions.iter().find(|s| s.id == chat) else {
-                            continue;
-                        };
+                        let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
                         let unread = self.unread(s, &me);
                         let ctx = phone_ctx.get_or_insert_with(|| api::PhoneChatCtx::new(self));
-                        self.hub
-                            .emit("chat.updated", hub::wrap("chat", ctx.dto(self, s, unread)));
+                        self.hub.emit("chat.updated", hub::wrap("chat", ctx.dto(self, s, unread)));
                     }
                 }
             }
@@ -1196,34 +974,18 @@ impl Shared {
     /// phone did before. The box's own identity is always listed, and is
     /// the one ntfy hears about.
     fn push_audiences(&self, author: &ligus_core::ActorIdentity) -> Vec<PushAudience> {
-        let mut out = vec![PushAudience {
-            who: author.clone(),
-            phones: Vec::new(),
-            ntfy: true,
-        }];
+        let mut out = vec![PushAudience { who: author.clone(), phones: Vec::new(), ntfy: true }];
         let Some(t) = &self.tunnel else { return out };
-        let phones: Vec<_> = t
-            .registry
-            .list()
-            .into_iter()
-            .filter(|r| r.is_active())
-            .collect();
+        let phones: Vec<_> = t.registry.list().into_iter().filter(|r| r.is_active()).collect();
         if phones.is_empty() {
             return out;
         }
         let svc = self.lock();
         for rec in phones {
-            let who = rec
-                .device_id
-                .and_then(|d| svc.phone_person(self.ws, d).ok())
-                .unwrap_or_else(|| author.clone());
+            let who = rec.device_id.and_then(|d| svc.phone_person(self.ws, d).ok()).unwrap_or_else(|| author.clone());
             match out.iter_mut().find(|a| a.who.id == who.id) {
                 Some(a) => a.phones.push(rec.pid),
-                None => out.push(PushAudience {
-                    who,
-                    phones: vec![rec.pid],
-                    ntfy: false,
-                }),
+                None => out.push(PushAudience { who, phones: vec![rec.pid], ntfy: false }),
             }
         }
         out
@@ -1258,22 +1020,12 @@ struct Outgoing {
 impl Outgoing {
     /// News for everyone on this box (a proposal to review, a workflow gate).
     fn everyone((notice, push): (ntfy::Notice, tunnel::PushContent)) -> Self {
-        Outgoing {
-            notice,
-            push,
-            phones: None,
-            ntfy: true,
-        }
+        Outgoing { notice, push, phones: None, ntfy: true }
     }
 
     /// A "you" notice for `au` only.
     fn to((notice, push): (ntfy::Notice, tunnel::PushContent), au: &PushAudience) -> Self {
-        Outgoing {
-            notice,
-            push,
-            phones: Some(au.phones.clone()),
-            ntfy: au.ntfy,
-        }
+        Outgoing { notice, push, phones: Some(au.phones.clone()), ntfy: au.ntfy }
     }
 }
 
@@ -1297,15 +1049,8 @@ impl TurnSink for ServeSink {
     }
 
     fn delta(&self, chat: Uuid, message: Uuid, text: &str) {
-        self.0
-            .local_streams
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(message);
-        self.0.hub.emit(
-            "message.delta",
-            json!({ "chatId": chat, "messageId": message, "text": text }),
-        );
+        self.0.local_streams.lock().unwrap_or_else(|e| e.into_inner()).insert(message);
+        self.0.hub.emit("message.delta", json!({ "chatId": chat, "messageId": message, "text": text }));
     }
 
     fn changed(&self) {
@@ -1394,11 +1139,8 @@ impl ServeHandle {
                 let _ = w.join();
             }
         }
-        let tasks: Vec<_> =
-            std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|e| e.into_inner()));
-        let Ok(rt) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
+        let tasks: Vec<_> = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|e| e.into_inner()));
+        let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
         if rt.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
             return;
         }
@@ -1450,18 +1192,13 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     // Phase B: sync first, never found a workspace, join only as this box's
     // own service member through an admission (`crate::admit::prepare_box`).
     let mut cfg = cfg;
-    let admission =
-        crate::admit::admission_from_file(crate::env_opt(crate::admit::ADMISSION_FILE_ENV))?;
+    let admission = crate::admit::admission_from_file(crate::env_opt(crate::admit::ADMISSION_FILE_ENV))?;
     #[cfg(test)]
     let person = opts.test_person;
     #[cfg(not(test))]
     let person = false;
     #[cfg(test)]
-    let started = if person {
-        Some(test_person_start(&cfg).await?)
-    } else {
-        None
-    };
+    let started = if person { Some(test_person_start(&cfg).await?) } else { None };
     #[cfg(not(test))]
     let started: Option<(ChatService, bool)> = None;
     let (mut svc, synced) = match started {
@@ -1471,26 +1208,12 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
             // name nobody chose.
             crate::admit::mark_box(&cfg)?;
             if opts.name.is_none() {
-                let identity = ligus_runtime::IdentityStore::new(
-                    &cfg.data_dir,
-                    ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir),
-                );
-                if let Err(e) = crate::adopt_box_name(
-                    &identity,
-                    &opts.label,
-                    ligus_runtime::machine_hostname().as_deref(),
-                ) {
+                let identity = ligus_runtime::IdentityStore::new(&cfg.data_dir, ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));
+                if let Err(e) = crate::adopt_box_name(&identity, &opts.label, ligus_runtime::machine_hostname().as_deref()) {
                     eprintln!("serve: renaming this box failed: {e}");
                 }
             }
-            crate::admit::prepare_box(
-                &mut cfg,
-                &opts.label,
-                opts.name.as_deref(),
-                admission,
-                |c| async move { sync_once(&c).await },
-            )
-            .await?
+            crate::admit::prepare_box(&mut cfg, &opts.label, opts.name.as_deref(), admission, |c| async move { sync_once(&c).await }).await?
         }
     };
     let first_sync = synced.then(time::OffsetDateTime::now_utc);
@@ -1509,16 +1232,9 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
                 // A box still called by the host name `ligus enroll` gave it
                 // takes its label so the
                 // phone's messages show the name the box was given.
-                let identity = ligus_runtime::IdentityStore::new(
-                    &cfg.data_dir,
-                    ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir),
-                );
+                let identity = ligus_runtime::IdentityStore::new(&cfg.data_dir, ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));
                 let was = svc.author().display_name.clone();
-                match crate::adopt_box_name(
-                    &identity,
-                    &opts.label,
-                    ligus_runtime::machine_hostname().as_deref(),
-                ) {
+                match crate::adopt_box_name(&identity, &opts.label, ligus_runtime::machine_hostname().as_deref()) {
                     Ok(Some(name)) => {
                         println!("ligus serve: this box's name is now '{name}' (was '{was}').");
                         svc.set_author_display_name(name);
@@ -1535,10 +1251,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     // and never be answered (its placeholder counts as the reply).
     if standing != Standing::Revoked {
         match worker::recover_interrupted_turns(&mut svc) {
-            Ok(done) if !done.is_empty() => eprintln!(
-                "serve: finished {} reply(s) interrupted by the last stop",
-                done.len()
-            ),
+            Ok(done) if !done.is_empty() => eprintln!("serve: finished {} reply(s) interrupted by the last stop", done.len()),
             Ok(_) => {}
             Err(e) => eprintln!("serve: interrupted-turn recovery failed: {e}"),
         }
@@ -1549,10 +1262,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         crate::publish_key_agreement(&cfg, &mut svc);
     }
     let tunnel = match &opts.remote {
-        Some(settings) => Some(
-            tunnel::TunnelHost::open(&cfg.data_dir, settings.clone())
-                .context("opening the relay tunnel state")?,
-        ),
+        Some(settings) => Some(tunnel::TunnelHost::open(&cfg.data_dir, settings.clone()).context("opening the relay tunnel state")?),
         None => None,
     };
     let shared = Arc::new(Shared {
@@ -1583,9 +1293,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         #[cfg(test)]
         sync_failures: Default::default(),
         started_at: Timestamp::now(),
-        http: ligus_forge::http_client_builder()
-            .connect_timeout(Duration::from_secs(3))
-            .build()?,
+        http: ligus_forge::http_client_builder().connect_timeout(Duration::from_secs(3)).build()?,
         dashboard_cache: dashboard::Cache::default(),
         rt: tokio::runtime::Handle::current(),
         revisions: Mutex::new(HashMap::new()),
@@ -1619,11 +1327,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     // replays history as events nor shows it all as unread.
     {
         let chats = shared.phone_chats()?;
-        shared
-            .differ
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .seed(&chats);
+        shared.differ.lock().unwrap_or_else(|e| e.into_inner()).seed(&chats);
         let mut marks = shared.read_marks.lock().unwrap_or_else(|e| e.into_inner());
         for s in &chats {
             if let Some(last) = s.messages.last() {
@@ -1639,39 +1343,18 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     let addr = listener.local_addr()?;
     let app = api::router(shared.clone());
     let (header_read, idle) = (shared.opts.header_read_timeout, shared.opts.idle_timeout);
-    let mut tasks = vec![tokio::spawn(listener::serve(
-        listener,
-        app,
-        header_read,
-        idle,
-        rx.clone(),
-    ))];
+    let mut tasks = vec![tokio::spawn(listener::serve(listener, app, header_read, idle, rx.clone()))];
     if shared.cfg.relay_url.is_some() {
         tasks.push(tokio::spawn(sync_loop(shared.clone(), rx.clone())));
         tasks.push(tokio::spawn(presence_loop(shared.clone(), rx.clone())));
         tasks.push(tokio::spawn(contact_loop(shared.clone(), rx.clone())));
-        tasks.push(tokio::spawn(phone_enroll_api::relay_loop(
-            shared.clone(),
-            rx.clone(),
-        )));
-        tasks.push(tokio::spawn(approvals_api::poll_loop(
-            shared.clone(),
-            rx.clone(),
-        )));
+        tasks.push(tokio::spawn(phone_enroll_api::relay_loop(shared.clone(), rx.clone())));
+        tasks.push(tokio::spawn(approvals_api::poll_loop(shared.clone(), rx.clone())));
     }
     tasks.push(tokio::spawn(dms::dm_sync_loop(shared.clone(), rx.clone())));
-    tasks.push(tokio::spawn(scratch_api::sweep_loop(
-        shared.clone(),
-        rx.clone(),
-    )));
-    tasks.push(tokio::spawn(contacts_api::held_loop(
-        shared.clone(),
-        rx.clone(),
-    )));
-    tasks.push(tokio::spawn(typing_api::typing_loop(
-        shared.clone(),
-        rx.clone(),
-    )));
+    tasks.push(tokio::spawn(scratch_api::sweep_loop(shared.clone(), rx.clone())));
+    tasks.push(tokio::spawn(contacts_api::held_loop(shared.clone(), rx.clone())));
+    tasks.push(tokio::spawn(typing_api::typing_loop(shared.clone(), rx.clone())));
     tasks.push(tokio::spawn(token_watch(shared.clone(), rx.clone())));
     if let Some(t) = shared.tunnel.clone() {
         let weak = Arc::downgrade(&shared);
@@ -1683,26 +1366,12 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         tasks.push(tokio::spawn(tunnel::revocation::run(t.clone(), rx.clone())));
         tasks.push(tokio::spawn(tunnel::pending_loop(t.clone(), rx.clone())));
         // E3b: an uncertified phone gets the add-a-phone routes only.
-        let routers = tunnel::session::Routers {
-            api: api::router(shared.clone()),
-            provisional: Some(phone_enroll_api::provisional_router(shared.clone())),
-        };
-        tasks.push(tokio::spawn(tunnel::control::run(
-            t,
-            routers,
-            rx.clone(),
-            Default::default(),
-        )));
+        let routers = tunnel::session::Routers { api: api::router(shared.clone()), provisional: Some(phone_enroll_api::provisional_router(shared.clone())) };
+        tasks.push(tokio::spawn(tunnel::control::run(t, routers, rx.clone(), Default::default())));
     }
     let worker = spawn_worker(shared.clone())?;
     shared.sync_kick.notify_one();
-    Ok(ServeHandle {
-        addr,
-        shared,
-        shutdown,
-        worker: Mutex::new(Some(worker)),
-        tasks: Mutex::new(tasks),
-    })
+    Ok(ServeHandle { addr, shared, shutdown, worker: Mutex::new(Some(worker)), tasks: Mutex::new(tasks) })
 }
 
 /// How often the box refreshes its contact record (relays keep one 30 days).
@@ -1749,11 +1418,7 @@ async fn revocation_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) 
     // (events row, equivocations row, registry generation) last looked at.
     let mut seen: Option<(i64, i64, u64)> = None;
     loop {
-        let gen = shared
-            .tunnel
-            .as_ref()
-            .map(|t| t.registry.generation())
-            .unwrap_or(0);
+        let gen = shared.tunnel.as_ref().map(|t| t.registry.generation()).unwrap_or(0);
         let now = {
             let svc = shared.lock();
             let st = svc.store();
@@ -1763,11 +1428,7 @@ async fn revocation_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) 
                     // (a busy workspace) never re-folds or rescans anything.
                     let check = match seen {
                         None => true,
-                        Some((r0, q0, g0)) => {
-                            g0 != gen
-                                || ((r, q) != (r0, q0)
-                                    && st.session_rows_after(config_id, r0, q0).unwrap_or(true))
-                        }
+                        Some((r0, q0, g0)) => g0 != gen || ((r, q) != (r0, q0) && st.session_rows_after(config_id, r0, q0).unwrap_or(true)),
                     };
                     Some(((r, q, gen), check))
                 }
@@ -1805,11 +1466,7 @@ const STREAM_STABLE_AFTER: Duration = Duration::from_secs(30);
 /// was stored since the last one.
 async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let opened = match crate::sync_engine(&shared.cfg) {
-        Ok(e) => crate::open_store_patiently(shared.cfg.data_dir.join("ligus.db"), "sync", || {
-            !shared.stopping()
-        })
-        .await
-        .map(|s| (e, s)),
+        Ok(e) => crate::open_store_patiently(shared.cfg.data_dir.join("ligus.db"), "sync", || !shared.stopping()).await.map(|s| (e, s)),
         Err(e) => Err(e),
     };
     let (mut engine, mut store) = match opened {
@@ -1828,8 +1485,7 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let mut stream_unsupported = false;
     while !shared.stopping() {
         // Subscribe before pulling: whatever lands from here on queues a nudge.
-        if stream.is_none() && !stream_unsupported && tokio::time::Instant::now() >= next_stream_try
-        {
+        if stream.is_none() && !stream_unsupported && tokio::time::Instant::now() >= next_stream_try {
             match crate::relay_client(&shared.cfg) {
                 Ok(c) => match c.open_event_stream(&shared.cfg.room).await {
                     Ok(s) => {
@@ -1839,14 +1495,10 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                     Err(ligus_runtime::SseConnectError::Unsupported) => stream_unsupported = true,
                     Err(e) => {
                         // A refusal (`sse_streams`) waits at least its Retry-After.
-                        let delay = ligus_runtime::next_backoff(stream_attempt)
-                            .max(e.retry_after().unwrap_or_default());
+                        let delay = ligus_runtime::next_backoff(stream_attempt).max(e.retry_after().unwrap_or_default());
                         stream_attempt = stream_attempt.saturating_add(1);
                         next_stream_try = tokio::time::Instant::now() + delay;
-                        eprintln!(
-                            "sync: no relay push stream ({e}); polling, retry in {}s",
-                            delay.as_secs()
-                        );
+                        eprintln!("sync: no relay push stream ({e}); polling, retry in {}s", delay.as_secs());
                     }
                 },
                 Err(_) => stream_unsupported = true,
@@ -1890,10 +1542,7 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                 shared.sync_failed(&format!("{e:#}"));
                 // The relay's Retry-After (a refused read) wins over our own
                 // backoff when it is longer.
-                let asked = e
-                    .downcast_ref::<ligus_runtime::SyncError>()
-                    .and_then(|e| e.retry_after())
-                    .unwrap_or_default();
+                let asked = e.downcast_ref::<ligus_runtime::SyncError>().and_then(|e| e.retry_after()).unwrap_or_default();
                 let wait = Duration::from_secs(crate::sync_backoff_secs(fails)).max(asked);
                 eprintln!("sync: {e} — retrying in {}s", wait.as_secs());
                 wait
@@ -1933,9 +1582,7 @@ const BLOB_RENEW_EVERY_SECS: i64 = 60 * 60;
 /// changes nothing.
 fn renew_attachment_blobs(shared: &Arc<Shared>) {
     let now = Timestamp::now().inner().unix_timestamp();
-    if now - shared.renewed_blobs_at.load(Ordering::SeqCst) < BLOB_RENEW_EVERY_SECS
-        || shared.renewing_blobs.swap(true, Ordering::SeqCst)
-    {
+    if now - shared.renewed_blobs_at.load(Ordering::SeqCst) < BLOB_RENEW_EVERY_SECS || shared.renewing_blobs.swap(true, Ordering::SeqCst) {
         return;
     }
     let shared = shared.clone();
@@ -1944,16 +1591,8 @@ fn renew_attachment_blobs(shared: &Arc<Shared>) {
         match due {
             Ok(due) if !due.is_empty() => {
                 if let Ok(client) = crate::relay_client(&shared.cfg) {
-                    let outcomes = ligus_runtime::attachment_blob::renew_blobs(
-                        &client,
-                        &shared.cfg.room,
-                        &due,
-                    )
-                    .await;
-                    if let Err(e) = shared
-                        .lock()
-                        .record_blob_renewals(shared.ws, &outcomes, now)
-                    {
+                    let outcomes = ligus_runtime::attachment_blob::renew_blobs(&client, &shared.cfg.room, &due).await;
+                    if let Err(e) = shared.lock().record_blob_renewals(shared.ws, &outcomes, now) {
                         eprintln!("attachments: recording blob renewals: {e}");
                     }
                 }
@@ -1983,42 +1622,23 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let mut paired_reported = false;
     let mut known_repos: Option<Vec<uuid::Uuid>> = None;
     loop {
-        shared
-            .presence
-            .record(&shared.host_id, Timestamp::now().inner().unix_timestamp());
+        shared.presence.record(&shared.host_id, Timestamp::now().inner().unix_timestamp());
         // When the workspace's repos change (and at start): map the legacy
         // bindings and look for checkouts in the repos dir (found ones stay
         // unconfirmed until someone says "use it").
-        let live: Vec<uuid::Uuid> = shared
-            .lock()
-            .workspace_roster(shared.ws)
-            .map(|r| {
-                ligus_runtime::repos::live_repos(&r)
-                    .iter()
-                    .map(|x| x.id)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let live: Vec<uuid::Uuid> = shared.lock().workspace_roster(shared.ws).map(|r| ligus_runtime::repos::live_repos(&r).iter().map(|x| x.id).collect()).unwrap_or_default();
         if known_repos.as_ref() != Some(&live) {
             known_repos = Some(live);
             let sh = shared.clone();
             // In the background: the beat never waits on a scan.
             drop(tokio::task::spawn_blocking(move || repos_refresh(&sh)));
         }
-        let coverage = if live_empty(&known_repos) {
-            Vec::new()
-        } else {
-            repo_coverage(&shared)
-        };
+        let coverage = if live_empty(&known_repos) { Vec::new() } else { repo_coverage(&shared) };
         // A box that can't write (revoked, awaiting approval) isn't serving work.
         let writable = shared.lock().write_block().is_none();
         // The one keyring (B1): beats seal at the authorized head.
         let ring = match crate::key_source(&shared.cfg) {
-            Ok(src) => ligus_runtime::keyring::KeyringEngine::from_store(
-                shared.lock().store(),
-                shared.ws,
-                &src,
-            ),
+            Ok(src) => ligus_runtime::keyring::KeyringEngine::from_store(shared.lock().store(), shared.ws, &src),
             Err(_) => ligus_runtime::keyring::KeyringEngine::passphrase(shared.ws, key),
         };
         if writable {
@@ -2054,13 +1674,11 @@ pub(crate) fn repos_refresh(shared: &Shared) {
     // keep it); only reads and writes of the store take it.
     let Ok((roster, roots, aliases)) = ({
         let svc = shared.lock();
-        svc.workspace_roster(shared.ws)
-            .map_err(|e| e.to_string())
-            .and_then(|r| {
-                let roots = svc.store().scan_roots().map_err(|e| e.to_string())?;
-                let aliases = ligus_runtime::repos::aliases(svc.store(), shared.ws, Some(&r));
-                Ok((r, roots, aliases))
-            })
+        svc.workspace_roster(shared.ws).map_err(|e| e.to_string()).and_then(|r| {
+            let roots = svc.store().scan_roots().map_err(|e| e.to_string())?;
+            let aliases = ligus_runtime::repos::aliases(svc.store(), shared.ws, Some(&r));
+            Ok((r, roots, aliases))
+        })
     }) else {
         return;
     };
@@ -2075,12 +1693,7 @@ pub(crate) fn repos_refresh(shared: &Shared) {
     if let Err(e) = ligus_runtime::repos::record_found(svc.store(), shared.ws, &found) {
         eprintln!("repos: recording found checkouts failed: {e}");
     }
-    if let Err(e) = crate::repos_cmd::migrate_bindings(
-        &shared.cfg.data_dir,
-        &svc,
-        shared.ws,
-        &shared.opts.label,
-    ) {
+    if let Err(e) = crate::repos_cmd::migrate_bindings(&shared.cfg.data_dir, &svc, shared.ws, &shared.opts.label) {
         eprintln!("repos: migrating bindings failed: {e}");
     }
 }
@@ -2093,9 +1706,7 @@ pub(crate) fn repo_coverage(shared: &Shared) -> Vec<ligus_core::workspace_repo::
         if !ligus_runtime::repos::coverage_reporting(svc.store(), shared.ws, true) {
             return Vec::new();
         }
-        let Ok(roster) = svc.workspace_roster(shared.ws) else {
-            return Vec::new();
-        };
+        let Ok(roster) = svc.workspace_roster(shared.ws) else { return Vec::new() };
         (
             svc.store().repo_mappings(shared.ws).unwrap_or_default(),
             ligus_runtime::repos::aliases(svc.store(), shared.ws, Some(&roster)),
@@ -2116,9 +1727,7 @@ async fn revocation_presence(
     retry_seen: &mut i64,
 ) {
     use ligus_runtime::revocation_status as rs;
-    let Some(t) = shared.tunnel.as_ref() else {
-        return;
-    };
+    let Some(t) = shared.tunnel.as_ref() else { return };
     // Under this box's workspace device id (its host id), signed with its key.
     let report = t.ledger.report(&shared.host_id);
     if !report.devices.is_empty() {
@@ -2132,9 +1741,7 @@ async fn revocation_presence(
         let ws = shared.ws;
         let retries = {
             let svc = shared.lock();
-            rs::open_retries(&blobs, ring, *retry_seen, now, |d| {
-                svc.retry_requester_key(ws, d)
-            })
+            rs::open_retries(&blobs, ring, *retry_seen, now, |d| svc.retry_requester_key(ws, d))
         };
         for r in retries {
             *retry_seen = (*retry_seen).max(r.at);
@@ -2155,28 +1762,20 @@ async fn pairing_presence(
     ring: &ligus_runtime::keyring::KeyringEngine,
     reported: &mut bool,
 ) {
-    let Some(t) = shared.tunnel.as_ref() else {
-        return;
-    };
+    let Some(t) = shared.tunnel.as_ref() else { return };
     // Only the phones of this box's own account(s): the report is sealed to
     // the workspace key, and only the owner's desktops show it.
     let mine = uuid::Uuid::parse_str(&shared.host_id)
         .ok()
         .and_then(|d| shared.lock().devices_sharing_an_account(shared.ws, d).ok())
         .unwrap_or_default();
-    let report = t.registry.pairing_report(
-        &shared.host_id,
-        shared.ws,
-        Timestamp::now().inner().unix_timestamp(),
-        |d| mine.contains(&d),
-    );
+    let report = t.registry.pairing_report(&shared.host_id, shared.ws, Timestamp::now().inner().unix_timestamp(), |d| mine.contains(&d));
     if report.phones.is_empty() && !*reported {
         return;
     }
     let named = !report.phones.is_empty();
     let report = shared.lock().sign_pairing_report(report);
-    match ligus_runtime::revocation_status::publish_pairing_report(relay, room, ring, &report).await
-    {
+    match ligus_runtime::revocation_status::publish_pairing_report(relay, room, ring, &report).await {
         Ok(()) => *reported = named,
         Err(e) => eprintln!("presence: publishing the paired phones failed: {e}"),
     }
@@ -2194,17 +1793,10 @@ struct WorkspaceLease {
 }
 
 /// Workspace leases renew on the host beat cadence, so the lease spans three.
-const WORKSPACE_LEASE_MS: u64 =
-    3 * ligus_runtime::host_presence::HOST_BEAT_EVERY_SECS as u64 * 1000;
+const WORKSPACE_LEASE_MS: u64 = 3 * ligus_runtime::host_presence::HOST_BEAT_EVERY_SECS as u64 * 1000;
 
 impl WorkspaceLease {
-    async fn tick(
-        &mut self,
-        shared: &Arc<Shared>,
-        relay: &ligus_runtime::RelayClient,
-        room: &str,
-        ring: &ligus_runtime::keyring::KeyringEngine,
-    ) {
+    async fn tick(&mut self, shared: &Arc<Shared>, relay: &ligus_runtime::RelayClient, room: &str, ring: &ligus_runtime::keyring::KeyringEngine) {
         use ligus_core::lease::{lease_health, LeaseClaimReason, LeaseHealth, LeaseScope};
         use ligus_runtime::lease_presence::{open_lease_beats, publish_lease_beat, LeaseBeat};
         let ws = shared.ws;
@@ -2213,30 +1805,21 @@ impl WorkspaceLease {
         let now_ms = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64;
         let (me, lease) = {
             let svc = shared.lock();
-            (
-                svc.device_id(),
-                svc.lease(ws, config_id, LeaseScope::Workspace, &scope_id)
-                    .ok()
-                    .flatten(),
-            )
+            (svc.device_id(), svc.lease(ws, config_id, LeaseScope::Workspace, &scope_id).ok().flatten())
         };
         // The holder's newest verified beat, from the presence channel.
         let last = match relay.list_presence(room).await {
             Ok(blobs) => {
                 let roster = {
                     let svc = shared.lock();
-                    ligus_runtime::envelope_verifier::build_roster(
-                        &svc.store().trust_envelopes(ws).unwrap_or_default(),
-                    )
+                    ligus_runtime::envelope_verifier::build_roster(&svc.store().trust_envelopes(ws).unwrap_or_default())
                 };
                 use ligus_runtime::envelope_verifier::DeviceKeyResolver;
-                open_lease_beats(&blobs, ring, now_ms, |d| {
-                    roster.public_key(d).map(<[u8]>::to_vec)
-                })
-                .into_iter()
-                .filter(|(b, _)| b.scope == LeaseScope::Workspace && b.scope_id == scope_id)
-                .map(|(b, _)| (b.holder, b.epoch, b.at_ms))
-                .next()
+                open_lease_beats(&blobs, ring, now_ms, |d| roster.public_key(d).map(<[u8]>::to_vec))
+                    .into_iter()
+                    .filter(|(b, _)| b.scope == LeaseScope::Workspace && b.scope_id == scope_id)
+                    .map(|(b, _)| (b.holder, b.epoch, b.at_ms))
+                    .next()
             }
             Err(_) => None,
         };
@@ -2248,10 +1831,7 @@ impl WorkspaceLease {
             }
             Some(l) => match lease_health(l, last, now_ms) {
                 LeaseHealth::Released => Some((l.current.epoch + 1, LeaseClaimReason::Released)),
-                LeaseHealth::Lapsed
-                    if last
-                        .is_none_or(|(_, _, at)| now_ms - at > 2 * l.current.lease_ms as i64) =>
-                {
+                LeaseHealth::Lapsed if last.is_none_or(|(_, _, at)| now_ms - at > 2 * l.current.lease_ms as i64) => {
                     Some((l.current.epoch + 1, LeaseClaimReason::Lapsed))
                 }
                 _ => {
@@ -2262,18 +1842,8 @@ impl WorkspaceLease {
         };
         if let Some((epoch, reason)) = want {
             let mut svc = shared.lock();
-            match svc.claim_lease(
-                config_id,
-                ws,
-                LeaseScope::Workspace,
-                &scope_id,
-                epoch,
-                WORKSPACE_LEASE_MS,
-                reason,
-            ) {
-                Ok(Some(l)) if l.current.holder == me && l.current.epoch == epoch => {
-                    self.epoch = Some(epoch)
-                }
+            match svc.claim_lease(config_id, ws, LeaseScope::Workspace, &scope_id, epoch, WORKSPACE_LEASE_MS, reason) {
+                Ok(Some(l)) if l.current.holder == me && l.current.epoch == epoch => self.epoch = Some(epoch),
                 _ => self.epoch = None,
             }
         }
@@ -2321,12 +1891,7 @@ impl worker::ServiceSource for Shared {
         let dto = {
             let svc = self.lock();
             let me = svc.author().id.clone();
-            match svc
-                .load_resolving(chat)
-                .ok()
-                .flatten()
-                .filter(|c| c.workspace_id == self.ws)
-            {
+            match svc.load_resolving(chat).ok().flatten().filter(|c| c.workspace_id == self.ws) {
                 Some(c) => match c.flow.asks.get(&ask.ask_id) {
                     Some(st) => api::ask_card_dto(&svc, &c, st, &me),
                     None => api::ask_dto(chat, ask),
@@ -2339,15 +1904,9 @@ impl worker::ServiceSource for Shared {
     /// The chat's bound checkout → its `origin` on one of this box's code
     /// hosts (and `upstream` for a fork), read-only.
     fn forge_for(&self, chat: Uuid) -> Option<ligus_runtime::ligus_mcp::forge_tools::ForgeBinding> {
-        let dir = crate::repos::RepoBindings::load(&self.cfg.data_dir)
-            .resolve(&crate::repos::repos_dir(&self.cfg.data_dir), chat)?;
+        let dir = crate::repos::RepoBindings::load(&self.cfg.data_dir).resolve(&crate::repos::repos_dir(&self.cfg.data_dir), chat)?;
         // The configured remote URLs, never git's insteadOf rewrites of them.
-        let forges: Vec<_> = self
-            .repos
-            .forges(&self.cfg.data_dir)
-            .into_iter()
-            .map(|h| h.forge)
-            .collect();
+        let forges: Vec<_> = self.repos.forges(&self.cfg.data_dir).into_iter().map(|h| h.forge).collect();
         ligus_runtime::ligus_mcp::forge_tools::binding_for_checkout(&dir, &forges)
     }
 }
@@ -2414,11 +1973,7 @@ fn spawn_worker(shared: Arc<Shared>) -> Result<std::thread::JoinHandle<()>> {
 /// v2 (§4): it also opens a one-time enrollment window (10 min) that a
 /// running `ligus serve` announces to the relay. `direct` = `None` prints a
 /// relay-only link (no `url`/`token`).
-pub fn print_pairing(
-    data_dir: &std::path::Path,
-    direct: Option<(&str, &str)>,
-    remote: Option<&tunnel::RelaySettings>,
-) -> Result<()> {
+pub fn print_pairing(data_dir: &std::path::Path, direct: Option<(&str, &str)>, remote: Option<&tunnel::RelaySettings>) -> Result<()> {
     let link = match remote {
         Some(r) => {
             r.validate()?;
@@ -2433,9 +1988,7 @@ pub fn print_pairing(
             tunnel::pairing_link_v2(direct, &keys, &r.relay, &secret.ps, exp)
         }
         None => {
-            let Some((url, token)) = direct else {
-                bail!("nothing to pair: no direct URL and remote access is off")
-            };
+            let Some((url, token)) = direct else { bail!("nothing to pair: no direct URL and remote access is off") };
             pair::pairing_url(url, token)
         }
     };
@@ -2453,9 +2006,7 @@ pub fn print_pairing(
 
 /// `ligus serve` — run until SIGTERM / Ctrl-C.
 pub fn cmd_serve(cfg: Config, opts: ServeOptions) -> Result<()> {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     rt.block_on(async move {
         let server_url = opts.server_url();
         let pair_now = opts.pair;
@@ -2518,9 +2069,7 @@ pub fn cmd_pair(cfg: &Config, opts: &ServeOptions, relay_only: bool) -> Result<(
         }
     }
     // Best effort: a box whose store can't be read yet just gets no hint.
-    let standing = open_service(cfg)
-        .ok()
-        .and_then(|svc| svc.device_standing(uuid_of_room(&cfg.room)).ok());
+    let standing = open_service(cfg).ok().and_then(|svc| svc.device_standing(uuid_of_room(&cfg.room)).ok());
     if let Some(hint) = standing.as_ref().and_then(pair::member_hint) {
         println!("{hint}");
     }

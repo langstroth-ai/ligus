@@ -15,10 +15,7 @@ use crate::agent_turn::McpAttach;
 
 /// Whether a legacy adapter can take the Ligus MCP server.
 pub fn legacy_attaches(kind: ModelProviderKind) -> bool {
-    matches!(
-        kind,
-        ModelProviderKind::ClaudeCode | ModelProviderKind::Copilot
-    )
+    matches!(kind, ModelProviderKind::ClaudeCode | ModelProviderKind::Copilot)
 }
 
 /// Add the Ligus server to a legacy CLI's args (in place). A no-op for CLIs
@@ -26,9 +23,7 @@ pub fn legacy_attaches(kind: ModelProviderKind) -> bool {
 pub fn legacy_args(kind: ModelProviderKind, a: &McpAttach, args: &mut Vec<String>) {
     match kind {
         ModelProviderKind::ClaudeCode => {
-            let Ok(path) = a.write_config_file("claude-mcp.json", &Default::default()) else {
-                return;
-            };
+            let Ok(path) = a.write_config_file("claude-mcp.json", &Default::default()) else { return };
             let path = path.to_string_lossy().into_owned();
             // `--mcp-config` takes several configs; add ours after an
             // existing list (an envelope's strict allow-list keeps it).
@@ -40,9 +35,7 @@ pub fn legacy_args(kind: ModelProviderKind, a: &McpAttach, args: &mut Vec<String
             }
         }
         ModelProviderKind::Copilot => {
-            let Ok(path) = a.write_config_file("copilot-mcp.json", &Default::default()) else {
-                return;
-            };
+            let Ok(path) = a.write_config_file("copilot-mcp.json", &Default::default()) else { return };
             args.push("--additional-mcp-config".into());
             args.push(format!("@{}", path.to_string_lossy()));
             // `copilot -p` denies any tool that would prompt; Ligus's own
@@ -72,13 +65,7 @@ mod tests {
     fn credential_stays_off_the_command_line() {
         let d = tempfile::tempdir().unwrap();
         let a = attach(d.path());
-        let mut args = vec![
-            "--strict-mcp-config".to_string(),
-            "--mcp-config".into(),
-            "{\"mcpServers\":{}}".into(),
-            "--model".into(),
-            "x".into(),
-        ];
+        let mut args = vec!["--strict-mcp-config".to_string(), "--mcp-config".into(), "{\"mcpServers\":{}}".into(), "--model".into(), "x".into()];
         legacy_args(ModelProviderKind::ClaudeCode, &a, &mut args);
         assert!(args.iter().all(|x| !x.contains("SECRET-CRED")));
         assert_eq!(args[1], "--mcp-config");
@@ -88,11 +75,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(file).unwrap().permissions().mode() & 0o077,
-                0,
-                "0600"
-            );
+            assert_eq!(std::fs::metadata(file).unwrap().permissions().mode() & 0o077, 0, "0600");
         }
         let mut c = vec![];
         legacy_args(ModelProviderKind::Copilot, &a, &mut c);

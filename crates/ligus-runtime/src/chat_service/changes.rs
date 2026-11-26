@@ -82,12 +82,7 @@ impl ChangeFeed {
 
     /// Session `session_id` of `workspace_id` gained synced events.
     pub fn synced(&self, session_id: Uuid, workspace_id: Uuid) {
-        self.publish(ChatChange {
-            session_id,
-            workspace_id,
-            origin: ChangeOrigin::Synced,
-            event: None,
-        });
+        self.publish(ChatChange { session_id, workspace_id, origin: ChangeOrigin::Synced, event: None });
     }
 }
 
@@ -150,9 +145,6 @@ mod tests {
         let sid = Uuid::new_v4();
         feed.synced(sid, ws);
         let c = rx.try_recv().unwrap();
-        assert_eq!(
-            (c.session_id, c.workspace_id, c.origin, c.kind()),
-            (sid, ws, ChangeOrigin::Synced, None)
-        );
+        assert_eq!((c.session_id, c.workspace_id, c.origin, c.kind()), (sid, ws, ChangeOrigin::Synced, None));
     }
 }

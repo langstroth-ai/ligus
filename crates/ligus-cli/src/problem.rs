@@ -28,41 +28,13 @@ pub const EXIT_OFFLINE: i32 = 7;
 /// The shared table, for `ligus help exit-codes` and every command's help.
 pub const TABLE: &[(i32, &str, &str)] = &[
     (EXIT_OK, "done (warnings allowed)", "continue"),
-    (
-        EXIT_ERROR,
-        "failed: the message (or checks[].fix) says why",
-        "read it, fix, retry",
-    ),
-    (
-        EXIT_USAGE,
-        "usage error: unknown command, missing or bad argument",
-        "fix the command line",
-    ),
-    (
-        EXIT_FIXABLE,
-        "a precondition you can fix is missing (a tool, a file, a sign-in, the agent sandbox)",
-        "fix it and rerun",
-    ),
-    (
-        EXIT_HUMAN,
-        "a person must decide or act (a passkey, an admission, exposure, deleting owned data)",
-        "stop and ask",
-    ),
-    (
-        EXIT_NOT_FOUND,
-        "not found (a workspace, chat, proposal, run)",
-        "check the id",
-    ),
-    (
-        EXIT_REFUSED,
-        "refused by workspace rules (a role, lockdown, agent access)",
-        "ask an Admin; don't retry",
-    ),
-    (
-        EXIT_OFFLINE,
-        "offline, the relay unreachable, or timed out",
-        "retry with backoff",
-    ),
+    (EXIT_ERROR, "failed: the message (or checks[].fix) says why", "read it, fix, retry"),
+    (EXIT_USAGE, "usage error: unknown command, missing or bad argument", "fix the command line"),
+    (EXIT_FIXABLE, "a precondition you can fix is missing (a tool, a file, a sign-in, the agent sandbox)", "fix it and rerun"),
+    (EXIT_HUMAN, "a person must decide or act (a passkey, an admission, exposure, deleting owned data)", "stop and ask"),
+    (EXIT_NOT_FOUND, "not found (a workspace, chat, proposal, run)", "check the id"),
+    (EXIT_REFUSED, "refused by workspace rules (a role, lockdown, agent access)", "ask an Admin; don't retry"),
+    (EXIT_OFFLINE, "offline, the relay unreachable, or timed out", "retry with backoff"),
 ];
 
 /// An error with its exit code, a stable machine code
@@ -85,12 +57,7 @@ impl std::error::Error for Problem {}
 
 /// Something named by id doesn't exist here (exit 5).
 pub fn not_found(message: impl Into<String>) -> anyhow::Error {
-    anyhow::Error::new(Problem {
-        exit: EXIT_NOT_FOUND,
-        code: "not_found",
-        message: message.into(),
-        fix: None,
-    })
+    anyhow::Error::new(Problem { exit: EXIT_NOT_FOUND, code: "not_found", message: message.into(), fix: None })
 }
 
 /// What `ligus` prints for an error, and its exit code.
@@ -120,12 +87,7 @@ fn default_fix(code: &str) -> Option<&'static str> {
 pub fn render(e: &anyhow::Error, command: &str, usage_hint: &str) -> Rendered {
     let (exit, code) = classify(e);
     let what = e.to_string();
-    let why: Vec<String> = e
-        .chain()
-        .skip(1)
-        .map(|c| c.to_string())
-        .filter(|c| !c.is_empty() && *c != what)
-        .collect();
+    let why: Vec<String> = e.chain().skip(1).map(|c| c.to_string()).filter(|c| !c.is_empty() && *c != what).collect();
     let why = (!why.is_empty()).then(|| why.join(": "));
     let fix = e
         .chain()
@@ -178,14 +140,10 @@ pub fn classify(e: &anyhow::Error) -> (i32, &'static str) {
         }
         if let Some(re) = c.downcast_ref::<RelayError>() {
             match re {
-                RelayError::Http(h) if h.is_connect() || h.is_timeout() => {
-                    return (EXIT_OFFLINE, "relay_unreachable")
-                }
+                RelayError::Http(h) if h.is_connect() || h.is_timeout() => return (EXIT_OFFLINE, "relay_unreachable"),
                 RelayError::Unauthorized => return (EXIT_FIXABLE, "relay_token_rejected"),
                 RelayError::Status(403) => return (EXIT_REFUSED, "refused"),
-                RelayError::Refused(r) if r.class().auto_retry() => {
-                    return (EXIT_OFFLINE, "relay_busy")
-                }
+                RelayError::Refused(r) if r.class().auto_retry() => return (EXIT_OFFLINE, "relay_busy"),
                 _ => {}
             }
         }
@@ -205,19 +163,10 @@ mod tests {
     #[test]
     fn errors_map_to_the_table() {
         assert_eq!(classify(&anyhow::anyhow!("boom")), (EXIT_ERROR, "error"));
-        assert_eq!(
-            classify(&crate::help::usage_error("usage: x")).0,
-            EXIT_USAGE
-        );
-        assert_eq!(
-            classify(&not_found("unknown chat 1")),
-            (EXIT_NOT_FOUND, "not_found")
-        );
+        assert_eq!(classify(&crate::help::usage_error("usage: x")).0, EXIT_USAGE);
+        assert_eq!(classify(&not_found("unknown chat 1")), (EXIT_NOT_FOUND, "not_found"));
         // Context on top keeps the code.
-        assert_eq!(
-            classify(&not_found("unknown chat 1").context("tail")).0,
-            EXIT_NOT_FOUND
-        );
+        assert_eq!(classify(&not_found("unknown chat 1").context("tail")).0, EXIT_NOT_FOUND);
         let e: anyhow::Error = ChatError::Unauthorized("Viewers can't post".into()).into();
         assert_eq!(classify(&e), (EXIT_REFUSED, "refused"));
         let e: anyhow::Error = ChatError::NotFound("chat".into()).into();
@@ -234,11 +183,7 @@ mod tests {
     async fn an_unreachable_relay_is_offline() {
         ligus_forge::install_tls_provider();
         // A closed port on loopback: connection refused.
-        let err = reqwest::Client::new()
-            .get("http://127.0.0.1:9/")
-            .send()
-            .await
-            .unwrap_err();
+        let err = reqwest::Client::new().get("http://127.0.0.1:9/").send().await.unwrap_err();
         let e: anyhow::Error = RelayError::Http(err).into();
         assert_eq!(classify(&e), (EXIT_OFFLINE, "relay_unreachable"));
     }
@@ -246,9 +191,7 @@ mod tests {
     #[test]
     fn errors_render_in_one_shape() {
         use anyhow::Context as _;
-        let e = Err::<(), _>(anyhow::anyhow!("connection refused"))
-            .context("sync failed")
-            .unwrap_err();
+        let e = Err::<(), _>(anyhow::anyhow!("connection refused")).context("sync failed").unwrap_err();
         let r = render(&e, "sync", "see `ligus sync --help`");
         assert_eq!(r.exit, EXIT_ERROR);
         assert_eq!(r.text, "ligus: sync failed\n  why: connection refused\n");
@@ -259,33 +202,15 @@ mod tests {
         assert_eq!(r.json["error"]["why"], "connection refused");
         assert!(r.json["error"].get("fix").is_none());
 
-        let u = render(
-            &crate::help::usage_error("usage: ligus tail <chat-id>"),
-            "tail",
-            "see `ligus tail --help`",
-        );
+        let u = render(&crate::help::usage_error("usage: ligus tail <chat-id>"), "tail", "see `ligus tail --help`");
         assert_eq!(u.exit, EXIT_USAGE);
-        assert_eq!(
-            u.text,
-            "ligus: usage: ligus tail <chat-id>\n  fix: see `ligus tail --help`\n"
-        );
+        assert_eq!(u.text, "ligus: usage: ligus tail <chat-id>\n  fix: see `ligus tail --help`\n");
 
         let n = render(&not_found("unknown chat 1"), "tail", "");
-        assert_eq!(
-            (n.exit, n.json["error"]["code"].as_str()),
-            (EXIT_NOT_FOUND, Some("not_found"))
-        );
+        assert_eq!((n.exit, n.json["error"]["code"].as_str()), (EXIT_NOT_FOUND, Some("not_found")));
 
-        let p = anyhow::Error::new(Problem {
-            exit: EXIT_FIXABLE,
-            code: "x",
-            message: "no CLI".into(),
-            fix: Some("install it".into()),
-        });
-        assert_eq!(
-            render(&p, "x", "").text,
-            "ligus: no CLI\n  fix: install it\n"
-        );
+        let p = anyhow::Error::new(Problem { exit: EXIT_FIXABLE, code: "x", message: "no CLI".into(), fix: Some("install it".into()) });
+        assert_eq!(render(&p, "x", "").text, "ligus: no CLI\n  fix: install it\n");
 
         let t: anyhow::Error = RelayError::Unauthorized.into();
         let t = render(&t, "sync", "");

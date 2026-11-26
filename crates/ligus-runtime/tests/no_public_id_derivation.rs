@@ -47,16 +47,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
 ];
 
 fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap()
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
 }
 
 fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
         let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -89,27 +84,17 @@ fn no_room_or_invite_id_derived_from_public_ids() {
     assert!(files.len() > 50, "found the sources ({})", files.len());
     let mut offenders = Vec::new();
     for f in &files {
-        let rel = f
-            .strip_prefix(&root)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/");
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
         let text = std::fs::read_to_string(f).unwrap();
         for (n, line) in non_test_part(&text).lines().enumerate() {
             if !line.contains("new_v5(") || line.trim_start().starts_with("//") {
                 continue;
             }
-            let ok = ALLOWED
-                .iter()
-                .any(|(file, frag, _)| rel.ends_with(file) && line.contains(frag));
+            let ok = ALLOWED.iter().any(|(file, frag, _)| rel.ends_with(file) && line.contains(frag));
             if !ok {
                 offenders.push(format!("{rel}:{}: {}", n + 1, line.trim()));
             }
         }
     }
-    assert!(
-        offenders.is_empty(),
-        "UUIDv5 call sites not on the allow-list:\n{}",
-        offenders.join("\n")
-    );
+    assert!(offenders.is_empty(), "UUIDv5 call sites not on the allow-list:\n{}", offenders.join("\n"));
 }

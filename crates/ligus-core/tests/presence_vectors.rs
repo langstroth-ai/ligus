@@ -10,9 +10,7 @@
 //! requirement; Ligus's production policy (RP `ligus.ai`, UV required) is
 //! covered by the reject cases below and the fold tests in ligus-runtime.
 
-use ligus_core::presence::{
-    self, b64url, verify_create, verify_get, PasskeyKey, Policy, PresenceAssertion,
-};
+use ligus_core::presence::{self, b64url, verify_create, verify_get, PasskeyKey, PresenceAssertion, Policy};
 
 struct Vector {
     reg_challenge: Vec<u8>,
@@ -26,19 +24,12 @@ struct Vector {
 }
 
 fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-        .collect()
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
 }
 
 fn load(name: &str) -> Vector {
-    let path = format!(
-        "{}/tests/golden/presence/{name}.json",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let v: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let path = format!("{}/tests/golden/presence/{name}.json", env!("CARGO_MANIFEST_DIR"));
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let r = |k: &str| unhex(v["registration"][k].as_str().unwrap());
     let a = |k: &str| unhex(v["authentication"][k].as_str().unwrap());
     Vector {
@@ -55,11 +46,7 @@ fn load(name: &str) -> Vector {
 
 const ORIGINS: &[&str] = &["https://example.org"];
 fn policy() -> Policy<'static> {
-    Policy {
-        rp_id: "example.org",
-        origins: ORIGINS,
-        require_uv: false,
-    }
+    Policy { rp_id: "example.org", origins: ORIGINS, require_uv: false }
 }
 
 impl Vector {
@@ -81,14 +68,9 @@ impl Vector {
     }
     /// Register, then authenticate with the registered key.
     fn run(&self, want_alg: i32) -> PasskeyKey {
-        let (id, alg, pk) = verify_create(&self.create(), &self.reg_challenge, &policy())
-            .expect("registration verifies");
+        let (id, alg, pk) = verify_create(&self.create(), &self.reg_challenge, &policy()).expect("registration verifies");
         assert_eq!((id, alg), (self.credential_id.clone(), want_alg));
-        let key = PasskeyKey {
-            alg,
-            public_key: pk,
-            recovery: false,
-        };
+        let key = PasskeyKey { alg, public_key: pk, recovery: false };
         verify_get(&self.get(), &key, &self.auth_challenge, &policy()).expect("assertion verifies");
         key
     }
@@ -113,48 +95,21 @@ fn rejects_tampering(v: &Vector, key: &PasskeyKey) {
     for field in 0..3 {
         for at in [0usize, 7, 31, 33, 40, 63, 64, 100] {
             assert!(
-                verify_get(
-                    &tampered(&good, field, at),
-                    key,
-                    &v.auth_challenge,
-                    &policy()
-                )
-                .is_err(),
+                verify_get(&tampered(&good, field, at), key, &v.auth_challenge, &policy()).is_err(),
                 "a flipped bit in field {field} at {at} must not verify"
             );
         }
     }
     let mut other = v.auth_challenge.clone();
     other[0] ^= 1;
-    assert!(
-        verify_get(&good, key, &other, &policy()).is_err(),
-        "wrong challenge"
-    );
-    let wrong_rp = Policy {
-        rp_id: "ligus.ai",
-        ..policy()
-    };
-    assert!(
-        verify_get(&good, key, &v.auth_challenge, &wrong_rp).is_err(),
-        "wrong RP id"
-    );
-    let wrong_origin = Policy {
-        origins: &["https://ligus.ai"],
-        ..policy()
-    };
-    assert!(
-        verify_get(&good, key, &v.auth_challenge, &wrong_origin).is_err(),
-        "wrong origin"
-    );
+    assert!(verify_get(&good, key, &other, &policy()).is_err(), "wrong challenge");
+    let wrong_rp = Policy { rp_id: "ligus.ai", ..policy() };
+    assert!(verify_get(&good, key, &v.auth_challenge, &wrong_rp).is_err(), "wrong RP id");
+    let wrong_origin = Policy { origins: &["https://ligus.ai"], ..policy() };
+    assert!(verify_get(&good, key, &v.auth_challenge, &wrong_origin).is_err(), "wrong origin");
     // A registration's client data is not an assertion's.
-    let swapped = PresenceAssertion {
-        client_data_json: b64url(&v.reg_client_data),
-        ..good.clone()
-    };
-    assert!(
-        verify_get(&swapped, key, &v.reg_challenge, &policy()).is_err(),
-        "webauthn.create isn't webauthn.get"
-    );
+    let swapped = PresenceAssertion { client_data_json: b64url(&v.reg_client_data), ..good.clone() };
+    assert!(verify_get(&swapped, key, &v.reg_challenge, &policy()).is_err(), "webauthn.create isn't webauthn.get");
 }
 
 #[test]
@@ -180,10 +135,7 @@ fn presence_requires_uv() {
     // The vectors' authenticators didn't set UV: Ligus's policy refuses them.
     let v = load("none-es256");
     let key = v.run(presence::ES256);
-    let strict = Policy {
-        require_uv: true,
-        ..policy()
-    };
+    let strict = Policy { require_uv: true, ..policy() };
     let err = verify_get(&v.get(), &key, &v.auth_challenge, &strict).unwrap_err();
     assert!(err.0.contains("UV"), "{err}");
 }
@@ -193,15 +145,7 @@ fn presence_rejects_wrong_rpid() {
     let v = load("packed-eddsa");
     let key = v.run(presence::EDDSA);
     assert!(verify_get(&v.get(), &key, &v.auth_challenge, &Policy::ligus()).is_err());
-    assert!(verify_create(
-        &v.create(),
-        &v.reg_challenge,
-        &Policy {
-            rp_id: "example.com",
-            ..policy()
-        }
-    )
-    .is_err());
+    assert!(verify_create(&v.create(), &v.reg_challenge, &Policy { rp_id: "example.com", ..policy() }).is_err());
 }
 
 #[test]
@@ -223,10 +167,7 @@ fn malformed_attestation_objects_are_refused_not_panicked() {
     let mut deep = vec![0x81u8; 64]; // arrays nested 64 deep
     deep.push(0x00);
     assert!(presence::cbor_decode(&deep).is_err());
-    assert!(
-        presence::cbor_decode(&[0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]).is_err(),
-        "a huge length"
-    );
+    assert!(presence::cbor_decode(&[0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]).is_err(), "a huge length");
 }
 
 /// Phase D: a native authenticator (macOS AuthenticationServices, Windows
@@ -237,12 +178,7 @@ fn malformed_attestation_objects_are_refused_not_panicked() {
 #[test]
 fn native_ceremony_format_vectors() {
     use presence::native::{RawAssertion, RawRegistration};
-    for (name, alg) in [
-        ("none-es256", presence::ES256),
-        ("packed-es256", presence::ES256),
-        ("apple-es256", presence::ES256),
-        ("packed-eddsa", presence::EDDSA),
-    ] {
+    for (name, alg) in [("none-es256", presence::ES256), ("packed-es256", presence::ES256), ("apple-es256", presence::ES256), ("packed-eddsa", presence::EDDSA)] {
         let v = load(name);
         let reg = RawRegistration {
             credential_id: v.credential_id.clone(),
@@ -250,11 +186,7 @@ fn native_ceremony_format_vectors() {
             client_data_json: v.reg_client_data.clone(),
         }
         .into_assertion();
-        assert_eq!(
-            reg,
-            v.create(),
-            "{name}: the native registration maps onto the hand-off's"
-        );
+        assert_eq!(reg, v.create(), "{name}: the native registration maps onto the hand-off's");
         let (id, got_alg, pk) = verify_create(&reg, &v.reg_challenge, &policy()).expect(name);
         assert_eq!((id, got_alg), (v.credential_id.clone(), alg));
         let get = RawAssertion {
@@ -264,27 +196,11 @@ fn native_ceremony_format_vectors() {
             signature: v.signature.clone(),
         }
         .into_assertion();
-        assert_eq!(
-            get,
-            v.get(),
-            "{name}: the native assertion maps onto the hand-off's"
-        );
-        let key = PasskeyKey {
-            alg: got_alg,
-            public_key: pk,
-            recovery: false,
-        };
+        assert_eq!(get, v.get(), "{name}: the native assertion maps onto the hand-off's");
+        let key = PasskeyKey { alg: got_alg, public_key: pk, recovery: false };
         verify_get(&get, &key, &v.auth_challenge, &policy()).expect(name);
-        assert_eq!(
-            presence::returned_challenge(&get.client_data_json).unwrap(),
-            v.auth_challenge,
-            "{name}"
-        );
-        assert_eq!(
-            presence::returned_challenge(&reg.client_data_json).unwrap(),
-            v.reg_challenge,
-            "{name}"
-        );
+        assert_eq!(presence::returned_challenge(&get.client_data_json).unwrap(), v.auth_challenge, "{name}");
+        assert_eq!(presence::returned_challenge(&reg.client_data_json).unwrap(), v.reg_challenge, "{name}");
         rejects_tampering(&v, &key);
     }
 }

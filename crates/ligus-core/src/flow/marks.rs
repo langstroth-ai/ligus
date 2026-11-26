@@ -40,12 +40,7 @@ impl MarkKind {
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        match s
-            .trim()
-            .to_lowercase()
-            .replace(['-', '_', ' '], "")
-            .as_str()
-        {
+        match s.trim().to_lowercase().replace(['-', '_', ' '], "").as_str() {
             "claim" | "todo" => Some(MarkKind::Claim),
             "underconstruction" | "lock" | "wip" => Some(MarkKind::UnderConstruction),
             "needsreview" | "review" => Some(MarkKind::NeedsReview),
@@ -116,20 +111,13 @@ impl WorkspaceMark {
                 None => self.path.clone(),
             }
         };
-        let note = if self.note.trim().is_empty() {
-            String::new()
-        } else {
-            format!(" — {}", self.note.trim())
-        };
+        let note = if self.note.trim().is_empty() { String::new() } else { format!(" — {}", self.note.trim()) };
         format!("[{}] {target} by {}{note}", self.kind.as_str(), self.by)
     }
 }
 
 /// Active marks, newest first.
-pub fn active<'a>(
-    marks: impl IntoIterator<Item = &'a WorkspaceMark>,
-    now_ms: i64,
-) -> Vec<&'a WorkspaceMark> {
+pub fn active<'a>(marks: impl IntoIterator<Item = &'a WorkspaceMark>, now_ms: i64) -> Vec<&'a WorkspaceMark> {
     let mut v: Vec<_> = marks.into_iter().filter(|m| m.active(now_ms)).collect();
     v.sort_by(|a, b| b.at_ms.cmp(&a.at_ms).then(a.id.cmp(&b.id)));
     v
@@ -152,11 +140,7 @@ pub fn conflicts<'a>(
 
 /// The marks block put in an agent's context: what others are working on and
 /// what is locked. At most `max` lines.
-pub fn context_block<'a>(
-    marks: impl IntoIterator<Item = &'a WorkspaceMark>,
-    now_ms: i64,
-    max: usize,
-) -> Option<String> {
+pub fn context_block<'a>(marks: impl IntoIterator<Item = &'a WorkspaceMark>, now_ms: i64, max: usize) -> Option<String> {
     let act = active(marks, now_ms);
     if act.is_empty() {
         return None;
@@ -228,10 +212,7 @@ mod tests {
 
     #[test]
     fn context_block_lists_active_marks() {
-        let marks = [
-            mark(MarkKind::Claim, "src/a.rs", "coder", 5),
-            mark(MarkKind::Claim, "old.rs", "coder", -5 * 3_600_000),
-        ];
+        let marks = [mark(MarkKind::Claim, "src/a.rs", "coder", 5), mark(MarkKind::Claim, "old.rs", "coder", -5 * 3_600_000)];
         let b = context_block(&marks, 10, 10).unwrap();
         assert!(b.contains("[claim] src/a.rs by coder"));
         assert!(!b.contains("old.rs"));
@@ -241,10 +222,7 @@ mod tests {
     #[test]
     fn kinds_parse_loosely() {
         assert_eq!(MarkKind::parse("lock"), Some(MarkKind::UnderConstruction));
-        assert_eq!(
-            MarkKind::parse("Under-Construction"),
-            Some(MarkKind::UnderConstruction)
-        );
+        assert_eq!(MarkKind::parse("Under-Construction"), Some(MarkKind::UnderConstruction));
         assert_eq!(MarkKind::parse("needs_review"), Some(MarkKind::NeedsReview));
         assert_eq!(MarkKind::parse("TODO"), Some(MarkKind::Claim));
         assert_eq!(MarkKind::parse("nope"), None);

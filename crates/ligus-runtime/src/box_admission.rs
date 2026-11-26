@@ -49,13 +49,7 @@ pub struct JoinRequest {
 }
 
 impl JoinRequest {
-    pub fn new(
-        account_id: Uuid,
-        device_id: Uuid,
-        device_public_key: &[u8],
-        ka_public: &[u8],
-        label: &str,
-    ) -> Self {
+    pub fn new(account_id: Uuid, device_id: Uuid, device_public_key: &[u8], ka_public: &[u8], label: &str) -> Self {
         Self {
             v: 1,
             account_id,
@@ -84,19 +78,12 @@ impl JoinRequest {
         h.update(&self.ka_public);
         let d = h.finalize();
         let hex: String = d[..10].iter().map(|b| format!("{b:02X}")).collect();
-        hex.as_bytes()
-            .chunks(4)
-            .map(|c| std::str::from_utf8(c).unwrap_or_default())
-            .collect::<Vec<_>>()
-            .join("-")
+        hex.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap_or_default()).collect::<Vec<_>>().join("-")
     }
 
     pub fn encode(&self) -> String {
         let json = serde_json::to_vec(self).expect("serialize join request");
-        format!(
-            "{JOIN_PREFIX}{}",
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
-        )
+        format!("{JOIN_PREFIX}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json))
     }
 
     pub fn decode(code: &str) -> Result<Self, String> {
@@ -104,19 +91,13 @@ impl JoinRequest {
         if code.len() > MAX_CODE_LEN {
             return Err("that join request is too long".into());
         }
-        let body = code
-            .strip_prefix(JOIN_PREFIX)
-            .ok_or("not a box join request (expected ligusjoin1:…)")?;
+        let body = code.strip_prefix(JOIN_PREFIX).ok_or("not a box join request (expected ligusjoin1:…)")?;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(body.trim().as_bytes())
             .map_err(|_| "the join request isn't valid base64url")?;
-        let r: Self =
-            serde_json::from_slice(&bytes).map_err(|_| "the join request is malformed")?;
+        let r: Self = serde_json::from_slice(&bytes).map_err(|_| "the join request is malformed")?;
         if r.v != 1 {
-            return Err(format!(
-                "join request version {} isn't supported; update Ligus",
-                r.v
-            ));
+            return Err(format!("join request version {} isn't supported; update Ligus", r.v));
         }
         if r.device_public_key.len() != 32 || r.ka_public.len() != 32 {
             return Err("the join request's keys are malformed".into());
@@ -128,12 +109,7 @@ impl JoinRequest {
         }
         // A box's device id is the one its key derives: an admission bound to
         // the request names the device that key is.
-        if r.device_id
-            != ligus_core::crypto::device_id_for(
-                ligus_core::crypto::SigAlg::Ed25519,
-                &r.device_public_key,
-            )
-        {
+        if r.device_id != ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &r.device_public_key) {
             return Err("the join request's device id isn't the one its key derives".into());
         }
         Ok(r)
@@ -141,13 +117,9 @@ impl JoinRequest {
 
     /// Seal `invite` (a `hivews1:` code) to this box: `ligusadmit1:…`.
     pub fn seal(&self, invite: &str) -> Result<String, String> {
-        let blob = ligus_core::e2ee::seal(&self.ka_public, invite.as_bytes())
-            .map_err(|e| e.to_string())?;
+        let blob = ligus_core::e2ee::seal(&self.ka_public, invite.as_bytes()).map_err(|e| e.to_string())?;
         let json = serde_json::to_vec(&blob).map_err(|e| e.to_string())?;
-        Ok(format!(
-            "{SEALED_PREFIX}{}",
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
-        ))
+        Ok(format!("{SEALED_PREFIX}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)))
     }
 }
 
@@ -159,11 +131,7 @@ pub const MAX_LABEL_CHARS: usize = 64;
 /// producers dropped controls and kept 64 characters, so their requests stay
 /// valid.
 pub fn clamp_label(label: &str) -> String {
-    label
-        .chars()
-        .filter(|c| !crate::phone_enroll::hidden_or_reordering(*c))
-        .take(MAX_LABEL_CHARS)
-        .collect()
+    label.chars().filter(|c| !crate::phone_enroll::hidden_or_reordering(*c)).take(MAX_LABEL_CHARS).collect()
 }
 
 /// The `hivews1:` invite inside an admission code: opened with this box's
@@ -182,11 +150,9 @@ pub fn open_admission(code: &str, ka: &ligus_core::KeyAgreementKeypair) -> Resul
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(body.trim().as_bytes())
         .map_err(|_| "the admission code isn't valid base64url")?;
-    let blob: ligus_core::SealedBlob =
-        serde_json::from_slice(&bytes).map_err(|_| "the admission code is malformed")?;
+    let blob: ligus_core::SealedBlob = serde_json::from_slice(&bytes).map_err(|_| "the admission code is malformed")?;
     let plain = zeroize::Zeroizing::new(
-        ligus_core::e2ee::open(ka, &blob)
-            .map_err(|_| "this admission code was sealed to another box".to_string())?,
+        ligus_core::e2ee::open(ka, &blob).map_err(|_| "this admission code was sealed to another box".to_string())?,
     );
     let s = std::str::from_utf8(&plain).map_err(|_| "the admission code is malformed")?;
     if !s.starts_with("hivews1:") {
@@ -206,23 +172,14 @@ pub const REDEEM_KEY_FIELD: &str = "ak";
 pub fn with_redeem_key(invite: &str, seed: &[u8; 32]) -> Result<String, String> {
     let mut v = invite_json(invite)?;
     let hex: String = seed.iter().map(|b| format!("{b:02x}")).collect();
-    v.as_object_mut()
-        .ok_or("the invite is malformed")?
-        .insert(REDEEM_KEY_FIELD.into(), serde_json::Value::String(hex));
+    v.as_object_mut().ok_or("the invite is malformed")?.insert(REDEEM_KEY_FIELD.into(), serde_json::Value::String(hex));
     let json = serde_json::to_vec(&v).map_err(|e| e.to_string())?;
-    Ok(format!(
-        "hivews1:{}",
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
-    ))
+    Ok(format!("hivews1:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)))
 }
 
 /// The redeem key seed a `hivews1:` code carries, if any.
 pub fn redeem_key_of(invite: &str) -> Option<[u8; 32]> {
-    invite_json(invite)
-        .ok()?
-        .get(REDEEM_KEY_FIELD)?
-        .as_str()
-        .and_then(seed_from_hex)
+    invite_json(invite).ok()?.get(REDEEM_KEY_FIELD)?.as_str().and_then(seed_from_hex)
 }
 
 /// A 32-byte seed from 64 hex digits.
@@ -231,21 +188,13 @@ pub fn seed_from_hex(h: &str) -> Option<[u8; 32]> {
     if h.len() != 64 || !h.is_ascii() {
         return None;
     }
-    let bytes: Vec<u8> = (0..64)
-        .step_by(2)
-        .filter_map(|i| u8::from_str_radix(&h[i..i + 2], 16).ok())
-        .collect();
+    let bytes: Vec<u8> = (0..64).step_by(2).filter_map(|i| u8::from_str_radix(&h[i..i + 2], 16).ok()).collect();
     <[u8; 32]>::try_from(bytes).ok()
 }
 
 fn invite_json(invite: &str) -> Result<serde_json::Value, String> {
-    let body = invite
-        .trim()
-        .strip_prefix("hivews1:")
-        .ok_or("not a workspace invite (expected hivews1:…)")?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(body.trim().as_bytes())
-        .map_err(|_| "the invite isn't valid base64url")?;
+    let body = invite.trim().strip_prefix("hivews1:").ok_or("not a workspace invite (expected hivews1:…)")?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(body.trim().as_bytes()).map_err(|_| "the invite isn't valid base64url")?;
     serde_json::from_slice(&bytes).map_err(|_| "the invite is malformed".to_string())
 }
 
@@ -257,9 +206,7 @@ mod b64 {
     }
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
         let s = String::deserialize(d)?;
-        base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(s.as_bytes())
-            .map_err(serde::de::Error::custom)
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s.as_bytes()).map_err(serde::de::Error::custom)
     }
 }
 
@@ -268,15 +215,8 @@ mod tests {
     use super::*;
 
     fn request(ka: &ligus_core::KeyAgreementKeypair) -> JoinRequest {
-        let device =
-            ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &[3; 32]);
-        JoinRequest::new(
-            Uuid::new_v4(),
-            device,
-            &[3; 32],
-            &ka.public_key_bytes(),
-            "build-1\n",
-        )
+        let device = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &[3; 32]);
+        JoinRequest::new(Uuid::new_v4(), device, &[3; 32], &ka.public_key_bytes(), "build-1\n")
     }
 
     /// A join request naming a device id its key doesn't derive is refused.
@@ -296,16 +236,11 @@ mod tests {
         let mut r = request(&ka);
         assert_eq!(JoinRequest::decode(&r.encode()).unwrap().label, "build-1");
         r.label = "x".repeat(65);
-        assert!(JoinRequest::decode(&r.encode())
-            .unwrap_err()
-            .contains("label"));
+        assert!(JoinRequest::decode(&r.encode()).unwrap_err().contains("label"));
         r.label = "build\u{202E}1-dliub".into();
         assert!(JoinRequest::decode(&r.encode()).is_err());
         r.label = "ü".repeat(64);
-        assert!(
-            JoinRequest::decode(&r.encode()).is_ok(),
-            "64 characters, whatever their bytes"
-        );
+        assert!(JoinRequest::decode(&r.encode()).is_ok(), "64 characters, whatever their bytes");
         assert_eq!(clamp_label(&"a".repeat(100)).len(), 64);
     }
 
@@ -319,9 +254,7 @@ mod tests {
         assert_eq!(back.fingerprint(), r.fingerprint());
         assert_eq!(r.fingerprint().len(), 24, "five groups of four");
         assert!(JoinRequest::decode("hivews1:abc").is_err());
-        assert!(
-            JoinRequest::decode(&format!("{JOIN_PREFIX}{}", "A".repeat(MAX_CODE_LEN))).is_err()
-        );
+        assert!(JoinRequest::decode(&format!("{JOIN_PREFIX}{}", "A".repeat(MAX_CODE_LEN))).is_err());
     }
 
     #[test]
@@ -335,54 +268,28 @@ mod tests {
         let r = request(&ka);
         let mut swapped_ka = r.clone();
         swapped_ka.ka_public = mitm.public_key_bytes().to_vec();
-        assert_ne!(
-            swapped_ka.fingerprint(),
-            r.fingerprint(),
-            "another key-agreement key"
-        );
+        assert_ne!(swapped_ka.fingerprint(), r.fingerprint(), "another key-agreement key");
         let mut swapped_account = r.clone();
         swapped_account.account_id = Uuid::new_v4();
-        assert_ne!(
-            swapped_account.fingerprint(),
-            r.fingerprint(),
-            "another account"
-        );
+        assert_ne!(swapped_account.fingerprint(), r.fingerprint(), "another account");
         let mut swapped_device = r.clone();
         swapped_device.device_id = Uuid::new_v4();
-        assert_ne!(
-            swapped_device.fingerprint(),
-            r.fingerprint(),
-            "another device id"
-        );
+        assert_ne!(swapped_device.fingerprint(), r.fingerprint(), "another device id");
         let mut relabelled = r.clone();
         relabelled.label = "other".into();
-        assert_eq!(
-            relabelled.fingerprint(),
-            r.fingerprint(),
-            "the label is only a hint"
-        );
+        assert_eq!(relabelled.fingerprint(), r.fingerprint(), "the label is only a hint");
     }
 
     /// Known answer (documented in `docs/design/v2/phase0-specs.md`).
     #[test]
     fn join_request_fingerprint_golden_vector() {
-        let r = JoinRequest::new(
-            Uuid::from_u128(0x72),
-            Uuid::from_u128(1),
-            &[0x33; 32],
-            &[0x44; 32],
-            "build-1",
-        );
+        let r = JoinRequest::new(Uuid::from_u128(0x72), Uuid::from_u128(1), &[0x33; 32], &[0x44; 32], "build-1");
         assert_eq!(r.fingerprint(), "4A88-26EE-7350-8756-8869");
     }
 
     #[test]
     fn a_redeem_key_rides_the_code_and_nothing_else() {
-        let plain = format!(
-            "hivews1:{}",
-            base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .encode(br#"{"relay_url":"https://r","room":"acme","inv":"x"}"#)
-        );
+        let plain = format!("hivews1:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"relay_url":"https://r","room":"acme","inv":"x"}"#));
         assert_eq!(redeem_key_of(&plain), None);
         let seed = [0xab; 32];
         let code = with_redeem_key(&plain, &seed).unwrap();

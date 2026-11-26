@@ -5,12 +5,12 @@ use std::collections::HashMap;
 
 use ligus_core::crypto::{DeviceCertificate, SigningKeypair};
 use ligus_core::{
-    sign_envelope, workspace_config_session_id, ActorIdentity, ActorKind, ActorStamp, ChatSession,
-    SessionEvent, SessionEventEnvelope, Timestamp, WorkspaceMember, WorkspaceRole,
+    sign_envelope, workspace_config_session_id, ActorIdentity, ActorKind, ActorStamp, ChatSession, SessionEvent,
+    SessionEventEnvelope, Timestamp, WorkspaceMember, WorkspaceRole,
 };
 use ligus_runtime::envelope_verifier::{
-    build_roster, build_rosters, roster_with_batch, verdict_for, DeviceKeyResolver, FounderPin,
-    QuarantineReason, Verdict,
+    build_roster, build_rosters, roster_with_batch, verdict_for, DeviceKeyResolver, FounderPin, QuarantineReason,
+    Verdict,
 };
 use proptest::prelude::*;
 use uuid::Uuid;
@@ -33,10 +33,7 @@ impl Principal {
             name,
             account: SigningKeypair::generate().unwrap(),
             account_id: Uuid::new_v4(),
-            device_id: ligus_core::crypto::device_id_for(
-                ligus_core::crypto::SigAlg::Ed25519,
-                &device.public_key_bytes(),
-            ),
+            device_id: ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &device.public_key_bytes()),
             device,
             present: std::cell::Cell::new(false),
         }
@@ -48,73 +45,31 @@ impl Principal {
         a
     }
     fn member(&self, role: WorkspaceRole) -> WorkspaceMember {
-        WorkspaceMember {
-            id: self.account_id.to_string(),
-            actor: self.actor(),
-            role,
-            title: String::new(),
-            index: 0,
-            joined_at: Timestamp::epoch(),
-        }
+        WorkspaceMember { id: self.account_id.to_string(), actor: self.actor(), role, title: String::new(), index: 0, joined_at: Timestamp::epoch() }
     }
     /// An event on `ws`'s config log, signed by this principal's device.
     fn sign(&self, ws: Uuid, lamport: u64, payload: SessionEvent) -> SessionEventEnvelope {
-        let mut e =
-            SessionEventEnvelope::new(workspace_config_session_id(ws), ws, lamport as i64, payload);
+        let mut e = SessionEventEnvelope::new(workspace_config_session_id(ws), ws, lamport as i64, payload);
         e.lamport = lamport;
-        e.actor_stamp = Some(ActorStamp {
-            actor: self.actor(),
-            recorded_at: Timestamp::epoch(),
-            cfg_frontier: None,
-            presence: None,
-            runtime_effect: false,
-            prev: None,
-            sig_alg: Default::default(),
-            log_head: None,
-        });
+        e.actor_stamp = Some(ActorStamp { actor: self.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         sign_envelope(&mut e, self.device_id, &self.device);
         if self.present.get() {
-            ligus_core::testkit::prove_recovery(
-                &mut e,
-                self.account_id,
-                self.device_id,
-                &self.device,
-            );
+            ligus_core::testkit::prove_recovery(&mut e, self.account_id, self.device_id, &self.device);
         }
         e
     }
     /// Register this principal's test recovery key (the founder's grant).
     fn recovery(&self, ws: Uuid, lamport: u64) -> SessionEventEnvelope {
-        let mut e = self.sign(
-            ws,
-            lamport,
-            ligus_core::testkit::recovery_registration(self.account_id),
-        );
+        let mut e = self.sign(ws, lamport, ligus_core::testkit::recovery_registration(self.account_id));
         ligus_core::testkit::prove_recovery(&mut e, self.account_id, self.device_id, &self.device);
         self.present.set(true);
         e
     }
     fn trust(&self, ws: Uuid, lamport: u64) -> Vec<SessionEventEnvelope> {
-        let cert = DeviceCertificate::issue(
-            &self.account,
-            self.account_id,
-            &self.device.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let cert = DeviceCertificate::issue(&self.account, self.account_id, &self.device.public_key_bytes(), Timestamp::epoch());
         vec![
-            self.sign(
-                ws,
-                lamport,
-                SessionEvent::AccountKeyRegistered {
-                    account_id: self.account_id,
-                    signing_public_key: self.account.public_key_bytes().to_vec(),
-                },
-            ),
-            self.sign(
-                ws,
-                lamport + 1,
-                SessionEvent::DeviceCertificateAdded { certificate: cert },
-            ),
+            self.sign(ws, lamport, SessionEvent::AccountKeyRegistered { account_id: self.account_id, signing_public_key: self.account.public_key_bytes().to_vec() }),
+            self.sign(ws, lamport + 1, SessionEvent::DeviceCertificateAdded { certificate: cert }),
         ]
     }
     fn seed(&self, ws: Uuid, lamport: u64) -> SessionEventEnvelope {
@@ -122,22 +77,10 @@ impl Principal {
         s.id = workspace_config_session_id(ws);
         s.creator_actor_id = self.account_id.to_string();
         s.members = vec![self.member(WorkspaceRole::Owner)];
-        self.sign(
-            ws,
-            lamport,
-            SessionEvent::SessionSnapshot {
-                session: Box::new(s),
-            },
-        )
+        self.sign(ws, lamport, SessionEvent::SessionSnapshot { session: Box::new(s) })
     }
     fn content(&self, ws: Uuid, lamport: u64) -> SessionEventEnvelope {
-        self.sign(
-            ws,
-            lamport,
-            SessionEvent::SessionTitleChanged {
-                title: format!("t{lamport}"),
-            },
-        )
+        self.sign(ws, lamport, SessionEvent::SessionTitleChanged { title: format!("t{lamport}") })
     }
 }
 
@@ -150,15 +93,9 @@ fn honest(events: Vec<SessionEventEnvelope>, ps: &[&Principal]) -> Vec<SessionEv
     logs.dedup();
     let mut out = Vec::new();
     for log in logs {
-        let one: Vec<SessionEventEnvelope> = events
-            .iter()
-            .filter(|e| e.session_id == log)
-            .cloned()
-            .collect();
+        let one: Vec<SessionEventEnvelope> = events.iter().filter(|e| e.session_id == log).cloned().collect();
         for mut e in ligus_core::testkit::honest_chain(&one) {
-            let Some(p) = ps.iter().find(|p| Some(p.device_id) == e.signer_device_id) else {
-                continue;
-            };
+            let Some(p) = ps.iter().find(|p| Some(p.device_id) == e.signer_device_id) else { continue };
             if e.actor_stamp.as_ref().is_some_and(|s| s.presence.is_some()) {
                 ligus_core::testkit::prove_recovery(&mut e, p.account_id, p.device_id, &p.device);
             } else {
@@ -177,15 +114,7 @@ fn workspace(ws: Uuid, owner: &Principal, others: &[&Principal]) -> Vec<SessionE
     out.push(owner.recovery(ws, 4));
     let mut l = 10;
     for p in others {
-        out.push(owner.sign(
-            ws,
-            l,
-            SessionEvent::MemberAdded {
-                invite: None,
-                proof: None,
-                member: p.member(WorkspaceRole::Contributor),
-            },
-        ));
+        out.push(owner.sign(ws, l, SessionEvent::MemberAdded { invite: None, proof: None, member: p.member(WorkspaceRole::Contributor) }));
         out.extend(p.trust(ws, l + 1));
         l += 10;
     }
@@ -232,25 +161,8 @@ fn roster_ignores_unverified_batch_membership() {
     let ws = Uuid::new_v4();
     let stored = workspace(ws, &owner, &[]);
     // Eve signs with her own device but stamps the owner as author.
-    let mut forged = eve.sign(
-        ws,
-        100,
-        SessionEvent::MemberAdded {
-            invite: None,
-            proof: None,
-            member: eve.member(WorkspaceRole::Admin),
-        },
-    );
-    forged.actor_stamp = Some(ActorStamp {
-        actor: owner.actor(),
-        recorded_at: Timestamp::epoch(),
-        cfg_frontier: None,
-        presence: None,
-        runtime_effect: false,
-        prev: None,
-        sig_alg: Default::default(),
-        log_head: None,
-    });
+    let mut forged = eve.sign(ws, 100, SessionEvent::MemberAdded { invite: None, proof: None, member: eve.member(WorkspaceRole::Admin) });
+    forged.actor_stamp = Some(ActorStamp { actor: owner.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
     forged.clear_raw();
     sign_envelope(&mut forged, eve.device_id, &eve.device);
     let mut batch = eve.trust(ws, 101);
@@ -260,10 +172,7 @@ fn roster_ignores_unverified_batch_membership() {
 
     let mut raw = stored.clone();
     raw.extend(batch.iter().cloned());
-    assert!(
-        build_roster(&raw).is_certified(eve.device_id),
-        "precondition: the raw batch certified eve"
-    );
+    assert!(build_roster(&raw).is_certified(eve.device_id), "precondition: the raw batch certified eve");
 
     let refs: Vec<&SessionEventEnvelope> = batch.iter().collect();
     let roster = roster_with_batch(stored, &refs, None);
@@ -280,10 +189,7 @@ fn roster_ignores_unverified_batch_membership() {
     fresh.clear_raw();
     let ghost = SigningKeypair::generate().unwrap();
     sign_envelope(&mut fresh, Uuid::new_v4(), &ghost);
-    assert_eq!(
-        verdict_for(&roster, &fresh),
-        Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
-    );
+    assert_eq!(verdict_for(&roster, &fresh), Verdict::Unverifiable(QuarantineReason::UncertifiedDevice));
 }
 
 /// The batch fixpoint still admits a whole workspace arriving at once: the
@@ -301,15 +207,7 @@ fn a_fresh_workspace_verifies_in_one_batch() {
     // A self-enrollment below Admin, signed by the joiner's own device, too.
     let joe = Principal::new("joe");
     let mut batch2 = joe.trust(ws, 200);
-    batch2.push(joe.sign(
-        ws,
-        202,
-        SessionEvent::MemberAdded {
-            invite: None,
-            proof: None,
-            member: joe.member(WorkspaceRole::Contributor),
-        },
-    ));
+    batch2.push(joe.sign(ws, 202, SessionEvent::MemberAdded { invite: None, proof: None, member: joe.member(WorkspaceRole::Contributor) }));
     let refs: Vec<&SessionEventEnvelope> = batch2.iter().collect();
     let roster = roster_with_batch(batch, &refs, None);
     assert!(roster.is_certified(joe.device_id));
@@ -328,68 +226,28 @@ fn founder_pin_disputes_forged_founder_key() {
     let mut events = workspace(ws, &founder, &[]);
     // The forger registers the founder's account id under its own key, with a
     // device certificate chained to that key, at a lower lamport.
-    let forger = Principal {
-        account_id: founder.account_id,
-        ..Principal::new("forger")
-    };
-    let fcert = DeviceCertificate::issue(
-        &forger.account,
-        founder.account_id,
-        &forger.device.public_key_bytes(),
-        Timestamp::epoch(),
-    );
-    let mut reg = forger.sign(
-        ws,
-        0,
-        SessionEvent::AccountKeyRegistered {
-            account_id: founder.account_id,
-            signing_public_key: forger.account.public_key_bytes().to_vec(),
-        },
-    );
+    let forger = Principal { account_id: founder.account_id, ..Principal::new("forger") };
+    let fcert = DeviceCertificate::issue(&forger.account, founder.account_id, &forger.device.public_key_bytes(), Timestamp::epoch());
+    let mut reg = forger.sign(ws, 0, SessionEvent::AccountKeyRegistered { account_id: founder.account_id, signing_public_key: forger.account.public_key_bytes().to_vec() });
     reg.lamport = 0;
     reg.clear_raw();
     sign_envelope(&mut reg, forger.device_id, &forger.device);
     events.push(reg);
-    events.push(forger.sign(
-        ws,
-        0,
-        SessionEvent::DeviceCertificateAdded { certificate: fcert },
-    ));
+    events.push(forger.sign(ws, 0, SessionEvent::DeviceCertificateAdded { certificate: fcert }));
 
     let unpinned = build_roster(&events);
-    assert!(
-        !unpinned.is_disputed(founder.account_id),
-        "the seed's signer anchors the founder's key"
-    );
-    assert_eq!(
-        unpinned.account_signing_key(founder.account_id),
-        Some(&founder.account.public_key_bytes()[..])
-    );
-    assert!(
-        unpinned
-            .refused_keys()
-            .iter()
-            .any(|r| r.signer_device_id == Some(forger.device_id)),
-        "attributed to the forger"
-    );
+    assert!(!unpinned.is_disputed(founder.account_id), "the seed's signer anchors the founder's key");
+    assert_eq!(unpinned.account_signing_key(founder.account_id), Some(&founder.account.public_key_bytes()[..]));
+    assert!(unpinned.refused_keys().iter().any(|r| r.signer_device_id == Some(forger.device_id)), "attributed to the forger");
 
     let fk = FounderPin::fingerprint_hex(&founder.account.public_key_bytes());
     let pin = FounderPin::parse(&founder.account_id.to_string(), &fk).unwrap();
     let pins: HashMap<Uuid, FounderPin> = [(ws, pin)].into_iter().collect();
     let roster = &build_rosters(&events, &pins)[&ws];
     assert!(!roster.is_disputed(founder.account_id));
-    assert_eq!(
-        roster.account_signing_key(founder.account_id),
-        Some(&founder.account.public_key_bytes()[..])
-    );
-    assert_eq!(
-        verdict_for(roster, &founder.content(ws, 50)),
-        Verdict::Valid
-    );
-    assert!(
-        roster.public_key(forger.device_id).is_none(),
-        "the forger's device chains to a rejected key"
-    );
+    assert_eq!(roster.account_signing_key(founder.account_id), Some(&founder.account.public_key_bytes()[..]));
+    assert_eq!(verdict_for(roster, &founder.content(ws, 50)), Verdict::Valid);
+    assert!(roster.public_key(forger.device_id).is_none(), "the forger's device chains to a rejected key");
     assert_ne!(verdict_for(roster, &forger.content(ws, 51)), Verdict::Valid);
 }
 
@@ -401,31 +259,14 @@ fn an_ex_members_events_are_refused_at_ingest() {
     let (owner, mara) = (Principal::new("owner"), Principal::new("mara"));
     let ws = Uuid::new_v4();
     let mut events = workspace(ws, &owner, &[&mara]);
-    events.push(owner.sign(
-        ws,
-        100,
-        SessionEvent::MemberRemoved {
-            member_id: mara.account_id.to_string(),
-            watermark: Vec::new(),
-        },
-    ));
+    events.push(owner.sign(ws, 100, SessionEvent::MemberRemoved { member_id: mara.account_id.to_string(), watermark: Vec::new() }));
     let events = honest(events, &[&owner, &mara]);
     let roster = build_roster(&events);
-    assert!(matches!(
-        verdict_for(&roster, &mara.content(ws, 120)),
-        Verdict::Quarantine(QuarantineReason::RevokedDevice)
-    ));
+    assert!(matches!(verdict_for(&roster, &mara.content(ws, 120)), Verdict::Quarantine(QuarantineReason::RevokedDevice)));
     let mut fresh = mara.content(ws, 121);
     fresh.clear_raw();
-    sign_envelope(
-        &mut fresh,
-        Uuid::new_v4(),
-        &SigningKeypair::generate().unwrap(),
-    );
-    assert_eq!(
-        verdict_for(&roster, &fresh),
-        Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
-    );
+    sign_envelope(&mut fresh, Uuid::new_v4(), &SigningKeypair::generate().unwrap());
+    assert_eq!(verdict_for(&roster, &fresh), Verdict::Unverifiable(QuarantineReason::UncertifiedDevice));
 }
 
 proptest! {
@@ -497,24 +338,13 @@ proptest! {
 /// victim signs is quarantined (a lockout).
 #[test]
 fn only_an_account_registers_its_own_key() {
-    let (owner, mara, eve) = (
-        Principal::new("owner"),
-        Principal::new("mara"),
-        Principal::new("eve"),
-    );
+    let (owner, mara, eve) = (Principal::new("owner"), Principal::new("mara"), Principal::new("eve"));
     let ws = Uuid::new_v4();
     let stored = workspace(ws, &owner, &[&mara, &eve]);
     let roster = build_roster(&stored);
-    assert_eq!(
-        verdict_for(&roster, &mara.content(ws, 90)),
-        Verdict::Valid,
-        "precondition"
-    );
+    assert_eq!(verdict_for(&roster, &mara.content(ws, 90)), Verdict::Valid, "precondition");
     let other_key = SigningKeypair::generate().unwrap();
-    let forged = SessionEvent::AccountKeyRegistered {
-        account_id: mara.account_id,
-        signing_public_key: other_key.public_key_bytes().to_vec(),
-    };
+    let forged = SessionEvent::AccountKeyRegistered { account_id: mara.account_id, signing_public_key: other_key.public_key_bytes().to_vec() };
     // A member (eve) signs it as herself...
     let by_member = eve.sign(ws, 100, forged.clone());
     // ...or nobody signs it at all.
@@ -538,14 +368,7 @@ fn only_an_account_registers_its_own_key() {
         assert_eq!(verdict_for(&r, &mara.content(ws, 120)), Verdict::Valid);
     }
     // Her own registration (idempotent) stays fine.
-    let own = mara.sign(
-        ws,
-        130,
-        SessionEvent::AccountKeyRegistered {
-            account_id: mara.account_id,
-            signing_public_key: mara.account.public_key_bytes().to_vec(),
-        },
-    );
+    let own = mara.sign(ws, 130, SessionEvent::AccountKeyRegistered { account_id: mara.account_id, signing_public_key: mara.account.public_key_bytes().to_vec() });
     assert_eq!(verdict_for(&roster, &own), Verdict::Valid);
 }
 
@@ -567,15 +390,7 @@ fn a_forged_low_lamport_seed_cannot_lock_out_the_founder() {
         let pin = FounderPin::parse(&owner.account_id.to_string(), &fk).unwrap();
         let mut held = stored.clone();
         held.extend(eve.trust(ws, 100));
-        held.push(eve.sign(
-            ws,
-            102,
-            SessionEvent::MemberAdded {
-                invite: None,
-                proof: None,
-                member: eve.member(WorkspaceRole::Contributor),
-            },
-        ));
+        held.push(eve.sign(ws, 102, SessionEvent::MemberAdded { invite: None, proof: None, member: eve.member(WorkspaceRole::Contributor) }));
         let mut seed = ChatSession::new("", ws, "");
         seed.id = workspace_config_session_id(ws);
         seed.creator_actor_id = eve.account_id.to_string();
@@ -583,55 +398,22 @@ fn a_forged_low_lamport_seed_cannot_lock_out_the_founder() {
         if list_founder {
             seed.members.push(owner.member(WorkspaceRole::Viewer));
         }
-        let forged = eve.sign(
-            ws,
-            0,
-            SessionEvent::SessionSnapshot {
-                session: Box::new(seed),
-            },
-        );
+        let forged = eve.sign(ws, 0, SessionEvent::SessionSnapshot { session: Box::new(seed) });
         let attack = [
             forged,
-            eve.sign(
-                ws,
-                103,
-                SessionEvent::DeviceRevoked {
-                    device_id: owner.device_id,
-                    watermark: Vec::new(),
-                },
-            ),
-            eve.sign(
-                ws,
-                104,
-                SessionEvent::MemberRemoved {
-                    member_id: owner.account_id.to_string(),
-                    watermark: Vec::new(),
-                },
-            ),
+            eve.sign(ws, 103, SessionEvent::DeviceRevoked { device_id: owner.device_id, watermark: Vec::new() }),
+            eve.sign(ws, 104, SessionEvent::MemberRemoved { member_id: owner.account_id.to_string(), watermark: Vec::new() }),
         ];
         let refs: Vec<&SessionEventEnvelope> = attack.iter().collect();
         let roster = roster_with_batch(held.clone(), &refs, Some(&pin));
         let mut after = held;
-        after.extend(
-            attack
-                .iter()
-                .filter(|e| !matches!(verdict_for(&roster, e), Verdict::Quarantine(_)))
-                .cloned(),
-        );
+        after.extend(attack.iter().filter(|e| !matches!(verdict_for(&roster, e), Verdict::Quarantine(_))).cloned());
         let pins: HashMap<Uuid, FounderPin> = [(ws, pin)].into_iter().collect();
         let r = &build_rosters(&after, &pins)[&ws];
-        assert_eq!(
-            verdict_for(r, &owner.content(ws, 200)),
-            Verdict::Valid,
-            "the founder was locked out ({list_founder})"
-        );
+        assert_eq!(verdict_for(r, &owner.content(ws, 200)), Verdict::Valid, "the founder was locked out ({list_founder})");
         // Without a pin, a raw removal the projection refused isn't sticky.
         if !list_founder {
-            assert_eq!(
-                verdict_for(&build_roster(&after), &owner.content(ws, 201)),
-                Verdict::Valid,
-                "unpinned lockout"
-            );
+            assert_eq!(verdict_for(&build_roster(&after), &owner.content(ws, 201)), Verdict::Valid, "unpinned lockout");
         }
     }
 }

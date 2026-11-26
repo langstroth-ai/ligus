@@ -31,38 +31,24 @@ impl ChatService {
         };
         let fk: String = pin.fk.iter().map(|b| format!("{b:02x}")).collect();
         if fk != a.founder_pin {
-            return Ok(refused(
-                "this device pins another founder than the approval address",
-            ));
+            return Ok(refused("this device pins another founder than the approval address"));
         }
         if self.waiting_for_founder(ws)?.is_some() {
             return Ok(not_yet("the workspace's founding hasn't synced yet"));
         }
         match &a.subject {
-            LogSubject::Box {
-                invite_id,
-                device_key,
-            } => {
+            LogSubject::Box { invite_id, device_key } => {
                 let (config, timeline) = self.pinned_config(ws)?;
-                let Some(config) = config else {
-                    return Ok(not_yet("the workspace hasn't synced yet"));
-                };
+                let Some(config) = config else { return Ok(not_yet("the workspace hasn't synced yet")) };
                 let Some(admission) = config.guards.service_invites.get(invite_id) else {
                     return Ok(not_yet("the admission isn't on the workspace log yet"));
                 };
                 if admission.device_key.as_deref() != Some(*device_key) {
-                    return Ok(refused(
-                        "the admission on the log is bound to another device",
-                    ));
+                    return Ok(refused("the admission on the log is bound to another device"));
                 }
                 let envelopes = self.store.config_envelopes(ws)?;
                 let founder = pin.founder_account.to_string();
-                let verdicts = ligus_core::fold_copy_decisions(
-                    &envelopes,
-                    Some(&founder),
-                    self.local_workspace_id,
-                    ligus_core::WorkspaceAuthz::Unchecked,
-                );
+                let verdicts = ligus_core::fold_copy_decisions(&envelopes, Some(&founder), self.local_workspace_id, ligus_core::WorkspaceAuthz::Unchecked);
                 let subject = format!("invite:{invite_id}");
                 // The rules allow a box admission only from an Admin, with
                 // passkey presence: an allowed one carried both.
@@ -77,44 +63,28 @@ impl ChatService {
                 }
                 let head = timeline.current();
                 let Some(device) = head.devices.get(&a.approver_device_id) else {
-                    return Ok(refused(
-                        "the approving device isn't certified in this workspace",
-                    ));
+                    return Ok(refused("the approving device isn't certified in this workspace"));
                 };
                 if device.revoked || device.public_key != a.approver_sig_key {
-                    return Ok(refused(
-                        "the approving device is revoked or isn't the one that showed the code",
-                    ));
+                    return Ok(refused("the approving device is revoked or isn't the one that showed the code"));
                 }
-                let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id)
-                else {
+                let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else {
                     return Ok(refused("the admission names no account"));
                 };
                 if !device.accounts.contains(&account) {
-                    return Ok(refused(
-                        "the approving device isn't certified for the account that signed",
-                    ));
+                    return Ok(refused("the approving device isn't certified for the account that signed"));
                 }
-                let Some(member) = config.members.iter().find(|m| {
-                    m.actor.kind == ActorKind::Human && m.actor.account_id == Some(account)
-                }) else {
+                let Some(member) = config.members.iter().find(|m| m.actor.kind == ActorKind::Human && m.actor.account_id == Some(account)) else {
                     return Ok(refused("the approver isn't a member of this workspace"));
                 };
                 if config.role_of(&member.actor.id).rank() < WorkspaceRole::Admin.rank() {
                     return Ok(refused("the approver isn't an Admin of this workspace"));
                 }
-                Ok(LogVerdict::Verified {
-                    account_id: account,
-                    name: crate::display::shown(&member.actor.display_name),
-                })
+                Ok(LogVerdict::Verified { account_id: account, name: crate::display::shown(&member.actor.display_name) })
             }
             LogSubject::Computer { grant } => {
-                if grant.approver_key != a.approver_sig_key
-                    || grant.approver_device_id != a.approver_device_id
-                {
-                    return Ok(refused(
-                        "the grant wasn't issued by the device that showed the code",
-                    ));
+                if grant.approver_key != a.approver_sig_key || grant.approver_device_id != a.approver_device_id {
+                    return Ok(refused("the grant wasn't issued by the device that showed the code"));
                 }
                 if grant.workspace_id != ws {
                     return Ok(refused("the grant is for another workspace"));
@@ -124,10 +94,7 @@ impl ChatService {
                         account_id: person.account_id.unwrap_or_default(),
                         name: crate::display::shown(&person.display_name),
                     }),
-                    Err(ChatError::Unauthorized(why))
-                        if why == crate::computer_link::NOT_ON_RELAY_YET
-                            || why.contains("hasn't synced") =>
-                    {
+                    Err(ChatError::Unauthorized(why)) if why == crate::computer_link::NOT_ON_RELAY_YET || why.contains("hasn't synced") => {
                         Ok(LogVerdict::NotYet(why))
                     }
                     Err(ChatError::Unauthorized(why)) => Ok(LogVerdict::Refused(why)),
@@ -150,17 +117,11 @@ impl ChatService {
     ) -> Result<Vec<crate::approval_mailbox::EpochKey>, ChatError> {
         let (_, timeline) = self.pinned_config(workspace_id)?;
         let ring = crate::keyring::KeyringEngine::build(workspace_id, Some(&timeline), src, &[]);
-        let mut out: Vec<crate::approval_mailbox::EpochKey> = ring
-            .authorized_keys(&timeline)
-            .into_iter()
-            .map(|(epoch, key)| crate::approval_mailbox::EpochKey { epoch, key })
-            .collect();
+        let mut out: Vec<crate::approval_mailbox::EpochKey> =
+            ring.authorized_keys(&timeline).into_iter().map(|(epoch, key)| crate::approval_mailbox::EpochKey { epoch, key }).collect();
         if let Some(seal) = ring.seal_key() {
             if !out.iter().any(|e| e.epoch == seal.version) {
-                out.push(crate::approval_mailbox::EpochKey {
-                    epoch: seal.version,
-                    key: seal.key,
-                });
+                out.push(crate::approval_mailbox::EpochKey { epoch: seal.version, key: seal.key });
             }
         }
         out.sort_by_key(|e| e.epoch);
@@ -170,10 +131,7 @@ impl ChatService {
     /// The founder pin this device holds for `workspace_id`, as an approval
     /// address carries it (32 lowercase hex).
     pub fn founder_pin_hex(&self, workspace_id: uuid::Uuid) -> Result<Option<String>, ChatError> {
-        Ok(self
-            .store
-            .workspace_pin(workspace_id)?
-            .map(|p| p.fk.iter().map(|b| format!("{b:02x}")).collect()))
+        Ok(self.store.workspace_pin(workspace_id)?.map(|p| p.fk.iter().map(|b| format!("{b:02x}")).collect()))
     }
 }
 
@@ -199,17 +157,10 @@ impl WorkspaceApprovers {
 }
 
 impl crate::approval_mailbox::ApproverClassifier for WorkspaceApprovers {
-    fn classify(
-        &self,
-        kind: ligus_core::match_code::MatchKind,
-        device_id: uuid::Uuid,
-        key: &[u8],
-    ) -> crate::approval_mailbox::Approvability {
+    fn classify(&self, kind: ligus_core::match_code::MatchKind, device_id: uuid::Uuid, key: &[u8]) -> crate::approval_mailbox::Approvability {
         use crate::approval_mailbox::Approvability;
         use ligus_core::match_code::MatchKind;
-        let Some(d) = self.devices.get(&device_id) else {
-            return Approvability::Unknown;
-        };
+        let Some(d) = self.devices.get(&device_id) else { return Approvability::Unknown };
         if d.revoked || d.public_key != key {
             return Approvability::Cannot;
         }
@@ -219,45 +170,27 @@ impl crate::approval_mailbox::ApproverClassifier for WorkspaceApprovers {
             // The viewer's own device holding their account key: another
             // member's desktop can't add a device of the viewer's.
             MatchKind::Computer | MatchKind::Phone => {
-                !d.phone
-                    && self.viewer.is_some_and(|v| {
-                        self.humans.contains(&v) && d.accounts.contains(&v) && !d.delegated_for(v)
-                    })
+                !d.phone && self.viewer.is_some_and(|v| self.humans.contains(&v) && d.accounts.contains(&v) && !d.delegated_for(v))
             }
         };
-        if ok {
-            Approvability::CanApprove
-        } else {
-            Approvability::Cannot
-        }
+        if ok { Approvability::CanApprove } else { Approvability::Cannot }
     }
 }
 
 impl ChatService {
     /// [`WorkspaceApprovers`] for `workspace_id`, read for this device's own
     /// account (empty before it syncs: every device then reads as unknown).
-    pub fn approval_classifier(
-        &self,
-        workspace_id: uuid::Uuid,
-    ) -> Result<WorkspaceApprovers, ChatError> {
+    pub fn approval_classifier(&self, workspace_id: uuid::Uuid) -> Result<WorkspaceApprovers, ChatError> {
         let (config, timeline) = self.pinned_config(workspace_id)?;
-        let Some(config) = config else {
-            return Ok(WorkspaceApprovers::default());
-        };
+        let Some(config) = config else { return Ok(WorkspaceApprovers::default()) };
         let head = timeline.current();
         let mut out = WorkspaceApprovers {
             devices: head.devices.iter().map(|(k, v)| (*k, v.clone())).collect(),
             viewer: self.author.account_id,
             ..Default::default()
         };
-        for m in config
-            .members
-            .iter()
-            .filter(|m| m.actor.kind == ActorKind::Human)
-        {
-            let Some(a) = m.actor.account_id else {
-                continue;
-            };
+        for m in config.members.iter().filter(|m| m.actor.kind == ActorKind::Human) {
+            let Some(a) = m.actor.account_id else { continue };
             out.humans.insert(a);
             if config.role_of(&m.actor.id).rank() >= WorkspaceRole::Admin.rank() {
                 out.admins.insert(a);
@@ -285,48 +218,15 @@ mod classify_tests {
         w.humans.insert(ana);
         w.humans.insert(mallory);
         w.admins.insert(mallory);
-        w.devices.insert(
-            mallory_dev,
-            ligus_core::authz::DeviceState {
-                accounts: [mallory].into_iter().collect(),
-                public_key: key.clone(),
-                ..Default::default()
-            },
-        );
-        w.devices.insert(
-            ana_dev,
-            ligus_core::authz::DeviceState {
-                accounts: [ana].into_iter().collect(),
-                public_key: key.clone(),
-                ..Default::default()
-            },
-        );
+        w.devices.insert(mallory_dev, ligus_core::authz::DeviceState { accounts: [mallory].into_iter().collect(), public_key: key.clone(), ..Default::default() });
+        w.devices.insert(ana_dev, ligus_core::authz::DeviceState { accounts: [ana].into_iter().collect(), public_key: key.clone(), ..Default::default() });
         let w = w.for_viewer(Some(ana));
-        assert_eq!(
-            w.classify(MatchKind::Computer, mallory_dev, &key),
-            Approvability::Cannot
-        );
-        assert_eq!(
-            w.classify(MatchKind::Phone, mallory_dev, &key),
-            Approvability::Cannot
-        );
-        assert_eq!(
-            w.classify(MatchKind::Computer, ana_dev, &key),
-            Approvability::CanApprove
-        );
+        assert_eq!(w.classify(MatchKind::Computer, mallory_dev, &key), Approvability::Cannot);
+        assert_eq!(w.classify(MatchKind::Phone, mallory_dev, &key), Approvability::Cannot);
+        assert_eq!(w.classify(MatchKind::Computer, ana_dev, &key), Approvability::CanApprove);
         // A box: any Admin's device.
-        assert_eq!(
-            w.classify(MatchKind::Box, mallory_dev, &key),
-            Approvability::CanApprove
-        );
-        assert_eq!(
-            w.classify(MatchKind::Box, ana_dev, &key),
-            Approvability::Cannot
-        );
-        assert_eq!(
-            w.classify(MatchKind::Box, mallory_dev, &[8; 32]),
-            Approvability::Cannot,
-            "another key"
-        );
+        assert_eq!(w.classify(MatchKind::Box, mallory_dev, &key), Approvability::CanApprove);
+        assert_eq!(w.classify(MatchKind::Box, ana_dev, &key), Approvability::Cannot);
+        assert_eq!(w.classify(MatchKind::Box, mallory_dev, &[8; 32]), Approvability::Cannot, "another key");
     }
 }

@@ -33,21 +33,16 @@ use uuid::Uuid;
 use ligus_runtime::contacts::{self, ContactsError};
 
 use crate::{
-    decode_workspace_invite, encode_workspace_invite, join_workspace_conn, map_err, parse_hex32,
-    random_token, save_settings, set_active_workspace_sync, sign_invite, with_epoch_keys, AppState,
-    LiveSettings, WorkspaceConn,
+    decode_workspace_invite, encode_workspace_invite, join_workspace_conn, map_err, parse_hex32, random_token,
+    save_settings, set_active_workspace_sync, sign_invite, with_epoch_keys, AppState, LiveSettings, WorkspaceConn,
 };
 
 /// This device's account: id, key fingerprint (when it holds the key).
 fn me(state: &AppState) -> (Option<Uuid>, Option<String>) {
     let svc = state.service.lock().unwrap();
-    let account = svc
-        .author()
-        .account_id
-        .or_else(|| Uuid::parse_str(&svc.author().id).ok());
-    let fk = (!svc.is_delegated()).then(|| {
-        ligus_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key())
-    });
+    let account = svc.author().account_id.or_else(|| Uuid::parse_str(&svc.author().id).ok());
+    let fk = (!svc.is_delegated())
+        .then(|| ligus_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key()));
     (account, fk)
 }
 
@@ -61,12 +56,7 @@ fn invite_signer(conn: &WorkspaceConn, people: &[CoMember]) -> Option<Uuid> {
 /// theirs only with their device's valid signature.
 fn invite_trust(conn: &WorkspaceConn, people: &[CoMember]) -> dm::FounderTrust {
     let known = dm::known_fingerprints(people);
-    dm::check_founder(
-        conn.founder_actor_id.as_deref(),
-        conn.fk.as_deref(),
-        &known,
-        invite_signer(conn, people),
-    )
+    dm::check_founder(conn.founder_actor_id.as_deref(), conn.fk.as_deref(), &known, invite_signer(conn, people))
 }
 
 #[derive(serde::Serialize)]
@@ -83,20 +73,11 @@ pub(crate) struct FounderStatusDto {
 /// founder is a claim until the founder's signed founding is on this device,
 /// and nothing is written there before.
 #[tauri::command]
-pub(crate) async fn founder_status(
-    ligus_app: tauri::AppHandle,
-    session_id: String,
-) -> Result<FounderStatusDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        founder_status_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)
-    })
-    .await
+pub(crate) async fn founder_status(ligus_app: tauri::AppHandle, session_id: String) -> Result<FounderStatusDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| founder_status_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
 }
 
-pub(crate) fn founder_status_sync(
-    state: State<AppState>,
-    session_id: String,
-) -> Result<FounderStatusDto, String> {
+pub(crate) fn founder_status_sync(state: State<AppState>, session_id: String) -> Result<FounderStatusDto, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let waiting = {
         let svc = state.service.lock().unwrap();
@@ -105,17 +86,8 @@ pub(crate) fn founder_status_sync(
             None => None,
         }
     };
-    let founder_name = waiting
-        .and_then(|f| {
-            co_members_of(&state)
-                .into_iter()
-                .find(|c| c.account_id == f)
-        })
-        .map(|c| c.display_name);
-    Ok(FounderStatusDto {
-        waiting: waiting.is_some(),
-        founder_name,
-    })
+    let founder_name = waiting.and_then(|f| co_members_of(&state).into_iter().find(|c| c.account_id == f)).map(|c| c.display_name);
+    Ok(FounderStatusDto { waiting: waiting.is_some(), founder_name })
 }
 
 fn co_members_of(state: &AppState) -> Vec<CoMember> {
@@ -140,10 +112,7 @@ pub(crate) struct ProfileDto {
 /// Your profile: name, picture, safety code and commit email.
 #[tauri::command]
 pub(crate) async fn my_profile(ligus_app: tauri::AppHandle) -> Result<ProfileDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        my_profile_sync(tauri::Manager::state::<AppState>(ligus_app))
-    })
-    .await
+    crate::off_main(ligus_app, move |ligus_app| my_profile_sync(tauri::Manager::state::<AppState>(ligus_app))).await
 }
 
 pub(crate) fn my_profile_sync(state: State<AppState>) -> Result<ProfileDto, String> {
@@ -156,10 +125,7 @@ pub(crate) fn my_profile_sync(state: State<AppState>) -> Result<ProfileDto, Stri
         // The workspace's profile for this account first (identity model v2,
         // 5.4), then the live author, then the local file.
         let profile = account.and_then(|acct| {
-            svc.load_in(ws, ligus_core::workspace_config_session_id(ws))
-                .ok()
-                .flatten()
-                .and_then(|c| c.profiles.get(&acct).cloned())
+            svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).ok().flatten().and_then(|c| c.profiles.get(&acct).cloned())
         });
         let name = profile
             .as_ref()
@@ -170,10 +136,7 @@ pub(crate) fn my_profile_sync(state: State<AppState>) -> Result<ProfileDto, Stri
         let avatar = match profile.as_ref() {
             Some(p) if p.avatar.is_some() => p.avatar.as_ref().map(|x| x.data_url()),
             Some(p) if p.avatar_cleared => None,
-            _ => a
-                .avatar_url
-                .clone()
-                .or_else(|| loaded.as_ref().and_then(|s| s.account.avatar_url.clone())),
+            _ => a.avatar_url.clone().or_else(|| loaded.as_ref().and_then(|s| s.account.avatar_url.clone())),
         };
         (name, avatar)
     };
@@ -182,13 +145,7 @@ pub(crate) fn my_profile_sync(state: State<AppState>) -> Result<ProfileDto, Stri
         display_name,
         avatar_url,
         safety_code: fk.as_deref().and_then(directory_trust::safety_code),
-        git_email: state
-            .settings
-            .lock()
-            .unwrap()
-            .git_email
-            .clone()
-            .unwrap_or_default(),
+        git_email: state.settings.lock().unwrap().git_email.clone().unwrap_or_default(),
     })
 }
 
@@ -227,40 +184,18 @@ pub(crate) struct CoMemberDto {
 /// share a name; their safety codes tell them apart.
 #[tauri::command]
 pub(crate) async fn list_co_members(ligus_app: tauri::AppHandle) -> Vec<CoMemberDto> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        list_co_members_sync(tauri::Manager::state::<AppState>(ligus_app))
-    })
-    .await
+    crate::off_main(ligus_app, move |ligus_app| list_co_members_sync(tauri::Manager::state::<AppState>(ligus_app))).await
 }
 
 pub(crate) fn list_co_members_sync(state: State<AppState>) -> Vec<CoMemberDto> {
     let list = co_members_of(&state);
-    let chips: BTreeMap<Uuid, Vec<crate::links_ui::LinkChipDto>> = list
-        .iter()
-        .map(|c| {
-            (
-                c.account_id,
-                crate::links_ui::chips_for(&state, c.account_id),
-            )
-        })
-        .collect();
+    let chips: BTreeMap<Uuid, Vec<crate::links_ui::LinkChipDto>> =
+        list.iter().map(|c| (c.account_id, crate::links_ui::chips_for(&state, c.account_id))).collect();
     let mut chips = chips;
     let s = state.settings.lock().unwrap();
-    let name_of = |id: Uuid| {
-        s.workspaces
-            .iter()
-            .find(|w| w.id() == id)
-            .map(|w| crate::shown(&w.display_name()))
-            .unwrap_or_default()
-    };
+    let name_of = |id: Uuid| s.workspaces.iter().find(|w| w.id() == id).map(|w| crate::shown(&w.display_name())).unwrap_or_default();
     list.into_iter()
-        .filter(|c| {
-            !c.workspaces.iter().all(|w| {
-                s.workspaces
-                    .iter()
-                    .any(|x| x.id() == *w && x.dm_account.is_some())
-            })
-        })
+        .filter(|c| !c.workspaces.iter().all(|w| s.workspaces.iter().any(|x| x.id() == *w && x.dm_account.is_some())))
         .map(|c| CoMemberDto {
             account_id: c.account_id.to_string(),
             display_name: crate::shown(&c.display_name),
@@ -272,23 +207,13 @@ pub(crate) fn list_co_members_sync(state: State<AppState>) -> Vec<CoMemberDto> {
             workspaces: c
                 .workspaces
                 .iter()
-                .filter(|w| {
-                    s.workspaces
-                        .iter()
-                        .any(|x| x.id() == **w && x.dm_account.is_none())
-                })
-                .map(|w| SharedWorkspaceDto {
-                    id: w.to_string(),
-                    name: name_of(*w),
-                })
+                .filter(|w| s.workspaces.iter().any(|x| x.id() == **w && x.dm_account.is_none()))
+                .map(|w| SharedWorkspaceDto { id: w.to_string(), name: name_of(*w) })
                 .collect(),
             dm_workspace_id: s
                 .workspaces
                 .iter()
-                .find(|w| {
-                    w.dm_account.as_deref() == Some(c.account_id.to_string().as_str())
-                        && !s.archived_dms.contains(&w.room)
-                })
+                .find(|w| w.dm_account.as_deref() == Some(c.account_id.to_string().as_str()) && !s.archived_dms.contains(&w.room))
                 .map(|w| w.id().to_string()),
             links: chips.remove(&c.account_id).unwrap_or_default(),
         })
@@ -336,10 +261,7 @@ fn resolve_concurrent_dms(state: &AppState) {
         let candidates: Vec<dm::DmCandidate> = {
             let svc = state.service.lock().unwrap();
             dms.iter()
-                .map(|w| dm::DmCandidate {
-                    room: w.room.clone(),
-                    created_at: svc.store().config_founded_at(w.id()).ok().flatten(),
-                })
+                .map(|w| dm::DmCandidate { room: w.room.clone(), created_at: svc.store().config_founded_at(w.id()).ok().flatten() })
                 .filter(|c| c.created_at.is_some())
                 .collect()
         };
@@ -364,70 +286,40 @@ fn resolve_concurrent_dms(state: &AppState) {
 /// (read-only: new messages go to the kept one).
 pub(crate) fn is_archived_dm(state: &AppState, workspace_id: Uuid) -> bool {
     let s = state.settings.lock().unwrap();
-    s.workspaces.iter().any(|w| {
-        w.id() == workspace_id && w.dm_account.is_some() && s.archived_dms.contains(&w.room)
-    })
+    s.workspaces.iter().any(|w| w.id() == workspace_id && w.dm_account.is_some() && s.archived_dms.contains(&w.room))
 }
 
 /// Your direct messages: one per person (the kept one), each linking the
 /// archived ones.
 #[tauri::command]
 pub(crate) async fn list_dms(ligus_app: tauri::AppHandle) -> Vec<DmDto> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        list_dms_sync(tauri::Manager::state::<AppState>(ligus_app))
-    })
-    .await
+    crate::off_main(ligus_app, move |ligus_app| list_dms_sync(tauri::Manager::state::<AppState>(ligus_app))).await
 }
 
 pub(crate) fn list_dms_sync(state: State<AppState>) -> Vec<DmDto> {
     resolve_concurrent_dms(&state);
-    let people: BTreeMap<String, CoMember> = co_members_of(&state)
-        .into_iter()
-        .map(|c| (c.account_id.to_string(), c))
-        .collect();
-    let conns: Vec<WorkspaceConn> = state
-        .settings
-        .lock()
-        .unwrap()
-        .workspaces
-        .iter()
-        .filter(|w| w.dm_account.is_some())
-        .cloned()
-        .collect();
+    let people: BTreeMap<String, CoMember> = co_members_of(&state).into_iter().map(|c| (c.account_id.to_string(), c)).collect();
+    let conns: Vec<WorkspaceConn> = state.settings.lock().unwrap().workspaces.iter().filter(|w| w.dm_account.is_some()).cloned().collect();
     let created_at: BTreeMap<Uuid, Option<Timestamp>> = {
         let svc = state.service.lock().unwrap();
-        conns
-            .iter()
-            .map(|w| (w.id(), svc.store().config_founded_at(w.id()).ok().flatten()))
-            .collect()
+        conns.iter().map(|w| (w.id(), svc.store().config_founded_at(w.id()).ok().flatten())).collect()
     };
     let created = |w: &WorkspaceConn| created_at.get(&w.id()).copied().flatten();
     let s = state.settings.lock().unwrap();
     let mut out = Vec::new();
-    for w in s
-        .workspaces
-        .iter()
-        .filter(|w| w.dm_account.is_some() && !s.archived_dms.contains(&w.room))
-    {
+    for w in s.workspaces.iter().filter(|w| w.dm_account.is_some() && !s.archived_dms.contains(&w.room)) {
         let peer = w.dm_account.clone().unwrap_or_default();
         let mut archived: Vec<(Option<Timestamp>, String)> = s
             .workspaces
             .iter()
-            .filter(|x| {
-                x.dm_account.as_deref() == Some(peer.as_str()) && s.archived_dms.contains(&x.room)
-            })
+            .filter(|x| x.dm_account.as_deref() == Some(peer.as_str()) && s.archived_dms.contains(&x.room))
             .map(|x| (created(x), x.id().to_string()))
             .collect();
         archived.sort();
         let person = people.get(&peer);
         out.push(DmDto {
             workspace_id: w.id().to_string(),
-            name: crate::shown(
-                &person
-                    .map(|p| p.display_name.clone())
-                    .filter(|n| !n.trim().is_empty())
-                    .unwrap_or_else(|| w.display_name()),
-            ),
+            name: crate::shown(&person.map(|p| p.display_name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| w.display_name())),
             avatar_url: person.and_then(|p| p.avatar_url.clone()),
             safety_code: person.and_then(|p| p.safety_code()),
             account: peer,
@@ -463,10 +355,7 @@ pub(crate) struct OpenDmDto {
 /// their account and carries your key fingerprint. The DM is created only
 /// when their keys are verified on a workspace you share.
 #[tauri::command]
-pub(crate) async fn open_dm(
-    state: State<'_, AppState>,
-    account_id: String,
-) -> Result<OpenDmDto, String> {
+pub(crate) async fn open_dm(state: State<'_, AppState>, account_id: String) -> Result<OpenDmDto, String> {
     let peer = Uuid::parse_str(account_id.trim()).map_err(|_| "not an account id".to_string())?;
     let (me_account, my_fk) = me(&state);
     let me_account = me_account.ok_or("this device has no account yet")?;
@@ -483,10 +372,7 @@ pub(crate) async fn open_dm(
         let s = state.settings.lock().unwrap();
         s.workspaces
             .iter()
-            .filter(|w| {
-                w.dm_account.as_deref() == Some(peer_s.as_str())
-                    && !s.archived_dms.contains(&w.room)
-            })
+            .filter(|w| w.dm_account.as_deref() == Some(peer_s.as_str()) && !s.archived_dms.contains(&w.room))
             .map(|w| w.id())
             .collect::<Vec<_>>()
     };
@@ -494,9 +380,7 @@ pub(crate) async fn open_dm(
     // device's own) verifies: never in a forged one that merely names them.
     let existing = {
         let svc = state.service.lock().unwrap();
-        existing
-            .into_iter()
-            .find(|id| svc.founder_verified(*id).unwrap_or(false))
+        existing.into_iter().find(|id| svc.founder_verified(*id).unwrap_or(false))
     };
     if let Some(id) = existing {
         set_active_workspace_sync(state.clone(), id.to_string())?;
@@ -505,15 +389,12 @@ pub(crate) async fn open_dm(
             workspace_id: id.to_string(),
             invite: None,
             delivered: false,
-            pending: held
-                .as_ref()
-                .is_some_and(|h| h.status_json()["pending"] == serde_json::json!(true)),
+            pending: held.as_ref().is_some_and(|h| h.status_json()["pending"] == serde_json::json!(true)),
             invite_delivery: held.map(|h| h.status_json()),
             safety_code: person.safety_code(),
         });
     }
-    let my_fk =
-        my_fk.ok_or("this device acts for an account without its key and can't found a DM")?;
+    let my_fk = my_fk.ok_or("this device acts for an account without its key and can't found a DM")?;
     let conn = {
         let mut s = state.settings.lock().unwrap();
         let conn = WorkspaceConn {
@@ -535,31 +416,13 @@ pub(crate) async fn open_dm(
     };
     let ws_id = conn.id();
     set_active_workspace_sync(state.clone(), ws_id.to_string())?;
-    let inv = state
-        .service
-        .lock()
-        .unwrap()
-        .issue_invite(ws_id)
-        .map_err(map_err)?;
-    let invite = encode_workspace_invite(&sign_invite(
-        &state,
-        with_epoch_keys(
-            &state,
-            WorkspaceConn {
-                inv: Some(inv.to_string()),
-                ..conn
-            },
-        ),
-    ));
+    let inv = state.service.lock().unwrap().issue_invite(ws_id).map_err(map_err)?;
+    let invite = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn })));
     let invite = crate::with_invite_redeem_key(&state, ws_id, inv, invite)?;
     // Delivered now, or held (sealed on this device) and delivered once their
     // contact id arrives.
     let delivered = deliver_invite(&state, &person, &plan, &invite).await == Delivery::Delivered;
-    let held = if delivered {
-        None
-    } else {
-        hold_invite(&state, ws_id, &person, &plan, &invite)
-    };
+    let held = if delivered { None } else { hold_invite(&state, ws_id, &person, &plan, &invite) };
     Ok(OpenDmDto {
         workspace_id: ws_id.to_string(),
         invite: Some(invite),
@@ -593,48 +456,23 @@ pub(crate) struct InviteInfoDto {
 
 /// What an invite says about who sent it, before joining.
 #[tauri::command]
-pub(crate) async fn inspect_invite(
-    ligus_app: tauri::AppHandle,
-    code: String,
-) -> Result<InviteInfoDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        inspect_invite_sync(tauri::Manager::state::<AppState>(ligus_app), code)
-    })
-    .await
+pub(crate) async fn inspect_invite(ligus_app: tauri::AppHandle, code: String) -> Result<InviteInfoDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| inspect_invite_sync(tauri::Manager::state::<AppState>(ligus_app), code)).await
 }
 
-pub(crate) fn inspect_invite_sync(
-    state: State<AppState>,
-    code: String,
-) -> Result<InviteInfoDto, String> {
+pub(crate) fn inspect_invite_sync(state: State<AppState>, code: String) -> Result<InviteInfoDto, String> {
     let conn = decode_workspace_invite(&code)?;
     let (me_account, _) = me(&state);
     let people = co_members_of(&state);
     let trust = invite_trust(&conn, &people);
-    let founder = conn
-        .founder_actor_id
-        .as_deref()
-        .and_then(|f| Uuid::parse_str(f).ok());
-    let already_joined = state
-        .settings
-        .lock()
-        .unwrap()
-        .workspaces
-        .iter()
-        .any(|w| w.room == conn.room);
+    let founder = conn.founder_actor_id.as_deref().and_then(|f| Uuid::parse_str(f).ok());
+    let already_joined = state.settings.lock().unwrap().workspaces.iter().any(|w| w.room == conn.room);
     Ok(InviteInfoDto {
-        workspace_name: if conn.dm_account.is_some() {
-            String::new()
-        } else {
-            ligus_proto::names::clean_display_name(&conn.display_name())
-        },
+        workspace_name: if conn.dm_account.is_some() { String::new() } else { ligus_proto::names::clean_display_name(&conn.display_name()) },
         is_dm: conn.dm_account.is_some(),
-        addressed_to_me: me_account
-            .is_some_and(|m| conn.dm_account.as_deref() == Some(m.to_string().as_str())),
+        addressed_to_me: me_account.is_some_and(|m| conn.dm_account.as_deref() == Some(m.to_string().as_str())),
         founder_account: founder.map(|f| f.to_string()),
-        founder_name: founder
-            .and_then(|f| people.iter().find(|p| p.account_id == f))
-            .map(|p| crate::shown(&p.display_name)),
+        founder_name: founder.and_then(|f| people.iter().find(|p| p.account_id == f)).map(|p| crate::shown(&p.display_name)),
         safety_code: conn.fk.as_deref().and_then(directory_trust::safety_code),
         trust: trust_str(trust).into(),
         already_joined,
@@ -646,22 +484,12 @@ pub(crate) fn inspect_invite_sync(
 /// this device shares nothing with, after the person compared the safety
 /// code). Rewrites the connection to this side's view: `dm_account` becomes
 /// the founder (the other person).
-pub(crate) fn admit_dm_invite(
-    state: &AppState,
-    conn: &mut WorkspaceConn,
-    safety_code_confirmed: bool,
-) -> Result<(), String> {
+pub(crate) fn admit_dm_invite(state: &AppState, conn: &mut WorkspaceConn, safety_code_confirmed: bool) -> Result<(), String> {
     let (me_account, _) = me(state);
     let me_account = me_account.ok_or("this device has no account yet")?;
     let people = co_members_of(state);
     let known = dm::known_fingerprints(&people);
-    let joined = state
-        .settings
-        .lock()
-        .unwrap()
-        .workspaces
-        .iter()
-        .any(|w| w.room == conn.room);
+    let joined = state.settings.lock().unwrap().workspaces.iter().any(|w| w.room == conn.room);
     let peer = dm::accept_dm_invite(
         conn.dm_account.as_deref(),
         conn.founder_actor_id.as_deref(),
@@ -685,36 +513,17 @@ pub(crate) fn admit_dm_invite(
 /// Join a DM from its invite. `confirm_safety_code` is for someone you share
 /// no workspace with, after you compared their safety code out of band.
 #[tauri::command]
-pub(crate) async fn join_dm(
-    ligus_app: tauri::AppHandle,
-    code: String,
-    confirm_safety_code: bool,
-) -> Result<WorkspaceInfoDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        join_dm_sync(
-            tauri::Manager::state::<AppState>(ligus_app),
-            code,
-            confirm_safety_code,
-        )
-    })
-    .await
+pub(crate) async fn join_dm(ligus_app: tauri::AppHandle, code: String, confirm_safety_code: bool) -> Result<WorkspaceInfoDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| join_dm_sync(tauri::Manager::state::<AppState>(ligus_app), code, confirm_safety_code)).await
 }
 
-pub(crate) fn join_dm_sync(
-    state: State<AppState>,
-    code: String,
-    confirm_safety_code: bool,
-) -> Result<WorkspaceInfoDto, String> {
+pub(crate) fn join_dm_sync(state: State<AppState>, code: String, confirm_safety_code: bool) -> Result<WorkspaceInfoDto, String> {
     let mut conn = decode_workspace_invite(&code)?;
     if conn.dm_account.is_none() {
         return Err("not a direct message invite".into());
     }
     admit_dm_invite(&state, &mut conn, confirm_safety_code)?;
-    join_workspace_conn(
-        state,
-        conn,
-        ligus_runtime::box_admission::redeem_key_of(&code),
-    )
+    join_workspace_conn(state, conn, ligus_runtime::box_admission::redeem_key_of(&code))
 }
 
 #[derive(serde::Serialize)]
@@ -748,9 +557,7 @@ pub(crate) async fn co_member_invite(
     let person = co_members_of(&state)
         .into_iter()
         .find(|c| c.account_id == peer)
-        .ok_or(
-            "only people you share a workspace with can be invited this way; use an invite link",
-        )?;
+        .ok_or("only people you share a workspace with can be invited this way; use an invite link")?;
     if person.workspaces.contains(&ws) {
         return Err(format!("{} is already a member", person.display_name));
     }
@@ -769,16 +576,7 @@ pub(crate) async fn co_member_invite(
         .unwrap()
         .issue_invite(ws)
         .map_err(|e| format!("Only a workspace Admin can invite people ({e})."))?;
-    let invite = encode_workspace_invite(&sign_invite(
-        &state,
-        with_epoch_keys(
-            &state,
-            WorkspaceConn {
-                inv: Some(inv.to_string()),
-                ..conn
-            },
-        ),
-    ));
+    let invite = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn })));
     let invite = crate::with_invite_redeem_key(&state, ws, inv, invite)?;
     let delivered = deliver_invite(&state, &person, &plan, &invite).await == Delivery::Delivered;
     Ok(CoMemberInviteDto {
@@ -819,37 +617,23 @@ pub(crate) struct OwnContact {
 
 impl OwnContact {
     fn fresh() -> Self {
-        Self {
-            cid: contacts::new_cid(),
-            write_key: contacts::new_write_key(),
-            ..Default::default()
-        }
+        Self { cid: contacts::new_cid(), write_key: contacts::new_write_key(), ..Default::default() }
     }
 }
 
 /// The contact id this device announces: only once some relay holds its
 /// record (else a sender would only find a 404).
 pub(crate) fn announced_cid(s: &LiveSettings) -> Option<String> {
-    s.contact
-        .as_ref()
-        .filter(|c| !c.published.is_empty() && contacts::valid_cid(&c.cid))
-        .map(|c| c.cid.clone())
+    s.contact.as_ref().filter(|c| !c.published.is_empty() && contacts::valid_cid(&c.cid)).map(|c| c.cid.clone())
 }
 
 fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 /// The relays this device syncs with (every workspace's, deduplicated).
 fn my_relays(s: &LiveSettings) -> Vec<String> {
-    let mut out: Vec<String> = s
-        .workspaces
-        .iter()
-        .map(|w| w.relay_url.trim().to_string())
-        .collect();
+    let mut out: Vec<String> = s.workspaces.iter().map(|w| w.relay_url.trim().to_string()).collect();
     out.extend(s.relay_url.iter().map(|r| r.trim().to_string()));
     out.retain(|r| !r.is_empty());
     out.sort();
@@ -859,10 +643,7 @@ fn my_relays(s: &LiveSettings) -> Vec<String> {
 
 fn ka_keypair(state: &AppState) -> Option<ligus_core::e2ee::KeyAgreementKeypair> {
     let s = state.settings.lock().unwrap();
-    s.ka_secret
-        .as_deref()
-        .and_then(parse_hex32)
-        .and_then(|seed| ligus_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok())
+    s.ka_secret.as_deref().and_then(parse_hex32).and_then(|seed| ligus_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok())
 }
 
 /// This device's record for `cid`, or `None` on a device that can't speak
@@ -878,21 +659,9 @@ fn own_record(state: &AppState, cid: &str) -> Option<serde_json::Value> {
     if stored.device.certificate.account_id != account_id || stored.device.id != svc.device_id() {
         return None;
     }
-    let env = svc.signed_ka_publication(
-        contacts::contact_workspace_id(cid),
-        ka.public_key_bytes().to_vec(),
-    );
-    let device = contacts::RecordDevice {
-        certificate: stored.device.certificate.clone(),
-        ka_publication: env,
-    };
-    let mut rec = contacts::build_record(
-        cid,
-        account_id,
-        &svc.account_public_key(),
-        vec![device],
-        Timestamp::now(),
-    );
+    let env = svc.signed_ka_publication(contacts::contact_workspace_id(cid), ka.public_key_bytes().to_vec());
+    let device = contacts::RecordDevice { certificate: stored.device.certificate.clone(), ka_publication: env };
+    let mut rec = contacts::build_record(cid, account_id, &svc.account_public_key(), vec![device], Timestamp::now());
     drop(svc);
     rec.links = crate::links_ui::contact_link_envelopes(state, cid);
     serde_json::to_value(rec).ok()
@@ -905,10 +674,7 @@ fn own_record(state: &AppState, cid: &str) -> Option<serde_json::Value> {
 pub(crate) async fn ensure_contact(state: &AppState) -> bool {
     let (contact, relays) = {
         let mut s = state.settings.lock().unwrap();
-        if s.contact
-            .as_ref()
-            .is_none_or(|c| !contacts::valid_cid(&c.cid) || c.write_key.is_empty())
-        {
+        if s.contact.as_ref().is_none_or(|c| !contacts::valid_cid(&c.cid) || c.write_key.is_empty()) {
             s.contact = Some(OwnContact::fresh());
             save_settings(&state.data_dir, &s);
         }
@@ -919,27 +685,16 @@ pub(crate) async fn ensure_contact(state: &AppState) -> bool {
     let mut refused = 0usize;
     c.published.retain(|r, _| relays.contains(r));
     for relay in &relays {
-        if c.published
-            .get(relay)
-            .is_some_and(|t| now - t < REPUBLISH_SECS)
-        {
+        if c.published.get(relay).is_some_and(|t| now - t < REPUBLISH_SECS) {
             continue;
         }
-        if c.unsupported
-            .get(relay)
-            .is_some_and(|t| now - t < RECHECK_UNSUPPORTED_SECS)
-        {
+        if c.unsupported.get(relay).is_some_and(|t| now - t < RECHECK_UNSUPPORTED_SECS) {
             continue;
         }
-        let Some(record) = own_record(state, &c.cid) else {
-            break;
-        };
+        let Some(record) = own_record(state, &c.cid) else { break };
         let client = state.relay_client(relay);
         let first = !c.published.contains_key(relay);
-        match client
-            .contact_put(&c.cid, &c.write_key, &record, first)
-            .await
-        {
+        match client.contact_put(&c.cid, &c.write_key, &record, first).await {
             Ok(_) => {
                 c.published.insert(relay.clone(), now);
                 c.unsupported.remove(relay);
@@ -970,11 +725,7 @@ pub(crate) async fn ensure_contact(state: &AppState) -> bool {
         s.contact = Some(c);
         save_settings(&state.data_dir, &s);
     }
-    state
-        .service
-        .lock()
-        .unwrap()
-        .set_author_contact(announced.clone());
+    state.service.lock().unwrap().set_author_contact(announced.clone());
     announced.is_some()
 }
 
@@ -984,26 +735,13 @@ pub(crate) async fn ensure_contact(state: &AppState) -> bool {
 /// when they have no contact, their relay has no contact routes, their
 /// record isn't theirs, or the drop failed: the caller shows the link (and
 /// holds a DM's invite for a retry).
-async fn deliver_invite(
-    state: &AppState,
-    person: &CoMember,
-    plan: &SealPlan,
-    invite: &str,
-) -> Delivery {
-    let Some((cid, ws)) = person.contact.clone() else {
-        return Delivery::NotYet("no contact id for them yet".into());
-    };
+async fn deliver_invite(state: &AppState, person: &CoMember, plan: &SealPlan, invite: &str) -> Delivery {
+    let Some((cid, ws)) = person.contact.clone() else { return Delivery::NotYet("no contact id for them yet".into()) };
     let relay = {
         let s = state.settings.lock().unwrap();
-        s.workspaces
-            .iter()
-            .find(|w| w.id() == ws)
-            .map(|w| w.relay_url.trim().to_string())
-            .filter(|r| !r.is_empty())
+        s.workspaces.iter().find(|w| w.id() == ws).map(|w| w.relay_url.trim().to_string()).filter(|r| !r.is_empty())
     };
-    let Some(relay) = relay else {
-        return Delivery::NotYet("no relay for their contact".into());
-    };
+    let Some(relay) = relay else { return Delivery::NotYet("no relay for their contact".into()) };
     // The drop box must be theirs: their record at that cid verifies under
     // the account key the shared logs register for them, is no older than
     // the newest one seen for it, and lists a device not revoked (S4). A cid
@@ -1011,13 +749,9 @@ async fn deliver_invite(
     let client = state.relay_client(&relay);
     let out = dm_delivery::drop_to_box(&client, &cid, person, plan, invite, |record| {
         let svc = state.service.lock().unwrap();
-        contacts::accept_contact_record(
-            svc.store(),
-            &cid,
-            record,
-            person.fingerprint.as_deref(),
-            &|d| person.revoked_devices.contains(&d),
-        )
+        contacts::accept_contact_record(svc.store(), &cid, record, person.fingerprint.as_deref(), &|d| {
+            person.revoked_devices.contains(&d)
+        })
     })
     .await;
     if let Delivery::NotYet(why) = &out {
@@ -1030,16 +764,10 @@ async fn deliver_invite(
 
 /// This device's held DM invites, one store per data dir.
 fn held(state: &AppState) -> std::sync::Arc<HeldInvites> {
-    static STORES: std::sync::OnceLock<
-        std::sync::Mutex<BTreeMap<std::path::PathBuf, std::sync::Arc<HeldInvites>>>,
-    > = std::sync::OnceLock::new();
-    let mut m = STORES
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    m.entry(state.data_dir.clone())
-        .or_insert_with(|| std::sync::Arc::new(HeldInvites::for_data_dir(&state.data_dir)))
-        .clone()
+    static STORES: std::sync::OnceLock<std::sync::Mutex<BTreeMap<std::path::PathBuf, std::sync::Arc<HeldInvites>>>> =
+        std::sync::OnceLock::new();
+    let mut m = STORES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    m.entry(state.data_dir.clone()).or_insert_with(|| std::sync::Arc::new(HeldInvites::for_data_dir(&state.data_dir))).clone()
 }
 
 /// Wakes the held-invite loop.
@@ -1048,13 +776,7 @@ static HELD_KICK: tokio::sync::Notify = tokio::sync::Notify::const_new();
 /// Hold a DM invite that couldn't be delivered yet, sealed to this device's
 /// key-agreement key. `None` when it can't be held (no key, too many
 /// waiting): the link is the way.
-fn hold_invite(
-    state: &AppState,
-    ws: Uuid,
-    person: &CoMember,
-    plan: &SealPlan,
-    invite: &str,
-) -> Option<dm_delivery::HeldInvite> {
+fn hold_invite(state: &AppState, ws: Uuid, person: &CoMember, plan: &SealPlan, invite: &str) -> Option<dm_delivery::HeldInvite> {
     let ka = ka_keypair(state)?;
     match held(state).hold(ws, person, plan, invite, &ka.public_key_bytes(), unix_now()) {
         Ok(h) => {
@@ -1077,19 +799,12 @@ impl dm_delivery::Host for DesktopHost<'_> {
     }
     fn dm_exists(&self, ws: Uuid) -> bool {
         let s = self.0.settings.lock().unwrap();
-        s.workspaces
-            .iter()
-            .any(|w| w.id() == ws && w.dm_account.is_some() && !s.archived_dms.contains(&w.room))
+        s.workspaces.iter().any(|w| w.id() == ws && w.dm_account.is_some() && !s.archived_dms.contains(&w.room))
     }
     fn own_ka(&self) -> Option<ligus_core::e2ee::KeyAgreementKeypair> {
         ka_keypair(self.0)
     }
-    fn deliver(
-        &self,
-        person: &CoMember,
-        plan: &SealPlan,
-        invite: &str,
-    ) -> impl std::future::Future<Output = Delivery> + Send {
+    fn deliver(&self, person: &CoMember, plan: &SealPlan, invite: &str) -> impl std::future::Future<Output = Delivery> + Send {
         deliver_invite(self.0, person, plan, invite)
     }
 }
@@ -1111,11 +826,7 @@ pub(crate) async fn run_held_dm_loop(app: tauri::AppHandle) {
         for h in &changed {
             let _ = app.emit("dm-invite-changed", serde_json::json!({ "workspaceId": h.workspace_id, "inviteDelivery": h.status_json() }));
         }
-        let wait = if store.any_open() {
-            HELD_EVERY
-        } else {
-            HELD_IDLE
-        };
+        let wait = if store.any_open() { HELD_EVERY } else { HELD_IDLE };
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
             _ = HELD_KICK.notified() => {}
@@ -1125,58 +836,32 @@ pub(crate) async fn run_held_dm_loop(app: tauri::AppHandle) {
 
 fn held_ws(state: &AppState, workspace_id: &str) -> Result<Uuid, String> {
     let ws = Uuid::parse_str(workspace_id.trim()).map_err(map_err)?;
-    held(state)
-        .get(ws)
-        .map(|_| ws)
-        .ok_or_else(|| "no invite waits for delivery in this DM".to_string())
+    held(state).get(ws).map(|_| ws).ok_or_else(|| "no invite waits for delivery in this DM".to_string())
 }
 
 /// The held invite's link, to share by hand while it waits.
 #[tauri::command]
-pub(crate) fn held_dm_invite(
-    state: State<AppState>,
-    workspace_id: String,
-) -> Result<String, String> {
+pub(crate) fn held_dm_invite(state: State<AppState>, workspace_id: String) -> Result<String, String> {
     let ws = held_ws(&state, &workspace_id)?;
     let ka = ka_keypair(&state).ok_or("this device has no key-agreement key")?;
     held(&state)
         .open_invite(ws, &ka)
         .map(|z| z.to_string())
-        .ok_or_else(|| {
-            "The invite no longer waits here (delivered, joined or expired).".to_string()
-        })
+        .ok_or_else(|| "The invite no longer waits here (delivered, joined or expired).".to_string())
 }
 
 /// After the unverified-recipient warning (their keys changed since the DM
 /// was opened): deliver to their current verified devices. `safety_code` is
 /// the code the opener compared; refused unless it is theirs now.
 #[tauri::command]
-pub(crate) async fn confirm_dm_invite(
-    ligus_app: tauri::AppHandle,
-    workspace_id: String,
-    safety_code: String,
-) -> Result<serde_json::Value, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        confirm_dm_invite_sync(
-            tauri::Manager::state::<AppState>(ligus_app),
-            workspace_id,
-            safety_code,
-        )
-    })
-    .await
+pub(crate) async fn confirm_dm_invite(ligus_app: tauri::AppHandle, workspace_id: String, safety_code: String) -> Result<serde_json::Value, String> {
+    crate::off_main(ligus_app, move |ligus_app| confirm_dm_invite_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, safety_code)).await
 }
 
-pub(crate) fn confirm_dm_invite_sync(
-    state: State<AppState>,
-    workspace_id: String,
-    safety_code: String,
-) -> Result<serde_json::Value, String> {
+pub(crate) fn confirm_dm_invite_sync(state: State<AppState>, workspace_id: String, safety_code: String) -> Result<serde_json::Value, String> {
     let ws = held_ws(&state, &workspace_id)?;
     let store = held(&state);
-    let account = store
-        .get(ws)
-        .map(|h| h.account_id)
-        .ok_or("no invite waits for delivery in this DM")?;
+    let account = store.get(ws).map(|h| h.account_id).ok_or("no invite waits for delivery in this DM")?;
     let person = co_members_of(&state)
         .into_iter()
         .find(|c| c.account_id == account)
@@ -1188,10 +873,7 @@ pub(crate) fn confirm_dm_invite_sync(
 
 /// Stop waiting (share the link instead); the sealed invite is forgotten.
 #[tauri::command]
-pub(crate) fn dismiss_dm_invite(
-    state: State<AppState>,
-    workspace_id: String,
-) -> Result<Option<serde_json::Value>, String> {
+pub(crate) fn dismiss_dm_invite(state: State<AppState>, workspace_id: String) -> Result<Option<serde_json::Value>, String> {
     let ws = held_ws(&state, &workspace_id)?;
     let store = held(&state);
     store.dismiss(ws);
@@ -1229,9 +911,7 @@ pub(crate) struct PendingInvitesDto {
 /// already joined and anything not addressed to this account are handled
 /// (and acknowledged) silently.
 #[tauri::command]
-pub(crate) async fn list_pending_invites(
-    state: State<'_, AppState>,
-) -> Result<PendingInvitesDto, String> {
+pub(crate) async fn list_pending_invites(state: State<'_, AppState>) -> Result<PendingInvitesDto, String> {
     let on = ensure_contact(&state).await;
     let (contact, relays) = {
         let s = state.settings.lock().unwrap();
@@ -1245,31 +925,16 @@ pub(crate) async fn list_pending_invites(
         "unsupported"
     };
     let (Some(contact), Some(ka)) = (contact, ka_keypair(&state)) else {
-        return Ok(PendingInvitesDto {
-            contacts: status.into(),
-            invites: Vec::new(),
-        });
+        return Ok(PendingInvitesDto { contacts: status.into(), invites: Vec::new() });
     };
     let (me_account, _) = me(&state);
     let people = co_members_of(&state);
-    let joined: Vec<String> = state
-        .settings
-        .lock()
-        .unwrap()
-        .workspaces
-        .iter()
-        .map(|w| w.room.clone())
-        .collect();
+    let joined: Vec<String> = state.settings.lock().unwrap().workspaces.iter().map(|w| w.room.clone()).collect();
     let mut out = Vec::new();
     let mut handled_now: BTreeMap<String, Vec<u64>> = BTreeMap::new();
     for relay in contact.published.keys() {
         let client = state.relay_client(relay);
-        let Ok(items) = client
-            .contact_drops_all(&contact.cid, &contact.write_key)
-            .await
-        else {
-            continue;
-        };
+        let Ok(items) = client.contact_drops_all(&contact.cid, &contact.write_key).await else { continue };
         let already = contact.handled.get(relay).cloned().unwrap_or_default();
         let mut pending = Vec::new();
         let mut handled = already.clone();
@@ -1285,43 +950,28 @@ pub(crate) async fn list_pending_invites(
                 continue;
             };
             let is_dm = conn.dm_account.is_some();
-            let for_me = !is_dm
-                || me_account
-                    .is_some_and(|m| conn.dm_account.as_deref() == Some(m.to_string().as_str()));
+            let for_me = !is_dm || me_account.is_some_and(|m| conn.dm_account.as_deref() == Some(m.to_string().as_str()));
             if joined.contains(&conn.room) || !for_me {
                 handled.push(item.seq);
                 continue;
             }
             let trust = invite_trust(&conn, &people);
-            let founder = conn
-                .founder_actor_id
-                .as_deref()
-                .and_then(|f| Uuid::parse_str(f).ok());
+            let founder = conn.founder_actor_id.as_deref().and_then(|f| Uuid::parse_str(f).ok());
             pending.push(item.seq);
             out.push(PendingInviteDto {
                 relay: relay.clone(),
                 seq: item.seq,
                 is_dm,
-                workspace_name: if is_dm {
-                    String::new()
-                } else {
-                    ligus_proto::names::clean_display_name(&conn.display_name())
-                },
+                workspace_name: if is_dm { String::new() } else { ligus_proto::names::clean_display_name(&conn.display_name()) },
                 founder_account: founder.map(|f| f.to_string()),
-                founder_name: founder
-                    .and_then(|f| people.iter().find(|p| p.account_id == f))
-                    .map(|p| crate::shown(&p.display_name)),
+                founder_name: founder.and_then(|f| people.iter().find(|p| p.account_id == f)).map(|p| crate::shown(&p.display_name)),
                 safety_code: conn.fk.as_deref().and_then(directory_trust::safety_code),
                 trust: trust_str(trust).into(),
                 code,
             });
         }
         if let Some(through) = contacts::ack_through(&handled, &pending) {
-            if client
-                .contact_drops_ack(&contact.cid, &contact.write_key, through)
-                .await
-                .is_ok()
-            {
+            if client.contact_drops_ack(&contact.cid, &contact.write_key, through).await.is_ok() {
                 handled.retain(|h| *h > through);
             }
         }
@@ -1342,10 +992,7 @@ pub(crate) async fn list_pending_invites(
             }
         }
     }
-    Ok(PendingInvitesDto {
-        contacts: status.into(),
-        invites: out,
-    })
+    Ok(PendingInvitesDto { contacts: status.into(), invites: out })
 }
 
 fn trust_str(t: dm::FounderTrust) -> &'static str {
@@ -1374,23 +1021,8 @@ fn mark_handled(state: &AppState, relay: &str, seq: u64) {
 /// comparing codes); a workspace invite whose founder's key contradicts what
 /// shared workspaces register is refused.
 #[tauri::command]
-pub(crate) async fn accept_pending_invite(
-    ligus_app: tauri::AppHandle,
-    relay: String,
-    seq: u64,
-    code: String,
-    confirm_safety_code: bool,
-) -> Result<WorkspaceInfoDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| {
-        accept_pending_invite_sync(
-            tauri::Manager::state::<AppState>(ligus_app),
-            relay,
-            seq,
-            code,
-            confirm_safety_code,
-        )
-    })
-    .await
+pub(crate) async fn accept_pending_invite(ligus_app: tauri::AppHandle, relay: String, seq: u64, code: String, confirm_safety_code: bool) -> Result<WorkspaceInfoDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| accept_pending_invite_sync(tauri::Manager::state::<AppState>(ligus_app), relay, seq, code, confirm_safety_code)).await
 }
 
 pub(crate) fn accept_pending_invite_sync(
@@ -1406,11 +1038,7 @@ pub(crate) fn accept_pending_invite_sync(
     } else if invite_trust(&conn, &co_members_of(&state)) == dm::FounderTrust::Mismatch {
         return Err("the invite's founder key doesn't match the one your shared workspaces have for that person".into());
     }
-    let joined = join_workspace_conn(
-        state.clone(),
-        conn,
-        ligus_runtime::box_admission::redeem_key_of(&code),
-    )?;
+    let joined = join_workspace_conn(state.clone(), conn, ligus_runtime::box_admission::redeem_key_of(&code))?;
     mark_handled(&state, &relay, seq);
     Ok(joined)
 }
@@ -1418,11 +1046,7 @@ pub(crate) fn accept_pending_invite_sync(
 /// Dismiss an invite from the drop box (it is deleted on the relay at the
 /// next read).
 #[tauri::command]
-pub(crate) fn dismiss_pending_invite(
-    state: State<AppState>,
-    relay: String,
-    seq: u64,
-) -> Result<(), String> {
+pub(crate) fn dismiss_pending_invite(state: State<AppState>, relay: String, seq: u64) -> Result<(), String> {
     mark_handled(&state, &relay, seq);
     Ok(())
 }

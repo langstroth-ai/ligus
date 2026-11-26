@@ -29,24 +29,13 @@ pub struct Ntfy {
 
 /// The ntfy settings from flags and env: both parts or neither, `https://`
 /// unless `allow_http` (`LIGUS_NTFY_ALLOW_HTTP=1`).
-pub fn settings(
-    url: Option<String>,
-    topic: Option<String>,
-    token: Option<String>,
-    allow_http: bool,
-    titles: bool,
-) -> Result<Option<Ntfy>> {
+pub fn settings(url: Option<String>, topic: Option<String>, token: Option<String>, allow_http: bool, titles: bool) -> Result<Option<Ntfy>> {
     let (url, topic) = match (url, topic) {
         (Some(url), Some(topic)) => (url.trim().to_string(), topic),
-        (Some(_), None) | (None, Some(_)) => {
-            bail!("ntfy needs both a URL and a topic (--ntfy-url / --ntfy-topic)")
-        }
+        (Some(_), None) | (None, Some(_)) => bail!("ntfy needs both a URL and a topic (--ntfy-url / --ntfy-topic)"),
         (None, None) => return Ok(None),
     };
-    let scheme = url
-        .split_once("://")
-        .map(|(s, _)| s.to_ascii_lowercase())
-        .unwrap_or_default();
+    let scheme = url.split_once("://").map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
     match scheme.as_str() {
         "https" => {}
         "http" if allow_http => {}
@@ -55,12 +44,7 @@ pub fn settings(
         ),
         _ => bail!("the ntfy URL must start with https:// (got {url})"),
     }
-    Ok(Some(Ntfy {
-        url,
-        topic,
-        token,
-        titles,
-    }))
+    Ok(Some(Ntfy { url, topic, token, titles }))
 }
 
 /// One notification.
@@ -75,11 +59,7 @@ pub struct Notice {
 impl Ntfy {
     /// The topic URL (`<url>/<topic>`).
     pub fn endpoint(&self) -> String {
-        format!(
-            "{}/{}",
-            self.url.trim_end_matches('/'),
-            self.topic.trim_matches('/')
-        )
+        format!("{}/{}", self.url.trim_end_matches('/'), self.topic.trim_matches('/'))
     }
 
     /// What goes to the ntfy server: the notice itself when the operator
@@ -98,10 +78,7 @@ impl Ntfy {
             .post(self.endpoint())
             .timeout(Duration::from_secs(5))
             .header("Title", header_text(&n.title))
-            .header(
-                "Click",
-                ligus_core::names::deep_link(&format!("chat/{}", n.chat_id)),
-            )
+            .header("Click", ligus_core::names::deep_link(&format!("chat/{}", n.chat_id)))
             .header("Tags", n.tags)
             .body(n.body.clone());
         if let Some(t) = &self.token {
@@ -122,10 +99,7 @@ pub fn header_text(s: &str) -> String {
     if clean.bytes().all(|b| (0x20..0x7f).contains(&b)) {
         clean
     } else {
-        format!(
-            "=?UTF-8?B?{}?=",
-            base64::engine::general_purpose::STANDARD.encode(clean.as_bytes())
-        )
+        format!("=?UTF-8?B?{}?=", base64::engine::general_purpose::STANDARD.encode(clean.as_bytes()))
     }
 }
 
@@ -143,12 +117,7 @@ pub fn generic(n: &Notice) -> Notice {
         "inbox_tray" => ("Ligus", "The review queue needs you"),
         _ => ("Ligus", "Something needs your attention"),
     };
-    Notice {
-        title: title.into(),
-        body: body.into(),
-        chat_id: n.chat_id,
-        tags: n.tags,
-    }
+    Notice { title: title.into(), body: body.into(), chat_id: n.chat_id, tags: n.tags }
 }
 
 fn short(s: &str, n: usize) -> String {
@@ -156,30 +125,16 @@ fn short(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         s.to_string()
     } else {
-        format!(
-            "{}…",
-            s.chars().take(n.saturating_sub(1)).collect::<String>()
-        )
+        format!("{}…", s.chars().take(n.saturating_sub(1)).collect::<String>())
     }
 }
 
 /// The notice for a finished agent reply.
 pub fn reply_notice(agent: &str, chat_title: &str, chat_id: Uuid, failed: bool) -> Notice {
-    let chat = short(
-        if chat_title.trim().is_empty() {
-            "Untitled"
-        } else {
-            chat_title
-        },
-        60,
-    );
+    let chat = short(if chat_title.trim().is_empty() { "Untitled" } else { chat_title }, 60);
     let agent = short(agent, 40);
     Notice {
-        title: if failed {
-            format!("{agent} hit an error")
-        } else {
-            format!("{agent} replied")
-        },
+        title: if failed { format!("{agent} hit an error") } else { format!("{agent} replied") },
         body: format!("in “{chat}”"),
         chat_id,
         tags: if failed { "warning" } else { "speech_balloon" },
@@ -188,21 +143,11 @@ pub fn reply_notice(agent: &str, chat_title: &str, chat_id: Uuid, failed: bool) 
 
 /// The notice asking this member to help with a backed-up review queue.
 pub fn recruit_notice(queue_len: u32, chat_title: &str, chat_id: Uuid) -> Notice {
-    let chat = short(
-        if chat_title.trim().is_empty() {
-            "Untitled"
-        } else {
-            chat_title
-        },
-        60,
-    );
+    let chat = short(if chat_title.trim().is_empty() { "Untitled" } else { chat_title }, 60);
     let n = queue_len.max(1);
     Notice {
         title: "The review queue needs you".into(),
-        body: format!(
-            "{n} proposal{} waiting — from “{chat}”",
-            if n == 1 { "" } else { "s" }
-        ),
+        body: format!("{n} proposal{} waiting — from “{chat}”", if n == 1 { "" } else { "s" }),
         chat_id,
         tags: "inbox_tray",
     }
@@ -210,14 +155,7 @@ pub fn recruit_notice(queue_len: u32, chat_title: &str, chat_id: Uuid) -> Notice
 
 /// The notice for a new proposal awaiting review.
 pub fn proposal_notice(title: &str, chat_title: &str, chat_id: Uuid) -> Notice {
-    let chat = short(
-        if chat_title.trim().is_empty() {
-            "Untitled"
-        } else {
-            chat_title
-        },
-        60,
-    );
+    let chat = short(if chat_title.trim().is_empty() { "Untitled" } else { chat_title }, 60);
     Notice {
         title: "Change ready for review".into(),
         body: format!("{} — in “{chat}”", short(title, 80)),
@@ -228,50 +166,19 @@ pub fn proposal_notice(title: &str, chat_title: &str, chat_id: Uuid) -> Notice {
 
 /// The notice for an agent's question waiting for an answer.
 pub fn ask_notice(agent: &str, chat_title: &str, chat_id: Uuid) -> Notice {
-    let chat = short(
-        if chat_title.trim().is_empty() {
-            "Untitled"
-        } else {
-            chat_title
-        },
-        60,
-    );
-    Notice {
-        title: format!("{} has a question", short(agent, 40)),
-        body: format!("in \u{201c}{chat}\u{201d}"),
-        chat_id,
-        tags: "question",
-    }
+    let chat = short(if chat_title.trim().is_empty() { "Untitled" } else { chat_title }, 60);
+    Notice { title: format!("{} has a question", short(agent, 40)), body: format!("in \u{201c}{chat}\u{201d}"), chat_id, tags: "question" }
 }
 
 /// The notice for a message that `@mentions` the user.
 pub fn mention_notice(sender: &str, chat_title: &str, chat_id: Uuid) -> Notice {
-    let chat = short(
-        if chat_title.trim().is_empty() {
-            "Untitled"
-        } else {
-            chat_title
-        },
-        60,
-    );
-    Notice {
-        title: format!("{} mentioned you", short(sender, 40)),
-        body: format!("in “{chat}”"),
-        chat_id,
-        tags: "bell",
-    }
+    let chat = short(if chat_title.trim().is_empty() { "Untitled" } else { chat_title }, 60);
+    Notice { title: format!("{} mentioned you", short(sender, 40)), body: format!("in “{chat}”"), chat_id, tags: "bell" }
 }
 
 /// The notice for a workflow run waiting on an approval gate.
 pub fn workflow_notice(workflow: &str, stage: &str, chat_title: &str, chat_id: Uuid) -> Notice {
-    let chat = short(
-        if chat_title.trim().is_empty() {
-            "Untitled"
-        } else {
-            chat_title
-        },
-        60,
-    );
+    let chat = short(if chat_title.trim().is_empty() { "Untitled" } else { chat_title }, 60);
     Notice {
         title: workflow_title(workflow),
         body: format!("{} — in “{chat}”", short(stage, 80)),
@@ -282,11 +189,7 @@ pub fn workflow_notice(workflow: &str, stage: &str, chat_title: &str, chat_id: U
 
 /// "<workflow> needs approval".
 pub fn workflow_title(workflow: &str) -> String {
-    let name = if workflow.trim().is_empty() {
-        "Workflow"
-    } else {
-        workflow
-    };
+    let name = if workflow.trim().is_empty() { "Workflow" } else { workflow };
     format!("{} needs approval", short(name, 40))
 }
 
@@ -315,37 +218,18 @@ mod tests {
 
     #[test]
     fn endpoint_joins_cleanly() {
-        let n = Ntfy {
-            url: "http://h:8095/".into(),
-            topic: "/t1".into(),
-            token: None,
-            titles: false,
-        };
+        let n = Ntfy { url: "http://h:8095/".into(), topic: "/t1".into(), token: None, titles: false };
         assert_eq!(n.endpoint(), "http://h:8095/t1");
     }
 
     /// Serve hardening: plain-http ntfy only when the operator says so.
     #[test]
     fn http_ntfy_needs_an_explicit_opt_in() {
-        let s = |url: &str, allow: bool| {
-            settings(Some(url.into()), Some("t".into()), None, allow, false)
-        };
-        assert!(s("http://ntfy.lan:8095", false)
-            .unwrap_err()
-            .to_string()
-            .contains("LIGUS_NTFY_ALLOW_HTTP"));
+        let s = |url: &str, allow: bool| settings(Some(url.into()), Some("t".into()), None, allow, false);
+        assert!(s("http://ntfy.lan:8095", false).unwrap_err().to_string().contains("LIGUS_NTFY_ALLOW_HTTP"));
         assert!(s("HTTP://ntfy.lan", false).is_err());
-        assert_eq!(
-            s("http://ntfy.lan:8095", true).unwrap().unwrap().endpoint(),
-            "http://ntfy.lan:8095/t"
-        );
-        assert_eq!(
-            s("https://ntfy.example", false)
-                .unwrap()
-                .unwrap()
-                .endpoint(),
-            "https://ntfy.example/t"
-        );
+        assert_eq!(s("http://ntfy.lan:8095", true).unwrap().unwrap().endpoint(), "http://ntfy.lan:8095/t");
+        assert_eq!(s("https://ntfy.example", false).unwrap().unwrap().endpoint(), "https://ntfy.example/t");
         assert!(s("ftp://x", true).is_err());
         assert!(s("ntfy.example", true).is_err());
         assert!(settings(Some("https://x".into()), None, None, false, false).is_err());
@@ -357,16 +241,8 @@ mod tests {
     #[test]
     fn ntfy_text_is_generic_unless_titles_are_opted_in() {
         let id = Uuid::new_v4();
-        let off = Ntfy {
-            url: "https://n".into(),
-            topic: "t".into(),
-            token: None,
-            titles: false,
-        };
-        let on = Ntfy {
-            titles: true,
-            ..off.clone()
-        };
+        let off = Ntfy { url: "https://n".into(), topic: "t".into(), token: None, titles: false };
+        let on = Ntfy { titles: true, ..off.clone() };
         for n in [
             reply_notice("@coder", "Acquire Initech", id, false),
             reply_notice("@coder", "Acquire Initech", id, true),

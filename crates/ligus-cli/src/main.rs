@@ -29,15 +29,15 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use ligus_core::{
-    workspace_config_session_id, HostKind, MessageRole, ModelProviderKind, Timestamp,
-    WorkspaceAgent, WorkspaceCredential, WorkspaceHost, WorkspaceRuntime,
+    workspace_config_session_id, HostKind, MessageRole, ModelProviderKind,
+    Timestamp, WorkspaceAgent, WorkspaceCredential, WorkspaceHost, WorkspaceRuntime,
 };
-use ligus_runtime::display::shown;
-use ligus_runtime::secret_store::StoreKeyVault;
 use ligus_runtime::{
     parse_mentions, pending_mentions, resolve_workspace_credential, turns_for, ChatService,
     ChatTurn, EventStore, IdentityStore, RelayClient, ResolvedRuntime, SyncEngine,
 };
+use ligus_runtime::display::shown;
+use ligus_runtime::secret_store::StoreKeyVault;
 use uuid::Uuid;
 
 mod admit;
@@ -50,21 +50,21 @@ mod auth;
 mod checks;
 mod cli_flags;
 mod devices_cmd;
+mod link_io;
 mod forge_cmd;
 mod gateway_check;
 mod hardening;
 mod help;
 mod hook_cmd;
-mod link_io;
 mod mcp_config;
-mod memory_cmd;
 mod problem;
+mod memory_cmd;
+mod selftest;
 mod reply;
 mod repos;
 mod repos_cmd;
 mod scratch_cmd;
 mod secret_arg;
-mod selftest;
 mod serve;
 mod setup_cmd;
 mod worker;
@@ -133,10 +133,7 @@ impl FileConfig {
             .and_then(|t| toml::from_str(&t).ok())
             .unwrap_or_default();
         if f.token.is_some() || f.key.is_some() || !f.ek.is_empty() {
-            eprintln!(
-                "{} held plaintext secrets; removed them (re-run `ligus enroll`)",
-                config_path(data_dir).display()
-            );
+            eprintln!("{} held plaintext secrets; removed them (re-run `ligus enroll`)", config_path(data_dir).display());
             f.token = None;
             f.key = None;
             f.ek.clear();
@@ -153,16 +150,9 @@ impl FileConfig {
     /// Write `config.toml` (owner-only, no secrets) and the secrets to the store.
     fn save(&self, data_dir: &std::path::Path) -> Result<()> {
         let store = ligus_runtime::secret_store::for_data_dir(data_dir);
-        let secrets = ConnectionSecrets {
-            token: self.token.clone(),
-            key: self.key.clone(),
-            ek: self.ek.clone(),
-        };
+        let secrets = ConnectionSecrets { token: self.token.clone(), key: self.key.clone(), ek: self.ek.clone() };
         secrets.save(store.as_ref(), CLI_SCOPE, "")?;
-        serve::tunnel::write_private(
-            &config_path(data_dir),
-            toml::to_string_pretty(self)?.as_bytes(),
-        )?;
+        serve::tunnel::write_private(&config_path(data_dir), toml::to_string_pretty(self)?.as_bytes())?;
         Ok(())
     }
 }
@@ -174,22 +164,13 @@ fn load_file_config(data_dir: &std::path::Path) -> FileConfig {
 fn config() -> Config {
     let data_dir = env_opt("LIGUS_DATA_DIR")
         .map(PathBuf::from)
-        .or_else(|| {
-            env_opt("HOME").map(|h| ligus_core::names::home_data_dir(std::path::Path::new(&h)))
-        })
+        .or_else(|| env_opt("HOME").map(|h| ligus_core::names::home_data_dir(std::path::Path::new(&h))))
         .unwrap_or_else(|| PathBuf::from("./ligus-data"));
     create_data_dir_or_exit(&data_dir);
     // B2: secrets come from the OS secret store from here on. `ligus doctor`
     // opens it with keychain prompts off: checking never asks.
-    if std::env::args()
-        .skip(1)
-        .find(|a| !a.starts_with('-'))
-        .as_deref()
-        == Some("doctor")
-    {
-        ligus_runtime::secret_store::without_prompts(|| {
-            ligus_runtime::secret_store::init_for_data_dir(&data_dir, None)
-        });
+    if std::env::args().skip(1).find(|a| !a.starts_with('-')).as_deref() == Some("doctor") {
+        ligus_runtime::secret_store::without_prompts(|| ligus_runtime::secret_store::init_for_data_dir(&data_dir, None));
     } else {
         ligus_runtime::secret_store::init_for_data_dir(&data_dir, None);
     }
@@ -199,9 +180,7 @@ fn config() -> Config {
         data_dir,
         relay_url: env_opt("LIGUS_RELAY_URL").or(f.relay_url),
         token: env_opt("LIGUS_RELAY_ACCESS_TOKEN").or(f.token),
-        room: env_opt("LIGUS_WORKSPACE")
-            .or(f.room)
-            .unwrap_or_else(|| "default".into()),
+        room: env_opt("LIGUS_WORKSPACE").or(f.room).unwrap_or_else(|| "default".into()),
         key: env_opt("LIGUS_WORKSPACE_KEY").or(f.key),
         epoch_keys: f.ek,
     }
@@ -231,30 +210,19 @@ fn prepare_store(cfg: &Config, command: &str) -> Result<()> {
     let conns = match sync_connections(cfg) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
-                "ligus: serve-dms.json is unreadable ({e}); the sync state stays as it is for now"
-            );
+            eprintln!("ligus: serve-dms.json is unreadable ({e}); the sync state stays as it is for now");
             return Ok(());
         }
     };
     match store.migrate_sync_tables(&conns) {
-        Ok(ligus_runtime::event_store::SyncMigration::Migrated {
-            backup: Some(b),
-            reset,
-            ..
-        }) => {
-            eprintln!(
-                "ligus: upgraded the local sync state (backup: {})",
-                b.display()
-            );
+        Ok(ligus_runtime::event_store::SyncMigration::Migrated { backup: Some(b), reset, .. }) => {
+            eprintln!("ligus: upgraded the local sync state (backup: {})", b.display());
             if !reset.is_empty() {
                 eprintln!("ligus: {} room(s) named on more than one relay, or on none, sync again from the start", reset.len());
             }
         }
         Ok(_) => {}
-        Err(e) => eprintln!(
-            "ligus: upgrading the local sync state failed, it runs again on the next start: {e}"
-        ),
+        Err(e) => eprintln!("ligus: upgrading the local sync state failed, it runs again on the next start: {e}"),
     }
     Ok(())
 }
@@ -265,21 +233,14 @@ fn newer_data_problem(cfg: &Config) -> anyhow::Error {
         exit: problem::EXIT_FIXABLE,
         code: "newer_data",
         message: ligus_runtime::event_store::NEWER_DATA_MESSAGE.to_string(),
-        fix: Some(format!(
-            "install the newer Ligus, or point LIGUS_DATA_DIR at another data dir (this one is {})",
-            cfg.data_dir.display()
-        )),
+        fix: Some(format!("install the newer Ligus, or point LIGUS_DATA_DIR at another data dir (this one is {})", cfg.data_dir.display())),
     })
 }
 
 /// This data dir's relay connections as (relay URL, room): its workspace
 /// and each DM `ligus serve` holds.
 fn sync_connections(cfg: &Config) -> Result<Vec<(String, String)>> {
-    let mut out: Vec<(String, String)> = cfg
-        .relay_url
-        .iter()
-        .map(|u| (u.clone(), cfg.room.clone()))
-        .collect();
+    let mut out: Vec<(String, String)> = cfg.relay_url.iter().map(|u| (u.clone(), cfg.room.clone())).collect();
     out.extend(serve::dms::DmStore::connections_checked(&cfg.data_dir)?);
     Ok(out)
 }
@@ -290,16 +251,8 @@ fn sync_connections(cfg: &Config) -> Result<Vec<(String, String)>> {
 #[allow(clippy::type_complexity)]
 fn decode_ligusws_invite_full(
     invite: &str,
-) -> Result<(
-    String,
-    String,
-    Option<String>,
-    Option<Uuid>,
-    Vec<ligus_runtime::keyring::DeliveredKey>,
-    Option<(String, String)>,
-)> {
-    let c =
-        ligus_runtime::workspace_invite::decode_workspace_invite(invite).map_err(|e| anyhow!(e))?;
+) -> Result<(String, String, Option<String>, Option<Uuid>, Vec<ligus_runtime::keyring::DeliveredKey>, Option<(String, String)>)> {
+    let c = ligus_runtime::workspace_invite::decode_workspace_invite(invite).map_err(|e| anyhow!(e))?;
     let (inv, pin) = (c.invite_id(), c.founder_pin());
     Ok((c.relay_url, c.room, c.key, inv, c.ek, pin))
 }
@@ -325,11 +278,7 @@ fn relay_origin(url: &str) -> String {
     let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let host = authority.rsplit('@').next().unwrap_or("");
-    if scheme.is_empty() {
-        host.to_string()
-    } else {
-        format!("{scheme}://{host}")
-    }
+    if scheme.is_empty() { host.to_string() } else { format!("{scheme}://{host}") }
 }
 
 /// Why this box can't sync, named before any HTTP is tried: no relay URL,
@@ -379,10 +328,7 @@ fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
     if let Some(inv) = inv {
         store.set_join_invite(uuid_of_room(&room), inv)?;
         // Its redeem key proves the redemption (`ligus_core::admission`).
-        store.set_join_redeem(
-            uuid_of_room(&room),
-            ligus_runtime::box_admission::redeem_key_of(invite).as_ref(),
-        )?;
+        store.set_join_redeem(uuid_of_room(&room), ligus_runtime::box_admission::redeem_key_of(invite).as_ref())?;
     }
     if let Some((founder, fk)) = pin {
         store.set_workspace_pin(uuid_of_room(&room), &founder, &fk)?;
@@ -409,10 +355,7 @@ async fn cmd_join(cfg: &Config, code: &str) -> Result<()> {
         .with_auth_cell(auth::cell());
     match relay.join_via_invite(&cfg.room, code.trim(), "").await? {
         Some(role) => {
-            println!(
-                "Joined workspace '{}' as {role}. Run `ligus sync`.",
-                cfg.room
-            );
+            println!("Joined workspace '{}' as {role}. Run `ligus sync`.", cfg.room);
             Ok(())
         }
         None => bail!("invite refused (invalid, expired, revoked, or used up)"),
@@ -430,13 +373,8 @@ pub(crate) fn box_name(label: Option<String>, hostname: Option<String>) -> Strin
 }
 
 /// This data dir's identity, created on first use with [`box_name`].
-pub(crate) fn bootstrap_identity(
-    identity: &IdentityStore<impl ligus_runtime::KeyVault>,
-) -> Result<ligus_runtime::StoredIdentity> {
-    let name = box_name(
-        env_opt("LIGUS_SERVE_LABEL"),
-        ligus_runtime::machine_hostname(),
-    );
+pub(crate) fn bootstrap_identity(identity: &IdentityStore<impl ligus_runtime::KeyVault>) -> Result<ligus_runtime::StoredIdentity> {
+    let name = box_name(env_opt("LIGUS_SERVE_LABEL"), ligus_runtime::machine_hostname());
     Ok(identity.bootstrap(&name, &name, &name)?)
 }
 
@@ -444,11 +382,7 @@ pub(crate) fn bootstrap_identity(
 /// nobody chose: `auto` (the host name it was created with before a label was
 /// known, e.g. by `ligus enroll`).
 /// Returns the new name when it changed.
-pub(crate) fn adopt_box_name(
-    identity: &IdentityStore<impl ligus_runtime::KeyVault>,
-    name: &str,
-    auto: Option<&str>,
-) -> Result<Option<String>> {
+pub(crate) fn adopt_box_name(identity: &IdentityStore<impl ligus_runtime::KeyVault>, name: &str, auto: Option<&str>) -> Result<Option<String>> {
     let name = name.trim();
     let current = bootstrap_identity(identity)?;
     let unchosen = auto.is_some_and(|a| current.account.display_name == a);
@@ -480,23 +414,15 @@ fn open_service_as(cfg: &Config, linking: bool) -> Result<ChatService> {
     let mut svc = ChatService::new(store, device_kp, account_kp, stored.actor());
     // A computer linked as a person's device ("Add a computer") acts as them
     // in the workspaces it was linked into, without their account key.
-    let link = ligus_runtime::computer_link::LinkState::load(&cfg.data_dir).map_err(|e| {
-        anyhow!(
-            "{} is unreadable ({e}): fix or remove it",
-            ligus_runtime::computer_link::LinkState::path(&cfg.data_dir).display()
-        )
-    })?;
+    let link = ligus_runtime::computer_link::LinkState::load(&cfg.data_dir)
+        .map_err(|e| anyhow!("{} is unreadable ({e}): fix or remove it", ligus_runtime::computer_link::LinkState::path(&cfg.data_dir).display()))?;
     // Which person this computer is here, from the log (identity model v2,
     // 7.2): the device's own choice, `computer-link.json` only a cache. A
     // certificate someone else put on this device's key changes nothing.
     let ws = uuid_of_room(&cfg.room);
     if link.is_linked() {
         use ligus_runtime::device_binding::Binding;
-        let binding = svc
-            .binding(ws, &link, stored.account.id)
-            .unwrap_or(Binding::Pending {
-                account: link.account_in(ws).unwrap_or_default(),
-            });
+        let binding = svc.binding(ws, &link, stored.account.id).unwrap_or(Binding::Pending { account: link.account_in(ws).unwrap_or_default() });
         let act_as = |svc: &mut ChatService, account: Uuid| {
             if let Some(person) = svc.person_actor(ws, account, link.person.as_ref()) {
                 svc.act_as_owner_device(person);
@@ -505,11 +431,7 @@ fn open_service_as(cfg: &Config, linking: bool) -> Result<ChatService> {
         match binding {
             Binding::Linked { account } => act_as(&mut svc, account),
             Binding::NotLinkedHere if !linking => {
-                let name = link
-                    .person
-                    .as_ref()
-                    .map(|p| shown(&p.display_name))
-                    .unwrap_or_else(|| "a person".into());
+                let name = link.person.as_ref().map(|p| shown(&p.display_name)).unwrap_or_else(|| "a person".into());
                 return Err(anyhow::Error::new(problem::Problem {
                     exit: problem::EXIT_REFUSED,
                     code: "linked_device",
@@ -526,9 +448,7 @@ fn open_service_as(cfg: &Config, linking: bool) -> Result<ChatService> {
                 // (offline, interrupted) accepts it now.
                 let healed = matches!(other, Binding::Pending { .. })
                     && svc.accept_device_certificate(ws).unwrap_or(false)
-                    && svc
-                        .binding(ws, &link, stored.account.id)
-                        .is_ok_and(|b| b.writable());
+                    && svc.binding(ws, &link, stored.account.id).is_ok_and(|b| b.writable());
                 if !linking && !healed {
                     svc.set_write_block(other.why_read_only());
                 }
@@ -548,11 +468,7 @@ fn open_service_as(cfg: &Config, linking: bool) -> Result<ChatService> {
 /// `ligus facts export`: read-only, so it never creates a data dir, an
 /// identity or a database. An observability tool polling a mistyped
 /// `LIGUS_DATA_DIR` gets an error, not a fresh empty device.
-fn cmd_facts_export(
-    cfg: &Config,
-    since: ligus_runtime::facts::Since,
-    now_ms: i64,
-) -> Result<Vec<String>> {
+fn cmd_facts_export(cfg: &Config, since: ligus_runtime::facts::Since, now_ms: i64) -> Result<Vec<String>> {
     let db = cfg.data_dir.join("ligus.db");
     if !db.is_file() {
         bail!("no Ligus database at {}: facts export reads an existing data dir and never creates one", db.display());
@@ -617,19 +533,12 @@ async fn open_store(path: std::path::PathBuf) -> Result<EventStore> {
 /// the busy timeout (the first open after an upgrade builds an index under
 /// the write lock, a large store's takes a while), try again with a growing
 /// pause instead of giving up, as long as `keep_trying` says so.
-async fn open_store_patiently(
-    path: std::path::PathBuf,
-    what: &str,
-    keep_trying: impl Fn() -> bool,
-) -> Result<EventStore> {
+async fn open_store_patiently(path: std::path::PathBuf, what: &str, keep_trying: impl Fn() -> bool) -> Result<EventStore> {
     let mut pause = std::time::Duration::from_secs(1);
     loop {
         match open_store(path.clone()).await {
             Err(e) if store_busy(&e) && keep_trying() => {
-                eprintln!(
-                    "{what}: the store is busy ({e}); trying again in {}s",
-                    pause.as_secs()
-                );
+                eprintln!("{what}: the store is busy ({e}); trying again in {}s", pause.as_secs());
                 tokio::time::sleep(pause).await;
                 pause = (pause * 2).min(std::time::Duration::from_secs(30));
             }
@@ -640,8 +549,7 @@ async fn open_store_patiently(
 
 /// Whether `e` is SQLite's "database is locked" (busy past the timeout).
 fn store_busy(e: &anyhow::Error) -> bool {
-    e.downcast_ref::<ligus_runtime::EventStoreError>()
-        .is_some_and(ligus_runtime::EventStoreError::is_busy)
+    e.downcast_ref::<ligus_runtime::EventStoreError>().is_some_and(ligus_runtime::EventStoreError::is_busy)
 }
 
 async fn sync_once(cfg: &Config) -> Result<(usize, usize)> {
@@ -684,11 +592,7 @@ fn relay_client(cfg: &Config) -> Result<RelayClient> {
 fn box_ring(cfg: &Config) -> Option<ligus_runtime::keyring::KeyringEngine> {
     let src = key_source(cfg).ok()?;
     let store = EventStore::open(cfg.data_dir.join("ligus.db")).ok()?;
-    Some(ligus_runtime::keyring::KeyringEngine::from_store(
-        &store,
-        ligus_core::room_workspace_id(&cfg.room),
-        &src,
-    ))
+    Some(ligus_runtime::keyring::KeyringEngine::from_store(&store, ligus_core::room_workspace_id(&cfg.room), &src))
 }
 
 /// A sync engine for this config. Kept across rounds (as `ligus serve` does),
@@ -705,12 +609,7 @@ fn key_source(cfg: &Config) -> Result<ligus_runtime::keyring::KeySource> {
     let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
     let device = bootstrap_identity(&identity)?.device.id;
     let ka = identity.key_agreement(device)?;
-    Ok(ligus_runtime::keyring::KeySource::for_device(
-        device,
-        ka,
-        cfg.key.as_deref(),
-        &cfg.epoch_keys,
-    ))
+    Ok(ligus_runtime::keyring::KeySource::for_device(device, ka, cfg.key.as_deref(), &cfg.epoch_keys))
 }
 
 /// Publish this box's own key-agreement key on the workspace config log
@@ -719,9 +618,7 @@ fn key_source(cfg: &Config) -> Result<ligus_runtime::keyring::KeySource> {
 /// yet, tries again on its next start.
 fn publish_key_agreement(cfg: &Config, svc: &mut ChatService) {
     let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
-    let Ok(ka) = identity.key_agreement(svc.device_id()) else {
-        return;
-    };
+    let Ok(ka) = identity.key_agreement(svc.device_id()) else { return };
     match svc.publish_key_agreement(uuid_of_room(&cfg.room), ka.public_key_bytes()) {
         Ok(true) => println!("published this box's key-agreement key for workspace key rotations"),
         Ok(false) => {}
@@ -737,13 +634,7 @@ async fn sync_round(engine: &mut SyncEngine, store: &mut EventStore) -> Result<(
 /// Files shared over the relay reach a headless agent only as delimited
 /// untrusted data (issue #118): a text file's verified content, anything else
 /// its description, never a path. No-op when no turn carries a marker.
-async fn materialize_turns(
-    cfg: &Config,
-    session: &ligus_core::ChatSession,
-    head: &ligus_core::attachment::AttachmentRules,
-    me: &str,
-    turns: &mut [ChatTurn],
-) {
+async fn materialize_turns(cfg: &Config, session: &ligus_core::ChatSession, head: &ligus_core::attachment::AttachmentRules, me: &str, turns: &mut [ChatTurn]) {
     // A local path resolves only from this box's own author's messages.
     let own = ligus_runtime::attachment_blob::own_path_markers(session, me);
     for t in turns.iter_mut() {
@@ -754,11 +645,7 @@ async fn materialize_turns(
     }
     let placed = ligus_runtime::attachment_blob::placed_attachments(session);
     let relay = match (cfg.relay_url.clone(), cfg.key.as_ref()) {
-        (Some(url), Some(_)) => Some(
-            RelayClient::new(&url)
-                .with_auth(cfg.token.clone())
-                .with_auth_cell(auth::cell()),
-        ),
+        (Some(url), Some(_)) => Some(RelayClient::new(&url).with_auth(cfg.token.clone()).with_auth_cell(auth::cell())),
         _ => None,
     };
     // The one keyring (B1): blobs sealed at any epoch this box holds open.
@@ -766,16 +653,7 @@ async fn materialize_turns(
     let cache = ligus_runtime::attachment_blob::verified_cache_dir(&cfg.data_dir);
     for t in turns.iter_mut() {
         if t.content.contains("[Attachment: ") {
-            t.content = ligus_runtime::attachment_blob::materialize_for_agent(
-                &t.content,
-                &placed,
-                head,
-                relay.as_ref(),
-                &cfg.room,
-                &ring,
-                &cache,
-            )
-            .await;
+            t.content = ligus_runtime::attachment_blob::materialize_for_agent(&t.content, &placed, head, relay.as_ref(), &cfg.room, &ring, &cache).await;
         }
     }
 }
@@ -787,9 +665,7 @@ fn cmd_whoami(cfg: &Config, json: bool) -> Result<()> {
     // (identity model v2, 7.5); its own pre-link account is retired here.
     let link = ligus_runtime::computer_link::LinkState::load(&cfg.data_dir).unwrap_or_default();
     let ws = uuid_of_room(&cfg.room);
-    let acting = open_service(cfg)
-        .ok()
-        .map(|svc| (svc.author().clone(), svc.write_block().map(str::to_string)));
+    let acting = open_service(cfg).ok().map(|svc| (svc.author().clone(), svc.write_block().map(str::to_string)));
     let linked = link.is_linked();
     if json {
         let person = acting.as_ref().filter(|_| linked).map(|(a, block)| {
@@ -816,18 +692,11 @@ fn cmd_whoami(cfg: &Config, json: bool) -> Result<()> {
         return Ok(());
     }
     if let (true, Some((a, block))) = (linked, &acting) {
-        println!(
-            "acts as : {} (account {}), one of their devices",
-            shown(&a.display_name),
-            a.account_id.map(|x| x.to_string()).unwrap_or_default()
-        );
+        println!("acts as : {} (account {}), one of their devices", shown(&a.display_name), a.account_id.map(|x| x.to_string()).unwrap_or_default());
         if let Some(b) = block {
             println!("here    : read-only: {b}");
         }
-        println!(
-            "local   : {} (this install's own account, not used while linked)",
-            stored.account.id
-        );
+        println!("local   : {} (this install's own account, not used while linked)", stored.account.id);
         println!("device  : {}", stored.device.id);
         println!("data dir: {}", cfg.data_dir.display());
         println!("room    : {}", cfg.room);
@@ -859,9 +728,7 @@ fn status_report(cfg: &Config) -> serde_json::Value {
             }
             standing = svc.device_standing(ws).ok().map(|s| match s {
                 ligus_runtime::device_enroll::Standing::Own => "own".to_string(),
-                ligus_runtime::device_enroll::Standing::OwnerDevice(_) => {
-                    "owner-device".to_string()
-                }
+                ligus_runtime::device_enroll::Standing::OwnerDevice(_) => "owner-device".to_string(),
                 ligus_runtime::device_enroll::Standing::Revoked => "revoked".to_string(),
             });
             admission = svc.store().join_invite(ws).ok().flatten().is_some();
@@ -876,12 +743,8 @@ fn status_report(cfg: &Config) -> serde_json::Value {
         .map(|p| (p, link_io::pending_line(&p, now)));
     let tunnel = serve::tunnel::tunnel_dir(&cfg.data_dir);
     let remote = serve::tunnel::RelaySettings::file(&tunnel);
-    let remote: Option<serve::tunnel::RelaySettings> = std::fs::read(&remote)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok());
-    let live: Option<serve::tunnel::LiveStatus> = std::fs::read(tunnel.join("status.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok());
+    let remote: Option<serve::tunnel::RelaySettings> = std::fs::read(&remote).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    let live: Option<serve::tunnel::LiveStatus> = std::fs::read(tunnel.join("status.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
     let sandbox = ligus_runtime::executor::sandbox_status();
     // A box (serve, worker) joins only through an admission, never an
     // invite; a person's CLI device enrolls with an invite.
@@ -902,11 +765,7 @@ fn status_report(cfg: &Config) -> serde_json::Value {
             join
         }
     } else if !copy {
-        if is_box {
-            "start ligus serve or ligus worker (it syncs first)"
-        } else {
-            "ligus sync"
-        }
+        if is_box { "start ligus serve or ligus worker (it syncs first)" } else { "ligus sync" }
     } else {
         "ready"
     };
@@ -962,35 +821,17 @@ fn cmd_status(cfg: &Config, json: bool) -> Result<()> {
         println!("{r}");
         return Ok(());
     }
-    let yn = |v: &serde_json::Value| {
-        if v.as_bool().unwrap_or(false) {
-            "yes"
-        } else {
-            "no"
-        }
-    };
+    let yn = |v: &serde_json::Value| if v.as_bool().unwrap_or(false) { "yes" } else { "no" };
     let w = &r["workspace"];
     println!("ligus {}", env!("CARGO_PKG_VERSION"));
-    println!(
-        "data dir      : {}{}",
-        cfg.data_dir.display(),
-        if r["database"].as_bool() == Some(true) {
-            ""
-        } else {
-            " (no ligus.db yet)"
-        }
-    );
+    println!("data dir      : {}{}", cfg.data_dir.display(), if r["database"].as_bool() == Some(true) { "" } else { " (no ligus.db yet)" });
     match r["identity"].as_object() {
         Some(i) => println!(
             "identity      : {} (account {}, device {}){}",
             i["name"].as_str().unwrap_or(""),
             i["account"].as_str().unwrap_or(""),
             i["device"].as_str().unwrap_or(""),
-            if i["box"].as_bool() == Some(true) {
-                ", a box (service member)"
-            } else {
-                ""
-            }
+            if i["box"].as_bool() == Some(true) { ", a box (service member)" } else { "" }
         ),
         None => println!("identity      : none yet (created on first use)"),
     }
@@ -1002,14 +843,7 @@ fn cmd_status(cfg: &Config, json: bool) -> Result<()> {
     println!("access token  : {}", yn(&w["accessToken"]));
     println!("workspace key : {}", yn(&w["workspaceKey"]));
     println!("local copy    : {}", yn(&w["localCopy"]));
-    println!(
-        "member        : {}{}",
-        yn(&w["member"]),
-        w["deviceStanding"]
-            .as_str()
-            .map(|s| format!(" (device standing: {s})"))
-            .unwrap_or_default()
-    );
+    println!("member        : {}{}", yn(&w["member"]), w["deviceStanding"].as_str().map(|s| format!(" (device standing: {s})")).unwrap_or_default());
     if w["admissionKept"].as_bool() == Some(true) {
         println!("admission     : kept; the next serve or worker start joins with it");
     }
@@ -1019,11 +853,7 @@ fn cmd_status(cfg: &Config, json: bool) -> Result<()> {
         Some(rr) => println!(
             "remote access : {} ({})",
             rr["url"].as_str().unwrap_or(""),
-            if rr["enabled"].as_bool() == Some(true) {
-                "enabled"
-            } else {
-                "disabled"
-            }
+            if rr["enabled"].as_bool() == Some(true) { "enabled" } else { "disabled" }
         ),
         None => println!("remote access : off"),
     }
@@ -1033,10 +863,7 @@ fn cmd_status(cfg: &Config, json: bool) -> Result<()> {
     if let Some(d) = r["linking"]["description"].as_str() {
         println!("linking       : {d}");
     }
-    println!(
-        "agent sandbox : {}",
-        r["sandbox"]["tier"].as_str().unwrap_or("")
-    );
+    println!("agent sandbox : {}", r["sandbox"]["tier"].as_str().unwrap_or(""));
     println!("next          : {}", r["next"].as_str().unwrap_or(""));
     Ok(())
 }
@@ -1061,26 +888,14 @@ fn cmd_chats(cfg: &Config, json: bool) -> Result<()> {
                 continue;
             }
             any = true;
-            let ch = if s.channel_id.is_empty() {
-                String::new()
-            } else {
-                format!("  #{}", s.channel_id)
-            };
-            println!(
-                "{}  {:<32}  {} msgs{}",
-                s.id,
-                truncate(&shown(&s.title), 32),
-                n,
-                ch
-            );
+            let ch = if s.channel_id.is_empty() { String::new() } else { format!("  #{}", s.channel_id) };
+            println!("{}  {:<32}  {} msgs{}", s.id, truncate(&shown(&s.title), 32), n, ch);
         }
     }
     if json {
         println!("{}", serde_json::Value::Array(rows));
     } else if !any {
-        println!(
-            "(no chats — run `ligus sync` to pull a workspace, or open the app to create one)"
-        );
+        println!("(no chats — run `ligus sync` to pull a workspace, or open the app to create one)");
     }
     Ok(())
 }
@@ -1095,9 +910,7 @@ fn cmd_proposals(cfg: &Config) -> Result<()> {
         if id == workspace_config_session_id(ws) {
             continue;
         }
-        let Some(s) = svc.load_in(ws, id)? else {
-            continue;
-        };
+        let Some(s) = svc.load_in(ws, id)? else { continue };
         if s.workspace_id != ws || id == workspace_config_session_id(s.workspace_id) {
             continue;
         }
@@ -1112,25 +925,11 @@ fn cmd_proposals(cfg: &Config) -> Result<()> {
             let votes: Vec<String> = p
                 .approvals
                 .iter()
-                .map(|a| {
-                    format!(
-                        "{} {} ({:?})",
-                        if a.approved { "+" } else { "-" },
-                        name_of(&a.actor_id),
-                        a.role
-                    )
-                })
+                .map(|a| format!("{} {} ({:?})", if a.approved { "+" } else { "-" }, name_of(&a.actor_id), a.role))
                 .collect();
             let status = format!("{:?}", p.status).to_lowercase();
-            let mut line = format!(
-                "{}  {:<9} {}  [chat {}]",
-                p.id,
-                status,
-                truncate(&p.title, 48),
-                s.id
-            );
-            if ligus_core::proposal_archive::archived(p, &s, ligus_core::Timestamp::now()).is_some()
-            {
+            let mut line = format!("{}  {:<9} {}  [chat {}]", p.id, status, truncate(&p.title, 48), s.id);
+            if ligus_core::proposal_archive::archived(p, &s, ligus_core::Timestamp::now()).is_some() {
                 line.push_str("  (archived)");
             }
             if !votes.is_empty() {
@@ -1151,9 +950,7 @@ fn cmd_proposals(cfg: &Config) -> Result<()> {
 
 fn print_transcript(svc: &ChatService, chat_id: Uuid, from: usize) -> Result<usize> {
     let Some(s) = svc.load_resolving(chat_id)? else {
-        return Err(problem::not_found(format!(
-            "unknown chat {chat_id} (ligus chats lists them)"
-        )));
+        return Err(problem::not_found(format!("unknown chat {chat_id} (ligus chats lists them)")));
     };
     for m in s.messages.iter().skip(from).filter(|m| !m.superseded) {
         println!("{:>9}  {}", m.author, m.body);
@@ -1182,18 +979,10 @@ fn cmd_tail(cfg: &Config, chat_id: Uuid, watch: bool) -> Result<()> {
 /// `ligus send`. With `wait`, it also pushes, then syncs every few seconds
 /// until someone else (a person or an agent) posts in the chat, prints what
 /// they posted, and exits 0; after `wait` without an answer it exits 7.
-async fn cmd_send(
-    cfg: &Config,
-    chat_id: Uuid,
-    body: String,
-    push: bool,
-    wait: Option<Duration>,
-) -> Result<()> {
+async fn cmd_send(cfg: &Config, chat_id: Uuid, body: String, push: bool, wait: Option<Duration>) -> Result<()> {
     let mut svc = open_service(cfg)?;
     let Some(session) = svc.load_resolving(chat_id)? else {
-        return Err(problem::not_found(format!(
-            "unknown chat {chat_id} (ligus chats lists them)"
-        )));
+        return Err(problem::not_found(format!("unknown chat {chat_id} (ligus chats lists them)")));
     };
     svc.post_user_message(chat_id, session.workspace_id, body)?;
     println!("posted.");
@@ -1205,24 +994,13 @@ async fn cmd_send(
         return Ok(());
     };
     // Ours is the last message now; an answer is any later one by another author.
-    let posted = svc
-        .load_resolving(chat_id)?
-        .map(|s| s.messages.clone())
-        .unwrap_or_default();
-    let (seen, me) = (
-        posted.len(),
-        posted.last().map(|m| m.author.clone()).unwrap_or_default(),
-    );
+    let posted = svc.load_resolving(chat_id)?.map(|s| s.messages.clone()).unwrap_or_default();
+    let (seen, me) = (posted.len(), posted.last().map(|m| m.author.clone()).unwrap_or_default());
     drop(svc);
     let deadline = std::time::Instant::now() + wait;
     loop {
         if let Some(s) = open_service(cfg)?.load_resolving(chat_id)? {
-            let answers: Vec<_> = s
-                .messages
-                .iter()
-                .skip(seen)
-                .filter(|m| !m.superseded && m.author != me)
-                .collect();
+            let answers: Vec<_> = s.messages.iter().skip(seen).filter(|m| !m.superseded && m.author != me).collect();
             if !answers.is_empty() {
                 for m in answers {
                     println!("{:>9}  {}", m.author, m.body);
@@ -1235,9 +1013,7 @@ async fn cmd_send(
                 exit: problem::EXIT_OFFLINE,
                 code: "timeout",
                 message: format!("no answer in chat {chat_id} within {}s", wait.as_secs()),
-                fix: Some(format!(
-                    "wait longer (--timeout 15m), or follow it with ligus tail {chat_id} --watch"
-                )),
+                fix: Some(format!("wait longer (--timeout 15m), or follow it with ligus tail {chat_id} --watch")),
             }));
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
@@ -1259,9 +1035,7 @@ async fn cmd_sync(cfg: &Config, watch: bool) -> Result<()> {
 fn cmd_new(cfg: &Config, title: String) -> Result<()> {
     let mut svc = open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
-    let founded = svc
-        .load_in(ws, ligus_core::workspace_config_session_id(ws))?
-        .is_none();
+    let founded = svc.load_in(ws, ligus_core::workspace_config_session_id(ws))?.is_none();
     let session = svc.create_chat(title, ws, "")?;
     println!("{}", session.id);
     // Phase A: the CLI can found a workspace (rules v2 from its seed) but has
@@ -1284,33 +1058,27 @@ fn cmd_new(cfg: &Config, title: String) -> Result<()> {
 fn resolve_runtime_from_env() -> Result<(ResolvedRuntime, String)> {
     let provider_str = env_opt("LIGUS_PROVIDER").unwrap_or_else(|| "anthropic".into());
     let model = env_opt("LIGUS_MODEL").unwrap_or_else(|| "claude-sonnet-4-5".into());
-    let (provider, endpoint, key_env): (ModelProviderKind, String, &str) = match provider_str
-        .to_lowercase()
-        .as_str()
-    {
-        "anthropic" => (
-            ModelProviderKind::Anthropic,
-            String::new(),
-            "ANTHROPIC_API_KEY",
-        ),
-        "openai" => (
-            ModelProviderKind::OpenAI,
-            "https://api.openai.com/v1/chat/completions".into(),
-            "OPENAI_API_KEY",
-        ),
-        "openrouter" => (
-            ModelProviderKind::OpenRouter,
-            "https://openrouter.ai/api/v1/chat/completions".into(),
-            "OPENROUTER_API_KEY",
-        ),
-        "ollama" => (
-            ModelProviderKind::Ollama,
-            env_opt("LIGUS_MODEL_BASE_URL")
-                .unwrap_or_else(|| "http://localhost:11434/v1/chat/completions".into()),
-            "",
-        ),
-        other => bail!("unsupported LIGUS_PROVIDER '{other}' (anthropic|openai|openrouter|ollama)"),
-    };
+    let (provider, endpoint, key_env): (ModelProviderKind, String, &str) =
+        match provider_str.to_lowercase().as_str() {
+            "anthropic" => (ModelProviderKind::Anthropic, String::new(), "ANTHROPIC_API_KEY"),
+            "openai" => (
+                ModelProviderKind::OpenAI,
+                "https://api.openai.com/v1/chat/completions".into(),
+                "OPENAI_API_KEY",
+            ),
+            "openrouter" => (
+                ModelProviderKind::OpenRouter,
+                "https://openrouter.ai/api/v1/chat/completions".into(),
+                "OPENROUTER_API_KEY",
+            ),
+            "ollama" => (
+                ModelProviderKind::Ollama,
+                env_opt("LIGUS_MODEL_BASE_URL")
+                    .unwrap_or_else(|| "http://localhost:11434/v1/chat/completions".into()),
+                "",
+            ),
+            other => bail!("unsupported LIGUS_PROVIDER '{other}' (anthropic|openai|openrouter|ollama)"),
+        };
     let api_key = env_opt("LIGUS_PROVIDER_API_KEY")
         .or_else(|| (!key_env.is_empty()).then(|| env_opt(key_env)).flatten());
     let rt = ResolvedRuntime {
@@ -1391,9 +1159,7 @@ fn cmd_rm_runtime(cfg: &Config, id: &str, dry_run: bool) -> Result<()> {
         let ws = uuid_of_room(&cfg.room);
         let known = svc.list_workspace_runtimes(ws)?.iter().any(|r| r.id == id);
         if !known {
-            return Err(problem::not_found(format!(
-                "no runtime '{id}' in this workspace (ligus runtimes lists them)"
-            )));
+            return Err(problem::not_found(format!("no runtime '{id}' in this workspace (ligus runtimes lists them)")));
         }
         println!("dry run: would remove runtime '{id}'; nothing was signed or written.");
         return Ok(());
@@ -1421,18 +1187,14 @@ fn cmd_setup(cfg: &Config, apply: bool) -> Result<()> {
         .parse()
         .ok()
         .map(|addr| {
-            std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300))
-                .is_ok()
+            std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
         })
         .unwrap_or(false);
     let claude = on_path("claude");
     let codex = on_path("codex");
     // `true`: also confirm agy's Google sign-in with `agy models` (read-only,
     // no quota) — this is an explicit, interactive command.
-    let clis = ligus_runtime::cli_detect::detect_cli_agents(
-        &ligus_runtime::cli_detect::DetectEnv::from_process(),
-        true,
-    );
+    let clis = ligus_runtime::cli_detect::detect_cli_agents(&ligus_runtime::cli_detect::DetectEnv::from_process(), true);
 
     println!("Detected on this box:");
     for (env_var, provider, model) in [
@@ -1440,10 +1202,7 @@ fn cmd_setup(cfg: &Config, apply: bool) -> Result<()> {
         ("OPENAI_API_KEY", "openai", "gpt-4o"),
         ("OPENROUTER_API_KEY", "openrouter", "openai/gpt-4o-mini"),
     ] {
-        if std::env::var(env_var)
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
-        {
+        if std::env::var(env_var).map(|v| !v.is_empty()).unwrap_or(false) {
             println!("  ✓ {env_var} present (key-backed)");
             println!(
                 "      → ligus add-runtime {provider} \"{provider}\" {provider} {model} --secret-ref {provider}   (worker sets LIGUS_WS_SECRET_{provider})"
@@ -1463,11 +1222,7 @@ fn cmd_setup(cfg: &Config, apply: bool) -> Result<()> {
         if !c.installed {
             continue;
         }
-        let version = c
-            .version
-            .as_deref()
-            .map(|v| format!(" {v}"))
-            .unwrap_or_default();
+        let version = c.version.as_deref().map(|v| format!(" {v}")).unwrap_or_default();
         if !c.supported {
             println!("  ! {}{version} — {}", c.label, c.note);
             continue;
@@ -1475,14 +1230,8 @@ fn cmd_setup(cfg: &Config, apply: bool) -> Result<()> {
         use ligus_runtime::cli_detect::LoginState;
         let login = match c.login {
             LoginState::LoggedIn => c.login_detail.clone(),
-            LoginState::NotLoggedIn => format!(
-                "NOT signed in — run `{}` in a terminal on this box",
-                c.login_command
-            ),
-            LoginState::Unknown => format!(
-                "sign-in unknown — if a turn fails, run `{}` in a terminal on this box",
-                c.login_command
-            ),
+            LoginState::NotLoggedIn => format!("NOT signed in — run `{}` in a terminal on this box", c.login_command),
+            LoginState::Unknown => format!("sign-in unknown — if a turn fails, run `{}` in a terminal on this box", c.login_command),
         };
         println!("  ✓ {} ({}){version}, keyless — {login}", c.label, c.binary);
     }
@@ -1492,41 +1241,22 @@ fn cmd_setup(cfg: &Config, apply: bool) -> Result<()> {
         let ws = uuid_of_room(&cfg.room);
         let mut n = 0;
         if ollama {
-            let mut wr = WorkspaceRuntime::new(
-                "ollama",
-                "Ollama (local)",
-                ModelProviderKind::Ollama,
-                "llama3.2",
-            );
+            let mut wr = WorkspaceRuntime::new("ollama", "Ollama (local)", ModelProviderKind::Ollama, "llama3.2");
             wr.endpoint = "http://localhost:11434".to_string();
             svc.add_workspace_runtime(ws, wr)?;
             n += 1;
         }
         if claude {
-            svc.add_workspace_runtime(
-                ws,
-                WorkspaceRuntime::new(
-                    "claude-code",
-                    "Claude Code",
-                    ModelProviderKind::ClaudeCode,
-                    "",
-                ),
-            )?;
+            svc.add_workspace_runtime(ws, WorkspaceRuntime::new("claude-code", "Claude Code", ModelProviderKind::ClaudeCode, ""))?;
             n += 1;
         }
         if codex {
-            svc.add_workspace_runtime(
-                ws,
-                WorkspaceRuntime::new("codex", "Codex", ModelProviderKind::Codex, ""),
-            )?;
+            svc.add_workspace_runtime(ws, WorkspaceRuntime::new("codex", "Codex", ModelProviderKind::Codex, ""))?;
             n += 1;
         }
         for c in clis.iter().filter(|c| c.installed && c.supported) {
             if let Some(kind) = ligus_runtime::cli_detect::provider_for(&c.id) {
-                svc.add_workspace_runtime(
-                    ws,
-                    WorkspaceRuntime::new(c.id.as_str(), c.label.as_str(), kind, ""),
-                )?;
+                svc.add_workspace_runtime(ws, WorkspaceRuntime::new(c.id.as_str(), c.label.as_str(), kind, ""))?;
                 n += 1;
             }
         }
@@ -1552,15 +1282,10 @@ fn cmd_config_export(cfg: &Config) -> Result<()> {
     let mut runtimes = svc.list_workspace_runtimes(uuid_of_room(&cfg.room))?;
     for r in &mut runtimes {
         if matches!(r.credential, WorkspaceCredential::Inline { .. }) {
-            r.credential = WorkspaceCredential::SecretRef {
-                secret_ref: r.id.clone(),
-            };
+            r.credential = WorkspaceCredential::SecretRef { secret_ref: r.id.clone() };
         }
     }
-    print!(
-        "{}",
-        toml::to_string_pretty(&WorkspaceRuntimesToml { runtimes })?
-    );
+    print!("{}", toml::to_string_pretty(&WorkspaceRuntimesToml { runtimes })?);
     Ok(())
 }
 
@@ -1572,15 +1297,8 @@ fn cmd_config_import(cfg: &Config, path: &str) -> Result<()> {
     let mut svc = open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
     let mut n = 0;
-    if let Some(wr) = doc
-        .runtimes
-        .iter()
-        .find(|r| r.credential.is_legacy_inline())
-    {
-        return Err(no_workspace_keys(&format!(
-            "runtime '{}' in {path} has an inline key",
-            wr.id
-        )));
+    if let Some(wr) = doc.runtimes.iter().find(|r| r.credential.is_legacy_inline()) {
+        return Err(no_workspace_keys(&format!("runtime '{}' in {path} has an inline key", wr.id)));
     }
     for wr in doc.runtimes {
         let id = wr.id.clone();
@@ -1601,21 +1319,13 @@ fn cmd_runtimes(cfg: &Config, json: bool) -> Result<()> {
             .iter()
             .map(|r| {
                 let (kind, secret_ref, present) = match &r.credential {
-                    WorkspaceCredential::SecretRef { secret_ref } => (
-                        "secretRef",
-                        Some(secret_ref.clone()),
-                        Some(
-                            ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref))
-                                .is_ok(),
-                        ),
-                    ),
+                    WorkspaceCredential::SecretRef { secret_ref } => {
+                        ("secretRef", Some(secret_ref.clone()), Some(ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref)).is_ok()))
+                    }
                     WorkspaceCredential::Inline {} => ("legacyInline", None, None),
                     WorkspaceCredential::None => ("keyless", None, None),
                 };
-                let warning = r
-                    .credential
-                    .is_legacy_inline()
-                    .then_some(ligus_core::LEGACY_INLINE_WARNING);
+                let warning = r.credential.is_legacy_inline().then_some(ligus_core::LEGACY_INLINE_WARNING);
                 serde_json::json!({
                     "id": r.id,
                     "name": shown(&r.name),
@@ -1638,23 +1348,13 @@ fn cmd_runtimes(cfg: &Config, json: bool) -> Result<()> {
     for r in rts {
         let cred = match &r.credential {
             WorkspaceCredential::SecretRef { secret_ref } => {
-                let have =
-                    ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref)).is_ok();
-                format!(
-                    "secretRef:{secret_ref}{}",
-                    if have { " ✓" } else { " (missing)" }
-                )
+                let have = ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref)).is_ok();
+                format!("secretRef:{secret_ref}{}", if have { " ✓" } else { " (missing)" })
             }
             WorkspaceCredential::Inline {} => ligus_core::LEGACY_INLINE_LABEL.into(),
             WorkspaceCredential::None => "keyless".into(),
         };
-        println!(
-            "{:<16} {:<22} {:?}/{}  [{cred}]",
-            r.id,
-            shown(&r.name),
-            r.provider,
-            r.model
-        );
+        println!("{:<16} {:<22} {:?}/{}  [{cred}]", r.id, shown(&r.name), r.provider, r.model);
         if r.credential.is_legacy_inline() {
             println!("{:<16} ! {}", "", ligus_core::LEGACY_INLINE_WARNING);
         }
@@ -1665,10 +1365,7 @@ fn cmd_runtimes(cfg: &Config, json: bool) -> Result<()> {
 /// Resolve the runtime an agent should use: a workspace-owned runtime by id
 /// (spec §12.5 — credential resolved via the worker's secret store, never a
 /// personal key), else the personal env fallback.
-fn resolve_agent_runtime(
-    cfg: &Config,
-    runtime_id: Option<&str>,
-) -> Result<(ResolvedRuntime, String)> {
+fn resolve_agent_runtime(cfg: &Config, runtime_id: Option<&str>) -> Result<(ResolvedRuntime, String)> {
     let Some(id) = runtime_id else {
         return resolve_runtime_from_env();
     };
@@ -1677,13 +1374,8 @@ fn resolve_agent_runtime(
         .list_workspace_runtimes(uuid_of_room(&cfg.room))?
         .into_iter()
         .find(|r| r.id == id)
-        .ok_or_else(|| {
-            anyhow!("no workspace runtime '{id}' (run `ligus runtimes`, or define one in the app)")
-        })?;
-    Ok((
-        workspace_runtime_resolved(&wr),
-        format!("workspace:{}", wr.name),
-    ))
+        .ok_or_else(|| anyhow!("no workspace runtime '{id}' (run `ligus runtimes`, or define one in the app)"))?;
+    Ok((workspace_runtime_resolved(&wr), format!("workspace:{}", wr.name)))
 }
 
 /// `ligus agent`'s runtime from a workspace runtime. A runtime that names a
@@ -1691,14 +1383,8 @@ fn resolve_agent_runtime(
 /// doesn't offer it), without the runtime's own key, as on serve and workers
 /// ([`worker::agent_workspace_runtime`]).
 fn workspace_runtime_resolved(wr: &ligus_core::WorkspaceRuntime) -> ResolvedRuntime {
-    let gateway = Some(wr.gateway.trim())
-        .filter(|g| !g.is_empty())
-        .map(ligus_runtime::model_gateway::GatewaySelection::named);
-    let api_key = if gateway.is_some() {
-        None
-    } else {
-        resolve_workspace_credential(&wr.credential)
-    };
+    let gateway = Some(wr.gateway.trim()).filter(|g| !g.is_empty()).map(ligus_runtime::model_gateway::GatewaySelection::named);
+    let api_key = if gateway.is_some() { None } else { resolve_workspace_credential(&wr.credential) };
     ResolvedRuntime {
         provider: wr.provider,
         model: wr.model.clone(),
@@ -1752,10 +1438,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
             }
         }
     }
-    ligus_runtime::author_gate::warn_if_lowered(ligus_runtime::author_gate::turn_writes(
-        rt.provider,
-        &rt.args,
-    ));
+    ligus_runtime::author_gate::warn_if_lowered(ligus_runtime::author_gate::turn_writes(rt.provider, &rt.args));
     println!("agent @{name} online ({rt_label}); replying to @primary / un-mentioned turns. Ctrl-C to stop.");
     let host_label = env_opt("HOSTNAME").unwrap_or_else(|| "this worker".into());
     let system = format!(
@@ -1770,9 +1453,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
         }
         let mut svc = open_service(cfg)?;
         for id in svc.store().list_session_ids()? {
-            let Some(s) = svc.load_resolving(id)? else {
-                continue;
-            };
+            let Some(s) = svc.load_resolving(id)? else { continue };
             if id == workspace_config_session_id(s.workspace_id) {
                 continue; // the config log isn't a chat
             }
@@ -1789,11 +1470,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 })
                 .filter(|m| {
                     // Already answered (by another `ligus agent`, or the desktop).
-                    !s.messages.iter().any(|r| {
-                        r.role == MessageRole::Assistant
-                            && !r.superseded
-                            && r.reply_to_message_id == Some(m.id)
-                    })
+                    !s.messages.iter().any(|r| r.role == MessageRole::Assistant && !r.superseded && r.reply_to_message_id == Some(m.id))
                 })
                 .cloned()
                 .collect();
@@ -1803,13 +1480,8 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 // credential, like a desktop's primary runtime, so in a shared
                 // room it answers only the operator unless they opened it
                 // (LIGUS_AGENT_OPEN_TO_MEMBERS=1). Refused: left for others.
-                let open =
-                    ligus_core::names::var("LIGUS_AGENT_OPEN_TO_MEMBERS").is_ok_and(|v| v == "1");
-                if !svc
-                    .primary_turn_access(s.workspace_id, s.id, last.id, open)
-                    .map(|d| d.allowed())
-                    .unwrap_or(false)
-                {
+                let open = ligus_core::names::var("LIGUS_AGENT_OPEN_TO_MEMBERS").is_ok_and(|v| v == "1");
+                if !svc.primary_turn_access(s.workspace_id, s.id, last.id, open).map(|d| d.allowed()).unwrap_or(false) {
                     println!("↳ @{name}: not answering {} (another member's message; set LIGUS_AGENT_OPEN_TO_MEMBERS=1 to answer everyone)", last.id);
                     continue;
                 }
@@ -1832,21 +1504,10 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 let author_role = svc.trigger_author_role(s.id, last.id).ok().flatten();
                 // Phase C: the shell is the Owner's (`ligus agent` has no
                 // agent id to hold a grant).
-                let shell_allowed = ligus_runtime::author_gate::shell_allowed(
-                    svc.trigger_shell_role(s.id, last.id).ok().flatten(),
-                    false,
-                );
+                let shell_allowed = ligus_runtime::author_gate::shell_allowed(svc.trigger_shell_role(s.id, last.id).ok().flatten(), false);
                 let mut turn_rt = rt.clone();
-                let plan = ligus_runtime::author_gate::gate_turn(
-                    turn_rt.provider,
-                    &mut turn_rt.args,
-                    author_role,
-                );
-                if let Err(reason) = ligus_runtime::author_gate::gate_shell(
-                    turn_rt.provider,
-                    &mut turn_rt.args,
-                    shell_allowed,
-                ) {
+                let plan = ligus_runtime::author_gate::gate_turn(turn_rt.provider, &mut turn_rt.args, author_role);
+                if let Err(reason) = ligus_runtime::author_gate::gate_shell(turn_rt.provider, &mut turn_rt.args, shell_allowed) {
                     println!("refused: {reason}");
                     continue;
                 }
@@ -1860,57 +1521,32 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                     continue;
                 }
                 if !allow_mcp {
-                    eprintln!(
-                        "gating message {} — author role {author_role:?} below this host's floor",
-                        last.id
-                    );
+                    eprintln!("gating message {} — author role {author_role:?} below this host's floor", last.id);
                 }
                 // MCP tools when LIGUS_MCP_CONFIG provisions them and the gate allows,
                 // else a plain stream.
                 // The CLI child runs in this host's OS sandbox, in a fresh
                 // scratch dir (never this process's cwd).
                 let envelope = ligus_core::sandbox::envelope_for_session(&s);
-                let enforcement =
-                    ligus_runtime::sandbox::enforce(turn_rt.provider, &envelope, &Vec::new());
+                let enforcement = ligus_runtime::sandbox::enforce(turn_rt.provider, &envelope, &Vec::new());
                 if let Some(reason) = enforcement.refuse {
                     println!("refused: {reason}");
                     continue;
                 }
                 turn_rt.args.extend(enforcement.extra_args);
                 let allow_mcp = allow_mcp && enforcement.allow_run_command;
-                let mut sandbox = ligus_runtime::executor::TurnPolicy::new(
-                    ligus_runtime::executor::HostKind::Agent,
-                    envelope,
-                    plan.clone(),
-                );
+                let mut sandbox = ligus_runtime::executor::TurnPolicy::new(ligus_runtime::executor::HostKind::Agent, envelope, plan.clone());
                 sandbox.shell_allowed = shell_allowed;
                 // The signed grants, when this host applies them
                 // (`LIGUS_SANDBOX_GRANTS`; by default only the Owner's).
-                sandbox.grants = svc
-                    .sandbox_grants_here(
-                        s.workspace_id,
-                        ligus_runtime::sandbox::grants_setting_from_env(),
-                    )
-                    .0
-                    .paths_for(None);
+                sandbox.grants = svc.sandbox_grants_here(s.workspace_id, ligus_runtime::sandbox::grants_setting_from_env()).0.paths_for(None);
                 // Who the turn answers (what the reply's `@you` means).
                 let system = match ligus_runtime::prompt::requester_guidance(&s, Some(last.id)) {
                     g if g.is_empty() => system.clone(),
                     g => format!("{system}\n\n{g}"),
                 };
-                let reply = ligus_runtime::executor::with_turn(
-                    sandbox,
-                    reply::generate_reply(&turn_rt, &system, &turns, allow_mcp, None),
-                )
-                .await?;
-                let mid = svc.begin_assistant_message(
-                    s.id,
-                    s.workspace_id,
-                    name.clone(),
-                    rt_label.clone(),
-                    None,
-                    Some(last.id),
-                )?;
+                let reply = ligus_runtime::executor::with_turn(sandbox, reply::generate_reply(&turn_rt, &system, &turns, allow_mcp, None)).await?;
+                let mid = svc.begin_assistant_message(s.id, s.workspace_id, name.clone(), rt_label.clone(), None, Some(last.id))?;
                 svc.complete_assistant_message(s.id, s.workspace_id, mid, reply)?;
                 seen.insert(mid);
                 println!("done");
@@ -1927,12 +1563,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
 /// `ligus trust list | enable <digest> | enable-all`: the S1 decision for a
 /// repository's runtimes and MCP servers on this device (the same table the
 /// desktop's *Trust this workspace* writes, in this host's data dir).
-fn cmd_trust(
-    cfg: &Config,
-    repo: &std::path::Path,
-    action: Option<&str>,
-    digest: Option<&str>,
-) -> Result<()> {
+fn cmd_trust(cfg: &Config, repo: &std::path::Path, action: Option<&str>, digest: Option<&str>) -> Result<()> {
     use ligus_runtime::workspace_trust as wt;
     let store = wt::TrustStore::open(&cfg.data_dir)?;
     let rid = wt::root_id(repo);
@@ -1957,24 +1588,11 @@ fn cmd_trust(
             Ok(())
         }
         Some("enable") => {
-            let d = digest.ok_or_else(|| {
-                anyhow!("usage: ligus trust enable <digest> (from `ligus trust list`)")
-            })?;
-            let matching: Vec<&wt::TrustItem> =
-                items.iter().filter(|i| i.digest.starts_with(d)).collect();
-            let [item] = matching.as_slice() else {
-                bail!(
-                    "{} items match {d}: give more of the digest",
-                    matching.len()
-                )
-            };
+            let d = digest.ok_or_else(|| anyhow!("usage: ligus trust enable <digest> (from `ligus trust list`)"))?;
+            let matching: Vec<&wt::TrustItem> = items.iter().filter(|i| i.digest.starts_with(d)).collect();
+            let [item] = matching.as_slice() else { bail!("{} items match {d}: give more of the digest", matching.len()) };
             store.enable(&rid, item.kind, &item.digest, "ligus-cli")?;
-            println!(
-                "trusted {} {}: {}",
-                item.kind.as_str(),
-                item.id,
-                item.command_line
-            );
+            println!("trusted {} {}: {}", item.kind.as_str(), item.id, item.command_line);
             Ok(())
         }
         Some("enable-all") => {
@@ -2000,27 +1618,16 @@ fn cmd_add_agent(
     // The desktop refuses these too: a mention word ("ligus", "primary", the
     // legacy "hive", "all", ...) would shadow the default agent or a group.
     if ligus_core::agent::is_reserved_agent_name(name) {
-        return Err(crate::help::usage_error(format!(
-            "'{name}' is a reserved mention name: pick another agent name"
-        )));
+        return Err(crate::help::usage_error(format!("'{name}' is a reserved mention name: pick another agent name")));
     }
     if dry_run {
         // The dry run checks what the real run needs: the runtime exists.
         let svc = open_service(cfg)?;
         let ws = uuid_of_room(&cfg.room);
-        if !svc
-            .list_workspace_runtimes(ws)?
-            .iter()
-            .any(|r| r.id == runtime_id)
-        {
-            return Err(problem::not_found(format!(
-                "no runtime '{runtime_id}' in this workspace (ligus runtimes lists them)"
-            )));
+        if !svc.list_workspace_runtimes(ws)?.iter().any(|r| r.id == runtime_id) {
+            return Err(problem::not_found(format!("no runtime '{runtime_id}' in this workspace (ligus runtimes lists them)")));
         }
-        let on = host
-            .as_deref()
-            .map(|h| format!(" on host {h}"))
-            .unwrap_or_default();
+        let on = host.as_deref().map(|h| format!(" on host {h}")).unwrap_or_default();
         println!("dry run: would create agent @{name} on runtime '{runtime_id}'{on}; nothing was signed or written.");
         return Ok(());
     }
@@ -2038,10 +1645,7 @@ fn cmd_add_agent(
 fn cmd_agents(cfg: &Config, json: bool) -> Result<()> {
     let svc = open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
-    let agents = svc
-        .load_in(ws, workspace_config_session_id(ws))?
-        .map(|s| s.workspace_agents)
-        .unwrap_or_default();
+    let agents = svc.load_in(ws, workspace_config_session_id(ws))?.map(|s| s.workspace_agents).unwrap_or_default();
     if json {
         let rows: Vec<serde_json::Value> = agents
             .iter()
@@ -2062,17 +1666,8 @@ fn cmd_agents(cfg: &Config, json: bool) -> Result<()> {
         println!("(no agents — `ligus add-agent <name> <runtime-id>`)");
     }
     for a in agents {
-        let host = if a.host_id.is_empty() {
-            "owner-device".into()
-        } else {
-            a.host_id.clone()
-        };
-        println!(
-            "@{:<20} runtime={:<14} host={}",
-            shown(&a.name),
-            a.runtime_id,
-            host
-        );
+        let host = if a.host_id.is_empty() { "owner-device".into() } else { a.host_id.clone() };
+        println!("@{:<20} runtime={:<14} host={}", shown(&a.name), a.runtime_id, host);
     }
     Ok(())
 }
@@ -2118,23 +1713,12 @@ pub(crate) fn with_gateways(mut h: WorkspaceHost) -> WorkspaceHost {
 fn cmd_register_worker(cfg: &Config, label: Option<String>) -> Result<String> {
     let mut svc = open_service(cfg)?;
     // Never seed a config log by registering: sync the workspace first.
-    if svc
-        .load_resolving(workspace_config_session_id(uuid_of_room(&cfg.room)))?
-        .is_none()
-    {
-        bail!(
-            "this box has no copy of workspace '{}' yet: run `ligus sync` first",
-            cfg.room
-        );
+    if svc.load_resolving(workspace_config_session_id(uuid_of_room(&cfg.room)))?.is_none() {
+        bail!("this box has no copy of workspace '{}' yet: run `ligus sync` first", cfg.room);
     }
     let id = svc.device_id().to_string();
-    let label = label
-        .or_else(|| env_opt("HOSTNAME"))
-        .unwrap_or_else(|| "worker".into());
-    svc.ensure_host(
-        uuid_of_room(&cfg.room),
-        crate::with_gateways(WorkspaceHost::new(id.clone(), HostKind::Worker, label)),
-    )?;
+    let label = label.or_else(|| env_opt("HOSTNAME")).unwrap_or_else(|| "worker".into());
+    svc.ensure_host(uuid_of_room(&cfg.room), crate::with_gateways(WorkspaceHost::new(id.clone(), HostKind::Worker, label)))?;
     Ok(id)
 }
 
@@ -2148,11 +1732,7 @@ fn cmd_set_agent_host(cfg: &Config, agent_name: &str, host_id: &str, dry_run: bo
     let agent = agents
         .iter()
         .find(|a| a.name == agent_name)
-        .ok_or_else(|| {
-            problem::not_found(format!(
-                "no agent '{agent_name}' in this workspace (ligus agents lists them)"
-            ))
-        })?;
+        .ok_or_else(|| problem::not_found(format!("no agent '{agent_name}' in this workspace (ligus agents lists them)")))?;
     let aid = agent.id;
     if dry_run {
         println!("dry run: would bind @{agent_name} ({aid}) to host {host_id}; nothing was signed or written.");
@@ -2170,11 +1750,7 @@ fn cmd_set_agent_host(cfg: &Config, agent_name: &str, host_id: &str, dry_run: bo
 /// reassigned to it) is answered via that agent's workspace runtime and synced
 /// back. A failing turn is isolated and not retried in a tight loop. See
 /// `worker.rs` for the turn itself (tool loop, worktrees, proposals).
-async fn cmd_worker(
-    cfg: &Config,
-    label: Option<String>,
-    health_listen: Option<String>,
-) -> Result<()> {
+async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<String>) -> Result<()> {
     // Probes for an orchestrator (Kubernetes): live while the process serves,
     // ready once the worker has registered and opened its store.
     let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2199,10 +1775,7 @@ async fn cmd_worker(
     // Finish replies a previous run was streaming when it stopped (see
     // `worker::recover_interrupted_turns`).
     match worker::recover_interrupted_turns(&mut svc) {
-        Ok(done) if !done.is_empty() => println!(
-            "worker: finished {} reply(s) interrupted by the last stop",
-            done.len()
-        ),
+        Ok(done) if !done.is_empty() => println!("worker: finished {} reply(s) interrupted by the last stop", done.len()),
         Ok(_) => {}
         Err(e) => eprintln!("worker: interrupted-turn recovery failed: {e}"),
     }
@@ -2292,29 +1865,15 @@ async fn cmd_worker(
 /// or Owner), join only as this box's own service member through an
 /// admission, then register its host, publish its key-agreement key and push.
 /// Returns the service and this box's host id.
-async fn worker_start(
-    cfg: &mut Config,
-    label: &str,
-    admission: Option<String>,
-) -> Result<(ChatService, String)> {
-    let (mut svc, _) = admit::prepare_box(cfg, label, None, admission, |c| async move {
-        sync_once(&c).await
-    })
-    .await?;
+async fn worker_start(cfg: &mut Config, label: &str, admission: Option<String>) -> Result<(ChatService, String)> {
+    let (mut svc, _) = admit::prepare_box(cfg, label, None, admission, |c| async move { sync_once(&c).await }).await?;
     let ws = uuid_of_room(&cfg.room);
     let id = svc.device_id().to_string();
     if svc.device_standing(ws)? == ligus_runtime::device_enroll::Standing::Revoked {
         bail!("this worker's device was revoked by a workspace Admin; start it from a fresh data dir and admit it again");
     }
-    svc.ensure_host(
-        ws,
-        with_gateways(WorkspaceHost::new(
-            id.clone(),
-            HostKind::Worker,
-            label.to_string(),
-        )),
-    )
-    .context("registering this box as a worker host")?;
+    svc.ensure_host(ws, with_gateways(WorkspaceHost::new(id.clone(), HostKind::Worker, label.to_string())))
+        .context("registering this box as a worker host")?;
     let device = svc.device_id();
     if let Err(e) = svc.set_device_label(ws, device, label) {
         eprintln!("worker: naming this box's device failed (it keeps working): {e}");
@@ -2370,9 +1929,7 @@ fn cmd_queue(cfg: &Config) -> Result<()> {
     let now = Timestamp::now();
     let mut any = false;
     for id in svc.store().list_session_ids()? {
-        let Some(s) = svc.load_in(ws, id)? else {
-            continue;
-        };
+        let Some(s) = svc.load_in(ws, id)? else { continue };
         if id == workspace_config_session_id(s.workspace_id) {
             continue;
         }
@@ -2407,16 +1964,10 @@ fn cmd_queue(cfg: &Config) -> Result<()> {
 /// decides, see [`ligus_runtime::HostPresence::is_online`]).
 fn fetch_presence(cfg: &Config) -> ligus_runtime::HostPresence {
     let presence = ligus_runtime::HostPresence::new();
-    if let (Ok(relay), Some(_), Some(ring)) = (relay_client(cfg), cfg.key.as_deref(), box_ring(cfg))
-    {
-        if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
+    if let (Ok(relay), Some(_), Some(ring)) = (relay_client(cfg), cfg.key.as_deref(), box_ring(cfg)) {
+        if let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() {
             let fetch = ligus_runtime::host_presence::fetch_host_beats(&relay, &cfg.room, &ring);
-            if let Ok(Ok(beats)) =
-                rt.block_on(async { tokio::time::timeout(Duration::from_secs(5), fetch).await })
-            {
+            if let Ok(Ok(beats)) = rt.block_on(async { tokio::time::timeout(Duration::from_secs(5), fetch).await }) {
                 presence.merge(beats);
             }
         }
@@ -2426,11 +1977,8 @@ fn fetch_presence(cfg: &Config) -> ligus_runtime::HostPresence {
 
 /// Publish this host's liveness beat (best effort; no relay or key = no-op).
 async fn publish_beat(cfg: &Config, host_id: &str) {
-    if let (Ok(relay), Some(_), Some(ring)) = (relay_client(cfg), cfg.key.as_deref(), box_ring(cfg))
-    {
-        if let Err(e) =
-            ligus_runtime::host_presence::publish_host_beat(&relay, &cfg.room, &ring, host_id).await
-        {
+    if let (Ok(relay), Some(_), Some(ring)) = (relay_client(cfg), cfg.key.as_deref(), box_ring(cfg)) {
+        if let Err(e) = ligus_runtime::host_presence::publish_host_beat(&relay, &cfg.room, &ring, host_id).await {
             eprintln!("presence: publishing this host's beat failed: {e}");
         }
     }
@@ -2455,21 +2003,13 @@ fn truncate(s: &str, n: usize) -> String {
 /// turn may reach on this host (Phase C: the home is default-deny), each path
 /// with why, the shell rule, and the signed grants in force for this
 /// workspace. The same lines as Settings, Sandbox on the desktop.
-fn sandbox_policy_lines(
-    cfg: &Config,
-    runtime: Option<&str>,
-    agent: Option<&str>,
-) -> Result<Vec<String>> {
+fn sandbox_policy_lines(cfg: &Config, runtime: Option<&str>, agent: Option<&str>) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     use ligus_core::ModelProviderKind as K;
     // The signed grants, and whether this host applies them.
     let setting = ligus_runtime::sandbox::grants_setting_from_env();
     let (signed, here) = signed_grants_here(cfg, setting);
-    let grants = if here.apply {
-        signed.clone()
-    } else {
-        ligus_core::sandbox::SandboxGrants::default()
-    };
+    let grants = if here.apply { signed.clone() } else { ligus_core::sandbox::SandboxGrants::default() };
     let agent_id = agent.and_then(|a| Uuid::parse_str(a.trim()).ok());
     let kinds: Vec<Option<K>> = match runtime.map(|r| r.trim().to_ascii_lowercase()) {
         Some(r) => vec![match r.as_str() {
@@ -2497,24 +2037,10 @@ fn sandbox_policy_lines(
         out.push(format!("  shell      {}", p.shell));
     }
     out.push(String::new());
-    out.push(format!(
-        "workspace sandbox grants on this host: {}",
-        here.why
-    ));
-    out.push(format!(
-        "  ({}=apply or {}=ignore sets it)",
-        ligus_runtime::sandbox::GRANTS_ENV,
-        ligus_runtime::sandbox::GRANTS_ENV
-    ));
+        out.push(format!("workspace sandbox grants on this host: {}", here.why));
+    out.push(format!("  ({}=apply or {}=ignore sets it)", ligus_runtime::sandbox::GRANTS_ENV, ligus_runtime::sandbox::GRANTS_ENV));
     out.push(String::new());
-    out.push(format!(
-        "signed grants for this workspace{}:",
-        if here.apply {
-            " (in force here)"
-        } else {
-            " (not applied here)"
-        }
-    ));
+        out.push(format!("signed grants for this workspace{}:", if here.apply { " (in force here)" } else { " (not applied here)" }));
     let grants = signed;
     if grants.is_empty() {
         out.push("  none (Settings, Sandbox on a desktop: Admin with a passkey; the shell grant is the Owner's)".into());
@@ -2533,9 +2059,7 @@ fn sandbox_policy_lines(
             out.push(format!("  agent {id}  read-write  {p}"));
         }
         if a.shell {
-            out.push(format!(
-                "  agent {id}  shell for every member's turns (an Owner's grant)"
-            ));
+            out.push(format!("  agent {id}  shell for every member's turns (an Owner's grant)"));
         }
     }
     Ok(out)
@@ -2543,31 +2067,16 @@ fn sandbox_policy_lines(
 
 /// This host's workspace's signed sandbox grants and whether it applies
 /// them (`LIGUS_SANDBOX_GRANTS`, else only on the Owner's own hosts).
-fn signed_grants_here(
-    cfg: &Config,
-    setting: Option<bool>,
-) -> (
-    ligus_core::sandbox::SandboxGrants,
-    ligus_runtime::sandbox::GrantsHere,
-) {
+fn signed_grants_here(cfg: &Config, setting: Option<bool>) -> (ligus_core::sandbox::SandboxGrants, ligus_runtime::sandbox::GrantsHere) {
     if cfg.room.is_empty() {
-        return (
-            Default::default(),
-            ligus_runtime::sandbox::grants_here(setting, None, false),
-        );
+        return (Default::default(), ligus_runtime::sandbox::grants_here(setting, None, false));
     }
     match open_service(cfg) {
         Ok(svc) => {
             let ws = uuid_of_room(&cfg.room);
-            (
-                svc.sandbox_grants(ws),
-                svc.sandbox_grants_here(ws, setting).1,
-            )
+            (svc.sandbox_grants(ws), svc.sandbox_grants_here(ws, setting).1)
         }
-        Err(_) => (
-            Default::default(),
-            ligus_runtime::sandbox::grants_here(setting, None, false),
-        ),
+        Err(_) => (Default::default(), ligus_runtime::sandbox::grants_here(setting, None, false)),
     }
 }
 
@@ -2627,24 +2136,14 @@ fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
     // A failed check exits 1; --legacy-exit-codes keeps the preflights' old
     // codes (3 no sandbox, 4 another tier, 5 the turn test) for one release.
     let mut code = 0;
-    let legacy = |old: i32| {
-        if o.legacy_exit_codes {
-            old
-        } else {
-            help::EXIT_ERROR
-        }
-    };
+    let legacy = |old: i32| if o.legacy_exit_codes { old } else { help::EXIT_ERROR };
     if o.sandbox_scope() {
         let s = ligus_runtime::executor::sandbox_status();
         let unconfined = s.kind == ligus_runtime::executor::ExecutorKind::Unconfined;
         let mut notes = s.notes.clone();
         let c = if unconfined {
             notes.push("CLI agent turns (any tier), run_command, stdio MCP servers and pre-flight tests are refused here; chat with an HTTP model (no local tools) still runs".into());
-            let c = if o.require_confined || o.turn_test {
-                Check::fail("sandbox.tier", "agent sandbox", s.tier())
-            } else {
-                Check::warn("sandbox.tier", "agent sandbox", s.tier())
-            };
+            let c = if o.require_confined || o.turn_test { Check::fail("sandbox.tier", "agent sandbox", s.tier()) } else { Check::warn("sandbox.tier", "agent sandbox", s.tier()) };
             c.fix(unconfined_fix())
         } else {
             Check::ok("sandbox.tier", "agent sandbox", s.tier())
@@ -2656,26 +2155,15 @@ fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
             eprintln!("ligus: no agent sandbox on this host: every agent turn that runs local programs would be refused");
             code = legacy(hardening::EXIT_UNCONFINED);
         }
-        if let Some(want) = o
-            .expect_tier
-            .as_deref()
-            .map(|t| t.trim().to_ascii_lowercase())
-        {
+        if let Some(want) = o.expect_tier.as_deref().map(|t| t.trim().to_ascii_lowercase()) {
             if want == s.tier() {
-                r.add(Check::ok(
-                    "sandbox.expected-tier",
-                    "expected tier",
-                    format!("{want}, as expected"),
-                ));
+                r.add(Check::ok("sandbox.expected-tier", "expected tier", format!("{want}, as expected")));
             } else {
                 r.add(
                     Check::fail("sandbox.expected-tier", "expected tier", format!("expected {want}, this host uses {}", s.tier()))
                         .fix("run on a node that has that tier, or change the expected tier (agentSandbox.tier on Kubernetes)"),
                 );
-                eprintln!(
-                    "ligus: expected agent sandbox tier {want}, this host uses {}",
-                    s.tier()
-                );
+                eprintln!("ligus: expected agent sandbox tier {want}, this host uses {}", s.tier());
                 if code == 0 {
                     code = legacy(4);
                 }
@@ -2683,83 +2171,37 @@ fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
         }
         if let Some(d) = hardening::dumpable() {
             r.add(if d {
-                Check::warn(
-                    "process.dumpable",
-                    "process",
-                    "dumpable: other processes of this user can read its memory",
-                )
-                .fix("run on Linux with prctl allowed (ligus help security)")
+                Check::warn("process.dumpable", "process", "dumpable: other processes of this user can read its memory").fix("run on Linux with prctl allowed (ligus help security)")
             } else {
                 Check::ok("process.dumpable", "process", "not dumpable")
             });
         }
-        let (signed, here) =
-            signed_grants_here(cfg, ligus_runtime::sandbox::grants_setting_from_env());
-        let n = signed.workspace.read_only.len()
-            + signed.workspace.read_write.len()
-            + signed.agents.len();
-        r.add(Check::ok(
-            "sandbox.grants",
-            "sandbox grants",
-            format!(
-                "{} ({n} signed; ligus doctor --sandbox lists them)",
-                here.why
-            ),
-        ));
+        let (signed, here) = signed_grants_here(cfg, ligus_runtime::sandbox::grants_setting_from_env());
+        let n = signed.workspace.read_only.len() + signed.workspace.read_write.len() + signed.agents.len();
+        r.add(Check::ok("sandbox.grants", "sandbox grants", format!("{} ({n} signed; ligus doctor --sandbox lists them)", here.why)));
         if o.turn_test && code == 0 {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
             match rt.block_on(selftest::turn_test(&cfg.data_dir)) {
                 Ok(t) if t.passed() => {
                     let mut lines = t.lines.clone();
                     lines.push(format!("passed (tier {})", t.tier));
-                    r.add(
-                        Check::ok(
-                            "sandbox.turn-test",
-                            "turn test",
-                            format!("passed (tier {})", t.tier),
-                        )
-                        .notes(lines),
-                    );
+                    r.add(Check::ok("sandbox.turn-test", "turn test", format!("passed (tier {})", t.tier)).notes(lines));
                 }
                 Ok(t) => {
                     eprintln!("ligus: turn test failed");
-                    r.add(
-                        Check::fail(
-                            "sandbox.turn-test",
-                            "turn test",
-                            "failed: the sandbox let something through or the command didn't run",
-                        )
-                        .fix("read the findings above; ligus help troubleshooting")
-                        .notes(t.lines),
-                    );
+                    r.add(Check::fail("sandbox.turn-test", "turn test", "failed: the sandbox let something through or the command didn't run").fix("read the findings above; ligus help troubleshooting").notes(t.lines));
                     code = legacy(5);
                 }
                 Err(e) => {
                     eprintln!("ligus: turn test could not run: {e:#}");
-                    r.add(
-                        Check::fail(
-                            "sandbox.turn-test",
-                            "turn test",
-                            format!("could not run: {e:#}"),
-                        )
-                        .fix("ligus help troubleshooting"),
-                    );
+                    r.add(Check::fail("sandbox.turn-test", "turn test", format!("could not run: {e:#}")).fix("ligus help troubleshooting"));
                     code = legacy(5);
                 }
             }
         }
         if o.sandbox && code == 0 {
             let lines = sandbox_policy_lines(cfg, o.runtime.as_deref(), o.agent.as_deref())?;
-            r.add(
-                Check::ok(
-                    "sandbox.policy",
-                    "sandbox policy",
-                    "what an agent turn may read and write here",
-                )
-                .notes(lines),
-            );
+            r.add(Check::ok("sandbox.policy", "sandbox policy", "what an agent turn may read and write here").notes(lines));
         }
     }
     if o.everything() {
@@ -2767,10 +2209,7 @@ fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
     }
     if o.gateway_scope() {
         let ws = (!cfg.room.is_empty()).then(|| uuid_of_room(&cfg.room));
-        let model = o
-            .model
-            .clone()
-            .unwrap_or_else(|| "ligus-gateway-check".into());
+        let model = o.model.clone().unwrap_or_else(|| "ligus-gateway-check".into());
         let rt = rt_current()?;
         for c in rt.block_on(gateway_check::checks(ws, o.gateway.clone(), model, false)) {
             if c.status == Status::Fail {
@@ -2780,11 +2219,7 @@ fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
         }
     }
     // Data a newer Ligus wrote: exit 3, as every other command does.
-    if code == 0
-        && r.checks
-            .iter()
-            .any(|c| c.id == "store.schema" && c.status == Status::Fail)
-    {
+    if code == 0 && r.checks.iter().any(|c| c.id == "store.schema" && c.status == Status::Fail) {
         code = problem::EXIT_FIXABLE;
     }
     if code == 0 && !r.ok() {
@@ -2825,13 +2260,7 @@ fn doctor_text(r: &checks::Report, quiet: bool, color: bool) -> String {
                     let _ = writeln!(s, "turn test: {n}");
                 }
                 if c.status != checks::Status::Ok {
-                    s.push_str(&checks::Report::check_text_styled(
-                        &checks::Check {
-                            notes: Vec::new(),
-                            ..c.clone()
-                        },
-                        color,
-                    ));
+                    s.push_str(&checks::Report::check_text_styled(&checks::Check { notes: Vec::new(), ..c.clone() }, color));
                 }
             }
             "sandbox.policy" => {
@@ -2908,17 +2337,9 @@ fn store_checks(cfg: &Config) -> Vec<checks::Check> {
         Check::ok("store.backups", "database backups", "none")
     } else {
         let paths: Vec<String> = backups.iter().map(|p| p.display().to_string()).collect();
-        Check::warn(
-            "store.backups",
-            "database backups",
-            format!(
-                "{} backup(s) of the database hold invite and admission seeds: {}",
-                paths.len(),
-                paths.join(", ")
-            ),
-        )
-        .fix("delete once you no longer need the backup")
-        .notes(paths)
+        Check::warn("store.backups", "database backups", format!("{} backup(s) of the database hold invite and admission seeds: {}", paths.len(), paths.join(", ")))
+            .fix("delete once you no longer need the backup")
+            .notes(paths)
     });
     out
 }
@@ -2937,25 +2358,14 @@ fn doctor_workspace_checks(cfg: &Config, r: &mut checks::Report) {
         Check::ok("secrets.backend", "secret store", backend.as_str())
     });
     #[cfg(target_os = "macos")]
-    if matches!(
-        backend,
-        ligus_runtime::secret_store::Backend::MacKeychain
-            | ligus_runtime::secret_store::Backend::Unavailable
-    ) {
+    if matches!(backend, ligus_runtime::secret_store::Backend::MacKeychain | ligus_runtime::secret_store::Backend::Unavailable) {
         // Never in a test binary unless it opted in: the probe reads the
         // login keychain (read-only, prompts off).
-        let real = !ligus_runtime::executor::cli_home::in_test_binary()
-            || ligus_runtime::executor::cli_home::test_keychain_opt_in();
+        let real = !ligus_runtime::executor::cli_home::in_test_binary() || ligus_runtime::executor::cli_home::test_keychain_opt_in();
         r.add(if real {
-            keychain_access_check(&ligus_runtime::secret_store::MacKeychain::access(
-                &cfg.data_dir,
-            ))
+            keychain_access_check(&ligus_runtime::secret_store::MacKeychain::access(&cfg.data_dir))
         } else {
-            Check::skip(
-                "secrets.keychain-access",
-                "keychain access",
-                "not probed in tests",
-            )
+            Check::skip("secrets.keychain-access", "keychain access", "not probed in tests")
         });
     }
 
@@ -2968,59 +2378,29 @@ fn doctor_workspace_checks(cfg: &Config, r: &mut checks::Report) {
     let next = st["next"].as_str().unwrap_or("").to_string();
     let joined = w["relayProblem"].is_null() && w["workspaceKey"].as_bool() == Some(true);
     let c = if !joined {
-        Check::warn(
-            "workspace.joined",
-            "workspace",
-            w["relayProblem"]
-                .as_str()
-                .unwrap_or("no workspace key on this device"),
-        )
-        .fix(next.clone())
+        Check::warn("workspace.joined", "workspace", w["relayProblem"].as_str().unwrap_or("no workspace key on this device")).fix(next.clone())
     } else if w["deviceStanding"].as_str() == Some("revoked") {
-        Check::fail(
-            "workspace.joined",
-            "workspace",
-            format!("{}: this device was revoked", cfg.room),
-        )
-        .fix("an Admin re-admits it from a desktop; or join again from a fresh data dir")
+        Check::fail("workspace.joined", "workspace", format!("{}: this device was revoked", cfg.room))
+            .fix("an Admin re-admits it from a desktop; or join again from a fresh data dir")
     } else if next != "ready" {
-        Check::warn(
-            "workspace.joined",
-            "workspace",
-            format!("{}: not synced or not a member yet", cfg.room),
-        )
-        .fix(next.clone())
+        Check::warn("workspace.joined", "workspace", format!("{}: not synced or not a member yet", cfg.room)).fix(next.clone())
     } else {
-        Check::ok(
-            "workspace.joined",
-            "workspace",
-            format!("{}: a member, local copy present", cfg.room),
-        )
+        Check::ok("workspace.joined", "workspace", format!("{}: a member, local copy present", cfg.room))
     };
     // Only a plain command is a next step (the fix says the rest).
-    if c.status != checks::Status::Ok
-        && next.starts_with("ligus ")
-        && !next.contains([':', ';', '('])
-    {
+    if c.status != checks::Status::Ok && next.starts_with("ligus ") && !next.contains([':', ';', '(']) {
         r.next(next);
     }
     r.add(c);
 
     match cfg.relay_url.as_deref().filter(|u| usable_relay_url(u)) {
-        None => r.add(Check::skip(
-            "relay.reachable",
-            "relay",
-            "no relay URL on this device",
-        )),
+        None => r.add(Check::skip("relay.reachable", "relay", "no relay URL on this device")),
         Some(full) => {
             use ligus_runtime::relay_client::RelayProbe as P;
             // Only scheme://host[:port] is ever printed (see relay_origin).
             let url = relay_origin(full);
             let probe = match (rt_current(), relay_client(cfg)) {
-                (Ok(rt), Ok(c)) => rt.block_on(
-                    c.with_request_timeout(Duration::from_secs(10))
-                        .probe(&cfg.room),
-                ),
+                (Ok(rt), Ok(c)) => rt.block_on(c.with_request_timeout(Duration::from_secs(10)).probe(&cfg.room)),
                 (Err(e), _) | (_, Err(e)) => P::Unreachable(format!("{e:#}")),
             };
             let relay_check = format!("langstroth-relay check --url {url}");
@@ -3050,14 +2430,9 @@ fn doctor_workspace_checks(cfg: &Config, r: &mut checks::Report) {
                 "{} from {} device(s), {} dropped by a cap ({} to fetch again from the relay), {} given up, {} expired (they apply on their own once what they wait for arrives)",
                 h.held, h.signers, h.dropped, h.refetch, h.lost, h.expired
             );
-            let notes = h
-                .reasons
-                .iter()
-                .map(|(reason, n)| format!("- {n}: {reason}"));
+            let notes = h.reasons.iter().map(|(reason, n)| format!("- {n}: {reason}"));
             r.add(if h.lost > 0 {
-                Check::warn("sync.held", "held events", detail)
-                    .fix("ligus help troubleshooting (held events)")
-                    .notes(notes)
+                Check::warn("sync.held", "held events", detail).fix("ligus help troubleshooting (held events)").notes(notes)
             } else {
                 Check::ok("sync.held", "held events", detail).notes(notes)
             });
@@ -3075,11 +2450,7 @@ fn inline_key_check(rts: &[WorkspaceRuntime]) -> checks::Check {
     use checks::Check;
     const ID: &str = "runtimes.inline-key";
     const TITLE: &str = "runtime keys";
-    let legacy: Vec<&str> = rts
-        .iter()
-        .filter(|r| r.credential.is_legacy_inline())
-        .map(|r| r.id.as_str())
-        .collect();
+    let legacy: Vec<&str> = rts.iter().filter(|r| r.credential.is_legacy_inline()).map(|r| r.id.as_str()).collect();
     if legacy.is_empty() {
         return Check::ok(ID, TITLE, "no runtime keys stored in the workspace");
     }
@@ -3089,19 +2460,14 @@ fn inline_key_check(rts: &[WorkspaceRuntime]) -> checks::Check {
 
 /// A current-thread runtime (the CLI only ever `block_on`s).
 fn rt_current() -> Result<tokio::runtime::Runtime> {
-    Ok(tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?)
+    Ok(tokio::runtime::Builder::new_current_thread().enable_all().build()?)
 }
 
 /// Whether the command line asks for help (`-h` / `--help` / `help` anywhere
 /// before a `--` separator).
 fn wants_help(args: &[String]) -> bool {
     args.first().is_some_and(|a| a == "help")
-        || args
-            .iter()
-            .take_while(|a| *a != "--")
-            .any(|a| a == "--help" || a == "-h")
+        || args.iter().take_while(|a| *a != "--").any(|a| a == "--help" || a == "-h")
 }
 
 fn main() {
@@ -3110,16 +2476,8 @@ fn main() {
     ligus_forge::install_tls_provider();
     if let Err(e) = run() {
         let args = split_flag_values(std::env::args().skip(1).collect());
-        let words: Vec<&str> = args
-            .iter()
-            .take_while(|a| *a != "--")
-            .map(String::as_str)
-            .collect();
-        let command = words
-            .iter()
-            .find(|a| !a.starts_with('-'))
-            .copied()
-            .unwrap_or("");
+        let words: Vec<&str> = args.iter().take_while(|a| *a != "--").map(String::as_str).collect();
+        let command = words.iter().find(|a| !a.starts_with('-')).copied().unwrap_or("");
         let r = problem::render(&e, command, &help::hint(&words));
         // Errors go to stderr; with --json the same error is also the one
         // JSON document on stdout.
@@ -3133,10 +2491,7 @@ fn main() {
 
 /// `--json` or `-o json` on the command line.
 fn wants_json(words: &[&str]) -> bool {
-    words.iter().any(|a| *a == "--json")
-        || words
-            .windows(2)
-            .any(|w| matches!(w, ["-o" | "--output", "json"]))
+    words.iter().any(|a| *a == "--json") || words.windows(2).any(|w| matches!(w, ["-o" | "--output", "json"]))
 }
 
 fn run() -> Result<()> {
@@ -3154,20 +2509,10 @@ fn run() -> Result<()> {
     // Help never opens the data dir, the config or the secret store (a bare
     // `ligus serve --help` once started a real server on the default one).
     if args.first().map(String::as_str) == Some("help") {
-        help::print_and_exit(
-            &args[1..].iter().map(String::as_str).collect::<Vec<_>>(),
-            true,
-        );
+        help::print_and_exit(&args[1..].iter().map(String::as_str).collect::<Vec<_>>(), true);
     }
     if wants_help(&args) {
-        help::print_and_exit(
-            &args
-                .iter()
-                .take_while(|a| *a != "--")
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            false,
-        );
+        help::print_and_exit(&args.iter().take_while(|a| *a != "--").map(String::as_str).collect::<Vec<_>>(), false);
     }
     let Some(first) = args.first().map(String::as_str) else {
         eprint!("{}", help::overview());
@@ -3179,9 +2524,7 @@ fn run() -> Result<()> {
     }
     // An unknown command never creates a data dir.
     if !help::is_command(first) {
-        return Err(help::usage_error(format!(
-            "unknown command `{first}`: `ligus help` lists the commands and topics"
-        )));
+        return Err(help::usage_error(format!("unknown command `{first}`: `ligus help` lists the commands and topics")));
     }
     // `--dry-run` where it isn't supported would otherwise be ignored and the
     // command would really run (sign, write, sync): refuse it up front,
@@ -3204,10 +2547,7 @@ fn run() -> Result<()> {
     let secret_paths = hardening::load_secret_files();
     // Long-running hosts hold the workspace key in memory: no other process
     // of this user may read their memory or environ.
-    if matches!(
-        args.first().map(String::as_str),
-        Some("serve" | "worker" | "doctor")
-    ) {
+    if matches!(args.first().map(String::as_str), Some("serve" | "worker" | "doctor")) {
         hardening::set_not_dumpable();
     }
     let cfg = config();
@@ -3220,11 +2560,7 @@ fn run() -> Result<()> {
     // Agent processes this host spawns never read its data dir (keys,
     // database, serve token) or its secret files; checked-out repos under
     // the data dir stay readable.
-    ligus_runtime::executor::configure_host(
-        &cfg.data_dir,
-        &secret_paths,
-        &[repos::repos_dir(&cfg.data_dir)],
-    );
+    ligus_runtime::executor::configure_host(&cfg.data_dir, &secret_paths, &[repos::repos_dir(&cfg.data_dir)]);
     // The operator's model gateways (LIGUS_MODEL_GATEWAYS_FILE): their
     // credential files join the deny list. A listed file that can't be used
     // stops the host rather than running without the gateways.
@@ -3292,26 +2628,14 @@ fn run() -> Result<()> {
         "gateway-check" => {
             let ws = (!cfg.room.is_empty()).then(|| uuid_of_room(&cfg.room));
             let model = flag_val("--model").unwrap_or_else(|| "ligus-gateway-check".into());
-            let code = rt()?.block_on(gateway_check::run(
-                ws,
-                flag_val("--gateway"),
-                model,
-                has("--legacy-exit-codes"),
-            ))?;
+            let code = rt()?.block_on(gateway_check::run(ws, flag_val("--gateway"), model, has("--legacy-exit-codes")))?;
             if code != 0 {
                 std::process::exit(code);
             }
             Ok(())
         }
         "chats" => cmd_chats(&cfg, has("--json")),
-        "new" => cmd_new(
-            &cfg,
-            positional
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
+        "new" => cmd_new(&cfg, positional.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")),
         "tail" => {
             let id = positional
                 .first()
@@ -3319,11 +2643,9 @@ fn run() -> Result<()> {
             cmd_tail(&cfg, chat_id_arg(id)?, has("--watch"))
         }
         "send" => {
-            let id = positional.first().ok_or_else(|| {
-                anyhow!(
-                    "usage: ligus send <chat-id> <message…> [--push] [--wait [--timeout DURATION]]"
-                )
-            })?;
+            let id = positional
+                .first()
+                .ok_or_else(|| anyhow!("usage: ligus send <chat-id> <message…> [--push] [--wait [--timeout DURATION]]"))?;
             let chat_id = chat_id_arg(id)?;
             let body = positional[1..]
                 .iter()
@@ -3358,19 +2680,13 @@ fn run() -> Result<()> {
             )
         }
         "rm-runtime" => {
-            let id = positional
-                .first()
-                .ok_or_else(|| anyhow!("usage: ligus rm-runtime <id>"))?;
+            let id = positional.first().ok_or_else(|| anyhow!("usage: ligus rm-runtime <id>"))?;
             cmd_rm_runtime(&cfg, id, has("--dry-run"))
         }
         "enroll" => {
             devices_cmd::refuse_if_linked(&cfg, "accept invites")?;
             let mut stdin = secret_arg::stdin_once();
-            let (invite, on_argv) = enroll_invite(
-                positional.first().map(|s| s.as_str()),
-                flag_val("--file"),
-                &mut stdin,
-            )?;
+            let (invite, on_argv) = enroll_invite(positional.first().map(|s| s.as_str()), flag_val("--file"), &mut stdin)?;
             if on_argv {
                 eprintln!(
                     "warning: an invite carries the workspace key, and the command line leaks it (ps, shell history): \
@@ -3404,14 +2720,7 @@ fn run() -> Result<()> {
             if positional.len() < 2 {
                 bail!("usage: ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>]");
             }
-            cmd_add_agent(
-                &cfg,
-                positional[0],
-                positional[1],
-                flag_val("--host"),
-                flag_val("--role"),
-                has("--dry-run"),
-            )
+            cmd_add_agent(&cfg, positional[0], positional[1], flag_val("--host"), flag_val("--role"), has("--dry-run"))
         }
         "hosts" => cmd_hosts(&cfg, has("--json")),
         "register-worker" => {
@@ -3428,30 +2737,19 @@ fn run() -> Result<()> {
         "worker" => {
             devices_cmd::refuse_if_linked(&cfg, "run as a box")?;
             hardening::require_sandbox_or_exit("this worker");
-            let health =
-                flag_val("--health-listen").or_else(|| env_opt("LIGUS_WORKER_HEALTH_LISTEN"));
+            let health = flag_val("--health-listen").or_else(|| env_opt("LIGUS_WORKER_HEALTH_LISTEN"));
             rt()?.block_on(cmd_worker(&cfg, flag_val("--label"), health))
         }
         "queue" => cmd_queue(&cfg),
         "serve" if positional.first().map(|s| s.as_str()) == Some("enroll") => {
-            bail!(
-                "`ligus serve enroll` was removed: {}",
-                admit::OWNER_MODE_REMOVED
-            )
+            bail!("`ligus serve enroll` was removed: {}", admit::OWNER_MODE_REMOVED)
         }
         "admit" => {
-            if matches!(
-                positional.first().map(|s| s.as_str()),
-                Some("request" | "redeem")
-            ) {
+            if matches!(positional.first().map(|s| s.as_str()), Some("request" | "redeem")) {
                 devices_cmd::refuse_if_linked(&cfg, "become a box")?;
             }
             match (positional.first().map(|s| s.as_str()), flag_val("--to")) {
-                (Some("address"), _) => rt()?.block_on(approvals_cmd::cmd_address(
-                    &cfg,
-                    has("--reset"),
-                    has("--json"),
-                )),
+                (Some("address"), _) => rt()?.block_on(approvals_cmd::cmd_address(&cfg, has("--reset"), has("--json"))),
                 (Some("request"), Some(to)) => {
                     let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
                     let mut ask = devices_cmd::confirm_on_tty;
@@ -3459,22 +2757,9 @@ fn run() -> Result<()> {
                         .or_else(|| env_opt("LIGUS_SERVE_LABEL"))
                         .or_else(ligus_runtime::machine_hostname)
                         .unwrap_or_else(|| "box".into());
-                    let wait = flag_val("--wait")
-                        .map(|w| cli_flags::parse_duration(&w))
-                        .transpose()?
-                        .unwrap_or(approvals_cmd::DEFAULT_WAIT);
-                    let o = approvals_cmd::ToOptions::new(
-                        to,
-                        label,
-                        wait,
-                        has("--insecure-relay"),
-                        has("--json"),
-                    );
-                    rt()?.block_on(approvals_cmd::cmd_admit_request_to(
-                        &cfg,
-                        o,
-                        interactive.then_some(&mut ask as approvals_cmd::Ask<'_>),
-                    ))
+                    let wait = flag_val("--wait").map(|w| cli_flags::parse_duration(&w)).transpose()?.unwrap_or(approvals_cmd::DEFAULT_WAIT);
+                    let o = approvals_cmd::ToOptions::new(to, label, wait, has("--insecure-relay"), has("--json"));
+                    rt()?.block_on(approvals_cmd::cmd_admit_request_to(&cfg, o, interactive.then_some(&mut ask as approvals_cmd::Ask<'_>)))
                 }
                 _ => admit::cmd_admit(&cfg, &positional, |f| flag_val(f)),
             }
@@ -3483,20 +2768,10 @@ fn run() -> Result<()> {
             Some("list") | None => rt()?.block_on(approvals_cmd::cmd_list(&cfg, has("--json"))),
             Some("approve") => {
                 let rid = positional.get(1).map(|s| s.to_string()).ok_or_else(|| help::usage_error("usage: ligus approvals approve <rid> --recovery-words-file PATH [--code -] | <rid> --end"))?;
-                let o = approvals_cmd::ApproveOptions {
-                    rid,
-                    code: flag_val("--code"),
-                    words: flag_val("--recovery-words-file"),
-                    json: has("--json"),
-                    end: has("--end"),
-                };
+                let o = approvals_cmd::ApproveOptions { rid, code: flag_val("--code"), words: flag_val("--recovery-words-file"), json: has("--json"), end: has("--end") };
                 let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
                 let mut type_code = approvals_cmd::type_code_on_tty;
-                rt()?.block_on(approvals_cmd::cmd_approve(
-                    &cfg,
-                    o,
-                    interactive.then_some(&mut type_code as &mut dyn FnMut() -> Result<String>),
-                ))
+                rt()?.block_on(approvals_cmd::cmd_approve(&cfg, o, interactive.then_some(&mut type_code as &mut dyn FnMut() -> Result<String>)))
             }
             Some(other) => bail!("unknown `ligus approvals {other}`: use list|approve"),
         },
@@ -3507,35 +2782,15 @@ fn run() -> Result<()> {
             match positional.first().map(|s| s.as_str()) {
                 Some("list") | None => devices_cmd::cmd_list(&cfg, json),
                 Some("request") if flag_val("--to").is_some() => {
-                    let wait = flag_val("--wait")
-                        .map(|w| cli_flags::parse_duration(&w))
-                        .transpose()?
-                        .unwrap_or(approvals_cmd::DEFAULT_WAIT);
-                    let o = approvals_cmd::ToOptions::new(
-                        flag_val("--to").unwrap_or_default(),
-                        flag_val("--label").unwrap_or_default(),
-                        wait,
-                        has("--insecure-relay"),
-                        json,
-                    );
+                    let wait = flag_val("--wait").map(|w| cli_flags::parse_duration(&w)).transpose()?.unwrap_or(approvals_cmd::DEFAULT_WAIT);
+                    let o = approvals_cmd::ToOptions::new(flag_val("--to").unwrap_or_default(), flag_val("--label").unwrap_or_default(), wait, has("--insecure-relay"), json);
                     let mut ask2 = devices_cmd::confirm_on_tty;
-                    rt()?.block_on(approvals_cmd::cmd_devices_request_to(
-                        &cfg,
-                        o,
-                        has("--new-device"),
-                        interactive.then_some(&mut ask2 as approvals_cmd::Ask<'_>),
-                    ))
+                    rt()?.block_on(approvals_cmd::cmd_devices_request_to(&cfg, o, has("--new-device"), interactive.then_some(&mut ask2 as approvals_cmd::Ask<'_>)))
                 }
                 Some("request") => {
                     let mut copier = link_io::copy;
                     let copy = has("--copy").then_some(&mut copier as devices_cmd::Copier<'_>);
-                    devices_cmd::cmd_request(
-                        &cfg,
-                        flag_val("--label"),
-                        has("--new-device"),
-                        json,
-                        copy,
-                    )
+                    devices_cmd::cmd_request(&cfg, flag_val("--label"), has("--new-device"), json, copy)
                 }
                 Some("approve") => rt()?.block_on(devices_cmd::cmd_approve(
                     &cfg,
@@ -3568,9 +2823,7 @@ fn run() -> Result<()> {
                     positional.get(2).map(|s| s.as_str()),
                     json,
                 )),
-                Some(other) => {
-                    bail!("unknown `ligus devices {other}`: use list|request|approve|redeem|rename")
-                }
+                Some(other) => bail!("unknown `ligus devices {other}`: use list|request|approve|redeem|rename"),
             }
         }
         "recovery-key" => admit::cmd_recovery_key(&cfg, &positional, flag_val("--out")),
@@ -3602,11 +2855,7 @@ fn run() -> Result<()> {
             opts.remote = serve::tunnel::RelaySettings::resolve(
                 &cfg.data_dir,
                 flag_val("--remote-relay"),
-                secret_arg::secret_flag_warn(
-                    "--reg-token",
-                    flag_val("--reg-token"),
-                    &mut secret_arg::stdin_once(),
-                )?,
+                secret_arg::secret_flag_warn("--reg-token", flag_val("--reg-token"), &mut secret_arg::stdin_once())?,
                 has("--insecure-relay"),
             )?;
             serve::cmd_serve(cfg, opts)
@@ -3628,11 +2877,7 @@ fn run() -> Result<()> {
             opts.remote = serve::tunnel::RelaySettings::resolve(
                 &cfg.data_dir,
                 flag_val("--remote-relay"),
-                secret_arg::secret_flag_warn(
-                    "--reg-token",
-                    flag_val("--reg-token"),
-                    &mut secret_arg::stdin_once(),
-                )?,
+                secret_arg::secret_flag_warn("--reg-token", flag_val("--reg-token"), &mut secret_arg::stdin_once())?,
                 has("--insecure-relay"),
             )?;
             serve::cmd_pair(&cfg, &opts, has("--relay-only"))
@@ -3643,31 +2888,19 @@ fn run() -> Result<()> {
                 Some("enable") => cli::remote_enable(
                     &cfg.data_dir,
                     flag_val("--relay"),
-                    secret_arg::secret_flag_warn(
-                        "--reg-token",
-                        flag_val("--reg-token"),
-                        &mut secret_arg::stdin_once(),
-                    )?,
+                    secret_arg::secret_flag_warn("--reg-token", flag_val("--reg-token"), &mut secret_arg::stdin_once())?,
                     has("--insecure-relay"),
                 ),
                 Some("disable") => cli::remote_disable(&cfg.data_dir),
                 Some("status") | None => cli::remote_status(&cfg.data_dir, has("--json")),
                 Some("reset") => cli::remote_reset(&cfg.data_dir),
-                Some("push-test") => {
-                    cli::remote_push_test(&cfg.data_dir, flag_val("--phone").as_deref())
-                }
-                Some(other) => bail!(
-                    "unknown `ligus remote {other}`: use enable|status|push-test|disable|reset"
-                ),
+                Some("push-test") => cli::remote_push_test(&cfg.data_dir, flag_val("--phone").as_deref()),
+                Some(other) => bail!("unknown `ligus remote {other}`: use enable|status|push-test|disable|reset"),
             }
         }
         "memory" => {
             let flags = memory_cmd::Flags {
-                tags: ligus_core::memory::normalize_tags(
-                    &flag_val("--tag")
-                        .map(|t| t.split(',').map(str::to_string).collect::<Vec<_>>())
-                        .unwrap_or_default(),
-                ),
+                tags: ligus_core::memory::normalize_tags(&flag_val("--tag").map(|t| t.split(',').map(str::to_string).collect::<Vec<_>>()).unwrap_or_default()),
                 title: flag_val("--title"),
                 body: flag_val("--body"),
                 note: flag_val("--note"),
@@ -3689,9 +2922,7 @@ fn run() -> Result<()> {
                 json: has("--json"),
             },
         ),
-        "task-state" => {
-            memory_cmd::task_state(&cfg, positional.first().map(|s| s.as_str()), has("--json"))
-        }
+        "task-state" => memory_cmd::task_state(&cfg, positional.first().map(|s| s.as_str()), has("--json")),
         "facts" => {
             if positional.first().map(|s| s.as_str()) != Some("export") || !has("--jsonl") {
                 bail!("usage: ligus facts export --jsonl [--since <cursor | unix ms>]");
@@ -3707,16 +2938,8 @@ fn run() -> Result<()> {
             Ok(())
         }
         "trust" => {
-            let repo = flag_val("--repo")
-                .map(PathBuf::from)
-                .map(Ok)
-                .unwrap_or_else(std::env::current_dir)?;
-            cmd_trust(
-                &cfg,
-                &repo,
-                positional.first().map(|s| s.as_str()),
-                positional.get(1).map(|s| s.as_str()),
-            )
+            let repo = flag_val("--repo").map(PathBuf::from).map(Ok).unwrap_or_else(std::env::current_dir)?;
+            cmd_trust(&cfg, &repo, positional.first().map(|s| s.as_str()), positional.get(1).map(|s| s.as_str()))
         }
         "phones" => {
             use serve::tunnel::cli;
@@ -3727,12 +2950,7 @@ fn run() -> Result<()> {
                         .or_else(|| env_opt("LIGUS_SERVE_TOKEN_FILE"))
                         .map(PathBuf::from)
                         .unwrap_or_else(|| cfg.data_dir.join("serve.token"));
-                    cli::phones_revoke(
-                        &cfg.data_dir,
-                        positional.get(1).map(|s| s.as_str()),
-                        &token_file,
-                        has("--keep-token"),
-                    )
+                    cli::phones_revoke(&cfg.data_dir, positional.get(1).map(|s| s.as_str()), &token_file, has("--keep-token"))
                 }
                 Some("certify") => {
                     // Without --fingerprint, only a person at a terminal can
@@ -3773,49 +2991,27 @@ fn run() -> Result<()> {
         "repos" => {
             let mut svc = open_service(&cfg)?;
             let ws = uuid_of_room(&cfg.room);
-            let label = flag_val("--label")
-                .or_else(|| env_opt("LIGUS_HOST_LABEL"))
-                .or_else(|| env_opt("HOSTNAME"))
-                .unwrap_or_else(|| "this host".into());
+            let label = flag_val("--label").or_else(|| env_opt("LIGUS_HOST_LABEL")).or_else(|| env_opt("HOSTNAME")).unwrap_or_else(|| "this host".into());
             let pos: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
-            repos_cmd::cmd(&cfg.data_dir, &mut svc, ws, &label, &pos, &|f: &str| {
-                flag_val(f).or_else(|| has(f).then(String::new))
-            })
+            repos_cmd::cmd(&cfg.data_dir, &mut svc, ws, &label, &pos, &|f: &str| flag_val(f).or_else(|| has(f).then(String::new)))
         }
         "repo" => {
             let mut svc = open_service(&cfg)?;
             let ws = uuid_of_room(&cfg.room);
-            let label = flag_val("--label")
-                .or_else(|| env_opt("LIGUS_HOST_LABEL"))
-                .or_else(|| env_opt("HOSTNAME"))
-                .unwrap_or_else(|| "this host".into());
+            let label = flag_val("--label").or_else(|| env_opt("LIGUS_HOST_LABEL")).or_else(|| env_opt("HOSTNAME")).unwrap_or_else(|| "this host".into());
             let pos: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
-            scratch_cmd::cmd_repo(&cfg.data_dir, &mut svc, ws, &label, &pos, &|f: &str| {
-                flag_val(f).or_else(|| has(f).then(String::new))
-            })
+            scratch_cmd::cmd_repo(&cfg.data_dir, &mut svc, ws, &label, &pos, &|f: &str| flag_val(f).or_else(|| has(f).then(String::new)))
         }
         "forge" => {
             let pos: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
-            forge_cmd::cmd(
-                &cfg.data_dir,
-                &pos,
-                flag_val("--auth"),
-                flag_val("--client-id"),
-                has("--internal"),
-            )
+            forge_cmd::cmd(&cfg.data_dir, &pos, flag_val("--auth"), flag_val("--client-id"), has("--internal"))
         }
         "agent" => {
-            let name = positional
-                .first()
-                .map(|s| s.as_str())
-                .unwrap_or("assistant")
-                .to_string();
+            let name = positional.first().map(|s| s.as_str()).unwrap_or("assistant").to_string();
             let runtime_id = flag_val("--runtime").or_else(|| env_opt("LIGUS_RUNTIME"));
             rt()?.block_on(cmd_agent(&cfg, name, runtime_id))
         }
-        other => Err(help::usage_error(format!(
-            "unknown command `{other}`: `ligus help` lists the commands and topics"
-        ))),
+        other => Err(help::usage_error(format!("unknown command `{other}`: `ligus help` lists the commands and topics"))),
     }
 }
 
@@ -3824,15 +3020,10 @@ fn run() -> Result<()> {
 /// is whether it came from the command line.
 /// A chat id from the command line: a malformed one is a usage error.
 fn chat_id_arg(s: &str) -> Result<Uuid> {
-    Uuid::parse_str(s.trim())
-        .map_err(|_| help::usage_error(format!("not a chat id: {s:?} (ligus chats lists the ids)")))
+    Uuid::parse_str(s.trim()).map_err(|_| help::usage_error(format!("not a chat id: {s:?} (ligus chats lists the ids)")))
 }
 
-fn enroll_invite(
-    arg: Option<&str>,
-    file: Option<String>,
-    stdin: &mut dyn FnMut() -> std::io::Result<String>,
-) -> Result<(String, bool)> {
+fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: &mut dyn FnMut() -> std::io::Result<String>) -> Result<(String, bool)> {
     match (arg, file) {
         (Some("-"), None) => Ok((stdin()?.trim().to_string(), false)),
         (Some(c), None) => Ok((c.trim().to_string(), true)),
@@ -3930,24 +3121,13 @@ fn split_flag_values(args: Vec<String>) -> Vec<String> {
 }
 
 /// The commands that take `--dry-run`.
-const DRY_RUN_COMMANDS: &[&str] = &[
-    "add-runtime",
-    "rm-runtime",
-    "add-agent",
-    "set-agent-host",
-    "setup",
-    "hook",
-];
+const DRY_RUN_COMMANDS: &[&str] = &["add-runtime", "rm-runtime", "add-agent", "set-agent-host", "setup", "hook"];
 
 /// A usage error when `--dry-run` (before any `--`) is given to a command
 /// that has no dry run.
 fn dry_run_supported(args: &[String]) -> Result<()> {
     let cmd = args.first().map(String::as_str).unwrap_or("");
-    let asked = args
-        .iter()
-        .skip(1)
-        .take_while(|a| *a != "--")
-        .any(|a| a == "--dry-run");
+    let asked = args.iter().skip(1).take_while(|a| *a != "--").any(|a| a == "--dry-run");
     if asked && !DRY_RUN_COMMANDS.contains(&cmd) {
         return Err(help::usage_error(format!(
             "`ligus {cmd}` has no --dry-run (only {} do); nothing was run",
@@ -3964,10 +3144,7 @@ fn no_workspace_keys(what: &str) -> anyhow::Error {
         exit: problem::EXIT_USAGE,
         code: "usage",
         message: "keys aren't stored in the workspace".into(),
-        fix: Some(
-            "put the key on each worker as LIGUS_WS_SECRET_<NAME> and use --secret-ref <NAME>"
-                .into(),
-        ),
+        fix: Some("put the key on each worker as LIGUS_WS_SECRET_<NAME> and use --secret-ref <NAME>".into()),
     })
     .context(what.to_string())
 }
@@ -3978,11 +3155,7 @@ fn refuse_secret_flag(args: &[String]) -> Result<()> {
     if args.first().map(String::as_str) != Some("add-runtime") {
         return Ok(());
     }
-    let given = args
-        .iter()
-        .skip(1)
-        .take_while(|a| *a != "--")
-        .any(|a| a == "--secret" || a.starts_with("--secret="));
+    let given = args.iter().skip(1).take_while(|a| *a != "--").any(|a| a == "--secret" || a.starts_with("--secret="));
     if given {
         return Err(no_workspace_keys("ligus add-runtime doesn't take --secret"));
     }
@@ -4016,49 +3189,17 @@ mod cli_tests {
     fn add_runtime_secret_is_a_usage_error() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         for args in [
-            a(&[
-                "add-runtime",
-                "oa",
-                "OpenAI",
-                "openai",
-                "gpt-4o",
-                "--secret",
-                "-",
-            ]),
-            a(&[
-                "add-runtime",
-                "oa",
-                "OpenAI",
-                "openai",
-                "gpt-4o",
-                "--secret=@/tmp/k",
-            ]),
+            a(&["add-runtime", "oa", "OpenAI", "openai", "gpt-4o", "--secret", "-"]),
+            a(&["add-runtime", "oa", "OpenAI", "openai", "gpt-4o", "--secret=@/tmp/k"]),
         ] {
             let e = super::refuse_secret_flag(&args).unwrap_err();
             let r = crate::problem::render(&e, "add-runtime", "ligus add-runtime --help");
             assert_eq!(r.exit, crate::problem::EXIT_USAGE);
             assert!(r.text.contains("doesn't take --secret"), "{}", r.text);
-            assert!(
-                r.text.contains("why: keys aren't stored in the workspace"),
-                "{}",
-                r.text
-            );
-            assert!(
-                r.text.contains("LIGUS_WS_SECRET_<NAME>") && r.text.contains("--secret-ref <NAME>"),
-                "{}",
-                r.text
-            );
+            assert!(r.text.contains("why: keys aren't stored in the workspace"), "{}", r.text);
+            assert!(r.text.contains("LIGUS_WS_SECRET_<NAME>") && r.text.contains("--secret-ref <NAME>"), "{}", r.text);
         }
-        assert!(super::refuse_secret_flag(&a(&[
-            "add-runtime",
-            "oa",
-            "OpenAI",
-            "openai",
-            "gpt-4o",
-            "--secret-ref",
-            "oa"
-        ]))
-        .is_ok());
+        assert!(super::refuse_secret_flag(&a(&["add-runtime", "oa", "OpenAI", "openai", "gpt-4o", "--secret-ref", "oa"])).is_ok());
         assert!(super::refuse_secret_flag(&a(&["send", "--", "--secret"])).is_ok());
     }
 
@@ -4066,24 +3207,14 @@ mod cli_tests {
     /// written.
     #[test]
     fn an_imported_inline_key_is_never_decoded() {
-        let mut old = ligus_core::WorkspaceRuntime::new(
-            "oa",
-            "OpenAI",
-            ligus_core::ModelProviderKind::OpenAI,
-            "gpt-4o",
-        );
+        let mut old = ligus_core::WorkspaceRuntime::new("oa", "OpenAI", ligus_core::ModelProviderKind::OpenAI, "gpt-4o");
         let ok = super::inline_key_check(std::slice::from_ref(&old));
         assert_eq!(ok.status, crate::checks::Status::Ok);
         old.credential = ligus_core::WorkspaceCredential::Inline {};
         let warn = super::inline_key_check(&[old]);
         assert_eq!(warn.status, crate::checks::Status::Warn);
         assert_eq!(warn.id, "runtimes.inline-key");
-        assert!(
-            warn.detail
-                .contains("oa: This runtime's key was stored in the workspace"),
-            "{}",
-            warn.detail
-        );
+        assert!(warn.detail.contains("oa: This runtime's key was stored in the workspace"), "{}", warn.detail);
 
         let doc: super::WorkspaceRuntimesToml = toml::from_str(
             "[[runtime]]\nid = \"oa\"\nname = \"OpenAI\"\nprovider = \"openAI\"\nmodel = \"gpt-4o\"\n[runtime.credential]\nkind = \"inline\"\nsecret = \"sk-IMPORT-1\"\n",
@@ -4098,17 +3229,12 @@ mod cli_tests {
     /// `--`, pass.
     #[test]
     fn dry_run_only_where_supported() {
-        for cmd in [
-            "new", "send", "sync", "enroll", "serve", "worker", "admit", "doctor",
-        ] {
+        for cmd in ["new", "send", "sync", "enroll", "serve", "worker", "admit", "doctor"] {
             let e = super::dry_run_supported(&argv(&[cmd, "x", "--dry-run"])).unwrap_err();
             assert!(crate::help::is_usage(&e), "{cmd}: {e:#}");
         }
         for cmd in super::DRY_RUN_COMMANDS {
-            assert!(
-                super::dry_run_supported(&argv(&[cmd, "a", "b", "--dry-run"])).is_ok(),
-                "{cmd}"
-            );
+            assert!(super::dry_run_supported(&argv(&[cmd, "a", "b", "--dry-run"])).is_ok(), "{cmd}");
         }
         assert!(super::dry_run_supported(&argv(&["send", "id", "--", "--dry-run"])).is_ok());
         assert!(super::dry_run_supported(&argv(&["new", "a chat"])).is_ok());
@@ -4119,35 +3245,17 @@ mod cli_tests {
     #[test]
     fn flags_take_an_equals_sign_or_the_next_argument() {
         let split = |a: &[&str]| super::split_flag_values(argv(a));
-        assert_eq!(
-            split(&["worker", "--label=box", "--json"]),
-            argv(&["worker", "--label", "box", "--json"])
-        );
-        assert_eq!(
-            split(&["worker", "--label", "box"]),
-            argv(&["worker", "--label", "box"])
-        );
-        assert_eq!(
-            split(&["memory", "search", "--since=a=b"]),
-            argv(&["memory", "search", "--since", "a=b"])
-        );
+        assert_eq!(split(&["worker", "--label=box", "--json"]), argv(&["worker", "--label", "box", "--json"]));
+        assert_eq!(split(&["worker", "--label", "box"]), argv(&["worker", "--label", "box"]));
+        assert_eq!(split(&["memory", "search", "--since=a=b"]), argv(&["memory", "search", "--since", "a=b"]));
         assert_eq!(split(&["serve", "--name="]), argv(&["serve", "--name", ""]));
-        assert_eq!(
-            split(&["send", "k=v", "-x=1"]),
-            argv(&["send", "k=v", "-x=1"])
-        );
-        assert_eq!(
-            split(&["mcp", "--", "--label=x"]),
-            argv(&["mcp", "--", "--label=x"])
-        );
+        assert_eq!(split(&["send", "k=v", "-x=1"]), argv(&["send", "k=v", "-x=1"]));
+        assert_eq!(split(&["mcp", "--", "--label=x"]), argv(&["mcp", "--", "--label=x"]));
         assert_eq!(split(&["mcp", "--=x"]), argv(&["mcp", "--=x"]));
         // Both spellings give the same positionals.
         let a = split(&["add-agent", "--host=sff", "coder", "claude-code"]);
         let b = argv(&["add-agent", "--host", "sff", "coder", "claude-code"]);
-        assert_eq!(
-            super::positional_args(&a[1..]),
-            super::positional_args(&b[1..])
-        );
+        assert_eq!(super::positional_args(&a[1..]), super::positional_args(&b[1..]));
     }
 
     /// The invite (which carries the workspace key) can be piped or read
@@ -4155,21 +3263,12 @@ mod cli_tests {
     #[test]
     fn enroll_takes_the_invite_from_stdin_or_a_file() {
         let no_stdin = &mut || -> std::io::Result<String> { panic!("stdin not read") };
-        assert_eq!(
-            super::enroll_invite(Some("-"), None, &mut || Ok("hivews1:x\n".into())).unwrap(),
-            ("hivews1:x".to_string(), false)
-        );
+        assert_eq!(super::enroll_invite(Some("-"), None, &mut || Ok("hivews1:x\n".into())).unwrap(), ("hivews1:x".to_string(), false));
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("invite");
         std::fs::write(&f, "hivews1:y\n").unwrap();
-        assert_eq!(
-            super::enroll_invite(None, Some(f.to_string_lossy().into_owned()), no_stdin).unwrap(),
-            ("hivews1:y".to_string(), false)
-        );
-        assert_eq!(
-            super::enroll_invite(Some("hivews1:z"), None, no_stdin).unwrap(),
-            ("hivews1:z".to_string(), true)
-        );
+        assert_eq!(super::enroll_invite(None, Some(f.to_string_lossy().into_owned()), no_stdin).unwrap(), ("hivews1:y".to_string(), false));
+        assert_eq!(super::enroll_invite(Some("hivews1:z"), None, no_stdin).unwrap(), ("hivews1:z".to_string(), true));
         assert!(super::enroll_invite(None, None, no_stdin).is_err());
     }
 
@@ -4185,16 +3284,10 @@ mod cli_tests {
         std::fs::create_dir(&d).unwrap();
         std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
         super::create_data_dir_or_exit(&d);
-        assert_eq!(
-            std::fs::metadata(&d).unwrap().permissions().mode() & 0o077,
-            0
-        );
+        assert_eq!(std::fs::metadata(&d).unwrap().permissions().mode() & 0o077, 0);
         let fresh = tmp.path().join("fresh").join("data");
         super::create_data_dir_or_exit(&fresh);
-        assert_eq!(
-            std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o077,
-            0
-        );
+        assert_eq!(std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o077, 0);
     }
 
     /// `recovery-key create --out` never replaces an existing file: re-running
@@ -4207,13 +3300,9 @@ mod cli_tests {
         let out = tmp.path().join("words.txt");
         std::fs::write(&out, "old words").unwrap();
         let create = "create".to_string();
-        let err = crate::admit::cmd_recovery_key(
-            &cfg,
-            &[&create],
-            Some(out.to_string_lossy().into_owned()),
-        )
-        .unwrap_err()
-        .to_string();
+        let err = crate::admit::cmd_recovery_key(&cfg, &[&create], Some(out.to_string_lossy().into_owned()))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("already exists"), "{err}");
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "old words");
         assert!(!cfg.data_dir.exists(), "nothing else was set up");
@@ -4234,30 +3323,18 @@ mod cli_tests {
         }
         missing.sort();
         missing.dedup();
-        assert!(
-            missing.is_empty(),
-            "value flags missing from VALUE_FLAGS: {missing:?}"
-        );
+        assert!(missing.is_empty(), "value flags missing from VALUE_FLAGS: {missing:?}");
     }
 
     #[test]
     fn phones_certify_flags_are_not_positional() {
         let rest: Vec<String> = [
-            "certify",
-            "--code-file",
-            "c.txt",
-            "--recovery-words-file",
-            "w.txt",
-            "--fingerprint",
-            "F",
+            "certify", "--code-file", "c.txt", "--recovery-words-file", "w.txt", "--fingerprint", "F",
         ]
         .iter()
         .map(|s| s.to_string())
         .collect();
-        let pos: Vec<&str> = super::positional_args(&rest)
-            .iter()
-            .map(|s| s.as_str())
-            .collect();
+        let pos: Vec<&str> = super::positional_args(&rest).iter().map(|s| s.as_str()).collect();
         assert_eq!(pos, ["certify"]);
     }
 
@@ -4268,27 +3345,14 @@ mod cli_tests {
     /// isn't offered), and the runtime's own key is never sent along.
     #[test]
     fn ligus_agent_keeps_the_runtimes_gateway() {
-        let mut wr = ligus_core::WorkspaceRuntime::new(
-            "gw",
-            "Gateway",
-            ligus_core::ModelProviderKind::Custom,
-            "m",
-        );
+        let mut wr = ligus_core::WorkspaceRuntime::new("gw", "Gateway", ligus_core::ModelProviderKind::Custom, "m");
         wr.endpoint = "https://api.example.com/v1/chat/completions".into();
         std::env::set_var("LIGUS_WS_SECRET_agent_gateway_test", "sk-RUNTIME-OWN");
-        wr.credential = ligus_core::WorkspaceCredential::SecretRef {
-            secret_ref: "agent_gateway_test".into(),
-        };
+        wr.credential = ligus_core::WorkspaceCredential::SecretRef { secret_ref: "agent_gateway_test".into() };
         wr.gateway = "litellm".into();
         let rt = workspace_runtime_resolved(&wr);
-        assert_eq!(
-            rt.gateway.as_ref().map(|g| g.name.as_str()),
-            Some("litellm")
-        );
-        assert!(
-            rt.api_key.is_none(),
-            "the runtime's key rides along to a gateway turn"
-        );
+        assert_eq!(rt.gateway.as_ref().map(|g| g.name.as_str()), Some("litellm"));
+        assert!(rt.api_key.is_none(), "the runtime's key rides along to a gateway turn");
         wr.gateway.clear();
         assert!(workspace_runtime_resolved(&wr).gateway.is_none());
     }
@@ -4296,14 +3360,8 @@ mod cli_tests {
     /// A box enrolled with `ligus enroll` is named after its label or host.
     #[test]
     fn a_new_box_is_named_after_its_label_or_host() {
-        assert_eq!(
-            box_name(Some("mac-test".into()), Some("zaz-mbp".into())),
-            "mac-test"
-        );
-        assert_eq!(
-            box_name(Some("  ".into()), Some("zaz-mbp".into())),
-            "zaz-mbp"
-        );
+        assert_eq!(box_name(Some("mac-test".into()), Some("zaz-mbp".into())), "mac-test");
+        assert_eq!(box_name(Some("  ".into()), Some("zaz-mbp".into())), "zaz-mbp");
         assert_eq!(box_name(None, None), "Ligus box");
         let tmp = tempfile::tempdir().unwrap();
         let identity = IdentityStore::new(tmp.path(), StoreKeyVault::for_data_dir(tmp.path()));
@@ -4318,21 +3376,9 @@ mod cli_tests {
         let tmp = tempfile::tempdir().unwrap();
         let identity = IdentityStore::new(tmp.path(), StoreKeyVault::for_data_dir(tmp.path()));
         identity.bootstrap("zaz-mbp", "zaz-mbp", "zaz-mbp").unwrap();
-        assert_eq!(
-            adopt_box_name(&identity, "mac-test", Some("zaz-mbp"))
-                .unwrap()
-                .as_deref(),
-            Some("mac-test")
-        );
-        assert_eq!(
-            bootstrap_identity(&identity).unwrap().account.display_name,
-            "mac-test"
-        );
-        assert_eq!(
-            adopt_box_name(&identity, "other", Some("zaz-mbp")).unwrap(),
-            None,
-            "a chosen name stays"
-        );
+        assert_eq!(adopt_box_name(&identity, "mac-test", Some("zaz-mbp")).unwrap().as_deref(), Some("mac-test"));
+        assert_eq!(bootstrap_identity(&identity).unwrap().account.display_name, "mac-test");
+        assert_eq!(adopt_box_name(&identity, "other", Some("zaz-mbp")).unwrap(), None, "a chosen name stays");
         assert_eq!(adopt_box_name(&identity, "other", None).unwrap(), None);
     }
 
@@ -4354,17 +3400,9 @@ mod cli_tests {
         let body = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(br#"{"relay_url":"https://relay.example","room":"r","key":"test-passphrase"}"#);
         cmd_enroll(&cfg, &format!("hivews1:{body}"), Some("hrt1-test".into())).unwrap();
-        let mode = std::fs::metadata(config_path(&cfg.data_dir))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
+        let mode = std::fs::metadata(config_path(&cfg.data_dir)).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "config.toml is {mode:o}");
-        let dir = std::fs::metadata(&cfg.data_dir)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o077;
+        let dir = std::fs::metadata(&cfg.data_dir).unwrap().permissions().mode() & 0o077;
         assert_eq!(dir, 0, "data dir is readable by others");
     }
 
@@ -4389,25 +3427,16 @@ mod cli_tests {
             let cfg = bare_cfg(tmp.path(), None);
             let json = serde_json::json!({"relay_url": relay, "room": "r", "key": "k"}).to_string();
             let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json.as_bytes());
-            let err = cmd_enroll(&cfg, &format!("hivews1:{body}"), None)
-                .unwrap_err()
-                .to_string();
+            let err = cmd_enroll(&cfg, &format!("hivews1:{body}"), None).unwrap_err().to_string();
             assert!(err.contains("Settings → Team sync"), "{relay:?}: {err}");
-            assert!(
-                !cfg.data_dir.exists(),
-                "{relay:?}: enroll wrote {:?}",
-                cfg.data_dir
-            );
+            assert!(!cfg.data_dir.exists(), "{relay:?}: enroll wrote {:?}", cfg.data_dir);
         }
         // An invite with no relay field at all gets the same answer, not a
         // serde "missing field" error.
         let tmp = tempfile::tempdir().unwrap();
         let cfg = bare_cfg(tmp.path(), None);
-        let body =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"room":"r","key":"k"}"#);
-        let err = cmd_enroll(&cfg, &format!("hivews1:{body}"), None)
-            .unwrap_err()
-            .to_string();
+        let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"room":"r","key":"k"}"#);
+        let err = cmd_enroll(&cfg, &format!("hivews1:{body}"), None).unwrap_err().to_string();
         assert!(err.contains("Settings → Team sync"), "{err}");
         assert!(!cfg.data_dir.exists());
     }
@@ -4458,47 +3487,25 @@ mod cli_tests {
         assert!(r["identity"].is_null(), "{r}");
         assert_eq!(r["workspace"]["room"], "r");
         assert_eq!(r["workspace"]["localCopy"], false);
-        assert!(r["workspace"]["relayProblem"]
-            .as_str()
-            .unwrap()
-            .contains("no relay URL"));
-        assert!(
-            IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir))
-                .load()
-                .unwrap()
-                .is_none()
-        );
+        assert!(r["workspace"]["relayProblem"].as_str().unwrap().contains("no relay URL"));
+        assert!(IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir)).load().unwrap().is_none());
         assert!(!cfg.data_dir.join("ligus.db").exists());
         // No identity yet: both ways in, the box's first.
-        assert!(
-            r["next"]
-                .as_str()
-                .unwrap()
-                .starts_with("a serve or worker box: ligus admit request"),
-            "{r}"
-        );
+        assert!(r["next"].as_str().unwrap().starts_with("a serve or worker box: ligus admit request"), "{r}");
         // A box is never told to enroll.
         admit::mark_box(&cfg).unwrap();
         let r = status_report(&cfg);
-        assert!(
-            r["next"].as_str().unwrap().starts_with("admit this box"),
-            "{r}"
-        );
+        assert!(r["next"].as_str().unwrap().starts_with("admit this box"), "{r}");
         assert!(!r["next"].as_str().unwrap().contains("enroll"), "{r}");
+
     }
 
     #[test]
     fn custom_provider_is_accepted() {
         assert_eq!(provider_kind("custom").unwrap(), ModelProviderKind::Custom);
         assert_eq!(provider_kind("Custom").unwrap(), ModelProviderKind::Custom);
-        assert_eq!(
-            provider_kind("agy").unwrap(),
-            ModelProviderKind::Antigravity
-        );
-        assert_eq!(
-            provider_kind("copilot").unwrap(),
-            ModelProviderKind::Copilot
-        );
+        assert_eq!(provider_kind("agy").unwrap(), ModelProviderKind::Antigravity);
+        assert_eq!(provider_kind("copilot").unwrap(), ModelProviderKind::Copilot);
         assert!(provider_kind("nope").is_err());
     }
 
@@ -4512,16 +3519,12 @@ mod cli_tests {
         let mut c = Check::ok("sandbox.tier", "agent sandbox", "x").notes(["a caveat".to_string()]);
         c.detail = "landlock: Landlock (ABI 6): confined".into();
         r.add(c);
-        r.add(
-            Check::ok("sandbox.turn-test", "turn test", "passed (tier landlock)").notes([
-                "agent sandbox: landlock".to_string(),
-                "DENIED_ENVIRON_1".to_string(),
-                "passed (tier landlock)".to_string(),
-            ]),
-        );
-        r.add(
-            Check::warn("workspace.joined", "workspace", "not joined").fix("ligus help quickstart"),
-        );
+        r.add(Check::ok("sandbox.turn-test", "turn test", "passed (tier landlock)").notes([
+            "agent sandbox: landlock".to_string(),
+            "DENIED_ENVIRON_1".to_string(),
+            "passed (tier landlock)".to_string(),
+        ]));
+        r.add(Check::warn("workspace.joined", "workspace", "not joined").fix("ligus help quickstart"));
         let t = doctor_text(&r, false, false);
         let lines: Vec<&str> = t.lines().collect();
         assert_eq!(lines[0], "agent sandbox: landlock");
@@ -4535,17 +3538,9 @@ mod cli_tests {
         // Quiet: the header and the turn test stay, ok checks go.
         r.add(Check::ok("secrets.backend", "secret store", "file"));
         let q = doctor_text(&r, true, false);
-        assert!(
-            q.starts_with("agent sandbox: landlock\n")
-                && q.contains("turn test: passed")
-                && q.contains("warn  workspace"),
-            "{q}"
-        );
+        assert!(q.starts_with("agent sandbox: landlock\n") && q.contains("turn test: passed") && q.contains("warn  workspace"), "{q}");
         assert!(!q.contains("secret store"), "{q}");
-        assert!(
-            doctor_text(&r, false, true).contains("\x1b[33mwarn"),
-            "colour on request"
-        );
+        assert!(doctor_text(&r, false, true).contains("\x1b[33mwarn"), "colour on request");
     }
 
     /// `secrets.keychain-access` says what was found and what to do,
@@ -4556,50 +3551,18 @@ mod cli_tests {
         use ligus_runtime::secret_store::KeychainAccess as A;
         let s = |a: A| keychain_access_check(&a);
         assert_eq!(s(A::NoKeychain).status, checks::Status::Skip);
-        assert_eq!(
-            s(A::Trusted { untrusted: vec![] }).status,
-            checks::Status::Ok
-        );
+        assert_eq!(s(A::Trusted { untrusted: vec![] }).status, checks::Status::Ok);
         let c = s(A::UnlockNotTrusted);
         assert_eq!(c.status, checks::Status::Warn);
-        assert!(
-            c.id == "secrets.keychain-access" && c.detail.contains("isn't trusted"),
-            "{}",
-            c.detail
-        );
-        assert!(c
-            .fix
-            .as_deref()
-            .is_some_and(|f| f.contains("Always Allow") && f.contains("ai.ligus.secrets.unlock")));
-        let c = s(A::Trusted {
-            untrusted: vec!["seed:device".into()],
-        });
-        assert!(
-            c.status == checks::Status::Warn && c.detail.contains("seed:device"),
-            "{}",
-            c.detail
-        );
-        assert!(c
-            .fix
-            .as_deref()
-            .is_some_and(|f| f.contains("choose Cancel")));
+        assert!(c.id == "secrets.keychain-access" && c.detail.contains("isn't trusted"), "{}", c.detail);
+        assert!(c.fix.as_deref().is_some_and(|f| f.contains("Always Allow") && f.contains("ai.ligus.secrets.unlock")));
+        let c = s(A::Trusted { untrusted: vec!["seed:device".into()] });
+        assert!(c.status == checks::Status::Warn && c.detail.contains("seed:device"), "{}", c.detail);
+        assert!(c.fix.as_deref().is_some_and(|f| f.contains("choose Cancel")));
         assert_eq!(s(A::UnlockMissing).status, checks::Status::Fail);
-        for a in [
-            A::UnlockNotTrusted,
-            A::UnlockMissing,
-            A::Trusted {
-                untrusted: vec!["x".into()],
-            },
-            A::Other("e".into()),
-        ] {
+        for a in [A::UnlockNotTrusted, A::UnlockMissing, A::Trusted { untrusted: vec!["x".into()] }, A::Other("e".into())] {
             let c = s(a);
-            assert!(
-                !format!("{} {:?}", c.detail, c.fix)
-                    .to_ascii_lowercase()
-                    .contains("delete"),
-                "{}",
-                c.detail
-            );
+            assert!(!format!("{} {:?}", c.detail, c.fix).to_ascii_lowercase().contains("delete"), "{}", c.detail);
         }
     }
 
@@ -4609,29 +3572,13 @@ mod cli_tests {
     fn doctor_scopes() {
         let all = DoctorOpts::default();
         assert!(all.everything() && all.sandbox_scope() && all.gateway_scope());
-        let sb = DoctorOpts {
-            sandbox: true,
-            ..Default::default()
-        };
+        let sb = DoctorOpts { sandbox: true, ..Default::default() };
         assert!(!sb.everything() && sb.sandbox_scope() && !sb.gateway_scope());
-        let gw = DoctorOpts {
-            gateways: true,
-            ..Default::default()
-        };
+        let gw = DoctorOpts { gateways: true, ..Default::default() };
         assert!(!gw.everything() && !gw.sandbox_scope() && gw.gateway_scope());
-        let pre = DoctorOpts {
-            require_confined: true,
-            ..Default::default()
-        };
-        assert!(
-            !pre.everything() && pre.sandbox_scope() && !pre.gateway_scope(),
-            "an init container's doctor checks only the sandbox"
-        );
-        let both = DoctorOpts {
-            sandbox: true,
-            gateways: true,
-            ..Default::default()
-        };
+        let pre = DoctorOpts { require_confined: true, ..Default::default() };
+        assert!(!pre.everything() && pre.sandbox_scope() && !pre.gateway_scope(), "an init container's doctor checks only the sandbox");
+        let both = DoctorOpts { sandbox: true, gateways: true, ..Default::default() };
         assert!(!both.everything() && both.sandbox_scope() && both.gateway_scope());
     }
 
@@ -4645,27 +3592,14 @@ mod cli_tests {
         let mut r = checks::Report::new("doctor");
         doctor_workspace_checks(&cfg, &mut r);
         let ids: Vec<&str> = r.checks.iter().map(|c| c.id.as_str()).collect();
-        assert!(
-            ids.contains(&"workspace.joined")
-                && ids.contains(&"relay.reachable")
-                && ids.contains(&"secrets.backend"),
-            "{ids:?}"
-        );
+        assert!(ids.contains(&"workspace.joined") && ids.contains(&"relay.reachable") && ids.contains(&"secrets.backend"), "{ids:?}");
         let relay = r.checks.iter().find(|c| c.id == "relay.reachable").unwrap();
         assert_eq!(relay.status, checks::Status::Skip);
-        let ws = r
-            .checks
-            .iter()
-            .find(|c| c.id == "workspace.joined")
-            .unwrap();
+        let ws = r.checks.iter().find(|c| c.id == "workspace.joined").unwrap();
         assert_eq!(ws.status, checks::Status::Warn);
         assert!(ws.fix.is_some());
         assert!(r.ok());
-        assert!(
-            r.next.iter().all(|n| n.starts_with("ligus ")),
-            "{:?}",
-            r.next
-        );
+        assert!(r.next.iter().all(|n| n.starts_with("ligus ")), "{:?}", r.next);
         let d = r.to_json(0);
         assert_eq!(d["schema"], "ligus.checks.v1");
     }
@@ -4676,17 +3610,10 @@ mod cli_tests {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = bare_cfg(tmp.path(), None);
         let e = cmd_add_agent(&cfg, "coder", "no-such-runtime", None, None, true).unwrap_err();
-        assert!(
-            format!("{e:#}").contains("no runtime 'no-such-runtime'"),
-            "{e:#}"
-        );
+        assert!(format!("{e:#}").contains("no runtime 'no-such-runtime'"), "{e:#}");
         let svc = open_service(&cfg).unwrap();
         let ws = uuid_of_room(&cfg.room);
-        let agents = svc
-            .load_in(ws, workspace_config_session_id(ws))
-            .unwrap()
-            .map(|s| s.workspace_agents)
-            .unwrap_or_default();
+        let agents = svc.load_in(ws, workspace_config_session_id(ws)).unwrap().map(|s| s.workspace_agents).unwrap_or_default();
         assert!(agents.is_empty(), "a dry run created an agent");
     }
 
@@ -4702,25 +3629,15 @@ mod cli_tests {
         }
         let svc = open_service(&cfg).unwrap();
         let ws = uuid_of_room(&cfg.room);
-        let agents = svc
-            .load_in(ws, workspace_config_session_id(ws))
-            .unwrap()
-            .map(|s| s.workspace_agents)
-            .unwrap_or_default();
+        let agents = svc.load_in(ws, workspace_config_session_id(ws)).unwrap().map(|s| s.workspace_agents).unwrap_or_default();
         assert!(agents.is_empty());
     }
 
     /// Only scheme://host[:port] of a relay URL is ever printed.
     #[test]
     fn relay_origin_drops_credentials_path_and_query() {
-        assert_eq!(
-            relay_origin("https://u:p@relay.example/base?token=hrt1x#f"),
-            "https://relay.example"
-        );
-        assert_eq!(
-            relay_origin(" http://127.0.0.1:8080/x "),
-            "http://127.0.0.1:8080"
-        );
+        assert_eq!(relay_origin("https://u:p@relay.example/base?token=hrt1x#f"), "https://relay.example");
+        assert_eq!(relay_origin(" http://127.0.0.1:8080/x "), "http://127.0.0.1:8080");
         assert_eq!(relay_origin("https://[::1]:9/a"), "https://[::1]:9");
         assert_eq!(relay_origin("relay.example/x?t=1"), "relay.example");
         assert_eq!(relay_origin("weird://a:b@h/x"), "weird://h");
@@ -4747,28 +3664,12 @@ mod cli_tests {
         let mut r = checks::Report::new("doctor");
         let t0 = std::time::Instant::now();
         doctor_workspace_checks(&cfg, &mut r);
-        assert!(
-            t0.elapsed() < Duration::from_secs(20),
-            "doctor hung for {:?}",
-            t0.elapsed()
-        );
+        assert!(t0.elapsed() < Duration::from_secs(20), "doctor hung for {:?}", t0.elapsed());
         let relay = r.checks.iter().find(|c| c.id == "relay.reachable").unwrap();
         assert_eq!(relay.status, checks::Status::Fail);
-        let out = format!(
-            "{}\n{}\n{}",
-            r.to_json(0),
-            doctor_text(&r, false, false),
-            status_report(&cfg)
-        );
+        let out = format!("{}\n{}\n{}", r.to_json(0), doctor_text(&r, false, false), status_report(&cfg));
         assert!(out.contains(&format!("http://127.0.0.1:{port}")), "{out}");
-        for leak in [
-            "alice",
-            "s3cretpw",
-            "hrt1leak",
-            "token=",
-            "/base/path",
-            "frag",
-        ] {
+        for leak in ["alice", "s3cretpw", "hrt1leak", "token=", "/base/path", "frag"] {
             assert!(!out.contains(leak), "{leak} printed: {out}");
         }
     }

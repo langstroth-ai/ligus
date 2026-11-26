@@ -3,9 +3,7 @@
 
 use ligus_core::crypto::{sign_envelope, DeviceCertificate, SigningKeypair};
 use ligus_core::testkit::SignedWorld;
-use ligus_core::{
-    CfgFrontier, ChatSession, SessionEvent, SessionEventEnvelope, WorkspaceAuthz, WorkspaceRole,
-};
+use ligus_core::{CfgFrontier, ChatSession, SessionEvent, SessionEventEnvelope, WorkspaceAuthz, WorkspaceRole};
 use ligus_runtime::event_store::EventStore;
 use ligus_runtime::relay_client::RelayClient;
 use ligus_runtime::sync_engine::SyncEngine;
@@ -25,34 +23,20 @@ struct Device {
 
 impl Device {
     fn new(w: &SignedWorld) -> Self {
-        let engine = SyncEngine::new(
-            RelayClient::new("http://127.0.0.1:0"),
-            Uuid::new_v4().to_string(),
-        )
-        .with_room_workspace(w.wid)
-        .with_key(key());
-        Self {
-            store: EventStore::open_in_memory().unwrap(),
-            engine,
-            relay: Vec::new(),
-        }
+        let engine = SyncEngine::new(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string())
+            .with_room_workspace(w.wid)
+            .with_key(key());
+        Self { store: EventStore::open_in_memory().unwrap(), engine, relay: Vec::new() }
     }
 
     fn deliver(&mut self, envs: &[SessionEventEnvelope]) {
         let start = self.relay.len() as u64;
         for (e, seq) in envs.iter().zip(start + 1..) {
-            let sealed =
-                ligus_core::seal_symmetric(&key(), 0, &serde_json::to_vec(e).unwrap()).unwrap();
-            self.relay
-                .push((seq, serde_json::to_value(sealed).unwrap()));
+            let sealed = ligus_core::seal_symmetric(&key(), 0, &serde_json::to_vec(e).unwrap()).unwrap();
+            self.relay.push((seq, serde_json::to_value(sealed).unwrap()));
         }
         let cursor = self.engine.cursor();
-        let page: Vec<(u64, Value)> = self
-            .relay
-            .iter()
-            .filter(|(s, _)| *s > cursor)
-            .cloned()
-            .collect();
+        let page: Vec<(u64, Value)> = self.relay.iter().filter(|(s, _)| *s > cursor).cloned().collect();
         if !page.is_empty() {
             self.engine.apply_fetched(&mut self.store, &page).unwrap();
         }
@@ -62,38 +46,21 @@ impl Device {
     /// due sequences again and judge them.
     fn refetch(&mut self) -> usize {
         let due = self.engine.refetch_due(&self.store).unwrap();
-        let rows: Vec<(u64, Value)> = self
-            .relay
-            .iter()
-            .filter(|(s, _)| due.contains(s))
-            .cloned()
-            .collect();
-        self.engine
-            .apply_refetched(&mut self.store, &due, &rows)
-            .unwrap()
+        let rows: Vec<(u64, Value)> = self.relay.iter().filter(|(s, _)| due.contains(s)).cloned().collect();
+        self.engine.apply_refetched(&mut self.store, &due, &rows).unwrap()
     }
 
     fn chat(&self, w: &SignedWorld, chat: Uuid) -> Option<ChatSession> {
         let (_, t) = self.store.load_config(w.wid, None, None).unwrap();
-        self.store
-            .load_session_authorized(w.wid, chat, None, None, WorkspaceAuthz::Timeline(&t))
-            .unwrap()
+        self.store.load_session_authorized(w.wid, chat, None, None, WorkspaceAuthz::Timeline(&t)).unwrap()
     }
 
     fn roster(&self, w: &SignedWorld) -> ligus_core::authz::RosterState {
-        self.store
-            .load_config(w.wid, None, None)
-            .unwrap()
-            .1
-            .current()
-            .clone()
+        self.store.load_config(w.wid, None, None).unwrap().1.current().clone()
     }
 
     fn ingest_roster(&self, w: &SignedWorld) -> ligus_runtime::envelope_verifier::WorkspaceRoster {
-        let mut r = ligus_runtime::envelope_verifier::build_rosters(
-            &self.store.trust_envelopes(w.wid).unwrap(),
-            &Default::default(),
-        );
+        let mut r = ligus_runtime::envelope_verifier::build_rosters(&self.store.trust_envelopes(w.wid).unwrap(), &Default::default());
         r.remove(&w.wid).unwrap()
     }
 }
@@ -104,14 +71,7 @@ fn title(t: &str) -> SessionEvent {
 
 /// `payload` on `chat` (or the config log) stamped as `as_who`, signed by
 /// `by`'s device; with `log_head` set, at that head and a small event id.
-fn forge(
-    w: &mut SignedWorld,
-    by: &str,
-    as_who: &str,
-    chat: Option<Uuid>,
-    payload: SessionEvent,
-    log_head: Option<Option<CfgFrontier>>,
-) -> SessionEventEnvelope {
+fn forge(w: &mut SignedWorld, by: &str, as_who: &str, chat: Option<Uuid>, payload: SessionEvent, log_head: Option<Option<CfgFrontier>>) -> SessionEventEnvelope {
     let mut env = w.draft(by, chat, payload, None);
     let p = &w.people[by];
     if let Some(s) = env.actor_stamp.as_mut() {
@@ -139,11 +99,7 @@ fn forge(
 fn world() -> (SignedWorld, Uuid, String) {
     let id = Uuid::new_v4();
     let owner = id.to_string();
-    let people = vec![
-        ligus_core::testkit::Person::new(&owner).with_account_id(id),
-        ligus_core::testkit::Person::new("con"),
-        ligus_core::testkit::Person::new("eve"),
-    ];
+    let people = vec![ligus_core::testkit::Person::new(&owner).with_account_id(id), ligus_core::testkit::Person::new("con"), ligus_core::testkit::Person::new("eve")];
     let mut w = SignedWorld::genesis_of(people, None);
     w.admit(&owner, "con", WorkspaceRole::Contributor);
     w.admit(&owner, "eve", WorkspaceRole::Contributor);
@@ -156,9 +112,7 @@ fn world() -> (SignedWorld, Uuid, String) {
 fn device(w: &SignedWorld, owner: &str, pinned: bool) -> Device {
     let d = Device::new(w);
     if pinned {
-        let fk = ligus_runtime::envelope_verifier::FounderPin::fingerprint_hex(
-            &w.people[owner].account.public_key_bytes(),
-        );
+        let fk = ligus_runtime::envelope_verifier::FounderPin::fingerprint_hex(&w.people[owner].account.public_key_bytes());
         d.store.set_workspace_pin(w.wid, owner, &fk).unwrap();
     }
     d
@@ -167,38 +121,12 @@ fn device(w: &SignedWorld, owner: &str, pinned: bool) -> Device {
 /// eve's self-evident identity for `victim`'s account (her own device,
 /// certified under a key of hers, registered by that device), stamped as the
 /// victim, backdated to `head`.
-fn self_evident_forgery(
-    w: &mut SignedWorld,
-    victim: &str,
-    head: Option<Option<CfgFrontier>>,
-) -> (SigningKeypair, Vec<SessionEventEnvelope>) {
+fn self_evident_forgery(w: &mut SignedWorld, victim: &str, head: Option<Option<CfgFrontier>>) -> (SigningKeypair, Vec<SessionEventEnvelope>) {
     let account = w.people[victim].account_id;
     let k = SigningKeypair::generate().unwrap();
-    let c = DeviceCertificate::issue(
-        &k,
-        account,
-        &w.people["eve"].device.public_key_bytes(),
-        ligus_core::Timestamp::epoch(),
-    );
-    let cert = forge(
-        w,
-        "eve",
-        victim,
-        None,
-        SessionEvent::DeviceCertificateAdded { certificate: c },
-        head,
-    );
-    let reg = forge(
-        w,
-        "eve",
-        victim,
-        None,
-        SessionEvent::AccountKeyRegistered {
-            account_id: account,
-            signing_public_key: k.public_key_bytes().to_vec(),
-        },
-        head,
-    );
+    let c = DeviceCertificate::issue(&k, account, &w.people["eve"].device.public_key_bytes(), ligus_core::Timestamp::epoch());
+    let cert = forge(w, "eve", victim, None, SessionEvent::DeviceCertificateAdded { certificate: c }, head);
+    let reg = forge(w, "eve", victim, None, SessionEvent::AccountKeyRegistered { account_id: account, signing_public_key: k.public_key_bytes().to_vec() }, head);
     (k, vec![cert, reg])
 }
 
@@ -216,20 +144,9 @@ fn a_competing_founding_seed_never_anchors_the_founder_to_someone_else() {
     let (_k, mut attack) = self_evident_forgery(&mut w, o, None);
     let seed_payload = w.cfg[0].payload.clone();
     attack.push(forge(&mut w, "eve", o, None, seed_payload, Some(None)));
-    let as_owner = forge(
-        &mut w,
-        "eve",
-        o,
-        Some(chat),
-        title("eve as the owner"),
-        None,
-    );
+    let as_owner = forge(&mut w, "eve", o, Some(chat), title("eve as the owner"), None);
     let honest = w.say(chat, o, title("the owner after"));
-    let honest_env: Vec<SessionEventEnvelope> = w.chats[&chat]
-        .iter()
-        .filter(|e| e.event_id == honest)
-        .cloned()
-        .collect();
+    let honest_env: Vec<SessionEventEnvelope> = w.chats[&chat].iter().filter(|e| e.event_id == honest).cloned().collect();
     // Unpinned with the attack first is the B2 residual (pre-existing: a
     // device with no founder pin takes the first self-consistent seed it can
     // verify); every device pins its founder (creating, joining, or TOFU on
@@ -252,25 +169,11 @@ fn a_competing_founding_seed_never_anchors_the_founder_to_someone_else() {
         let owner = w.people[o].account_id;
         let r = d.ingest_roster(&w);
         let case = format!("attack_first={attack_first} pinned={pinned}");
-        assert_eq!(
-            r.account_signing_key(owner),
-            Some(&w.people[o].account.public_key_bytes()[..]),
-            "{case}"
-        );
-        assert!(
-            !d.store.has_event(as_owner.event_id).unwrap(),
-            "eve never signs as the owner ({case})"
-        );
-        assert!(
-            d.store.has_event(honest).unwrap(),
-            "the owner's events keep applying ({case})"
-        );
+        assert_eq!(r.account_signing_key(owner), Some(&w.people[o].account.public_key_bytes()[..]), "{case}");
+        assert!(!d.store.has_event(as_owner.event_id).unwrap(), "eve never signs as the owner ({case})");
+        assert!(d.store.has_event(honest).unwrap(), "the owner's events keep applying ({case})");
         assert_eq!(d.chat(&w, chat).unwrap().title, "the owner after", "{case}");
-        assert_eq!(
-            d.roster(&w).account_keys.get(&owner),
-            Some(&w.people[o].account.public_key_bytes().to_vec()),
-            "{case}"
-        );
+        assert_eq!(d.roster(&w).account_keys.get(&owner), Some(&w.people[o].account.public_key_bytes().to_vec()), "{case}");
     }
 }
 
@@ -288,42 +191,22 @@ fn a_replayed_rotation_never_disputes_the_account() {
     let (mut w, chat, owner) = world();
     // bo: a member with no passkey (as a box is).
     let bo = ligus_core::testkit::Person::new("bo");
-    std::sync::Arc::get_mut(&mut w.people)
-        .unwrap()
-        .insert("bo".into(), bo);
+    std::sync::Arc::get_mut(&mut w.people).unwrap().insert("bo".into(), bo);
     let m = w.member_of("bo", WorkspaceRole::Contributor);
-    w.push(
-        &owner,
-        SessionEvent::MemberAdded {
-            member: m,
-            invite: None,
-            proof: None,
-        },
-    );
+    w.push(&owner, SessionEvent::MemberAdded { member: m, invite: None, proof: None });
     w.publish_identity("bo");
     let account = w.people["bo"].account_id;
     let device_key = w.people["bo"].device.public_key_bytes();
     let k0 = SigningKeypair::from_seed(&w.people["bo"].account.seed_bytes()).unwrap();
-    let (k1, k2) = (
-        SigningKeypair::generate().unwrap(),
-        SigningKeypair::generate().unwrap(),
-    );
+    let (k1, k2) = (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
     let mut first = None;
     for (from, to) in [(&k0, &k1), (&k1, &k2)] {
         let sig = from.sign(&to.public_key_bytes()).to_vec();
-        let rot = SessionEvent::AccountKeyRotated {
-            account_id: account,
-            new_signing_public_key: to.public_key_bytes().to_vec(),
-            succession_signature: sig,
-        };
+        let rot = SessionEvent::AccountKeyRotated { account_id: account, new_signing_public_key: to.public_key_bytes().to_vec(), succession_signature: sig };
         first.get_or_insert(rot.clone());
         w.push_bare("bo", rot);
-        let cert =
-            DeviceCertificate::issue(to, account, &device_key, ligus_core::Timestamp::epoch());
-        w.push_bare(
-            "bo",
-            SessionEvent::DeviceCertificateAdded { certificate: cert },
-        );
+        let cert = DeviceCertificate::issue(to, account, &device_key, ligus_core::Timestamp::epoch());
+        w.push_bare("bo", SessionEvent::DeviceCertificateAdded { certificate: cert });
     }
     let replay = forge(&mut w, "eve", "bo", None, first.unwrap(), None);
     let after = w.say(chat, "bo", title("bo after the replay"));
@@ -332,19 +215,10 @@ fn a_replayed_rotation_never_disputes_the_account() {
     d.deliver(&[replay]);
     d.deliver(&w.chats[&chat]);
     let r = d.ingest_roster(&w);
-    assert!(
-        !r.is_disputed(account),
-        "a replay of the account's own rotation disputes nothing"
-    );
-    assert!(
-        d.store.has_event(after).unwrap(),
-        "bo's events keep applying"
-    );
+    assert!(!r.is_disputed(account), "a replay of the account's own rotation disputes nothing");
+    assert!(d.store.has_event(after).unwrap(), "bo's events keep applying");
     // Ingest and the fold agree on bo's key.
-    assert_eq!(
-        r.account_signing_key(account).map(<[u8]>::to_vec),
-        d.roster(&w).account_keys.get(&account).cloned()
-    );
+    assert_eq!(r.account_signing_key(account).map(<[u8]>::to_vec), d.roster(&w).account_keys.get(&account).cloned());
 }
 
 /// Finding: the anchor without its key. vic's admission anchors her account
@@ -358,37 +232,14 @@ fn a_replayed_rotation_never_disputes_the_account() {
 fn an_anchor_whose_key_has_not_arrived_pins_nothing_else() {
     let (mut w, chat, owner) = world();
     let vic = ligus_core::testkit::Person::new("vic");
-    std::sync::Arc::get_mut(&mut w.people)
-        .unwrap()
-        .insert("vic".into(), vic);
+    std::sync::Arc::get_mut(&mut w.people).unwrap().insert("vic".into(), vic);
     // eve's identity for vic, and an event as vic, before vic ever joins.
     let (_k, mut attack) = self_evident_forgery(&mut w, "vic", None);
-    attack.push(forge(
-        &mut w,
-        "eve",
-        "vic",
-        Some(chat),
-        title("eve as vic"),
-        None,
-    ));
+    attack.push(forge(&mut w, "eve", "vic", Some(chat), title("eve as vic"), None));
     let invite = Uuid::new_v4();
-    w.push(
-        &owner,
-        SessionEvent::JoinApproved {
-            subject: ligus_core::authorization::invite_subject(invite),
-            admission: None,
-            redeem_key: None,
-        },
-    );
+    w.push(&owner, SessionEvent::JoinApproved { subject: ligus_core::authorization::invite_subject(invite), admission: None, redeem_key: None });
     let m = w.member_of("vic", WorkspaceRole::Contributor);
-    let admission = w.push_bare(
-        "vic",
-        SessionEvent::MemberAdded {
-            member: m,
-            invite: Some(invite),
-            proof: None,
-        },
-    );
+    let admission = w.push_bare("vic", SessionEvent::MemberAdded { member: m, invite: Some(invite), proof: None });
     w.publish_identity("vic");
     let mine = w.say(chat, "vic", title("vic herself"));
     let cut = w.cfg.iter().position(|e| e.event_id == admission).unwrap() + 1;
@@ -401,11 +252,7 @@ fn an_anchor_whose_key_has_not_arrived_pins_nothing_else() {
             // vic's identity reaches this device only on a chat log.
             for e in cfg.drain(cut..) {
                 let mut e = e;
-                if matches!(
-                    e.payload,
-                    SessionEvent::AccountKeyRegistered { .. }
-                        | SessionEvent::DeviceCertificateAdded { .. }
-                ) {
+                if matches!(e.payload, SessionEvent::AccountKeyRegistered { .. } | SessionEvent::DeviceCertificateAdded { .. }) {
                     e.session_id = chat;
                     e.clear_raw();
                     let p = &w.people["vic"];
@@ -423,48 +270,25 @@ fn an_anchor_whose_key_has_not_arrived_pins_nothing_else() {
         d.deliver(&w.chats[&chat][1..]);
         let case = format!("by_page={by_page} on_config={on_config}");
         let account = w.people["vic"].account_id;
-        assert!(
-            !d.store.has_event(attack[2].event_id).unwrap(),
-            "eve never signs as vic ({case})"
-        );
+        assert!(!d.store.has_event(attack[2].event_id).unwrap(), "eve never signs as vic ({case})");
         let r = d.ingest_roster(&w);
-        assert_ne!(
-            r.account_signing_key(account),
-            Some(&_k.public_key_bytes()[..]),
-            "{case}"
-        );
-        assert_ne!(
-            d.roster(&w).account_keys.get(&account),
-            Some(&_k.public_key_bytes().to_vec()),
-            "the fold never takes eve's key for vic ({case})"
-        );
+        assert_ne!(r.account_signing_key(account), Some(&_k.public_key_bytes()[..]), "{case}");
+        assert_ne!(d.roster(&w).account_keys.get(&account), Some(&_k.public_key_bytes().to_vec()), "the fold never takes eve's key for vic ({case})");
         if on_config {
             assert!(d.store.has_event(mine).unwrap(), "{case}");
-            assert_eq!(
-                r.account_signing_key(account),
-                Some(&w.people["vic"].account.public_key_bytes()[..]),
-                "{case}"
-            );
+            assert_eq!(r.account_signing_key(account), Some(&w.people["vic"].account.public_key_bytes()[..]), "{case}");
         }
     }
 }
 
 /// `n` events from `n` fresh devices (one each), stamped as `as_who`, on
 /// `chat`: the cheapest flood of the held table (no per-signer cap applies).
-fn sybil_flood(
-    w: &mut SignedWorld,
-    as_who: &str,
-    chat: Uuid,
-    n: usize,
-) -> Vec<SessionEventEnvelope> {
+fn sybil_flood(w: &mut SignedWorld, as_who: &str, chat: Uuid, n: usize) -> Vec<SessionEventEnvelope> {
     let template = forge(w, "eve", as_who, Some(chat), title("sybil"), None);
     (0..n)
         .map(|i| {
             let k = SigningKeypair::generate().unwrap();
-            let id = ligus_core::crypto::device_id_for(
-                ligus_core::crypto::SigAlg::Ed25519,
-                &k.public_key_bytes(),
-            );
+            let id = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &k.public_key_bytes());
             let mut e = template.clone();
             e.event_id = Uuid::new_v4();
             e.payload = title(&format!("sybil {i}"));
@@ -489,35 +313,14 @@ fn sybil_flood(
 fn a_flood_never_loses_an_honest_held_event() {
     let (mut w, chat, owner) = world();
     let vic = ligus_core::testkit::Person::new("vic");
-    std::sync::Arc::get_mut(&mut w.people)
-        .unwrap()
-        .insert("vic".into(), vic);
+    std::sync::Arc::get_mut(&mut w.people).unwrap().insert("vic".into(), vic);
     let invite = Uuid::new_v4();
-    w.push(
-        &owner,
-        SessionEvent::JoinApproved {
-            subject: ligus_core::authorization::invite_subject(invite),
-            admission: None,
-            redeem_key: None,
-        },
-    );
+    w.push(&owner, SessionEvent::JoinApproved { subject: ligus_core::authorization::invite_subject(invite), admission: None, redeem_key: None });
     let m = w.member_of("vic", WorkspaceRole::Contributor);
-    w.push_bare(
-        "vic",
-        SessionEvent::MemberAdded {
-            member: m,
-            invite: Some(invite),
-            proof: None,
-        },
-    );
+    w.push_bare("vic", SessionEvent::MemberAdded { member: m, invite: Some(invite), proof: None });
     w.publish_identity("vic");
     let hers = w.say(chat, "vic", title("vic was here"));
-    let flood = sybil_flood(
-        &mut w,
-        "con",
-        chat,
-        ligus_runtime::event_store::HELD_PER_WORKSPACE as usize,
-    );
+    let flood = sybil_flood(&mut w, "con", chat, ligus_runtime::event_store::HELD_PER_WORKSPACE as usize);
     let mut d = device(&w, &owner, true);
     d.deliver(&flood);
     d.deliver(&w.chats[&chat]);
@@ -528,28 +331,19 @@ fn a_flood_never_loses_an_honest_held_event() {
     // the flood from devices nobody certified is not.
     let stats = d.store.held_stats(w.wid).unwrap();
     assert!(stats.refetch > 0, "{stats:?}");
-    assert_eq!(
-        d.engine.refetch_due(&d.store).unwrap().len(),
-        stats.refetch.min(3) as usize,
-        "only vic's dropped events are due: {stats:?}"
-    );
+    assert_eq!(d.engine.refetch_due(&d.store).unwrap().len(), stats.refetch.min(3) as usize, "only vic's dropped events are due: {stats:?}");
     d.refetch();
-    assert!(
-        d.store.has_event(hers).unwrap(),
-        "vic's message is applied once her admission arrives: {:?}",
-        d.store.held_stats(w.wid).unwrap()
-    );
+    assert!(d.store.has_event(hers).unwrap(), "vic's message is applied once her admission arrives: {:?}", d.store.held_stats(w.wid).unwrap());
     assert_eq!(d.chat(&w, chat).unwrap().title, "vic was here");
     let after = d.store.held_stats(w.wid).unwrap();
     assert_eq!(after.lost, 0, "{after:?}");
     assert!(d.engine.refetch_due(&d.store).unwrap().is_empty());
 }
 
+
 fn shuffle<T>(v: &mut [T], mut s: u64) {
     for i in (1..v.len()).rev() {
-        s = s
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         v.swap(i, (s >> 33) as usize % (i + 1));
     }
 }
@@ -561,49 +355,22 @@ fn agreement_world() -> (SignedWorld, Uuid, String, Vec<SessionEventEnvelope>) {
     let (mut w, chat, owner) = world();
     for n in ["vic", "bo"] {
         let p = ligus_core::testkit::Person::new(n);
-        std::sync::Arc::get_mut(&mut w.people)
-            .unwrap()
-            .insert(n.into(), p);
+        std::sync::Arc::get_mut(&mut w.people).unwrap().insert(n.into(), p);
     }
     let invite = Uuid::new_v4();
     let k = ligus_core::admission::RedeemKey::generate().unwrap();
-    w.push(
-        &owner,
-        SessionEvent::JoinApproved {
-            subject: ligus_core::authorization::invite_subject(invite),
-            admission: None,
-            redeem_key: Some(k.public().to_vec()),
-        },
-    );
+    w.push(&owner, SessionEvent::JoinApproved { subject: ligus_core::authorization::invite_subject(invite), admission: None, redeem_key: Some(k.public().to_vec()) });
     let m = w.member_of("vic", WorkspaceRole::Contributor);
     let proof = k.prove_person(w.wid, invite, &m.id, w.people["vic"].device_id);
-    w.push_bare(
-        "vic",
-        SessionEvent::MemberAdded {
-            member: m,
-            invite: Some(invite),
-            proof: Some(proof),
-        },
-    );
+    w.push_bare("vic", SessionEvent::MemberAdded { member: m, invite: Some(invite), proof: Some(proof) });
     w.publish_identity("vic");
     let m = w.member_of("bo", WorkspaceRole::Contributor);
-    w.push(
-        &owner,
-        SessionEvent::MemberAdded {
-            member: m,
-            invite: None,
-            proof: None,
-        },
-    );
+    w.push(&owner, SessionEvent::MemberAdded { member: m, invite: None, proof: None });
     w.publish_identity("bo");
     let account = w.people["bo"].account_id;
     let k0 = SigningKeypair::from_seed(&w.people["bo"].account.seed_bytes()).unwrap();
     let k1 = SigningKeypair::generate().unwrap();
-    let rot = SessionEvent::AccountKeyRotated {
-        account_id: account,
-        new_signing_public_key: k1.public_key_bytes().to_vec(),
-        succession_signature: k0.sign(&k1.public_key_bytes()).to_vec(),
-    };
+    let rot = SessionEvent::AccountKeyRotated { account_id: account, new_signing_public_key: k1.public_key_bytes().to_vec(), succession_signature: k0.sign(&k1.public_key_bytes()).to_vec() };
     w.push_bare("bo", rot.clone());
     w.say(chat, "vic", title("vic was here"));
     // The attacks, all by eve: for each victim, a self-evident identity late
@@ -615,17 +382,7 @@ fn agreement_world() -> (SignedWorld, Uuid, String, Vec<SessionEventEnvelope>) {
         attacks.extend(self_evident_forgery(&mut w, victim, Some(None)).1);
         let other = SigningKeypair::generate().unwrap();
         let account = w.people[victim].account_id;
-        attacks.push(forge(
-            &mut w,
-            "eve",
-            victim,
-            None,
-            SessionEvent::AccountKeyRegistered {
-                account_id: account,
-                signing_public_key: other.public_key_bytes().to_vec(),
-            },
-            None,
-        ));
+        attacks.push(forge(&mut w, "eve", victim, None, SessionEvent::AccountKeyRegistered { account_id: account, signing_public_key: other.public_key_bytes().to_vec() }, None));
     }
     attacks.push(forge(&mut w, "eve", "bo", None, rot, None));
     (w, chat, owner, attacks)

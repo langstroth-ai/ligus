@@ -139,9 +139,7 @@ pub enum ScratchError {
 impl std::fmt::Display for ScratchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ScratchError::Limit(m) | ScratchError::Path(m) | ScratchError::Invalid(m) => {
-                f.write_str(m)
-            }
+            ScratchError::Limit(m) | ScratchError::Path(m) | ScratchError::Invalid(m) => f.write_str(m),
             ScratchError::NotFound => f.write_str("no such scratch repository on this host"),
             ScratchError::Git(m) => write!(f, "git: {m}"),
             ScratchError::Io(m) => write!(f, "couldn't change the folder: {m}"),
@@ -197,20 +195,13 @@ pub struct Settings {
 /// none is set.
 pub fn settings(store: &EventStore, default_root: &Path) -> Settings {
     let get = |k: &str| store.repo_setting(k).ok().flatten();
-    let root = get(KEY_ROOT)
-        .filter(|r| !r.trim().is_empty())
-        .map(PathBuf::from);
+    let root = get(KEY_ROOT).filter(|r| !r.trim().is_empty()).map(PathBuf::from);
     let cleanup_days = match get(KEY_DAYS).and_then(|d| d.trim().parse::<u32>().ok()) {
         Some(0) => None,
         Some(d) => Some(d.min(MAX_CLEANUP_DAYS)),
         None => Some(DEFAULT_CLEANUP_DAYS),
     };
-    let num = |k: &str, d: usize| {
-        get(k)
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .map(|v| v.clamp(1, HARD_MAX_PER_HOST))
-            .unwrap_or(d)
-    };
+    let num = |k: &str, d: usize| get(k).and_then(|v| v.trim().parse::<usize>().ok()).map(|v| v.clamp(1, HARD_MAX_PER_HOST)).unwrap_or(d);
     Settings {
         root_is_default: root.is_none(),
         root: root.unwrap_or_else(|| default_root.to_path_buf()),
@@ -222,11 +213,7 @@ pub fn settings(store: &EventStore, default_root: &Path) -> Settings {
 
 /// Set (or with `None` reset) this host's scratch root. The root is checked
 /// ([`check_root`]) before it is stored.
-pub fn set_root(
-    store: &EventStore,
-    root: Option<&Path>,
-    forbidden: &[PathBuf],
-) -> Result<Option<PathBuf>> {
+pub fn set_root(store: &EventStore, root: Option<&Path>, forbidden: &[PathBuf]) -> Result<Option<PathBuf>> {
     match root {
         None => {
             store.set_repo_setting(KEY_ROOT, None).map_err(store_err)?;
@@ -234,9 +221,7 @@ pub fn set_root(
         }
         Some(r) => {
             let c = check_root(r, forbidden)?;
-            store
-                .set_repo_setting(KEY_ROOT, Some(&c.to_string_lossy()))
-                .map_err(store_err)?;
+            store.set_repo_setting(KEY_ROOT, Some(&c.to_string_lossy())).map_err(store_err)?;
             Ok(Some(c))
         }
     }
@@ -246,28 +231,18 @@ pub fn set_root(
 /// the default.
 pub fn set_cleanup_days(store: &EventStore, days: Option<u32>) -> Result<()> {
     if days.is_some_and(|d| d > MAX_CLEANUP_DAYS) {
-        return Err(ScratchError::Invalid(format!(
-            "at most {MAX_CLEANUP_DAYS} days (0 turns the cleanup off)"
-        )));
+        return Err(ScratchError::Invalid(format!("at most {MAX_CLEANUP_DAYS} days (0 turns the cleanup off)")));
     }
     let v = days.map(|d| d.to_string());
-    store
-        .set_repo_setting(KEY_DAYS, v.as_deref())
-        .map_err(store_err)
+    store.set_repo_setting(KEY_DAYS, v.as_deref()).map_err(store_err)
 }
 
 /// Set the per-host and per-member limits (1 to [`HARD_MAX_PER_HOST`];
 /// `None` keeps the default).
-pub fn set_limits(
-    store: &EventStore,
-    per_host: Option<usize>,
-    per_member: Option<usize>,
-) -> Result<()> {
+pub fn set_limits(store: &EventStore, per_host: Option<usize>, per_member: Option<usize>) -> Result<()> {
     for (k, v) in [(KEY_MAX_HOST, per_host), (KEY_MAX_MEMBER, per_member)] {
         if v.is_some_and(|n| n == 0 || n > HARD_MAX_PER_HOST) {
-            return Err(ScratchError::Invalid(format!(
-                "a limit is 1 to {HARD_MAX_PER_HOST}"
-            )));
+            return Err(ScratchError::Invalid(format!("a limit is 1 to {HARD_MAX_PER_HOST}")));
         }
         let s = v.map(|n| n.to_string());
         store.set_repo_setting(k, s.as_deref()).map_err(store_err)?;
@@ -282,14 +257,7 @@ fn inside(path: &Path, dir: &Path) -> bool {
 /// The first ancestor of `p` (itself included) that is a git checkout's
 /// work tree or git dir.
 fn enclosing_repo(p: &Path) -> Option<PathBuf> {
-    p.ancestors()
-        .find(|a| {
-            a.join(".git").exists()
-                || (a.join("HEAD").is_file()
-                    && a.join("objects").is_dir()
-                    && a.join("refs").is_dir())
-        })
-        .map(Path::to_path_buf)
+    p.ancestors().find(|a| a.join(".git").exists() || (a.join("HEAD").is_file() && a.join("objects").is_dir() && a.join("refs").is_dir())).map(Path::to_path_buf)
 }
 
 /// Create (if needed) and check a scratch root: canonical, a directory and
@@ -297,14 +265,10 @@ fn enclosing_repo(p: &Path) -> Option<PathBuf> {
 /// never inside one of `forbidden` (for a box: the desktop app's data dir).
 pub fn check_root(root: &Path, forbidden: &[PathBuf]) -> Result<PathBuf> {
     if root.as_os_str().is_empty() || !root.is_absolute() {
-        return Err(ScratchError::Path(
-            "the scratch root must be an absolute path".into(),
-        ));
+        return Err(ScratchError::Path("the scratch root must be an absolute path".into()));
     }
     if std::fs::symlink_metadata(root).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err(ScratchError::Path(
-            "the scratch root can't be a symlink".into(),
-        ));
+        return Err(ScratchError::Path("the scratch root can't be a symlink".into()));
     }
     std::fs::create_dir_all(root).map_err(io_err)?;
     let c = super::git::canonical(root);
@@ -312,23 +276,15 @@ pub fn check_root(root: &Path, forbidden: &[PathBuf]) -> Result<PathBuf> {
         return Err(ScratchError::Path("the scratch root isn't a folder".into()));
     }
     if c.parent().is_none() {
-        return Err(ScratchError::Path(
-            "the scratch root can't be a filesystem root".into(),
-        ));
+        return Err(ScratchError::Path("the scratch root can't be a filesystem root".into()));
     }
     if let Some(r) = enclosing_repo(&c) {
-        return Err(ScratchError::Path(format!(
-            "the scratch root can't be inside another repository ({})",
-            r.display()
-        )));
+        return Err(ScratchError::Path(format!("the scratch root can't be inside another repository ({})", r.display())));
     }
     for f in forbidden {
         let fc = super::git::canonical(f);
         if inside(&c, &fc) || inside(&fc, &c) {
-            return Err(ScratchError::Path(format!(
-                "the scratch root can't be inside (or contain) {}",
-                fc.display()
-            )));
+            return Err(ScratchError::Path(format!("the scratch root can't be inside (or contain) {}", fc.display())));
         }
     }
     #[cfg(unix)]
@@ -340,9 +296,7 @@ pub fn check_root(root: &Path, forbidden: &[PathBuf]) -> Result<PathBuf> {
         // SAFETY: geteuid has no preconditions and cannot fail.
         let me = unsafe { libc::geteuid() };
         if m.uid() != me || m.mode() & 0o002 != 0 {
-            return Err(ScratchError::Path(
-                "the scratch root must be your own folder, not one anyone may write to".into(),
-            ));
+            return Err(ScratchError::Path("the scratch root must be your own folder, not one anyone may write to".into()));
         }
     }
     Ok(c)
@@ -351,12 +305,7 @@ pub fn check_root(root: &Path, forbidden: &[PathBuf]) -> Result<PathBuf> {
 // ── The registry ─────────────────────────────────────────────────────────
 
 fn load_all(store: &EventStore) -> Vec<ScratchRepo> {
-    store
-        .repo_setting(KEY_REGISTRY)
-        .ok()
-        .flatten()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+    store.repo_setting(KEY_REGISTRY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
 fn save_all(store: &EventStore, mut all: Vec<ScratchRepo>) -> Result<()> {
@@ -376,17 +325,12 @@ fn save_all(store: &EventStore, mut all: Vec<ScratchRepo>) -> Result<()> {
         all.sort_by_key(|e| e.created_at);
     }
     let text = serde_json::to_string(&all).map_err(store_err)?;
-    store
-        .set_repo_setting(KEY_REGISTRY, Some(&text))
-        .map_err(store_err)
+    store.set_repo_setting(KEY_REGISTRY, Some(&text)).map_err(store_err)
 }
 
 fn update(store: &EventStore, id: Uuid, f: impl FnOnce(&mut ScratchRepo)) -> Result<ScratchRepo> {
     let mut all = load_all(store);
-    let e = all
-        .iter_mut()
-        .find(|e| e.id == id)
-        .ok_or(ScratchError::NotFound)?;
+    let e = all.iter_mut().find(|e| e.id == id).ok_or(ScratchError::NotFound)?;
     f(e);
     let out = e.clone();
     save_all(store, all)?;
@@ -396,26 +340,17 @@ fn update(store: &EventStore, id: Uuid, f: impl FnOnce(&mut ScratchRepo)) -> Res
 /// Every scratch repository this host created in `workspace_id`, oldest
 /// first (kept and removed ones too).
 pub fn list(store: &EventStore, workspace_id: Uuid) -> Vec<ScratchRepo> {
-    load_all(store)
-        .into_iter()
-        .filter(|e| e.workspace_id == workspace_id)
-        .collect()
+    load_all(store).into_iter().filter(|e| e.workspace_id == workspace_id).collect()
 }
 
 /// The live ones in every workspace (a host's cleanup walks them all).
 pub fn live_all(store: &EventStore) -> Vec<ScratchRepo> {
-    load_all(store)
-        .into_iter()
-        .filter(ScratchRepo::is_live)
-        .collect()
+    load_all(store).into_iter().filter(ScratchRepo::is_live).collect()
 }
 
 /// The live ones.
 pub fn live(store: &EventStore, workspace_id: Uuid) -> Vec<ScratchRepo> {
-    list(store, workspace_id)
-        .into_iter()
-        .filter(ScratchRepo::is_live)
-        .collect()
+    list(store, workspace_id).into_iter().filter(ScratchRepo::is_live).collect()
 }
 
 /// One by id, id prefix (at least 4 hex), folder name or display name.
@@ -426,44 +361,31 @@ pub fn find(store: &EventStore, workspace_id: Uuid, sel: &str) -> Option<Scratch
     let hits: Vec<&ScratchRepo> = all
         .iter()
         .filter(|e| {
-            (lower.len() >= 4
-                && e.id
-                    .simple()
-                    .to_string()
-                    .starts_with(&lower.replace('-', "")))
+            (lower.len() >= 4 && e.id.simple().to_string().starts_with(&lower.replace('-', "")))
                 || e.id.to_string() == lower
                 || e.dir_name == sel
                 || e.name.eq_ignore_ascii_case(sel)
         })
         .collect();
     // Prefer a live one when names repeat.
-    hits.iter()
-        .find(|e| e.is_live())
-        .or(hits.first())
-        .map(|e| (*e).clone())
+    hits.iter().find(|e| e.is_live()).or(hits.first()).map(|e| (*e).clone())
 }
 
 /// The live scratch repository at `path` (compared canonically).
 pub fn by_path(store: &EventStore, path: &Path) -> Option<ScratchRepo> {
     let c = super::git::canonical(path);
-    load_all(store)
-        .into_iter()
-        .find(|e| e.is_live() && e.path == c)
+    load_all(store).into_iter().find(|e| e.is_live() && e.path == c)
 }
 
 /// The live scratch repository registered as workspace repo `repo_id`.
 pub fn by_repo(store: &EventStore, repo_id: Uuid) -> Option<ScratchRepo> {
-    load_all(store)
-        .into_iter()
-        .find(|e| e.is_live() && e.repo_id == Some(repo_id))
+    load_all(store).into_iter().find(|e| e.is_live() && e.repo_id == Some(repo_id))
 }
 
 /// Record activity in the scratch repository at `path` (a turn ran in it).
 /// `false` when `path` isn't one.
 pub fn touch(store: &EventStore, path: &Path, now: i64) -> bool {
-    let Some(e) = by_path(store, path) else {
-        return false;
-    };
+    let Some(e) = by_path(store, path) else { return false };
     update(store, e.id, |e| {
         e.last_activity = e.last_activity.max(now);
         e.noticed_at = None;
@@ -477,9 +399,7 @@ pub fn touch(store: &EventStore, path: &Path, now: i64) -> bool {
 /// they are otherwise refused). The sandbox's rules for the turn's worktree
 /// are the same as for any repository. `false` when it isn't one.
 pub fn turn_in(store: &EventStore, path: &Path, now: i64) -> bool {
-    let Some(e) = by_path(store, path) else {
-        return false;
-    };
+    let Some(e) = by_path(store, path) else { return false };
     if verify_dir(&e).is_err() {
         return false;
     }
@@ -488,13 +408,7 @@ pub fn turn_in(store: &EventStore, path: &Path, now: i64) -> bool {
 }
 
 /// Note that `chat` works in it (or, with `on` false, no longer does).
-pub fn set_chat(
-    store: &EventStore,
-    id: Uuid,
-    chat: Uuid,
-    on: bool,
-    now: i64,
-) -> Result<ScratchRepo> {
+pub fn set_chat(store: &EventStore, id: Uuid, chat: Uuid, on: bool, now: i64) -> Result<ScratchRepo> {
     update(store, id, |e| {
         e.chats.retain(|c| *c != chat);
         if on {
@@ -534,21 +448,8 @@ pub fn set_published(store: &EventStore, id: Uuid, url: &str) -> Result<ScratchR
 
 /// The folder-name slug of a display name (`[a-z0-9-]`, at most 40).
 pub fn slug(name: &str) -> String {
-    let s: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let s = s
-        .split('-')
-        .filter(|x| !x.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
+    let s: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
+    let s = s.split('-').filter(|x| !x.is_empty()).collect::<Vec<_>>().join("-");
     let s: String = s.chars().take(40).collect();
     let s = s.trim_end_matches('-').to_string();
     if s.is_empty() {
@@ -561,23 +462,15 @@ pub fn slug(name: &str) -> String {
 /// Whether one more live scratch repository may be created here for
 /// `created_by` (an account id; `""` counts only against the host).
 pub fn reserve(store: &EventStore, settings: &Settings, created_by: &str) -> Result<()> {
-    let all: Vec<ScratchRepo> = load_all(store)
-        .into_iter()
-        .filter(ScratchRepo::is_live)
-        .collect();
+    let all: Vec<ScratchRepo> = load_all(store).into_iter().filter(ScratchRepo::is_live).collect();
     let host_max = settings.max_per_host.min(HARD_MAX_PER_HOST);
     if all.len() >= host_max {
         return Err(ScratchError::Limit(format!(
             "this host already has {host_max} scratch repositories; keep or remove one first (ligus repo scratch --list)"
         )));
     }
-    if !created_by.is_empty()
-        && all.iter().filter(|e| e.created_by == created_by).count() >= settings.max_per_member
-    {
-        return Err(ScratchError::Limit(format!(
-            "you already have {} scratch repositories on this host; keep or remove one first",
-            settings.max_per_member
-        )));
+    if !created_by.is_empty() && all.iter().filter(|e| e.created_by == created_by).count() >= settings.max_per_member {
+        return Err(ScratchError::Limit(format!("you already have {} scratch repositories on this host; keep or remove one first", settings.max_per_member)));
     }
     Ok(())
 }
@@ -587,8 +480,7 @@ fn git_in(dir: &Path, args: &[&str]) -> Result<String> {
 }
 
 fn write_marker(dir: &Path, id: Uuid) -> Result<()> {
-    let common =
-        super::git::git_common_dir(dir).ok_or_else(|| ScratchError::Git("no git dir".into()))?;
+    let common = super::git::git_common_dir(dir).ok_or_else(|| ScratchError::Git("no git dir".into()))?;
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -605,45 +497,28 @@ fn write_marker(dir: &Path, id: Uuid) -> Result<()> {
 /// Whether the repository at `dir` carries the marker of scratch repo `id`
 /// (in its git common dir: a commit can't supply it).
 pub fn has_marker(dir: &Path, id: Uuid) -> bool {
-    let Some(common) = super::git::git_common_dir(dir) else {
-        return false;
-    };
+    let Some(common) = super::git::git_common_dir(dir) else { return false };
     // The git dir must be this folder's own `.git`, not one it points at.
     if common != super::git::canonical(&dir.join(".git")) {
         return false;
     }
-    std::fs::read_to_string(common.join(MARKER))
-        .ok()
-        .and_then(|t| t.lines().next().map(|l| l.trim().to_string()))
-        .is_some_and(|l| l == id.to_string())
+    std::fs::read_to_string(common.join(MARKER)).ok().and_then(|t| t.lines().next().map(|l| l.trim().to_string())).is_some_and(|l| l == id.to_string())
 }
 
 /// Create an empty repository for a new scratch entry under `root` (already
 /// checked with [`check_root`]): `git init -b main`, one empty commit, the
 /// marker. Filesystem only (nothing recorded): call [`record`] next, or
 /// [`discard_dir`] if that fails.
-pub fn init_dir(
-    root: &Path,
-    workspace_id: Uuid,
-    name: &str,
-    created_by: &str,
-    now: i64,
-) -> Result<ScratchRepo> {
+pub fn init_dir(root: &Path, workspace_id: Uuid, name: &str, created_by: &str, now: i64) -> Result<ScratchRepo> {
     let name = name.trim();
-    if name.chars().count() > ligus_core::workspace_repo::MAX_DISPLAY_NAME
-        || (!name.is_empty() && !ligus_core::workspace_repo::display_name_ok(name))
-    {
+    if name.chars().count() > ligus_core::workspace_repo::MAX_DISPLAY_NAME || (!name.is_empty() && !ligus_core::workspace_repo::display_name_ok(name)) {
         return Err(ScratchError::Invalid("bad scratch repository name".into()));
     }
     let root = super::git::canonical(root);
     let id = Uuid::new_v4();
     let short = id.simple().to_string()[..8].to_string();
     let dir_name = format!("{}-{short}", slug(name));
-    let display = if name.is_empty() {
-        dir_name.clone()
-    } else {
-        name.to_string()
-    };
+    let display = if name.is_empty() { dir_name.clone() } else { name.to_string() };
     let path = root.join(&dir_name);
     // `create_dir`, never `_all`: a folder that exists (or a symlink planted
     // there) is refused, never reused.
@@ -653,22 +528,7 @@ pub fn init_dir(
         // The scratch id in the message keeps two scratch repos made in the
         // same second from sharing a root commit (their `local:` identity).
         let msg = format!("Start scratch repository {display} ({id})");
-        git_in(
-            &path,
-            &[
-                "-c",
-                "user.name=Ligus",
-                "-c",
-                "user.email=ligus@localhost",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "--quiet",
-                "--allow-empty",
-                "-m",
-                &msg,
-            ],
-        )?;
+        git_in(&path, &["-c", "user.name=Ligus", "-c", "user.email=ligus@localhost", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", &msg])?;
         write_marker(&path, id)?;
         super::git::root_commit(&path).ok_or_else(|| ScratchError::Git("no root commit".into()))
     })();
@@ -718,15 +578,7 @@ pub fn discard_dir(entry: &ScratchRepo) {
 
 /// [`reserve`], [`init_dir`] and [`record`] in one (for callers that hold
 /// the store anyway; git runs inside).
-pub fn create(
-    store: &EventStore,
-    settings: &Settings,
-    forbidden: &[PathBuf],
-    workspace_id: Uuid,
-    name: &str,
-    created_by: &str,
-    now: i64,
-) -> Result<ScratchRepo> {
+pub fn create(store: &EventStore, settings: &Settings, forbidden: &[PathBuf], workspace_id: Uuid, name: &str, created_by: &str, now: i64) -> Result<ScratchRepo> {
     reserve(store, settings, created_by)?;
     let root = check_root(&settings.root, forbidden)?;
     let e = init_dir(&root, workspace_id, name, created_by, now)?;
@@ -744,22 +596,14 @@ pub fn create(
 /// root it was created under, canonicalizes to the recorded path, has the
 /// recorded name, and carries this entry's marker in its own git dir.
 pub fn verify_dir(entry: &ScratchRepo) -> Result<PathBuf> {
-    let bad = |m: &str| {
-        Err(ScratchError::Path(format!(
-            "refused to touch {}: {m}",
-            entry.dir_name
-        )))
-    };
+    let bad = |m: &str| Err(ScratchError::Path(format!("refused to touch {}: {m}", entry.dir_name)));
     if !entry.is_live() {
         return Err(ScratchError::NotFound);
     }
     let valid_name = !entry.dir_name.is_empty()
         && entry.dir_name != "."
         && entry.dir_name != ".."
-        && entry
-            .dir_name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        && entry.dir_name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
     if !valid_name {
         return bad("not a scratch folder name");
     }
@@ -778,10 +622,7 @@ pub fn verify_dir(entry: &ScratchRepo) -> Result<PathBuf> {
     if c != expected || c != entry.path || c.parent() != Some(root.as_path()) {
         return bad("it isn't directly under the scratch root");
     }
-    if std::fs::symlink_metadata(c.join(".git"))
-        .map(|m| !m.is_dir())
-        .unwrap_or(true)
-    {
+    if std::fs::symlink_metadata(c.join(".git")).map(|m| !m.is_dir()).unwrap_or(true) {
         return bad("its .git isn't a folder of its own");
     }
     if !has_marker(&c, entry.id) {
@@ -802,8 +643,7 @@ pub fn remove_dir_checked(entry: &ScratchRepo) -> Result<()> {
     let dir = verify_dir(entry)?;
     let trash = trash_path(entry);
     {
-        let _lock = super::marker::lock(&dir, std::time::Duration::from_secs(30))
-            .map_err(|e| ScratchError::Io(e.to_string()))?;
+        let _lock = super::marker::lock(&dir, std::time::Duration::from_secs(30)).map_err(|e| ScratchError::Io(e.to_string()))?;
         let dir = verify_dir(entry)?;
         // The checkout's lock file is inside the folder: Windows refuses to rename
         // a folder with a file open in it, so there the lock goes just before
@@ -835,16 +675,11 @@ pub fn delete_trash(trash: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     fn open_up(dir: &Path) {
         use std::os::unix::fs::PermissionsExt;
-        let Ok(m) = std::fs::symlink_metadata(dir) else {
-            return;
-        };
+        let Ok(m) = std::fs::symlink_metadata(dir) else { return };
         if !m.is_dir() {
             return;
         }
-        let _ = std::fs::set_permissions(
-            dir,
-            std::fs::Permissions::from_mode(m.permissions().mode() | 0o700),
-        );
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(m.permissions().mode() | 0o700));
         for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
             if e.file_type().is_ok_and(|t| t.is_dir()) {
                 open_up(&e.path());
@@ -872,10 +707,7 @@ pub fn pending_trash(store: &EventStore) -> Vec<PathBuf> {
 /// are still there.
 pub fn purge_trash(store: &EventStore) -> usize {
     let mut left = 0;
-    for e in load_all(store)
-        .into_iter()
-        .filter(|e| e.state == ScratchState::Removed)
-    {
+    for e in load_all(store).into_iter().filter(|e| e.state == ScratchState::Removed) {
         let t = trash_path(&e);
         if std::fs::symlink_metadata(&t).is_ok() && delete_trash(&t).is_err() {
             left += 1;
@@ -898,10 +730,7 @@ pub fn mark_removed(store: &EventStore, id: Uuid, now: i64) -> Result<ScratchRep
 
 /// Removed entries whose workspace repository is still to be removed.
 pub fn retire_pending(store: &EventStore, workspace_id: Uuid) -> Vec<ScratchRepo> {
-    list(store, workspace_id)
-        .into_iter()
-        .filter(|e| e.state == ScratchState::Removed && e.retire_pending && e.repo_id.is_some())
-        .collect()
+    list(store, workspace_id).into_iter().filter(|e| e.state == ScratchState::Removed && e.retire_pending && e.repo_id.is_some()).collect()
 }
 
 /// Note that a removed entry's workspace repository was removed too.
@@ -917,45 +746,27 @@ pub fn check_keep_dest(entry: &ScratchRepo, dest: &Path, forbidden: &[PathBuf]) 
         return Err(ScratchError::Path("keep it in an absolute path".into()));
     }
     if std::fs::symlink_metadata(dest).is_ok() {
-        return Err(ScratchError::Path(format!(
-            "{} already exists",
-            dest.display()
-        )));
+        return Err(ScratchError::Path(format!("{} already exists", dest.display())));
     }
-    let name = dest
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let name = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     if name.is_empty() || name == "." || name == ".." || name.starts_with('.') {
         return Err(ScratchError::Path("pick a folder name".into()));
     }
-    let parent = dest
-        .parent()
-        .ok_or_else(|| ScratchError::Path("pick a folder".into()))?;
+    let parent = dest.parent().ok_or_else(|| ScratchError::Path("pick a folder".into()))?;
     if !parent.is_dir() {
-        return Err(ScratchError::Path(format!(
-            "{} isn't a folder",
-            parent.display()
-        )));
+        return Err(ScratchError::Path(format!("{} isn't a folder", parent.display())));
     }
     let parent = super::git::canonical(parent);
     let target = parent.join(&name);
     if inside(&target, &super::git::canonical(&entry.root)) {
-        return Err(ScratchError::Path(
-            "keep it outside the scratch folder".into(),
-        ));
+        return Err(ScratchError::Path("keep it outside the scratch folder".into()));
     }
     if let Some(r) = enclosing_repo(&parent) {
-        return Err(ScratchError::Path(format!(
-            "keep it outside other repositories ({})",
-            r.display()
-        )));
+        return Err(ScratchError::Path(format!("keep it outside other repositories ({})", r.display())));
     }
     for f in forbidden {
         if inside(&target, &super::git::canonical(f)) {
-            return Err(ScratchError::Path(
-                "keep it outside the desktop app's data folder".into(),
-            ));
+            return Err(ScratchError::Path("keep it outside the desktop app's data folder".into()));
         }
     }
     Ok(target)
@@ -975,27 +786,19 @@ pub fn keep_dir(entry: &ScratchRepo, dest: &Path, forbidden: &[PathBuf]) -> Resu
         .map(PathBuf::from)
         .filter(|p| p != &src && p.starts_with(&src))
         .collect();
-    let _lock = super::marker::lock(&src, std::time::Duration::from_secs(30))
-        .map_err(|e| ScratchError::Io(e.to_string()))?;
+    let _lock = super::marker::lock(&src, std::time::Duration::from_secs(30)).map_err(|e| ScratchError::Io(e.to_string()))?;
     // As in [`remove_dir_checked`]: on Windows the lock (a file inside the
     // folder) goes just before the rename.
     #[cfg(windows)]
     drop(_lock);
     std::fs::rename(&src, &dest).map_err(|e| {
         if e.raw_os_error() == Some(18) {
-            ScratchError::Io(
-                "that folder is on another disk; pick one on the same disk as the scratch folder"
-                    .into(),
-            )
+            ScratchError::Io("that folder is on another disk; pick one on the same disk as the scratch folder".into())
         } else {
             io_err(e)
         }
     })?;
-    let moved: Vec<String> = worktrees
-        .iter()
-        .filter_map(|w| w.strip_prefix(&src).ok())
-        .map(|rel| dest.join(rel).to_string_lossy().into_owned())
-        .collect();
+    let moved: Vec<String> = worktrees.iter().filter_map(|w| w.strip_prefix(&src).ok()).map(|rel| dest.join(rel).to_string_lossy().into_owned()).collect();
     if !moved.is_empty() {
         let mut args = vec!["worktree", "repair"];
         args.extend(moved.iter().map(String::as_str));
@@ -1020,9 +823,7 @@ pub fn mark_kept(store: &EventStore, id: Uuid, path: &Path) -> Result<ScratchRep
 
 fn mtime(p: &Path) -> Option<i64> {
     let m = std::fs::metadata(p).ok()?.modified().ok()?;
-    m.duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_secs() as i64)
+    m.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs() as i64)
 }
 
 /// The last activity of a live scratch repository: the latest of what this
@@ -1030,18 +831,8 @@ fn mtime(p: &Path) -> Option<i64> {
 /// a branch moved, a worktree added), never later than `now`.
 pub fn activity(entry: &ScratchRepo, now: i64) -> i64 {
     let git = entry.path.join(".git");
-    let traces = [
-        git.join("HEAD"),
-        git.join("index"),
-        git.join("logs").join("HEAD"),
-        git.join("refs").join("heads"),
-        git.join("worktrees"),
-    ];
-    traces
-        .iter()
-        .filter_map(|p| mtime(p))
-        .fold(entry.last_activity, i64::max)
-        .min(now)
+    let traces = [git.join("HEAD"), git.join("index"), git.join("logs").join("HEAD"), git.join("refs").join("heads"), git.join("worktrees")];
+    traces.iter().filter_map(|p| mtime(p)).fold(entry.last_activity, i64::max).min(now)
 }
 
 /// When a live scratch repository will be removed, and when its notice
@@ -1063,11 +854,7 @@ pub fn expiry(entry: &ScratchRepo, settings: &Settings, now: i64) -> Option<Expi
     }
     let remove_at = activity(entry, now) + i64::from(days) * DAY;
     let notice_from = remove_at - i64::from(NOTICE_DAYS.min(days)) * DAY;
-    Some(Expiry {
-        remove_at,
-        notice_from,
-        notice: now >= notice_from,
-    })
+    Some(Expiry { remove_at, notice_from, notice: now >= notice_from })
 }
 
 /// What the cleanup should do now.
@@ -1085,9 +872,7 @@ pub struct Due {
 pub fn due(store: &EventStore, workspace_id: Uuid, settings: &Settings, now: i64) -> Due {
     let mut out = Due::default();
     for e in live(store, workspace_id) {
-        let Some(x) = expiry(&e, settings, now) else {
-            continue;
-        };
+        let Some(x) = expiry(&e, settings, now) else { continue };
         if now >= x.remove_at {
             out.remove.push(e);
         } else if x.notice && e.noticed_at.is_none() {
@@ -1121,8 +906,7 @@ pub fn removed_text(entry: &ScratchRepo, host_label: &str) -> String {
 
 /// `2026-12-09` for a unix time.
 pub fn date(unix: i64) -> String {
-    let t =
-        time::OffsetDateTime::from_unix_timestamp(unix).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    let t = time::OffsetDateTime::from_unix_timestamp(unix).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     format!("{:04}-{:02}-{:02}", t.year(), u8::from(t.month()), t.day())
 }
 

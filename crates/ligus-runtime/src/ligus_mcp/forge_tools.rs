@@ -52,12 +52,7 @@ impl ForgeBinding {
             .into_iter()
             .find(|r| r.full_name().eq_ignore_ascii_case(raw))
             .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "only this chat's repository ({}) or its upstream can be read",
-                    self.repo.full_name()
-                )
-            })
+            .ok_or_else(|| format!("only this chat's repository ({}) or its upstream can be read", self.repo.full_name()))
     }
 }
 
@@ -71,11 +66,7 @@ pub fn egress_allows(egress: &EgressPolicy) -> bool {
 }
 
 fn denied(msg: impl Into<String>) -> ToolResult {
-    ToolResult {
-        text: json!({"error": "denied", "message": msg.into()}).to_string(),
-        is_error: true,
-        outcome: Outcome::Denied,
-    }
+    ToolResult { text: json!({"error": "denied", "message": msg.into()}).to_string(), is_error: true, outcome: Outcome::Denied }
 }
 
 fn failed(e: ForgeError) -> ToolResult {
@@ -83,31 +74,17 @@ fn failed(e: ForgeError) -> ToolResult {
         ForgeError::Unauthorized(_) | ForgeError::NotSignedIn(_) => Outcome::Denied,
         _ => Outcome::Error,
     };
-    ToolResult {
-        text: json!({"error": "failed", "message": e.to_string()}).to_string(),
-        is_error: true,
-        outcome,
-    }
+    ToolResult { text: json!({"error": "failed", "message": e.to_string()}).to_string(), is_error: true, outcome }
 }
 
 fn ok(v: Value) -> ToolResult {
-    ToolResult {
-        text: v.to_string(),
-        is_error: false,
-        outcome: Outcome::Ok,
-    }
+    ToolResult { text: v.to_string(), is_error: false, outcome: Outcome::Ok }
 }
 
 /// Run one code-host read. The caller has authorized the turn, charged the
 /// budgets and checked the egress tier.
 pub async fn call(b: &ForgeBinding, tool: &str, args: &Value) -> ToolResult {
-    let s = |k: &str| {
-        args.get(k)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or("")
-            .to_string()
-    };
+    let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
     let repo = match b.target(&s("repo")) {
         Ok(r) => r,
         Err(m) => return denied(m),
@@ -116,15 +93,9 @@ pub async fn call(b: &ForgeBinding, tool: &str, args: &Value) -> ToolResult {
         Some(st) => st,
         None => return denied("state is open, closed or all"),
     };
-    let limit = args
-        .get("limit")
-        .and_then(Value::as_u64)
-        .unwrap_or(20)
-        .clamp(1, 50) as u32;
+    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20).clamp(1, 50) as u32;
     let number = s("number");
-    if matches!(tool, "ligus_forge_read_pr" | "ligus_forge_read_issue")
-        && (number.is_empty() || number.len() > 20 || !number.bytes().all(|c| c.is_ascii_digit()))
-    {
+    if matches!(tool, "ligus_forge_read_pr" | "ligus_forge_read_issue") && (number.is_empty() || number.len() > 20 || !number.bytes().all(|c| c.is_ascii_digit())) {
         return denied("number is the pull request or issue number");
     }
     let head = |extra: Value| {
@@ -137,9 +108,7 @@ pub async fn call(b: &ForgeBinding, tool: &str, args: &Value) -> ToolResult {
     let r = &b.reader;
     match tool {
         "ligus_forge_list_prs" => match r.list_change_requests(&repo, state, limit).await {
-            Ok(list) => ok(head(
-                json!({"changeRequests": list.into_iter().take(50).map(|mut c| { c.body = c.body.chars().take(500).collect(); c }).collect::<Vec<_>>()}),
-            )),
+            Ok(list) => ok(head(json!({"changeRequests": list.into_iter().take(50).map(|mut c| { c.body = c.body.chars().take(500).collect(); c }).collect::<Vec<_>>()}))),
             Err(e) => failed(e),
         },
         "ligus_forge_read_pr" => {
@@ -147,22 +116,15 @@ pub async fn call(b: &ForgeBinding, tool: &str, args: &Value) -> ToolResult {
                 Ok(c) => c,
                 Err(e) => return failed(e),
             };
-            let comments = r
-                .review_comments(&repo, &number)
-                .await
-                .map(|c| c.into_iter().take(100).collect::<Vec<_>>());
+            let comments = r.review_comments(&repo, &number).await.map(|c| c.into_iter().take(100).collect::<Vec<_>>());
             let ci = match cr.head_sha.as_deref() {
                 Some(sha) => r.ci_status(&repo, sha).await.ok(),
                 None => None,
             };
-            ok(head(
-                json!({"changeRequest": cr, "reviewComments": comments.unwrap_or_default(), "ci": ci}),
-            ))
+            ok(head(json!({"changeRequest": cr, "reviewComments": comments.unwrap_or_default(), "ci": ci})))
         }
         "ligus_forge_list_issues" => match r.issues(&repo, state, limit).await {
-            Ok(list) => ok(head(
-                json!({"issues": list.into_iter().take(50).map(|mut i| { i.body = i.body.chars().take(500).collect(); i }).collect::<Vec<_>>()}),
-            )),
+            Ok(list) => ok(head(json!({"issues": list.into_iter().take(50).map(|mut i| { i.body = i.body.chars().take(500).collect(); i }).collect::<Vec<_>>()}))),
             Err(e) => failed(e),
         },
         "ligus_forge_read_issue" => match r.issue(&repo, &number).await {
@@ -181,15 +143,9 @@ pub async fn call(b: &ForgeBinding, tool: &str, args: &Value) -> ToolResult {
         }
         "ligus_forge_read_file" => {
             let path = s("path");
-            let git_ref = Some(s("ref"))
-                .filter(|r| !r.is_empty())
-                .unwrap_or_else(|| "HEAD".into());
-            if !ligus_forge::spec::valid_file_path(&path)
-                || !ligus_forge::spec::valid_git_ref(&git_ref)
-            {
-                return denied(
-                    "path is a repository-relative file path and ref a branch, tag or commit",
-                );
+            let git_ref = Some(s("ref")).filter(|r| !r.is_empty()).unwrap_or_else(|| "HEAD".into());
+            if !ligus_forge::spec::valid_file_path(&path) || !ligus_forge::spec::valid_git_ref(&git_ref) {
+                return denied("path is a repository-relative file path and ref a branch, tag or commit");
             }
             match r.file_at(&repo, &path, &git_ref).await {
                 Ok(f) => ok(head(json!({"file": f}))),
@@ -219,33 +175,19 @@ pub fn configured_remote_url(dir: &std::path::Path, remote: &str) -> Option<Stri
         .stdin(std::process::Stdio::null())
         .output()
         .ok()?;
-    let s = String::from_utf8_lossy(&o.stdout)
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let s = String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").trim().to_string();
     (o.status.success() && !s.is_empty()).then_some(s)
 }
 
 /// The read-only binding for a checkout: its configured `origin` on one of
 /// `forges`, and `upstream` (when it names another repository on the same
 /// forge).
-pub fn binding_for_checkout(
-    dir: &std::path::Path,
-    forges: &[Arc<dyn ligus_forge::Forge>],
-) -> Option<ForgeBinding> {
+pub fn binding_for_checkout(dir: &std::path::Path, forges: &[Arc<dyn ligus_forge::Forge>]) -> Option<ForgeBinding> {
     let origin = configured_remote_url(dir, "origin")?;
     for f in forges {
         if let Some(repo) = f.repo_of_remote(&origin) {
-            let upstream = configured_remote_url(dir, "upstream")
-                .and_then(|u| f.repo_of_remote(&u))
-                .filter(|u| !u.same(&repo));
-            return Some(ForgeBinding {
-                reader: Arc::new(ligus_forge::ReadOnly(f.clone())),
-                repo,
-                upstream,
-            });
+            let upstream = configured_remote_url(dir, "upstream").and_then(|u| f.repo_of_remote(&u)).filter(|u| !u.same(&repo));
+            return Some(ForgeBinding { reader: Arc::new(ligus_forge::ReadOnly(f.clone())), repo, upstream });
         }
     }
     None
@@ -256,17 +198,8 @@ mod binding_tests {
     use super::*;
 
     fn git(dir: &std::path::Path, args: &[&str]) {
-        let o = ligus_core::process_util::git()
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            o.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&o.stderr)
-        );
+        let o = ligus_core::process_util::git().arg("-C").arg(dir).args(args).output().unwrap();
+        assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
     }
 
     /// `url.<base>.insteadOf` rewrites what `git remote get-url` reports (and
@@ -278,55 +211,15 @@ mod binding_tests {
         let d = tempfile::tempdir().unwrap();
         let dir = d.path();
         git(dir, &["init", "-q"]);
-        git(
-            dir,
-            &["remote", "add", "origin", "https://github.com/me/app.git"],
-        );
-        git(
-            dir,
-            &[
-                "remote",
-                "add",
-                "upstream",
-                "https://github.com/org/app.git",
-            ],
-        );
-        git(
-            dir,
-            &[
-                "config",
-                "url.https://github.com/victim/.insteadOf",
-                "https://github.com/me/",
-            ],
-        );
-        git(
-            dir,
-            &[
-                "config",
-                "url.https://github.com/victim2/.pushInsteadOf",
-                "https://github.com/me/",
-            ],
-        );
-        git(
-            dir,
-            &[
-                "config",
-                "url.https://github.com/other/.insteadOf",
-                "https://github.com/org/",
-            ],
-        );
-        let c = ligus_forge::Connection::new(
-            ligus_forge::ForgeKind::GitHub,
-            "https://github.com",
-            ligus_forge::AuthSource::None,
-        )
-        .unwrap();
+        git(dir, &["remote", "add", "origin", "https://github.com/me/app.git"]);
+        git(dir, &["remote", "add", "upstream", "https://github.com/org/app.git"]);
+        git(dir, &["config", "url.https://github.com/victim/.insteadOf", "https://github.com/me/"]);
+        git(dir, &["config", "url.https://github.com/victim2/.pushInsteadOf", "https://github.com/me/"]);
+        git(dir, &["config", "url.https://github.com/other/.insteadOf", "https://github.com/org/"]);
+        let c = ligus_forge::Connection::new(ligus_forge::ForgeKind::GitHub, "https://github.com", ligus_forge::AuthSource::None).unwrap();
         let f = c.build(Arc::new(ligus_forge::tokens::Anonymous));
         let b = binding_for_checkout(dir, &[f]).expect("origin is on github.com");
         assert_eq!(b.repo.full_name(), "me/app");
-        assert_eq!(
-            b.upstream.map(|u| u.full_name()).as_deref(),
-            Some("org/app")
-        );
+        assert_eq!(b.upstream.map(|u| u.full_name()).as_deref(), Some("org/app"));
     }
 }

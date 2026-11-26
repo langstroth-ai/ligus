@@ -104,25 +104,14 @@ impl InviteConn {
     pub fn trust(&self, people: &[CoMember]) -> FounderTrust {
         let known = dm::known_fingerprints(people);
         let signer = self.signed_by(&|d| people.iter().any(|p| p.revoked_devices.contains(&d)));
-        dm::check_founder(
-            self.founder_actor_id.as_deref(),
-            self.fk.as_deref(),
-            &known,
-            signer,
-        )
+        dm::check_founder(self.founder_actor_id.as_deref(), self.fk.as_deref(), &known, signer)
     }
 
     /// The code: `hivews1:` + base64url(JSON), icon left out.
     pub fn encode(&self) -> String {
-        let conn = InviteConn {
-            icon: None,
-            ..self.clone()
-        };
+        let conn = InviteConn { icon: None, ..self.clone() };
         let json = serde_json::to_vec(&conn).unwrap_or_default();
-        format!(
-            "hivews1:{}",
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
-        )
+        format!("hivews1:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json))
     }
 
     pub fn decode(code: &str) -> Result<Self, String> {
@@ -136,8 +125,7 @@ impl InviteConn {
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(body.trim().as_bytes())
             .map_err(|_| "the invite isn't encoded correctly".to_string())?;
-        let mut conn: InviteConn =
-            serde_json::from_slice(&bytes).map_err(|_| "the invite isn't readable".to_string())?;
+        let mut conn: InviteConn = serde_json::from_slice(&bytes).map_err(|_| "the invite isn't readable".to_string())?;
         if conn.room.trim().is_empty() {
             return Err("the invite is missing a room".into());
         }
@@ -170,21 +158,12 @@ pub fn random_hex(len: usize) -> Result<String, getrandom::Error> {
 /// Admin) issued it: relay, room, workspace key, every authorized epoch key
 /// `svc` holds, the founder pin, and the founder's signature when `svc` is
 /// the founder's device. A bearer secret: hand it only to the box it admits.
-pub fn admission_code(
-    cfg: &crate::Config,
-    svc: &ligus_runtime::ChatService,
-    inv: Uuid,
-    redeem_key: &[u8; 32],
-) -> anyhow::Result<String> {
+pub fn admission_code(cfg: &crate::Config, svc: &ligus_runtime::ChatService, inv: Uuid, redeem_key: &[u8; 32]) -> anyhow::Result<String> {
     let relay = cfg
         .relay_url
         .clone()
         .filter(|r| crate::usable_relay_url(r))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "this workspace has no relay URL, so no box could join it (set LIGUS_RELAY_URL)"
-            )
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("this workspace has no relay URL, so no box could join it (set LIGUS_RELAY_URL)"))?;
     let ws = crate::uuid_of_room(&cfg.room);
     let pin = svc.store().workspace_pin(ws)?;
     let mut conn = InviteConn {
@@ -195,9 +174,7 @@ pub fn admission_code(
         icon: None,
         dm_account: None,
         founder_actor_id: pin.as_ref().map(|p| p.founder_account.to_string()),
-        fk: pin
-            .as_ref()
-            .map(|p| p.fk.iter().map(|b| format!("{b:02x}")).collect()),
+        fk: pin.as_ref().map(|p| p.fk.iter().map(|b| format!("{b:02x}")).collect()),
         inv: Some(inv.to_string()),
         ek: Vec::new(),
         sig: None,
@@ -205,15 +182,11 @@ pub fn admission_code(
     if let Ok(src) = crate::key_source(cfg) {
         conn.ek = svc.delivered_epoch_keys(ws, &src).unwrap_or_default();
     }
-    let identity = ligus_runtime::IdentityStore::new(
-        &cfg.data_dir,
-        ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir),
-    );
+    let identity = ligus_runtime::IdentityStore::new(&cfg.data_dir, ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));
     if let Some(stored) = identity.load()? {
         conn.sig = conn.with_claims(|c| svc.sign_invite(c, &stored.device.certificate));
     }
-    ligus_runtime::box_admission::with_redeem_key(&conn.encode(), redeem_key)
-        .map_err(|e| anyhow::anyhow!(e))
+    ligus_runtime::box_admission::with_redeem_key(&conn.encode(), redeem_key).map_err(|e| anyhow::anyhow!(e))
 }
 
 #[cfg(test)]
@@ -245,12 +218,7 @@ mod tests {
     fn encoding_matches_the_desktop_shape() {
         let code = sample().encode();
         let body = code.strip_prefix("hivews1:").unwrap();
-        let json = String::from_utf8(
-            base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .decode(body)
-                .unwrap(),
-        )
-        .unwrap();
+        let json = String::from_utf8(base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(body).unwrap()).unwrap();
         assert_eq!(
             json,
             r#"{"name":"Team Rocket","relay_url":"wss://relay.example/v1","room":"team-rocket-9f3a2b","key":"hunter2","icon":null,"dm_account":null,"founder_actor_id":"6f1c2d3e-0000-4000-8000-000000000042","fk":"00112233445566778899aabbccddeeff"}"#
@@ -262,11 +230,7 @@ mod tests {
     fn decode_refuses_junk_and_oversize() {
         assert!(InviteConn::decode("hivedev1:abc").is_err());
         assert!(InviteConn::decode("hivews1:!!!").is_err());
-        let no_room = InviteConn {
-            room: " ".into(),
-            ..sample()
-        }
-        .encode();
+        let no_room = InviteConn { room: " ".into(), ..sample() }.encode();
         assert!(InviteConn::decode(&no_room).is_err());
         assert!(InviteConn::decode(&format!("hivews1:{}", "A".repeat(MAX_CODE_LEN))).is_err());
     }
@@ -279,15 +243,8 @@ mod tests {
         let account = SigningKeypair::generate().unwrap();
         let device = SigningKeypair::generate().unwrap();
         let founder = Uuid::new_v4();
-        let cert = DeviceCertificate::issue(
-            &account,
-            founder,
-            &device.public_key_bytes(),
-            ligus_core::Timestamp::epoch(),
-        );
-        let fk = ligus_runtime::envelope_verifier::FounderPin::fingerprint_hex(
-            &account.public_key_bytes(),
-        );
+        let cert = DeviceCertificate::issue(&account, founder, &device.public_key_bytes(), ligus_core::Timestamp::epoch());
+        let fk = ligus_runtime::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes());
         for name in ["", "Team"] {
             let mut conn = InviteConn {
                 name: name.into(),
@@ -297,37 +254,16 @@ mod tests {
                 inv: Some(Uuid::new_v4().to_string()),
                 ..sample()
             };
-            conn.sig = Some(conn.with_claims(|c| {
-                ligus_runtime::invite_sig::sign(c, 1, &device, &cert, &account.public_key_bytes())
-            }));
+            conn.sig = Some(conn.with_claims(|c| ligus_runtime::invite_sig::sign(c, 1, &device, &cert, &account.public_key_bytes())));
             let back = InviteConn::decode(&conn.encode()).unwrap();
             assert_eq!(back.signed_by(&|_| false), Some(founder));
-            assert_eq!(
-                back.signed_by(&|d| d == cert.device_id),
-                None,
-                "a revoked device's signature counts for nothing"
-            );
+            assert_eq!(back.signed_by(&|d| d == cert.device_id), None, "a revoked device's signature counts for nothing");
             for changed in [
-                InviteConn {
-                    relay_url: "https://evil.example".into(),
-                    ..back.clone()
-                },
-                InviteConn {
-                    room: "other".into(),
-                    ..back.clone()
-                },
-                InviteConn {
-                    key: Some("other".into()),
-                    ..back.clone()
-                },
-                InviteConn {
-                    dm_account: Some(Uuid::new_v4().to_string()),
-                    ..back.clone()
-                },
-                InviteConn {
-                    sig: None,
-                    ..back.clone()
-                },
+                InviteConn { relay_url: "https://evil.example".into(), ..back.clone() },
+                InviteConn { room: "other".into(), ..back.clone() },
+                InviteConn { key: Some("other".into()), ..back.clone() },
+                InviteConn { dm_account: Some(Uuid::new_v4().to_string()), ..back.clone() },
+                InviteConn { sig: None, ..back.clone() },
             ] {
                 assert_eq!(changed.signed_by(&|_| false), None);
             }

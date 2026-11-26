@@ -14,111 +14,42 @@ use serde_json::{json, Value};
 /// text); folded `ligus_ask` gained `to` (`person`, `room`); and
 /// `ligus_ask_human`'s description points at them. Nothing was renamed.
 pub const TOOLS: [(&str, &str); 30] = [
-    (
-        "ligus_propose_diff",
-        include_str!("schema/ligus_propose_diff.json"),
-    ),
-    (
-        "ligus_propose_decision",
-        include_str!("schema/ligus_propose_decision.json"),
-    ),
-    (
-        "ligus_propose_command",
-        include_str!("schema/ligus_propose_command.json"),
-    ),
-    (
-        "ligus_propose_workflow",
-        include_str!("schema/ligus_propose_workflow.json"),
-    ),
-    (
-        "ligus_open_alternatives",
-        include_str!("schema/ligus_open_alternatives.json"),
-    ),
+    ("ligus_propose_diff", include_str!("schema/ligus_propose_diff.json")),
+    ("ligus_propose_decision", include_str!("schema/ligus_propose_decision.json")),
+    ("ligus_propose_command", include_str!("schema/ligus_propose_command.json")),
+    ("ligus_propose_workflow", include_str!("schema/ligus_propose_workflow.json")),
+    ("ligus_open_alternatives", include_str!("schema/ligus_open_alternatives.json")),
     ("ligus_assess", include_str!("schema/ligus_assess.json")),
     ("ligus_handoff", include_str!("schema/ligus_handoff.json")),
     ("ligus_mark", include_str!("schema/ligus_mark.json")),
     ("ligus_unmark", include_str!("schema/ligus_unmark.json")),
     ("ligus_react", include_str!("schema/ligus_react.json")),
-    (
-        "ligus_list_chats",
-        include_str!("schema/ligus_list_chats.json"),
-    ),
-    (
-        "ligus_read_chat",
-        include_str!("schema/ligus_read_chat.json"),
-    ),
-    (
-        "ligus_read_proposals",
-        include_str!("schema/ligus_read_proposals.json"),
-    ),
-    (
-        "ligus_read_board",
-        include_str!("schema/ligus_read_board.json"),
-    ),
-    (
-        "ligus_ask_human",
-        include_str!("schema/ligus_ask_human.json"),
-    ),
+    ("ligus_list_chats", include_str!("schema/ligus_list_chats.json")),
+    ("ligus_read_chat", include_str!("schema/ligus_read_chat.json")),
+    ("ligus_read_proposals", include_str!("schema/ligus_read_proposals.json")),
+    ("ligus_read_board", include_str!("schema/ligus_read_board.json")),
+    ("ligus_ask_human", include_str!("schema/ligus_ask_human.json")),
     // Decision cards (agent questions, 0.4).
-    (
-        "ligus_ask_person",
-        include_str!("schema/ligus_ask_person.json"),
-    ),
+    ("ligus_ask_person", include_str!("schema/ligus_ask_person.json")),
     ("ligus_ask_room", include_str!("schema/ligus_ask_room.json")),
     ("ligus_report", include_str!("schema/ligus_report.json")),
     // Workspace memory (search, read, propose) and live task state.
-    (
-        "ligus_memory_search",
-        include_str!("schema/ligus_memory_search.json"),
-    ),
-    (
-        "ligus_memory_read",
-        include_str!("schema/ligus_memory_read.json"),
-    ),
-    (
-        "ligus_memory_propose",
-        include_str!("schema/ligus_memory_propose.json"),
-    ),
-    (
-        "ligus_task_update",
-        include_str!("schema/ligus_task_update.json"),
-    ),
-    (
-        "ligus_task_state",
-        include_str!("schema/ligus_task_state.json"),
-    ),
+    ("ligus_memory_search", include_str!("schema/ligus_memory_search.json")),
+    ("ligus_memory_read", include_str!("schema/ligus_memory_read.json")),
+    ("ligus_memory_propose", include_str!("schema/ligus_memory_propose.json")),
+    ("ligus_task_update", include_str!("schema/ligus_task_update.json")),
+    ("ligus_task_state", include_str!("schema/ligus_task_state.json")),
     // Read-only code-host tools (IDENTITY-AND-FORGES 5.5): the token stays
     // in the host process; see `forge_tools`.
-    (
-        "ligus_forge_list_prs",
-        include_str!("schema/ligus_forge_list_prs.json"),
-    ),
-    (
-        "ligus_forge_read_pr",
-        include_str!("schema/ligus_forge_read_pr.json"),
-    ),
-    (
-        "ligus_forge_list_issues",
-        include_str!("schema/ligus_forge_list_issues.json"),
-    ),
-    (
-        "ligus_forge_read_issue",
-        include_str!("schema/ligus_forge_read_issue.json"),
-    ),
-    (
-        "ligus_forge_ci_status",
-        include_str!("schema/ligus_forge_ci_status.json"),
-    ),
-    (
-        "ligus_forge_read_file",
-        include_str!("schema/ligus_forge_read_file.json"),
-    ),
+    ("ligus_forge_list_prs", include_str!("schema/ligus_forge_list_prs.json")),
+    ("ligus_forge_read_pr", include_str!("schema/ligus_forge_read_pr.json")),
+    ("ligus_forge_list_issues", include_str!("schema/ligus_forge_list_issues.json")),
+    ("ligus_forge_read_issue", include_str!("schema/ligus_forge_read_issue.json")),
+    ("ligus_forge_ci_status", include_str!("schema/ligus_forge_ci_status.json")),
+    ("ligus_forge_read_file", include_str!("schema/ligus_forge_read_file.json")),
     // Issue #118: an agent's file offer, filed as a proposal a person
     // approves before anything is shared.
-    (
-        "ligus_offer_file",
-        include_str!("schema/ligus_offer_file.json"),
-    ),
+    ("ligus_offer_file", include_str!("schema/ligus_offer_file.json")),
 ];
 
 /// The same capabilities folded into four tools, for in-process tool loops
@@ -158,13 +89,7 @@ pub fn is_ligus_tool(name: &str) -> bool {
 
 /// A folded call as the full tool it stands for.
 pub fn unfold(name: &str, input: &Value) -> Result<(String, Value), String> {
-    let field = |k: &str| {
-        input
-            .get(k)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    };
+    let field = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let full = match name {
         "ligus_propose" => match field("kind").as_str() {
             "diff" => "ligus_propose_diff",
@@ -215,10 +140,7 @@ pub fn unfold(name: &str, input: &Value) -> Result<(String, Value), String> {
     if let Some(o) = args.as_object_mut() {
         for k in ["kind", "op", "what"] {
             // `kind` is also a mark's field; only strip the folding selector.
-            if (k == "kind" && name == "ligus_propose")
-                || (k == "op" && name == "ligus_flow")
-                || (k == "what" && name == "ligus_read")
-            {
+            if (k == "kind" && name == "ligus_propose") || (k == "op" && name == "ligus_flow") || (k == "what" && name == "ligus_read") {
                 o.remove(k);
             }
         }
@@ -252,11 +174,7 @@ mod tests {
         let digest: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(digest, GOLDEN, "a frozen Ligus tool schema changed");
         assert_eq!(TOOLS.len(), 30);
-        assert_eq!(
-            FOLDED.len(),
-            4,
-            "the folded set fits the reserved MCP slots"
-        );
+        assert_eq!(FOLDED.len(), 4, "the folded set fits the reserved MCP slots");
         assert!(FOLDED.len() <= crate::agent_tools::MCP_RESERVED_SLOTS);
     }
 
@@ -264,37 +182,16 @@ mod tests {
 
     #[test]
     fn folded_calls_unfold_to_the_full_tools() {
-        let (n, a) = unfold(
-            "ligus_propose",
-            &json!({"kind": "command", "title": "t", "argv": ["ls"]}),
-        )
-        .unwrap();
+        let (n, a) = unfold("ligus_propose", &json!({"kind": "command", "title": "t", "argv": ["ls"]})).unwrap();
         assert_eq!(n, "ligus_propose_command");
         assert!(a.get("kind").is_none() && a["argv"][0] == "ls");
-        let (n, a) = unfold(
-            "ligus_flow",
-            &json!({"op": "mark", "kind": "lock", "path": "x"}),
-        )
-        .unwrap();
+        let (n, a) = unfold("ligus_flow", &json!({"op": "mark", "kind": "lock", "path": "x"})).unwrap();
         assert_eq!(n, "ligus_mark");
         assert_eq!(a["kind"], "lock", "a mark keeps its own kind");
-        assert_eq!(
-            unfold("ligus_read", &json!({"what": "board"})).unwrap().0,
-            "ligus_read_board"
-        );
-        assert_eq!(
-            unfold("ligus_ask", &json!({"question": "?"})).unwrap().0,
-            "ligus_ask_human"
-        );
-        let (n, a) = unfold(
-            "ligus_ask",
-            &json!({"to": "person", "member": "m1", "question": "?"}),
-        )
-        .unwrap();
-        assert_eq!(
-            (n.as_str(), a["to"].as_str()),
-            ("ligus_ask_person", Some("m1"))
-        );
+        assert_eq!(unfold("ligus_read", &json!({"what": "board"})).unwrap().0, "ligus_read_board");
+        assert_eq!(unfold("ligus_ask", &json!({"question": "?"})).unwrap().0, "ligus_ask_human");
+        let (n, a) = unfold("ligus_ask", &json!({"to": "person", "member": "m1", "question": "?"})).unwrap();
+        assert_eq!((n.as_str(), a["to"].as_str()), ("ligus_ask_person", Some("m1")));
         let (n, a) = unfold("ligus_ask", &json!({"to": "room", "quorum": 2})).unwrap();
         assert_eq!(n, "ligus_ask_room");
         assert!(a.get("to").is_none() && a["quorum"] == 2);
@@ -302,44 +199,13 @@ mod tests {
         assert!(unfold("ligus_propose", &json!({"kind": "vote"})).is_err());
         assert!(unfold("ligus_apply", &json!({})).is_err());
         let (n, a) = unfold("ligus_read", &json!({"what": "forge.pr", "number": "7"})).unwrap();
-        assert_eq!(
-            (n.as_str(), a["number"].as_str()),
-            ("ligus_forge_read_pr", Some("7"))
-        );
+        assert_eq!((n.as_str(), a["number"].as_str()), ("ligus_forge_read_pr", Some("7")));
         assert!(a.get("what").is_none());
-        let (n, a) = unfold(
-            "ligus_propose",
-            &json!({"kind": "memory", "op": "create", "title": "t"}),
-        )
-        .unwrap();
-        assert_eq!(
-            (n.as_str(), a["op"].as_str()),
-            ("ligus_memory_propose", Some("create")),
-            "a memory proposal keeps its op"
-        );
-        assert_eq!(
-            unfold("ligus_flow", &json!({"op": "taskUpdate"}))
-                .unwrap()
-                .0,
-            "ligus_task_update"
-        );
-        assert_eq!(
-            unfold("ligus_read", &json!({"what": "memory", "query": "x"}))
-                .unwrap()
-                .0,
-            "ligus_memory_search"
-        );
-        assert_eq!(
-            unfold("ligus_read", &json!({"what": "memoryEntry"}))
-                .unwrap()
-                .0,
-            "ligus_memory_read"
-        );
-        assert_eq!(
-            unfold("ligus_read", &json!({"what": "taskState"}))
-                .unwrap()
-                .0,
-            "ligus_task_state"
-        );
+        let (n, a) = unfold("ligus_propose", &json!({"kind": "memory", "op": "create", "title": "t"})).unwrap();
+        assert_eq!((n.as_str(), a["op"].as_str()), ("ligus_memory_propose", Some("create")), "a memory proposal keeps its op");
+        assert_eq!(unfold("ligus_flow", &json!({"op": "taskUpdate"})).unwrap().0, "ligus_task_update");
+        assert_eq!(unfold("ligus_read", &json!({"what": "memory", "query": "x"})).unwrap().0, "ligus_memory_search");
+        assert_eq!(unfold("ligus_read", &json!({"what": "memoryEntry"})).unwrap().0, "ligus_memory_read");
+        assert_eq!(unfold("ligus_read", &json!({"what": "taskState"})).unwrap().0, "ligus_task_state");
     }
 }

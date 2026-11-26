@@ -41,9 +41,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ligus_core::presence::native::{RawAssertion, RawRegistration};
-use ligus_core::presence::{
-    returned_challenge, unb64url, PresenceAssertion, PresencePolicy, RecoveryKey,
-};
+use ligus_core::presence::{returned_challenge, unb64url, PresenceAssertion, PresencePolicy, RecoveryKey};
 use ligus_runtime::chat_service::PresenceRequest;
 
 #[cfg(target_os = "macos")]
@@ -110,8 +108,7 @@ pub trait NativeAuthenticator: Send + Sync {
 
 /// This OS's native authenticator, if it has one and it isn't turned off.
 pub fn platform(app: &tauri::AppHandle) -> Option<Arc<dyn NativeAuthenticator>> {
-    if cfg!(any(test, feature = "e2e")) || std::env::var(DISABLE_ENV).is_ok_and(|v| v.trim() == "0")
-    {
+    if cfg!(any(test, feature = "e2e")) || std::env::var(DISABLE_ENV).is_ok_and(|v| v.trim() == "0") {
         return None;
     }
     platform_impl(app)
@@ -187,12 +184,7 @@ impl Default for Signals {
 
 impl Signals {
     pub const fn new() -> Self {
-        Self {
-            turn: Mutex::new(()),
-            cancel: AtomicBool::new(false),
-            browser: AtomicBool::new(false),
-            recovery: Mutex::new(None),
-        }
+        Self { turn: Mutex::new(()), cancel: AtomicBool::new(false), browser: AtomicBool::new(false), recovery: Mutex::new(None) }
     }
     /// Wait for any other ceremony to end; this one runs while the guard
     /// lives. Lock order: the service lock (when held) before the turn,
@@ -222,18 +214,13 @@ impl Signals {
     /// The person entered a recovery key for the ceremony whose digest
     /// (short form) the sheet showed.
     pub fn set_recovery(&self, k: RecoveryKey, digest_short: &str) {
-        *self.recovery.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some((digest_short.to_string(), k));
+        *self.recovery.lock().unwrap_or_else(|e| e.into_inner()) = Some((digest_short.to_string(), k));
     }
     /// The recovery key entered for the ceremony with `digest_short`. One
     /// entered for another ceremony (words submitted as the previous one
     /// ended) is dropped: it never signs a digest the sheet didn't show.
     pub fn take_recovery(&self, digest_short: &str) -> Option<RecoveryKey> {
-        let (shown, k) = self
-            .recovery
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()?;
+        let (shown, k) = self.recovery.lock().unwrap_or_else(|e| e.into_inner()).take()?;
         if shown == digest_short {
             Some(k)
         } else {
@@ -322,14 +309,10 @@ pub fn attempt<T: Send + 'static>(
                 pending = false;
                 events.stage(Stage::Dismissed);
             }
-            Ok(Err(NativeError::Unavailable(why) | NativeError::Failed(why))) => {
-                return Attempt::Browser(why)
-            }
+            Ok(Err(NativeError::Unavailable(why) | NativeError::Failed(why))) => return Attempt::Browser(why),
             Ok(Err(NativeError::Refused(why))) => return Attempt::Failed(why),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Attempt::Browser("the native authenticator stopped".into())
-            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Attempt::Browser("the native authenticator stopped".into()),
         }
     }
 }
@@ -354,15 +337,9 @@ pub fn run_get(
         rp_id: req.policy.rp_id.clone(),
         origin,
         challenge: req.challenge,
-        allow: req
-            .credential_ids
-            .iter()
-            .filter_map(|c| unb64url(c).ok())
-            .collect(),
+        allow: req.credential_ids.iter().filter_map(|c| unb64url(c).ok()).collect(),
     };
-    let out = match attempt(auth, sig, Some(&req.digest_short), wait, events, move |a| {
-        a.get(&g)
-    }) {
+    let out = match attempt(auth, sig, Some(&req.digest_short), wait, events, move |a| a.get(&g)) {
         Attempt::Done(raw) => {
             let a = raw.into_assertion();
             if returned_challenge(&a.client_data_json).as_deref() == Some(&req.challenge[..]) {
@@ -422,11 +399,7 @@ pub fn run_create(
         challenge: req.challenge,
         user_id: user_id.to_vec(),
         user_name: user_name.to_string(),
-        exclude: req
-            .credential_ids
-            .iter()
-            .filter_map(|c| unb64url(c).ok())
-            .collect(),
+        exclude: req.credential_ids.iter().filter_map(|c| unb64url(c).ok()).collect(),
     };
     let out = match attempt(auth, sig, None, wait, events, move |a| a.create(&c)) {
         Attempt::Done(raw) => {
@@ -462,10 +435,7 @@ pub(crate) struct PendingOp<T: Copy> {
 #[cfg_attr(not(windows), allow(dead_code))]
 impl<T: Copy> PendingOp<T> {
     pub const fn new() -> Self {
-        Self {
-            slot: Mutex::new(None),
-            next: std::sync::atomic::AtomicU64::new(0),
-        }
+        Self { slot: Mutex::new(None), next: std::sync::atomic::AtomicU64::new(0) }
     }
     /// A call starts with `v`; returns its ticket for [`PendingOp::end`].
     pub fn begin(&self, v: T) -> u64 {
@@ -482,10 +452,7 @@ impl<T: Copy> PendingOp<T> {
     }
     /// The pending call's value, if one is running.
     pub fn current(&self) -> Option<T> {
-        self.slot
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .map(|(_, v)| v)
+        self.slot.lock().unwrap_or_else(|e| e.into_inner()).map(|(_, v)| v)
     }
 }
 
@@ -535,11 +502,7 @@ pub(crate) fn await_main_thread<T>(
         if state.load(Ordering::SeqCst) == STARTED {
             break;
         }
-        if t0.elapsed() > w.start_wait
-            && state
-                .compare_exchange(QUEUED, ABANDONED, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-        {
+        if t0.elapsed() > w.start_wait && state.compare_exchange(QUEUED, ABANDONED, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
             return Err(busy());
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -550,16 +513,12 @@ pub(crate) fn await_main_thread<T>(
     loop {
         match rx.recv_timeout(Duration::from_millis(20)) {
             Ok(r) => return r,
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(NativeError::Failed("the passkey dialog went away".into()))
-            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(NativeError::Failed("the passkey dialog went away".into())),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         if t0.elapsed() > w.total {
             cancel();
-            return Err(NativeError::Failed(
-                "no answer from the passkey dialog".into(),
-            ));
+            return Err(NativeError::Failed("no answer from the passkey dialog".into()));
         }
         let got = answered.load(Ordering::SeqCst);
         if got < sent && sent_at.elapsed() > w.stall {

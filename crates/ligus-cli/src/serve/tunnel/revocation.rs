@@ -32,16 +32,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
-use ligus_runtime::revocation_status::{
-    DeviceRevocationStatus, RevocationReport, StepState, StepStatus, MAX_REPORTED,
-};
+use ligus_runtime::revocation_status::{DeviceRevocationStatus, RevocationReport, StepState, StepStatus, MAX_REPORTED};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-use super::{
-    b64u, ctx, now, random_bytes, read_json, write_json, HostKeys, RelaySettings, TunnelHost,
-};
+use super::{b64u, ctx, now, random_bytes, read_json, write_json, HostKeys, RelaySettings, TunnelHost};
 
 /// How long finished entries are kept.
 const KEEP_SECS: u64 = 30 * 86_400;
@@ -120,15 +116,8 @@ impl Ledger {
 
     pub fn load(dir: &Path) -> Self {
         let path = Self::file(dir);
-        let devices = read_json::<LedgerFile>(&path)
-            .ok()
-            .flatten()
-            .map(|f| f.devices)
-            .unwrap_or_default();
-        Self {
-            path,
-            inner: Mutex::new(devices),
-        }
+        let devices = read_json::<LedgerFile>(&path).ok().flatten().map(|f| f.devices).unwrap_or_default();
+        Self { path, inner: Mutex::new(devices) }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Entry>> {
@@ -136,13 +125,7 @@ impl Ledger {
     }
 
     fn save(&self, devices: &[Entry]) {
-        if let Err(e) = write_json(
-            &self.path,
-            &LedgerFile {
-                v: 1,
-                devices: devices.to_vec(),
-            },
-        ) {
+        if let Err(e) = write_json(&self.path, &LedgerFile { v: 1, devices: devices.to_vec() }) {
             eprintln!("remote: saving the revocation status failed: {e:#}");
         }
     }
@@ -151,9 +134,7 @@ impl Ledger {
         let mut d = self.lock();
         let out = f(&mut d);
         let t = now();
-        d.retain(|e| {
-            !e.status.complete() || t.saturating_sub(e.status.revoked_at.max(0) as u64) < KEEP_SECS
-        });
+        d.retain(|e| !e.status.complete() || t.saturating_sub(e.status.revoked_at.max(0) as u64) < KEEP_SECS);
         if d.len() > MAX_ENTRIES {
             d.sort_by_key(|e| std::cmp::Reverse(e.status.revoked_at));
             d.truncate(MAX_ENTRIES);
@@ -169,22 +150,11 @@ impl Ledger {
     }
 
     /// Start (or extend, with new pairings) the revocation of `device`.
-    pub fn begin(
-        &self,
-        device: Uuid,
-        name: &str,
-        pids: &[String],
-        session: Option<(StepState, &str)>,
-    ) {
+    pub fn begin(&self, device: Uuid, name: &str, pids: &[String], session: Option<(StepState, &str)>) {
         let t = now() as i64;
         self.update(|d| {
             let id = device.to_string();
-            let pending = |detail: &str| StepStatus {
-                state: StepState::Pending,
-                detail: detail.into(),
-                at: t,
-                attempts: 0,
-            };
+            let pending = |detail: &str| StepStatus { state: StepState::Pending, detail: detail.into(), at: t, attempts: 0 };
             match d.iter_mut().find(|e| e.status.device_id == id) {
                 Some(e) => {
                     let mut added = false;
@@ -196,19 +166,13 @@ impl Ledger {
                     }
                     if added {
                         e.status.tunnel = pending("closed on this box; telling the relay");
-                        e.status.push =
-                            pending("this box stopped pushing; removing the relay's push token");
+                        e.status.push = pending("this box stopped pushing; removing the relay's push token");
                         e.next_try = 0;
                     }
                 }
                 None => {
                     let session = match session {
-                        Some((state, detail)) => StepStatus {
-                            state,
-                            detail: detail.into(),
-                            at: t,
-                            attempts: 0,
-                        },
+                        Some((state, detail)) => StepStatus { state, detail: detail.into(), at: t, attempts: 0 },
                         None => pending("ending the langstroth-auth session"),
                     };
                     d.push(Entry {
@@ -217,9 +181,7 @@ impl Ledger {
                             name: name.to_string(),
                             revoked_at: t,
                             tunnel: pending("closed on this box; telling the relay"),
-                            push: pending(
-                                "this box stopped pushing; removing the relay's push token",
-                            ),
+                            push: pending("this box stopped pushing; removing the relay's push token"),
                             session,
                         },
                         pids: pids.to_vec(),
@@ -239,9 +201,7 @@ impl Ledger {
     pub fn relay_confirmed(&self, pid: &str, closed: Option<u64>, removed: Option<bool>) -> bool {
         let t = now() as i64;
         self.update(|d| {
-            let Some(e) = d.iter_mut().find(|e| e.pids.iter().any(|p| p == pid)) else {
-                return false;
-            };
+            let Some(e) = d.iter_mut().find(|e| e.pids.iter().any(|p| p == pid)) else { return false };
             e.relay_done.insert(pid.to_string());
             e.relay_closed += closed.unwrap_or(0);
             e.push_removed |= removed.unwrap_or(false);
@@ -249,20 +209,13 @@ impl Ledger {
                 let n = e.relay_closed;
                 e.status.tunnel = StepStatus {
                     state: StepState::Done,
-                    detail: format!(
-                        "the relay refuses this phone and closed {n} live session{}",
-                        if n == 1 { "" } else { "s" }
-                    ),
+                    detail: format!("the relay refuses this phone and closed {n} live session{}", if n == 1 { "" } else { "s" }),
                     at: t,
                     attempts: e.status.tunnel.attempts,
                 };
                 e.status.push = StepStatus {
                     state: StepState::Done,
-                    detail: if e.push_removed {
-                        "the relay deleted its push token".into()
-                    } else {
-                        "the relay holds no push token for it".into()
-                    },
+                    detail: if e.push_removed { "the relay deleted its push token".into() } else { "the relay holds no push token for it".into() },
                     at: t,
                     attempts: e.status.push.attempts,
                 };
@@ -276,9 +229,7 @@ impl Ledger {
         let t = now();
         self.update(|d| {
             let id = device.to_string();
-            let Some(e) = d.iter_mut().find(|e| e.status.device_id == id) else {
-                return;
-            };
+            let Some(e) = d.iter_mut().find(|e| e.status.device_id == id) else { return };
             let s = e.step(step);
             if s.state == StepState::Done && state != StepState::Done {
                 return;
@@ -307,11 +258,7 @@ impl Ledger {
     /// Unsettled entries whose next attempt is due.
     pub fn due(&self) -> Vec<Entry> {
         let t = now();
-        self.lock()
-            .iter()
-            .filter(|e| !e.status.complete() && e.next_try <= t)
-            .cloned()
-            .collect()
+        self.lock().iter().filter(|e| !e.status.complete() && e.next_try <= t).cloned().collect()
     }
 
     /// Schedule `device` for its next attempt now. False when unknown.
@@ -342,12 +289,7 @@ impl Ledger {
         RevocationReport {
             host_id: host_id.to_string(),
             at: now() as i64,
-            devices: self
-                .list()
-                .into_iter()
-                .take(MAX_REPORTED)
-                .map(|e| e.status)
-                .collect(),
+            devices: self.list().into_iter().take(MAX_REPORTED).map(|e| e.status).collect(),
             signature: Vec::new(),
         }
     }
@@ -357,23 +299,8 @@ impl Ledger {
 
 /// The signed preimage, byte-identical to the relay's `hostRevokeMessage`:
 /// `ctx("host-revoke", hostId, pid, u64be(exp), u64be(ts), nonce)`.
-pub fn host_revoke_message(
-    host_id: &str,
-    pid: &str,
-    exp: u64,
-    ts: u64,
-    nonce: &[u8; 16],
-) -> Vec<u8> {
-    ctx(
-        "host-revoke",
-        &[
-            host_id.as_bytes(),
-            pid.as_bytes(),
-            &exp.to_be_bytes(),
-            &ts.to_be_bytes(),
-            nonce,
-        ],
-    )
+pub fn host_revoke_message(host_id: &str, pid: &str, exp: u64, ts: u64, nonce: &[u8; 16]) -> Vec<u8> {
+    ctx("host-revoke", &[host_id.as_bytes(), pid.as_bytes(), &exp.to_be_bytes(), &ts.to_be_bytes(), nonce])
 }
 
 /// What the relay did.
@@ -407,36 +334,17 @@ impl std::fmt::Display for RelayRevokeError {
 }
 
 /// Ask the relay to drop `pid` (until `exp`), signed with the host key.
-pub async fn relay_revoke(
-    http: &reqwest::Client,
-    settings: &RelaySettings,
-    keys: &HostKeys,
-    pid: &str,
-    exp: u64,
-) -> Result<RelayRevoked, RelayRevokeError> {
+pub async fn relay_revoke(http: &reqwest::Client, settings: &RelaySettings, keys: &HostKeys, pid: &str, exp: u64) -> Result<RelayRevoked, RelayRevokeError> {
     relay_revoke_at(http, settings, keys, pid, exp, now()).await
 }
 
 /// [`relay_revoke`] with `ts` (the relay's time as this box best knows it).
-pub async fn relay_revoke_at(
-    http: &reqwest::Client,
-    settings: &RelaySettings,
-    keys: &HostKeys,
-    pid: &str,
-    exp: u64,
-    ts: u64,
-) -> Result<RelayRevoked, RelayRevokeError> {
+pub async fn relay_revoke_at(http: &reqwest::Client, settings: &RelaySettings, keys: &HostKeys, pid: &str, exp: u64, ts: u64) -> Result<RelayRevoked, RelayRevokeError> {
     let nonce: [u8; 16] = random_bytes();
     let sig = keys.sign(&host_revoke_message(keys.host_id(), pid, exp, ts, &nonce));
     let body = json!({ "v": 1, "hostId": keys.host_id(), "pid": pid, "exp": exp, "ts": ts, "nonce": b64u(nonce), "sig": b64u(sig) });
     let url = format!("{}/v1/tunnel/revoke", settings.relay);
-    let resp = http
-        .post(url)
-        .json(&body)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .map_err(|e| RelayRevokeError::Network(e.without_url().to_string()))?;
+    let resp = http.post(url).json(&body).timeout(Duration::from_secs(10)).send().await.map_err(|e| RelayRevokeError::Network(e.without_url().to_string()))?;
     let status = resp.status().as_u16();
     let v: serde_json::Value = resp.json().await.unwrap_or_default();
     match status {
@@ -449,15 +357,7 @@ pub async fn relay_revoke_at(
             Some(relay_now) => Err(RelayRevokeError::ClockSkew(relay_now as i64 - now() as i64)),
             None => Err(RelayRevokeError::Refused(401, "clock_skew".into())),
         },
-        s => Err(RelayRevokeError::Refused(
-            s,
-            v["error"]
-                .as_str()
-                .unwrap_or("?")
-                .chars()
-                .take(40)
-                .collect(),
-        )),
+        s => Err(RelayRevokeError::Refused(s, v["error"].as_str().unwrap_or("?").chars().take(40).collect())),
     }
 }
 
@@ -474,11 +374,7 @@ pub struct AuthAdmin {
 
 impl std::fmt::Debug for AuthAdmin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AuthAdmin")
-            .field("url", &self.url)
-            .field("tenant", &self.tenant)
-            .field("token", &"<redacted>")
-            .finish()
+        f.debug_struct("AuthAdmin").field("url", &self.url).field("tenant", &self.tenant).field("token", &"<redacted>").finish()
     }
 }
 
@@ -489,13 +385,8 @@ impl AuthAdmin {
     /// config; never the operator token, never an env var). `None` when any
     /// is unset.
     pub fn from_env() -> Option<Self> {
-        let url = crate::env_opt("LIGUS_AUTH_ADMIN_URL")?
-            .trim()
-            .trim_end_matches('/')
-            .to_string();
-        let tenant = crate::env_opt("LIGUS_AUTH_ADMIN_TENANT")?
-            .trim()
-            .to_string();
+        let url = crate::env_opt("LIGUS_AUTH_ADMIN_URL")?.trim().trim_end_matches('/').to_string();
+        let tenant = crate::env_opt("LIGUS_AUTH_ADMIN_TENANT")?.trim().to_string();
         let file = crate::env_opt("LIGUS_AUTH_ADMIN_TOKEN_FILE")?;
         Self::from_parts(&url, &tenant, std::path::Path::new(file.trim()))
     }
@@ -521,17 +412,9 @@ impl AuthAdmin {
         ligus_runtime::secret_redact::register(&token);
         // https, or plain http to loopback only ("http://localhost.example"
         // is not loopback); a tenant id is one path segment.
-        let loopback = reqwest::Url::parse(&url).is_ok_and(|u| {
-            u.scheme() == "http"
-                && matches!(u.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
-        });
-        let https = reqwest::Url::parse(&url)
-            .is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some());
-        if tenant.is_empty()
-            || !tenant
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "._:-".contains(c))
-        {
+        let loopback = reqwest::Url::parse(&url).is_ok_and(|u| u.scheme() == "http" && matches!(u.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")));
+        let https = reqwest::Url::parse(&url).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some());
+        if tenant.is_empty() || !tenant.chars().all(|c| c.is_ascii_alphanumeric() || "._:-".contains(c)) {
             eprintln!("remote: LIGUS_AUTH_ADMIN_TENANT is not a tenant id; phone sign-in sessions won't be ended on revocation");
             return None;
         }
@@ -544,10 +427,7 @@ impl AuthAdmin {
 
     /// End `device`'s session; returns how many refresh tokens it revoked.
     pub async fn revoke_device(&self, http: &reqwest::Client, device: Uuid) -> Result<u64, String> {
-        let url = format!(
-            "{}/admin/v1/tenants/{}/devices/{device}/revoke",
-            self.url, self.tenant
-        );
+        let url = format!("{}/admin/v1/tenants/{}/devices/{device}/revoke", self.url, self.tenant);
         let resp = http
             .post(url)
             .bearer_auth(&self.token)
@@ -559,10 +439,7 @@ impl AuthAdmin {
         if !status.is_success() {
             return Err(format!("langstroth-auth answered {}", status.as_u16()));
         }
-        let v: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|_| "langstroth-auth sent an unreadable answer".to_string())?;
+        let v: serde_json::Value = resp.json().await.map_err(|_| "langstroth-auth sent an unreadable answer".to_string())?;
         Ok(v["revoked"].as_u64().unwrap_or(0))
     }
 }
@@ -577,29 +454,16 @@ async fn work(host: &TunnelHost, e: Entry) {
         for pid in e.pids.iter().filter(|p| !e.relay_done.contains(*p)) {
             let exp = host.revocation_exp(pid);
             let at = |off: i64| (now() as i64).saturating_add(off).max(0) as u64;
-            let mut res = relay_revoke_at(
-                &host.http,
-                &host.settings,
-                &host.keys,
-                pid,
-                exp,
-                at(host.relay_clock_offset()),
-            )
-            .await;
+            let mut res = relay_revoke_at(&host.http, &host.settings, &host.keys, pid, exp, at(host.relay_clock_offset())).await;
             if let Err(RelayRevokeError::ClockSkew(off)) = res {
                 // The relay told us its time: sign with it (once per attempt).
                 eprintln!("remote: this box's clock is {off} s off the relay's; signing revocations with the relay's time");
                 host.set_relay_clock_offset(off);
-                res = relay_revoke_at(&host.http, &host.settings, &host.keys, pid, exp, at(off))
-                    .await;
+                res = relay_revoke_at(&host.http, &host.settings, &host.keys, pid, exp, at(off)).await;
             }
             match res {
                 Ok(r) => {
-                    host.ledger.relay_confirmed(
-                        pid,
-                        Some(r.sessions_closed),
-                        Some(r.push_token_removed),
-                    );
+                    host.ledger.relay_confirmed(pid, Some(r.sessions_closed), Some(r.push_token_removed));
                 }
                 Err(RelayRevokeError::Unsupported) => {
                     // An older relay: its control `revoke` ack confirms (on_ack).
@@ -609,48 +473,19 @@ async fn work(host: &TunnelHost, e: Entry) {
                 }
                 Err(err) => {
                     let detail = format!("closed on this box; {err}; retrying");
-                    host.ledger
-                        .set(device, Step::Tunnel, StepState::Failed, &detail);
-                    host.ledger.set(
-                        device,
-                        Step::Push,
-                        StepState::Failed,
-                        &format!("this box stopped pushing; {err}; retrying"),
-                    );
+                    host.ledger.set(device, Step::Tunnel, StepState::Failed, &detail);
+                    host.ledger.set(device, Step::Push, StepState::Failed, &format!("this box stopped pushing; {err}; retrying"));
                 }
             }
         }
     }
     if !e.status.session.state.is_settled() {
         match host.auth_admin() {
-            None => host.ledger.set(
-                device,
-                Step::Session,
-                StepState::NotApplicable,
-                NO_AUTH_ADMIN,
-            ),
+            None => host.ledger.set(device, Step::Session, StepState::NotApplicable, NO_AUTH_ADMIN),
             Some(a) => match a.revoke_device(&host.http, device).await {
-                Ok(0) => host.ledger.set(
-                    device,
-                    Step::Session,
-                    StepState::Done,
-                    "langstroth-auth had no session for this device",
-                ),
-                Ok(n) => host.ledger.set(
-                    device,
-                    Step::Session,
-                    StepState::Done,
-                    &format!(
-                        "langstroth-auth ended its session ({n} refresh token{})",
-                        if n == 1 { "" } else { "s" }
-                    ),
-                ),
-                Err(err) => host.ledger.set(
-                    device,
-                    Step::Session,
-                    StepState::Failed,
-                    &format!("{err}; retrying"),
-                ),
+                Ok(0) => host.ledger.set(device, Step::Session, StepState::Done, "langstroth-auth had no session for this device"),
+                Ok(n) => host.ledger.set(device, Step::Session, StepState::Done, &format!("langstroth-auth ended its session ({n} refresh token{})", if n == 1 { "" } else { "s" })),
+                Err(err) => host.ledger.set(device, Step::Session, StepState::Failed, &format!("{err}; retrying")),
             },
         }
     }
@@ -684,9 +519,7 @@ mod tests {
         let mut want = b"hive-tunnel/1 host-revoke\0".to_vec();
         want.extend_from_slice(hid.as_bytes());
         want.extend_from_slice(pid.as_bytes());
-        want.extend_from_slice(&[
-            1, 2, 3, 4, 5, 6, 7, 8, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-        ]);
+        want.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18]);
         want.extend_from_slice(&[7u8; 16]);
         assert_eq!(got, want);
     }
@@ -699,17 +532,11 @@ mod tests {
         let f = dir.path().join("tok");
         std::fs::write(&f, "home-device-revoke-token-0123456789abcdef\n").unwrap();
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(
-            AuthAdmin::from_parts("https://auth.example", "home", &f).is_none(),
-            "a world-readable token file was used"
-        );
+        assert!(AuthAdmin::from_parts("https://auth.example", "home", &f).is_none(), "a world-readable token file was used");
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
         let a = AuthAdmin::from_parts("https://auth.example", "home", &f).unwrap();
         assert_eq!(a.token, "home-device-revoke-token-0123456789abcdef");
-        assert!(
-            !format!("{a:?}").contains("0123456789"),
-            "the token is redacted from Debug"
-        );
+        assert!(!format!("{a:?}").contains("0123456789"), "the token is redacted from Debug");
         // Plain http only to loopback; a tenant id is one path segment.
         assert!(AuthAdmin::from_parts("http://localhost.attacker.example", "home", &f).is_none());
         assert!(AuthAdmin::from_parts("http://127.0.0.1:9000", "home", &f).is_some());
@@ -721,12 +548,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let l = Ledger::load(dir.path());
         let d = Uuid::new_v4();
-        l.begin(
-            d,
-            "Phone",
-            &["p1".into(), "p2".into()],
-            Some((StepState::NotApplicable, NO_AUTH_ADMIN)),
-        );
+        l.begin(d, "Phone", &["p1".into(), "p2".into()], Some((StepState::NotApplicable, NO_AUTH_ADMIN)));
         assert_eq!(l.due().len(), 1);
         // One of two pairings confirmed: still pending.
         assert!(l.relay_confirmed("p1", Some(1), Some(true)));
@@ -739,10 +561,7 @@ mod tests {
         assert!(l.relay_confirmed("p2", Some(0), Some(false)));
         let e = &l.list()[0];
         assert!(e.status.complete(), "{e:?}");
-        assert_eq!(
-            e.status.summary(),
-            "revoked: tunnel cut, push removed, session: not applicable"
-        );
+        assert_eq!(e.status.summary(), "revoked: tunnel cut, push removed, session: not applicable");
         assert!(e.status.tunnel.detail.contains("1 live session"));
         // A late failure never undoes a done step.
         l.set(d, Step::Tunnel, StepState::Failed, "late");
@@ -755,9 +574,6 @@ mod tests {
         // A new pairing of the same device reopens the relay steps.
         again.begin(d, "Phone", &["p3".into()], None);
         assert_eq!(again.list()[0].status.tunnel.state, StepState::Pending);
-        assert_eq!(
-            again.list()[0].status.session.state,
-            StepState::NotApplicable
-        );
+        assert_eq!(again.list()[0].status.session.state, StepState::NotApplicable);
     }
 }

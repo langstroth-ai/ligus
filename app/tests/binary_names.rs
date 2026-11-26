@@ -6,28 +6,19 @@
 use std::path::{Path, PathBuf};
 
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
 }
 
 /// The `name = "..."` value on a TOML line, if the line is one.
 fn name_value(line: &str) -> Option<String> {
-    let rest = line
-        .trim()
-        .strip_prefix("name")?
-        .trim_start()
-        .strip_prefix('=')?
-        .trim();
+    let rest = line.trim().strip_prefix("name")?.trim_start().strip_prefix('=')?.trim();
     Some(rest.trim_matches('"').to_string())
 }
 
 /// The desktop app's main binary: `mainBinaryName`, else the package name.
 fn desktop_binary() -> String {
     let conf: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(root().join("app/tauri.conf.json")).unwrap())
-            .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(root().join("app/tauri.conf.json")).unwrap()).unwrap();
     match conf.get("mainBinaryName").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
         None => env!("CARGO_PKG_NAME").to_string(),
@@ -40,9 +31,7 @@ fn workspace_binaries() -> Vec<String> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(root().join("crates")).unwrap() {
         let dir = entry.unwrap().path();
-        let Ok(manifest) = std::fs::read_to_string(dir.join("Cargo.toml")) else {
-            continue;
-        };
+        let Ok(manifest) = std::fs::read_to_string(dir.join("Cargo.toml")) else { continue };
         let mut section = String::new();
         let mut package = None;
         let mut bins = Vec::new();
@@ -78,10 +67,7 @@ fn workspace_binaries() -> Vec<String> {
 fn the_desktop_binary_never_collides_with_a_workspace_binary() {
     let desktop = desktop_binary();
     let bins = workspace_binaries();
-    assert!(
-        bins.iter().any(|b| b == "ligus"),
-        "the CLI's `ligus` binary wasn't found: {bins:?}"
-    );
+    assert!(bins.iter().any(|b| b == "ligus"), "the CLI's `ligus` binary wasn't found: {bins:?}");
     for b in &bins {
         assert!(
             !b.eq_ignore_ascii_case(&desktop),

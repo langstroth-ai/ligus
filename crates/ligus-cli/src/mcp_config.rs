@@ -46,51 +46,27 @@ pub fn token_origin_id(server: &str) -> ligus_runtime::secret_store::SecretId {
 }
 
 /// Save `server`'s bearer token, bound to `url`'s origin.
-pub fn save_token(
-    store: &dyn ligus_runtime::secret_store::SecretStore,
-    server: &str,
-    url: &str,
-    token: &str,
-) -> Result<()> {
+pub fn save_token(store: &dyn ligus_runtime::secret_store::SecretStore, server: &str, url: &str, token: &str) -> Result<()> {
     let origin = ligus_runtime::setup::validate::origin(url);
-    store
-        .put(&token_origin_id(server), origin.as_bytes())
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    store
-        .put(&token_secret_id(server), token.as_bytes())
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    store.put(&token_origin_id(server), origin.as_bytes()).map_err(|e| anyhow::anyhow!("{e}"))?;
+    store.put(&token_secret_id(server), token.as_bytes()).map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(())
 }
 
 /// Forget `server`'s token and its origin.
-pub fn delete_token(
-    store: &dyn ligus_runtime::secret_store::SecretStore,
-    server: &str,
-) -> Result<()> {
-    store
-        .delete(&token_secret_id(server))
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    store
-        .delete(&token_origin_id(server))
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+pub fn delete_token(store: &dyn ligus_runtime::secret_store::SecretStore, server: &str) -> Result<()> {
+    store.delete(&token_secret_id(server)).map_err(|e| anyhow::anyhow!("{e}"))?;
+    store.delete(&token_origin_id(server)).map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(())
 }
 
 /// `server`'s saved token, only when `url` has the origin it was saved for.
-pub fn token_for(
-    store: &dyn ligus_runtime::secret_store::SecretStore,
-    server: &str,
-    url: &str,
-) -> Option<String> {
+pub fn token_for(store: &dyn ligus_runtime::secret_store::SecretStore, server: &str, url: &str) -> Option<String> {
     let saved = store.get_string(&token_origin_id(server)).ok().flatten()?;
     if saved.as_str() != ligus_runtime::setup::validate::origin(url) {
         return None;
     }
-    store
-        .get_string(&token_secret_id(server))
-        .ok()
-        .flatten()
-        .map(|z| z.as_str().to_string())
+    store.get_string(&token_secret_id(server)).ok().flatten().map(|z| z.as_str().to_string())
 }
 
 /// This process's data dir and workspace (set once at start-up), for the
@@ -146,13 +122,9 @@ fn default_true() -> bool {
 /// Load the MCP servers named by `LIGUS_MCP_CONFIG`. Unset or empty → no servers
 /// (an empty vec), so the caller behaves exactly as it did before MCP wiring.
 pub fn load_from_env() -> Result<Vec<McpServerSpec>> {
-    let mut specs = match ligus_core::names::var(CONFIG_ENV)
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-    {
+    let mut specs = match ligus_core::names::var(CONFIG_ENV).ok().filter(|s| !s.trim().is_empty()) {
         Some(path) => {
-            let text = std::fs::read_to_string(&path)
-                .with_context(|| format!("reading {CONFIG_ENV}={path}"))?;
+            let text = std::fs::read_to_string(&path).with_context(|| format!("reading {CONFIG_ENV}={path}"))?;
             specs_from_str(&text).with_context(|| format!("parsing {CONFIG_ENV}={path}"))?
         }
         None => Vec::new(),
@@ -163,8 +135,7 @@ pub fn load_from_env() -> Result<Vec<McpServerSpec>> {
                 specs.push(m);
             }
         }
-        let reach =
-            ligus_runtime::McpReach::load(dir).map_err(|e| anyhow::anyhow!("MCP reach: {e}"))?;
+        let reach = ligus_runtime::McpReach::load(dir).map_err(|e| anyhow::anyhow!("MCP reach: {e}"))?;
         reach.apply(*ws, &mut specs);
     }
     Ok(specs)
@@ -178,8 +149,7 @@ pub fn load_managed(data_dir: &std::path::Path) -> Result<Vec<McpServerSpec>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     };
-    let raw: RawConfig =
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let raw: RawConfig = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     let store = ligus_runtime::secret_store::for_data_dir(data_dir);
     Ok(raw
         .mcp_servers
@@ -226,9 +196,7 @@ struct ManagedFile {
 pub fn managed_entries(data_dir: &std::path::Path) -> Result<Vec<ManagedEntry>> {
     let path = managed_path(data_dir);
     match std::fs::read_to_string(&path) {
-        Ok(t) => Ok(toml::from_str::<ManagedFile>(&t)
-            .with_context(|| format!("parsing {}", path.display()))?
-            .mcp_servers),
+        Ok(t) => Ok(toml::from_str::<ManagedFile>(&t).with_context(|| format!("parsing {}", path.display()))?.mcp_servers),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
     }
@@ -236,9 +204,7 @@ pub fn managed_entries(data_dir: &std::path::Path) -> Result<Vec<ManagedEntry>> 
 
 /// Replace the managed file's entries (owner-only, atomically).
 pub fn save_managed(data_dir: &std::path::Path, entries: Vec<ManagedEntry>) -> Result<()> {
-    let text = toml::to_string_pretty(&ManagedFile {
-        mcp_servers: entries,
-    })?;
+    let text = toml::to_string_pretty(&ManagedFile { mcp_servers: entries })?;
     ligus_runtime::private_file::write_private_atomic(&managed_path(data_dir), text.as_bytes())?;
     Ok(())
 }
@@ -253,9 +219,7 @@ pub fn specs_from_str(text: &str) -> Result<Vec<McpServerSpec>> {
 fn spec_from_raw(m: RawMcpServer) -> McpServerSpec {
     let is_http = matches!(m.transport.to_lowercase().as_str(), "http" | "sse");
     let transport = if is_http {
-        McpTransport::Http {
-            url: m.url.unwrap_or_default(),
-        }
+        McpTransport::Http { url: m.url.unwrap_or_default() }
     } else {
         McpTransport::Stdio {
             command: m.command.unwrap_or_default(),
@@ -267,10 +231,7 @@ fn spec_from_raw(m: RawMcpServer) -> McpServerSpec {
         match std::env::var(var).ok().filter(|s| !s.trim().is_empty()) {
             Some(tok) => Some(tok),
             None => {
-                eprintln!(
-                    "mcp: server '{}' token_env '{var}' is not set — connecting without auth",
-                    m.id
-                );
+                eprintln!("mcp: server '{}' token_env '{var}' is not set — connecting without auth", m.id);
                 None
             }
         }
@@ -295,16 +256,9 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = ligus_runtime::secret_store::File0600::new(d.path());
         save_token(&store, "gh", "https://mcp.example.com/v1", "tok-canary").unwrap();
-        assert_eq!(
-            token_for(&store, "gh", "https://mcp.example.com/other").as_deref(),
-            Some("tok-canary")
-        );
+        assert_eq!(token_for(&store, "gh", "https://mcp.example.com/other").as_deref(), Some("tok-canary"));
         assert_eq!(token_for(&store, "gh", "https://evil.example.com/v1"), None);
-        assert_eq!(
-            token_for(&store, "gh", "http://mcp.example.com/v1"),
-            None,
-            "scheme is part of the origin"
-        );
+        assert_eq!(token_for(&store, "gh", "http://mcp.example.com/v1"), None, "scheme is part of the origin");
         delete_token(&store, "gh").unwrap();
         assert_eq!(token_for(&store, "gh", "https://mcp.example.com/v1"), None);
     }
@@ -355,9 +309,7 @@ token_env = "LIGUS_MCP_TEST_TOKEN"
         assert_eq!(specs[1].id, "linear");
         assert_eq!(
             specs[1].transport,
-            McpTransport::Http {
-                url: "https://mcp.linear.app/mcp".into()
-            }
+            McpTransport::Http { url: "https://mcp.linear.app/mcp".into() }
         );
         assert_eq!(specs[1].auth.as_deref(), Some("secret-abc"));
 

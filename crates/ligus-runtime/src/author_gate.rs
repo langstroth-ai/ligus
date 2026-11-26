@@ -74,17 +74,12 @@ pub fn default_min_role(write_capable: bool) -> WorkspaceRole {
 /// The floor from an explicit setting (`LIGUS_MCP_MIN_ROLE`'s value), or the
 /// default for the turn's tier when unset or unparseable.
 pub fn min_role_from(explicit: Option<&str>, write_capable: bool) -> WorkspaceRole {
-    explicit
-        .and_then(parse_role)
-        .unwrap_or_else(|| default_min_role(write_capable))
+    explicit.and_then(parse_role).unwrap_or_else(|| default_min_role(write_capable))
 }
 
 /// This host's floor for a turn (reads `LIGUS_MCP_MIN_ROLE`).
 pub fn min_role(write_capable: bool) -> WorkspaceRole {
-    min_role_from(
-        ligus_core::names::var(MIN_ROLE_ENV).ok().as_deref(),
-        write_capable,
-    )
+    min_role_from(ligus_core::names::var(MIN_ROLE_ENV).ok().as_deref(), write_capable)
 }
 
 /// The startup warning for an explicit floor below the default, if any.
@@ -103,10 +98,7 @@ pub fn lowered_floor_warning(explicit: Option<&str>, write_capable: bool) -> Opt
 /// Log [`lowered_floor_warning`] for this host's setting. Call once at
 /// startup.
 pub fn warn_if_lowered(write_capable: bool) {
-    if let Some(w) = lowered_floor_warning(
-        ligus_core::names::var(MIN_ROLE_ENV).ok().as_deref(),
-        write_capable,
-    ) {
+    if let Some(w) = lowered_floor_warning(ligus_core::names::var(MIN_ROLE_ENV).ok().as_deref(), write_capable) {
         tracing::warn!(target: "gate", "{w}");
         eprintln!("warning: {w}");
     }
@@ -116,20 +108,13 @@ pub fn warn_if_lowered(write_capable: bool) {
 pub fn always_writes(runtime: ModelProviderKind) -> bool {
     matches!(
         runtime,
-        ModelProviderKind::Codex
-            | ModelProviderKind::Aider
-            | ModelProviderKind::Pi
-            | ModelProviderKind::Hermes
+        ModelProviderKind::Codex | ModelProviderKind::Aider | ModelProviderKind::Pi | ModelProviderKind::Hermes
     )
 }
 
 /// The gate for one turn: `author_role` is the triggering message's author's
 /// role at that message's position (`None` = unresolved).
-pub fn gate(
-    runtime: ModelProviderKind,
-    author_role: Option<WorkspaceRole>,
-    min_role: WorkspaceRole,
-) -> GatePlan {
+pub fn gate(runtime: ModelProviderKind, author_role: Option<WorkspaceRole>, min_role: WorkspaceRole) -> GatePlan {
     if author_role.is_some_and(|r| r.rank() >= min_role.rank()) {
         return GatePlan::Full;
     }
@@ -166,16 +151,11 @@ pub fn read_only_args(runtime: ModelProviderKind, args: &[String]) -> Vec<String
         }
         let tier_flag = match runtime {
             ModelProviderKind::ClaudeCode => {
-                a.starts_with("--permission-mode=")
-                    || a == "--dangerously-skip-permissions"
-                    || a.starts_with("--allowedTools=")
+                a.starts_with("--permission-mode=") || a == "--dangerously-skip-permissions" || a.starts_with("--allowedTools=")
             }
             ModelProviderKind::Antigravity if a.starts_with("--mode=") => true,
             ModelProviderKind::Copilot => {
-                a.starts_with("--allow-tool=")
-                    || a.starts_with("--deny-tool=")
-                    || a == "--allow-all-tools"
-                    || a == "--allow-all-paths"
+                a.starts_with("--allow-tool=") || a.starts_with("--deny-tool=") || a == "--allow-all-tools" || a == "--allow-all-paths"
             }
             ModelProviderKind::Antigravity => a == "--dangerously-skip-permissions",
             _ => false,
@@ -192,11 +172,7 @@ pub fn read_only_args(runtime: ModelProviderKind, args: &[String]) -> Vec<String
 }
 
 /// Apply a gate plan to a runtime's args. `Err` carries the refusal reason.
-pub fn apply(
-    plan: &GatePlan,
-    runtime: ModelProviderKind,
-    args: &mut Vec<String>,
-) -> Result<(), String> {
+pub fn apply(plan: &GatePlan, runtime: ModelProviderKind, args: &mut Vec<String>) -> Result<(), String> {
     match plan {
         GatePlan::Full => Ok(()),
         GatePlan::ReadOnly => {
@@ -217,11 +193,7 @@ pub fn turn_writes(runtime: ModelProviderKind, args: &[String]) -> bool {
 /// `ligus agent`): the floor follows the turn's tier ([`turn_writes`]),
 /// `args` are narrowed to the read-only tier below it, and the plan is
 /// returned (a `Refuse` leaves `args` untouched; the caller doesn't run).
-pub fn gate_turn(
-    runtime: ModelProviderKind,
-    args: &mut Vec<String>,
-    author_role: Option<WorkspaceRole>,
-) -> GatePlan {
+pub fn gate_turn(runtime: ModelProviderKind, args: &mut Vec<String>, author_role: Option<WorkspaceRole>) -> GatePlan {
     let floor = min_role(turn_writes(runtime, args));
     let plan = gate(runtime, author_role, floor);
     let _ = apply(&plan, runtime, args);
@@ -267,11 +239,7 @@ pub fn shell_free_args(runtime: ModelProviderKind, args: &[String]) -> Result<Ve
                 if a == "--permission-mode" || a == "--allowedTools" {
                     let v = args.get(i + 1).map(String::as_str).unwrap_or("");
                     if a == "--allowedTools" {
-                        let keep: Vec<&str> = v
-                            .split(',')
-                            .map(str::trim)
-                            .filter(|t| !t.is_empty() && !is_claude_shell_tool(t))
-                            .collect();
+                        let keep: Vec<&str> = v.split(',').map(str::trim).filter(|t| !t.is_empty() && !is_claude_shell_tool(t)).collect();
                         if !keep.is_empty() {
                             out.push(a.clone());
                             out.push(keep.join(","));
@@ -284,11 +252,7 @@ pub fn shell_free_args(runtime: ModelProviderKind, args: &[String]) -> Result<Ve
                     continue;
                 }
                 if let Some(v) = a.strip_prefix("--allowedTools=") {
-                    let keep: Vec<&str> = v
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|t| !t.is_empty() && !is_claude_shell_tool(t))
-                        .collect();
+                    let keep: Vec<&str> = v.split(',').map(str::trim).filter(|t| !t.is_empty() && !is_claude_shell_tool(t)).collect();
                     if !keep.is_empty() {
                         out.push(format!("--allowedTools={}", keep.join(",")));
                     }
@@ -297,10 +261,7 @@ pub fn shell_free_args(runtime: ModelProviderKind, args: &[String]) -> Result<Ve
                 out.push(a.clone());
             }
             if tiered {
-                out.splice(
-                    0..0,
-                    ["--permission-mode".to_string(), "acceptEdits".to_string()],
-                );
+                out.splice(0..0, ["--permission-mode".to_string(), "acceptEdits".to_string()]);
             }
             // `claude_code::confine` takes Bash off the tool list and denies
             // it (from the turn's `shell_allowed`); an ACP session's
@@ -309,10 +270,7 @@ pub fn shell_free_args(runtime: ModelProviderKind, args: &[String]) -> Result<Ve
         ModelProviderKind::Copilot => {
             let tiered = read_only_args(runtime, args) != args;
             for a in args {
-                let shellish = a == "--allow-tool=shell"
-                    || a == "--allow-all-tools"
-                    || a == "--allow-all"
-                    || a.starts_with("--allow-tool=shell");
+                let shellish = a == "--allow-tool=shell" || a == "--allow-all-tools" || a == "--allow-all" || a.starts_with("--allow-tool=shell");
                 if !shellish {
                     out.push(a.clone());
                 }
@@ -372,11 +330,7 @@ fn is_claude_shell_tool(t: &str) -> bool {
 
 /// Apply the shell decision to a runtime's args (after [`gate_turn`]).
 /// `Err` carries the refusal for a runtime that can't run without a shell.
-pub fn gate_shell(
-    runtime: ModelProviderKind,
-    args: &mut Vec<String>,
-    allowed: bool,
-) -> Result<(), String> {
+pub fn gate_shell(runtime: ModelProviderKind, args: &mut Vec<String>, allowed: bool) -> Result<(), String> {
     if allowed {
         return Ok(());
     }
@@ -404,35 +358,13 @@ mod tests {
 
     #[test]
     fn below_floor_is_read_only_or_refused() {
-        for p in [
-            ModelProviderKind::ClaudeCode,
-            ModelProviderKind::Antigravity,
-            ModelProviderKind::Copilot,
-            ModelProviderKind::Ollama,
-            ModelProviderKind::Anthropic,
-        ] {
-            assert_eq!(
-                gate(p, Some(Contributor), Admin),
-                GatePlan::ReadOnly,
-                "{p:?}"
-            );
-            assert_eq!(
-                gate(p, None, Viewer),
-                GatePlan::ReadOnly,
-                "unresolved author fails closed: {p:?}"
-            );
+        for p in [ModelProviderKind::ClaudeCode, ModelProviderKind::Antigravity, ModelProviderKind::Copilot, ModelProviderKind::Ollama, ModelProviderKind::Anthropic] {
+            assert_eq!(gate(p, Some(Contributor), Admin), GatePlan::ReadOnly, "{p:?}");
+            assert_eq!(gate(p, None, Viewer), GatePlan::ReadOnly, "unresolved author fails closed: {p:?}");
             assert_eq!(gate(p, Some(Admin), Admin), GatePlan::Full);
         }
-        for p in [
-            ModelProviderKind::Codex,
-            ModelProviderKind::Aider,
-            ModelProviderKind::Pi,
-            ModelProviderKind::Hermes,
-        ] {
-            assert!(
-                matches!(gate(p, Some(Viewer), Contributor), GatePlan::Refuse(_)),
-                "{p:?}"
-            );
+        for p in [ModelProviderKind::Codex, ModelProviderKind::Aider, ModelProviderKind::Pi, ModelProviderKind::Hermes] {
+            assert!(matches!(gate(p, Some(Viewer), Contributor), GatePlan::Refuse(_)), "{p:?}");
             assert_eq!(gate(p, Some(Owner), Admin), GatePlan::Full);
         }
     }
@@ -441,53 +373,14 @@ mod tests {
     fn read_only_args_drop_every_tier_flag() {
         let a = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
-            read_only_args(
-                ModelProviderKind::ClaudeCode,
-                &a(&[
-                    "--permission-mode",
-                    "acceptEdits",
-                    "--allowedTools",
-                    "Bash",
-                    "--model",
-                    "opus",
-                    "--dangerously-skip-permissions"
-                ])
-            ),
+            read_only_args(ModelProviderKind::ClaudeCode, &a(&["--permission-mode", "acceptEdits", "--allowedTools", "Bash", "--model", "opus", "--dangerously-skip-permissions"])),
             a(&["--model", "opus"])
         );
+        assert_eq!(read_only_args(ModelProviderKind::Antigravity, &a(&["--mode", "auto", "--model", "x"])), a(&["--model", "x"]));
+        assert_eq!(read_only_args(ModelProviderKind::Antigravity, &a(&["--dangerously-skip-permissions"])), a(&[]));
         assert_eq!(
-            read_only_args(
-                ModelProviderKind::Antigravity,
-                &a(&["--mode", "auto", "--model", "x"])
-            ),
-            a(&["--model", "x"])
-        );
-        assert_eq!(
-            read_only_args(
-                ModelProviderKind::Antigravity,
-                &a(&["--dangerously-skip-permissions"])
-            ),
-            a(&[])
-        );
-        assert_eq!(
-            read_only_args(
-                ModelProviderKind::Copilot,
-                &a(&[
-                    "--allow-tool=write",
-                    "--allow-tool",
-                    "shell",
-                    "--allow-all-tools",
-                    "--model",
-                    "m"
-                ])
-            ),
-            a(&[
-                "--allow-tool=read",
-                "--deny-tool=write",
-                "--deny-tool=shell",
-                "--model",
-                "m"
-            ])
+            read_only_args(ModelProviderKind::Copilot, &a(&["--allow-tool=write", "--allow-tool", "shell", "--allow-all-tools", "--model", "m"])),
+            a(&["--allow-tool=read", "--deny-tool=write", "--deny-tool=shell", "--model", "m"])
         );
     }
 
@@ -499,50 +392,23 @@ mod tests {
     fn author_gate_applies_to_cli_runtimes_on_desktop_worker_agent() {
         let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         // desktop "runCommands" tier, worker LIGUS_WORKER_PERMISSION_MODE=bypassPermissions, agent default
-        for host_args in [
-            v(&["--permission-mode", "acceptEdits", "--allowedTools", "Bash"]),
-            v(&["--permission-mode", "bypassPermissions"]),
-        ] {
+        for host_args in [v(&["--permission-mode", "acceptEdits", "--allowedTools", "Bash"]), v(&["--permission-mode", "bypassPermissions"])] {
             let mut args = host_args.clone();
-            assert_eq!(
-                gate_turn(ModelProviderKind::ClaudeCode, &mut args, Some(Contributor)),
-                GatePlan::ReadOnly
-            );
-            assert!(
-                !turn_writes(ModelProviderKind::ClaudeCode, &args),
-                "{args:?}"
-            );
+            assert_eq!(gate_turn(ModelProviderKind::ClaudeCode, &mut args, Some(Contributor)), GatePlan::ReadOnly);
+            assert!(!turn_writes(ModelProviderKind::ClaudeCode, &args), "{args:?}");
             let mut args = host_args.clone();
-            assert_eq!(
-                gate_turn(ModelProviderKind::ClaudeCode, &mut args, Some(Admin)),
-                GatePlan::Full
-            );
+            assert_eq!(gate_turn(ModelProviderKind::ClaudeCode, &mut args, Some(Admin)), GatePlan::Full);
             assert_eq!(args, host_args);
             let mut args = host_args.clone();
-            assert_eq!(
-                gate_turn(ModelProviderKind::ClaudeCode, &mut args, None),
-                GatePlan::ReadOnly
-            );
+            assert_eq!(gate_turn(ModelProviderKind::ClaudeCode, &mut args, None), GatePlan::ReadOnly);
         }
         let mut args = Vec::new();
-        assert!(matches!(
-            gate_turn(ModelProviderKind::Codex, &mut args, Some(Contributor)),
-            GatePlan::Refuse(_)
-        ));
-        assert_eq!(
-            gate_turn(ModelProviderKind::Codex, &mut args, Some(Admin)),
-            GatePlan::Full
-        );
+        assert!(matches!(gate_turn(ModelProviderKind::Codex, &mut args, Some(Contributor)), GatePlan::Refuse(_)));
+        assert_eq!(gate_turn(ModelProviderKind::Codex, &mut args, Some(Admin)), GatePlan::Full);
         // A read-only claude turn: a Contributor still gets it.
         let mut args = v(&["--model", "opus"]);
-        assert_eq!(
-            gate_turn(ModelProviderKind::ClaudeCode, &mut args, Some(Contributor)),
-            GatePlan::Full
-        );
-        assert_eq!(
-            gate_turn(ModelProviderKind::ClaudeCode, &mut args, Some(Viewer)),
-            GatePlan::ReadOnly
-        );
+        assert_eq!(gate_turn(ModelProviderKind::ClaudeCode, &mut args, Some(Contributor)), GatePlan::Full);
+        assert_eq!(gate_turn(ModelProviderKind::ClaudeCode, &mut args, Some(Viewer)), GatePlan::ReadOnly);
     }
 
     #[test]
@@ -557,103 +423,33 @@ mod tests {
     #[test]
     fn shell_free_args_cap_every_cli_at_edits() {
         let a = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let claude = shell_free_args(
-            ModelProviderKind::ClaudeCode,
-            &a(&[
-                "--permission-mode",
-                "acceptEdits",
-                "--allowedTools",
-                "Bash",
-                "--model",
-                "opus",
-            ]),
-        )
-        .unwrap();
-        assert_eq!(
-            claude,
-            a(&["--permission-mode", "acceptEdits", "--model", "opus"])
-        );
-        assert_eq!(
-            tier_of(ModelProviderKind::ClaudeCode, &claude),
-            "acceptEdits"
-        );
-        let bypass = shell_free_args(
-            ModelProviderKind::ClaudeCode,
-            &a(&["--permission-mode", "bypassPermissions"]),
-        )
-        .unwrap();
-        assert_eq!(
-            tier_of(ModelProviderKind::ClaudeCode, &bypass),
-            "acceptEdits"
-        );
-        let skip = shell_free_args(
-            ModelProviderKind::ClaudeCode,
-            &a(&[
-                "--dangerously-skip-permissions",
-                "--allowedTools=Bash(git:*),Edit",
-            ]),
-        )
-        .unwrap();
-        assert!(
-            !skip
-                .iter()
-                .any(|x| x.contains("Bash(") || x == "--dangerously-skip-permissions"),
-            "{skip:?}"
-        );
-        assert!(
-            skip.contains(&"--allowedTools=Edit".to_string()),
-            "{skip:?}"
-        );
+        let claude = shell_free_args(ModelProviderKind::ClaudeCode, &a(&["--permission-mode", "acceptEdits", "--allowedTools", "Bash", "--model", "opus"])).unwrap();
+        assert_eq!(claude, a(&["--permission-mode", "acceptEdits", "--model", "opus"]));
+        assert_eq!(tier_of(ModelProviderKind::ClaudeCode, &claude), "acceptEdits");
+        let bypass = shell_free_args(ModelProviderKind::ClaudeCode, &a(&["--permission-mode", "bypassPermissions"])).unwrap();
+        assert_eq!(tier_of(ModelProviderKind::ClaudeCode, &bypass), "acceptEdits");
+        let skip = shell_free_args(ModelProviderKind::ClaudeCode, &a(&["--dangerously-skip-permissions", "--allowedTools=Bash(git:*),Edit"])).unwrap();
+        assert!(!skip.iter().any(|x| x.contains("Bash(") || x == "--dangerously-skip-permissions"), "{skip:?}");
+        assert!(skip.contains(&"--allowedTools=Edit".to_string()), "{skip:?}");
         // A read-only claude stays read-only (no tier added), shell still denied.
         let ro = shell_free_args(ModelProviderKind::ClaudeCode, &a(&["--model", "opus"])).unwrap();
         assert_eq!(ro, a(&["--model", "opus"]));
-        let copilot = shell_free_args(
-            ModelProviderKind::Copilot,
-            &a(&[
-                "--allow-tool=read",
-                "--allow-tool=write",
-                "--allow-tool=shell",
-            ]),
-        )
-        .unwrap();
-        assert!(
-            copilot.contains(&"--deny-tool=shell".to_string())
-                && !copilot.contains(&"--allow-tool=shell".to_string()),
-            "{copilot:?}"
-        );
+        let copilot = shell_free_args(ModelProviderKind::Copilot, &a(&["--allow-tool=read", "--allow-tool=write", "--allow-tool=shell"])).unwrap();
+        assert!(copilot.contains(&"--deny-tool=shell".to_string()) && !copilot.contains(&"--allow-tool=shell".to_string()), "{copilot:?}");
         let all = shell_free_args(ModelProviderKind::Copilot, &a(&["--allow-all-tools"])).unwrap();
-        assert!(
-            all.contains(&"--allow-tool=write".to_string())
-                && !all.contains(&"--allow-all-tools".to_string()),
-            "{all:?}"
-        );
-        let agy = shell_free_args(
-            ModelProviderKind::Antigravity,
-            &a(&["--mode", "auto", "--model", "x"]),
-        )
-        .unwrap();
+        assert!(all.contains(&"--allow-tool=write".to_string()) && !all.contains(&"--allow-all-tools".to_string()), "{all:?}");
+        let agy = shell_free_args(ModelProviderKind::Antigravity, &a(&["--mode", "auto", "--model", "x"])).unwrap();
         assert_eq!(agy, a(&["--mode", "accept-edits", "--model", "x"]));
         let pi = shell_free_args(ModelProviderKind::Pi, &a(&["-p"])).unwrap();
         assert_eq!(pi, a(&["-p", "--exclude-tools", "bash"]));
-        for k in [
-            ModelProviderKind::Codex,
-            ModelProviderKind::Aider,
-            ModelProviderKind::Hermes,
-        ] {
+        for k in [ModelProviderKind::Codex, ModelProviderKind::Aider, ModelProviderKind::Hermes] {
             assert!(shell_free_args(k, &[]).is_err(), "{k:?}");
         }
         // HTTP runtimes: unchanged (the host withholds run_command).
-        assert_eq!(
-            shell_free_args(ModelProviderKind::Ollama, &a(&["x"])).unwrap(),
-            a(&["x"])
-        );
+        assert_eq!(shell_free_args(ModelProviderKind::Ollama, &a(&["x"])).unwrap(), a(&["x"]));
         let mut args = a(&["--allowedTools", "Bash"]);
         gate_shell(ModelProviderKind::ClaudeCode, &mut args, true).unwrap();
-        assert_eq!(
-            args,
-            a(&["--allowedTools", "Bash"]),
-            "an allowed shell leaves the args alone"
-        );
+        assert_eq!(args, a(&["--allowedTools", "Bash"]), "an allowed shell leaves the args alone");
     }
 
     fn tier_of(k: ModelProviderKind, args: &[String]) -> &'static str {

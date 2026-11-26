@@ -50,9 +50,7 @@ impl ConnectionSecrets {
         let s = Self {
             token: get("token"),
             key: get("key"),
-            ek: get("ek")
-                .and_then(|j| serde_json::from_str(&j).ok())
-                .unwrap_or_default(),
+            ek: get("ek").and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default(),
         };
         if let Some(t) = &s.token {
             crate::secret_redact::register(t);
@@ -64,12 +62,7 @@ impl ConnectionSecrets {
     }
 
     /// Write them to `store`; an absent or blank value is deleted.
-    pub fn save(
-        &self,
-        store: &dyn SecretStore,
-        scope: &'static str,
-        prefix: &str,
-    ) -> Result<(), SecretError> {
+    pub fn save(&self, store: &dyn SecretStore, scope: &'static str, prefix: &str) -> Result<(), SecretError> {
         let put = |n: &str, v: Option<&str>| -> Result<(), SecretError> {
             let id = SecretId::new(scope, format!("{prefix}{n}"));
             match v.filter(|v| !v.is_empty()) {
@@ -79,19 +72,12 @@ impl ConnectionSecrets {
         };
         put("token", self.token.as_deref())?;
         put("key", self.key.as_deref())?;
-        let ek = (!self.ek.is_empty())
-            .then(|| serde_json::to_string(&self.ek))
-            .transpose()
-            .map_err(|e| SecretError::Io(e.into()))?;
+        let ek = (!self.ek.is_empty()).then(|| serde_json::to_string(&self.ek)).transpose().map_err(|e| SecretError::Io(e.into()))?;
         put("ek", ek.as_deref())
     }
 
     /// Delete them from `store`.
-    pub fn delete(
-        store: &dyn SecretStore,
-        scope: &'static str,
-        prefix: &str,
-    ) -> Result<(), SecretError> {
+    pub fn delete(store: &dyn SecretStore, scope: &'static str, prefix: &str) -> Result<(), SecretError> {
         Self::default().save(store, scope, prefix)
     }
 }
@@ -126,11 +112,7 @@ impl SavedWorkspace {
             dm_account: conn.dm_account.clone(),
             founder_actor_id: conn.founder_actor_id.clone(),
             fk: conn.fk.clone(),
-            secrets: ConnectionSecrets {
-                token,
-                key: conn.key.clone(),
-                ek: conn.ek.clone(),
-            },
+            secrets: ConnectionSecrets { token, key: conn.key.clone(), ek: conn.ek.clone() },
         }
     }
 
@@ -200,12 +182,7 @@ impl WorkspaceList {
     }
 
     /// Write the file (owner-only, no secrets) and every workspace's secrets.
-    pub fn save(
-        &self,
-        data_dir: &Path,
-        store: &dyn SecretStore,
-        scope: &'static str,
-    ) -> Result<(), SecretError> {
+    pub fn save(&self, data_dir: &Path, store: &dyn SecretStore, scope: &'static str) -> Result<(), SecretError> {
         for w in &self.workspaces {
             w.secrets.save(store, scope, &w.secret_prefix())?;
         }
@@ -229,12 +206,7 @@ impl WorkspaceList {
 
     /// Remove workspace `id` and delete its secrets. Returns whether it was
     /// there.
-    pub fn remove(
-        &mut self,
-        id: Uuid,
-        store: &dyn SecretStore,
-        scope: &'static str,
-    ) -> Result<bool, SecretError> {
+    pub fn remove(&mut self, id: Uuid, store: &dyn SecretStore, scope: &'static str) -> Result<bool, SecretError> {
         let before = self.workspaces.len();
         self.workspaces.retain(|w| w.id() != id);
         if self.workspaces.len() != before {
@@ -270,24 +242,11 @@ mod tests {
     fn secrets_round_trip_and_blank_deletes() {
         let tmp = tempfile::tempdir().unwrap();
         let store = File0600::new(tmp.path());
-        let s = ConnectionSecrets {
-            token: Some("hrt1-x".into()),
-            key: Some("k".into()),
-            ek: vec![DeliveredKey::new(1, &[1u8; 32])],
-        };
+        let s = ConnectionSecrets { token: Some("hrt1-x".into()), key: Some("k".into()), ek: vec![DeliveredKey::new(1, &[1u8; 32])] };
         s.save(&store, "cli", "").unwrap();
         assert_eq!(ConnectionSecrets::load(&store, "cli", ""), s);
-        assert_eq!(
-            ConnectionSecrets::load(&store, "term", ""),
-            ConnectionSecrets::default(),
-            "scopes are separate"
-        );
-        ConnectionSecrets {
-            token: Some(String::new()),
-            ..s.clone()
-        }
-        .save(&store, "cli", "")
-        .unwrap();
+        assert_eq!(ConnectionSecrets::load(&store, "term", ""), ConnectionSecrets::default(), "scopes are separate");
+        ConnectionSecrets { token: Some(String::new()), ..s.clone() }.save(&store, "cli", "").unwrap();
         assert_eq!(ConnectionSecrets::load(&store, "cli", "").token, None);
     }
 
@@ -300,23 +259,13 @@ mod tests {
         list.upsert(SavedWorkspace::from_conn(&c, Some("hrt1-token-abc".into())));
         list.save(tmp.path(), &store, "term").unwrap();
         let text = std::fs::read_to_string(WorkspaceList::path(tmp.path())).unwrap();
-        for secret in [
-            "passphrase-1",
-            "hrt1-token-abc",
-            &DeliveredKey::new(2, &[7u8; 32]).k,
-            "data:image",
-            c.inv.as_deref().unwrap(),
-        ] {
+        for secret in ["passphrase-1", "hrt1-token-abc", &DeliveredKey::new(2, &[7u8; 32]).k, "data:image", c.inv.as_deref().unwrap()] {
             assert!(!text.contains(secret), "{secret} leaked into {text}");
         }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(WorkspaceList::path(tmp.path()))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777;
+            let mode = std::fs::metadata(WorkspaceList::path(tmp.path())).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
         let back = WorkspaceList::load(tmp.path(), &store, "term");
@@ -324,10 +273,7 @@ mod tests {
         let w = back.get(c.id()).unwrap();
         assert_eq!(w.relay(), Some("https://relay.example"));
         let again = w.conn();
-        assert_eq!(
-            (again.key, again.ek, again.inv, again.icon),
-            (c.key.clone(), c.ek.clone(), None, None)
-        );
+        assert_eq!((again.key, again.ek, again.inv, again.icon), (c.key.clone(), c.ek.clone(), None, None));
     }
 
     #[test]
@@ -345,10 +291,7 @@ mod tests {
         list.save(tmp.path(), &store, "term").unwrap();
         assert!(list.remove(c.id(), &store, "term").unwrap());
         assert!(!list.remove(c.id(), &store, "term").unwrap());
-        assert_eq!(
-            ConnectionSecrets::load(&store, "term", &secret_prefix(c.id())),
-            ConnectionSecrets::default()
-        );
+        assert_eq!(ConnectionSecrets::load(&store, "term", &secret_prefix(c.id())), ConnectionSecrets::default());
     }
 
     #[test]

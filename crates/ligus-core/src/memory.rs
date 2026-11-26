@@ -147,18 +147,13 @@ pub enum MemoryOp {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tags: Vec<String>,
     },
-    Remove {
-        entry_id: Uuid,
-        base: Uuid,
-    },
+    Remove { entry_id: Uuid, base: Uuid },
 }
 
 impl MemoryOp {
     pub fn entry_id(&self) -> Uuid {
         match self {
-            MemoryOp::Create { entry_id, .. }
-            | MemoryOp::Edit { entry_id, .. }
-            | MemoryOp::Remove { entry_id, .. } => *entry_id,
+            MemoryOp::Create { entry_id, .. } | MemoryOp::Edit { entry_id, .. } | MemoryOp::Remove { entry_id, .. } => *entry_id,
         }
     }
     pub fn name(&self) -> &'static str {
@@ -261,9 +256,7 @@ pub struct TaskStateUpdate {
 
 impl TaskStateUpdate {
     pub fn ttl(&self) -> i64 {
-        self.ttl_ms
-            .unwrap_or(DEFAULT_TASK_TTL_MS)
-            .clamp(1, MAX_TASK_TTL_MS)
+        self.ttl_ms.unwrap_or(DEFAULT_TASK_TTL_MS).clamp(1, MAX_TASK_TTL_MS)
     }
 }
 
@@ -281,11 +274,7 @@ pub struct MemoryAuthor {
 
 impl Default for MemoryAuthor {
     fn default() -> Self {
-        Self {
-            id: String::new(),
-            name: String::new(),
-            kind: ActorKind::System,
-        }
+        Self { id: String::new(), name: String::new(), kind: ActorKind::System }
     }
 }
 
@@ -412,9 +401,7 @@ impl MemoryState {
     }
     /// Tombstones carrying edits that sorted after their removal.
     pub fn edited_after_removal(&self) -> impl Iterator<Item = &MemoryEntry> {
-        self.entries
-            .values()
-            .filter(|e| !e.live() && !e.edited_after_removal.is_empty())
+        self.entries.values().filter(|e| !e.live() && !e.edited_after_removal.is_empty())
     }
     pub fn live(&self) -> impl Iterator<Item = &MemoryEntry> {
         self.entries.values().filter(|e| e.live())
@@ -464,8 +451,7 @@ impl TaskSlot {
 // --------------------------------------------------------------- validation
 
 fn bad_chars(s: &str, allow_newlines: bool) -> bool {
-    s.chars()
-        .any(|c| c.is_control() && !(allow_newlines && (c == '\n' || c == '\t' || c == '\r')))
+    s.chars().any(|c| c.is_control() && !(allow_newlines && (c == '\n' || c == '\t' || c == '\r')))
 }
 
 fn text_ok(s: &str, max: usize, newlines: bool) -> bool {
@@ -511,8 +497,7 @@ pub fn is_invisible(c: char) -> bool {
 /// A character a title refuses: an invisible one (an emoji's own
 /// presentation selector excepted) or a line or paragraph separator.
 fn title_refuses(c: char) -> bool {
-    (is_invisible(c) && !matches!(c, '\u{fe0e}' | '\u{fe0f}'))
-        || matches!(c, '\u{2028}' | '\u{2029}')
+    (is_invisible(c) && !matches!(c, '\u{fe0e}' | '\u{fe0f}')) || matches!(c, '\u{2028}' | '\u{2029}')
 }
 
 /// Whether a reader whose egress is `reader` may see content written under
@@ -546,18 +531,12 @@ pub fn readable_under(e: &MemoryEntry, reader: &EgressPolicy) -> bool {
 
 /// The chats an entry's shown text came from (its head and its conflicts).
 pub fn source_chats(e: &MemoryEntry) -> impl Iterator<Item = Uuid> + '_ {
-    std::iter::once(&e.current)
-        .chain(e.conflicts.iter())
-        .filter_map(|r| r.source.chat_id)
+    std::iter::once(&e.current).chain(e.conflicts.iter()).filter_map(|r| r.source.chat_id)
 }
 
 fn source_ok(s: &MemorySource) -> Result<(), &'static str> {
     if let Some(EgressPolicy::AllowList { mcp_servers }) = &s.egress {
-        if mcp_servers.len() > MAX_EGRESS_SERVERS
-            || !mcp_servers
-                .iter()
-                .all(|x| text_ok(x, MAX_EGRESS_ID_CHARS, false))
-        {
+        if mcp_servers.len() > MAX_EGRESS_SERVERS || !mcp_servers.iter().all(|x| text_ok(x, MAX_EGRESS_ID_CHARS, false)) {
             return Err("a recorded egress allow-list names at most 32 servers");
         }
     }
@@ -567,9 +546,7 @@ fn source_ok(s: &MemorySource) -> Result<(), &'static str> {
 fn tag_ok(t: &str) -> bool {
     !t.is_empty()
         && t.chars().count() <= MAX_TAG_CHARS
-        && t.chars().all(|c| {
-            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.' | ':')
-        })
+        && t.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.' | ':'))
 }
 
 fn tags_ok(tags: &[String]) -> bool {
@@ -609,9 +586,7 @@ pub fn normalize_tags(tags: &[String]) -> Vec<String> {
             .to_lowercase()
             .replace(' ', "-")
             .chars()
-            .filter(|c| {
-                c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.' | ':')
-            })
+            .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.' | ':'))
             .take(MAX_TAG_CHARS)
             .collect();
         if !t.is_empty() && !out.contains(&t) {
@@ -641,22 +616,12 @@ pub enum Outcome {
 /// within bounds, and `resolves` naming only conflicts it may settle.
 /// `author` is who makes it happen (the writer, or the decider of an
 /// accepted proposal).
-pub fn judge_op(
-    m: &MemoryState,
-    op: &MemoryOp,
-    resolves: &[Uuid],
-    author: &str,
-) -> Result<Outcome, &'static str> {
+pub fn judge_op(m: &MemoryState, op: &MemoryOp, resolves: &[Uuid], author: &str) -> Result<Outcome, &'static str> {
     if !unique(resolves, MAX_CONFLICTS) {
         return Err("resolves names each conflict once, at most 4");
     }
     match op {
-        MemoryOp::Create {
-            entry_id,
-            title,
-            body,
-            tags,
-        } => {
+        MemoryOp::Create { entry_id, title, body, tags } => {
             content_ok(title, body, tags)?;
             if m.entries.contains_key(entry_id) {
                 return Err("that memory entry id is already used");
@@ -670,21 +635,12 @@ pub fn judge_op(
             if m.entries.len() >= MAX_ENTRY_IDS {
                 return Err("the workspace memory has used every entry id it may");
             }
-            if m.ids_by_author
-                .get(author)
-                .is_some_and(|n| *n as usize >= MAX_ENTRY_IDS_PER_AUTHOR)
-            {
+            if m.ids_by_author.get(author).is_some_and(|n| *n as usize >= MAX_ENTRY_IDS_PER_AUTHOR) {
                 return Err("this person has used every memory entry id one person may (2000)");
             }
             Ok(Outcome::Created)
         }
-        MemoryOp::Edit {
-            entry_id,
-            base,
-            title,
-            body,
-            tags,
-        } => {
+        MemoryOp::Edit { entry_id, base, title, body, tags } => {
             content_ok(title, body, tags)?;
             judge_change(m, *entry_id, *base, resolves, false)
         }
@@ -692,16 +648,8 @@ pub fn judge_op(
     }
 }
 
-fn judge_change(
-    m: &MemoryState,
-    entry_id: Uuid,
-    base: Uuid,
-    resolves: &[Uuid],
-    removal: bool,
-) -> Result<Outcome, &'static str> {
-    let Some(e) = m.entries.get(&entry_id) else {
-        return Err("no such memory entry");
-    };
+fn judge_change(m: &MemoryState, entry_id: Uuid, base: Uuid, resolves: &[Uuid], removal: bool) -> Result<Outcome, &'static str> {
+    let Some(e) = m.entries.get(&entry_id) else { return Err("no such memory entry") };
     if !e.live() {
         // An edit made from a version its author saw (the removal raced
         // it) is kept on the tombstone, never applied (no resurrection) and
@@ -722,45 +670,23 @@ fn judge_change(
         // conflict, never refused, so nothing a person wrote is lost. The
         // conflicts it merged that are still open are settled by it (their
         // text is in it); ones already settled are ignored.
-        let settled = e
-            .conflicts
-            .iter()
-            .filter(|c| resolves.contains(&c.rev))
-            .count();
+        let settled = e.conflicts.iter().filter(|c| resolves.contains(&c.rev)).count();
         if e.conflicts.len() - settled >= MAX_CONFLICTS {
             return Err("this entry has too many unresolved conflicts; resolve them first");
         }
         return Ok(Outcome::Conflict);
     }
-    if !resolves
-        .iter()
-        .all(|r| e.conflicts.iter().any(|c| c.rev == *r))
-    {
+    if !resolves.iter().all(|r| e.conflicts.iter().any(|c| c.rev == *r)) {
         return Err("resolves names a conflict this entry doesn't have");
     }
-    Ok(if removal {
-        Outcome::Removed
-    } else {
-        Outcome::Head
-    })
+    Ok(if removal { Outcome::Removed } else { Outcome::Head })
 }
 
 /// The op a direct write names.
 pub fn write_op(w: &MemoryWrite) -> MemoryOp {
     match w.base {
-        None => MemoryOp::Create {
-            entry_id: w.entry_id,
-            title: w.title.clone(),
-            body: w.body.clone(),
-            tags: w.tags.clone(),
-        },
-        Some(base) => MemoryOp::Edit {
-            entry_id: w.entry_id,
-            base,
-            title: w.title.clone(),
-            body: w.body.clone(),
-            tags: w.tags.clone(),
-        },
+        None => MemoryOp::Create { entry_id: w.entry_id, title: w.title.clone(), body: w.body.clone(), tags: w.tags.clone() },
+        Some(base) => MemoryOp::Edit { entry_id: w.entry_id, base, title: w.title.clone(), body: w.body.clone(), tags: w.tags.clone() },
     }
 }
 
@@ -779,16 +705,10 @@ pub fn task_shape_ok(t: &TaskStateUpdate) -> Result<(), &'static str> {
     if t.progress.is_some_and(|p| p > 100) {
         return Err("progress is 0 to 100");
     }
-    if !task_items_ok(&t.open_questions, MAX_QUESTION_CHARS)
-        || !task_items_ok(&t.partial_results, MAX_RESULT_CHARS)
-    {
-        return Err(
-            "at most 8 open questions (300 characters) and 8 partial results (600 characters)",
-        );
+    if !task_items_ok(&t.open_questions, MAX_QUESTION_CHARS) || !task_items_ok(&t.partial_results, MAX_RESULT_CHARS) {
+        return Err("at most 8 open questions (300 characters) and 8 partial results (600 characters)");
     }
-    if t.ttl_ms
-        .is_some_and(|x| !(1..=MAX_TASK_TTL_MS).contains(&x))
-    {
+    if t.ttl_ms.is_some_and(|x| !(1..=MAX_TASK_TTL_MS).contains(&x)) {
         return Err("a task-state lifetime is at most 24 hours");
     }
     Ok(())
@@ -799,9 +719,7 @@ pub fn task_shape_ok(t: &TaskStateUpdate) -> Result<(), &'static str> {
 /// backdated first update included), and an agent that moves hosts, or gets
 /// its own key in the A3 transition, keeps reporting.
 fn slot_index(tasks: &[TaskSlot], t: &TaskStateUpdate, signer: Uuid) -> Option<usize> {
-    tasks.iter().position(|s| {
-        s.writer == signer && s.update.task_id == t.task_id && s.update.agent_key == t.agent_key
-    })
+    tasks.iter().position(|s| s.writer == signer && s.update.task_id == t.task_id && s.update.agent_key == t.agent_key)
 }
 
 /// The signer's own least recently updated slot, when it holds its share.
@@ -833,29 +751,12 @@ fn evictable(tasks: &[TaskSlot]) -> Option<usize> {
 /// record): bounds and semantics that need only the fold so far, the
 /// signer and the author (the stamp's actor id). Role and identity rules
 /// live in `authz`.
-pub fn validate(
-    flow: &FlowState,
-    record: &FlowRecord,
-    signer: Option<Uuid>,
-    author: &str,
-) -> Option<Result<(), &'static str>> {
+pub fn validate(flow: &FlowState, record: &FlowRecord, signer: Option<Uuid>, author: &str) -> Option<Result<(), &'static str>> {
     let m = &flow.memory;
     Some(match record {
-        FlowRecord::MemoryWritten(w) => source_ok(&w.source)
-            .and_then(|_| judge_op(m, &write_op(w), &w.resolves, author))
-            .map(|_| ()),
+        FlowRecord::MemoryWritten(w) => source_ok(&w.source).and_then(|_| judge_op(m, &write_op(w), &w.resolves, author)).map(|_| ()),
         FlowRecord::MemoryRemoved(r) => source_ok(&r.source)
-            .and_then(|_| {
-                judge_op(
-                    m,
-                    &MemoryOp::Remove {
-                        entry_id: r.entry_id,
-                        base: r.base,
-                    },
-                    &r.resolves,
-                    author,
-                )
-            })
+            .and_then(|_| judge_op(m, &MemoryOp::Remove { entry_id: r.entry_id, base: r.base }, &r.resolves, author))
             .map(|_| ()),
         FlowRecord::MemoryProposed(p) => validate_proposal(m, p, signer),
         FlowRecord::MemoryProposalDecided(d) => validate_decision(m, d, author),
@@ -886,20 +787,14 @@ pub fn bound_event_id(record: &FlowRecord) -> Option<Uuid> {
 pub fn id_binding_ok(record: &FlowRecord, event_id: Uuid) -> Result<(), &'static str> {
     match bound_event_id(record) {
         Some(id) if id != event_id => Err(match record {
-            FlowRecord::MemoryProposed(_) => {
-                "a memory proposal's id is the id of the event that files it"
-            }
+            FlowRecord::MemoryProposed(_) => "a memory proposal's id is the id of the event that files it",
             _ => "a new memory entry's id is the id of the event that creates it",
         }),
         _ => Ok(()),
     }
 }
 
-fn validate_proposal(
-    m: &MemoryState,
-    p: &MemoryProposal,
-    signer: Option<Uuid>,
-) -> Result<(), &'static str> {
+fn validate_proposal(m: &MemoryState, p: &MemoryProposal, signer: Option<Uuid>) -> Result<(), &'static str> {
     if p.rationale.chars().count() > MAX_NOTE_CHARS || bad_chars(&p.rationale, true) {
         return Err("a proposal's rationale is at most 500 characters");
     }
@@ -911,12 +806,7 @@ fn validate_proposal(
     }
     source_ok(&p.source)?;
     match &p.op {
-        MemoryOp::Create {
-            entry_id,
-            title,
-            body,
-            tags,
-        } => {
+        MemoryOp::Create { entry_id, title, body, tags } => {
             // The entry an accepted create makes is known by the proposal
             // (itself known by its event): an id of the proposer's choice
             // could be taken first, and the person's acceptance refused.
@@ -928,13 +818,7 @@ fn validate_proposal(
                 return Err("that memory entry id is already used");
             }
         }
-        MemoryOp::Edit {
-            entry_id,
-            title,
-            body,
-            tags,
-            ..
-        } => {
+        MemoryOp::Edit { entry_id, title, body, tags, .. } => {
             content_ok(title, body, tags)?;
             if !m.entries.get(entry_id).is_some_and(|e| e.live()) {
                 return Err("no such memory entry");
@@ -951,30 +835,18 @@ fn validate_proposal(
     }
     // Per signer (a device or an agent key), whatever proposer it names:
     // one device cycling proposer names still fills only its own share.
-    let Some(signer) = signer else {
-        return Err("a memory proposal is signed");
-    };
-    if m.open_proposals()
-        .filter(|x| x.signer == Some(signer))
-        .count()
-        >= MAX_OPEN_PROPOSALS_PER_PROPOSER
-    {
+    let Some(signer) = signer else { return Err("a memory proposal is signed") };
+    if m.open_proposals().filter(|x| x.signer == Some(signer)).count() >= MAX_OPEN_PROPOSALS_PER_PROPOSER {
         return Err("too many open memory proposals from this device");
     }
     Ok(())
 }
 
-fn validate_decision(
-    m: &MemoryState,
-    d: &MemoryDecision,
-    author: &str,
-) -> Result<(), &'static str> {
+fn validate_decision(m: &MemoryState, d: &MemoryDecision, author: &str) -> Result<(), &'static str> {
     if d.note.chars().count() > MAX_NOTE_CHARS || bad_chars(&d.note, true) {
         return Err("a decision note is at most 500 characters");
     }
-    let Some(p) = m.proposals.get(&d.proposal_id) else {
-        return Err("no such memory proposal");
-    };
+    let Some(p) = m.proposals.get(&d.proposal_id) else { return Err("no such memory proposal") };
     if !p.is_open() {
         return Err("that memory proposal is already decided");
     }
@@ -986,21 +858,13 @@ fn validate_decision(
     Ok(())
 }
 
-fn validate_task(
-    tasks: &[TaskSlot],
-    t: &TaskStateUpdate,
-    signer: Option<Uuid>,
-) -> Result<(), &'static str> {
+fn validate_task(tasks: &[TaskSlot], t: &TaskStateUpdate, signer: Option<Uuid>) -> Result<(), &'static str> {
     task_shape_ok(t)?;
-    let Some(signer) = signer else {
-        return Err("a task-state update is signed");
-    };
+    let Some(signer) = signer else { return Err("a task-state update is signed") };
     match slot_index(tasks, t, signer) {
         Some(_) => Ok(()),
         None if writer_evictable(tasks, signer).is_some() => Ok(()),
-        None if tasks.len() >= MAX_TASK_SLOTS_PER_CHAT && evictable(tasks).is_none() => {
-            Err("too many live task-state slots on this chat")
-        }
+        None if tasks.len() >= MAX_TASK_SLOTS_PER_CHAT && evictable(tasks).is_none() => Err("too many live task-state slots on this chat"),
         None => Ok(()),
     }
 }
@@ -1021,20 +885,9 @@ impl RevCtx {
         let (id, name, kind) = env
             .actor_stamp
             .as_ref()
-            .map(|s| {
-                (
-                    s.actor.id.clone(),
-                    s.actor.display_name.clone(),
-                    s.actor.kind,
-                )
-            })
+            .map(|s| (s.actor.id.clone(), s.actor.display_name.clone(), s.actor.kind))
             .unwrap_or((String::new(), String::new(), ActorKind::System));
-        Self {
-            event_id: env.event_id,
-            author: MemoryAuthor { id, name, kind },
-            at_ms: crate::flow::ms(&env.timestamp),
-            signer: env.signer_device_id,
-        }
+        Self { event_id: env.event_id, author: MemoryAuthor { id, name, kind }, at_ms: crate::flow::ms(&env.timestamp), signer: env.signer_device_id }
     }
 }
 
@@ -1044,41 +897,16 @@ impl RevCtx {
 pub fn apply_enveloped(flow: &mut FlowState, record: &FlowRecord, ctx: &RevCtx) -> bool {
     match record {
         FlowRecord::MemoryWritten(w) => {
-            apply_op(
-                &mut flow.memory,
-                &write_op(w),
-                &w.resolves,
-                ctx,
-                &w.source,
-                None,
-                "",
-            );
+            apply_op(&mut flow.memory, &write_op(w), &w.resolves, ctx, &w.source, None, "");
         }
         FlowRecord::MemoryRemoved(r) => {
-            apply_op(
-                &mut flow.memory,
-                &MemoryOp::Remove {
-                    entry_id: r.entry_id,
-                    base: r.base,
-                },
-                &r.resolves,
-                ctx,
-                &r.source,
-                None,
-                "",
-            );
+            apply_op(&mut flow.memory, &MemoryOp::Remove { entry_id: r.entry_id, base: r.base }, &r.resolves, ctx, &r.source, None, "");
         }
         FlowRecord::MemoryProposed(p) => {
             if validate_proposal(&flow.memory, p, ctx.signer).is_ok() {
                 flow.memory.proposals.insert(
                     p.proposal_id,
-                    ProposalState {
-                        proposal: p.clone(),
-                        by: ctx.author.clone(),
-                        signer: ctx.signer,
-                        at_ms: ctx.at_ms,
-                        decision: None,
-                    },
+                    ProposalState { proposal: p.clone(), by: ctx.author.clone(), signer: ctx.signer, at_ms: ctx.at_ms, decision: None },
                 );
             }
         }
@@ -1086,31 +914,14 @@ pub fn apply_enveloped(flow: &mut FlowState, record: &FlowRecord, ctx: &RevCtx) 
             if validate_decision(&flow.memory, d, &ctx.author.id).is_err() {
                 return true;
             }
-            let Some(p) = flow.memory.proposals.get(&d.proposal_id).cloned() else {
-                return true;
-            };
+            let Some(p) = flow.memory.proposals.get(&d.proposal_id).cloned() else { return true };
             let mut conflicted = false;
             if d.accepted {
-                let outcome = apply_op(
-                    &mut flow.memory,
-                    &p.proposal.op,
-                    &d.resolves,
-                    ctx,
-                    &p.proposal.source,
-                    Some(d.proposal_id),
-                    &p.proposal.proposer,
-                );
+                let outcome = apply_op(&mut flow.memory, &p.proposal.op, &d.resolves, ctx, &p.proposal.source, Some(d.proposal_id), &p.proposal.proposer);
                 conflicted = matches!(outcome, Some(Outcome::Conflict | Outcome::AfterRemoval));
             }
             if let Some(st) = flow.memory.proposals.get_mut(&d.proposal_id) {
-                st.decision = Some(DecisionState {
-                    accepted: d.accepted,
-                    by: ctx.author.clone(),
-                    at_ms: ctx.at_ms,
-                    note: d.note.clone(),
-                    rev: ctx.event_id,
-                    conflicted,
-                });
+                st.decision = Some(DecisionState { accepted: d.accepted, by: ctx.author.clone(), at_ms: ctx.at_ms, note: d.note.clone(), rev: ctx.event_id, conflicted });
             }
             trim_decided(&mut flow.memory);
         }
@@ -1134,14 +945,7 @@ pub fn apply_enveloped(flow: &mut FlowState, record: &FlowRecord, ctx: &RevCtx) 
                                     flow.tasks.remove(i);
                                 }
                             }
-                            flow.tasks.push(TaskSlot {
-                                update: t.clone(),
-                                writer: signer,
-                                by: ctx.author.clone(),
-                                at_ms: ctx.at_ms,
-                                rev: ctx.event_id,
-                                updates: 1,
-                            });
+                            flow.tasks.push(TaskSlot { update: t.clone(), writer: signer, by: ctx.author.clone(), at_ms: ctx.at_ms, rev: ctx.event_id, updates: 1 });
                         }
                     }
                 }
@@ -1153,11 +957,8 @@ pub fn apply_enveloped(flow: &mut FlowState, record: &FlowRecord, ctx: &RevCtx) 
 }
 
 fn trim_decided(m: &mut MemoryState) {
-    let decided: Vec<(i64, Uuid)> = m
-        .proposals
-        .iter()
-        .filter_map(|(id, p)| p.decision.as_ref().map(|d| (d.at_ms, *id)))
-        .collect();
+    let decided: Vec<(i64, Uuid)> =
+        m.proposals.iter().filter_map(|(id, p)| p.decision.as_ref().map(|d| (d.at_ms, *id))).collect();
     if decided.len() > MAX_DECIDED_KEPT {
         let mut decided = decided;
         decided.sort();
@@ -1187,31 +988,21 @@ fn apply_op(
     proposer: &str,
 ) -> Option<Outcome> {
     let outcome = judge_op(m, op, resolves, &ctx.author.id).ok()?;
-    let rev = |base: Option<Uuid>, title: &str, body: &str, tags: &[String], removal: bool| {
-        MemoryRevision {
-            rev: ctx.event_id,
-            base,
-            title: title.to_string(),
-            body: body.to_string(),
-            tags: tags.to_vec(),
-            author: ctx.author.clone(),
-            at_ms: ctx.at_ms,
-            source: source.clone(),
-            via_proposal: via,
-            proposer: proposer.to_string(),
-            removal,
-        }
+    let rev = |base: Option<Uuid>, title: &str, body: &str, tags: &[String], removal: bool| MemoryRevision {
+        rev: ctx.event_id,
+        base,
+        title: title.to_string(),
+        body: body.to_string(),
+        tags: tags.to_vec(),
+        author: ctx.author.clone(),
+        at_ms: ctx.at_ms,
+        source: source.clone(),
+        via_proposal: via,
+        proposer: proposer.to_string(),
+        removal,
     };
     match (op, outcome) {
-        (
-            MemoryOp::Create {
-                entry_id,
-                title,
-                body,
-                tags,
-            },
-            Outcome::Created,
-        ) => {
+        (MemoryOp::Create { entry_id, title, body, tags }, Outcome::Created) => {
             let mut e = MemoryEntry {
                 id: *entry_id,
                 current: rev(None, title, body, tags, false),
@@ -1227,35 +1018,16 @@ fn apply_op(
         (MemoryOp::Edit { entry_id, base, .. }, Outcome::AfterRemoval) => {
             let e = m.entries.get_mut(entry_id)?;
             // Who and when, never the text (the removal dropped the content).
-            e.edited_after_removal
-                .push(rev(Some(*base), "", "", &[], false));
+            e.edited_after_removal.push(rev(Some(*base), "", "", &[], false));
         }
-        (
-            MemoryOp::Edit {
-                entry_id,
-                base,
-                title,
-                body,
-                tags,
-            },
-            Outcome::Head,
-        ) => {
+        (MemoryOp::Edit { entry_id, base, title, body, tags }, Outcome::Head) => {
             let e = m.entries.get_mut(entry_id)?;
             e.egress = tighten(e.egress.as_ref(), source.egress.as_ref());
             e.current = rev(Some(*base), title, body, tags, false);
             e.conflicts.retain(|c| !resolves.contains(&c.rev));
             remember(e, ctx.event_id);
         }
-        (
-            MemoryOp::Edit {
-                entry_id,
-                base,
-                title,
-                body,
-                tags,
-            },
-            Outcome::Conflict,
-        ) => {
+        (MemoryOp::Edit { entry_id, base, title, body, tags }, Outcome::Conflict) => {
             let e = m.entries.get_mut(entry_id)?;
             e.egress = tighten(e.egress.as_ref(), source.egress.as_ref());
             e.conflicts.retain(|c| !resolves.contains(&c.rev));
@@ -1288,19 +1060,12 @@ fn apply_op(
 /// direct write or by accepting a proposal: creating needs Contributor (the
 /// role floor, checked by `authorization::evaluate`); changing an entry needs
 /// its creator or an Admin.
-pub fn may_change(
-    m: &MemoryState,
-    op: &MemoryOp,
-    author: &str,
-    role: crate::identity::WorkspaceRole,
-) -> bool {
+pub fn may_change(m: &MemoryState, op: &MemoryOp, author: &str, role: crate::identity::WorkspaceRole) -> bool {
     match op {
         MemoryOp::Create { .. } => true,
         MemoryOp::Edit { entry_id, .. } | MemoryOp::Remove { entry_id, .. } => {
             role.rank() >= crate::identity::WorkspaceRole::Admin.rank()
-                || m.entries
-                    .get(entry_id)
-                    .is_some_and(|e| e.created_by.id == author)
+                || m.entries.get(entry_id).is_some_and(|e| e.created_by.id == author)
         }
     }
 }
@@ -1309,21 +1074,13 @@ pub fn may_change(
 pub fn is_memory(record: &FlowRecord) -> bool {
     matches!(
         record,
-        FlowRecord::MemoryWritten(_)
-            | FlowRecord::MemoryRemoved(_)
-            | FlowRecord::MemoryProposed(_)
-            | FlowRecord::MemoryProposalDecided(_)
+        FlowRecord::MemoryWritten(_) | FlowRecord::MemoryRemoved(_) | FlowRecord::MemoryProposed(_) | FlowRecord::MemoryProposalDecided(_)
     )
 }
 
 /// Memory records only a person writes: direct writes and decisions.
 pub fn is_person_only(record: &FlowRecord) -> bool {
-    matches!(
-        record,
-        FlowRecord::MemoryWritten(_)
-            | FlowRecord::MemoryRemoved(_)
-            | FlowRecord::MemoryProposalDecided(_)
-    )
+    matches!(record, FlowRecord::MemoryWritten(_) | FlowRecord::MemoryRemoved(_) | FlowRecord::MemoryProposalDecided(_))
 }
 
 // -------------------------------------------------------------------- search
@@ -1331,10 +1088,7 @@ pub fn is_person_only(record: &FlowRecord) -> bool {
 /// Lowercase search terms of `query` (punctuation separates them).
 pub fn terms(query: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for t in query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-    {
+    for t in query.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()) {
         let t: String = t.to_lowercase().chars().take(MAX_TERM_CHARS).collect();
         if !out.contains(&t) {
             out.push(t);
@@ -1364,19 +1118,9 @@ pub fn search<'a>(m: &'a MemoryState, query: &str, tags: &[String], limit: usize
 
 /// [`search`] over the live entries `keep` admits (before the limit), e.g.
 /// the ones a turn's egress may see.
-pub fn search_where<'a>(
-    m: &'a MemoryState,
-    query: &str,
-    tags: &[String],
-    limit: usize,
-    keep: impl Fn(&MemoryEntry) -> bool,
-) -> Vec<Hit<'a>> {
+pub fn search_where<'a>(m: &'a MemoryState, query: &str, tags: &[String], limit: usize, keep: impl Fn(&MemoryEntry) -> bool) -> Vec<Hit<'a>> {
     let terms = terms(query);
-    let want: Vec<String> = tags
-        .iter()
-        .map(|t| t.trim().to_lowercase())
-        .filter(|t| !t.is_empty())
-        .collect();
+    let want: Vec<String> = tags.iter().map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty()).collect();
     let mut hits: Vec<Hit<'a>> = m
         .live()
         .filter(|e| keep(e))
@@ -1432,23 +1176,11 @@ pub fn neutralize(s: &str, nonce: &str) -> String {
     // replacement can make a new one: each pass lowers (nonces, `<<<` and
     // `>>>` runs, adjacent `[[` and `]]`), and the loop ends. Content can't
     // close a block without `<<<` anyway; the nonce is defence in depth.
-    let nonce = if !nonce.is_empty() && nonce.chars().all(|c| c.is_ascii_alphanumeric()) {
-        nonce
-    } else {
-        ""
-    };
+    let nonce = if !nonce.is_empty() && nonce.chars().all(|c| c.is_ascii_alphanumeric()) { nonce } else { "" };
     // To a fixed point: one pass over `[[[` leaves `[ [[`.
     loop {
-        let next = out
-            .replace("<<<", "‹‹‹")
-            .replace(">>>", "›››")
-            .replace("[[", "[ [")
-            .replace("]]", "] ]");
-        let next = if nonce.is_empty() {
-            next
-        } else {
-            next.replace(nonce, "[·]")
-        };
+        let next = out.replace("<<<", "‹‹‹").replace(">>>", "›››").replace("[[", "[ [").replace("]]", "] ]");
+        let next = if nonce.is_empty() { next } else { next.replace(nonce, "[·]") };
         if next == out {
             return out;
         }
@@ -1481,33 +1213,18 @@ pub fn memory_header(nonce: &str) -> String {
 /// One entry as an untrusted, delimited block.
 pub fn render_entry(e: &MemoryEntry, nonce: &str, with_body: bool) -> String {
     let c = &e.current;
-    let mut by = format!(
-        "{} ({})",
-        one_line(&c.author.name, nonce),
-        kind_word(c.author.kind)
-    );
+    let mut by = format!("{} ({})", one_line(&c.author.name, nonce), kind_word(c.author.kind));
     if !c.proposer.is_empty() {
-        by.push_str(&format!(
-            ", proposed by agent {}",
-            one_line(&c.proposer, nonce)
-        ));
+        by.push_str(&format!(", proposed by agent {}", one_line(&c.proposer, nonce)));
     }
-    let tags = if c.tags.is_empty() {
-        String::new()
-    } else {
-        format!(" tags=\"{}\"", c.tags.join(","))
-    };
+    let tags = if c.tags.is_empty() { String::new() } else { format!(" tags=\"{}\"", c.tags.join(",")) };
     let mut out = format!(
         "<<<entry {nonce} id={} rev={} title=\"{}\" by=\"{by}\" updatedMs={}{tags}{}>>>\n",
         e.id,
         c.rev,
         one_line(&c.title, nonce),
         c.at_ms,
-        if e.conflicts.is_empty() {
-            String::new()
-        } else {
-            format!(" conflicts={}", e.conflicts.len())
-        }
+        if e.conflicts.is_empty() { String::new() } else { format!(" conflicts={}", e.conflicts.len()) }
     );
     if with_body {
         out.push_str(&neutralize(&c.body, nonce));
@@ -1535,9 +1252,7 @@ pub fn render_slot(s: &TaskSlot, nonce: &str) -> String {
         one_line(&u.agent_key, nonce),
         u.status.as_str(),
         u.task_id,
-        u.progress
-            .map(|p| format!(" progress={p}%"))
-            .unwrap_or_default(),
+        u.progress.map(|p| format!(" progress={p}%")).unwrap_or_default(),
         s.at_ms,
         neutralize(u.summary.trim(), nonce)
     );
@@ -1559,17 +1274,8 @@ pub fn render_slot(s: &TaskSlot, nonce: &str) -> String {
 
 /// The task-state block put in an agent's context: the other writers' active
 /// slots, newest first, at most `max`. `None` when there are none.
-pub fn task_context_block(
-    tasks: &[TaskSlot],
-    me: &str,
-    now_ms: i64,
-    max: usize,
-    nonce: &str,
-) -> Option<String> {
-    let mut act: Vec<&TaskSlot> = tasks
-        .iter()
-        .filter(|s| s.update.agent_key != me && s.active(now_ms))
-        .collect();
+pub fn task_context_block(tasks: &[TaskSlot], me: &str, now_ms: i64, max: usize, nonce: &str) -> Option<String> {
+    let mut act: Vec<&TaskSlot> = tasks.iter().filter(|s| s.update.agent_key != me && s.active(now_ms)).collect();
     if act.is_empty() {
         return None;
     }

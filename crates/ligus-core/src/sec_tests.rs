@@ -39,11 +39,7 @@ fn signed_flow_records_with_floats_verify_after_a_json_round_trip() {
             (rng.next() % 1_000_000) as f64 * 0.000137
         } else {
             let f = f64::from_bits(rng.next());
-            if f.is_finite() {
-                f
-            } else {
-                0.5
-            }
+            if f.is_finite() { f } else { 0.5 }
         };
         let rec = FlowRecord::Progress(ProgressMark {
             message_id: Uuid::from_u128(i as u128),
@@ -52,12 +48,7 @@ fn signed_flow_records_with_floats_verify_after_a_json_round_trip() {
             kind: "tests_passing".into(),
             at_ms: 0,
         });
-        let mut env = SessionEventEnvelope::new(
-            Uuid::nil(),
-            Uuid::nil(),
-            1,
-            SessionEvent::FlowRecorded { record: rec },
-        );
+        let mut env = SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), 1, SessionEvent::FlowRecorded { record: rec });
         sign_envelope(&mut env, device, &kp);
         let wire = serde_json::to_string(&env).unwrap();
         let back: SessionEventEnvelope = serde_json::from_str(&wire).unwrap();
@@ -65,10 +56,7 @@ fn signed_flow_records_with_floats_verify_after_a_json_round_trip() {
             failures += 1;
         }
     }
-    assert_eq!(
-        failures, 0,
-        "signed events with floats failed to verify after a JSON round trip"
-    );
+    assert_eq!(failures, 0, "signed events with floats failed to verify after a JSON round trip");
 }
 
 // ---- human gate: what a proposal touches ----
@@ -102,30 +90,16 @@ fn diff_for(path: &str) -> String {
 #[test]
 fn brood_gate_reads_the_diff_not_the_declared_file_list() {
     let s = base();
-    let lying = ActionProposal::file_diff(
-        "p",
-        "",
-        diff_for(".github/workflows/ci.yml"),
-        vec!["src/lib.rs".into()],
-    );
+    let lying = ActionProposal::file_diff("p", "", diff_for(".github/workflows/ci.yml"), vec!["src/lib.rs".into()]);
     let pid = lying.id;
     let p = crate::testkit::project_honest(&[
         seed(&s),
         ev(&s, 1, "owner", None, dearth_on()),
-        ev(
-            &s,
-            2,
-            "alice",
-            None,
-            SessionEvent::ProposalUpserted { proposal: lying },
-        ),
+        ev(&s, 2, "alice", None, SessionEvent::ProposalUpserted { proposal: lying }),
     ])
     .unwrap();
     let prop = p.proposals.iter().find(|x| x.id == pid).unwrap();
-    assert!(
-        human_gate_reason(&p, prop).is_some(),
-        "a CI change hidden behind a false file list skipped the human gate"
-    );
+    assert!(human_gate_reason(&p, prop).is_some(), "a CI change hidden behind a false file list skipped the human gate");
 }
 
 /// macOS and Windows volumes are case-insensitive by default, so
@@ -136,48 +110,23 @@ fn brood_gate_reads_the_diff_not_the_declared_file_list() {
 fn brood_gate_is_case_insensitive() {
     let s = base();
     let mut rng = Rng::new(42);
-    for path in [
-        ".github/workflows/ci.yml",
-        "deploy/prod.yaml",
-        "infra/main.tf",
-        "Jenkinsfile",
-        ".circleci/config.yml",
-    ] {
+    for path in [".github/workflows/ci.yml", "deploy/prod.yaml", "infra/main.tf", "Jenkinsfile", ".circleci/config.yml"] {
         // A random case-flip of the protected path.
         let flipped: String = path
             .chars()
-            .map(|c| {
-                if rng.next() % 2 == 0 {
-                    c.to_ascii_uppercase()
-                } else {
-                    c.to_ascii_lowercase()
-                }
-            })
+            .map(|c| if rng.next() % 2 == 0 { c.to_ascii_uppercase() } else { c.to_ascii_lowercase() })
             .collect();
-        let flipped = if flipped == path {
-            path.to_ascii_uppercase()
-        } else {
-            flipped
-        };
+        let flipped = if flipped == path { path.to_ascii_uppercase() } else { flipped };
         let prop = ActionProposal::file_diff("p", "", diff_for(&flipped), vec![flipped.clone()]);
         let pid = prop.id;
         let p = crate::testkit::project_honest(&[
             seed(&s),
             ev(&s, 1, "owner", None, dearth_on()),
-            ev(
-                &s,
-                2,
-                "alice",
-                None,
-                SessionEvent::ProposalUpserted { proposal: prop },
-            ),
+            ev(&s, 2, "alice", None, SessionEvent::ProposalUpserted { proposal: prop }),
         ])
         .unwrap();
         let prop = p.proposals.iter().find(|x| x.id == pid).unwrap();
-        assert!(
-            human_gate_reason(&p, prop).is_some(),
-            "{flipped} slipped past the brood gate"
-        );
+        assert!(human_gate_reason(&p, prop).is_some(), "{flipped} slipped past the brood gate");
     }
 }
 
@@ -188,9 +137,7 @@ fn signed_vote(pid: Uuid, voter: &str) -> SessionEvent {
             actor_id: voter.into(),
             role: crate::identity::WorkspaceRole::Owner,
             approved: true,
-            created_at: Timestamp::epoch(),
-            diff_digest: None,
-        },
+            created_at: Timestamp::epoch(), diff_digest: None },
     }
 }
 
@@ -208,45 +155,19 @@ fn verified_approval_does_not_survive_a_changed_patch() {
     let mut envs = vec![
         seed(&s),
         ev(&s, 1, "owner", None, dearth_on()),
-        ev(
-            &s,
-            2,
-            "alice",
-            None,
-            SessionEvent::ProposalUpserted {
-                proposal: benign.clone(),
-            },
-        ),
+        ev(&s, 2, "alice", None, SessionEvent::ProposalUpserted { proposal: benign.clone() }),
         ev(&s, 3, "owner", None, signed_vote(pid, "owner")),
     ];
     let p = crate::testkit::project_honest(&envs).unwrap();
-    assert!(
-        human_gate_reason(&p, p.proposals.iter().find(|x| x.id == pid).unwrap()).is_none(),
-        "control: approved"
-    );
+    assert!(human_gate_reason(&p, p.proposals.iter().find(|x| x.id == pid).unwrap()).is_none(), "control: approved");
     // A status-only re-upsert of the same patch keeps the approval.
     let mut same = benign.clone();
     same.title = "renamed".into();
-    envs.push(ev(
-        &s,
-        4,
-        "alice",
-        None,
-        SessionEvent::ProposalUpserted { proposal: same },
-    ));
+    envs.push(ev(&s, 4, "alice", None, SessionEvent::ProposalUpserted { proposal: same }));
     let p = crate::testkit::project_honest(&envs).unwrap();
-    assert!(
-        human_gate_reason(&p, p.proposals.iter().find(|x| x.id == pid).unwrap()).is_none(),
-        "same patch keeps it"
-    );
+    assert!(human_gate_reason(&p, p.proposals.iter().find(|x| x.id == pid).unwrap()).is_none(), "same patch keeps it");
     // Swapping the patch under the approval must re-arm the gate.
-    envs.push(ev(
-        &s,
-        5,
-        "alice",
-        None,
-        SessionEvent::ProposalUpserted { proposal: swapped },
-    ));
+    envs.push(ev(&s, 5, "alice", None, SessionEvent::ProposalUpserted { proposal: swapped }));
     let p = crate::testkit::project_honest(&envs).unwrap();
     assert!(
         human_gate_reason(&p, p.proposals.iter().find(|x| x.id == pid).unwrap()).is_some(),
@@ -289,29 +210,13 @@ fn a_rogue_epoch_jump_cannot_freeze_a_lease() {
         };
         let envs = vec![
             seed(&s),
-            ev(
-                &s,
-                1,
-                "alice",
-                Some(honest_a),
-                lease_claim(run, honest_a, 1),
-            ),
+            ev(&s, 1, "alice", Some(honest_a), lease_claim(run, honest_a, 1)),
             ev(&s, 2, "victor", Some(rogue), lease_claim(run, rogue, jump)),
-            ev(
-                &s,
-                3,
-                "alice",
-                Some(honest_b),
-                lease_claim(run, honest_b, 2),
-            ),
+            ev(&s, 3, "alice", Some(honest_b), lease_claim(run, honest_b, 2)),
         ];
         let p = crate::testkit::project_honest(&envs).unwrap();
-        let st = &p.guards.leases
-            [&crate::lease::lease_key(crate::lease::LeaseScope::WorkflowRun, &run.to_string())];
-        assert_eq!(
-            st.current.holder, honest_b,
-            "a claim at epoch {jump} froze the lease"
-        );
+        let st = &p.guards.leases[&crate::lease::lease_key(crate::lease::LeaseScope::WorkflowRun, &run.to_string())];
+        assert_eq!(st.current.holder, honest_b, "a claim at epoch {jump} froze the lease");
     }
 }
 
@@ -327,47 +232,24 @@ fn a_removed_member_cannot_self_enroll_back() {
     use crate::identity::WorkspaceRole;
     use crate::lease_projection_tests::member;
     let s = base();
-    let removed = SessionEvent::MemberRemoved {
-        member_id: "alice".into(),
-        watermark: Vec::new(),
-    };
-    let rejoin = SessionEvent::MemberAdded {
-        invite: None,
-        proof: None,
-        member: member("alice", WorkspaceRole::Contributor),
-    };
-    let noise = |n: u64| SessionEvent::SessionTitleChanged {
-        title: format!("t{n}"),
-    };
+    let removed = SessionEvent::MemberRemoved { member_id: "alice".into(), watermark: Vec::new() };
+    let rejoin = SessionEvent::MemberAdded { invite: None, proof: None, member: member("alice", WorkspaceRole::Contributor) };
+    let noise = |n: u64| SessionEvent::SessionTitleChanged { title: format!("t{n}") };
     let mut rng = Rng::new(77);
     for _ in 0..32 {
-        let mut envs = vec![
-            seed(&s),
-            ev(&s, 10, "owner", None, removed.clone()),
-            ev(&s, 20, "alice", None, rejoin.clone()),
-        ];
+        let mut envs = vec![seed(&s), ev(&s, 10, "owner", None, removed.clone()), ev(&s, 20, "alice", None, rejoin.clone())];
         for _ in 0..3 {
             let l = rng.next() % 30 + 1;
             envs.push(ev(&s, l, "owner", None, noise(l)));
         }
         let p = crate::testkit::project_honest(&envs).unwrap();
-        assert!(
-            !p.members.iter().any(|m| m.id == "alice"),
-            "the removed member enrolled themself back"
-        );
+        assert!(!p.members.iter().any(|m| m.id == "alice"), "the removed member enrolled themself back");
         // An Admin's re-add does restore them.
         envs.push(ev(&s, 30, "owner", None, rejoin.clone()));
         let p = crate::testkit::project_honest(&envs).unwrap();
-        assert!(
-            p.members.iter().any(|m| m.id == "alice"),
-            "an Admin re-add must still work"
-        );
+        assert!(p.members.iter().any(|m| m.id == "alice"), "an Admin re-add must still work");
         // And after that re-add, the member's own idempotent re-add is fine.
         envs.push(ev(&s, 40, "alice", None, rejoin.clone()));
-        assert!(crate::testkit::project_honest(&envs)
-            .unwrap()
-            .members
-            .iter()
-            .any(|m| m.id == "alice"));
+        assert!(crate::testkit::project_honest(&envs).unwrap().members.iter().any(|m| m.id == "alice"));
     }
 }

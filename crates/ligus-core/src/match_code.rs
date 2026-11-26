@@ -177,10 +177,7 @@ pub fn encode(code40: u64) -> String {
 
 /// The 8 symbols with no space (`K7Q4M9X2`), as `--code` takes it.
 pub fn encode_compact(code40: u64) -> String {
-    (0..8)
-        .rev()
-        .map(|i| ALPHABET[((code40 >> (i * 5)) & 31) as usize] as char)
-        .collect()
+    (0..8).rev().map(|i| ALPHABET[((code40 >> (i * 5)) & 31) as usize] as char).collect()
 }
 
 /// Read a typed code: case is ignored, `I` and `L` read as 1, `O` as 0, and
@@ -211,12 +208,7 @@ pub fn decode(typed: &str) -> Option<u64> {
 /// `aria-label` is `Code: ` followed by this).
 pub fn spell(code40: u64) -> String {
     let c = encode_compact(code40);
-    let group = |s: &str| {
-        s.chars()
-            .map(|c| c.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+    let group = |s: &str| s.chars().map(|c| c.to_string()).collect::<Vec<_>>().join(", ");
     format!("{}. {}.", group(&c[..4]), group(&c[4..]))
 }
 
@@ -263,10 +255,7 @@ fn hkdf32(ikm: &[u8], info: &[u8]) -> [u8; 32] {
 impl MailboxKeys {
     /// Derive from the 32-byte workspace key of one epoch.
     pub fn derive(epoch_key: &[u8; 32]) -> Self {
-        Self {
-            auth_seed: hkdf32(epoch_key, b"auth"),
-            seal_seed: hkdf32(epoch_key, b"seal"),
-        }
+        Self { auth_seed: hkdf32(epoch_key, b"auth"), seal_seed: hkdf32(epoch_key, b"seal") }
     }
 
     pub fn auth(&self) -> crate::crypto::SigningKeypair {
@@ -360,10 +349,7 @@ pub fn unhex(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) || !s.is_ascii() {
         return None;
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-        .collect()
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
 }
 
 #[cfg(test)]
@@ -378,29 +364,14 @@ mod tests {
 
     #[test]
     fn match_constants_are_frozen() {
-        assert_eq!(
-            hex(COMMIT_CTX),
-            "6c696775732d6d617463682d636f6d6d69742d763100"
-        );
-        assert_eq!(
-            hex(TRANSCRIPT_CTX),
-            "6c696775732d6d617463682d7472616e7363726970742d763100"
-        );
+        assert_eq!(hex(COMMIT_CTX), "6c696775732d6d617463682d636f6d6d69742d763100");
+        assert_eq!(hex(TRANSCRIPT_CTX), "6c696775732d6d617463682d7472616e7363726970742d763100");
         assert_eq!(hex(CODE_CTX), "6c696775732d6d617463682d636f64652d763100");
-        assert_eq!(
-            hex(REQUEST_CTX),
-            "6c696775732d6d617463682d726571756573742d763100"
-        );
+        assert_eq!(hex(REQUEST_CTX), "6c696775732d6d617463682d726571756573742d763100");
         assert_eq!(hex(CLAIM_CTX), "6c696775732d6d617463682d636c61696d2d763100");
         assert_eq!(hex(OPEN_CTX), "6c696775732d6d617463682d6f70656e2d763100");
-        assert_eq!(
-            hex(REVEAL_CTX),
-            "6c696775732d6d617463682d72657665616c2d763100"
-        );
-        assert_eq!(
-            hex(RESULT_CTX),
-            "6c696775732d6d617463682d726573756c742d763100"
-        );
+        assert_eq!(hex(REVEAL_CTX), "6c696775732d6d617463682d72657665616c2d763100");
+        assert_eq!(hex(RESULT_CTX), "6c696775732d6d617463682d726573756c742d763100");
         assert_eq!(hex(ABORT_CTX), "6c696775732d6d617463682d61626f72742d763100");
         assert_eq!(hex(OFFER_CTX), "6c696775732d6d617463682d6f666665722d763100");
         assert_eq!(hex(ACK_CTX), "6c696775732d6d617463682d61636b2d763100");
@@ -430,10 +401,7 @@ mod tests {
         assert_eq!(decode("0000 000"), None);
         assert_eq!(decode("0000 00000"), None);
         assert_eq!(decode("0000 000!"), None);
-        assert_eq!(
-            spell(decode("K7Q4M9X2").unwrap()),
-            "K, 7, Q, 4. M, 9, X, 2."
-        );
+        assert_eq!(spell(decode("K7Q4M9X2").unwrap()), "K, 7, Q, 4. M, 9, X, 2.");
     }
 
     fn transcript_for(n_a: &[u8; 32], commit: &[u8; 32], ka: &[u8; 32]) -> [u8; 32] {
@@ -470,57 +438,23 @@ mod tests {
         let n_r = [11u8; 32];
         let c0 = code40(&base.digest(), &n_r);
         let variants: Vec<Transcript> = vec![
-            Transcript {
-                kind: MatchKind::Computer,
-                ..base
-            },
-            Transcript {
-                mailbox: &[0; 16],
-                ..base
-            },
-            Transcript {
-                rid: &[0; 16],
-                ..base
-            },
-            Transcript {
-                request_code: b"ligusjoin1:abd",
-                ..base
-            },
-            Transcript {
-                requester_ka: &[0; 32],
-                ..base
-            },
-            Transcript {
-                commit: &[0; 32],
-                ..base
-            },
-            Transcript {
-                approver_device_id: Uuid::from_u128(6),
-                ..base
-            },
-            Transcript {
-                approver_sig_key: &[0; 32],
-                ..base
-            },
-            Transcript {
-                approver_ka: &[0; 32],
-                ..base
-            },
-            Transcript {
-                n_a: &[0; 32],
-                ..base
-            },
+            Transcript { kind: MatchKind::Computer, ..base },
+            Transcript { mailbox: &[0; 16], ..base },
+            Transcript { rid: &[0; 16], ..base },
+            Transcript { request_code: b"ligusjoin1:abd", ..base },
+            Transcript { requester_ka: &[0; 32], ..base },
+            Transcript { commit: &[0; 32], ..base },
+            Transcript { approver_device_id: Uuid::from_u128(6), ..base },
+            Transcript { approver_sig_key: &[0; 32], ..base },
+            Transcript { approver_ka: &[0; 32], ..base },
+            Transcript { n_a: &[0; 32], ..base },
         ];
         for (i, v) in variants.iter().enumerate() {
             assert_ne!(code40(&v.digest(), &n_r), c0, "variant {i}");
         }
         assert_ne!(code40(&base.digest(), &[12; 32]), c0, "nR");
         // Length prefixes: moving a byte between adjacent keys changes it too.
-        let a = Transcript {
-            requester_ka: &[3; 33],
-            commit: &[4; 32],
-            ..base
-        };
+        let a = Transcript { requester_ka: &[3; 33], commit: &[4; 32], ..base };
         assert_ne!(a.digest(), base.digest());
     }
 
@@ -642,9 +576,7 @@ mod tests {
 
     #[test]
     fn message_contexts_are_distinct() {
-        let ts = [
-            "request", "claim", "open", "reveal", "result", "abort", "offer", "ack",
-        ];
+        let ts = ["request", "claim", "open", "reveal", "result", "abort", "offer", "ack"];
         for a in ts {
             for b in ts {
                 if a != b {

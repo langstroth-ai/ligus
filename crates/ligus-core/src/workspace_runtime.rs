@@ -62,8 +62,7 @@ pub const LEGACY_INLINE_LABEL: &str = "stored key (unused)";
 
 /// The calm warning for a runtime whose key an older version stored in the
 /// workspace.
-pub const LEGACY_INLINE_WARNING: &str =
-    "This runtime's key was stored in the workspace by an older version. \
+pub const LEGACY_INLINE_WARNING: &str = "This runtime's key was stored in the workspace by an older version. \
 Rotate that key with the provider, then set it on each worker with --secret-ref.";
 
 /// Why a key can't be stored in the workspace, and what to do instead.
@@ -143,12 +142,7 @@ mod tests {
 
     #[test]
     fn secret_ref_and_none_round_trip() {
-        for c in [
-            WorkspaceCredential::SecretRef {
-                secret_ref: "a".into(),
-            },
-            WorkspaceCredential::None,
-        ] {
+        for c in [WorkspaceCredential::SecretRef { secret_ref: "a".into() }, WorkspaceCredential::None] {
             let s = serde_json::to_string(&c).unwrap();
             assert_eq!(serde_json::from_str::<WorkspaceCredential>(&s).unwrap(), c);
             assert!(!c.is_legacy_inline());

@@ -22,12 +22,7 @@ pub struct QuorumOutcome {
 }
 
 impl ChatService {
-    fn proposal_set(
-        &self,
-        workspace_id: Uuid,
-        session_id: Uuid,
-        set_id: Uuid,
-    ) -> Result<(ligus_core::ChatSession, ProposalSet)> {
+    fn proposal_set(&self, workspace_id: Uuid, session_id: Uuid, set_id: Uuid) -> Result<(ligus_core::ChatSession, ProposalSet)> {
         let session = self
             .load_in(workspace_id, session_id)?
             .ok_or_else(|| ChatError::NotFound(format!("session {session_id}")))?;
@@ -58,11 +53,7 @@ impl ChatService {
             self.upsert_proposal(session_id, workspace_id, p)?;
         }
         let set_id = set.id;
-        self.append_signed(
-            session_id,
-            workspace_id,
-            SessionEvent::ProposalSetOpened { set: Box::new(set) },
-        )?;
+        self.append_signed(session_id, workspace_id, SessionEvent::ProposalSetOpened { set: Box::new(set) })?;
         Ok(self.proposal_set(workspace_id, session_id, set_id)?.1)
     }
 
@@ -83,11 +74,7 @@ impl ChatService {
                 self.upsert_proposal(session_id, workspace_id, p)?;
             }
         }
-        self.append_signed(
-            session_id,
-            workspace_id,
-            SessionEvent::ProposalSetOpened { set: Box::new(set) },
-        )?;
+        self.append_signed(session_id, workspace_id, SessionEvent::ProposalSetOpened { set: Box::new(set) })?;
         Ok(self.proposal_set(workspace_id, session_id, set_id)?.1)
     }
 
@@ -105,11 +92,7 @@ impl ChatService {
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::ProposalSetAlternativeAdded {
-                set_id,
-                proposal_id,
-                revises,
-            },
+            SessionEvent::ProposalSetAlternativeAdded { set_id, proposal_id, revises },
         )?;
         if revises.is_some() {
             self.advance_set_round(session_id, workspace_id, set_id, "revision")?;
@@ -127,17 +110,11 @@ impl ChatService {
         assessment: ScoutAssessment,
     ) -> Result<Option<ProposalSet>> {
         let (session, set) = self.proposal_set(workspace_id, session_id, set_id)?;
-        if set.is_frozen(assessment.proposal_id)
-            || !set.is_active(&session.proposals, assessment.proposal_id)
-        {
+        if set.is_frozen(assessment.proposal_id) || !set.is_active(&session.proposals, assessment.proposal_id) {
             return Ok(None);
         }
         let id = assessment.id;
-        self.append_signed(
-            session_id,
-            workspace_id,
-            SessionEvent::ScoutAssessmentPosted { set_id, assessment },
-        )?;
+        self.append_signed(session_id, workspace_id, SessionEvent::ScoutAssessmentPosted { set_id, assessment })?;
         let set = self.proposal_set(workspace_id, session_id, set_id)?.1;
         Ok(set.assessments.iter().any(|a| a.id == id).then_some(set))
     }
@@ -157,11 +134,7 @@ impl ChatService {
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::ProposalSetRoundAdvanced {
-                set_id,
-                round: set.round + 1,
-                reason: reason.to_string(),
-            },
+            SessionEvent::ProposalSetRoundAdvanced { set_id, round: set.round + 1, reason: reason.to_string() },
         )?;
         Ok(())
     }
@@ -187,22 +160,13 @@ impl ChatService {
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::ProposalSetQuorumReached {
-                set_id,
-                proposal_id: winner,
-                tie_break,
-                at: now,
-            },
+            SessionEvent::ProposalSetQuorumReached { set_id, proposal_id: winner, tie_break, at: now },
         )?;
         let (session, set) = self.proposal_set(workspace_id, session_id, set_id)?;
         if set.front_runner != Some(winner) {
             return Ok(None); // another device's quorum folded first
         }
-        let reason = if tie_break {
-            StopReason::TieDeadline
-        } else {
-            StopReason::Quorum
-        };
+        let reason = if tie_break { StopReason::TieDeadline } else { StopReason::Quorum };
         let rivals: Vec<Uuid> = set
             .alternatives
             .iter()
@@ -223,11 +187,7 @@ impl ChatService {
             )?;
             stopped.push((rival, set.scouts_of(rival)));
         }
-        Ok(Some(QuorumOutcome {
-            front_runner: winner,
-            tie_break,
-            stopped,
-        }))
+        Ok(Some(QuorumOutcome { front_runner: winner, tie_break, stopped }))
     }
 
     /// Withdraw an alternative for good (it can't be the front-runner).
@@ -240,9 +200,7 @@ impl ChatService {
     ) -> Result<()> {
         let (_, set) = self.proposal_set(workspace_id, session_id, set_id)?;
         if set.front_runner == Some(proposal_id) {
-            return Err(ChatError::Unauthorized(
-                "the front-runner can't be withdrawn; close the set instead".into(),
-            ));
+            return Err(ChatError::Unauthorized("the front-runner can't be withdrawn; close the set instead".into()));
         }
         self.append_signed(
             session_id,
@@ -291,12 +249,7 @@ impl ChatService {
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::ProposalSetPreflightRecorded {
-                set_id,
-                proposal_id,
-                report,
-                at: Timestamp::now(),
-            },
+            SessionEvent::ProposalSetPreflightRecorded { set_id, proposal_id, report, at: Timestamp::now() },
         )?;
         Ok(self.proposal_set(workspace_id, session_id, set_id)?.1)
     }
@@ -312,9 +265,7 @@ impl ChatService {
     ) -> Result<ProposalSet> {
         let (session, set) = self.proposal_set(workspace_id, session_id, set_id)?;
         if !set.is_open() {
-            return Err(ChatError::Unauthorized(
-                "this set is already decided".into(),
-            ));
+            return Err(ChatError::Unauthorized("this set is already decided".into()));
         }
         if let Some(w) = winner {
             if !set.can_decide_for(&session.proposals, w) {
@@ -326,35 +277,21 @@ impl ChatService {
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::ProposalSetDecided {
-                set_id,
-                winner,
-                at: Timestamp::now(),
-            },
+            SessionEvent::ProposalSetDecided { set_id, winner, at: Timestamp::now() },
         )?;
         let set = self.proposal_set(workspace_id, session_id, set_id)?.1;
         if set.phase != SetPhase::Decided {
-            return Err(ChatError::Unauthorized(
-                "the decision didn't take (the set changed under it)".into(),
-            ));
+            return Err(ChatError::Unauthorized("the decision didn't take (the set changed under it)".into()));
         }
         Ok(set)
     }
 
     /// Mark an applied proposal's change as reverted.
-    pub fn mark_proposal_reverted(
-        &mut self,
-        session_id: Uuid,
-        workspace_id: Uuid,
-        proposal_id: Uuid,
-    ) -> Result<()> {
+    pub fn mark_proposal_reverted(&mut self, session_id: Uuid, workspace_id: Uuid, proposal_id: Uuid) -> Result<()> {
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::ProposalReverted {
-                proposal_id,
-                at: Timestamp::now(),
-            },
+            SessionEvent::ProposalReverted { proposal_id, at: Timestamp::now() },
         )?;
         Ok(())
     }
@@ -413,58 +350,31 @@ mod tests {
             .map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner"))
             .collect();
         let (a, b, c) = (alts[0].id, alts[1].id, alts[2].id);
-        let set = svc
-            .open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), alts)
-            .unwrap();
+        let set = svc.open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), alts).unwrap();
         assert_eq!(set.alternatives, vec![a, b, c]);
         let set_id = set.id;
 
         let (s1, s2, s3) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        svc.post_scout_assessment(sid, wid, set_id, assessment(b, s1, "coder", 80))
-            .unwrap()
-            .unwrap();
-        svc.post_scout_assessment(sid, wid, set_id, assessment(c, s3, "local", 95))
-            .unwrap()
-            .unwrap();
-        assert!(svc
-            .settle_proposal_set(sid, wid, set_id, Timestamp::now())
-            .unwrap()
-            .is_none());
-        svc.post_scout_assessment(sid, wid, set_id, assessment(b, s2, "reviewer", 71))
-            .unwrap()
-            .unwrap();
-        let out = svc
-            .settle_proposal_set(sid, wid, set_id, Timestamp::now())
-            .unwrap()
-            .unwrap();
+        svc.post_scout_assessment(sid, wid, set_id, assessment(b, s1, "coder", 80)).unwrap().unwrap();
+        svc.post_scout_assessment(sid, wid, set_id, assessment(c, s3, "local", 95)).unwrap().unwrap();
+        assert!(svc.settle_proposal_set(sid, wid, set_id, Timestamp::now()).unwrap().is_none());
+        svc.post_scout_assessment(sid, wid, set_id, assessment(b, s2, "reviewer", 71)).unwrap().unwrap();
+        let out = svc.settle_proposal_set(sid, wid, set_id, Timestamp::now()).unwrap().unwrap();
         assert_eq!(out.front_runner, b);
         assert!(!out.tie_break);
-        assert_eq!(
-            out.stopped,
-            vec![(a, vec![]), (c, vec!["local".to_string()])]
-        );
+        assert_eq!(out.stopped, vec![(a, vec![]), (c, vec!["local".to_string()])]);
         // Rivals are frozen: a late assessment is refused.
-        assert!(svc
-            .post_scout_assessment(sid, wid, set_id, assessment(c, s1, "coder", 99))
-            .unwrap()
-            .is_none());
+        assert!(svc.post_scout_assessment(sid, wid, set_id, assessment(c, s1, "coder", 99)).unwrap().is_none());
 
         // Decision needs a human approval and a pre-flight.
         assert!(svc.decide_proposal_set(sid, wid, set_id, Some(b)).is_err());
         let r = svc.vote_on_proposal(sid, wid, b, true).unwrap().unwrap();
         assert_eq!(r.status, ProposalStatus::Approved);
-        assert!(
-            svc.decide_proposal_set(sid, wid, set_id, Some(b)).is_err(),
-            "no pre-flight yet"
-        );
-        svc.record_set_preflight(sid, wid, set_id, b, passing())
-            .unwrap();
+        assert!(svc.decide_proposal_set(sid, wid, set_id, Some(b)).is_err(), "no pre-flight yet");
+        svc.record_set_preflight(sid, wid, set_id, b, passing()).unwrap();
         let done = svc.decide_proposal_set(sid, wid, set_id, Some(b)).unwrap();
         assert_eq!(done.winner, Some(b));
-        assert!(
-            svc.decide_proposal_set(sid, wid, set_id, None).is_err(),
-            "decided is terminal"
-        );
+        assert!(svc.decide_proposal_set(sid, wid, set_id, None).is_err(), "decided is terminal");
     }
 
     #[test]
@@ -473,29 +383,17 @@ mod tests {
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
         svc.ensure_workspace_config(chat.workspace_id).unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
-        let alts: Vec<ActionProposal> = ["A", "B"]
-            .iter()
-            .map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner"))
-            .collect();
+        let alts: Vec<ActionProposal> =
+            ["A", "B"].iter().map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner")).collect();
         let (a, b) = (alts[0].id, alts[1].id);
-        let set_id = svc
-            .open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), alts)
-            .unwrap()
-            .id;
-        svc.tune_proposal_set(sid, wid, set_id, QuorumDial::Fast.knobs())
-            .unwrap();
-        svc.post_scout_assessment(sid, wid, set_id, assessment(a, Uuid::new_v4(), "coder", 90))
-            .unwrap();
-        let out = svc
-            .settle_proposal_set(sid, wid, set_id, Timestamp::now())
-            .unwrap()
-            .unwrap();
+        let set_id = svc.open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), alts).unwrap().id;
+        svc.tune_proposal_set(sid, wid, set_id, QuorumDial::Fast.knobs()).unwrap();
+        svc.post_scout_assessment(sid, wid, set_id, assessment(a, Uuid::new_v4(), "coder", 90)).unwrap();
+        let out = svc.settle_proposal_set(sid, wid, set_id, Timestamp::now()).unwrap().unwrap();
         assert_eq!(out.front_runner, a, "fast: one scout is enough");
         let mut report = passing();
         report.tests = CheckOutcome::failed("2 tests failed");
-        let set = svc
-            .record_set_preflight(sid, wid, set_id, a, report)
-            .unwrap();
+        let set = svc.record_set_preflight(sid, wid, set_id, a, report).unwrap();
         assert_eq!(set.phase, SetPhase::Scouting);
         assert!(!set.is_frozen(b), "rivals thaw");
 
@@ -504,8 +402,7 @@ mod tests {
         rev.parent_id = Some(b);
         let rid = rev.id;
         svc.upsert_proposal(sid, wid, rev).unwrap();
-        svc.add_set_alternative(sid, wid, set_id, rid, Some(b))
-            .unwrap();
+        svc.add_set_alternative(sid, wid, set_id, rid, Some(b)).unwrap();
         let set = svc.load(sid).unwrap().unwrap().proposal_sets.remove(0);
         assert_eq!(set.alternatives, vec![a, b, rid]);
         assert_eq!(set.round, 2);
@@ -531,65 +428,25 @@ mod tests {
             },
         )
         .unwrap();
-        let alts: Vec<ActionProposal> = ["A", "B"]
-            .iter()
-            .map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner"))
-            .collect();
+        let alts: Vec<ActionProposal> =
+            ["A", "B"].iter().map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner")).collect();
         let a = alts[0].id;
-        let set_id = svc
-            .open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), alts)
-            .unwrap()
-            .id;
+        let set_id = svc.open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), alts).unwrap().id;
 
         // Signed envelopes from peers, as sync would store them: a Viewer's
         // failing pre-flight and tune, and a stranger closing the set.
         let forged = |by: &ActorIdentity, seq: i64, payload: SessionEvent| {
             let mut env = ligus_core::SessionEventEnvelope::new(sid, wid, seq, payload);
-            env.actor_stamp = Some(ligus_core::ActorStamp {
-                actor: by.clone(),
-                recorded_at: Timestamp::now(),
-                cfg_frontier: None,
-                presence: None,
-                runtime_effect: false,
-                prev: None,
-                sig_alg: Default::default(),
-                log_head: None,
-            });
+            env.actor_stamp = Some(ligus_core::ActorStamp { actor: by.clone(), recorded_at: Timestamp::now(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
             env
         };
         let eve = ActorIdentity::new("eve", "Eve", ligus_core::ActorKind::Human);
         let mut failing = passing();
         failing.tests = CheckOutcome::failed("forged");
         for env in [
-            forged(
-                &val,
-                9_001,
-                SessionEvent::ProposalSetPreflightRecorded {
-                    set_id,
-                    proposal_id: a,
-                    report: failing,
-                    at: Timestamp::now(),
-                },
-            ),
-            forged(
-                &val,
-                9_002,
-                SessionEvent::ProposalSetTuned {
-                    set_id,
-                    agent_quorum: 1,
-                    required_approvals: 1,
-                    quality_bar: 1,
-                },
-            ),
-            forged(
-                &eve,
-                9_003,
-                SessionEvent::ProposalSetDecided {
-                    set_id,
-                    winner: None,
-                    at: Timestamp::now(),
-                },
-            ),
+            forged(&val, 9_001, SessionEvent::ProposalSetPreflightRecorded { set_id, proposal_id: a, report: failing, at: Timestamp::now() }),
+            forged(&val, 9_002, SessionEvent::ProposalSetTuned { set_id, agent_quorum: 1, required_approvals: 1, quality_bar: 1 }),
+            forged(&eve, 9_003, SessionEvent::ProposalSetDecided { set_id, winner: None, at: Timestamp::now() }),
         ] {
             let mut env = env;
             ligus_core::lamport::stamp_next(&mut env, svc.store().lamport_head(wid, sid).unwrap());
@@ -605,12 +462,8 @@ mod tests {
         assert!(set.preflights.is_empty(), "val's pre-flight was dropped");
         assert_ne!(set.quality_bar, 1, "val's tune was dropped");
         // The owner's own events still fold.
-        svc.tune_proposal_set(sid, wid, set_id, QuorumDial::Careful.knobs())
-            .unwrap();
-        assert_eq!(
-            svc.load(sid).unwrap().unwrap().proposal_sets[0].agent_quorum,
-            QuorumDial::Careful.knobs().agent_quorum
-        );
+        svc.tune_proposal_set(sid, wid, set_id, QuorumDial::Careful.knobs()).unwrap();
+        assert_eq!(svc.load(sid).unwrap().unwrap().proposal_sets[0].agent_quorum, QuorumDial::Careful.knobs().agent_quorum);
     }
 
     #[test]
@@ -619,14 +472,9 @@ mod tests {
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
         svc.ensure_workspace_config(chat.workspace_id).unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
-        let alts: Vec<ActionProposal> = ["A", "B"]
-            .iter()
-            .map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner"))
-            .collect();
-        let set_id = svc
-            .open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), alts)
-            .unwrap()
-            .id;
+        let alts: Vec<ActionProposal> =
+            ["A", "B"].iter().map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner")).collect();
+        let set_id = svc.open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), alts).unwrap().id;
         // Demote the local actor (the chat creator, an Owner) to Viewer by
         // swapping identity to a non-member.
         svc.author = ActorIdentity::new("stranger", "Stranger", ligus_core::ActorKind::Human);
@@ -634,9 +482,6 @@ mod tests {
             svc.tune_proposal_set(sid, wid, set_id, QuorumDial::Fast.knobs()),
             Err(ChatError::Unauthorized(_))
         ));
-        assert!(matches!(
-            svc.decide_proposal_set(sid, wid, set_id, None),
-            Err(ChatError::Unauthorized(_))
-        ));
+        assert!(matches!(svc.decide_proposal_set(sid, wid, set_id, None), Err(ChatError::Unauthorized(_))));
     }
 }

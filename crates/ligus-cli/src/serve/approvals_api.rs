@@ -41,9 +41,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use ligus_core::match_code::{hex, MailboxKeys, MatchKind};
-use ligus_runtime::approval_mailbox::{
-    self as am, EpochKey, LiveRequest, MailboxAuth, MailboxClient, MailboxError,
-};
+use ligus_runtime::approval_mailbox::{self as am, EpochKey, LiveRequest, MailboxAuth, MailboxClient, MailboxError};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{watch, Notify};
@@ -81,8 +79,7 @@ impl PushTracker {
     /// Whether request `rid` (of `kind`, `claimed` or not) pushes at `now_ms`.
     /// Every request is seen once: a later call for it is `false`.
     pub fn decide(&mut self, rid: &str, kind: MatchKind, claimed: bool, now_ms: i64) -> bool {
-        self.seen
-            .retain(|_, at| now_ms.saturating_sub(*at) <= SEEN_KEEP_MS);
+        self.seen.retain(|_, at| now_ms.saturating_sub(*at) <= SEEN_KEEP_MS);
         if self.seen.contains_key(rid) {
             return false;
         }
@@ -90,11 +87,7 @@ impl PushTracker {
         if kind != MatchKind::Box || claimed {
             return false;
         }
-        while self
-            .sent
-            .front()
-            .is_some_and(|t| now_ms.saturating_sub(*t) >= PUSH_WINDOW_MS)
-        {
+        while self.sent.front().is_some_and(|t| now_ms.saturating_sub(*t) >= PUSH_WINDOW_MS) {
             self.sent.pop_front();
         }
         if self.sent.len() >= PUSH_LIMIT {
@@ -142,9 +135,7 @@ impl Approvals {
 
     /// Whether the last look found a relay without mailbox routes.
     pub fn no_routes(&self) -> bool {
-        self.lock()
-            .no_routes_until
-            .is_some_and(|t| Instant::now() < t)
+        self.lock().no_routes_until.is_some_and(|t| Instant::now() < t)
     }
 
     /// Tests: the request ids pushed so far.
@@ -177,19 +168,14 @@ fn client(s: &Shared) -> Option<MailboxClient> {
     }
     crate::relay_client(&s.cfg).ok()?;
     let url = s.cfg.relay_url.as_deref()?.trim().to_string();
-    let token = crate::auth::cell()
-        .and_then(|c| c.get_for(&url))
-        .filter(|t| !t.is_empty())
-        .or_else(|| s.cfg.token.clone());
+    let token = crate::auth::cell().and_then(|c| c.get_for(&url)).filter(|t| !t.is_empty()).or_else(|| s.cfg.token.clone());
     Some(MailboxClient::new(&url).with_auth(token))
 }
 
 /// The workspace keys this box holds, one per authorized epoch.
 fn epoch_keys(s: &Shared) -> Result<Vec<EpochKey>, String> {
     let src = crate::key_source(&s.cfg).map_err(|e| format!("{e:#}"))?;
-    s.lock()
-        .approval_epoch_keys(s.ws, &src)
-        .map_err(|e| e.to_string())
+    s.lock().approval_epoch_keys(s.ws, &src).map_err(|e| e.to_string())
 }
 
 /// Why a listing failed.
@@ -215,14 +201,10 @@ async fn refresh(s: &Shared, force: bool) -> Result<(), Refresh> {
             return Ok(());
         }
     }
-    let client = client(s).ok_or_else(|| {
-        Refresh::Unavailable("this box has no relay to read approval requests from".into())
-    })?;
+    let client = client(s).ok_or_else(|| Refresh::Unavailable("this box has no relay to read approval requests from".into()))?;
     let epochs = epoch_keys(s).map_err(Refresh::Unavailable)?;
     if epochs.is_empty() {
-        return Err(Refresh::Unavailable(
-            "this box holds no workspace key yet".into(),
-        ));
+        return Err(Refresh::Unavailable("this box holds no workspace key yet".into()));
     }
     let listing = match am::list_live(&client, &epochs).await {
         Ok(l) => l,
@@ -246,22 +228,13 @@ async fn refresh(s: &Shared, force: bool) -> Result<(), Refresh> {
             match client.ensure_registered(&k.key).await {
                 Ok(_) | Err(MailboxError::StaleCounter) => {}
                 Err(MailboxError::NoRoutes) => break,
-                Err(e) => note_error(
-                    s,
-                    &format!("registering the approval mailbox of key epoch {epoch}: {e}"),
-                ),
+                Err(e) => note_error(s, &format!("registering the approval mailbox of key epoch {epoch}: {e}")),
             }
         }
     }
     if !listing.refused.is_empty() {
         // Counted, shown nowhere (the bytes are anyone's).
-        note_error(
-            s,
-            &format!(
-                "{} approval request(s) didn't verify and were skipped",
-                listing.refused.len()
-            ),
-        );
+        note_error(s, &format!("{} approval request(s) didn't verify and were skipped", listing.refused.len()));
     }
     let now = now_ms();
     let new: Vec<LiveRequest> = {
@@ -272,17 +245,7 @@ async fn refresh(s: &Shared, force: bool) -> Result<(), Refresh> {
         g.epochs = epochs;
         g.live = listing.live;
         let live = g.live.clone();
-        live.into_iter()
-            .filter(|r| {
-                r.ended.is_none()
-                    && g.pushes.decide(
-                        &r.rid_hex(),
-                        r.kind(),
-                        !r.claims.is_empty() || r.opened_without_claim,
-                        now,
-                    )
-            })
-            .collect()
+        live.into_iter().filter(|r| r.ended.is_none() && g.pushes.decide(&r.rid_hex(), r.kind(), !r.claims.is_empty() || r.opened_without_claim, now)).collect()
     };
     for r in new {
         push(s, &r);
@@ -302,23 +265,14 @@ fn note_error(s: &Shared, why: &str) {
 /// join <workspace>", collapsing per workspace.
 pub fn push_content(ws: Uuid, workspace_name: &str, r: &LiveRequest) -> PushContent {
     let label = r.label();
-    let title = if workspace_name.is_empty() {
-        format!("{label} wants to join")
-    } else {
-        format!("{label} wants to join {workspace_name}")
-    };
+    let title = if workspace_name.is_empty() { format!("{label} wants to join") } else { format!("{label} wants to join {workspace_name}") };
     PushContent {
         kind: "approval.request".into(),
         title,
         fixed_body: "Open Ligus to compare the code the box shows.".into(),
         collapse: Some(format!("approvals:{ws}")),
         coalesce: Some(r.rid_hex()),
-        fields: vec![
-            ("workspaceId", ws.to_string()),
-            ("rid", r.rid_hex()),
-            ("label", label),
-            ("requestKind", r.kind().as_str().to_string()),
-        ],
+        fields: vec![("workspaceId", ws.to_string()), ("rid", r.rid_hex()), ("label", label), ("requestKind", r.kind().as_str().to_string())],
         ..Default::default()
     }
 }
@@ -357,11 +311,7 @@ pub async fn poll_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
 
 /// A problem answer: `{"error": <message>, "code": <code>}`.
 fn problem(status: StatusCode, code: &str, message: impl Into<String>) -> Response {
-    (
-        status,
-        Json(json!({ "error": message.into(), "code": code })),
-    )
-        .into_response()
+    (status, Json(json!({ "error": message.into(), "code": code }))).into_response()
 }
 
 /// How a relay failure reads to the phone.
@@ -378,9 +328,7 @@ fn mailbox_problem(e: &MailboxError) -> Response {
             }
             r
         }
-        MailboxError::TooManyMessages => {
-            problem(StatusCode::TOO_MANY_REQUESTS, "too_many_messages", msg)
-        }
+        MailboxError::TooManyMessages => problem(StatusCode::TOO_MANY_REQUESTS, "too_many_messages", msg),
         MailboxError::MailboxFull => problem(StatusCode::TOO_MANY_REQUESTS, "mailbox_full", msg),
         MailboxError::TooLarge => problem(StatusCode::PAYLOAD_TOO_LARGE, "too_large", msg),
         MailboxError::Unreachable(_) => problem(StatusCode::BAD_GATEWAY, "relay_unreachable", msg),
@@ -399,9 +347,7 @@ fn refresh_problem(e: Refresh) -> Response {
 
 /// The refusal when the call didn't come through a secret channel.
 fn guard(s: &Shared, peer: Option<&TunnelPeer>) -> Option<Response> {
-    super::identity_api::require_secret_channel(s, peer)
-        .err()
-        .map(IntoResponse::into_response)
+    super::identity_api::require_secret_channel(s, peer).err().map(IntoResponse::into_response)
 }
 
 /// `rid` as 32 lowercase hex, else `None` (an unknown request).
@@ -414,18 +360,10 @@ fn parse_rid(raw: &str) -> Option<[u8; 16]> {
 
 /// The certified, unrevoked device `id` holding `key` in this workspace.
 fn certified(roster: Option<&ligus_core::authz::RosterState>, id: Uuid, key: &[u8]) -> bool {
-    roster
-        .and_then(|r| r.devices.get(&id))
-        .is_some_and(|d| !d.revoked && !d.accounts.is_empty() && d.public_key == key)
+    roster.and_then(|r| r.devices.get(&id)).is_some_and(|d| !d.revoked && !d.accounts.is_empty() && d.public_key == key)
 }
 
-fn row(
-    ws: Uuid,
-    workspace_name: &str,
-    r: &LiveRequest,
-    roster: Option<&ligus_core::authz::RosterState>,
-    seal_key: &[u8; 32],
-) -> Value {
+fn row(ws: Uuid, workspace_name: &str, r: &LiveRequest, roster: Option<&ligus_core::authz::RosterState>, seal_key: &[u8; 32]) -> Value {
     let claims: Vec<Value> = r
         .claims
         .iter()
@@ -479,13 +417,7 @@ pub async fn list(State(s): State<Arc<Shared>>, peer: Option<Extension<TunnelPee
         .filter(|r| r.ended.is_none() && r.expires_at > now)
         .filter_map(|r| {
             let key = epochs.iter().find(|e| e.epoch == r.epoch)?;
-            Some(row(
-                s.ws,
-                &name,
-                r,
-                roster.as_ref(),
-                &MailboxKeys::derive(&key.key).seal().public_key_bytes(),
-            ))
+            Some(row(s.ws, &name, r, roster.as_ref(), &MailboxKeys::derive(&key.key).seal().public_key_bytes()))
         })
         .collect();
     Json(json!({ "approvals": rows })).into_response()
@@ -503,16 +435,8 @@ async fn find(s: &Shared, rid: &[u8; 16]) -> Result<(MailboxKeys, [u8; 16]), Box
     if let Some(found) = lookup(s) {
         return Ok(found);
     }
-    refresh(s, true)
-        .await
-        .map_err(|e| Box::new(refresh_problem(e)))?;
-    lookup(s).ok_or_else(|| {
-        Box::new(problem(
-            StatusCode::NOT_FOUND,
-            "request_unknown",
-            "no live approval request with that id",
-        ))
-    })
+    refresh(s, true).await.map_err(|e| Box::new(refresh_problem(e)))?;
+    lookup(s).ok_or_else(|| Box::new(problem(StatusCode::NOT_FOUND, "request_unknown", "no live approval request with that id")))
 }
 
 fn forget(s: &Shared, rid: &[u8; 16]) {
@@ -528,37 +452,21 @@ pub struct MsgsQuery {
 /// `GET /v1/approvals/{rid}/msgs?after=N` → `{"msgs":[{seq, to, from, at,
 /// blob, plain}]}`. `plain` is the plaintext of a blob sealed to the
 /// members (claims, aborts), else null; no long poll (the phone polls).
-pub async fn msgs(
-    State(s): State<Arc<Shared>>,
-    peer: Option<Extension<TunnelPeer>>,
-    Path(rid): Path<String>,
-    Query(q): Query<MsgsQuery>,
-) -> Response {
+pub async fn msgs(State(s): State<Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Path(rid): Path<String>, Query(q): Query<MsgsQuery>) -> Response {
     if let Some(r) = guard(&s, peer.as_deref()) {
         return r;
     }
     let Some(rid) = parse_rid(&rid) else {
-        return problem(
-            StatusCode::NOT_FOUND,
-            "request_unknown",
-            "no live approval request with that id",
-        );
+        return problem(StatusCode::NOT_FOUND, "request_unknown", "no live approval request with that id");
     };
     let (keys, mailbox) = match find(&s, &rid).await {
         Ok(k) => k,
         Err(r) => return *r,
     };
     let Some(client) = client(&s) else {
-        return problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "unavailable",
-            "this box has no relay",
-        );
+        return problem(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "this box has no relay");
     };
-    let msgs = match client
-        .get_msgs(MailboxAuth::Member(&keys), &mailbox, &rid, q.after, 0)
-        .await
-    {
+    let msgs = match client.get_msgs(MailboxAuth::Member(&keys), &mailbox, &rid, q.after, 0).await {
         Ok(m) => m,
         Err(e) => {
             if e == MailboxError::RequestUnknown {
@@ -606,12 +514,8 @@ pub fn blob_ok(blob: &str) -> bool {
     use base64::Engine;
     !blob.is_empty()
         && blob.len() <= am::MAX_MSG_BLOB
-        && blob
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
-        && base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(blob.as_bytes())
-            .is_ok_and(|b| b.len() > 32)
+        && blob.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+        && base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(blob.as_bytes()).is_ok_and(|b| b.len() > 32)
 }
 
 #[derive(Deserialize)]
@@ -620,62 +524,28 @@ pub struct PostReq {
     to: String,
 }
 
-async fn post_msg(
-    s: Arc<Shared>,
-    peer: Option<Extension<TunnelPeer>>,
-    rid: String,
-    req: PostReq,
-    kind: PostKind,
-) -> Response {
+async fn post_msg(s: Arc<Shared>, peer: Option<Extension<TunnelPeer>>, rid: String, req: PostReq, kind: PostKind) -> Response {
     if let Some(r) = guard(&s, peer.as_deref()) {
         return r;
     }
     let Some(rid) = parse_rid(&rid) else {
-        return problem(
-            StatusCode::NOT_FOUND,
-            "request_unknown",
-            "no live approval request with that id",
-        );
+        return problem(StatusCode::NOT_FOUND, "request_unknown", "no live approval request with that id");
     };
     if !kind.allows(&req.to) {
-        return problem(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            format!(
-                "a {kind:?} doesn't go to '{}'",
-                req.to.chars().take(16).collect::<String>()
-            ),
-        );
+        return problem(StatusCode::BAD_REQUEST, "invalid_request", format!("a {kind:?} doesn't go to '{}'", req.to.chars().take(16).collect::<String>()));
     }
     if !blob_ok(&req.blob) {
-        return problem(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "blob must be a sealed message: non-empty base64url, at most 32 KiB",
-        );
+        return problem(StatusCode::BAD_REQUEST, "invalid_request", "blob must be a sealed message: non-empty base64url, at most 32 KiB");
     }
     let (keys, mailbox) = match find(&s, &rid).await {
         Ok(k) => k,
         Err(r) => return *r,
     };
     let Some(client) = client(&s) else {
-        return problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "unavailable",
-            "this box has no relay",
-        );
+        return problem(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "this box has no relay");
     };
     // The phone's bytes, unchanged.
-    match client
-        .post_msg(
-            MailboxAuth::Member(&keys),
-            &mailbox,
-            &rid,
-            &req.blob,
-            &req.to,
-        )
-        .await
-    {
+    match client.post_msg(MailboxAuth::Member(&keys), &mailbox, &rid, &req.blob, &req.to).await {
         Ok(seq) => (StatusCode::CREATED, Json(json!({ "seq": seq }))).into_response(),
         Err(e) => {
             if e == MailboxError::RequestUnknown {
@@ -687,42 +557,22 @@ async fn post_msg(
 }
 
 /// `POST /v1/approvals/{rid}/claim` `{blob, to:"members"}` → 201 `{seq}`.
-pub async fn claim(
-    State(s): State<Arc<Shared>>,
-    peer: Option<Extension<TunnelPeer>>,
-    Path(rid): Path<String>,
-    Json(req): Json<PostReq>,
-) -> Response {
+pub async fn claim(State(s): State<Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Path(rid): Path<String>, Json(req): Json<PostReq>) -> Response {
     post_msg(s, peer, rid, req, PostKind::Claim).await
 }
 
 /// `POST /v1/approvals/{rid}/open` `{blob, to:"requester"}` → 201 `{seq}`.
-pub async fn open(
-    State(s): State<Arc<Shared>>,
-    peer: Option<Extension<TunnelPeer>>,
-    Path(rid): Path<String>,
-    Json(req): Json<PostReq>,
-) -> Response {
+pub async fn open(State(s): State<Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Path(rid): Path<String>, Json(req): Json<PostReq>) -> Response {
     post_msg(s, peer, rid, req, PostKind::Open).await
 }
 
 /// `POST /v1/approvals/{rid}/result` `{blob, to:"requester"}` → 201 `{seq}`.
-pub async fn result(
-    State(s): State<Arc<Shared>>,
-    peer: Option<Extension<TunnelPeer>>,
-    Path(rid): Path<String>,
-    Json(req): Json<PostReq>,
-) -> Response {
+pub async fn result(State(s): State<Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Path(rid): Path<String>, Json(req): Json<PostReq>) -> Response {
     post_msg(s, peer, rid, req, PostKind::Result).await
 }
 
 /// `POST /v1/approvals/{rid}/abort` `{blob, to:"members"|"requester"}` → 201 `{seq}`.
-pub async fn abort(
-    State(s): State<Arc<Shared>>,
-    peer: Option<Extension<TunnelPeer>>,
-    Path(rid): Path<String>,
-    Json(req): Json<PostReq>,
-) -> Response {
+pub async fn abort(State(s): State<Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Path(rid): Path<String>, Json(req): Json<PostReq>) -> Response {
     post_msg(s, peer, rid, req, PostKind::Abort).await
 }
 
@@ -746,10 +596,7 @@ mod unit {
         let mut t = PushTracker::default();
         let t0 = 1_000_000;
         assert!(t.decide("a", MatchKind::Box, false, t0));
-        assert!(
-            !t.decide("a", MatchKind::Box, false, t0 + 1),
-            "a request pushes once"
-        );
+        assert!(!t.decide("a", MatchKind::Box, false, t0 + 1), "a request pushes once");
         // Device requests are listed, never pushed; a claimed box request
         // (someone is already checking it) neither.
         assert!(!t.decide("c", MatchKind::Computer, false, t0 + 2));
@@ -769,17 +616,9 @@ mod unit {
     fn routing_hints_follow_the_wire_note() {
         assert!(PostKind::Claim.allows("members"));
         assert!(!PostKind::Claim.allows("requester"));
-        assert!(
-            PostKind::Open.allows("requester")
-                && !PostKind::Open.allows("members")
-                && !PostKind::Open.allows("approver")
-        );
+        assert!(PostKind::Open.allows("requester") && !PostKind::Open.allows("members") && !PostKind::Open.allows("approver"));
         assert!(PostKind::Result.allows("requester") && !PostKind::Result.allows("members"));
-        assert!(
-            PostKind::Abort.allows("members")
-                && PostKind::Abort.allows("requester")
-                && !PostKind::Abort.allows("approver")
-        );
+        assert!(PostKind::Abort.allows("members") && PostKind::Abort.allows("requester") && !PostKind::Abort.allows("approver"));
     }
 
     #[test]
@@ -788,10 +627,7 @@ mod unit {
         assert!(blob_ok(&sealed));
         assert!(!blob_ok(""));
         assert!(!blob_ok(&format!("{sealed}=")), "padding");
-        assert!(
-            !blob_ok(&format!("{}+", "A".repeat(100))),
-            "standard base64"
-        );
+        assert!(!blob_ok(&format!("{}+", "A".repeat(100))), "standard base64");
         assert!(!blob_ok("abc"), "too short to be sealed");
         assert!(!blob_ok(&"A".repeat(am::MAX_MSG_BLOB + 4)));
     }

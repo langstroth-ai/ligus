@@ -30,10 +30,7 @@ pub struct GitLab {
 pub fn draft_title(title: &str) -> String {
     let t = title.trim();
     let lower = t.to_ascii_lowercase();
-    if ["draft:", "[draft]", "(draft)"]
-        .iter()
-        .any(|p| lower.starts_with(p))
-    {
+    if ["draft:", "[draft]", "(draft)"].iter().any(|p| lower.starts_with(p)) {
         t.to_string()
     } else {
         format!("Draft: {t}")
@@ -45,14 +42,7 @@ impl GitLab {
         Self {
             id: conn.id.clone(),
             web: conn.base_url.trim_end_matches('/').to_string(),
-            api: Api {
-                client: crate::http::client_for(conn.internal),
-                internal: conn.internal,
-                base: conn.api_base(),
-                style: AuthStyle::Bearer,
-                creds,
-                headers: vec![("Accept", "application/json")],
-            },
+            api: Api { client: crate::http::client_for(conn.internal), internal: conn.internal, base: conn.api_base(), style: AuthStyle::Bearer, creds, headers: vec![("Accept", "application/json")] },
         }
     }
 
@@ -89,15 +79,7 @@ fn access_level(v: &Value) -> Option<u64> {
 }
 
 fn meta(v: &Value) -> Option<RepoMeta> {
-    let parent = v["forked_from_project"].as_object().and_then(|p| {
-        Some((
-            repo_of(p.get("path_with_namespace")?.as_str()?)?,
-            p.get("default_branch")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
-        ))
-    });
+    let parent = v["forked_from_project"].as_object().and_then(|p| Some((repo_of(p.get("path_with_namespace")?.as_str()?)?, p.get("default_branch").and_then(Value::as_str).unwrap_or("").to_string())));
     Some(RepoMeta {
         repo: repo_of(v["path_with_namespace"].as_str()?)?,
         default_branch: s(v, "default_branch"),
@@ -119,10 +101,7 @@ fn mr(v: &Value) -> ChangeRequest {
         number: id_str(&v["iid"]),
         title: s(v, "title"),
         state,
-        draft: v["draft"]
-            .as_bool()
-            .or(v["work_in_progress"].as_bool())
-            .unwrap_or(false),
+        draft: v["draft"].as_bool().or(v["work_in_progress"].as_bool()).unwrap_or(false),
         author: s(&v["author"], "username"),
         head: s(v, "source_branch"),
         base: s(v, "target_branch"),
@@ -140,14 +119,7 @@ fn issue(v: &Value) -> Issue {
         state: s(v, "state"),
         author: s(&v["author"], "username"),
         url: s(v, "web_url"),
-        labels: v["labels"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|l| l.as_str().or(l["name"].as_str()).map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default(),
+        labels: v["labels"].as_array().map(|a| a.iter().filter_map(|l| l.as_str().or(l["name"].as_str()).map(str::to_string)).collect()).unwrap_or_default(),
         body: cap_text(v["description"].as_str().unwrap_or(""), MAX_TEXT_CHARS).0,
         updated_at: s(v, "updated_at"),
     }
@@ -159,9 +131,7 @@ fn ci_state(st: &str) -> CiState {
         "failed" => CiState::Failure,
         "canceled" | "cancelled" => CiState::Cancelled,
         "running" => CiState::Running,
-        "pending" | "created" | "waiting_for_resource" | "preparing" | "scheduled" | "manual" => {
-            CiState::Pending
-        }
+        "pending" | "created" | "waiting_for_resource" | "preparing" | "scheduled" | "manual" => CiState::Pending,
         "skipped" => CiState::Success,
         _ => CiState::Unknown,
     }
@@ -185,52 +155,18 @@ impl ForgeReader for GitLab {
         &self.id
     }
 
-    async fn list_change_requests(
-        &self,
-        r: &RepoRef,
-        state: StateFilter,
-        limit: u32,
-    ) -> Result<Vec<ChangeRequest>> {
-        let q = [
-            ("state", state_param(state)),
-            ("per_page", limit.clamp(1, 100).to_string()),
-            ("order_by", "updated_at".into()),
-        ];
-        let v = self
-            .api
-            .get(&format!("{}/merge_requests", Self::project(r)), &q)
-            .await?;
-        Ok(v.as_array()
-            .map(|a| a.iter().map(mr).collect())
-            .unwrap_or_default())
+    async fn list_change_requests(&self, r: &RepoRef, state: StateFilter, limit: u32) -> Result<Vec<ChangeRequest>> {
+        let q = [("state", state_param(state)), ("per_page", limit.clamp(1, 100).to_string()), ("order_by", "updated_at".into())];
+        let v = self.api.get(&format!("{}/merge_requests", Self::project(r)), &q).await?;
+        Ok(v.as_array().map(|a| a.iter().map(mr).collect()).unwrap_or_default())
     }
 
     async fn change_request(&self, r: &RepoRef, number: &str) -> Result<ChangeRequest> {
-        Ok(mr(&self
-            .api
-            .get(
-                &format!(
-                    "{}/merge_requests/{}",
-                    Self::project(r),
-                    spec::encode_segment(number)
-                ),
-                &[],
-            )
-            .await?))
+        Ok(mr(&self.api.get(&format!("{}/merge_requests/{}", Self::project(r), spec::encode_segment(number)), &[]).await?))
     }
 
     async fn review_comments(&self, r: &RepoRef, number: &str) -> Result<Vec<ReviewComment>> {
-        let v = self
-            .api
-            .get(
-                &format!(
-                    "{}/merge_requests/{}/discussions",
-                    Self::project(r),
-                    spec::encode_segment(number)
-                ),
-                &[("per_page", "100".into())],
-            )
-            .await?;
+        let v = self.api.get(&format!("{}/merge_requests/{}/discussions", Self::project(r), spec::encode_segment(number)), &[("per_page", "100".into())]).await?;
         let mut out = Vec::new();
         for d in v.as_array().into_iter().flatten() {
             for n in d["notes"].as_array().into_iter().flatten() {
@@ -241,15 +177,9 @@ impl ForgeReader for GitLab {
                     author: s(&n["author"], "username"),
                     body: cap_text(n["body"].as_str().unwrap_or(""), 8000).0,
                     path: n["position"]["new_path"].as_str().map(str::to_string),
-                    line: n["position"]["new_line"]
-                        .as_u64()
-                        .or(n["position"]["old_line"].as_u64())
-                        .map(|l| l as u32),
+                    line: n["position"]["new_line"].as_u64().or(n["position"]["old_line"].as_u64()).map(|l| l as u32),
                     created_at: s(n, "created_at"),
-                    resolved: n["resolvable"]
-                        .as_bool()
-                        .filter(|r| *r)
-                        .and(n["resolved"].as_bool()),
+                    resolved: n["resolvable"].as_bool().filter(|r| *r).and(n["resolved"].as_bool()),
                 });
             }
         }
@@ -257,49 +187,18 @@ impl ForgeReader for GitLab {
     }
 
     async fn issues(&self, r: &RepoRef, state: StateFilter, limit: u32) -> Result<Vec<Issue>> {
-        let q = [
-            ("state", state_param(state)),
-            ("per_page", limit.clamp(1, 100).to_string()),
-            ("order_by", "updated_at".into()),
-        ];
-        let v = self
-            .api
-            .get(&format!("{}/issues", Self::project(r)), &q)
-            .await?;
-        Ok(v.as_array()
-            .map(|a| a.iter().map(issue).collect())
-            .unwrap_or_default())
+        let q = [("state", state_param(state)), ("per_page", limit.clamp(1, 100).to_string()), ("order_by", "updated_at".into())];
+        let v = self.api.get(&format!("{}/issues", Self::project(r)), &q).await?;
+        Ok(v.as_array().map(|a| a.iter().map(issue).collect()).unwrap_or_default())
     }
 
     async fn issue(&self, r: &RepoRef, number: &str) -> Result<Issue> {
-        Ok(issue(
-            &self
-                .api
-                .get(
-                    &format!(
-                        "{}/issues/{}",
-                        Self::project(r),
-                        spec::encode_segment(number)
-                    ),
-                    &[],
-                )
-                .await?,
-        ))
+        Ok(issue(&self.api.get(&format!("{}/issues/{}", Self::project(r), spec::encode_segment(number)), &[]).await?))
     }
 
     async fn ci_status(&self, r: &RepoRef, git_ref: &str) -> Result<CiStatus> {
         // The ref (branch, tag or sha) → its commit and last pipeline.
-        let c = self
-            .api
-            .get(
-                &format!(
-                    "{}/repository/commits/{}",
-                    Self::project(r),
-                    spec::encode_segment(git_ref)
-                ),
-                &[],
-            )
-            .await?;
+        let c = self.api.get(&format!("{}/repository/commits/{}", Self::project(r), spec::encode_segment(git_ref)), &[]).await?;
         let sha = c["id"].as_str().unwrap_or(git_ref).to_string();
         let mut checks = Vec::new();
         if let Some(p) = c["last_pipeline"].as_object() {
@@ -309,40 +208,15 @@ impl ForgeReader for GitLab {
                 url: p.get("web_url").and_then(Value::as_str).map(str::to_string),
             });
         }
-        let st = self
-            .api
-            .get(
-                &format!(
-                    "{}/repository/commits/{}/statuses",
-                    Self::project(r),
-                    spec::encode_segment(&sha)
-                ),
-                &[("per_page", "100".into())],
-            )
-            .await?;
+        let st = self.api.get(&format!("{}/repository/commits/{}/statuses", Self::project(r), spec::encode_segment(&sha)), &[("per_page", "100".into())]).await?;
         for x in st.as_array().into_iter().flatten() {
-            checks.push(CiCheck {
-                name: s(x, "name"),
-                state: ci_state(x["status"].as_str().unwrap_or("")),
-                url: x["target_url"].as_str().map(str::to_string),
-            });
+            checks.push(CiCheck { name: s(x, "name"), state: ci_state(x["status"].as_str().unwrap_or("")), url: x["target_url"].as_str().map(str::to_string) });
         }
         Ok(CiStatus::from_checks(checks, None))
     }
 
     async fn file_at(&self, r: &RepoRef, path: &str, git_ref: &str) -> Result<FileAtRef> {
-        let text = self
-            .api
-            .get_text(
-                &format!(
-                    "{}/repository/files/{}/raw",
-                    Self::project(r),
-                    spec::encode_segment(path)
-                ),
-                &[("ref", git_ref.to_string())],
-                None,
-            )
-            .await?;
+        let text = self.api.get_text(&format!("{}/repository/files/{}/raw", Self::project(r), spec::encode_segment(path)), &[("ref", git_ref.to_string())], None).await?;
         crate::github::file_result(path, git_ref, &text)
     }
 }
@@ -353,15 +227,7 @@ impl Forge for GitLab {
         &self.web
     }
     fn capabilities(&self) -> ForgeCaps {
-        ForgeCaps {
-            draft_cr: false,
-            fork_api: true,
-            ci_status: true,
-            review_threads: true,
-            issues: true,
-            api_open_cr: true,
-            device_flow: true,
-        }
+        ForgeCaps { draft_cr: false, fork_api: true, ci_status: true, review_threads: true, issues: true, api_open_cr: true, device_flow: true }
     }
     fn creds(&self) -> &Arc<dyn CredentialSource> {
         &self.api.creds
@@ -372,19 +238,11 @@ impl Forge for GitLab {
             return Ok(None);
         }
         let v = self.api.get("user", &[]).await?;
-        Ok(Some(ForgeUser {
-            id: id_str(&v["id"]),
-            login: s(&v, "username"),
-            name: s(&v, "name"),
-        }))
+        Ok(Some(ForgeUser { id: id_str(&v["id"]), login: s(&v, "username"), name: s(&v, "name") }))
     }
 
     async fn list_repos(&self, q: &RepoQuery, login: &str) -> Result<Vec<RepoSummary>> {
-        let mut p = vec![
-            ("per_page", q.per_page.clamp(1, 100).to_string()),
-            ("page", q.page.max(1).to_string()),
-            ("order_by", "last_activity_at".into()),
-        ];
+        let mut p = vec![("per_page", q.per_page.clamp(1, 100).to_string()), ("page", q.page.max(1).to_string()), ("order_by", "last_activity_at".into())];
         if let Some(t) = q.q.as_deref() {
             p.push(("search", t.to_string()));
         }
@@ -393,96 +251,43 @@ impl Forge for GitLab {
                 p.push(("membership", "true".into()));
                 self.api.get("projects", &p).await?
             }
-            Some(o) if o.eq_ignore_ascii_case(login) => {
-                self.api
-                    .get(&format!("users/{}/projects", spec::encode_segment(o)), &p)
-                    .await?
-            }
+            Some(o) if o.eq_ignore_ascii_case(login) => self.api.get(&format!("users/{}/projects", spec::encode_segment(o)), &p).await?,
             Some(o) => {
                 p.push(("include_subgroups", "true".into()));
-                self.api
-                    .get(&format!("groups/{}/projects", spec::encode_segment(o)), &p)
-                    .await?
+                self.api.get(&format!("groups/{}/projects", spec::encode_segment(o)), &p).await?
             }
         };
-        Ok(v.as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(summary)
-            .collect())
+        Ok(v.as_array().into_iter().flatten().filter_map(summary).collect())
     }
 
     async fn owners(&self, login: &str) -> Result<Vec<String>> {
-        let groups = self
-            .api
-            .get(
-                "groups",
-                &[
-                    ("per_page", "100".into()),
-                    ("min_access_level", "30".into()),
-                ],
-            )
-            .await?;
+        let groups = self.api.get("groups", &[("per_page", "100".into()), ("min_access_level", "30".into())]).await?;
         let mut out = vec![login.to_string()];
-        out.extend(
-            groups
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|g| g["full_path"].as_str().map(str::to_string)),
-        );
+        out.extend(groups.as_array().into_iter().flatten().filter_map(|g| g["full_path"].as_str().map(str::to_string)));
         Ok(out)
     }
 
     async fn repo(&self, r: &RepoRef) -> Result<Option<RepoMeta>> {
-        Ok(self
-            .api
-            .get_opt(&Self::project(r), &[])
-            .await?
-            .as_ref()
-            .and_then(meta))
+        Ok(self.api.get_opt(&Self::project(r), &[]).await?.as_ref().and_then(meta))
     }
 
     async fn create_fork(&self, upstream: &RepoRef) -> Result<RepoRef> {
-        let (status, v) = self
-            .api
-            .write(
-                Method::POST,
-                &format!("{}/fork", Self::project(upstream)),
-                &json!({}),
-            )
-            .await?;
+        let (status, v) = self.api.write(Method::POST, &format!("{}/fork", Self::project(upstream)), &json!({})).await?;
         if !status.is_success() {
-            return Err(ForgeError::Rejected(format!(
-                "GitLab didn't create the fork: {}",
-                v.as_str().unwrap_or("")
-            )));
+            return Err(ForgeError::Rejected(format!("GitLab didn't create the fork: {}", v.as_str().unwrap_or(""))));
         }
-        v["path_with_namespace"]
-            .as_str()
-            .and_then(repo_of)
-            .ok_or_else(|| ForgeError::Transport("GitLab's fork answer had no project".into()))
+        v["path_with_namespace"].as_str().and_then(repo_of).ok_or_else(|| ForgeError::Transport("GitLab's fork answer had no project".into()))
     }
 
     async fn open_change_request(&self, d: &ChangeRequestDraft) -> Result<ChangeRequestOutcome> {
         if !self.api.creds.has_write() {
-            return Err(ForgeError::NotSignedIn(
-                "this needs a write token for the code host on this device".into(),
-            ));
+            return Err(ForgeError::NotSignedIn("this needs a write token for the code host on this device".into()));
         }
-        let title = if d.draft {
-            draft_title(&d.title)
-        } else {
-            d.title.clone()
-        };
+        let title = if d.draft { draft_title(&d.title) } else { d.title.clone() };
         let mut body = json!({ "source_branch": d.head_branch, "target_branch": d.base_branch, "title": title, "description": d.body, "remove_source_branch": false });
         let cross = !d.head.same(&d.base);
         let ids = if cross {
-            let pid = |v: Value| {
-                v["id"]
-                    .as_u64()
-                    .ok_or_else(|| ForgeError::Transport("GitLab didn't give a project id".into()))
-            };
+            let pid = |v: Value| v["id"].as_u64().ok_or_else(|| ForgeError::Transport("GitLab didn't give a project id".into()));
             let base = pid(self.api.get(&Self::project(&d.base), &[]).await?)?;
             let head = pid(self.api.get(&Self::project(&d.head), &[]).await?)?;
             body["target_project_id"] = json!(base);
@@ -490,21 +295,9 @@ impl Forge for GitLab {
         } else {
             None
         };
-        let (status, v) = self
-            .api
-            .write(
-                Method::POST,
-                &format!("{}/merge_requests", Self::project(&d.head)),
-                &body,
-            )
-            .await?;
+        let (status, v) = self.api.write(Method::POST, &format!("{}/merge_requests", Self::project(&d.head)), &body).await?;
         if status.is_success() {
-            return Ok(ChangeRequestOutcome::Opened {
-                number: id_str(&v["iid"]),
-                url: s(&v, "web_url"),
-                draft_supported: false,
-                existing: false,
-            });
+            return Ok(ChangeRequestOutcome::Opened { number: id_str(&v["iid"]), url: s(&v, "web_url"), draft_supported: false, existing: false });
         }
         let msg = v.as_str().unwrap_or("").to_string();
         if status == StatusCode::CONFLICT && msg.contains("already exists") {
@@ -512,32 +305,15 @@ impl Forge for GitLab {
                 Some((base, _)) => format!("projects/{base}"),
                 None => Self::project(&d.base),
             };
-            let list = self
-                .api
-                .get(
-                    &format!("{target}/merge_requests"),
-                    &[
-                        ("state", "opened".into()),
-                        ("source_branch", d.head_branch.clone()),
-                    ],
-                )
-                .await?;
+            let list = self.api.get(&format!("{target}/merge_requests"), &[("state", "opened".into()), ("source_branch", d.head_branch.clone())]).await?;
             let found = list.as_array().into_iter().flatten().find(|m| {
-                m["source_branch"] == d.head_branch.as_str()
-                    && ids.is_none_or(|(_, head)| m["source_project_id"].as_u64() == Some(head))
+                m["source_branch"] == d.head_branch.as_str() && ids.is_none_or(|(_, head)| m["source_project_id"].as_u64() == Some(head))
             });
             if let Some(m) = found {
-                return Ok(ChangeRequestOutcome::Opened {
-                    number: id_str(&m["iid"]),
-                    url: s(m, "web_url"),
-                    draft_supported: false,
-                    existing: true,
-                });
+                return Ok(ChangeRequestOutcome::Opened { number: id_str(&m["iid"]), url: s(m, "web_url"), draft_supported: false, existing: true });
             }
         }
-        Err(ForgeError::Rejected(format!(
-            "GitLab didn't open the merge request: {msg}"
-        )))
+        Err(ForgeError::Rejected(format!("GitLab didn't open the merge request: {msg}")))
     }
 
     fn git_auth_args(&self) -> Vec<String> {
@@ -550,26 +326,13 @@ impl Forge for GitLab {
 
 impl GitLab {
     pub async fn resolve_user(&self, subject_id: &str) -> Result<ForgeUser> {
-        let v = self
-            .api
-            .get(&format!("users/{}", spec::encode_segment(subject_id)), &[])
-            .await?;
-        Ok(ForgeUser {
-            id: id_str(&v["id"]),
-            login: s(&v, "username"),
-            name: s(&v, "name"),
-        })
+        let v = self.api.get(&format!("users/{}", spec::encode_segment(subject_id)), &[]).await?;
+        Ok(ForgeUser { id: id_str(&v["id"]), login: s(&v, "username"), name: s(&v, "name") })
     }
 
     /// Public keys by user id (anonymous on GitLab), with their usage.
     pub async fn public_keys(&self, subject_id: &str) -> Result<Vec<PublicKeyEntry>> {
-        let v = self
-            .api
-            .get(
-                &format!("users/{}/keys", spec::encode_segment(subject_id)),
-                &[],
-            )
-            .await?;
+        let v = self.api.get(&format!("users/{}/keys", spec::encode_segment(subject_id)), &[]).await?;
         Ok(v.as_array()
             .into_iter()
             .flatten()
@@ -580,10 +343,7 @@ impl GitLab {
                     "auth_and_signing" => KeyUsage::Both,
                     _ => KeyUsage::Unknown,
                 };
-                Some(PublicKeyEntry {
-                    openssh: k["key"].as_str()?.to_string(),
-                    usage,
-                })
+                Some(PublicKeyEntry { openssh: k["key"].as_str()?.to_string(), usage })
             })
             .collect())
     }

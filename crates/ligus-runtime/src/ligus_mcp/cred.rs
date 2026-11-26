@@ -52,13 +52,7 @@ pub fn hmac_sha256(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
 fn mac(key: &[u8; 32], b: &TurnBinding) -> [u8; 32] {
     hmac_sha256(
         key,
-        &[
-            TURN_CRED_TAG,
-            b.turn_id.as_bytes(),
-            b.chat_id.as_bytes(),
-            b.agent_id.as_bytes(),
-            &b.expires_unix.to_le_bytes(),
-        ],
+        &[TURN_CRED_TAG, b.turn_id.as_bytes(), b.chat_id.as_bytes(), b.agent_id.as_bytes(), &b.expires_unix.to_le_bytes()],
     )
 }
 
@@ -87,9 +81,7 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 
 /// Verify `cred` under `key` at `now_unix`: its MAC, then its expiry.
 pub fn verify(key: &[u8; 32], cred: &str, now_unix: u64) -> Result<TurnBinding, CredError> {
-    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(cred.trim())
-        .map_err(|_| CredError::Malformed)?;
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(cred.trim()).map_err(|_| CredError::Malformed)?;
     if raw.len() != CRED_LEN {
         return Err(CredError::Malformed);
     }
@@ -117,10 +109,7 @@ pub fn host_key() -> [u8; 32] {
 }
 
 pub fn now_unix() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -135,33 +124,19 @@ mod tests {
         key[..20].copy_from_slice(&[0x0b; 20]);
         let tag = hmac_sha256(&key, &[b"Hi There"]);
         let hex: String = tag.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(
-            hex,
-            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
-        );
+        assert_eq!(hex, "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
     }
 
     #[test]
     fn cred_round_trips_and_is_tamper_evident() {
         let k = host_key();
-        let b = TurnBinding {
-            turn_id: Uuid::new_v4(),
-            chat_id: Uuid::new_v4(),
-            agent_id: Uuid::new_v4(),
-            expires_unix: 2_000,
-        };
+        let b = TurnBinding { turn_id: Uuid::new_v4(), chat_id: Uuid::new_v4(), agent_id: Uuid::new_v4(), expires_unix: 2_000 };
         let c = mint(&k, &b);
         assert_eq!(verify(&k, &c, 1_000), Ok(b));
         assert_eq!(verify(&k, &c, 2_000), Err(CredError::Expired));
-        assert_eq!(
-            verify(&host_key(), &c, 1_000),
-            Err(CredError::BadMac),
-            "another host's key"
-        );
+        assert_eq!(verify(&host_key(), &c, 1_000), Err(CredError::BadMac), "another host's key");
         // Flip each byte of the bound fields: always refused.
-        let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&c)
-            .unwrap();
+        let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&c).unwrap();
         for i in 0..56 {
             let mut r = raw.clone();
             r[i] ^= 1;

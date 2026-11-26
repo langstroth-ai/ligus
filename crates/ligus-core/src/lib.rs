@@ -2,20 +2,19 @@
 //! budgeting, git context, crypto/signing, MCP wire types, and the event-sourced
 //! session projector. No IO — orchestration lives in `ligus-runtime`.
 
-pub mod account_keys;
 pub mod admission;
-pub mod agent;
 pub mod attachment;
+pub mod account_keys;
+pub mod agent;
 pub mod authorization;
 pub mod authz;
 pub mod channel;
 pub mod chat;
+pub mod names;
 pub mod config;
 pub mod context_budget;
 pub mod copies;
 pub mod crypto;
-#[cfg(test)]
-mod dearth_tests;
 pub mod device_link;
 pub mod dispatch;
 pub mod e2ee;
@@ -30,14 +29,17 @@ pub mod identity_link;
 pub mod keys;
 pub mod lamport;
 pub mod lease;
+pub mod match_code;
+pub mod memory;
 #[cfg(test)]
 mod lease_projection_tests;
 #[cfg(test)]
+mod dearth_tests;
+#[cfg(test)]
 mod lockdown_tests;
-pub mod match_code;
-pub mod memory;
+#[cfg(test)]
+mod sec_tests;
 pub mod model_profile;
-pub mod names;
 pub mod phone_action;
 pub mod policy;
 pub mod presence;
@@ -50,13 +52,9 @@ pub mod retirement;
 pub mod runtime;
 pub mod sandbox;
 pub mod schedule;
-#[cfg(test)]
-mod sec_tests;
 pub mod session;
 pub mod signal;
 pub mod skills;
-#[doc(hidden)]
-pub mod testkit;
 pub mod throttle;
 pub mod time_util;
 pub mod vault;
@@ -65,39 +63,38 @@ pub mod workflow;
 pub mod workspace_host;
 pub mod workspace_repo;
 pub mod workspace_runtime;
+#[doc(hidden)]
+pub mod testkit;
 
 // Flat re-exports of the core domain types for ergonomic downstream use.
 pub use agent::{AgentLimits, AgentPolicy, WorkspaceAgent};
 pub use authorization::{evaluate as authorize, AuthzDecision, AuthzReason};
 pub use channel::{room_workspace_id, workspace_config_session_id, Channel};
+pub use device_link::DeviceLinks;
+pub use workspace_host::{HostKind, HostModelGateway, WorkspaceHost};
+pub use workspace_runtime::{WorkspaceCredential, WorkspaceRuntime, LEGACY_INLINE_LABEL, LEGACY_INLINE_WARNING, NO_WORKSPACE_KEYS};
 pub use chat::{
     ChatMessage, ChatToolCall, ChatToolResult, MessageReaction, MessageRole, TranscriptEventKind,
 };
 pub use crypto::{
-    sign_envelope, verify, verify_envelope, AgentKeyCertificate, CryptoError, DeviceCertificate,
-    DeviceIdentity, HumanAccount, Platform, SigningKeypair,
+    sign_envelope, verify, verify_envelope, AgentKeyCertificate, CryptoError, DeviceCertificate, DeviceIdentity,
+    HumanAccount, Platform, SigningKeypair,
 };
-pub use device_link::DeviceLinks;
 pub use e2ee::{
     derive_workspace_key, generate_workspace_key, open as seal_open, open_symmetric, seal,
-    seal_symmetric, seal_symmetric_kid, KeyAgreementKeypair, SealedBlob, SealedEnvelope,
-    WorkspaceKeyRotation,
+    seal_symmetric, seal_symmetric_kid, KeyAgreementKeypair, SealedBlob, SealedEnvelope, WorkspaceKeyRotation,
 };
 pub use events::{
-    fold_copy_decisions, fold_decisions, project, project_authorized, project_config,
-    project_with_founder, project_with_options, CopyVerdicts, EventScope, MemberRoleChange,
-    SessionEvent, SessionEventEnvelope, Verdict, WorkspaceAuthz,
+    fold_copy_decisions, fold_decisions, project, project_authorized, project_config, CopyVerdicts, Verdict, project_with_founder, project_with_options, WorkspaceAuthz, EventScope, MemberRoleChange, SessionEvent,
+    SessionEventEnvelope,
 };
 pub use git_context::{GitContextReader, GitFileChange, GitFileDiff, GitSnapshot};
 pub use identity::{
-    ActorIdentity, ActorKind, ActorStamp, CfgFrontier, LigusUserProfile, WorkspaceMember,
-    WorkspaceRole,
+    ActorIdentity, ActorKind, ActorStamp, CfgFrontier, LigusUserProfile, WorkspaceMember, WorkspaceRole,
 };
 pub use policy::{PermissionPolicy, PermissionScope, Workspace};
 pub use proposal_sets::{ProposalSet, ScoutAssessment, SetPhase};
-pub use proposals::{
-    ActionProposal, ProposalApproval, ProposalKind, ProposalStatus, ProposedCommand,
-};
+pub use proposals::{ActionProposal, ProposalApproval, ProposalKind, ProposalStatus, ProposedCommand};
 pub use runtime::{Driver, ModelProviderKind, RuntimeCapabilities, RuntimeLocation, RuntimeTarget};
 pub use schedule::ScheduleTrigger;
 pub use session::{turn_claim_key, ChatSession, MAX_CASCADE_DEPTH};
@@ -107,11 +104,6 @@ pub use vault::{MountedVault, VaultSource};
 pub use workflow::{
     GateRejectPolicy, NodeRunState, NodeRunStatus, WorkflowDefinition, WorkflowNode,
     WorkflowNodeKind, WorkflowRun, WorkflowRunStatus,
-};
-pub use workspace_host::{HostKind, HostModelGateway, WorkspaceHost};
-pub use workspace_runtime::{
-    WorkspaceCredential, WorkspaceRuntime, LEGACY_INLINE_LABEL, LEGACY_INLINE_WARNING,
-    NO_WORKSPACE_KEYS,
 };
 
 /// Crate version string, surfaced through the IPC `get_app_info` command.
@@ -139,14 +131,8 @@ mod community_relay_tests {
     #[test]
     fn ts_mirror_matches() {
         let ts = include_str!("../../../web/src/lib/communityRelay.ts");
-        let want = format!(
-            "export const COMMUNITY_RELAY_URL = \"{}\";",
-            super::COMMUNITY_RELAY_URL
-        );
-        assert!(
-            ts.contains(&want),
-            "web/src/lib/communityRelay.ts must declare {want}"
-        );
+        let want = format!("export const COMMUNITY_RELAY_URL = \"{}\";", super::COMMUNITY_RELAY_URL);
+        assert!(ts.contains(&want), "web/src/lib/communityRelay.ts must declare {want}");
     }
 
     #[test]

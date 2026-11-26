@@ -56,27 +56,11 @@ fn only_plain_hex_colors_are_valid() {
 #[test]
 fn an_upserted_agent_with_a_non_hex_color_folds_without_it() {
     let mut w = world();
-    w.write(
-        "mara",
-        None,
-        SessionEvent::AgentUpserted {
-            agent: agent(1, "#3f72a8"),
-        },
-        None,
-        Proof::Recovery,
-    );
+    w.write("mara", None, SessionEvent::AgentUpserted { agent: agent(1, "#3f72a8") }, None, Proof::Recovery);
     assert_eq!(color(&w, 1).as_deref(), Some("#3f72a8"));
     for (i, bad) in BAD.iter().enumerate() {
         let id = 10 + i as u128;
-        w.write(
-            "mara",
-            None,
-            SessionEvent::AgentUpserted {
-                agent: agent(id, bad),
-            },
-            None,
-            Proof::Recovery,
-        );
+        w.write("mara", None, SessionEvent::AgentUpserted { agent: agent(id, bad) }, None, Proof::Recovery);
         assert_eq!(color(&w, id), None, "{bad}");
     }
 }
@@ -84,17 +68,8 @@ fn an_upserted_agent_with_a_non_hex_color_folds_without_it() {
 #[test]
 fn a_roster_list_with_a_non_hex_color_folds_without_it() {
     let mut w = world();
-    let list = vec![
-        agent(1, "#abc"),
-        agent(2, "url(https://evil.example/p.gif)"),
-    ];
-    w.write(
-        "owner",
-        None,
-        SessionEvent::AgentRosterUpdated { agents: list },
-        None,
-        Proof::Recovery,
-    );
+    let list = vec![agent(1, "#abc"), agent(2, "url(https://evil.example/p.gif)")];
+    w.write("owner", None, SessionEvent::AgentRosterUpdated { agents: list }, None, Proof::Recovery);
     assert_eq!(color(&w, 1).as_deref(), Some("#abc"));
     assert_eq!(color(&w, 2), None);
 }

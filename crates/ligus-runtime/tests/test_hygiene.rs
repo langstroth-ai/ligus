@@ -17,17 +17,8 @@ fn without_the_opt_in_no_real_sign_ins_and_no_os_secret_store() {
         eprintln!("skipped: LIGUS_TEST_KEYCHAIN=1");
         return;
     }
-    assert!(
-        !cli_home::real_sign_ins_allowed(),
-        "a test would copy the user's CLI sign-ins"
-    );
+    assert!(!cli_home::real_sign_ins_allowed(), "a test would copy the user's CLI sign-ins");
     let dir = tempfile::tempdir().unwrap();
-    assert_eq!(
-        secret_store::open(dir.path(), None).backend(),
-        Backend::File0600
-    );
-    assert_eq!(
-        secret_store::init_for_data_dir(dir.path(), None).backend(),
-        Backend::File0600
-    );
+    assert_eq!(secret_store::open(dir.path(), None).backend(), Backend::File0600);
+    assert_eq!(secret_store::init_for_data_dir(dir.path(), None).backend(), Backend::File0600);
 }

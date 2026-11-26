@@ -91,14 +91,8 @@ impl Registry {
 
     pub fn load(dir: &Path) -> Result<Self> {
         let path = Self::file(dir);
-        let phones = read_json::<PhonesFile>(&path)?
-            .map(|f| f.phones)
-            .unwrap_or_default();
-        Ok(Self {
-            path,
-            inner: Mutex::new(phones),
-            generation: Default::default(),
-        })
+        let phones = read_json::<PhonesFile>(&path)?.map(|f| f.phones).unwrap_or_default();
+        Ok(Self { path, inner: Mutex::new(phones), generation: Default::default() })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<PhoneRecord>> {
@@ -106,15 +100,8 @@ impl Registry {
     }
 
     fn save(&self, phones: &[PhoneRecord]) -> Result<()> {
-        self.generation
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        write_json(
-            &self.path,
-            &PhonesFile {
-                v: 1,
-                phones: phones.to_vec(),
-            },
-        )
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        write_json(&self.path, &PhonesFile { v: 1, phones: phones.to_vec() })
     }
 
     /// Changes whenever the registry is saved.
@@ -136,10 +123,7 @@ impl Registry {
 
     /// The active record whose Noise static is `static_pub` (S1).
     pub fn active_by_static(&self, static_pub: &[u8; 32]) -> Option<PhoneRecord> {
-        self.lock()
-            .iter()
-            .find(|r| r.is_active() && r.static_key().as_ref() == Some(static_pub))
-            .cloned()
+        self.lock().iter().find(|r| r.is_active() && r.static_key().as_ref() == Some(static_pub)).cloned()
     }
 
     /// Find by pid, or by name when it names exactly one phone.
@@ -148,10 +132,7 @@ impl Registry {
         if let Some(r) = phones.iter().find(|r| r.pid == pid_or_name) {
             return Some(r.clone());
         }
-        let named: Vec<_> = phones
-            .iter()
-            .filter(|r| r.name == pid_or_name && r.is_active())
-            .collect();
+        let named: Vec<_> = phones.iter().filter(|r| r.name == pid_or_name && r.is_active()).collect();
         (named.len() == 1).then(|| named[0].clone())
     }
 
@@ -172,9 +153,7 @@ impl Registry {
     /// there is no such phone.
     pub fn revoke(&self, pid: &str) -> Result<Option<u64>> {
         let mut phones = self.lock();
-        let Some(r) = phones.iter_mut().find(|r| r.pid == pid) else {
-            return Ok(None);
-        };
+        let Some(r) = phones.iter_mut().find(|r| r.pid == pid) else { return Ok(None) };
         let exp = r.cred_exp;
         if r.revoked_at.is_none() {
             r.revoked_at = Some(super::now());
@@ -184,10 +163,7 @@ impl Registry {
     }
 
     /// The active pairings of phones whose workspace device is in `revoked`.
-    pub fn pairings_of_revoked(
-        &self,
-        revoked: &std::collections::BTreeSet<uuid::Uuid>,
-    ) -> Vec<String> {
+    pub fn pairings_of_revoked(&self, revoked: &std::collections::BTreeSet<uuid::Uuid>) -> Vec<String> {
         self.lock()
             .iter()
             .filter(|r| r.is_active() && r.device_id.is_some_and(|d| revoked.contains(&d)))
@@ -208,24 +184,12 @@ impl Registry {
         report: impl Fn(uuid::Uuid) -> bool,
     ) -> ligus_runtime::revocation_status::PairingReport {
         use ligus_runtime::revocation_status::{PairedPhone, PairingReport, MAX_PAIRED_REPORTED};
-        let mut by_device: std::collections::BTreeMap<uuid::Uuid, (u64, PairedPhone)> =
-            Default::default();
+        let mut by_device: std::collections::BTreeMap<uuid::Uuid, (u64, PairedPhone)> = Default::default();
         for r in self.lock().iter().filter(|r| r.is_active()) {
-            let Some(d) = r.device_id.filter(|d| report(*d)) else {
-                continue;
-            };
+            let Some(d) = r.device_id.filter(|d| report(*d)) else { continue };
             // To the minute: every workspace-key holder can read the report.
             let seen = r.last_seen.map(|t| (t - t % 60) as i64);
-            let e = by_device.entry(d).or_insert_with(|| {
-                (
-                    r.enrolled_at,
-                    PairedPhone {
-                        device_id: d.to_string(),
-                        name: r.name.clone(),
-                        last_seen: seen,
-                    },
-                )
-            });
+            let e = by_device.entry(d).or_insert_with(|| (r.enrolled_at, PairedPhone { device_id: d.to_string(), name: r.name.clone(), last_seen: seen }));
             if r.enrolled_at >= e.0 {
                 e.0 = r.enrolled_at;
                 e.1.name = r.name.clone();
@@ -235,13 +199,7 @@ impl Registry {
         let mut phones: Vec<PairedPhone> = by_device.into_values().map(|(_, p)| p).collect();
         phones.sort_by_key(|p| std::cmp::Reverse(p.last_seen));
         phones.truncate(MAX_PAIRED_REPORTED);
-        PairingReport {
-            host_id: host_id.to_string(),
-            workspace_id,
-            at,
-            phones,
-            signature: Vec::new(),
-        }
+        PairingReport { host_id: host_id.to_string(), workspace_id, at, phones, signature: Vec::new() }
     }
 
     /// Record a newly issued credential `exp` (never moves backwards).
@@ -257,16 +215,9 @@ impl Registry {
     /// Set the push preference; `previews: None` keeps the stored value.
     /// Returns the resulting `(enabled, previews)`, or `None` for no such
     /// active phone.
-    pub fn set_push(
-        &self,
-        pid: &str,
-        enabled: bool,
-        previews: Option<bool>,
-    ) -> Result<Option<(bool, bool)>> {
+    pub fn set_push(&self, pid: &str, enabled: bool, previews: Option<bool>) -> Result<Option<(bool, bool)>> {
         let mut phones = self.lock();
-        let Some(r) = phones.iter_mut().find(|r| r.pid == pid && r.is_active()) else {
-            return Ok(None);
-        };
+        let Some(r) = phones.iter_mut().find(|r| r.pid == pid && r.is_active()) else { return Ok(None) };
         r.push_enabled = enabled;
         if let Some(p) = previews {
             r.push_previews = p;

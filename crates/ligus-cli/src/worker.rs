@@ -20,22 +20,15 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
-use ligus_core::{
-    workspace_config_session_id, ChatSession, ModelProviderKind, WorkspaceAgent, WorkspaceRuntime,
-};
+use ligus_core::{workspace_config_session_id, ChatSession, ModelProviderKind, WorkspaceAgent, WorkspaceRuntime};
 use ligus_runtime::ligus_mcp::{LigusHost, LigusMcp};
-use ligus_runtime::{
-    pending_turns, resolve_workspace_credential, turns_for, ChatService, PendingMention,
-    ResolvedRuntime,
-};
+use ligus_runtime::{pending_turns, resolve_workspace_credential, turns_for, ChatService, PendingMention, ResolvedRuntime};
 use uuid::Uuid;
 
 use crate::reply::{self, ToolSettings};
+use ligus_runtime::turn_engine::{self, Checkout, EngineOptions, Responder, ToolOptions, TurnHost, TurnInput};
 use crate::repos::{repos_dir, RepoBindings};
 use crate::Config;
-use ligus_runtime::turn_engine::{
-    self, Checkout, EngineOptions, Responder, ToolOptions, TurnHost, TurnInput,
-};
 
 /// Lifecycle of one agent turn, as reported to a [`TurnSink`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,10 +100,7 @@ pub trait ServiceSource: Send + Sync {
     /// An agent asked the chat's humans a question (push it).
     fn ask_posted(&self, _chat: Uuid, _ask: &ligus_core::flow::HumanAsk) {}
     /// The code host behind the chat's bound repository (read-only tools).
-    fn forge_for(
-        &self,
-        _chat: Uuid,
-    ) -> Option<ligus_runtime::ligus_mcp::forge_tools::ForgeBinding> {
+    fn forge_for(&self, _chat: Uuid) -> Option<ligus_runtime::ligus_mcp::forge_tools::ForgeBinding> {
         None
     }
 }
@@ -185,9 +175,7 @@ fn worker_permission_mode() -> String {
 fn worker_args(provider: ModelProviderKind, mode: &str) -> Vec<String> {
     match provider {
         ModelProviderKind::ClaudeCode => worker_claude_args(),
-        ModelProviderKind::Antigravity => {
-            ligus_runtime::provider::antigravity::permission_args(mode)
-        }
+        ModelProviderKind::Antigravity => ligus_runtime::provider::antigravity::permission_args(mode),
         ModelProviderKind::Copilot => ligus_runtime::provider::copilot::permission_args(mode),
         _ => Vec::new(),
     }
@@ -201,25 +189,17 @@ fn keyless_ok(wr: &WorkspaceRuntime) -> bool {
     wr.provider == ModelProviderKind::Ollama
         || matches!(
             wr.provider,
-            ModelProviderKind::ClaudeCode
-                | ModelProviderKind::Codex
-                | ModelProviderKind::Antigravity
-                | ModelProviderKind::Copilot
+            ModelProviderKind::ClaudeCode | ModelProviderKind::Codex | ModelProviderKind::Antigravity | ModelProviderKind::Copilot
         )
-        || (matches!(
-            wr.provider,
-            ModelProviderKind::Custom | ModelProviderKind::LigusDaemon
-        ) && ligus_core::endpoint::endpoint_is_local_server(&wr.endpoint))
+        || (matches!(wr.provider, ModelProviderKind::Custom | ModelProviderKind::LigusDaemon)
+            && ligus_core::endpoint::endpoint_is_local_server(&wr.endpoint))
 }
 
 /// Serve `GET /v1/health` (always 200 while the process runs, with the
 /// sandbox tier) and `GET /v1/ready` (200 once `ready` is set, else 503) on
 /// `addr`, for an orchestrator's liveness and readiness probes. Nothing else
 /// is served there and nothing secret is returned.
-pub async fn spawn_health(
-    addr: &str,
-    ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> Result<()> {
+pub async fn spawn_health(addr: &str, ready: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     use axum::{http::StatusCode, routing::get, Json, Router};
     let tier = ligus_runtime::executor::sandbox_status().tier();
     let r = ready.clone();
@@ -240,13 +220,8 @@ pub async fn spawn_health(
                 }
             }),
         );
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| anyhow!("worker health listener {addr}: {e}"))?;
-    println!(
-        "worker: health on http://{}/v1/health",
-        listener.local_addr()?
-    );
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| anyhow!("worker health listener {addr}: {e}"))?;
+    println!("worker: health on http://{}/v1/health", listener.local_addr()?);
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
             eprintln!("worker: health listener stopped: {e}");
@@ -259,9 +234,7 @@ pub async fn spawn_health(
 /// read-only mounted file, e.g. a Kubernetes ConfigMap), else
 /// `<data>/runtimes.toml`.
 pub fn local_runtimes_path(data_dir: &std::path::Path) -> std::path::PathBuf {
-    crate::env_opt("LIGUS_RUNTIMES_FILE")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| data_dir.join(LOCAL_RUNTIMES_FILE))
+    crate::env_opt("LIGUS_RUNTIMES_FILE").map(std::path::PathBuf::from).unwrap_or_else(|| data_dir.join(LOCAL_RUNTIMES_FILE))
 }
 
 /// The host-local runtimes file inside the data dir.
@@ -299,14 +272,8 @@ pub fn local_runtimes(data_dir: &std::path::Path) -> Vec<WorkspaceRuntime> {
 /// The runtime an agent runs on here: a workspace runtime with its id, else a
 /// host-local one with its id, else the host-local catch-all (`id = "*"`).
 /// `runtimes` is workspace runtimes first, then [`local_runtimes`].
-pub fn runtime_for<'a>(
-    runtimes: &'a [WorkspaceRuntime],
-    agent: &WorkspaceAgent,
-) -> Option<&'a WorkspaceRuntime> {
-    runtimes
-        .iter()
-        .find(|r| r.id == agent.runtime_id)
-        .or_else(|| runtimes.iter().find(|r| r.id == "*"))
+pub fn runtime_for<'a>(runtimes: &'a [WorkspaceRuntime], agent: &WorkspaceAgent) -> Option<&'a WorkspaceRuntime> {
+    runtimes.iter().find(|r| r.id == agent.runtime_id).or_else(|| runtimes.iter().find(|r| r.id == "*"))
 }
 
 /// Build a ResolvedRuntime for an agent from its workspace runtime (or this
@@ -318,13 +285,8 @@ pub fn runtime_for<'a>(
 fn warn_legacy_inline_once(runtime_id: &str) {
     static WARNED: std::sync::Mutex<Option<HashSet<String>>> = std::sync::Mutex::new(None);
     let mut g = WARNED.lock().unwrap_or_else(|e| e.into_inner());
-    if g.get_or_insert_with(HashSet::new)
-        .insert(runtime_id.to_string())
-    {
-        eprintln!(
-            "worker: runtime '{runtime_id}': {}",
-            ligus_core::LEGACY_INLINE_WARNING
-        );
+    if g.get_or_insert_with(HashSet::new).insert(runtime_id.to_string()) {
+        eprintln!("worker: runtime '{runtime_id}': {}", ligus_core::LEGACY_INLINE_WARNING);
     }
 }
 
@@ -339,32 +301,19 @@ pub fn agent_workspace_runtime(
             agent.runtime_id
         )
     })?;
-    let gateway = Some(wr.gateway.trim())
-        .filter(|g| !g.is_empty())
-        .map(ligus_runtime::model_gateway::GatewaySelection::named);
+    let gateway = Some(wr.gateway.trim()).filter(|g| !g.is_empty()).map(ligus_runtime::model_gateway::GatewaySelection::named);
     // Through a gateway the runtime's own key is never sent: the gateway's
     // credential (this host's operator config) is.
     // A key an older version stored in the workspace is never used.
     if wr.credential.is_legacy_inline() {
         warn_legacy_inline_once(&wr.id);
     }
-    let api_key = if gateway.is_some() {
-        None
-    } else {
-        resolve_workspace_credential(&wr.credential)
-    };
+    let api_key = if gateway.is_some() { None } else { resolve_workspace_credential(&wr.credential) };
     if api_key.is_none() && gateway.is_none() && !keyless_ok(wr) {
         if wr.credential.is_legacy_inline() {
-            bail!(
-                "workspace runtime '{}' has no key on this box. {}",
-                wr.name,
-                ligus_core::LEGACY_INLINE_WARNING
-            );
+            bail!("workspace runtime '{}' has no key on this box. {}", wr.name, ligus_core::LEGACY_INLINE_WARNING);
         }
-        bail!(
-            "workspace runtime '{}' has no secret on this box (provision LIGUS_WS_SECRET_…)",
-            wr.name
-        );
+        bail!("workspace runtime '{}' has no secret on this box (provision LIGUS_WS_SECRET_…)", wr.name);
     }
     // claude-code / agy / copilot take the worker's permission tier; other
     // providers ignore args here.
@@ -460,12 +409,7 @@ pub async fn drain_tick(
         let online: HashSet<Uuid> = match ctx.presence {
             Some(p) => {
                 let now = ligus_core::Timestamp::now();
-                svc.list_hosts(ctx.ws)
-                    .unwrap_or_default()
-                    .iter()
-                    .filter(|h| p.is_online(h, &now))
-                    .filter_map(|h| Uuid::parse_str(&h.id).ok())
-                    .collect()
+                svc.list_hosts(ctx.ws).unwrap_or_default().iter().filter(|h| p.is_online(h, &now)).filter_map(|h| Uuid::parse_str(&h.id).ok()).collect()
             }
             None => HashSet::new(),
         };
@@ -473,9 +417,7 @@ pub async fn drain_tick(
         let mut work = Vec::new();
         let mut refused = false;
         for pm in candidates {
-            let Some(s) = svc.load_in(ctx.ws, pm.session_id)? else {
-                continue;
-            };
+            let Some(s) = svc.load_in(ctx.ws, pm.session_id)? else { continue };
             // Agent access controls: this host runs the agent on its own
             // credentials, so who may use it (and its daily budgets) is
             // decided here, before claiming. A refused turn is answered with
@@ -483,10 +425,7 @@ pub async fn drain_tick(
             match svc.gate_agent_turn(pm.session_id, s.workspace_id, pm.message_id, pm.agent_id) {
                 Ok(Ok(_)) => {}
                 Ok(Err(note)) => {
-                    eprintln!(
-                        "worker: @{} in {} refused: {note}",
-                        pm.agent_name, pm.session_id
-                    );
+                    eprintln!("worker: @{} in {} refused: {note}", pm.agent_name, pm.session_id);
                     // Told after the service is released (the sink reads it).
                     refused = true;
                     continue;
@@ -497,24 +436,13 @@ pub async fn drain_tick(
                 }
             }
             let coverage = match roster.as_ref() {
-                Some(r) => ligus_runtime::repos::dispatch_coverage(
-                    svc.store(),
-                    svc.device_id(),
-                    &s,
-                    r,
-                    &ligus_runtime::repos::cloning(),
-                ),
+                Some(r) => ligus_runtime::repos::dispatch_coverage(svc.store(), svc.device_id(), &s, r, &ligus_runtime::repos::cloning()),
                 None => ligus_core::dispatch::Coverage::NoRepo,
             };
             // The same claim key the desktop uses (a hand-off is keyed by
             // its receiver), and the service's own wait clock per holder.
             let receiver = ligus_runtime::claim_receiver(&s, &pm);
-            let dctx = ligus_runtime::DispatchCtx {
-                eligible: true,
-                coverage,
-                waited: std::time::Duration::ZERO,
-                holder_live: &live,
-            };
+            let dctx = ligus_runtime::DispatchCtx { eligible: true, coverage, waited: std::time::Duration::ZERO, holder_live: &live };
             match svc.dispatch_turn(pm.session_id, s.workspace_id, pm.message_id, receiver, dctx) {
                 Ok(ligus_core::dispatch::Step::Run) => work.push(pm),
                 Ok(_) => {}
@@ -532,26 +460,13 @@ pub async fn drain_tick(
     for pm in work {
         // Shutting down: the rest waits for the next start.
         if ctx.stops.as_ref().is_some_and(|s| s.is_closed()) {
-            sink.status(
-                pm.session_id,
-                pm.agent_id,
-                TurnState::Done,
-                Some("the host is shutting down"),
-            );
+            sink.status(pm.session_id, pm.agent_id, TurnState::Done, Some("the host is shutting down"));
             continue;
         }
         if let Err(e) = run_turn(ctx, svc, &runtimes, &pm, sink).await {
-            eprintln!(
-                "worker: @{} in {} failed: {e}",
-                pm.agent_name, pm.session_id
-            );
+            eprintln!("worker: @{} in {} failed: {e}", pm.agent_name, pm.session_id);
             failed.insert(pm.message_id);
-            sink.status(
-                pm.session_id,
-                pm.agent_id,
-                TurnState::Error,
-                Some(&e.to_string()),
-            );
+            sink.status(pm.session_id, pm.agent_id, TurnState::Error, Some(&e.to_string()));
         }
     }
     Ok(())
@@ -561,16 +476,12 @@ pub async fn drain_tick(
 /// ‹host›"): once each, in the chat's worktree of this host's checkout, with
 /// the result written back. Never on this host's own approval: only a
 /// person's `ProposalApplyRequested` names a host.
-pub fn apply_tick(
-    ctx: &WorkerCtx<'_>,
-    svc: &Mutex<ChatService>,
-) -> Vec<(Uuid, ligus_runtime::apply_host::Outcome)> {
+pub fn apply_tick(ctx: &WorkerCtx<'_>, svc: &Mutex<ChatService>) -> Vec<(Uuid, ligus_runtime::apply_host::Outcome)> {
     let repo_for = |chat: Uuid| {
         // Called only for a proposal without a repo: one with a repo applies
         // only in this box's checkout of that repo (apply_host::checkout_for,
         // in the apply tick).
-        let repo =
-            RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), chat);
+        let repo = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), chat);
         if let Some(r) = repo.as_deref() {
             crate::repos::ensure_chat_base(r);
         }
@@ -592,8 +503,7 @@ pub fn apply_tick(
 }
 
 /// The note a reply cut off by a restart ends with.
-pub const INTERRUPTED_NOTE: &str =
-    "[interrupted: the host restarted before this reply finished. Ask again to retry.]";
+pub const INTERRUPTED_NOTE: &str = "[interrupted: the host restarted before this reply finished. Ask again to retry.]";
 
 /// Startup recovery, run before the worker loop: finish every reply *this
 /// device* was still streaming when the process stopped (a restart or Ctrl-C
@@ -621,11 +531,7 @@ pub fn recover_interrupted_turns(svc: &mut ChatService) -> Result<Vec<(Uuid, Uui
         if id == workspace_config_session_id(s.workspace_id) {
             continue;
         }
-        for m in s
-            .messages
-            .iter()
-            .filter(|m| m.is_streaming && m.origin_device_id == Some(me))
-        {
+        for m in s.messages.iter().filter(|m| m.is_streaming && m.origin_device_id == Some(me)) {
             let body = if m.body.trim().is_empty() {
                 format!("[error] {INTERRUPTED_NOTE}")
             } else {
@@ -679,26 +585,11 @@ async fn run_turn(
     // the phone's turn strip waits forever.
     // The chat of this worker's workspace: its log is (workspace, chat).
     let Some(s) = lock(svc).load_in(ctx.ws, pm.session_id)? else {
-        sink.status(
-            pm.session_id,
-            pm.agent_id,
-            TurnState::Done,
-            Some("chat no longer exists"),
-        );
+        sink.status(pm.session_id, pm.agent_id, TurnState::Done, Some("chat no longer exists"));
         return Ok(());
     };
-    let Some(agent) = s
-        .workspace_agents
-        .iter()
-        .find(|a| a.id == pm.agent_id)
-        .cloned()
-    else {
-        sink.status(
-            pm.session_id,
-            pm.agent_id,
-            TurnState::Done,
-            Some("agent no longer exists"),
-        );
+    let Some(agent) = s.workspace_agents.iter().find(|a| a.id == pm.agent_id).cloned() else {
+        sink.status(pm.session_id, pm.agent_id, TurnState::Done, Some("agent no longer exists"));
         return Ok(());
     };
     let (mut rt, rt_label) = agent_workspace_runtime(runtimes, &agent)?;
@@ -711,30 +602,18 @@ async fn run_turn(
     // with a repo runs only in this box's confirmed checkout of it, never
     // in other code; the turn is already claimed, so waiting on a clone is
     // safe.
-    let repo_turn =
-        match crate::repos_cmd::repo_for_turn(&ctx.cfg.data_dir, svc, &s, ctx.host_label).await {
-            Ok(r) => r,
-            Err(reason) => {
-                let _ = lock(svc).post_system_note(
-                    s.id,
-                    s.workspace_id,
-                    format!("@{} did not run: {reason}", agent.name),
-                );
-                sink.changed();
-                return Err(anyhow!("refused by the repo gate"));
-            }
-        };
-    let mut turns = turns_for(
-        &through_trigger(&s, pm.message_id),
-        Some(agent.id),
-        &agent.name,
-    );
+    let repo_turn = match crate::repos_cmd::repo_for_turn(&ctx.cfg.data_dir, svc, &s, ctx.host_label).await {
+        Ok(r) => r,
+        Err(reason) => {
+            let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
+            sink.changed();
+            return Err(anyhow!("refused by the repo gate"));
+        }
+    };
+    let mut turns = turns_for(&through_trigger(&s, pm.message_id), Some(agent.id), &agent.name);
     let (head, me) = {
         let g = lock(svc);
-        (
-            g.attachment_rules(s.workspace_id).unwrap_or_default(),
-            g.author().id.clone(),
-        )
+        (g.attachment_rules(s.workspace_id).unwrap_or_default(), g.author().id.clone())
     };
     crate::materialize_turns(ctx.cfg, &s, &head, &me, &mut turns).await;
     let system = format!(
@@ -759,31 +638,16 @@ async fn run_turn(
     // config roster at its frontier), not today's; an agent's message (a
     // hand-off, an @mention cascade) has none of its own and resolves to the
     // lowest of the humans behind its chain (the rule every host shares).
-    let author_role = lock(svc)
-        .trigger_author_role_in(ctx.ws, pm.session_id, pm.message_id)
-        .ok()
-        .flatten();
+    let author_role = lock(svc).trigger_author_role_in(ctx.ws, pm.session_id, pm.message_id).ok().flatten();
     // Phase C: the shell is the Owner's (every person behind the turn a
     // workspace Owner), or an Owner granted it to this agent.
-    let shell_role = lock(svc)
-        .trigger_shell_role_in(ctx.ws, pm.session_id, pm.message_id)
-        .ok()
-        .flatten();
+    let shell_role = lock(svc).trigger_shell_role_in(ctx.ws, pm.session_id, pm.message_id).ok().flatten();
     // The signed grants, when this host applies them (`LIGUS_SANDBOX_GRANTS`;
     // by default only on the workspace Owner's own hosts).
-    let grants = lock(svc)
-        .sandbox_grants_here(
-            s.workspace_id,
-            ligus_runtime::sandbox::grants_setting_from_env(),
-        )
-        .0;
-    let shell_allowed =
-        ligus_runtime::author_gate::shell_allowed(shell_role, grants.shell_granted(agent.id));
+    let grants = lock(svc).sandbox_grants_here(s.workspace_id, ligus_runtime::sandbox::grants_setting_from_env()).0;
+    let shell_allowed = ligus_runtime::author_gate::shell_allowed(shell_role, grants.shell_granted(agent.id));
     let mut rt = rt;
-    let min_role = reply::mcp_min_role(ligus_runtime::author_gate::turn_writes(
-        rt.provider,
-        &rt.args,
-    ));
+    let min_role = reply::mcp_min_role(ligus_runtime::author_gate::turn_writes(rt.provider, &rt.args));
     let gate_plan = ligus_runtime::author_gate::gate_turn(rt.provider, &mut rt.args, author_role);
     let allow_tools = gate_plan.allows_tools();
     if !allow_tools {
@@ -814,45 +678,27 @@ async fn run_turn(
     let envelope = ligus_core::sandbox::envelope_for_session(&s);
     let enforcement = ligus_runtime::sandbox::enforce(rt.provider, &envelope, &Vec::new());
     if let Some(reason) = enforcement.refuse {
-        let _ = lock(svc).post_system_note(
-            s.id,
-            s.workspace_id,
-            format!("@{} did not run: {reason}", agent.name),
-        );
+        let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
         sink.changed();
         // An error puts the mention in the failed set, so it isn't retried
         // (and the note re-posted) every tick.
         return Err(anyhow!("refused by the workspace sandbox"));
     }
     if let ligus_runtime::author_gate::GatePlan::Refuse(reason) = &gate_plan {
-        let _ = lock(svc).post_system_note(
-            s.id,
-            s.workspace_id,
-            format!("@{} did not run: {reason}", agent.name),
-        );
+        let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
         sink.changed();
         return Err(anyhow!("refused by the tool role gate"));
     }
     // No OS sandbox on this box: a CLI agent turn is refused at any tier.
     if let Err(reason) = ligus_runtime::executor::turn_allowed(rt.provider) {
-        let _ = lock(svc).post_system_note(
-            s.id,
-            s.workspace_id,
-            format!("@{} did not run: {reason}", agent.name),
-        );
+        let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
         sink.changed();
         return Err(anyhow!("refused: no agent sandbox on this host"));
     }
     // Without the shell the CLI runs without its shell tool; one that can't
     // drop it is refused.
-    if let Err(reason) =
-        ligus_runtime::author_gate::gate_shell(rt.provider, &mut rt.args, shell_allowed)
-    {
-        let _ = lock(svc).post_system_note(
-            s.id,
-            s.workspace_id,
-            format!("@{} did not run: {reason}", agent.name),
-        );
+    if let Err(reason) = ligus_runtime::author_gate::gate_shell(rt.provider, &mut rt.args, shell_allowed) {
+        let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
         sink.changed();
         return Err(anyhow!("refused: no shell for this turn"));
     }
@@ -864,13 +710,9 @@ async fn run_turn(
     // the envelope), read only for a runtime that lists them (the Anthropic
     // tool loop, an HTTP runtime that runs the tool loop): a broken config
     // fails such a turn, as before, and never a CLI agent's.
-    let lists_mcp = (rt.provider == ModelProviderKind::Anthropic && rt.api_key.is_some())
-        || rt.runs_agent_tools();
+    let lists_mcp = (rt.provider == ModelProviderKind::Anthropic && rt.api_key.is_some()) || rt.runs_agent_tools();
     let mcp_servers: Vec<_> = if allow_tools && lists_mcp {
-        crate::mcp_config::load_from_env()?
-            .into_iter()
-            .filter(|s| envelope.egress.allows_mcp(&s.id))
-            .collect()
+        crate::mcp_config::load_from_env()?.into_iter().filter(|s| envelope.egress.allows_mcp(&s.id)).collect()
     } else {
         Vec::new()
     };
@@ -879,35 +721,19 @@ async fn run_turn(
     // the desktop) so its edits return as a review-gated proposal. Only turns
     // that can actually write: a write-mode claude or aider/pi/codex/hermes.
     let write_capable = match rt.provider {
-        ModelProviderKind::ClaudeCode => rt
-            .args
-            .iter()
-            .any(|a| a == "acceptEdits" || a == "bypassPermissions"),
-        ModelProviderKind::Antigravity | ModelProviderKind::Copilot => {
-            worker_permission_mode() != "default"
-        }
-        ModelProviderKind::Pi
-        | ModelProviderKind::Aider
-        | ModelProviderKind::Codex
-        | ModelProviderKind::Hermes => true,
+        ModelProviderKind::ClaudeCode => rt.args.iter().any(|a| a == "acceptEdits" || a == "bypassPermissions"),
+        ModelProviderKind::Antigravity | ModelProviderKind::Copilot => worker_permission_mode() != "default",
+        ModelProviderKind::Pi | ModelProviderKind::Aider | ModelProviderKind::Codex | ModelProviderKind::Hermes => true,
         _ => false,
     };
     // Every child of this turn runs in this host's OS sandbox under the
     // turn's envelope and gate.
-    let mut policy = ligus_runtime::executor::TurnPolicy::new(
-        ligus_runtime::executor::HostKind::Worker,
-        envelope.clone(),
-        gate_plan.clone(),
-    );
+    let mut policy = ligus_runtime::executor::TurnPolicy::new(ligus_runtime::executor::HostKind::Worker, envelope.clone(), gate_plan.clone());
     policy.shell_allowed = shell_allowed;
     policy.grants = grants.paths_for(Some(agent.id));
 
     sink.status(s.id, agent.id, TurnState::Running, None);
-    println!(
-        "↳ @{} replying in {} …",
-        ligus_runtime::display::shown(&agent.name),
-        s.id
-    );
+    println!("↳ @{} replying in {} …", ligus_runtime::display::shown(&agent.name), s.id);
     let host = WorkerHost {
         svc,
         sink,
@@ -921,10 +747,7 @@ async fn run_turn(
             context: String::new(),
             workspace_root: None,
             repo_root: repo_turn.repo_root.clone(),
-            base: repo_turn
-                .base
-                .as_ref()
-                .map(|(_, tip, base)| (tip.clone(), base.clone())),
+            base: repo_turn.base.as_ref().map(|(_, tip, base)| (tip.clone(), base.clone())),
         },
         agent_name: agent.name.clone(),
     };
@@ -965,11 +788,7 @@ async fn run_turn(
         require_isolation: true,
         stop: stop_guard.as_ref().map(|g| g.signal()),
         timeout: turn_timeout(),
-        options: EngineOptions {
-            empty_reply_notice: true,
-            warm_context_probe: true,
-            ..Default::default()
-        },
+        options: EngineOptions { empty_reply_notice: true, warm_context_probe: true, ..Default::default() },
     };
     // On the heap: the engine's future is large, and the serve worker's
     // thread (a current-thread runtime) would carry it on its own stack,
@@ -980,16 +799,8 @@ async fn run_turn(
         Ok(outcome) => {
             sink.changed();
             if outcome.empty {
-                sink.status(
-                    s.id,
-                    agent.id,
-                    TurnState::Error,
-                    Some("the model returned an empty reply"),
-                );
-                println!(
-                    "   @{} returned an empty reply",
-                    ligus_runtime::display::shown(&agent.name)
-                );
+                sink.status(s.id, agent.id, TurnState::Error, Some("the model returned an empty reply"));
+                println!("   @{} returned an empty reply", ligus_runtime::display::shown(&agent.name));
             } else {
                 sink.status(s.id, agent.id, TurnState::Done, None);
                 println!("   @{} done", ligus_runtime::display::shown(&agent.name));
@@ -1000,14 +811,7 @@ async fn run_turn(
             // Only a shutdown stops a worker's turn: say so, so the asker
             // knows to ask again.
             if e.message_id.is_some() {
-                let _ = lock(svc).post_system_note(
-                    s.id,
-                    s.workspace_id,
-                    format!(
-                        "@{} stopped: the host is shutting down. Ask again to retry.",
-                        agent.name
-                    ),
-                );
+                let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} stopped: the host is shutting down. Ask again to retry.", agent.name));
             }
             sink.changed();
             Err(anyhow!("{}", e.message))
@@ -1034,22 +838,14 @@ impl TurnHost for WorkerHost<'_> {
     fn service(&self) -> &Mutex<ChatService> {
         self.svc
     }
-    fn mcp_servers(
-        &self,
-        _egress: &ligus_core::sandbox::EgressPolicy,
-        _shell: bool,
-    ) -> impl std::future::Future<Output = Vec<ligus_runtime::McpServerSpec>> + Send {
+    fn mcp_servers(&self, _egress: &ligus_core::sandbox::EgressPolicy, _shell: bool) -> impl std::future::Future<Output = Vec<ligus_runtime::McpServerSpec>> + Send {
         let servers = self.mcp_servers.clone();
         async move { servers }
     }
     fn ligus(&self) -> Option<std::sync::Arc<LigusMcp>> {
         self.ligus.clone()
     }
-    fn checkout(
-        &self,
-        _session: &ChatSession,
-        _message_id: Uuid,
-    ) -> impl std::future::Future<Output = std::result::Result<Checkout, String>> + Send {
+    fn checkout(&self, _session: &ChatSession, _message_id: Uuid) -> impl std::future::Future<Output = std::result::Result<Checkout, String>> + Send {
         // The box's repo gate ran before the turn was posted.
         let c = self.checkout.clone();
         async move { Ok(c) }
@@ -1082,29 +878,20 @@ mod tests {
 
     fn rt_with(provider: ModelProviderKind, args: &[&str]) -> ResolvedRuntime {
         let wr = WorkspaceRuntime::new("gate", "Gate", provider, "m");
-        let mut rt = agent_workspace_runtime(&[wr], &agent("gate"))
-            .map(|r| r.0)
-            .unwrap_or_else(|_| {
-                // Runtimes that need a secret on this box: shape one by hand.
-                let wr = WorkspaceRuntime::new("gate", "Gate", ModelProviderKind::ClaudeCode, "m");
-                let mut rt = agent_workspace_runtime(&[wr], &agent("gate")).unwrap().0;
-                rt.provider = provider;
-                rt
-            });
+        let mut rt = agent_workspace_runtime(&[wr], &agent("gate")).map(|r| r.0).unwrap_or_else(|_| {
+            // Runtimes that need a secret on this box: shape one by hand.
+            let wr = WorkspaceRuntime::new("gate", "Gate", ModelProviderKind::ClaudeCode, "m");
+            let mut rt = agent_workspace_runtime(&[wr], &agent("gate")).unwrap().0;
+            rt.provider = provider;
+            rt
+        });
         rt.args = args.iter().map(|a| a.to_string()).collect();
         rt
     }
 
-    fn gate_subprocess_tools(
-        rt: &mut ResolvedRuntime,
-        allow: bool,
-    ) -> std::result::Result<(), String> {
+    fn gate_subprocess_tools(rt: &mut ResolvedRuntime, allow: bool) -> std::result::Result<(), String> {
         use ligus_core::WorkspaceRole;
-        let role = if allow {
-            WorkspaceRole::Owner
-        } else {
-            WorkspaceRole::Viewer
-        };
+        let role = if allow { WorkspaceRole::Owner } else { WorkspaceRole::Viewer };
         let plan = ligus_runtime::author_gate::gate(rt.provider, Some(role), WorkspaceRole::Admin);
         ligus_runtime::author_gate::apply(&plan, rt.provider, &mut rt.args)
     }
@@ -1113,40 +900,17 @@ mod tests {
     /// CLI turn on this box (the CLI's own tools bypass Ligus's tool loop).
     #[test]
     fn below_the_floor_cli_agents_run_read_only_or_not_at_all() {
-        let mut rt = rt_with(
-            ModelProviderKind::ClaudeCode,
-            &["--permission-mode", "bypassPermissions"],
-        );
+        let mut rt = rt_with(ModelProviderKind::ClaudeCode, &["--permission-mode", "bypassPermissions"]);
         gate_subprocess_tools(&mut rt, false).unwrap();
-        assert!(
-            !rt.args
-                .iter()
-                .any(|a| a == "bypassPermissions" || a == "acceptEdits"),
-            "{:?}",
-            rt.args
-        );
+        assert!(!rt.args.iter().any(|a| a == "bypassPermissions" || a == "acceptEdits"), "{:?}", rt.args);
         let mut rt = rt_with(ModelProviderKind::Copilot, &["--allow-all-tools"]);
         gate_subprocess_tools(&mut rt, false).unwrap();
-        assert!(
-            rt.args.contains(&"--deny-tool=shell".to_string())
-                && !rt.args.contains(&"--allow-all-tools".to_string())
-        );
-        for p in [
-            ModelProviderKind::Codex,
-            ModelProviderKind::Aider,
-            ModelProviderKind::Pi,
-            ModelProviderKind::Hermes,
-        ] {
-            assert!(
-                gate_subprocess_tools(&mut rt_with(p, &[]), false).is_err(),
-                "{p:?}"
-            );
+        assert!(rt.args.contains(&"--deny-tool=shell".to_string()) && !rt.args.contains(&"--allow-all-tools".to_string()));
+        for p in [ModelProviderKind::Codex, ModelProviderKind::Aider, ModelProviderKind::Pi, ModelProviderKind::Hermes] {
+            assert!(gate_subprocess_tools(&mut rt_with(p, &[]), false).is_err(), "{p:?}");
         }
         // At or above the floor nothing changes.
-        let mut rt = rt_with(
-            ModelProviderKind::ClaudeCode,
-            &["--permission-mode", "bypassPermissions"],
-        );
+        let mut rt = rt_with(ModelProviderKind::ClaudeCode, &["--permission-mode", "bypassPermissions"]);
         gate_subprocess_tools(&mut rt, true).unwrap();
         assert!(rt.args.iter().any(|a| a == "bypassPermissions"));
     }
@@ -1171,36 +935,22 @@ mod tests {
         s.messages = vec![ask, other];
         let queued = ligus_runtime::pending_mentions(&s);
         assert_eq!(queued.len(), 1);
-        assert_eq!(
-            (queued[0].message_id, queued[0].agent_id),
-            (ask_id, coder_id)
-        );
+        assert_eq!((queued[0].message_id, queued[0].agent_id), (ask_id, coder_id));
         let seen = turns_for(&through_trigger(&s, ask_id), Some(coder_id), "coder");
         assert_eq!(seen.len(), 1, "{seen:?}");
-        assert!(
-            format!("{seen:?}").contains("run the tests")
-                && !format!("{seen:?}").contains("status")
-        );
+        assert!(format!("{seen:?}").contains("run the tests") && !format!("{seen:?}").contains("status"));
         // Unknown trigger (deleted): the transcript is left whole.
         assert_eq!(through_trigger(&s, Uuid::new_v4()).messages.len(), 2);
     }
 
     #[test]
     fn keyless_local_gateway_resolves_with_tools_on() {
-        let mut wr = WorkspaceRuntime::new(
-            "gw",
-            "Lab gateway",
-            ModelProviderKind::Custom,
-            "gpt-oss:20b",
-        );
+        let mut wr = WorkspaceRuntime::new("gw", "Lab gateway", ModelProviderKind::Custom, "gpt-oss:20b");
         wr.endpoint = "http://100.101.102.103:8080/v1/chat/completions".into();
         let (rt, label) = agent_workspace_runtime(&[wr], &agent("gw")).unwrap();
         assert_eq!(label, "gw");
         assert!(rt.api_key.is_none());
-        assert!(
-            rt.runs_agent_tools(),
-            "a tailnet llama.cpp gateway runs the tool loop"
-        );
+        assert!(rt.runs_agent_tools(), "a tailnet llama.cpp gateway runs the tool loop");
     }
 
     #[test]
@@ -1228,38 +978,20 @@ credential = { kind = "none" }
         .unwrap();
         let rts = local_runtimes(dir.path());
         assert_eq!(rts.len(), 2);
-        assert_eq!(
-            runtime_for(&rts, &agent("lab")).unwrap().model,
-            "gpt-oss:20b"
-        );
-        assert_eq!(
-            runtime_for(&rts, &agent("desktop-local-id")).unwrap().model,
-            "gemma4:12b"
-        );
+        assert_eq!(runtime_for(&rts, &agent("lab")).unwrap().model, "gpt-oss:20b");
+        assert_eq!(runtime_for(&rts, &agent("desktop-local-id")).unwrap().model, "gemma4:12b");
         let (rt, _) = agent_workspace_runtime(&rts, &agent("desktop-local-id")).unwrap();
         assert!(rt.runs_agent_tools());
         // A workspace runtime with the agent's id wins over the catch-all.
-        let mut all = vec![WorkspaceRuntime::new(
-            "desktop-local-id",
-            "WS",
-            ModelProviderKind::Ollama,
-            "llama3.2",
-        )];
+        let mut all = vec![WorkspaceRuntime::new("desktop-local-id", "WS", ModelProviderKind::Ollama, "llama3.2")];
         all.extend(rts);
-        assert_eq!(
-            runtime_for(&all, &agent("desktop-local-id")).unwrap().name,
-            "WS"
-        );
+        assert_eq!(runtime_for(&all, &agent("desktop-local-id")).unwrap().name, "WS");
         assert!(runtime_for(&[], &agent("x")).is_none());
     }
 
     #[test]
     fn subscription_clis_are_keyless_and_read_only_by_default() {
-        for p in [
-            ModelProviderKind::Antigravity,
-            ModelProviderKind::Copilot,
-            ModelProviderKind::ClaudeCode,
-        ] {
+        for p in [ModelProviderKind::Antigravity, ModelProviderKind::Copilot, ModelProviderKind::ClaudeCode] {
             let wr = WorkspaceRuntime::new("cli", "CLI", p, "");
             let (rt, _) = agent_workspace_runtime(&[wr], &agent("cli")).unwrap();
             assert!(rt.api_key.is_none());
@@ -1268,10 +1000,7 @@ credential = { kind = "none" }
         let d = worker_args(ModelProviderKind::Copilot, "default");
         assert!(d.contains(&"--deny-tool=shell".to_string()));
         assert!(worker_args(ModelProviderKind::Antigravity, "default").is_empty());
-        assert_eq!(
-            worker_args(ModelProviderKind::Antigravity, "acceptEdits"),
-            vec!["--mode", "accept-edits"]
-        );
+        assert_eq!(worker_args(ModelProviderKind::Antigravity, "acceptEdits"), vec!["--mode", "accept-edits"]);
         assert!(worker_args(ModelProviderKind::Ollama, "bypassPermissions").is_empty());
     }
 
@@ -1279,9 +1008,7 @@ credential = { kind = "none" }
     fn keyless_hosted_api_is_refused() {
         let mut wr = WorkspaceRuntime::new("oa", "OpenAI", ModelProviderKind::OpenAI, "gpt-4o");
         wr.endpoint = "https://api.openai.com/v1/chat/completions".into();
-        wr.credential = WorkspaceCredential::SecretRef {
-            secret_ref: "definitely_unset_ref_xyz".into(),
-        };
+        wr.credential = WorkspaceCredential::SecretRef { secret_ref: "definitely_unset_ref_xyz".into() };
         assert!(agent_workspace_runtime(&[wr], &agent("oa")).is_err());
     }
 
@@ -1291,13 +1018,8 @@ credential = { kind = "none" }
         let mut wr = WorkspaceRuntime::new("oa", "OpenAI", ModelProviderKind::OpenAI, "gpt-4o");
         wr.endpoint = "https://api.openai.com/v1/chat/completions".into();
         wr.credential = WorkspaceCredential::Inline {};
-        let err = agent_workspace_runtime(&[wr], &agent("oa"))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("stored in the workspace by an older version"),
-            "{err}"
-        );
+        let err = agent_workspace_runtime(&[wr], &agent("oa")).unwrap_err().to_string();
+        assert!(err.contains("stored in the workspace by an older version"), "{err}");
         assert!(err.contains("--secret-ref"), "{err}");
         // A keyless-capable runtime still runs, with no key.
         let mut wr = WorkspaceRuntime::new("ol", "Ollama", ModelProviderKind::Ollama, "llama3.2");
@@ -1310,9 +1032,7 @@ credential = { kind = "none" }
     fn hosted_api_never_gets_agent_tools() {
         let mut wr = WorkspaceRuntime::new("oa", "OpenAI", ModelProviderKind::OpenAI, "gpt-4o");
         std::env::set_var("LIGUS_WS_SECRET_worker_hosted_tools_test", "sk-test");
-        wr.credential = WorkspaceCredential::SecretRef {
-            secret_ref: "worker_hosted_tools_test".into(),
-        };
+        wr.credential = WorkspaceCredential::SecretRef { secret_ref: "worker_hosted_tools_test".into() };
         let (rt, _) = agent_workspace_runtime(&[wr], &agent("oa")).unwrap();
         assert!(!rt.runs_agent_tools());
     }
@@ -1322,15 +1042,10 @@ credential = { kind = "none" }
         let mut wr = WorkspaceRuntime::new("gw", "GW", ModelProviderKind::Custom, "m");
         wr.endpoint = "https://models.example.com/v1/chat/completions".into();
         std::env::set_var("LIGUS_WS_SECRET_worker_builtin_tools_test", "k");
-        wr.credential = WorkspaceCredential::SecretRef {
-            secret_ref: "worker_builtin_tools_test".into(),
-        };
+        wr.credential = WorkspaceCredential::SecretRef { secret_ref: "worker_builtin_tools_test".into() };
         let (rt, _) = agent_workspace_runtime(&[wr], &agent("gw")).unwrap();
         let mut settings = ToolSettings::default();
-        assert!(
-            !reply::wants_builtin_tools(&rt, &settings),
-            "public endpoint: no file tools by default"
-        );
+        assert!(!reply::wants_builtin_tools(&rt, &settings), "public endpoint: no file tools by default");
         settings.allow_remote_file_tools = true;
         assert!(reply::wants_builtin_tools(&rt, &settings));
         settings.builtin_tools = false;

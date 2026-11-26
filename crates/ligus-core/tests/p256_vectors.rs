@@ -11,19 +11,13 @@
 //! and `--ignored`). Every build must keep verifying them.
 
 use ligus_core::crypto::{envelope_preimage, verify_envelope, verify_p256, SigAlg};
-use ligus_core::{
-    ActorIdentity, ActorKind, ActorStamp, ChatMessage, MessageRole, ProposalApproval, SessionEvent,
-    SessionEventEnvelope, Timestamp, WorkspaceRole,
-};
+use ligus_core::{ActorIdentity, ActorKind, ActorStamp, ChatMessage, MessageRole, ProposalApproval, SessionEvent, SessionEventEnvelope, Timestamp, WorkspaceRole};
 use uuid::Uuid;
 
 const GOLDEN: &str = include_str!("golden/p256_cryptokit.jsonl");
 
 fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-        .collect()
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
 }
 
 fn hex(b: &[u8]) -> String {
@@ -42,18 +36,9 @@ fn cryptokit_p256_vectors_verify() {
         verify_p256(&pk, &preimage, &sig).unwrap_or_else(|e| panic!("{label}: {e:?}"));
         // Parse the envelope from its exact bytes (a `Value` would reorder keys).
         let start = line.find("\"envelope\":").unwrap() + "\"envelope\":".len();
-        let mut env: SessionEventEnvelope =
-            serde_json::from_str(&line[start..line.len() - 1]).unwrap();
-        assert_eq!(
-            env.actor_stamp.as_ref().unwrap().sig_alg,
-            SigAlg::P256,
-            "{label}"
-        );
-        assert_eq!(
-            envelope_preimage(&env),
-            preimage,
-            "{label}: the preimage moved"
-        );
+        let mut env: SessionEventEnvelope = serde_json::from_str(&line[start..line.len() - 1]).unwrap();
+        assert_eq!(env.actor_stamp.as_ref().unwrap().sig_alg, SigAlg::P256, "{label}");
+        assert_eq!(envelope_preimage(&env), preimage, "{label}: the preimage moved");
         env.signature = Some(sig.clone());
         verify_envelope(&env, &pk).unwrap_or_else(|e| panic!("{label}: {e:?}"));
         // Any flipped bit fails.
@@ -77,35 +62,11 @@ fn inputs() -> Vec<(&'static str, SessionEventEnvelope)> {
     let mut msg = ChatMessage::new(MessageRole::User, "Mara", "from my phone");
     msg.id = Uuid::from_u128(0x2222_0000_0000_4000_8000_0000_0000_00a1);
     msg.created_at = Timestamp::epoch();
-    let approval = ProposalApproval {
-        actor_id: account.to_string(),
-        role: WorkspaceRole::Contributor,
-        approved: true,
-        created_at: Timestamp::epoch(),
-        diff_digest: Some("ab".repeat(32)),
-    };
+    let approval = ProposalApproval { actor_id: account.to_string(), role: WorkspaceRole::Contributor, approved: true, created_at: Timestamp::epoch(), diff_digest: Some("ab".repeat(32)) };
     let cases = vec![
-        (
-            "phone/messageAppended",
-            chat,
-            SessionEvent::MessageAppended { message: msg },
-        ),
-        (
-            "phone/proposalVoteCast",
-            chat,
-            SessionEvent::ProposalVoteCast {
-                proposal_id: Uuid::from_u128(0xb1),
-                approval,
-            },
-        ),
-        (
-            "phone/deviceRevoked-self",
-            ligus_core::workspace_config_session_id(ws),
-            SessionEvent::DeviceRevoked {
-                device_id: phone,
-                watermark: vec![],
-            },
-        ),
+        ("phone/messageAppended", chat, SessionEvent::MessageAppended { message: msg }),
+        ("phone/proposalVoteCast", chat, SessionEvent::ProposalVoteCast { proposal_id: Uuid::from_u128(0xb1), approval }),
+        ("phone/deviceRevoked-self", ligus_core::workspace_config_session_id(ws), SessionEvent::DeviceRevoked { device_id: phone, watermark: vec![] }),
     ];
     cases
         .into_iter()
@@ -123,8 +84,7 @@ fn inputs() -> Vec<(&'static str, SessionEventEnvelope)> {
                 presence: None,
                 runtime_effect: false,
                 prev: None,
-                sig_alg: SigAlg::P256,
-                log_head: None,
+                sig_alg: SigAlg::P256, log_head: None,
             });
             e.signer_device_id = Some(phone);
             (label, e)
@@ -136,9 +96,7 @@ fn inputs() -> Vec<(&'static str, SessionEventEnvelope)> {
 #[test]
 #[ignore]
 fn p256_vector_inputs() {
-    let Ok(path) = std::env::var("LIGUS_P256_INPUTS") else {
-        return;
-    };
+    let Ok(path) = std::env::var("LIGUS_P256_INPUTS") else { return };
     let mut out = String::new();
     for (label, e) in inputs() {
         // The envelope travels as text so the signer copies its exact bytes.

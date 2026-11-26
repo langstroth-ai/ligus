@@ -12,9 +12,8 @@ use ligus_core::authz::RosterState;
 use ligus_core::crypto::{sign_envelope, DeviceCertificate, SigningKeypair};
 use ligus_core::identity_link::{render_statement, IdentityLink, LinkMethod, MAX_LIVE_LINKS};
 use ligus_core::{
-    fold_decisions, project_config, workspace_config_session_id, ActorIdentity, ActorKind,
-    ActorStamp, ChatSession, SessionEvent, SessionEventEnvelope, Timestamp, Verdict,
-    WorkspaceAuthz, WorkspaceMember, WorkspaceRole,
+    fold_decisions, project_config, workspace_config_session_id, ActorIdentity, ActorKind, ActorStamp, ChatSession,
+    SessionEvent, SessionEventEnvelope, Timestamp, Verdict, WorkspaceAuthz, WorkspaceMember, WorkspaceRole,
 };
 use proptest::prelude::*;
 use uuid::Uuid;
@@ -42,14 +41,7 @@ const NAMES: [&str; 4] = ["owner", "ada", "mara", "eve"];
 fn member(name: &str, p: &Person, role: WorkspaceRole) -> WorkspaceMember {
     let mut actor = ActorIdentity::new(name, name, ActorKind::Human);
     actor.account_id = Some(p.account_id);
-    WorkspaceMember {
-        id: name.into(),
-        actor,
-        role,
-        title: String::new(),
-        index: 0,
-        joined_at: Timestamp::epoch(),
-    }
+    WorkspaceMember { id: name.into(), actor, role, title: String::new(), index: 0, joined_at: Timestamp::epoch() }
 }
 
 fn ts(s: &str) -> Timestamp {
@@ -67,78 +59,34 @@ impl World {
                     Person {
                         account_id: Uuid::new_v4(),
                         account: SigningKeypair::generate().unwrap(),
-                        device_id: ligus_core::crypto::device_id_for(
-                            ligus_core::crypto::SigAlg::Ed25519,
-                            &device.public_key_bytes(),
-                        ),
+                        device_id: ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &device.public_key_bytes()),
                         device,
                     },
                 )
             })
             .collect();
-        let mut w = Self {
-            wid: Uuid::new_v4(),
-            clock: 0,
-            cfg: Vec::new(),
-            people: std::sync::Arc::new(people),
-            present: Default::default(),
-        };
+        let mut w = Self { wid: Uuid::new_v4(), clock: 0, cfg: Vec::new(), people: std::sync::Arc::new(people), present: Default::default() };
         let mut seed = ChatSession::new("", w.wid, "");
         seed.id = workspace_config_session_id(w.wid);
         seed.creator_actor_id = "owner".into();
         seed.members = vec![member("owner", &w.people["owner"], WorkspaceRole::Owner)];
-        w.push(
-            "owner",
-            SessionEvent::SessionSnapshot {
-                session: Box::new(seed),
-            },
-        );
+        w.push("owner", SessionEvent::SessionSnapshot { session: Box::new(seed) });
         for name in NAMES {
             let p = &w.people[name];
             let (account_id, pk) = (p.account_id, p.account.public_key_bytes().to_vec());
-            let cert = DeviceCertificate::issue(
-                &p.account,
-                p.account_id,
-                &p.device.public_key_bytes(),
-                Timestamp::epoch(),
-            );
-            w.push(
-                name,
-                SessionEvent::AccountKeyRegistered {
-                    account_id,
-                    signing_public_key: pk,
-                },
-            );
-            w.push(
-                name,
-                SessionEvent::DeviceCertificateAdded { certificate: cert },
-            );
+            let cert = DeviceCertificate::issue(&p.account, p.account_id, &p.device.public_key_bytes(), Timestamp::epoch());
+            w.push(name, SessionEvent::AccountKeyRegistered { account_id, signing_public_key: pk });
+            w.push(name, SessionEvent::DeviceCertificateAdded { certificate: cert });
         }
         w.register_recovery("owner");
-        for (name, role) in [
-            ("ada", WorkspaceRole::Admin),
-            ("mara", WorkspaceRole::Viewer),
-        ] {
+        for (name, role) in [("ada", WorkspaceRole::Admin), ("mara", WorkspaceRole::Viewer)] {
             let m = member(name, &w.people[name], role);
-            w.push(
-                "owner",
-                SessionEvent::MemberAdded {
-                    member: m,
-                    invite: None,
-                    proof: None,
-                },
-            );
+            w.push("owner", SessionEvent::MemberAdded { member: m, invite: None, proof: None });
             w.register_recovery(name);
         }
         for name in NAMES {
             let device_id = w.people[name].device_id;
-            w.push(
-                name,
-                SessionEvent::DeviceKeyAgreementPublished {
-                    device_id,
-                    ka_public: vec![name.len() as u8; 32],
-                },
-            );
+            w.push(name, SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public: vec![name.len() as u8; 32] });
         }
         w
     }
@@ -155,24 +103,10 @@ impl World {
     fn draft(&mut self, by: &str, payload: SessionEvent) -> SessionEventEnvelope {
         self.clock += 1;
         let p = &self.people[by];
-        let mut env = SessionEventEnvelope::new(
-            workspace_config_session_id(self.wid),
-            self.wid,
-            self.clock as i64,
-            payload,
-        );
+        let mut env = SessionEventEnvelope::new(workspace_config_session_id(self.wid), self.wid, self.clock as i64, payload);
         let mut actor = ActorIdentity::new(by, by, ActorKind::Human);
         actor.account_id = Some(p.account_id);
-        env.actor_stamp = Some(ActorStamp {
-            actor,
-            recorded_at: Timestamp::epoch(),
-            cfg_frontier: None,
-            presence: None,
-            runtime_effect: false,
-            prev: None,
-            sig_alg: Default::default(),
-            log_head: None,
-        });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         ligus_core::lamport::stamp_after(&mut env, &self.cfg);
         sign_envelope(&mut env, p.device_id, &p.device);
         if self.present.contains(by) {
@@ -241,11 +175,7 @@ fn own_link_folds_and_supersedes_by_subject() {
     let mut w = World::new();
     let l = w.link("mara", "100");
     let id = w.push("mara", publish(l.clone()));
-    assert_eq!(
-        w.verdict(id),
-        Verdict::Allowed,
-        "a Viewer links their own identity"
-    );
+    assert_eq!(w.verdict(id), Verdict::Allowed, "a Viewer links their own identity");
     assert_eq!(w.roster().links[&w.account("mara")].len(), 1);
     // The same (provider, host, subject) again: the newer one replaces it.
     let mut newer = w.link("mara", "100");
@@ -257,13 +187,7 @@ fn own_link_folds_and_supersedes_by_subject() {
     assert_eq!(links.len(), 1);
     assert_eq!(links.values().next().unwrap().handle_at_link, "renamed");
     // Removed by the account itself.
-    let id = w.push(
-        "mara",
-        SessionEvent::IdentityLinkRemoved {
-            account_id: w.account("mara"),
-            link_id: newer.link_id,
-        },
-    );
+    let id = w.push("mara", SessionEvent::IdentityLinkRemoved { account_id: w.account("mara"), link_id: newer.link_id });
     assert_eq!(w.verdict(id), Verdict::Allowed);
     assert!(!w.roster().links.contains_key(&w.account("mara")));
 }
@@ -300,11 +224,7 @@ fn cross_workspace_replay_rejected() {
 fn statement_binds_the_account_key_at_its_position() {
     let mut w = World::new();
     let mut l = w.link("mara", "100");
-    l.statement = render_statement(
-        &l,
-        w.wid,
-        &SigningKeypair::generate().unwrap().public_key_bytes(),
-    );
+    l.statement = render_statement(&l, w.wid, &SigningKeypair::generate().unwrap().public_key_bytes());
     let id = w.push("mara", publish(l));
     assert_eq!(w.verdict(id), Verdict::Denied);
 }
@@ -315,23 +235,14 @@ fn statement_binds_the_account_key_at_its_position() {
 fn agent_cannot_publish_a_link() {
     let mut w = World::new();
     let owner = &w.people["owner"];
-    let (host, dev) = (
-        owner.device_id,
-        SigningKeypair::from_seed(&owner.device.seed_bytes()).unwrap(),
-    );
+    let (host, dev) = (owner.device_id, SigningKeypair::from_seed(&owner.device.seed_bytes()).unwrap());
     let mut agent = ligus_core::WorkspaceAgent::new("coder", "gw");
     agent.owner_actor_id = "owner".into();
     agent.host_id = host.to_string();
     let agent_id = agent.id;
     w.push("owner", SessionEvent::AgentUpserted { agent });
     let akp = SigningKeypair::generate().unwrap();
-    let cert = ligus_core::AgentKeyCertificate::issue(
-        &dev,
-        host,
-        agent_id,
-        &akp.public_key_bytes(),
-        Timestamp::epoch(),
-    );
+    let cert = ligus_core::AgentKeyCertificate::issue(&dev, host, agent_id, &akp.public_key_bytes(), Timestamp::epoch());
     let key_id = cert.key_id;
     w.push("owner", SessionEvent::AgentKeyCertified { cert });
     assert!(w.roster().valid_agent_key(key_id).is_some());
@@ -341,16 +252,7 @@ fn agent_cannot_publish_a_link() {
     let mut env = w.draft("owner", publish(l.clone()));
     let mut actor = ActorIdentity::new(agent_id.to_string(), "coder", ActorKind::Agent);
     actor.account_id = Some(w.account("owner"));
-    env.actor_stamp = Some(ActorStamp {
-        actor,
-        recorded_at: Timestamp::epoch(),
-        cfg_frontier: None,
-        presence: None,
-        runtime_effect: false,
-        prev: None,
-        sig_alg: Default::default(),
-        log_head: None,
-    });
+    env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
     env.clear_raw();
     sign_envelope(&mut env, key_id, &akp);
     let id = w.push_env(env);
@@ -376,11 +278,7 @@ fn outsider_forged_or_unsigned_links_are_refused() {
     // Signed by a device key the account never certified.
     let mut env = w.draft("mara", publish(w.link("mara", "100")));
     env.clear_raw();
-    sign_envelope(
-        &mut env,
-        w.people["mara"].device_id,
-        &SigningKeypair::generate().unwrap(),
-    );
+    sign_envelope(&mut env, w.people["mara"].device_id, &SigningKeypair::generate().unwrap());
     let id = w.push_env(env);
     assert_eq!(w.verdict(id), Verdict::Denied, "bad signature");
     // Unsigned.
@@ -419,45 +317,13 @@ fn removal_is_the_account_or_an_admin_not_below() {
     w.push("mara", publish(ml.clone()));
     let ol = w.link("owner", "1");
     w.push("owner", publish(ol.clone()));
-    let id = w.push(
-        "eve",
-        SessionEvent::IdentityLinkRemoved {
-            account_id: w.account("mara"),
-            link_id: ml.link_id,
-        },
-    );
+    let id = w.push("eve", SessionEvent::IdentityLinkRemoved { account_id: w.account("mara"), link_id: ml.link_id });
     assert_eq!(w.verdict(id), Verdict::Denied, "an outsider");
-    let id = w.push(
-        "mara",
-        SessionEvent::IdentityLinkRemoved {
-            account_id: w.account("owner"),
-            link_id: ol.link_id,
-        },
-    );
-    assert_eq!(
-        w.verdict(id),
-        Verdict::Denied,
-        "a Viewer removing someone else's"
-    );
-    let id = w.push(
-        "ada",
-        SessionEvent::IdentityLinkRemoved {
-            account_id: w.account("owner"),
-            link_id: ol.link_id,
-        },
-    );
-    assert_eq!(
-        w.verdict(id),
-        Verdict::Denied,
-        "an Admin removing an Owner's"
-    );
-    let id = w.push(
-        "ada",
-        SessionEvent::IdentityLinkRemoved {
-            account_id: w.account("mara"),
-            link_id: ml.link_id,
-        },
-    );
+    let id = w.push("mara", SessionEvent::IdentityLinkRemoved { account_id: w.account("owner"), link_id: ol.link_id });
+    assert_eq!(w.verdict(id), Verdict::Denied, "a Viewer removing someone else's");
+    let id = w.push("ada", SessionEvent::IdentityLinkRemoved { account_id: w.account("owner"), link_id: ol.link_id });
+    assert_eq!(w.verdict(id), Verdict::Denied, "an Admin removing an Owner's");
+    let id = w.push("ada", SessionEvent::IdentityLinkRemoved { account_id: w.account("mara"), link_id: ml.link_id });
     assert_eq!(w.verdict(id), Verdict::Allowed, "moderation");
 }
 
@@ -478,9 +344,7 @@ fn link_never_grants_membership_or_seal_trust() {
     assert_eq!(after.agent_keys, before.agent_keys);
     assert_eq!(after.ka_keys, before.ka_keys);
     assert_eq!(after.rotation_recipients(), before.rotation_recipients());
-    assert!(!after
-        .rotation_recipients()
-        .contains_key(&w.people["eve"].device_id));
+    assert!(!after.rotation_recipients().contains_key(&w.people["eve"].device_id));
     assert!(after.role_of("eve").is_none());
     assert_eq!(after.links.len(), 3);
 }
@@ -492,19 +356,9 @@ fn links_absent_from_unselected_workspaces() {
     let mut a = World::new();
     let id = a.push("mara", publish(a.link("mara", "100")));
     assert_eq!(a.verdict(id), Verdict::Allowed);
-    let b = World {
-        wid: Uuid::new_v4(),
-        clock: 0,
-        cfg: Vec::new(),
-        people: a.people.clone(),
-        present: Default::default(),
-    };
+    let b = World { wid: Uuid::new_v4(), clock: 0, cfg: Vec::new(), people: a.people.clone(), present: Default::default() };
     assert!(b.roster().links.is_empty());
-    assert!(project_config(&b.cfg, None, None)
-        .1
-        .current()
-        .links
-        .is_empty());
+    assert!(project_config(&b.cfg, None, None).1.current().links.is_empty());
 }
 
 #[test]
@@ -514,17 +368,9 @@ fn delegated_host_cannot_publish_its_owners_links() {
     // publish itself: a delegated host).
     let ada = &w.people["ada"];
     let box_key = SigningKeypair::generate().unwrap();
-    let cert = DeviceCertificate::issue(
-        &ada.account,
-        ada.account_id,
-        &box_key.public_key_bytes(),
-        Timestamp::epoch(),
-    );
+    let cert = DeviceCertificate::issue(&ada.account, ada.account_id, &box_key.public_key_bytes(), Timestamp::epoch());
     let box_id = cert.device_id;
-    w.push(
-        "ada",
-        SessionEvent::DeviceCertificateAdded { certificate: cert },
-    );
+    w.push("ada", SessionEvent::DeviceCertificateAdded { certificate: cert });
     assert!(w.roster().devices[&box_id].delegated_for(w.account("ada")));
     let mut env = w.draft("ada", publish(w.link("ada", "7")));
     env.clear_raw();
@@ -544,25 +390,11 @@ fn delegated_host_cannot_remove_its_owners_links() {
     assert_eq!(w.verdict(id), Verdict::Allowed);
     let ada = &w.people["ada"];
     let box_key = SigningKeypair::generate().unwrap();
-    let cert = DeviceCertificate::issue(
-        &ada.account,
-        ada.account_id,
-        &box_key.public_key_bytes(),
-        Timestamp::epoch(),
-    );
+    let cert = DeviceCertificate::issue(&ada.account, ada.account_id, &box_key.public_key_bytes(), Timestamp::epoch());
     let box_id = cert.device_id;
-    w.push(
-        "ada",
-        SessionEvent::DeviceCertificateAdded { certificate: cert },
-    );
+    w.push("ada", SessionEvent::DeviceCertificateAdded { certificate: cert });
     assert!(w.roster().devices[&box_id].delegated_for(w.account("ada")));
-    let mut env = w.draft(
-        "ada",
-        SessionEvent::IdentityLinkRemoved {
-            account_id: w.account("ada"),
-            link_id: l.link_id,
-        },
-    );
+    let mut env = w.draft("ada", SessionEvent::IdentityLinkRemoved { account_id: w.account("ada"), link_id: l.link_id });
     env.clear_raw();
     sign_envelope(&mut env, box_id, &box_key);
     let id = w.push_env(env);

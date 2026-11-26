@@ -81,11 +81,7 @@ pub enum ProgressKind {
 
 /// One guard signal. Tagged by `kind`; field names are camelCase on the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum GuardSignal {
     /// This device renewed a lease it holds (one per beat).
     CoordinatorHeartbeat {
@@ -217,10 +213,7 @@ mod tests {
         assert_eq!(v["leaseMs"], 60_000);
         assert_eq!(serde_json::from_value::<GuardSignal>(v).unwrap(), s);
 
-        let h = GuardSignal::Hygiene {
-            hygiene_kind: HygieneKind::SecretInDiff,
-            count: 2,
-        };
+        let h = GuardSignal::Hygiene { hygiene_kind: HygieneKind::SecretInDiff, count: 2 };
         let v = serde_json::to_value(&h).unwrap();
         assert_eq!(v["hygieneKind"], "secret_in_diff");
         assert_eq!(h.kind_str(), "hygiene");

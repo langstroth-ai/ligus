@@ -26,21 +26,9 @@ pub use imp::open_beneath;
 /// Elsewhere (Windows): plain opens under the root, after the callers'
 /// path checks (no agent sandbox runs write-capable turns there).
 #[cfg(not(unix))]
-pub fn open_beneath(
-    root: &std::path::Path,
-    rel: &std::path::Path,
-    mode: Mode,
-) -> std::io::Result<std::fs::File> {
-    if rel.components().any(|c| {
-        !matches!(
-            c,
-            std::path::Component::Normal(_) | std::path::Component::CurDir
-        )
-    }) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "the path must stay beneath its root",
-        ));
+pub fn open_beneath(root: &std::path::Path, rel: &std::path::Path, mode: Mode) -> std::io::Result<std::fs::File> {
+    if rel.components().any(|c| !matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir)) {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "the path must stay beneath its root"));
     }
     let p = root.join(rel);
     match mode {
@@ -55,37 +43,23 @@ pub fn open_beneath(
 }
 
 /// Read at most `max` bytes of `rel` beneath `root` (see [`open_beneath`]).
-pub fn read_beneath(
-    root: &std::path::Path,
-    rel: &std::path::Path,
-    max: u64,
-) -> std::io::Result<Vec<u8>> {
+pub fn read_beneath(root: &std::path::Path, rel: &std::path::Path, max: u64) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
     race_point(&root.join(rel));
     let f = open_beneath(root, rel, Mode::Read)?;
     if f.metadata()?.len() > max {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "file too large",
-        ));
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "file too large"));
     }
     let mut buf = Vec::new();
     f.take(max + 1).read_to_end(&mut buf)?;
     if buf.len() as u64 > max {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "file too large",
-        ));
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "file too large"));
     }
     Ok(buf)
 }
 
 /// Create or replace `rel` beneath `root` with `bytes` (see [`open_beneath`]).
-pub fn write_beneath(
-    root: &std::path::Path,
-    rel: &std::path::Path,
-    bytes: &[u8],
-) -> std::io::Result<()> {
+pub fn write_beneath(root: &std::path::Path, rel: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     race_point(&root.join(rel));
     let mut f = open_beneath(root, rel, Mode::WriteTruncate)?;
@@ -104,8 +78,7 @@ mod imp {
     use super::Mode;
 
     fn cstr(name: &OsStr) -> io::Result<CString> {
-        CString::new(name.as_bytes())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))
+        CString::new(name.as_bytes()).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))
     }
 
     fn last_os_error_or_symlink() -> io::Error {
@@ -113,30 +86,15 @@ mod imp {
         match e.raw_os_error() {
             // O_NOFOLLOW on a symlink: ELOOP (Linux, macOS), EMLINK (FreeBSD),
             // ENOTDIR with O_DIRECTORY on some systems.
-            Some(libc::ELOOP) | Some(libc::EMLINK) => io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "a path component is a symbolic link",
-            ),
+            Some(libc::ELOOP) | Some(libc::EMLINK) => io::Error::new(io::ErrorKind::PermissionDenied, "a path component is a symbolic link"),
             _ => e,
         }
     }
 
-    fn openat(
-        dir: &OwnedFd,
-        name: &OsStr,
-        flags: libc::c_int,
-        mode: libc::mode_t,
-    ) -> io::Result<OwnedFd> {
+    fn openat(dir: &OwnedFd, name: &OsStr, flags: libc::c_int, mode: libc::mode_t) -> io::Result<OwnedFd> {
         let c = cstr(name)?;
         // SAFETY: `dir` is a valid descriptor and `c` a NUL-terminated name.
-        let fd = unsafe {
-            libc::openat(
-                dir.as_raw_fd(),
-                c.as_ptr(),
-                flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-                mode as libc::c_uint,
-            )
-        };
+        let fd = unsafe { libc::openat(dir.as_raw_fd(), c.as_ptr(), flags | libc::O_CLOEXEC | libc::O_NOFOLLOW, mode as libc::c_uint) };
         if fd < 0 {
             return Err(last_os_error_or_symlink());
         }
@@ -152,12 +110,7 @@ mod imp {
             match c {
                 Component::Normal(n) => v.push(n),
                 Component::CurDir => {}
-                _ => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "the path must stay beneath its root",
-                    ))
-                }
+                _ => return Err(io::Error::new(io::ErrorKind::PermissionDenied, "the path must stay beneath its root")),
             }
         }
         Ok(v)
@@ -168,12 +121,7 @@ mod imp {
     pub fn open_root(root: &Path) -> io::Result<OwnedFd> {
         let c = cstr(root.as_os_str())?;
         // SAFETY: a NUL-terminated path.
-        let fd = unsafe {
-            libc::open(
-                c.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-            )
-        };
+        let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW) };
         if fd < 0 {
             return Err(last_os_error_or_symlink());
         }
@@ -210,9 +158,7 @@ mod imp {
     /// the host) and must be a regular file.
     pub fn open_beneath(root: &Path, rel: &Path, mode: Mode) -> io::Result<File> {
         let parts = names(rel)?;
-        let (last, dirs) = parts
-            .split_last()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
+        let (last, dirs) = parts.split_last().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
         let rootfd = open_root(root)?;
         let dir = open_dirs(&rootfd, dirs, mode == Mode::WriteTruncate)?;
         let flags = match mode {
@@ -226,16 +172,14 @@ mod imp {
         let f = File::from(fd);
         let meta = f.metadata()?;
         if !meta.is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "not a regular file",
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"));
         }
         if mode == Mode::WriteTruncate {
             f.set_len(0)?;
         }
         Ok(f)
     }
+
 }
 
 #[cfg(test)]
@@ -248,10 +192,7 @@ static RACE_HOOKS: std::sync::Mutex<Vec<Hook>> = std::sync::Mutex::new(Vec::new(
 /// of a path beneath `under` (a test swaps a directory for a symlink there).
 #[cfg(test)]
 pub(crate) fn set_race_hook(under: &std::path::Path, f: impl FnOnce() + Send + 'static) {
-    RACE_HOOKS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .push((under.to_path_buf(), Box::new(f)));
+    RACE_HOOKS.lock().unwrap_or_else(|e| e.into_inner()).push((under.to_path_buf(), Box::new(f)));
 }
 
 /// Where a concurrent swap would land: after `path` was validated, before
@@ -261,10 +202,7 @@ pub(crate) fn race_point(_path: &std::path::Path) {
     {
         let hook = {
             let mut hooks = RACE_HOOKS.lock().unwrap_or_else(|e| e.into_inner());
-            hooks
-                .iter()
-                .position(|(u, _)| _path.starts_with(u))
-                .map(|i| hooks.remove(i).1)
+            hooks.iter().position(|(u, _)| _path.starts_with(u)).map(|i| hooks.remove(i).1)
         };
         if let Some(f) = hook {
             f()
@@ -275,8 +213,8 @@ pub(crate) fn race_point(_path: &std::path::Path) {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
     use std::path::Path;
+    use std::io::{Read, Write};
 
     #[test]
     fn opens_plain_paths_and_refuses_symlinks_anywhere() {
@@ -286,17 +224,11 @@ mod tests {
         std::fs::create_dir_all(root.join("a/b")).unwrap();
         std::fs::write(root.join("a/b/f.txt"), "hi").unwrap();
         let mut s = String::new();
-        open_beneath(&root, Path::new("a/b/f.txt"), Mode::Read)
-            .unwrap()
-            .read_to_string(&mut s)
-            .unwrap();
+        open_beneath(&root, Path::new("a/b/f.txt"), Mode::Read).unwrap().read_to_string(&mut s).unwrap();
         assert_eq!(s, "hi");
         let mut w = open_beneath(&root, Path::new("new/dir/g.txt"), Mode::WriteTruncate).unwrap();
         w.write_all(b"x").unwrap();
-        assert_eq!(
-            std::fs::read_to_string(root.join("new/dir/g.txt")).unwrap(),
-            "x"
-        );
+        assert_eq!(std::fs::read_to_string(root.join("new/dir/g.txt")).unwrap(), "x");
         std::os::unix::fs::symlink(outside.path(), root.join("link")).unwrap();
         assert!(open_beneath(&root, Path::new("link/x.txt"), Mode::WriteTruncate).is_err());
         assert!(!outside.path().join("x.txt").exists());

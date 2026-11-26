@@ -35,8 +35,7 @@ pub fn sandbox_tcp_env() -> Option<(String, String)> {
 /// ([`super::socket::tcp_port_for`]); nothing elsewhere.
 pub fn sandbox_tcp_env_for(socket: &std::path::Path) -> Option<(String, String)> {
     match crate::executor::default_executor().kind() {
-        crate::executor::ExecutorKind::Landlock => super::socket::tcp_port_for(socket)
-            .map(|p| (TCP_ENV.to_string(), format!("127.0.0.1:{p}"))),
+        crate::executor::ExecutorKind::Landlock => super::socket::tcp_port_for(socket).map(|p| (TCP_ENV.to_string(), format!("127.0.0.1:{p}"))),
         _ => sandbox_tcp_env(),
     }
 }
@@ -132,10 +131,7 @@ where
         let mut stdout = std::io::stdout();
         for line in BufReader::new(from_server).lines() {
             let Ok(line) = line else { break };
-            if writeln!(stdout, "{line}")
-                .and_then(|_| stdout.flush())
-                .is_err()
-            {
+            if writeln!(stdout, "{line}").and_then(|_| stdout.flush()).is_err() {
                 break;
             }
         }
@@ -149,10 +145,7 @@ where
             continue;
         }
         let msg = crediting.line(&line);
-        if writeln!(to_server, "{msg}")
-            .and_then(|_| to_server.flush())
-            .is_err()
-        {
+        if writeln!(to_server, "{msg}").and_then(|_| to_server.flush()).is_err() {
             break;
         }
     }
@@ -181,10 +174,7 @@ mod tests {
 
     #[test]
     fn only_initialize_gets_the_credential() {
-        let l = with_credential(
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
-            "CRED",
-        );
+        let l = with_credential(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#, "CRED");
         let v: Value = serde_json::from_str(&l).unwrap();
         assert_eq!(v["params"]["_meta"]["ligusTurnCred"], "CRED");
         assert_eq!(v["params"]["protocolVersion"], "2025-06-18");

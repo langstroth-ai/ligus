@@ -82,10 +82,7 @@ pub enum HeldState {
 
 impl HeldState {
     fn is_open(self) -> bool {
-        matches!(
-            self,
-            HeldState::Waiting | HeldState::Warning | HeldState::Sending
-        )
+        matches!(self, HeldState::Waiting | HeldState::Warning | HeldState::Sending)
     }
     pub fn as_str(self) -> &'static str {
         match self {
@@ -184,9 +181,7 @@ pub fn decide(item: &HeldInvite, person: Option<&CoMember>, dm_exists: bool, now
     if !dm_exists {
         return Step::Gone;
     }
-    let Some(person) = person else {
-        return Step::Wait;
-    };
+    let Some(person) = person else { return Step::Wait };
     if person.workspaces.contains(&item.workspace_id) {
         return Step::Joined;
     }
@@ -210,11 +205,7 @@ fn recheck(item: &HeldInvite, person: &CoMember) -> Result<SealPlan, String> {
             person.display_name
         ));
     }
-    let new: Vec<&Recipient> = plan
-        .recipients
-        .iter()
-        .filter(|r| !item.keys.contains(&hex(&r.ka_public)))
-        .collect();
+    let new: Vec<&Recipient> = plan.recipients.iter().filter(|r| !item.keys.contains(&hex(&r.ka_public))).collect();
     if !new.is_empty() {
         return Err(format!(
             "{UNVERIFIED_RECIPIENT}: {} has {} device key{} you didn't approve when you opened the DM; confirm before it is sent to {}",
@@ -252,9 +243,7 @@ pub async fn drop_to_box(
 ) -> Delivery {
     let record = match client.contact_get(cid).await {
         Ok(Some(r)) => r.record,
-        Ok(None) => {
-            return Delivery::NotYet("their contact record isn't on their relay yet".into())
-        }
+        Ok(None) => return Delivery::NotYet("their contact record isn't on their relay yet".into()),
         Err(e) => return Delivery::NotYet(format!("their contact record wasn't readable ({e})")),
     };
     match accept(&record) {
@@ -284,12 +273,7 @@ pub trait Host {
     /// This device's key-agreement key (opens the held invite).
     fn own_ka(&self) -> Option<KeyAgreementKeypair>;
     /// Drop `invite`, sealed to `plan`'s devices, into `person`'s box.
-    fn deliver(
-        &self,
-        person: &CoMember,
-        plan: &SealPlan,
-        invite: &str,
-    ) -> impl Future<Output = Delivery> + Send;
+    fn deliver(&self, person: &CoMember, plan: &SealPlan, invite: &str) -> impl Future<Output = Delivery> + Send;
 }
 
 /// The held invites of one device.
@@ -304,12 +288,7 @@ pub struct HeldInvites {
 
 impl HeldInvites {
     pub fn new(data_dir: &Path, secrets: Arc<dyn SecretStore>) -> Self {
-        Self {
-            path: data_dir.join(FILE),
-            secrets,
-            file: std::sync::Mutex::new(()),
-            pass: tokio::sync::Mutex::new(()),
-        }
+        Self { path: data_dir.join(FILE), secrets, file: std::sync::Mutex::new(()), pass: tokio::sync::Mutex::new(()) }
     }
 
     pub fn for_data_dir(data_dir: &Path) -> Self {
@@ -322,10 +301,7 @@ impl HeldInvites {
     }
 
     fn load(&self) -> Vec<HeldInvite> {
-        std::fs::read_to_string(&self.path)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default()
+        std::fs::read_to_string(&self.path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
     }
 
     fn save(&self, items: &[HeldInvite]) {
@@ -372,10 +348,7 @@ impl HeldInvites {
         own_ka_public: &[u8; 32],
         now: i64,
     ) -> Result<HeldInvite, String> {
-        let fingerprint = person
-            .fingerprint
-            .clone()
-            .ok_or_else(|| format!("{UNVERIFIED_RECIPIENT}: no account key for them"))?;
+        let fingerprint = person.fingerprint.clone().ok_or_else(|| format!("{UNVERIFIED_RECIPIENT}: no account key for them"))?;
         let item = HeldInvite {
             workspace_id: ws,
             account_id: person.account_id,
@@ -392,18 +365,14 @@ impl HeldInvites {
         // Sealed first, then the cap is checked and the entry added in one
         // step under the file lock: concurrent holds can't pass the cap
         // between a check and an insert.
-        let sealed =
-            ligus_core::e2ee::seal(own_ka_public, invite.as_bytes()).map_err(|e| e.to_string())?;
+        let sealed = ligus_core::e2ee::seal(own_ka_public, invite.as_bytes()).map_err(|e| e.to_string())?;
         let blob = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
         let (removed, added) = self.update(|items| {
             let (mut removed, _) = prune(items, now);
             // An old finished entry of the same DM must not take the new
             // secret with it.
             removed.retain(|w| *w != ws);
-            let open = items
-                .iter()
-                .filter(|h| h.state.is_open() && h.workspace_id != ws)
-                .count();
+            let open = items.iter().filter(|h| h.state.is_open() && h.workspace_id != ws).count();
             if open >= MAX_HELD {
                 let changed = !removed.is_empty();
                 return ((removed, Ok(false)), changed);
@@ -418,9 +387,7 @@ impl HeldInvites {
         });
         self.forget_all(&removed);
         if !added? {
-            return Err(format!(
-                "{MAX_HELD} DM invites are already waiting for delivery; share this one's link"
-            ));
+            return Err(format!("{MAX_HELD} DM invites are already waiting for delivery; share this one's link"));
         }
         Ok(item)
     }
@@ -447,36 +414,20 @@ impl HeldInvites {
     /// Move `ws` from one of `from` to `to` (with `f` for the other fields),
     /// on disk. `None` when it wasn't in one of `from`: someone else moved
     /// it first.
-    fn transition(
-        &self,
-        ws: Uuid,
-        from: &[HeldState],
-        to: HeldState,
-        f: impl FnOnce(&mut HeldInvite),
-    ) -> Option<HeldInvite> {
-        self.update(|items| {
-            match items
-                .iter_mut()
-                .find(|h| h.workspace_id == ws && from.contains(&h.state))
-            {
-                Some(h) => {
-                    h.state = to;
-                    f(h);
-                    (Some(h.clone()), true)
-                }
-                None => (None, false),
+    fn transition(&self, ws: Uuid, from: &[HeldState], to: HeldState, f: impl FnOnce(&mut HeldInvite)) -> Option<HeldInvite> {
+        self.update(|items| match items.iter_mut().find(|h| h.workspace_id == ws && from.contains(&h.state)) {
+            Some(h) => {
+                h.state = to;
+                f(h);
+                (Some(h.clone()), true)
             }
+            None => (None, false),
         })
     }
 
     /// The opener dismissed it (sharing the link by hand instead).
     pub fn dismiss(&self, ws: Uuid) -> Option<HeldInvite> {
-        let out = self.transition(
-            ws,
-            &[HeldState::Waiting, HeldState::Warning],
-            HeldState::Dismissed,
-            |h| h.note = None,
-        );
+        let out = self.transition(ws, &[HeldState::Waiting, HeldState::Warning], HeldState::Dismissed, |h| h.note = None);
         if out.is_some() {
             self.forget(ws);
         }
@@ -489,27 +440,11 @@ impl HeldInvites {
     /// code the opener compared: refused unless it is `person`'s now, so a
     /// key that changed again between the warning and the click is never
     /// approved unseen.
-    pub fn confirm(
-        &self,
-        ws: Uuid,
-        person: &CoMember,
-        safety_code: &str,
-        now: i64,
-    ) -> Result<HeldInvite, String> {
+    pub fn confirm(&self, ws: Uuid, person: &CoMember, safety_code: &str, now: i64) -> Result<HeldInvite, String> {
         let plan = person.seal_plan()?;
-        let fingerprint = person
-            .fingerprint
-            .clone()
-            .ok_or_else(|| format!("{UNVERIFIED_RECIPIENT}: no account key for them"))?;
-        let norm = |c: &str| {
-            c.chars()
-                .filter(|c| !c.is_whitespace())
-                .collect::<String>()
-                .to_ascii_lowercase()
-        };
-        if person.safety_code().map(|c| norm(&c))
-            != Some(norm(safety_code)).filter(|c| !c.is_empty())
-        {
+        let fingerprint = person.fingerprint.clone().ok_or_else(|| format!("{UNVERIFIED_RECIPIENT}: no account key for them"))?;
+        let norm = |c: &str| c.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_lowercase();
+        if person.safety_code().map(|c| norm(&c)) != Some(norm(safety_code)).filter(|c| !c.is_empty()) {
             return Err(format!(
                 "{UNVERIFIED_RECIPIENT}: {}'s safety code isn't the one you compared (their keys changed again); compare it again",
                 person.display_name
@@ -566,10 +501,7 @@ pub async fn run_pass<H: Host>(host: &H, store: &HeldInvites, now: i64) -> Vec<H
     });
     store.forget_all(&removed);
     let items = store.list();
-    if !items
-        .iter()
-        .any(|h| matches!(h.state, HeldState::Waiting | HeldState::Warning))
-    {
+    if !items.iter().any(|h| matches!(h.state, HeldState::Waiting | HeldState::Warning)) {
         return changed;
     }
     let mut people = host.co_members();
@@ -592,44 +524,21 @@ pub async fn run_pass<H: Host>(host: &H, store: &HeldInvites, now: i64) -> Vec<H
             }
             Step::Warn(w) => {
                 tracing::warn!(target: "contacts", "a held DM invite waits: the recipient's keys changed");
-                if let Some(h) = store.transition(
-                    item.workspace_id,
-                    &[HeldState::Waiting],
-                    HeldState::Warning,
-                    |h| h.note = Some(w),
-                ) {
+                if let Some(h) = store.transition(item.workspace_id, &[HeldState::Waiting], HeldState::Warning, |h| h.note = Some(w)) {
                     changed.push(h);
                 }
             }
             Step::Deliver(plan) => {
                 let Some(person) = person else { continue };
                 // On disk before the drop: never sent twice.
-                if store
-                    .transition(
-                        item.workspace_id,
-                        &[HeldState::Waiting],
-                        HeldState::Sending,
-                        |_| {},
-                    )
-                    .is_none()
-                {
+                if store.transition(item.workspace_id, &[HeldState::Waiting], HeldState::Sending, |_| {}).is_none() {
                     continue;
                 }
-                let invite = host
-                    .own_ka()
-                    .and_then(|ka| store.open_invite(item.workspace_id, &ka));
+                let invite = host.own_ka().and_then(|ka| store.open_invite(item.workspace_id, &ka));
                 let Some(invite) = invite else {
-                    if let Some(h) = store.transition(
-                        item.workspace_id,
-                        &[HeldState::Sending],
-                        HeldState::Failed,
-                        |h| {
-                            h.note = Some(
-                                "this device can no longer open the held invite; share the link"
-                                    .into(),
-                            )
-                        },
-                    ) {
+                    if let Some(h) = store.transition(item.workspace_id, &[HeldState::Sending], HeldState::Failed, |h| {
+                        h.note = Some("this device can no longer open the held invite; share the link".into())
+                    }) {
                         store.forget(item.workspace_id);
                         changed.push(h);
                     }
@@ -642,30 +551,20 @@ pub async fn run_pass<H: Host>(host: &H, store: &HeldInvites, now: i64) -> Vec<H
                 people = host.co_members();
                 match out {
                     Delivery::Delivered => {
-                        if let Some(h) = store.transition(
-                            item.workspace_id,
-                            &[HeldState::Sending],
-                            HeldState::Delivered,
-                            |h| {
-                                h.delivered_at = Some(now);
-                                h.note = None;
-                            },
-                        ) {
+                        if let Some(h) = store.transition(item.workspace_id, &[HeldState::Sending], HeldState::Delivered, |h| {
+                            h.delivered_at = Some(now);
+                            h.note = None;
+                        }) {
                             store.forget(item.workspace_id);
                             changed.push(h);
                         }
                     }
                     Delivery::NotYet(why) => {
-                        if let Some(h) = store.transition(
-                            item.workspace_id,
-                            &[HeldState::Sending],
-                            HeldState::Waiting,
-                            |h| {
-                                h.attempts = h.attempts.saturating_add(1);
-                                h.next_try_at = now + backoff_secs(h.attempts);
-                                h.note = Some(why);
-                            },
-                        ) {
+                        if let Some(h) = store.transition(item.workspace_id, &[HeldState::Sending], HeldState::Waiting, |h| {
+                            h.attempts = h.attempts.saturating_add(1);
+                            h.next_try_at = now + backoff_secs(h.attempts);
+                            h.note = Some(why);
+                        }) {
                             changed.push(h);
                         }
                     }

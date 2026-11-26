@@ -64,23 +64,13 @@ fn write_key_id() -> SecretId {
 
 impl OwnContact {
     fn fresh() -> Self {
-        Self {
-            cid: contacts::new_cid(),
-            write_key: contacts::new_write_key(),
-            ..Default::default()
-        }
+        Self { cid: contacts::new_cid(), write_key: contacts::new_write_key(), ..Default::default() }
     }
 
     pub fn load(data_dir: &std::path::Path) -> Option<Self> {
-        let mut c: OwnContact =
-            serde_json::from_str(&std::fs::read_to_string(path(data_dir)).ok()?).ok()?;
+        let mut c: OwnContact = serde_json::from_str(&std::fs::read_to_string(path(data_dir)).ok()?).ok()?;
         let store = ligus_runtime::secret_store::for_data_dir(data_dir);
-        c.write_key = store
-            .get_string(&write_key_id())
-            .ok()
-            .flatten()
-            .map(|z| z.to_string())
-            .unwrap_or_default();
+        c.write_key = store.get_string(&write_key_id()).ok().flatten().map(|z| z.to_string()).unwrap_or_default();
         ligus_runtime::secret_redact::register(&c.write_key);
         (contacts::valid_cid(&c.cid) && !c.write_key.is_empty()).then_some(c)
     }
@@ -108,18 +98,8 @@ pub fn unix_now() -> i64 {
 
 /// The relays this box syncs with: the workspace's and every DM's.
 fn my_relays(s: &Shared) -> Vec<String> {
-    let mut out: Vec<String> = s
-        .cfg
-        .relay_url
-        .iter()
-        .map(|r| r.trim().to_string())
-        .collect();
-    out.extend(
-        s.dms
-            .list()
-            .into_iter()
-            .map(|d| d.relay_url.trim().to_string()),
-    );
+    let mut out: Vec<String> = s.cfg.relay_url.iter().map(|r| r.trim().to_string()).collect();
+    out.extend(s.dms.list().into_iter().map(|d| d.relay_url.trim().to_string()));
     out.retain(|r| !r.is_empty());
     out.sort();
     out.dedup();
@@ -135,10 +115,7 @@ fn can_publish(s: &Shared) -> bool {
 /// This box's record for `cid`, or `None` when it can't speak for its
 /// account (delegated, no certificate yet).
 fn own_record(s: &Shared, cid: &str) -> Option<Value> {
-    let identity = ligus_runtime::IdentityStore::new(
-        &s.cfg.data_dir,
-        ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&s.cfg.data_dir),
-    );
+    let identity = ligus_runtime::IdentityStore::new(&s.cfg.data_dir, ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&s.cfg.data_dir));
     let stored = identity.load().ok().flatten()?;
     let svc = s.lock();
     if svc.is_delegated() {
@@ -149,21 +126,9 @@ fn own_record(s: &Shared, cid: &str) -> Option<Value> {
         return None;
     }
     let ka = identity.key_agreement(svc.device_id()).ok()?;
-    let env = svc.signed_ka_publication(
-        contacts::contact_workspace_id(cid),
-        ka.public_key_bytes().to_vec(),
-    );
-    let device = contacts::RecordDevice {
-        certificate: stored.device.certificate.clone(),
-        ka_publication: env,
-    };
-    let rec = contacts::build_record(
-        cid,
-        account_id,
-        &svc.account_public_key(),
-        vec![device],
-        Timestamp::now(),
-    );
+    let env = svc.signed_ka_publication(contacts::contact_workspace_id(cid), ka.public_key_bytes().to_vec());
+    let device = contacts::RecordDevice { certificate: stored.device.certificate.clone(), ka_publication: env };
+    let rec = contacts::build_record(cid, account_id, &svc.account_public_key(), vec![device], Timestamp::now());
     serde_json::to_value(rec).ok()
 }
 
@@ -205,31 +170,20 @@ pub async fn ensure_contact(s: &Shared) -> bool {
     let mut refused = 0usize;
     c.published.retain(|r, _| relays.contains(r));
     for relay in &relays {
-        if c.published
-            .get(relay)
-            .is_some_and(|t| now - t < REPUBLISH_SECS)
-        {
+        if c.published.get(relay).is_some_and(|t| now - t < REPUBLISH_SECS) {
             continue;
         }
-        if c.unsupported
-            .get(relay)
-            .is_some_and(|t| now - t < RECHECK_UNSUPPORTED_SECS)
-        {
+        if c.unsupported.get(relay).is_some_and(|t| now - t < RECHECK_UNSUPPORTED_SECS) {
             continue;
         }
-        let Some(record) = own_record(s, &c.cid) else {
-            break;
-        };
+        let Some(record) = own_record(s, &c.cid) else { break };
         if let Err(e) = super::dms::foreign_relay_check(&s.cfg, relay).await {
             eprintln!("serve: skipping a relay for the contact record ({e})");
             continue;
         }
         let client = super::dms::relay_client_for(&s.cfg, relay);
         let first = !c.published.contains_key(relay);
-        match client
-            .contact_put(&c.cid, &c.write_key, &record, first)
-            .await
-        {
+        match client.contact_put(&c.cid, &c.write_key, &record, first).await {
             Ok(_) => {
                 c.published.insert(relay.clone(), now);
                 c.unsupported.remove(relay);
@@ -270,9 +224,7 @@ fn announce(s: &Shared, cid: Option<String>) {
     } else {
         svc.set_author_contact(cid.clone());
     }
-    let (Some(cid), Some(account)) = (cid, svc.author().account_id) else {
-        return;
-    };
+    let (Some(cid), Some(account)) = (cid, svc.author().account_id) else { return };
     if svc.write_block().is_some() {
         return;
     }
@@ -299,23 +251,14 @@ fn announce(s: &Shared, cid: Option<String>) {
 /// they have no contact, their relay has no contact routes, their record
 /// doesn't verify for them, or the drop failed: share the link, or hold it
 /// for a retry ([`dm_delivery`]).
-pub async fn deliver_invite(
-    s: &Shared,
-    person: &CoMember,
-    plan: &SealPlan,
-    invite: &str,
-) -> Delivery {
-    let Some((cid, ws)) = person.contact.clone() else {
-        return Delivery::NotYet("no contact id for them yet".into());
-    };
+pub async fn deliver_invite(s: &Shared, person: &CoMember, plan: &SealPlan, invite: &str) -> Delivery {
+    let Some((cid, ws)) = person.contact.clone() else { return Delivery::NotYet("no contact id for them yet".into()) };
     let relay = if ws == s.ws {
         s.cfg.relay_url.clone()
     } else {
         s.dms.get(ws).map(|d| d.relay_url)
     };
-    let Some(relay) = relay.filter(|r| !r.trim().is_empty()) else {
-        return Delivery::NotYet("no relay for their contact".into());
-    };
+    let Some(relay) = relay.filter(|r| !r.trim().is_empty()) else { return Delivery::NotYet("no relay for their contact".into()) };
     if let Err(e) = super::dms::foreign_relay_check(&s.cfg, &relay).await {
         eprintln!("serve: their relay was refused ({e}); share the link");
         return Delivery::NotYet("their relay was refused".into());
@@ -323,13 +266,9 @@ pub async fn deliver_invite(
     let client = super::dms::relay_client_for(&s.cfg, &relay);
     dm_delivery::drop_to_box(&client, &cid, person, plan, invite, |record| {
         let svc = s.lock();
-        contacts::accept_contact_record(
-            svc.store(),
-            &cid,
-            record,
-            person.fingerprint.as_deref(),
-            &|d| person.revoked_devices.contains(&d),
-        )
+        contacts::accept_contact_record(svc.store(), &cid, record, person.fingerprint.as_deref(), &|d| {
+            person.revoked_devices.contains(&d)
+        })
     })
     .await
 }
@@ -347,40 +286,23 @@ impl dm_delivery::Host for BoxHost<'_> {
     fn own_ka(&self) -> Option<ligus_core::e2ee::KeyAgreementKeypair> {
         own_ka(self.0)
     }
-    fn deliver(
-        &self,
-        person: &CoMember,
-        plan: &SealPlan,
-        invite: &str,
-    ) -> impl std::future::Future<Output = Delivery> + Send {
+    fn deliver(&self, person: &CoMember, plan: &SealPlan, invite: &str) -> impl std::future::Future<Output = Delivery> + Send {
         deliver_invite(self.0, person, plan, invite)
     }
 }
 
 /// This box's key-agreement key (what held invites are sealed to).
 pub fn own_ka(s: &Shared) -> Option<ligus_core::e2ee::KeyAgreementKeypair> {
-    let identity = ligus_runtime::IdentityStore::new(
-        &s.cfg.data_dir,
-        ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&s.cfg.data_dir),
-    );
+    let identity = ligus_runtime::IdentityStore::new(&s.cfg.data_dir, ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&s.cfg.data_dir));
     let device = s.lock().device_id();
     identity.key_agreement(device).ok()
 }
 
 /// Hold a DM invite that couldn't be delivered yet; `None` when it can't be
 /// held (no key, too many waiting): share the link.
-pub fn hold_invite(
-    s: &Shared,
-    ws: Uuid,
-    person: &CoMember,
-    plan: &SealPlan,
-    invite: &str,
-) -> Option<dm_delivery::HeldInvite> {
+pub fn hold_invite(s: &Shared, ws: Uuid, person: &CoMember, plan: &SealPlan, invite: &str) -> Option<dm_delivery::HeldInvite> {
     let ka = own_ka(s)?;
-    match s
-        .held
-        .hold(ws, person, plan, invite, &ka.public_key_bytes(), unix_now())
-    {
+    match s.held.hold(ws, person, plan, invite, &ka.public_key_bytes(), unix_now()) {
         Ok(h) => {
             s.held_kick.notify_one();
             Some(h)
@@ -408,11 +330,7 @@ pub async fn held_loop(s: std::sync::Arc<Shared>, mut stop: tokio::sync::watch::
             }
             s.hub.emit("dms.changed", serde_json::json!({}));
         }
-        let wait = if s.held.any_open() {
-            HELD_EVERY
-        } else {
-            HELD_IDLE
-        };
+        let wait = if s.held.any_open() { HELD_EVERY } else { HELD_IDLE };
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
             _ = s.held_kick.notified() => {}
@@ -447,9 +365,7 @@ pub struct PendingInvite {
 }
 
 fn mark_handled(s: &Shared, relay: &str, seq: u64) {
-    let Some(mut c) = OwnContact::load(&s.cfg.data_dir) else {
-        return;
-    };
+    let Some(mut c) = OwnContact::load(&s.cfg.data_dir) else { return };
     let h = c.handled.entry(relay.to_string()).or_default();
     if !h.contains(&seq) {
         h.push(seq);
@@ -463,35 +379,20 @@ fn mark_handled(s: &Shared, relay: &str, seq: u64) {
 pub async fn pending(s: &Shared) -> (String, Vec<PendingInvite>) {
     let on = ensure_contact(s).await;
     let status = status(s, on).to_string();
-    let Some(contact) = OwnContact::load(&s.cfg.data_dir) else {
-        return (status, Vec::new());
-    };
-    let identity = ligus_runtime::IdentityStore::new(
-        &s.cfg.data_dir,
-        ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&s.cfg.data_dir),
-    );
+    let Some(contact) = OwnContact::load(&s.cfg.data_dir) else { return (status, Vec::new()) };
+    let identity = ligus_runtime::IdentityStore::new(&s.cfg.data_dir, ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&s.cfg.data_dir));
     let device = s.lock().device_id();
-    let Ok(ka) = identity.key_agreement(device) else {
-        return (status, Vec::new());
-    };
+    let Ok(ka) = identity.key_agreement(device) else { return (status, Vec::new()) };
     let me = s.my_account();
     let people = s.co_members();
     let mut out = Vec::new();
     let mut handled_now: BTreeMap<String, Vec<u64>> = BTreeMap::new();
     for relay in contact.published.keys() {
-        if super::dms::foreign_relay_check(&s.cfg, relay)
-            .await
-            .is_err()
-        {
+        if super::dms::foreign_relay_check(&s.cfg, relay).await.is_err() {
             continue;
         }
         let client = super::dms::relay_client_for(&s.cfg, relay);
-        let Ok(items) = client
-            .contact_drops_all(&contact.cid, &contact.write_key)
-            .await
-        else {
-            continue;
-        };
+        let Ok(items) = client.contact_drops_all(&contact.cid, &contact.write_key).await else { continue };
         let already = contact.handled.get(relay).cloned().unwrap_or_default();
         let mut waiting = Vec::new();
         let mut handled = already.clone();
@@ -506,10 +407,7 @@ pub async fn pending(s: &Shared) -> (String, Vec<PendingInvite>) {
                 handled.push(item.seq);
                 continue;
             };
-            let for_me = !conn.is_dm()
-                || me.is_some_and(|m| {
-                    conn.dm_account.as_deref().map(str::trim) == Some(m.to_string().as_str())
-                });
+            let for_me = !conn.is_dm() || me.is_some_and(|m| conn.dm_account.as_deref().map(str::trim) == Some(m.to_string().as_str()));
             if s.holds_room(&conn.room) || !for_me {
                 handled.push(item.seq);
                 continue;
@@ -521,11 +419,7 @@ pub async fn pending(s: &Shared) -> (String, Vec<PendingInvite>) {
             }
         }
         if let Some(through) = contacts::ack_through(&handled, &waiting) {
-            if client
-                .contact_drops_ack(&contact.cid, &contact.write_key, through)
-                .await
-                .is_ok()
-            {
+            if client.contact_drops_ack(&contact.cid, &contact.write_key, through).await.is_ok() {
                 handled.retain(|h| *h > through);
             }
         }
@@ -546,19 +440,9 @@ pub async fn pending(s: &Shared) -> (String, Vec<PendingInvite>) {
     (status, out)
 }
 
-fn describe(
-    s: &Shared,
-    people: &[CoMember],
-    relay: &str,
-    seq: u64,
-    code: String,
-    conn: &InviteConn,
-) -> PendingInvite {
+fn describe(s: &Shared, people: &[CoMember], relay: &str, seq: u64, code: String, conn: &InviteConn) -> PendingInvite {
     let trust = conn.trust(people);
-    let founder = conn
-        .founder_actor_id
-        .as_deref()
-        .and_then(|f| Uuid::parse_str(f.trim()).ok());
+    let founder = conn.founder_actor_id.as_deref().and_then(|f| Uuid::parse_str(f.trim()).ok());
     let refusal = if conn.is_dm() {
         s.dm_refusal(conn, trust, true).err()
     } else {
@@ -568,19 +452,10 @@ fn describe(
         relay: relay.to_string(),
         seq,
         is_dm: conn.is_dm(),
-        workspace_name: if conn.is_dm() {
-            String::new()
-        } else {
-            ligus_proto::names::clean_display_name(&conn.display_name())
-        },
+        workspace_name: if conn.is_dm() { String::new() } else { ligus_proto::names::clean_display_name(&conn.display_name()) },
         founder_account: founder.map(|f| f.to_string()),
-        founder_name: founder
-            .and_then(|f| people.iter().find(|p| p.account_id == f))
-            .map(|p| p.display_name.clone()),
-        safety_code: conn
-            .fk
-            .as_deref()
-            .and_then(ligus_runtime::directory_trust::safety_code),
+        founder_name: founder.and_then(|f| people.iter().find(|p| p.account_id == f)).map(|p| p.display_name.clone()),
+        safety_code: conn.fk.as_deref().and_then(ligus_runtime::directory_trust::safety_code),
         trust: trust_str(trust).into(),
         acceptable: refusal.is_none(),
         refusal,
