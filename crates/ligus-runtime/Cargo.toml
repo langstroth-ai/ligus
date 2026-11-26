@@ -50,6 +50,8 @@ zeroize = "1"
 ssh-key = { version = "0.6", default-features = false, features = ["alloc", "std", "ecdsa", "ed25519", "p256"] }
 rsa = { version = "0.10.0", default-features = false, features = ["std", "pkcs1v15"] }
 iroh = { version = "1.4.1", optional = true }
+# A phone's P-256 key signs code-match messages (already in the tree via ligus-core).
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 # The in-process mock relay for other clients' tests (`test-relay`).
 axum = { version = "0.8", optional = true }
 
@@ -93,5 +95,3 @@ test-relay = ["dep:axum"]
 tempfile = "3"
 axum = "0.8"
 proptest = { version = "1", default-features = false, features = ["std"] }
-# Fixed P-256 keys for the reverse-QR golden vectors (already in the tree via ligus-core).
-p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }

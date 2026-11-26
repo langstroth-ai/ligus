@@ -7,7 +7,8 @@ trust boundaries.
 ## Assets {#assets}
 
 1. **Workspace content**: messages, proposals, diffs, attachments, workflow
-   definitions, inline runtime credentials.
+   definitions. Model API keys are never stored in the workspace (a key an
+   older version stored there is never used; rotate it).
 2. **Keys**: account and device signing keys, workspace keys, key-agreement
    keys, `serve.token`, phone credentials.
 3. **Your machines and repositories**: what agents can execute or change.

@@ -249,6 +249,7 @@ acts as you, not as a second person with your name. See
 | `ligus devices request [--label NAME] [--new-device] [--copy] [--json]` | prints this computer's link request (`liguslink1:…`, no secret) and remembers it as pending (15 minutes to approve, single use). Only the request goes to stdout, so `ligus devices request \| pbcopy` copies exactly it; the fingerprint, the time to approve by and the next step go to stderr. `--copy` copies it to the clipboard instead; `--json` prints one report whose `result` has `code`, `fingerprint`, `label`, `expiresAt` (unix ms) and `newDevice`. A data dir that was already connected asks with a new device key, switched to only when you redeem. A box can't: it joins with `ligus admit` |
 | `ligus devices redeem [<ligusgrant1:code> \| - \| --code-file PATH] [--approver-fingerprint FP]` | opens the grant your desktop showed (sealed to this computer). With no code at a terminal it asks for a hidden paste, or reads the clipboard when you just press Enter (**Copy for lt** on the desktop copies the grant alone); a pasted whole command or line breaks around the code are fine, and the code is never echoed. It asks you to confirm who approved it: *Approved by Alex's desktop · fingerprint … · for acme. Is that your desktop? [y/N]* (or `--approver-fingerprint`; away from a terminal without it, exit 4). Then it saves the connection, pulls, checks your desktop's certificate for this computer is there (exit 7 until it has synced) and acts as you from then on |
 | `ligus devices approve <liguslink1:request> \| --code-file PATH --fingerprint FP --recovery-words-file PATH [--out PATH]` | a person's own headless approval (prefer the desktop's My devices > Add a computer): certifies the computer as yours with your recovery key, syncs, and prints the grant (or writes it owner-only to `--out`) |
+| `ligus devices request --to ligusaddr1:… [--label NAME] [--wait 15m] [--json]` | **code match**: sends the request to the workspace's approval address (your desktop shows it under My devices), so it reaches your desktop's Inbox. Prints the paste text and fingerprint straight away (for an older desktop), then `Code: K7Q4 M9X2` once your desktop opens it; you confirm the code here, your desktop confirms with your passkey, and this computer links after finding the approval on the workspace log and asking "Link this computer as Ana (verified on the workspace log)?". Needs a terminal (exit 4 without one); exit 3 when the relay has no approval mailbox (paste instead) |
 | `ligus devices list [--json]` | your devices in this workspace, whether this computer acts as you, and a link still waiting for the desktop's code (`ligus status` shows that too). Expired requests are cleaned up as you go |
 | `ligus devices rename <device-id \| this> <name> [--json]` | gives one of your devices (or this one) a name every member sees; an empty name clears it. A linked computer renames only itself |
 | `ligus profile set [--name NAME] [--avatar FILE \| --clear-avatar] [--json]` | publishes your name and/or picture (PNG, JPEG or WebP, 16 KB at most) as your profile in this workspace: every member sees it, in past content too. Only a computer holding your account key can; at most one change a minute and 20 a day |
@@ -329,12 +330,12 @@ refused on the command line.
 
 | Command | What it does |
 |---|---|
-| `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host has `LIGUS_WS_SECRET_<ref>`) |
-| `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> \| --secret - \| --secret @FILE] [--dry-run]` | defines (or replaces by id) a workspace runtime. `--dry-run` checks the arguments and prints what it would define, signing and writing nothing (the same on `rm-runtime`, `add-agent` and `set-agent-host`; `add-agent --dry-run` also checks the runtime exists). Any other command refuses `--dry-run` with a usage error (exit 2) and runs nothing. |
+| `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host has `LIGUS_WS_SECRET_<ref>`; a key an older version stored in the workspace shows as `stored key (unused)` with a warning) |
+| `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name>] [--dry-run]` | defines (or replaces by id) a workspace runtime. `--dry-run` checks the arguments and prints what it would define, signing and writing nothing (the same on `rm-runtime`, `add-agent` and `set-agent-host`; `add-agent --dry-run` also checks the runtime exists). Any other command refuses `--dry-run` with a usage error (exit 2) and runs nothing. |
 | `ligus rm-runtime <id> [--dry-run]` | removes a workspace runtime. |
 | `ligus setup runtimes [--apply]` | detects what this box can reach (API keys in env, Ollama on `127.0.0.1:11434`, `claude`, `codex`, `agy`, `copilot`); `--apply` defines the keyless ones as workspace runtimes. This was `ligus setup [--apply]`; `ligus setup --apply` still works for one release |
-| `ligus config export` | prints the workspace runtimes as TOML. Inline secrets are never exported; they become a `secretRef` |
-| `ligus config import <file.toml>` | adds or replaces runtimes from that TOML (by id) |
+| `ligus config export` | prints the workspace runtimes as TOML. No key is ever exported; a key an older version stored in the workspace becomes a `secretRef` |
+| `ligus config import <file.toml>` | adds or replaces runtimes from that TOML (by id); a runtime with an inline key is refused |
 | `ligus agents [--json]` | lists workspace agents. |
 | `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>] [--dry-run]` | defines an agent. |
 | `ligus hosts [--json]` | lists workspace hosts (devices and workers) |
@@ -348,12 +349,18 @@ refused on the command line.
 
 Credentials for `add-runtime`:
 
-- `--secret-ref <name>`: the key stays off the shared log; each host that runs
-  the agent sets `LIGUS_WS_SECRET_<name>`.
-- `--secret - | @FILE`: the key (read from stdin, or from an owner-only
-  file) travels **E2EE on the workspace config log**, so every member's
-  device holds it. Prefer `--secret-ref`.
-- neither: keyless (local models, subscription CLIs).
+- `--secret-ref <name>`: each host that runs the agent sets
+  `LIGUS_WS_SECRET_<name>` (or a file in `LIGUS_WS_SECRET_DIR`). Keys are
+  never stored in the workspace.
+- without it: keyless (local models, subscription CLIs).
+
+`--secret` was removed: passing it is a usage error (exit 2). A runtime whose key an older version stored in the workspace (the removed
+`--secret` flag) keeps working only if it can run keyless; its stored key is
+never used, shown or exported (it reads as "stored key (unused)"), and
+`ligus doctor` warns about it (`runtimes.inline-key`). Every member's device
+received that key, so rotate it with the provider, set the new one on each
+worker as `LIGUS_WS_SECRET_<NAME>`, and redefine the runtime with
+`--secret-ref <NAME>`.
 
 ## The worker daemon
 
@@ -383,6 +390,10 @@ worker 5b1c… online — draining queued mentions for its agents. Ctrl-C to sto
 |---|---|
 | `ligus serve [--listen ADDR] [--token-file PATH] [--label NAME] [--name NAME] [--public-url URL] [--ntfy-url URL] [--ntfy-topic T] [--pair] [--remote-relay URL] [--reg-token - \| @FILE] [--insecure-relay]` | sync + worker + the phone's HTTP/SSE API. `--pair` prints the pairing code at start. The other flags override the `LIGUS_SERVE_*`, `LIGUS_NTFY_*` and `LIGUS_REMOTE_*` variables |
 | `ligus admit request [--label NAME]` | prints this box's join request (`ligusjoin1:…`) and fingerprint for an Admin to approve (desktop: workspace menu, **Admit a box…**) |
+| `ligus admit address [--reset] [--json]` | on any member: registers the workspace's approval mailbox and prints its approval address (`ligusaddr1:…`, not a secret). `--reset` (Admins) makes a leaked address stop taking requests |
+| `ligus admit request --to ligusaddr1:… [--label NAME] [--wait 15m] [--json]` | **code match**: sends the join request to the approval address, so it reaches Admins' Inboxes and paired phones. Prints the paste text and fingerprint straight away, then `Code: K7Q4 M9X2 (the approver's screen must show the same)` (`--json`: a `match-code` check). At a terminal it asks whether the approver shows the same code; without one the box keeps the admission only after finding it on the workspace log, signed by an Admin's device with a passkey. Exit 3 when the relay has no approval mailbox (paste instead), 4 when nobody approved within `--wait`, 7 when the relay is unreachable |
+| `ligus approvals list [--json]` (or `ligus approvals`) | the live approval requests in the workspace's mailbox (current key epoch and the previous two): rid, kind, label, fingerprint, when, and who is checking each (unclaimed, you, another approver, or contested) |
+| `ligus approvals approve <rid> [--code -] --recovery-words-file PATH [--json]` | the headless approver, a person's own step like `ligus admit issue`: opens the request, then asks you to type the code the requesting device now shows (or, with `--code -`, reads it from stdin), and approves only if it equals the code this device computes; a wrong code ends the request and nothing is granted. The code exists only once the request is opened, so it can't be passed in advance. Without a terminal or `--code -`, exit 4 |
 | `ligus admit close` | as an Admin's CLI identity, closes this workspace's settled box admissions (redeemed, or lapsed unredeemed) so no later or backdated redemption admits anyone; the desktop does it after every sync. Run `ligus sync` before and after |
 | `ligus admit redeem <ligusadmit1:…>` / `ligus admit redeem -` / `ligus admit redeem --file PATH` | keeps a box admission (`ligusadmit1:…` sealed to this box, or a bearer `hivews1:…`, which is read only from a file or standard input, never the command line); the next `ligus serve` or `ligus worker` joins as this box's own service member. `LIGUS_ADMISSION_FILE` does the same at start-up |
 | `ligus admit issue --recovery-words-file PATH [--ttl 1h] [--request ligusjoin1:…] [--out PATH]` | the headless Admin path: issues a box admission from your own CLI identity, confirmed with your recovery key; sealed to the box when `--request` is given. `--out` writes the code owner-only (0600) into an existing directory, which it leaves as it is |
