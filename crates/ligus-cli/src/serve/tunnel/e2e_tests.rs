@@ -386,6 +386,86 @@ async fn a_suspended_phones_stale_events_stream_stops_suppressing_pushes() {
     h.handle.shutdown();
 }
 
+/// An agent's question for one person, asked from the desktop (its turn
+/// runs there), pushes to that person's phone through a box that joined as
+/// its own member: the audience is matched against the phone's person (the
+/// member who holds its device), not the box's identity. A question for
+/// someone else doesn't push.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_ask_for_the_phones_person_pushes_to_that_phone() {
+    use ligus_core::flow::{self as hflow, FlowRecord};
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(WAIT).await.unwrap();
+    let (t, info, keys, pid, credential, phone) = pair_bound(&h, &relay).await;
+    let mut c = testkit::phone_session(&info, &keys, &credential).await.unwrap();
+    assert_eq!(c.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": true }))).await.unwrap().status, 200);
+    t.push_available.store(true, std::sync::atomic::Ordering::SeqCst);
+    let key: [u8; 32] = tun::b64u_fixed(&t.registry.get(&pid).unwrap().push_key).unwrap();
+    let ws = h.handle.shared.ws;
+
+    // The desktop owner certifies the phone: it is theirs.
+    let owner = {
+        let mut desk = crate::open_service(&h.desktop).unwrap();
+        desk.certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
+        desk.author().id.clone()
+    };
+    assert_ne!(owner, h.handle.shared.my_actor_id(), "the box is its own member");
+    desktop_sync(&h).await;
+    let shared = h.handle.shared.clone();
+    wait_until("the box resolves the phone's person", WAIT, || {
+        shared.sync_kick.notify_one();
+        shared.lock().phone_person(ws, phone.device_id).is_ok_and(|p| p.id == owner)
+    })
+    .await;
+
+    // A chat made on the box, synced to the desktop, where the agent runs.
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "general" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        desktop_sync(&h).await;
+        if crate::open_service(&h.desktop).unwrap().load_resolving(chat_id).unwrap().is_some() {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "the box's chat never reached the desktop");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let ask_for = |who: &str, question: &str| hflow::HumanAsk {
+        ask_id: Uuid::new_v4(),
+        turn_id: Uuid::new_v4(),
+        agent_key: hflow::agent_key(Some(h.agent_id)),
+        question: question.into(),
+        options: vec!["yes".into(), "no".into()],
+        expires_at_ms: hflow::now_ms() + 600_000,
+        at_ms: hflow::now_ms(),
+        v: hflow::ASK_V2,
+        audience: Some(hflow::AskAudience::people(vec![who.to_string()])),
+        ..Default::default()
+    };
+    let seq0 = t.registry.get(&pid).unwrap().push_seq;
+    {
+        let mut desk = crate::open_service(&h.desktop).unwrap();
+        for ask in [ask_for("someone-else", "Not for you?"), ask_for(&owner, "Ship it?")] {
+            desk.as_agent(Some(h.agent_id), |svc| svc.record_flow(chat_id, ws, FlowRecord::HumanAsk(ask))).unwrap();
+        }
+    }
+    desktop_sync(&h).await;
+    let hid = t.host_id().to_string();
+    let open = |m: &serde_json::Value| {
+        let ct = tun::b64u_decode(m["ct"].as_str().unwrap_or_default()).unwrap_or_default();
+        if ct.len() > 28 { testkit::open_push(&key, &hid, &pid, &ct) } else { serde_json::Value::Null }
+    };
+    let m = relay.wait_for("push", |m| m["pid"] == json!(pid) && open(m)["kind"] == "ask.pending", WAIT).await.unwrap();
+    let pt = open(&m);
+    assert_eq!(pt["kind"], "ask.pending");
+    assert_eq!(pt["title"], "@coder asks you \u{b7} general");
+    assert_eq!(pt["body"], "Ship it?");
+    assert_eq!(t.registry.get(&pid).unwrap().push_seq, seq0 + 1, "only the ask for the phone's person pushed");
+    t.push_available.store(false, std::sync::atomic::Ordering::SeqCst);
+    h.handle.shutdown();
+}
+
 /// `ligus remote push-test`: the CLI hands the request to the running serve
 /// through `pending/`, serve sends a `test` push (even with the app open)
 /// asking the relay for details, and the CLI reports each hop; a refusal

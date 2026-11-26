@@ -1439,6 +1439,33 @@ async fn ask_person_goes_to_the_requester_and_returns_the_answer() {
     assert!(a.ask.closed && !a.is_open(), "the host closes what it acted on");
 }
 
+/// A reply that reports a person's answer is posted after that answer. The
+/// turn's placeholder is appended when the turn starts, before the agent asks,
+/// so the reply's posted time is its completion's, never the turn's start:
+/// the chat reads ask, answer, reply.
+#[tokio::test]
+async fn a_reply_written_after_an_answer_is_posted_after_it() {
+    let w = world();
+    let turn = Arc::new(w.mcp.begin_turn(spec(&w, Budgets::default())));
+    let t2 = turn.clone();
+    let task = tokio::spawn(async move { t2.call("ligus_ask_person", &json!({"question": "Which language?", "options": ["Rust", "Speaking every language"], "timeoutSecs": 30})).await });
+    let st = posted_ask(&w, 0).await;
+    tokio::time::sleep(Duration::from_millis(15)).await;
+    choose(&w, st.ask.ask_id, Some(1), "", false).unwrap();
+    assert!(!task.await.unwrap().is_error);
+    tokio::time::sleep(Duration::from_millis(15)).await;
+    w.host.svc.lock().unwrap().complete_assistant_message(w.chat, w.wid, w.reply, "You picked Speaking every language.").unwrap();
+    let s = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+    let reply = s.messages.iter().find(|m| m.id == w.reply).unwrap();
+    let answered = s.flow.asks[&st.ask.ask_id].answered_by.iter().map(|v| v.at_ms).max().expect("answered");
+    let ms = ligus_core::flow::ms;
+    assert!(ms(&reply.created_at) <= st.ask.at_ms, "the placeholder is the turn's start, before the ask");
+    assert!(ms(&reply.posted_at()) > answered, "the reply is posted after the answer it reports");
+    // A fresh fold of the same log agrees (no device-local state).
+    let again = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+    assert_eq!(again.messages.iter().find(|m| m.id == w.reply).unwrap().posted_at(), reply.posted_at());
+}
+
 #[tokio::test]
 async fn ask_cards_refuse_bad_arguments_without_posting() {
     let w = world();
