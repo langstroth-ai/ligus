@@ -865,6 +865,7 @@ impl ChatSession {
                 // never the author's.
                 let mut message = message.clone();
                 message.superseded = false;
+                message.completed_at = None;
                 if let Some(idx) = self.message_index(message.id) {
                     self.messages[idx] = message;
                 } else {
@@ -2403,6 +2404,14 @@ fn fold_pass(
                 } else {
                     session.apply(payload);
                 }
+                // A streamed reply is posted when it completes: its
+                // placeholder was appended at the turn's start
+                // (`ChatMessage::posted_at`). Display state only.
+                if let SessionEvent::MessageCompleted { message_id, .. } = payload {
+                    if let Some(idx) = session.message_index(*message_id) {
+                        session.messages[idx].completed_at = Some(env.timestamp);
+                    }
+                }
                 // The dispatcher's commit (`crate::dispatch`): an answer whose
                 // origin device is the signer (or certified the signing agent
                 // key, as the workspace roster at its position holds it)
@@ -2572,6 +2581,30 @@ mod tests {
 
     fn base_session() -> ChatSession {
         ChatSession::new("Demo", Uuid::nil(), "anthropic")
+    }
+
+    /// A streamed reply is posted when it completes (the signed time of its
+    /// `MessageCompleted`), not when its placeholder was appended at the
+    /// turn's start; an author can't claim a completion time.
+    #[test]
+    fn a_streamed_reply_is_posted_at_its_completion() {
+        let base = base_session();
+        let (sid, wid) = (base.id, base.workspace_id);
+        let start = Timestamp::from_unix_seconds(1_800_000_000);
+        let mut placeholder = ChatMessage::new(MessageRole::Assistant, "ligus", "");
+        placeholder.is_streaming = true;
+        placeholder.created_at = start;
+        placeholder.completed_at = Some(Timestamp::from_unix_seconds(1_900_000_000));
+        let mid = placeholder.id;
+        let mut done = SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MessageCompleted { message_id: mid, body: "You said yes.".into() });
+        done.timestamp = Timestamp::from_unix_seconds(1_800_000_120);
+        let streaming = project(&[snapshot_env(base.clone(), 1), SessionEventEnvelope::new(sid, wid, 2, SessionEvent::MessageAppended { message: placeholder.clone() })]).unwrap();
+        assert_eq!(streaming.messages[0].completed_at, None, "an author's completedAt is not folded");
+        assert_eq!(streaming.messages[0].posted_at(), start);
+        let envs = vec![snapshot_env(base, 1), SessionEventEnvelope::new(sid, wid, 2, SessionEvent::MessageAppended { message: placeholder }), done];
+        let s = project(&envs).unwrap();
+        assert_eq!(s.messages[0].created_at, start, "created_at stays the turn's start");
+        assert_eq!(s.messages[0].posted_at(), Timestamp::from_unix_seconds(1_800_000_120));
     }
 
     #[test]

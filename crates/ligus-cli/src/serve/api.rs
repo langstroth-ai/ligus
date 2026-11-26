@@ -235,7 +235,9 @@ pub fn message_dto(chat: Uuid, m: &ChatMessage, viewer: Viewer) -> Value {
         "author": ligus_proto::names::clean_display_name(ligus_core::agent::display_author(m)),
         "role": role_str(m),
         "body": m.body,
-        "createdAt": iso(m.created_at),
+        // When it was posted: a streamed reply's completion, not its turn's
+        // start.
+        "createdAt": iso(m.posted_at()),
         "streaming": m.is_streaming,
     });
     if let Some(a) = m.responder_id {
@@ -311,7 +313,7 @@ fn truncate(s: &str, n: usize) -> String {
 
 /// When a chat last changed: its own stamp or its newest message.
 fn updated_at(s: &ChatSession) -> Timestamp {
-    s.messages.iter().filter(|m| !m.superseded).map(|m| m.created_at).chain([s.updated_at, s.created_at]).max().unwrap_or(s.updated_at)
+    s.messages.iter().filter(|m| !m.superseded).map(|m| m.posted_at()).chain([s.updated_at, s.created_at]).max().unwrap_or(s.updated_at)
 }
 
 pub fn chat_dto(s: &ChatSession, unread: usize) -> Value {

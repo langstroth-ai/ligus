@@ -4,6 +4,17 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## Unreleased
+
+### Fixed
+
+- **A reply written after you answer an agent's question reads after your
+  answer.** An agent's reply is stamped with when it was posted (when its
+  turn finished), not when the turn started, on the desktop and the phone. On
+  the desktop, a question you already answered sits above the reply that
+  reports your answer. Replies from devices still on 0.4.0 show right too,
+  once the device or box showing them is updated.
+
 ## 0.4.0
 
 Approve a box or a computer by comparing a short code, profiles and device
