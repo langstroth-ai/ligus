@@ -4,7 +4,13 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
-## Unreleased
+## 0.4.1
+
+Fixes for setting up and running agents: replies read in order, an agent's
+question reaches the phone of the person it asks, a chat that refused every
+message sends again, agents that run their own helper server (Linux), hosts
+picked in Add an agent, and clearer lines when a host is offline or a step
+needs your passkey. A phone sees only its own person's direct messages.
 
 ### Added
 
@@ -15,12 +21,6 @@ Full release notes are on the
   says to do it in the desktop app, or to run it again with
   `--recovery-words-file PATH`, which `ligus setup` now accepts. See
   [Set up](../getting-started/set-up.md).
-- **A message that wouldn't send ("this draft is out of date") sends
-  again.** After older reply pieces were pulled back from the relay, every
-  message to that chat from this computer was refused as out of date, and
-  Retry didn't help. A message now links to this computer's newest event in
-  the chat, whatever order the relay delivered them in, so it sends the first
-  time.
 - **Agents that run their own helper server.** The Google Antigravity CLI
   (`agy`) starts a local language server, which the agent sandbox refused
   (`bind: operation not permitted`). A per-agent **May run local servers**
@@ -31,7 +31,15 @@ Full release notes are on the
   Landlock tier keeps it off. Not available on macOS yet: the Mac's sandbox
   can't keep a listener loopback-only. agy's failure now says which applies.
   See [Local servers](../concepts/security.md#local-servers).
+
 ### Fixed
+
+- **A message that wouldn't send ("this draft is out of date") sends
+  again.** After older reply pieces were pulled back from the relay, every
+  message to that chat from this computer was refused as out of date, and
+  Retry didn't help. A message now links to this computer's newest event in
+  the chat, whatever order the relay delivered them in, so it sends the first
+  time.
 - **An agent whose host is offline says so in the chat.** Writing to an
   agent that runs on another device used to do nothing visible while that
   device was off. The chat now shows one line, for example "@agy runs on
@@ -77,6 +85,11 @@ Full release notes are on the
   the desktop, a question you already answered sits above the reply that
   reports your answer. Replies from devices still on 0.4.0 show right too,
   once the device or box showing them is updated.
+- **An agent's question reaches the phone of the person it asks.** A
+  question an agent asks a named person never pushed to that person's phone
+  when the box had joined as its own member. A box now works out questions,
+  mentions and replies to you for each paired phone's person, and sends each
+  only to that person's phones.
 - **A phone lists only your own direct messages.** A box used to list every
   DM it holds to every paired phone, so someone else's phone could see a DM
   that wasn't theirs. Now a phone sees only the DMs its person is in, and
@@ -100,6 +113,7 @@ Full release notes are on the
   the kinds of notification the phone's switches allow.
 
 ### Docs
+
 - **The box pages say how a box really joins.** Setting up `ligus serve` or
   `ligus worker` no longer tells you to enroll the box with your own invite
   or calls it one of your devices: a box is its own member, and you approve
@@ -115,6 +129,20 @@ Full release notes are on the
   earlier member by itself when it safely can. First launch says plainly
   that a computer links from `lt` or `ligus devices request`, not from a
   second desktop app.
+
+### With this release
+
+- **Phone app.** A problem you dismissed stays dismissed until something
+  changes, and connection problems clear once the phone reconnects. A
+  settled question sits in the chat at the time it was answered, and a
+  finished reply moves to its time. Pairing says `ligus pair`; push that was
+  never set up reads grey. Forget host turns that box's notifications off
+  first, and the note field on proposals is hidden for now.
+- **lt.** This computer's name is chosen once and stays the same when the
+  network name changes. Setup checks Antigravity's sign-in instead of
+  warning. Linking this computer never fails silently: it waits for the
+  desktop's approval, says when a step isn't confirmed here yet (with a
+  retry), and says when the relay can't be reached.
 
 ## 0.4.0
 
