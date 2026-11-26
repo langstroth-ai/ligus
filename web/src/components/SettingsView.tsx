@@ -92,7 +92,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "models", label: "Models & runtimes", icon: <IconHexagon size={16} />, keywords: ["api key", "provider", "anthropic", "openai", "openrouter", "ollama", "claude", "model", "runtime", "endpoint", "agent", "prompt"] },
       { id: "tools", label: "Tools & MCP", icon: <IconWrench size={16} />, keywords: ["mcp", "server", "linear", "github", "tool", "integration"] },
       { id: "permissions", label: "Permissions", icon: <IconLock size={16} />, keywords: ["permission", "bypass", "shell", "edits", "file access", "safety"] },
-      { id: "sandbox", label: "Sandbox", icon: <IconLock size={16} />, keywords: ["sandbox", "home", "folder", "read", "write", "grant", "allow", "path", "shell", "owner", "toolchain", "seatbelt", "landlock", "bubblewrap"] },
+      { id: "sandbox", label: "Sandbox", icon: <IconLock size={16} />, keywords: ["sandbox", "home", "folder", "read", "write", "grant", "allow", "path", "shell", "owner", "toolchain", "seatbelt", "landlock", "bubblewrap", "local server", "loopback", "agy"] },
       { id: "flow", label: "Flow", icon: <IconComb size={16} />, keywords: ["routing", "route", "shadow", "hand-off", "handoff", "queue", "review queue", "task board", "marks", "worktree"] },
     ],
   },

@@ -64,6 +64,11 @@ writable paths, the same egress allow-list. They differ in how.
   kernels before 6.12 (Landlock ABI below 6).
 - **No terminals.** `/dev/pts` belongs to your real sessions, so the agent
   gets none (bubblewrap gives it a private one).
+- **No local servers.** Without a network namespace nothing can contain a
+  listener, so a CLI that runs its own helper server (agy's language
+  server) fails here, even with its agent's
+  [local-servers switch](../../ligus/concepts/security.md#local-servers) on.
+  Under bubblewrap each turn has its own loopback, where it works.
 - **The worktree's top level is fixed** (see Writes above). This is the
   limit agents notice most: a build or install that creates a new top-level
   directory (`cargo build` without `target/`, `npm install` without

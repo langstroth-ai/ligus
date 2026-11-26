@@ -65,6 +65,13 @@ impl CliKind {
             CliKind::Copilot => "brew install --cask copilot-cli   (or: npm install -g @github/copilot)",
         }
     }
+    /// Why a refused listening socket stops this CLI.
+    fn local_server_hint(self) -> &'static str {
+        match self {
+            CliKind::Antigravity => "agy needs to run a local helper server:",
+            CliKind::Copilot => "Copilot CLI tried to run a local server:",
+        }
+    }
     fn usage_hint(self) -> &'static str {
         match self {
             CliKind::Antigravity => {
@@ -82,7 +89,18 @@ impl CliKind {
 pub enum CliFailure {
     NotLoggedIn,
     UsageLimit,
+    /// The sandbox refused a listening socket (agy's language server on
+    /// 127.0.0.1:0): the agent's local-servers grant is off.
+    LocalServerDenied,
     Other,
+}
+
+/// Whether `t` (lowercased) is a refused listening socket: Go's
+/// `listen tcp 127.0.0.1:0: bind: operation not permitted`, or the same from
+/// another runtime.
+fn local_server_denied(t: &str) -> bool {
+    let denied = t.contains("operation not permitted") || t.contains("permission denied");
+    denied && (t.contains("bind: ") || t.contains("listen tcp") || t.contains("listen(") || t.contains("language server failed to start"))
 }
 
 /// Classify a CLI error message (stderr / an error event). Order matters:
@@ -123,7 +141,9 @@ pub fn classify_failure(text: &str) -> CliFailure {
         "ai credit",
         "too many requests",
     ];
-    if AUTH.iter().any(|p| t.contains(p)) {
+    if local_server_denied(&t) {
+        CliFailure::LocalServerDenied
+    } else if AUTH.iter().any(|p| t.contains(p)) {
         CliFailure::NotLoggedIn
     } else if LIMIT.iter().any(|p| t.contains(p)) {
         CliFailure::UsageLimit
@@ -140,10 +160,31 @@ pub fn failure_error(kind: CliKind, detail: &str) -> ProviderError {
     let msg = match classify_failure(detail) {
         CliFailure::NotLoggedIn => format!("{} is not signed in on this host. {} ({detail})", kind.display(), kind.login_hint()),
         CliFailure::UsageLimit => format!("{} hit a usage limit. {} ({detail})", kind.display(), kind.usage_hint()),
+        CliFailure::LocalServerDenied => format!("{} ({detail})", local_server_message(kind, crate::executor::sandbox_status().kind)),
         CliFailure::Other if detail.is_empty() => format!("{} failed without an error message.", kind.display()),
         CliFailure::Other => format!("{}: {detail}", kind.display()),
     };
     ProviderError::Subprocess(msg)
+}
+
+/// What a refused local server means for `cli` on a host of sandbox tier
+/// `tier`, and what to do.
+pub(crate) fn local_server_message(cli: CliKind, tier: crate::executor::ExecutorKind) -> String {
+    if tier == crate::executor::ExecutorKind::Seatbelt {
+        return match cli {
+            CliKind::Antigravity => "agy needs a local helper server, which the macOS sandbox can't allow safely yet; run agy agents on a Linux host with the bubblewrap sandbox, or use another harness.".into(),
+            CliKind::Copilot => "Copilot CLI tried to run a local server, which the macOS sandbox can't allow safely yet; run it on a Linux host with the bubblewrap sandbox.".into(),
+        };
+    }
+    format!("{} {}", cli.local_server_hint(), local_servers_fix_on(tier))
+}
+
+pub(crate) fn local_servers_fix_on(kind: crate::executor::ExecutorKind) -> String {
+    use crate::executor::ExecutorKind as K;
+    match kind {
+        K::Landlock => "this host's sandbox (Landlock, without namespaces) can't give it a private loopback, so local servers stay off here; run the agent on a host where bubblewrap works (ligus doctor --sandbox says why it doesn't here).".into(),
+        _ => "turn on 'May run local servers' for this agent (ligus agents set <agent> --local-servers on, or Settings, Sandbox on the desktop; the workspace Owner's switch).".into(),
+    }
 }
 
 /// The default binary of a subscription CLI runtime.

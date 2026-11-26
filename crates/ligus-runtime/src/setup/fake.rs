@@ -47,6 +47,8 @@ pub struct Fake {
     /// Every write, in order.
     pub writes: Vec<String>,
     pub test_turn: Result<TestTurn, OpsError>,
+    /// Agents whose local-servers grant is on.
+    pub local_servers: Vec<Uuid>,
 }
 
 impl Default for Fake {
@@ -85,6 +87,7 @@ impl Default for Fake {
             needs_presence: Vec::new(),
             writes: Vec::new(),
             test_turn: Ok(TestTurn { ok: true, latency_ms: 900, detail: "PINGOK".into() }),
+            local_servers: Vec::new(),
         }
     }
 }
@@ -168,8 +171,26 @@ impl SetupOps for Fake {
         self.agents.push(AgentFact { id, name: name.into(), runtime_id: runtime_id.into() });
         Ok(id)
     }
+    fn local_servers(&self, agent_id: Uuid) -> bool {
+        self.local_servers.contains(&agent_id)
+    }
+    fn set_local_servers(&mut self, agent_id: Uuid, on: bool) -> OpsResult<()> {
+        let name = self.agents.iter().find(|a| a.id == agent_id).map(|a| a.name.clone()).unwrap_or_default();
+        self.write("set_local_servers", format!("{name} {on}"))?;
+        self.local_servers.retain(|a| *a != agent_id);
+        if on {
+            self.local_servers.push(agent_id);
+        }
+        Ok(())
+    }
     fn test_turn(&mut self, _r: &str) -> OpsResult<TestTurn> {
         self.test_turn.clone()
+    }
+    fn test_turn_with(&mut self, r: &str, local_servers: bool) -> OpsResult<TestTurn> {
+        if local_servers {
+            self.writes.push(format!("test_turn_with_local_servers {r}"));
+        }
+        self.test_turn(r)
     }
     fn mcp_servers(&self) -> Vec<McpFact> {
         self.mcp.clone()
