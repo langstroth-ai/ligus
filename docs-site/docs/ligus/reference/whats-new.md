@@ -8,6 +8,12 @@ Full release notes are on the
 
 ### Added
 
+- **A message that wouldn't send ("this draft is out of date") sends
+  again.** After older reply pieces were pulled back from the relay, every
+  message to that chat from this computer was refused as out of date, and
+  Retry didn't help. A message now links to this computer's newest event in
+  the chat, whatever order the relay delivered them in, so it sends the first
+  time.
 - **Agents that run their own helper server.** The Google Antigravity CLI
   (`agy`) starts a local language server, which the agent sandbox refused
   (`bind: operation not permitted`). A per-agent **May run local servers**
