@@ -34,6 +34,28 @@ Full release notes are on the
   the desktop, a question you already answered sits above the reply that
   reports your answer. Replies from devices still on 0.4.0 show right too,
   once the device or box showing them is updated.
+- **A phone lists only your own direct messages.** A box used to list every
+  DM it holds to every paired phone, so someone else's phone could see a DM
+  that wasn't theirs. Now a phone sees only the DMs its person is in, and
+  none when the box can't tell whose phone it is.
+- **Notes on a proposal from the phone are turned off for now.** A note sent
+  from the phone was written as the box, not as you. The box now refuses it
+  and the phone hides the note field: add notes from your desktop for now.
+  Votes and *Send to agent to revise* still work from the phone.
+- **The chat says when an agent runs on a host's default runtime.** A worker
+  or box without an agent's runtime runs it on its `runtimes.toml` catch-all
+  (`id = "*"`), with that entry's model, and used to do so without saying.
+  The turn still runs, and the chat now shows, once, "@agent ran on this host's
+  default runtime (model) because it doesn't have runtime ...". With no
+  catch-all, the turn is refused as before, and the chat now says why.
+- **Scratch repositories survive a damaged list.** If the box's list of
+  scratch repositories can't be read, it is kept aside instead of being
+  replaced by an empty one.
+- **Forget host stops that box's notifications, and the box follows your
+  notification switches.** Forgetting a host on the phone now tells the box
+  to stop pushing to it first (if the box is reachable), and a box sends only
+  the kinds of notification the phone's switches allow.
+
 ### Docs
 - **The box pages say how a box really joins.** Setting up `ligus serve` or
   `ligus worker` no longer tells you to enroll the box with your own invite

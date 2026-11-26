@@ -276,6 +276,32 @@ pub fn runtime_for<'a>(runtimes: &'a [WorkspaceRuntime], agent: &WorkspaceAgent)
     runtimes.iter().find(|r| r.id == agent.runtime_id).or_else(|| runtimes.iter().find(|r| r.id == "*"))
 }
 
+/// Whether this is the first turn in `chat` (since this process started)
+/// that `agent` runs on the catch-all for its missing runtime: the chat is
+/// told once, not on every turn.
+fn catch_all_first_time(chat: Uuid, agent: &WorkspaceAgent) -> bool {
+    static SEEN: std::sync::Mutex<Option<HashSet<(Uuid, Uuid, String)>>> = std::sync::Mutex::new(None);
+    let mut g = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    g.get_or_insert_with(HashSet::new).insert((chat, agent.id, agent.runtime_id.clone()))
+}
+
+/// What the chat is told about a turn of `agent` on runtime `rt` here: a
+/// line when it runs on the catch-all (`id = "*"`) because this host
+/// doesn't have the agent's own runtime (so another model answers), or
+/// when there is no runtime for it at all (the turn is refused). Nothing
+/// when it runs on its own runtime.
+pub fn runtime_note(agent: &WorkspaceAgent, rt: Option<&WorkspaceRuntime>) -> Option<String> {
+    let id = ligus_proto::names::clean_display_name(&agent.runtime_id);
+    match rt {
+        Some(r) if r.id == "*" && agent.runtime_id != "*" => {
+            let model = if r.model.trim().is_empty() { r.name.clone() } else { r.model.clone() };
+            Some(format!("@{} ran on this host's default runtime ({model}) because it doesn't have runtime '{id}'", agent.name))
+        }
+        Some(_) => None,
+        None => Some(format!("@{} did not run: this host doesn't have runtime '{id}'; update it or pick another host", agent.name)),
+    }
+}
+
 /// Build a ResolvedRuntime for an agent from its workspace runtime (or this
 /// host's own, see [`local_runtimes`]). A detached agent never runs on a
 /// member's personal key (§12.5) — this returns an error if neither knows the
@@ -592,6 +618,18 @@ async fn run_turn(
         sink.status(pm.session_id, pm.agent_id, TurnState::Done, Some("agent no longer exists"));
         return Ok(());
     };
+    // Never silently on another model: the chat says when the catch-all
+    // stands in, and why a turn with no runtime here doesn't run.
+    let found = runtime_for(runtimes, &agent);
+    if let Some(note) = runtime_note(&agent, found).filter(|_| found.is_none() || catch_all_first_time(s.id, &agent)) {
+        let _ = lock(svc).post_system_note(s.id, s.workspace_id, note);
+        sink.changed();
+        if found.is_none() {
+            // An error puts the mention in the failed set, so the note
+            // isn't re-posted every tick.
+            return Err(anyhow!("refused: this host doesn't have runtime '{}'", agent.runtime_id));
+        }
+    }
     let (mut rt, rt_label) = agent_workspace_runtime(runtimes, &agent)?;
     // The gateway's attribution (when its operator turned it on) hashes these.
     if let Some(g) = rt.gateway.as_mut() {
@@ -982,6 +1020,16 @@ credential = { kind = "none" }
         assert_eq!(runtime_for(&rts, &agent("desktop-local-id")).unwrap().model, "gemma4:12b");
         let (rt, _) = agent_workspace_runtime(&rts, &agent("desktop-local-id")).unwrap();
         assert!(rt.runs_agent_tools());
+        // It isn't silent: the chat is told which model stands in, and why.
+        assert_eq!(
+            runtime_note(&agent("desktop-local-id"), runtime_for(&rts, &agent("desktop-local-id"))).as_deref(),
+            Some("@coder ran on this host's default runtime (gemma4:12b) because it doesn't have runtime 'desktop-local-id'")
+        );
+        assert_eq!(runtime_note(&agent("lab"), runtime_for(&rts, &agent("lab"))), None);
+        assert_eq!(
+            runtime_note(&agent("x"), None).as_deref(),
+            Some("@coder did not run: this host doesn't have runtime 'x'; update it or pick another host")
+        );
         // A workspace runtime with the agent's id wins over the catch-all.
         let mut all = vec![WorkspaceRuntime::new("desktop-local-id", "WS", ModelProviderKind::Ollama, "llama3.2")];
         all.extend(rts);

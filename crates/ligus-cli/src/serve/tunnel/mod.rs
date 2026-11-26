@@ -918,6 +918,10 @@ impl TunnelHost {
                 println!("push: {} to {who} not sent: notifications are off on that phone (the app hasn't turned them on for this host)", content.kind);
                 continue;
             }
+            if !rec.wants_kind(&content.kind) {
+                println!("push: {} to {who} not sent: that phone turned this kind of notification off", content.kind);
+                continue;
+            }
             let group = content.chat_id.as_deref().or(content.coalesce.as_deref());
             let verdict = Self::lock(&self.push_gate).check(&rec.pid, &content.kind, group, at);
             if verdict != push::Verdict::Send {
