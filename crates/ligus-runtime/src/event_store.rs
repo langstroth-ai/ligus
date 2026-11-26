@@ -83,11 +83,17 @@ pub fn syncable(env: &SessionEventEnvelope) -> Result<()> {
 }
 
 mod agent_usage;
+mod blob_renewals;
 mod held;
 mod repo_tables;
+mod storage_v2;
 pub use held::{claimed_account, HeldEvent, HeldStats, HoldItem, RefetchRow, HELD_PER_SIGNER, HELD_PER_WORKSPACE, HELD_REFETCH_PER_WORKSPACE, HELD_REFETCH_TRIES, HELD_RETRY_EVERY, HELD_TOTAL, HELD_TTL_MS};
 pub use agent_usage::{parse_day, utc_day, AgentUsageRow};
+pub use blob_renewals::BlobRenewal;
 pub use repo_tables::{CheckoutSource, RepoMapping};
+pub use storage_v2::{
+    invite_secret, redeem_secret, relay_origin, seed_backups, SyncKey, SyncMigration, NEWER_DATA_MESSAGE, PERSON_SEED_KEEP_MS, SCHEMA_VERSION,
+};
 
 /// A chat responder's compaction state as kept on this device: the first
 /// kept message (`boundary`), the ids the `summary` covers (everything before
@@ -115,6 +121,16 @@ pub struct EventStore {
     /// Each log's lamport head ([`EventStore::lamport_head`]), by
     /// (workspace, session), with the rows it was computed over.
     heads: Mutex<HashMap<(Uuid, Uuid), (RowsSig, Option<ligus_core::CfgFrontier>)>>,
+    /// The secret store this device's redeem key seeds move to (identity
+    /// model v2, 10.3): the one the host chose for the data dir; none in
+    /// memory or when the host chose none (the seeds stay in their tables).
+    secrets: Option<Arc<dyn crate::secret_store::SecretStore>>,
+    /// `ligus.db.lock`, held shared while this connection is open (M1 takes
+    /// it exclusive).
+    lock: Option<std::fs::File>,
+    /// The schema version of a database a newer Ligus wrote: opened
+    /// read-only ([`NEWER_DATA_MESSAGE`]).
+    newer: Option<i64>,
 }
 
 /// A cached chat projection: its rows, the config events held when it was
@@ -480,18 +496,51 @@ impl Drop for WriteTx<'_> {
 
 impl EventStore {
     /// Open (creating if needed) the event store at `path`.
+    ///
+    /// A database a newer Ligus wrote (its `user_version` above
+    /// [`SCHEMA_VERSION`]) is opened read-only and left as it is:
+    /// [`EventStore::newer_schema`] says so ([`NEWER_DATA_MESSAGE`]).
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
         let conn = Connection::open(path)?;
-        Self::init(conn)
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        let version = storage_v2::user_version(&conn)?;
+        if version > SCHEMA_VERSION {
+            drop(conn);
+            return Self::open_read_only(path, version);
+        }
+        let lock = storage_v2::shared_lock(path);
+        let mut store = Self::init(conn, Some(path))?;
+        store.lock = lock;
+        Ok(store)
+    }
+
+    /// A database a newer Ligus wrote, read-only: nothing here changes it.
+    fn open_read_only(path: &Path, version: i64) -> Result<Self> {
+        use rusqlite::OpenFlags;
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        tracing::error!(target: "event_store", version, known = SCHEMA_VERSION, "{NEWER_DATA_MESSAGE}");
+        Ok(Self {
+            conn,
+            projections: Mutex::new(HashMap::new()),
+            configs: Mutex::new(HashMap::new()),
+            heads: Mutex::new(HashMap::new()),
+            secrets: None,
+            lock: None,
+            newer: Some(version),
+        })
     }
 
     /// Open an in-memory store (tests).
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        Self::init(conn)
+        Self::init(conn, None)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
+    /// `path`: the file as the host named it (its data dir picks the secret
+    /// store; SQLite's own name for it may be a resolved one).
+    fn init(conn: Connection, path: Option<&Path>) -> Result<Self> {
         // First, before anything touches the file: a connection that meets
         // another one's lock waits for it (up to the timeout) instead of
         // failing at once with "database is locked". The pragmas below and
@@ -515,6 +564,17 @@ impl EventStore {
         // changed; a failed upgrade removes its own backup.
         let _upgrade = upgrade_lock().lock().unwrap_or_else(|p| p.into_inner());
         let db = db_path(&conn);
+        // M2 (identity model v2, 11), first on this start: redeem key seeds
+        // are copied to the secret store the host chose, and read back,
+        // before any backup below is taken. Its deletions wait for the log
+        // (below).
+        let secrets = path.and_then(Path::parent).and_then(crate::secret_store::registered);
+        let move_seeds = secrets.is_some() && path.is_some_and(storage_v2::first_open);
+        if let (true, Some(store)) = (move_seeds, &secrets) {
+            if let Err(e) = storage_v2::copy_seeds(&conn, store.as_ref(), storage_v2::now_ms()) {
+                tracing::warn!(target: "event_store", "moving redeem key seeds to the secret store: {e}");
+            }
+        }
         if let Some(db) = &db {
             remove_migration_backups(db);
         }
@@ -564,7 +624,29 @@ impl EventStore {
             }
         }
         drop(_upgrade);
-        Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()), heads: Mutex::new(HashMap::new()) })
+        let store = Self {
+            conn,
+            projections: Mutex::new(HashMap::new()),
+            configs: Mutex::new(HashMap::new()),
+            heads: Mutex::new(HashMap::new()),
+            secrets,
+            lock: None,
+            newer: None,
+        };
+        if move_seeds {
+            match store.move_seeds() {
+                Ok((_, deleted)) if deleted > 0 => tracing::info!(target: "event_store", deleted, "deleted redeem key seeds of closed invites"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(target: "event_store", "retiring redeem key seeds: {e}"),
+            }
+            if let Some(db) = &db {
+                let backups = seed_backups(db);
+                if !backups.is_empty() {
+                    tracing::warn!(target: "event_store", backups = ?backups, "these database backups hold redeem key seeds; delete once you no longer need the backup");
+                }
+            }
+        }
+        Ok(store)
     }
 
     fn init_schema(conn: &Connection) -> Result<()> {
@@ -633,6 +715,16 @@ impl EventStore {
             -- Device-local (Phase B): the redeem key seed of the box
             -- admission (or person invite) this device redeems (from its
             -- code).
+            -- Device-local: the person each phone first resolved to here,
+            -- while it had one certifier (identity model v2, 7.3a). A
+            -- certificate someone adds later doesn't move it.
+            CREATE TABLE IF NOT EXISTS phone_persons (
+                workspace_id TEXT NOT NULL,
+                device_id    TEXT NOT NULL,
+                account_id   TEXT NOT NULL,
+                PRIMARY KEY (workspace_id, device_id)
+            );
+
             CREATE TABLE IF NOT EXISTS join_redeem_keys (
                 workspace_id TEXT PRIMARY KEY,
                 seed         TEXT NOT NULL
@@ -791,8 +883,11 @@ impl EventStore {
             "#,
         )?;
         repo_tables::init(conn)?;
+        storage_v2::init(conn)?;
+        storage_v2::stamp_if_nothing_to_migrate(conn)?;
         held::init(conn)?;
         agent_usage::init(conn)?;
+        blob_renewals::init(conn)?;
         // B1: the key epoch each relay body arrived sealed under (device-local,
         // unsigned; NULL for events authored here or received unsealed).
         let has_epoch: bool = conn
@@ -1609,80 +1704,6 @@ impl EventStore {
         Ok(out)
     }
 
-    /// Park a relay body this device can't open yet (A-13), with priority 0.
-    pub fn park_body(&self, workspace: &str, seq: u64, body: &serde_json::Value) -> Result<()> {
-        self.park_bodies(workspace, &[(seq, body, 0)])
-    }
-
-    /// Park relay bodies this device can't open yet (A-13), each with how
-    /// much it is worth keeping (`priority`, higher first; see
-    /// `KeyringEngine::park_priority`). Keeps at most [`PARKED_KEEP`] per
-    /// room: past that the lowest priority goes first, oldest first within a
-    /// priority (B-11: a flood of junk can't evict a body waiting for an
-    /// authorized rotation).
-    pub fn park_bodies(&self, workspace: &str, bodies: &[(u64, &serde_json::Value, u8)]) -> Result<()> {
-        if bodies.is_empty() {
-            return Ok(());
-        }
-        let tx = write_tx(&self.conn)?;
-        for (seq, body, priority) in bodies {
-            tx.execute(
-                "INSERT OR REPLACE INTO parked_bodies (workspace, seq, body, priority) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![workspace, *seq as i64, serde_json::to_string(body)?, *priority as i64],
-            )?;
-        }
-        tx.execute(
-            "DELETE FROM parked_bodies WHERE workspace = ?1 AND seq NOT IN \
-             (SELECT seq FROM parked_bodies WHERE workspace = ?1 ORDER BY priority DESC, seq DESC LIMIT ?2)",
-            rusqlite::params![workspace, PARKED_KEEP],
-        )?;
-        tx.execute(
-            "DELETE FROM parked_bodies WHERE workspace = ?1 AND seq IN \
-             (SELECT seq FROM (SELECT seq, SUM(length(CAST(body AS BLOB))) OVER (ORDER BY priority DESC, seq DESC ROWS UNBOUNDED PRECEDING) AS kept \
-              FROM parked_bodies WHERE workspace = ?1) WHERE kept > ?2)",
-            rusqlite::params![workspace, PARKED_BYTES_KEEP],
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Re-rank parked bodies (the keyring changed: a rotation they wait for
-    /// may now be authorized, or one they claim may have turned out junk).
-    pub fn set_parked_priorities(&self, workspace: &str, priorities: &[(u64, u8)]) -> Result<()> {
-        let tx = write_tx(&self.conn)?;
-        for (seq, priority) in priorities {
-            tx.execute(
-                "UPDATE parked_bodies SET priority = ?3 WHERE workspace = ?1 AND seq = ?2",
-                rusqlite::params![workspace, *seq as i64, *priority as i64],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Every parked body of a room, by relay sequence.
-    pub fn parked_bodies(&self, workspace: &str) -> Result<Vec<(u64, serde_json::Value)>> {
-        let mut stmt = self.conn.prepare("SELECT seq, body FROM parked_bodies WHERE workspace = ?1 ORDER BY seq ASC")?;
-        let rows = stmt.query_map([workspace], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (seq, body) = row?;
-            if let Ok(v) = serde_json::from_str(&body) {
-                out.push((seq as u64, v));
-            }
-        }
-        Ok(out)
-    }
-
-    /// Forget a parked body (it opened, or proved bad).
-    pub fn unpark(&self, workspace: &str, seq: u64) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM parked_bodies WHERE workspace = ?1 AND seq = ?2",
-            rusqlite::params![workspace, seq as i64],
-        )?;
-        Ok(())
-    }
-
     /// The key epoch an event arrived sealed under, if it was received sealed.
     pub fn sealed_epoch_of(&self, event_id: Uuid) -> Result<Option<u32>> {
         let v: Option<Option<i64>> = self
@@ -1712,60 +1733,6 @@ impl EventStore {
                 Err(e) => {
                     tracing::warn!(error = %e, "skipping unparseable event row during load");
                 }
-            }
-        }
-        Ok(out)
-    }
-
-    // --- Durable sync state (#2): survives process restarts so the sync
-    // engine resumes its fetch cursor + push-dedup instead of restarting from
-    // scratch. Keyed by the relay `workspace`/room string. ---
-
-    /// The durable fetch cursor for a workspace — the highest relay server
-    /// sequence applied so far (0 if the workspace has never synced).
-    pub fn sync_cursor(&self, workspace: &str) -> Result<u64> {
-        let seq: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT last_fetched_seq FROM sync_cursor WHERE workspace = ?1",
-                [workspace],
-                |row| row.get(0),
-            )
-            .optional()?;
-        Ok(seq.unwrap_or(0).max(0) as u64)
-    }
-
-    /// Persist the fetch cursor for a workspace (upsert).
-    pub fn set_sync_cursor(&self, workspace: &str, last_fetched_seq: u64) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO sync_cursor (workspace, last_fetched_seq) VALUES (?1, ?2) \
-             ON CONFLICT(workspace) DO UPDATE SET last_fetched_seq = excluded.last_fetched_seq",
-            rusqlite::params![workspace, last_fetched_seq as i64],
-        )?;
-        Ok(())
-    }
-
-    /// Mark an event as already on the relay for a workspace (idempotent), so a
-    /// later `take_unpushed` — even after a restart — never re-pushes it.
-    pub fn mark_pushed(&self, workspace: &str, event_id: Uuid) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR IGNORE INTO pushed (workspace, event_id) VALUES (?1, ?2)",
-            rusqlite::params![workspace, event_id.to_string()],
-        )?;
-        Ok(())
-    }
-
-    /// Every event_id already pushed for a workspace — used to seed the sync
-    /// engine's in-memory dedup cache on construction.
-    pub fn pushed_ids(&self, workspace: &str) -> Result<Vec<Uuid>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT event_id FROM pushed WHERE workspace = ?1 ORDER BY event_id")?;
-        let rows = stmt.query_map([workspace], |row| row.get::<_, String>(0))?;
-        let mut out = Vec::new();
-        for s in rows {
-            if let Ok(id) = Uuid::parse_str(&s?) {
-                out.push(id);
             }
         }
         Ok(out)
@@ -1981,6 +1948,36 @@ impl EventStore {
         )?;
         let rows = stmt.query_map([since_ms], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Each stored event (any log of `workspace_id`, equivocations
+    /// included) whose envelope names `device` as its signer, oldest first,
+    /// until `visit` returns `false`. Through `idx_events_by_signer`. Rows
+    /// that don't parse are skipped. The signature is **not** checked here:
+    /// ingest stores some trust-bootstrap kinds from a signer it can't verify
+    /// yet, so a caller that reads who the device acted for checks each one
+    /// (`crate::device_enroll::chosen_accounts`).
+    pub fn for_each_signed_by(
+        &self,
+        workspace_id: Uuid,
+        device: Uuid,
+        mut visit: impl FnMut(SessionEventEnvelope) -> bool,
+    ) -> Result<()> {
+        for table in ["events", "equivocations"] {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT envelope_json FROM {table} WHERE json_extract(envelope_json, '$.signerDeviceId') = ?1 \
+                 AND +workspace_id = ?2 ORDER BY row_id ASC"
+            ))?;
+            let mut rows = stmt.query(rusqlite::params![device.to_string(), workspace_id.to_string()])?;
+            while let Some(row) = rows.next()? {
+                let json: String = row.get(0)?;
+                let Ok(env) = serde_json::from_str::<SessionEventEnvelope>(&json) else { continue };
+                if !visit(env) {
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The newest event `signer` put on `session_id` here (by local row
@@ -2342,60 +2339,27 @@ impl EventStore {
         Ok(())
     }
 
-    /// Keep the redeem key seed of the box admission this box redeems.
-    pub fn set_join_redeem_key(&self, workspace_id: Uuid, seed: &[u8; 32]) -> Result<()> {
-        let hex: String = seed.iter().map(|b| format!("{b:02x}")).collect();
-        self.conn.execute(
-            "INSERT INTO join_redeem_keys (workspace_id, seed) VALUES (?1, ?2) \
-             ON CONFLICT(workspace_id) DO UPDATE SET seed = excluded.seed",
-            rusqlite::params![workspace_id.to_string(), hex],
-        )?;
-        Ok(())
-    }
-
-    /// Keep (or, with `None`, forget) the redeem key seed of the invite this
-    /// device redeems to join `workspace_id`: set with the invite, so a seed
-    /// from an earlier code never proves a later one.
-    pub fn set_join_redeem(&self, workspace_id: Uuid, seed: Option<&[u8; 32]>) -> Result<()> {
-        match seed {
-            Some(seed) => self.set_join_redeem_key(workspace_id, seed),
-            None => self.clear_join_redeem_key(workspace_id),
-        }
-    }
-
-    /// Keep the redeem key seed of person invite `invite_id` this device
-    /// issued, for its code.
-    pub fn set_issued_invite_key(&self, workspace_id: Uuid, invite_id: Uuid, seed: &[u8; 32]) -> Result<()> {
-        let hex: String = seed.iter().map(|b| format!("{b:02x}")).collect();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO issued_invite_keys (workspace_id, invite_id, seed) VALUES (?1, ?2, ?3)",
-            rusqlite::params![workspace_id.to_string(), invite_id.to_string(), hex],
-        )?;
-        Ok(())
-    }
-
-    /// The redeem key seed of person invite `invite_id` this device issued,
-    /// forgotten here: its code carries it from now on.
-    pub fn take_issued_invite_key(&self, workspace_id: Uuid, invite_id: Uuid) -> Result<Option<[u8; 32]>> {
-        let seed = self.issued_invite_key(workspace_id, invite_id)?;
-        self.conn.execute(
-            "DELETE FROM issued_invite_keys WHERE workspace_id = ?1 AND invite_id = ?2",
-            rusqlite::params![workspace_id.to_string(), invite_id.to_string()],
-        )?;
-        Ok(seed)
-    }
-
-    /// The redeem key seed of person invite `invite_id` this device issued.
-    pub fn issued_invite_key(&self, workspace_id: Uuid, invite_id: Uuid) -> Result<Option<[u8; 32]>> {
+    /// The person phone `device` first resolved to here, if recorded.
+    pub fn phone_person_pin(&self, workspace_id: Uuid, device: Uuid) -> Result<Option<Uuid>> {
         let v: Option<String> = self
             .conn
             .query_row(
-                "SELECT seed FROM issued_invite_keys WHERE workspace_id = ?1 AND invite_id = ?2",
-                rusqlite::params![workspace_id.to_string(), invite_id.to_string()],
+                "SELECT account_id FROM phone_persons WHERE workspace_id = ?1 AND device_id = ?2",
+                rusqlite::params![workspace_id.to_string(), device.to_string()],
                 |r| r.get(0),
             )
             .optional()?;
-        Ok(v.and_then(|h| crate::box_admission::seed_from_hex(&h)))
+        Ok(v.and_then(|s| Uuid::parse_str(&s).ok()))
+    }
+
+    /// Record the person phone `device` resolved to while it had one
+    /// certifier; a recorded one is kept (first wins).
+    pub fn pin_phone_person(&self, workspace_id: Uuid, device: Uuid, account: Uuid) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO phone_persons (workspace_id, device_id, account_id) VALUES (?1, ?2, ?3)",
+            rusqlite::params![workspace_id.to_string(), device.to_string(), account.to_string()],
+        )?;
+        Ok(())
     }
 
     /// Link box relay subject `subject` (minted by this Admin's device) to
@@ -2420,22 +2384,6 @@ impl EventStore {
             )
             .optional()?;
         Ok(v.and_then(|s| Uuid::parse_str(&s).ok()))
-    }
-
-    /// Forget the redeem key seed once the redemption it proved is written:
-    /// it admits no one else, and is kept no longer than needed.
-    pub fn clear_join_redeem_key(&self, workspace_id: Uuid) -> Result<()> {
-        self.conn.execute("DELETE FROM join_redeem_keys WHERE workspace_id = ?1", [workspace_id.to_string()])?;
-        Ok(())
-    }
-
-    /// The redeem key seed this box proves its admission with, if any.
-    pub fn join_redeem_key(&self, workspace_id: Uuid) -> Result<Option<[u8; 32]>> {
-        let v: Option<String> = self
-            .conn
-            .query_row("SELECT seed FROM join_redeem_keys WHERE workspace_id = ?1", [workspace_id.to_string()], |r| r.get(0))
-            .optional()?;
-        Ok(v.and_then(|h| crate::box_admission::seed_from_hex(&h)))
     }
 
     /// Every envelope of `workspace_id`'s config log (equivocations
@@ -2700,6 +2648,10 @@ impl EventStore {
                 tx.execute("DELETE FROM sync_cursor WHERE workspace = ?1", [room])?;
                 tx.execute("DELETE FROM pushed WHERE workspace = ?1", [room])?;
             }
+            // The same workspace's state on every relay.
+            for table in ["sync_cursor_v2", "pushed_v2", "parked_bodies_v2"] {
+                tx.execute(&format!("DELETE FROM {table} WHERE workspace_id = ?1"), [&ws_s])?;
+            }
         }
         tx.commit()?;
         self.projections.lock().unwrap_or_else(|p| p.into_inner()).clear();
@@ -2839,13 +2791,14 @@ mod tests {
     #[test]
     fn final_review_parked_bodies_are_capped_by_bytes() {
         let store = EventStore::open_in_memory().unwrap();
+        let r = SyncKey::new("https://relay.example", ligus_core::room_workspace_id("r"));
         let keep = serde_json::json!({"version": 2, "kid": "aaaaaaaaaaaaaaaa", "ciphertext": "pending"});
-        store.park_bodies("r", &[(1, &keep, 9)]).unwrap();
+        store.park_bodies(&r, &[(1, &keep, 9)]).unwrap();
         let big = serde_json::json!({"version": 77, "kid": "deadbeefdeadbeef", "ciphertext": "A".repeat(4 << 20)});
         for s in 2..=40u64 {
-            store.park_bodies("r", &[(s, &big, 0)]).unwrap();
+            store.park_bodies(&r, &[(s, &big, 0)]).unwrap();
         }
-        let parked = store.parked_bodies("r").unwrap();
+        let parked = store.parked_bodies(&r).unwrap();
         let bytes: usize = parked.iter().map(|(_, b)| b.to_string().len()).sum();
         assert!(bytes as i64 <= PARKED_BYTES_KEEP, "{bytes} bytes parked");
         assert!(parked.iter().any(|(s, _)| *s == 1), "the high-priority body was evicted");
@@ -3547,7 +3500,10 @@ mod tests {
     fn sync_cursor_and_pushed_are_durable_per_workspace() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("events.db");
-        let (a, b) = ("room-a", "room-b");
+        let (wa, wb) = (Uuid::new_v4(), Uuid::new_v4());
+        let (a, b) = (&SyncKey::new("https://relay.example/", wa), &SyncKey::new("https://relay.example", wb));
+        // The same workspace on another relay is another cursor.
+        let elsewhere = &SyncKey::new("https://other.example", wa);
         let e1 = Uuid::new_v4();
         let e2 = Uuid::new_v4();
         {
@@ -3570,6 +3526,9 @@ mod tests {
         want.sort();
         assert_eq!(ids, want, "pushed set persisted, deduped");
         assert!(store.pushed_ids(b).unwrap().is_empty(), "pushed set is per workspace");
+        assert_eq!(store.sync_cursor(elsewhere).unwrap(), 0, "keyed per relay");
+        assert!(store.pushed_ids(elsewhere).unwrap().is_empty(), "pushed set is per relay");
+        assert_eq!(*a, SyncKey::new("HTTPS://Relay.Example:443", wa), "one form of the relay URL");
     }
 
     #[test]
@@ -3745,8 +3704,9 @@ mod tests {
         ] {
             store.ingest(&e).unwrap();
         }
-        store.set_sync_cursor(leaked_room, 7).unwrap();
-        store.set_sync_cursor(room, 9).unwrap();
+        let relay = "https://relay.example";
+        store.set_sync_cursor(&SyncKey::new(relay, leaked_ws), 7).unwrap();
+        store.set_sync_cursor(&SyncKey::new(relay, room_ws), 9).unwrap();
 
         let keep = HashSet::from([room_ws]);
         let mut found = store.foreign_workspaces(&keep, me).unwrap();
@@ -3762,8 +3722,8 @@ mod tests {
         assert_eq!(store.max_row_id().unwrap(), 6);
         let left: i64 = store.conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 3, "the room's event, the legacy nil one, and this device's own");
-        assert_eq!(store.sync_cursor(leaked_room).unwrap(), 0, "a dropped room re-pulls from the start");
-        assert_eq!(store.sync_cursor(room).unwrap(), 9);
+        assert_eq!(store.sync_cursor(&SyncKey::new(relay, leaked_ws)).unwrap(), 0, "a dropped room re-pulls from the start");
+        assert_eq!(store.sync_cursor(&SyncKey::new(relay, room_ws)).unwrap(), 9);
 
         // The backup holds everything, and a second run is a no-op.
         let copy = EventStore::open(&backup).unwrap();

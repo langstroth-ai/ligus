@@ -149,6 +149,9 @@ pub(crate) struct AttachmentView {
     risky_by_name: bool,
     /// Shared by a host for an agent's approved offer.
     from_agent_offer: bool,
+    /// The relay no longer has it and this device holds no verified copy:
+    /// shown as "This file expired on the relay", not a download.
+    expired: bool,
     /// The messages (signed by the sharer) that place it: the only ones that
     /// show it.
     message_ids: Vec<String>,
@@ -176,7 +179,9 @@ pub(crate) fn list_attachments_sync(state: State<AppState>, session_id: String) 
     let rules = svc.attachment_rules(session.workspace_id).unwrap_or_default();
     let (_, role) = svc.attachment_standing(session.workspace_id).unwrap_or((ligus_core::ActorKind::Human, ligus_core::WorkspaceRole::Viewer));
     let placed = blob::placed_attachments(&session);
+    let gone = svc.gone_blobs(session.workspace_id).unwrap_or_default();
     drop(svc);
+    let cache_dir = blob::verified_cache_dir(&state.data_dir);
     let signed_by = |mid: &Uuid| session.authz.message_authors.get(mid).cloned();
     let own_local_paths = {
         let mut out = Vec::new();
@@ -222,6 +227,7 @@ pub(crate) fn list_attachments_sync(state: State<AppState>, session_id: String) 
                 name_class: class,
                 risky_by_name: class.risky() || attachment::double_extension(&a.name),
                 from_agent_offer: a.proposal_id.is_some(),
+                expired: !s.deleted && gone.contains(&a.blob_id) && !blob::cached_path(&cache_dir, a).exists(),
                 message_ids,
             }
         })
@@ -285,7 +291,17 @@ pub(crate) async fn check_attachment(state: State<'_, AppState>, session_id: Str
         Some(b) => b,
         None => {
             let (client, room, ring) = transport_for(&state, session.workspace_id)?;
-            blob::fetch_verified(&client, &room, &ring, &cache_dir, &a).await.map_err(|e| e.to_string())?
+            match blob::fetch_verified(&client, &room, &ring, &cache_dir, &a).await {
+                Ok(b) => b,
+                Err(e) => {
+                    // Gone from the relay: remembered, so the chat shows it
+                    // as expired from now on.
+                    if e == blob::BlobError::NotFound {
+                        let _ = state.service.lock().unwrap().mark_blob_gone(session.workspace_id, &a.blob_id, unix_now());
+                    }
+                    return Err(e.to_string());
+                }
+            }
         }
     };
     let name = a.name.clone();
@@ -518,6 +534,54 @@ pub(crate) async fn unblock_attachment_hash(ligus_app: tauri::AppHandle, workspa
 pub(crate) fn unblock_attachment_hash_sync(state: State<AppState>, workspace_id: String, sha256: String) -> Result<(), String> {
     let ws = crate::shown_workspace(&state, &workspace_id)?;
     state.service.lock().unwrap().unblock_attachment_hash(ws, &sha256).map_err(map_err)
+}
+
+fn unix_now() -> i64 {
+    ligus_core::Timestamp::now().inner().unix_timestamp()
+}
+
+/// Renew the relay blobs of the active workspace's live attachments
+/// (identity model v2, 10.5): the files this person shared, and every live
+/// one when they are an Admin (this is a desktop). A low-priority background
+/// job after a sync, at most once an hour; each blob at most once a day,
+/// past a third of its life. A relay without the retain route changes
+/// nothing; a blob it no longer has is shown as expired.
+pub(crate) fn renew_attachment_blobs(app: &AppHandle) {
+    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    static LAST: AtomicI64 = AtomicI64::new(0);
+    const EVERY_SECS: i64 = 60 * 60;
+    let now = unix_now();
+    if now - LAST.load(Ordering::SeqCst) < EVERY_SECS || RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let ws = state.active_workspace_id();
+        if !state.is_local_only_ws(ws) {
+            let due = state.service.lock().unwrap().blob_renewals_due(ws, true, now);
+            match due {
+                Ok(due) if !due.is_empty() => {
+                    if let Ok((client, room, _)) = transport_for(&state, ws) {
+                        let outcomes = blob::renew_blobs(&client, &room, &due).await;
+                        for (b, o) in &outcomes {
+                            if let blob::RenewalOutcome::Failed(e) = o {
+                                tracing::debug!(target: "attachments", blob = %b.chars().take(8).collect::<String>(), "renewal will be retried: {e}");
+                            }
+                        }
+                        if let Err(e) = state.service.lock().unwrap().record_blob_renewals(ws, &outcomes, now) {
+                            tracing::warn!(target: "attachments", "recording blob renewals: {e}");
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(target: "attachments", "planning blob renewals: {e}"),
+            }
+        }
+        LAST.store(now, Ordering::SeqCst);
+        RUNNING.store(false, Ordering::SeqCst);
+    });
 }
 
 /// Upload and share every agent offer this device produced that a person

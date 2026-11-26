@@ -266,7 +266,8 @@ limits refuse what goes over them (nothing is evicted):
 | `LANGSTROTH_RELAY_BLOB_ROOM_MAX_COUNT` | `2000` | files per workspace (`507 blob_room_count`) |
 | `LANGSTROTH_RELAY_BLOB_WRITER_MAX_BYTES` / `…_WRITER_MAX_COUNT` | 128 MiB / `500` | per member (token subject) per workspace (`507 blob_writer_bytes` / `blob_writer_count`) |
 | `LANGSTROTH_RELAY_BLOB_TOTAL_MAX_BYTES` | off | file bytes across the relay (`507 blob_total_bytes`) |
-| `LANGSTROTH_RELAY_BLOB_RETENTION_DAYS` | `30` | a file expires this long after upload (`0` = kept until deleted) |
+| `LANGSTROTH_RELAY_BLOB_RETENTION_DAYS` | `30` | a file expires this long after upload or its last renewal (`0` = kept until deleted) |
+| `LANGSTROTH_RELAY_BLOB_MAX_AGE_DAYS` | `365` | renewals never keep a file longer than this after upload (`0` = no cap). Set it to the retention to turn renewals off in effect |
 | `LANGSTROTH_RELAY_BLOB_RATE` / `…_BURST` | 1/s, burst 20 | uploads per member per workspace (`429 blob_rate`) |
 | `LANGSTROTH_RELAY_BLOB_MAX_INFLIGHT` / `…_WRITER_INFLIGHT` | `16` / `4` | uploads being received at once, relay-wide and per uploader (`429 blob_inflight`) |
 | `LANGSTROTH_RELAY_BLOB_DOWNLOAD_RATE` / `…_BURST` | 0.5/s, burst 100 | downloads of one file (`429 blob_download_rate`) |
@@ -277,10 +278,19 @@ With tenancy, a tenant's `limits` can set `blob_max_bytes` and
 `blob_room_max_count` (per workspace, replacing the relay-wide values). In the
 Helm chart these are the `blobs.*` values (`enabled`, `maxBytes`,
 `roomMaxBytes`, `roomMaxCount`, `writerMaxBytes`, `writerMaxCount`,
-`totalMaxBytes`, `retentionDays`, `rate`, `burst`); with
+`totalMaxBytes`, `retentionDays`, `maxAgeDays`, `rate`, `burst`); with
 `ingress.streamingDefaults` the chart raises the ingress body limit to
 `blobs.maxBytes`. A proxy in front of the relay must accept request bodies of
 that size.
+
+From Ligus 0.4, members' devices renew the files their chats still use
+(`POST /v1/workspaces/{id}/blobs/{blob}/retain`): the sharer's devices and
+Admins' desktops, about every ten days, at most once a day per file. A
+renewal moves the file's expiry to the retention from now, never past
+`LANGSTROTH_RELAY_BLOB_MAX_AGE_DAYS` after its upload, and the file keeps
+counting toward the quotas. A relay without the route answers `404` and
+Ligus carries on as before; members see an expired file as "This file
+expired on the relay".
 
 Files are removed when they expire, when a member's device deletes one after a
 signed deletion (the file's sharer or an Admin), when a member is removed
@@ -401,6 +411,11 @@ relay needs to know who is calling: either a signed token (its `sub`) or
 `LANGSTROTH_RELAY_MEMBERSHIP_PUBKEY`, which reads identity from an `hrt1` token
 while leaving relay access open. See
 [Server-side membership](../ops/server-side-membership.md).
+
+For Ligus workspaces the relay roster is deprecated from Ligus 0.4: Ligus
+never reads it, and it can drift from the workspace's signed roster. Gate a
+Ligus relay with signed tokens and workspace scope instead. Relay membership
+stays available for other clients.
 
 ### The user and token admin API
 

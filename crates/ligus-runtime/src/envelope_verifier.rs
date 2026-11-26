@@ -613,6 +613,13 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
         }) {
             continue;
         }
+        // Rules 3: only a certificate its device accepted counts (the
+        // config fold decides which, `RosterTracker::accepted`); one someone
+        // put on another device's public key certifies nothing at ingest
+        // either.
+        if heads.get(ws).is_some_and(|h| h.rules >= ligus_core::authz::RULES_V3 && !h.account_certified(cert.account_id, cert.device_id)) {
+            continue;
+        }
         if !roster.disputed.contains(&cert.account_id) {
             roster
                 .chained

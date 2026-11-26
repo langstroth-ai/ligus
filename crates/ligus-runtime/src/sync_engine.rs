@@ -180,6 +180,11 @@ pub struct SyncEngine {
     parked_ring: Option<Vec<u8>>,
     /// Replaying parked bodies now (no nested replay).
     in_retry: bool,
+    /// Replaying bodies an older build parked in the room-keyed table (no
+    /// single relay was named for the room, so M1 didn't copy them): their
+    /// sequences may be another relay's, so they never move the cursor and
+    /// never mark a held event for refetch.
+    in_legacy_retry: bool,
     /// Judging held events again now (no nested replay).
     in_held_retry: bool,
     /// When held events were last judged again on the timer.
@@ -289,6 +294,7 @@ impl SyncEngine {
             rows_fetched: None,
             parked_ring: None,
             in_retry: false,
+            in_legacy_retry: false,
             in_held_retry: false,
             held_checked: None,
             held_sig: std::collections::HashMap::new(),
@@ -409,6 +415,13 @@ impl SyncEngine {
     /// populate (Option C). In `Relay` mode it is simply never consulted.
     pub fn identity_cache(&self) -> SharedIdentityCache {
         Arc::clone(&self.identity_cache)
+    }
+
+    /// What this engine's durable state is kept under: this relay and this
+    /// room's workspace (identity model v2, section 9), never the room
+    /// string alone.
+    pub fn sync_key(&self) -> crate::event_store::SyncKey {
+        crate::event_store::SyncKey::new(self.relay.base_url(), self.room_workspace())
     }
 
     /// The workspace this room's keys belong to (the commitment binds it).
@@ -726,8 +739,9 @@ impl SyncEngine {
         if self.loaded {
             return Ok(());
         }
-        self.last_fetched_seq = self.last_fetched_seq.max(store.sync_cursor(&self.workspace)?);
-        for id in store.pushed_ids(&self.workspace)? {
+        let key = self.sync_key();
+        self.last_fetched_seq = self.last_fetched_seq.max(store.sync_cursor(&key)?);
+        for id in store.pushed_ids(&key)? {
             self.seen.insert(id);
         }
         self.loaded = true;
@@ -737,8 +751,9 @@ impl SyncEngine {
     /// Flush `pending` (event_ids confirmed on the relay) to the durable `pushed`
     /// table. Called by every store-bearing entry point.
     fn persist_pending(&mut self, store: &EventStore) -> Result<(), SyncError> {
+        let key = self.sync_key();
         for id in self.pending.drain(..) {
-            store.mark_pushed(&self.workspace, id)?;
+            store.mark_pushed(&key, id)?;
         }
         Ok(())
     }
@@ -1021,7 +1036,10 @@ impl SyncEngine {
             }
         }
 
-        store.park_bodies(&self.workspace, &to_park)?;
+        // (An old-table body that still can't be opened stays where it is.)
+        if !self.in_legacy_retry {
+            store.park_bodies(&self.sync_key(), &to_park)?;
+        }
         if foreign > 0 {
             tracing::warn!(room = %self.workspace, foreign, "dropped fetched events stamped with another workspace");
         }
@@ -1063,7 +1081,9 @@ impl SyncEngine {
             // held table, never before the cursor.
             resolved.push(*seq);
             match outcome {
-                Judgement::Held(reason) => to_hold.push(crate::event_store::HoldItem { env, reason, seq: Some(*seq) }),
+                Judgement::Held(reason) => {
+                    to_hold.push(crate::event_store::HoldItem { env, reason, seq: (!self.in_legacy_retry).then_some(*seq) })
+                }
                 // Fetched again and judged now: nothing more to fetch.
                 _ if self.in_refetch => store.held_refetch_done(self.room_workspace_scope(std::slice::from_ref(env)), *seq)?,
                 _ => {}
@@ -1108,7 +1128,7 @@ impl SyncEngine {
         // never backwards. Later openable events above `retry_at` were still
         // applied above; the cursor just waits for the gap to fill.
         let settled: Vec<u64> = if self.in_retry { resolved.clone() } else { Vec::new() };
-        for seq in resolved {
+        for seq in resolved.into_iter().filter(|_| !self.in_legacy_retry) {
             if retry_at.is_none_or(|r| seq < r) {
                 self.last_fetched_seq = self.last_fetched_seq.max(seq);
             }
@@ -1123,11 +1143,15 @@ impl SyncEngine {
         // lowest not-yet-openable body, so that value is what gets persisted.
         self.persist_pending(store)?;
         if self.last_fetched_seq != cursor_before {
-            store.set_sync_cursor(&self.workspace, self.last_fetched_seq)?;
+            store.set_sync_cursor(&self.sync_key(), self.last_fetched_seq)?;
         }
         // A replay of parked bodies: forget the ones that resolved.
         for seq in settled.into_iter().filter(|s| !parked_now.contains(s)) {
-            store.unpark(&self.workspace, seq)?;
+            if self.in_legacy_retry {
+                store.legacy_unpark(&self.workspace, seq)?;
+            } else {
+                store.unpark(&self.sync_key(), seq)?;
+            }
         }
         applied += self.retry_parked(store)?;
         applied += self.retry_held(store)?;
@@ -1362,18 +1386,26 @@ impl SyncEngine {
             return Ok(0);
         }
         self.parked_ring = Some(fp);
-        let parked = store.parked_bodies(&self.workspace)?;
-        if parked.is_empty() {
+        let key = self.sync_key();
+        let parked = store.parked_bodies(&key)?;
+        let legacy = store.legacy_parked_bodies(&self.workspace)?;
+        if parked.is_empty() && legacy.is_empty() {
             return Ok(0);
         }
         // B-11: re-rank what is parked against the new ring, so the cap
         // evicts junk before a body waiting for an authorized rotation.
         let ranks: Vec<(u64, u8)> = parked.iter().map(|(seq, body)| (*seq, self.park_priority(body))).collect();
-        store.set_parked_priorities(&self.workspace, &ranks)?;
+        store.set_parked_priorities(&key, &ranks)?;
         let (hold, behind) = (self.walk_hold, self.behind);
         self.in_retry = true;
         self.behind = false;
-        let r = self.apply_fetched(store, &parked);
+        let mut r = if parked.is_empty() { Ok(0) } else { self.apply_fetched(store, &parked) };
+        if r.is_ok() && !legacy.is_empty() {
+            self.in_legacy_retry = true;
+            let more = self.apply_fetched(store, &legacy);
+            self.in_legacy_retry = false;
+            r = r.and_then(|n| more.map(|m| n + m));
+        }
         self.in_retry = false;
         (self.walk_hold, self.behind) = (hold, behind);
         r
@@ -1553,6 +1585,95 @@ mod tests {
             assert_eq!(env.workspace_id, room_ws);
             assert!(!serde_json::to_string(&env).unwrap().contains("PRIVATE"));
         }
+    }
+
+    /// M1d (identity model v2, section 11): two connections name one room
+    /// on two relays. A 0.3 device kept one cursor and pushed set for the
+    /// room string, so whatever it fetched from relay A moved past events
+    /// relay B holds at the same sequences. M1 copies nothing for such a
+    /// room: each relay syncs from 0 under its own key, and no event of
+    /// either is skipped.
+    #[tokio::test]
+    async fn m1d_a_room_on_two_relays_resyncs_from_zero_on_both() {
+        let (a, b) = (spawn_relay().await, spawn_relay().await);
+        let room = "team";
+        let ws = ligus_core::room_workspace_id(room);
+        let key = ligus_core::derive_workspace_key("team secret");
+        let mut writer_a = EventStore::open_in_memory().unwrap();
+        let sid_a = seed_chat_in(&mut writer_a, ws, "on relay A");
+        let mut writer_b = EventStore::open_in_memory().unwrap();
+        let sid_b = seed_chat_in(&mut writer_b, ws, "on relay B");
+        assert_eq!(SyncEngine::new(RelayClient::new(&a), room).with_key(key).push_new(&writer_a).await.unwrap(), 2);
+        assert_eq!(SyncEngine::new(RelayClient::new(&b), room).with_key(key).push_new(&writer_b).await.unwrap(), 2);
+
+        // The reader synced relay A under 0.3: its room-keyed cursor is at 2.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("ligus.db");
+        drop(EventStore::open(&db).unwrap());
+        let old = rusqlite::Connection::open(&db).unwrap();
+        old.execute_batch("INSERT INTO sync_cursor (workspace, last_fetched_seq) VALUES ('team', 2); PRAGMA user_version = 0;").unwrap();
+        drop(old);
+        let mut store = EventStore::open(&db).unwrap();
+        let conns = vec![(a.clone(), room.to_string()), (b.clone(), room.to_string())];
+        let migrated = store.migrate_sync_tables(&conns).unwrap();
+        assert!(matches!(&migrated, crate::event_store::SyncMigration::Migrated { copied, .. } if copied.is_empty()), "{migrated:?}");
+
+        let mut on_a = SyncEngine::new(RelayClient::new(&a), room).with_key(key);
+        let mut on_b = SyncEngine::new(RelayClient::new(&b), room).with_key(key);
+        assert_ne!(on_a.sync_key(), on_b.sync_key());
+        assert_eq!(on_b.pull(&mut store).await.unwrap(), 2, "relay B's events, from 0");
+        assert_eq!(on_a.pull(&mut store).await.unwrap(), 2, "relay A's events, from 0");
+        for (writer, sid) in [(&writer_a, sid_a), (&writer_b, sid_b)] {
+            for env in writer.list_in(ws, sid).unwrap() {
+                assert!(store.has_event_in(ws, env.event_id).unwrap(), "no event skipped");
+            }
+        }
+        assert_eq!(store.sync_cursor(&on_a.sync_key()).unwrap(), 2);
+        assert_eq!(store.sync_cursor(&on_b.sync_key()).unwrap(), 2);
+    }
+
+    /// A body an older build parked for a room M1 didn't copy (two relays
+    /// named it) is drained from the old table by the old path: it applies,
+    /// leaves that table, and never moves this relay's cursor (its sequence
+    /// may be the other relay's).
+    #[tokio::test]
+    async fn legacy_parked_bodies_drain_without_moving_the_cursor() {
+        let (relay, other) = (spawn_relay().await, spawn_relay().await);
+        let room = "team";
+        let ws = ligus_core::room_workspace_id(room);
+        let source = || {
+            crate::keyring::KeySource::for_device(Uuid::new_v4(), ligus_core::e2ee::KeyAgreementKeypair::generate().unwrap(), Some("team pass"), &[])
+        };
+        let mut writer = EventStore::open_in_memory().unwrap();
+        let sid = seed_chat_in(&mut writer, ws, "parked under 0.3");
+        assert_eq!(SyncEngine::new(RelayClient::new(&other), room).with_key_source(source()).push_new(&writer).await.unwrap(), 2);
+        let bodies = RelayClient::new(&other).fetch_values(room, 0).await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("ligus.db");
+        drop(EventStore::open(&db).unwrap());
+        let old = rusqlite::Connection::open(&db).unwrap();
+        for (i, (_, body)) in bodies.iter().enumerate() {
+            old.execute(
+                "INSERT INTO parked_bodies (workspace, seq, body, priority) VALUES ('team', ?1, ?2, 0)",
+                rusqlite::params![900 + i as i64, body.to_string()],
+            )
+            .unwrap();
+        }
+        old.execute_batch("PRAGMA user_version = 0;").unwrap();
+        drop(old);
+        let mut store = EventStore::open(&db).unwrap();
+        store.migrate_sync_tables(&[(relay.clone(), room.to_string()), (other.clone(), room.to_string())]).unwrap();
+        assert_eq!(store.legacy_parked_bodies(room).unwrap().len(), 2);
+
+        let mut eng = SyncEngine::new(RelayClient::new(&relay), room).with_key_source(source());
+        assert_eq!(eng.retry_parked(&mut store).unwrap(), 2);
+        for env in writer.list_in(ws, sid).unwrap() {
+            assert!(store.has_event_in(ws, env.event_id).unwrap());
+        }
+        assert!(store.legacy_parked_bodies(room).unwrap().is_empty(), "drained");
+        assert_eq!(eng.cursor(), 0, "another relay's sequences never move this cursor");
+        assert_eq!(store.sync_cursor(&eng.sync_key()).unwrap(), 0);
     }
 
     /// Defense in depth: events of another workspace that an older client
@@ -2217,7 +2338,7 @@ mod tests {
         assert_eq!(sync_b1.pull(&mut store_b).await.unwrap(), 2);
         let cursor = sync_b1.cursor();
         assert!(cursor > 0, "cursor advanced");
-        assert_eq!(store_b.sync_cursor(&workspace).unwrap(), cursor, "cursor is durable");
+        assert_eq!(store_b.sync_cursor(&sync_b1.sync_key()).unwrap(), cursor, "cursor is durable");
         drop(sync_b1);
 
         // A brand-new engine (simulating a restart) resumes from the durable
@@ -2250,8 +2371,9 @@ mod tests {
 
         let mut sync1 = SyncEngine::unscoped(RelayClient::new(&base), &workspace).with_key(key);
         assert_eq!(sync1.push_new(&store).await.unwrap(), 2);
+        let sync_key = sync1.sync_key();
         drop(sync1);
-        assert_eq!(store.pushed_ids(&workspace).unwrap().len(), 2, "pushes are durable");
+        assert_eq!(store.pushed_ids(&sync_key).unwrap().len(), 2, "pushes are durable");
 
         // Fresh engine, same store: the durable `pushed` set makes take_unpushed
         // collect nothing, so a restart re-push is a no-op and the relay keeps
@@ -2308,7 +2430,7 @@ mod tests {
             .with_key(held);
         assert_eq!(eng1.apply_fetched(&mut store, &batch).unwrap(), 1);
         assert_eq!(eng1.cursor(), 0, "cursor held before the not-yet-openable seq");
-        assert_eq!(store.sync_cursor(&workspace).unwrap(), 0, "durable cursor is the retry point");
+        assert_eq!(store.sync_cursor(&eng1.sync_key()).unwrap(), 0, "durable cursor is the retry point");
         drop(eng1);
 
         // Fresh engine (restart), STILL without epoch 7: resumes cursor 0, the
@@ -2325,7 +2447,7 @@ mod tests {
         assert_eq!(eng2.apply_fetched(&mut store, &batch).unwrap(), 1);
         assert!(store.has_event(snap.event_id).unwrap());
         assert_eq!(eng2.cursor(), 2);
-        assert_eq!(store.sync_cursor(&workspace).unwrap(), 2, "durable cursor advanced past the gap");
+        assert_eq!(store.sync_cursor(&eng2.sync_key()).unwrap(), 2, "durable cursor advanced past the gap");
     }
 
     #[tokio::test]
@@ -2701,7 +2823,7 @@ mod tests {
         assert_eq!(first, 3 * PULL_PAGES_PER_ROUND, "one round = a bounded number of pages");
         assert_eq!(gets.count() - before, PULL_PAGES_PER_ROUND);
         assert!(b.is_behind(), "more pages remain");
-        assert_eq!(store_b.sync_cursor(&workspace).unwrap(), first as u64, "progress is durable per page");
+        assert_eq!(store_b.sync_cursor(&b.sync_key()).unwrap(), first as u64, "progress is durable per page");
 
         let second = b.pull_round(&mut store_b).await.unwrap();
         assert_eq!(first + second, 41);
@@ -2787,7 +2909,7 @@ mod tests {
         b.catch_up(&mut store_b, 10).await.unwrap();
         assert!(store_b.has_event(snap.event_id).unwrap(), "held body converges");
         assert_eq!(b.cursor(), 7);
-        assert_eq!(store_b.sync_cursor(&workspace).unwrap(), 7);
+        assert_eq!(store_b.sync_cursor(&b.sync_key()).unwrap(), 7);
     }
 
     /// The probe asks for one envelope, never the room's history.

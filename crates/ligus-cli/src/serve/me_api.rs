@@ -83,6 +83,9 @@ pub async fn me(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<
         .get(&device)
         .map(|d| ligus_runtime::device_enroll::fingerprint(&d.public_key))
         .unwrap_or_default();
+    let account = person.account_id.unwrap_or_default();
+    let consented = svc.phone_consented(s.ws, device, account).unwrap_or(false);
+    let label = svc.device_label_of(s.ws, device, account).unwrap_or_default();
     let policy = match svc.workspace_presence_policy(s.ws) {
         Ok(p) => p,
         Err(e) => return refuse(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()),
@@ -92,15 +95,64 @@ pub async fn me(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<
         "room": s.cfg.room,
         "workspaceName": config.as_ref().map(|c| ligus_runtime::display::workspace_name(&c.title)).unwrap_or_default(),
         "configLogId": config_id,
-        "device": { "id": device, "fingerprint": fingerprint, "tier": "phone" },
+        "device": { "id": device, "fingerprint": fingerprint, "tier": "phone", "label": label },
         "account": {
             "id": person.account_id,
             "memberId": person.id,
             "displayName": person.display_name,
             "role": role,
+            "consented": consented,
         },
+        // Identity model v2: this box takes the phone's enrollment
+        // statement (`POST /v1/phone-consent`).
+        "capabilities": { "phoneConsent": 1 },
         "rpId": policy.rp_id,
         "origins": policy.origins,
     }))
     .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct ConsentBody {
+    /// base64url (no padding) of the phone's 64-byte P-256 signature over
+    /// `ligus_core::crypto::phone_consent_preimage(workspace, account, phone)`.
+    signature: String,
+}
+
+/// `POST /v1/phone-consent`: the phone's signed enrollment statement for the
+/// person this box knows it as (identity model v2, 7.3a; decision O12).
+/// Through the tunnel only: the phone is the pairing's device. The box
+/// checks it against the phone's certified key and publishes it with the
+/// phone's certificate.
+pub async fn phone_consent(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Json(body): Json<ConsentBody>) -> Response {
+    use base64::Engine as _;
+    let Some(p) = peer.as_deref() else {
+        return refuse(StatusCode::FORBIDDEN, "secure_channel_required", "a phone's statement comes through the end-to-end encrypted tunnel only");
+    };
+    let Some(device) = s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)).and_then(|r| r.device_id) else {
+        return refuse(StatusCode::FORBIDDEN, DEVICE_NOT_CERTIFIED, "this pairing isn't bound to a workspace device");
+    };
+    let Ok(sig) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(body.signature.trim()) else {
+        return refuse(StatusCode::BAD_REQUEST, "bad_signature", "the signature isn't base64url");
+    };
+    let mut svc = s.lock();
+    let person = match svc.phone_person(s.ws, device) {
+        Ok(p) => p,
+        Err(e) => return refuse(StatusCode::FORBIDDEN, DEVICE_NOT_CERTIFIED, e.to_string()),
+    };
+    let Some(account) = person.account_id else {
+        return refuse(StatusCode::CONFLICT, "not_this_account", "this phone's person has no account here");
+    };
+    match svc.publish_phone_consent(s.ws, device, account, &sig) {
+        Ok(true) => {
+            drop(svc);
+            s.after_write();
+            Json(json!({ "published": true })).into_response()
+        }
+        Ok(false) => Json(json!({ "published": false, "reason": "already published" })).into_response(),
+        Err(e) if e.to_string().contains(ligus_runtime::chat_service::BAD_CONSENT) => {
+            refuse(StatusCode::BAD_REQUEST, "bad_signature", e.to_string())
+        }
+        Err(e) => refuse(StatusCode::CONFLICT, "not_this_account", e.to_string()),
+    }
 }

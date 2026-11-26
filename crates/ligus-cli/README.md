@@ -55,7 +55,7 @@ ligus send <chat-id> <message…>     # post a signed message
 ligus sync [--watch]                # one sync round (push everything unpushed, then fetch+ingest)
 ligus runtimes                      # list workspace-owned runtimes (spec §12.5)
 ligus add-runtime <id> <name> <provider> <model>
-       [--endpoint <url>] [--secret-ref <name> | --secret <value>]
+       [--endpoint <url>] [--secret-ref <name>]
 ligus rm-runtime <id>
 ligus agents                        # list workspace agents
 ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>]
@@ -229,10 +229,16 @@ LIGUS_WS_SECRET_acme=sk-… ligus agent teambot --runtime ws-claude
 - `--secret-ref <name>` — the worker resolves the key from env
   `LIGUS_WS_SECRET_<name>`. Raw keys never touch the synced stream. `ligus runtimes`
   shows `✓` when the secret is present on this box, `(missing)` otherwise.
-- `--secret <value>` — carries the key **E2EE on the config log**. Zero worker
-  provisioning (the workspace key already unlocks it); the key does land on every
-  member's disk, so use it only for trusted workspaces.
-- neither — a keyless runtime (e.g. local Ollama).
+- neither — a keyless runtime (e.g. local Ollama). Keys are never stored in the
+  workspace; `--secret` was removed and is a usage error.
+
+A runtime whose key an older version stored in the workspace (the removed
+`--secret` flag) keeps working only if it can run keyless; its stored key is
+never used, shown or exported (it reads as "stored key (unused)"), and
+`ligus doctor` warns about it (`runtimes.inline-key`). Every member's device
+received that key, so rotate it with the provider, set the new one on each
+worker as `LIGUS_WS_SECRET_<NAME>`, and redefine the runtime with
+`--secret-ref <NAME>`.
 
 `ligus agent --runtime <id>` resolves provider/model/credential from the workspace
 runtime; without `--runtime` it falls back to a **personal** env key

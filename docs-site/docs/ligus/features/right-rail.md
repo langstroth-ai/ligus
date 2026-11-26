@@ -103,7 +103,14 @@ pane's page in these docs.
   Admin can't remove or demote another Admin, only the founder cuts an
   Owner, nobody cuts the founder, a service member (a box) is never raised
   above Contributor and holds no passkey. The pane asks the same rule
-  function every device's fold uses. On a membership-enforcing relay it also
+  function every device's fold uses. Under Members, one line says whether
+  the relay checks membership for this workspace, with the details behind
+  **?** and at most one action: **Claim ownership** only when this device's
+  relay token names an account, **Add a relay token** on a self-hosted relay
+  when it doesn't, and nothing on the community relay or a relay with
+  membership off. See
+  [Claiming a workspace](../../operate/ops/server-side-membership.md#claiming-a-workspace).
+  On a membership-enforcing relay it also
   manages the server-side roster + issues join codes, and — for an admin with a
   relay issuer key (Settings → Team sync) — a **Remote agents** section that
   enrolls a headless agent and generates the one copy-paste command to run on its

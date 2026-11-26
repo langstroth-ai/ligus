@@ -18,9 +18,15 @@ export function Sheet({
   step = 0,
   footer,
   onClose,
+  titleAddon,
+  corner,
   children,
 }: {
   title: string;
+  /// Beside the title (a "?").
+  titleAddon?: ReactNode;
+  /// Quiet, in the header's corner before Close (a countdown).
+  corner?: ReactNode;
   description?: ReactNode;
   /// "right": a full-height panel on the right edge; "center": a centred card.
   side?: "right" | "center";
@@ -55,9 +61,12 @@ export function Sheet({
       <>
         <header className="flex items-start gap-3 border-b px-5 pb-3 pt-4" style={{ borderColor: "var(--ligus-line)" }}>
           <div className="min-w-0 flex-1">
-            <h2 id={titleId} className="text-[17px] font-semibold leading-6">
-              {title}
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2 id={titleId} className="text-[17px] font-semibold leading-6">
+                {title}
+              </h2>
+              {titleAddon}
+            </div>
             {description && (
               <p className="mt-0.5 text-[13px]" style={{ color: "var(--ligus-ink-soft)" }}>
                 {description}
@@ -69,6 +78,7 @@ export function Sheet({
               </div>
             )}
           </div>
+          {corner && <div className="shrink-0 pt-1">{corner}</div>}
           <button
             type="button"
             aria-label="Close"
