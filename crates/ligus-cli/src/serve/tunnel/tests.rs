@@ -459,6 +459,7 @@ fn record(pid: &str, phone: &PhoneKeys) -> PhoneRecord {
         push_seq: 0,
         last_seen: None,
         owner_phone: false,
+        push_kinds: None,
         device_id: Some(phone.device_id()),
     }
 }

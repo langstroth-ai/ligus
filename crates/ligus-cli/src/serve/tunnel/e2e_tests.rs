@@ -386,6 +386,34 @@ async fn a_suspended_phones_stale_events_stream_stops_suppressing_pushes() {
     h.handle.shutdown();
 }
 
+/// The phone's notification switches (`kinds` in `PUT /v1/tunnel/push`)
+/// decide which pushes it gets: a kind it turned off isn't sent, one it
+/// kept is, and a push that isn't one of its switches (a test, a new phone
+/// paired) still goes. Turning push off (what Forget host sends) stops all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_phones_notification_switches_pick_the_kinds_it_gets() {
+    let (relay, h, t, mut c, pid, _key) = push_phone().await;
+    let r = c.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": true, "previews": true, "kinds": ["mention"] }))).await.unwrap();
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(t.registry.get(&pid).unwrap().push_kinds, Some(vec!["mention".to_string()]));
+    // A body without kinds (an older app) keeps them.
+    assert_eq!(c.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": true }))).await.unwrap().status, 200);
+    assert_eq!(t.registry.get(&pid).unwrap().push_kinds, Some(vec!["mention".to_string()]));
+    let push = |kind: &str, chat: &str| tun::PushContent { kind: kind.into(), chat_id: Some(chat.into()), title: "x".into(), ..Default::default() };
+    // Quiet past the foreground window, so the open session doesn't hold pushes.
+    let later = std::time::Instant::now() + tun::push::FOREGROUND_QUIET + Duration::from_secs(1);
+    assert_eq!(t.push_all_at(&push("message.done", "c1"), later), 0, "a finished reply the phone turned off");
+    assert_eq!(t.push_all_at(&push("proposal.created", "c2"), later), 0, "a proposal the phone turned off");
+    assert_eq!(t.push_all_at(&push("mention", "c3"), later), 1, "a mention it kept");
+    assert_eq!(t.push_all_at(&push("phone.paired", "c4"), later), 1, "not one of its switches");
+    relay.wait_for("push", |m| m["pid"] == json!(pid), WAIT).await.unwrap();
+    // Push off: nothing at all.
+    assert_eq!(c.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": false }))).await.unwrap().status, 200);
+    assert_eq!(t.push_all_at(&push("mention", "c5"), later), 0);
+    t.push_available.store(false, std::sync::atomic::Ordering::SeqCst);
+    h.handle.shutdown();
+}
+
 /// An agent's question for one person, asked from the desktop (its turn
 /// runs there), pushes to that person's phone through a box that joined as
 /// its own member: the audience is matched against the phone's person (the
@@ -1607,6 +1635,90 @@ async fn a_phone_sees_its_own_persons_role_and_vote() {
         (blank["myRole"].clone(), blank["myVote"].clone(), blank["canVote"].clone(), blank["isMine"].clone()),
         (Value::Null, Value::Null, json!(false), json!(false))
     );
+    h.handle.shutdown();
+}
+
+/// A paired phone lists only the DMs its person is in: not a DM this box
+/// holds with someone else, and none at all for a phone the box can't place.
+/// The box's own view (the bearer) still lists it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_phone_lists_only_its_persons_dms() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(WAIT).await.unwrap();
+    let (_t, info, keys, _pid, credential, phone) = pair_bound(&h, &relay).await;
+    let ws = h.handle.shared.ws;
+    crate::open_service(&h.desktop).unwrap().certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
+    sync_once(&h.desktop).await.unwrap();
+    wait_until("the box places the phone", WAIT, || {
+        h.handle.shared.sync_kick.notify_one();
+        h.handle.shared.lock().phone_person(ws, phone.device_id).is_ok()
+    })
+    .await;
+    // A DM this box holds with someone other than the phone's person.
+    let room = ligus_runtime::dm::new_room();
+    let dm_ws = ligus_core::room_workspace_id(&room);
+    h.handle
+        .shared
+        .dms
+        .add(
+            crate::serve::dms::DmConn {
+                name: "Ben".into(),
+                relay_url: relay.url.clone(),
+                room,
+                peer: Uuid::new_v4().to_string(),
+                founder_actor_id: h.handle.shared.my_actor_id(),
+                fk: "00".repeat(16),
+            },
+            "k",
+            &[],
+        )
+        .unwrap();
+    let dm_chat = {
+        let mut svc = h.handle.shared.lock();
+        svc.ensure_self_member(ligus_core::workspace_config_session_id(dm_ws), dm_ws).unwrap();
+        svc.create_chat("dm", dm_ws, "").unwrap().id
+    };
+    let listed = |v: &Value| v["chats"].as_array().unwrap().iter().any(|c| c["id"] == json!(dm_chat));
+    assert!(listed(&h.get("/v1/chats").await), "the box's own view lists its DM");
+
+    let mut c = testkit::phone_session(&info, &keys, &credential).await.unwrap();
+    let r = c.request("GET", "/v1/chats", None).await.unwrap();
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert!(!listed(&r.json()), "another person's DM reached the phone: {}", String::from_utf8_lossy(&r.body));
+    let dms = c.request("GET", "/v1/dms", None).await.unwrap().json();
+    assert_eq!(dms["dms"], json!([]), "{dms}");
+    let r = c.request("GET", &format!("/v1/chats/{dm_chat}/messages"), None).await.unwrap();
+    assert_eq!(r.status, 404, "{}", String::from_utf8_lossy(&r.body));
+
+    // Its messages don't reach the phone's event stream either; a
+    // workspace chat's do.
+    let sse = c.open("GET", "/v1/events", &[("accept", "text/event-stream")], None, true).await.unwrap();
+    let head = c.recv_timeout(WAIT).await.unwrap();
+    assert_eq!((head.ty, head.stream), (frame::RESPONSE, sse));
+    h.handle.shared.lock().post_user_message(dm_chat, dm_ws, "secret dm text").unwrap();
+    h.handle.shared.after_write();
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "workspace text" }))).await;
+    let mut text = String::new();
+    while !text.contains("workspace text") {
+        let f = c.recv_timeout(WAIT).await.unwrap();
+        if f.ty == frame::DATA && f.stream == sse {
+            text.push_str(&String::from_utf8_lossy(&f.payload));
+        }
+    }
+    assert!(!text.contains("secret dm text") && !text.contains(&dm_chat.to_string()), "{text}");
+    c.send(Frame::reset(sse, frame::reset::CANCEL, "")).await.unwrap();
+
+    // The rule: the box's view sees every DM, a member of the DM sees it,
+    // anyone else (and a phone the box can't place) doesn't.
+    use crate::serve::dms::DmViewer;
+    let chat = h.handle.shared.dm_chats().into_iter().find(|c| c.id == dm_chat).unwrap();
+    assert!(DmViewer::Box.sees(&chat) && !DmViewer::Nobody.sees(&chat));
+    let box_account = h.handle.shared.my_account().unwrap();
+    assert!(DmViewer::Person(box_account).sees(&chat), "a member of the DM sees it");
+    assert!(!DmViewer::Person(Uuid::new_v4()).sees(&chat));
     h.handle.shutdown();
 }
 
