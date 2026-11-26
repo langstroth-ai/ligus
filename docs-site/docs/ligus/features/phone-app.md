@@ -454,7 +454,8 @@ code rather than by name:
   a passkey, which a box (its own service member) can't do and the phone
   tier doesn't include; make the invite on your desktop. **Open an invite
   link** (paste or scan) shows who it's from before anything is joined.
-- **Direct messages** appear at the top of the chat list. A DM is a
+- **Direct messages** appear at the top of the chat list: only the box's
+  DMs you are in (none, if the box can't tell whose phone it is). A DM is a
   workspace of its own where the phone's key isn't certified, so what the
   phone sends there goes as the box, not as you; hold DMs as yourself from
   your desktop. Agents don't run in DMs and DMs never send a notification.

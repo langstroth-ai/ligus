@@ -1610,5 +1610,69 @@ async fn a_phone_sees_its_own_persons_role_and_vote() {
     h.handle.shutdown();
 }
 
+/// A paired phone lists only the DMs its person is in: not a DM this box
+/// holds with someone else, and none at all for a phone the box can't place.
+/// The box's own view (the bearer) still lists it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_phone_lists_only_its_persons_dms() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(WAIT).await.unwrap();
+    let (_t, info, keys, _pid, credential, phone) = pair_bound(&h, &relay).await;
+    let ws = h.handle.shared.ws;
+    crate::open_service(&h.desktop).unwrap().certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
+    sync_once(&h.desktop).await.unwrap();
+    wait_until("the box places the phone", WAIT, || {
+        h.handle.shared.sync_kick.notify_one();
+        h.handle.shared.lock().phone_person(ws, phone.device_id).is_ok()
+    })
+    .await;
+    // A DM this box holds with someone other than the phone's person.
+    let room = ligus_runtime::dm::new_room();
+    let dm_ws = ligus_core::room_workspace_id(&room);
+    h.handle
+        .shared
+        .dms
+        .add(
+            crate::serve::dms::DmConn {
+                name: "Ben".into(),
+                relay_url: relay.url.clone(),
+                room,
+                peer: Uuid::new_v4().to_string(),
+                founder_actor_id: h.handle.shared.my_actor_id(),
+                fk: "00".repeat(16),
+            },
+            "k",
+            &[],
+        )
+        .unwrap();
+    let dm_chat = {
+        let mut svc = h.handle.shared.lock();
+        svc.ensure_self_member(ligus_core::workspace_config_session_id(dm_ws), dm_ws).unwrap();
+        svc.create_chat("dm", dm_ws, "").unwrap().id
+    };
+    let listed = |v: &Value| v["chats"].as_array().unwrap().iter().any(|c| c["id"] == json!(dm_chat));
+    assert!(listed(&h.get("/v1/chats").await), "the box's own view lists its DM");
+
+    let mut c = testkit::phone_session(&info, &keys, &credential).await.unwrap();
+    let r = c.request("GET", "/v1/chats", None).await.unwrap();
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert!(!listed(&r.json()), "another person's DM reached the phone: {}", String::from_utf8_lossy(&r.body));
+    let dms = c.request("GET", "/v1/dms", None).await.unwrap().json();
+    assert_eq!(dms["dms"], json!([]), "{dms}");
+    let r = c.request("GET", &format!("/v1/chats/{dm_chat}/messages"), None).await.unwrap();
+    assert_eq!(r.status, 404, "{}", String::from_utf8_lossy(&r.body));
+
+    // The rule: the box's view sees every DM, a member of the DM sees it,
+    // anyone else (and a phone the box can't place) doesn't.
+    use crate::serve::dms::DmViewer;
+    let chat = h.handle.shared.dm_chats().into_iter().find(|c| c.id == dm_chat).unwrap();
+    assert!(DmViewer::Box.sees(&chat) && !DmViewer::Nobody.sees(&chat));
+    let box_account = h.handle.shared.my_account().unwrap();
+    assert!(DmViewer::Person(box_account).sees(&chat), "a member of the DM sees it");
+    assert!(!DmViewer::Person(Uuid::new_v4()).sees(&chat));
+    h.handle.shutdown();
+}
+
 #[path = "enroll_qr_e2e_tests.rs"]
 mod enroll_qr;

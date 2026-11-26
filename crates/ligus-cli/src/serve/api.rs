@@ -998,7 +998,7 @@ async fn health(State(s): S, Extension(Authorized(ok)): Extension<Authorized>) -
 
 async fn list_chats(State(s): S) -> ApiResult<Json<Value>> {
     let me = s.my_actor_id();
-    let mut chats = s.phone_chats()?;
+    let mut chats = s.phone_chats_for(s.dm_viewer())?;
     chats.sort_by_key(|c| std::cmp::Reverse(updated_at(c)));
     let ctx = PhoneChatCtx::new(&s);
     let list: Vec<Value> = chats.iter().map(|c| ctx.dto(&s, c, s.unread(c, &me))).collect();
@@ -1078,15 +1078,17 @@ pub(super) fn load_chat(s: &Shared, raw: &str) -> ApiResult<ChatSession> {
     s.workspace_chats()?.into_iter().find(|c| c.id == id).ok_or_else(|| ApiError::not_found("chat"))
 }
 
-/// A chat the phone may read and post in: the workspace's, or a DM's. Only
-/// the message routes (and the founder status) take a DM's chat; everything
+/// A chat the phone may read and post in: the workspace's, or a DM its
+/// person is in ([`Shared::dm_viewer`]).
+/// Only the message routes (and the founder status) take a DM's chat; everything
 /// else (agents, proposals, repos, guards) is the workspace's alone.
 pub(super) fn load_phone_chat(s: &Shared, raw: &str) -> ApiResult<ChatSession> {
     let id = parse_id(raw, "chat")?;
     if let Some(c) = s.workspace_chats()?.into_iter().find(|c| c.id == id) {
         return Ok(c);
     }
-    s.dm_chats().into_iter().find(|c| c.id == id).ok_or_else(|| ApiError::not_found("chat"))
+    let who = s.dm_viewer();
+    s.dm_chats().into_iter().find(|c| c.id == id && who.sees(c)).ok_or_else(|| ApiError::not_found("chat"))
 }
 
 #[derive(Deserialize)]

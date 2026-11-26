@@ -289,6 +289,28 @@ pub fn dm_relay_allowed(own_relay: Option<&str>, relay: &str) -> bool {
     }
 }
 
+/// Whose DMs a request may see ([`Shared::dm_viewer`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DmViewer {
+    /// This box's own view (the operator, the direct-path bearer): every DM.
+    Box,
+    /// A phone's person (an account): only the DMs they are a member of.
+    Person(Uuid),
+    /// A phone this box can't place: no DMs.
+    Nobody,
+}
+
+impl DmViewer {
+    /// Whether a DM's chat `c` is one this viewer may see.
+    pub fn sees(self, c: &ChatSession) -> bool {
+        match self {
+            DmViewer::Box => true,
+            DmViewer::Person(account) => c.members.iter().any(|m| m.actor.account_id == Some(account)),
+            DmViewer::Nobody => false,
+        }
+    }
+}
+
 impl Shared {
     /// The live chats of the box's DMs (each DM's own chats), archived DMs
     /// included (read-only).
@@ -307,10 +329,52 @@ impl Shared {
         out
     }
 
-    /// Every chat the phone lists: the workspace's and the DMs'.
+    /// Every chat this box holds: the workspace's and every DM's. What the
+    /// box itself watches (the differ, typing); a phone's list is
+    /// [`Self::phone_chats_for`].
     pub fn phone_chats(&self) -> Result<Vec<ChatSession>> {
         let mut all = self.workspace_chats()?;
         all.extend(self.dm_chats());
+        Ok(all)
+    }
+
+    /// Whose DMs the request being handled may see: through the tunnel, the
+    /// phone's person ([`ligus_runtime::ChatService::phone_person`], as its
+    /// other calls see it), or nobody when this box can't place the phone
+    /// (or off a request's task). The operator and the direct-path bearer
+    /// see this box's own view, as before.
+    pub fn dm_viewer(&self) -> DmViewer {
+        match super::api::caller() {
+            super::api::Caller::Tunnel(pid) => {
+                let device = self.tunnel.as_ref().and_then(|t| t.registry.get(&pid)).and_then(|r| r.device_id);
+                device
+                    .and_then(|d| self.lock().phone_person(self.ws, d).ok())
+                    .and_then(|a| a.account_id)
+                    .map_or(DmViewer::Nobody, DmViewer::Person)
+            }
+            super::api::Caller::Operator | super::api::Caller::Bearer => DmViewer::Box,
+            super::api::Caller::Anonymous => DmViewer::Nobody,
+        }
+    }
+
+    /// [`Self::dm_rows`] for the DMs `who` may see (a DM whose chat hasn't
+    /// synced yet is shown only to this box's own view).
+    pub fn dm_rows_for(&self, people: &[ligus_runtime::directory_trust::CoMember], who: DmViewer) -> Vec<serde_json::Value> {
+        let rows = if who == DmViewer::Nobody { Vec::new() } else { self.dm_rows(people) };
+        if who == DmViewer::Box {
+            return rows;
+        }
+        let seen: Vec<Uuid> = self.dm_chats().into_iter().filter(|c| who.sees(c)).map(|c| c.workspace_id).collect();
+        rows.into_iter().filter(|r| seen.iter().any(|ws| r["workspaceId"] == serde_json::json!(ws))).collect()
+    }
+
+    /// The chats a phone lists: the workspace's, and only the DMs `who` is
+    /// in.
+    pub fn phone_chats_for(&self, who: DmViewer) -> Result<Vec<ChatSession>> {
+        let mut all = self.workspace_chats()?;
+        if who != DmViewer::Nobody {
+            all.extend(self.dm_chats().into_iter().filter(|c| who.sees(c)));
+        }
         Ok(all)
     }
 
