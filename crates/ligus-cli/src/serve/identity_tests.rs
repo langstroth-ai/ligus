@@ -654,7 +654,14 @@ async fn invites_need_presence_on_a_delegated_box() {
     assert!(prepared["challenge"].as_str().is_some_and(|c| c.len() == 43));
     // A made-up assertion is refused: a stamped assertion must verify, so a
     // bearer can't commit the invite without the owner's passkey.
-    let before = a.handle.shared.lock().store().list(ligus_core::workspace_config_session_id(a.handle.shared.ws)).unwrap().len();
+    // Only invites count: the box's own background writes (its profile,
+    // device names) may land on the config log meanwhile.
+    let invites = || {
+        let shared = &a.handle.shared;
+        let list = shared.lock().store().list(ligus_core::workspace_config_session_id(shared.ws)).unwrap();
+        list.iter().filter(|e| matches!(e.payload, ligus_core::SessionEvent::JoinApproved { .. })).count()
+    };
+    let before = invites();
     let (code, v) = a
         .call(
             reqwest::Method::POST,
@@ -665,8 +672,7 @@ async fn invites_need_presence_on_a_delegated_box() {
         .await;
     assert!(code == 403 || code == 400 || code == 500, "{code} {v}");
     assert!(v.get("invite").is_none());
-    let after = a.handle.shared.lock().store().list(ligus_core::workspace_config_session_id(a.handle.shared.ws)).unwrap().len();
-    assert_eq!(before, after, "nothing was appended");
+    assert_eq!(before, invites(), "no invite was appended");
     // A delegated box can't found a DM.
     let (code, v) = a.call(reqwest::Method::POST, "/v1/dms", Some(json!({ "accountId": Uuid::new_v4().to_string() }))).await;
     assert!(code == 404 || code == 409, "{code} {v}");
