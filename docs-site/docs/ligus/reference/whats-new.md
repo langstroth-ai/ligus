@@ -4,6 +4,21 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## Unreleased
+
+### Added
+
+- **Agents that run their own helper server.** The Google Antigravity CLI
+  (`agy`) starts a local language server, which the agent sandbox refused
+  (`bind: operation not permitted`). A per-agent **May run local servers**
+  switch, off by default and the workspace Owner's, lets it: **Settings →
+  Sandbox** (or the agent row's ⋯ → **Sandbox…**), `ligus agents set <agent>
+  --local-servers on`, or `ligus setup agent --harness antigravity
+  --local-servers`. On macOS the agent may then also reach your other local
+  servers; on Linux bubblewrap already gives each turn its own loopback, and
+  the Landlock tier keeps it off. agy's failure now names the fix. See
+  [Local servers](../concepts/security.md#local-servers).
+
 ## 0.4.0
 
 Approve a box or a computer by comparing a short code, profiles and device

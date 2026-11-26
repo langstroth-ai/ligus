@@ -446,7 +446,7 @@ pub const COMMANDS: &[Cmd] = &[
                   member's), pick the model, reuse a keyless workspace runtime with that harness and model or define one \
                   (Admin), create the agent (Contributor), and optionally send one test turn. A failure after the \
                   runtime was defined removes it again.",
-        synopsis: &["ligus setup agent --harness H --name NAME [--model M] [--endpoint URL | --gateway NAME] [--test-turn] [--json] [--dry-run]"],
+        synopsis: &["ligus setup agent --harness H --name NAME [--model M] [--endpoint URL | --gateway NAME] [--local-servers] [--test-turn] [--json] [--dry-run]"],
         flags: &[
             f("--harness H", "required", "claude-code, codex, copilot, antigravity, aider, pi, local (Ollama or OpenAI-compatible) or gateway"),
             f("--name NAME", "required", "the agent's @name"),
@@ -454,6 +454,7 @@ pub const COMMANDS: &[Cmd] = &[
             f("--endpoint URL", "http://localhost:11434", "local only: the model server (https://, or http:// on this machine)"),
             f("--gateway NAME", "none", "gateway only: a model gateway a host offers (ligus hosts)"),
             f("--test-turn", "off", "send one short test message and check the reply"),
+            f("--local-servers", "off", "let the agent run local servers (agy needs it for its helper server; the Owner's; ligus agents set)"),
             JSON,
             DRY_RUN,
         ],
@@ -461,7 +462,7 @@ pub const COMMANDS: &[Cmd] = &[
         examples: &[
             "ligus setup agent --harness claude-code --name builder --test-turn",
             "ligus setup agent --harness local --model llama3.2 --name local --dry-run",
-            "ligus setup agent --harness codex --name reviewer --json",
+            "ligus setup agent --harness antigravity --name gem --local-servers --json",
         ],
         exit: &[(2, "a missing or invalid flag (the check names it)"), (3, "the harness isn't installed or signed in, or no agent sandbox"), (6, "your role can't add an agent or a workspace runtime"), (7, "a local model server didn't answer")],
         see_also: &["ligus setup", "ligus add-agent", "ligus runtimes", "ligus doctor --sandbox"],
@@ -1024,13 +1025,36 @@ pub const COMMANDS: &[Cmd] = &[
         name: "agents",
         group: G_AGENTS,
         summary: "list the workspace's agents",
-        purpose: "List the workspace agents: name, runtime and host (an agent with no host is answered by its owner's \
-                  device).",
-        synopsis: &["ligus agents [--json]"],
+        purpose: "List the workspace agents: name, runtime, host (an agent with no host is answered by its owner's \
+                  device) and whether it may run local servers.",
+        synopsis: &["ligus agents [--json]", "ligus agents set <agent> --local-servers on|off [--json]"],
         flags: &[JSON],
         conn: true,
+        exit: &[(2, "unknown subcommand")],
         examples: &["ligus agents", "ligus agents --json"],
-        see_also: &["ligus add-agent", "ligus set-agent-host", "ligus help agents"],
+        see_also: &["ligus agents set", "ligus add-agent", "ligus set-agent-host", "ligus help agents"],
+        ..D
+    },
+    Cmd {
+        name: "agents set",
+        group: G_AGENTS,
+        summary: "let an agent run local servers (or stop it)",
+        purpose: "Turn an agent's local-servers switch on or off: a signed workspace sandbox grant, off by default, \
+                  the workspace Owner's to change (with a passkey in a shared workspace, so on a CLI device it works \
+                  in your local workspace; otherwise use Settings, Sandbox on the desktop). On, the agent's turns may \
+                  listen on and connect to this machine's own addresses, which the Google Antigravity CLI (agy) needs \
+                  for its helper server. Files, unix sockets and egress stay as they are. macOS: the turns can then \
+                  also reach the machine's other local servers, and a listener the agent opens on every address can \
+                  be reached from other machines unless the macOS firewall blocks it. Linux with bubblewrap: every \
+                  turn already has its own loopback in a private network namespace, so nothing changes. Linux \
+                  Landlock tier (no namespaces): it stays off. Applies where the workspace grants apply (by default \
+                  the Owner's own devices). Share with `ligus sync`.",
+        synopsis: &["ligus agents set <agent> --local-servers on|off [--json]"],
+        flags: &[f("--local-servers on|off", "required", "the agent's local-servers switch"), JSON],
+        conn: true,
+        exit: &[(2, "no agent named, or --local-servers without on or off"), (5, "no such agent"), (6, "you aren't the workspace Owner, or a shared workspace needs your passkey (use the desktop)")],
+        examples: &["ligus agents set gem --local-servers on && ligus sync", "ligus agents set @gem --local-servers off --json"],
+        see_also: &["ligus agents", "ligus doctor --sandbox", "ligus setup agent", "desktop: Settings > Sandbox"],
         ..D
     },
     Cmd {
@@ -2823,6 +2847,15 @@ the agent sets LIGUS_WS_SECRET_<NAME> (or a file in LIGUS_WS_SECRET_DIR). Keys a
 in the workspace (--secret was removed); ligus doctor warns about a key an older
 version stored there (runtimes.inline-key): rotate it and use --secret-ref.
 
+Local servers: a CLI that runs its own helper server (agy does) needs its agent's
+local-servers switch, off by default and the Owner's:
+  ligus agents set <agent> --local-servers on     # or: ligus setup agent … --local-servers
+  verify: ligus agents ; ligus doctor --sandbox --agent <agent-id>
+macOS: its turns may then listen on and connect to this machine's own addresses
+(other local servers included; a listener on every address is reachable from
+other machines unless the macOS firewall blocks it). Linux with bubblewrap: each
+turn has its own loopback already. Linux Landlock tier: it stays off.
+
 Access controls:
 - Who may use an agent (only its owner, or everyone; daily turn limits; spending
   cap) is set on the agent in the desktop app (Workspace > Agent roster).
@@ -2883,6 +2916,12 @@ Hosts: LIGUS_REQUIRE_SANDBOX=1 refuses to start without an agent sandbox
         summary: "common errors and their fixes",
         text: "\
 Start with:  ligus status ; ligus doctor ; ligus remote status
+
+\"agy needs to run a local helper server\" / \"listen tcp 127.0.0.1:0: bind: operation not permitted\"
+  The agent sandbox refused agy's helper server. The workspace Owner turns on the
+  agent's local-servers switch: ligus agents set <agent> --local-servers on (or
+  Settings > Sandbox), then ligus sync. On a Linux host in the Landlock tier it
+  stays off: run the agent where bubblewrap works (ligus doctor --sandbox).
 
 \"this box's workspace has no relay URL\" (sync, serve, worker, join)
   A serve or worker box: it has no admission yet (ligus admit request, an Admin
@@ -3466,6 +3505,7 @@ mod tests {
             ("phones", main.clone(), "\"phones\" => {", "\n        \"dashboard\"", &[]),
             ("devices", main.clone(), "\"devices\" => {", "\n        \"recovery-key\"", &[]),
             ("profile", main.clone(), "\"profile\" => match", "\n        },\n", &[]),
+            ("agents", main.clone(), "\"agents\" => match", "\n        },\n", &[]),
             ("dashboard", main.clone(), "\"dashboard\" => match", "\n        },\n", &[]),
             ("facts", main.clone(), "\"facts\" => {", "\n        }\n", &[]),
             ("trust", main.clone(), "fn cmd_trust", "\n}\n", &[]),

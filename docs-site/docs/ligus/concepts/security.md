@@ -392,6 +392,8 @@ every device judges them the same way:
 - **An agent's shell grant** ([below](#owner-only-shell)): the Owner's,
   confirmed with a passkey. An Admin's set that turns any agent's shell on
   or off is refused.
+- **An agent's local-servers switch** ([below](#local-servers)): the
+  Owner's, confirmed with a passkey, like the shell.
 - **Never an agent's.** Agents can't hold presence, so no agent, and no
   phone key, sets grants.
 - **A grant never opens Ligus's data dir, a secret file or a credential
@@ -492,6 +494,37 @@ ligus doctor --sandbox [--runtime claude|codex|copilot|agy|aider|pi|hermes|comma
 
 prints the same lines, the signed grants for its workspace and whether this
 host applies them. Both are built from the plan the executors enforce.
+
+#### Local servers: an agent's own helper server {#local-servers}
+
+Some agent CLIs start a server on this machine and talk to it: the Google
+Antigravity CLI (`agy`) runs its language server on `127.0.0.1:0`. The
+sandbox refuses listening sockets by default, so such a turn fails with
+"agy needs to run a local helper server" (the CLI's own words follow:
+`listen tcp 127.0.0.1:0: bind: operation not permitted`).
+
+**May run local servers** is a per-agent switch, off by default, in
+**Settings → Sandbox** (pick the agent; the agent row's ⋯ menu →
+**Sandbox…** opens it there), `ligus agents set <agent> --local-servers on`,
+or `ligus setup agent … --local-servers` (offered for agy only). It is a
+signed grant, so only the workspace Owner turns it on or off, with a
+passkey in a shared workspace, and it applies where the grants apply
+([below](#grants-on-this-device)). It reaches only that agent's own CLI and
+what it starts; Ligus's `run_command`, pre-flight tests and MCP servers
+never get it, and a chat whose egress is closed (a lockdown) runs the agent
+without it. Older devices (0.4.0) ignore it, so their turns run without it.
+
+What it allows depends on the sandbox:
+
+| | With the switch on |
+|---|---|
+| macOS (Seatbelt) | The turn may listen on and connect to this machine's own addresses. That includes your other local servers (a database, a dev server, a model server on loopback). Seatbelt's `localhost` means *this machine* and its rules can't hold a listener to loopback: a server the agent opens on `0.0.0.0` can be reached from other machines on your network unless the macOS firewall blocks it. Connections to other machines still go only through the egress proxy; unix sockets, files and the keychain rules are unchanged. |
+| Linux, bubblewrap | Nothing changes: every turn has its own network namespace with a loopback of its own, where agy's server already works. That loopback can't reach this machine's servers. |
+| Linux, Landlock tier | It stays off: without a network namespace there's nothing to contain a listener, so agy can't run here (`ligus doctor --sandbox` says why bubblewrap doesn't work on this host). |
+
+`ligus doctor` lists the agents that have it on, and `ligus doctor
+--sandbox` and Settings → Sandbox show what it means on this host. Turn it
+on only for an agent that needs it.
 
 ### What a plain Claude Code turn tries to reach {#refused-optional}
 

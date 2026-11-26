@@ -183,6 +183,11 @@ pub struct PathGrants {
     pub read_only: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_write: Vec<String>,
+    /// The agent may run local servers ([`AgentGrant::local_servers`]).
+    /// Filled in by [`SandboxGrants::paths_for`] for one agent; never on the
+    /// wire (the workspace-wide grant has no such switch).
+    #[serde(skip)]
+    pub local_servers: bool,
 }
 
 impl PathGrants {
@@ -204,6 +209,13 @@ pub struct AgentGrant {
     /// in turns that a member other than the workspace Owner starts.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shell: bool,
+    /// The agent's turns may run local servers: listen on and connect to
+    /// this machine's own addresses (a CLI such as `agy` that starts a
+    /// helper server and talks to it). Off unless the Owner turns it on.
+    /// Additive: an older build ignores it, so its turns run without it
+    /// (narrower). Files, unix sockets and egress are unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local_servers: bool,
 }
 
 /// The sandbox grants in force for a workspace (`WorkspaceSandboxSet`, config
@@ -285,18 +297,35 @@ impl SandboxGrants {
         ids.into_iter().filter(|id| shell(self, id) != shell(other, id)).collect()
     }
 
+    /// The agents whose local-servers grant differs between `self` and
+    /// `other` (the Owner's to change, like the shell).
+    pub fn local_servers_changes(&self, other: &SandboxGrants) -> Vec<uuid::Uuid> {
+        let on = |g: &SandboxGrants, id: &uuid::Uuid| g.agents.get(id).is_some_and(|a| a.local_servers);
+        let mut ids: Vec<uuid::Uuid> = self.agents.keys().chain(other.agents.keys()).copied().collect();
+        ids.sort();
+        ids.dedup();
+        ids.into_iter().filter(|id| on(self, id) != on(other, id)).collect()
+    }
+
+    /// Whether agent `id`'s turns may run local servers.
+    pub fn local_servers_granted(&self, id: uuid::Uuid) -> bool {
+        self.agents.get(&id).is_some_and(|a| a.local_servers)
+    }
+
     /// Whether agent `id` keeps its shell in a turn a non-Owner starts.
     pub fn shell_granted(&self, id: uuid::Uuid) -> bool {
         self.agents.get(&id).is_some_and(|a| a.shell)
     }
 
     /// The paths agent `id` gets: the workspace's, then its own (sorted,
-    /// deduplicated).
+    /// deduplicated), and its local-servers grant (off for `None`).
     pub fn paths_for(&self, id: Option<uuid::Uuid>) -> PathGrants {
         let mut p = self.workspace.clone();
+        p.local_servers = false;
         if let Some(a) = id.and_then(|i| self.agents.get(&i)) {
             p.read_only.extend(a.read_only.iter().cloned());
             p.read_write.extend(a.read_write.iter().cloned());
+            p.local_servers = a.local_servers;
         }
         p.read_only.sort();
         p.read_only.dedup();

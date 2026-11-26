@@ -1646,6 +1646,7 @@ fn cmd_agents(cfg: &Config, json: bool) -> Result<()> {
     let svc = open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
     let agents = svc.load_in(ws, workspace_config_session_id(ws))?.map(|s| s.workspace_agents).unwrap_or_default();
+    let grants = svc.sandbox_grants(ws);
     if json {
         let rows: Vec<serde_json::Value> = agents
             .iter()
@@ -1656,6 +1657,7 @@ fn cmd_agents(cfg: &Config, json: bool) -> Result<()> {
                     "runtimeId": a.runtime_id,
                     "hostId": (!a.host_id.is_empty()).then_some(&a.host_id),
                     "role": shown(&a.role),
+                    "localServers": grants.local_servers_granted(a.id),
                 })
             })
             .collect();
@@ -1667,7 +1669,61 @@ fn cmd_agents(cfg: &Config, json: bool) -> Result<()> {
     }
     for a in agents {
         let host = if a.host_id.is_empty() { "owner-device".into() } else { a.host_id.clone() };
-        println!("@{:<20} runtime={:<14} host={}", shown(&a.name), a.runtime_id, host);
+        let ls = if grants.local_servers_granted(a.id) { "  local-servers=on" } else { "" };
+        println!("@{:<20} runtime={:<14} host={}{ls}", shown(&a.name), a.runtime_id, host);
+    }
+    Ok(())
+}
+
+/// `ligus agents set <agent> --local-servers on|off [--json]`: an agent's
+/// signed local-servers grant (the Owner's, with presence in a shared
+/// workspace). The agent by @name or id.
+fn cmd_agents_set(cfg: &Config, rest: &[String]) -> Result<()> {
+    let usage = "usage: ligus agents set <agent> --local-servers on|off [--json]";
+    let mut agent: Option<&str> = None;
+    let mut local: Option<&str> = None;
+    let mut json = false;
+    let mut it = rest.iter().map(String::as_str).skip_while(|a| *a != "set").skip(1);
+    while let Some(a) = it.next() {
+        match a {
+            "--json" => json = true,
+            "--local-servers" => local = Some(it.next().ok_or_else(|| help::usage_error(format!("--local-servers needs on or off; {usage}")))?),
+            f if f.starts_with("--") => return Err(help::usage_error(format!("`ligus agents set` has no flag {f}; {usage}"))),
+            v if agent.is_none() => agent = Some(v),
+            _ => return Err(help::usage_error(usage)),
+        }
+    }
+    let agent = agent.ok_or_else(|| help::usage_error(usage))?;
+    let on = match local {
+        Some("on" | "true" | "yes") => true,
+        Some("off" | "false" | "no") => false,
+        Some(v) => return Err(help::usage_error(format!("--local-servers takes on or off, not {v:?}"))),
+        None => return Err(help::usage_error(format!("nothing to set; {usage}"))),
+    };
+    let mut svc = open_service(cfg)?;
+    let ws = uuid_of_room(&cfg.room);
+    let agents = svc.load_in(ws, workspace_config_session_id(ws))?.map(|s| s.workspace_agents).unwrap_or_default();
+    let want = agent.trim().trim_start_matches('@');
+    let a = agents
+        .iter()
+        .find(|a| a.id.to_string() == want || a.name.eq_ignore_ascii_case(want))
+        .ok_or_else(|| problem::not_found(format!("no agent @{want} in this workspace (ligus agents lists them)")))?;
+    let (id, name) = (a.id, shown(&a.name));
+    let before = svc.sandbox_grants(ws).local_servers_granted(id);
+    if before != on {
+        ligus_runtime::setup::service::set_local_servers(&mut svc, ws, id, on).map_err(|e| match e {
+            ligus_runtime::setup::OpsError::Refused(m) => anyhow::Error::from(ligus_runtime::chat_service::ChatError::Unauthorized(m)),
+            e => anyhow!("{e}"),
+        })?;
+    }
+    if json {
+        println!("{}", serde_json::json!({ "agent": id, "name": name, "localServers": on, "changed": before != on }));
+    } else if before == on {
+        println!("@{name}: local servers already {}", if on { "on" } else { "off" });
+    } else if on {
+        println!("@{name} may now run local servers (listen and connect on this machine; ligus doctor --sandbox says what that means here). Share with `ligus sync`.");
+    } else {
+        println!("@{name} may no longer run local servers. Share with `ligus sync`.");
     }
     Ok(())
 }
@@ -2035,6 +2091,9 @@ fn sandbox_policy_lines(cfg: &Config, runtime: Option<&str>, agent: Option<&str>
             out.push(format!("  {:<10} {}  ({})", e.access, e.path, e.why));
         }
         out.push(format!("  shell      {}", p.shell));
+        if k.is_some_and(|k| k.is_cli_agent()) {
+            out.push(format!("  local servers  {}", p.local_servers));
+        }
     }
     out.push(String::new());
         out.push(format!("workspace sandbox grants on this host: {}", here.why));
@@ -2061,8 +2120,18 @@ fn sandbox_policy_lines(cfg: &Config, runtime: Option<&str>, agent: Option<&str>
         if a.shell {
             out.push(format!("  agent {id}  shell for every member's turns (an Owner's grant)"));
         }
+        if a.local_servers {
+            out.push(format!("  agent {id}  local servers: listen and connect on this machine (an Owner's grant)"));
+        }
     }
     Ok(out)
+}
+
+/// The agents' @names (their ids when the roster can't be read).
+fn agent_names(cfg: &Config, ids: &[Uuid]) -> Vec<String> {
+    let ws = uuid_of_room(&cfg.room);
+    let roster = open_service(cfg).ok().and_then(|svc| svc.load_in(ws, workspace_config_session_id(ws)).ok().flatten()).map(|c| c.workspace_agents).unwrap_or_default();
+    ids.iter().map(|id| roster.iter().find(|a| a.id == *id).map(|a| format!("@{}", shown(&a.name))).unwrap_or_else(|| id.to_string())).collect()
 }
 
 /// This host's workspace's signed sandbox grants and whether it applies
@@ -2179,6 +2248,13 @@ fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
         let (signed, here) = signed_grants_here(cfg, ligus_runtime::sandbox::grants_setting_from_env());
         let n = signed.workspace.read_only.len() + signed.workspace.read_write.len() + signed.agents.len();
         r.add(Check::ok("sandbox.grants", "sandbox grants", format!("{} ({n} signed; ligus doctor --sandbox lists them)", here.why)));
+        let local: Vec<Uuid> = signed.agents.iter().filter(|(_, a)| a.local_servers).map(|(id, _)| *id).collect();
+        if !local.is_empty() {
+            let names = agent_names(cfg, &local);
+            let rule = ligus_runtime::executor::local_servers_rule(s.kind, here.apply);
+            let detail = format!("{} may run local servers{}", names.join(", "), if here.apply { "" } else { " (not applied on this host)" });
+            r.add(Check::ok("sandbox.local-servers", "local servers", detail).notes(vec![rule]));
+        }
         if o.turn_test && code == 0 {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
             match rt.block_on(selftest::turn_test(&cfg.data_dir)) {
@@ -2714,7 +2790,11 @@ fn run() -> Result<()> {
             }
             _ => bail!("usage: ligus config <export|import <file.toml>>"),
         },
-        "agents" => cmd_agents(&cfg, has("--json")),
+        "agents" => match positional.first().map(|s| s.as_str()) {
+            Some("set") => cmd_agents_set(&cfg, rest),
+            Some(other) => bail!("unknown `ligus agents` subcommand {other:?}; use `ligus agents [--json]` or `ligus agents set <agent> --local-servers on|off`"),
+            None => cmd_agents(&cfg, has("--json")),
+        },
         "proposals" => cmd_proposals(&cfg),
         "add-agent" => {
             if positional.len() < 2 {

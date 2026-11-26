@@ -125,6 +125,13 @@ pub struct EnforcementPlan {
     /// through: only via the proxy's gateway route, which adds the
     /// credential (docs/design/v2/model-gateways.md §7).
     pub gateway: Option<GatewayRoute>,
+    /// An agent child may run local servers (its agent's signed
+    /// `localServers` grant): listen on and connect to this machine's own
+    /// addresses. Seatbelt adds just that; the bubblewrap tier's private
+    /// network namespace already has its own loopback; the Landlock tier
+    /// (no namespace) can't confine it and keeps refusing. Never set for an
+    /// open-egress child, a tool or a pre-flight test.
+    pub local_servers: bool,
 }
 
 /// A CLI agent's model gateway route: which gateway, its wire, and the CLI
@@ -1116,6 +1123,15 @@ impl EnvelopeEnforcer {
             mcp.retain(|m| m != LIGUS_MCP_ID);
             mcp.insert(0, LIGUS_MCP_ID.to_string());
         }
+        // Local servers: the agent child only (its tools and descendants run
+        // inside its sandbox), only where the network is restricted, and
+        // never under a tightened envelope (a chat in lockdown, a workspace
+        // in dearth mode): on macOS a listener can be reached from other
+        // machines, a way out the tightening doesn't allow.
+        let local_servers = matches!(i.purpose, Purpose::Agent(_))
+            && i.grants.local_servers
+            && !matches!(egress_plan, EgressPlan::Open)
+            && i.envelope.tightened_by.is_empty();
         EnforcementPlan {
             worktree: i.worktree.to_path_buf(),
             worktree_writable,
@@ -1132,6 +1148,7 @@ impl EnvelopeEnforcer {
             mcp,
             ligus_mcp_socket,
             gateway,
+            local_servers,
         }
     }
 }
@@ -2151,6 +2168,27 @@ pub struct EffectivePolicy {
     pub entries: Vec<PolicyEntry>,
     /// The shell rule for this agent's turns.
     pub shell: String,
+    /// Whether this agent's turns may run local servers here, and what that
+    /// means on this tier ([`local_servers_rule`]).
+    pub local_servers: String,
+}
+
+/// What local servers mean for an agent on a sandbox tier: `granted` is its
+/// signed `localServers` grant (applied on this device).
+pub fn local_servers_rule(kind: ExecutorKind, granted: bool) -> String {
+    match (kind, granted) {
+        (ExecutorKind::Bwrap, _) => {
+            "allowed on the loopback of the turn's own network namespace (it can't reach this machine's other servers), with or without the grant".into()
+        }
+        (ExecutorKind::Seatbelt, true) => {
+            "on: may listen on and connect to this machine's own addresses (also its other local servers); macOS can't hold a listener to loopback, so other machines may reach one it opens on 0.0.0.0 unless the macOS firewall blocks them".into()
+        }
+        (ExecutorKind::Landlock, true) => {
+            "granted, but this tier has no network namespace to contain it, so it stays off (bubblewrap with user namespaces gives the agent its own loopback)".into()
+        }
+        (ExecutorKind::Unconfined, _) => "no agent sandbox: CLI agent turns are refused".into(),
+        (_, false) => "off: no listening sockets and no connections to this machine's other servers (the Owner can turn it on for one agent)".into(),
+    }
 }
 
 /// The effective policy for an agent turn of `kind` (a CLI or an HTTP model
@@ -2271,12 +2309,14 @@ pub fn effective_policy_in(
         "the workspace Owner's turns only (the device owner's in the local workspace); other members' turns run without it".to_string()
     };
     let status = sandbox_status();
+    let local_servers = local_servers_rule(status.kind, plan.local_servers);
     EffectivePolicy {
         runtime: kind.map(|k| format!("{k:?}")).unwrap_or_else(|| "commands and pre-flight tests".into()),
         tier: status.tier().into(),
         home: plan.home.as_ref().map(|h| h.display().to_string()),
         entries,
         shell,
+        local_servers,
     }
 }
 
@@ -2304,3 +2344,5 @@ pub(crate) mod tests;
 mod home_tests;
 #[cfg(test)]
 mod review2_tests;
+#[cfg(all(test, unix))]
+mod local_servers_tests;

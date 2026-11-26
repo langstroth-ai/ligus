@@ -1071,6 +1071,7 @@ mod tests {
             mcp: vec![],
             ligus_mcp_socket: None,
             gateway: None,
+            local_servers: false,
         }
     }
 

@@ -21,6 +21,10 @@ with a reason.
 The Gemini and MLX presets are one-click entries in Settings, Models, both
 on the OpenAI-compatible provider. Neither adds a new provider kind.
 
+Google Antigravity runs its own language server on this machine, so its
+agent needs the [local-servers switch](../concepts/security.md#local-servers)
+on (the Owner's; off by default), and doesn't run on the Linux Landlock tier.
+
 ACP details, the Claude login rule and the permission mapping:
 [Subscription CLIs over ACP](../addons/acp.md). The tools themselves:
 [Ligus tools for agents](../addons/ligus-mcp.md).

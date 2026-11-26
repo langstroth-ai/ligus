@@ -1,5 +1,5 @@
 //! Set up an agent: harness (installed, signed in) → name → model →
-//! sandbox → optional test turn.
+//! sandbox (agy: may it run local servers) → optional test turn.
 
 use ligus_core::WorkspaceRole;
 
@@ -73,6 +73,11 @@ pub(crate) fn steps(ops: &dyn SetupOps, inputs: &Inputs) -> Vec<StepDef> {
                     .required()
                     .when("harness", &["gateway"])
                     .help("The gateway's name, as the host lists it (ligus gateway-check)."),
+                // Off unless the person turns it on; offered for agy only
+                // (any harness takes --local-servers when asked for).
+                Field::new("local-servers", "May run local servers", FieldKind::Toggle)
+                    .when("harness", &["antigravity"])
+                    .help("agy runs its own helper server on this machine and needs this. Its turns may then also reach other servers on this machine (ligus help agents)."),
             ],
         ),
         StepDef::input(
@@ -199,7 +204,11 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
             ctx.ok("agent", "agent", format!("@{} is already set up on {label}", a.name));
             ctx.result("agentId", a.id.to_string());
             ctx.result("runtimeId", a.runtime_id.clone());
-            return verify(ctx, ops, inputs, &a.runtime_id, &name);
+            let (id, rid) = (a.id, a.runtime_id.clone());
+            if !local_servers(ctx, ops, inputs, id, &name) {
+                return;
+            }
+            return verify(ctx, ops, inputs, &rid, &name);
         }
     }
     let mut taken: Vec<String> = agents.iter().map(|a| a.name.clone()).collect();
@@ -269,20 +278,66 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
     }
     if ctx.dry_run() {
         ctx.skip("agent", "agent", format!("would create @{name} on '{runtime_id}'"));
+        if inputs.on("local-servers") {
+            ctx.skip("local-servers", "local servers", format!("would let @{name} run local servers"));
+        }
         if inputs.on("test-turn") {
             ctx.skip("test-turn", "test turn", "would send one test message");
         }
         return ctx.done();
     }
-    match ops.add_agent(&name, &runtime_id) {
+    if inputs.on("local-servers") && !gate::need(ctx, ops, WorkspaceRole::Owner, "letting an agent run local servers") {
+        return;
+    }
+    let id = match ops.add_agent(&name, &runtime_id) {
         Ok(id) => {
             ctx.ok("agent", "agent", format!("@{name} created"));
             ctx.result("agentId", id.to_string());
             ctx.commit();
+            id
         }
         Err(e) => return ctx.fail("agent", "agent", format!("couldn't create @{name}: {e}"), "fix what it says and run this again", ops_code(&e)),
+    };
+    if !local_servers(ctx, ops, inputs, id, &name) {
+        return;
     }
     verify(ctx, ops, inputs, &runtime_id, &name);
+}
+
+/// The agent's local-servers grant, when asked for (`--local-servers`):
+/// on, the Owner's signed switch. Never turned off here (a rerun without
+/// the flag leaves it as it is). `false` when the flow stopped.
+fn local_servers(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, id: uuid::Uuid, name: &str) -> bool {
+    if !inputs.on("local-servers") {
+        return true;
+    }
+    if ops.local_servers(id) {
+        ctx.ok("local-servers", "local servers", format!("@{name} may already run local servers"));
+        return true;
+    }
+    if ctx.dry_run() {
+        ctx.skip("local-servers", "local servers", format!("would let @{name} run local servers"));
+        return true;
+    }
+    if !gate::need(ctx, ops, WorkspaceRole::Owner, "letting an agent run local servers") {
+        return false;
+    }
+    match ops.set_local_servers(id, true) {
+        Ok(()) => {
+            ctx.ok("local-servers", "local servers", format!("@{name} may run local servers (listen and connect on this machine)"));
+            true
+        }
+        Err(e) => {
+            ctx.fail(
+                "local-servers",
+                "local servers",
+                format!("couldn't let @{name} run local servers: {e}"),
+                format!("the workspace Owner runs ligus agents set {name} --local-servers on, or turns it on in Settings, Sandbox"),
+                ops_code(&e),
+            );
+            false
+        }
+    }
 }
 
 fn verify(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, runtime_id: &str, name: &str) {
@@ -293,7 +348,8 @@ fn verify(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, runtime_id: &s
         if ctx.cancelled() {
             return;
         }
-        match ops.test_turn(runtime_id) {
+        let local = ops.agents().iter().find(|a| a.name.eq_ignore_ascii_case(name)).is_some_and(|a| ops.local_servers(a.id));
+        match ops.test_turn_with(runtime_id, local) {
             Ok(t) if t.ok => ctx.ok("test-turn", "test turn", format!("answered in {} ms", t.latency_ms)),
             Ok(t) => {
                 return ctx.fail("test-turn", "test turn", t.detail, "check the sign-in and the model, then run this again with --test-turn", exit::FAILED)

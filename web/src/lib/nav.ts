@@ -88,3 +88,22 @@ export const OPEN_ARCHIVED_PROPOSALS_EVENT = "ligus:open-archived-proposals";
 export function openArchivedProposals() {
   window.dispatchEvent(new CustomEvent(OPEN_ARCHIVED_PROPOSALS_EVENT));
 }
+
+/// Open Settings on Sandbox with one agent picked (the agent row's
+/// "Sandbox…"). The section reads the request when it mounts and clears it;
+/// one already on screen hears it through SANDBOX_AGENT_EVENT.
+export const SANDBOX_AGENT_EVENT = "ligus:sandbox-agent";
+
+let sandboxAgentPending: string | null = null;
+
+export function openSandboxForAgent(agentId: string) {
+  sandboxAgentPending = agentId;
+  openSettingsTab("sandbox");
+  window.dispatchEvent(new CustomEvent<string>(SANDBOX_AGENT_EVENT, { detail: agentId }));
+}
+
+export function takeSandboxAgentRequest(): string | null {
+  const a = sandboxAgentPending;
+  sandboxAgentPending = null;
+  return a;
+}

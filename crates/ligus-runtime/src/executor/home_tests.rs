@@ -137,7 +137,7 @@ fn sandbox_home_grants_open_only_what_they_name() {
     let grants = PathGrants {
         // A grant of a credential dir or the data dir opens nothing.
         read_only: vec!["~/granted/ro".into(), "~/.ssh".into(), format!("~/{}", data_dir_rel().display())],
-        read_write: vec!["~/granted/rw".into(), "~/.ligus".into()],
+        read_write: vec!["~/granted/rw".into(), "~/.ligus".into()], local_servers: false,
     };
     for purpose in PURPOSES {
         let (ok, out) = run_in(&*e, &d, *purpose, &format!("cat '{h}/granted/ro/data.txt'"), grants.clone());
@@ -232,7 +232,7 @@ fn plan_denies_the_home_and_lists_what_it_lets_back() {
     };
     let grants = PathGrants {
         read_only: vec!["~/data".into(), "~/.ssh".into(), "~/.ligus/keys".into(), "/opt/models".into()],
-        read_write: vec!["~/scratch".into(), "~/.ssh/x".into(), "~/.ligus".into()],
+        read_write: vec!["~/scratch".into(), "~/.ssh/x".into(), "~/.ligus".into()], local_servers: false,
     };
     for purpose in [Purpose::Tool, Purpose::Preflight, Purpose::McpServer, Purpose::Agent(ModelProviderKind::Aider)] {
         let p = plan_for(home, &host, purpose, &grants);
@@ -305,7 +305,7 @@ fn program_install_dir_is_the_prefix_under_the_home() {
 fn effective_policy_names_every_path_with_a_reason() {
     let d = DecoyHome::new();
     let host = d.host();
-    let grants = PathGrants { read_only: vec!["~/granted/ro".into(), "~/.ssh".into()], read_write: vec!["~/granted/rw".into()] };
+    let grants = PathGrants { read_only: vec!["~/granted/ro".into(), "~/.ssh".into()], read_write: vec!["~/granted/rw".into()], local_servers: false };
     let p = effective_policy_in(Some(ModelProviderKind::ClaudeCode), &grants, false, &d.home, &host, None, &|_| None);
     let find = |path: &Path, access: &str| p.entries.iter().find(|e| e.path == path.display().to_string() && e.access == access).cloned();
     assert!(find(&d.home, "denied").is_some(), "{p:?}");
@@ -393,7 +393,7 @@ fn symlinked_decoy() -> (DecoyHome, HostPaths, PathGrants) {
     let path = std::env::join_paths([d.home.join(".local/bin")]).unwrap();
     let t = toolchain_allow(&d.home, Some(&path), &|_| None, &|p| p.exists());
     let host = HostPaths { toolchain_read: t.read.into_iter().map(|(p, _)| p).collect(), ..d.host() };
-    let grants = PathGrants { read_only: vec!["~/granted/ssh-link".into()], read_write: vec![] };
+    let grants = PathGrants { read_only: vec!["~/granted/ssh-link".into()], read_write: vec![], local_servers: false };
     (d, host, grants)
 }
 
@@ -431,7 +431,7 @@ fn review_symlinked_allow_entries_resolve_before_they_open_live() {
 fn review_a_grant_above_the_home_opens_nothing_in_it() {
     let d = DecoyHome::new();
     let parent = d.home.parent().unwrap().display().to_string();
-    let grants = PathGrants { read_only: vec![parent.clone()], read_write: vec![parent.clone()] };
+    let grants = PathGrants { read_only: vec![parent.clone()], read_write: vec![parent.clone()], local_servers: false };
     let p = plan_for(&d.home, &d.host(), Purpose::Tool, &grants);
     let real_home = canonical(&d.home);
     for r in p.home_read.iter().chain(p.write_extra.iter()) {
@@ -445,7 +445,7 @@ fn review_a_grant_above_the_home_opens_nothing_in_it_live() {
     let Some(e) = super::tests::real_executor() else { return };
     let d = DecoyHome::new();
     let parent = d.home.parent().unwrap().display().to_string();
-    let grants = PathGrants { read_only: vec![parent.clone()], read_write: vec![parent.clone()] };
+    let grants = PathGrants { read_only: vec![parent.clone()], read_write: vec![parent.clone()], local_servers: false };
     let h = d.home.display().to_string();
     for purpose in PURPOSES {
         let (_, out) = run_in(&*e, &d, *purpose, &format!("cat '{h}/Documents/taxes.txt'; echo x > '{h}/new-file'; test -e '{h}/new-file' && echo MADE"), grants.clone());
@@ -469,7 +469,7 @@ fn code_path_decoy() -> (DecoyHome, HostPaths, Vec<&'static str>, PathGrants) {
     let t = toolchain_allow(&d.home, Some(&path), &|_| None, &|p| p.exists());
     let host = HostPaths { toolchain_read: t.read.into_iter().map(|(p, _)| p).collect(), ..d.host() };
     let rw = [".cargo/bin", ".local/bin", ".zshrc", "Library/LaunchAgents", ".config/autostart", ".config/systemd/user", ".config", ".cargo"];
-    let grants = PathGrants { read_only: vec![], read_write: rw.iter().map(|r| format!("~/{r}")).collect() };
+    let grants = PathGrants { read_only: vec![], read_write: rw.iter().map(|r| format!("~/{r}")).collect(), local_servers: false };
     (d, host, rw.to_vec(), grants)
 }
 
@@ -483,7 +483,7 @@ fn review_rw_grants_never_open_code_that_runs_outside_the_sandbox() {
     }
     // A grant beside them still works. (`~/.cargo/registry` is a code path
     // too since the second review: a build compiles its sources.)
-    let ok = PathGrants { read_only: vec![], read_write: vec!["~/granted/rw".into(), "~/datasets".into()] };
+    let ok = PathGrants { read_only: vec![], read_write: vec!["~/granted/rw".into(), "~/datasets".into()], local_servers: false };
     let p = plan_for(&d.home, &host, Purpose::Tool, &ok);
     assert!(p.write_extra.contains(&d.home.join("granted/rw")) && p.write_extra.contains(&d.home.join("datasets")), "{:?}", p.write_extra);
 }
@@ -509,7 +509,7 @@ fn review_rw_grants_never_open_code_that_runs_outside_the_sandbox_live() {
 fn review_grant_case_variants_open_no_denied_path() {
     let Some(e) = super::tests::real_executor() else { return };
     let d = DecoyHome::new();
-    let grants = PathGrants { read_only: vec!["~/.SSH".into(), "~/.LIGUS/keys".into()], read_write: vec!["~/.Ssh".into()] };
+    let grants = PathGrants { read_only: vec!["~/.SSH".into(), "~/.LIGUS/keys".into()], read_write: vec!["~/.Ssh".into()], local_servers: false };
     for target in [".ssh/id_ed25519", ".SSH/id_ed25519", ".LIGUS/keys/device.seed", ".ligus/keys/device.seed"] {
         let (_, out) = run_in(&*e, &d, Purpose::Tool, &format!("cat '{}'", d.home.join(target).display()), grants.clone());
         assert!(!out.contains("DECOY"), "{target}: {out}");
