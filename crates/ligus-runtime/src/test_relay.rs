@@ -11,6 +11,13 @@
 //! and, when rows remain, `X-Hive-More: true`. [`router_with_page_cap`] sets a
 //! tiny cap so tests cross page boundaries with a handful of envelopes.
 //!
+//! The blob channel (upload, download, delete and the 0.4 retain route) is
+//! here too, with the relay's expiry rule: a blob expires after the
+//! retention, a renewal moves that to now plus the retention but never past
+//! its upload plus the maximum age. [`router_with_blobs`] hands back a
+//! [`MockBlobs`] to look at and age the stored blobs; `retain: false` is a
+//! relay older than the retain route.
+//!
 //! The approval mailbox routes (`docs/design/code-match-wire.md` section 4)
 //! are served in full, with every limit: 64 live requests, 10 messages per
 //! request, the 15-minute expiry, 10 puts a minute per client, no overwrite,
@@ -48,6 +55,27 @@ struct MockState {
     page_cap: usize,
     /// How many `GET /envelopes` requests were served (paging assertions).
     envelope_gets: usize,
+    /// (workspace, blob id) → stored blob.
+    blobs: HashMap<(String, String), MockBlob>,
+    blob_seq: u64,
+    /// Retain requests served, by blob id (any answer).
+    retain_calls: Vec<String>,
+}
+
+/// One stored blob (unix seconds; `expires_at` 0 = never).
+#[derive(Clone, Debug)]
+pub struct MockBlob {
+    pub data: Vec<u8>,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
+
+/// The real relay's blob defaults.
+pub const BLOB_RETENTION_SECS: i64 = 30 * 24 * 60 * 60;
+pub const BLOB_MAX_AGE_SECS: i64 = 365 * 24 * 60 * 60;
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
 // A path from this file's directory, so the CLI's tests (which include this
@@ -113,7 +141,24 @@ pub fn router_with_clock() -> (Router, TestClock) {
 fn build(page_cap: usize, clock: TestClock) -> (Router, EnvelopeGets, ()) {
     let state: Shared = Arc::new(Mutex::new(MockState { page_cap: page_cap.max(1), ..Default::default() }));
     let gets = EnvelopeGets(state.clone());
-    let router = Router::new()
+    (routes(state, true, clock), gets, ())
+}
+
+/// A mock relay with a handle on its blobs; `retain: false` leaves out the
+/// retain route (a relay from before Ligus 0.4: plain `404`).
+pub fn router_with_blobs(retain: bool) -> (Router, MockBlobs) {
+    let state: Shared = Arc::new(Mutex::new(MockState { page_cap: DEFAULT_PAGE_CAP, ..Default::default() }));
+    (routes(state.clone(), retain, TestClock::default()), MockBlobs(state))
+}
+
+fn routes(state: Shared, retain: bool, clock: TestClock) -> Router {
+    let mut router = Router::new()
+        .route("/v1/workspaces/{ws}/blobs", post(post_blob))
+        .route("/v1/workspaces/{ws}/blobs/{id}", get(get_blob).delete(delete_blob));
+    if retain {
+        router = router.route("/v1/workspaces/{ws}/blobs/{id}/retain", post(retain_blob));
+    }
+    router
         .route("/v1/health", get(|| async { "ok" }))
         .route(
             "/v1/workspaces/{ws}/envelopes",
@@ -127,8 +172,87 @@ fn build(page_cap: usize, clock: TestClock) -> (Router, EnvelopeGets, ()) {
         .route("/v1/pair", post(create_pair))
         .route("/v1/pair/{code}", get(resolve_pair))
         .with_state(state)
-        .merge(mailbox::router(clock));
-    (router, gets, ())
+        .merge(mailbox::router(clock))
+}
+
+/// Looks at and ages a mock relay's blobs.
+#[derive(Clone)]
+pub struct MockBlobs(Shared);
+
+impl MockBlobs {
+    pub fn get(&self, ws: &str, id: &str) -> Option<MockBlob> {
+        self.0.lock().unwrap().blobs.get(&(ws.to_string(), id.to_string())).cloned()
+    }
+    /// Rewrite a blob's upload and expiry times.
+    pub fn set_times(&self, ws: &str, id: &str, created_at: i64, expires_at: i64) {
+        if let Some(b) = self.0.lock().unwrap().blobs.get_mut(&(ws.to_string(), id.to_string())) {
+            b.created_at = created_at;
+            b.expires_at = expires_at;
+        }
+    }
+    /// The blob ids retain was asked about, in order.
+    pub fn retain_calls(&self) -> Vec<String> {
+        self.0.lock().unwrap().retain_calls.clone()
+    }
+    /// How many blobs the relay holds (expired ones included until asked).
+    pub fn count(&self) -> usize {
+        self.0.lock().unwrap().blobs.len()
+    }
+}
+
+fn blob_not_found() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (StatusCode::NOT_FOUND, Json(json!({"error": "blob_not_found", "message": "no such blob"}))).into_response()
+}
+
+/// A live blob of `ws` (expired ones answer as absent).
+fn live_blob<'a>(st: &'a mut MockState, ws: &str, id: &str, now: i64) -> Option<&'a mut MockBlob> {
+    st.blobs.get_mut(&(ws.to_string(), id.to_string())).filter(|b| b.expires_at == 0 || b.expires_at > now)
+}
+
+async fn post_blob(State(st): State<Shared>, Path(ws): Path<String>, body: axum::body::Bytes) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut st = st.lock().unwrap();
+    st.blob_seq += 1;
+    // 43 characters of base64url, like the relay's ids.
+    let id = format!("{:0>43}", format!("mockblob{}", st.blob_seq));
+    let now = unix_now();
+    let b = MockBlob { data: body.to_vec(), created_at: now, expires_at: now + BLOB_RETENTION_SECS };
+    let size = b.data.len();
+    let expires_at = b.expires_at;
+    st.blobs.insert((ws, id.clone()), b);
+    (StatusCode::CREATED, Json(json!({"id": id, "size": size, "sha256": "", "expiresAt": expires_at}))).into_response()
+}
+
+async fn get_blob(State(st): State<Shared>, Path((ws, id)): Path<(String, String)>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut st = st.lock().unwrap();
+    match live_blob(&mut st, &ws, &id, unix_now()) {
+        Some(b) => (StatusCode::OK, b.data.clone()).into_response(),
+        None => blob_not_found(),
+    }
+}
+
+async fn delete_blob(State(st): State<Shared>, Path((ws, id)): Path<(String, String)>) -> StatusCode {
+    st.lock().unwrap().blobs.remove(&(ws, id));
+    StatusCode::NO_CONTENT
+}
+
+/// The relay's rule: now plus the retention, never past the upload plus the
+/// maximum age, never earlier than it was; a never-expiring blob stays so.
+async fn retain_blob(State(st): State<Shared>, Path((ws, id)): Path<(String, String)>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut st = st.lock().unwrap();
+    st.retain_calls.push(id.clone());
+    let now = unix_now();
+    let Some(b) = live_blob(&mut st, &ws, &id, now) else {
+        return blob_not_found();
+    };
+    if b.expires_at != 0 {
+        let next = (now + BLOB_RETENTION_SECS).min(b.created_at + BLOB_MAX_AGE_SECS);
+        b.expires_at = b.expires_at.max(next);
+    }
+    (StatusCode::OK, Json(json!({"id": id, "expiresAt": b.expires_at}))).into_response()
 }
 
 /// Reads how many `GET /envelopes` requests a mock relay has served.

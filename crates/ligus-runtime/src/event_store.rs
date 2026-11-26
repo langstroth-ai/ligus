@@ -83,11 +83,13 @@ pub fn syncable(env: &SessionEventEnvelope) -> Result<()> {
 }
 
 mod agent_usage;
+mod blob_renewals;
 mod held;
 mod repo_tables;
 mod storage_v2;
 pub use held::{claimed_account, HeldEvent, HeldStats, HoldItem, RefetchRow, HELD_PER_SIGNER, HELD_PER_WORKSPACE, HELD_REFETCH_PER_WORKSPACE, HELD_REFETCH_TRIES, HELD_RETRY_EVERY, HELD_TOTAL, HELD_TTL_MS};
 pub use agent_usage::{parse_day, utc_day, AgentUsageRow};
+pub use blob_renewals::BlobRenewal;
 pub use repo_tables::{CheckoutSource, RepoMapping};
 pub use storage_v2::{
     invite_secret, redeem_secret, relay_origin, seed_backups, SyncKey, SyncMigration, NEWER_DATA_MESSAGE, PERSON_SEED_KEEP_MS, SCHEMA_VERSION,
@@ -885,6 +887,7 @@ impl EventStore {
         storage_v2::stamp_if_nothing_to_migrate(conn)?;
         held::init(conn)?;
         agent_usage::init(conn)?;
+        blob_renewals::init(conn)?;
         // B1: the key epoch each relay body arrived sealed under (device-local,
         // unsigned; NULL for events authored here or received unsealed).
         let has_epoch: bool = conn

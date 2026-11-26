@@ -53,6 +53,18 @@ pub struct BlobUploaded {
     pub expires_at: i64,
 }
 
+/// What the relay answers to a blob renewal ([`RelayClient::retain_blob`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlobRetained {
+    /// Renewed: the blob now expires at this unix time (0 = never).
+    Renewed { expires_at: i64 },
+    /// The relay has no such blob (expired, deleted, never there).
+    Gone,
+    /// The relay has no retain route (older than Ligus 0.4's relay, or its
+    /// blob channel is off): keep today's behaviour.
+    Unsupported,
+}
+
 /// A refusal's JSON body (`{"error","message"}`), or the bare status.
 async fn refusal(status: u16, resp: reqwest::Response) -> RelayError {
     #[derive(serde::Deserialize)]
@@ -600,6 +612,40 @@ impl RelayClient {
             return Err(RelayError::Unauthorized);
         }
         Err(refusal(status, resp).await)
+    }
+
+    /// Renew a live blob (`POST /v1/workspaces/{id}/blobs/{blob}/retain`):
+    /// the relay moves its expiry to now plus its retention, capped by the
+    /// operator's maximum age. Idempotent. A `404 blob_not_found` is
+    /// [`BlobRetained::Gone`]; any other `404` (or `405`) is a relay without
+    /// the route, [`BlobRetained::Unsupported`], never an error.
+    pub async fn retain_blob(&self, workspace: &str, id: &str) -> Result<BlobRetained, RelayError> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Body {
+            #[serde(default)]
+            expires_at: i64,
+            #[serde(default)]
+            error: String,
+        }
+        let url = format!("{}/v1/workspaces/{}/blobs/{}/retain", self.base, workspace, id);
+        let resp = self.send_retrying(|| self.http.post(&url).timeout(self.request_timeout)).await?;
+        let status = resp.status().as_u16();
+        match status {
+            200..=299 => {
+                let b: Body = resp.json().await?;
+                Ok(BlobRetained::Renewed { expires_at: b.expires_at })
+            }
+            404 => {
+                let text = resp.text().await.unwrap_or_default();
+                let gone = serde_json::from_str::<Body>(&text).is_ok_and(|b| b.error == "blob_not_found");
+                Ok(if gone { BlobRetained::Gone } else { BlobRetained::Unsupported })
+            }
+            405 => Ok(BlobRetained::Unsupported),
+            401 | 403 => Err(RelayError::Unauthorized),
+            503 => Err(unavailable(&resp)),
+            _ => Err(refusal(status, resp).await),
+        }
     }
 
     /// Cheap connectivity + auth check: an authed GET of the envelope list.
@@ -1201,6 +1247,7 @@ mod tests {
         let _ = c.post_blob(&ws, vec![1, 2]).await;
         let _ = c.get_blob(&ws, "b", 10).await;
         let _ = c.delete_blob(&ws, "b").await;
+        let _ = c.retain_blob(&ws, "b").await;
         let _ = c.publish_presence(&ws, "d", &serde_json::json!({})).await;
         let _ = c.list_presence(&ws).await;
         let _ = c.publish_pairing("x", None).await;

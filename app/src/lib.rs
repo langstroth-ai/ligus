@@ -13571,6 +13571,7 @@ async fn sync_pull_once(
                 }
                 fulfil_apply_requests(app);
                 attachments::share_approved_offers(app);
+                attachments::renew_attachment_blobs(app);
                 first_profile(app, active);
             }
             if pulled > 0 {

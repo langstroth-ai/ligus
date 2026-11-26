@@ -485,6 +485,9 @@ export interface SharedAttachmentView {
   nameClass: TypeClass;
   riskyByName: boolean;
   fromAgentOffer: boolean;
+  /// The relay no longer has it and this device holds no verified copy
+  /// (older desktops leave it out).
+  expired?: boolean;
   /// The sharer's own messages that place it (the only ones that show it).
   messageIds: string[];
 }
