@@ -105,8 +105,8 @@ itself, through your `ligus serve` box.
 **My devices** lists the phone once, under the name it gave itself
 (cleaned, as every name is). That name is remembered only on the desktop
 that added the phone, in its local settings. Your other desktops show the
-name the phone's box knows it by, or "Device" and the first 8 characters of
-its device id (for example "Device 6f1c2a9b"). Both flows
+name the phone's box knows it by, or what it is and the day it was added
+(for example "Phone · added 24 Nov"); its fingerprint is under Details. Both flows
 ([Can't scan?](#cant-scan) too) remember it, and adding a phone that is
 already yours again replaces the old name rather than adding a second row:
 the phone says "This phone is already one of *Ana*'s devices in

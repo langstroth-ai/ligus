@@ -20,6 +20,26 @@ function renderLine(s: RelayMembershipDto) {
 }
 
 describe("RelayMembershipLine", () => {
+  it("can be hidden, and stays hidden for that workspace and state", async () => {
+    localStorage.clear();
+    const s = status({ identified: true });
+    const { unmount } = render(<RelayMembershipLine status={s} claiming={false} onClaim={vi.fn()} onToken={vi.fn()} scope="ws-1" />);
+    await userEvent.click(screen.getByRole("button", { name: "Hide this line" }));
+    expect(screen.queryByText("Relay doesn't check membership")).toBeNull();
+    unmount();
+    // Remembered on this device.
+    render(<RelayMembershipLine status={s} claiming={false} onClaim={vi.fn()} onToken={vi.fn()} scope="ws-1" />);
+    expect(screen.queryByText("Relay doesn't check membership")).toBeNull();
+  });
+
+  it("a hidden line comes back when the relay starts refusing this device", () => {
+    localStorage.clear();
+    localStorage.setItem("ligus.relayMembershipLine.hidden.ws-1.unclaimed", "1");
+    render(<RelayMembershipLine status={status({ state: "hidden" })} claiming={false} onClaim={vi.fn()} onToken={vi.fn()} scope="ws-1" />);
+    expect(screen.getByText("Relay roster: you're not on it")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Hide this line" })).toBeNull();
+  });
+
   it("offers Claim only when this device's token names an account", async () => {
     const { onClaim } = renderLine(status({ identified: true }));
     await userEvent.click(screen.getByRole("button", { name: "Claim ownership" }));
@@ -36,7 +56,7 @@ describe("RelayMembershipLine", () => {
 
   it("offers nothing on the community relay without an identified token", () => {
     renderLine(status({ community: true }));
-    expect(screen.queryByRole("button")?.textContent ?? "").not.toMatch(/Claim|token/);
+    expect(screen.queryAllByRole("button").map((b) => b.textContent ?? "").join(" ")).not.toMatch(/Claim|token/);
     expect(relayMembershipCopy(status({ community: true }))!.detail).toMatch(/no sign-in: only its operator/);
   });
 

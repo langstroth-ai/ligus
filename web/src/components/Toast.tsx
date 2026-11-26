@@ -8,6 +8,8 @@ export interface Toast {
   message: string;
   /** Optional action button (e.g. Undo / Retry). */
   action?: { label: string; run: () => void };
+  /** A summary of several errors folded together ("3 problems · Show"). */
+  folded?: number;
 }
 
 // External store: dispatching a toast re-renders only <ToastHost>, never the
@@ -16,7 +18,9 @@ export interface Toast {
 //
 // One toast is visible at a time; the rest wait their turn (a burst of the
 // same message counts once). Every error also lands in the error log, which
-// stays reopenable after its toast is gone.
+// stays reopenable after its toast is gone. An error is never dropped from
+// the queue: when too many wait, notes and successes go first, then the
+// waiting errors fold into one "N problems · Show" that opens the log.
 let queue: Toast[] = [];
 const listeners = new Set<() => void>();
 let nextId = 1;
@@ -39,11 +43,55 @@ const DEFAULT_TTL: Record<ToastKind, number> = {
   error: 7000, // errors linger longer so they're not missed
 };
 
-/// How many toasts may wait behind the visible one. Older waiting ones drop
-/// first (errors are still in the log).
+/// How many toasts may wait behind the visible one. Older notes and
+/// successes drop first; errors fold into one summary instead.
 const MAX_WAITING = 3;
 
 const ttls = new Map<number, number>();
+
+/// Opens the error log (the app sets it once; the summary's Show uses it).
+let showErrorLog: (() => void) | undefined;
+export function setShowErrorLog(fn: (() => void) | undefined) {
+  showErrorLog = fn;
+}
+
+function foldedToast(id: number, count: number): Toast {
+  return {
+    id,
+    kind: "error",
+    message: `${count} problems`,
+    folded: count,
+    action: { label: "Show", run: () => showErrorLog?.() },
+  };
+}
+
+/// Trim the waiting line to MAX_WAITING without losing an error.
+function trim(waiting: Toast[]): Toast[] {
+  const out = waiting.slice();
+  while (out.length > MAX_WAITING) {
+    const quiet = out.findIndex((t) => t.kind !== "error");
+    if (quiet >= 0) {
+      ttls.delete(out[quiet].id);
+      out.splice(quiet, 1);
+      continue;
+    }
+    // Only errors wait: fold the oldest one into the summary (made from the
+    // two oldest the first time).
+    const at = out.findIndex((t) => t.folded !== undefined);
+    if (at >= 0) {
+      const victim = out.findIndex((t, i) => i !== at && t.folded === undefined);
+      ttls.delete(out[victim].id);
+      out[at] = foldedToast(out[at].id, (out[at].folded ?? 0) + 1);
+      out.splice(victim, 1);
+    } else {
+      const [a, b] = [out[0], out[1]];
+      ttls.delete(a.id);
+      ttls.delete(b.id);
+      out.splice(0, 2, foldedToast(nextId++, 2));
+    }
+  }
+  return out;
+}
 
 /// Start the visible toast's clock (once it is the one on screen).
 function arm() {
@@ -70,8 +118,7 @@ function push(kind: ToastKind, message: string, action?: Toast["action"], ttl?: 
   const id = nextId++;
   if (ttl !== undefined) ttls.set(id, ttl);
   const head = queue[0];
-  const waiting = [...queue.slice(1), { id, kind, message, action }];
-  while (waiting.length > MAX_WAITING) ttls.delete(waiting.shift()!.id);
+  const waiting = trim([...queue.slice(1), { id, kind, message, action }]);
   queue = head ? [head, ...waiting] : waiting;
   emit();
   if (!head) arm();
