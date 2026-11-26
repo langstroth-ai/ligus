@@ -2566,7 +2566,10 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
         author: shown(ligus_core::agent::display_author(m)),
         body: m.body.clone(),
         is_streaming: m.is_streaming,
-        created_at: rfc3339(m.created_at),
+        // When it was posted: a streamed reply's completion, not its
+        // turn's start (a reply written after a person answered reads after
+        // the answer).
+        created_at: rfc3339(m.posted_at()),
         reactions: m
             .reactions
             .iter()

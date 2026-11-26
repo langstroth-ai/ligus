@@ -206,12 +206,17 @@ its host ("lt on studio-mini"). To make it one of your devices and leave one
 3. **On the desktop**, paste the request in **Add a computer**: the sheet says
    **This computer was the member "Alex (lt)"**. Compare the fingerprint, add
    it with your passkey and paste the grant in `lt`.
-4. The desktop offers **Remove "Alex (lt)"…**. Removing that member keeps
-   every message they wrote under their name (Ligus never changes who wrote
-   something) and stops anything new from them. Removing a member takes an
-   Owner's or Admin's passkey. If you opened Add a computer from People and the
-   computer didn't prove it was that member, the confirmation says so: remove
-   it only if it was you.
+4. When `lt` redeems the grant, it **retires** "Alex (lt)" into you by
+   itself when that's safe (see
+   [Its name, and your earlier member](#its-name-and-your-earlier-member)):
+   the member leaves People, and every message they wrote keeps their name
+   (Ligus never changes who wrote something). When it can't (that member is
+   the founder or the last Owner, ranks above you, has a passkey, or the
+   workspace is on older rules), `lt` says so. Then the desktop's
+   **Remove…** beside the grant removes it, with an Owner's or Admin's
+   passkey. If you opened Add a computer from People and the computer didn't
+   prove it was that member, the confirmation says so: remove it only if it
+   was you.
 
 ## Revoked devices
 

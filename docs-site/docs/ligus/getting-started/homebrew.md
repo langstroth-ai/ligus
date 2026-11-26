@@ -18,10 +18,11 @@ once:
 brew trust --tap langstroth-ai/ligus
 ```
 
-Upgrade later with:
+The app updates itself in place (**Settings → Updates & data**), so a plain
+`brew upgrade` leaves it alone. To have Homebrew upgrade it anyway:
 
 ```bash
-brew upgrade --cask ligus-app
+brew upgrade --cask --greedy ligus-app
 ```
 
 This installs `Ligus.app` into `/Applications`. The desktop app is **Apple
@@ -53,7 +54,11 @@ brew upgrade ligus                  # track releases
 This is the same runtime as the desktop app without the window — for running
 agents on a server, scripting Ligus, or connecting a remote agent to a workspace.
 See [Headless agents & setups](../../operate/concepts/headless-agents.md) for the full
-workflow (`ligus enroll` → `ligus worker`).
+workflow. A box (`ligus serve` or `ligus worker`) joins as its own member
+through an admission an Admin approves (`ligus admit request`), never with
+your invite: see [Admitting a box](../../operate/ops/admitting-a-box.md).
+After `brew upgrade ligus`, restart the box so it runs the new binary
+([Personal fleet](../../operate/deploy/personal-fleet.md#operating-it)).
 
 ## Other platforms
 

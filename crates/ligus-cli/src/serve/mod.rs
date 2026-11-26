@@ -798,7 +798,10 @@ impl Shared {
             (svc.author().clone(), svc.device_links(self.ws).unwrap_or_default(), api::Viewer::of(&svc))
         };
         let me = author.id.clone();
-        let mut notices = Vec::new();
+        // Who a "you" notice is for: each paired phone's person, and this
+        // box's own identity (ntfy, older pairings) — see [`Shared::push_audiences`].
+        let audiences = self.push_audiences(&author);
+        let mut notices: Vec<Outgoing> = Vec::new();
         let mut created = Vec::new();
         {
             let mut differ = self.differ.lock().unwrap_or_else(|e| e.into_inner());
@@ -839,7 +842,10 @@ impl Shared {
                         // Agent replies notify when done; other members'
                         // messages when they appear (only if they mention you).
                         if self.fresh(m.created_at) {
-                            notices.extend(notify::for_message(s, m, done, &me));
+                            for au in &audiences {
+                                let me = notify::Me::in_chat(&au.who, s, &links);
+                                notices.extend(notify::for_message(s, m, done, &me).map(|n| Outgoing::to(n, au)));
+                            }
                         }
                     }
                     Change::ProposalCreated { chat, proposal } => {
@@ -848,14 +854,14 @@ impl Shared {
                         created.push((chat, proposal));
                         self.hub.emit("proposal.created", hub::wrap("proposal", api::proposal_dto_as(s, p, &me)));
                         if self.fresh(p.created_at) {
-                            notices.extend(notify::for_proposal(s, p));
+                            notices.extend(notify::for_proposal(s, p).map(Outgoing::everyone));
                         }
                     }
                     Change::WorkflowApproval { chat, run, node } => {
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
                         let Some(r) = s.workflow_runs.iter().find(|r| r.id == run) else { continue };
                         if self.fresh(r.updated_at) {
-                            notices.extend(notify::for_workflow_gate(s, r, &node));
+                            notices.extend(notify::for_workflow_gate(s, r, &node).map(Outgoing::everyone));
                         }
                     }
                     Change::RecruitApprovers { chat, recruit } => {
@@ -865,10 +871,12 @@ impl Shared {
                         // records any member or agent can write, every one points
                         // at the same waiting proposal, and ntfy has no rate limit.
                         if !recruit_pushed && self.fresh(ligus_core::Timestamp::from_unix_seconds(r.at_ms / 1000)) {
-                            let me = notify::Me::in_chat(&author, s, &links);
-                            if let Some(n) = notify::for_recruit(&sessions, s, r, &me) {
-                                recruit_pushed = true;
-                                notices.push(n);
+                            for au in &audiences {
+                                let me = notify::Me::in_chat(&au.who, s, &links);
+                                if let Some(n) = notify::for_recruit(&sessions, s, r, &me) {
+                                    recruit_pushed = true;
+                                    notices.push(Outgoing::to(n, au));
+                                }
                             }
                         }
                     }
@@ -878,13 +886,20 @@ impl Shared {
                         let dto = api::ask_card_dto(&self.lock(), s, a, &me);
                         self.hub.emit("ask.pending", json!({ "ask": dto }));
                         if self.fresh(ligus_core::Timestamp::from_unix_seconds(a.ask.at_ms / 1000)) {
-                            let who = notify::Me::in_chat(&author, s, &links);
-                            // One push per ask, only to the people it asks,
-                            // and at most 10 an hour (agent questions 6.5).
-                            if let Some(n) = notify::for_ask(s, a, &who) {
+                            // One push per ask, only to the people it asks
+                            // (each phone's own person, not this box's
+                            // identity), and at most 10 an hour (agent
+                            // questions 6.5).
+                            let asked: Vec<_> = audiences
+                                .iter()
+                                .filter_map(|au| notify::for_ask(s, a, &notify::Me::in_chat(&au.who, s, &links)).map(|n| (n, au)))
+                                .collect();
+                            if !asked.is_empty() {
                                 match self.ask_pushes.lock().unwrap_or_else(|e| e.into_inner()).admit(std::time::Instant::now()) {
-                                    notify::AskPush::Send => notices.push(n),
-                                    notify::AskPush::Summary => notices.push(notify::several_asking(s)),
+                                    notify::AskPush::Send => notices.extend(asked.into_iter().map(|(n, au)| Outgoing::to(n, au))),
+                                    notify::AskPush::Summary => {
+                                        notices.extend(asked.into_iter().map(|(_, au)| Outgoing::to(notify::several_asking(s), au)))
+                                    }
                                     notify::AskPush::Hold => {}
                                 }
                             }
@@ -912,14 +927,18 @@ impl Shared {
         }
         // A DM never pushes (its text stays between the two people and
         // this box); only the workspace's chats do.
-        notices.retain(|(n, _)| !self.is_dm_chat(n.chat_id));
+        notices.retain(|o| !self.is_dm_chat(o.notice.chat_id));
         if let Some(t) = &self.tunnel {
-            for (_, push) in &notices {
-                t.push_all(push);
+            for o in &notices {
+                match &o.phones {
+                    None => t.push_all(&o.push),
+                    Some(pids) if !pids.is_empty() => t.push_to(&o.push, pids),
+                    Some(_) => 0,
+                };
             }
         }
         if let Some(n) = self.opts.ntfy.clone() {
-            for (notice, _) in notices {
+            for notice in notices.into_iter().filter(|o| o.ntfy).map(|o| o.notice) {
                 let n = n.clone();
                 let client = self.http.clone();
                 self.rt.spawn(async move { n.send(&client, &notice).await });
@@ -943,10 +962,70 @@ impl Shared {
         self.dm_kick.notify_one();
     }
 
+    /// The people this box's "you" notices (a mention, a reply to your
+    /// message, an agent's question to you, a reviewer recruit) are worked
+    /// out for, each with the paired phones that are theirs.
+    ///
+    /// A phone's person is the member who holds its workspace device
+    /// ([`ChatService::phone_person`], as its API calls see it), not this
+    /// box's identity: a box that joined as its own member is never the
+    /// one an agent asks. A phone whose person can't be told (a pairing
+    /// without a device, a contested device) gets this box's, as every
+    /// phone did before. The box's own identity is always listed, and is
+    /// the one ntfy hears about.
+    fn push_audiences(&self, author: &ligus_core::ActorIdentity) -> Vec<PushAudience> {
+        let mut out = vec![PushAudience { who: author.clone(), phones: Vec::new(), ntfy: true }];
+        let Some(t) = &self.tunnel else { return out };
+        let phones: Vec<_> = t.registry.list().into_iter().filter(|r| r.is_active()).collect();
+        if phones.is_empty() {
+            return out;
+        }
+        let svc = self.lock();
+        for rec in phones {
+            let who = rec.device_id.and_then(|d| svc.phone_person(self.ws, d).ok()).unwrap_or_else(|| author.clone());
+            match out.iter_mut().find(|a| a.who.id == who.id) {
+                Some(a) => a.phones.push(rec.pid),
+                None => out.push(PushAudience { who, phones: vec![rec.pid], ntfy: false }),
+            }
+        }
+        out
+    }
+
     /// Whether `chat` belongs to one of the box's DMs.
     pub fn is_dm_chat(&self, chat: Uuid) -> bool {
         let ws = self.lock().workspace_of(chat).ok().flatten();
         ws.is_some_and(|w| w != self.ws && self.dms.get(w).is_some())
+    }
+}
+
+/// One person [`Shared::refresh`] works "you" notices out for: see
+/// [`Shared::push_audiences`].
+struct PushAudience {
+    who: ligus_core::ActorIdentity,
+    /// Their paired phones (pids).
+    phones: Vec<String>,
+    /// ntfy hears about what this person gets (this box's own identity).
+    ntfy: bool,
+}
+
+/// A notice [`Shared::refresh`] sends: to every paired phone (`phones:
+/// None`) or only to the phones of the person it is for.
+struct Outgoing {
+    notice: ntfy::Notice,
+    push: tunnel::PushContent,
+    phones: Option<Vec<String>>,
+    ntfy: bool,
+}
+
+impl Outgoing {
+    /// News for everyone on this box (a proposal to review, a workflow gate).
+    fn everyone((notice, push): (ntfy::Notice, tunnel::PushContent)) -> Self {
+        Outgoing { notice, push, phones: None, ntfy: true }
+    }
+
+    /// A "you" notice for `au` only.
+    fn to((notice, push): (ntfy::Notice, tunnel::PushContent), au: &PushAudience) -> Self {
+        Outgoing { notice, push, phones: Some(au.phones.clone()), ntfy: au.ntfy }
     }
 }
 

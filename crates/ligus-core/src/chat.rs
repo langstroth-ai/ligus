@@ -130,6 +130,14 @@ pub struct ChatMessage {
     /// and the next turn's context (`crate::dispatch`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub superseded: bool,
+    /// Fold state, never an author's word: when a streamed reply was
+    /// finished, from the signed time of its `MessageCompleted`. A turn's
+    /// reply is appended as a placeholder when the turn starts, so
+    /// `created_at` is the turn's start; a reply that waited on a person
+    /// (`ligus_ask_person`) is posted well after that. Read it through
+    /// [`ChatMessage::posted_at`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<Timestamp>,
     #[serde(default)]
     pub tool_calls: Vec<ChatToolCall>,
     #[serde(default)]
@@ -162,11 +170,19 @@ impl ChatMessage {
             origin_device_id: None,
             workflow_run_id: None,
             superseded: false,
+            completed_at: None,
             tool_calls: Vec::new(),
             tool_results: Vec::new(),
             reactions: Vec::new(),
             reaction_options: Vec::new(),
         }
+    }
+
+    /// When the message was posted, for showing and ordering it: a streamed
+    /// reply's completion (its final text), else when it was appended. Never
+    /// before `created_at`.
+    pub fn posted_at(&self) -> Timestamp {
+        self.completed_at.filter(|c| *c > self.created_at).unwrap_or(self.created_at)
     }
 }
 

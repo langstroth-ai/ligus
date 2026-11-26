@@ -1,7 +1,7 @@
 # ligus serve: the home host for the iOS app
 
-`ligus serve` runs on an always-on Linux box on your tailnet. It is an ordinary
-Ligus device in your workspace: it syncs the E2EE event log through the relay
+`ligus serve` runs on an always-on Linux box on your tailnet. It joins your
+workspace as its own member (never one of your devices): it syncs the E2EE event log through the relay
 like the desktop app, runs agents you send to it on your own model gateway, and
 gives the iPhone app a small HTTP + Server-Sent Events API on the box's
 Tailscale address. The phone holds only a bearer token. The workspace key and
@@ -9,7 +9,7 @@ the device keys stay on the box. Design and API contract: [`docs/ios-app.md`](..
 
 [`deploy/local/ligus-local`](../local/ligus-local) scripts steps 2 and 5 below
 (configure, start, verify, stop) for a person or a coding agent; see
-[`AGENTS.md`](../../AGENTS.md). Joining the workspace (step 3) stays yours.
+[`AGENTS.md`](../../AGENTS.md). Approving the box (step 3) stays yours.
 
 Files here:
 
@@ -54,29 +54,35 @@ For the CLI commands below, load the same environment into your shell:
 set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
 ```
 
-## 3. Join the workspace
+## 3. Admit the box to the workspace
 
-You run this step yourself. It needs your workspace invite, and that invite
-carries the workspace's E2EE key.
+A box joins as **its own service member** (Contributor at most). It is never
+one of your devices and never takes a person's invite. An Admin approves it
+once, with a passkey; that step is yours.
 
-1. In the desktop app, open the workspace and use **Copy invite**. It gives you
-   a `hivews1:…` code. Send it to the box over a channel you trust, such as
-   SSH. Don't use chat or email.
-2. On the box:
+1. On the desktop, open the workspace menu, **Admit a box…**, and **Copy**
+   the approval address (`ligusaddr1:…`). It isn't a secret and grants
+   nothing. `ligus admit address` prints it too.
+2. On the box, with the env file loaded:
 
    ```sh
-   ligus enroll -                            # paste the invite, then Ctrl-D; add --token @FILE (an owner-only file) if your relay needs an access token
-   ligus join <invite-code>                  # only on relays that enforce membership
-   ligus sync                                # pull the workspace
-   ligus whoami                              # this box's account/device ids
+   ligus admit request --to 'ligusaddr1:…' --label "$LIGUS_SERVE_LABEL"
    ```
 
-`enroll` writes the connection, including the key, to
-`$LIGUS_DATA_DIR/config.toml`. Keep that directory private (the unit sets
-`UMask=0077`).
+3. The request appears in every Admin's Inbox. Open it, check that the code
+   on the desktop matches the one the box prints, choose **Codes match** and
+   confirm with your passkey. The box keeps the admission by itself.
 
-On first start, `ligus serve` adds itself to the roster at the **Contributor**
-role. That is enough to chat, vote on proposals and move agents between hosts.
+No `--to`? `ligus admit request --label NAME` prints a join request to paste
+into **Admit a box… → From the box's join request**; paste the code it gives
+back with `ligus admit redeem 'ligusadmit1:…'`. Details:
+[Admitting a box](../../docs-site/docs/operate/ops/admitting-a-box.md).
+
+The admission is saved in `$LIGUS_DATA_DIR`. Keep that directory private
+(the unit sets `UMask=0077`).
+
+On first start, `ligus serve` syncs, then joins through the admission at the
+**Contributor** role. That is enough to chat, vote on proposals and move agents between hosts.
 It also registers itself as a host, so it appears in the desktop's host list
 under `LIGUS_SERVE_LABEL`. A proposal whose `approvalRoleFloor` sits above
 Contributor needs an Owner/Admin to promote this member in the desktop's
@@ -89,6 +95,27 @@ People pane before the phone's vote counts. Defining workspace runtimes
   and point it at your gateway. Agents you send to this host use the runtime
   listed there (the `*` entry catches all), unless a workspace runtime with the
   agent's runtime id exists.
+- **A model gateway (optional).** To send agents' model traffic through a
+  gateway (LiteLLM, llama.cpp's server, any OpenAI- or Anthropic-wire
+  endpoint), list it in a JSON file and name the file in the env file:
+
+  ```json
+  { "gateways": [ { "name": "home-gw", "url": "https://gw.example.ts.net",
+      "api": "openai", "auth": { "mode": "apiKey", "keyFile": "/home/you/.config/ligus-serve/gw.key" } } ] }
+  ```
+
+  ```sh
+  LIGUS_MODEL_GATEWAYS_FILE=/home/you/.config/ligus-serve/gateways.json
+  ```
+
+  An unreadable or invalid file stops the box at start-up. Once a gateway is
+  listed, the box runs only turns that go through one
+  (`LIGUS_MODEL_GATEWAYS_EXCLUSIVE=0` turns that off). A plain `http://`
+  gateway needs `"allowPlaintext": true`; that is your choice as the
+  operator, for a gateway inside a private network. Check it with
+  `ligus gateway-check`. The box advertises the gateway's name (never its
+  URL or key), and an Admin picks it on a runtime and binds the agent to this
+  box. See the docs: Deploying with an LLM gateway.
 - **Repos.** Clone the checkouts agents should work on under `LIGUS_REPOS_DIR`
   and bind one:
 
@@ -129,6 +156,20 @@ at login and keeps it running; `stop --launchd` unloads and removes it,
 copied into the plist, except names that look like secrets; rerun `start
 --launchd` after editing it. See the docs: Personal fleet, Start at login on
 macOS.
+
+### Upgrading
+
+```sh
+brew upgrade ligus        # or rebuild and reinstall as in step 1
+systemctl --user restart ligus-serve
+```
+
+The unit here runs `~/.local/bin/ligus`. If you installed with Homebrew,
+install the unit with `deploy/local/ligus-local start --role serve
+--data-dir ~/.ligus-serve --systemd` instead (it runs the `ligus` on your
+`PATH`), or edit its `ExecStart`, or the upgrade won't change what it runs.
+On a Mac with the LaunchAgent, run `brew upgrade ligus`, then `start
+--launchd` again: it stops the running box and starts the new binary.
 
 ## 6. Pair the phone
 

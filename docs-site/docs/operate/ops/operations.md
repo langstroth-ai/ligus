@@ -103,13 +103,14 @@ proposals.
     A data dir is one device. Restoring the same backup onto two machines
     gives two writers the same device key, which the sync model can't
     reconcile cleanly. To move a device, stop the old one first. To add a
-    machine, enroll a new device instead.
+    machine, link a new device (or admit a new box) instead.
 
 ### Lost a device without a backup
 
-Revoke it (your own device: **Settings → Profile → My devices**) and set up
-a new one: a desktop by signing in and joining the workspace again; a serve
-or worker box with `ligus enroll` in a fresh data dir. History comes back
+Revoke it (your own device: **Settings → Profile → My devices**; a box: an
+Admin removes its member in **People**) and set up a new one: a desktop by
+joining the workspace again; a serve or worker box from a fresh data dir,
+admitted again ([Admitting a box](admitting-a-box.md)). History comes back
 from the relay or peers, as far back as the relay's retention reaches.
 
 ### The relay
@@ -121,7 +122,7 @@ A relay backup is a convenience, not your only copy.
 
 | Component | Upgrade | Check |
 |---|---|---|
-| Desktop | updates itself (or `brew upgrade --cask ligus-app`) | **Settings → Updates & data** shows the version |
+| Desktop | updates itself (or `brew upgrade --cask --greedy ligus-app`) | **Settings → Updates & data** shows the version |
 | CLI | `brew upgrade ligus`, then restart services | `ligus --version` |
 | Relay | replace binary/image, restart | `/v1/health` → `ok` |
 

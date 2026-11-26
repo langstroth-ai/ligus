@@ -70,6 +70,7 @@ Unknown fields and kinds must be ignored by the app (an unknown kind shows
 |---|---|---|---|
 | `message.done` | an agent reply to **you** finished: you are its requester, the person whose message started the turn (through hand-offs; a workflow stage's is whoever started the run). Other members get nothing for it unless it mentions them (then one `mention`). No requester found → nobody. Not a reply that mentions you (that is the `mention`) | `coder replied`, or `coder hit an error` for a failed turn | first 120 characters of the reply |
 | `mention` | a message from an agent or another member `@mentions` you | `Ana mentioned you` | first 120 characters of the message |
+| `ask.pending` | an agent asks a question and you are in its audience (named, or at or above its room role); never for one a member posted under an agent's name. At most 10 an hour, then one `Several agents are asking` until you open the questions | `@coder asks you · <chat>` (or `asks Admins`, `asks Owners`, `asks the room`) | the question |
 | `proposal.created` | a proposal is waiting for review (not a workflow gate's) | `Change ready for review` | the proposal title, cut the same way |
 | `workflow.approval` | a workflow run's approval gate is waiting (again on each rerouted attempt) | `<workflow name> needs approval` | the gate's stage name |
 | `review.recruit` | a backed-up review queue asked you to help (a `flowRecorded` recruit with action `approvers` naming you) | `The review queue needs you` | the title of the proposal that has waited longest for you (one you haven't voted on and didn't write); `proposalId` deep-links to it |
@@ -84,8 +85,13 @@ Rules:
   not also as `proposal.created` (its backing proposal is recognised by the
   run's `proposalId`, or as an authorless decision when the run hasn't synced
   in yet).
-- **"You"** is this host's identity (the one the phone posts as) and any
-  member that shares its account or its display name, such as your desktop.
+- **"You"** is worked out for each phone: the person who holds its
+  workspace device (the member its requests act for), and any member that
+  shares their account, such as their desktop. A box that joined as its own
+  member is never "you": a question for the phone's person reaches their
+  phone, and another person's phone on the same box gets nothing for it. A
+  phone whose person can't be told (a pairing without a device, a contested
+  device) uses this host's identity. ntfy follows this host's identity.
   A mention is `@<your name>` (or `@<name>#<n>`), `@all`, a role group you're
   in (`@owners`, `@admins`, …), or `@you` in an agent's reply whose requester
   (the person whose message started the turn) is you. A person's `@you` is
