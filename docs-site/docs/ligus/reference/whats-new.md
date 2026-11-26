@@ -4,7 +4,13 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
-## Unreleased
+## 0.4.0
+
+Approve a box or a computer by comparing a short code, profiles and device
+names, stricter device rules (rules 3), decision cards from agents
+(Claude Code's own prompts included), proposal archiving, scratch
+repositories, secrets out of the database and attachments that stay on the
+relay while they're used. Upgrade every device, boxes and phones included.
 
 ### New
 
@@ -69,9 +75,43 @@ Full release notes are on the
 - **Device names sync.** **Rename…** in My devices, `ligus devices rename`,
   `lt --plain device-rename`; boxes name themselves from `--label`. A
   computer approved but never redeemed says so and offers **Remove**.
-- **Rules v3** for new workspaces: a device certificate counts only when its
-  device accepted it, duplicate members retire into their person, model keys
-  are refused on the log. See [Rules v3](../../operate/security/index.md#rules-v3).
+- **Claude Code's own permission prompts reach Ligus.** `ligus hook install`
+  adds `ligus hook permission` as Claude Code's `PermissionRequest` hook, so a
+  Claude Code session you run yourself shows its prompt as a grant card on
+  the desktop and your phone. Allow once always needs your passkey (Face ID on
+  the phone); no answer leaves the decision to Claude Code's own dialog. The
+  desktop app answers the hook; a box and lt don't yet. `ligus asks list`,
+  `answer` and `decline` answer questions at a terminal. See
+  [Claude Code's permission prompts](../addons/claude-code-hook.md).
+- **Linking a computer finishes on the computer.** When it redeems the code,
+  the computer accepts your desktop's approval, names itself after its link
+  request and, when it was already a separate member here, retires that
+  member into you (only when that's safe; otherwise an Admin removes it).
+  See [Add a computer](../features/linked-devices.md).
+- **Rules v3.** A device certificate counts only when its device accepted
+  it, duplicate members retire into their person, model keys are refused on
+  the log. A new workspace moves to rules 3 with its founder's first
+  passkey. On an older workspace an Owner switches in **Settings → Security
+  → Stricter device rules**, with a list of devices whose approval would
+  stop counting, and a passkey; there is no way back. Devices on Ligus 0.3
+  are read-only on a rules 3 workspace. See
+  [Rules v3](../../operate/security/index.md#rules-v3).
+- **Look-alike names are tagged.** A name that looks like another
+  account's, an agent's or Ligus shows as Name#abcd wherever a chat
+  renders, prompts to agents included.
+- **Attachments stay on the relay while they're used.** The sharer's devices
+  and Admins' desktops renew a live attachment on the relay about every ten
+  days, up to the relay's maximum age (a year by default). A file the relay
+  no longer has says **This file expired on the relay**. A relay without
+  renewals keeps files for its retention, as before. See
+  [How long files stay on the relay](../features/attachments.md#how-long-files-stay-on-the-relay).
+- **Secrets out of the database.** Invite and admission seeds live only in
+  the OS secret store; old copies are moved there and removed from
+  `ligus.db` once their invite or admission is closed. Sync progress is kept
+  per relay and workspace. `ligus.db` records its layout version: a database
+  written by a newer Ligus opens read-only (the CLI exits 3), and
+  `ligus doctor` reports the version and lists database backups. See
+  [Invite seeds, backups and the database version](../../operate/security/index.md#seeds-and-backups).
 - **Phones state their person.** The phone app asks once to confirm *this
   phone is Ana's in Hive Lab*; that signed statement settles a phone
   another member also certified.
@@ -81,6 +121,25 @@ Full release notes are on the
 - Every question card is plain text: no Markdown and no clickable links.
 - Members on 0.3 can't answer the new cards until they update: their
   answers are kept but not counted.
+- An open proposal that an earlier version dismissed shows in Review again:
+  nothing that still waits on someone is archived. Reject it, or hide it
+  for yourself.
+- The relay's own member roster is deprecated for Ligus workspaces: every
+  device enforces the signed roster.
+
+### Upgrading
+
+- **Upgrade every device**: desktops, `ligus` CLIs and lt, `ligus serve`
+  and worker boxes, and phones. A 0.3 device is read-only on a rules 3
+  workspace, and can't answer the new cards.
+- **Relays.** Approval by code and attachment renewal need the new
+  `langstroth-relay` release. On an older relay, `ligus admit request --to`
+  and `ligus devices request --to` stop with exit 3 and name the paste
+  command to use instead, and the desktop keeps the paste and fingerprint
+  path; attachments expire at the relay's retention, as before.
+- **Going back to 0.3** still opens the data (0.4 keeps the old tables
+  written too), but invites issued by 0.4 must be issued again there. From
+  0.4 on, a build that finds a newer database opens it read-only.
 
 ## 0.3.1
 
