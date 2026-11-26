@@ -4,6 +4,17 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## Unreleased
+
+### Fixed
+
+- **A message that wouldn't send ("this draft is out of date") sends
+  again.** After older reply pieces were pulled back from the relay, every
+  message to that chat from this computer was refused as out of date, and
+  Retry didn't help. A message now links to this computer's newest event in
+  the chat, whatever order the relay delivered them in, so it sends the first
+  time.
+
 ## 0.4.0
 
 Approve a box or a computer by comparing a short code, profiles and device
