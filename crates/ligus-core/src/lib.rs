@@ -29,6 +29,7 @@ pub mod identity_link;
 pub mod keys;
 pub mod lamport;
 pub mod lease;
+pub mod match_code;
 pub mod memory;
 #[cfg(test)]
 mod lease_projection_tests;
@@ -70,7 +71,7 @@ pub use authorization::{evaluate as authorize, AuthzDecision, AuthzReason};
 pub use channel::{room_workspace_id, workspace_config_session_id, Channel};
 pub use device_link::DeviceLinks;
 pub use workspace_host::{HostKind, HostModelGateway, WorkspaceHost};
-pub use workspace_runtime::{WorkspaceCredential, WorkspaceRuntime};
+pub use workspace_runtime::{WorkspaceCredential, WorkspaceRuntime, LEGACY_INLINE_LABEL, LEGACY_INLINE_WARNING, NO_WORKSPACE_KEYS};
 pub use chat::{
     ChatMessage, ChatToolCall, ChatToolResult, MessageReaction, MessageRole, TranscriptEventKind,
 };

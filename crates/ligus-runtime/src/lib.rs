@@ -15,6 +15,7 @@ compile_error!("ligus-runtime's `test-presence` feature must never be in an opti
 pub mod agent_tools;
 pub mod agent_turn;
 pub mod apply_host;
+pub mod approval_mailbox;
 pub mod attachment_blob;
 pub mod attachment_safety;
 pub mod agent_access;
@@ -131,8 +132,8 @@ pub use mcp::{McpReach,
 };
 pub use mentions::{message_mentions, parse_mentions, requester_from, requester_of, MentionTargets, Requester};
 pub use relay_client::{
-    EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry, RelayClient,
-    RelayError, RelayProbe, ENVELOPE_PAGE_LIMIT,
+    token_subject, EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry, RelayClient,
+    RelayError, RelayProbe, RosterState, ENVELOPE_PAGE_LIMIT, UNIDENTIFIED_ROSTER_MESSAGE,
 };
 pub use relay_refusal::{RefusalClass, RelayRefusal};
 pub use remote_manifest::resolve_manifest_url;

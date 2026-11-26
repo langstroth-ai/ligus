@@ -57,6 +57,10 @@ Plaintext (JSON) of every push:
 | `proposalId` | UUID | `proposal.created`, `workflow.approval`, `review.recruit` | the proposal to review |
 | `workflowRunId` | UUID | `workflow.approval` | the run waiting on the gate |
 | `workflowId` | UUID | `workflow.approval` | the run's workflow definition |
+| `workspaceId` | UUID | `approval.request` | the workspace the request asks to join |
+| `rid` | 32 hex | `approval.request` | the approval request (`GET /v1/approvals` lists it) |
+| `label` | ≤ 64 bytes | `approval.request` | the label the requesting box gave itself (a display hint, not verified) |
+| `requestKind` | `box` | `approval.request` | what asks: always `box` today (see below) |
 | `preview` | `true` | when `body` is a content preview | |
 
 Unknown fields and kinds must be ignored by the app (an unknown kind shows
@@ -69,6 +73,7 @@ Unknown fields and kinds must be ignored by the app (an unknown kind shows
 | `proposal.created` | a proposal is waiting for review (not a workflow gate's) | `Change ready for review` | the proposal title, cut the same way |
 | `workflow.approval` | a workflow run's approval gate is waiting (again on each rerouted attempt) | `<workflow name> needs approval` | the gate's stage name |
 | `review.recruit` | a backed-up review queue asked you to help (a `flowRecorded` recruit with action `approvers` naming you) | `The review queue needs you` | the title of the proposal that has waited longest for you (one you haven't voted on and didn't write); `proposalId` deep-links to it |
+| `approval.request` | a box asks to join the workspace through its approval mailbox (code-match approval, `docs/design/code-match-approval.md` 7.3) and nobody is checking it yet | `<label> wants to join <workspace>` | `Open Ligus to compare the code the box shows.` (always shown; no preview) |
 | `phone.paired` | a new phone was paired with this host | `New phone paired` | the phone's name (always shown) |
 | `test` | reserved for a test push | | |
 
@@ -89,6 +94,21 @@ Rules:
   its requester. Your own messages never notify. Message JSON for an agent
   reply with `@you` carries `requester {name, actorId, isYou}` so the phone
   renders `@you` as `@<name>`.
+- **Join requests.** `ligus serve` polls the workspace's approval mailboxes
+  (the current key epoch and the two before it) as a member and sends one
+  `approval.request` per new box request, the first time it sees it, unless
+  it is already claimed or ended. There is no `chatId`: these pushes
+  collapse per workspace, and the host coalesces them per request. After
+  **3 in 10 minutes** per workspace it stops pushing them, and the phone's
+  Inbox shows one row, "Several join requests", so a flood can't wear the
+  person down. A computer's or a phone's request ("a device of mine") never
+  pushes: `GET /v1/approvals` lists it so the phone can show it read-only
+  ("Approve on your desktop"), without a code, because the `open` and the
+  reveal are sealed to the requester and the approver, so neither the box nor
+  the phone can compute that code. A box restart forgets which requests it
+  pushed, and may push a still-live one once more. The phone is the approver
+  for a box: the box only carries its sealed messages
+  (`docs/design/code-match-wire.md` section 5).
 - **Only news.** Replies, proposals and gates created more than 10 minutes
   before `ligus serve` started (history that synced in late) don't push, and a
   restart never replays.
@@ -112,7 +132,8 @@ On top of the relay's limits (§11), `ligus serve` drops a push to a phone when:
 | Rule | Limit |
 |---|---|
 | Foreground | the phone has an open `/v1/events` stream through the tunnel and sent a frame (a request, PING or WINDOW) within the last 40 s. The app keeps that stream open only while it's in the foreground, PINGs after 25 s without traffic, and closes the session (RESET, GOAWAY) when it goes to the background. A phone iOS suspended before that close left goes quiet, so its stale stream stops counting after 40 s |
-| Coalescing | one push per (phone, kind, chat) per 10 s: the first of a burst goes, the rest are dropped |
+| Coalescing | one push per (phone, kind, chat) per 10 s (an `approval.request`: per request): the first of a burst goes, the rest are dropped |
+| Join requests | 3 `approval.request` per workspace per 10 minutes, one per request |
 | Per phone | 20 per minute, 500 per day |
 | Host-wide | 1 per second sustained, burst of 5 (the relay's "pushes ≤ 1/s") |
 
