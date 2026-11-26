@@ -31,7 +31,8 @@ export function initials(name: string): string {
 
 /// Resize/crop an image File to a small square `data:` URL fit to ride the
 /// synced event log. Center-crops to a square, scales to `size` px, and
-/// re-encodes as JPEG under the size budget (the backend hard-caps at ~96 KB).
+/// re-encodes as JPEG under the profile cap (16 KiB decoded: PNG, JPEG or
+/// WebP only, never SVG).
 export async function fileToAvatarDataUrl(file: File, size = 128): Promise<string> {
   const bitmap = await createImageBitmap(file);
   const side = Math.min(bitmap.width, bitmap.height);
@@ -44,11 +45,16 @@ export async function fileToAvatarDataUrl(file: File, size = 128): Promise<strin
   if (!ctx) throw new Error("canvas unsupported");
   ctx.drawImage(bitmap, sx, sy, side, side, 0, 0, size, size);
   bitmap.close?.();
-  // Step quality down until it fits comfortably under the backend cap.
+  // Step quality down until it fits under the cap (base64 is 4/3 of the
+  // bytes, plus the `data:` prefix).
   for (const q of [0.85, 0.7, 0.55, 0.4]) {
     const url = canvas.toDataURL("image/jpeg", q);
-    if (url.length <= 90 * 1024) return url;
+    if (url.length <= AVATAR_URL_BUDGET) return url;
   }
   // Last resort: a smaller square.
-  return fileToAvatarDataUrl(file, 96);
+  if (size <= 48) throw new Error("This picture can't be made small enough. Try another one.");
+  return fileToAvatarDataUrl(file, size === 128 ? 96 : 64);
 }
+
+/// The longest avatar `data:` URL the profile cap (16 KiB decoded) allows.
+export const AVATAR_URL_BUDGET = Math.floor((16 * 1024 * 4) / 3) + 32;

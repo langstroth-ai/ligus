@@ -1,6 +1,6 @@
 # Code-match approval (design note)
 
-Status: design, owner decisions taken 2026-11-25 (section 12); not implemented. Target: Ligus 0.4. Surfaces: the
+Status: implementing, owner decisions taken 2026-11-25 (section 12); the bytes are in `docs/design/code-match-wire.md`. Target: Ligus 0.4. Surfaces: the
 desktop, the phone apps, `lt` (ligus-term), the `ligus` CLI and `ligus serve`,
 plus one additive route family on the relay (`langstroth-relay`). Ligus is
 short for *ligustica*, the Italian honeybee.

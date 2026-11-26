@@ -1,6 +1,6 @@
 [package]
 name = "ligus-cli"
-version = "0.3.0"
+version = "0.3.1"
 edition.workspace = true
 license.workspace = true
 
@@ -55,8 +55,9 @@ chacha20poly1305 = "0.11"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 
-# prctl(PR_SET_DUMPABLE) for the long-running hosts (src/hardening.rs).
-[target.'cfg(target_os = "linux")'.dependencies]
+# prctl(PR_SET_DUMPABLE) for the long-running hosts (src/hardening.rs), and
+# the terminal's echo off while a code is pasted (src/link_io.rs).
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]

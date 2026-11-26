@@ -16,6 +16,7 @@ pub mod agent_tools;
 pub mod agent_turn;
 pub mod ask_view;
 pub mod apply_host;
+pub mod approval_mailbox;
 pub mod attachment_blob;
 pub mod attachment_safety;
 pub mod agent_access;
@@ -30,6 +31,7 @@ pub mod cli_detect;
 pub mod computer_link;
 pub mod connection_settings;
 pub mod context;
+pub mod device_binding;
 pub mod device_enroll;
 pub mod directory_trust;
 pub mod display;
@@ -51,6 +53,7 @@ pub mod frozen_ns;
 pub mod guard_scan;
 pub mod host_presence;
 pub mod revocation_status;
+pub mod role_refusal;
 pub mod human_presence;
 pub mod hook;
 pub mod hygiene;
@@ -71,6 +74,7 @@ pub mod model_gateway;
 pub mod patch_leaving;
 pub mod peer;
 pub mod phone_enroll;
+pub mod profiles;
 pub mod phone_enroll_qr;
 #[cfg(feature = "p2p")]
 pub mod peer_iroh;
@@ -130,8 +134,8 @@ pub use mcp::{McpReach,
 };
 pub use mentions::{message_mentions, parse_mentions, requester_from, requester_of, MentionTargets, Requester};
 pub use relay_client::{
-    EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry, RelayClient,
-    RelayError, RelayProbe, ENVELOPE_PAGE_LIMIT,
+    token_subject, EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry, RelayClient,
+    RelayError, RelayProbe, RosterState, ENVELOPE_PAGE_LIMIT, UNIDENTIFIED_ROSTER_MESSAGE,
 };
 pub use relay_refusal::{RefusalClass, RelayRefusal};
 pub use remote_manifest::resolve_manifest_url;

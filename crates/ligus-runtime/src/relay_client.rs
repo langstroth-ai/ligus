@@ -53,6 +53,18 @@ pub struct BlobUploaded {
     pub expires_at: i64,
 }
 
+/// What the relay answers to a blob renewal ([`RelayClient::retain_blob`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlobRetained {
+    /// Renewed: the blob now expires at this unix time (0 = never).
+    Renewed { expires_at: i64 },
+    /// The relay has no such blob (expired, deleted, never there).
+    Gone,
+    /// The relay has no retain route (older than Ligus 0.4's relay, or its
+    /// blob channel is off): keep today's behaviour.
+    Unsupported,
+}
+
 /// A refusal's JSON body (`{"error","message"}`), or the bare status.
 async fn refusal(status: u16, resp: reqwest::Response) -> RelayError {
     #[derive(serde::Deserialize)]
@@ -153,6 +165,16 @@ async fn roster_error(resp: reqwest::Response) -> RelayError {
     }
     let text = resp.text().await.unwrap_or_default();
     let reason: String = text.trim().chars().filter(|c| !c.is_control()).take(200).collect();
+    if code == 401 {
+        // The roster routes 401 only for a caller the relay can't name; the
+        // access gate's 401 ("relay requires a valid access token") is a
+        // rejected token.
+        return if reason.contains("identified") {
+            RelayError::Message(UNIDENTIFIED_ROSTER_MESSAGE.into())
+        } else {
+            RelayError::Unauthorized
+        };
+    }
     if reason.is_empty() {
         RelayError::Message(format!("the relay refused (HTTP {code})"))
     } else {
@@ -228,7 +250,7 @@ pub enum RelayProbe {
 /// 401s. Relay tokens are colon-free (hex, or `hrt1.<b64>.<b64>`), so a leading
 /// `identifier:` can be dropped safely; anything that doesn't look like that is
 /// returned unchanged.
-fn normalize_access_token(raw: &str) -> String {
+pub(crate) fn normalize_access_token(raw: &str) -> String {
     let t = raw.trim();
     if let Some((prefix, rest)) = t.split_once(':') {
         let prefix_ok = !prefix.is_empty()
@@ -255,6 +277,51 @@ pub struct MemberEntry {
     pub added_by: String,
     #[serde(default)]
     pub added_at: u64,
+}
+
+/// What a relay's membership roster says about a workspace, as seen by this
+/// caller ([`RelayClient::roster_state`]).
+#[derive(Debug, Clone)]
+pub enum RosterState {
+    /// The relay has membership off (its roster routes answer 404): it
+    /// forwards writes from anyone who knows the workspace id.
+    Unsupported,
+    /// Membership is on but nobody has claimed this workspace yet, so the
+    /// relay treats it as open.
+    Unclaimed,
+    /// Claimed; the relay enforces this roster.
+    Members(Vec<MemberEntry>),
+    /// Claimed, and this caller isn't on the roster (403), so the relay
+    /// hides it.
+    Hidden,
+}
+
+/// What the relay's roster routes need and the caller's token lacks: an
+/// account. Shown in place of the relay's "requires an identified access
+/// token" 401: what happened, why, and the fix.
+pub const UNIDENTIFIED_ROSTER_MESSAGE: &str = "The relay doesn't know which account you are, so it won't claim this workspace or change its roster for you. \
+Claiming needs a relay token that names your account (an hrt1 token signed by a key the relay trusts), and this device's token doesn't. \
+Sign in to the relay, or paste a token from its operator, under Settings → Team sync, then try again. Sync works as before either way.";
+
+/// The subject (`sub`) of a relay token, when it is an unexpired `hrt1`
+/// token that names one. The signature isn't checked (only the relay knows
+/// its key), so `Some` means "may identify this device", and `None` means it
+/// certainly can't: an opaque or anonymous token never identifies a caller
+/// to the relay's roster. Never logs or returns the token itself.
+pub fn token_subject(token: &str, now_unix: u64) -> Option<String> {
+    use base64::Engine;
+    let mut parts = token.trim().split('.');
+    let (Some("hrt1"), Some(claims), Some(_sig), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
+        return None;
+    };
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(claims).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    let exp = v.get("exp").and_then(|e| e.as_u64()).unwrap_or(0);
+    if exp != 0 && now_unix >= exp {
+        return None;
+    }
+    let sub = v.get("sub")?.as_str()?.trim();
+    (!sub.is_empty()).then(|| sub.to_string())
 }
 
 /// Invite metadata from a membership-enforcing relay (never the code).
@@ -545,6 +612,40 @@ impl RelayClient {
             return Err(RelayError::Unauthorized);
         }
         Err(refusal(status, resp).await)
+    }
+
+    /// Renew a live blob (`POST /v1/workspaces/{id}/blobs/{blob}/retain`):
+    /// the relay moves its expiry to now plus its retention, capped by the
+    /// operator's maximum age. Idempotent. A `404 blob_not_found` is
+    /// [`BlobRetained::Gone`]; any other `404` (or `405`) is a relay without
+    /// the route, [`BlobRetained::Unsupported`], never an error.
+    pub async fn retain_blob(&self, workspace: &str, id: &str) -> Result<BlobRetained, RelayError> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Body {
+            #[serde(default)]
+            expires_at: i64,
+            #[serde(default)]
+            error: String,
+        }
+        let url = format!("{}/v1/workspaces/{}/blobs/{}/retain", self.base, workspace, id);
+        let resp = self.send_retrying(|| self.http.post(&url).timeout(self.request_timeout)).await?;
+        let status = resp.status().as_u16();
+        match status {
+            200..=299 => {
+                let b: Body = resp.json().await?;
+                Ok(BlobRetained::Renewed { expires_at: b.expires_at })
+            }
+            404 => {
+                let text = resp.text().await.unwrap_or_default();
+                let gone = serde_json::from_str::<Body>(&text).is_ok_and(|b| b.error == "blob_not_found");
+                Ok(if gone { BlobRetained::Gone } else { BlobRetained::Unsupported })
+            }
+            405 => Ok(BlobRetained::Unsupported),
+            401 | 403 => Err(RelayError::Unauthorized),
+            503 => Err(unavailable(&resp)),
+            _ => Err(refusal(status, resp).await),
+        }
     }
 
     /// Cheap connectivity + auth check: an authed GET of the envelope list.
@@ -889,6 +990,24 @@ impl RelayClient {
         Ok(Some(resp.json().await?))
     }
 
+    /// The workspace's roster state on this relay: membership off, unclaimed,
+    /// claimed (with the roster), or claimed and hidden from this caller.
+    /// Unlike [`Self::list_members`], it tells "the relay has no membership"
+    /// from "nobody claimed it" from "you aren't on it".
+    pub async fn roster_state(&self, workspace: &str) -> Result<RosterState, RelayError> {
+        let url = format!("{}/v1/workspaces/{}/members", self.base, workspace);
+        let resp = self.authed(self.http.get(url)).send().await?;
+        match resp.status().as_u16() {
+            200..=299 => {
+                let members: Vec<MemberEntry> = resp.json().await?;
+                Ok(if members.is_empty() { RosterState::Unclaimed } else { RosterState::Members(members) })
+            }
+            404 => Ok(RosterState::Unsupported),
+            403 => Ok(RosterState::Hidden),
+            _ => Err(status_error(resp).await),
+        }
+    }
+
     /// Add a member or change their role (caller must be `Admin`+).
     pub async fn upsert_member(
         &self,
@@ -1128,6 +1247,7 @@ mod tests {
         let _ = c.post_blob(&ws, vec![1, 2]).await;
         let _ = c.get_blob(&ws, "b", 10).await;
         let _ = c.delete_blob(&ws, "b").await;
+        let _ = c.retain_blob(&ws, "b").await;
         let _ = c.publish_presence(&ws, "d", &serde_json::json!({})).await;
         let _ = c.list_presence(&ws).await;
         let _ = c.publish_pairing("x", None).await;
@@ -1222,6 +1342,79 @@ mod tests {
         assert!(c.create_invite(&ws, "viewer", 60, 1).await.unwrap().is_none());
         assert!(c.join_via_invite(&ws, "code", "").await.unwrap().is_none());
         assert!(c.list_members(&ws).await.unwrap().is_none());
+    }
+
+    /// The roster routes' "requires an identified access token" 401 becomes a
+    /// what/why/fix message, never the raw HTTP text; the access gate's 401
+    /// stays a rejected token.
+    #[tokio::test]
+    async fn roster_401_without_identity_explains_the_fix() {
+        use axum::http::StatusCode;
+        for (body, unidentified) in [("requires an identified access token", true), ("relay requires a valid access token", false)] {
+            let router = axum::Router::new().fallback(move || async move { (StatusCode::UNAUTHORIZED, body) });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            let c = RelayClient::new(format!("http://{addr}"));
+            let ws = Uuid::new_v4().to_string();
+            let e = c.claim_membership(&ws).await.expect_err("a 401 claim is an error");
+            let msg = e.to_string();
+            assert!(!msg.contains("HTTP 401"), "no raw HTTP text: {msg}");
+            if unidentified {
+                assert_eq!(msg, UNIDENTIFIED_ROSTER_MESSAGE);
+                let e = c.upsert_member(&ws, "ligus:a", "A", "viewer").await.expect_err("refused");
+                assert_eq!(e.to_string(), UNIDENTIFIED_ROSTER_MESSAGE);
+            } else {
+                assert!(matches!(e, RelayError::Unauthorized), "{msg}");
+            }
+        }
+    }
+
+    /// `roster_state` tells membership off (404), unclaimed (200 []),
+    /// claimed (200 [..]) and hidden (403) apart.
+    #[tokio::test]
+    async fn roster_state_tells_the_cases_apart() {
+        use axum::http::StatusCode;
+        use axum::response::IntoResponse;
+        for case in ["off", "unclaimed", "claimed", "hidden"] {
+            let router = axum::Router::new().fallback(move || async move {
+                match case {
+                    "off" => (StatusCode::NOT_FOUND, "404 page not found").into_response(),
+                    "unclaimed" => axum::Json(serde_json::json!([])).into_response(),
+                    "claimed" => axum::Json(serde_json::json!([{"account": "ligus:a", "login": "", "role": "owner"}])).into_response(),
+                    _ => (StatusCode::FORBIDDEN, "forbidden").into_response(),
+                }
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            let c = RelayClient::new(format!("http://{addr}"));
+            let got = c.roster_state(&Uuid::new_v4().to_string()).await.unwrap();
+            let ok = match (case, &got) {
+                ("off", RosterState::Unsupported) | ("unclaimed", RosterState::Unclaimed) | ("hidden", RosterState::Hidden) => true,
+                ("claimed", RosterState::Members(m)) => m.len() == 1 && m[0].role == "owner",
+                _ => false,
+            };
+            assert!(ok, "{case}: {got:?}");
+        }
+    }
+
+    #[test]
+    fn token_subject_reads_only_an_unexpired_named_hrt1() {
+        use base64::Engine;
+        let tok = |claims: serde_json::Value| {
+            let b = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
+            format!("hrt1.{b}.c2ln")
+        };
+        let now = 1_000;
+        assert_eq!(token_subject(&tok(serde_json::json!({"sub": "ligus:a", "exp": 0})), now).as_deref(), Some("ligus:a"));
+        assert_eq!(token_subject(&tok(serde_json::json!({"sub": "ligus:a", "exp": 2_000})), now).as_deref(), Some("ligus:a"));
+        assert_eq!(token_subject(&tok(serde_json::json!({"sub": "ligus:a", "exp": 999})), now), None, "expired");
+        assert_eq!(token_subject(&tok(serde_json::json!({"sub": "  ", "exp": 0})), now), None, "blank subject");
+        assert_eq!(token_subject(&tok(serde_json::json!({"plan": "free"})), now), None, "no subject");
+        assert_eq!(token_subject("an-opaque-allowlist-token", now), None);
+        assert_eq!(token_subject("hrt1.not-base64!.sig", now), None);
+        assert_eq!(token_subject("hrt1.a.b.c", now), None);
     }
 
     #[tokio::test]

@@ -13,6 +13,9 @@ import { confirmDialog } from "@/components/Dialog";
 import { toast, errMsg } from "@/components/Toast";
 import { IconFile } from "@/lib/icons";
 
+/// What the desktop says when the relay no longer has a file.
+export const EXPIRED_ON_RELAY = "This file expired on the relay";
+
 /// A file shared over the relay (issue #118). Nothing is fetched, opened or
 /// previewed until the person asks: "Check" downloads and verifies it against
 /// its signed reference and inspects it; "Save…" writes it (quarantine-marked)
@@ -24,11 +27,30 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<AttachmentPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [expiredNow, setExpiredNow] = useState(false);
 
   if (view.deleted) {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs text-ink-soft" style={{ borderColor: "var(--ligus-line)" }}>
         <IconFile size={13} /> {view.name} (deleted)
+      </span>
+    );
+  }
+
+  // Gone from the relay (expired, or never renewed): a quiet note instead
+  // of a download that can only fail.
+  if (view.expired || expiredNow) {
+    return (
+      <span
+        data-testid="shared-attachment-expired"
+        className="inline-flex max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-xs text-ink-soft"
+        style={{ borderColor: "var(--ligus-line)" }}
+      >
+        <IconFile size={13} />
+        <span className="min-w-0 truncate" data-tip={view.name}>
+          {view.name}
+        </span>
+        <span>· {EXPIRED_ON_RELAY}</span>
       </span>
     );
   }
@@ -39,7 +61,9 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
     try {
       setCheck(await checkAttachment(sessionId, view.id));
     } catch (e) {
-      setError(errMsg(e));
+      const msg = errMsg(e);
+      if (msg.includes(EXPIRED_ON_RELAY)) setExpiredNow(true);
+      else setError(msg);
     } finally {
       setBusy(false);
     }

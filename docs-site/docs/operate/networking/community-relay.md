@@ -30,6 +30,20 @@ anyone who compromises it) can see:
 Never the content. See the [security model](../security/index.md) for what
 each component holds.
 
+## Membership on the community relay
+
+The community relay runs with [server-side membership](../ops/server-side-membership.md)
+on, but it has no sign-in: it trusts only tokens signed with its operator's
+membership key, and nobody else can issue those. So for everyone but its
+operator a workspace there stays unclaimed, and the People pane offers no
+**Claim ownership**. That doesn't open your workspace to anyone: events are
+end-to-end encrypted and signed, so a stranger who knows the workspace id
+can't read them, pose as a member or change anything; at most they can make
+the relay store junk that every device drops. If you want a relay that
+refuses writes from non-members, [run your own](self-host.md) with
+`LANGSTROTH_RELAY_MEMBERSHIP=1` and an issuer key, and see
+[Claiming a workspace](../ops/server-side-membership.md#claiming-a-workspace).
+
 ## When to self-host
 
 Use the community relay to try Ligus or for low-stakes work. For anything

@@ -47,6 +47,7 @@ mod passkey_native;
 mod passkey_ui;
 mod phone_enroll_ui;
 mod phones_ui;
+mod approvals_ui;
 mod people;
 mod links_ui;
 mod agent_iface;
@@ -5112,6 +5113,14 @@ struct MyDeviceDto {
     /// The label is a name (a host's, or one the phone gave itself here),
     /// not the "Device 1a2b3c4d" fallback.
     named: bool,
+    /// One quiet line when another member also certified this device's key
+    /// (identity model v2, 7.2 and 7.3a), else `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+    /// Approved here but never wrote anything (identity model v2, 8.2):
+    /// offered as Remove.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    never_written: bool,
 }
 
 /// A host that names you as its owner but isn't certified as your device
@@ -5138,8 +5147,12 @@ fn decode_device_code(code: &str) -> Result<ligus_runtime::device_enroll::Device
 
 /// Human members (not you) whose account certified `device`: the box's own
 /// pre-enrollment identity.
-fn device_own_members(svc: &ChatService, ws: Uuid, device: Uuid) -> Vec<WorkspaceMember> {
-    let accounts = svc.accounts_certifying(ws, device).unwrap_or_default();
+/// The members (not you) a device being approved was before: the accounts
+/// it **signed as itself** here (verified under `key`, its own). A
+/// certificate another member put on its public key doesn't make them its
+/// member, so approving the device never offers to remove them.
+fn device_own_members(svc: &ChatService, ws: Uuid, device: Uuid, key: &[u8]) -> Vec<WorkspaceMember> {
+    let accounts = svc.device_chosen_accounts(ws, device, key).unwrap_or_default();
     let me = svc.author().id.clone();
     svc.load_in(ws, ligus_core::workspace_config_session_id(ws))
         .ok()
@@ -5172,7 +5185,7 @@ pub(crate) fn inspect_device_code_sync(state: State<AppState>, code: String) -> 
         known_workspace,
         already_mine: entry.is_some_and(|d| !d.revoked),
         revoked,
-        replaces_member: device_own_members(&svc, ws, req.device_id)
+        replaces_member: device_own_members(&svc, ws, req.device_id, &req.device_public_key)
             .first()
             .map(|m| DeviceMemberDto { member_id: m.id.clone(), display_name: shown(&m.actor.display_name) }),
     })
@@ -5201,7 +5214,7 @@ pub(crate) fn approve_device_sync(state: State<AppState>, code: String, retire_m
     let mut out = ApproveDeviceDto { retired: None, retire_error: None };
     if retire_member {
         let cfg = ligus_core::workspace_config_session_id(ws);
-        for m in device_own_members(&svc, ws, req.device_id) {
+        for m in device_own_members(&svc, ws, req.device_id, &req.device_public_key) {
             match svc.remove_member(cfg, ws, m.id.clone()) {
                 Ok(()) => out.retired = Some(m.actor.display_name.clone()),
                 Err(e) => out.retire_error = Some(e.to_string()),
@@ -5227,8 +5240,11 @@ struct ComputerRequestDto {
     fingerprint: String,
     already_mine: bool,
     revoked: bool,
-    /// Already in the workspace as someone else (their name).
+    /// Already in the workspace as someone else (their name): it signed as them.
     someone_elses: Option<String>,
+    /// Members whose account certified this computer's key without it ever
+    /// acting for them: shown in one quiet line, never a refusal.
+    also_certified_by: Vec<String>,
     /// The separate member this computer proved it was here.
     previous_member: Option<DeviceMemberDto>,
     /// This desktop's fingerprint: the computer shows it when it redeems.
@@ -5264,6 +5280,7 @@ pub(crate) fn inspect_computer_request_sync(state: State<AppState>, request: Str
         already_mine: p.already_mine,
         revoked: p.revoked,
         someone_elses: p.someone_elses,
+        also_certified_by: p.also_certified_by,
         previous_member: p.previous_member.map(|m| DeviceMemberDto { member_id: m.id, display_name: shown(&m.actor.display_name) }),
         this_desktop: ligus_runtime::device_enroll::fingerprint(&svc.device_public_key()),
     })
@@ -5283,6 +5300,22 @@ pub(crate) fn add_computer_sync(state: State<AppState>, request: String, fingerp
         return Err("The fingerprint changed: paste the computer's request again and compare.".into());
     }
     let ws = state.active_workspace_id();
+    let conn = computer_link_conn(&state, ws)?;
+    let mut svc = state.service.lock().unwrap();
+    let previous = svc.preview_computer_link(ws, &req).ok().and_then(|p| p.previous_member);
+    let grant = svc.issue_computer_link(ws, &req, &conn, ligus_core::flow::now_ms()).map_err(map_err)?;
+    tracing::info!(target: "identity", device = %req.device_id, "added a computer as this account's device");
+    Ok(ComputerGrantDto {
+        grant,
+        expires_in_minutes: ligus_runtime::computer_link::GRANT_TTL_MS / 60_000,
+        this_desktop: ligus_runtime::device_enroll::fingerprint(&svc.device_public_key()),
+        previous_member: previous.map(|m| DeviceMemberDto { member_id: m.id, display_name: shown(&m.actor.display_name) }),
+    })
+}
+
+/// The workspace connection (`hivews1:`, no invite, with the epoch keys)
+/// a computer's grant carries, for team workspace `ws`.
+pub(crate) fn computer_link_conn(state: &AppState, ws: Uuid) -> Result<String, String> {
     let mut conn = {
         let s = state.settings.lock().unwrap();
         s.workspaces.iter().find(|w| w.id() == ws).cloned().ok_or_else(|| "Add a computer to a team workspace (this one is on this device only).".to_string())?
@@ -5294,17 +5327,7 @@ pub(crate) fn add_computer_sync(state: State<AppState>, request: String, fingerp
         return Err(problem);
     }
     conn.inv = None;
-    let conn = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, conn)));
-    let mut svc = state.service.lock().unwrap();
-    let previous = svc.preview_computer_link(ws, &req).ok().and_then(|p| p.previous_member);
-    let grant = svc.issue_computer_link(ws, &req, &conn, ligus_core::flow::now_ms()).map_err(map_err)?;
-    tracing::info!(target: "identity", device = %req.device_id, "added a computer as this account's device");
-    Ok(ComputerGrantDto {
-        grant,
-        expires_in_minutes: ligus_runtime::computer_link::GRANT_TTL_MS / 60_000,
-        this_desktop: ligus_runtime::device_enroll::fingerprint(&svc.device_public_key()),
-        previous_member: previous.map(|m| DeviceMemberDto { member_id: m.id, display_name: shown(&m.actor.display_name) }),
-    })
+    Ok(encode_workspace_invite(&sign_invite(state, with_epoch_keys(state, conn))))
 }
 
 /// Remove the separate member a just-added computer proved it was (Add a
@@ -5325,6 +5348,53 @@ pub(crate) fn remove_duplicate_member_sync(state: State<AppState>, member_id: St
     svc.remove_member(ligus_core::workspace_config_session_id(ws), ws, member_id).map_err(map_err)
 }
 
+/// Migration M6 (identity model v2, 11), once caught up: where this
+/// account has no profile yet in `ws`, publish one from `identity.json`
+/// (only a desktop holding the account key; a stale laptop that starts later
+/// finds the profile and writes nothing), and a synced name for each phone
+/// this desktop named before names synced.
+fn first_profile(app: &AppHandle, ws: Uuid) {
+    let state = app.state::<AppState>();
+    let Ok(Some(stored)) = state.identity.load() else { return };
+    let phone_labels = state.settings.lock().unwrap().phone_labels.clone();
+    let mut svc = state.service.lock().unwrap();
+    let Some(me) = svc.author().account_id else { return };
+    let Ok(Some(cfg)) = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)) else { return };
+    if !cfg.members.iter().any(|m| m.actor.account_id == Some(me)) {
+        return;
+    }
+    if !cfg.profiles.contains_key(&me) {
+        let picture = stored.account.avatar_url.as_deref().and_then(|u| avatar_from_data_url(u).ok());
+        if let Err(e) = svc.set_profile(ws, Some(&stored.account.display_name), picture, false) {
+            tracing::debug!(target: "identity", "first profile not written yet: {e}");
+        }
+    }
+    let mine: Vec<Uuid> = svc.own_devices(ws).unwrap_or_default().into_iter().map(|d| d.device_id).collect();
+    for (device, label) in phone_labels {
+        let Ok(d) = Uuid::parse_str(&device) else { continue };
+        if !mine.contains(&d) || cfg.device_labels.get(&d).is_some_and(|m| m.contains_key(&me)) {
+            continue;
+        }
+        let _ = svc.set_device_label(ws, d, &label);
+    }
+}
+
+/// Rename one of your devices (or this one) in the active workspace: a
+/// synced `DeviceLabelSet` every member sees (identity model v2, 6). Empty
+/// clears it.
+#[tauri::command]
+async fn rename_device(ligus_app: tauri::AppHandle, device_id: String, label: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| rename_device_sync(tauri::Manager::state::<AppState>(ligus_app), device_id, label)).await
+}
+
+pub(crate) fn rename_device_sync(state: State<AppState>, device_id: String, label: String) -> Result<(), String> {
+    let device = Uuid::parse_str(device_id.trim()).map_err(|_| "That isn't a device id.".to_string())?;
+    let ws = state.active_workspace_id();
+    let mut svc = state.service.lock().unwrap();
+    svc.set_device_label(ws, device, &label).map_err(map_err)?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn list_my_devices(ligus_app: tauri::AppHandle) -> Result<Vec<MyDeviceDto>, String> {
     crate::off_main(ligus_app, move |ligus_app| list_my_devices_sync(tauri::Manager::state::<AppState>(ligus_app))).await
@@ -5337,15 +5407,105 @@ pub(crate) fn list_my_devices_sync(state: State<AppState>) -> Result<Vec<MyDevic
     let svc = state.service.lock().unwrap();
     let here = svc.device_id();
     let hosts = svc.list_hosts(ws).unwrap_or_default();
-    let phones: std::collections::HashSet<Uuid> = svc
-        .store()
-        .load_config(ws, None, None)
-        .map(|(_, t)| t.current().devices.iter().filter(|(_, d)| d.phone).map(|(id, _)| *id).collect())
+    let roster = svc.store().load_config(ws, None, None).map(|(_, t)| t.current().clone()).ok();
+    let phones: std::collections::HashSet<Uuid> =
+        roster.as_ref().map(|r| r.devices.iter().filter(|(_, d)| d.phone).map(|(id, _)| *id).collect()).unwrap_or_default();
+    let devices = svc.own_devices(ws).map_err(map_err)?;
+    let notes: HashMap<Uuid, String> = devices
+        .iter()
+        .filter(|d| !d.revoked && !d.also_certified_by.is_empty())
+        .filter_map(|d| Some((d.device_id, device_note(&svc, ws, roster.as_ref()?, d.device_id, phones.contains(&d.device_id))?)))
+        .collect();
+    // Synced names (identity model v2, 6.3) under this account.
+    let me = svc.author().account_id;
+    let synced: HashMap<Uuid, String> = svc
+        .load_in(ws, ligus_core::workspace_config_session_id(ws))
+        .ok()
+        .flatten()
+        .map(|c| c.device_labels.iter().filter_map(|(d, m)| Some((*d, m.get(&me?)?.clone()))).collect())
         .unwrap_or_default();
-    Ok(my_device_rows(svc.own_devices(ws).map_err(map_err)?, here, |d| phones.contains(&d), |d| {
+    let mut rows = my_device_rows(devices, here, |d| phones.contains(&d), |d| {
         let host = hosts.iter().find(|h| h.id == d.to_string())?;
         Some((host.label.clone(), rfc3339(state.host_presence.last_seen(host))))
-    }, &phone_labels))
+    }, &phone_labels);
+    for r in &mut rows {
+        let Ok(d) = Uuid::parse_str(&r.device_id) else { continue };
+        if let Some(l) = synced.get(&d) {
+            r.label = shown(l);
+            r.named = true;
+        }
+        if !r.phone && !r.revoked && !r.this_device {
+            if let Ok(Some(at)) = svc.never_written(ws, d) {
+                r.never_written = true;
+                let day = at.inner().date();
+                r.note = Some(format!("Approved on {} {}, {}. It hasn't written anything yet.", day.month(), day.day(), day.year()));
+            }
+        }
+    }
+    for r in &mut rows {
+        r.note = Uuid::parse_str(&r.device_id).ok().and_then(|d| notes.get(&d).cloned());
+    }
+    Ok(rows)
+}
+
+/// My devices' quiet line for a device of yours whose key another member
+/// also certified (identity model v2, 7.2 and 7.3a). A computer or box
+/// acts only for the accounts it signed as itself, so the certificate gives
+/// them nothing. A phone never signs for anyone but its person, and a
+/// revocation goes strictly down the ranks over everyone who certified it:
+/// say who can revoke it when you can't.
+fn device_note(svc: &ChatService, ws: Uuid, roster: &ligus_core::authz::RosterState, device: Uuid, phone: bool) -> Option<String> {
+    let me = svc.author().account_id?;
+    let my_id = svc.author().id.clone();
+    let names = |people: &[ligus_core::ActorIdentity]| {
+        let mut v: Vec<String> = people.iter().map(|a| shown(&a.display_name)).collect();
+        v.sort();
+        v.dedup();
+        v.join(", ")
+    };
+    if phone {
+        let co = svc.phone_co_holders(ws, device).ok()?;
+        let co: Vec<_> = co.into_iter().filter(|a| a.account_id != Some(me)).collect();
+        if co.is_empty() {
+            return None;
+        }
+        // The same cut rule the fold applies to a revocation
+        // (`ligus_core::authz`): never the founder, an Owner only by the
+        // founder, anyone else strictly down the ranks.
+        let my_role = roster.role_of(&my_id);
+        let founder = roster.founder.as_str();
+        let can_cut = co.iter().all(|a| match roster.role_of(&a.id) {
+            _ if a.id == founder => false,
+            None => true,
+            Some(ligus_core::WorkspaceRole::Owner) => my_id == founder && my_role == Some(ligus_core::WorkspaceRole::Owner),
+            Some(r) => my_role.is_some_and(|m| r.rank() < m.rank()),
+        });
+        if can_cut {
+            return None;
+        }
+        let who = if co.iter().any(|a| roster.role_of(&a.id) == Some(ligus_core::WorkspaceRole::Owner) || a.id == founder) {
+            "the workspace's founder"
+        } else {
+            "an Owner"
+        };
+        return Some(format!("{} also certified this phone's key. If you lose the phone, ask {who} to revoke it.", names(&co)));
+    }
+    let key = roster.devices.get(&device).map(|d| d.public_key.clone())?;
+    let chosen = svc.device_chosen_accounts(ws, device, &key).ok()?;
+    let config = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).ok().flatten()?;
+    let d = roster.devices.get(&device)?;
+    let foreign: Vec<ligus_core::ActorIdentity> = config
+        .members
+        .iter()
+        .filter(|m| m.actor.kind == ActorKind::Human)
+        .filter(|m| m.actor.account_id.is_some_and(|a| a != me && d.accounts.contains(&a) && !chosen.contains(&a)))
+        .map(|m| m.actor.clone())
+        .collect();
+    if foreign.is_empty() {
+        return None;
+    }
+    let n = names(&foreign);
+    Some(format!("{n} also certified this device's key. That gives {n} nothing over it."))
 }
 
 /// My devices' rows: exactly one per device id (the trust log can hold more
@@ -5376,6 +5536,8 @@ fn my_device_rows(
                 last_seen: host.map(|h| h.1),
                 phone: is_phone(d.device_id),
                 named,
+                note: None,
+                never_written: false,
             }
         })
         .collect()
@@ -12002,13 +12164,35 @@ async fn set_display_name(ligus_app: tauri::AppHandle, name: String) -> Result<(
 pub(crate) fn set_display_name_sync(state: State<AppState>, name: String) -> Result<(), String> {
     state.identity.update_display_name(&name).map_err(map_err)?;
     // Refresh the live ChatService author so new messages + signatures use the
-    // new name immediately (updating the persisted identity alone doesn't).
-    state
-        .service
-        .lock()
-        .unwrap()
-        .set_author_display_name(name.trim());
+    // new name immediately (updating the persisted identity alone doesn't),
+    // and publish it as this account's profile in every workspace it's a
+    // member of (identity model v2, 5.5): everyone sees the new name, in
+    // past content too.
+    let mut svc = state.service.lock().unwrap();
+    svc.set_author_display_name(name.trim());
+    let (_, err) = svc.set_profile_everywhere(Some(name.trim()), None, false);
+    if let Some(e) = err {
+        tracing::warn!(target: "identity", error = %e, "publishing the new name failed in a workspace");
+        return Err(format!("Your name changed on this device, but not in every workspace yet: {}", map_err(e)));
+    }
     Ok(())
+}
+
+/// A profile picture from a `data:image/…;base64,…` URL: PNG, JPEG or WebP,
+/// 16 KiB at most (decision O1).
+fn avatar_from_data_url(url: &str) -> Result<ligus_core::profile::Avatar, String> {
+    use base64::Engine as _;
+    let rest = url.strip_prefix("data:").ok_or("a picture is a data: URL")?;
+    let (meta, data) = rest.split_once(',').ok_or("a picture is a data: URL")?;
+    let content_type = meta.strip_suffix(";base64").ok_or("a picture is base64")?;
+    if !ligus_core::profile::AVATAR_TYPES.contains(&content_type) {
+        return Err("Use a PNG, JPEG or WebP picture.".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(|_| "That picture is damaged.".to_string())?;
+    if bytes.len() > ligus_core::profile::MAX_AVATAR_BYTES {
+        return Err("Pick a smaller picture (16 KB at most).".into());
+    }
+    ligus_core::profile::Avatar::new(content_type, &bytes).map_err(|e| e.to_string())
 }
 
 /// A bounded `data:image/…` URL fit to ride the synced event log. Avatars fan
@@ -12065,8 +12249,18 @@ async fn set_avatar(ligus_app: tauri::AppHandle, avatar: Option<String>) -> Resu
 
 pub(crate) fn set_avatar_sync(state: State<AppState>, avatar: Option<String>) -> Result<(), String> {
     validate_avatar_data_url(&avatar)?;
+    let picture = avatar.as_deref().map(avatar_from_data_url).transpose()?;
     state.identity.update_avatar(avatar.clone()).map_err(map_err)?;
-    state.service.lock().unwrap().set_author_avatar(avatar);
+    let mut svc = state.service.lock().unwrap();
+    svc.set_author_avatar(avatar);
+    // The picture rides one profile event per workspace, never every
+    // message (decisions O1, O2).
+    let clear = picture.is_none();
+    let (_, err) = svc.set_profile_everywhere(None, picture, clear);
+    if let Some(e) = err {
+        tracing::warn!(target: "identity", error = %e, "publishing the new picture failed in a workspace");
+        return Err(format!("Your picture changed on this device, but not in every workspace yet: {}", map_err(e)));
+    }
     Ok(())
 }
 
@@ -12581,6 +12775,9 @@ enum InitFailure {
     /// The database needs a one-time upgrade and the disk is too full for
     /// it (nothing was changed): free some space and try again.
     DiskSpace(String),
+    /// The database was written by a newer Ligus (identity model v2, 10.4):
+    /// update, or use another data dir. Trying again can't help.
+    NewerData(String),
     /// Anything else.
     Other(String),
 }
@@ -12596,6 +12793,9 @@ impl InitFailure {
         }
         if l.contains("to upgrade the ligus database") {
             return Self::DiskSpace(e.to_string());
+        }
+        if l.contains("written by a newer ligus") {
+            return Self::NewerData(e.to_string());
         }
         Self::Other(e.to_string())
     }
@@ -12627,6 +12827,11 @@ impl InitFailure {
                 "Ligus needs more disk space",
                 format!("Ligus has to upgrade its database once, and there isn't room: {e}.\n\nFree up space on this disk, then choose Try again."),
                 true,
+            ),
+            Self::NewerData(e) => (
+                "This data is from a newer Ligus",
+                format!("Ligus can't use its data: {e}.\n\nInstall the newer version of Ligus. Nothing was changed."),
+                false,
             ),
             Self::Other(e) => (
                 "Ligus couldn't start",
@@ -12736,6 +12941,11 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
 
     let db_path = data_dir.join("ligus.db");
     let store = EventStore::open(&db_path).map_err(map_err)?;
+    // A newer Ligus wrote this database (identity model v2, 10.4): it opened
+    // read-only, and this build stops here rather than run on it.
+    if store.newer_schema().is_some() {
+        return Err(ligus_runtime::event_store::NEWER_DATA_MESSAGE.to_string());
+    }
     clock.phase("  event store");
     // NB: chunk-row pruning (one-time DB shrink) is deferred to a background
     // thread after the window is live — see `run()`. Running it here scanned
@@ -12956,6 +13166,27 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         save_settings(&data_dir, &s);
         id
     };
+    // Identity model v2 (section 11, M1): the sync state is keyed by relay
+    // and workspace, once, while this is the only connection to the store
+    // (otherwise on a later launch; it starts from 0 meanwhile, which is
+    // safe).
+    {
+        let conns: Vec<(String, String)> = {
+            let s = settings.lock().unwrap();
+            let mut c: Vec<(String, String)> = s.workspaces.iter().map(|w| (w.relay_url.clone(), w.room.clone())).collect();
+            if let Some(url) = s.relay_url.clone().filter(|u| !u.is_empty()) {
+                c.push((url, s.sync_room.clone()));
+            }
+            c
+        };
+        match service.store().migrate_sync_tables(&conns) {
+            Ok(ligus_runtime::event_store::SyncMigration::Migrated { backup, reset, .. }) => {
+                tracing::info!(target: "sync", backup = ?backup, reset = reset.len(), "sync state is now kept per relay and workspace");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(target: "sync", "upgrading the sync state failed; it runs again on the next launch: {e}"),
+        }
+    }
     // The private local workspace skips governance authz (solo, never-synced), so
     // an identity churn can't lock the sole user out of routine actions in their
     // own Home workspace.
@@ -13341,6 +13572,8 @@ async fn sync_pull_once(
                 }
                 fulfil_apply_requests(app);
                 attachments::share_approved_offers(app);
+                attachments::renew_attachment_blobs(app);
+                first_profile(app, active);
             }
             if pulled > 0 {
                 let _ = app.emit("workspace://synced", pulled);
@@ -14849,14 +15082,59 @@ fn hostname_label() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Whether this device's relay token names an account (an unexpired `hrt1`
+/// token with a subject). Without one the relay can't tell who is calling, so
+/// it refuses a claim or any roster change. The token never leaves here.
+fn relay_token_identified(state: &AppState) -> bool {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    state.relay_token().is_some_and(|t| ligus_runtime::token_subject(&t, now).is_some())
+}
+
 /// Claim the active team workspace's room on a membership-enforcing relay, making
 /// this account the `Owner` and turning enforcement on. Best-effort: returns
 /// `false` on an open/self-host relay (no membership) or if already claimed.
+/// Refused here, without calling the relay, when this device's token names no
+/// account: the relay would answer 401.
 #[tauri::command]
 async fn workspace_claim_membership(state: State<'_, AppState>) -> Result<bool, String> {
     let relay = configured_relay(&state)?;
+    if !relay_token_identified(&state) {
+        return Err(ligus_runtime::UNIDENTIFIED_ROSTER_MESSAGE.to_string());
+    }
     let room = state.settings.lock().unwrap().sync_room.clone();
     state.relay_client(&relay).claim_membership(&room).await.map_err(|e| e.to_string())
+}
+
+/// The People pane's view of relay-side membership for the active workspace.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RelayMembershipDto {
+    /// `off` (the relay has membership off), `unclaimed`, `claimed` (the
+    /// relay enforces `members`) or `hidden` (claimed; this device isn't on
+    /// the roster).
+    state: &'static str,
+    members: Vec<ligus_runtime::MemberEntry>,
+    /// This device's relay token names an account, so a claim can work.
+    identified: bool,
+    /// The relay is the community relay, which has no sign-in.
+    community: bool,
+}
+
+/// Relay-side membership for the active workspace, and whether this device
+/// could claim it. Never returns the token, only whether it names an account.
+#[tauri::command]
+async fn relay_membership_status(state: State<'_, AppState>) -> Result<RelayMembershipDto, String> {
+    let relay = configured_relay(&state)?;
+    let room = state.settings.lock().unwrap().sync_room.clone();
+    let identified = relay_token_identified(&state);
+    let community = ligus_runtime::setup::validate::same_origin(&relay, ligus_core::COMMUNITY_RELAY_URL);
+    let (state_name, members) = match state.relay_client(&relay).roster_state(&room).await.map_err(|e| e.to_string())? {
+        ligus_runtime::RosterState::Unsupported => ("off", vec![]),
+        ligus_runtime::RosterState::Unclaimed => ("unclaimed", vec![]),
+        ligus_runtime::RosterState::Members(m) => ("claimed", m),
+        ligus_runtime::RosterState::Hidden => ("hidden", vec![]),
+    };
+    Ok(RelayMembershipDto { state: state_name, members, identified, community })
 }
 
 /// List the active workspace's server-side members (empty on open relays).
@@ -16350,6 +16628,8 @@ pub fn run() {
             // List this desktop as an online Device host in the synced room, so
             // the phone (via `ligus serve`) can tell whether @ligus can answer now.
             tauri::async_runtime::spawn(run_device_host_loop(app.handle().clone()));
+            // Code-match approval: list the team workspaces' approval mailboxes.
+            tauri::async_runtime::spawn(crate::approvals_ui::run_poll_loop(app.handle().clone()));
             tauri::async_runtime::spawn(flow::run_tick(app.handle().clone()));
             // DM invites held for a peer whose contact id wasn't known yet.
             tauri::async_runtime::spawn(crate::people::run_held_dm_loop(app.handle().clone()));
@@ -16427,6 +16707,19 @@ pub fn run() {
             chat_models::set_chat_model,
             chat_models::chat_model_problem,
             phones_ui::certify_phone_code,
+            approvals_ui::list_approvals,
+            approvals_ui::approval_dismiss_fact,
+            approvals_ui::get_approval_address,
+            approvals_ui::reset_approval_address,
+            approvals_ui::approval_match_paste,
+            approvals_ui::approval_session,
+            approvals_ui::approval_open,
+            approvals_ui::approval_codes_match,
+            approvals_ui::approval_dont_match,
+            approvals_ui::approval_expire,
+            approvals_ui::approval_end,
+            approvals_ui::approval_decline,
+            approvals_ui::approval_forget,
             phone_enroll_ui::phone_enroll_precheck,
             phone_enroll_ui::phone_enroll_offer_start,
             phone_enroll_ui::phone_enroll_offer_show,
@@ -16541,6 +16834,7 @@ pub fn run() {
             remove_duplicate_member,
             approve_device,
             list_my_devices,
+            rename_device,
             list_device_pairings,
             list_device_requests,
             revoke_my_device,
@@ -16667,6 +16961,7 @@ pub fn run() {
             workspace_share_code,
             redeem_short_code,
             workspace_claim_membership,
+            relay_membership_status,
             workspace_members,
             workspace_list_invites,
             workspace_create_invite,
@@ -17166,7 +17461,12 @@ mod dispatch_target_tests {
         let mut host = ligus_core::WorkspaceHost::new(box_device.to_string(), ligus_core::HostKind::Worker, "sff");
         host.owner_actor_id = "owner".into();
         config.workspace_hosts = vec![host];
-        let links = ligus_core::DeviceLinks::from_config(&config, |d, a| d == box_device && a == box_account);
+        let owner_account = config.members[0].actor.account_id.unwrap();
+        let links = ligus_core::DeviceLinks::from_config(
+            &config,
+            |d, a| d == box_device && a == box_account,
+            |d, a| d == box_device && (a == box_account || a == owner_account),
+        );
         let mut chat = ChatSession::new("phone @ligus test", Uuid::nil(), "rt");
         chat.creator_actor_id = box_account.to_string();
         chat.members = config.members.clone();
