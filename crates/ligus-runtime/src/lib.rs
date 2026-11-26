@@ -55,6 +55,7 @@ pub mod host_presence;
 pub mod revocation_status;
 pub mod role_refusal;
 pub mod human_presence;
+pub mod hook;
 pub mod hygiene;
 pub mod identity_links;
 pub mod identity_store;

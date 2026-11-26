@@ -51,6 +51,7 @@ mod approvals_ui;
 mod people;
 mod links_ui;
 mod agent_iface;
+mod hook_socket;
 mod attachments;
 mod memory_ui;
 mod repos_ui;
@@ -16529,6 +16530,8 @@ pub fn run() {
             ligus_auth_ui::start(&app.state::<AppState>());
             // B3: governance asks for a passkey through the system browser.
             passkey_ui::install(&app.state::<AppState>(), app.handle());
+            // Claude Code's permission prompts from outside Ligus (`ligus hook`).
+            hook_socket::start(app.handle());
 
             // Arm the workspace file watcher on the initial root (re-armed later
             // whenever `set_workspace_root` changes it).

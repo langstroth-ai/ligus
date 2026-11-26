@@ -302,6 +302,32 @@ an invite and an Admin.
 | `ligus proposals` | lists proposals with status and votes |
 | `ligus queue` | unanswered agent mentions and whether each agent's host is online |
 
+### Agents' questions {#asks}
+
+| Command | What it does |
+|---|---|
+| `ligus asks list [--chat ID] [--mine] [--json]` (or `ligus asks`) | open [decision cards](../addons/ligus-mcp.md#asks): who asks whom, the options, what an answer does |
+| `ligus asks answer <ask-id> (--option N \| --yes \| --no) [--text TEXT] [--json]` | answers a card after your yes at the terminal |
+| `ligus asks decline <ask-id> [--json]` | Not now: closes a card put to you alone; on a room card it is your abstention |
+
+Answering is a human step. Every answer asks "Answer Builder's question with
+'Postgres'? [y/N]" on `/dev/tty` and exits 4 without a yes, so an agent
+running as you can't settle a card through the CLI. A grant (Allow once,
+Deny) needs your passkey, which the CLI can't ask for: answer it in the
+desktop app or on your phone (exit 4). Prompts from `ligus hook permission`
+are never answered from the CLI (exit 6). Other exits: 5 for an unknown
+card, 6 for one that isn't yours, 1 for one already settled or expired.
+
+### Claude Code's permission prompts {#hook}
+
+| Command | What it does |
+|---|---|
+| `ligus hook permission --workspace W --chat C [--timeout SECS]` | Claude Code's `PermissionRequest` hook: asks the running desktop, prints allow, deny or nothing |
+| `ligus hook install --settings PATH --workspace W --chat C [--dry-run]` | writes the hook into a Claude Code settings file, prints the change |
+| `ligus hook token [--data-dir DIR] [--json]` | where the install's hook token is; never its value |
+
+See [Claude Code's permission prompts](../addons/claude-code-hook.md).
+
 ## Guided setup {#setup}
 
 The same seven flows as the desktop's **Set up** commands ([Set up](../getting-started/set-up.md)).

@@ -812,6 +812,159 @@ pub const COMMANDS: &[Cmd] = &[
         see_also: &["ligus memory"],
         ..D
     },
+    Cmd {
+        name: "asks",
+        group: G_CHAT,
+        summary: "agents' questions: list them, answer one at the terminal",
+        purpose: "Agents' decision cards from this person's own CLI device. Every answer needs your yes at the \
+                  terminal (/dev/tty): without one it exits 4, so an agent running as you can't settle a card by \
+                  accident. A grant (Allow once / Deny) needs your passkey, which the CLI can't ask for: answer it in \
+                  the desktop app or on your phone (exit 4). Prompts from `ligus hook permission` are never answered \
+                  here (exit 6).",
+        synopsis: &[
+            "ligus asks [list] [--chat ID] [--mine] [--json]",
+            "ligus asks answer <ask-id> (--option N | --yes | --no) [--text TEXT] [--json]",
+            "ligus asks decline <ask-id> [--json]",
+        ],
+        flags: &[
+            f("--chat ID", "every chat", "only this chat"),
+            f("--mine", "off", "only questions you can answer"),
+            f("--option N", "none", "the option to answer with, from 0"),
+            f("--yes, --no", "none", "answer a yes/no question"),
+            f("--text TEXT", "none", "a free-text reply, where the question allows one"),
+            JSON,
+        ],
+        conn: true,
+        examples: &["ligus asks list --mine", "ligus asks answer 0b7e2f8a-… --option 1"],
+        exit: &[(4, "no yes at the terminal, or a grant (needs your passkey)"), (5, "no such question"), (6, "not yours to answer, an outside prompt, or refused by the workspace rules")],
+        see_also: &["ligus asks list", "ligus asks answer", "ligus hook"],
+        ..D
+    },
+    Cmd {
+        name: "asks list",
+        group: G_CHAT,
+        summary: "open questions, and whether you can answer them",
+        purpose: "List the open decision cards: who asks whom, the options, and what an answer does.",
+        synopsis: &["ligus asks [list] [--chat ID] [--mine] [--json]"],
+        flags: &[f("--chat ID", "every chat", "only this chat"), f("--mine", "off", "only questions you can answer"), JSON],
+        conn: true,
+        examples: &["ligus asks list --json"],
+        see_also: &["ligus asks answer"],
+        ..D
+    },
+    Cmd {
+        name: "asks answer",
+        group: G_CHAT,
+        summary: "answer a question, after your yes at the terminal",
+        purpose: "Answer one card with an option (or yes/no, or free text where allowed). Asks for your yes on \
+                  /dev/tty first. Grants and outside prompts are refused here.",
+        synopsis: &["ligus asks answer <ask-id> (--option N | --yes | --no) [--text TEXT] [--json]"],
+        flags: &[f("--option N", "none", "the option, from 0"), f("--yes, --no", "none", "for a yes/no question"), f("--text TEXT", "none", "a free-text reply"), JSON],
+        conn: true,
+        examples: &["ligus asks answer 0b7e2f8a-… --yes"],
+        exit: &[(4, "no yes at the terminal, or a grant"), (5, "no such question"), (6, "not yours to answer")],
+        see_also: &["ligus asks decline"],
+        ..D
+    },
+    Cmd {
+        name: "asks decline",
+        group: G_CHAT,
+        summary: "say Not now",
+        purpose: "Say Not now: it closes a question put to you alone; on a room question it is only your abstention.",
+        synopsis: &["ligus asks decline <ask-id> [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus asks decline 0b7e2f8a-…"],
+        exit: &[(4, "no yes at the terminal"), (5, "no such question"), (6, "not yours to answer")],
+        see_also: &["ligus asks answer"],
+        ..D
+    },
+    Cmd {
+        name: "hook",
+        group: G_AGENTS,
+        summary: "send Claude Code's permission prompts to your Ligus devices",
+        purpose: "Claude Code's PermissionRequest hook, for sessions Ligus didn't start. `ligus hook permission` \
+                  reads the prompt on stdin, asks the running Ligus desktop over an owner-only socket in its data \
+                  dir (with the install's hook token), and the prompt becomes a grant card in the chat you name, put \
+                  to you alone. Allowing it always needs your passkey (Face ID on the phone). It prints Claude Code's \
+                  allow or deny, never a standing rule; with no answer, or no Ligus running, it prints nothing and \
+                  Claude Code decides (its own dialog, or a deny in -p). The hook never opens a data dir. Point it at \
+                  a workspace of your own: every member of a workspace can read its chats.",
+        synopsis: &[
+            "ligus hook permission --workspace W --chat C [--timeout SECS] [--data-dir DIR]",
+            "ligus hook install --settings PATH --workspace W --chat C [--dry-run]",
+            "ligus hook token [--data-dir DIR] [--json]",
+        ],
+        flags: &[
+            f("--workspace W", "required", "the workspace id (one of your own)"),
+            f("--chat C", "required", "the chat id the cards go to"),
+            f("--timeout SECS", "90", "how long the hook waits (10 to 590)"),
+            f("--data-dir DIR", "the desktop's", "the running Ligus process to ask"),
+            f("--settings PATH", "required", "the Claude Code settings file to write the hook into"),
+            f("--dry-run", "off", "print the change, write nothing"),
+            JSON,
+        ],
+        data: false,
+        examples: &["ligus hook install --settings .claude/settings.json --workspace 1b2c… --chat 6f1c…", "ligus hook token"],
+        see_also: &["ligus hook permission", "ligus hook install", "ligus asks"],
+        ..D
+    },
+    Cmd {
+        name: "hook permission",
+        group: G_AGENTS,
+        summary: "the PermissionRequest hook itself (Claude Code runs it)",
+        purpose: "Read Claude Code's PermissionRequest input on stdin and print its decision from Ligus: \
+                  {\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\"}}}, \
+                  or a deny with \"Denied from Ligus by <name>\", or nothing (no answer in time, Not now, no Ligus \
+                  running, more than 10 prompts a minute or 3 waiting). Always exits 0. The card shows the call's own \
+                  content: the command, or the file and its new content; one over 8 KiB offers only Deny.",
+        synopsis: &["ligus hook permission --workspace W --chat C [--timeout SECS] [--data-dir DIR]"],
+        flags: &[
+            f("--workspace W", "required", "the workspace id"),
+            f("--chat C", "required", "the chat id"),
+            f("--timeout SECS", "90", "how long to wait (10 to 590; keep it under the hook's timeout)"),
+            f("--data-dir DIR", "the desktop's", "the running Ligus process to ask"),
+        ],
+        env: &["LIGUS_DATA_DIR"],
+        data: false,
+        examples: &["echo '{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls\"}}' | ligus hook permission --workspace 1b2c… --chat 6f1c…"],
+        see_also: &["ligus hook install"],
+        ..D
+    },
+    Cmd {
+        name: "hook install",
+        group: G_AGENTS,
+        summary: "write the hook into a Claude Code settings file",
+        purpose: "Add (or update) the PermissionRequest hook in a Claude Code settings file you name, keeping \
+                  everything else, and print the change. Running it again changes nothing. Your own \
+                  ~/.claude/settings.json needs your yes at the terminal (exit 4 without it).",
+        synopsis: &["ligus hook install --settings PATH --workspace W --chat C [--dry-run]"],
+        flags: &[
+            f("--settings PATH", "required", "the settings file (.claude/settings.json for one project)"),
+            f("--workspace W", "required", "the workspace id"),
+            f("--chat C", "required", "the chat id"),
+            f("--dry-run", "off", "print the change, write nothing"),
+        ],
+        data: false,
+        examples: &["ligus hook install --settings .claude/settings.json --workspace 1b2c… --chat 6f1c… --dry-run"],
+        exit: &[(4, "your user-level settings need your yes at the terminal")],
+        see_also: &["ligus hook permission"],
+        ..D
+    },
+    Cmd {
+        name: "hook token",
+        group: G_AGENTS,
+        summary: "where the install's hook token is",
+        purpose: "Print the path of each install's hook token (0600) and whether its socket listens. Never the \
+                  token itself, and it creates nothing: the desktop makes its token when it starts listening.",
+        synopsis: &["ligus hook token [--data-dir DIR] [--json]"],
+        flags: &[f("--data-dir DIR", "the desktop's", "the install"), JSON],
+        data: false,
+        examples: &["ligus hook token --json"],
+        exit: &[(3, "no Ligus data dir here")],
+        see_also: &["ligus hook"],
+        ..D
+    },
     // ── Runtimes, agents, hosts ────────────────────────────────────────
     Cmd {
         name: "runtimes",
@@ -3216,6 +3369,7 @@ mod tests {
         want.insert("help".into());
         want.insert("version".into());
         want.insert("app".into());
+        want.insert("hook".into());
         for name in &want {
             sections_ok(name);
         }
@@ -3237,6 +3391,8 @@ mod tests {
             ("facts", main.clone(), "\"facts\" => {", "\n        }\n", &[]),
             ("trust", main.clone(), "fn cmd_trust", "\n}\n", &[]),
             ("memory", src("memory_cmd.rs"), "pub fn run(", "\n}\n", &[]),
+            ("asks", src("asks_cmd.rs"), "pub fn run(", "\n}\n", &[]),
+            ("hook", src("hook_cmd.rs"), "pub fn cmd(", "\n}\n", &[]),
             ("repos", src("repos_cmd.rs"), "pub fn cmd(", "\n}\n", &["on", "off", "default"]),
             ("forge", src("forge_cmd.rs"), "pub fn cmd(", "\n}\n", &["oauth", "gh", "none"]),
             ("setup", src("setup_cmd.rs"), "pub fn cmd(", "\n}\n", &["-", "--json", "--dry-run"]),
@@ -3275,7 +3431,7 @@ mod tests {
             .flat_map(|fl| fl.flag.split([' ', ',']).filter(|w| w.starts_with("--")).map(|w| w.to_string()).collect::<Vec<_>>())
             .collect();
         let mut missing = Vec::new();
-        for file in ["main.rs", "admit.rs", "repos_cmd.rs"] {
+        for file in ["main.rs", "admit.rs", "repos_cmd.rs", "hook_cmd.rs"] {
             let text = src(file);
             for pat in ["flag_val(\"", "has(\"", "flag(\""] {
                 for part in text.split(pat).skip(1) {
