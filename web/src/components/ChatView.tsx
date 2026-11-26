@@ -1,5 +1,6 @@
 import { TaskStatePanel } from "@/components/TaskStatePanel";
 import { DecisionCard } from "@/components/DecisionCard";
+import { placeTurnAsks } from "@/lib/askPlacement";
 import { responderBadge } from "@/lib/responderBadge";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -254,8 +255,9 @@ export function ChatView({
   });
   const handoffIndex = useMemo(() => handoffsByMessage(handoffs.data ?? []), [handoffs.data]);
   // Agents' decision cards sit in the transcript where the agent asked:
-  // after the asking turn's reply, or (while that turn still streams) after
-  // the live bubble.
+  // before the asking turn's reply once settled (the reply is posted when
+  // the turn ends, after the answer), after it while still waiting, or
+  // (while that turn still streams) after the live bubble.
   const asks = useQuery({ queryKey: ["asks", sessionId], queryFn: () => listAsks(sessionId), enabled: Boolean(sessionId), refetchInterval: 4000 });
   const asksByTurn = useMemo(() => {
     const m = new Map<string, AskDto[]>();
@@ -1269,9 +1271,13 @@ export function ChatView({
                   ? undefined
                   : rosterAgent?.name ?? (m.author === PRIMARY_NAME ? PRIMARY_HANDLE : m.author);
               const prov = provenanceFor(m.runtimeId, m.runtimeLabel);
+              // A card the person settled before the reply was posted reads
+              // above the reply that reports the answer.
+              const turnAsks = placeTurnAsks(asksByTurn.get(m.id), m);
               return (
                 <Fragment key={m.id}>
                   {showDay && <DaySeparator label={dayLabel(m.createdAt)} />}
+                  {turnAsks.before.map((a) => <DecisionCard key={a.askId} sessionId={sessionId} ask={a} />)}
                   <Bubble
                   messageId={m.id}
                   sessionId={sessionId}
@@ -1325,7 +1331,7 @@ export function ChatView({
                   }}
                   />
                   {handoffIndex.get(m.id)?.map((card) => <HandoffCardView key={card.id} card={card} />)}
-                  {asksByTurn.get(m.id)?.map((a) => <DecisionCard key={a.askId} sessionId={sessionId} ask={a} />)}
+                  {turnAsks.after.map((a) => <DecisionCard key={a.askId} sessionId={sessionId} ask={a} />)}
                 </Fragment>
               );
             })}
