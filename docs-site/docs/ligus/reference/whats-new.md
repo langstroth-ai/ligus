@@ -15,6 +15,20 @@ Full release notes are on the
   says to do it in the desktop app, or to run it again with
   `--recovery-words-file PATH`, which `ligus setup` now accepts. See
   [Set up](../getting-started/set-up.md).
+- **Add an agent picks where it runs in the same step.** "Runs on" lists
+  this device, your always-on boxes (`ligus serve` and workers) and your
+  other computers, and saving writes the agent and its host together, so
+  there's no separate step afterwards and only one passkey confirmation. For
+  a model that goes through a model gateway, it starts on the one box that
+  offers that gateway, and says so if you pick a host that doesn't.
+- **A model gateway runtime is OpenAI-compatible.** Picking a model gateway
+  in Add a runtime switches the kind to OpenAI-compatible and hides the
+  Ollama-only settings (its address, keep-loaded and the context size sent
+  to Ollama). Type the model the gateway serves.
+- **First-run Ollama gets a real model.** Choosing Ollama during first
+  setup offers the models installed on this computer (or a field to type
+  one), instead of creating the runtime with `gpt-4o`. The first-run error
+  note says "press Next", matching the button.
 
 - **A reply written after you answer an agent's question reads after your
   answer.** An agent's reply is stamped with when it was posted (when its
@@ -22,6 +36,24 @@ Full release notes are on the
   the desktop, a question you already answered sits above the reply that
   reports your answer. Replies from devices still on 0.4.0 show right too,
   once the device or box showing them is updated.
+
+### Docs
+
+- **The box pages say how a box really joins.** Setting up `ligus serve` or
+  `ligus worker` no longer tells you to enroll the box with your own invite
+  or calls it one of your devices: a box is its own member, and you approve
+  it once by comparing a code
+  ([Admitting a box](../../operate/ops/admitting-a-box.md)). The box pages
+  also cover using a model gateway and upgrading a box, including on a Mac
+  that starts it at login
+  ([Personal fleet](../../operate/deploy/personal-fleet.md#operating-it)).
+- **Smaller corrections.** Homebrew upgrades of the desktop app need
+  `--greedy`, since the app updates itself. The first-run wizard has five
+  steps. A local model gateway on another machine should use `https://`.
+  "Already invited yourself?" says that the linked computer retires your
+  earlier member by itself when it safely can. First launch says plainly
+  that a computer links from `lt` or `ligus devices request`, not from a
+  second desktop app.
 
 ## 0.4.0
 

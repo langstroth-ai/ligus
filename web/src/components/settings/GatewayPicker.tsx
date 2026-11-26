@@ -68,7 +68,7 @@ export function GatewayPicker({
       {value && (
         <p className="text-xs text-ink-soft" data-testid="gateway-note">
           Runs only on hosts that offer this gateway: {picked ? picked.hosts.join(", ") : "none right now"}; credentials stay
-          on those hosts. Bind the agent to one of them.
+          on those hosts. Add an agent picks one of them for you.
         </p>
       )}
     </div>

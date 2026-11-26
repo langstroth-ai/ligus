@@ -1624,7 +1624,7 @@ phones agree:
   item's own tab (Back returns to that tab's list). Section 7.2's "Inbox
   beneath it" is still the target for Android; the iPhone may follow.
 - **First pairing:** one primary action ("Scan the code") under the one
-  command to run on the box, `ligus serve --pair`, with a Copy button.
+  command to run on the box, `ligus pair`, with a Copy button.
   Everything else (paste, an address and token, adding this phone first,
   resetting its key) sits under "Other ways to connect". Both confirm sheets
   say what pairing grants: this phone reads chats and proposals through the

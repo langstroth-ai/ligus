@@ -20,6 +20,7 @@ import {
   probeRelay,
   probeRelayAt,
   probeProvider,
+  listOllamaModels,
   type RuntimeTestResult,
   type EnvDetectDto,
   type ClaudeModelOption,
@@ -129,6 +130,27 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
   }
   const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1/chat/completions");
   const [model, setModel] = useState("gpt-4o");
+  // Ollama gets its own model: the OpenAI field's "gpt-4o" default must never
+  // reach an Ollama runtime. Prefilled from the server's installed models.
+  const [ollamaModel, setOllamaModel] = useState("");
+  const [ollamaInstalled, setOllamaInstalled] = useState<string[]>([]);
+  useEffect(() => {
+    if (choice !== "ollama") return;
+    let live = true;
+    void listOllamaModels({ endpoint: "http://localhost:11434" })
+      .then((r) => {
+        if (!live) return;
+        const names = r.models.map((m) => m.name);
+        setOllamaInstalled(names);
+        setOllamaModel((cur) => cur || names[0] || "");
+      })
+      .catch(() => {
+        /* no list: the plain field still works */
+      });
+    return () => {
+      live = false;
+    };
+  }, [choice]);
   // Any change to the agent choice/creds invalidates a prior probe result.
   useEffect(() => {
     setAgentProbe(null);
@@ -279,7 +301,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
           if (!ok) {
             setAgentAckFail(true);
             setError(
-              "Couldn't reach that provider with this key — @ligus won't answer until it works. Fix the key, or press Continue again to set it up anyway.",
+              "Couldn't reach that provider with this key — @ligus won't answer until it works. Fix the key, or press Next again to set it up anyway.",
             );
             return;
           }
@@ -311,7 +333,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
       // runtime; default to Sonnet.
       await addRuntime("anthropic-api", "Anthropic API", "anthropic", "remote", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-6", true, false);
     } else if (choice === "ollama") {
-      await addRuntime("ollama-local", "Ollama (local)", "ollama", "local", "http://localhost:11434", model.trim() || "llama3.1", true, false);
+      await addRuntime("ollama-local", "Ollama (local)", "ollama", "local", "http://localhost:11434", ollamaModel.trim() || "llama3.1", true, false);
     } else if (choice === "claudeCode") {
       // Claude Code uses the built-in runtime; persist the chosen --model.
       await setClaudeCodeModel(claudeModel);
@@ -563,6 +585,24 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
                 <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="Base URL (chat completions endpoint)" className={field + " font-mono text-xs"} style={inputStyle} />
                 <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Model (e.g. gpt-4o)" className={field} style={inputStyle} />
               </div>
+            )}
+            {choice === "ollama" && (
+              <>
+                <input
+                  value={ollamaModel}
+                  onChange={(e) => setOllamaModel(e.target.value)}
+                  list="onboarding-ollama-models"
+                  placeholder="Model (e.g. llama3.1)"
+                  aria-label="Ollama model"
+                  className={field}
+                  style={inputStyle}
+                />
+                <datalist id="onboarding-ollama-models">
+                  {ollamaInstalled.map((n) => (
+                    <option key={n} value={n} />
+                  ))}
+                </datalist>
+              </>
             )}
             {choice === "anthropic" && (
               <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder="Anthropic API key (sk-ant-…)" className={field} style={inputStyle} />
