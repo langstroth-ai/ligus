@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formOllamaListEnabled } from "./ModelsSection";
+import { formOllamaListEnabled, providerForGateway } from "./ModelsSection";
 
 describe("formOllamaListEnabled", () => {
   const base = { provider: "ollama", endpoint: "", ollamaConfigured: false, asked: false };
@@ -13,5 +13,19 @@ describe("formOllamaListEnabled", () => {
   });
   it("only for the Ollama provider", () => {
     expect(formOllamaListEnabled({ ...base, provider: "anthropic", asked: true })).toBe(false);
+  });
+});
+
+describe("providerForGateway", () => {
+  it("turns an HTTP provider into OpenAI-compatible once a gateway is picked", () => {
+    expect(providerForGateway("ollama", "litellm")).toBe("custom");
+    expect(providerForGateway("openAI", "litellm")).toBe("custom");
+  });
+  it("keeps a CLI harness, which routes its own calls through the gateway", () => {
+    expect(providerForGateway("claude-code", "claude-gw")).toBe("claude-code");
+    expect(providerForGateway("codex", "litellm")).toBe("codex");
+  });
+  it("leaves the provider alone without a gateway", () => {
+    expect(providerForGateway("ollama", "")).toBe("ollama");
   });
 });
