@@ -252,7 +252,7 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
                 ctx.skip("runtime", "runtime", format!("would define runtime '{id}'"));
             } else {
                 if let Err(e) = ops.add_runtime(&spec) {
-                    return ctx.fail("runtime", "runtime", format!("couldn't define runtime '{id}': {e}"), "ligus doctor checks this device", ops_code(&e));
+                    return ctx.fail("runtime", "runtime", format!("couldn't define runtime '{id}': {e}"), "fix what it says and run this again", ops_code(&e));
                 }
                 let rid = id.clone();
                 ctx.undo(format!("runtime '{id}'"), Box::new(move |o| o.remove_runtime(&rid)));

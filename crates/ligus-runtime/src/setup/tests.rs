@@ -193,6 +193,33 @@ fn agent_names_follow_the_rules() {
 }
 
 #[test]
+fn a_passkey_refusal_is_a_persons_step_with_where_to_do_it() {
+    // The CLI has no passkey: the rules hold the runtime for its author's
+    // confirmation. That is a person's step (exit 4), not a refusal (6), and
+    // the fix says where to confirm it, not "ligus doctor".
+    let mut f = Fake { needs_presence: vec!["add_runtime"], ..Fake::default() };
+    let o = run_(FlowId::Agent, &mut f, AGENT);
+    assert_eq!(o.exit, exit::PERSON);
+    let c = o.report.checks.iter().find(|c| c.id == "agent.runtime").expect("runtime check");
+    assert_eq!(c.status, Status::Warn);
+    let fix = c.fix.clone().unwrap_or_default();
+    assert!(fix.contains("desktop app") && fix.contains("--recovery-words-file"), "{fix}");
+    assert!(!fix.contains("doctor"), "{fix}");
+    assert!(o.report.next.iter().any(|n| n.contains("desktop app")), "{:?}", o.report.next);
+    assert!(f.writes.is_empty());
+
+    // On a surface with a passkey (a cancelled ceremony), the line says to
+    // confirm it, and never names a command-line flag.
+    let mut f = Fake { surface: Surface::Desktop, needs_presence: vec!["add_agent"], ..Fake::default() };
+    let o = run_(FlowId::Agent, &mut f, AGENT);
+    assert_eq!(o.exit, exit::PERSON);
+    let c = o.report.checks.iter().find(|c| c.id == "agent.agent").expect("agent check");
+    assert!(!c.fix.clone().unwrap_or_default().contains("--recovery-words-file"));
+    // A person's step keeps what came before it: the rerun reuses the runtime.
+    assert_eq!(f.writes, ["add_runtime claude-code-sonnet"]);
+}
+
+#[test]
 fn a_failed_agent_write_rolls_the_runtime_back() {
     let mut f = Fake { fail: vec!["add_agent"], ..Fake::default() };
     let o = run_(FlowId::Agent, &mut f, AGENT);

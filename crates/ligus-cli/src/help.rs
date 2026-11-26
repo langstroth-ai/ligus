@@ -430,8 +430,12 @@ pub const COMMANDS: &[Cmd] = &[
                   done on this device, from the same engine the desktop's Set up commands use. `ligus setup <flow> \
                   --help` shows a flow's flags. Every flow checks first, writes only when every check passed, is safe \
                   to run again, and stops with exit 4 at a step only a person can do. `ligus help setup` is the guide.",
-        synopsis: &["ligus setup [--json]", "ligus setup <flow> [flags] [--json] [--dry-run]"],
-        flags: &[JSON, f("--apply", "off", "the earlier `ligus setup --apply`: now `ligus setup runtimes --apply`")],
+        synopsis: &["ligus setup [--json]", "ligus setup <flow> [flags] [--recovery-words-file PATH] [--json] [--dry-run]"],
+        flags: &[
+            JSON,
+            f("--apply", "off", "the earlier `ligus setup --apply`: now `ligus setup runtimes --apply`"),
+            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence for a step that needs your passkey"),
+        ],
         examples: &["ligus setup", "ligus setup agent --harness claude-code --name builder", "ligus setup --json | jq '.checks[] | {id, status}'"],
         exit: &[(0, "listed (setup never fails a listing)")],
         see_also: &["ligus help setup", "ligus doctor", "desktop: ⌘K > Set up an agent (and the other Set up commands)"],
@@ -446,7 +450,7 @@ pub const COMMANDS: &[Cmd] = &[
                   member's), pick the model, reuse a keyless workspace runtime with that harness and model or define one \
                   (Admin), create the agent (Contributor), and optionally send one test turn. A failure after the \
                   runtime was defined removes it again.",
-        synopsis: &["ligus setup agent --harness H --name NAME [--model M] [--endpoint URL | --gateway NAME] [--test-turn] [--json] [--dry-run]"],
+        synopsis: &["ligus setup agent --harness H --name NAME [--model M] [--endpoint URL | --gateway NAME] [--test-turn] [--recovery-words-file PATH] [--json] [--dry-run]"],
         flags: &[
             f("--harness H", "required", "claude-code, codex, copilot, antigravity, aider, pi, local (Ollama or OpenAI-compatible) or gateway"),
             f("--name NAME", "required", "the agent's @name"),
@@ -454,6 +458,7 @@ pub const COMMANDS: &[Cmd] = &[
             f("--endpoint URL", "http://localhost:11434", "local only: the model server (https://, or http:// on this machine)"),
             f("--gateway NAME", "none", "gateway only: a model gateway a host offers (ligus hosts)"),
             f("--test-turn", "off", "send one short test message and check the reply"),
+            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence when the workspace's rules need your passkey"),
             JSON,
             DRY_RUN,
         ],
@@ -463,7 +468,13 @@ pub const COMMANDS: &[Cmd] = &[
             "ligus setup agent --harness local --model llama3.2 --name local --dry-run",
             "ligus setup agent --harness codex --name reviewer --json",
         ],
-        exit: &[(2, "a missing or invalid flag (the check names it)"), (3, "the harness isn't installed or signed in, or no agent sandbox"), (6, "your role can't add an agent or a workspace runtime"), (7, "a local model server didn't answer")],
+        exit: &[
+            (2, "a missing or invalid flag (the check names it)"),
+            (3, "the harness isn't installed or signed in, or no agent sandbox"),
+            (4, "the workspace's rules need your passkey: do it in the desktop app, or pass --recovery-words-file"),
+            (6, "your role can't add an agent or a workspace runtime"),
+            (7, "a local model server didn't answer"),
+        ],
         see_also: &["ligus setup", "ligus add-agent", "ligus runtimes", "ligus doctor --sandbox"],
         ..D
     },
@@ -2568,6 +2579,10 @@ Exit codes: 0 done; 1 a write or a check failed; 2 a missing or invalid flag; 3 
 tool, a sign-in or the agent sandbox is missing (the fix says how); 4 a person must
 act (a passkey approval, pairing, creating an invite): stop and ask; 6 your role or
 the workspace lockdown refuses it; 7 the relay or the server didn't answer.
+
+A workspace with stricter device rules holds some writes (a workspace runtime, a
+repository) for your passkey. The CLI has none: do that step in the desktop app, or
+pass --recovery-words-file PATH (your recovery key's 24 words, an owner-only file).
 
 Who may run what: adding an agent needs a Contributor (defining a workspace runtime
 for it, an Admin); connecting a tool and binding a folder a Contributor; adding a

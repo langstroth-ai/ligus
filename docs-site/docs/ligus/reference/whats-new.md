@@ -8,6 +8,14 @@ Full release notes are on the
 
 ### Fixed
 
+- **`ligus setup` says where to confirm a step that needs your passkey.**
+  In a workspace with stricter device rules, adding an agent from the
+  command line stopped with "refused" (exit 6) and pointed at `ligus
+  doctor`, which can't help. It now stops as a person's step (exit 4) and
+  says to do it in the desktop app, or to run it again with
+  `--recovery-words-file PATH`, which `ligus setup` now accepts. See
+  [Set up](../getting-started/set-up.md).
+
 - **A reply written after you answer an agent's question reads after your
   answer.** An agent's reply is stamped with when it was posted (when its
   turn finished), not when the turn started, on the desktop and the phone. On

@@ -154,6 +154,12 @@ the shared table: 0 done, 1 failed, 2 a missing or invalid flag, 3 a tool,
 sign-in or sandbox to fix, 4 a person must act, 6 refused by your role or
 the lockdown, 7 the relay or server didn't answer.
 
+In a workspace with stricter device rules, some writes (a workspace runtime
+for a new agent, a repository) need your passkey. The CLI has none, so such a
+step stops with exit 4 and says so: do it in the desktop app, or run the flow
+again with `--recovery-words-file PATH` (your recovery key's 24 words, in a
+file only you can read).
+
 ```sh
 ligus setup agent --harness claude-code --name builder --json | jq '.done'
 ligus setup tool --id notes --command "npx -y @modelcontextprotocol/server-filesystem ~/notes" --reach builder

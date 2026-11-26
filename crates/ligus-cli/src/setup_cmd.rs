@@ -101,6 +101,15 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
         match a {
             "--json" => json = true,
             "--dry-run" => dry_run = true,
+            // Your presence for a write the rules hold for its author's
+            // passkey (a workspace runtime, a repository): the CLI has no
+            // passkey, so the recovery key confirms it, as for approvals.
+            "--recovery-words-file" => {
+                let path = rest.get(i).ok_or_else(|| help::usage_error("--recovery-words-file needs a path"))?;
+                i += 1;
+                let key = crate::secret_arg::recovery_key_from_file(Path::new(path))?;
+                ops.svc.set_presence_provider(Some(std::sync::Arc::new(crate::admit::RecoveryPresence(key))));
+            }
             _ if !a.starts_with("--") => {
                 if !seen_flow && a == flow.as_str() {
                     seen_flow = true;
