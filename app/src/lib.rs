@@ -5563,7 +5563,8 @@ fn my_device_rows(
         .filter(|d| seen.insert(d.device_id))
         .map(|d| {
             let host = host(d.device_id);
-            let label = device_label(d.device_id, here, host.as_ref().map(|h| h.0.as_str()), phone_labels);
+            let phone = is_phone(d.device_id);
+            let label = device_label(d.device_id, here, host.as_ref().map(|h| h.0.as_str()), phone_labels, phone, d.certified_at);
             let named = host.as_ref().is_some_and(|h| !shown(&h.0).trim().is_empty())
                 || phone_labels.get(&d.device_id.to_string()).is_some_and(|l| !shown(l).trim().is_empty());
             MyDeviceDto {
@@ -5573,7 +5574,7 @@ fn my_device_rows(
                 this_device: d.device_id == here,
                 revoked: d.revoked,
                 last_seen: host.map(|h| h.1),
-                phone: is_phone(d.device_id),
+                phone,
                 named,
                 note: None,
                 never_written: false,
@@ -5608,14 +5609,35 @@ pub(crate) fn list_device_requests_sync(state: State<AppState>) -> Result<Vec<De
 }
 
 /// What My devices calls a device: its host's label, else the name a phone
-/// gave itself when this desktop added it, else "This device" or "Device
-/// <first 8 of its id>".
-fn device_label(device: Uuid, here: Uuid, host_label: Option<&str>, phone_labels: &HashMap<String, String>) -> String {
+/// gave itself when this desktop added it, else "This device", else what it
+/// is and when it was added ("Phone · added 24 Nov", "Computer · approved 24
+/// Nov"). Never its id: the fingerprint is behind Details.
+fn device_label(
+    device: Uuid,
+    here: Uuid,
+    host_label: Option<&str>,
+    phone_labels: &HashMap<String, String>,
+    phone: bool,
+    certified_at: Option<ligus_core::Timestamp>,
+) -> String {
     host_label
         .map(shown)
         .filter(|l| !l.trim().is_empty())
         .or_else(|| phone_labels.get(&device.to_string()).map(|l| shown(l)).filter(|l| !l.trim().is_empty()))
-        .unwrap_or_else(|| if device == here { "This device".into() } else { format!("Device {}", &device.to_string()[..8]) })
+        .unwrap_or_else(|| if device == here { "This device".into() } else { unnamed_device_label(phone, certified_at) })
+}
+
+/// An unnamed device's name: its kind and the day it was added.
+fn unnamed_device_label(phone: bool, certified_at: Option<ligus_core::Timestamp>) -> String {
+    let (kind, verb) = if phone { ("Phone", "added") } else { ("Computer", "approved") };
+    match certified_at {
+        Some(at) => {
+            let d = at.inner().date();
+            let month = d.month().to_string();
+            format!("{kind} \u{00B7} {verb} {} {}", d.day(), &month[..3])
+        }
+        None => kind.into(),
+    }
 }
 
 #[cfg(test)]
@@ -5624,7 +5646,7 @@ mod my_devices_tests {
     use ligus_runtime::device_enroll::OwnDevice;
 
     fn dev(id: Uuid) -> OwnDevice {
-        OwnDevice { device_id: id, fingerprint: "AAAA".into(), revoked: false, also_certified_by: Vec::new() }
+        OwnDevice { device_id: id, fingerprint: "AAAA".into(), revoked: false, also_certified_by: Vec::new(), certified_at: Some(ligus_core::Timestamp::from_unix_seconds(1_795_521_600)) }
     }
 
     /// One row per device id, under the newest name this desktop was given
@@ -5642,7 +5664,10 @@ mod my_devices_tests {
         assert_eq!(p.label, "Ana's iPhone");
         assert!(p.phone && p.named && !p.this_device);
         let o = rows.iter().find(|r| r.device_id == other.to_string()).unwrap();
-        assert!(!o.named && !o.phone && o.label.starts_with("Device "));
+        assert!(!o.named && !o.phone);
+        // An unnamed device says what it is and when, never its id.
+        assert_eq!(o.label, "Computer \u{00B7} approved 24 Nov");
+        assert!(!o.label.contains(&other.to_string()[..8]));
         let h = rows.iter().find(|r| r.this_device).unwrap();
         assert_eq!(h.label, "This device");
     }
@@ -5668,13 +5693,15 @@ mod my_devices_tests {
 pub(crate) fn my_device_labels(svc: &ChatService, ws: Uuid, phone_labels: &HashMap<String, String>) -> Vec<(Uuid, String)> {
     let here = svc.device_id();
     let hosts = svc.list_hosts(ws).unwrap_or_default();
+    let roster = svc.store().load_config(ws, None, None).map(|(_, t)| t.current().clone()).ok();
+    let is_phone = |d: Uuid| roster.as_ref().is_some_and(|r| r.devices.get(&d).is_some_and(|x| x.phone));
     svc.own_devices(ws)
         .unwrap_or_default()
         .into_iter()
         .filter(|d| !d.revoked)
         .map(|d| {
             let host = hosts.iter().find(|h| h.id == d.device_id.to_string());
-            (d.device_id, device_label(d.device_id, here, host.map(|h| h.label.as_str()), phone_labels))
+            (d.device_id, device_label(d.device_id, here, host.map(|h| h.label.as_str()), phone_labels, is_phone(d.device_id), d.certified_at))
         })
         .collect()
 }
@@ -10152,6 +10179,26 @@ pub(crate) fn agent_turn_allowed(state: &AppState, session_id: Uuid, workspace_i
 /// device: wait out [`DEFERRED_CLAIM_TIMEOUT`], then ask the dispatcher as an
 /// eligible device (it claims an unclaimed turn, or hands over one whose
 /// holder went silent).
+/// The chat line for a turn whose agent is bound to a host that is offline:
+/// "@agy runs on lt on Ana's MacBook Air, which is offline."
+fn offline_host_line(agent: &str, host_label: Option<&str>) -> String {
+    let who = agent.trim().trim_start_matches('@');
+    let host = host_label.map(shown).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| "another device".into());
+    format!("@{who} runs on {host}, which is offline.")
+}
+
+/// Whether the same offline line is already the last note before `trigger`
+/// with no reply since: one line while the host stays offline, not one per
+/// message.
+fn offline_line_already_shown(session: &ligus_core::ChatSession, trigger: Uuid, line: &str) -> bool {
+    let Some(at) = session.messages.iter().position(|m| m.id == trigger) else { return false };
+    session.messages[..at]
+        .iter()
+        .rev()
+        .find(|m| m.role != MessageRole::User)
+        .is_some_and(|m| m.role == MessageRole::System && m.body == line)
+}
+
 fn arm_deferred_claim_fallback(
     app: &AppHandle,
     session_id: Uuid,
@@ -10413,6 +10460,16 @@ async fn send_message(
             // fallback, or a slow turn there would be answered twice.
             let host_live = binding == HostBinding::Elsewhere
                 && host_online(&state, workspace_id, &responder.host_id);
+            // Never a silent skip: an agent bound to a host that is offline
+            // says so in the chat, in one line (once while it stays offline).
+            if depth == 0 && binding == HostBinding::Elsewhere && !host_live {
+                let mut svc = state.service.lock().unwrap();
+                let label = svc.list_hosts(workspace_id).ok().and_then(|hs| hs.into_iter().find(|h| h.id == responder.host_id)).map(|h| h.label);
+                let line = offline_host_line(&responder.author, label.as_deref());
+                if !offline_line_already_shown(&session, trigger_id, &line) {
+                    let _ = svc.post_system_note(sid, workspace_id, line);
+                }
+            }
             if depth == 0 && !host_live && !stop.is_stopped() {
                 arm_deferred_claim_fallback(&app, sid, workspace_id, trigger_id);
             }
@@ -17396,6 +17453,33 @@ mod dispatch_ownership_tests {
         let trigger_id = trigger.id;
         s.messages = vec![trigger];
         (s, trigger_id)
+    }
+
+    #[test]
+    fn an_agent_on_an_offline_host_says_so_once() {
+        use super::{offline_host_line, offline_line_already_shown};
+        let line = offline_host_line("agy", Some("lt on Michael's MacBook Air"));
+        assert_eq!(line, "@agy runs on lt on Michael's MacBook Air, which is offline.");
+        assert_eq!(offline_host_line("@agy", None), "@agy runs on another device, which is offline.");
+
+        // The first message gets the line; the next one, with no reply in
+        // between, doesn't get a second.
+        let (mut s, first) = deferred_session();
+        assert!(!offline_line_already_shown(&s, first, &line));
+        s.messages.push(ChatMessage::new(MessageRole::System, "Ligus", line.clone()));
+        let second = ChatMessage::new(MessageRole::User, "Michael", "again");
+        let second_id = second.id;
+        s.messages.push(second);
+        assert!(offline_line_already_shown(&s, second_id, &line));
+
+        // After a reply, a new offline spell says it again.
+        let mut reply = ChatMessage::new(MessageRole::Assistant, "agy", "back");
+        reply.reply_to_message_id = Some(second_id);
+        s.messages.push(reply);
+        let third = ChatMessage::new(MessageRole::User, "Michael", "and now?");
+        let third_id = third.id;
+        s.messages.push(third);
+        assert!(!offline_line_already_shown(&s, third_id, &line));
     }
 
     #[test]

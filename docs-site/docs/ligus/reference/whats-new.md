@@ -8,6 +8,31 @@ Full release notes are on the
 
 ### Fixed
 
+- **An agent whose host is offline says so in the chat.** Writing to an
+  agent that runs on another device used to do nothing visible while that
+  device was off. The chat now shows one line, for example "@agy runs on
+  lt on Ana's MacBook Air, which is offline", once while it stays offline.
+- **Devices are never named by a hex id.** A device with no name shows
+  what it is and when it was added, such as "Phone · added 24 Nov" or
+  "Computer · approved 24 Nov". Its fingerprint is under Details.
+- **Errors aren't lost behind other messages.** When several notices
+  arrive at once, notes and confirmations make room first, and many
+  errors fold into one "N problems" notice whose Show opens the error log.
+- **First run points a second computer at what works.** The hint for
+  people who already use Ligus now says to link this computer from lt or
+  `ligus devices request`; a second desktop app can't link itself yet.
+- **Closing a new workspace before it's secured asks first.** The ✕
+  during Secure now asks "Finish later?" and says what stays locked until
+  you add your passkey and recovery key (Settings → Passkeys & keys).
+- **The relay roster line in People can be hidden.** Its ✕ hides it on
+  this device for that workspace. It comes back if the relay starts
+  refusing this device.
+- **The phone says the right pairing command, and push you never turned
+  on isn't red.** The phone's pairing screen says `ligus pair` (run on your
+  box) instead of `ligus serve --pair`. On Health, a Push row that was
+  never set up reads grey "Not set up", or "Not available in this build",
+  with a short how behind ?. The box reports it the same way. Red now only
+  means something that's on is failing.
 - **Add an agent picks where it runs in the same step.** "Runs on" lists
   this device, your always-on boxes (`ligus serve` and workers) and your
   other computers, and saving writes the agent and its host together, so

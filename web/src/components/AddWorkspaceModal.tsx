@@ -40,6 +40,14 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
   const [securing, setSecuring] = useState<WorkspaceInfoDto | null>(null);
   const [hasPasskey, setHasPasskey] = useState(false);
   const [words, setWords] = useState<string | null>(null);
+  // Closing half-way through Secure asks first: until it's done, inviting,
+  // adding repositories, runtimes or agents and revoking devices all wait
+  // for a passkey that doesn't exist yet.
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const requestClose = () => {
+    if (securing) setConfirmLeave(true);
+    else onClose();
+  };
 
   const workspaces = useQuery({
     queryKey: ["workspaces"],
@@ -202,7 +210,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
 
   return (
     <Modal
-      onClose={onClose}
+      onClose={requestClose}
       overlayClassName="z-[900] flex items-center justify-center p-4"
       overlayStyle={{ background: "color-mix(in srgb, var(--ligus-ink) 45%, transparent)" }}
       panelClassName="w-full max-w-md rounded-2xl border p-5 shadow-2xl"
@@ -210,7 +218,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
     >
       <div className="mb-3 flex items-center justify-between">
         <h2 className="ligus-title">Add workspace</h2>
-        <button className="text-ink-soft hover:text-ink" aria-label="Close" onClick={onClose}>
+        <button className="text-ink-soft hover:text-ink" aria-label="Close" onClick={requestClose}>
           ✕
         </button>
       </div>
@@ -231,7 +239,33 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
         ))}
       </div>
 
-      {securing ? (
+      {securing && confirmLeave ? (
+        <div className="space-y-3" data-testid="secure-finish-later">
+          <p className="text-sm font-semibold">Finish later?</p>
+          <p className="text-xs text-ink-soft">
+            Until “{securing.name}” has your passkey and recovery key, inviting people and other changes that need
+            your passkey stay locked. Finish it any time in Settings → Passkeys & keys.
+          </p>
+          <button
+            onClick={() => setConfirmLeave(false)}
+            className="w-full rounded-lg px-3 py-2 text-sm font-semibold"
+            style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
+          >
+            Keep going
+          </button>
+          <button
+            onClick={() => {
+              setConfirmLeave(false);
+              setSecuring(null);
+              setWords(null);
+              onClose();
+            }}
+            className="w-full rounded-lg px-3 py-2 text-sm text-ink-soft hover:text-ink"
+          >
+            Finish later
+          </button>
+        </div>
+      ) : securing ? (
         <div className="space-y-3" data-testid="secure-workspace">
           <p className="text-sm font-semibold">Secure “{securing.name}”</p>
           <p className="text-xs text-ink-soft">
