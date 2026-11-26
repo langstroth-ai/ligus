@@ -18,6 +18,9 @@ Full release notes are on the
 - **Errors aren't lost behind other messages.** When several notices
   arrive at once, notes and confirmations make room first, and many
   errors fold into one "N problems" notice whose Show opens the error log.
+- **Closing a new workspace before it's secured asks first.** The ✕
+  during Secure now asks "Finish later?" and says what stays locked until
+  you add your passkey and recovery key (Settings → Passkeys & keys).
 - **The relay roster line in People can be hidden.** Its ✕ hides it on
   this device for that workspace. It comes back if the relay starts
   refusing this device.

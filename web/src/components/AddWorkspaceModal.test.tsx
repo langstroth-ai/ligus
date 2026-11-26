@@ -34,11 +34,11 @@ vi.mock("@/components/Toast", () => ({
   errMsg: (e: unknown) => String(e),
 }));
 
-function renderIt() {
+function renderIt(onClose = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <AddWorkspaceModal open onClose={vi.fn()} />
+      <AddWorkspaceModal open onClose={onClose} />
     </QueryClientProvider>,
   );
 }
@@ -47,6 +47,23 @@ const getConn = ipc.getConnectionSettings as unknown as ReturnType<typeof vi.fn>
 
 describe("AddWorkspaceModal relay choice", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("asks before closing half-way through Secure, and Keep going returns to it", async () => {
+    getConn.mockResolvedValue(conn("https://relay.acme.example"));
+    const onClose = vi.fn();
+    renderIt(onClose);
+    await userEvent.type(await screen.findByPlaceholderText(/Workspace name/), "Acme");
+    await userEvent.click(screen.getByRole("button", { name: "Create workspace" }));
+    await screen.findByTestId("secure-workspace");
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText("Finish later?")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Keep going" }));
+    expect(screen.getByTestId("secure-workspace")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    await userEvent.click(screen.getByRole("button", { name: "Finish later" }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
 
   it("with no relay set, preselects the community relay and creates on it", async () => {
     getConn.mockResolvedValue(conn(""));
