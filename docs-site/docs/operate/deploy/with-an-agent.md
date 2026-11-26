@@ -29,7 +29,7 @@ Ask, for example: *"Deploy Ligus on my OrbStack cluster as a trial"*, or
 | Secrets | creates a throwaway workspace Secret for a trial | for a real workspace, write `room`, `key` (and a relay token) as files in a private directory; the agent only passes its path |
 | Render, server-side dry run, install, wait | runs `ligus-k8s install --dry-run`, then without | review the dry-run summary for a team install |
 | Verify | `ligus-k8s verify` / `ligus-local verify` | |
-| Enroll, passkeys, invites | | `ligus enroll` with the invite, desktop sign-in, approving devices |
+| Admitting the box, passkeys, invites | sends the box's join request (`ligus admit request --to ligusaddr1:…`) | approve it on the desktop or phone with your passkey (a box is its own member, never one of your devices); invites and approving devices |
 | Pair the phone, exposure, DNS and TLS | | yours |
 | Tear down | `teardown` / `uninstall` | revoke the device from a desktop; decide on key rotation |
 
@@ -78,7 +78,7 @@ the full operator guide is [Kubernetes (preview)](kubernetes.md).
 ```sh
 L=deploy/local/ligus-local
 $L preflight --role serve --data-dir ~/.ligus-serve --json
-$L configure --role serve --data-dir ~/.ligus-serve --json   # then you run ligus enroll
+$L configure --role serve --data-dir ~/.ligus-serve --json   # then admit the box: ligus admit request --to ligusaddr1:…, you approve it
 $L start --role serve --data-dir ~/.ligus-serve --json
 $L verify --role serve --data-dir ~/.ligus-serve --json
 $L stop --role serve --data-dir ~/.ligus-serve
