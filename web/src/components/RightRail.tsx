@@ -2222,6 +2222,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
             claiming={claimMutation.isPending}
             onClaim={claim}
             onToken={() => openSettingsTab("team-sync")}
+            scope={activeRoom?.id}
           />
         )}
         <RowList label="Members">

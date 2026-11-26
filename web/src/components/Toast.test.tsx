@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
-import { ToastHost, toast, errMsg, errorLogStore, _resetToasts } from "./Toast";
+import { ToastHost, toast, errMsg, errorLogStore, _resetToasts, setShowErrorLog } from "./Toast";
 import { ErrorLogSheet } from "./ErrorLogSheet";
 
 describe("errMsg", () => {
@@ -87,6 +87,39 @@ describe("toast store + host", () => {
     expect(screen.getAllByText("Relay unreachable")).toHaveLength(1);
     expect(screen.getByText(/3 more/)).toBeInTheDocument();
     expect(errorLogStore.snapshot().entries.map((e) => e.message)).toEqual(["Relay unreachable"]);
+  });
+
+  it("never drops an error behind other toasts: notes go first, then errors fold into one", () => {
+    render(<ToastHost />);
+    act(() => {
+      toast.info("visible note");
+      toast.error("setup failed");
+      for (let i = 0; i < 5; i++) toast.success(`saved ${i}`);
+    });
+    // The waiting successes made room; the error still waits.
+    expect(screen.getByText(/3 more/)).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(4000));
+    expect(screen.getByText("setup failed")).toBeInTheDocument();
+  });
+
+  it("folds many waiting errors into one summary that opens the log", () => {
+    const open = vi.fn();
+    setShowErrorLog(open);
+    render(<ToastHost />);
+    act(() => {
+      toast.error("first");
+      for (let i = 0; i < 6; i++) toast.error(`problem ${i}`);
+    });
+    // One visible, three waiting: two single errors and one summary of the rest.
+    expect(screen.getByText(/3 more/)).toBeInTheDocument();
+    expect(errorLogStore.snapshot().entries).toHaveLength(7);
+    act(() => vi.advanceTimersByTime(7000));
+    expect(screen.getByText("4 problems")).toBeInTheDocument();
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Show" }));
+    });
+    expect(open).toHaveBeenCalledOnce();
+    setShowErrorLog(undefined);
   });
 
   it("keeps every error in a log you can reopen after the toast is gone", () => {
