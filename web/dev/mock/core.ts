@@ -11,8 +11,11 @@
 //   (a model picked for the Copilot runtime) &modelproblem=1 (Copilot's
 //   model failed as unavailable: the composer's one-line note)
 //   &noagents=1 (no agents, MCP servers or hosts: the panes' Set up actions)
+//   &approvals=box|computer|contested|several|mismatch (code-match approval
+//   requests in the Inbox; dev/mock/approvals.ts)
 import * as fx from "./fixtures";
 import { setupMock } from "./setup";
+import { approvalsMock } from "./approvals";
 
 const params = new URLSearchParams(window.location.search);
 const scenario = params.get("scenario") ?? "default";
@@ -44,6 +47,8 @@ function handle(cmd: string, args: Args): unknown {
   const sid = (args?.sessionId as string) ?? "";
   const setup = setupMock(cmd, args);
   if (setup.handled) return setup.value;
+  const approvals = approvalsMock(cmd, args);
+  if (approvals.handled) return approvals.value;
   switch (cmd) {
     case "export_theme":
       return `/Users/you/Downloads/${String(args?.fileName ?? "theme.toml")}`;

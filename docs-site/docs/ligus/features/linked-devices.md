@@ -32,9 +32,10 @@ screens show the same 8-symbol code to compare.
     It prints the link request and its fingerprint straight away (an older
     desktop can still [paste it](#paste)), then waits for your desktop.
 
-3. **On your desktop**, the Inbox shows "work-laptop wants to be your
-    device". Open it: the sheet **Add work-laptop to your devices?** shows a
-    code, and the computer prints the same one:
+3. **On your desktop**, the Inbox shows "A computer asks to be your
+    device: “work-laptop”". Open it: the sheet **Add a computer to your
+    devices?**, with “work-laptop” beneath, shows a code, and the computer
+    prints the same one:
 
     ```text
     Code: K7Q4 M9X2  (the approver's screen must show the same)

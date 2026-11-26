@@ -47,6 +47,7 @@ mod passkey_native;
 mod passkey_ui;
 mod phone_enroll_ui;
 mod phones_ui;
+mod approvals_ui;
 mod people;
 mod links_ui;
 mod agent_iface;
@@ -5298,6 +5299,22 @@ pub(crate) fn add_computer_sync(state: State<AppState>, request: String, fingerp
         return Err("The fingerprint changed: paste the computer's request again and compare.".into());
     }
     let ws = state.active_workspace_id();
+    let conn = computer_link_conn(&state, ws)?;
+    let mut svc = state.service.lock().unwrap();
+    let previous = svc.preview_computer_link(ws, &req).ok().and_then(|p| p.previous_member);
+    let grant = svc.issue_computer_link(ws, &req, &conn, ligus_core::flow::now_ms()).map_err(map_err)?;
+    tracing::info!(target: "identity", device = %req.device_id, "added a computer as this account's device");
+    Ok(ComputerGrantDto {
+        grant,
+        expires_in_minutes: ligus_runtime::computer_link::GRANT_TTL_MS / 60_000,
+        this_desktop: ligus_runtime::device_enroll::fingerprint(&svc.device_public_key()),
+        previous_member: previous.map(|m| DeviceMemberDto { member_id: m.id, display_name: shown(&m.actor.display_name) }),
+    })
+}
+
+/// The workspace connection (`hivews1:`, no invite, with the epoch keys)
+/// a computer's grant carries, for team workspace `ws`.
+pub(crate) fn computer_link_conn(state: &AppState, ws: Uuid) -> Result<String, String> {
     let mut conn = {
         let s = state.settings.lock().unwrap();
         s.workspaces.iter().find(|w| w.id() == ws).cloned().ok_or_else(|| "Add a computer to a team workspace (this one is on this device only).".to_string())?
@@ -5309,17 +5326,7 @@ pub(crate) fn add_computer_sync(state: State<AppState>, request: String, fingerp
         return Err(problem);
     }
     conn.inv = None;
-    let conn = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, conn)));
-    let mut svc = state.service.lock().unwrap();
-    let previous = svc.preview_computer_link(ws, &req).ok().and_then(|p| p.previous_member);
-    let grant = svc.issue_computer_link(ws, &req, &conn, ligus_core::flow::now_ms()).map_err(map_err)?;
-    tracing::info!(target: "identity", device = %req.device_id, "added a computer as this account's device");
-    Ok(ComputerGrantDto {
-        grant,
-        expires_in_minutes: ligus_runtime::computer_link::GRANT_TTL_MS / 60_000,
-        this_desktop: ligus_runtime::device_enroll::fingerprint(&svc.device_public_key()),
-        previous_member: previous.map(|m| DeviceMemberDto { member_id: m.id, display_name: shown(&m.actor.display_name) }),
-    })
+    Ok(encode_workspace_invite(&sign_invite(state, with_epoch_keys(state, conn))))
 }
 
 /// Remove the separate member a just-added computer proved it was (Add a
@@ -16611,6 +16618,8 @@ pub fn run() {
             // List this desktop as an online Device host in the synced room, so
             // the phone (via `ligus serve`) can tell whether @ligus can answer now.
             tauri::async_runtime::spawn(run_device_host_loop(app.handle().clone()));
+            // Code-match approval: list the team workspaces' approval mailboxes.
+            tauri::async_runtime::spawn(crate::approvals_ui::run_poll_loop(app.handle().clone()));
             tauri::async_runtime::spawn(flow::run_tick(app.handle().clone()));
             // DM invites held for a peer whose contact id wasn't known yet.
             tauri::async_runtime::spawn(crate::people::run_held_dm_loop(app.handle().clone()));
@@ -16688,6 +16697,19 @@ pub fn run() {
             chat_models::set_chat_model,
             chat_models::chat_model_problem,
             phones_ui::certify_phone_code,
+            approvals_ui::list_approvals,
+            approvals_ui::approval_dismiss_fact,
+            approvals_ui::get_approval_address,
+            approvals_ui::reset_approval_address,
+            approvals_ui::approval_match_paste,
+            approvals_ui::approval_session,
+            approvals_ui::approval_open,
+            approvals_ui::approval_codes_match,
+            approvals_ui::approval_dont_match,
+            approvals_ui::approval_expire,
+            approvals_ui::approval_end,
+            approvals_ui::approval_decline,
+            approvals_ui::approval_forget,
             phone_enroll_ui::phone_enroll_precheck,
             phone_enroll_ui::phone_enroll_offer_start,
             phone_enroll_ui::phone_enroll_offer_show,
