@@ -61,6 +61,7 @@ pub mod phone_enroll_api;
 pub mod presence_api;
 pub mod proposal_file;
 pub mod repos_api;
+pub mod scratch_api;
 pub mod sets;
 pub mod tunnel;
 pub mod typing_api;
@@ -1272,6 +1273,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         tasks.push(tokio::spawn(approvals_api::poll_loop(shared.clone(), rx.clone())));
     }
     tasks.push(tokio::spawn(dms::dm_sync_loop(shared.clone(), rx.clone())));
+    tasks.push(tokio::spawn(scratch_api::sweep_loop(shared.clone(), rx.clone())));
     tasks.push(tokio::spawn(contacts_api::held_loop(shared.clone(), rx.clone())));
     tasks.push(tokio::spawn(typing_api::typing_loop(shared.clone(), rx.clone())));
     tasks.push(tokio::spawn(token_watch(shared.clone(), rx.clone())));

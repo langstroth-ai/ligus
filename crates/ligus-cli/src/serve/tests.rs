@@ -2147,6 +2147,8 @@ struct FakeGitHub {
     parents: std::collections::HashMap<String, (String, String, String)>,
     creds: Arc<dyn ligus_forge::CredentialSource>,
     id: ligus_forge::ForgeId,
+    /// Repositories created ("owner/name"), always private.
+    created: Mutex<Vec<String>>,
 }
 
 /// The fake's credentials: the box's gh login, signed in or not.
@@ -2180,6 +2182,7 @@ impl FakeGitHub {
             parents: Default::default(),
             creds: Arc::new(FakeCreds(available)),
             id: ligus_forge::ForgeId::github_com(),
+            created: Mutex::new(Vec::new()),
         }
     }
 }
@@ -2272,6 +2275,16 @@ impl ligus_forge::Forge for FakeGitHub {
     }
     async fn create_fork(&self, _: &ligus_forge::RepoRef) -> ligus_forge::Result<ligus_forge::RepoRef> {
         panic!("this host never creates forks")
+    }
+    async fn create_private_repo(&self, owner: &str, _login: &str, name: &str) -> ligus_forge::Result<ligus_forge::RepoRef> {
+        let bare = self.remotes.join(owner).join(format!("{name}.git"));
+        if bare.exists() {
+            return Err(ligus_forge::ForgeError::Rejected("name already exists on this account".into()));
+        }
+        std::fs::create_dir_all(&bare).unwrap();
+        crate::repos::git_out(&bare, &["init", "--bare", "-q"]);
+        self.created.lock().unwrap().push(format!("{owner}/{name}"));
+        Ok(ligus_forge::RepoRef::new(owner, name))
     }
     async fn open_change_request(&self, d: &ligus_forge::ChangeRequestDraft) -> ligus_forge::Result<ligus_forge::ChangeRequestOutcome> {
         let mut prs = self.prs.lock().unwrap();
@@ -5230,6 +5243,7 @@ mod approvals;
 mod box_removal;
 mod devices_link;
 mod foreign_certificate;
+mod scratch;
 
 /// Archiving from the phone (0.4): a settled proposal is archived for
 /// everyone with the `archive` action (signed by the phone's own key), drops

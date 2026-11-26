@@ -25,6 +25,7 @@ import { Sheet } from "@/components/kit/Sheet";
 import { MoreMenu } from "@/components/MoreMenu";
 import { useRowMenu } from "@/components/RowMenu";
 import { toast, errMsg } from "@/components/Toast";
+import { KeepScratchDialog, ScratchReposPart, ScratchTag, formatScratchDate } from "@/components/ScratchRepo";
 
 export const REPOS_KEY = ["workspace-repos"];
 
@@ -130,6 +131,8 @@ function AliasChip({ alias, accepted, onToggle }: { alias: string; accepted: boo
 
 function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceReposDto; refresh: () => void }) {
   const [cloning, setCloning] = useState(false);
+  const [keeping, setKeeping] = useState(false);
+  const scratchInfo = !r.removed && r.scratchInfo?.state === "live" ? r.scratchInfo : null;
   const run = async (what: string, f: () => Promise<unknown>) => {
     try {
       await f();
@@ -140,6 +143,7 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
   };
   const admin = data.canAdmin && !r.removed;
   const rm = useRowMenu(`Actions for ${r.name}`, [
+    ...(scratchInfo ? [{ label: "Keep it as a repo…", onSelect: () => setKeeping(true) }] : []),
     ...(!r.removed && r.here.path
       ? [{ label: "Unbind", onSelect: () => void run("Couldn't unbind it", () => unbindRepoCheckout(r.id, r.here.path!)) }]
       : []),
@@ -184,11 +188,13 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
       <div className="flex items-baseline justify-between gap-3">
         <div className="min-w-0">
           <div className="font-medium">
-            {r.name} {r.removed && <span className="text-xs text-ink-soft">(removed from this workspace)</span>}
+            {r.name} {r.scratch && !r.removed && <ScratchTag />}{" "}
+            {r.removed && <span className="text-xs text-ink-soft">(removed from this workspace)</span>}
           </div>
           <div className="truncate text-xs text-ink-soft">
             {r.canonical}
             {r.defaultBranch ? ` · ${r.defaultBranch}` : ""}
+            {scratchInfo?.removeAt ? ` · removed on ${formatScratchDate(scratchInfo.removeAt)} unless kept` : ""}
           </div>
           {r.lookalikeOf && (
             <div className="text-xs" style={{ color: "var(--ligus-accent-warm, orange)" }}>
@@ -281,6 +287,7 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
         </div>
       )}
       {rm.menu}
+      {keeping && scratchInfo && <KeepScratchDialog entry={scratchInfo} onClose={() => setKeeping(false)} />}
     </div>
   );
 }
@@ -354,6 +361,7 @@ export function RepositoriesSection() {
           </Sheet>
         )}
       </Section>
+      {data && <ScratchReposPart canAdmin={data.canAdmin} />}
       {data && <HostAliasesSection data={data} refresh={refresh} />}
       {data && (
         <Section

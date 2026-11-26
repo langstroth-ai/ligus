@@ -168,6 +168,7 @@ fn repo(canonical: &str, name: &str) -> WorkspaceRepo {
         forge_kind: String::new(),
         default_branch: "main".into(),
         root_commit: None,
+        scratch: false,
     }
 }
 
@@ -233,7 +234,7 @@ proptest! {
             let c = names[*which as usize];
             let e = match op {
                 0 => SessionEvent::WorkspaceRepoAdded { repo: repo(c, "R") },
-                1 => SessionEvent::WorkspaceRepoUpdated { repo_id: repo_id(c), display_name: format!("R{by}"), default_branch: "main".into() },
+                1 => SessionEvent::WorkspaceRepoUpdated { repo_id: repo_id(c), display_name: format!("R{by}"), default_branch: "main".into(), scratch: None },
                 _ => SessionEvent::WorkspaceRepoRemoved { repo_id: repo_id(c) },
             };
             w.push(by, e);

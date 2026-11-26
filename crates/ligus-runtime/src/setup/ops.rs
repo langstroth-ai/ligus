@@ -341,6 +341,13 @@ pub trait SetupOps {
     fn bind_folder(&mut self, repo_id: &str, path: &str) -> OpsResult<()> {
         Err(OpsError::Unsupported)
     }
+    /// Start with a scratch repository instead of a folder: an empty one
+    /// this host creates under its scratch root, registered as a workspace
+    /// repository flagged scratch and bound here (`repos::scratch_host`).
+    /// Returns its repo id and folder.
+    fn create_scratch(&mut self, name: &str) -> OpsResult<(String, String)> {
+        Err(OpsError::Unsupported)
+    }
 
     // box
     fn box_state(&self) -> OpsResult<BoxFact> {

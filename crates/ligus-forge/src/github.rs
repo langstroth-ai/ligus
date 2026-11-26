@@ -305,6 +305,31 @@ impl Forge for GitHub {
         meta(&v).map(|m| m.repo).ok_or_else(|| ForgeError::Transport("GitHub's fork answer had no repository".into()))
     }
 
+    async fn create_private_repo(&self, owner: &str, login: &str, name: &str) -> Result<RepoRef> {
+        if !spec::valid_segment(name) || name.ends_with(".git") || (!owner.is_empty() && !spec::valid_segment(owner)) {
+            return Err(ForgeError::Invalid("not a repository name".into()));
+        }
+        // Always private, never initialised (the scratch repo's history is
+        // pushed into it as it is).
+        let body = json!({ "name": name, "private": true, "auto_init": false, "has_wiki": false });
+        let path = if owner.is_empty() || owner.eq_ignore_ascii_case(login) { "user/repos".to_string() } else { format!("orgs/{}/repos", spec::encode_segment(owner)) };
+        let (status, v) = self.api.write(Method::POST, &path, &body).await?;
+        if !status.is_success() {
+            return Err(ForgeError::Rejected(format!("GitHub didn't create the repository: {}", v.as_str().unwrap_or(""))));
+        }
+        let m = meta(&v).ok_or_else(|| ForgeError::Transport("GitHub's answer had no repository".into()))?;
+        // GitHub created it private; refuse to go on if it says otherwise
+        // (an Enterprise "internal" repository also says private: true).
+        let visibility = v["visibility"].as_str();
+        if v["private"].as_bool() != Some(true) || visibility.is_some_and(|x| x != "private") {
+            return Err(ForgeError::Rejected(format!(
+                "GitHub created {} but didn't report it as private; nothing was pushed (delete it on GitHub if you don't want it)",
+                m.repo.full_name()
+            )));
+        }
+        Ok(m.repo)
+    }
+
     async fn open_change_request(&self, d: &ChangeRequestDraft) -> Result<ChangeRequestOutcome> {
         let cross = !d.head.same(&d.base);
         let head = if cross { format!("{}:{}", d.head.owner, d.head_branch) } else { d.head_branch.clone() };

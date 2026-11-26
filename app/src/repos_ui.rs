@@ -103,6 +103,8 @@ pub(crate) fn turn_repo(state: &AppState, session: &ChatSession) -> Result<Optio
         TurnCheckout::Refused { reason, .. } => return Err(reason),
     };
     let prepared = rr::prepare_chat(&ready, session, &label)?;
+    // A turn in a scratch repository is activity: its cleanup clock restarts.
+    rr::scratch::turn_in(state.service.lock().unwrap().store(), &ready.path, rr::scratch::now());
     if let Some(pin) = &prepared.pin {
         if let Err(e) = state.service.lock().unwrap().pin_chat_base(session.id, session.workspace_id, ready.repo.id, pin) {
             tracing::warn!(target: "repos", "couldn't pin the chat's base: {e}");
@@ -215,6 +217,8 @@ pub fn list_workspace_repos_sync(state: State<AppState>) -> Result<Value, String
     let accepted = svc.store().accepted_aliases(ws).unwrap_or_default();
     let is_accepted = |kind: &str, alias: &str, target: &str| accepted.iter().any(|(k, a, t)| k == kind && a == alias && t == target);
     let al = rr::aliases(svc.store(), ws, Some(&roster));
+    let scratch_st = rr::scratch::settings(svc.store(), &state.data_dir.join("scratch"));
+    let now = rr::scratch::now();
     let repos: Vec<Value> = entries
         .iter()
         .map(|e| {
@@ -259,6 +263,10 @@ pub fn list_workspace_repos_sync(state: State<AppState>) -> Result<Value, String
                 "hosts": hosts,
                 "lookalikeOf": lookalike_of,
                 "aliases": aliases,
+                // A scratch repository (the tag), and this device's own
+                // scratch entry for it (removal date, notice) when it made it.
+                "scratch": r.is_scratch(),
+                "scratchInfo": rr::scratch::by_repo(svc.store(), r.id).map(|x| crate::scratch_ui::dto(&x, &scratch_st, now)),
             })
         })
         .collect();
@@ -476,6 +484,8 @@ pub fn chat_workspace_repo_sync(state: State<AppState>, session_id: String) -> R
     // Re-pinning (review residual 3): an Admin's, or the chat's creator's.
     let admin = roster.role_of(&my_actor).is_some_and(|r| r.rank() >= ligus_core::WorkspaceRole::Admin.rank());
     let can_repin = cr.base_commit.is_some() && (admin || (!s.creator_actor_id.is_empty() && s.creator_actor_id == my_actor));
+    let scratch_st = rr::scratch::settings(svc.store(), &state.data_dir.join("scratch"));
+    let scratch_info = rr::scratch::by_repo(svc.store(), id).map(|x| crate::scratch_ui::dto(&x, &scratch_st, rr::scratch::now()));
     drop(svc);
     let pinned = pinned_elsewhere(&state, &s, id, &me, &my_actor, here_ok);
     Ok(json!({
@@ -483,6 +493,8 @@ pub fn chat_workspace_repo_sync(state: State<AppState>, session_id: String) -> R
         "name": entry.map(|e| crate::shown(&e.repo.display_name)),
         "canonical": entry.map(|e| e.repo.canonical.clone()),
         "removed": entry.is_some_and(|e| e.removed),
+        "scratch": entry.is_some_and(|e| e.repo.is_scratch()),
+        "scratchInfo": scratch_info,
         "baseBranch": cr.base_branch,
         "basePinned": cr.base_commit.is_some(),
         "baseCommit": cr.base_commit,

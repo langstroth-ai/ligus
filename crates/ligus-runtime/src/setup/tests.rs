@@ -383,6 +383,30 @@ fn binding_an_existing_repo_needs_no_admin_but_adding_does() {
     assert!(f.writes.is_empty());
 }
 
+#[test]
+fn folder_can_start_with_a_scratch_repo() {
+    let mut f = Fake::default();
+    let o = run_(FlowId::Folder, &mut f, &[("scratch", "true"), ("name", "spike")]);
+    assert_eq!(o.exit, 0, "{:?}", ids(&o));
+    assert!(o.done);
+    assert_eq!(f.writes, ["create_scratch spike"]);
+    assert_eq!(o.results.get("scratch").map(String::as_str), Some("true"));
+    // No path needed; a path and a scratch repo at once is a usage error.
+    let mut f = Fake::default();
+    assert_eq!(run_(FlowId::Folder, &mut f, &[("scratch", "true"), ("path", "/w")]).exit, exit::USAGE);
+    assert!(f.writes.is_empty());
+    // An Admin's, like adding any repository.
+    let mut f = Fake { role: Some(WorkspaceRole::Contributor), ..Fake::default() };
+    assert_eq!(run_(FlowId::Folder, &mut f, &[("scratch", "true")]).exit, exit::REFUSED);
+    assert!(f.writes.is_empty());
+    // A host that can't make one says so.
+    let mut f = Fake { fail: vec!["create_scratch"], ..Fake::default() };
+    assert_ne!(run_(FlowId::Folder, &mut f, &[("scratch", "true")]).exit, 0);
+    // Without --scratch, a folder is still needed.
+    let mut f = Fake::default();
+    assert_eq!(run_(FlowId::Folder, &mut f, &[]).exit, exit::USAGE);
+}
+
 // ── box, phone, invite ──────────────────────────────────────────────────────
 
 #[test]

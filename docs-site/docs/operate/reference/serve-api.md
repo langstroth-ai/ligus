@@ -378,6 +378,12 @@ voter's account, so they never act as the person (see
 | `GET /v1/repos/fork` | `?repo=owner/name&forge=` | the signed-in account's fork, if any. 412 if the connection isn't signed in |
 | `POST /v1/repos/clone` | `{repo, viaFork?, forge?}` or `{repoId}` | Contributor, and the box **owner** (below). Starts a clone (or fetch) job. A URL's host picks the connection; `owner/name` uses `forge` (default `github.com`). With `repoId`, a workspace repository: the URL is rebuilt from its canonical for a connected host, the address is re-checked and pinned, and the clone is mapped and reported as this box's checkout (404 for an unknown or removed repository). 400 for a host with no connection; 429 with 2 jobs running; 409 if the target dir holds another repo |
 | `GET /v1/repos/clone/:job` | | job status (last 20 finished kept) |
+| `GET /v1/repos/scratch` | | the box **owner**. This box's scratch repositories (live, kept, removed) and its cleanup settings; names and dates, never paths |
+| `POST /v1/repos/scratch` | `{chatId?, name?}` | Contributor and the box **owner**. Creates an empty repository (one empty commit on `main`) under the box's scratch root; with `chatId` binds that chat to it here and posts a note. 429 past the limits (16 per host, 8 per member by account id) |
+| `POST /v1/repos/scratch/:id/keep` | `{name?}` | Contributor and the box **owner**. Moves a live one into `LIGUS_REPOS_DIR`; its chats' bindings follow. 404 if not live |
+| `POST /v1/repos/scratch/:id/publish` | `{owner, name, confirm, forge?}` | Contributor and the box **owner**. A kept one only: creates a **private** repository `owner/name` with the box's connection (default github.com) and pushes its branches. `confirm` must equal `owner/name` (409 otherwise; nothing is created) |
+| `DELETE /v1/repos/scratch/:id` | | Contributor and the box **owner**. Removes a live one now (strict path checks; 409 when one refuses); its chats get no repository and a note |
+| `PUT /v1/repos/scratch/settings` | `{cleanupDays}` | the box **owner**. 1 to 365 days, `0` off, `null` the default (14) |
 | `GET /v1/chats/:id/repo` | | the chat's checkout, branch, ahead/behind, PR branch |
 | `PUT /v1/chats/:id/repo` | `{repo?}` | Contributor, owner. Binds a checkout under the repos dir; `null`/`""` = workspace default |
 | `POST /v1/chats/:id/repo/pull` | | Contributor. Fast-forward-only pull; 409 if dirty or diverged |

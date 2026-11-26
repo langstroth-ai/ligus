@@ -179,6 +179,7 @@ fn cases() -> Vec<(&'static str, Uuid, SessionEvent)> {
         forge_kind: "github".into(),
         default_branch: "main".into(),
         root_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+        scratch: false,
     };
     let mut prop = ActionProposal::file_diff("Fix", "agent", "diff --git a/f b/f\n+1\n".into(), vec!["f".into()]);
     prop.id = u(0x71);
@@ -270,7 +271,7 @@ fn cases() -> Vec<(&'static str, Uuid, SessionEvent)> {
         }),
         ("proposalUpserted/repo", chat, SessionEvent::ProposalUpserted { proposal: prop }),
         ("workspaceRepoAdded", cfg, SessionEvent::WorkspaceRepoAdded { repo: repo.clone() }),
-        ("workspaceRepoUpdated", cfg, SessionEvent::WorkspaceRepoUpdated { repo_id: repo.id, display_name: "WeFit app".into(), default_branch: "main".into() }),
+        ("workspaceRepoUpdated", cfg, SessionEvent::WorkspaceRepoUpdated { repo_id: repo.id, display_name: "WeFit app".into(), default_branch: "main".into(), scratch: None }),
         ("workspaceRepoRemoved", cfg, SessionEvent::WorkspaceRepoRemoved { repo_id: repo.id }),
         ("chatRepoSet", chat, SessionEvent::ChatRepoSet { repo_id: Some(repo.id), base_branch: "main".into() }),
         ("chatBasePinned", chat, SessionEvent::ChatBasePinned { repo_id: repo.id, commit: "0123456789abcdef0123456789abcdef01234567".into() }),

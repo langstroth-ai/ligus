@@ -1009,6 +1009,8 @@ pub fn repo_checkout(svc: &Mutex<ChatService>, session: &ChatSession, host_label
         TurnCheckout::Refused { reason, .. } => return Err(reason),
     };
     let prepared = rr::prepare_chat(&ready, session, host_label)?;
+    // A turn in a scratch repository is activity: its cleanup clock restarts.
+    rr::scratch::turn_in(svc.lock().unwrap_or_else(|e| e.into_inner()).store(), &ready.path, rr::scratch::now());
     if let Some(pin) = &prepared.pin {
         let r = svc.lock().unwrap_or_else(|e| e.into_inner()).pin_chat_base(session.id, session.workspace_id, ready.repo.id, pin);
         if let Err(e) = r {

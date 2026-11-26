@@ -24,6 +24,7 @@ fn repo(canonical: &str) -> WorkspaceRepo {
         forge_kind: "github".into(),
         default_branch: "main".into(),
         root_commit: None,
+        scratch: false,
     }
 }
 
@@ -51,7 +52,7 @@ fn repos_are_admin_presence_and_normal_form() {
     let forged = w.push("ada", SessionEvent::WorkspaceRepoAdded { repo: wrong_id });
     assert_eq!((w.verdict(shouty), w.verdict(forged)), (Verdict::Denied, Verdict::Denied));
     // A rename is cosmetic (no presence) but still an Admin's.
-    let rename = SessionEvent::WorkspaceRepoUpdated { repo_id: repo_id(WEFIT), display_name: "WeFit app".into(), default_branch: "main".into() };
+    let rename = SessionEvent::WorkspaceRepoUpdated { repo_id: repo_id(WEFIT), display_name: "WeFit app".into(), default_branch: "main".into(), scratch: None };
     let r_ok = w.push_bare("ada", rename.clone());
     let r_no = w.push("mara", rename);
     assert_eq!((w.verdict(r_ok), w.verdict(r_no)), (Verdict::Allowed, Verdict::Denied));

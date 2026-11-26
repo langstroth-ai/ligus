@@ -201,6 +201,28 @@ left off.
 Pull requests are opened from that branch. Ligus never force-pushes. If the
 remote branch has moved, the push is refused and the phone says so.
 
+## Scratch repositories
+
+**New scratch repo** on the phone has the box create an empty repository
+(one empty commit on `main`) under its scratch root, `LIGUS_SCRATCH_DIR`
+(default `<data dir>/scratch`; `ligus repo scratch --set-root` changes it),
+and bind the chat to it. It is bound like any checkout of the box, in
+`repo-bindings.toml`, so turns run on the chat's branch with proposals and
+the sandbox as usual. A box is a Contributor, so it never adds scratch
+repositories to the workspace.
+
+- **Keep it as a repo** moves it into `LIGUS_REPOS_DIR`; its chats follow.
+  **Publish to GitHub (private)** then creates a private repository with the
+  box's connection and pushes its branches, only after the phone's
+  confirmation naming the account and the name.
+- The cleanup runs hourly (`LIGUS_SCRATCH_SWEEP_SECS`). After 14 days without
+  activity (`ligus repo scratch --cleanup-days N`, `0` off) it removes an
+  unkept one, after a notice in its chats two days before. It deletes only a
+  folder this box created and recorded, directly under the scratch root, not
+  a symlink, carrying the box's own marker in its git dir; its chats are left
+  with no repository (not the workspace default), and their history stays.
+- Limits: 16 per box and 8 per member (`ligus repo scratch --list` shows them).
+
 ## Limits and safety
 
 - A repository is given as `owner/name` (on the chosen connection, by default

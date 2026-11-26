@@ -234,6 +234,13 @@ impl SetupOps for Fake {
         }
         Ok(())
     }
+    fn create_scratch(&mut self, name: &str) -> OpsResult<(String, String)> {
+        self.write("create_scratch", name.into())?;
+        let id = Uuid::new_v4().to_string();
+        let path = format!("/data/scratch/{}", if name.is_empty() { "scratch" } else { name });
+        self.repos.push(RepoFact { id: id.clone(), canonical: "local:0".into(), display_name: name.into(), default_branch: "main".into(), bound_here: Some(path.clone()) });
+        Ok((id, path))
+    }
     fn box_state(&self) -> OpsResult<BoxFact> {
         self.box_state.clone()
     }

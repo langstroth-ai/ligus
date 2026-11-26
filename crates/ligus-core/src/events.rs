@@ -476,6 +476,12 @@ pub enum SessionEvent {
         display_name: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         default_branch: String,
+        /// `Some(false)`: the repo was kept, so it is no longer a scratch
+        /// repository (additive; a display hint like
+        /// `WorkspaceRepo::scratch`). `Some(true)` is ignored: a repo never
+        /// becomes scratch after it was added.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scratch: Option<bool>,
     },
     /// Remove a repository (config log; Admin, presence). A tombstone until a
     /// later add of the same id.

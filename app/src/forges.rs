@@ -43,6 +43,17 @@ fn forge(c: &Connection, data_dir: &Path) -> Arc<dyn Forge> {
     c.build(credentials(c, data_dir))
 }
 
+/// The connection `id` on this device (`None`: its github.com connection),
+/// with its credentials, for a host-only write a person asked for.
+pub(crate) fn forge_for(data_dir: &Path, id: Option<&str>) -> Option<Arc<dyn Forge>> {
+    let all = Connections::load(data_dir);
+    let c = match id.map(str::trim).filter(|i| !i.is_empty()) {
+        Some(raw) => all.get(&ForgeId::parse(raw).ok()?)?.clone(),
+        None => all.forges.iter().find(|c| c.id == ForgeId::github_com())?.clone(),
+    };
+    Some(forge(&c, data_dir))
+}
+
 /// `<exe> forge git-credential <id> --data-dir <dir> <action>`: answer git
 /// from the secret store and exit. Run first thing in `main`.
 pub fn maybe_run_git_credential() {

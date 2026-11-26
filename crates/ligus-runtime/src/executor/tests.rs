@@ -1851,3 +1851,43 @@ fn gateway_plan_has_no_vendor_endpoints_or_keys() {
         assert_eq!(gw.gateway.as_ref().map(|g| g.name.as_str()), Some("claude-gw"));
     }
 }
+
+/// Scratch repositories live in `<data dir>/scratch`: an agent turn works
+/// in its worktree once the host allows exactly that scratch folder
+/// (`allow_agent_dir`, from `repos::scratch::turn_in`), with the same rules
+/// as any repository: the worktree writable, the rest of the data dir
+/// (keys, settings) still unreadable, and nothing outside the worktree
+/// writable.
+#[test]
+fn a_scratch_repo_in_the_data_dir_runs_agents_with_the_usual_rules() {
+    let Some(e) = real_executor() else { return };
+    let base = Fixture::new();
+    let repo = base.data.join("scratch/spike-1a2b3c4d");
+    let worktree = repo.join(".ligus/worktrees/chat-1");
+    std::fs::create_dir_all(worktree.join(".git")).unwrap();
+    std::fs::write(worktree.join("README.md"), "scratch-hello").unwrap();
+    std::fs::create_dir_all(worktree.join("src")).unwrap();
+    std::fs::write(repo.join("MAIN.md"), "main").unwrap();
+    let f = Fixture { data: base.data.clone(), worktree: worktree.clone(), outside: base.outside.clone() };
+    // Inside the data dir and not allowed: refused before anything runs.
+    let host = host_paths();
+    assert!(check_cwd(&worktree, &host).is_err() || host.allow_read.iter().any(|a| worktree.starts_with(a)));
+    allow_agent_dir(&canonical(&repo));
+    assert!(check_cwd(&worktree, &host_paths()).is_ok());
+    // A symlinked path is never allowed.
+    #[cfg(unix)]
+    {
+        let link = base.outside.join("link-to-data");
+        std::os::unix::fs::symlink(&base.data, &link).unwrap();
+        allow_agent_dir(&link);
+        assert!(!host_paths().allow_read.contains(&link));
+    }
+    let (ok, out) = run_sh(&*e, &f, "cat README.md && echo made > src/new.txt && cat src/new.txt", isolated());
+    assert!(ok && out.contains("scratch-hello") && out.contains("made"), "{out}");
+    for secret in ["keys/device.seed", "settings.json"] {
+        let (ok, out) = run_sh(&*e, &f, &format!("cat '{}'", base.data.join(secret).display()), isolated());
+        assert!(!ok && !out.contains("SECRET"), "{secret}: {out}");
+    }
+    let (ok, _) = run_sh(&*e, &f, &format!("echo x > '{}'", repo.join("MAIN.md").display()), isolated());
+    assert!(!ok || std::fs::read_to_string(repo.join("MAIN.md")).unwrap() == "main", "outside the worktree stays unwritable");
+}

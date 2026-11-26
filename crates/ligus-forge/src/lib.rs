@@ -593,6 +593,15 @@ pub trait Forge: ForgeReader {
     }
     /// Only on an explicit human action.
     async fn create_fork(&self, upstream: &RepoRef) -> Result<RepoRef>;
+    /// Create an empty **private** repository `name` under `owner` (the
+    /// signed-in `login`, or one of its orgs). Only on an explicit human
+    /// action, after a confirmation naming the owner and the name (a scratch
+    /// repository's "Publish to GitHub"). Never public: no caller can ask
+    /// for that. Forges without it say so.
+    async fn create_private_repo(&self, owner: &str, login: &str, name: &str) -> Result<RepoRef> {
+        let _ = (owner, login, name);
+        Err(ForgeError::Unsupported("publishing a new repository isn't supported on this code host yet".into()))
+    }
     /// Only on an explicit human action or an applied proposal.
     async fn open_change_request(&self, d: &ChangeRequestDraft) -> Result<ChangeRequestOutcome>;
 

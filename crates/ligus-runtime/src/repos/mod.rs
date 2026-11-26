@@ -24,6 +24,8 @@ pub mod clone;
 pub mod git;
 pub mod marker;
 pub mod scan;
+pub mod scratch;
+pub mod scratch_host;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

@@ -183,6 +183,43 @@ chat says why: a commit on the chat's branch that isn't an applied proposal
 proposal that doesn't apply on the new base, or a new base that host hasn't
 fetched.
 
+## Scratch repositories {#scratch}
+
+No code yet, or just trying something? Pick **New scratch repo**, the first
+choice in every repository picker (the desktop's chip, the phone's repo
+chip, lt's picker, and **Start with a scratch repo** in the guided setup's
+code folder flow). The host that runs the chat's agents creates an empty
+repository there: `git init` on `main` with one empty commit, in its scratch
+folder (`<data dir>/scratch/<name>-<id>` by default; a host setting). Agents
+work in it like in any repository: the chat's own branch and worktree,
+proposals, approvals and the sandbox are unchanged.
+
+- **Which host.** For a phone chat, your home host (the box). On the desktop
+  and in lt, this device. On a person's own device the scratch repository is
+  added to the workspace flagged scratch, so only an Admin can create one
+  there (with the passkey, like adding any repository). A box binds it on
+  the box only, the way it binds every checkout.
+- **The tag.** A small **scratch** tag marks it in the chat's header, the
+  repository lists and the pickers, on every device.
+- **Keep it as a repo.** From the chip (or the notice), keep it: on the
+  desktop and in lt you pick a folder; on the phone it moves into the box's
+  repos folder. It loses the scratch tag and is never cleaned up after that.
+  Optionally **Publish to GitHub (private)**: only when you tap it, after a
+  confirmation naming the account or org and the repository name, Ligus
+  creates a private repository with the host's code-host connection and
+  pushes its branches. Never public, never automatic.
+- **Cleanup.** A scratch repository nobody kept is removed after 14 days
+  without activity (a turn, a commit, binding a chat; a host setting, or off).
+  Two days before, its chats say "This scratch repo will be removed on
+  ‹date› · Keep it". Removal deletes only that folder on that host, after
+  strict checks: a folder this host created and recorded, directly under its
+  scratch folder, not a symlink. Its chats are left with **No repository**;
+  their proposals and diffs stay.
+- **Limits.** 16 per host and 8 per member by default.
+
+From the command line: `ligus repo scratch --chat <id>`, `ligus repo keep
+<scratch> [--to PATH]` ([CLI](../reference/cli.md#scratch)).
+
 ### Where a turn runs
 
 The host that runs a turn is the only judge of whether it can:

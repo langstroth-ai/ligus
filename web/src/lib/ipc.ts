@@ -2662,6 +2662,11 @@ export interface WorkspaceRepoDto {
   /// Synced aliases (other spellings of this repo), and whether this device
   /// accepted each. Names only: they never change where git connects.
   aliases?: RepoAliasDto[];
+  /// A scratch repository (the "scratch" tag).
+  scratch?: boolean;
+  /// This device's scratch entry for it (removal date, notice), when this
+  /// device made it.
+  scratchInfo?: ScratchRepoDto | null;
 }
 
 /// One synced alias and whether a person on this device accepted it.
@@ -2704,6 +2709,10 @@ export interface ChatWorkspaceRepoDto {
   /// The chat's agents pinned to another host that says it has no checkout
   /// of this repo (the composer's warning).
   pinnedElsewhere?: PinnedElsewhere[];
+  /// A scratch repository (the "scratch" tag).
+  scratch?: boolean;
+  /// This device's scratch entry for it, when this device made it.
+  scratchInfo?: ScratchRepoDto | null;
 }
 
 export interface PinnedElsewhere {
@@ -2756,6 +2765,71 @@ export const openChatCheckout = (sessionId: string) => invoke<string>("open_chat
 /// After an apply conflict: a follow-up turn asking the proposal's agent to rebase it.
 export const askAgentToRebase = (sessionId: string, proposalId: string) =>
   invoke<void>("ask_agent_to_rebase", { sessionId, proposalId });
+
+// ── Scratch repositories (app/src/scratch_ui.rs) ─────────────────────────
+// A throwaway git repository a chat works in, made on this device. Unkept
+// ones are removed after the cleanup days without activity, with a notice
+// `noticeDays` before.
+
+export interface ScratchRepoDto {
+  id: string;
+  name: string;
+  /// The folder's name under the scratch root ("spike-1a2b3c4d").
+  folder: string;
+  /// This device's own path.
+  path: string;
+  state: "live" | "kept" | "removed";
+  repoId: string | null;
+  /// Unix seconds.
+  createdAt: number;
+  lastActivity: number;
+  /// When the cleanup removes it (unix seconds), or null (kept, or cleanup off).
+  removeAt: number | null;
+  noticeFrom: number | null;
+  /// Inside the notice window: show "will be removed on …".
+  notice: boolean;
+  chats: number;
+  /// The private repository's URL once published.
+  published: string | null;
+}
+
+export interface ScratchSettingsDto {
+  root: string;
+  rootIsDefault: boolean;
+  /// Days without activity before removal; 0 off; null the default (14).
+  cleanupDays: number | null;
+  noticeDays: number;
+  maxPerHost: number;
+  maxPerMember: number;
+  live: number;
+}
+
+export interface ScratchReposDto {
+  scratch: ScratchRepoDto[];
+  settings: ScratchSettingsDto;
+}
+
+export const listScratchRepos = () => invoke<ScratchReposDto>("list_scratch_repos");
+/// "New scratch repo" (Admin, as adding any repository): for `sessionId`, or
+/// none from Settings. Binds it here and sets it as the chat's repository.
+export const createScratchRepo = (sessionId?: string | null, name?: string | null) =>
+  invoke<ScratchRepoDto & { repoId: string }>("create_scratch_repo", { sessionId: sessionId ?? null, name: name ?? null });
+/// "Keep it as a repo": move it to `path` (an absolute folder that doesn't
+/// exist yet) and drop the scratch flag.
+export const keepScratchRepo = (id: string, path: string, name?: string | null) =>
+  invoke<ScratchRepoDto & { workspaceFlagDropped: boolean }>("keep_scratch_repo", { id, path, name: name ?? null });
+/// Publish a kept scratch repository to GitHub as a private repository.
+/// `confirm` repeats `owner/name` exactly as the confirmation showed it.
+export const publishScratchRepo = (id: string, owner: string, name: string, confirm: string, forge?: string | null) =>
+  invoke<{ url: string; private: true }>("publish_scratch_repo", { id, owner, name, confirm, forge: forge ?? null });
+export const removeScratchRepo = (id: string) => invoke<void>("remove_scratch_repo", { id });
+/// `cleanupDays` 0 = off; `resetDays` back to the default; `root` "" = the default root.
+export const setScratchSettings = (opts: { cleanupDays?: number | null; resetDays?: boolean | null; root?: string | null }) =>
+  invoke<ScratchReposDto>("set_scratch_settings", {
+    cleanupDays: opts.cleanupDays ?? null,
+    resetDays: opts.resetDays ?? null,
+    root: opts.root ?? null,
+  });
 
 // ── Guided setup (`ligus_runtime::setup`; app/src/setup_ui.rs) ────────────
 

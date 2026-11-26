@@ -17,14 +17,20 @@ pub(crate) fn status(ops: &dyn SetupOps) -> (Progress, String) {
     }
 }
 
-pub(crate) fn steps(_ops: &dyn SetupOps, _inputs: &Inputs) -> Vec<StepDef> {
+pub(crate) fn steps(_ops: &dyn SetupOps, inputs: &Inputs) -> Vec<StepDef> {
+    let scratch = inputs.on("scratch");
     vec![
         StepDef::input(
             "folder",
             "Folder",
-            vec![Field::new("path", "Folder", FieldKind::Path)
-                .required()
-                .help("A git checkout on this device (its main checkout, not a linked worktree).")],
+            vec![
+                Field::new("scratch", "Start with a scratch repo", FieldKind::Toggle).help(
+                    "No code yet? This host creates an empty repository (one empty commit on main) in its scratch folder, adds it to the workspace as scratch, and binds it here. Unkept scratch repos are removed after 14 days without activity.",
+                ),
+                Field::new("path", "Folder", FieldKind::Path)
+                    .required_if(!scratch)
+                    .help("A git checkout on this device (its main checkout, not a linked worktree)."),
+            ],
         ),
         StepDef::input(
             "repo",
@@ -48,6 +54,9 @@ pub(crate) fn preflight(ctx: &mut Ctx, _ops: &dyn SetupOps) {
 
 pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
     let fields: Vec<Field> = steps(ops, inputs).into_iter().flat_map(|s| s.fields).collect();
+    if inputs.on("scratch") {
+        return run_scratch(ctx, ops, inputs, &fields);
+    }
     let path = value(inputs, &fields, "path").unwrap_or("").to_string();
     let f = ops.inspect_folder(&path);
 
@@ -135,5 +144,39 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
         ctx.done();
     } else {
         ctx.fail("verify", "verify", "the binding isn't listed", "Settings > Repositories lists the bindings", exit::FAILED);
+    }
+}
+
+/// "Start with a scratch repo": an Admin's (it adds a workspace repository),
+/// made by this host, bound here.
+fn run_scratch(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, fields: &[Field]) {
+    if value(inputs, fields, "path").is_some_and(|p| !p.trim().is_empty()) {
+        return ctx.fail("folder", "folder", "pick a folder or a scratch repo, not both", "drop --path, or drop --scratch", exit::USAGE);
+    }
+    if !gate::need(ctx, ops, WorkspaceRole::Admin, "adding a scratch repository to the workspace") {
+        return;
+    }
+    let name = value(inputs, fields, "name").unwrap_or("").to_string();
+    if ctx.cancelled() {
+        return;
+    }
+    if ctx.dry_run() {
+        ctx.skip("repo", "repository", "would create an empty scratch repository here and add it to the workspace");
+        ctx.skip("bind", "bind", "would bind it here");
+        return ctx.done();
+    }
+    ctx.commit();
+    let (repo_id, path) = match ops.create_scratch(&name) {
+        Ok(x) => x,
+        Err(e) => return ctx.fail("repo", "repository", format!("couldn't start a scratch repository: {e}"), "fix what it says and run this again", ops_code(&e)),
+    };
+    ctx.ok("repo", "repository", "a scratch repository, added to the workspace");
+    ctx.ok("bind", "bound", path);
+    ctx.result("repoId", repo_id.clone());
+    ctx.result("scratch", "true");
+    if ops.repos().iter().any(|r| r.id == repo_id && r.bound_here.is_some()) {
+        ctx.done();
+    } else {
+        ctx.fail("verify", "verify", "the scratch repository isn't listed", "Settings > Repositories lists the bindings", exit::FAILED);
     }
 }

@@ -11,6 +11,8 @@
 //   (a model picked for the Copilot runtime) &modelproblem=1 (Copilot's
 //   model failed as unavailable: the composer's one-line note)
 //   &noagents=1 (no agents, MCP servers or hosts: the panes' Set up actions)
+//   &scratch=1 (scratch repositories: the open chat works in one that is
+//   inside its removal notice; Settings → Repositories lists three)
 //   &asks=question|grant|quorum|waiting|settled|all (agents' decision cards
 //   in the open chat, and their Inbox rows)
 //   &approvals=box|computer|contested|several|mismatch (code-match approval
@@ -31,6 +33,7 @@ const flags = {
   noAgents: params.get("noagents") === "1",
   // You on another computer (lt joined with an invite) and revoked devices.
   devices: params.get("devices") === "1",
+  scratch: params.get("scratch") === "1",
   // An older workspace whose Owner may switch to rules 3 (identity model v2).
   rules3: params.get("rules3") === "1",
   empty: scenario === "empty" || scenario === "onboarding",
@@ -85,7 +88,20 @@ function handle(cmd: string, args: Args): unknown {
     case "get_file_diff_sides":
       return fx.fileDiffSides(String(args?.path ?? ""));
     case "list_workspace_repos":
-      return fx.workspaceRepos;
+      return flags.scratch ? { ...fx.workspaceRepos, repos: [...fx.workspaceRepos.repos, fx.scratchWorkspaceRepo] } : fx.workspaceRepos;
+    case "chat_workspace_repo":
+      return flags.scratch && sid === "chat-1" ? fx.scratchChatRepo : null;
+    case "list_scratch_repos":
+    case "set_scratch_settings":
+      return fx.scratchRepos(flags.scratch);
+    case "create_scratch_repo":
+      return { ...fx.scratchEntry({ id: "sc-new", name: "scratch-9b7c1d2e", folder: "scratch-9b7c1d2e", notice: false }), repoId: "repo-scratch-new" };
+    case "keep_scratch_repo":
+      return { ...fx.scratchEntry({ state: "kept", path: String(args?.path ?? ""), removeAt: null, notice: false }), workspaceFlagDropped: true };
+    case "publish_scratch_repo":
+      return { url: `https://github.com/${String(args?.owner)}/${String(args?.name)}`, private: true };
+    case "remove_scratch_repo":
+      return null;
     case "memory_view":
       return fx.memoryView(String(args?.query ?? ""));
     case "task_state":

@@ -549,6 +549,21 @@ pub fn configure_host(data_dir: &Path, secret_files: &[PathBuf], allow_read: &[P
     }
 }
 
+/// Let agent processes work in `dir` although it is inside a data dir (a
+/// scratch repository under `<data dir>/scratch`): only that folder, never
+/// the data dir around it. A path that isn't its own canonical form (it
+/// goes through a symlink) is ignored.
+pub fn allow_agent_dir(dir: &Path) {
+    let c = canonical(dir);
+    if c != dir || std::fs::symlink_metadata(dir).map(|m| !m.is_dir()).unwrap_or(true) {
+        return;
+    }
+    let mut h = host_slot().write().unwrap_or_else(|e| e.into_inner());
+    if !h.allow_read.contains(&c) {
+        h.allow_read.push(c);
+    }
+}
+
 /// Add files (or dirs) no agent child may read: a model gateway's token,
 /// API key, client key and CA (`model_gateway::install`).
 pub fn configure_secret_files(paths: &[PathBuf]) {
