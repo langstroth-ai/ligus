@@ -147,7 +147,7 @@ See
 - [ ] tokens issued with an expiry, one per person and box
 - [ ] co-member invites where possible; invite links only over trusted channels; compare safety codes on first contact
 - [ ] roles set; few Admins
-- [ ] workspace runtimes use `--secret-ref`, not inline secrets
+- [ ] workspace runtimes use `--secret-ref`; `ligus doctor` shows no `runtimes.inline-key` warning (rotate any key an older version stored in the workspace)
 - [ ] everyone's status bar reads **Live**, with the lock (encrypted)
 - [ ] relay backups scheduled ([Operations](operations.md))
 

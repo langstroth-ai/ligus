@@ -6,6 +6,13 @@ and `deploy/kubernetes/ligus-k8s`. A person reads the text form; a script or a
 coding agent reads one JSON document with `--json`. `ligus help checks` prints
 this page in short.
 
+Data on stdout, everything else on stderr: when a command's text output is a
+code meant for pasting elsewhere (`ligus devices request`), stdout holds only
+that code, and the fingerprint, instructions and progress go to stderr, so
+`ligus devices request | pbcopy` copies exactly the code. A secret is never
+printed or asked for on the command line: it is read from a file, from stdin
+(`-`), or at a terminal from a hidden paste or the clipboard.
+
 ## The `ligus.checks.v1` report {#checks-v1}
 
 With `--json`, a check command prints exactly one JSON document on stdout
@@ -208,4 +215,5 @@ containers and CI.
 | `workspace.joined` | the device has a workspace, is a member, and holds a local copy |
 | `relay.reachable` | one request to the relay (10 seconds at most): reachable and the access token accepted |
 | `sync.held` | events held aside until this device can judge them |
+| `runtimes.inline-key` | a warning when a workspace runtime's key was stored in the workspace by an older version (never used or shown): rotate it and use `--secret-ref` |
 | `gateway.<name>.hosted`, `gateway.<name>.cli`, `gateways.unlisted` | this host's model gateways, as `ligus gateway-check` proves them; `gateways` is skipped when the host lists none |

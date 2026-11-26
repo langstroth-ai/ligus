@@ -42,18 +42,22 @@ export function Fingerprint({
   label = "Fingerprint",
   size = "md",
   copyable = true,
+  copyText,
 }: {
   value: string;
   /// What it is, for screen readers and the copy button ("Device fingerprint").
   label?: string;
   size?: "md" | "lg";
   copyable?: boolean;
+  /// What the copy button copies, when it isn't the groups spaced out (a
+  /// command-line flag wants the dashed form).
+  copyText?: string;
 }) {
   const groups = groupFingerprint(value);
   const [copied, setCopied] = useState(false);
   const copy = () => {
     void navigator.clipboard
-      ?.writeText(groups.join(" "))
+      ?.writeText(copyText ?? groups.join(" "))
       .then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);

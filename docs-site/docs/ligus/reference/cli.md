@@ -246,20 +246,26 @@ acts as you, not as a second person with your name. See
 
 | Command | What it does |
 |---|---|
-| `ligus devices request [--label NAME] [--new-device]` | prints this computer's link request (`liguslink1:…`, no secret) and its fingerprint, and remembers it as pending (15 minutes, single use). A data dir that was already connected asks with a new device key, switched to only when you redeem. A box can't: it joins with `ligus admit` |
-| `ligus devices redeem <ligusgrant1:code> \| - \| --code-file PATH [--approver-fingerprint FP]` | opens the grant your desktop showed (sealed to this computer), asks you to confirm who approved it (the person, the workspace and the approving desktop's fingerprint; `--approver-fingerprint`, or a yes at a terminal, else exit 4), saves the connection, pulls, checks your desktop's certificate for this computer is there (exit 7 until it has synced) and acts as you from then on |
+| `ligus devices request [--label NAME] [--new-device] [--copy] [--json]` | prints this computer's link request (`liguslink1:…`, no secret) and remembers it as pending (15 minutes to approve, single use). Only the request goes to stdout, so `ligus devices request \| pbcopy` copies exactly it; the fingerprint, the time to approve by and the next step go to stderr. `--copy` copies it to the clipboard instead; `--json` prints one report whose `result` has `code`, `fingerprint`, `label`, `expiresAt` (unix ms) and `newDevice`. A data dir that was already connected asks with a new device key, switched to only when you redeem. A box can't: it joins with `ligus admit` |
+| `ligus devices redeem [<ligusgrant1:code> \| - \| --code-file PATH] [--approver-fingerprint FP]` | opens the grant your desktop showed (sealed to this computer). With no code at a terminal it asks for a hidden paste, or reads the clipboard when you just press Enter (**Copy for lt** on the desktop copies the grant alone); a pasted whole command or line breaks around the code are fine, and the code is never echoed. It asks you to confirm who approved it: *Approved by Alex's desktop · fingerprint … · for acme. Is that your desktop? [y/N]* (or `--approver-fingerprint`; away from a terminal without it, exit 4). Then it saves the connection, pulls, checks your desktop's certificate for this computer is there (exit 7 until it has synced) and acts as you from then on |
 | `ligus devices approve <liguslink1:request> \| --code-file PATH --fingerprint FP --recovery-words-file PATH [--out PATH]` | a person's own headless approval (prefer the desktop's My devices > Add a computer): certifies the computer as yours with your recovery key, syncs, and prints the grant (or writes it owner-only to `--out`) |
 | `ligus devices request --to ligusaddr1:… [--label NAME] [--wait 15m] [--json]` | **code match**: sends the request to the workspace's approval address (your desktop shows it under My devices), so it reaches your desktop's Inbox. Prints the paste text and fingerprint straight away (for an older desktop), then `Code: K7Q4 M9X2` once your desktop opens it; you confirm the code here, your desktop confirms with your passkey, and this computer links after finding the approval on the workspace log and asking "Link this computer as Ana (verified on the workspace log)?". Needs a terminal (exit 4 without one); exit 3 when the relay has no approval mailbox (paste instead) |
-| `ligus devices list [--json]` | your devices in this workspace, whether this computer acts as you, and pending requests |
+| `ligus devices list [--json]` | your devices in this workspace, whether this computer acts as you, and a link still waiting for the desktop's code (`ligus status` shows that too). Expired requests are cleaned up as you go |
 
 ```console
-$ ligus devices request --label work-laptop
-Ask your desktop to add this computer: Settings > Profile > My devices > Add a computer.
-…
-Fingerprint: 7F3A-91C0-77DE-0B14-5E62  (label "work-laptop")
-$ ligus devices redeem --code-file ./grant --approver-fingerprint 2C41-88E0-1B9D-04AF-6E73
+$ ligus devices request --copy
+Copied this computer's link request (it holds no secret).
+Fingerprint: 7F3A-91C0-77DE-0B14-5E62  (label "ligus on work-laptop")
+On your desktop: Settings > Profile > My devices > Add a computer; paste the request, compare the fingerprint, confirm with your passkey (by 14:17).
+Then here: ligus devices redeem   (it reads the desktop's code from the clipboard or a hidden paste)
+$ ligus devices redeem
+Paste the desktop's code (hidden) and press Enter, or just press Enter to read it from the clipboard:
+Approved by Alex's desktop · fingerprint 2C41-88E0-1B9D-04AF-6E73 · for acme. Is that your desktop? [y/N] y
 This computer is now one of Alex's devices in workspace 'acme' (approved by desktop 2C41-88E0-1B9D-04AF-6E73).
 ```
+
+In a script, pipe the grant in and pin the desktop, so nothing secret is on
+the command line: `pbpaste | ligus devices redeem - --approver-fingerprint 2C41-88E0-1B9D-04AF-6E73`.
 
 A linked computer acts as you without your account key: a vote asks for your
 passkey, and account changes (devices, phones, passkeys, keys, invites as
@@ -322,12 +328,12 @@ refused on the command line.
 
 | Command | What it does |
 |---|---|
-| `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host has `LIGUS_WS_SECRET_<ref>`) |
-| `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> \| --secret - \| --secret @FILE] [--dry-run]` | defines (or replaces by id) a workspace runtime. `--dry-run` checks the arguments and prints what it would define, signing and writing nothing (the same on `rm-runtime`, `add-agent` and `set-agent-host`; `add-agent --dry-run` also checks the runtime exists). Any other command refuses `--dry-run` with a usage error (exit 2) and runs nothing. |
+| `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host has `LIGUS_WS_SECRET_<ref>`; a key an older version stored in the workspace shows as `stored key (unused)` with a warning) |
+| `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name>] [--dry-run]` | defines (or replaces by id) a workspace runtime. `--dry-run` checks the arguments and prints what it would define, signing and writing nothing (the same on `rm-runtime`, `add-agent` and `set-agent-host`; `add-agent --dry-run` also checks the runtime exists). Any other command refuses `--dry-run` with a usage error (exit 2) and runs nothing. |
 | `ligus rm-runtime <id> [--dry-run]` | removes a workspace runtime. |
 | `ligus setup runtimes [--apply]` | detects what this box can reach (API keys in env, Ollama on `127.0.0.1:11434`, `claude`, `codex`, `agy`, `copilot`); `--apply` defines the keyless ones as workspace runtimes. This was `ligus setup [--apply]`; `ligus setup --apply` still works for one release |
-| `ligus config export` | prints the workspace runtimes as TOML. Inline secrets are never exported; they become a `secretRef` |
-| `ligus config import <file.toml>` | adds or replaces runtimes from that TOML (by id) |
+| `ligus config export` | prints the workspace runtimes as TOML. No key is ever exported; a key an older version stored in the workspace becomes a `secretRef` |
+| `ligus config import <file.toml>` | adds or replaces runtimes from that TOML (by id); a runtime with an inline key is refused |
 | `ligus agents [--json]` | lists workspace agents. |
 | `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>] [--dry-run]` | defines an agent. |
 | `ligus hosts [--json]` | lists workspace hosts (devices and workers) |
@@ -341,12 +347,18 @@ refused on the command line.
 
 Credentials for `add-runtime`:
 
-- `--secret-ref <name>`: the key stays off the shared log; each host that runs
-  the agent sets `LIGUS_WS_SECRET_<name>`.
-- `--secret - | @FILE`: the key (read from stdin, or from an owner-only
-  file) travels **E2EE on the workspace config log**, so every member's
-  device holds it. Prefer `--secret-ref`.
-- neither: keyless (local models, subscription CLIs).
+- `--secret-ref <name>`: each host that runs the agent sets
+  `LIGUS_WS_SECRET_<name>` (or a file in `LIGUS_WS_SECRET_DIR`). Keys are
+  never stored in the workspace.
+- without it: keyless (local models, subscription CLIs).
+
+`--secret` was removed: passing it is a usage error (exit 2). A runtime whose key an older version stored in the workspace (the removed
+`--secret` flag) keeps working only if it can run keyless; its stored key is
+never used, shown or exported (it reads as "stored key (unused)"), and
+`ligus doctor` warns about it (`runtimes.inline-key`). Every member's device
+received that key, so rotate it with the provider, set the new one on each
+worker as `LIGUS_WS_SECRET_<NAME>`, and redefine the runtime with
+`--secret-ref <NAME>`.
 
 ## The worker daemon
 
