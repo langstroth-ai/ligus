@@ -276,6 +276,15 @@ pub fn runtime_for<'a>(runtimes: &'a [WorkspaceRuntime], agent: &WorkspaceAgent)
     runtimes.iter().find(|r| r.id == agent.runtime_id).or_else(|| runtimes.iter().find(|r| r.id == "*"))
 }
 
+/// Whether this is the first turn in `chat` (since this process started)
+/// that `agent` runs on the catch-all for its missing runtime: the chat is
+/// told once, not on every turn.
+fn catch_all_first_time(chat: Uuid, agent: &WorkspaceAgent) -> bool {
+    static SEEN: std::sync::Mutex<Option<HashSet<(Uuid, Uuid, String)>>> = std::sync::Mutex::new(None);
+    let mut g = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    g.get_or_insert_with(HashSet::new).insert((chat, agent.id, agent.runtime_id.clone()))
+}
+
 /// What the chat is told about a turn of `agent` on runtime `rt` here: a
 /// line when it runs on the catch-all (`id = "*"`) because this host
 /// doesn't have the agent's own runtime (so another model answers), or
@@ -612,7 +621,7 @@ async fn run_turn(
     // Never silently on another model: the chat says when the catch-all
     // stands in, and why a turn with no runtime here doesn't run.
     let found = runtime_for(runtimes, &agent);
-    if let Some(note) = runtime_note(&agent, found) {
+    if let Some(note) = runtime_note(&agent, found).filter(|_| found.is_none() || catch_all_first_time(s.id, &agent)) {
         let _ = lock(svc).post_system_note(s.id, s.workspace_id, note);
         sink.changed();
         if found.is_none() {

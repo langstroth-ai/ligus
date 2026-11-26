@@ -49,8 +49,8 @@ API plus a Server-Sent Events stream.
   that, it runs on this host's own `runtimes.toml` entry for its runtime id, or
   on the catch-all `id = "*"` entry, which is typically the lab's keyless
   llama.cpp gateway. Desktop agents are bound to the desktop's device-local
-  runtime ids, so this mapping is what lets you send them here. A turn on the
-  catch-all posts one line in its chat naming the model and the missing
+  runtime ids, so this mapping is what lets you send them here. The first turn on the
+  catch-all in a chat posts one line there naming the model and the missing
   runtime id; with no catch-all the turn is refused and the chat says why.
 - **Repos.** Agents work on checkouts under `LIGUS_REPOS_DIR`
   (default `<LIGUS_DATA_DIR>/repos`). `ligus bind-repo <name|path> [--chat <id>]`

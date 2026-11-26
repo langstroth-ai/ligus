@@ -1344,11 +1344,15 @@ async fn an_owner_only_agent_refuses_the_phone_without_a_model_call() {
 }
 
 /// An agent sent to this box on a runtime the box doesn't have runs on the
-/// `runtimes.toml` `*` entry, and the chat says so (which model, and why),
-/// once.
+/// `runtimes.toml` `*` entry, and the chat says so (which model, and why)
+/// once per chat, not on every turn.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_on_the_catch_all_runtime_says_so_in_its_chat() {
-    let (endpoint, model) = spawn_model(vec![vec![delta(json!({"content": "hi from the lab"}))]]).await;
+    let (endpoint, model) = spawn_model(vec![
+        vec![delta(json!({"content": "hi from the lab"}))],
+        vec![delta(json!({"content": "again from the lab"}))],
+    ])
+    .await;
     let h = harness(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")]).await;
     let ws = h.handle.shared.ws;
     std::fs::write(
@@ -1384,7 +1388,17 @@ async fn an_agent_on_the_catch_all_runtime_says_so_in_its_chat() {
     assert!(msgs.contains(want), "the sender is told: {msgs}");
     assert!(msgs.contains("hi from the lab"), "the turn still ran: {msgs}");
     assert_eq!(model.bodies.lock().unwrap().first().unwrap()["model"], "other-model");
-    assert_eq!(msgs.matches("default runtime").count(), 1, "said once: {msgs}");
+    // A second turn in the same chat runs too, without the line again.
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@local again" }))).await;
+    for _ in 0..300 {
+        msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await.to_string();
+        if msgs.contains("again from the lab") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(msgs.contains("again from the lab"), "the second turn ran: {msgs}");
+    assert_eq!(msgs.matches("default runtime").count(), 1, "said once across two turns: {msgs}");
     h.handle.shutdown();
 }
 

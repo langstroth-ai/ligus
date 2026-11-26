@@ -25,7 +25,7 @@ Full release notes are on the
 - **The chat says when an agent runs on a host's default runtime.** A worker
   or box without an agent's runtime runs it on its `runtimes.toml` catch-all
   (`id = "*"`), with that entry's model, and used to do so without saying.
-  The turn still runs, and the chat now shows "@agent ran on this host's
+  The turn still runs, and the chat now shows, once, "@agent ran on this host's
   default runtime (model) because it doesn't have runtime ...". With no
   catch-all, the turn is refused as before, and the chat now says why.
 - **Scratch repositories survive a damaged list.** If the box's list of
