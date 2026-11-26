@@ -18,7 +18,8 @@ Time: about 30 minutes. You'll end with:
 
 - a relay (on the home server or anywhere else);
 - a workspace on the laptop, synced through that relay;
-- `ligus serve` on the home server as one of **your** devices;
+- `ligus serve` on the home server as its own member of the workspace (a box
+  is never one of your devices);
 - the phone paired to it, directly over Tailscale, through the relay, or both.
 
 ## What each piece holds
@@ -26,7 +27,7 @@ Time: about 30 minutes. You'll end with:
 | Device | Holds | Doesn't hold |
 |---|---|---|
 | Laptop | your account key, its device key, the workspace key, all events | |
-| Home server | its own device key (certified by your account), the workspace key, all events, `serve.token`, `serve.operator.token`, tunnel host keys, checkouts | your account key |
+| Home server | its own member's account and device keys, the workspace key, all events, `serve.token`, `serve.operator.token`, tunnel host keys, checkouts | your account key |
 | Relay | ciphertext, metadata, (tunnel) host public keys and push tokens | any key that decrypts the workspace |
 | Phone | a bearer token and/or its tunnel credential and pairing key | the workspace key, any device key |
 
@@ -98,23 +99,28 @@ Or build the container image (`deploy/container/Dockerfile`) and run
 
 The server joins as **its own service member** (at most Contributor; its
 votes never count as yours), admitted once by you with your passkey. Use a
-dedicated data dir and keep it private:
+dedicated data dir and keep it private.
+
+On the laptop, open the workspace menu (the workspace name at the top of the
+sidebar; or ⌘K, "Admit a box") and **Copy** the approval address
+(`ligusaddr1:…`). It isn't a secret and grants nothing. On the server:
 
 ```sh
 export LIGUS_DATA_DIR=$HOME/.ligus-serve
 install -d -m 700 "$LIGUS_DATA_DIR"
-ligus admit request --label home-server
-# prints a join request (ligusjoin1:…) and a fingerprint
+ligus admit request --to 'ligusaddr1:…' --label home-server
+# Code: K7Q4 M9X2  (the approver's screen must show the same)
 ```
 
-On the laptop, open the workspace menu (the workspace name at the top of the
-sidebar; or ⌘K, "Admit a box"), **Admit a box… → From the box's join request**, paste it, **Check** that the fingerprint matches,
-**Admit this box**, and confirm with your passkey. Copy the code it gives
-you (sealed to the server: only the server can open it) back to the server:
+The request appears in your Inbox on the laptop. Open it, check that the
+code matches the server's, choose **Codes match** and confirm with your
+passkey. The server keeps the admission by itself.
 
-```sh
-ligus admit redeem 'ligusadmit1:…'   # add LIGUS_RELAY_ACCESS_TOKEN for a gated relay
-```
+Without the address, `ligus admit request --label home-server` prints a join
+request (`ligusjoin1:…`) to paste into **Admit a box… → From the box's join
+request**; copy the code it gives you back to the server with
+`ligus admit redeem 'ligusadmit1:…'` (add `LIGUS_RELAY_ACCESS_TOKEN` for a
+gated relay).
 
 The server joins when `ligus serve` starts (next step). See
 [Admitting a box](../ops/admitting-a-box.md).
@@ -271,14 +277,25 @@ with `ligus worker`:
 
 ```sh
 export LIGUS_DATA_DIR=$HOME/.ligus-worker
-ligus admit request --label gpu-box      # admit it on the laptop, as in step 4
-ligus admit redeem 'ligusadmit1:…'
+ligus admit request --to 'ligusaddr1:…' --label gpu-box   # approve it on the laptop, as in step 4
 ligus worker --label gpu-box             # syncs first, joins, registers its host
 ```
 
 Then bind an agent to it from the laptop (an Admin's act).
 
 See [Headless agents](../concepts/headless-agents.md).
+
+## Optional: a model gateway on the server
+
+To run agents on a gateway the server reaches (LiteLLM, llama.cpp's
+server), list it in a JSON file and set `LIGUS_MODEL_GATEWAYS_FILE` in the
+env file. An invalid file stops the server, and once a gateway is listed
+the server runs only turns that use one (`LIGUS_MODEL_GATEWAYS_EXCLUSIVE=0`
+turns that off). Use `https://`; a plain `http://` gateway needs
+`"allowPlaintext": true`, which is your choice as the operator. Check it
+with `ligus gateway-check`, then on the laptop pick the gateway on a runtime
+and bind the agent to the server. See
+[Deploying with an LLM gateway](model-gateways.md#outside-kubernetes).
 
 ## Verify the whole thing
 
@@ -290,8 +307,14 @@ See [Headless agents](../concepts/headless-agents.md).
 
 ## Operating it
 
-- Upgrades: `brew upgrade ligus && systemctl --user restart ligus-serve`.
+- Upgrades: `brew upgrade ligus`, then restart the box:
+  `systemctl --user restart ligus-serve` on Linux, or `$L start --role serve
+  --data-dir ~/.ligus-serve --launchd` again on a Mac (it stops the running
+  box and starts the new binary). The unit file in `deploy/ligus-serve/` runs
+  `~/.local/bin/ligus`; with Homebrew, install the unit with `$L start
+  --systemd` instead (it runs the `ligus` on your `PATH`) or edit its
+  `ExecStart`, or the upgrade won't change what runs.
 - Back up `~/.ligus-serve` (keys, events, phone pairings). See
   [Operations](../ops/operations.md).
-- Lost phone: `ligus phones revoke <name>`. Lost server: revoke it in
-  **My devices**. See [Runbooks](../security/runbooks.md).
+- Lost phone: `ligus phones revoke <name>`. Lost server: an Admin removes its
+  member in **People** (a box is never in My devices). See [Runbooks](../security/runbooks.md).

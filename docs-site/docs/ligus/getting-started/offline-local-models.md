@@ -87,7 +87,13 @@ OpenAI-compatible)** fills in:
 
 - provider `custom`, no API key
 - endpoint `http://<host>:8080/v1/chat/completions`; replace `<host>`
-  with the gateway's address (a Tailscale IP works)
+  with the gateway's address. Plain `http://` is for a gateway on this
+  machine (`localhost`). For a gateway on another machine, prefer
+  `https://` (for example a reverse proxy, or `tailscale serve` on the
+  gateway machine). Plain `http://` to another machine is your choice on
+  this device; **⌘K → Set up an agent** and `ligus setup agent` refuse it,
+  and on a box the operator lists the gateway with `"allowPlaintext": true`
+  (see [Deploying with an LLM gateway](../../operate/deploy/model-gateways.md#outside-kubernetes))
 - **Supports tools** on
 
 Add one runtime per model you want to use (each sends a different
@@ -105,7 +111,7 @@ id = "gateway-gpt-oss"
 name = "gpt-oss 20B (gateway)"
 provider = "custom"
 kind = "local"
-endpoint = "http://10.0.0.10:8080/v1/chat/completions"
+endpoint = "http://localhost:8080/v1/chat/completions"   # https:// for a gateway on another machine
 preferred_model = "gpt-oss:20b"
 supports_tools = true
 # context_window = 32768   # only if the server can't report it

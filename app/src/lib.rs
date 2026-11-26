@@ -4473,8 +4473,18 @@ fn notify_agent_use_synced(app: &AppHandle, state: &AppState, sid: Uuid, ids: &[
 }
 
 #[tauri::command(async)]
-async fn add_agent(ligus_app: tauri::AppHandle, session_id: String, name: String, runtime_id: String, role: String) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| add_agent_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, name, runtime_id, role)).await
+async fn add_agent(
+    ligus_app: tauri::AppHandle,
+    session_id: String,
+    name: String,
+    runtime_id: String,
+    role: String,
+    host_id: Option<String>,
+) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        add_agent_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, name, runtime_id, role, host_id)
+    })
+    .await
 }
 
 pub(crate) fn add_agent_sync(
@@ -4483,6 +4493,7 @@ pub(crate) fn add_agent_sync(
     name: String,
     runtime_id: String,
     role: String,
+    host_id: Option<String>,
 ) -> Result<(), String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     let name = name.trim().to_string();
@@ -4517,6 +4528,9 @@ pub(crate) fn add_agent_sync(
         },
     );
     agent.role = role;
+    // Where it runs, in the same record (one signed write, one passkey
+    // confirmation). Empty = this device.
+    agent.host_id = host_id.map(|h| h.trim().to_string()).unwrap_or_default();
     // Stamp ownership so only the creator can later edit the agent's avatar.
     agent.owner_actor_id = svc.author().id.clone();
     svc.add_agent(id, state.active_workspace_id(), agent).map_err(map_err)

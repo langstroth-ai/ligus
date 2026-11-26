@@ -111,11 +111,12 @@ name the phone's box knows it by, or what it is and the day it was added
 already yours again replaces the old name rather than adding a second row:
 the phone says "This phone is already one of *Ana*'s devices in
 *workspace*. Update its name there?" and **Update name** sends its current
-name to the desktop, which needs no passkey for it. When one of your own
-boxes (a box enrolled as your device) has the phone paired, the row also
-says so: "Paired with home-server · seen 2 min ago". A box reports only its
-owner's phones, and your desktop ignores what any other device says about
-yours.
+name to the desktop, which needs no passkey for it. The row can also say
+which box the phone is paired with ("Paired with home-server · seen 2 min
+ago"), but only when that report is signed by one of your own devices. A box
+is its own member, never one of your devices, so a box admitted that way
+doesn't add this line: your desktop ignores what any other member's device
+says about your phones.
 
 The phone is added to the workspace the desktop showed the code for, under
 the account of the person at that desktop. The phone warns you before

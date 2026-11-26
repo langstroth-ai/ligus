@@ -105,7 +105,8 @@ people compare with the code they see for you (see
 
 - **More devices** join your account from **Settings → Profile → My
   devices** (**Add a phone**, **Add a computer**). They don't sign in
-  anywhere. Don't invite yourself from another computer: that makes a second
+  anywhere. A computer asks to join from `lt` (**Link to my devices**) or
+  with `ligus devices request`; a second desktop app can't ask to link yet. Don't invite yourself from another computer: that makes a second
   member. See [Add a computer](../features/linked-devices.md).
 - **Commits** Ligus makes on your behalf are attributed to the commit email
   in your profile.
