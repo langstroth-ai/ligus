@@ -160,16 +160,23 @@ pub fn failure_error(kind: CliKind, detail: &str) -> ProviderError {
     let msg = match classify_failure(detail) {
         CliFailure::NotLoggedIn => format!("{} is not signed in on this host. {} ({detail})", kind.display(), kind.login_hint()),
         CliFailure::UsageLimit => format!("{} hit a usage limit. {} ({detail})", kind.display(), kind.usage_hint()),
-        CliFailure::LocalServerDenied => format!("{} {} ({detail})", kind.local_server_hint(), local_servers_fix()),
+        CliFailure::LocalServerDenied => format!("{} ({detail})", local_server_message(kind, crate::executor::sandbox_status().kind)),
         CliFailure::Other if detail.is_empty() => format!("{} failed without an error message.", kind.display()),
         CliFailure::Other => format!("{}: {detail}", kind.display()),
     };
     ProviderError::Subprocess(msg)
 }
 
-/// The fix for a refused local server on this host's sandbox tier.
-fn local_servers_fix() -> String {
-    local_servers_fix_on(crate::executor::sandbox_status().kind)
+/// What a refused local server means for `cli` on a host of sandbox tier
+/// `tier`, and what to do.
+pub(crate) fn local_server_message(cli: CliKind, tier: crate::executor::ExecutorKind) -> String {
+    if tier == crate::executor::ExecutorKind::Seatbelt {
+        return match cli {
+            CliKind::Antigravity => "agy needs a local helper server, which the macOS sandbox can't allow safely yet; run agy agents on a Linux host with the bubblewrap sandbox, or use another harness.".into(),
+            CliKind::Copilot => "Copilot CLI tried to run a local server, which the macOS sandbox can't allow safely yet; run it on a Linux host with the bubblewrap sandbox.".into(),
+        };
+    }
+    format!("{} {}", cli.local_server_hint(), local_servers_fix_on(tier))
 }
 
 pub(crate) fn local_servers_fix_on(kind: crate::executor::ExecutorKind) -> String {

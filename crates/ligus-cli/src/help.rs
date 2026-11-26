@@ -454,7 +454,7 @@ pub const COMMANDS: &[Cmd] = &[
             f("--endpoint URL", "http://localhost:11434", "local only: the model server (https://, or http:// on this machine)"),
             f("--gateway NAME", "none", "gateway only: a model gateway a host offers (ligus hosts)"),
             f("--test-turn", "off", "send one short test message and check the reply"),
-            f("--local-servers", "off", "let the agent run local servers (agy needs it for its helper server; the Owner's; ligus agents set)"),
+            f("--local-servers", "off", "let the agent run local servers (agy's helper server; Linux with bubblewrap; not available on macOS yet; the Owner's)"),
             JSON,
             DRY_RUN,
         ],
@@ -1041,13 +1041,12 @@ pub const COMMANDS: &[Cmd] = &[
         summary: "let an agent run local servers (or stop it)",
         purpose: "Turn an agent's local-servers switch on or off: a signed workspace sandbox grant, off by default, \
                   the workspace Owner's to change (with a passkey in a shared workspace, so on a CLI device it works \
-                  in your local workspace; otherwise use Settings, Sandbox on the desktop). On, the agent's turns may \
-                  listen on and connect to this machine's own addresses, which the Google Antigravity CLI (agy) needs \
-                  for its helper server. Files, unix sockets and egress stay as they are. macOS: the turns can then \
-                  also reach the machine's other local servers, and a listener the agent opens on every address can \
-                  be reached from other machines unless the macOS firewall blocks it. Linux with bubblewrap: every \
-                  turn already has its own loopback in a private network namespace, so nothing changes. Linux \
-                  Landlock tier (no namespaces): it stays off. Applies where the workspace grants apply (by default \
+                  in your local workspace; otherwise use Settings, Sandbox on the desktop). On, the agent may run a \
+                  local server such as the Google Antigravity CLI's (agy) helper server. Linux with bubblewrap: every \
+                  turn has its own loopback in a private network namespace, where that works. Linux Landlock tier (no \
+                  namespaces): it stays off. macOS: not available yet (the Mac's sandbox can't keep a listener \
+                  loopback-only), so the switch is stored but has no effect there. Files, unix sockets and egress \
+                  never change. Applies where the workspace grants apply (by default \
                   the Owner's own devices). Share with `ligus sync`.",
         synopsis: &["ligus agents set <agent> --local-servers on|off [--json]"],
         flags: &[f("--local-servers on|off", "required", "the agent's local-servers switch"), JSON],
@@ -2851,10 +2850,9 @@ Local servers: a CLI that runs its own helper server (agy does) needs its agent'
 local-servers switch, off by default and the Owner's:
   ligus agents set <agent> --local-servers on     # or: ligus setup agent … --local-servers
   verify: ligus agents ; ligus doctor --sandbox --agent <agent-id>
-macOS: its turns may then listen on and connect to this machine's own addresses
-(other local servers included; a listener on every address is reachable from
-other machines unless the macOS firewall blocks it). Linux with bubblewrap: each
-turn has its own loopback already. Linux Landlock tier: it stays off.
+Linux with bubblewrap: each turn has its own loopback, where agy's server runs.
+Linux Landlock tier: it stays off. macOS: not available yet (the Mac's sandbox
+can't keep a listener loopback-only): run agy agents on a Linux host.
 
 Access controls:
 - Who may use an agent (only its owner, or everyone; daily turn limits; spending
@@ -2918,10 +2916,13 @@ Hosts: LIGUS_REQUIRE_SANDBOX=1 refuses to start without an agent sandbox
 Start with:  ligus status ; ligus doctor ; ligus remote status
 
 \"agy needs to run a local helper server\" / \"listen tcp 127.0.0.1:0: bind: operation not permitted\"
-  The agent sandbox refused agy's helper server. The workspace Owner turns on the
-  agent's local-servers switch: ligus agents set <agent> --local-servers on (or
-  Settings > Sandbox), then ligus sync. On a Linux host in the Landlock tier it
-  stays off: run the agent where bubblewrap works (ligus doctor --sandbox).
+  The agent sandbox refused agy's helper server. On a Linux host with bubblewrap
+  the workspace Owner turns on the agent's local-servers switch: ligus agents set
+  <agent> --local-servers on (or Settings > Sandbox), then ligus sync. On the
+  Landlock tier it stays off, and on macOS it isn't available yet (\"agy needs a
+  local helper server, which the macOS sandbox can't allow safely yet\"): run agy
+  agents on a Linux host with bubblewrap (ligus doctor --sandbox), or use another
+  harness.
 
 \"this box's workspace has no relay URL\" (sync, serve, worker, join)
   A serve or worker box: it has no admission yet (ligus admit request, an Admin

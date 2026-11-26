@@ -500,8 +500,10 @@ host applies them. Both are built from the plan the executors enforce.
 Some agent CLIs start a server on this machine and talk to it: the Google
 Antigravity CLI (`agy`) runs its language server on `127.0.0.1:0`. The
 sandbox refuses listening sockets by default, so such a turn fails with
-"agy needs to run a local helper server" (the CLI's own words follow:
-`listen tcp 127.0.0.1:0: bind: operation not permitted`).
+"agy needs to run a local helper server" (on macOS: "agy needs a local
+helper server, which the macOS sandbox can't allow safely yet"), followed by
+the CLI's own words (`listen tcp 127.0.0.1:0: bind: operation not
+permitted`).
 
 **May run local servers** is a per-agent switch, off by default, in
 **Settings → Sandbox** (pick the agent; the agent row's ⋯ menu →
@@ -518,9 +520,14 @@ What it allows depends on the sandbox:
 
 | | With the switch on |
 |---|---|
-| macOS (Seatbelt) | The turn may listen on and connect to this machine's own addresses. That includes your other local servers (a database, a dev server, a model server on loopback). Seatbelt's `localhost` means *this machine* and its rules can't hold a listener to loopback: a server the agent opens on `0.0.0.0` can be reached from other machines on your network unless the macOS firewall blocks it. Connections to other machines still go only through the egress proxy; unix sockets, files and the keychain rules are unchanged. |
 | Linux, bubblewrap | Nothing changes: every turn has its own network namespace with a loopback of its own, where agy's server already works. That loopback can't reach this machine's servers. |
 | Linux, Landlock tier | It stays off: without a network namespace there's nothing to contain a listener, so agy can't run here (`ligus doctor --sandbox` says why bubblewrap doesn't work on this host). |
+| macOS (Seatbelt) | **Not available yet.** The switch is stored but has no effect: agy fails with "agy needs a local helper server, which the macOS sandbox can't allow safely yet". Run agy agents on a Linux host with bubblewrap, or use another harness. |
+
+Why macOS is held: Seatbelt's `localhost` means *this machine* (each of its
+addresses, not just loopback), and its rules can't hold a listening socket
+to one address. A listener the agent opened could take every address and
+accept connections from other machines, a way past the egress proxy.
 
 `ligus doctor` lists the agents that have it on, and `ligus doctor
 --sandbox` and Settings → Sandbox show what it means on this host. Turn it

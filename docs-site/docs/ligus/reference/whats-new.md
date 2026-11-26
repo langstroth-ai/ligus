@@ -11,13 +11,13 @@ Full release notes are on the
 - **Agents that run their own helper server.** The Google Antigravity CLI
   (`agy`) starts a local language server, which the agent sandbox refused
   (`bind: operation not permitted`). A per-agent **May run local servers**
-  switch, off by default and the workspace Owner's, lets it: **Settings →
-  Sandbox** (or the agent row's ⋯ → **Sandbox…**), `ligus agents set <agent>
-  --local-servers on`, or `ligus setup agent --harness antigravity
-  --local-servers`. On macOS the agent may then also reach your other local
-  servers; on Linux bubblewrap already gives each turn its own loopback, and
-  the Landlock tier keeps it off. agy's failure now names the fix. See
-  [Local servers](../concepts/security.md#local-servers).
+  switch, off by default and the workspace Owner's, lets it on Linux:
+  **Settings → Sandbox** (or the agent row's ⋯ → **Sandbox…**), `ligus agents
+  set <agent> --local-servers on`, or `ligus setup agent --harness antigravity
+  --local-servers`. With bubblewrap each turn has its own loopback; the
+  Landlock tier keeps it off. Not available on macOS yet: the Mac's sandbox
+  can't keep a listener loopback-only. agy's failure now says which applies.
+  See [Local servers](../concepts/security.md#local-servers).
 
 ## 0.4.0
 

@@ -130,6 +130,7 @@ describe("SandboxSection", () => {
     await waitFor(() =>
       expect(setGrants).toHaveBeenCalledWith({ workspace: { readOnly: ["~/data"] }, agents: { [AGENT]: { localServers: true } } }),
     );
+    expect(screen.getByText(/so it has no effect on this Mac/)).toBeTruthy();
   });
 
   it("an Admin who isn't the Owner can't change local servers", async () => {

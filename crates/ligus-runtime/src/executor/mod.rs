@@ -127,7 +127,8 @@ pub struct EnforcementPlan {
     pub gateway: Option<GatewayRoute>,
     /// An agent child may run local servers (its agent's signed
     /// `localServers` grant): listen on and connect to this machine's own
-    /// addresses. Seatbelt adds just that; the bubblewrap tier's private
+    /// addresses. Held on macOS (Seatbelt can't keep a listener on
+    /// loopback, so the profile ignores it); the bubblewrap tier's private
     /// network namespace already has its own loopback; the Landlock tier
     /// (no namespace) can't confine it and keeps refusing. Never set for an
     /// open-egress child, a tool or a pre-flight test.
@@ -2180,8 +2181,8 @@ pub fn local_servers_rule(kind: ExecutorKind, granted: bool) -> String {
         (ExecutorKind::Bwrap, _) => {
             "allowed on the loopback of the turn's own network namespace (it can't reach this machine's other servers), with or without the grant".into()
         }
-        (ExecutorKind::Seatbelt, true) => {
-            "on: may listen on and connect to this machine's own addresses (also its other local servers); macOS can't hold a listener to loopback, so other machines may reach one it opens on 0.0.0.0 unless the macOS firewall blocks them".into()
+        (ExecutorKind::Seatbelt, _) => {
+            "not available on macOS yet: the Mac's sandbox can't keep a listener loopback-only, so agents here run without local servers (grant or not)".into()
         }
         (ExecutorKind::Landlock, true) => {
             "granted, but this tier has no network namespace to contain it, so it stays off (bubblewrap with user namespaces gives the agent its own loopback)".into()

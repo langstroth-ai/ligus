@@ -319,7 +319,7 @@ export function SandboxSection() {
                 <span className="text-[12.5px]">May run local servers</span>
                 <InfoTip
                   label="May run local servers"
-                  text="Some agent CLIs run their own helper server on this machine (agy does) and fail without this. On: the agent's turns may listen on and connect to this machine's own addresses, which includes your other local servers. On macOS a server it opens on every address can be reached from other machines unless the macOS firewall blocks it. Linux: with bubblewrap every turn already has its own loopback; the Landlock tier keeps it off. Files, keys, unix sockets and egress stay as they are."
+                  text="Some agent CLIs run their own helper server (agy does) and fail without it. Linux with bubblewrap: each turn has its own loopback, where that works; the Landlock tier keeps it off. Not available on macOS yet: the Mac's sandbox can't keep a listener loopback-only, so here it has no effect. Files, keys, unix sockets and egress never change."
                 />
               </span>
               <Switch
@@ -329,6 +329,11 @@ export function SandboxSection() {
                 disabled={!d.canEditShell}
               />
             </div>
+            {d.policies.some((p) => p.tier === "seatbelt") && (
+              <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
+                Not available on macOS yet: the Mac's sandbox can't keep a listener loopback-only, so it has no effect on this Mac.
+              </p>
+            )}
           </div>
         ) : (
           <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>

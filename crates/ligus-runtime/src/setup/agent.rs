@@ -77,7 +77,7 @@ pub(crate) fn steps(ops: &dyn SetupOps, inputs: &Inputs) -> Vec<StepDef> {
                 // (any harness takes --local-servers when asked for).
                 Field::new("local-servers", "May run local servers", FieldKind::Toggle)
                     .when("harness", &["antigravity"])
-                    .help("agy runs its own helper server on this machine and needs this. Its turns may then also reach other servers on this machine (ligus help agents)."),
+                    .help("agy runs its own helper server and needs this. Linux with bubblewrap only for now: not available on macOS yet (ligus help agents)."),
             ],
         ),
         StepDef::input(
@@ -313,6 +313,7 @@ fn local_servers(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, id: uui
     }
     if ops.local_servers(id) {
         ctx.ok("local-servers", "local servers", format!("@{name} may already run local servers"));
+        held_on_macos(ctx, ops);
         return true;
     }
     if ctx.dry_run() {
@@ -324,7 +325,8 @@ fn local_servers(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, id: uui
     }
     match ops.set_local_servers(id, true) {
         Ok(()) => {
-            ctx.ok("local-servers", "local servers", format!("@{name} may run local servers (listen and connect on this machine)"));
+            ctx.ok("local-servers", "local servers", format!("@{name} may run local servers"));
+            held_on_macos(ctx, ops);
             true
         }
         Err(e) => {
@@ -337,6 +339,13 @@ fn local_servers(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, id: uui
             );
             false
         }
+    }
+}
+
+/// One line when this host is a Mac: the grant is stored but has no effect.
+fn held_on_macos(ctx: &mut Ctx, ops: &dyn SetupOps) {
+    if ops.sandbox().tier == "seatbelt" {
+        ctx.warn("local-servers.macos", "local servers on this Mac", "not available on macOS yet: the Mac's sandbox can't keep a listener loopback-only, so it has no effect here", Some("run agy agents on a Linux host with the bubblewrap sandbox".into()));
     }
 }
 

@@ -363,7 +363,7 @@ refused on the command line.
 | `ligus config export` | prints the workspace runtimes as TOML. No key is ever exported; a key an older version stored in the workspace becomes a `secretRef` |
 | `ligus config import <file.toml>` | adds or replaces runtimes from that TOML (by id); a runtime with an inline key is refused |
 | `ligus agents [--json]` | lists workspace agents, and which may run local servers. |
-| `ligus agents set <agent> --local-servers on\|off [--json]` | turns an agent's [local-servers switch](../concepts/security.md#local-servers) on or off (agy needs it for its helper server). The workspace Owner's; in a shared workspace it needs a passkey, so use Settings → Sandbox there. Exit 6 when refused. |
+| `ligus agents set <agent> --local-servers on\|off [--json]` | turns an agent's [local-servers switch](../concepts/security.md#local-servers) on or off (agy needs it for its helper server; Linux with bubblewrap; not available on macOS yet, where it is stored but has no effect). The workspace Owner's; in a shared workspace it needs a passkey, so use Settings → Sandbox there. Exit 6 when refused. |
 | `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>] [--dry-run]` | defines an agent. |
 | `ligus hosts [--json]` | lists workspace hosts (devices and workers) |
 | `ligus register-worker [--label <name>]` | registers this box as a worker host, prints its host id |

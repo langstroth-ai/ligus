@@ -175,6 +175,7 @@ fn local_servers_are_offered_for_agy_only_and_stay_off_unless_asked() {
     assert_eq!(f.writes.last().map(String::as_str), Some("set_local_servers gem2 true"), "{:?}", f.writes);
     let gem2 = f.agents.iter().find(|a| a.name == "gem2").unwrap().id;
     assert_eq!(f.local_servers, vec![gem2]);
+    assert!(has(&o, "agent.local-servers.macos", Status::Warn), "a Mac says it has no effect here: {:?}", ids(&o));
     let n = f.writes.len();
     let again = run_(FlowId::Agent, &mut f, &[("harness", "antigravity"), ("name", "gem2"), ("local-servers", "on")]);
     assert_eq!(again.exit, 0);

@@ -1,6 +1,6 @@
 //! An agent's local-servers grant (`localServers`): off by default, only for
-//! that agent's own CLI child, and nothing but the network rules for this
-//! machine's addresses changes. The `sandbox_local_servers_*` tests run a
+//! that agent's own CLI child, held on macOS (no effect), and nothing else in
+//! the plan changes. The `sandbox_local_servers_*` tests run a
 //! probe under this host's real executor.
 
 use super::home_tests::plan_for;
@@ -88,22 +88,18 @@ fn a_tightened_envelope_drops_local_servers() {
     assert!(!plan_in(&TurnPolicy::outside_turn(HostKind::Desktop).envelope, &PathGrants::default()).local_servers);
 }
 
-/// The Seatbelt profile with the grant is the profile without it plus the
-/// three network rules, after every deny (later rules win).
+/// macOS is held: the Seatbelt profile with the grant is byte-identical to
+/// the profile without it (Seatbelt can't keep a listener loopback-only).
 #[test]
-fn seatbelt_adds_exactly_the_local_server_rules() {
+fn seatbelt_ignores_the_grant() {
     let off = plan_with(Purpose::Agent(ModelProviderKind::Antigravity), &PathGrants::default());
     let onp = plan_with(Purpose::Agent(ModelProviderKind::Antigravity), &on());
+    assert!(onp.local_servers, "the grant is still planned (and stored)");
     for port in [None, Some(4123)] {
         let (a, b) = (seatbelt::profile(&off, port), seatbelt::profile(&onp, port));
-        let extra = "(allow network-bind (local ip \"localhost:*\"))\n(allow network-inbound (local ip \"localhost:*\"))\n(allow network-outbound (remote ip \"localhost:*\"))\n";
-        assert_eq!(b, format!("{a}{extra}"), "only the three rules, last");
-        assert!(!extra.contains("unix-socket") && !extra.contains("file-"), "no unix-socket or file rule");
+        assert_eq!(b, a, "the profile doesn't change with the grant");
+        assert!(!b.contains("network-bind") && !b.contains("network-inbound"), "no listening rule: {b}");
     }
-    // Open egress (a stdio MCP server) never carries them.
-    let mut open = onp.clone();
-    open.egress = EgressPlan::Open;
-    assert!(!seatbelt::profile(&open, None).contains("network-bind"));
 }
 
 /// A probe that listens on 127.0.0.1:0 (as agy's language server does),
@@ -143,7 +139,7 @@ fn run_py(e: &dyn TurnExecutor, f: &Fixture, py: &str, code: &str, args: &[Strin
 }
 
 #[test]
-fn sandbox_local_servers_let_a_cli_listen_on_loopback_only_when_granted() {
+fn sandbox_local_servers_listen_only_inside_a_private_namespace() {
     let Some(e) = real_executor() else { return };
     let Some(py) = python() else {
         eprintln!("skipped: no python3");
@@ -153,9 +149,9 @@ fn sandbox_local_servers_let_a_cli_listen_on_loopback_only_when_granted() {
     let off = run_py(&*e, &f, py, LISTEN_PROBE, &[], false);
     let on = run_py(&*e, &f, py, LISTEN_PROBE, &[], true);
     match e.kind() {
+        // Held on macOS: refused with or without the grant.
         ExecutorKind::Seatbelt => {
-            assert!(off.contains("LISTEN_DENIED"), "off: {off}");
-            assert!(on.contains("LISTEN_OK"), "on: {on}");
+            assert!(off.contains("LISTEN_DENIED") && on.contains("LISTEN_DENIED"), "off: {off} on: {on}");
         }
         // Its own network namespace: loopback is the turn's, either way.
         ExecutorKind::Bwrap => {
@@ -197,9 +193,9 @@ fn sandbox_local_servers_leave_files_unix_sockets_and_egress_denied() {
     assert!(out.contains("EGRESS_DENIED"), "{out}");
 }
 
-/// What the grant means for this machine's other loopback servers: Seatbelt
-/// reaches them (its `localhost` is the machine); bubblewrap's namespace
-/// doesn't; the Landlock tier refuses.
+/// The grant never reaches this machine's other loopback servers: macOS
+/// ignores it, bubblewrap's namespace has its own loopback, the Landlock
+/// tier refuses.
 #[test]
 fn sandbox_local_servers_and_this_machines_other_servers() {
     let Some(e) = real_executor() else { return };
@@ -215,8 +211,5 @@ fn sandbox_local_servers_and_this_machines_other_servers() {
     let off = run_py(&*e, &f, py, probe, &[port.to_string()], false);
     assert!(off.contains("HOST_DENIED"), "without the grant nothing on the host is reached: {off}");
     let on = run_py(&*e, &f, py, probe, &[port.to_string()], true);
-    match e.kind() {
-        ExecutorKind::Seatbelt => assert!(on.contains("HOST_CONNECTED"), "{on}"),
-        _ => assert!(on.contains("HOST_DENIED"), "{on}"),
-    }
+    assert!(on.contains("HOST_DENIED"), "{on}");
 }

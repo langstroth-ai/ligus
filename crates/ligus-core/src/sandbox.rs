@@ -209,9 +209,10 @@ pub struct AgentGrant {
     /// in turns that a member other than the workspace Owner starts.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shell: bool,
-    /// The agent's turns may run local servers: listen on and connect to
-    /// this machine's own addresses (a CLI such as `agy` that starts a
-    /// helper server and talks to it). Off unless the Owner turns it on.
+    /// The agent's turns may run local servers (a CLI such as `agy` that
+    /// starts a helper server and talks to it), where the host's sandbox can
+    /// keep them loopback-only (Linux with bubblewrap; held on macOS). Off
+    /// unless the Owner turns it on.
     /// Additive: an older build ignores it, so its turns run without it
     /// (narrower). Files, unix sockets and egress are unchanged.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

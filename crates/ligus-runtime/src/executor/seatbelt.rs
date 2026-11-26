@@ -30,7 +30,6 @@
 //! (deny network*)                                   ; proxied/closed egress
 //! (deny network-outbound (remote unix-socket)) …     ; open egress: no host unix sockets (but DNS)
 //! (allow network-outbound (remote ip "localhost:<proxy port>"))
-//! (allow network-bind (local ip "localhost:*")) …   ; only an agent granted local servers
 //! (allow network-outbound (remote unix-socket (path-literal "<ligus mcp socket>")))
 //! ```
 //!
@@ -396,19 +395,10 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
         }
         _ => p.push_str("(deny network*)\n"),
     }
-    // The agent's local servers (its signed `localServers` grant): listen,
-    // accept and connect on this machine's own addresses. Seatbelt's
-    // `localhost` means *this machine* (each of its addresses, not just
-    // loopback) and its `local` filters don't hold a bind to one address:
-    // a listener can take 0.0.0.0 and accept from other machines
-    // (`sandbox_local_servers_*` pins what holds). Connections out still
-    // reach only this machine, unix sockets stay denied, the files are
-    // untouched.
-    if plan.local_servers && !matches!(plan.egress, EgressPlan::Open) {
-        p.push_str("(allow network-bind (local ip \"localhost:*\"))\n");
-        p.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
-        p.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
-    }
+    // An agent's `localServers` grant is held on macOS: Seatbelt's
+    // `localhost` means *this machine* (each of its addresses) and its
+    // `local` filters don't hold a bind to one address, so a listener could
+    // take 0.0.0.0 and accept from other machines. The profile ignores it.
     // The turn's Ligus MCP socket (D.3.2): the one extra connection allowed.
     if let Some(sock) = &plan.ligus_mcp_socket {
         p.push_str(&format!("(allow network-outbound (remote unix-socket (path-literal {})))\n", q(sock)));

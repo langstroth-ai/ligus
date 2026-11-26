@@ -1721,7 +1721,10 @@ fn cmd_agents_set(cfg: &Config, rest: &[String]) -> Result<()> {
     } else if before == on {
         println!("@{name}: local servers already {}", if on { "on" } else { "off" });
     } else if on {
-        println!("@{name} may now run local servers (listen and connect on this machine; ligus doctor --sandbox says what that means here). Share with `ligus sync`.");
+        println!("@{name} may now run local servers (ligus doctor --sandbox says what that means here). Share with `ligus sync`.");
+        if ligus_runtime::executor::sandbox_status().kind == ligus_runtime::executor::ExecutorKind::Seatbelt {
+            println!("note: not available on macOS yet: the Mac's sandbox can't keep a listener loopback-only, so it has no effect here.");
+        }
     } else {
         println!("@{name} may no longer run local servers. Share with `ligus sync`.");
     }
@@ -2121,7 +2124,7 @@ fn sandbox_policy_lines(cfg: &Config, runtime: Option<&str>, agent: Option<&str>
             out.push(format!("  agent {id}  shell for every member's turns (an Owner's grant)"));
         }
         if a.local_servers {
-            out.push(format!("  agent {id}  local servers: listen and connect on this machine (an Owner's grant)"));
+            out.push(format!("  agent {id}  local servers (an Owner's grant; Linux with bubblewrap; no effect on macOS yet)"));
         }
     }
     Ok(out)
