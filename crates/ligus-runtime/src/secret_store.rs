@@ -1830,6 +1830,14 @@ pub fn for_data_dir(data_dir: &Path) -> Arc<dyn SecretStore> {
     map.entry(data_dir.to_path_buf()).or_insert_with(|| Arc::new(File0600::new(data_dir))).clone()
 }
 
+/// The store [`init_for_data_dir`] or [`set_for_data_dir`] chose for
+/// `data_dir` in this process, if one did. Unlike [`for_data_dir`] it never
+/// falls back to plain files: the event store moves its seeds only into a
+/// store the host picked (identity model v2, 10.3).
+pub fn registered(data_dir: &Path) -> Option<Arc<dyn SecretStore>> {
+    stores().lock().unwrap_or_else(|e| e.into_inner()).get(data_dir).cloned()
+}
+
 /// Use `store` for `data_dir` from now on in this process (tests, and hosts
 /// that choose a backend from their own config).
 pub fn set_for_data_dir(data_dir: &Path, store: Arc<dyn SecretStore>) {

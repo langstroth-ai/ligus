@@ -34,6 +34,7 @@ use crate::worker::{self, TurnSink, TurnState, WorkerCtx};
 use crate::{env_opt, open_service, sync_once, uuid_of_room, Config};
 
 pub mod admissions_api;
+pub mod approvals_api;
 pub mod api;
 pub mod appearance;
 pub mod contacts_api;
@@ -68,7 +69,7 @@ pub mod workspace_repos_api;
 #[cfg(test)]
 mod identity_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// How long `ligus serve` waits for a turn in flight on SIGTERM / Ctrl-C.
 const STOP_GRACE: Duration = Duration::from_secs(12);
@@ -224,7 +225,14 @@ async fn test_person_start(cfg: &Config) -> Result<(ChatService, bool)> {
 /// own service member ([`crate::admit::prepare_box`] made it a member).
 fn register_own(svc: &mut ChatService, ws: Uuid, host_id: &str, opts: &ServeOptions) -> Result<()> {
     let host = crate::with_gateways(WorkspaceHost::new(host_id.to_string(), HostKind::Worker, opts.label.clone()));
-    svc.ensure_host(ws, host).map(|_| ()).context("registering this box as a workspace host")
+    svc.ensure_host(ws, host).map(|_| ()).context("registering this box as a workspace host")?;
+    // Its synced device name (identity model v2, 6.3): what My devices and
+    // People show for it.
+    let device = svc.device_id();
+    if let Err(e) = svc.set_device_label(ws, device, &opts.label) {
+        eprintln!("serve: naming this box's device failed (it keeps working): {e}");
+    }
+    Ok(())
 }
 
 /// State shared by the API handlers, the sync loop and the worker thread.
@@ -295,6 +303,10 @@ pub struct Shared {
     /// Whose device this box is (see [`Standing`]): its own identity, its
     /// owner's enrolled device, or revoked. Re-read after every pull.
     standing: Mutex<Standing>,
+    /// Members whose account certified this box's device key without the
+    /// box ever acting for them (names). Foreign: shown in `/v1/health`,
+    /// never obeyed (identity model v2, 7.2).
+    foreign_certifiers: Mutex<Vec<String>>,
     /// Host liveness from the relay's presence channel (see
     /// [`ligus_runtime::host_presence`]), refreshed by `presence_loop`.
     pub presence: ligus_runtime::HostPresence,
@@ -325,6 +337,10 @@ pub struct Shared {
     pub held: ligus_runtime::dm_delivery::HeldInvites,
     /// Wakes the held-invite loop (after a pull, or a new held invite).
     pub held_kick: Notify,
+    /// Unix seconds of the last blob renewal pass, and whether one is
+    /// running ([`renew_attachment_blobs`]).
+    renewed_blobs_at: std::sync::atomic::AtomicI64,
+    renewing_blobs: AtomicBool,
     /// The last contacts status (`contacts_api::status`).
     pub contact_state: Mutex<String>,
     /// Drop-box invites from the last listing (codes stay on the box).
@@ -333,6 +349,8 @@ pub struct Shared {
     pub typing: typing_api::Typing,
     /// Reverse-QR phone enrollment: requests relayed to desktops (`phone_enroll_api`).
     pub phone_enroll: phone_enroll_api::EnrollBox,
+    /// Code-match approval requests a paired phone approves (`approvals_api`).
+    pub approvals: approvals_api::Approvals,
 }
 
 /// How long a dashboard snapshot of the workspace is reused.
@@ -555,19 +573,42 @@ impl Shared {
             Standing::Revoked => "revoked",
             Standing::Own => "member",
         };
-        json!({ "mode": mode, "actorId": actor.id, "displayName": ligus_proto::names::clean_display_name(&actor.display_name), "deviceFingerprint": fingerprint })
+        let foreign = self.foreign_certifiers.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut v = json!({ "mode": mode, "actorId": actor.id, "displayName": ligus_proto::names::clean_display_name(&actor.display_name), "deviceFingerprint": fingerprint });
+        if !foreign.is_empty() {
+            v["alsoCertifiedBy"] = json!(foreign);
+        }
+        v
     }
 
-    /// Re-read this box's standing after a pull, switching identity when the
-    /// owner approves it (or revokes it) while it runs. Returns whether it changed.
+    /// Re-read this box's standing after a pull: a revocation blocks
+    /// writes. A certificate another member put on this box's device key is
+    /// foreign: it never blocks, redirects or adopts the box (only the box's
+    /// own signatures say whose it is); it is logged once and shown in
+    /// `/v1/health`. Returns whether the standing changed.
     pub fn refresh_standing(&self) -> bool {
-        let next = match self.lock().device_standing(self.ws, None) {
+        // Each phone's person, recorded while one account alone certified it,
+        // so a certificate someone adds later never moves it (7.3a).
+        if let Err(e) = self.lock().pin_phone_persons(self.ws) {
+            eprintln!("serve: recording phones' persons failed: {e}");
+        }
+        let (next, foreign) = match self.lock().device_standing_and_foreign(self.ws) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("serve: reading this box's device standing failed: {e}");
                 return false;
             }
         };
+        let names: Vec<String> = foreign.iter().map(|a| ligus_proto::names::clean_display_name(&a.display_name)).collect();
+        {
+            let mut known = self.foreign_certifiers.lock().unwrap_or_else(|e| e.into_inner());
+            if *known != names {
+                for n in names.iter().filter(|n| !known.contains(n)) {
+                    println!("ligus serve: {n}'s account also certified this box's device key. That gives {n} nothing over this box; it keeps working as itself.");
+                }
+                *known = names;
+            }
+        }
         let prev = self.standing();
         if next == prev {
             return false;
@@ -579,11 +620,12 @@ impl Shared {
                     svc.set_write_block(Some(REVOKED.into()));
                     eprintln!("ligus serve: {REVOKED}.");
                 }
-                // Phase B: a box never acts as a person. Someone certified
-                // this box's device for their account while it ran: stop
-                // writing rather than take on that identity.
+                // Phase B: a box never acts as a person. This box signed as
+                // someone else (an old owner-device box): stop writing
+                // rather than keep that identity. A certificate alone never
+                // gets here (see `device_enroll::standing`).
                 (_, Standing::OwnerDevice(owner)) => {
-                    let why = format!("this box's device was certified as {}'s device; {}", owner.display_name, crate::admit::OWNER_MODE_REMOVED);
+                    let why = format!("this box's device acted as {}'s device (it signed as them); {}", owner.display_name, crate::admit::OWNER_MODE_REMOVED);
                     eprintln!("ligus serve: {why}");
                     svc.set_write_block(Some(why));
                 }
@@ -1097,7 +1139,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     let first_sync = synced.then(time::OffsetDateTime::now_utc);
     let ws = uuid_of_room(&cfg.room);
     let host_id = svc.device_id().to_string();
-    let standing = svc.device_standing(ws, None).unwrap_or(Standing::Own);
+    let standing = svc.device_standing(ws).unwrap_or(Standing::Own);
     match &standing {
         Standing::Revoked => {
             svc.set_write_block(Some(REVOKED.into()));
@@ -1176,6 +1218,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         rt: tokio::runtime::Handle::current(),
         revisions: Mutex::new(HashMap::new()),
         standing: Mutex::new(standing),
+        foreign_certifiers: Mutex::new(Vec::new()),
         presence: ligus_runtime::HostPresence::new(),
         sync_status: Mutex::new((first_sync, None)),
         busy: Mutex::new(HashSet::new()),
@@ -1187,10 +1230,13 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         contact_lock: tokio::sync::Mutex::new(()),
         held: ligus_runtime::dm_delivery::HeldInvites::for_data_dir(&cfg.data_dir),
         held_kick: Notify::new(),
+        renewed_blobs_at: std::sync::atomic::AtomicI64::new(0),
+        renewing_blobs: AtomicBool::new(false),
         contact_state: Mutex::new("unknown".into()),
         pending_codes: identity_api::PendingCodes::default(),
         typing: typing_api::Typing::default(),
         phone_enroll: Default::default(),
+        approvals: Default::default(),
         ligus_snapshot: Mutex::new(None),
         dashboard_mcp: dashboard_mcp_registry(),
         repos: repos_api::RepoState::default(),
@@ -1223,6 +1269,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         tasks.push(tokio::spawn(presence_loop(shared.clone(), rx.clone())));
         tasks.push(tokio::spawn(contact_loop(shared.clone(), rx.clone())));
         tasks.push(tokio::spawn(phone_enroll_api::relay_loop(shared.clone(), rx.clone())));
+        tasks.push(tokio::spawn(approvals_api::poll_loop(shared.clone(), rx.clone())));
     }
     tasks.push(tokio::spawn(dms::dm_sync_loop(shared.clone(), rx.clone())));
     tasks.push(tokio::spawn(contacts_api::held_loop(shared.clone(), rx.clone())));
@@ -1396,6 +1443,9 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                     // A peer's contact id may have arrived: deliver what waits.
                     shared.held_kick.notify_one();
                 }
+                if !engine.is_behind() {
+                    renew_attachment_blobs(&shared);
+                }
                 if engine.is_behind() {
                     // Mid catch-up (a large room): next round of pages now.
                     Duration::ZERO
@@ -1438,6 +1488,40 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             _ = stop.wait_for(|s| *s) => return,
         }
     }
+}
+
+/// How often the box looks for attachment blobs to renew.
+const BLOB_RENEW_EVERY_SECS: i64 = 60 * 60;
+
+/// Renew the relay blobs of the files this box shared (an agent's approved
+/// offers) that are still live, past a third of their life, at most once a
+/// day each (identity model v2, 10.5). A box is never an Admin's desktop,
+/// so it renews only its own. Low priority: after a caught-up sync round, at
+/// most once an hour, in its own task; a relay without the retain route
+/// changes nothing.
+fn renew_attachment_blobs(shared: &Arc<Shared>) {
+    let now = Timestamp::now().inner().unix_timestamp();
+    if now - shared.renewed_blobs_at.load(Ordering::SeqCst) < BLOB_RENEW_EVERY_SECS || shared.renewing_blobs.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let shared = shared.clone();
+    tokio::spawn(async move {
+        let due = shared.lock().blob_renewals_due(shared.ws, false, now);
+        match due {
+            Ok(due) if !due.is_empty() => {
+                if let Ok(client) = crate::relay_client(&shared.cfg) {
+                    let outcomes = ligus_runtime::attachment_blob::renew_blobs(&client, &shared.cfg.room, &due).await;
+                    if let Err(e) = shared.lock().record_blob_renewals(shared.ws, &outcomes, now) {
+                        eprintln!("attachments: recording blob renewals: {e}");
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("attachments: planning blob renewals: {e}"),
+        }
+        shared.renewed_blobs_at.store(now, Ordering::SeqCst);
+        shared.renewing_blobs.store(false, Ordering::SeqCst);
+    });
 }
 
 /// Host liveness: publish this box's beat to the relay's presence channel and
@@ -1889,7 +1973,7 @@ pub fn cmd_pair(cfg: &Config, opts: &ServeOptions, relay_only: bool) -> Result<(
         }
     }
     // Best effort: a box whose store can't be read yet just gets no hint.
-    let standing = open_service(cfg).ok().and_then(|svc| svc.device_standing(uuid_of_room(&cfg.room), None).ok());
+    let standing = open_service(cfg).ok().and_then(|svc| svc.device_standing(uuid_of_room(&cfg.room)).ok());
     if let Some(hint) = standing.as_ref().and_then(pair::member_hint) {
         println!("{hint}");
     }

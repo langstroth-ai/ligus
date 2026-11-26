@@ -391,6 +391,11 @@ pub struct SecurityStatusDto {
     /// (under rules v2 a new device of an account with a passkey needs
     /// **Confirm this device**).
     device_confirmed: bool,
+    /// This account is an Owner here (only an Owner switches the rules).
+    is_owner: bool,
+    /// Rules 3's readiness list (decision O6): devices whose certificate
+    /// would stop counting, one plain line each. Empty when nothing changes.
+    rules3_gaps: Vec<String>,
 }
 
 /// Passkeys of this account on the active workspace, the rules version and
@@ -413,7 +418,30 @@ pub fn security_status_sync(state: State<'_, AppState>) -> Result<SecurityStatus
     let cfg = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).ok().flatten();
     let rules = cfg.as_ref().map(|c| c.authz.rules).unwrap_or(ligus_core::authz::RULES_GENESIS);
     let (_, timeline) = svc.store().load_config(ws, None, None).map_err(|e| e.to_string())?;
+    let me = svc.author().id.clone();
+    let is_owner = cfg.as_ref().is_some_and(|c| c.role_of(&me) == ligus_core::WorkspaceRole::Owner);
+    let rules3_gaps = if rules < ligus_core::authz::RULES_V3 {
+        let name_of = |account: uuid::Uuid| {
+            cfg.as_ref()
+                .map(|c| ligus_runtime::profiles::name_of(c, account, "someone"))
+                .map(|n| crate::shown(&n))
+                .unwrap_or_else(|| "someone".into())
+        };
+        svc.rules3_readiness(ws)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|g| {
+                let kind = if g.phone { "phone" } else { "device" };
+                let short = &g.device_id.to_string()[..8];
+                format!("{}'s {kind} {short} would stop counting until it confirms", name_of(g.account_id))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     Ok(SecurityStatusDto {
+        is_owner,
+        rules3_gaps,
         passkeys,
         rules,
         key_version: timeline.current().key_epochs.head_version(),

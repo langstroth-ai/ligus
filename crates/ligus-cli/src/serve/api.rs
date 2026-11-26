@@ -855,6 +855,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
     let r = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/me", get(super::me_api::me))
+        .route("/v1/phone-consent", post(super::me_api::phone_consent))
         .route("/v1/presence/prepare", post(super::presence_api::prepare))
         .route("/v1/presence/commit", post(super::presence_api::commit))
         .route("/v1/admissions/prepare", post(super::admissions_api::prepare))
@@ -932,7 +933,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/tunnel/direct", get(tunnel_direct))
         .route("/v1/revocations", get(list_revocations))
         .route("/v1/revocations/{device}/retry", post(retry_revocation));
-    super::phone_enroll_api::routes(r)
+    super::approvals_api::routes(super::phone_enroll_api::routes(r))
         .layer(middleware::from_fn_with_state(shared.clone(), auth))
         .with_state(shared)
 }
@@ -1194,6 +1195,11 @@ pub(super) fn agent_dto(s: &Shared, a: &ligus_core::WorkspaceAgent, config: &Cha
     }
     if let Some(r) = rt.filter(|r| !r.model.trim().is_empty()) {
         v["model"] = json!(r.model);
+    }
+    // A key an older version stored in the workspace is never used or sent;
+    // the phone and lt show this calm warning on the agent's row.
+    if rt.is_some_and(|r| r.credential.is_legacy_inline()) {
+        v["runtimeWarning"] = json!(ligus_core::LEGACY_INLINE_WARNING);
     }
     if !a.host_id.is_empty() {
         v["hostId"] = json!(a.host_id);

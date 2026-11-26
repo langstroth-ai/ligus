@@ -30,7 +30,7 @@ use crate::repos::RepoBindings;
 
 #[path = "../../../ligus-runtime/src/test_relay.rs"]
 #[allow(dead_code)]
-mod test_relay;
+pub(crate) mod test_relay;
 
 async fn spawn(router: Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5226,8 +5226,10 @@ async fn internal_errors_answer_a_generic_message() {
     assert!(String::from_utf8_lossy(&body).contains("deviceId isn't a uuid"));
 }
 
+mod approvals;
 mod box_removal;
 mod devices_link;
+mod foreign_certificate;
 
 /// The payload field of a hive-envelope-v3 preimage (its fourth
 /// length-prefixed field): what a phone digests (agent questions 6.3).

@@ -139,4 +139,20 @@ describe("SharedAttachmentCard", () => {
     expect(screen.getByText(/blocked in this workspace/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Check" })).toBeNull();
   });
+  it("shows an expired file as a note, with nothing to download", () => {
+    render(<SharedAttachmentCard sessionId="s1" view={view({ expired: true })} />);
+    const note = screen.getByTestId("shared-attachment-expired");
+    expect(note).toHaveTextContent("photo.png");
+    expect(note).toHaveTextContent("This file expired on the relay");
+    expect(screen.queryByRole("button", { name: "Check" })).toBeNull();
+    expect(screen.queryByTestId("shared-attachment")).toBeNull();
+  });
+
+  it("turns a download the relay can't serve into the expired note", async () => {
+    vi.mocked(ipc.checkAttachment).mockRejectedValue("This file expired on the relay");
+    render(<SharedAttachmentCard sessionId="s1" view={view()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Check" }));
+    expect(await screen.findByTestId("shared-attachment-expired")).toHaveTextContent("This file expired on the relay");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });
