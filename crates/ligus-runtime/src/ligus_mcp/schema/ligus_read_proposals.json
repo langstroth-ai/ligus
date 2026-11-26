@@ -3,6 +3,10 @@
   "inputSchema": {
     "additionalProperties": false,
     "properties": {
+      "archived": {
+        "description": "Also list archived proposals (left out by default)",
+        "type": "boolean"
+      },
       "chatId": {
         "description": "Chat id",
         "maxLength": 64,

@@ -86,7 +86,44 @@ pub struct HumanAnswer {
 /// first answer (D.4.2). `None` = timed out (or the turn ended).
 pub trait HumanAsker: Send + Sync {
     fn ask(&self, question: String, options: Vec<String>, timeout: Duration) -> Pin<Box<dyn Future<Output = Option<HumanAnswer>> + Send + '_>>;
+
+    /// Put a permission request to the people who may grant it, as a grant
+    /// card (`docs/design/agent-questions.md` 6.2). The default asks it as
+    /// a question with Ligus's labels (an asker without grant cards).
+    fn ask_grant(&self, req: GrantRequest) -> Pin<Box<dyn Future<Output = Option<HumanAnswer>> + Send + '_>> {
+        let tool = serde_json::json!({"title": if req.title.is_empty() { "a tool" } else { req.title.as_str() }, "kind": req.tool});
+        let (question, choices) = crate::provider::acp::permission_question(&req.agent_label, &tool, req.standing);
+        self.ask(question, choices, req.timeout)
+    }
 }
+
+/// An ACP permission request, as the host puts it on a grant card.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GrantRequest {
+    /// The asking agent's name (Ligus's words around it).
+    pub agent_label: String,
+    /// The ACP tool kind (`execute`, `edit`, `fetch`, …).
+    pub tool: String,
+    /// The agent's own description of the call (unverified).
+    pub title: String,
+    /// The call's own content: the raw input, the command, the locations.
+    pub detail: String,
+    /// The detail was too large to review on a card: no Allow.
+    pub too_large: bool,
+    pub cwd: String,
+    /// The agent offered only a permission for the rest of its session.
+    pub standing: bool,
+    /// The call reaches outside this turn's sandbox (a path outside the
+    /// worktree, or open egress): the grant needs the person's passkey.
+    pub outside_sandbox: bool,
+    /// The runtime reports the call comes from one of the turn's
+    /// sub-agents (ACP tool-call metadata).
+    pub subagent: bool,
+    pub timeout: Duration,
+}
+
+/// The most detail a grant card carries before it offers no Allow.
+pub const MAX_GRANT_DETAIL_BYTES: usize = 8 * 1024;
 
 /// The scope of one agent turn.
 #[derive(Clone, Default)]

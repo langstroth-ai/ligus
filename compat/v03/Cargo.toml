@@ -1,0 +1,16 @@
+[package]
+name = "ligus-compat-v03"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Mixed-version tests: the released 0.3 core and this checkout's core fold the same logs alike (identity model v2, X1)."
+
+[workspace]
+
+[dependencies]
+
+[dev-dependencies]
+ligus-core = { path = "../../crates/ligus-core" }
+ligus-core-v03 = { package = "ligus-core", git = "https://github.com/langstroth-ai/ligus", tag = "v0.3.0" }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }

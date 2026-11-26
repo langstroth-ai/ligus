@@ -513,6 +513,12 @@ phone with the same collaboration state as the desktop's Review card:
   instruction to the agent that produced the proposal. When that agent files
   its next version in the chat, the new version is linked to the old one and
   the old one leaves the open list.
+- **Archive.** A settled proposal (applied, rejected or replaced) has
+  **Archive** in its menu: it leaves the inbox for everyone in the workspace,
+  signed by the phone like a vote. Archived proposals (by a person, or after
+  the workspace's auto-archive days) are out of the lists and badges and
+  listed apart under **Archived proposals**, where **Restore** brings one
+  back. See [Archiving proposals](right-rail.md#archiving-proposals).
 - **Rendered Markdown.** A changed `.md`/`.markdown`/`.mdx` file (or a
   `README`) has a *Diff | Rendered* switch. *Rendered* shows the document as
   formatted Markdown, with a rail beside the blocks the proposal changed, and

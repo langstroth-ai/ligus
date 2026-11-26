@@ -12,7 +12,7 @@ import {
   removeAndRevoke,
   setMemberRole,
   passkeyRegrant,
-  workspaceMembers,
+  relayMembershipStatus,
   workspaceRemoveMember,
   workspaceClaimMembership,
   workspaceListInvites,
@@ -55,7 +55,8 @@ import {
   voteProposal,
   refineProposal,
   requestProposalChanges,
-  dismissProposals,
+  archiveProposals,
+  hideProposals,
   type ProposalDto,
   type ApplyRequestDto,
   type RuntimeSummaryDto,
@@ -79,6 +80,8 @@ import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
 import { toast, errMsg } from "@/components/Toast";
 import { inviteError } from "@/lib/invites";
 import { confirmThen } from "@/lib/confirm";
+import { openSettingsTab } from "@/lib/nav";
+import { RelayMembershipLine } from "@/components/RelayMembershipLine";
 import { useRowMenu, type RowAction } from "@/components/RowMenu";
 import { MoreMenu, type MoreMenuItem } from "@/components/MoreMenu";
 import { Sheet } from "@/components/kit/Sheet";
@@ -123,7 +126,7 @@ import { AgentAsks } from "@/components/AgentAsks";
 import { MemoryPane } from "@/components/MemoryPane";
 import { hostGatewaysLabel } from "@/components/settings/GatewayPicker";
 import { LIKELY_ME_HINT, likelyMeReason } from "@/lib/likelyMe";
-import { requestDevices } from "@/lib/nav";
+import { openArchivedProposals, requestDevices } from "@/lib/nav";
 
 // Re-exported from the shared pane source so existing
 // `import type { UtilityPane } from "@/components/RightRail"` keeps working.
@@ -1195,13 +1198,17 @@ function ProposalCard({
   proposal,
   sessionId,
   onChanged,
-  onDismiss,
+  onArchive,
+  onHide,
   defaultOpen,
 }: {
   proposal: ProposalDto;
   sessionId: string;
   onChanged: () => void;
-  onDismiss: (dismissed: boolean) => void;
+  /// Archive for everyone (true) or restore to the inbox (false).
+  onArchive: (archived: boolean) => void;
+  /// Hide for me on this device (true) or show again (false).
+  onHide: (hidden: boolean) => void;
   /// Open the detail on mount. Rows start as one line; the first active
   /// proposal opens (you're reviewing it), the rest and settled ones don't.
   defaultOpen?: boolean;
@@ -1350,9 +1357,13 @@ function ProposalCard({
           onSelect: () => requestApply.mutate(h.id),
         }))
       : []),
-    ...(settled
-      ? [{ label: proposal.dismissed ? "Restore to the inbox" : "Dismiss", onSelect: () => onDismiss(!proposal.dismissed) }]
+    ...(proposal.canArchive
+      ? [{ label: "Archive", title: "Takes it out of the inbox for everyone. Restore it from Archived proposals.", onSelect: () => onArchive(true) }]
       : []),
+    ...(proposal.archived ? [{ label: "Restore", title: "Back in the inbox for everyone", onSelect: () => onArchive(false) }] : []),
+    proposal.hidden
+      ? { label: "Show again", title: "Back in your inbox on this device", onSelect: () => onHide(false) }
+      : { label: "Hide for me", title: "Only on this device. Others still see it.", onSelect: () => onHide(true) },
   ]);
   return (
     <li className="px-1 py-2" {...rowMenu.rowProps} data-testid="proposal-row">
@@ -1794,11 +1805,10 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
     queryKey: ["proposals", sessionId],
     queryFn: () => listProposals(sessionId),
   });
-  // Settled work is history, so it starts collapsed; dismissed work is history
-  // the reader has explicitly filed away, so it stays out of the way until asked
-  // for. Neither is deleted — both shelves can be reopened.
+  // Settled work is history, so it starts collapsed. Archived and hidden
+  // proposals leave the pane for the Archived proposals view (⋯); nothing is
+  // deleted.
   const [showSettled, setShowSettled] = useState(false);
-  const [showDismissed, setShowDismissed] = useState(false);
 
   // Alternatives of a proposal set render inside their set, not on their own.
   const sets = useProposalSets(sessionId);
@@ -1807,12 +1817,26 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
     qc.invalidateQueries({ queryKey: ["proposals", sessionId] });
     qc.invalidateQueries({ queryKey: ["chat", sessionId] });
   };
-  const dismiss = async (ids: string[], dismissed: boolean) => {
+  const afterShelving = () => {
+    qc.invalidateQueries({ queryKey: ["proposals", sessionId] });
+    qc.invalidateQueries({ queryKey: ["archived-proposals"] });
+    qc.invalidateQueries({ queryKey: ["chats", "attention"] });
+  };
+  const archive = async (ids: string[], archived: boolean) => {
     try {
-      await dismissProposals(sessionId, ids, dismissed);
-      qc.invalidateQueries({ queryKey: ["proposals", sessionId] });
+      const n = await archiveProposals(sessionId, ids, archived);
+      afterShelving();
+      if (archived && n > 0) toast.success(n === 1 ? "Archived." : `${n} archived.`);
     } catch (e) {
-      toast.error(`Couldn't ${dismissed ? "dismiss" : "restore"}: ${errMsg(e)}`);
+      toast.error(`Couldn't ${archived ? "archive" : "restore"}: ${errMsg(e)}`);
+    }
+  };
+  const hide = async (ids: string[], hidden: boolean) => {
+    try {
+      await hideProposals(ids, hidden);
+      afterShelving();
+    } catch (e) {
+      toast.error(`Couldn't ${hidden ? "hide" : "show"} it: ${errMsg(e)}`);
     }
   };
   const card = (proposal: ProposalDto, i = 1) => (
@@ -1821,7 +1845,8 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
       proposal={proposal}
       sessionId={sessionId}
       onChanged={refresh}
-      onDismiss={(dismissed) => dismiss([proposal.id], dismissed)}
+      onArchive={(archived) => archive([proposal.id], archived)}
+      onHide={(hidden) => hide([proposal.id], hidden)}
       defaultOpen={!isSettled(proposal) && i === 0}
     />
   );
@@ -1829,7 +1854,17 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
   const loading = proposals.isPending || sets.isPending;
   const failed = proposals.isError || sets.isError;
   return (
-    <RailFrame title="Review" about="Pending decisions and proposal quorum for this chat." docs={PANE_DOCS.review}>
+    <RailFrame
+      title="Review"
+      about="Pending decisions and proposal quorum for this chat."
+      docs={PANE_DOCS.review}
+      more={[
+        {
+          label: "Archived proposals",
+          onSelect: openArchivedProposals,
+        },
+      ]}
+    >
       <AgentAsks sessionId={sessionId} />
       <QueuedWorkSection />
       {failed && (
@@ -1864,9 +1899,10 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
           action={
             <button
               className="text-xs text-ink-soft transition-colors hover:text-ink"
-              onClick={() => dismiss(groups.settled.map((p) => p.id), true)}
+              data-tip="Archives them for everyone"
+              onClick={() => archive(groups.settled.filter((p) => p.canArchive).map((p) => p.id), true)}
             >
-              Clear settled
+              Archive settled
             </button>
           }
         >
@@ -1880,17 +1916,7 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
         </Section>
       )}
 
-      {groups.dismissed.length > 0 && (
-        <Section title="Dismissed">
-          <FormDisclosure
-            label={`${groups.dismissed.length} dismissed`}
-            open={showDismissed}
-            onToggle={() => setShowDismissed((v) => !v)}
-          >
-            <RowList label="Dismissed proposals">{groups.dismissed.map((p) => card(p))}</RowList>
-          </FormDisclosure>
-        </Section>
-      )}
+
           </>
       )}
     </RailFrame>
@@ -2032,9 +2058,9 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
   // Server-side membership (enforced by a relay with membership on). Distinct from
   // the roster above: this is who the *relay* will accept writes from.
   const relayOn = Boolean(sync.data?.relayConfigured);
-  const srvMembers = useQuery({
+  const relayMembership = useQuery({
     queryKey: ["server-members"],
-    queryFn: workspaceMembers,
+    queryFn: relayMembershipStatus,
     enabled: relayOn,
   });
   const audit = useQuery({ queryKey: ["membership-audit", sessionId], queryFn: listMembershipAudit });
@@ -2043,14 +2069,19 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     mutationFn: workspaceClaimMembership,
     onSuccess: (claimed) => {
       refreshSrv();
-      toast.success(
-        claimed
-          ? "Membership enabled — you're the owner. The relay now enforces who can write."
-          : "This relay doesn't enforce membership (open/self-host), or it's already enabled.",
-      );
+      if (claimed) {
+        toast.success("Claimed. You're the owner on the relay, and it now refuses devices whose token names no member.");
+      } else {
+        toast.error("Not claimed: this relay has membership turned off, or someone already claimed this workspace.");
+      }
     },
     onError: (e) => toast.error(`Couldn't claim: ${errMsg(e)}`),
   });
+  const claim = () =>
+    confirmThen(
+      "Claim this workspace on the relay? You become its owner there, and the relay then refuses reads and writes from every device whose relay token doesn't name a member, including your other devices and boxes until you add them. Ligus can't undo a claim.",
+      () => claimMutation.mutate(),
+    );
   const srvRemoveMutation = useMutation({
     mutationFn: (account: string) => workspaceRemoveMember(account),
     onSuccess: (r) => {
@@ -2126,7 +2157,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
   const roster = members.data ?? [];
   const relayByMember = new Map<string, ServerMember>();
   const relayOnly: ServerMember[] = [];
-  for (const m of srvMembers.data ?? []) {
+  for (const m of relayMembership.data?.members ?? []) {
     const hit = relayMemberFor(m, profile.data?.accountId, roster);
     if (hit) relayByMember.set(hit.id, m);
     else relayOnly.push(m);
@@ -2136,7 +2167,8 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
       `Remove ${name} from this workspace? They're removed on the relay and from the workspace, then the key is rotated so they can't read new messages.`,
       () => srvRemoveMutation.mutate(m.account),
     );
-  const relayEnforced = relayOn && (srvMembers.data ?? []).length > 0;
+  const relayState = relayMembership.data?.state;
+  const relayEnforced = relayOn && (relayState === "claimed" || relayState === "hidden");
   // "Is this you on another computer?": only where Add a computer works (a
   // team workspace, a desktop holding your account key).
   const canLinkComputers = Boolean(activeRoom && profile.data?.safetyCode);
@@ -2168,23 +2200,13 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
             your own, re-create it; identity is stable going forward.
           </div>
         )}
-        {relayOn && srvMembers.isSuccess && (srvMembers.data ?? []).length === 0 && (
-          <div
-            className="flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs"
-            style={{ borderColor: "var(--ligus-warn-line)", background: "var(--ligus-warn-tint)" }}
-          >
-            <span className="font-semibold" style={{ color: "var(--ligus-warn-ink)" }}>
-              Not enforced: anyone can write
-            </span>
-            <InfoTip
-              label="member controls"
-              text="Who the relay accepts writes from (server-enforced). Claim this workspace on the relay so it enforces who can write; you become the owner. Requires a relay with membership turned on (LANGSTROTH_RELAY_MEMBERSHIP=1); no-op on an open relay."
-            />
-            <span className="flex-1" />
-            <Button size="sm" disabled={claimMutation.isPending} onClick={() => claimMutation.mutate()}>
-              {claimMutation.isPending ? "…" : "Claim ownership"}
-            </Button>
-          </div>
+        {relayOn && relayMembership.data && (
+          <RelayMembershipLine
+            status={relayMembership.data}
+            claiming={claimMutation.isPending}
+            onClaim={claim}
+            onToken={() => openSettingsTab("team-sync")}
+          />
         )}
         <RowList label="Members">
           {selfMember && (

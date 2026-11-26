@@ -10,7 +10,9 @@ import {
   recoveryKeyCreate,
   rotateWorkspaceKey,
   securityStatus,
+  workspaceRulesSet,
 } from "@/lib/ipc";
+import { confirmDialog } from "@/components/Dialog";
 
 /// Passkeys, the recovery key and the workspace key. Every workspace is on
 /// rules v2 from its first event, so admin actions need a passkey
@@ -23,6 +25,14 @@ export function SecuritySection() {
   const [words, setWords] = useState<string | null>(null);
   const [registering, setRegistering] = useState(false);
   const refresh = () => qc.invalidateQueries({ queryKey: ["security-status"] });
+  const switchRules = useMutation({
+    mutationFn: () => workspaceRulesSet(3),
+    onSuccess: () => {
+      refresh();
+      toast.success("This workspace is on rules 3.");
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
   const register = useMutation({
     mutationFn: () => passkeyRegister(label.trim() || "Passkey"),
     onSuccess: () => {
@@ -166,6 +176,38 @@ export function SecuritySection() {
           Finish securing this workspace: membership, roles, devices and keys need your passkey, and a recovery key
           keeps a lost passkey from locking you out.
         </p>
+      )}
+      {st && st.rules < 3 && st.isOwner && (
+        <Section
+          title="Stricter device rules"
+          info="Rules 3: a device counts only once it accepted its approval, duplicate members retire into their person, and model keys are refused on the log. Devices on Ligus 0.3 become read-only here."
+        >
+          <p className="text-xs text-ink-soft" data-testid="rules3-intro">
+            New workspaces start on these rules. Switching this one is confirmed with your passkey and can't be undone.
+          </p>
+          {(st.rules3Gaps ?? []).length === 0 ? (
+            <p className="text-xs text-ink-soft" data-testid="rules3-ready">
+              Every device here already counts under them.
+            </p>
+          ) : (
+            <ul className="text-xs" data-testid="rules3-gaps">
+              {(st.rules3Gaps ?? []).map((g) => (
+                <li key={g}>{g}</li>
+              ))}
+            </ul>
+          )}
+          <Button
+            disabled={switchRules.isPending}
+            onClick={async () => {
+              const ok = await confirmDialog("Switch this workspace to rules 3? Devices on Ligus 0.3 become read-only here.", {
+                confirmLabel: "Switch",
+              });
+              if (ok) switchRules.mutate();
+            }}
+          >
+            Switch to rules 3
+          </Button>
+        </Section>
       )}
       <Section title="Workspace key">
         <p className="text-xs text-ink-soft">

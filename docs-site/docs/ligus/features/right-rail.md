@@ -83,13 +83,16 @@ pane's page in these docs.
   the one that approves a workflow proposal, it adds the workflow to the
   **Workflows** pane then and there (it doesn't run it). See
   [Apply on a host](../../operate/ops/serve-box.md#apply-on-a-host).
-  **Questions from agents** (`ligus_ask_human`, and ACP permission requests
-  that need a person) appear at the top of the pane with their options; the
-  asking turn waits for your answer. See
-  [Ligus tools for agents](../addons/ligus-mcp.md#asks).
+  **Questions from agents** (decision cards, and ACP permission requests
+  that need a person) appear at the top of the pane while they are open;
+  the asking turn waits for your answer. See
+  [Questions from agents](agent-questions.md).
   **Proposal sets** (competing alternatives with scout scores, the quorum
   dial, and pre-flight then apply) sit at the top of the pane; see
   [Exploring options](proposal-sets.md).
+  Settled proposals (applied, rejected, or replaced by a newer revision)
+  fold into **Settled**, and old ones leave the pane; see
+  [Archiving proposals](#archiving-proposals) below.
   It also shows
   **Queued work** — every unanswered `@agent` mention with its host's
   live status (online / offline / owner-device). If an agent's host is
@@ -103,7 +106,14 @@ pane's page in these docs.
   Admin can't remove or demote another Admin, only the founder cuts an
   Owner, nobody cuts the founder, a service member (a box) is never raised
   above Contributor and holds no passkey. The pane asks the same rule
-  function every device's fold uses. On a membership-enforcing relay it also
+  function every device's fold uses. Under Members, one line says whether
+  the relay checks membership for this workspace, with the details behind
+  **?** and at most one action: **Claim ownership** only when this device's
+  relay token names an account, **Add a relay token** on a self-hosted relay
+  when it doesn't, and nothing on the community relay or a relay with
+  membership off. See
+  [Claiming a workspace](../../operate/ops/server-side-membership.md#claiming-a-workspace).
+  On a membership-enforcing relay it also
   manages the server-side roster + issues join codes, and — for an admin with a
   relay issuer key (Settings → Team sync) — a **Remote agents** section that
   enrolls a headless agent and generates the one copy-paste command to run on its
@@ -120,3 +130,38 @@ The icon strip + tinted card is the only chrome that needs to
 exist for these signals. A window-level toolbar duplicating the
 same affordances would just steal screen space; the rail is the
 canonical place to switch panes and close them.
+
+## Archiving proposals
+
+Old proposals stop taking up room in the Review pane. Nothing is deleted:
+every proposal stays in the chat's log and can be brought back.
+
+- **Archive** (a settled proposal's row menu) takes it out of the inbox for
+  everyone in the workspace. **Archive settled** does it for the whole
+  Settled shelf. A Contributor or above archives; the change syncs like a
+  vote. A proposal that still waits on someone (open, or approved and not
+  yet applied) can't be archived: reject it first, or hide it for yourself.
+  An archive from someone below Contributor is ignored by the inbox.
+- **Hide for me** (any proposal's row menu) takes it out of your inbox on
+  this device only. Nobody else is affected, and it isn't synced to your
+  other devices: Ligus has no per-person settings channel between your own
+  devices, so each device keeps its own hidden list.
+- **Auto-archive**: a settled proposal leaves the inbox on its own once it
+  has been settled for the workspace's auto-archive days (7 by default;
+  an Admin changes it, or turns it off, in **Settings → Review**). This is a
+  rule every device applies to the time the proposal settled (the time
+  recorded on the event that settled it, never a device's own clock), so no
+  device writes anything when a proposal ages out and every device agrees.
+  A settled proposal restored after it was auto-archived stays in the inbox.
+
+Archived and hidden proposals drop out of the Inbox, the needs-you counts,
+the dock badge and what agents read with `ligus_read` (an agent can ask for
+them with `archived: true`). They are listed in **Archived proposals**:
+the Review pane's **⋯** menu, or ⌘K **Archived proposals**. It covers every
+chat of the workspace and has a search box (title, chat, description, files).
+Click a row to open it in its chat; its row menu has **Restore** (back in the
+inbox for everyone) or, for one you hid, **Show again** (back on this device).
+
+In lt the same actions are in a proposal's row menu, with an archived filter.
+On the phone, a settled proposal's menu has **Archive**, and archived ones
+are listed apart; see [the phone app](phone-app.md).

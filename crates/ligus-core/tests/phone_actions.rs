@@ -78,6 +78,7 @@ fn payload(f: &Fixture, action: &PhoneAction) -> SessionEvent {
                 option_index: *option_index,
                 by: mara.display_name.clone(),
                 at_ms: 1,
+                ..Default::default()
             }),
         },
         PhoneAction::ClearLockdown { chat_id, raises } => SessionEvent::ChatLockdownCleared { chat_id: *chat_id, raises: raises.clone() },
@@ -96,6 +97,7 @@ fn payload(f: &Fixture, action: &PhoneAction) -> SessionEvent {
         PhoneAction::WithdrawApply { proposal_id, request_id, .. } => {
             SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id }
         }
+        PhoneAction::Archive { proposal_id, archived, .. } => SessionEvent::ProposalDismissed { proposal_id: *proposal_id, dismissed: *archived },
         PhoneAction::ProposeMemory { chat_id, op, rationale } => {
             // A new entry is named by its proposal (the box's id).
             let id = Uuid::new_v4();
@@ -152,7 +154,7 @@ fn actions(f: &Fixture) -> Vec<PhoneAction> {
     vec![
         PhoneAction::Post { chat_id: f.chat, text: "from my phone".into() },
         PhoneAction::Vote { chat_id: f.chat, proposal_id: f.pid, diff_digest: f.digest.clone(), approved: true },
-        PhoneAction::Answer { chat_id: f.chat, ask_id: Uuid::from_u128(5), answer: "yes".into(), option_index: Some(0) },
+        PhoneAction::Answer { chat_id: f.chat, ask_id: Uuid::from_u128(5), answer: "yes".into(), option_index: Some(0), ask_digest: String::new(), text: String::new(), decline: false },
         PhoneAction::ClearLockdown { chat_id: f.chat, raises: vec![Uuid::from_u128(0x77)] },
         PhoneAction::RequestApply {
             chat_id: f.chat,

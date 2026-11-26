@@ -60,7 +60,7 @@ fn phone_action_vectors_check_as_frozen() {
         }
         n += 1;
     }
-    assert!(n >= 18, "{n} vectors");
+    assert!(n >= 29, "{n} vectors");
 }
 
 // ---- the generator ----
@@ -96,7 +96,7 @@ fn action(i: &Ids, kind: &str) -> PhoneAction {
     match kind {
         "post" => PhoneAction::Post { chat_id: i.chat, text: "Ship it after lunch.".into() },
         "vote" => PhoneAction::Vote { chat_id: i.chat, proposal_id: i.proposal, diff_digest: DIGEST.into(), approved: true },
-        "answer" => PhoneAction::Answer { chat_id: i.chat, ask_id: u(7), answer: "yes".into(), option_index: Some(0) },
+        "answer" => PhoneAction::Answer { chat_id: i.chat, ask_id: u(7), answer: "yes".into(), option_index: Some(0), ask_digest: String::new(), text: String::new(), decline: false },
         "clearLockdown" => PhoneAction::ClearLockdown { chat_id: i.chat, raises: vec![u(0x20), u(0x21)] },
         "requestApply" => PhoneAction::RequestApply {
             chat_id: i.chat,
@@ -130,8 +130,17 @@ fn payload(i: &Ids, a: &PhoneAction) -> SessionEvent {
                 diff_digest: Some(diff_digest.clone()),
             },
         },
-        PhoneAction::Answer { ask_id, answer, option_index, .. } => SessionEvent::FlowRecorded {
-            record: FlowRecord::HumanAnswered(HumanAnswered { ask_id: *ask_id, answer: answer.clone(), option_index: *option_index, by: "Mara".into(), at_ms: 1_700_000_000_000 }),
+        PhoneAction::Answer { ask_id, answer, option_index, ask_digest, text, decline, .. } => SessionEvent::FlowRecorded {
+            record: FlowRecord::HumanAnswered(HumanAnswered {
+                ask_id: *ask_id,
+                answer: answer.clone(),
+                option_index: *option_index,
+                by: "Mara".into(),
+                at_ms: 1_700_000_000_000,
+                text: text.clone(),
+                ask_digest: ask_digest.clone(),
+                decline: *decline,
+            }),
         },
         PhoneAction::ClearLockdown { chat_id, raises } => SessionEvent::ChatLockdownCleared { chat_id: *chat_id, raises: raises.clone() },
         PhoneAction::RequestApply { proposal_id, diff_digest, host_device_id, expected_base_commit, repo_id, .. } => SessionEvent::ProposalApplyRequested {
@@ -145,6 +154,7 @@ fn payload(i: &Ids, a: &PhoneAction) -> SessionEvent {
             },
         },
         PhoneAction::WithdrawApply { proposal_id, request_id, .. } => SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id },
+        PhoneAction::Archive { proposal_id, archived, .. } => SessionEvent::ProposalDismissed { proposal_id: *proposal_id, dismissed: *archived },
         PhoneAction::ProposeMemory { chat_id, op, rationale } => SessionEvent::FlowRecorded {
             record: FlowRecord::MemoryProposed(ligus_core::memory::MemoryProposal {
                 proposal_id: u(0x12),
@@ -418,6 +428,145 @@ fn propose_memory_vectors_are_present() {
         "refuse/proposeMemory-unbound-entry",
         "proposeMemory-closed-egress",
     ] {
+        assert!(labels.iter().any(|l| l == want), "missing {want}");
+    }
+}
+
+/// The v2 answer lines (agent questions, `docs/design/agent-questions.md`
+/// 6.3): the answer names the ask's digest, and may carry free text or say
+/// Not now. Run with `LIGUS_GOLDEN_OUT=<path> --ignored phone_answer_v2_goldens`,
+/// then append the lines (the earlier lines stay frozen).
+#[test]
+#[ignore]
+fn phone_answer_v2_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let i = ids();
+    let key = p256::ecdsa::SigningKey::from_slice(&[0x11; 32]).unwrap();
+    let pk = hex(&ligus_core::crypto::p256_public_key(&key));
+    let digest = "8c1d6e3f0a2b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5";
+    let mut out = String::new();
+    // (label, the phone's answer, tweak): 0 as drafted; 1 the box names
+    // another digest; 2 the box drops the free text; 3 the box turns Not now
+    // into the first option.
+    let answer = |answer: &str, option: Option<u32>, text: &str, decline: bool| PhoneAction::Answer {
+        chat_id: i.chat,
+        ask_id: u(9),
+        answer: answer.into(),
+        option_index: option,
+        ask_digest: digest.into(),
+        text: text.into(),
+        decline,
+    };
+    for (n, (label, asked, tweak)) in [
+        ("answer/v2", answer("Postgres", Some(0), "keep the dev db", false), 0u8),
+        ("answer/v2-not-now", answer("Not now", None, "", true), 0),
+        ("refuse/answer-other-digest", answer("Postgres", Some(0), "", false), 1),
+        ("refuse/answer-dropped-text", answer("Postgres", Some(0), "keep the dev db", false), 2),
+        ("refuse/answer-not-now-as-yes", answer("Not now", None, "", true), 3),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut ev = payload(&i, &asked);
+        if let SessionEvent::FlowRecorded { record: FlowRecord::HumanAnswered(a) } = &mut ev {
+            match tweak {
+                1 => a.ask_digest = "0".repeat(64),
+                2 => a.text.clear(),
+                3 => {
+                    a.decline = false;
+                    a.option_index = Some(0);
+                    a.answer = "Postgres".into();
+                }
+                _ => {}
+            }
+        }
+        let env = draft(&i, &asked, 60 + n as u128, ev);
+        let preimage = envelope_preimage(&env);
+        let expect = match check_phone_action_preimage(&preimage, None, i.ws, i.phone, i.account, &asked) {
+            Ok(_) => "ok".to_string(),
+            Err(why) => why.to_string(),
+        };
+        assert_eq!(expect == "ok", tweak == 0, "{label}: {expect}");
+        let mut line = serde_json::json!({
+            "label": label,
+            "workspaceId": i.ws,
+            "phoneDeviceId": i.phone,
+            "accountId": i.account,
+            "action": asked,
+            "preimage": b64url(&preimage),
+            "publicKey": pk,
+            "expect": expect,
+        });
+        if expect == "ok" {
+            line["signature"] = serde_json::json!(b64url(&sign_p256(&key, &preimage)));
+        }
+        out.push_str(&serde_json::to_string(&line).unwrap());
+        out.push('\n');
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// The `archive` lines (proposal archiving, 0.4). Run with
+/// `LIGUS_GOLDEN_OUT=<path> --ignored phone_archive_goldens`, then append
+/// the lines (the earlier lines stay frozen).
+#[test]
+#[ignore]
+fn phone_archive_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let i = ids();
+    let key = p256::ecdsa::SigningKey::from_slice(&[0x11; 32]).unwrap();
+    let pk = hex(&ligus_core::crypto::p256_public_key(&key));
+    let mut out = String::new();
+    // (label, archived, tweak): 0 as drafted; 1 the box flips it; 2 another proposal.
+    for (n, (label, archived, tweak)) in [
+        ("archive", true, 0u8),
+        ("archive/restore", false, 0),
+        ("refuse/archive-flipped", true, 1),
+        ("refuse/archive-other-proposal", true, 2),
+    ]
+        .into_iter()
+        .enumerate()
+    {
+        let asked = PhoneAction::Archive { chat_id: i.chat, proposal_id: i.proposal, archived };
+        let ev = match tweak {
+            1 => SessionEvent::ProposalDismissed { proposal_id: i.proposal, dismissed: !archived },
+            2 => SessionEvent::ProposalDismissed { proposal_id: u(0x55), dismissed: archived },
+            _ => payload(&i, &asked),
+        };
+        let env = draft(&i, &asked, 60 + n as u128, ev);
+        let preimage = envelope_preimage(&env);
+        let expect = match check_phone_action_preimage(&preimage, None, i.ws, i.phone, i.account, &asked) {
+            Ok(_) => "ok".to_string(),
+            Err(why) => why.to_string(),
+        };
+        assert_eq!(expect == "ok", tweak == 0, "{label}: {expect}");
+        let mut line = serde_json::json!({
+            "label": label,
+            "workspaceId": i.ws,
+            "phoneDeviceId": i.phone,
+            "accountId": i.account,
+            "action": asked,
+            "preimage": b64url(&preimage),
+            "publicKey": pk,
+            "expect": expect,
+        });
+        if expect == "ok" {
+            line["signature"] = serde_json::json!(b64url(&sign_p256(&key, &preimage)));
+        }
+        out.push_str(&serde_json::to_string(&line).unwrap());
+        out.push('\n');
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+#[test]
+fn archive_vectors_are_present() {
+    let labels: Vec<String> = GOLDEN
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["label"].as_str().unwrap().to_string())
+        .collect();
+    for want in ["archive", "archive/restore", "refuse/archive-flipped", "refuse/archive-other-proposal"] {
         assert!(labels.iter().any(|l| l == want), "missing {want}");
     }
 }

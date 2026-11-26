@@ -6,7 +6,7 @@ use std::time::Duration;
 use ligus_core::crypto::SigningKeypair;
 use ligus_core::events::SessionEvent;
 use ligus_core::flow::{FlowRecord, HumanAnswered};
-use ligus_core::{ActorIdentity, ActorKind, WorkspaceAgent};
+use ligus_core::{ActionProposal, ActorIdentity, ActorKind, WorkspaceAgent};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -405,7 +405,7 @@ async fn ask_pauses_and_resumes_with_answer() {
         .svc
         .lock()
         .unwrap()
-        .record_flow(w.chat, w.wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "postgres".into(), option_index: Some(1), by: "Alex".into(), at_ms: 1 }))
+        .record_flow(w.chat, w.wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "postgres".into(), option_index: Some(1), by: "Alex".into(), at_ms: 1, ..Default::default() }))
         .unwrap();
     let r = task.await.unwrap();
     assert!(!r.is_error, "{}", r.text);
@@ -646,7 +646,7 @@ async fn permission_escalation_needs_the_hosts_own_person() {
                 svc.add_member(chat, wid, member).unwrap();
                 svc.set_author_account(bob, "Bob", None);
             }
-            let answered = svc.record_flow(chat, wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "Allow once".into(), option_index: Some(0), by: "Alex".into(), at_ms: 1 }));
+            let answered = svc.record_flow(chat, wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "Allow once".into(), option_index: Some(0), by: "Alex".into(), at_ms: 1, ..Default::default() }));
             // The host's device writing as another member (Bob) is refused
             // by the fold outright: it isn't certified for Bob's account.
             if answerer != "bob" {
@@ -1357,10 +1357,350 @@ async fn the_host_never_takes_an_answer_to_someone_elses_ask_under_its_id() {
     {
         let mut svc = w.host.svc.lock().unwrap();
         svc.record_flow(w.chat, w.wid, FlowRecord::HumanAsk(theirs.clone())).unwrap();
-        svc.record_flow(w.chat, w.wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "Yes, deny".into(), option_index: Some(0), by: "Alex".into(), at_ms: 2 })).unwrap();
+        svc.record_flow(w.chat, w.wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "Yes, deny".into(), option_index: Some(0), by: "Alex".into(), at_ms: 2, ..Default::default() })).unwrap();
         assert!(svc.load(w.chat).unwrap().unwrap().flow.asks[&ask_id].answer.is_some(), "their ask took the answer");
     }
     let mine = ligus_core::flow::HumanAsk { question: "coder asks permission to run rm (execute). Allow it once?".into(), options: vec!["Allow once".into(), "Deny".into()], permission: true, ..theirs };
     let got = super::server::wait_answer(&*w.host, w.chat, &mine, Duration::from_secs(5), || false).await;
     assert!(got.is_none(), "an answer to another ask under the id is no answer to this one");
+}
+
+/// Archived and hidden-here proposals stay out of an agent's proposal reads
+/// unless it asks for them (`archived: true`).
+#[tokio::test]
+async fn read_proposals_leaves_out_archived_and_hidden_ones() {
+    let w = world();
+    let (settled, open) = {
+        let mut svc = w.host.svc.lock().unwrap();
+        let a = ActionProposal::new("Settled one", ligus_core::ProposalKind::Decision, "someone");
+        let b = ActionProposal::new("Open one", ligus_core::ProposalKind::Decision, "someone");
+        let (a_id, b_id) = (a.id, b.id);
+        svc.upsert_proposal(w.chat, w.wid, a).unwrap();
+        svc.upsert_proposal(w.chat, w.wid, b).unwrap();
+        svc.vote_on_proposal(w.chat, w.wid, a_id, false).unwrap();
+        svc.archive_proposals(w.chat, w.wid, &[a_id], true).unwrap();
+        svc.set_proposals_hidden(w.wid, &[b_id], true).unwrap();
+        (a_id, b_id)
+    };
+    let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+    let ids = |r: &super::server::ToolResult| body(r)["proposals"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let r = turn.call("ligus_read_proposals", &json!({})).await;
+    assert!(!r.is_error, "{}", r.text);
+    assert!(ids(&r).is_empty(), "{:?}", ids(&r));
+    let r = turn.call("ligus_read_proposals", &json!({"archived": true})).await;
+    let all = ids(&r);
+    assert!(all.contains(&settled.to_string()) && all.contains(&open.to_string()), "{all:?}");
+}
+
+/// Wait for the `n`th ask to land in `w.chat`.
+async fn posted_ask(w: &World, n: usize) -> ligus_core::flow::AskState {
+    for _ in 0..250 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let s = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+        let mut v: Vec<_> = s.flow.asks.values().cloned().collect();
+        v.sort_by_key(|a| a.ask.at_ms);
+        if v.len() > n {
+            return v[n].clone();
+        }
+    }
+    panic!("no ask was posted");
+}
+
+fn choose(w: &World, ask_id: Uuid, option: Option<u32>, text: &str, decline: bool) -> Result<ligus_core::SessionEventEnvelope, crate::chat_service::ChatError> {
+    let mut svc = w.host.svc.lock().unwrap();
+    svc.answer_ask(w.chat, w.wid, ask_id, crate::chat_service::AskChoice { option, text: text.into(), decline })
+}
+
+/// A decision card to the person who asked: posted as a v2 ask to them, the
+/// turn paused, the answer bound to the ask's digest, the card closed with
+/// the answer the host acted on, and the result in the documented shape.
+#[tokio::test]
+async fn ask_person_goes_to_the_requester_and_returns_the_answer() {
+    let w = world();
+    let turn = Arc::new(w.mcp.begin_turn(spec(&w, Budgets::default())));
+    let paused = turn.scope().paused.clone();
+    let t2 = turn.clone();
+    let task = tokio::spawn(async move { t2.call("ligus_ask_person", &json!({"question": "Delete the generated fixtures too?", "yesNo": true, "allowText": true, "timeoutSecs": 30})).await });
+    let st = posted_ask(&w, 0).await;
+    assert!(st.is_v2());
+    assert_eq!(st.ask.options, vec!["Yes", "No"]);
+    let me = w.host.svc.lock().unwrap().author().id.clone();
+    assert_eq!(st.ask.audience.as_ref().and_then(|a| a.single()), Some(me.as_str()), "the requester, resolved at post time");
+    assert!(st.ask.effect.is_none(), "an agent's card never carries an effect");
+    assert!(paused.load(std::sync::atomic::Ordering::SeqCst) > 0);
+    choose(&w, st.ask.ask_id, Some(0), "keep the dev db", false).unwrap();
+    let r = task.await.unwrap();
+    assert!(!r.is_error, "{}", r.text);
+    let b = body(&r);
+    assert_eq!((b["status"].as_str(), b["option"].as_str(), b["text"].as_str()), (Some("answered"), Some("Yes"), Some("keep the dev db")));
+    assert_eq!(b["answeredBy"][0]["memberId"], me);
+    let s = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+    let a = &s.flow.asks[&st.ask.ask_id];
+    assert!(a.ask.closed && !a.is_open(), "the host closes what it acted on");
+}
+
+#[tokio::test]
+async fn ask_cards_refuse_bad_arguments_without_posting() {
+    let w = world();
+    let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+    for (args, code) in [
+        (json!({"question": "Pick", "options": ["Approve", "Later"]}), "option_reserved"),
+        (json!({"question": "Pick", "options": ["only one"]}), "options_count"),
+        (json!({"question": "Pick", "yesNo": true, "to": "nobody"}), "unknown_member"),
+    ] {
+        let r = turn.call("ligus_ask_person", &args).await;
+        assert!(r.is_error);
+        assert_eq!(body(&r)["error"], code);
+    }
+    let r = turn.call("ligus_ask_room", &json!({"question": "Pick", "yesNo": true, "quorum": 3})).await;
+    assert_eq!(body(&r)["error"], "quorum_unreachable");
+    let r = turn.call("ligus_ask_room", &json!({"question": "Pick", "yesNo": true, "minRole": "viewer"})).await;
+    assert_eq!(body(&r)["error"], "min_role");
+    let s = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+    assert!(s.flow.asks.is_empty(), "nothing was posted");
+}
+
+#[tokio::test]
+async fn ask_cards_share_the_asks_budget_and_the_open_caps() {
+    let w = world();
+    let turn = w.mcp.begin_turn(spec(&w, Budgets { max_asks: 0, ..Budgets::default() }));
+    let r = turn.call("ligus_ask_room", &json!({"question": "Pick", "yesNo": true})).await;
+    assert_eq!(body(&r)["error"], "ask_budget");
+    drop(turn);
+    // Two open asks from this agent already: a third is refused.
+    let turn = w.mcp.begin_turn(spec(&w, Budgets { max_asks: 10, ..Budgets::default() }));
+    {
+        let mut svc = w.host.svc.lock().unwrap();
+        for i in 0..2 {
+            let a = ligus_core::flow::HumanAsk {
+                ask_id: Uuid::new_v4(),
+                turn_id: w.reply,
+                agent_key: w.agent.to_string(),
+                question: format!("q{i}"),
+                at_ms: i,
+                expires_at_ms: ligus_core::flow::now_ms() + 60_000,
+                ..Default::default()
+            };
+            svc.as_agent(Some(w.agent), |svc| svc.record_flow(w.chat, w.wid, FlowRecord::HumanAsk(a))).unwrap();
+        }
+    }
+    let r = turn.call("ligus_ask_room", &json!({"question": "Pick", "yesNo": true})).await;
+    assert_eq!(body(&r)["error"], "too_many_open");
+}
+
+#[tokio::test]
+async fn ask_cards_stop_with_the_turn() {
+    let w = world();
+    let turn = Arc::new(w.mcp.begin_turn(spec(&w, Budgets::default())));
+    let t2 = turn.clone();
+    let task = tokio::spawn(async move { t2.call("ligus_ask_room", &json!({"question": "Anyone?", "yesNo": true, "timeoutSecs": 600})).await });
+    let st = posted_ask(&w, 0).await;
+    turn.finish();
+    let r = task.await.unwrap();
+    assert!(r.is_error);
+    assert_eq!(body(&r)["status"], "cancelled");
+    let s = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+    assert!(!s.flow.asks[&st.ask.ask_id].is_open(), "closed when the turn stopped");
+}
+
+/// "Not now" on a card put to one person ends it as declined.
+#[tokio::test]
+async fn not_now_declines_a_personal_card() {
+    let w = world();
+    let turn = Arc::new(w.mcp.begin_turn(spec(&w, Budgets::default())));
+    let t2 = turn.clone();
+    let task = tokio::spawn(async move { t2.call("ligus_ask_person", &json!({"question": "Ship it?", "options": ["Ship", "Hold"], "timeoutSecs": 30})).await });
+    let st = posted_ask(&w, 0).await;
+    choose(&w, st.ask.ask_id, None, "", true).unwrap();
+    let r = task.await.unwrap();
+    assert!(r.is_error);
+    assert_eq!(body(&r)["status"], "declined");
+}
+
+/// Q-T5: an ACP grant card carries the host's effect, names who may grant
+/// it, and is allowed only by them; a call too large to show is never
+/// allowed; outside the sandbox the grant needs the person's passkey.
+#[tokio::test]
+async fn acp_grant_cards_carry_the_hosts_effect() {
+    use crate::agent_turn::GrantRequest;
+    for (outside, too_large) in [(false, false), (true, false), (false, true)] {
+        let w = world();
+        let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+        let asker = turn.asker();
+        let req = GrantRequest {
+            agent_label: "coder".into(),
+            tool: "execute".into(),
+            title: "Run cargo publish".into(),
+            detail: "cargo publish --dry-run".into(),
+            too_large,
+            outside_sandbox: outside,
+            timeout: Duration::from_secs(20),
+            ..Default::default()
+        };
+        let w2 = World { host: w.host.clone(), mcp: w.mcp.clone(), wid: w.wid, chat: w.chat, agent: w.agent, reviewer: w.reviewer, reply: w.reply, _dir: tempfile::tempdir().unwrap() };
+        let answer = tokio::spawn(async move {
+            let st = posted_ask(&w2, 0).await;
+            let e = st.grant().expect("a grant card");
+            assert_eq!(e.detail, "cargo publish --dry-run");
+            assert_eq!(e.presence == ligus_core::flow::PRESENCE_REQUIRED, outside);
+            assert_eq!(st.ask.options, vec!["Allow once", "Deny"], "Ligus's labels");
+            let env = choose(&w2, st.ask.ask_id, Some(0), "", false).unwrap();
+            assert_eq!(env.actor_stamp.unwrap().presence.is_some(), outside, "a passkey only where the effect needs it");
+        });
+        let got = asker.ask_grant(req).await;
+        answer.await.unwrap();
+        assert_eq!(got.is_some_and(|a| a.option_index == Some(0)), !too_large, "outside={outside} too_large={too_large}");
+    }
+}
+
+/// Q-T6: a host's restart closes every ask it had open.
+#[tokio::test]
+async fn the_restart_sweep_closes_the_hosts_open_asks() {
+    let w = world();
+    {
+        let mut svc = w.host.svc.lock().unwrap();
+        let a = ligus_core::flow::HumanAsk { ask_id: Uuid::new_v4(), turn_id: w.reply, agent_key: w.agent.to_string(), question: "q".into(), at_ms: 1, ..Default::default() };
+        svc.as_agent(Some(w.agent), |svc| svc.record_flow(w.chat, w.wid, FlowRecord::HumanAsk(a))).unwrap();
+        assert_eq!(svc.sweep_open_asks().unwrap(), 1);
+        assert_eq!(svc.sweep_open_asks().unwrap(), 0);
+        let s = svc.load(w.chat).unwrap().unwrap();
+        assert!(s.flow.asks.values().all(|a| !a.is_open()));
+    }
+}
+
+/// Q-T9 end to end over the hook socket: the person's device posts the
+/// outside prompt as a grant card to its person (passkey always), and the
+/// hook gets allow, deny, or nothing; a wrong token posts nothing; the
+/// socket is owner-only; a hook that goes away closes its card.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hook_prompts_become_grant_cards_for_the_person() {
+    use crate::hook;
+    use std::os::unix::fs::PermissionsExt;
+    let w = world();
+    let dir = tempfile::tempdir().unwrap();
+    let server = hook::listen(dir.path(), hook::Answerer::Host(w.host.clone())).unwrap();
+    assert_eq!(std::fs::metadata(&server.path).unwrap().permissions().mode() & 0o777, 0o600);
+    let token = hook::read_token(&hook::token_path(dir.path())).unwrap();
+    let req = |token: &str, cmd: &str| hook::HookRequest {
+        token: token.into(),
+        workspace: w.wid.to_string(),
+        chat: w.chat.to_string(),
+        timeout_secs: 30,
+        input: json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": "/home/alex/shop", "permission_mode": "default"}),
+    };
+    // A wrong token: nothing is posted, no decision.
+    let path = server.path.clone();
+    let bad = req(&"0".repeat(64), "ls");
+    let r = tokio::task::spawn_blocking(move || hook::ask(&path, &bad, Duration::from_secs(5))).await.unwrap().unwrap();
+    assert_eq!(r.decision, "none");
+    assert!(hook::claude_output(Some(&r)).is_none());
+    assert!(w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap().flow.asks.is_empty());
+    for (n, (option, expect)) in [(0u32, "allow"), (1, "deny")].into_iter().enumerate() {
+        let path = server.path.clone();
+        let rq = req(&token, "cargo publish --dry-run");
+        let client = tokio::task::spawn_blocking(move || hook::ask(&path, &rq, Duration::from_secs(30)));
+        let st = posted_ask(&w, n).await;
+        let e = st.grant().expect("the person's own prompt is a grant card");
+        assert_eq!(e.detail, "cargo publish --dry-run");
+        assert!(st.grant_needs_presence(), "an outside prompt always needs the passkey");
+        assert_eq!(st.ask.origin.as_ref().map(|o| o.label.as_str()), Some("shop"));
+        let env = choose(&w, st.ask.ask_id, Some(option), "", false).unwrap();
+        assert!(env.actor_stamp.unwrap().presence.is_some(), "answered with the passkey");
+        let r = client.await.unwrap().unwrap();
+        assert_eq!(r.decision, expect);
+        let out = hook::claude_output(Some(&r));
+        match expect {
+            "allow" => assert_eq!(out.as_deref(), Some(r#"{"hookSpecificOutput":{"decision":{"behavior":"allow"},"hookEventName":"PermissionRequest"}}"#)),
+            _ => assert!(out.unwrap().contains("Denied from Ligus by Alex")),
+        }
+        let s = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+        assert!(s.flow.asks[&st.ask.ask_id].ask.closed, "closed with what it acted on");
+    }
+    // The hook goes away while waiting: the card is closed.
+    let path = server.path.clone();
+    let rq = req(&token, "rm -rf build");
+    let killer = tokio::task::spawn_blocking(move || {
+        use std::io::Write;
+        let mut s = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        let mut line = serde_json::to_vec(&rq).unwrap();
+        line.push(b'\n');
+        s.write_all(&line).unwrap();
+        std::thread::sleep(Duration::from_millis(600));
+        drop(s);
+    });
+    let st = posted_ask(&w, 2).await;
+    killer.await.unwrap();
+    let mut closed = false;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let s = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+        if !s.flow.asks[&st.ask.ask_id].is_open() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "a hook that went away leaves no card open");
+}
+
+/// A box answers every hook prompt with no decision (its card couldn't be
+/// a grant), and the hook prints nothing.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_box_never_raises_hook_prompts() {
+    use crate::hook;
+    let dir = tempfile::tempdir().unwrap();
+    let server = hook::listen(dir.path(), hook::Answerer::Refuse("a box".into())).unwrap();
+    let token = hook::read_token(&hook::token_path(dir.path())).unwrap();
+    let rq = hook::HookRequest { token, workspace: Uuid::new_v4().to_string(), chat: Uuid::new_v4().to_string(), timeout_secs: 30, input: json!({}) };
+    let path = server.path.clone();
+    let r = tokio::task::spawn_blocking(move || hook::ask(&path, &rq, Duration::from_secs(5))).await.unwrap().unwrap();
+    assert_eq!((r.decision.as_str(), r.reason.as_deref()), ("none", Some("a box")));
+    // Nothing listening: no reply at all.
+    drop(server);
+    let rq = hook::HookRequest { token: String::new(), workspace: String::new(), chat: String::new(), timeout_secs: 10, input: json!({}) };
+    assert!(hook::ask(&hook::socket_path(dir.path()), &rq, Duration::from_secs(1)).is_none());
+}
+
+/// Tool calls run on tokio workers with the default 2 MiB stack (lt, the
+/// desktop, serve): the call future stays small, so its waits (the asks'
+/// polls, a grant's wait) never overflow one. Regression for a stack
+/// overflow when they were inlined into the dispatch future.
+#[test]
+fn a_tool_call_future_stays_small() {
+    let w = world();
+    let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+    let args = json!({"question": "q", "yesNo": true});
+    let call = turn.call("ligus_ask_person", &args);
+    let size = std::mem::size_of_val(&call);
+    assert!(size < 32 * 1024, "the call future is {size} bytes");
+    let asker = turn.asker();
+    let grant = asker.ask_grant(crate::agent_turn::GrantRequest::default());
+    drop(grant);
+    drop(call);
+    // And a call runs to its end on a default-sized worker.
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(2 * 1024 * 1024).enable_all().build().unwrap();
+    let r = rt.block_on(async { tokio::spawn(async move { turn.call("ligus_ask_person", &json!({"question": "q", "options": ["Approve", "b"]})).await }).await.unwrap() });
+    assert_eq!(body(&r)["error"], "option_reserved");
+}
+
+/// Review S1/S2: the older tool refuses Ligus's control labels too, and a
+/// member's own asks don't count toward the agents' open caps.
+#[tokio::test]
+async fn the_older_tool_refuses_control_labels_and_member_asks_dont_crowd_agents() {
+    let w = world();
+    let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+    let r = turn.call("ligus_ask_human", &json!({"question": "Run it?", "options": ["Allow once", "Deny"]})).await;
+    assert_eq!(body(&r)["error"], "option_reserved");
+    // Six never-expiring asks a member posted under the agent's name.
+    let mut s = ligus_core::ChatSession::new("t", w.wid, "rt");
+    for i in 0..6u128 {
+        let a = ligus_core::flow::HumanAsk { ask_id: Uuid::from_u128(i + 1), agent_key: w.agent.to_string(), question: "q".into(), ..Default::default() };
+        s.flow.asks.insert(a.ask_id, ligus_core::flow::AskState { ask: a, posted_by: Some(ligus_core::flow::AskPoster { id: "bob".into(), name: String::new() }), ..Default::default() });
+    }
+    assert!(super::server::decision::open_caps(&s, &w.agent.to_string(), ligus_core::flow::now_ms()).is_ok(), "a member's asks don't crowd agents out");
+    for st in s.flow.asks.values_mut() {
+        st.posted_by = None;
+    }
+    assert_eq!(super::server::decision::open_caps(&s, &w.agent.to_string(), ligus_core::flow::now_ms()).unwrap_err().code, "too_many_open");
 }

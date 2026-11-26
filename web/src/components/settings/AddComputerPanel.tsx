@@ -9,6 +9,7 @@
 import { useState, type ReactNode } from "react";
 import {
   addComputer,
+  approvalMatchPaste,
   inspectComputerRequest,
   removeDuplicateMember,
   type ComputerGrantDto,
@@ -18,6 +19,9 @@ import { Button, fieldStyle } from "@/components/ui";
 import { Fingerprint } from "@/components/kit/Fingerprint";
 import { confirmDialog } from "@/components/Dialog";
 import { toast, errMsg } from "@/components/Toast";
+import { ApprovalAddress } from "@/components/ApprovalAddress";
+import { shownWorkspace } from "@/lib/shownWorkspace";
+import { approvalSheet } from "@/state/approvals";
 
 type MemberRef = { memberId: string; displayName: string };
 
@@ -48,6 +52,13 @@ export function AddComputerPanel({
     setMatches(false);
     if (!next.trim()) return;
     try {
+      // A request that is live in the mailbox: compare the code instead.
+      const live = await approvalMatchPaste(next.trim()).catch(() => null);
+      if (live) {
+        approvalSheet.open(live.workspaceId, live.rid);
+        onCancel();
+        return;
+      }
       setPreview(await inspectComputerRequest(next.trim()));
     } catch (e) {
       if (next.trim().startsWith("liguslink1:")) setProblem(errMsg(e));
@@ -123,8 +134,9 @@ export function AddComputerPanel({
           Linking <strong>"{suggested.displayName}"</strong>: you can remove that member once it's added.
         </p>
       )}
+      {shownWorkspace() && <ApprovalAddress workspaceId={shownWorkspace()} hint={<>On the computer, run <code>ligus devices request --to</code> with it. The request comes to your Inbox.</>} />}
       <p className="text-xs text-ink-soft">
-        On the other computer, choose <em>Link to my devices</em> in lt (Settings or People, or the palette), or run{" "}
+        Or paste: on the other computer, choose <em>Link to my devices</em> in lt (Settings or People, or the palette), or run{" "}
         <code>ligus devices request</code>. Paste what it shows. An invite would make a second member; this makes the
         computer yours.
       </p>
@@ -165,6 +177,11 @@ export function AddComputerPanel({
             <div style={{ color: "var(--ligus-danger-ink)" }}>
               This computer is already in the workspace as {preview.someoneElses}. On it, make a new request with a new
               device key (<code>ligus devices request --new-device</code>).
+            </div>
+          )}
+          {canAdd && (preview.alsoCertifiedBy?.length ?? 0) > 0 && (
+            <div className="text-ink-soft" data-testid="also-certified">
+              {preview.alsoCertifiedBy!.join(", ")} also certified this computer's key. Add it only if it's the computer in front of you.
             </div>
           )}
           {canAdd && (

@@ -192,7 +192,7 @@ from its synced event log. `ligus dashboard metrics` prints this list.
 | `agents` | rows | Each agent: up while its host is online, with Busy, Idle or Offline |
 | `agents.by_host` | rows | Number of agents per host |
 | `hosts` | rows | Each registered host: up while online |
-| `proposals.open` | number | Open proposals (not dismissed or superseded) |
+| `proposals.open` | number | Open proposals in the inbox (not archived or superseded) |
 | `proposals.awaiting_me` | number | Open proposals you may vote on and haven't, your own excluded |
 | `proposals.list` | table | Open proposals, newest first: proposal, chat, approvals |
 | `workflows.running` | number | Workflow runs in progress |

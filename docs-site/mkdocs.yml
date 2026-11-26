@@ -133,6 +133,7 @@ plugins:
         features/onboarding.md: ligus/features/onboarding.md
         features/phone-app.md: ligus/features/phone-app.md
         features/proposal-sets.md: ligus/features/proposal-sets.md
+        features/agent-questions.md: ligus/features/agent-questions.md
         features/right-rail.md: ligus/features/right-rail.md
         features/scheduling.md: ligus/features/scheduling.md
         features/settings.md: ligus/features/settings.md
@@ -209,6 +210,7 @@ nav:
           - Who can use your agents: ligus/features/agent-access.md
           - Exploring options (proposal sets): ligus/features/proposal-sets.md
           - Inbox: ligus/features/inbox.md
+          - Questions from agents: ligus/features/agent-questions.md
           - Mentions & notifications: ligus/features/mentions-and-notifications.md
           - Agentic workflows: ligus/features/workflows.md
           - Workspace guards: ligus/features/guards.md
@@ -238,6 +240,7 @@ nav:
           - MCP servers: ligus/addons/mcp.md
           - Ligus tools for agents (MCP): ligus/addons/ligus-mcp.md
           - Subscription CLIs over ACP: ligus/addons/acp.md
+          - Claude Code's permission prompts: ligus/addons/claude-code-hook.md
           - Linear & remote MCP (OAuth): ligus/addons/linear.md
       - Help:
           - Troubleshooting: ligus/help/troubleshooting.md

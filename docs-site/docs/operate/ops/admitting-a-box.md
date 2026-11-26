@@ -58,7 +58,160 @@ Both boxes start the same way:
 4. It adds itself through the admission. Without one, it prints its join
    request and exits; under systemd or Kubernetes it retries on restart.
 
-## From the desktop, with the box's join request
+## Live: the approval address and a code to compare {#code-match}
+
+From 0.4 a box sends its join request straight to the workspace's Admins,
+and both screens show the same short code. There is nothing to paste and no
+fingerprint to read out.
+
+1. **Get the approval address.** An Admin prints it (any member can):
+
+    ```sh
+    ligus admit address
+    ```
+
+    or copies it on the desktop: workspace menu, **Admit a box…**, **Copy**
+    beside the approval address. It looks like `ligusaddr1:…`. The address
+    **is not a secret and grants nothing**: it only lets a box put a request
+    in the Admins' Inboxes, so it can go in a provisioning script or a note.
+
+2. **On the box**, send the request to it:
+
+    ```sh
+    ligus admit request --to 'ligusaddr1:…' --label build-1
+    ```
+
+    It prints the join request and its fingerprint straight away (an older
+    desktop can still [paste it](#paste)), then `Waiting for an approver…`.
+
+3. **An Admin opens it.** The request is in every Admin's Inbox, "A box
+   asks to join: “build-1”", and reaches their phones as a push through a paired box.
+   Opening it shows a code, and the box prints the same one:
+
+    ```text
+    Code: K7Q4 M9X2  (the approver's screen must show the same)
+    ```
+
+    On the desktop the sheet **Admit a box?**, with “build-1” beneath it,
+    shows the code large, on one line. Compare it with the box. **Codes match** becomes available after 3
+    seconds and asks for your passkey; the passkey prompt names the box and
+    the code (`Admit box “build-1”, code K7Q4 M9X2`). **Don't match** ends
+    the request. You need to be an Admin.
+
+4. **The box joins.** At a terminal it first asks `Does the approver's
+   screen show this code? [y/N]`. Then, before it keeps anything, it checks
+   that the admission is sealed to this box, is for the workspace and
+   founder the address names, and comes from the device that showed the
+   code. It syncs and looks for the approval **on the real workspace log**,
+   signed by an Admin's device with a passkey, retrying for up to 2 minutes
+   while it arrives. Only then does it keep the admission, as `ligus admit
+   redeem` would. Start `ligus serve` or `ligus worker` and it joins as its
+   own member.
+
+**A headless box** (a systemd unit, a script with no terminal) asks nothing:
+the check on the log is what lets it accept, and the Admin's match and
+passkey are the human step. A device that can open the request but can't
+approve it (not an Admin's, or revoked) can make the box print a code, but no
+Admin's screen shows that code and no Admin-signed approval reaches the log,
+so the box never joins through it.
+
+The code comes from both devices' keys and a random number from each side,
+each fixed before the other side's is seen, so anyone in between (the relay
+included) makes the two screens show different codes. It proves the two
+screens are in the same exchange. It doesn't prove whose box is at the other
+end: approve only a box you are setting up yourself, never a code someone
+reads out to you.
+
+The code **is not a secret**. It may be on screen while you share it, and it
+appears in the box's output and in `--json` (a `match-code` check). It is good
+for one attempt and for 5 minutes after the Admin opens the request. A
+request waits in the mailbox for 15 minutes.
+
+### When the codes don't match
+
+Whichever side says so (**Don't match** on the desktop, `N` at the box), the
+request ends. Nothing is granted and nothing is written to any log. The box
+prints `the codes don't match: nothing was granted` and exits 1; the Admin's
+Inbox keeps `Request from build-1 didn't match. Nothing was granted.` for a
+day. Someone may have tried to intercept the request: check the box, start
+again on a trusted network, and tell an Admin if it happens twice. A box
+stops after 3 requests that ended without an approval in 15 minutes, and
+says why.
+
+When a second Admin opens a request another is already checking, their sheet
+says who ("Ben's desktop is checking this request"). A request opened by a
+device that can't approve it is flagged as a possible interception, with
+**End this request**.
+
+### Exit codes for `--to`
+
+From the [shared table](../reference/cli-conventions.md#exit-codes):
+
+| Code | Meaning |
+|---|---|
+| 0 | approved; the admission is kept |
+| 1 | the codes didn't match, or the request was declined, ended or expired, or the approval wasn't found on the workspace log, or 3 requests ended within 15 minutes. Nothing was kept |
+| 2 | a damaged address, or one whose relay isn't `https://` |
+| 3 | the relay has no approval mailbox: paste the request instead (`fix` names the command) |
+| 4 | nobody approved within `--wait` (15 minutes by default), or the address is stale: ask an Admin for the current one |
+| 6 | the relay refused the request (check the relay access token) |
+| 7 | the relay is unreachable, busy or its mailbox is full: retry |
+
+### Reset address
+
+If the address leaks and requests you don't want arrive, an Admin makes a new
+one:
+
+```sh
+ligus admit address --reset
+```
+
+The old address stops taking requests at once; nothing about the workspace
+changes, and no key is rotated. Give the new address to whoever sets up boxes.
+A workspace key rotation also gives a new address, but members keep reading
+the previous two, so an address in a script still works for a while; past
+that the box exits 4 and asks for the current one.
+
+### On the phone
+
+Through a box it is paired with, the phone gets a push, "build-1 wants to join
+*workspace*". Opened from the push, it asks **Which code does the box show?**
+and offers three codes and **None of these**. Tap the code the box shows, then
+confirm with Face ID. A wrong code or **None of these** ends the request, and
+nothing is granted. Opened from the phone's Inbox instead, it shows the one
+code with **Codes match** and **Don't match**, as the desktop does. After 3
+requests in 10 minutes the pushes stop and the Inbox shows one row, "Several
+join requests".
+
+The phone is the approver: it makes its own random number, computes the code
+and signs with its own device key. The box it goes through only carries the
+messages, so it can't change the code without the phone noticing. An older
+box doesn't offer this, and the phone keeps the [paste flow](#from-the-phone).
+
+### A headless approver
+
+An Admin without a desktop at hand approves from their own CLI identity (never
+from a box), confirmed with their recovery key, like `ligus admit issue`:
+
+```sh
+ligus approvals list
+ligus approvals approve 3f2a…c9 --recovery-words-file ./recovery-words
+```
+
+`ligus approvals list` shows each live request: its id, kind, label,
+fingerprint and who is checking it. `ligus approvals approve` opens the
+request (the box then prints its code), asks `Type the code the requesting
+device shows:`, and approves only when what you type equals the code this
+device computed (case, spaces and I, L or O for 1 and 0 are forgiven). A wrong
+code ends the request. The code exists only once the request is opened, so
+it can't be given in advance: without a terminal, `--code -` reads it from
+stdin after the open; with neither it exits 4.
+
+## Paste: the box's join request {#paste}
+
+The live path falls back to this when the relay has no approval mailbox (exit
+3) or the Admin's desktop is older than 0.4. `ligus admit request --to` has
+already printed the join request for it.
 
 On the box:
 
@@ -79,6 +232,15 @@ menu of the workspace in the rail. Paste the request, choose **Check**,
 compare the fingerprint with the one the box printed, then choose **Admit this
 box** and confirm with your passkey. You need to be an Admin.
 
+!!! note "The fingerprint stays for one release"
+    With no live channel (an older box, a relay without the approval
+    mailbox) the fingerprint compare is how you know the request wasn't
+    swapped, exactly as before; a short code is never shown for a pasted
+    request alone. On the live path, 0.4 still shows the fingerprint under
+    **Details** in the sheet and in `--json`; a later release drops it there.
+    A 0.4 desktop given a pasted request that is still waiting in the
+    mailbox runs the code match for it instead.
+
 The desktop gives you a code (`ligusadmit1:…`) that is **sealed to that box's
 key**: only that box can open it, and the admission is bound to that box's
 account and device key, so only a redemption that box signs counts. It is
@@ -92,7 +254,7 @@ ligus serve        # or: ligus worker --label build-1
 The box keeps the relay, room and workspace key the code carries (unless it
 already has them), syncs, and joins as its own member.
 
-## From the phone
+## From the phone, by paste {#from-the-phone}
 
 The phone admits a box with its own device key and your passkey, through a
 box it is paired with. The box it goes through is a service member that can't
@@ -118,7 +280,8 @@ code); see the [serve API](../reference/serve-api.md#admissions).
 
 A pod has no terminal to paste a request into, so the Admin makes a
 **bearer** admission instead. It isn't bound to a box until the first box
-redeems it.
+redeems it. This path is unchanged in 0.4: the chart doesn't send a request
+to an approval address, and an admission Secret is how a pod joins.
 
 1. On the desktop: **Admit a box… → For Kubernetes**. Choose how long it stays
    redeemable (24 hours by default, at most 6 days), then **Make an admission
@@ -180,7 +343,9 @@ ligus sync && ligus admit close && ligus sync
 ```
 
 `ligus admit close` closes this Admin's workspace's settled admissions (the
-desktop does it on its own after every sync).
+desktop does it on its own after every sync). For a box that asked through the
+approval address, use `ligus approvals approve` instead
+([A headless approver](#a-headless-approver)).
 
 A workspace founded from the CLI registers a recovery key as its founder's
 first credential with `ligus recovery-key create --out ./recovery-words`. The
@@ -237,3 +402,9 @@ no workspace member, and you remove the box's member under Members.
 | `a box joins under its own account` / `a box admission is redeemed by its own certified device: …` | The redemption wasn't the box's own (signed by another device than it names, or a member record naming another account): not something a Ligus box writes. Remove whatever joined and issue a new admission. |
 | `this admission code was sealed to another box` | Same: redeem it on the box that printed the request. |
 | `that admission is for workspace 'X', but this box serves 'Y'` | The code and `LIGUS_WORKSPACE` name different workspaces. |
+| `this relay has no approval mailbox: paste the request instead` (exit 3) | The relay doesn't offer the approval mailbox. Paste the join request `--to` already printed ([Paste](#paste)). |
+| `no approver answered within --wait` (exit 4) | Ask an Admin to open it in their Inbox, or paste the join request printed above. |
+| `the approval address was reset` / `the approval address isn't registered on this relay` (exit 4) | Ask an Admin for the current address (`ligus admit address`). |
+| `the approval wasn't found on the workspace log (…): nothing was redeemed` | The Admin's desktop hasn't published the approval yet, or it didn't come from an Admin's device with a passkey. Check their desktop is online and synced, then start again. |
+| `the grant names another founder than the approval address pins` / `the grant is for another workspace than the approval address names` | The admission points at a copy of the workspace, not the real one. Nothing was kept. Tell an Admin. |
+| `3 requests ended without an approval in the last 15 minutes: stopping` | Check the box and the network, then start again on a trusted network. |

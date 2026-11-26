@@ -49,6 +49,8 @@ import { Tour, type TourStep } from "@/components/Tour";
 import { ToastHost, toast, errMsg } from "@/components/Toast";
 import { PresenceSheet } from "@/components/PresenceSheet";
 import { PhoneEnrollTripwire } from "@/components/PhoneEnrollTripwire";
+import { ApprovalSheetHost } from "@/components/ApprovalSheet";
+import { approvalSheet, useApprovalEvents, useApprovalSheet } from "@/state/approvals";
 import { DearthBanner } from "@/components/guards/DearthBanner";
 import { LockdownBar } from "@/components/guards/LockdownBar";
 import { AppStatusBar } from "@/components/AppStatusBar";
@@ -59,6 +61,7 @@ import { CanvasLoading, EmptyCanvas } from "@/components/EmptyCanvas";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ShortcutsSheet } from "@/components/ShortcutsSheet";
 import { ErrorLogSheet } from "@/components/ErrorLogSheet";
+import { ArchivedProposalsSheet } from "@/components/ArchivedProposals";
 import { Inbox } from "@/components/Inbox";
 import { useDockBadge, useNeedsYou } from "@/state/useNeedsYou";
 import { needsYouCount, needsYouLabel } from "@/lib/needsYou";
@@ -72,7 +75,7 @@ import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { CANVAS_TAB_HINT, TOUR_CANVAS_TABS, TOUR_DIFF } from "@/lib/tour";
 import { tip } from "@/components/Tooltip";
 import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour } from "@/lib/firstRun";
-import { ADMIT_BOX_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, OPEN_SETUP_EVENT, flashMessage, openSetup, requestAddPhone, requestDevices, type OpenChatDetail } from "@/lib/nav";
+import { ADMIT_BOX_EVENT, OPEN_ARCHIVED_PROPOSALS_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, OPEN_SETUP_EVENT, flashMessage, openSetup, requestAddPhone, requestDevices, type OpenChatDetail } from "@/lib/nav";
 import { SetupWizard } from "@/components/setup/SetupWizard";
 import { isSetupFlow } from "@/lib/setup";
 import type { SetupFlowId } from "@/lib/ipc";
@@ -554,6 +557,14 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Review ⋯ → Archived proposals (the pane can't reach App's state).
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  useEffect(() => {
+    const onOpen = () => setArchivedOpen(true);
+    window.addEventListener(OPEN_ARCHIVED_PROPOSALS_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_ARCHIVED_PROPOSALS_EVENT, onOpen);
+  }, []);
+
   // In-app links to "Admit a box" (the add-a-phone check). The dialog renders
   // above Settings, so the person comes back to where they were.
   useEffect(() => {
@@ -692,6 +703,8 @@ export function App() {
   const banner = blockingBanner({ lockdown: view === "workspace" && Boolean(lockdown.data?.active), dearth: dearthOn });
   // What waits on you: the Inbox lists it; the dock and tray count it.
   const needsYou = useNeedsYou(activeWorkspaceId);
+  useApprovalEvents();
+  const approvalOpen = useApprovalSheet();
   useDockBadge(needsYou);
 
   // Default view on workspace open/switch: land on the workspace's most-recent
@@ -1049,8 +1062,22 @@ export function App() {
       <DialogHost />
       <PresenceSheet />
       <PhoneEnrollTripwire />
+      <ApprovalSheetHost open={approvalOpen} onClose={() => approvalSheet.close()} />
       {shortcutsOpen && <ShortcutsSheet onClose={() => setShortcutsOpen(false)} />}
       {errorsOpen && <ErrorLogSheet onClose={() => setErrorsOpen(false)} />}
+      {archivedOpen && (
+        <ArchivedProposalsSheet
+          onClose={() => setArchivedOpen(false)}
+          onOpen={(chatId) => {
+            setArchivedOpen(false);
+            rememberChat(chatId);
+            setSelectedId(chatId);
+            setView("workspace");
+            setMode("chat");
+            openUtilityPane("review");
+          }}
+        />
+      )}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -1130,6 +1157,7 @@ export function App() {
           setup: (flow) => openSetup(flow),
           showShortcuts: () => setShortcutsOpen(true),
           showErrors: () => setErrorsOpen(true),
+          archivedProposals: () => setArchivedOpen(true),
           openInbox: () => setView("inbox"),
           toggleFocusMode: () => setFocusMode((v) => !v),
           // After the palette closes, so its focus-return doesn't steal it back.

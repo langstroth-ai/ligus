@@ -451,6 +451,46 @@ pub fn ask_state_dto(s: &ChatSession, st: &ligus_core::flow::AskState) -> Value 
     v
 }
 
+/// The raw signed ask (agent questions 6.3): the hive-envelope-v3 preimage
+/// exactly as the envelope that posted `ask_id` signs it, its signature and
+/// signer, so a phone draws the card from bytes the box can't rewrite
+/// unnoticed and digests the payload (the preimage's fourth length-prefixed
+/// field) itself. `None` when this box doesn't hold the envelope.
+pub fn signed_ask(svc: &ligus_runtime::ChatService, ws: Uuid, chat: Uuid, ask_id: Uuid) -> Option<Value> {
+    let env = svc.ask_envelope(ws, chat, ask_id).ok().flatten()?;
+    let preimage = ligus_core::crypto::envelope_preimage(&env);
+    Some(json!({
+        "preimage": ligus_core::presence::b64url(&preimage),
+        "signature": env.signature.as_deref().map(ligus_core::presence::b64url),
+        "signerDeviceId": env.signer_device_id,
+        "askDigest": ligus_core::flow::asks::envelope_ask_digest(&env),
+    }))
+}
+
+/// [`ask_state_dto`] with the 0.4 card for `viewer` (`card`: who may answer,
+/// what an answer does, the cleaned text, grant labels by index; see
+/// `ligus_runtime::ask_view`) and the raw signed ask (`signed`). The older
+/// fields stay for older phones.
+pub fn ask_card_dto(svc: &ligus_runtime::ChatService, s: &ChatSession, st: &ligus_core::flow::AskState, viewer: &str) -> Value {
+    let mut v = ask_state_dto(s, st);
+    let hosts = svc.list_hosts(s.workspace_id).unwrap_or_default();
+    let label = |d: Uuid| hosts.iter().find(|h| h.id == d.to_string()).map(|h| ligus_proto::names::clean_display_name(&h.label)).filter(|l| !l.is_empty());
+    let card = ligus_runtime::ask_view::view(s, st, viewer, ligus_core::flow::now_ms(), &label);
+    v["card"] = serde_json::to_value(card).unwrap_or(Value::Null);
+    v["signed"] = signed_ask(svc, s.workspace_id, s.id, st.ask.ask_id).unwrap_or(Value::Null);
+    v
+}
+
+/// The card's "you" field (`eligible`) for `viewer`, recomputed on an event
+/// the hub built for this box's own identity.
+fn ask_as_viewer(dto: &mut Value, s: &ChatSession, viewer: &str) {
+    let Some(id) = dto.get("id").and_then(Value::as_str).and_then(|x| Uuid::parse_str(x).ok()) else { return };
+    let eligible = s.flow.asks.get(&id).is_some_and(|st| !viewer.is_empty() && ligus_runtime::ask_view::eligible(s, st, viewer));
+    if let Some(card) = dto.get_mut("card").filter(|c| c.is_object()) {
+        card["eligible"] = json!(eligible);
+    }
+}
+
 pub(super) fn role_name(r: WorkspaceRole) -> &'static str {
     match r {
         WorkspaceRole::Owner => "owner",
@@ -511,12 +551,39 @@ fn collab_fields(v: &mut Value, s: &ChatSession, p: &ActionProposal) {
     v["changeRequestCount"] = json!(p.refinements.iter().filter(|r| r.request_changes).count());
     v["changedFiles"] = json!(p.changed_files);
     v["dismissed"] = json!(p.dismissed);
+    archive_fields(v, s, p);
     if let Some(id) = p.parent_id {
         v["parentId"] = json!(id);
     }
     if let Some(id) = p.superseded_by {
         v["supersededBy"] = json!(id);
     }
+}
+
+/// Archiving (`ligus_core::proposal_archive`, additive): `archived` is
+/// `"person"` (someone archived it, for everyone) or `"auto"` (settled for
+/// longer than the workspace's auto-archive days), absent while it is in the
+/// inbox; `archivedAt` and `settledAt` are those events' own times;
+/// `canArchive` says the `archive` phone action may archive it now (settled
+/// or stale, not archived yet: a proposal that waits on someone can't be).
+fn archive_fields(v: &mut Value, s: &ChatSession, p: &ActionProposal) {
+    use ligus_core::proposal_archive::{self, Archived};
+    let archived = proposal_archive::archived(p, s, Timestamp::now());
+    if let Some(a) = archived {
+        v["archived"] = json!(match a {
+            Archived::ByPerson => "person",
+            Archived::Auto => "auto",
+        });
+        if a == Archived::ByPerson {
+            if let Some(t) = p.archived_at {
+                v["archivedAt"] = json!(iso(t));
+            }
+        }
+    }
+    if let Some(t) = p.settled_at.filter(|_| proposal_archive::is_settled(p)) {
+        v["settledAt"] = json!(iso(t));
+    }
+    v["canArchive"] = json!(archived.is_none() && !proposal_archive::waits_on_someone(p, s));
 }
 
 /// [`proposal_dto`] plus what `me` can do: their current vote and whether
@@ -630,6 +697,14 @@ pub(super) fn tunnel_viewer(s: &Shared, pid: &str) -> String {
 /// A proposal event from the hub (built for this box's identity) as `viewer`
 /// sees it: its "you" fields recomputed from the chat it belongs to.
 fn as_viewer(s: &Shared, mut ev: super::hub::SseEvent, viewer: &str) -> super::hub::SseEvent {
+    if ev.name == "ask.pending" {
+        let chat_id = ev.data.get("ask").and_then(|a| a.get("chatId")).and_then(Value::as_str).and_then(|x| Uuid::parse_str(x).ok());
+        let chat = chat_id.and_then(|c| s.lock().load_resolving(c).ok().flatten()).filter(|c| c.workspace_id == s.ws);
+        if let (Some(c), Some(dto)) = (chat, ev.data.get_mut("ask")) {
+            ask_as_viewer(dto, &c, viewer);
+        }
+        return ev;
+    }
     if !matches!(ev.name, "proposal.created" | "proposal.updated") {
         return ev;
     }
@@ -807,6 +882,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
     let r = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/me", get(super::me_api::me))
+        .route("/v1/phone-consent", post(super::me_api::phone_consent))
         .route("/v1/presence/prepare", post(super::presence_api::prepare))
         .route("/v1/presence/commit", post(super::presence_api::commit))
         .route("/v1/admissions/prepare", post(super::admissions_api::prepare))
@@ -889,7 +965,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/tunnel/direct", get(tunnel_direct))
         .route("/v1/revocations", get(list_revocations))
         .route("/v1/revocations/{device}/retry", post(retry_revocation));
-    super::phone_enroll_api::routes(r)
+    super::approvals_api::routes(super::phone_enroll_api::routes(r))
         .layer(middleware::from_fn_with_state(shared.clone(), auth))
         .with_state(shared)
 }
@@ -1152,6 +1228,11 @@ pub(super) fn agent_dto(s: &Shared, a: &ligus_core::WorkspaceAgent, config: &Cha
     if let Some(r) = rt.filter(|r| !r.model.trim().is_empty()) {
         v["model"] = json!(r.model);
     }
+    // A key an older version stored in the workspace is never used or sent;
+    // the phone and lt show this calm warning on the agent's row.
+    if rt.is_some_and(|r| r.credential.is_legacy_inline()) {
+        v["runtimeWarning"] = json!(ligus_core::LEGACY_INLINE_WARNING);
+    }
     if !a.host_id.is_empty() {
         v["hostId"] = json!(a.host_id);
         let label = if a.host_id == s.host_id {
@@ -1380,19 +1461,37 @@ struct ProposalFilter {
     status: Option<String>,
 }
 
+/// `GET /v1/proposals?status=open|all|archived`: `open` (the default) is
+/// what waits for review; `all` is every proposal still in the inbox (open
+/// and settled, archived ones left out); `archived` is the archived ones only
+/// (by a person, or by the workspace's auto-archive days), newest first.
 async fn list_proposals(State(s): S, Query(f): Query<ProposalFilter>) -> ApiResult<Json<Value>> {
-    let all = match f.status.as_deref().map(str::trim) {
-        None | Some("") | Some("open") => false,
-        Some("all") => true,
-        Some(other) => return Err(ApiError::bad_request(format!("status must be open or all (got '{other}')"))),
+    #[derive(PartialEq)]
+    enum Which {
+        Open,
+        All,
+        Archived,
+    }
+    let which = match f.status.as_deref().map(str::trim) {
+        None | Some("") | Some("open") => Which::Open,
+        Some("all") => Which::All,
+        Some("archived") => Which::Archived,
+        Some(other) => return Err(ApiError::bad_request(format!("status must be open, all or archived (got '{other}')"))),
     };
     let me = viewer(&s);
+    let now = Timestamp::now();
     let mut out: Vec<(Timestamp, Value)> = Vec::new();
     for chat in s.workspace_chats()? {
         for p in &chat.proposals {
-            let open = p.status == ProposalStatus::Open && !p.dismissed && p.superseded_by.is_none();
-            if all || open {
-                out.push((p.created_at, proposal_dto_as(&chat, p, &me)));
+            let archived = ligus_core::proposal_archive::archived(p, &chat, now).is_some();
+            let keep = match which {
+                Which::Open => super::hub::is_open(p, &chat),
+                Which::All => !archived,
+                Which::Archived => archived,
+            };
+            if keep {
+                let at = if which == Which::Archived { p.archived_at.or(p.settled_at).unwrap_or(p.created_at) } else { p.created_at };
+                out.push((at, proposal_dto_as(&chat, p, &me)));
             }
         }
     }
@@ -1473,9 +1572,13 @@ async fn implement_plan(State(s): S, Path(id): Path<String>) -> ApiResult<Json<V
 
 async fn list_asks(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let chat = load_chat(&s, &id)?;
+    let me = viewer(&s);
     let mut asks: Vec<&ligus_core::flow::AskState> = chat.flow.asks.values().collect();
     asks.sort_by_key(|a| std::cmp::Reverse(a.ask.at_ms));
-    Ok(Json(json!({ "asks": asks.into_iter().take(50).map(|a| ask_state_dto(&chat, a)).collect::<Vec<_>>() })))
+    // Opening the cards lifts the push cap (agent questions 6.5).
+    s.ask_pushes.lock().unwrap_or_else(|e| e.into_inner()).opened();
+    let svc = s.lock();
+    Ok(Json(json!({ "asks": asks.into_iter().take(50).map(|a| ask_card_dto(&svc, &chat, a, &me)).collect::<Vec<_>>() })))
 }
 
 /// `POST v1/asks/{id}/answer`: gone (410). A person answers an agent's

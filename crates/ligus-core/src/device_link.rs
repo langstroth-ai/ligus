@@ -21,14 +21,20 @@
 //! enrollment keep being answered by the owner's desktop and its history reads
 //! as theirs. See [`DeviceLinks::link_retired`].
 //!
-//! **Trust (host claim, pre-enrollment).** A member `M` is a device of `X` only
-//! when all hold:
-//!   * a host's id is a device certified (cert signed by `M`'s own account key)
-//!     to `M`, and that host names `X` as its owner;
+//! **Trust (host claim).** A member `M` is a device of `X` only when all hold:
+//!   * a host's id is a device that **itself signed as `M`** (a signature by
+//!     the device's own key, stamped for `M`'s account, which only the
+//!     device's holder can make), and that host names `X` as its owner;
+//!   * `X`'s account certified that device too;
 //!   * `M` and `X` are both human members, `M != X`;
 //!   * `M` is an Admin or Owner. Admins already define the workspace runtimes
 //!     (credentials) every device runs, so honoring an Admin's claim grants no
 //!     capability it lacks; a Contributor's claim is ignored.
+//!
+//! A certificate alone is never enough (identity model v2, 7.3): device keys
+//! are public, so an Admin who certifies someone else's host device for
+//! their own account must not become that person (their turns would count
+//! as the person's own on the person's private agents).
 
 use std::collections::HashMap;
 
@@ -42,9 +48,16 @@ use crate::session::ChatSession;
 pub struct DeviceLinks(HashMap<String, String>);
 
 impl DeviceLinks {
-    /// Fold the links out of a workspace-config projection. `certified(device,
-    /// account)` says whether `device` holds a valid certificate for `account`.
-    pub fn from_config(config: &ChatSession, certified: impl Fn(Uuid, Uuid) -> bool) -> Self {
+    /// Fold the links out of a workspace-config projection. `acts_for(device,
+    /// account)` says whether `device` holds a valid certificate for
+    /// `account` **and signed as it** (verified under the device's key);
+    /// `certified(device, account)` whether it holds a valid certificate
+    /// for `account`.
+    pub fn from_config(
+        config: &ChatSession,
+        acts_for: impl Fn(Uuid, Uuid) -> bool,
+        certified: impl Fn(Uuid, Uuid) -> bool,
+    ) -> Self {
         let humans: HashMap<&str, &crate::identity::WorkspaceMember> = config
             .members
             .iter()
@@ -58,12 +71,16 @@ impl DeviceLinks {
                 continue;
             }
             let Ok(device) = Uuid::parse_str(&host.id) else { continue };
+            let Some(owner_account) = humans.get(owner).and_then(|o| o.actor.account_id) else { continue };
+            if !certified(device, owner_account) {
+                continue;
+            }
             for m in humans.values() {
                 if m.actor.id == owner || m.role.rank() < WorkspaceRole::Admin.rank() {
                     continue;
                 }
                 let Some(account) = m.actor.account_id else { continue };
-                if certified(device, account) {
+                if acts_for(device, account) {
                     out.insert(m.actor.id.clone(), owner.to_string());
                 }
             }
@@ -177,14 +194,20 @@ mod tests {
         World { config, owner, boxed, box_device }
     }
 
+    /// The box's device signed as the box's member.
     fn certs(w: &World) -> impl Fn(Uuid, Uuid) -> bool + '_ {
         move |d, a| d == w.box_device && a == w.boxed
+    }
+
+    /// Both the box's own account and the owner certified the box's device.
+    fn both(w: &World) -> impl Fn(Uuid, Uuid) -> bool + '_ {
+        move |d, a| d == w.box_device && (a == w.boxed || a == w.owner)
     }
 
     #[test]
     fn admin_box_owned_by_its_owner_is_their_device() {
         let w = world(WorkspaceRole::Admin);
-        let links = DeviceLinks::from_config(&w.config, certs(&w));
+        let links = DeviceLinks::from_config(&w.config, certs(&w), both(&w));
         assert_eq!(links.owner_of(&w.boxed.to_string()), Some(w.owner.to_string().as_str()));
         assert_eq!(links.person(&w.boxed.to_string()), w.owner.to_string());
         // The owner and the box are one person: a solo room.
@@ -194,7 +217,7 @@ mod tests {
     #[test]
     fn contributor_claim_is_ignored() {
         let w = world(WorkspaceRole::Contributor);
-        let links = DeviceLinks::from_config(&w.config, certs(&w));
+        let links = DeviceLinks::from_config(&w.config, certs(&w), both(&w));
         assert!(links.is_empty());
         assert_eq!(links.human_count(&w.config), 2);
     }
@@ -203,7 +226,7 @@ mod tests {
     fn host_without_a_cert_for_the_member_links_nothing() {
         let w = world(WorkspaceRole::Admin);
         // A host naming the owner, but no cert ties its device to the box's account.
-        let links = DeviceLinks::from_config(&w.config, |_, _| false);
+        let links = DeviceLinks::from_config(&w.config, |_, _| false, both(&w));
         assert!(links.is_empty());
     }
 
@@ -212,10 +235,10 @@ mod tests {
         let mut w = world(WorkspaceRole::Admin);
         // Today's box: its host is owned by itself.
         w.config.workspace_hosts = vec![host(w.box_device, w.boxed)];
-        assert!(DeviceLinks::from_config(&w.config, certs(&w)).is_empty());
+        assert!(DeviceLinks::from_config(&w.config, certs(&w), both(&w)).is_empty());
         // A host naming a non-member as owner.
         w.config.workspace_hosts = vec![host(w.box_device, Uuid::new_v4())];
-        assert!(DeviceLinks::from_config(&w.config, certs(&w)).is_empty());
+        assert!(DeviceLinks::from_config(&w.config, certs(&w), both(&w)).is_empty());
     }
 
     #[test]
@@ -246,7 +269,28 @@ mod tests {
         w.config.members.push(member(Uuid::new_v4(), WorkspaceRole::Contributor, ActorKind::Human));
         // Agents never count.
         w.config.members.push(member(Uuid::new_v4(), WorkspaceRole::Contributor, ActorKind::Agent));
-        let links = DeviceLinks::from_config(&w.config, certs(&w));
+        let links = DeviceLinks::from_config(&w.config, certs(&w), both(&w));
         assert_eq!(links.human_count(&w.config), 2);
+    }
+
+    /// F2a: an Admin who certified the owner's host device for their own
+    /// account, without the device ever signing as them, is not the owner.
+    #[test]
+    fn a_foreign_certificate_on_a_host_borrows_no_one() {
+        let w = world(WorkspaceRole::Admin);
+        // The Admin certified the owner's device; it never signed as the Admin.
+        let links = DeviceLinks::from_config(&w.config, |_, _| false, both(&w));
+        assert!(links.is_empty(), "a certificate alone mapped {:?}", links);
+        assert_eq!(links.person(&w.boxed.to_string()), w.boxed.to_string());
+        assert_eq!(links.human_count(&w.config), 2);
+    }
+
+    /// The owner never certified the host: a host record naming them as its
+    /// owner (anyone with the device can write one) links nothing.
+    #[test]
+    fn a_host_claim_without_the_owners_certificate_links_nothing() {
+        let w = world(WorkspaceRole::Admin);
+        let links = DeviceLinks::from_config(&w.config, certs(&w), certs(&w));
+        assert!(links.is_empty());
     }
 }

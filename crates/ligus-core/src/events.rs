@@ -156,6 +156,12 @@ pub enum SessionEvent {
     /// delete: the session is an event-sourced log, so a delete wouldn't survive
     /// a re-fold and wouldn't replicate.
     ProposalDismissed { proposal_id: Uuid, dismissed: bool },
+    /// Set how many days a settled proposal stays in the Review inbox before
+    /// it is auto-archived (config log; Admin; 0 = off). Auto-archive is a
+    /// view rule over the settled time every device folds alike
+    /// ([`crate::proposal_archive`]): no event is written when a proposal
+    /// ages out. Additive: an older build decodes it as `Unknown`.
+    ProposalArchivePolicySet { policy: crate::proposal_archive::ProposalArchivePolicy },
     /// Append a note to a proposal's refinement thread (a comment or change
     /// request) from a human member or role-qualified agent. A delta, like a vote
     /// — it merges into the proposal's `refinements` (idempotent by note id) so
@@ -548,6 +554,19 @@ pub enum SessionEvent {
     /// older one. Grants nothing: whether it verifies against its forge is
     /// device-local, never fold state. Read by the roster tracker.
     IdentityLinkPublished { link: crate::identity_link::IdentityLink },
+    /// A person's name and picture (config log; identity model v2, 5):
+    /// render-only. Written by the account itself from one of its own,
+    /// non-delegated, non-phone devices; content checks in
+    /// [`crate::profile::change_ok`]. Never read by a rule.
+    ProfileUpdated { profile: crate::profile::ProfileChange },
+    /// A device's name under one account (config log; identity model v2, 6):
+    /// render-only. Written by the device itself or by a non-delegated,
+    /// non-phone device of the account. Never read by a rule.
+    DeviceLabelSet { label: crate::profile::DeviceLabel },
+    /// A computer that linked as its person retires the separate member it
+    /// was (config log; identity model v2, 8.3). Rules 3 only: removes that
+    /// member like a self-leave. See [`crate::retirement`].
+    MemberRetired { retirement: crate::retirement::MemberRetirement },
     /// Remove a linked identity (the account itself, or an Admin for
     /// moderation).
     IdentityLinkRemoved { account_id: Uuid, link_id: Uuid },
@@ -606,6 +625,7 @@ impl SessionEvent {
             SessionEvent::ProposalUpserted { .. } => "proposalUpserted",
             SessionEvent::ProposalVoteCast { .. } => "proposalVoteCast",
             SessionEvent::ProposalDismissed { .. } => "proposalDismissed",
+            SessionEvent::ProposalArchivePolicySet { .. } => "proposalArchivePolicySet",
             SessionEvent::ProposalRefined { .. } => "proposalRefined",
             SessionEvent::ProposalSetOpened { .. } => "proposalSetOpened",
             SessionEvent::ProposalSetAlternativeAdded { .. } => "proposalSetAlternativeAdded",
@@ -655,6 +675,9 @@ impl SessionEvent {
             SessionEvent::PasskeyRegistered { .. } => "passkeyRegistered",
             SessionEvent::PasskeyRemoved { .. } => "passkeyRemoved",
             SessionEvent::IdentityLinkPublished { .. } => "identityLinkPublished",
+            SessionEvent::ProfileUpdated { .. } => "profileUpdated",
+            SessionEvent::DeviceLabelSet { .. } => "deviceLabelSet",
+            SessionEvent::MemberRetired { .. } => "memberRetired",
             SessionEvent::IdentityLinkRemoved { .. } => "identityLinkRemoved",
             SessionEvent::ProposalApplyRequested { .. } => "proposalApplyRequested",
             SessionEvent::ProposalApplyFailed { .. } => "proposalApplyFailed",
@@ -701,6 +724,7 @@ impl SessionEvent {
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::AdmissionClosed { .. }
             | SessionEvent::WorkspaceSandboxSet { .. }
+            | SessionEvent::ProposalArchivePolicySet { .. }
             | SessionEvent::ChatLockdownRaised { .. }
             | SessionEvent::ChatLockdownCleared { .. }
             | SessionEvent::WorkspaceRulesSet { .. }
@@ -711,6 +735,9 @@ impl SessionEvent {
             | SessionEvent::PasskeyRemoved { .. }
             | SessionEvent::IdentityLinkPublished { .. }
             | SessionEvent::IdentityLinkRemoved { .. }
+            | SessionEvent::ProfileUpdated { .. }
+            | SessionEvent::DeviceLabelSet { .. }
+            | SessionEvent::MemberRetired { .. }
             | SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
             | SessionEvent::WorkspaceRepoRemoved { .. }
@@ -940,6 +967,13 @@ impl ChatSession {
                     // to set `superseded_by`) or extra comments changes
                     // nothing here.
                     proposal.refinements = std::mem::take(&mut slot.refinements);
+                    // Settled and archived times are the fold's
+                    // (`crate::proposal_archive`), never the writer's.
+                    proposal.settled_at = slot.settled_at;
+                    proposal.archived_at = slot.archived_at;
+                    proposal.archived_by = slot.archived_by;
+                    proposal.archive_mark = slot.archive_mark;
+                    proposal.keep_unarchived = slot.keep_unarchived;
                     // A verified human approval is for the change that was
                     // reviewed: a re-upsert that changes what would be
                     // applied (patch, files, kind, workflow, command, base)
@@ -952,6 +986,12 @@ impl ChatSession {
                     proposal.repo_id = self.repo.as_ref().and_then(|r| r.repo_id);
                     // A new proposal starts with an empty thread.
                     proposal.refinements.clear();
+                    proposal.settled_at = None;
+                    proposal.archived_at = None;
+                    proposal.archived_by = None;
+                    // Filed in the inbox, whatever flag its writer set.
+                    proposal.archive_mark = Some(false);
+                    proposal.keep_unarchived = false;
                     self.proposals.push(proposal.clone());
                 }
                 crate::proposal_sets::restamp(&self.proposal_sets, &mut self.proposals, proposal.id);
@@ -1061,6 +1101,30 @@ impl ChatSession {
             // Folded with their signed author in projection (`fold_pass`),
             // never from a bare payload.
             SessionEvent::AttachmentShared { .. } | SessionEvent::AttachmentDeleted { .. } => {}
+            // Folded with their signed event in projection (`fold_pass`).
+            SessionEvent::ProfileUpdated { .. } | SessionEvent::DeviceLabelSet { .. } => {}
+            // Allowed only under rules 3 (`authz::retire`): the member leaves.
+            SessionEvent::MemberRetired { retirement } => {
+                if self.members.iter().any(|m| m.id == retirement.member_id) {
+                    self.guards.removed_members.insert(retirement.member_id.clone());
+                }
+                // The linked computer's host passes to the person (8.3).
+                let successor = self
+                    .members
+                    .iter()
+                    .find(|m| m.actor.account_id == Some(retirement.successor_account_id))
+                    .map(|m| m.id.clone());
+                if let Some(s) = successor {
+                    let device = retirement.device_id.to_string();
+                    for h in self.workspace_hosts.iter_mut() {
+                        if h.id == device && h.owner_actor_id == retirement.member_id {
+                            h.owner_actor_id = s.clone();
+                        }
+                    }
+                }
+                self.members.retain(|m| m.id != retirement.member_id);
+                self.retired.insert(retirement.member_id.clone(), retirement.successor_account_id);
+            }
             SessionEvent::ProposalReverted { proposal_id, .. } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     p.reverted = p.status == crate::proposals::ProposalStatus::Applied;
@@ -1233,6 +1297,9 @@ impl ChatSession {
             }
             SessionEvent::WorkspaceSandboxSet { grants } => {
                 self.guards.sandbox_grants = grants.clone();
+            }
+            SessionEvent::ProposalArchivePolicySet { policy } => {
+                self.guards.proposal_archive = Some(*policy);
             }
             SessionEvent::ChatLockdownRaised { chat_id, lockdown } => {
                 let list = self.guards.lockdowns.entry(*chat_id).or_default();
@@ -1962,6 +2029,11 @@ fn fold_pass(
     // never depends on a position (see `authz::DeviceState::holders`).
     if keyed.iter().any(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. })) {
         tracker.set_vouched(authz::RosterTracker::vouched(&keyed));
+        // Which certificates their devices accepted: read only once the log
+        // names rules 3 (an unallowed rules set changes nothing it reads).
+        if keyed.iter().any(|e| matches!(e.payload, SessionEvent::WorkspaceRulesSet { version, .. } if version >= authz::RULES_V3)) {
+            tracker.set_accepted(authz::RosterTracker::accepted(&keyed, ordered[base].workspace_id));
+        }
     }
     // Each voter's last folded vote per proposal: its lamport and whether it
     // approved (see the concurrent-vote rule below).
@@ -2239,6 +2311,22 @@ fn fold_pass(
                         a.deleted = true;
                     }
                 }
+                // Render-only (identity model v2, 5 and 6): last writer wins
+                // per field in fold order.
+                SessionEvent::ProfileUpdated { profile } => {
+                    session.profiles.entry(profile.account_id).or_default().apply(profile, env.event_id);
+                }
+                SessionEvent::DeviceLabelSet { label } => {
+                    let per = session.device_labels.entry(label.device_id).or_default();
+                    if label.label.is_empty() {
+                        per.remove(&label.account_id);
+                    } else {
+                        per.insert(label.account_id, label.label.clone());
+                    }
+                    if per.is_empty() {
+                        session.device_labels.remove(&label.device_id);
+                    }
+                }
                 _ => {}
             }
             // Where content was filed (see `AuthzState::content_frontier`).
@@ -2296,6 +2384,10 @@ fn fold_pass(
                 }
                 _ => false,
             };
+            // Settled and archived times (`crate::proposal_archive`): the
+            // event's own recorded time, and who from its signed stamp.
+            let archive_before = crate::proposal_archive::touches_proposals(payload)
+                .then(|| crate::proposal_archive::settled_states(&session));
             if !superseded && !enveloped && !crate::guard::fold_authored(&mut session, payload, author) {
                 let ms = crate::admission::envelope_ms(env);
                 if let SessionEvent::TurnClaimed { trigger_id, device_id, epoch, supersedes, repo_id } = payload {
@@ -2329,6 +2421,20 @@ fn fold_pass(
                     }
                 }
             }
+            if let Some(before) = archive_before {
+                let account = env
+                    .actor_stamp
+                    .as_ref()
+                    .filter(|s| s.actor.kind != crate::identity::ActorKind::Agent)
+                    .and_then(|s| s.actor.account_id);
+                // Archiving is a Contributor's (the content floor): below
+                // that the event still folds as on every build, but the
+                // inbox ignores it (`ActionProposal::archive_mark`).
+                let may_archive = !checked
+                    || trusted
+                    || at.and_then(|r| r.role_of(author)).is_some_and(|r| r.rank() >= crate::identity::WorkspaceRole::Contributor.rank());
+                crate::proposal_archive::note_event(&mut session, &before, payload, env.timestamp, account, may_archive);
+            }
             session.updated_at = env.timestamp;
         }
         if let Some(d) = decisions.as_deref_mut() {
@@ -2356,6 +2462,25 @@ fn fold_pass(
         WorkspaceAuthz::Timeline(t) => t.current().rules,
         _ => tracker.state.rules,
     };
+    // Rules 3: a host whose owner isn't a member any more is inert (agents
+    // bound to it become unbound everywhere at once).
+    if session.authz.rules >= authz::RULES_V3 && session.id == crate::channel::workspace_config_session_id(session.workspace_id) {
+        let members: std::collections::BTreeSet<&str> = session.members.iter().map(|m| m.id.as_str()).collect();
+        let gone: Vec<String> = session
+            .workspace_hosts
+            .iter()
+            .filter(|h| !h.owner_actor_id.is_empty() && !members.contains(h.owner_actor_id.as_str()))
+            .map(|h| h.id.clone())
+            .collect();
+        if !gone.is_empty() {
+            session.workspace_hosts.retain(|h| !gone.contains(&h.id));
+            for a in session.workspace_agents.iter_mut() {
+                if gone.contains(&a.host_id) {
+                    a.host_id.clear();
+                }
+            }
+        }
+    }
     Some(session)
 }
 

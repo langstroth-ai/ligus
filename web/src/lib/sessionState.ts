@@ -67,7 +67,10 @@ export interface ChatAttention {
   sessionId: string;
   /// The chat's workspace: a chat is (workspace, chat).
   workspaceId?: string;
+  /// Questions still waiting that you may answer.
   openAsks: number;
+  /// Every question still waiting, newest first.
+  asks?: { askId: string; agentName: string; kind: string; eligible: boolean; audience: string }[];
   proposals: { id: string; title: string; status: string; needsMe: boolean }[];
   paused: boolean;
 }

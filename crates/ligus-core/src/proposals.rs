@@ -175,6 +175,33 @@ pub struct ActionProposal {
     /// uploads it and signs the `AttachmentShared`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment: Option<Box<crate::attachment::AttachmentRef>>,
+    /// When it settled (applied, rejected or superseded), by the settling
+    /// event's own recorded time, never the folding device's clock. Set by
+    /// the fold only (see [`crate::proposal_archive`]); a value an upsert
+    /// carries is ignored. Feeds auto-archive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_at: Option<Timestamp>,
+    /// When it was archived (`ProposalDismissed { dismissed: true }`), by
+    /// that event's recorded time. Fold-derived, like `settled_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<Timestamp>,
+    /// Who archived it: the account on that event's signed stamp (the
+    /// account-id rule; never a payload field). `None` for an agent or a
+    /// legacy actor without an account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_by: Option<Uuid>,
+    /// The archive state as members who may archive (Contributor+) left it:
+    /// `Some(true)` archived, `Some(false)` restored. A `ProposalDismissed`
+    /// from anyone below Contributor still flips `dismissed` (the fold every
+    /// build shares) but never this, and the inbox reads this
+    /// ([`crate::proposal_archive`]). `None`: no such event folded here (a
+    /// proposal seeded from a snapshot), so `dismissed` stands. Fold-derived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_mark: Option<bool>,
+    /// A person restored it after it settled, so auto-archive leaves it in
+    /// the inbox. Cleared when it settles again. Fold-derived.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_unarchived: bool,
 }
 
 /// A structured command proposal (Track D4).
@@ -264,6 +291,11 @@ impl ActionProposal {
             base_ref: String::new(),
             produced_on: None,
             attachment: None,
+            settled_at: None,
+            archived_at: None,
+            archived_by: None,
+            archive_mark: None,
+            keep_unarchived: false,
         }
     }
 

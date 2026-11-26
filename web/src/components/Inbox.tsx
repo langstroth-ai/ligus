@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { AgentAsks } from "@/components/AgentAsks";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PendingInviteRows } from "@/components/PendingInvitesBanner";
 import { SandboxGrantsNotice } from "@/components/SandboxGrantsBanner";
 import { WorkspaceTrustSheet } from "@/components/WorkspaceTrustBanner";
 import { RepoSuggestionNotice, REPOS_KEY } from "@/components/settings/RepositoriesSection";
 import { InboxItem } from "@/components/kit";
-import { Button, SectionCap } from "@/components/ui";
-import { listWorkspaceRepos } from "@/lib/ipc";
-import { needsYouCount, needsYouLabel, type NeedsYouItem } from "@/lib/needsYou";
+import { Button, InfoTip, SectionCap } from "@/components/ui";
+import { approvalDecline, approvalDismissFact, listWorkspaceRepos } from "@/lib/ipc";
+import { approvalTitle, needsYouCount, needsYouLabel, type ApprovalRef, type NeedsYouItem } from "@/lib/needsYou";
+import { COPY as APPROVAL_COPY } from "@/components/ApprovalSheet";
+import { APPROVALS_KEY, approvalSheet } from "@/state/approvals";
+import { errMsg, toast } from "@/components/Toast";
 import { liveTurns } from "@/state/liveTurns";
 import { phoneAlerts } from "@/state/phoneAlerts";
 
@@ -20,13 +22,57 @@ export interface InboxActions {
   openSettingsTab: (tab: string) => void;
 }
 
-/// Everything that needs you, in one place: agents' questions (answered right
-/// here), proposals waiting on your vote or ready to apply, runs that failed,
+/// Everything that needs you, in one place: agents' questions (one row each,
+/// answered in their chat), proposals waiting on your vote or ready to apply, runs that failed,
 /// a phone code another phone answered, changed sandbox grants, repository
 /// commands to enable, boxes asking to be your device, and invites. Below,
 /// quieter, suggestions that don't need you. Opening a row takes you to it.
+/// "now", "5m", "3h", "2d".
+export function shortAgo(ms: number, now: number = Date.now()): string {
+  const s = Math.max(0, Math.floor((now - ms) / 1000));
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86_400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86_400)}d`;
+}
+
 export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; actions: InboxActions }) {
   const [trustOpen, setTrustOpen] = useState(false);
+  const [severalOpen, setSeveralOpen] = useState(false);
+  const qc = useQueryClient();
+  // One request: one line, opening the sheet. Nothing is approved here.
+  const approvalRow = (a: ApprovalRef) =>
+    a.kind === "phone" ? (
+      // Phones are added from My devices until they send code-match
+      // requests themselves: read-only here.
+      <InboxItem
+        key={`approval:${a.rid}`}
+        state="idle"
+        title={approvalTitle(a)}
+        detail="Add phones from My devices > Add a phone."
+        when={shortAgo(a.createdAt)}
+        whenInline
+        onOpen={() => actions.openSettingsTab("account")}
+      />
+    ) : (
+    <InboxItem
+      key={`approval:${a.rid}`}
+      state="idle"
+      title={approvalTitle(a)}
+      when={shortAgo(a.createdAt)}
+      whenInline
+      onOpen={() => approvalSheet.open(a.workspaceId, a.rid)}
+      menu={[
+        {
+          label: "Decline",
+          onSelect: () =>
+            void approvalDecline(a.workspaceId, a.rid)
+              .then(() => qc.invalidateQueries({ queryKey: APPROVALS_KEY }))
+              .catch((e) => toast.error(errMsg(e))),
+        },
+      ]}
+    />
+  );
   const repos = useQuery({ queryKey: REPOS_KEY, queryFn: listWorkspaceRepos, retry: false });
   const n = needsYouCount(items);
   // Rows that render a whole kind at once (they own its data and actions)
@@ -42,18 +88,18 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
     const where = item.chatTitle;
     switch (item.kind) {
       case "ask":
-        return [
+      case "waiting":
+        // No answer buttons here: the card is answered in its chat, where
+        // its consequences are on screen.
+        return (
           <InboxItem
             key={item.key}
             state="idle"
             title={item.title}
             context={where}
             onOpen={() => actions.openChat(item.chatId!)}
-          />,
-          <div key={`${item.key}:answer`} role="listitem" aria-label={`Answer in ${where ?? "the chat"}`} className="px-3 pb-1">
-            <AgentAsks sessionId={item.chatId!} />
-          </div>,
-        ];
+          />
+        );
       case "vote":
       case "apply":
         return (
@@ -128,6 +174,48 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
                 Review
               </Button>
             }
+          />
+        );
+      case "approval": {
+        const list = item.approvals ?? [];
+        if (list.length === 1) return approvalRow(list[0]);
+        return [
+          <InboxItem
+            key={item.key}
+            state="idle"
+            title={item.title}
+            when={item.at ? shortAgo(item.at) : undefined}
+            whenInline
+            onOpen={() => setSeveralOpen((v) => !v)}
+          />,
+          ...(severalOpen ? [<div key={`${item.key}:list`} role="group" aria-label="Requests to approve" className="pl-4">{list.map(approvalRow)}</div>] : []),
+        ];
+      }
+      case "approvalFact":
+        return (
+          <InboxItem
+            key={item.key}
+            state="idle"
+            title={item.title}
+            when={item.at ? shortAgo(item.at) : undefined}
+            whenInline
+            actions={
+              item.fact?.help || item.fact?.kind === "mismatch" ? (
+                <InfoTip
+                  label={item.fact.kind === "mismatch" ? "a request that didn't match" : "a link that didn't finish"}
+                  text={item.fact.help ?? APPROVAL_COPY.aboutMismatch}
+                />
+              ) : undefined
+            }
+            menu={[
+              {
+                label: "Dismiss",
+                onSelect: () =>
+                  void approvalDismissFact(item.fact!.key)
+                    .then(() => qc.invalidateQueries({ queryKey: APPROVALS_KEY }))
+                    .catch(() => {}),
+              },
+            ]}
           />
         );
       case "sandbox":

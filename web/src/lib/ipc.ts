@@ -17,6 +17,7 @@ import type { WorkspaceAgentDto } from "@/bindings/WorkspaceAgentDto";
 import type { SkillDto } from "@/bindings/SkillDto";
 import type { McpServerDto } from "@/bindings/McpServerDto";
 import type { ProposalDto } from "@/bindings/ProposalDto";
+import type { ArchivedProposalDto } from "@/bindings/ArchivedProposalDto";
 import type { ProposalSetDto } from "@/bindings/ProposalSetDto";
 import type { WorkspaceMemberDto } from "@/bindings/WorkspaceMemberDto";
 import type { VaultSourceDto } from "@/bindings/VaultSourceDto";
@@ -485,6 +486,9 @@ export interface SharedAttachmentView {
   nameClass: TypeClass;
   riskyByName: boolean;
   fromAgentOffer: boolean;
+  /// The relay no longer has it and this device holds no verified copy
+  /// (older desktops leave it out).
+  expired?: boolean;
   /// The sharer's own messages that place it (the only ones that show it).
   messageIds: string[];
 }
@@ -885,6 +889,19 @@ export const workspaceClaimMembership = () =>
   invoke<boolean>("workspace_claim_membership");
 /// Server-side members of the active workspace (empty on open relays).
 export const workspaceMembers = () => invoke<MemberEntry[]>("workspace_members");
+/// Relay-side membership of the active workspace, as this device sees it.
+export interface RelayMembershipDto {
+  /// `off`: the relay has membership turned off. `unclaimed`: nobody claimed
+  /// the workspace yet. `claimed`: the relay enforces `members`. `hidden`:
+  /// claimed, and this device's relay token names no member.
+  state: "off" | "unclaimed" | "claimed" | "hidden";
+  members: MemberEntry[];
+  /// This device's relay token names an account, so a claim can work.
+  identified: boolean;
+  /// The relay is the community relay (no sign-in there).
+  community: boolean;
+}
+export const relayMembershipStatus = () => invoke<RelayMembershipDto>("relay_membership_status");
 /// What removing a relay member did in the workspace.
 export interface RelayRemoveResultDto {
   /** Whether the workspace key was rotated. */
@@ -1278,13 +1295,30 @@ export const refineProposal = (
 export const requestProposalChanges = (sessionId: string, proposalId: string) =>
   invoke<void>("request_proposal_changes", { sessionId, proposalId });
 
-/// Hide (or restore) proposals in the Review inbox. Hides only — the proposals
-/// stay in the event log as a paper trail. Resolves to the number changed.
-export const dismissProposals = (
+/// Archive (or restore) proposals for everyone in the workspace. Archives
+/// only: the proposals stay in the event log as a paper trail. A proposal that
+/// still waits on someone is refused. Resolves to the number changed. (The
+/// command keeps its old name, from when this was Dismiss.)
+export const archiveProposals = (
   sessionId: string,
   proposalIds: string[],
-  dismissed: boolean,
-) => invoke<number>("dismiss_proposals", { sessionId, proposalIds, dismissed });
+  archived: boolean,
+) => invoke<number>("dismiss_proposals", { sessionId, proposalIds, dismissed: archived });
+
+/// Hide proposals for me on this device only, or show them again. Never synced.
+export const hideProposals = (proposalIds: string[], hidden: boolean) =>
+  invoke<void>("hide_proposals", { proposalIds, hidden });
+
+/// Every archived or hidden-for-me proposal in the workspace, newest first.
+export const listArchivedProposals = () => invoke<ArchivedProposalDto[]>("list_archived_proposals");
+
+/// The workspace's auto-archive days in force (`days: null`: off), and whether
+/// this person may change them (an Admin).
+export type ProposalArchiveSetting = { days: number | null; canEdit: boolean };
+export const proposalArchiveDays = () => invoke<ProposalArchiveSetting>("proposal_archive_days");
+
+/// Set the workspace's auto-archive days (0 = off). An Admin's.
+export const setProposalArchiveDays = (days: number) => invoke<void>("set_proposal_archive_days", { days });
 
 export const toggleReaction = (sessionId: string, messageId: string, emoji: string) =>
   invoke<void>("toggle_reaction", { sessionId, messageId, emoji });
@@ -1332,6 +1366,10 @@ export interface MyDeviceDto {
   phone: boolean;
   /** The label is a real name, not the "Device 1a2b3c4d" fallback. */
   named: boolean;
+  /** One quiet line when another member also certified this device's key, or it never finished linking. */
+  note?: string;
+  /** Approved here but it never wrote anything: offered as Remove. */
+  neverWritten?: boolean;
 }
 export interface DeviceRequestDto {
   hostId: string;
@@ -1348,6 +1386,8 @@ export const inspectDeviceCode = (code: string) => invoke<DeviceCodeDto>("inspec
 export const approveDevice = (code: string, retireMember: boolean) =>
   invoke<ApproveDeviceDto>("approve_device", { code, retireMember });
 export const listMyDevices = () => invoke<MyDeviceDto[]>("list_my_devices");
+/// Rename one of your devices: a synced name every member sees; empty clears it.
+export const renameDevice = (deviceId: string, label: string) => invoke<void>("rename_device", { deviceId, label });
 
 /// Another computer's link request (`liguslink1:`), as Add a computer shows it.
 export interface ComputerRequestDto {
@@ -1357,8 +1397,10 @@ export interface ComputerRequestDto {
   fingerprint: string;
   alreadyMine: boolean;
   revoked: boolean;
-  /** Already in the workspace as someone else (their name). */
+  /** Already in the workspace as someone else (their name): it signed as them. */
   someoneElses: string | null;
+  /** Members who certified this computer's key without it acting for them: shown, never a refusal. */
+  alsoCertifiedBy?: string[];
   /** The separate member this computer proved it was here. */
   previousMember: { memberId: string; displayName: string } | null;
   /** This desktop's fingerprint: the computer shows it when it redeems. */
@@ -1681,6 +1723,112 @@ export type BoxAdmission = { code: string; sealed: boolean; expiresInMinutes: nu
 export const admitBox = (workspaceId: string, request: string | null, ttlMinutes: number | null) =>
   invoke<BoxAdmission>("admit_box", { workspaceId, request, ttlMinutes });
 
+// ── Code-match approval (docs/design/code-match-approval.md 7.2) ──────────
+
+/// Who is checking a request, as this device reads the claims.
+export type ApprovalClaimDto =
+  | { state: "unclaimed" }
+  | { state: "mine" }
+  | { state: "claimedBy"; name: string }
+  | { state: "contested"; name: string | null };
+
+/// A live request in a workspace's approval mailbox that this device can approve.
+export interface ApprovalDto {
+  workspaceId: string;
+  workspaceName: string;
+  rid: string;
+  kind: "box" | "computer" | "phone";
+  label: string;
+  /// The 80-bit fingerprint (Details only).
+  fingerprint: string;
+  createdAt: number;
+  expiresAt: number;
+  /// The approval address's relay.
+  relay: string;
+  claim: ApprovalClaimDto;
+  /// Live requests of the same group in this workspace ("2 devices are asking").
+  parallel: number;
+  /// The phase of this device's session for it, if one is open.
+  phase: ApprovalPhase | null;
+  /// The label looks like an existing device or member name.
+  nameClash?: boolean;
+}
+
+/// A device-local Inbox fact kept for a day.
+export interface ApprovalFactDto {
+  /// The request's rid (what dismisses it).
+  key: string;
+  kind: "mismatch" | "didntFinish";
+  workspaceId: string;
+  label: string;
+  at: number;
+  /// The Inbox line and its "?", worded by the runtime.
+  text?: string;
+  help?: string;
+}
+
+export interface ApprovalsDto {
+  requests: ApprovalDto[];
+  facts: ApprovalFactDto[];
+}
+
+export type ApprovalPhase =
+  | "waiting"
+  | "code"
+  | "confirming"
+  | "passkey"
+  | "approved"
+  | "mismatch"
+  | "declined"
+  | "expired"
+  | "didntFinish"
+  | "ended"
+  | "failed";
+
+/// An approval open on this device.
+export interface ApprovalSessionDto {
+  rid: string;
+  workspaceId: string;
+  kind: "box" | "computer" | "phone";
+  label: string;
+  fingerprint: string;
+  relay: string;
+  createdAt: number;
+  phase: ApprovalPhase;
+  /// "K7Q4 M9X2": compared by eye, never copied.
+  code: string | null;
+  spelled: string | null;
+  expiresAt: number | null;
+  /// When the code appeared (the 3-second hold starts here).
+  codeAt: number | null;
+  message: string | null;
+}
+
+/// A workspace's approval address (`ligusaddr1:`): not a secret.
+export interface ApprovalAddressDto {
+  address: string;
+  relay: string;
+  canReset: boolean;
+}
+
+export const listApprovals = () => invoke<ApprovalsDto>("list_approvals");
+export const approvalDismissFact = (key: string) => invoke<void>("approval_dismiss_fact", { key });
+export const getApprovalAddress = (workspaceId: string) => invoke<ApprovalAddressDto>("get_approval_address", { workspaceId });
+export const resetApprovalAddress = (workspaceId: string) => invoke<ApprovalAddressDto>("reset_approval_address", { workspaceId });
+/// Pasted request text that is a live request: run the code match for it.
+export const approvalMatchPaste = (text: string) => invoke<{ workspaceId: string; rid: string } | null>("approval_match_paste", { text });
+export const approvalSession = (rid: string) => invoke<ApprovalSessionDto | null>("approval_session", { rid });
+export const approvalOpen = (workspaceId: string, rid: string) => invoke<ApprovalSessionDto>("approval_open", { workspaceId, rid });
+export const approvalCodesMatch = (rid: string) => invoke<ApprovalSessionDto>("approval_codes_match", { rid });
+export const approvalDontMatch = (rid: string) => invoke<ApprovalSessionDto>("approval_dont_match", { rid });
+export const approvalExpire = (rid: string) => invoke<ApprovalSessionDto>("approval_expire", { rid });
+export const approvalEnd = (workspaceId: string, rid: string) => invoke<void>("approval_end", { workspaceId, rid });
+export const approvalDecline = (workspaceId: string, rid: string) => invoke<void>("approval_decline", { workspaceId, rid });
+export const approvalForget = (rid: string) => invoke<void>("approval_forget", { rid });
+export const onApprovalsChanged = (cb: () => void): Promise<UnlistenFn> => listen("approvals://changed", () => cb());
+export const onApprovalSession = (cb: (s: ApprovalSessionDto) => void): Promise<UnlistenFn> =>
+  listen<ApprovalSessionDto>("approvals://session", (evt) => cb(evt.payload));
+
 /// An invite delivered to this device's contact drop box (sealed to it,
 /// opened locally).
 export type PendingInvite = {
@@ -1855,30 +2003,90 @@ export const withdrawApplyRequest = (sessionId: string, requestId: string) =>
 export const getImplementPlan = (sessionId: string, proposalId: string, targetAgentId?: string | null) =>
   invoke<ImplementPreviewDto>("get_implement_plan", { sessionId, proposalId, targetAgentId: targetAgentId ?? null });
 
-/// An agent's question to the chat's people (ligus_ask_human).
+/// Who a decision card is put to.
+export type AskAudienceDto = {
+  kind: "people" | "room";
+  memberIds?: string[];
+  /// The named people's roster names, in order.
+  names?: string[];
+  minRole?: "contributor" | "admin" | "owner" | null;
+};
+
+/// What answering a grant card lets the host do (written only by the host).
+export type AskEffectDto = {
+  kind: "permission" | "secret" | string;
+  tool: string;
+  /// The agent's own description (unverified; shown as "… describes it as").
+  title: string;
+  /// The call's own content, verbatim: the command, the files and content.
+  detail: string;
+  cwd: string;
+  hostDeviceId?: string | null;
+  hostLabel: string;
+  /// An answer needs the person's passkey.
+  presenceRequired: boolean;
+  standing: boolean;
+  /// Too large to review on a card: Deny only.
+  tooLarge: boolean;
+};
+
+export type AskOriginDto = { via: "subagent" | "chat" | "outside" | string; label: string; chatId?: string | null; runtime: string };
+
+export type AskVoteDto = { memberId: string; name: string; deviceId?: string | null; atMs: number };
+
+/// An agent's question in a chat, as the decision card draws it (the same
+/// card every surface builds: ligus_runtime::ask_view).
 export type AskDto = {
   askId: string;
+  chatId: string;
+  /// The asking turn (its reply message): the card sits there.
+  turnId?: string | null;
   agentName: string;
+  kind: "question" | "permission" | "secret";
+  /// 2 for a card with the 0.4 rules, 0 for an older ligus_ask_human one.
+  v: number;
+  /// The agent's words, cleaned, plain text (never Markdown).
   question: string;
   options: string[];
+  allowText: boolean;
+  audience: AskAudienceDto;
+  quorum: number;
+  /// This person may answer it.
+  eligible: boolean;
+  effect?: AskEffectDto | null;
+  origin?: AskOriginDto | null;
+  tally: number[];
   expiresAtMs: number;
-  answer?: string | null;
-  answeredBy?: string | null;
   open: boolean;
-  /// "permission": the turn's host asks to run something (only its person or
-  /// the agent's owner can grant it); "question" otherwise.
-  kind?: "permission" | "question";
-  /// Posted by someone other than the agent or its turn's host: theirs, never
-  /// a permission request.
+  /// Open and not expired: the buttons show.
+  live: boolean;
+  declined: boolean;
+  answer?: string | null;
+  answerText?: string | null;
+  answeredBy: AskVoteDto[];
+  olderAnswerUncounted: boolean;
+  /// Posted by someone other than the agent or its host: theirs, never a grant.
   postedBy?: string | null;
+  atMs: number;
 };
 
 /// The agents' questions in a chat, newest first.
 export const listAsks = (sessionId: string) => invoke<AskDto[]>("list_asks", { sessionId });
 
-/// Answer an agent's question (the first answer wins; it authorizes nothing).
-export const answerAsk = (sessionId: string, askId: string, answer: string, optionIndex?: number | null) =>
-  invoke<void>("answer_ask", { sessionId, askId, answer, optionIndex: optionIndex ?? null });
+/// What a person picked on a card.
+export type AskChoice = { optionIndex?: number | null; text?: string; decline?: boolean };
+
+/// Answer a card: an option, free text where allowed, or Not now. The answer
+/// is bound to the signed question this device holds; a grant that needs it
+/// asks for your passkey first.
+export const answerAsk = (sessionId: string, askId: string, choice: AskChoice) =>
+  invoke<void>("answer_ask", {
+    sessionId,
+    askId,
+    optionIndex: choice.optionIndex ?? null,
+    text: choice.text ?? null,
+    decline: choice.decline ?? null,
+  });
 
 /// Check for an app update. Resolves to the new version if one is available,
 /// null if up to date; rejects with a friendly message if the updater isn't
@@ -2339,6 +2547,10 @@ export type SecurityStatusDto = {
   /// This device counts on the workspace (rules v2: a new device of an
   /// account with a passkey needs Confirm this device).
   deviceConfirmed: boolean;
+  /** This account is an Owner here (only an Owner switches the rules). */
+  isOwner?: boolean;
+  /** Rules 3's readiness list: devices whose certificate would stop counting. */
+  rules3Gaps?: string[];
 };
 /** What the "Confirm with passkey" sheet shows while a ceremony runs. `via`:
  * `browser` (the hand-off page is open), `native` (the system passkey dialog

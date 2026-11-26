@@ -13,8 +13,13 @@
 //   &noagents=1 (no agents, MCP servers or hosts: the panes' Set up actions)
 //   &scratch=1 (scratch repositories: the open chat works in one that is
 //   inside its removal notice; Settings → Repositories lists three)
+//   &asks=question|grant|quorum|waiting|settled|all (agents' decision cards
+//   in the open chat, and their Inbox rows)
+//   &approvals=box|computer|contested|several|mismatch (code-match approval
+//   requests in the Inbox; dev/mock/approvals.ts)
 import * as fx from "./fixtures";
 import { setupMock } from "./setup";
+import { approvalsMock } from "./approvals";
 
 const params = new URLSearchParams(window.location.search);
 const scenario = params.get("scenario") ?? "default";
@@ -29,10 +34,18 @@ const flags = {
   // You on another computer (lt joined with an invite) and revoked devices.
   devices: params.get("devices") === "1",
   scratch: params.get("scratch") === "1",
+  // An older workspace whose Owner may switch to rules 3 (identity model v2).
+  rules3: params.get("rules3") === "1",
   empty: scenario === "empty" || scenario === "onboarding",
+  asks: params.get("asks") ?? "",
 };
 
 type Args = Record<string, unknown> | undefined;
+
+// Archive and hide-for-me (proposal archiving): what the session changed.
+const archiveState: Record<string, boolean> = {};
+const hiddenState: Record<string, boolean> = {};
+let archiveDays: number | null = 7;
 
 // The chat model picker's state (per runtime, like the device's settings).
 const chatModels: Record<string, string> = params.get("chatmodel") ? { "rt-copilot": params.get("chatmodel")! } : {};
@@ -45,6 +58,8 @@ function handle(cmd: string, args: Args): unknown {
   const sid = (args?.sessionId as string) ?? "";
   const setup = setupMock(cmd, args);
   if (setup.handled) return setup.value;
+  const approvals = approvalsMock(cmd, args);
+  if (approvals.handled) return approvals.value;
   switch (cmd) {
     case "export_theme":
       return `/Users/you/Downloads/${String(args?.fileName ?? "theme.toml")}`;
@@ -101,6 +116,8 @@ function handle(cmd: string, args: Args): unknown {
       return flags.devices ? [...fx.members, fx.ltMember] : fx.members;
     case "workspace_members":
       return fx.serverMembers;
+    case "relay_membership_status":
+      return { state: fx.serverMembers.length ? "claimed" : "unclaimed", members: fx.serverMembers, identified: false, community: true };
     case "presence_list":
       return fx.presence;
     case "get_share_typing":
@@ -112,7 +129,23 @@ function handle(cmd: string, args: Args): unknown {
     case "set_primary_open_to_members":
       return null;
     case "list_proposals":
-      return flags.empty ? [] : fx.proposals;
+      return flags.empty ? [] : fx.proposalsWithArchive(archiveState, hiddenState);
+    case "dismiss_proposals": {
+      const ids = (args?.proposalIds as string[]) ?? [];
+      for (const id of ids) archiveState[id] = Boolean(args?.dismissed);
+      return ids.length;
+    }
+    case "hide_proposals": {
+      for (const id of (args?.proposalIds as string[]) ?? []) hiddenState[id] = Boolean(args?.hidden);
+      return null;
+    }
+    case "list_archived_proposals":
+      return flags.empty ? [] : fx.archivedProposals(archiveState, hiddenState);
+    case "proposal_archive_days":
+      return { days: archiveDays, canEdit: true };
+    case "set_proposal_archive_days":
+      archiveDays = Number(args?.days ?? 0) || null;
+      return null;
     case "list_proposal_sets":
       return flags.empty ? [] : fx.proposalSets;
     case "list_skills":
@@ -247,7 +280,23 @@ function handle(cmd: string, args: Args): unknown {
     case "list_agent_templates":
       return [];
     case "my_profile":
-      return { accountId: "6f1c2d3e-8a7b-4c1d-9e0f-112233445566", displayName: "Zaz", avatarUrl: null, safetyCode: "3f2a 91c0 77de 0b14 c2e8 5a6f 9d31 e047", gitEmail: "zaz@example.com" };
+      return { accountId: "6f1c2d3e-8a7b-4c1d-9e0f-112233445566", displayName: profile.name, avatarUrl: profile.avatar, safetyCode: "3f2a 91c0 77de 0b14 c2e8 5a6f 9d31 e047", gitEmail: "zaz@example.com" };
+    case "set_display_name":
+      profile.name = String(args?.name ?? profile.name);
+      return null;
+    case "set_avatar":
+      profile.avatar = (args?.avatar as string | null) ?? null;
+      return null;
+    case "security_status":
+      return {
+        passkeys: [{ credentialId: "pk1", recovery: false }, { credentialId: "rk1", recovery: true }],
+        rules: flags.rules3 ? 2 : 3,
+        keyVersion: 2,
+        secretBackend: "keychain",
+        deviceConfirmed: true,
+        isOwner: true,
+        rules3Gaps: flags.rules3 ? ["Theo's phone 3c1e0f2a would stop counting until it confirms"] : [],
+      };
     case "list_co_members":
       return [
         { accountId: "a1b2c3d4-0000-4000-8000-000000000002", displayName: "Maya", avatarUrl: null, safetyCode: "b7e1 04aa 3c9f 6d20 18ee 7f45 a0c3 5b92", keyConflict: false, devices: 2, workspaces: [{ id: "w-bees", name: "Bees" }], dmWorkspaceId: null, links: [{ provider: "forgejo", host: "codeberg.org", handle: "maya", subjectId: "48213", status: null }] },
@@ -304,8 +353,14 @@ function handle(cmd: string, args: Args): unknown {
       return [
         { deviceId: "d1", label: "MacBook Pro", fingerprint: "a1b2-c3d4", thisDevice: true, revoked: false, lastSeen: null, phone: false, named: true },
         { deviceId: "p1", label: "Ana's iPhone", fingerprint: "e5f6-a7b8", thisDevice: false, revoked: false, lastSeen: null, phone: true, named: true },
+        { deviceId: "c1", label: "Device 376b5d72", fingerprint: "7f3a-91c0", thisDevice: false, revoked: false, lastSeen: null, phone: false, named: false },
+        { deviceId: "f3b686ca", label: "Device f3b686ca", fingerprint: "2c41-88e0", thisDevice: false, revoked: false, lastSeen: null, phone: false, named: false, neverWritten: true, note: "Approved on November 12, 2026. It hasn't written anything yet." },
         ...(flags.devices ? fx.revokedDevices : []),
-      ];
+      ].map((d) => (deviceNames[d.deviceId] ? { ...d, label: deviceNames[d.deviceId], named: true } : d));
+    case "rename_device":
+      deviceNames[String(args?.deviceId)] = String(args?.label ?? "");
+      if (!deviceNames[String(args?.deviceId)]) delete deviceNames[String(args?.deviceId)];
+      return null;
     case "inspect_computer_request":
       return {
         deviceId: "c1",
@@ -396,6 +451,30 @@ function handle(cmd: string, args: Args): unknown {
   }
 }
 
+/// Agents' decision cards in the open chat (`&asks=…`).
+function askExtras(cmd: string, args: Args, base: unknown): unknown {
+  const pick = fx.demoAsks.filter((a) => flags.asks === "all" || a.demo === flags.asks);
+  switch (cmd) {
+    case "list_asks":
+      return (args?.sessionId ?? "chat-1") === "chat-1" ? pick : base;
+    case "list_chat_attention": {
+      const live = pick.filter((a) => a.live);
+      const rows = (base as typeof fx.chatAttention).filter((a) => a.sessionId !== "chat-1");
+      const mine = (base as typeof fx.chatAttention).find((a) => a.sessionId === "chat-1") ?? { sessionId: "chat-1", openAsks: 0, paused: false, proposals: [] };
+      return [
+        ...rows,
+        {
+          ...mine,
+          openAsks: live.filter((a) => a.eligible).length,
+          asks: live.map((a) => ({ askId: a.askId, agentName: a.agentName, kind: a.kind, eligible: a.eligible, audience: a.eligible ? "you" : "Maya" })),
+        },
+      ];
+    }
+    default:
+      return base;
+  }
+}
+
 /// Extra things that need you, for previewing the Inbox (`&inbox=1`).
 function inboxExtras(cmd: string, args: Args, base: unknown): unknown {
   switch (cmd) {
@@ -416,6 +495,12 @@ function inboxExtras(cmd: string, args: Args, base: unknown): unknown {
   }
 }
 
+/** Device names set with Rename in this mock session. */
+const deviceNames: Record<string, string> = {};
+
+/** The profile this mock session edits. */
+const profile: { name: string; avatar: string | null } = { name: "Zaz", avatar: null };
+
 export async function invoke<T>(cmd: string, args?: Args): Promise<T> {
   if (flags.loading && !["get_app_settings", "list_workspaces", "list_runtimes"].includes(cmd)) {
     return new Promise<T>(() => {});
@@ -424,7 +509,8 @@ export async function invoke<T>(cmd: string, args?: Args): Promise<T> {
     throw new Error(`${cmd}: relay unreachable (mock)`);
   }
   await new Promise((r) => setTimeout(r, 15));
-  const out = handle(cmd, args);
+  let out = handle(cmd, args);
+  if (flags.asks) out = askExtras(cmd, args, out);
   return structuredClone(flags.inbox ? inboxExtras(cmd, args, out) : out) as T;
 }
 

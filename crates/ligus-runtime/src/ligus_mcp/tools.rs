@@ -9,8 +9,11 @@ use serde_json::{json, Value};
 /// task-state tools joined it, with `ligus_propose` kind `memory`,
 /// `ligus_flow` op `taskUpdate` and `ligus_read` `memory`, `memoryEntry`
 /// and `taskState`; `ligus_offer_file` joined it with secure attachments
-/// (issue #118).
-pub const TOOLS: [(&str, &str); 28] = [
+/// (issue #118). Release note (0.4): `ligus_ask_person` and `ligus_ask_room`
+/// joined the set (decision cards: who may answer, quorum, yes/no, free
+/// text); folded `ligus_ask` gained `to` (`person`, `room`); and
+/// `ligus_ask_human`'s description points at them. Nothing was renamed.
+pub const TOOLS: [(&str, &str); 30] = [
     ("ligus_propose_diff", include_str!("schema/ligus_propose_diff.json")),
     ("ligus_propose_decision", include_str!("schema/ligus_propose_decision.json")),
     ("ligus_propose_command", include_str!("schema/ligus_propose_command.json")),
@@ -26,6 +29,9 @@ pub const TOOLS: [(&str, &str); 28] = [
     ("ligus_read_proposals", include_str!("schema/ligus_read_proposals.json")),
     ("ligus_read_board", include_str!("schema/ligus_read_board.json")),
     ("ligus_ask_human", include_str!("schema/ligus_ask_human.json")),
+    // Decision cards (agent questions, 0.4).
+    ("ligus_ask_person", include_str!("schema/ligus_ask_person.json")),
+    ("ligus_ask_room", include_str!("schema/ligus_ask_room.json")),
     ("ligus_report", include_str!("schema/ligus_report.json")),
     // Workspace memory (search, read, propose) and live task state.
     ("ligus_memory_search", include_str!("schema/ligus_memory_search.json")),
@@ -120,7 +126,13 @@ pub fn unfold(name: &str, input: &Value) -> Result<(String, Value), String> {
             "forge.file" => "ligus_forge_read_file",
             other => return Err(format!("unknown read {other:?}")),
         },
-        "ligus_ask" => "ligus_ask_human",
+        // Without `to`: the older tool, as before.
+        "ligus_ask" => match field("to").as_str() {
+            "person" => "ligus_ask_person",
+            "room" => "ligus_ask_room",
+            "" => "ligus_ask_human",
+            other => return Err(format!("unknown ask audience {other:?}")),
+        },
         other if TOOLS.iter().any(|(n, _)| *n == other) => other,
         other => return Err(format!("unknown Ligus tool {other:?}")),
     };
@@ -130,6 +142,12 @@ pub fn unfold(name: &str, input: &Value) -> Result<(String, Value), String> {
             // `kind` is also a mark's field; only strip the folding selector.
             if (k == "kind" && name == "ligus_propose") || (k == "op" && name == "ligus_flow") || (k == "what" && name == "ligus_read") {
                 o.remove(k);
+            }
+        }
+        if name == "ligus_ask" {
+            o.remove("to");
+            if let Some(m) = o.remove("member") {
+                o.insert("to".into(), m);
             }
         }
     }
@@ -155,12 +173,12 @@ mod tests {
         }
         let digest: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(digest, GOLDEN, "a frozen Ligus tool schema changed");
-        assert_eq!(TOOLS.len(), 28);
+        assert_eq!(TOOLS.len(), 30);
         assert_eq!(FOLDED.len(), 4, "the folded set fits the reserved MCP slots");
         assert!(FOLDED.len() <= crate::agent_tools::MCP_RESERVED_SLOTS);
     }
 
-    const GOLDEN: &str = "5edb7914ccd7eedfc7f7bd637b60de24b16b948710783205821c66e8a506d129";
+    const GOLDEN: &str = "67ed42eac2bf6422f3d5e89ac0d76ead6029867ab833d4b5d20de57d5f5c8668";
 
     #[test]
     fn folded_calls_unfold_to_the_full_tools() {
@@ -172,6 +190,12 @@ mod tests {
         assert_eq!(a["kind"], "lock", "a mark keeps its own kind");
         assert_eq!(unfold("ligus_read", &json!({"what": "board"})).unwrap().0, "ligus_read_board");
         assert_eq!(unfold("ligus_ask", &json!({"question": "?"})).unwrap().0, "ligus_ask_human");
+        let (n, a) = unfold("ligus_ask", &json!({"to": "person", "member": "m1", "question": "?"})).unwrap();
+        assert_eq!((n.as_str(), a["to"].as_str()), ("ligus_ask_person", Some("m1")));
+        let (n, a) = unfold("ligus_ask", &json!({"to": "room", "quorum": 2})).unwrap();
+        assert_eq!(n, "ligus_ask_room");
+        assert!(a.get("to").is_none() && a["quorum"] == 2);
+        assert!(unfold("ligus_ask", &json!({"to": "everyone"})).is_err());
         assert!(unfold("ligus_propose", &json!({"kind": "vote"})).is_err());
         assert!(unfold("ligus_apply", &json!({})).is_err());
         let (n, a) = unfold("ligus_read", &json!({"what": "forge.pr", "number": "7"})).unwrap();

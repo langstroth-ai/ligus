@@ -250,8 +250,16 @@ LIGUS_WS_SECRET_acme=sk-…  ligus agent bot --runtime ws-claude
 
 - `--secret-ref <name>` keeps the key **off** the synced log — the worker holds
   it in env `LIGUS_WS_SECRET_<name>`. `ligus runtimes` shows `✓` when it's present.
-- `--secret - | @FILE` carries the key **E2EE on the log** (zero worker
-  provisioning; use only for trusted workspaces).
+- Keys are never stored in the workspace: there is no inline option.
+
+A runtime whose key an older version stored in the workspace (the removed
+`--secret` flag) keeps working only if it can run keyless; its stored key is
+never used, shown or exported (it reads as "stored key (unused)"), and
+`ligus doctor` warns about it (`runtimes.inline-key`). Every member's device
+received that key, so rotate it with the provider, set the new one on each
+worker as `LIGUS_WS_SECRET_<NAME>`, and redefine the runtime with
+`--secret-ref <NAME>`. An agent on such a runtime carries a `runtimeWarning` in
+`GET /v1/agents`.
 
 ## Who may use a hosted agent
 
