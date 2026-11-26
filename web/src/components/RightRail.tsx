@@ -41,6 +41,7 @@ import {
   listSkills,
   listVaults,
   listWorkspaceHosts,
+  listMyDevices,
   previewVault,
   removeAgent,
   setAgentAvatar,
@@ -125,6 +126,7 @@ import { ImplementPreview } from "@/components/ImplementPreview";
 import { AgentAsks } from "@/components/AgentAsks";
 import { MemoryPane } from "@/components/MemoryPane";
 import { hostGatewaysLabel } from "@/components/settings/GatewayPicker";
+import { agentHostOptions, defaultAgentHost } from "@/lib/agentHost";
 import { LIKELY_ME_HINT, likelyMeReason } from "@/lib/likelyMe";
 import { openArchivedProposals, requestDevices } from "@/lib/nav";
 
@@ -364,7 +366,7 @@ export function PaneHelpLink({ title, about, docs }: { title: string; about: str
 // place through their row menus (§11.1: the workspace owns configuration).
 
 
-function ToolsPane({
+export function ToolsPane({
   sessionId,
   activeRuntimeId,
 }: {
@@ -378,11 +380,20 @@ function ToolsPane({
   const mcp = useQuery({ queryKey: ["mcp"], queryFn: listMcpServers });
   const hosts = useQuery({ queryKey: ["workspace-hosts"], queryFn: listWorkspaceHosts });
   const hostList = hosts.data ?? [];
-  const workerHosts = hostList.filter((h) => h.kind === "worker");
+  const myDevices = useQuery({ queryKey: ["my-devices"], queryFn: listMyDevices, retry: false });
+  const thisDeviceId = (myDevices.data ?? []).find((d) => d.thisDevice)?.deviceId ?? null;
   const [agentName, setAgentName] = useState("");
   const [agentRole, setAgentRole] = useState("");
   const [agentRuntimeId, setAgentRuntimeId] = useState(activeRuntimeId);
   const [agentHostId, setAgentHostId] = useState("");
+  // Picked by hand: a runtime change no longer moves it to the default.
+  const [agentHostTouched, setAgentHostTouched] = useState(false);
+  const agentRuntime = (runtimes.data ?? []).find((r) => r.id === agentRuntimeId);
+  const agentGateway = agentRuntime?.gateway || null;
+  const hostOptions = agentHostOptions(hostList, thisDeviceId, agentGateway);
+  useEffect(() => {
+    if (!agentHostTouched) setAgentHostId(defaultAgentHost(hostList, agentGateway));
+  }, [agentGateway, agentHostTouched, hostList]);
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [mcpSource, setMcpSource] = useState("");
   const [mcpError, setMcpError] = useState<string | null>(null);
@@ -397,20 +408,14 @@ function ToolsPane({
   const addAgentMutation = useMutation({
     mutationFn: async () => {
       const name = agentName.trim();
-      await addAgent(sessionId, name, agentRuntimeId, agentRole.trim());
-      // `add_agent` doesn't return the new id, and agent names are enforced
-      // unique — so to bind the persona to a worker we refetch the roster and
-      // match by name, then reassign its host via the existing path.
-      if (agentHostId) {
-        const list = await listAgents(sessionId);
-        const created = list.find((a) => a.name.toLowerCase() === name.toLowerCase());
-        if (created) await setAgentHost(created.id, agentHostId);
-      }
+      // The host rides in the same record: one write, one confirmation.
+      await addAgent(sessionId, name, agentRuntimeId, agentRole.trim(), agentHostId);
     },
     onSuccess: () => {
       setAgentName("");
       setAgentRole("");
       setAgentHostId("");
+      setAgentHostTouched(false);
       setShowAddAgent(false);
       qc.invalidateQueries({ queryKey: ["agents", sessionId] });
       qc.invalidateQueries({ queryKey: ["workspace-hosts"] });
@@ -604,16 +609,26 @@ function ToolsPane({
                   </SelectField>
                 </Field>
                 <Field label="Runs on">
-                  <SelectField value={agentHostId} onChange={setAgentHostId} ariaLabel="Agent host">
-                    <option value="">This device</option>
-                    {workerHosts.map((host) => (
-                      <option key={host.id} value={host.id}>
-                        {host.label || host.id}
-                        {host.online ? "" : " (offline)"}
+                  <SelectField
+                    value={agentHostId}
+                    onChange={(v) => {
+                      setAgentHostId(v);
+                      setAgentHostTouched(true);
+                    }}
+                    ariaLabel="Agent host"
+                  >
+                    {hostOptions.map((o) => (
+                      <option key={o.id || "this-device"} value={o.id}>
+                        {o.label}
                       </option>
                     ))}
                   </SelectField>
                 </Field>
+                {agentGateway && !hostOptions.find((o) => o.id === agentHostId)?.offersGateway && (
+                  <p className="text-xs text-ink-soft" data-testid="agent-host-gateway-note">
+                    {`This model goes through the ${agentGateway} gateway, which this host doesn't offer, so it won't answer here.`}
+                  </p>
+                )}
                 <Button
                   variant="primary"
                   disabled={!agentName.trim() || !agentRuntimeId || addAgentMutation.isPending}

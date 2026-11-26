@@ -1166,7 +1166,9 @@ export const addAgent = (
   name: string,
   runtimeId: string,
   role: string,
-) => invoke<void>("add_agent", { sessionId, name, runtimeId, role });
+  /** The host it runs on; omitted or "" = this device. */
+  hostId?: string,
+) => invoke<void>("add_agent", { sessionId, name, runtimeId, role, hostId: hostId || null });
 
 export const removeAgent = (sessionId: string, agentId: string) =>
   invoke<void>("remove_agent", { sessionId, agentId });

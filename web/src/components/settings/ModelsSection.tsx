@@ -640,6 +640,19 @@ export function formOllamaListEnabled(o: { provider: string; endpoint: string; o
   return o.provider === "ollama" && (o.endpoint.trim() !== "" || o.ollamaConfigured || o.asked);
 }
 
+/// The CLI harnesses: a gateway routes their own model calls, so picking one
+/// keeps the harness.
+const CLI_PROVIDERS = ["claude-code", "pi", "aider", "codex", "hermes", "antigravity", "copilot"];
+
+/// The provider to use once a model gateway is picked: a CLI harness stays as
+/// it is; any HTTP provider becomes the OpenAI-compatible "custom" one (what
+/// the setup engine writes), so Ollama's address, keep-loaded and num_ctx
+/// never apply to a gateway.
+export function providerForGateway(provider: string, gateway: string): string {
+  if (!gateway) return provider;
+  return CLI_PROVIDERS.includes(provider) ? provider : "custom";
+}
+
 function RuntimesSection() {
   const qc = useQueryClient();
   const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: listRuntimes });
@@ -836,7 +849,8 @@ function RuntimesSection() {
   const profile = formModel ? modelProfile.data ?? null : null;
   // Built-in file tools go only to local/private endpoints unless opted in.
   // Native Ollama with no endpoint talks to localhost.
-  const fileToolsEndpoint = formEndpoint || (runtimeProvider === "ollama" ? "http://localhost:11434" : "");
+  // A gateway has no endpoint here (its address stays on the host).
+  const fileToolsEndpoint = runtimeGateway ? "" : formEndpoint || (runtimeProvider === "ollama" ? "http://localhost:11434" : "");
   const endpointPrivate = useQuery({
     queryKey: ["endpoint-private", fileToolsEndpoint],
     queryFn: () => endpointIsPrivate(fileToolsEndpoint),
@@ -1034,9 +1048,9 @@ function RuntimesSection() {
             <option value="anthropic">Anthropic</option>
             <option value="openAI">OpenAI</option>
             <option value="openRouter">OpenRouter</option>
-            <option value="ollama">Ollama</option>
+            {!runtimeGateway && <option value="ollama">Ollama</option>}
             <option value="azure">Azure OpenAI</option>
-            <option value="custom">Custom</option>
+            <option value="custom">OpenAI-compatible (custom)</option>
             <option value="claude-code">Claude Code</option>
             <option value="pi">Pi</option>
             <option value="aider">Aider</option>
@@ -1046,7 +1060,15 @@ function RuntimesSection() {
             <option value="copilot">GitHub Copilot CLI</option>
           </select>
         </div>
-        <GatewayPicker hosts={hosts.data ?? []} value={runtimeGateway} onChange={setRuntimeGateway} style={fieldStyle} />
+        <GatewayPicker
+          hosts={hosts.data ?? []}
+          value={runtimeGateway}
+          onChange={(g) => {
+            setRuntimeGateway(g);
+            setRuntimeProvider((p) => providerForGateway(p, g));
+          }}
+          style={fieldStyle}
+        />
         {!runtimeGateway && (
         <input
           value={runtimeEndpoint}
@@ -1083,12 +1105,15 @@ function RuntimesSection() {
         <input
           value={runtimeModel}
           onChange={(e) => setRuntimeModel(e.target.value)}
-          placeholder={runtimeProvider === "pi" ? "Model — e.g. qwen2.5-coder" : "Preferred model"}
-          list={runtimeProvider === "ollama" ? "ollama-form-models" : runtimeProvider ? "runtime-form-models" : undefined}
+          placeholder={
+            runtimeGateway ? "Model the gateway serves" : runtimeProvider === "pi" ? "Model — e.g. qwen2.5-coder" : "Preferred model"
+          }
+          aria-label="Model"
+          list={runtimeGateway ? undefined : runtimeProvider === "ollama" ? "ollama-form-models" : runtimeProvider ? "runtime-form-models" : undefined}
           className="w-full rounded-xl border px-3 py-2 text-sm"
           style={fieldStyle}
         />
-        {runtimeProvider !== "ollama" && runtimeProvider !== "" && (
+        {!runtimeGateway && runtimeProvider !== "ollama" && runtimeProvider !== "" && (
           <ModelFieldHelp
             listId="runtime-form-models"
             runtimeId={editingId}

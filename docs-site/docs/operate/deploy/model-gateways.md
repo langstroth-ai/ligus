@@ -128,7 +128,10 @@ mode.
 2. Set the gateway on a workspace runtime (`gateway = "litellm"`) instead of
    an endpoint URL. The runtime's model is the model name the gateway
    expects.
-3. Bind the agent to that runtime and to a host that offers the gateway.
+3. Bind the agent to that runtime and to a host that offers the gateway. In
+   the desktop app, Tools → **Add an agent** does both in one step: with a
+   gateway runtime picked, **Runs on** starts on the one host that offers
+   the gateway (you pick when several do).
 
 Steps 2 and 3 are workspace config changes: they need an Admin and passkey
 presence, like every other change to a workspace runtime or an agent's host
