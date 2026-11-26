@@ -180,9 +180,12 @@ const FORKS_CHAIN_SQL: &str = "SELECT 1 FROM events WHERE session_id = ?1 AND +w
 
 /// A signer's newest event on a log below a lamport (see
 /// `EventStore::last_signed_by`), through `idx_events_by_signer` (the
-/// workspace checked on its rows, as in [`FORKS_CHAIN_SQL`]).
+/// workspace checked on its rows, as in [`FORKS_CHAIN_SQL`]). Newest by
+/// lamport, not by row: a signer's chain climbs in lamport, while rows can
+/// arrive out of order (a pruned chunk pulled back from the relay lands as a
+/// new row long after the events that follow it).
 const LAST_SIGNED_BY_SQL: &str = "SELECT event_id FROM events WHERE session_id = ?1 AND +workspace_id = ?4 AND json_extract(envelope_json, '$.signerDeviceId') = ?2 \
-     AND json_extract(envelope_json, '$.lamport') < ?3 ORDER BY row_id DESC LIMIT 1";
+     AND json_extract(envelope_json, '$.lamport') < ?3 ORDER BY json_extract(envelope_json, '$.lamport') DESC, row_id DESC LIMIT 1";
 
 /// A fresh name for the foreign-workspace cleanup's backup next to the
 /// database in `data_dir`: unique per call (time to the nanosecond and the
@@ -1982,8 +1985,8 @@ impl EventStore {
         Ok(())
     }
 
-    /// The newest event `signer` put on `session_id` here (by local row
-    /// order) with a lamport below `below`: what a new event of that signer at
+    /// The newest event `signer` put on `session_id` here (by lamport, then
+    /// local row order) with a lamport below `below`: what a new event of that signer at
     /// lamport `below` names as `ActorStamp::prev` (a chain link is always
     /// older than the event, `ligus_core::lamport`).
     pub fn last_signed_by(&self, workspace_id: Uuid, session_id: Uuid, signer: Uuid, below: u64) -> Result<Option<Uuid>> {

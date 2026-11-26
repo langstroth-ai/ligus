@@ -7157,6 +7157,64 @@ mod same_key_tests {
         assert_eq!(covered, mine, "a watermark covers every event of the signer");
     }
 
+    /// Two computers of one person (the desktop and a terminal). The
+    /// desktop's pruned reply chunks are pulled back from the relay later
+    /// (they land as new rows, after the events that follow them), and the
+    /// other computer posts in between. The desktop's next message still
+    /// sends: its chain link is its newest event by lamport, not the newest
+    /// row (that link is already taken, so every draft and every redraft of
+    /// it was refused as out of date).
+    #[test]
+    fn a_post_after_pruned_chunks_are_pulled_back_links_to_the_newest_event() {
+        let (desk_dev, term_dev) = (Device::new(), Device::new());
+        let (mut desk, mut term) = (desk_dev.service(), term_dev.service());
+        let wid = Uuid::new_v4();
+        let chat = desk.create_chat("c", wid, "anthropic").unwrap();
+        desk.post_user_message(chat.id, wid, "first").unwrap();
+        let reply = desk.begin_assistant_message(chat.id, wid, "ligus", "anthropic", None, None).unwrap();
+        desk.append_chunk(chat.id, wid, reply, "Hello there ").unwrap();
+        desk.append_chunk(chat.id, wid, reply, "and more ").unwrap();
+        desk.complete_assistant_message(chat.id, wid, reply, "Hello there and more").unwrap();
+        desk.post_user_message(chat.id, wid, "second").unwrap();
+        let chunks: Vec<SessionEventEnvelope> = desk
+            .store()
+            .list(chat.id)
+            .unwrap()
+            .into_iter()
+            .filter(|e| matches!(e.payload, SessionEvent::MessageChunkReceived { .. }))
+            .collect();
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(desk.prune_superseded_chunks().unwrap(), 2);
+        // The terminal holds the log and writes a message the desktop gets.
+        for e in desk.store().list(chat.id).unwrap().iter().chain(&chunks) {
+            term.store.ingest(e).unwrap();
+        }
+        let theirs = term.draft_signed(chat.id, wid, message("from the terminal".to_string())).unwrap();
+        // The relay hands the pruned chunks back, then the terminal's message.
+        for e in &chunks {
+            assert!(desk.store.ingest(e).unwrap(), "pulled back as a new row");
+        }
+        assert!(desk.store.ingest(&theirs).unwrap());
+        let me = desk.device_id();
+        let newest = desk
+            .store()
+            .list(chat.id)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.signer_device_id == Some(me))
+            .max_by_key(|e| e.lamport)
+            .unwrap()
+            .event_id;
+        let third = desk.post_user_message(chat.id, wid, "third").unwrap();
+        let envs = desk.store().list(chat.id).unwrap();
+        let env = envs.iter().find(|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == third.id)).unwrap();
+        assert_eq!(env.actor_stamp.as_ref().and_then(|s| s.prev), Some(newest), "links to its newest event");
+        assert_one_chain(&envs, chat.id, me);
+        // And again: the next one doesn't trip over it either.
+        desk.post_user_message(chat.id, wid, "fourth").unwrap();
+        assert_one_chain(&desk.store().list(chat.id).unwrap(), chat.id, me);
+    }
+
     /// Nine stale drafts, each raced by a post of the same key through the
     /// other connection: none is stored as drafted, the chain stays one.
     #[test]
