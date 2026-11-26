@@ -66,8 +66,8 @@ admit it again.
 - **Revoking a direct-path phone means rotating `serve.token`.** Every phone
   on the direct path shares it, so all of them pair again; tunnel phones are
   revoked one by one. See [Lost phone](../security/runbooks.md#lost-phone).
-- **File modes.** `ligus enroll` writes `config.toml` (the workspace key and
-  relay token) `0600` and keeps the data dir `0700`; key seeds are `0600` in
+- **File modes.** The workspace connection, `config.toml` (the workspace key
+  and relay token), is `0600` and keeps the data dir `0700`; key seeds are `0600` in
   a `0700` key dir. The shipped unit also sets `UMask=0077`.
 - **Agents on the box don't see Ligus's secrets.** Agent CLIs, MCP servers,
   `run_command` and pre-flight tests start with an allow-listed environment

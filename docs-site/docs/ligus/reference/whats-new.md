@@ -15,6 +15,24 @@ Full release notes are on the
   reports your answer. Replies from devices still on 0.4.0 show right too,
   once the device or box showing them is updated.
 
+### Docs
+
+- **The box pages say how a box really joins.** Setting up `ligus serve` or
+  `ligus worker` no longer tells you to enroll the box with your own invite
+  or calls it one of your devices: a box is its own member, and you approve
+  it once by comparing a code
+  ([Admitting a box](../../operate/ops/admitting-a-box.md)). The box pages
+  also cover using a model gateway and upgrading a box, including on a Mac
+  that starts it at login
+  ([Personal fleet](../../operate/deploy/personal-fleet.md#operating-it)).
+- **Smaller corrections.** Homebrew upgrades of the desktop app need
+  `--greedy`, since the app updates itself. The first-run wizard has five
+  steps. A local model gateway on another machine should use `https://`.
+  "Already invited yourself?" says that the linked computer retires your
+  earlier member by itself when it safely can. First launch says plainly
+  that a computer links from `lt` or `ligus devices request`, not from a
+  second desktop app.
+
 ## 0.4.0
 
 Approve a box or a computer by comparing a short code, profiles and device

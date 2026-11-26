@@ -1,6 +1,6 @@
 # Onboarding
 
-Ligus's first-launch wizard — "Four quick steps" — appears
+Ligus's first-launch wizard, five quick steps, appears
 automatically the first time you open the app on a fresh data dir. It
 is gated on the data dir itself: it shows until `settings.json` in
 `ai.ligus.desktop/` records `"onboarded": true`, which finishing the
@@ -13,8 +13,9 @@ after the wizard is tracked the same way (`"tour_seen"`).
 |----------------|------------------------------------------------------|
 | Identity       | Display name, optional picture; shows your safety code |
 | Project folder | The workspace folder agents work in                  |
-| Runtime        | One agent (Claude Code / OpenAI-compatible / Anthropic API key / Ollama) + "let agents edit files" |
+| Runtime        | One agent (Claude Code / Codex / OpenAI-compatible / Anthropic API key / Ollama) + "let agents edit files" |
 | Team & sync    | **Just me (no sync)**, **Join a team** (an invite or short code), or **Sync through a relay**: the [community relay](../../operate/networking/community-relay.md) (preselected, best-effort) or your own relay URL and token |
+| Appearance     | A theme and light / dark / auto                      |
 
 ![Onboarding identity step: display name and this device's safety code (demo data)](../images/desktop-onboarding-identity-light.png#only-light){ width="560" loading=lazy }
 ![Onboarding identity step: display name and this device's safety code (demo data)](../images/desktop-onboarding-identity-dark.png#only-dark){ width="560" loading=lazy }
@@ -24,7 +25,7 @@ after the wizard is tracked the same way (`"tour_seen"`).
 
 There is no separate Welcome, Permissions, or Finish/Review screen —
 identity is the first thing you see, and the last step's **Finish**
-button saves everything. The runtime picker offers Claude Code,
+button saves everything. The runtime picker offers Claude Code, Codex,
 OpenAI-compatible (OpenAI/OpenRouter/local), an Anthropic API key, and
 Ollama (shown only when a local Ollama daemon is detected); aider and
 pi are configured later from Settings, not here. The **"Let agents
