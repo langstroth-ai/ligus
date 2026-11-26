@@ -88,7 +88,7 @@ reads **Live**, with a lock for end-to-end encrypted.
 ```sh
 brew install langstroth-ai/ligus/ligus      # macOS or Linux with Homebrew
 ligus --version
-# ligus 0.3.1
+# ligus 0.4.0
 ```
 
 Or build the container image (`deploy/container/Dockerfile`) and run
@@ -208,7 +208,7 @@ curl -s http://192.0.2.10:8787/v1/health \
   -H "Authorization: Bearer $(cat ~/.ligus-serve/serve.token)"
 # On the server itself (loopback), the operator uses its own token:
 # curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.ligus-serve/serve.operator.token)"
-# {…,"identity":{…,"mode":"member"},"ok":true,"version":"0.3.1",…}
+# {…,"identity":{…,"mode":"member"},"ok":true,"version":"0.4.0",…}
 ```
 
 ## 7. Bind a repository
