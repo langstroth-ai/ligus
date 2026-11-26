@@ -31,6 +31,9 @@ fn files(dir: &Path) -> Arc<dyn SecretStore> {
 fn old_build(db: &Path) -> Connection {
     let c = Connection::open(db).unwrap();
     c.busy_timeout(std::time::Duration::from_secs(10)).unwrap();
+    // As a 0.3 process runs it (an fsync per commit would make the writer
+    // below hold the write lock nearly all the time on a slow disk).
+    c.pragma_update(None, "synchronous", "NORMAL").unwrap();
     c
 }
 
@@ -251,6 +254,9 @@ fn m1c_an_older_process_writing_beside_the_upgrade() {
             c.execute("INSERT INTO sync_cursor (workspace, last_fetched_seq) VALUES ('team', ?1) ON CONFLICT(workspace) DO UPDATE SET last_fetched_seq = excluded.last_fetched_seq", [100 + i]).unwrap();
             c.execute("INSERT OR IGNORE INTO pushed (workspace, event_id) VALUES ('team', ?1)", [Uuid::new_v4().to_string()]).unwrap();
             c.execute("INSERT OR REPLACE INTO parked_bodies (workspace, seq, body, priority) VALUES ('later', ?1, '{}', 0)", [i]).unwrap();
+            // A real process writes between other work: leave the lock free
+            // for a moment so the upgrading process isn't starved.
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
     });
     for _ in 0..20 {
