@@ -551,12 +551,39 @@ fn collab_fields(v: &mut Value, s: &ChatSession, p: &ActionProposal) {
     v["changeRequestCount"] = json!(p.refinements.iter().filter(|r| r.request_changes).count());
     v["changedFiles"] = json!(p.changed_files);
     v["dismissed"] = json!(p.dismissed);
+    archive_fields(v, s, p);
     if let Some(id) = p.parent_id {
         v["parentId"] = json!(id);
     }
     if let Some(id) = p.superseded_by {
         v["supersededBy"] = json!(id);
     }
+}
+
+/// Archiving (`ligus_core::proposal_archive`, additive): `archived` is
+/// `"person"` (someone archived it, for everyone) or `"auto"` (settled for
+/// longer than the workspace's auto-archive days), absent while it is in the
+/// inbox; `archivedAt` and `settledAt` are those events' own times;
+/// `canArchive` says the `archive` phone action may archive it now (settled
+/// or stale, not archived yet: a proposal that waits on someone can't be).
+fn archive_fields(v: &mut Value, s: &ChatSession, p: &ActionProposal) {
+    use ligus_core::proposal_archive::{self, Archived};
+    let archived = proposal_archive::archived(p, s, Timestamp::now());
+    if let Some(a) = archived {
+        v["archived"] = json!(match a {
+            Archived::ByPerson => "person",
+            Archived::Auto => "auto",
+        });
+        if a == Archived::ByPerson {
+            if let Some(t) = p.archived_at {
+                v["archivedAt"] = json!(iso(t));
+            }
+        }
+    }
+    if let Some(t) = p.settled_at.filter(|_| proposal_archive::is_settled(p)) {
+        v["settledAt"] = json!(iso(t));
+    }
+    v["canArchive"] = json!(archived.is_none() && !proposal_archive::waits_on_someone(p, s));
 }
 
 /// [`proposal_dto`] plus what `me` can do: their current vote and whether
@@ -1429,19 +1456,37 @@ struct ProposalFilter {
     status: Option<String>,
 }
 
+/// `GET /v1/proposals?status=open|all|archived`: `open` (the default) is
+/// what waits for review; `all` is every proposal still in the inbox (open
+/// and settled, archived ones left out); `archived` is the archived ones only
+/// (by a person, or by the workspace's auto-archive days), newest first.
 async fn list_proposals(State(s): S, Query(f): Query<ProposalFilter>) -> ApiResult<Json<Value>> {
-    let all = match f.status.as_deref().map(str::trim) {
-        None | Some("") | Some("open") => false,
-        Some("all") => true,
-        Some(other) => return Err(ApiError::bad_request(format!("status must be open or all (got '{other}')"))),
+    #[derive(PartialEq)]
+    enum Which {
+        Open,
+        All,
+        Archived,
+    }
+    let which = match f.status.as_deref().map(str::trim) {
+        None | Some("") | Some("open") => Which::Open,
+        Some("all") => Which::All,
+        Some("archived") => Which::Archived,
+        Some(other) => return Err(ApiError::bad_request(format!("status must be open, all or archived (got '{other}')"))),
     };
     let me = viewer(&s);
+    let now = Timestamp::now();
     let mut out: Vec<(Timestamp, Value)> = Vec::new();
     for chat in s.workspace_chats()? {
         for p in &chat.proposals {
-            let open = p.status == ProposalStatus::Open && !p.dismissed && p.superseded_by.is_none();
-            if all || open {
-                out.push((p.created_at, proposal_dto_as(&chat, p, &me)));
+            let archived = ligus_core::proposal_archive::archived(p, &chat, now).is_some();
+            let keep = match which {
+                Which::Open => super::hub::is_open(p, &chat),
+                Which::All => !archived,
+                Which::Archived => archived,
+            };
+            if keep {
+                let at = if which == Which::Archived { p.archived_at.or(p.settled_at).unwrap_or(p.created_at) } else { p.created_at };
+                out.push((at, proposal_dto_as(&chat, p, &me)));
             }
         }
     }

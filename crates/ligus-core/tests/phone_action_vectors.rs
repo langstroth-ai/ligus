@@ -154,6 +154,7 @@ fn payload(i: &Ids, a: &PhoneAction) -> SessionEvent {
             },
         },
         PhoneAction::WithdrawApply { proposal_id, request_id, .. } => SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id },
+        PhoneAction::Archive { proposal_id, archived, .. } => SessionEvent::ProposalDismissed { proposal_id: *proposal_id, dismissed: *archived },
         PhoneAction::ProposeMemory { chat_id, op, rationale } => SessionEvent::FlowRecorded {
             record: FlowRecord::MemoryProposed(ligus_core::memory::MemoryProposal {
                 proposal_id: u(0x12),
@@ -503,4 +504,69 @@ fn phone_answer_v2_goldens() {
         out.push('\n');
     }
     std::fs::write(path, out).unwrap();
+}
+
+/// The `archive` lines (proposal archiving, 0.4). Run with
+/// `LIGUS_GOLDEN_OUT=<path> --ignored phone_archive_goldens`, then append
+/// the lines (the earlier lines stay frozen).
+#[test]
+#[ignore]
+fn phone_archive_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let i = ids();
+    let key = p256::ecdsa::SigningKey::from_slice(&[0x11; 32]).unwrap();
+    let pk = hex(&ligus_core::crypto::p256_public_key(&key));
+    let mut out = String::new();
+    // (label, archived, tweak): 0 as drafted; 1 the box flips it; 2 another proposal.
+    for (n, (label, archived, tweak)) in [
+        ("archive", true, 0u8),
+        ("archive/restore", false, 0),
+        ("refuse/archive-flipped", true, 1),
+        ("refuse/archive-other-proposal", true, 2),
+    ]
+        .into_iter()
+        .enumerate()
+    {
+        let asked = PhoneAction::Archive { chat_id: i.chat, proposal_id: i.proposal, archived };
+        let ev = match tweak {
+            1 => SessionEvent::ProposalDismissed { proposal_id: i.proposal, dismissed: !archived },
+            2 => SessionEvent::ProposalDismissed { proposal_id: u(0x55), dismissed: archived },
+            _ => payload(&i, &asked),
+        };
+        let env = draft(&i, &asked, 60 + n as u128, ev);
+        let preimage = envelope_preimage(&env);
+        let expect = match check_phone_action_preimage(&preimage, None, i.ws, i.phone, i.account, &asked) {
+            Ok(_) => "ok".to_string(),
+            Err(why) => why.to_string(),
+        };
+        assert_eq!(expect == "ok", tweak == 0, "{label}: {expect}");
+        let mut line = serde_json::json!({
+            "label": label,
+            "workspaceId": i.ws,
+            "phoneDeviceId": i.phone,
+            "accountId": i.account,
+            "action": asked,
+            "preimage": b64url(&preimage),
+            "publicKey": pk,
+            "expect": expect,
+        });
+        if expect == "ok" {
+            line["signature"] = serde_json::json!(b64url(&sign_p256(&key, &preimage)));
+        }
+        out.push_str(&serde_json::to_string(&line).unwrap());
+        out.push('\n');
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+#[test]
+fn archive_vectors_are_present() {
+    let labels: Vec<String> = GOLDEN
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["label"].as_str().unwrap().to_string())
+        .collect();
+    for want in ["archive", "archive/restore", "refuse/archive-flipped", "refuse/archive-other-proposal"] {
+        assert!(labels.iter().any(|l| l == want), "missing {want}");
+    }
 }

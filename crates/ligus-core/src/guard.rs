@@ -159,6 +159,11 @@ pub struct GuardState {
     /// self-enrollment: each admits one member.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub used_invites: BTreeSet<Uuid>,
+    /// The workspace's auto-archive setting (`ProposalArchivePolicySet`,
+    /// config log; overlaid onto chats by `ChatService::load`). Absent = the
+    /// default ([`crate::proposal_archive::DEFAULT_AFTER_DAYS`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_archive: Option<crate::proposal_archive::ProposalArchivePolicy>,
     /// Set on a chat session by the overlay: this chat's id, so
     /// [`GuardState::lockdown_active`] can find its entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]

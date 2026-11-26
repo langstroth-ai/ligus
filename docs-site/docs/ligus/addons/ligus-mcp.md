@@ -43,7 +43,7 @@ changes workspace settings.
 | `ligus_react` | `messageId?`, `emoji` | A reaction |
 | `ligus_list_chats` | `channel?`, `limit ≤ 50` | The workspace's chats |
 | `ligus_read_chat` | `chatId?`, `sinceMessageId?`, `limit ≤ 100` | Messages from **any chat in the workspace** whose egress is no stricter than this one's |
-| `ligus_read_proposals` | `chatId?`, `status?`, `setId?` | Proposals |
+| `ligus_read_proposals` | `chatId?`, `status?`, `setId?`, `archived?` | Proposals in the inbox; `archived: true` adds archived ones and ones hidden on this device |
 | `ligus_read_board` | | Marks, hand-offs and open questions |
 | `ligus_ask_person` | `question ≤ 500`, `options` (2 to 5, each ≤ 60) or `yesNo`, `allowText?`, `to?: requester\|<member id>`, `timeoutSecs 10-3600` | A [decision card](#asks) for one person: by default the one who started this turn. **The turn pauses** until they answer, say Not now, or the timeout passes |
 | `ligus_ask_room` | as `ligus_ask_person`, with `minRole?: contributor\|admin\|owner` and `quorum? 1-5` instead of `to` | A decision card for anyone at or above `minRole`, or a quorum of them who must pick the same option |

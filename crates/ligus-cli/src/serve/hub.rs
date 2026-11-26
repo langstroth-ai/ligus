@@ -180,9 +180,13 @@ fn awaiting_gates(s: &ChatSession) -> impl Iterator<Item = (Uuid, String, u32)> 
     })
 }
 
-/// A proposal still waiting for review.
-pub fn is_open(p: &ActionProposal) -> bool {
-    p.status == ProposalStatus::Open && !p.dismissed && p.superseded_by.is_none()
+/// A proposal still waiting for review, in the inbox (an archive never takes
+/// out one that waits on someone, except a stale one; see
+/// `ligus_core::proposal_archive`).
+pub fn is_open(p: &ActionProposal, s: &ChatSession) -> bool {
+    p.status == ProposalStatus::Open
+        && p.superseded_by.is_none()
+        && ligus_core::proposal_archive::archived(p, s, ligus_core::Timestamp::now()).is_none()
 }
 
 fn is_reply(role: MessageRole) -> bool {
@@ -238,7 +242,7 @@ impl Differ {
                     // Only open work is "created" for the phone's review inbox;
                     // one first seen already settled (synced in after an outage)
                     // just updates its chat.
-                    None if is_open(p) => {
+                    None if is_open(p, s) => {
                         touched = true;
                         out.push(Change::ProposalCreated { chat: s.id, proposal: p.id });
                     }
@@ -404,13 +408,29 @@ mod tests {
         d.seed(std::slice::from_ref(&s));
         let mut settled = ActionProposal::new("old", ligus_core::ProposalKind::FileDiff, "");
         settled.status = ProposalStatus::Applied;
+        // Archived by the hygiene sweep (stale): out of the inbox.
         let mut hidden = ActionProposal::new("hidden", ligus_core::ProposalKind::FileDiff, "");
         hidden.dismissed = true;
+        s.guards.stale_proposals.insert(hidden.id);
         let open = ActionProposal::new("new", ligus_core::ProposalKind::FileDiff, "");
         let oid = open.id;
         s.proposals = vec![settled, hidden, open];
         let c = d.diff(std::slice::from_ref(&s));
         assert_eq!(c, vec![Change::ProposalCreated { chat: s.id, proposal: oid }, Change::ChatUpdated { chat: s.id }]);
+    }
+
+    /// An archive never hides a proposal that still waits on someone (see
+    /// `ligus_core::proposal_archive`): one an older build dismissed while
+    /// open is still open work for the phone.
+    #[test]
+    fn a_dismissed_proposal_that_waits_on_someone_is_still_open() {
+        let s = chat();
+        let mut p = ActionProposal::new("waiting", ligus_core::ProposalKind::FileDiff, "");
+        p.dismissed = true;
+        assert!(is_open(&p, &s));
+        let mut stale = s.clone();
+        stale.guards.stale_proposals.insert(p.id);
+        assert!(!is_open(&p, &stale));
     }
 
     #[test]

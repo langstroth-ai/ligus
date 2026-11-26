@@ -294,6 +294,45 @@ pub struct ProposalDto {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub can_request_apply: bool,
+    /// Archived, and how: "person" (someone archived it, for everyone) or
+    /// "auto" (settled for longer than the workspace's auto-archive days).
+    /// Absent: in the inbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub archived: Option<String>,
+    /// When it was archived by a person (RFC 3339; that event's own time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub archived_at: Option<String>,
+    /// Who archived it (the name of the account on the signed event).
+    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "crate::names::ser_clean_opt")]
+    #[ts(optional)]
+    pub archived_by: Option<String>,
+    /// When it settled (RFC 3339; the settling event's own time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub settled_at: Option<String>,
+    /// Hidden on this device by this person ("Hide for me"; never synced).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub hidden: bool,
+    /// It may be archived: settled (applied, rejected, superseded) or stale,
+    /// and not archived yet. A proposal that still waits on someone can't be.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub can_archive: bool,
+}
+
+/// One archived (or hidden-for-me) proposal in the workspace-wide Archived
+/// view, with the chat it belongs to.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct ArchivedProposalDto {
+    pub chat_id: String,
+    #[serde(serialize_with = "crate::names::ser_clean")]
+    pub chat_title: String,
+    pub proposal: ProposalDto,
 }
 
 /// A person's request that one host apply a proposal (`ProposalApplyRequested`),
@@ -1013,6 +1052,7 @@ mod tests {
         McpServerDto::export_all(&cfg).unwrap();
         ReactionDto::export_all(&cfg).unwrap();
         ProposalDto::export_all(&cfg).unwrap();
+        ArchivedProposalDto::export_all(&cfg).unwrap();
         ImplementPreviewDto::export_all(&cfg).unwrap();
         RefinementDto::export_all(&cfg).unwrap();
         ApprovalDto::export_all(&cfg).unwrap();

@@ -9,7 +9,10 @@
 
 use tauri::State;
 
-use ligus_core::{ActionProposal, ChatSession, ProposalStatus};
+use std::collections::BTreeSet;
+
+use ligus_core::{ActionProposal, ChatSession, ProposalStatus, Timestamp};
+use uuid::Uuid;
 
 use crate::{map_err, shown, AppState};
 
@@ -57,8 +60,13 @@ pub(crate) struct ChatAttentionDto {
     pub paused: bool,
 }
 
-fn waiting(p: &ActionProposal) -> bool {
-    !p.dismissed && matches!(p.status, ProposalStatus::Open | ProposalStatus::Approved)
+/// Waiting on a decision and in this device's inbox: archived and
+/// hidden-for-me proposals never count (`ligus_core::proposal_archive`; an
+/// archive can't take out one that waits on someone, a hide-for-me can).
+fn waiting(p: &ActionProposal, s: &ChatSession, hidden: &BTreeSet<Uuid>, now: Timestamp) -> bool {
+    p.superseded_by.is_none()
+        && matches!(p.status, ProposalStatus::Open | ProposalStatus::Approved)
+        && ligus_runtime::chat_service::in_inbox(p, s, hidden, now)
 }
 
 fn needs_me(p: &ActionProposal, me: &str) -> bool {
@@ -70,7 +78,8 @@ fn needs_me(p: &ActionProposal, me: &str) -> bool {
 }
 
 /// The chat's attention, or None when it waits on nothing.
-pub(crate) fn chat_attention(s: &ChatSession, me: &str, now_ms: i64) -> Option<ChatAttentionDto> {
+pub(crate) fn chat_attention(s: &ChatSession, me: &str, now_ms: i64, hidden: &BTreeSet<Uuid>) -> Option<ChatAttentionDto> {
+    let now = Timestamp::from_unix_seconds(now_ms / 1000);
     let mut live: Vec<&ligus_core::flow::AskState> = s.flow.asks.values().filter(|a| a.is_live(now_ms)).collect();
     live.sort_by_key(|a| std::cmp::Reverse(a.ask.at_ms));
     let asks: Vec<AttentionAskDto> = live
@@ -91,7 +100,7 @@ pub(crate) fn chat_attention(s: &ChatSession, me: &str, now_ms: i64) -> Option<C
     let proposals: Vec<AttentionProposalDto> = s
         .proposals
         .iter()
-        .filter(|p| waiting(p))
+        .filter(|p| waiting(p, s, hidden, now))
         .map(|p| AttentionProposalDto {
             id: p.id.to_string(),
             title: shown(&p.title),
@@ -121,6 +130,7 @@ pub(crate) fn list_chat_attention_sync(state: State<AppState>) -> Result<Vec<Cha
         .unwrap_or(0);
     let svc = state.service.lock().unwrap();
     let config_id = ligus_core::workspace_config_session_id(active);
+    let hidden = svc.hidden_proposals(active).map_err(map_err)?;
     let mut out = Vec::new();
     for id in svc.store().list_session_ids().map_err(map_err)? {
         if id == config_id {
@@ -130,7 +140,7 @@ pub(crate) fn list_chat_attention_sync(state: State<AppState>) -> Result<Vec<Cha
         if s.archived {
             continue;
         }
-        out.extend(chat_attention(&s, &me, now_ms));
+        out.extend(chat_attention(&s, &me, now_ms, &hidden));
     }
     Ok(out)
 }
@@ -176,7 +186,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let a = chat_attention(&s, "me", 1_000).unwrap();
+        let a = chat_attention(&s, "me", 1_000, &BTreeSet::new()).unwrap();
         assert_eq!(a.open_asks, 0);
         assert_eq!(a.asks.len(), 1);
         assert!(!a.asks[0].eligible);
@@ -202,7 +212,7 @@ mod tests {
 
     #[test]
     fn a_quiet_chat_is_left_out() {
-        assert_eq!(chat_attention(&session(), "me", 1_000), None);
+        assert_eq!(chat_attention(&session(), "me", 1_000, &BTreeSet::new()), None);
     }
 
     #[test]
@@ -213,7 +223,7 @@ mod tests {
         ask(&mut s, 500, false, false); // timed out
         ask(&mut s, 0, true, false); // answered
         ask(&mut s, 0, false, true); // closed by the host
-        let a = chat_attention(&s, "me", 1_000).unwrap();
+        let a = chat_attention(&s, "me", 1_000, &BTreeSet::new()).unwrap();
         assert_eq!(a.open_asks, 2);
         assert!(a.proposals.is_empty());
         assert!(!a.paused);
@@ -236,11 +246,20 @@ mod tests {
         s.proposals[ready].status = ProposalStatus::Approved;
         let applied = proposal(&mut s, "Done", "agent-1");
         s.proposals[applied].status = ProposalStatus::Applied;
-        let hidden = proposal(&mut s, "Dismissed", "agent-1");
-        s.proposals[hidden].dismissed = true;
+        // Marked archived while it still waits: an archive can't hide it.
+        let archived = proposal(&mut s, "Archived while open", "agent-1");
+        s.proposals[archived].dismissed = true;
+        // Hidden for me on this device: out of my counts.
+        let hidden = proposal(&mut s, "Hidden for me", "agent-1");
+        let hidden_set = BTreeSet::from([s.proposals[hidden].id]);
+        // Stale and archived by the hygiene sweep: out.
+        let stale = proposal(&mut s, "Stale", "agent-1");
+        let stale_id = s.proposals[stale].id;
+        s.proposals[stale].dismissed = true;
+        s.guards.stale_proposals.insert(stale_id);
         let _ = mine;
 
-        let a = chat_attention(&s, "me", 0).unwrap();
+        let a = chat_attention(&s, "me", 0, &hidden_set).unwrap();
         let got: Vec<(&str, &str, bool)> =
             a.proposals.iter().map(|p| (p.title.as_str(), p.status.as_str(), p.needs_me)).collect();
         assert_eq!(
@@ -250,6 +269,7 @@ mod tests {
                 ("My change", "open", false),
                 ("Already voted", "open", false),
                 ("Ready to apply", "approved", true),
+                ("Archived while open", "open", true),
             ]
         );
     }
@@ -267,7 +287,7 @@ mod tests {
             message_id: None,
             raise_event_id: None,
         });
-        let a = chat_attention(&s, "me", 0).unwrap();
+        let a = chat_attention(&s, "me", 0, &BTreeSet::new()).unwrap();
         assert!(a.paused);
         assert_eq!(a.open_asks, 0);
     }

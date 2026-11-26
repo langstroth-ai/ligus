@@ -31,6 +31,7 @@ import { FlowSection } from "@/components/settings/FlowSection";
 import { SecuritySection } from "@/components/settings/SecuritySection";
 import { SandboxSection } from "@/components/settings/SandboxSection";
 import { AttachmentsSection } from "@/components/settings/AttachmentsSection";
+import { ReviewSection } from "@/components/settings/ReviewSection";
 import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { IconComb } from "@/components/flow/icon";
 
@@ -46,6 +47,7 @@ export type SettingsTab =
   | "guards"
   | "passkeys"
   | "attachments"
+  | "review"
   | "schedules"
   | "models"
   | "tools"
@@ -79,6 +81,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "team-sync", label: "Team sync", icon: <IconUsers size={16} />, keywords: ["relay", "e2ee", "encryption", "sync", "token", "invite", "p2p", "peer", "collaborate"] },
       { id: "passkeys", label: "Passkeys & keys", icon: <IconLock size={16} />, keywords: ["passkey", "webauthn", "touch id", "recovery", "rules v2", "presence", "rotate", "workspace key", "keychain"] },
       { id: "attachments", label: "File attachments", icon: <IconFile size={16} />, keywords: ["attachment", "file", "upload", "share", "quarantine", "blocklist", "hash", "malware", "scan", "policy"] },
+      { id: "review", label: "Review", icon: <IconFile size={16} />, keywords: ["proposals", "archive", "auto-archive", "archived", "settled", "inbox", "dismiss"] },
       { id: "guards", label: "Guards", icon: <IconLock size={16} />, keywords: ["dearth", "security", "lockdown", "entrance", "approval", "throttle", "lease", "sandbox", "egress", "network", "preset", "registries", "npm", "connectors"] },
       { id: "schedules", label: "Schedules", icon: <IconActivity size={16} />, keywords: ["cron", "recurring", "timer", "automation"] },
     ],
@@ -140,6 +143,10 @@ export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
     case "security":
     case "dearth":
       return "guards";
+    case "review":
+    case "proposals":
+    case "archive":
+      return "review";
     case "attachments":
     case "files":
       return "attachments";
@@ -301,6 +308,7 @@ export function SettingsView({
           {tab === "guards" && <GuardsSection chat={activeChat} />}
           {tab === "passkeys" && <SecuritySection />}
           {tab === "attachments" && <AttachmentsSection />}
+          {tab === "review" && <ReviewSection />}
           {tab === "schedules" && <SchedulesSection />}
           {tab === "models" && <ModelsSection />}
           {tab === "tools" && <ToolsSection />}

@@ -61,6 +61,7 @@ import { CanvasLoading, EmptyCanvas } from "@/components/EmptyCanvas";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ShortcutsSheet } from "@/components/ShortcutsSheet";
 import { ErrorLogSheet } from "@/components/ErrorLogSheet";
+import { ArchivedProposalsSheet } from "@/components/ArchivedProposals";
 import { Inbox } from "@/components/Inbox";
 import { useDockBadge, useNeedsYou } from "@/state/useNeedsYou";
 import { needsYouCount, needsYouLabel } from "@/lib/needsYou";
@@ -74,7 +75,7 @@ import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { CANVAS_TAB_HINT, TOUR_CANVAS_TABS, TOUR_DIFF } from "@/lib/tour";
 import { tip } from "@/components/Tooltip";
 import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour } from "@/lib/firstRun";
-import { ADMIT_BOX_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, OPEN_SETUP_EVENT, flashMessage, openSetup, requestAddPhone, requestDevices, type OpenChatDetail } from "@/lib/nav";
+import { ADMIT_BOX_EVENT, OPEN_ARCHIVED_PROPOSALS_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, OPEN_SETUP_EVENT, flashMessage, openSetup, requestAddPhone, requestDevices, type OpenChatDetail } from "@/lib/nav";
 import { SetupWizard } from "@/components/setup/SetupWizard";
 import { isSetupFlow } from "@/lib/setup";
 import type { SetupFlowId } from "@/lib/ipc";
@@ -554,6 +555,14 @@ export function App() {
     return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpen);
     // openSettings is stable (only touches setState setters).
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Review ⋯ → Archived proposals (the pane can't reach App's state).
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  useEffect(() => {
+    const onOpen = () => setArchivedOpen(true);
+    window.addEventListener(OPEN_ARCHIVED_PROPOSALS_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_ARCHIVED_PROPOSALS_EVENT, onOpen);
   }, []);
 
   // In-app links to "Admit a box" (the add-a-phone check). The dialog renders
@@ -1056,6 +1065,19 @@ export function App() {
       <ApprovalSheetHost open={approvalOpen} onClose={() => approvalSheet.close()} />
       {shortcutsOpen && <ShortcutsSheet onClose={() => setShortcutsOpen(false)} />}
       {errorsOpen && <ErrorLogSheet onClose={() => setErrorsOpen(false)} />}
+      {archivedOpen && (
+        <ArchivedProposalsSheet
+          onClose={() => setArchivedOpen(false)}
+          onOpen={(chatId) => {
+            setArchivedOpen(false);
+            rememberChat(chatId);
+            setSelectedId(chatId);
+            setView("workspace");
+            setMode("chat");
+            openUtilityPane("review");
+          }}
+        />
+      )}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -1135,6 +1157,7 @@ export function App() {
           setup: (flow) => openSetup(flow),
           showShortcuts: () => setShortcutsOpen(true),
           showErrors: () => setErrorsOpen(true),
+          archivedProposals: () => setArchivedOpen(true),
           openInbox: () => setView("inbox"),
           toggleFocusMode: () => setFocusMode((v) => !v),
           // After the palette closes, so its focus-return doesn't steal it back.

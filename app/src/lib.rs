@@ -2756,7 +2756,28 @@ fn proposal_dto_reviewed(p: &ActionProposal, s: &ChatSession, svc: &ChatService)
         })
         .collect();
     dto.can_request_apply = p.ready_to_apply() && s.open_apply_request(p.id).is_none() && !proposal_sets::guarded_by_open_set(s, p.id);
+    let hidden = svc.hidden_proposals(s.workspace_id).unwrap_or_default();
+    archive_fields(&mut dto, p, s, &hidden, ligus_core::Timestamp::now());
     dto
+}
+
+/// Where a proposal shows (`ligus_core::proposal_archive`): archived (by a
+/// person, or by the auto-archive rule), hidden on this device, or neither.
+fn archive_fields(dto: &mut ProposalDto, p: &ActionProposal, s: &ChatSession, hidden: &std::collections::BTreeSet<Uuid>, now: ligus_core::Timestamp) {
+    use ligus_core::proposal_archive::{self, Archived};
+    dto.archived = proposal_archive::archived(p, s, now).map(|a| match a {
+        Archived::ByPerson => "person".to_string(),
+        Archived::Auto => "auto".to_string(),
+    });
+    if dto.archived.as_deref() == Some("person") {
+        dto.archived_at = p.archived_at.map(rfc3339);
+        dto.archived_by = p.archived_by.and_then(|a| {
+            s.members.iter().find(|m| m.actor.account_id == Some(a)).map(|m| shown(&m.actor.display_name)).filter(|n| !n.trim().is_empty())
+        });
+    }
+    dto.settled_at = p.settled_at.filter(|_| proposal_archive::is_settled(p)).map(rfc3339);
+    dto.hidden = hidden.contains(&p.id);
+    dto.can_archive = dto.archived.is_none() && !proposal_archive::waits_on_someone(p, s);
 }
 
 fn session_dto(s: &ChatSession, viewer: Viewer, me: &str) -> ChatSessionDto {
@@ -7046,11 +7067,13 @@ async fn ask_agent_to_rebase(
     run_revision_turn(&app, &state, sid, req.workspace_id, pid, &req.instruction, "Sent to the agent to rebase.", req.producing_agent_id, req.before_ids).await
 }
 
-/// Hide (or restore) proposals in the Review inbox. Takes a list so "Clear
+/// Archive (or restore) proposals for everyone. Takes a list so "Archive
 /// settled" is one call. Returns the number actually changed.
 ///
-/// This hides; it does not delete. The proposal stays in the event log, so the
-/// paper trail survives and the dismiss replicates to the other devices.
+/// This archives; it does not delete. The proposal stays in the event log, so
+/// the paper trail survives and the archive replicates to the other devices
+/// (`ProposalDismissed`, the wire name kept from when this was Dismiss). A
+/// proposal that still waits on someone is refused.
 #[tauri::command]
 async fn dismiss_proposals(ligus_app: tauri::AppHandle, session_id: String, proposal_ids: Vec<String>, dismissed: bool) -> Result<u32, String> {
     crate::off_main(ligus_app, move |ligus_app| dismiss_proposals_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, proposal_ids, dismissed)).await
@@ -7069,9 +7092,90 @@ pub(crate) fn dismiss_proposals_sync(
         .collect::<Result<Vec<_>, _>>()?;
     let mut svc = state.service.lock().unwrap();
     let changed = svc
-        .set_proposals_dismissed(sid, state.active_workspace_id(), &ids, dismissed)
+        .archive_proposals(sid, state.active_workspace_id(), &ids, dismissed)
         .map_err(map_err)?;
     Ok(changed.len() as u32)
+}
+
+/// Hide proposals for this person on this device only ("Hide for me"), or
+/// show them again. Nothing is signed or synced.
+#[tauri::command]
+async fn hide_proposals(ligus_app: tauri::AppHandle, proposal_ids: Vec<String>, hidden: bool) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| hide_proposals_sync(tauri::Manager::state::<AppState>(ligus_app), proposal_ids, hidden)).await
+}
+
+pub(crate) fn hide_proposals_sync(state: State<AppState>, proposal_ids: Vec<String>, hidden: bool) -> Result<(), String> {
+    let ids = proposal_ids.iter().map(|p| Uuid::parse_str(p).map_err(map_err)).collect::<Result<Vec<_>, _>>()?;
+    let svc = state.service.lock().unwrap();
+    svc.set_proposals_hidden(state.active_workspace_id(), &ids, hidden).map_err(map_err)
+}
+
+/// Every archived or hidden-for-me proposal in the active workspace, across
+/// its chats, newest first (the Archived proposals view).
+#[tauri::command]
+async fn list_archived_proposals(ligus_app: tauri::AppHandle) -> Result<Vec<ligus_proto::ArchivedProposalDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_archived_proposals_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn list_archived_proposals_sync(state: State<AppState>) -> Result<Vec<ligus_proto::ArchivedProposalDto>, String> {
+    let active = state.active_workspace_id();
+    let me = state.local_actor_id();
+    let known_rooms = state.known_room_ids();
+    let svc = state.service.lock().unwrap();
+    let config_id = ligus_core::workspace_config_session_id(active);
+    let hidden = svc.hidden_proposals(active).map_err(map_err)?;
+    let now = ligus_core::Timestamp::now();
+    let mut out: Vec<(ligus_core::Timestamp, ligus_proto::ArchivedProposalDto)> = Vec::new();
+    for id in svc.store().list_session_ids().map_err(map_err)? {
+        if id == config_id {
+            continue;
+        }
+        let Some(s) = workspace_chat(&svc, id, active, &me, &known_rooms).map_err(map_err)? else { continue };
+        for p in &s.proposals {
+            if ligus_runtime::chat_service::in_inbox(p, &s, &hidden, now) {
+                continue;
+            }
+            let at = p.archived_at.or(p.settled_at).unwrap_or(p.created_at);
+            out.push((at, ligus_proto::ArchivedProposalDto { chat_id: s.id.to_string(), chat_title: s.title.clone(), proposal: proposal_dto_reviewed(p, &s, &svc) }));
+        }
+    }
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(out.into_iter().map(|(_, d)| d).collect())
+}
+
+/// The workspace's auto-archive setting: the days in force (`null`: off) and
+/// whether this person may change it (an Admin's, or anyone's own workspace).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProposalArchiveSettingDto {
+    days: Option<u32>,
+    can_edit: bool,
+}
+
+#[tauri::command]
+async fn proposal_archive_days(ligus_app: tauri::AppHandle) -> Result<ProposalArchiveSettingDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        let state = tauri::Manager::state::<AppState>(ligus_app);
+        let ws = state.active_workspace_id();
+        let local_only = state.is_local_only_ws(ws);
+        let svc = state.service.lock().unwrap();
+        let days = svc.proposal_archive_days(ws).map_err(map_err)?;
+        let (kind, role) = svc.attachment_standing(ws).map_err(map_err)?;
+        let can_edit = local_only || (role.rank() >= ligus_core::WorkspaceRole::Admin.rank() && kind == ligus_core::ActorKind::Human);
+        Ok(ProposalArchiveSettingDto { days, can_edit })
+    })
+    .await
+}
+
+/// Set the workspace's auto-archive days (0 = off). An Admin's.
+#[tauri::command]
+async fn set_proposal_archive_days(ligus_app: tauri::AppHandle, days: u32) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        let state = tauri::Manager::state::<AppState>(ligus_app);
+        let mut svc = state.service.lock().unwrap();
+        svc.set_proposal_archive_days(state.active_workspace_id(), days).map_err(map_err)
+    })
+    .await
 }
 
 /// Apply a unified diff to `workspace_root` with `git apply` (patch on stdin).
@@ -16811,6 +16915,10 @@ pub fn run() {
             refine_proposal,
             request_proposal_changes,
             dismiss_proposals,
+            hide_proposals,
+            list_archived_proposals,
+            proposal_archive_days,
+            set_proposal_archive_days,
             implement_proposal,
             proposal_sets::list_proposal_sets,
             proposal_sets::send_scouts,

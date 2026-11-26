@@ -34,7 +34,10 @@ expired (a request lasts 15 minutes); the two notices after it are this
 device's own record and go on no log.
 
 An item leaves the Inbox when it's done: the question is answered, you
-voted, the proposal was applied, you reviewed or dismissed the change.
+voted, the proposal was applied, you reviewed or dismissed the change. A
+proposal you hid for yourself, or one archived for everyone, leaves it too
+([Archiving proposals](right-rail.md#archiving-proposals)); an archive never
+takes out a proposal that still waits on a decision.
 
 ## Approving by code
 

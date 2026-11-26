@@ -39,6 +39,11 @@ const flags = {
 
 type Args = Record<string, unknown> | undefined;
 
+// Archive and hide-for-me (proposal archiving): what the session changed.
+const archiveState: Record<string, boolean> = {};
+const hiddenState: Record<string, boolean> = {};
+let archiveDays: number | null = 7;
+
 // The chat model picker's state (per runtime, like the device's settings).
 const chatModels: Record<string, string> = params.get("chatmodel") ? { "rt-copilot": params.get("chatmodel")! } : {};
 const chatRuntimes: Record<string, string> = {};
@@ -108,7 +113,23 @@ function handle(cmd: string, args: Args): unknown {
     case "set_primary_open_to_members":
       return null;
     case "list_proposals":
-      return flags.empty ? [] : fx.proposals;
+      return flags.empty ? [] : fx.proposalsWithArchive(archiveState, hiddenState);
+    case "dismiss_proposals": {
+      const ids = (args?.proposalIds as string[]) ?? [];
+      for (const id of ids) archiveState[id] = Boolean(args?.dismissed);
+      return ids.length;
+    }
+    case "hide_proposals": {
+      for (const id of (args?.proposalIds as string[]) ?? []) hiddenState[id] = Boolean(args?.hidden);
+      return null;
+    }
+    case "list_archived_proposals":
+      return flags.empty ? [] : fx.archivedProposals(archiveState, hiddenState);
+    case "proposal_archive_days":
+      return { days: archiveDays, canEdit: true };
+    case "set_proposal_archive_days":
+      archiveDays = Number(args?.days ?? 0) || null;
+      return null;
     case "list_proposal_sets":
       return flags.empty ? [] : fx.proposalSets;
     case "list_skills":

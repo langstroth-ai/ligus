@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProposalDto } from "@/bindings/ProposalDto";
-import { groupProposals, implementRefusal, isSettled, isVotable, sortProposals } from "./proposals";
+import { groupProposals, implementRefusal, isSettled, isVotable, matchesArchived, sortProposals } from "./proposals";
 
 function proposal(over: Partial<ProposalDto> & { id: string }): ProposalDto {
   return {
@@ -122,23 +122,32 @@ describe("isSettled / isVotable", () => {
 });
 
 describe("groupProposals", () => {
-  it("shelves active, settled and dismissed separately", () => {
+  it("shelves active, settled and archived separately", () => {
     const groups = groupProposals([
       at("open", "2026-08-01T10:00:00Z"),
       at("applied", "2026-08-02T10:00:00Z", { status: "applied" }),
-      at("filed-away", "2026-08-03T10:00:00Z", { status: "rejected", dismissed: true }),
+      at("filed-away", "2026-08-03T10:00:00Z", { status: "rejected", dismissed: true, archived: "person" }),
+      at("aged-out", "2026-07-01T10:00:00Z", { status: "applied", archived: "auto" }),
     ]);
     expect(groups.active.map((p) => p.id)).toEqual(["open"]);
     expect(groups.settled.map((p) => p.id)).toEqual(["applied"]);
-    expect(groups.dismissed.map((p) => p.id)).toEqual(["filed-away"]);
+    expect(groups.archived.map((p) => p.id)).toEqual(["filed-away", "aged-out"]);
   });
 
-  // Dismiss is the reader's explicit "I'm done with this". Honouring it only for
-  // settled items would silently ignore the action on anything else.
-  it("honours a dismiss regardless of status", () => {
+  // The backend leaves `archived` unset on a proposal that still waits on
+  // someone, even when an older build marked it dismissed: an archive can't
+  // hide work that needs a decision.
+  it("keeps a dismissed proposal that waits on someone in the inbox", () => {
     const groups = groupProposals([at("open-but-dismissed", "2026-08-01T10:00:00Z", { dismissed: true })]);
+    expect(groups.active.map((p) => p.id)).toEqual(["open-but-dismissed"]);
+    expect(groups.archived).toEqual([]);
+  });
+
+  // Hide for me is the reader's own view: it takes out even open work.
+  it("moves a proposal hidden for me out of the pane", () => {
+    const groups = groupProposals([at("hidden", "2026-08-01T10:00:00Z", { hidden: true })]);
     expect(groups.active).toEqual([]);
-    expect(groups.dismissed.map((p) => p.id)).toEqual(["open-but-dismissed"]);
+    expect(groups.archived.map((p) => p.id)).toEqual(["hidden"]);
   });
 
   it("orders each shelf newest-first", () => {
@@ -154,7 +163,15 @@ describe("groupProposals", () => {
 
   it("empties cleanly", () => {
     const groups = groupProposals([]);
-    expect(groups).toEqual({ active: [], settled: [], dismissed: [] });
+    expect(groups).toEqual({ active: [], settled: [], archived: [] });
+  });
+});
+
+describe("matchesArchived", () => {
+  const item = { chatTitle: "Hive scheduler", proposal: at("p", "2026-08-01T10:00:00Z", { title: "Cold-day floor", body: "Skip inspections below 15°C", changedFiles: ["src/weather.rs"] }) };
+  it("matches title, chat, body and files, ignoring case", () => {
+    for (const q of ["cold", "SCHEDULER", "15°c", "weather.rs", ""]) expect(matchesArchived(item, q)).toBe(true);
+    expect(matchesArchived(item, "varroa")).toBe(false);
   });
 });
 

@@ -40,6 +40,7 @@ fn tag(e: &SessionEvent) -> &'static str {
         E::ProposalUpserted { .. } => "proposalUpserted",
         E::ProposalVoteCast { .. } => "proposalVoteCast",
         E::ProposalDismissed { .. } => "proposalDismissed",
+        E::ProposalArchivePolicySet { .. } => "proposalArchivePolicySet",
         E::ProposalRefined { .. } => "proposalRefined",
         E::ProposalSetOpened { .. } => "proposalSetOpened",
         E::ProposalSetAlternativeAdded { .. } => "proposalSetAlternativeAdded",
@@ -133,7 +134,7 @@ const ALL: &[&str] = &[
     "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned", "proposalApplyFailed",
     "profileUpdated", "deviceLabelSet", "memberRetired",
     "proposalApplyWithdrawn", "workspaceSandboxSet", "workspaceRepoAliasesSet", "workspaceHostAliasSet", "chatBaseRepinned", "attachmentPolicySet", "attachmentHashBlocked", "attachmentHashUnblocked", "attachmentShared",
-    "attachmentDeleted",
+    "attachmentDeleted", "proposalArchivePolicySet",
 ];
 
 #[test]
@@ -894,4 +895,36 @@ fn agent_access_goldens() {
     });
     sign_envelope(&mut e, u(1), &kp);
     std::fs::write(path, format!("{{\"label\":\"agentUpserted/access\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
+}
+
+/// Writes the proposal-archive line (0.4): the workspace's auto-archive
+/// setting. Run with `LIGUS_GOLDEN_OUT=<path> --ignored`, then append it.
+#[test]
+#[ignore]
+fn proposal_archive_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let payload = SessionEvent::ProposalArchivePolicySet { policy: ligus_core::proposal_archive::ProposalArchivePolicy { after_days: 14 } };
+    let mut e = SessionEventEnvelope::new(ligus_core::workspace_config_session_id(ws), ws, 401, payload);
+    e.id = u(0x3210);
+    e.event_id = u(0x3211);
+    e.lamport = 801;
+    e.timestamp = Timestamp::epoch();
+    let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+    actor.account_id = Some(u(9));
+    actor.device_id = Some(u(1));
+    e.actor_stamp = Some(ActorStamp {
+        actor,
+        recorded_at: Timestamp::epoch(),
+        cfg_frontier: Some(CfgFrontier { lamport: 800, event_id: u(0x3201) }),
+        presence: None,
+        runtime_effect: false,
+        prev: Some(u(0x3201)),
+        sig_alg: SigAlg::Ed25519,
+        log_head: None,
+    });
+    sign_envelope(&mut e, u(1), &kp);
+    std::fs::write(path, format!("{{\"label\":\"proposalArchivePolicySet\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
 }

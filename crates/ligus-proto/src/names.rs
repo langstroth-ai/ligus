@@ -103,6 +103,14 @@ pub fn ser_clean<S: serde::Serializer>(name: &str, s: S) -> Result<S::Ok, S::Err
     s.serialize_str(&clean_display_name(name))
 }
 
+/// [`ser_clean`] for an optional name.
+pub fn ser_clean_opt<S: serde::Serializer>(name: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
+    match name {
+        Some(n) => s.serialize_some(&clean_display_name(n)),
+        None => s.serialize_none(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

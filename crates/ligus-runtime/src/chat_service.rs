@@ -68,6 +68,8 @@ pub type Result<T> = std::result::Result<T, ChatError>;
 
 
 mod proposal_sets;
+mod proposal_archive;
+pub use proposal_archive::{in_inbox, shelf, Shelf};
 pub use proposal_sets::QuorumOutcome;
 
 /// The start of the error a write gets while [`ChatService::waiting_for_founder`]
@@ -3715,6 +3717,8 @@ impl ChatService {
                 // knows about (never admitted on the config log) are dropped from
                 // its roster, except the chat's creator: the tight entrance.
                 session.guards.dearth = cfg.guards.dearth.clone();
+                // Auto-archive is workspace-wide (`proposal_archive`).
+                session.guards.proposal_archive = cfg.guards.proposal_archive;
                 // This chat's lockdown (self-medication) lives on the config log.
                 session.guards.chat_id = Some(session.id);
                 session.guards.lockdowns = cfg

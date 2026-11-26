@@ -20,7 +20,6 @@ Full release notes are on the
   exact command or file change, the agent's own description labelled as
   such, and Allow once and Deny. A passkey is asked in a lockdown, in dearth
   mode, and for a call outside the agent's sandbox.
-
 - **Approve a box or a computer by comparing a code.** An Admin copies the
   workspace's approval address (`ligus admit address`, or workspace menu →
   **Admit a box…**); a box runs `ligus admit request --to ligusaddr1:…` and a
@@ -37,6 +36,20 @@ Full release notes are on the
 
 ### Added
 
+- **Archiving proposals.** A settled proposal's row menu has **Archive**
+  (for everyone, Contributor+) and every proposal has **Hide for me** (this
+  device only). Settled proposals also leave the Review pane on their own
+  after the workspace's auto-archive days (7 by default; an Admin sets it,
+  or turns it off, in **Settings → Review**), a rule every device applies
+  to the time the proposal settled, so nothing is written when one ages
+  out. Nothing that still waits on someone is ever archived. **Archived
+  proposals** (the Review pane's ⋯, or ⌘K) lists them across the
+  workspace, with search and **Restore**. Archived and hidden proposals are
+  out of the Inbox, the needs-you counts, the dock badge and agents'
+  `ligus_read` (which takes `archived: true` to include them; the tool's
+  schema changed for that). The phone gets an `archive` action and
+  `GET /v1/proposals?status=archived`; `status=all` now leaves archived
+  proposals out. See [Archiving proposals](../features/right-rail.md#archiving-proposals).
 - **Your name and picture are one profile.** A rename or a new picture on
   the desktop shows for everyone in every workspace you're in, in past
   messages too; pictures no longer ride every message (16 KB at most, PNG,

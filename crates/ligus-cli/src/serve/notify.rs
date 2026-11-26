@@ -300,7 +300,7 @@ pub fn waiting_for(sessions: &[ChatSession], chat: uuid::Uuid, me: &Me) -> Optio
     let waiting = |s: &ChatSession| {
         s.proposals
             .iter()
-            .filter(|p| super::hub::is_open(p) && !me.is(&p.author_actor_id) && !p.approvals.iter().any(|a| me.is(&a.actor_id)))
+            .filter(|p| super::hub::is_open(p, s) && !me.is(&p.author_actor_id) && !p.approvals.iter().any(|a| me.is(&a.actor_id)))
             .map(|p| (p.created_at, s.id, p.id))
             .collect::<Vec<_>>()
     };

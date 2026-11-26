@@ -141,6 +141,7 @@ on ingest. Its session id is a UUIDv5 of the workspace id. It carries:
 | Flow path zones, home beacon | Admin |
 | Flow route stops, marks, agent profiles | Contributor |
 | stale-proposal marks | the hygiene sweep (Contributor) |
+| auto-archive days for settled proposals (`proposalArchivePolicySet`; default 7, 0 = off, at most 365; **Settings → Review**) | Admin |
 
 ## Device-local knobs that are deliberately not synced
 

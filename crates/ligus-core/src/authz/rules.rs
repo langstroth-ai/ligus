@@ -80,6 +80,9 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         SessionEvent::ProposalSetTuned { .. } | SessionEvent::WorkspaceRulesSet { .. } => true,
         // Sandbox grants widen what agents reach on every host that runs them.
         SessionEvent::WorkspaceSandboxSet { .. } => true,
+        // Auto-archive only changes what the inbox shows (nothing is
+        // deleted or decided), so it needs no presence.
+        SessionEvent::ProposalArchivePolicySet { .. } => false,
         SessionEvent::ProposalUpserted { proposal } => fold.proposals.iter().find(|p| p.id == proposal.id).is_some_and(|old| {
             proposal.required_approvals < old.required_approvals
                 || proposal.approval_role_floor.rank() < old.approval_role_floor.rank()

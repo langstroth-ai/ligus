@@ -116,4 +116,31 @@ applyRequests?: Array<ApplyRequestDto>,
  * A person may ask a host to apply it now: approved, and no request
  * open (one applier per proposal).
  */
-canRequestApply?: boolean, };
+canRequestApply?: boolean, 
+/**
+ * Archived, and how: "person" (someone archived it, for everyone) or
+ * "auto" (settled for longer than the workspace's auto-archive days).
+ * Absent: in the inbox.
+ */
+archived?: string, 
+/**
+ * When it was archived by a person (RFC 3339; that event's own time).
+ */
+archivedAt?: string, 
+/**
+ * Who archived it (the name of the account on the signed event).
+ */
+archivedBy?: string, 
+/**
+ * When it settled (RFC 3339; the settling event's own time).
+ */
+settledAt?: string, 
+/**
+ * Hidden on this device by this person ("Hide for me"; never synced).
+ */
+hidden?: boolean, 
+/**
+ * It may be archived: settled (applied, rejected, superseded) or stale,
+ * and not archived yet. A proposal that still waits on someone can't be.
+ */
+canArchive?: boolean, };

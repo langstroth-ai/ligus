@@ -263,7 +263,7 @@ impl LigusSnapshot {
         for c in i.chats {
             let role = c.role_of(i.me);
             for p in &c.proposals {
-                if p.status != ProposalStatus::Open || p.dismissed || p.superseded_by.is_some() {
+                if !super::hub::is_open(p, c) {
                     continue;
                 }
                 let floor = ligus_core::authorization::min_role_for(&ligus_core::SessionEvent::ProposalVoteCast {
@@ -674,8 +674,10 @@ pub(crate) mod tests {
         };
         let mut voted = open("Voted", "other-id", 3);
         voted.approvals.push(ProposalApproval { actor_id: ME.into(), role: WorkspaceRole::Contributor, approved: true, created_at: Timestamp::now(), diff_digest: None });
+        // Archived by the hygiene sweep (stale): out of the open list.
         let mut dismissed = open("Dismissed", "other-id", 4);
         dismissed.dismissed = true;
+        chat.guards.stale_proposals.insert(dismissed.id);
         let mut applied = open("Applied", "other-id", 5);
         applied.status = ProposalStatus::Applied;
         chat.proposals = vec![open("Older", "other-id", 6), open("Mine", ME, 2), voted, dismissed, applied, open("Newest", "other-id", 1)];
@@ -811,7 +813,7 @@ pub(crate) mod tests {
     #[test]
     fn proposals_open_awaiting_me_and_list() {
         let s = snapshot_of(&fixture(), HostState::default());
-        // Open, not dismissed: Older, Mine, Voted, Newest.
+        // Open and in the inbox: Older, Mine, Voted, Newest.
         assert_eq!(num(&s, "proposals.open"), 4.0);
         // Not my own, not already voted on: Older and Newest.
         assert_eq!(num(&s, "proposals.awaiting_me"), 2.0);

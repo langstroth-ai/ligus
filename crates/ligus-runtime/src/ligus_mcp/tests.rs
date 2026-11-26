@@ -6,7 +6,7 @@ use std::time::Duration;
 use ligus_core::crypto::SigningKeypair;
 use ligus_core::events::SessionEvent;
 use ligus_core::flow::{FlowRecord, HumanAnswered};
-use ligus_core::{ActorIdentity, ActorKind, WorkspaceAgent};
+use ligus_core::{ActionProposal, ActorIdentity, ActorKind, WorkspaceAgent};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -1363,6 +1363,33 @@ async fn the_host_never_takes_an_answer_to_someone_elses_ask_under_its_id() {
     let mine = ligus_core::flow::HumanAsk { question: "coder asks permission to run rm (execute). Allow it once?".into(), options: vec!["Allow once".into(), "Deny".into()], permission: true, ..theirs };
     let got = super::server::wait_answer(&*w.host, w.chat, &mine, Duration::from_secs(5), || false).await;
     assert!(got.is_none(), "an answer to another ask under the id is no answer to this one");
+}
+
+/// Archived and hidden-here proposals stay out of an agent's proposal reads
+/// unless it asks for them (`archived: true`).
+#[tokio::test]
+async fn read_proposals_leaves_out_archived_and_hidden_ones() {
+    let w = world();
+    let (settled, open) = {
+        let mut svc = w.host.svc.lock().unwrap();
+        let a = ActionProposal::new("Settled one", ligus_core::ProposalKind::Decision, "someone");
+        let b = ActionProposal::new("Open one", ligus_core::ProposalKind::Decision, "someone");
+        let (a_id, b_id) = (a.id, b.id);
+        svc.upsert_proposal(w.chat, w.wid, a).unwrap();
+        svc.upsert_proposal(w.chat, w.wid, b).unwrap();
+        svc.vote_on_proposal(w.chat, w.wid, a_id, false).unwrap();
+        svc.archive_proposals(w.chat, w.wid, &[a_id], true).unwrap();
+        svc.set_proposals_hidden(w.wid, &[b_id], true).unwrap();
+        (a_id, b_id)
+    };
+    let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+    let ids = |r: &super::server::ToolResult| body(r)["proposals"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let r = turn.call("ligus_read_proposals", &json!({})).await;
+    assert!(!r.is_error, "{}", r.text);
+    assert!(ids(&r).is_empty(), "{:?}", ids(&r));
+    let r = turn.call("ligus_read_proposals", &json!({"archived": true})).await;
+    let all = ids(&r);
+    assert!(all.contains(&settled.to_string()) && all.contains(&open.to_string()), "{all:?}");
 }
 
 /// Wait for the `n`th ask to land in `w.chat`.

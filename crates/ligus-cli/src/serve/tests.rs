@@ -5231,6 +5231,57 @@ mod box_removal;
 mod devices_link;
 mod foreign_certificate;
 
+/// Archiving from the phone (0.4): a settled proposal is archived for
+/// everyone with the `archive` action (signed by the phone's own key), drops
+/// out of `status=all` and shows under `status=archived`; one that still
+/// waits on a decision is refused before the phone signs; restoring brings
+/// it back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_phone_archives_settled_proposals_and_lists_them_apart() {
+    use ligus_core::phone_action::PhoneAction;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (phone, account) = certified_phone(&h).await;
+    let (chat_id, open) = filed_proposal(&h, None).await;
+    let (_, settled) = filed_proposal(&h, None).await;
+    let settled_chat = h.get(&format!("/v1/proposals/{settled}")).await["proposal"]["chatId"].as_str().map(|c| Uuid::parse_str(c).unwrap()).unwrap();
+    let rejected = box_vote(&h, &settled.to_string(), false).await;
+    assert_eq!(rejected["proposal"]["status"], "rejected");
+    assert_eq!(rejected["proposal"]["canArchive"], json!(true));
+    assert!(rejected["proposal"]["settledAt"].is_string());
+    let waiting = h.get(&format!("/v1/proposals/{open}")).await;
+    assert_eq!(waiting["proposal"]["canArchive"], json!(false));
+
+    // An open proposal waits on someone: refused before the phone signs.
+    let (code, _) = status_of(
+        &h,
+        reqwest::Method::POST,
+        "/v1/phone-actions/prepare",
+        Some(json!({ "deviceId": phone.device_id, "action": PhoneAction::Archive { chat_id, proposal_id: open, archived: true } })),
+    )
+    .await;
+    assert_eq!(code, 403);
+
+    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::Archive { chat_id: settled_chat, proposal_id: settled, archived: true }).await;
+    assert_eq!(code, 200, "{done}");
+    let ids = |v: &Value| v["proposals"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let all = h.get("/v1/proposals?status=all").await;
+    assert!(!ids(&all).contains(&settled.to_string()), "archived proposals leave the list");
+    let archived = h.get("/v1/proposals?status=archived").await;
+    assert_eq!(ids(&archived), vec![settled.to_string()]);
+    assert_eq!(archived["proposals"][0]["archived"], "person");
+    assert!(archived["proposals"][0]["archivedAt"].is_string());
+    assert_eq!(ids(&h.get("/v1/proposals").await), vec![open.to_string()], "the open list is unchanged");
+
+    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::Archive { chat_id: settled_chat, proposal_id: settled, archived: false }).await;
+    assert_eq!(code, 200, "{done}");
+    assert!(ids(&h.get("/v1/proposals?status=archived").await).is_empty());
+    assert!(ids(&h.get("/v1/proposals?status=all").await).contains(&settled.to_string()));
+    let (code, _) = status_of(&h, reqwest::Method::GET, "/v1/proposals?status=nope", None).await;
+    assert_eq!(code, 400);
+    h.handle.shutdown();
+}
+
 /// The payload field of a hive-envelope-v3 preimage (its fourth
 /// length-prefixed field): what a phone digests (agent questions 6.3).
 fn preimage_payload(pre: &[u8]) -> Vec<u8> {

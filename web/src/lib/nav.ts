@@ -81,3 +81,10 @@ export const OPEN_SETUP_EVENT = "ligus:open-setup";
 export function openSetup(flow: string) {
   window.dispatchEvent(new CustomEvent<string>(OPEN_SETUP_EVENT, { detail: flow }));
 }
+
+/// Open the Archived proposals view (Review ⋯, ⌘K) from anywhere; App owns it.
+export const OPEN_ARCHIVED_PROPOSALS_EVENT = "ligus:open-archived-proposals";
+
+export function openArchivedProposals() {
+  window.dispatchEvent(new CustomEvent(OPEN_ARCHIVED_PROPOSALS_EVENT));
+}
