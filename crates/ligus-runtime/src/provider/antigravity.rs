@@ -307,6 +307,29 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_language_server_names_the_local_servers_switch() {
+        // agy 1.5.18 on macOS with the agent's local-servers grant off.
+        let mut p = AgyParser::default();
+        let e = p
+            .finish(false, "Failed to start Antigravity: language server failed to start: listen tcp 127.0.0.1:0: bind: operation not permitted")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("agy needs") && e.contains("local helper server"), "{e}");
+        assert!(e.contains("bind: operation not permitted"), "the CLI's own words stay: {e}");
+        use crate::executor::ExecutorKind as K;
+        use crate::provider::cli_agent::{local_server_message, CliKind};
+        let mac = local_server_message(CliKind::Antigravity, K::Seatbelt);
+        assert_eq!(mac, "agy needs a local helper server, which the macOS sandbox can't allow safely yet; run agy agents on a Linux host with the bubblewrap sandbox, or use another harness.");
+        let bwrap = local_server_message(CliKind::Antigravity, K::Bwrap);
+        assert!(bwrap.contains("May run local servers") && bwrap.contains("ligus agents set <agent> --local-servers on"), "{bwrap}");
+        let ll = local_server_message(CliKind::Antigravity, K::Landlock);
+        assert!(ll.contains("bubblewrap") && !ll.contains("--local-servers on"), "{ll}");
+        // Not every 'operation not permitted' is a listener.
+        let e = p.finish(false, "open /etc/x: operation not permitted").unwrap_err().to_string();
+        assert!(!e.contains("local helper server"), "{e}");
+    }
+
+    #[test]
     fn exit_failure_without_result_uses_stderr() {
         let mut p = AgyParser::default();
         let e = p.finish(false, "Error: quota exceeded for this account").unwrap_err().to_string();

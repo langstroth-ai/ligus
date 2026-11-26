@@ -81,7 +81,7 @@ import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
 import { toast, errMsg } from "@/components/Toast";
 import { inviteError } from "@/lib/invites";
 import { confirmThen } from "@/lib/confirm";
-import { openSettingsTab } from "@/lib/nav";
+import { openSandboxForAgent, openSettingsTab } from "@/lib/nav";
 import { RelayMembershipLine } from "@/components/RelayMembershipLine";
 import { useRowMenu, type RowAction } from "@/components/RowMenu";
 import { MoreMenu, type MoreMenuItem } from "@/components/MoreMenu";
@@ -818,6 +818,7 @@ function AgentRosterRow({
   const avatarInput = useRef<HTMLInputElement>(null);
   const rm = useRowMenu(`More actions for @${agent.name}`, [
     ...(agent.canManageAccess ? [{ label: "Access…", onSelect: () => setAccessOpen(true) }] : []),
+    { label: "Sandbox…", onSelect: () => openSandboxForAgent(agent.id) },
     { label: "Upload avatar…", onSelect: () => avatarInput.current?.click() },
     ...(agent.avatarUrl
       ? [

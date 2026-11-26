@@ -1344,7 +1344,7 @@ pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, wo
     g.workspace.read_only = clean(grants.workspace.read_only);
     g.workspace.read_write = clean(grants.workspace.read_write);
     for (id, a) in grants.agents {
-        let a = ligus_core::sandbox::AgentGrant { read_only: clean(a.read_only), read_write: clean(a.read_write), shell: a.shell };
+        let a = ligus_core::sandbox::AgentGrant { read_only: clean(a.read_only), read_write: clean(a.read_write), shell: a.shell, local_servers: a.local_servers };
         if a != ligus_core::sandbox::AgentGrant::default() {
             g.agents.insert(id, a);
         }

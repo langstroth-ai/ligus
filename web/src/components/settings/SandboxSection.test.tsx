@@ -31,6 +31,7 @@ const base: SandboxPolicyDto = {
         { path: "/Users/u", access: "denied", why: "your home dir: everything not listed above" },
       ],
       shell: "the workspace Owner's turns only",
+      localServers: "off: no listening sockets",
     },
   ],
   grants: { workspace: { readOnly: ["~/data"] } },
@@ -117,6 +118,35 @@ describe("SandboxSection", () => {
         agents: { [AGENT]: { readOnly: ["/opt/models"], shell: true } },
       }),
     );
+  });
+
+  it("lets the Owner turn on local servers for one agent, off by default", async () => {
+    renderSection();
+    await userEvent.selectOptions(await screen.findByLabelText("Show the policy for"), AGENT);
+    const sw = await screen.findByRole("switch", { name: "May run local servers (@coder)" });
+    expect(sw.getAttribute("aria-checked")).toBe("false");
+    await userEvent.click(sw);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(setGrants).toHaveBeenCalledWith({ workspace: { readOnly: ["~/data"] }, agents: { [AGENT]: { localServers: true } } }),
+    );
+    expect(screen.getByText(/so it has no effect on this Mac/)).toBeTruthy();
+  });
+
+  it("an Admin who isn't the Owner can't change local servers", async () => {
+    state.d = { ...base, canEditShell: false, grants: { agents: { [AGENT]: { localServers: true } } } };
+    renderSection();
+    await userEvent.selectOptions(await screen.findByLabelText("Show the policy for"), AGENT);
+    const sw = await screen.findByRole("switch", { name: "May run local servers (@coder)" });
+    expect((sw as HTMLButtonElement).disabled).toBe(true);
+    expect(sw.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("an agent row's Sandbox… opens the section on that agent", async () => {
+    const nav = await import("@/lib/nav");
+    nav.openSandboxForAgent(AGENT);
+    renderSection();
+    expect(await screen.findByRole("switch", { name: "May run local servers (@coder)" })).toBeTruthy();
   });
 
   it("keeps Save off for a member below Admin", async () => {

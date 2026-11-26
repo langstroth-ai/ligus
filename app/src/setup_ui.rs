@@ -175,11 +175,20 @@ impl SetupOps for DesktopOps<'_> {
     fn add_agent(&mut self, name: &str, runtime_id: &str) -> OpsResult<Uuid> {
         service::add_agent(&mut self.state().service.lock().unwrap(), self.ws, name, runtime_id)
     }
+    fn local_servers(&self, agent_id: Uuid) -> bool {
+        service::local_servers(&self.state().service.lock().unwrap(), self.ws, agent_id)
+    }
+    fn set_local_servers(&mut self, agent_id: Uuid, on: bool) -> OpsResult<()> {
+        service::set_local_servers(&mut self.state().service.lock().unwrap(), self.ws, agent_id, on)
+    }
     fn test_turn(&mut self, runtime_id: &str) -> OpsResult<TestTurn> {
+        self.test_turn_with(runtime_id, false)
+    }
+    fn test_turn_with(&mut self, runtime_id: &str, local_servers: bool) -> OpsResult<TestTurn> {
         let state = self.state();
         let rt = state.resolve_runtime(runtime_id);
         let root = Some(state.workspace_root.lock().unwrap().clone()).filter(|r| !r.trim().is_empty());
-        service::block_on(async move { service::ping(&rt, root.as_deref()).await }).ok_or_else(|| OpsError::Failed("couldn't run the test turn".into()))
+        service::block_on(async move { service::ping_with(&rt, root.as_deref(), local_servers).await }).ok_or_else(|| OpsError::Failed("couldn't run the test turn".into()))
     }
 
     // tool

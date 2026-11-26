@@ -833,7 +833,7 @@ fn phase_c_goldens() {
     grants.workspace.read_only.push("~/.m2/repository".into());
     grants.agents.insert(
         u(0xa1),
-        ligus_core::sandbox::AgentGrant { read_only: vec!["/opt/datasets".into()], read_write: vec!["~/scratch/agent".into()], shell: true },
+        ligus_core::sandbox::AgentGrant { read_only: vec!["/opt/datasets".into()], read_write: vec!["~/scratch/agent".into()], shell: true, local_servers: false },
     );
     let cfg = ligus_core::workspace_config_session_id(ws);
     let mut e = SessionEventEnvelope::new(cfg, ws, 501, SessionEvent::WorkspaceSandboxSet { grants });

@@ -597,8 +597,9 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     }
 
     // Phase C: the sandbox grants live on the config log, are well formed,
-    // and only the Owner turns an agent's shell grant on or off (the shell
-    // is the Owner's; path grants are an Admin's). Presence below.
+    // and only the Owner turns an agent's shell or local-servers grant on or
+    // off (those are the Owner's; path grants are an Admin's). Presence
+    // below.
     if let SessionEvent::WorkspaceSandboxSet { grants } = &env.payload {
         if !on_config {
             return Decision::deny("the sandbox grants are set on the workspace config log");
@@ -608,6 +609,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
         if !grants.shell_changes(&fold.guards.sandbox_grants).is_empty() && fold.role_of(author) != WorkspaceRole::Owner {
             return Decision::deny("only the Owner grants or withdraws an agent's shell");
+        }
+        // Local servers open the machine's own addresses to the agent (on
+        // macOS, listening on any of them): the Owner's, like the shell.
+        if !grants.local_servers_changes(&fold.guards.sandbox_grants).is_empty() && fold.role_of(author) != WorkspaceRole::Owner {
+            return Decision::deny("only the Owner lets an agent run local servers");
         }
     }
 

@@ -83,7 +83,7 @@ fn review2_rw_grant_case_variants_never_reach_code_or_denied_paths_live() {
     let Some(e) = super::tests::real_executor() else { return };
     let d = DecoyHome::new();
     std::fs::remove_dir_all(d.home.join(".ssh")).unwrap();
-    let grants = PathGrants { read_only: vec![], read_write: vec!["~/Library/launchagents".into(), "~/.SSH".into(), "~/.Zshrc.d".into()] };
+    let grants = PathGrants { read_only: vec![], read_write: vec!["~/Library/launchagents".into(), "~/.SSH".into(), "~/.Zshrc.d".into()], local_servers: false };
     let h = d.home.display().to_string();
     let script = format!(
         "mkdir -p '{h}/Library/launchagents' && echo x > '{h}/Library/launchagents/evil.plist' && echo PLANTED-AGENT; mkdir -p '{h}/.SSH' && echo k > '{h}/.SSH/authorized_keys' && echo PLANTED-SSH"
@@ -160,16 +160,16 @@ fn review2_rw_grants_never_open_more_code_paths() {
         ".deno",
         ".bun",
     ];
-    let grants = PathGrants { read_only: vec![], read_write: rw.iter().map(|r| format!("~/{r}")).collect() };
+    let grants = PathGrants { read_only: vec![], read_write: rw.iter().map(|r| format!("~/{r}")).collect(), local_servers: false };
     let p = plan_for(&d.home, &d.host(), Purpose::Tool, &grants);
     let open: Vec<&&str> = rw.iter().filter(|r| p.write_extra.contains(&d.home.join(r))).collect();
     assert!(open.is_empty(), "granted read-write: {open:?}");
     // Absolute prefixes of user-writable installs on `PATH` (Homebrew).
-    let abs = PathGrants { read_only: vec![], read_write: vec!["/opt/homebrew".into(), "/usr/local".into(), "/usr/local/bin".into()] };
+    let abs = PathGrants { read_only: vec![], read_write: vec!["/opt/homebrew".into(), "/usr/local".into(), "/usr/local/bin".into()], local_servers: false };
     let p = plan_for(&d.home, &d.host(), Purpose::Tool, &abs);
     assert!(p.write_extra.iter().all(|w| !w.starts_with("/opt/homebrew") && !w.starts_with("/usr/local")), "{:?}", p.write_extra);
     // A data grant beside them still opens read-write.
-    let ok = PathGrants { read_only: vec![], read_write: vec!["~/granted/rw".into(), "~/datasets".into()] };
+    let ok = PathGrants { read_only: vec![], read_write: vec!["~/granted/rw".into(), "~/datasets".into()], local_servers: false };
     let p = plan_for(&d.home, &d.host(), Purpose::Tool, &ok);
     assert!(p.write_extra.contains(&d.home.join("granted/rw")) && p.write_extra.contains(&d.home.join("datasets")), "{:?}", p.write_extra);
 }
@@ -184,7 +184,7 @@ fn review2_rw_grants_never_open_more_code_paths() {
 fn review2_a_path_swapped_after_the_plan_opens_nothing() {
     let d = DecoyHome::new();
     std::fs::create_dir_all(d.home.join("shared/cache")).unwrap();
-    let grants = PathGrants { read_only: vec!["~/shared/cache".into()], read_write: vec!["~/granted/rw".into()] };
+    let grants = PathGrants { read_only: vec!["~/shared/cache".into()], read_write: vec!["~/granted/rw".into()], local_servers: false };
     let p = plan_for(&d.home, &d.host(), Purpose::Tool, &grants);
     assert!(p.home_read.iter().any(|r| canonical(r) == canonical(&d.home.join("shared/cache"))), "{:?}", p.home_read);
     // The swap, after the plan.
@@ -245,7 +245,7 @@ fn review2_a_grant_of_a_tool_dir_never_opens_its_tokens_live() {
     }
     let grants = PathGrants {
         read_only: vec!["~/.cargo".into(), "~/.m2".into(), "~/.npmrc".into(), "~/.pypirc".into()],
-        read_write: vec!["~/.gradle".into()],
+        read_write: vec!["~/.gradle".into()], local_servers: false,
     };
     let h = d.home.display().to_string();
     for purpose in PURPOSES {
@@ -305,7 +305,7 @@ fn review2_rw_grant_of_the_git_hooks_dir_is_read_only() {
     let dirs = cli_home::git_exec_dirs(&d.home);
     assert!(dirs.contains(&d.home.join(".githooks")), "{dirs:?}");
     let host = HostPaths { exec_dirs: dirs, ..d.host() };
-    let grants = PathGrants { read_only: vec![], read_write: vec!["~/.githooks".into(), "~/datasets".into()] };
+    let grants = PathGrants { read_only: vec![], read_write: vec!["~/.githooks".into(), "~/datasets".into()], local_servers: false };
     let p = plan_for(&d.home, &host, Purpose::Tool, &grants);
     assert!(!p.write_extra.iter().any(|w| w.ends_with(".githooks")), "{:?}", p.write_extra);
     assert!(p.write_extra.contains(&d.home.join("datasets")), "{:?}", p.write_extra);

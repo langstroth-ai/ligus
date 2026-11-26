@@ -75,6 +75,30 @@ pub fn add_agent(svc: &mut ChatService, ws: Uuid, name: &str, runtime_id: &str) 
     Ok(id)
 }
 
+/// Whether agent `id`'s signed local-servers grant is on.
+pub fn local_servers(svc: &ChatService, ws: Uuid, id: Uuid) -> bool {
+    svc.sandbox_grants(ws).local_servers_granted(id)
+}
+
+/// Turn agent `id`'s local-servers grant on or off: the signed grants in
+/// force with just that switch changed (the Owner's, with presence in a
+/// shared workspace; authorized again on every device's ingest).
+pub fn set_local_servers(svc: &mut ChatService, ws: Uuid, id: Uuid, on: bool) -> OpsResult<()> {
+    let mut g = svc.sandbox_grants(ws);
+    if g.local_servers_granted(id) == on {
+        return Ok(());
+    }
+    let entry = g.agents.entry(id).or_default();
+    entry.local_servers = on;
+    if *entry == ligus_core::sandbox::AgentGrant::default() {
+        g.agents.remove(&id);
+    }
+    svc.set_sandbox_grants(ws, g).map_err(|e| match e {
+        crate::chat_service::ChatError::Unauthorized(m) => OpsError::Refused(m),
+        e => failed(e),
+    })
+}
+
 /// The provider kind a harness id runs on.
 pub fn provider_of(harness: &str) -> Option<ModelProviderKind> {
     Some(match harness {
@@ -354,6 +378,19 @@ pub fn probe_relay(url: &str, token: Option<&Zeroizing<String>>, room: &str) -> 
 /// PINGOK"), 45 s at most (`LIGUS_RUNTIME_TEST_TIMEOUT_SECS`). The desktop's
 /// runtime Test and the agent flow's test turn.
 pub async fn ping(runtime: &crate::provider::ResolvedRuntime, workspace_root: Option<&str>) -> super::TestTurn {
+    ping_with(runtime, workspace_root, false).await
+}
+
+/// [`ping`] for an agent whose local-servers grant is `local_servers` (agy's
+/// test turn needs it: its helper server). Read-only, closed egress but the
+/// model, no shell, as any CLI run outside a turn.
+pub async fn ping_with(runtime: &crate::provider::ResolvedRuntime, workspace_root: Option<&str>, local_servers: bool) -> super::TestTurn {
+    let mut policy = crate::executor::TurnPolicy::outside_turn(crate::executor::HostKind::Desktop);
+    policy.grants.local_servers = local_servers;
+    crate::executor::with_turn(policy, ping_inner(runtime, workspace_root)).await
+}
+
+async fn ping_inner(runtime: &crate::provider::ResolvedRuntime, workspace_root: Option<&str>) -> super::TestTurn {
     let turns = vec![crate::provider::ChatTurn::user("Reply with exactly the token: PINGOK")];
     let system = "You are a connectivity probe. Reply with exactly PINGOK and nothing else.";
     let timeout = Duration::from_secs(ligus_core::names::var("LIGUS_RUNTIME_TEST_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(45));

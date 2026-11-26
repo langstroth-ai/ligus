@@ -6,7 +6,7 @@ Full release notes are on the
 
 ## Unreleased
 
-### Fixed
+### Added
 
 - **A message that wouldn't send ("this draft is out of date") sends
   again.** After older reply pieces were pulled back from the relay, every
@@ -14,6 +14,17 @@ Full release notes are on the
   Retry didn't help. A message now links to this computer's newest event in
   the chat, whatever order the relay delivered them in, so it sends the first
   time.
+- **Agents that run their own helper server.** The Google Antigravity CLI
+  (`agy`) starts a local language server, which the agent sandbox refused
+  (`bind: operation not permitted`). A per-agent **May run local servers**
+  switch, off by default and the workspace Owner's, lets it on Linux:
+  **Settings → Sandbox** (or the agent row's ⋯ → **Sandbox…**), `ligus agents
+  set <agent> --local-servers on`, or `ligus setup agent --harness antigravity
+  --local-servers`. With bubblewrap each turn has its own loopback; the
+  Landlock tier keeps it off. Not available on macOS yet: the Mac's sandbox
+  can't keep a listener loopback-only. agy's failure now says which applies.
+  See [Local servers](../concepts/security.md#local-servers).
+### Fixed
 - **An agent whose host is offline says so in the chat.** Writing to an
   agent that runs on another device used to do nothing visible while that
   device was off. The chat now shows one line, for example "@agy runs on
