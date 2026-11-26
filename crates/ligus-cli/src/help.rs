@@ -155,7 +155,8 @@ pub const COMMANDS: &[Cmd] = &[
         summary: "one-screen summary: data dir, identity, workspace, relay, admission, serve, sandbox",
         purpose: "Summarise this data dir without changing it: the identity (and whether it is a box), the workspace and \
                   its relay, whether an access token, a workspace key and a local copy of the workspace are present, \
-                  whether this identity is a member, a kept admission, the serve and remote-access state, the agent \
+                  whether this identity is a member, a kept admission, a link to your devices still waiting for the \
+                  desktop's code (linking: started, approve by, expires), the serve and remote-access state, the agent \
                   sandbox tier, and the next step. Never creates an identity; reads only.",
         synopsis: &["ligus status [--json]"],
         flags: &[JSON],
@@ -209,16 +210,16 @@ pub const COMMANDS: &[Cmd] = &[
                   key: votes ask for your passkey, and account changes (devices, phones, passkeys, keys) stay on the \
                   desktop. One person per data dir. Revoke it from My devices.",
         synopsis: &[
-            "ligus devices request [--label NAME] [--new-device]",
-            "ligus devices redeem <ligusgrant1:code> | - | --code-file PATH [--approver-fingerprint FP]",
+            "ligus devices request [--label NAME] [--new-device] [--copy]",
+            "ligus devices redeem [<ligusgrant1:code> | - | --code-file PATH] [--approver-fingerprint FP]",
             "ligus devices approve <liguslink1:request> | --code-file PATH --fingerprint FP --recovery-words-file PATH [--out PATH]",
             "ligus devices list",
         ],
         flags: &[JSON],
         conn: true,
         examples: &[
-            "ligus devices request",
-            "ligus devices redeem --code-file ./grant --approver-fingerprint 7F3A-91C0-77DE-0B14-5E62",
+            "ligus devices request | pbcopy",
+            "ligus devices redeem",
             "ligus devices list --json",
         ],
         exit: &[
@@ -234,27 +235,36 @@ pub const COMMANDS: &[Cmd] = &[
         name: "devices request",
         group: G_START,
         summary: "print this computer's link request for your desktop",
-        purpose: "Print this computer's link request (`liguslink1:…`, no secret) and its fingerprint, and remember it as \
-                  pending (15 minutes, single use). With --to (the approval address your desktop shows under My devices) \
-                  the request also goes to your desktop's Inbox: both screens then show the same 8-symbol code, you \
-                  confirm it here, your desktop confirms with your passkey, and this computer links after checking the \
-                  approval on the workspace log and asking \"Link this computer as <you>?\". The paste text and \
-                  fingerprint are printed straight away for an older desktop. An install that was already connected (it may have written as its own \
+        purpose: "Print this computer's link request (`liguslink1:…`, no secret) and remember it as pending (15 \
+                  minutes to approve, single use). Only the request goes to stdout, so `ligus devices request | pbcopy` \
+                  copies exactly it; the fingerprint, the time to approve by and the next step go to stderr. --copy \
+                  copies it to the clipboard instead (pbcopy, wl-copy, xclip, xsel, clip.exe; printed when none works). \
+                  --json prints one report whose result has code, fingerprint, label, expiresAt (unix ms: approve by \
+                  then) and newDevice. Expired requests are cleaned up as you go. With --to (the approval address your \
+                  desktop shows under My devices) the request also goes to your desktop's Inbox: both screens then show \
+                  the same 8-symbol code, you confirm it here, your desktop confirms with your passkey, and this computer \
+                  links after checking the approval on the workspace log and asking \"Link this computer as <you>?\". The \
+                  paste text and fingerprint are printed straight away for an older desktop. An install that was already connected (it may have written as its own \
                   member) asks with a new device key, switched to only when you redeem, and adds a proof that it was that \
                   member, so the desktop can offer to remove the duplicate. A box can't: it joins with `ligus admit`.",
         synopsis: &[
-            "ligus devices request [--label NAME] [--new-device] [--json]",
+            "ligus devices request [--label NAME] [--new-device] [--copy] [--json]",
             "ligus devices request --to ligusaddr1:… [--label NAME] [--wait 15m] [--new-device] [--json]",
         ],
         flags: &[
             f("--label NAME", "ligus on <host name>", "the label your desktop shows"),
             f("--new-device", "off (on when this data dir was connected)", "ask with a new device key"),
+            f("--copy", "off", "copy the request to the clipboard instead of printing it"),
             f("--to ligusaddr1:…", "none (print the request to paste)", "send the request to the workspace's approval address (code match): it reaches your desktop's Inbox"),
             f("--wait DUR", "15m", "with --to: how long to wait for your desktop (90s, 5m, 1h)"),
             f("--insecure-relay", "off", "with --to: allow an http:// relay that isn't loopback (tests)"),
             JSON,
         ],
-        examples: &["ligus devices request --label work-laptop", "ligus devices request --to ligusaddr1:… --label work-laptop"],
+        examples: &[
+            "ligus devices request --copy",
+            "ligus devices request --label work-laptop | pbcopy",
+            "ligus devices request --to ligusaddr1:… --label work-laptop",
+        ],
         exit: &[
             (3, "with --to: the relay has no approval mailbox (paste the request instead: ligus devices request)"),
             (4, "with --to: no terminal (a person confirms the code and who they link as here), or nobody approved within --wait"),
@@ -272,9 +282,14 @@ pub const COMMANDS: &[Cmd] = &[
                   confirm who approved it (the person, the workspace and the approving desktop's fingerprint: \
                   --approver-fingerprint, or a yes at a terminal), save the connection (the workspace key to the secret \
                   store), pull the workspace, check your desktop's certificate for this computer is there, and act as you \
-                  from then on. Publishes this computer's key-agreement key so later key rotations reach it. The relay \
+                  from then on. With no code at a terminal it asks for a hidden paste, and reads the clipboard when you \
+                  just press Enter (pbpaste, wl-paste, xclip, xsel, PowerShell); whatever surrounds the code (a whole \
+                  copied command, quotes, line breaks) is dropped, and the code is never echoed. Without \
+                  --approver-fingerprint, a terminal asks: Approved by <person>'s desktop · fingerprint … · for \
+                  <workspace>. Is that your desktop? [y/N] (y links it); anywhere else it exits 4. \
+                  Publishes this computer's key-agreement key so later key rotations reach it. The relay \
                   access token is never in the grant: on a gated relay, sign in here (ligus auth login).",
-        synopsis: &["ligus devices redeem <ligusgrant1:code> | - | --code-file PATH [--approver-fingerprint FP] [--json]"],
+        synopsis: &["ligus devices redeem [<ligusgrant1:code> | - | --code-file PATH] [--approver-fingerprint FP] [--json]"],
         flags: &[
             f("-", "", "read the grant from stdin"),
             f("--code-file PATH", "none", "read the grant from a file"),
@@ -282,9 +297,13 @@ pub const COMMANDS: &[Cmd] = &[
             JSON,
         ],
         conn: true,
-        examples: &["ligus devices redeem --code-file ./grant --approver-fingerprint 7F3A-91C0-77DE-0B14-5E62"],
+        examples: &[
+            "ligus devices redeem",
+            "pbpaste | ligus devices redeem - --approver-fingerprint 7F3A-91C0-77DE-0B14-5E62",
+            "ligus devices redeem --code-file ./grant --approver-fingerprint 7F3A-91C0-77DE-0B14-5E62",
+        ],
         exit: &[
-            (4, "confirm the approving desktop (pass --approver-fingerprint or run at a terminal)"),
+            (4, "no code given away from a terminal, or confirm the approving desktop (pass --approver-fingerprint or run at a terminal)"),
             (6, "refused: already someone else's device, another workspace in this data dir, lockdown, revoked"),
             (7, "the relay is unreachable, or the desktop's approval hasn't synced yet (retry within 30 minutes)"),
         ],
@@ -611,9 +630,10 @@ pub const COMMANDS: &[Cmd] = &[
         name: "config",
         group: G_START,
         summary: "export or import the workspace runtime set as TOML",
-        purpose: "Round-trip the workspace runtimes. `export` prints them as TOML (an inline secret is never exported: \
-                  it becomes a secretRef named after the runtime); `import` adds or replaces runtimes by id from a \
-                  file. Share imports with `ligus sync`.",
+        purpose: "Round-trip the workspace runtimes. `export` prints them as TOML (no key is ever exported: a key an \
+                  older version stored in the workspace becomes a secretRef named after the runtime); `import` adds \
+                  or replaces runtimes by id from a file and refuses one with an inline key. Share imports with \
+                  `ligus sync`.",
         synopsis: &["ligus config export", "ligus config import <file.toml>"],
         conn: true,
         examples: &["ligus config export > runtimes.toml", "ligus config import runtimes.toml && ligus sync"],
@@ -624,7 +644,7 @@ pub const COMMANDS: &[Cmd] = &[
         name: "config export",
         group: G_START,
         summary: "print the workspace runtimes as TOML",
-        purpose: "Print the workspace runtimes as TOML on stdout; inline secrets become a secretRef.",
+        purpose: "Print the workspace runtimes as TOML on stdout; a legacy inline key becomes a secretRef (its value is never read).",
         synopsis: &["ligus config export"],
         conn: true,
         examples: &["ligus config export > runtimes.toml"],
@@ -745,7 +765,9 @@ pub const COMMANDS: &[Cmd] = &[
         group: G_AGENTS,
         summary: "list workspace-owned runtimes",
         purpose: "List the workspace runtimes synced onto this box: id, name, provider/model and credential (keyless, \
-                  inline, or secretRef with whether LIGUS_WS_SECRET_<ref> is set here). Never prints a secret.",
+                  secretRef with whether LIGUS_WS_SECRET_<ref> is set here, or \"stored key (unused)\" with a warning \
+                  for a key an older version stored in the workspace: rotate it and use --secret-ref). Never prints a \
+                  secret.",
         synopsis: &["ligus runtimes [--json]"],
         flags: &[JSON],
         env: &["LIGUS_WS_SECRET_<ref>"],
@@ -760,14 +782,13 @@ pub const COMMANDS: &[Cmd] = &[
         summary: "define (or replace by id) a workspace runtime",
         purpose: "Define a workspace-owned runtime. <provider> is anthropic, openai, openrouter, ollama, custom (any \
                   OpenAI-compatible server), claude-code, codex, antigravity (agy) or copilot. Credential: \
-                  --secret-ref keeps the key off the shared log (each host that runs it sets LIGUS_WS_SECRET_<name>); \
-                  --secret puts it end-to-end encrypted on the workspace config log, where every member's device \
-                  holds it; neither is keyless. Share with `ligus sync`.",
-        synopsis: &["ligus add-runtime <id> <name> <provider> <model> [--endpoint URL] [--secret-ref NAME | --secret - | @FILE] [--dry-run]"],
+                  --secret-ref NAME: each host that runs it sets LIGUS_WS_SECRET_<NAME> (or a file in \
+                  LIGUS_WS_SECRET_DIR); without it the runtime is keyless. Keys are never stored in the workspace: \
+                  --secret is a usage error. Share with `ligus sync`.",
+        synopsis: &["ligus add-runtime <id> <name> <provider> <model> [--endpoint URL] [--secret-ref NAME] [--dry-run]"],
         flags: &[
             f("--endpoint URL", "the provider's default", "model endpoint (custom, ollama, a gateway)"),
-            f("--secret-ref NAME", "none", "hosts read the key from LIGUS_WS_SECRET_<NAME> (preferred)"),
-            f("--secret - | @FILE", "none", "the key itself, from stdin or an owner-only file; synced encrypted"),
+            f("--secret-ref NAME", "none", "hosts read the key from LIGUS_WS_SECRET_<NAME>; keys are never stored in the workspace"),
             DRY_RUN,
         ],
         conn: true,
@@ -2513,8 +2534,9 @@ by a host: its owner's device, or a worker or serve box.
      verify: ligus queue                  # empty once answered ; ligus tail <chat-id>
 
 Credentials: --secret-ref NAME keeps the key off the shared log; every host running
-the agent sets LIGUS_WS_SECRET_<NAME> (or a file in LIGUS_WS_SECRET_DIR). --secret
-syncs it encrypted to every member's device; prefer --secret-ref.
+the agent sets LIGUS_WS_SECRET_<NAME> (or a file in LIGUS_WS_SECRET_DIR). Keys are never stored
+in the workspace (--secret was removed); ligus doctor warns about a key an older
+version stored there (runtimes.inline-key): rotate it and use --secret-ref.
 
 Access controls:
 - Who may use an agent (only its owner, or everyone; daily turn limits; spending

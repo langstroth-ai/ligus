@@ -293,6 +293,10 @@ pub struct Shared {
     /// Whose device this box is (see [`Standing`]): its own identity, its
     /// owner's enrolled device, or revoked. Re-read after every pull.
     standing: Mutex<Standing>,
+    /// Members whose account certified this box's device key without the
+    /// box ever acting for them (names). Foreign: shown in `/v1/health`,
+    /// never obeyed (identity model v2, 7.2).
+    foreign_certifiers: Mutex<Vec<String>>,
     /// Host liveness from the relay's presence channel (see
     /// [`ligus_runtime::host_presence`]), refreshed by `presence_loop`.
     pub presence: ligus_runtime::HostPresence,
@@ -555,19 +559,42 @@ impl Shared {
             Standing::Revoked => "revoked",
             Standing::Own => "member",
         };
-        json!({ "mode": mode, "actorId": actor.id, "displayName": ligus_proto::names::clean_display_name(&actor.display_name), "deviceFingerprint": fingerprint })
+        let foreign = self.foreign_certifiers.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut v = json!({ "mode": mode, "actorId": actor.id, "displayName": ligus_proto::names::clean_display_name(&actor.display_name), "deviceFingerprint": fingerprint });
+        if !foreign.is_empty() {
+            v["alsoCertifiedBy"] = json!(foreign);
+        }
+        v
     }
 
-    /// Re-read this box's standing after a pull, switching identity when the
-    /// owner approves it (or revokes it) while it runs. Returns whether it changed.
+    /// Re-read this box's standing after a pull: a revocation blocks
+    /// writes. A certificate another member put on this box's device key is
+    /// foreign: it never blocks, redirects or adopts the box (only the box's
+    /// own signatures say whose it is); it is logged once and shown in
+    /// `/v1/health`. Returns whether the standing changed.
     pub fn refresh_standing(&self) -> bool {
-        let next = match self.lock().device_standing(self.ws, None) {
+        // Each phone's person, recorded while one account alone certified it,
+        // so a certificate someone adds later never moves it (7.3a).
+        if let Err(e) = self.lock().pin_phone_persons(self.ws) {
+            eprintln!("serve: recording phones' persons failed: {e}");
+        }
+        let (next, foreign) = match self.lock().device_standing_and_foreign(self.ws) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("serve: reading this box's device standing failed: {e}");
                 return false;
             }
         };
+        let names: Vec<String> = foreign.iter().map(|a| ligus_proto::names::clean_display_name(&a.display_name)).collect();
+        {
+            let mut known = self.foreign_certifiers.lock().unwrap_or_else(|e| e.into_inner());
+            if *known != names {
+                for n in names.iter().filter(|n| !known.contains(n)) {
+                    println!("ligus serve: {n}'s account also certified this box's device key. That gives {n} nothing over this box; it keeps working as itself.");
+                }
+                *known = names;
+            }
+        }
         let prev = self.standing();
         if next == prev {
             return false;
@@ -579,11 +606,12 @@ impl Shared {
                     svc.set_write_block(Some(REVOKED.into()));
                     eprintln!("ligus serve: {REVOKED}.");
                 }
-                // Phase B: a box never acts as a person. Someone certified
-                // this box's device for their account while it ran: stop
-                // writing rather than take on that identity.
+                // Phase B: a box never acts as a person. This box signed as
+                // someone else (an old owner-device box): stop writing
+                // rather than keep that identity. A certificate alone never
+                // gets here (see `device_enroll::standing`).
                 (_, Standing::OwnerDevice(owner)) => {
-                    let why = format!("this box's device was certified as {}'s device; {}", owner.display_name, crate::admit::OWNER_MODE_REMOVED);
+                    let why = format!("this box's device acted as {}'s device (it signed as them); {}", owner.display_name, crate::admit::OWNER_MODE_REMOVED);
                     eprintln!("ligus serve: {why}");
                     svc.set_write_block(Some(why));
                 }
@@ -1087,7 +1115,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     let first_sync = synced.then(time::OffsetDateTime::now_utc);
     let ws = uuid_of_room(&cfg.room);
     let host_id = svc.device_id().to_string();
-    let standing = svc.device_standing(ws, None).unwrap_or(Standing::Own);
+    let standing = svc.device_standing(ws).unwrap_or(Standing::Own);
     match &standing {
         Standing::Revoked => {
             svc.set_write_block(Some(REVOKED.into()));
@@ -1165,6 +1193,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         rt: tokio::runtime::Handle::current(),
         revisions: Mutex::new(HashMap::new()),
         standing: Mutex::new(standing),
+        foreign_certifiers: Mutex::new(Vec::new()),
         presence: ligus_runtime::HostPresence::new(),
         sync_status: Mutex::new((first_sync, None)),
         busy: Mutex::new(HashSet::new()),
@@ -1869,7 +1898,7 @@ pub fn cmd_pair(cfg: &Config, opts: &ServeOptions, relay_only: bool) -> Result<(
         }
     }
     // Best effort: a box whose store can't be read yet just gets no hint.
-    let standing = open_service(cfg).ok().and_then(|svc| svc.device_standing(uuid_of_room(&cfg.room), None).ok());
+    let standing = open_service(cfg).ok().and_then(|svc| svc.device_standing(uuid_of_room(&cfg.room)).ok());
     if let Some(hint) = standing.as_ref().and_then(pair::member_hint) {
         println!("{hint}");
     }

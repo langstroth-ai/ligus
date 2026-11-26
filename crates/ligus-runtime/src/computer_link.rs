@@ -464,6 +464,27 @@ pub struct Pending {
     pub code: String,
 }
 
+/// A link request waiting for the desktop's code ([`LinkState::pending_status`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingStatus {
+    /// When the newest request was made (unix ms).
+    pub created_at: i64,
+    /// The desktop can approve it until then ([`REQUEST_TTL_MS`]).
+    pub approve_by: i64,
+    /// A grant for it works until then; afterwards it is cleaned up
+    /// ([`LinkState::PENDING_TTL_MS`]).
+    pub expires_at: i64,
+    /// How many requests are waiting (the newest counts).
+    pub count: usize,
+}
+
+impl PendingStatus {
+    /// Whether the desktop can still approve the newest request.
+    pub fn approvable(&self, now_ms: i64) -> bool {
+        now_ms <= self.approve_by
+    }
+}
+
 /// What a data dir remembers about linking (`computer-link.json`, owner-only;
 /// nothing secret): its pending requests, and the person it acts for, in which
 /// workspaces.
@@ -530,6 +551,27 @@ impl LinkState {
     /// The newest pending request that is still fresh.
     pub fn latest_pending(&self, now_ms: i64) -> Option<&Pending> {
         self.pending.iter().filter(|p| now_ms.saturating_sub(p.created_at) <= REQUEST_TTL_MS).max_by_key(|p| p.created_at)
+    }
+
+    /// Drop pending requests no grant can answer any more (past
+    /// [`LinkState::PENDING_TTL_MS`]); `true` when any was dropped (save it).
+    pub fn prune_expired(&mut self, now_ms: i64) -> bool {
+        let before = self.pending.len();
+        self.pending.retain(|p| now_ms.saturating_sub(p.created_at) <= Self::PENDING_TTL_MS);
+        self.pending.len() != before
+    }
+
+    /// A half-done link: the newest request still waiting for the desktop's
+    /// code, when there is one.
+    pub fn pending_status(&self, now_ms: i64) -> Option<PendingStatus> {
+        let live: Vec<&Pending> = self.pending.iter().filter(|p| now_ms.saturating_sub(p.created_at) <= Self::PENDING_TTL_MS).collect();
+        let newest = live.iter().max_by_key(|p| p.created_at)?;
+        Some(PendingStatus {
+            created_at: newest.created_at,
+            approve_by: newest.created_at.saturating_add(REQUEST_TTL_MS),
+            expires_at: newest.created_at.saturating_add(Self::PENDING_TTL_MS),
+            count: live.len(),
+        })
     }
 
     /// The person this install acts for in `workspace_id`, if it was linked
@@ -777,6 +819,26 @@ mod tests {
         let blob = ligus_core::e2ee::seal(&ka.public_key_bytes(), &serde_json::to_vec(&body).unwrap()).unwrap();
         let code = format!("{GRANT_PREFIX}{}", URL_SAFE_NO_PAD.encode(serde_json::to_vec(&blob).unwrap()));
         assert_eq!(Grant::open(&code, &ka).unwrap_err(), LinkError::BadGrantSignature, "another person");
+    }
+
+    #[test]
+    fn expired_pending_requests_are_pruned_and_the_newest_is_reported() {
+        let (d, ka) = keys();
+        let r1 = LinkRequest::new(&d, &ka.public_key_bytes(), "lt", 1_000, None);
+        let r2 = LinkRequest::new(&d, &ka.public_key_bytes(), "lt", 2_000, None);
+        let mut s = LinkState::default();
+        assert_eq!(s.pending_status(1_000), None);
+        s.add_pending(&r1, 1_000);
+        s.add_pending(&r2, 2_000);
+        let st = s.pending_status(2_000).unwrap();
+        assert_eq!((st.created_at, st.approve_by, st.expires_at, st.count), (2_000, 2_000 + REQUEST_TTL_MS, 2_000 + LinkState::PENDING_TTL_MS, 2));
+        assert!(st.approvable(2_000 + REQUEST_TTL_MS) && !st.approvable(2_000 + REQUEST_TTL_MS + 1));
+        assert!(!s.prune_expired(1_000 + LinkState::PENDING_TTL_MS), "nothing past its life yet");
+        assert!(s.prune_expired(1_000 + LinkState::PENDING_TTL_MS + 1));
+        assert_eq!(s.pending.len(), 1);
+        assert_eq!(s.pending_status(1_000 + LinkState::PENDING_TTL_MS + 1).unwrap().count, 1);
+        assert!(s.prune_expired(2_000 + LinkState::PENDING_TTL_MS + 1));
+        assert_eq!(s.pending_status(2_000 + LinkState::PENDING_TTL_MS + 1), None);
     }
 
     #[test]

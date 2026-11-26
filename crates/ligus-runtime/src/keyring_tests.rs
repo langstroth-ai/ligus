@@ -544,6 +544,33 @@ fn removed_members_device_is_not_a_recipient_through_an_agent_host() {
     assert!(!recipients.contains_key(&w.people["mara"].device_id), "the removed member's device would get the next key");
 }
 
+/// F2c (identity model v2, 7.3): a current member who certifies a removed
+/// member's device key for their own account doesn't keep that device a
+/// rotation recipient. Device keys are public, so before, Ada's certificate
+/// of Mara's old device kept every later workspace key reaching Mara.
+#[test]
+fn a_foreign_certificate_doesnt_keep_a_removed_members_device_reading() {
+    let mut w = World::new();
+    let mara_device = w.people["mara"].device_id;
+    // Ada certifies Mara's public device key for herself.
+    let cert = DeviceCertificate::issue(&w.people["ada"].account, w.people["ada"].account_id, &w.people["mara"].device.public_key_bytes(), Timestamp::epoch());
+    w.push("ada", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    assert!(w.timeline().current().rotation_recipients().contains_key(&mara_device), "control: Mara is a member");
+    // Mara is removed with a watermark that keeps what she signed so far
+    // (her key-agreement key among it), as a real removal does.
+    let signers: std::collections::BTreeSet<Uuid> = [mara_device].into_iter().collect();
+    let wm = ligus_core::watermark::heads_of(&w.cfg, workspace_config_session_id(w.wid), &signers);
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: wm });
+    let t = w.timeline();
+    let roster = t.current();
+    assert!(roster.ka_keys.contains_key(&mara_device), "control: her key-agreement key is still on the log");
+    assert!(roster.account_certified(w.people["ada"].account_id, mara_device), "control: Ada's certificate is in force");
+    assert!(!roster.rotation_recipients().contains_key(&mara_device), "Ada's certificate kept the removed member's device reading");
+    let (r, _) = w.rotate("owner");
+    assert!(!r.sealed.contains_key(&mara_device.to_string()));
+    assert_eq!(w.engine("mara", &[]).seal_status(), SealStatus::NotARecipient { version: 1 });
+}
+
 /// Host beats are unsigned liveness facts; after a rotation, a removed
 /// member still holding the passphrase can neither read them nor make a host
 /// look online: readers take only beats sealed at the authorized head.

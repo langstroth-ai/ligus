@@ -104,8 +104,11 @@ relay configuration:
   — no `/v1` suffix, no `wss://`. **Use the community relay** fills in
   `https://relay.langstroth.ai`, the free, best-effort
   [community relay](../../operate/networking/community-relay.md).
-- **Relay access token** — needed **only** for a relay that gates access
-  with tokens; leave blank for an open relay (the default).
+- **Relay access token** — needed for a relay that gates access with
+  tokens, and to claim a workspace on a relay with membership on: there the
+  token has to name your account (an `hrt1` token with a `sub`, see
+  [Claiming a workspace](../../operate/ops/server-side-membership.md#claiming-a-workspace)).
+  Leave it blank otherwise (the default).
   Sent as a bearer on every relay request; never echoed back. If your
   token was issued as `name:token`, either form works — Ligus sends just
   the token part.

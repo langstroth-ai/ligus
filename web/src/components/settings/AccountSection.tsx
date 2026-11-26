@@ -478,7 +478,13 @@ export function DevicesSection() {
                 tip={pl || undefined}
                 actionsLabel={`Actions for ${nameOf(d)}`}
                 actions={!d.thisDevice ? [{ label: "Revoke", danger: true, onSelect: () => void revoke(d) }] : []}
-              />
+              >
+                {d.note && (
+                  <div className="px-1 text-[11px] text-ink-soft" data-testid={`device-note-${d.deviceId}`}>
+                    {d.note}
+                  </div>
+                )}
+              </ListRow>
             );
           })}
           {groups.attention.map((d) => {

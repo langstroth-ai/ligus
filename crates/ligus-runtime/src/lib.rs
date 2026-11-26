@@ -51,6 +51,7 @@ pub mod frozen_ns;
 pub mod guard_scan;
 pub mod host_presence;
 pub mod revocation_status;
+pub mod role_refusal;
 pub mod human_presence;
 pub mod hygiene;
 pub mod identity_links;
@@ -129,8 +130,8 @@ pub use mcp::{McpReach,
 };
 pub use mentions::{message_mentions, parse_mentions, requester_from, requester_of, MentionTargets, Requester};
 pub use relay_client::{
-    EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry, RelayClient,
-    RelayError, RelayProbe, ENVELOPE_PAGE_LIMIT,
+    token_subject, EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry, RelayClient,
+    RelayError, RelayProbe, RosterState, ENVELOPE_PAGE_LIMIT, UNIDENTIFIED_ROSTER_MESSAGE,
 };
 pub use relay_refusal::{RefusalClass, RelayRefusal};
 pub use remote_manifest::resolve_manifest_url;

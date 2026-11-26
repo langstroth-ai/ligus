@@ -5,11 +5,12 @@
 //! that: a provider/model the workspace owns, with a credential the workspace
 //! provides. It rides the config log, so it syncs to every member and any worker.
 //!
-//! The raw secret does not have to ride the synced log: `SecretRef` names an
-//! out-of-band secret (an env var / secret mount on the worker), keeping keys off
-//! the stream entirely. `Inline` carries the secret E2EE on the config log for
-//! zero-provisioning setups (the workspace key already unlocks it). Neither is
-//! key *escrow* — the workspace credential is independent of anyone's personal key.
+//! Model API keys are never stored in the workspace. `SecretRef` names an
+//! out-of-band secret (an env var / secret mount on each worker), so the key
+//! never rides the synced log. The legacy `Inline` kind (a key carried on the
+//! config log, authored by versions before 0.3.x) still decodes so old events
+//! parse, but its secret is dropped on decode: it is never kept in memory,
+//! used, displayed, exported or logged, and this version never authors it.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,9 +25,12 @@ pub enum WorkspaceCredential {
     /// Resolve from a named secret the worker holds out-of-band — env
     /// `LIGUS_WS_SECRET_<secretRef>`. The raw key never rides the synced log.
     SecretRef { secret_ref: String },
-    /// The secret, carried E2EE on the config log. Shared with members; no
-    /// worker provisioning needed (the workspace key unlocks it).
-    Inline { secret: String },
+    /// Legacy: a key an older version stored on the config log. Kept only so
+    /// those events still decode (wire kind `inline`). The `secret` field on
+    /// the wire is ignored on decode (no field here holds it), so the key is
+    /// never kept, used, shown or re-serialized. Never authored: the runtime
+    /// refuses to write it, and resolving it yields no key.
+    Inline {},
     /// No credential (keyless local runtime).
     None,
 }
@@ -44,9 +48,26 @@ impl WorkspaceCredential {
     }
     /// True when the raw secret is NOT carried on the synced log.
     pub fn is_off_log(&self) -> bool {
-        !matches!(self, WorkspaceCredential::Inline { .. })
+        !self.is_legacy_inline()
+    }
+    /// True for a legacy inline credential (a key an older version stored in
+    /// the workspace). It resolves as no key; the runtime warns about it.
+    pub fn is_legacy_inline(&self) -> bool {
+        matches!(self, WorkspaceCredential::Inline { .. })
     }
 }
+
+/// How a legacy inline credential is shown anywhere (UI, JSON, logs).
+pub const LEGACY_INLINE_LABEL: &str = "stored key (unused)";
+
+/// The calm warning for a runtime whose key an older version stored in the
+/// workspace.
+pub const LEGACY_INLINE_WARNING: &str = "This runtime's key was stored in the workspace by an older version. \
+Rotate that key with the provider, then set it on each worker with --secret-ref.";
+
+/// Why a key can't be stored in the workspace, and what to do instead.
+pub const NO_WORKSPACE_KEYS: &str = "Keys aren't stored in the workspace. \
+Put it on each worker as LIGUS_WS_SECRET_<NAME> and use --secret-ref <NAME>.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +112,40 @@ impl WorkspaceRuntime {
             created_at: Timestamp::now(),
             driver: crate::runtime::Driver::Auto,
             gateway: String::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_inline_decodes_and_drops_the_secret() {
+        let wire = r#"{"kind":"inline","secret":"sk-LEGACY-123"}"#;
+        let c: WorkspaceCredential = serde_json::from_str(wire).unwrap();
+        assert!(c.is_legacy_inline());
+        assert!(!format!("{c:?}").contains("sk-LEGACY"));
+        let back = serde_json::to_string(&c).unwrap();
+        assert!(!back.contains("sk-LEGACY"), "{back}");
+        assert_eq!(back, r#"{"kind":"inline"}"#);
+    }
+
+    #[test]
+    fn legacy_inline_runtime_never_reserializes_its_key() {
+        let wire = r#"{"id":"r","name":"R","provider":"anthropic","model":"m","credential":{"kind":"inline","secret":"sk-LEGACY-456"}}"#;
+        let rt: WorkspaceRuntime = serde_json::from_str(wire).unwrap();
+        assert!(rt.credential.is_legacy_inline());
+        assert!(!serde_json::to_string(&rt).unwrap().contains("sk-LEGACY"));
+        assert!(!format!("{rt:?}").contains("sk-LEGACY"));
+    }
+
+    #[test]
+    fn secret_ref_and_none_round_trip() {
+        for c in [WorkspaceCredential::SecretRef { secret_ref: "a".into() }, WorkspaceCredential::None] {
+            let s = serde_json::to_string(&c).unwrap();
+            assert_eq!(serde_json::from_str::<WorkspaceCredential>(&s).unwrap(), c);
+            assert!(!c.is_legacy_inline());
         }
     }
 }
