@@ -30,6 +30,7 @@ import { LigusBrandIcon } from "@/components/LigusBrand";
 import { RelayPicker } from "@/components/RelayPicker";
 import { relayUrlFor, type RelayChoice } from "@/lib/communityRelay";
 import { Avatar } from "@/components/Avatar";
+import { InfoTip } from "@/components/ui";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
 import {
   applyTheme,
@@ -447,8 +448,12 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
                 can compare with the code they see for you:
               </div>
               <code className="mt-1 block font-mono text-sm font-bold tracking-wider">{safetyCode ?? "…"}</code>
-              <div className="mt-1 text-ink-soft">
-                Already use Ligus on another device? Enroll this one later from Settings → Profile → My devices.
+              <div className="mt-1 flex items-center gap-1 text-ink-soft">
+                <span>Already use Ligus on another computer? Link this one from lt or the ligus CLI.</span>
+                <InfoTip
+                  label="linking this computer"
+                  text="A second desktop app can't link itself yet: joining your workspace from here makes a second member with your name. To be the same person on this computer, run lt (Add to my devices) or ligus devices request here, then approve it on your other desktop under Settings → Profile → My devices."
+                />
               </div>
             </div>
           </div>

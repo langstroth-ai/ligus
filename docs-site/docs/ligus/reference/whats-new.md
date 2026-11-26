@@ -18,6 +18,9 @@ Full release notes are on the
 - **Errors aren't lost behind other messages.** When several notices
   arrive at once, notes and confirmations make room first, and many
   errors fold into one "N problems" notice whose Show opens the error log.
+- **First run points a second computer at what works.** The hint for
+  people who already use Ligus now says to link this computer from lt or
+  `ligus devices request`; a second desktop app can't link itself yet.
 - **Closing a new workspace before it's secured asks first.** The ✕
   during Secure now asks "Finish later?" and says what stays locked until
   you add your passkey and recovery key (Settings → Passkeys & keys).
