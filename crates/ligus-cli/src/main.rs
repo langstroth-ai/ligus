@@ -45,6 +45,7 @@ mod app_cmd;
 mod approvals_cmd;
 #[cfg(test)]
 mod approvals_cmd_tests;
+mod asks_cmd;
 mod auth;
 mod checks;
 mod cli_flags;
@@ -54,6 +55,7 @@ mod forge_cmd;
 mod gateway_check;
 mod hardening;
 mod help;
+mod hook_cmd;
 mod mcp_config;
 mod problem;
 mod memory_cmd;
@@ -881,7 +883,7 @@ fn cmd_chats(cfg: &Config, json: bool) -> Result<()> {
             }
             let n = s.messages.iter().filter(|m| !m.superseded).count();
             if json {
-                rows.push(serde_json::json!({ "id": s.id, "title": shown(&s.title), "messages": n, "channel": s.channel_id }));
+                rows.push(serde_json::json!({ "id": s.id, "workspace": s.workspace_id, "title": shown(&s.title), "messages": n, "channel": s.channel_id }));
                 continue;
             }
             any = true;
@@ -2534,6 +2536,11 @@ fn run() -> Result<()> {
     if first == "app" {
         return app_cmd::cmd_app(&args[1..]);
     }
+    // `ligus hook` talks to a running Ligus process and never opens a data
+    // dir (AGENTS.md rule 4): no config, no secrets.
+    if first == "hook" {
+        return hook_cmd::cmd(&args[1..]);
+    }
     // Also before any thread starts: `*_FILE` secrets and LIGUS_WS_SECRET_DIR
     // become this process's environment (see hardening.rs).
     let secret_paths = hardening::load_secret_files();
@@ -2901,6 +2908,19 @@ fn run() -> Result<()> {
             };
             memory_cmd::run(&cfg, &positional, flags)
         }
+        "asks" => asks_cmd::run(
+            &cfg,
+            &positional,
+            &asks_cmd::Flags {
+                chat: flag_val("--chat"),
+                mine: has("--mine"),
+                option: flag_val("--option"),
+                yes: has("--yes"),
+                no: has("--no"),
+                text: flag_val("--text"),
+                json: has("--json"),
+            },
+        ),
         "task-state" => memory_cmd::task_state(&cfg, positional.first().map(|s| s.as_str()), has("--json")),
         "facts" => {
             if positional.first().map(|s| s.as_str()) != Some("export") || !has("--jsonl") {
@@ -3009,6 +3029,8 @@ fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: &mut dyn FnMut(
 /// flag read with `flag_val` must be listed here, or its value is taken as a
 /// positional argument (a test checks this against the source).
 const VALUE_FLAGS: &[&str] = &[
+    "--option",
+    "--text",
     "--approver-fingerprint",
     "--avatar",
     "--to",
@@ -3089,7 +3111,7 @@ fn split_flag_values(args: Vec<String>) -> Vec<String> {
 }
 
 /// The commands that take `--dry-run`.
-const DRY_RUN_COMMANDS: &[&str] = &["add-runtime", "rm-runtime", "add-agent", "set-agent-host", "setup"];
+const DRY_RUN_COMMANDS: &[&str] = &["add-runtime", "rm-runtime", "add-agent", "set-agent-host", "setup", "hook"];
 
 /// A usage error when `--dry-run` (before any `--`) is given to a command
 /// that has no dry run.

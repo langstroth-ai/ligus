@@ -28,7 +28,7 @@ use crate::provider::ChatTurn;
 mod approval_check;
 pub use approval_check::WorkspaceApprovers;
 mod asks;
-pub use asks::{answer_record, AskChoice};
+pub use asks::{answer_record, AskChoice, OutsidePrompt, OUTSIDE_AGENT_KEY};
 mod attachments;
 mod changes;
 mod computer_link;

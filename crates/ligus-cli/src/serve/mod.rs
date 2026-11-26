@@ -1855,6 +1855,21 @@ fn spawn_worker(shared: Arc<Shared>) -> Result<std::thread::JoinHandle<()>> {
                 presence: Some(&shared.presence),
                 stops: Some(shared.turn_stops.clone()),
             };
+            // `ligus hook permission` finds this box's socket, and is told no:
+            // a box is its own member, so a card it posted could never be the
+            // person's grant. The hook prints nothing and Claude Code decides.
+            let _hook = match ligus_runtime::hook::listen(
+                &shared.cfg.data_dir,
+                ligus_runtime::hook::Answerer::Refuse(
+                    "a ligus serve box is its own member, so it can't put a permission prompt to you; run the Ligus desktop app".into(),
+                ),
+            ) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    eprintln!("serve: hook socket: {e}");
+                    None
+                }
+            };
             let sink = ServeSink(shared.clone());
             let mut drain = worker::DrainState::default();
             while !shared.stopping() {

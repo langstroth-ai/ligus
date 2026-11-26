@@ -1568,6 +1568,100 @@ async fn the_restart_sweep_closes_the_hosts_open_asks() {
     }
 }
 
+/// Q-T9 end to end over the hook socket: the person's device posts the
+/// outside prompt as a grant card to its person (passkey always), and the
+/// hook gets allow, deny, or nothing; a wrong token posts nothing; the
+/// socket is owner-only; a hook that goes away closes its card.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hook_prompts_become_grant_cards_for_the_person() {
+    use crate::hook;
+    use std::os::unix::fs::PermissionsExt;
+    let w = world();
+    let dir = tempfile::tempdir().unwrap();
+    let server = hook::listen(dir.path(), hook::Answerer::Host(w.host.clone())).unwrap();
+    assert_eq!(std::fs::metadata(&server.path).unwrap().permissions().mode() & 0o777, 0o600);
+    let token = hook::read_token(&hook::token_path(dir.path())).unwrap();
+    let req = |token: &str, cmd: &str| hook::HookRequest {
+        token: token.into(),
+        workspace: w.wid.to_string(),
+        chat: w.chat.to_string(),
+        timeout_secs: 30,
+        input: json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": "/home/alex/shop", "permission_mode": "default"}),
+    };
+    // A wrong token: nothing is posted, no decision.
+    let path = server.path.clone();
+    let bad = req(&"0".repeat(64), "ls");
+    let r = tokio::task::spawn_blocking(move || hook::ask(&path, &bad, Duration::from_secs(5))).await.unwrap().unwrap();
+    assert_eq!(r.decision, "none");
+    assert!(hook::claude_output(Some(&r)).is_none());
+    assert!(w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap().flow.asks.is_empty());
+    for (n, (option, expect)) in [(0u32, "allow"), (1, "deny")].into_iter().enumerate() {
+        let path = server.path.clone();
+        let rq = req(&token, "cargo publish --dry-run");
+        let client = tokio::task::spawn_blocking(move || hook::ask(&path, &rq, Duration::from_secs(30)));
+        let st = posted_ask(&w, n).await;
+        let e = st.grant().expect("the person's own prompt is a grant card");
+        assert_eq!(e.detail, "cargo publish --dry-run");
+        assert!(st.grant_needs_presence(), "an outside prompt always needs the passkey");
+        assert_eq!(st.ask.origin.as_ref().map(|o| o.label.as_str()), Some("shop"));
+        let env = choose(&w, st.ask.ask_id, Some(option), "", false).unwrap();
+        assert!(env.actor_stamp.unwrap().presence.is_some(), "answered with the passkey");
+        let r = client.await.unwrap().unwrap();
+        assert_eq!(r.decision, expect);
+        let out = hook::claude_output(Some(&r));
+        match expect {
+            "allow" => assert_eq!(out.as_deref(), Some(r#"{"hookSpecificOutput":{"decision":{"behavior":"allow"},"hookEventName":"PermissionRequest"}}"#)),
+            _ => assert!(out.unwrap().contains("Denied from Ligus by Alex")),
+        }
+        let s = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+        assert!(s.flow.asks[&st.ask.ask_id].ask.closed, "closed with what it acted on");
+    }
+    // The hook goes away while waiting: the card is closed.
+    let path = server.path.clone();
+    let rq = req(&token, "rm -rf build");
+    let killer = tokio::task::spawn_blocking(move || {
+        use std::io::Write;
+        let mut s = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        let mut line = serde_json::to_vec(&rq).unwrap();
+        line.push(b'\n');
+        s.write_all(&line).unwrap();
+        std::thread::sleep(Duration::from_millis(600));
+        drop(s);
+    });
+    let st = posted_ask(&w, 2).await;
+    killer.await.unwrap();
+    let mut closed = false;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let s = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+        if !s.flow.asks[&st.ask.ask_id].is_open() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "a hook that went away leaves no card open");
+}
+
+/// A box answers every hook prompt with no decision (its card couldn't be
+/// a grant), and the hook prints nothing.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_box_never_raises_hook_prompts() {
+    use crate::hook;
+    let dir = tempfile::tempdir().unwrap();
+    let server = hook::listen(dir.path(), hook::Answerer::Refuse("a box".into())).unwrap();
+    let token = hook::read_token(&hook::token_path(dir.path())).unwrap();
+    let rq = hook::HookRequest { token, workspace: Uuid::new_v4().to_string(), chat: Uuid::new_v4().to_string(), timeout_secs: 30, input: json!({}) };
+    let path = server.path.clone();
+    let r = tokio::task::spawn_blocking(move || hook::ask(&path, &rq, Duration::from_secs(5))).await.unwrap().unwrap();
+    assert_eq!((r.decision.as_str(), r.reason.as_deref()), ("none", Some("a box")));
+    // Nothing listening: no reply at all.
+    drop(server);
+    let rq = hook::HookRequest { token: String::new(), workspace: String::new(), chat: String::new(), timeout_secs: 10, input: json!({}) };
+    assert!(hook::ask(&hook::socket_path(dir.path()), &rq, Duration::from_secs(1)).is_none());
+}
+
 /// Tool calls run on tokio workers with the default 2 MiB stack (lt, the
 /// desktop, serve): the call future stays small, so its waits (the asks'
 /// polls, a grant's wait) never overflow one. Regression for a stack
