@@ -507,8 +507,9 @@ phone with the same collaboration state as the desktop's Review card:
   apply it. The request shows as *open* until that host reports *applied*
   (with its commit) or *failed* (with the reason); you can **Withdraw** it
   while it is open. One request at a time per proposal.
-- **Refinement thread.** Read the proposal's notes and add your own. Mark a
-  note as a change request.
+- **Refinement thread.** Read the proposal's notes. Adding a note (or a
+  reason with a vote) is for your desktop for now: a note sent through a box
+  would be signed as the box, not as you, so the box refuses it.
 - **Request changes.** *Send to agent to revise* bundles the change requests
   (or every note, if none is marked), records it on the thread and sends the
   instruction to the agent that produced the proposal. When that agent files

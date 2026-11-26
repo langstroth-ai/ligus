@@ -1555,11 +1555,27 @@ fn add_note(s: &Shared, chat: &ChatSession, pid: Uuid, text: &str, request_chang
         .ok_or_else(|| ApiError::not_found("proposal"))
 }
 
+/// What a phone is told when it tries to write a note: a note through this
+/// box would be signed as the box, not as the phone's person, and no
+/// phone-signed note exists yet.
+pub const PHONE_NOTE_REFUSAL: &str = "Add notes from your desktop for now.";
+
+/// Refuse a note a phone (through the tunnel, or on the direct path) asks
+/// for; only the operator on the box writes one as the box ([`add_note`]).
+fn refuse_phone_note() -> ApiResult<()> {
+    if is_operator() {
+        Ok(())
+    } else {
+        Err(ApiError(StatusCode::FORBIDDEN, PHONE_NOTE_REFUSAL.into()))
+    }
+}
+
 async fn post_comment(State(s): S, Path(id): Path<String>, Json(req): Json<NewComment>) -> ApiResult<Json<Value>> {
     let text = req.text.trim();
     if text.is_empty() {
         return Err(ApiError::bad_request("a refinement note can't be empty"));
     }
+    refuse_phone_note()?;
     let (chat, p) = find_proposal(&s, &id)?;
     let updated = add_note(&s, &chat, p.id, text, req.request_changes)?;
     s.after_write();
@@ -1616,6 +1632,10 @@ struct ChangesReq {
 /// request, so the phone can do both in one tap.
 async fn request_changes(State(s): S, Path(id): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
     let req: ChangesReq = optional_json(&body)?;
+    let note = req.note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+    if note.is_some() {
+        refuse_phone_note()?;
+    }
     let (chat, p) = find_proposal(&s, &id)?;
     if p.superseded_by.is_some() {
         return Err(ApiError(StatusCode::CONFLICT, "this proposal was already revised".into()));
@@ -1640,7 +1660,7 @@ async fn request_changes(State(s): S, Path(id): Path<String>, body: Bytes) -> Ap
                 "this proposal came from the chat's primary runtime — send it back from the desktop".into(),
             )
         })?;
-    if let Some(note) = req.note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
+    if let Some(note) = note {
         add_note(&s, &chat, p.id, &note, true)?;
     }
     let folded = load_chat(&s, &chat.id.to_string()).unwrap_or_else(|_| chat.clone());

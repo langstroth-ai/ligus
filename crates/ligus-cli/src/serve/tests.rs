@@ -1438,13 +1438,15 @@ async fn status_of(h: &Harness, method: reqwest::Method, path: &str, body: Optio
     (code, r.json().await.unwrap_or(Value::Null))
 }
 
-/// The desktop's Review card, from the phone: comments and change requests
-/// land on the proposal's refinement thread, a vote is tagged with the voter's
+/// The desktop's Review card: the box's own notes and change requests land
+/// on the proposal's refinement thread, a vote is tagged with the voter's
 /// name and role, and each change reaches the stream as `proposal.updated`.
+/// A phone can't write a note here (it would be the box's, not its
+/// person's).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn comments_and_votes_show_who_and_stream_updates() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     let (_, pid) = filed_proposal(&h, Some(h.agent_id)).await;
     let mut rx = h.events(None).await;
 
@@ -1458,7 +1460,12 @@ async fn comments_and_votes_show_who_and_stream_updates() {
 
     let empty = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "  " }))).await;
     assert_eq!(empty.0, 400);
+    // A phone's note would be signed as the box: refused, nothing written.
+    let phone = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "Looks close" }))).await;
+    assert_eq!(phone, (403, json!({ "error": crate::serve::api::PHONE_NOTE_REFUSAL })));
+    assert_eq!(h.get(&format!("/v1/proposals/{pid}/comments")).await["comments"], json!([]));
 
+    h.as_operator = true;
     let c = h
         .send(reqwest::Method::POST, &format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "Looks close" })))
         .await;
@@ -1534,12 +1541,19 @@ async fn comments_and_votes_show_who_and_stream_updates() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn request_changes_asks_the_agent_and_links_the_revision() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     let (chat_id, pid) = filed_proposal(&h, Some(h.agent_id)).await;
 
     // Nothing on the thread yet: nothing to forward.
     let bare = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/request-changes"), None).await;
     assert_eq!(bare.0, 400, "{}", bare.1);
+    // A phone's note would be signed as the box: refused, nothing sent.
+    let phone = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/request-changes"), Some(json!({ "note": "redo" }))).await;
+    assert_eq!(phone, (403, json!({ "error": crate::serve::api::PHONE_NOTE_REFUSAL })));
+    assert!(h.handle.shared.lock().load_resolving(chat_id).unwrap().unwrap().proposals.iter().all(|p| p.refinements.is_empty()));
+
+    // The box's operator can.
+    h.as_operator = true;
 
     let res = h
         .send(
@@ -1608,7 +1622,7 @@ async fn request_changes_asks_the_agent_and_links_the_revision() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_viewer_cannot_vote_comment_or_request_changes() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     let (chat_id, pid) = filed_proposal(&h, Some(h.agent_id)).await;
     let me = h.handle.shared.my_actor_id();
     let ws = h.handle.shared.ws;
@@ -1648,6 +1662,8 @@ async fn a_viewer_cannot_vote_comment_or_request_changes() {
     for path in [format!("/v1/proposals/{pid}/approve"), format!("/v1/proposals/{pid}/reject")] {
         assert_gone(&h, &path, None, "vote").await;
     }
+    // The box's own notes, at its viewer role.
+    h.as_operator = true;
     for (path, body) in [
         (format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "hi" }))),
         (format!("/v1/proposals/{pid}/request-changes"), Some(json!({ "note": "redo" }))),
