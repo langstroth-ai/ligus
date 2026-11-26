@@ -15,6 +15,31 @@ Full release notes are on the
   says to do it in the desktop app, or to run it again with
   `--recovery-words-file PATH`, which `ligus setup` now accepts. See
   [Set up](../getting-started/set-up.md).
+- **An agent whose host is offline says so in the chat.** Writing to an
+  agent that runs on another device used to do nothing visible while that
+  device was off. The chat now shows one line, for example "@agy runs on
+  lt on Ana's MacBook Air, which is offline", once while it stays offline.
+- **Devices are never named by a hex id.** A device with no name shows
+  what it is and when it was added, such as "Phone · added 24 Nov" or
+  "Computer · approved 24 Nov". Its fingerprint is under Details.
+- **Errors aren't lost behind other messages.** When several notices
+  arrive at once, notes and confirmations make room first, and many
+  errors fold into one "N problems" notice whose Show opens the error log.
+- **First run points a second computer at what works.** The hint for
+  people who already use Ligus now says to link this computer from lt or
+  `ligus devices request`; a second desktop app can't link itself yet.
+- **Closing a new workspace before it's secured asks first.** The ✕
+  during Secure now asks "Finish later?" and says what stays locked until
+  you add your passkey and recovery key (Settings → Passkeys & keys).
+- **The relay roster line in People can be hidden.** Its ✕ hides it on
+  this device for that workspace. It comes back if the relay starts
+  refusing this device.
+- **The phone says the right pairing command, and push you never turned
+  on isn't red.** The phone's pairing screen says `ligus pair` (run on your
+  box) instead of `ligus serve --pair`. On Health, a Push row that was
+  never set up reads grey "Not set up", or "Not available in this build",
+  with a short how behind ?. The box reports it the same way. Red now only
+  means something that's on is failing.
 - **Add an agent picks where it runs in the same step.** "Runs on" lists
   this device, your always-on boxes (`ligus serve` and workers) and your
   other computers, and saving writes the agent and its host together, so
@@ -36,6 +61,27 @@ Full release notes are on the
   the desktop, a question you already answered sits above the reply that
   reports your answer. Replies from devices still on 0.4.0 show right too,
   once the device or box showing them is updated.
+- **A phone lists only your own direct messages.** A box used to list every
+  DM it holds to every paired phone, so someone else's phone could see a DM
+  that wasn't theirs. Now a phone sees only the DMs its person is in, and
+  none when the box can't tell whose phone it is.
+- **Notes on a proposal from the phone are turned off for now.** A note sent
+  from the phone was written as the box, not as you. The box now refuses it
+  and the phone hides the note field: add notes from your desktop for now.
+  Votes and *Send to agent to revise* still work from the phone.
+- **The chat says when an agent runs on a host's default runtime.** A worker
+  or box without an agent's runtime runs it on its `runtimes.toml` catch-all
+  (`id = "*"`), with that entry's model, and used to do so without saying.
+  The turn still runs, and the chat now shows, once, "@agent ran on this host's
+  default runtime (model) because it doesn't have runtime ...". With no
+  catch-all, the turn is refused as before, and the chat now says why.
+- **Scratch repositories survive a damaged list.** If the box's list of
+  scratch repositories can't be read, it is kept aside instead of being
+  replaced by an empty one.
+- **Forget host stops that box's notifications, and the box follows your
+  notification switches.** Forgetting a host on the phone now tells the box
+  to stop pushing to it first (if the box is reachable), and a box sends only
+  the kinds of notification the phone's switches allow.
 
 ### Docs
 

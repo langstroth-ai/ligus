@@ -35,6 +35,11 @@ pub struct PhoneRecord {
     /// records written before the preference existed.
     #[serde(default = "default_true")]
     pub push_previews: bool,
+    /// The push kinds the phone's notification switches allow (its `kinds`
+    /// in `PUT /v1/tunnel/push`); `None` when it never said (an older app):
+    /// every kind. See [`PhoneRecord::wants_kind`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push_kinds: Option<Vec<String>>,
     /// Last push `seq` sent (strictly increasing, survives restarts).
     #[serde(default)]
     pub push_seq: u64,
@@ -58,7 +63,21 @@ fn default_true() -> bool {
     true
 }
 
+/// The push kinds a phone's notification switches turn on and off (the app
+/// sends the ones it wants as `kinds`). Any other kind (a new phone paired,
+/// a test push) isn't one of its switches and always goes.
+pub const SWITCHED_PUSH_KINDS: &[&str] =
+    &["proposal.created", "workflow.approval", "review.recruit", "ask.pending", "approval.request", "mention", "message.done"];
+
 impl PhoneRecord {
+    /// Whether the phone's notification switches let a `kind` push through.
+    pub fn wants_kind(&self, kind: &str) -> bool {
+        match &self.push_kinds {
+            Some(kinds) if SWITCHED_PUSH_KINDS.contains(&kind) => kinds.iter().any(|k| k == kind),
+            _ => true,
+        }
+    }
+
     pub fn is_active(&self) -> bool {
         self.revoked_at.is_none()
     }
@@ -212,15 +231,18 @@ impl Registry {
         Ok(())
     }
 
-    /// Set the push preference; `previews: None` keeps the stored value.
-    /// Returns the resulting `(enabled, previews)`, or `None` for no such
-    /// active phone.
-    pub fn set_push(&self, pid: &str, enabled: bool, previews: Option<bool>) -> Result<Option<(bool, bool)>> {
+    /// Set the push preference; `previews: None` and `kinds: None` keep the
+    /// stored values. Returns the resulting `(enabled, previews)`, or `None`
+    /// for no such active phone.
+    pub fn set_push(&self, pid: &str, enabled: bool, previews: Option<bool>, kinds: Option<Vec<String>>) -> Result<Option<(bool, bool)>> {
         let mut phones = self.lock();
         let Some(r) = phones.iter_mut().find(|r| r.pid == pid && r.is_active()) else { return Ok(None) };
         r.push_enabled = enabled;
         if let Some(p) = previews {
             r.push_previews = p;
+        }
+        if kinds.is_some() {
+            r.push_kinds = kinds;
         }
         let out = (r.push_enabled, r.push_previews);
         self.save(&phones)?;

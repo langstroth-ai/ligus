@@ -679,8 +679,12 @@ fn my_devices_shows_the_name_a_phone_gave_itself_when_it_was_added() {
     let (here, phone, other) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
     let mut labels = HashMap::new();
     labels.insert(phone.to_string(), "Ana's\u{202E} iPhone".to_string());
-    assert_eq!(crate::device_label(phone, here, None, &labels), "Ana's iPhone", "cleaned like every name");
-    assert_eq!(crate::device_label(phone, here, Some("Studio box"), &labels), "Studio box", "a host's own label wins");
-    assert_eq!(crate::device_label(here, here, None, &labels), "This device");
-    assert_eq!(crate::device_label(other, here, None, &labels), format!("Device {}", &other.to_string()[..8]));
+    let at = Some(ligus_core::Timestamp::from_unix_seconds(1_795_521_600)); // 24 Nov 2026
+    assert_eq!(crate::device_label(phone, here, None, &labels, true, at), "Ana's iPhone", "cleaned like every name");
+    assert_eq!(crate::device_label(phone, here, Some("Studio box"), &labels, true, at), "Studio box", "a host's own label wins");
+    assert_eq!(crate::device_label(here, here, None, &labels, false, at), "This device");
+    // Unnamed: what it is and the day it was added, never hex.
+    assert_eq!(crate::device_label(other, here, None, &labels, true, at), "Phone \u{00B7} added 24 Nov");
+    assert_eq!(crate::device_label(other, here, None, &labels, false, at), "Computer \u{00B7} approved 24 Nov");
+    assert_eq!(crate::device_label(other, here, None, &labels, true, None), "Phone");
 }

@@ -1343,6 +1343,65 @@ async fn an_owner_only_agent_refuses_the_phone_without_a_model_call() {
     assert_eq!(code, 403);
 }
 
+/// An agent sent to this box on a runtime the box doesn't have runs on the
+/// `runtimes.toml` `*` entry, and the chat says so (which model, and why)
+/// once per chat, not on every turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_on_the_catch_all_runtime_says_so_in_its_chat() {
+    let (endpoint, model) = spawn_model(vec![
+        vec![delta(json!({"content": "hi from the lab"}))],
+        vec![delta(json!({"content": "again from the lab"}))],
+    ])
+    .await;
+    let h = harness(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")]).await;
+    let ws = h.handle.shared.ws;
+    std::fs::write(
+        h.handle.shared.cfg.data_dir.join(crate::worker::LOCAL_RUNTIMES_FILE),
+        format!("[[runtime]]\nid = \"*\"\nname = \"Lab\"\nprovider = \"custom\"\nmodel = \"other-model\"\nendpoint = \"{endpoint}\"\ncredential = {{ kind = \"none\" }}\n"),
+    )
+    .unwrap();
+    let local = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        let mut a = WorkspaceAgent::new("local", "desktop-only-runtime");
+        a.owner_actor_id = desk.author().id.clone();
+        a.access = ligus_core::agent::ACCESS_EVERYONE.into();
+        let id = a.id;
+        desk.add_agent(ws, ws, a).unwrap();
+        id
+    };
+    desktop_sync(&h).await;
+    let host = this_host(&h).await;
+    bind_here(&h, &host, &[local]).await;
+
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Try it" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@local hi" }))).await;
+    let want = "@local ran on this host's default runtime (other-model) because it doesn't have runtime 'desktop-only-runtime'";
+    let mut msgs = String::new();
+    for _ in 0..300 {
+        msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await.to_string();
+        if msgs.contains(want) && msgs.contains("hi from the lab") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(msgs.contains(want), "the sender is told: {msgs}");
+    assert!(msgs.contains("hi from the lab"), "the turn still ran: {msgs}");
+    assert_eq!(model.bodies.lock().unwrap().first().unwrap()["model"], "other-model");
+    // A second turn in the same chat runs too, without the line again.
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@local again" }))).await;
+    for _ in 0..300 {
+        msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await.to_string();
+        if msgs.contains("again from the lab") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(msgs.contains("again from the lab"), "the second turn ran: {msgs}");
+    assert_eq!(msgs.matches("default runtime").count(), 1, "said once across two turns: {msgs}");
+    h.handle.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reject_with_reason_and_last_event_id_replay() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
@@ -1438,13 +1497,15 @@ async fn status_of(h: &Harness, method: reqwest::Method, path: &str, body: Optio
     (code, r.json().await.unwrap_or(Value::Null))
 }
 
-/// The desktop's Review card, from the phone: comments and change requests
-/// land on the proposal's refinement thread, a vote is tagged with the voter's
+/// The desktop's Review card: the box's own notes and change requests land
+/// on the proposal's refinement thread, a vote is tagged with the voter's
 /// name and role, and each change reaches the stream as `proposal.updated`.
+/// A phone can't write a note here (it would be the box's, not its
+/// person's).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn comments_and_votes_show_who_and_stream_updates() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     let (_, pid) = filed_proposal(&h, Some(h.agent_id)).await;
     let mut rx = h.events(None).await;
 
@@ -1458,7 +1519,12 @@ async fn comments_and_votes_show_who_and_stream_updates() {
 
     let empty = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "  " }))).await;
     assert_eq!(empty.0, 400);
+    // A phone's note would be signed as the box: refused, nothing written.
+    let phone = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "Looks close" }))).await;
+    assert_eq!(phone, (403, json!({ "error": crate::serve::api::PHONE_NOTE_REFUSAL })));
+    assert_eq!(h.get(&format!("/v1/proposals/{pid}/comments")).await["comments"], json!([]));
 
+    h.as_operator = true;
     let c = h
         .send(reqwest::Method::POST, &format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "Looks close" })))
         .await;
@@ -1534,12 +1600,19 @@ async fn comments_and_votes_show_who_and_stream_updates() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn request_changes_asks_the_agent_and_links_the_revision() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     let (chat_id, pid) = filed_proposal(&h, Some(h.agent_id)).await;
 
     // Nothing on the thread yet: nothing to forward.
     let bare = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/request-changes"), None).await;
     assert_eq!(bare.0, 400, "{}", bare.1);
+    // A phone's note would be signed as the box: refused, nothing sent.
+    let phone = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/request-changes"), Some(json!({ "note": "redo" }))).await;
+    assert_eq!(phone, (403, json!({ "error": crate::serve::api::PHONE_NOTE_REFUSAL })));
+    assert!(h.handle.shared.lock().load_resolving(chat_id).unwrap().unwrap().proposals.iter().all(|p| p.refinements.is_empty()));
+
+    // The box's operator can.
+    h.as_operator = true;
 
     let res = h
         .send(
@@ -1608,7 +1681,7 @@ async fn request_changes_asks_the_agent_and_links_the_revision() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_viewer_cannot_vote_comment_or_request_changes() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     let (chat_id, pid) = filed_proposal(&h, Some(h.agent_id)).await;
     let me = h.handle.shared.my_actor_id();
     let ws = h.handle.shared.ws;
@@ -1648,6 +1721,8 @@ async fn a_viewer_cannot_vote_comment_or_request_changes() {
     for path in [format!("/v1/proposals/{pid}/approve"), format!("/v1/proposals/{pid}/reject")] {
         assert_gone(&h, &path, None, "vote").await;
     }
+    // The box's own notes, at its viewer role.
+    h.as_operator = true;
     for (path, body) in [
         (format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "hi" }))),
         (format!("/v1/proposals/{pid}/request-changes"), Some(json!({ "note": "redo" }))),

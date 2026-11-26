@@ -49,7 +49,9 @@ API plus a Server-Sent Events stream.
   that, it runs on this host's own `runtimes.toml` entry for its runtime id, or
   on the catch-all `id = "*"` entry, which is typically the lab's keyless
   llama.cpp gateway. Desktop agents are bound to the desktop's device-local
-  runtime ids, so this mapping is what lets you send them here.
+  runtime ids, so this mapping is what lets you send them here. The first turn on the
+  catch-all in a chat posts one line there naming the model and the missing
+  runtime id; with no catch-all the turn is refused and the chat says why.
 - **Repos.** Agents work on checkouts under `LIGUS_REPOS_DIR`
   (default `<LIGUS_DATA_DIR>/repos`). `ligus bind-repo <name|path> [--chat <id>]`
   binds the workspace (or one chat) to a checkout in
@@ -94,8 +96,8 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | GET | `/v1/proposals/{id}` | `{proposal}` |
 | GET | `/v1/proposals/{id}/file?path=&side=old\|new` | `{path, side, content, size, base, applied}`: one file of the proposal's diff, whole, before (`old`) or after (`new`, the default) the change. Read from the chat's bound checkout (branch `ligus/chat/<id>`, else `HEAD`) with the file's patch applied in a scratch directory, never in the checkout; `applied` means the base already carries the change and `old` was recovered by reversing it. `400`: `path` isn't a plain relative path or isn't in the diff, or a bad `side`. `404`: no diff, no checkout bound here, or that side doesn't exist (a new file has no `old`, a deleted one no `new`). `409`: the diff applies to neither base. `413` over 512 KB, `415` not UTF-8. The app uses it to render a changed Markdown file |
 | GET | `/v1/proposals/{id}/comments` | `{comments: [Comment]}`, the refinement thread, oldest first |
-| POST | `/v1/proposals/{id}/comments` `{text, requestChanges?}` | `{comment, proposal}`. `requestChanges: true` marks it a change request |
-| POST | `/v1/proposals/{id}/request-changes` `{note?}` | `{proposal, message}`. The desktop's "Send to agent to revise"; `note` is added first as a change request |
+| POST | `/v1/proposals/{id}/comments` `{text, requestChanges?}` | `{comment, proposal}`. `requestChanges: true` marks it a change request. The note is written as this box, so only the operator token may add one: a phone gets `403 {"error": "Add notes from your desktop for now."}` |
+| POST | `/v1/proposals/{id}/request-changes` `{note?}` | `{proposal, message}`. The desktop's "Send to agent to revise"; `note` is added first as a change request (operator only, as above: a phone sends none) |
 | GET | `/v1/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, every [proposal set](../docs-site/docs/ligus/features/proposal-sets.md) in the workspace, newest first (open by default). Read-only |
 | GET | `/v1/proposal-sets/{id}` | `{set: ProposalSet}` |
 | GET | `/v1/chats/{id}/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, one chat's sets (all by default) |
@@ -422,7 +424,7 @@ itself: https in front of it counts only when the box listens on loopback.
 | GET | `/v1/invites/pending` | `{contacts, invites: [{relay, seq, isDm, workspaceName, founderAccount?, founderName?, safetyCode?, trust, acceptable, refusal?}]}`: the box's contact drop box (relay v0.3), read and acknowledged like the desktop's. The codes stay on the box |
 | POST | `/v1/invites/pending/accept` `{relay, seq, confirmSafetyCode}` | `{workspaceId, account}` (by reference to the last listing) |
 | POST | `/v1/invites/pending/dismiss` `{relay, seq}` | `{dismissed: true}` |
-| GET | `/v1/dms` | `{dms: [{workspaceId, account, name, chatId?, safetyCode?, avatarUrl?, archived, waitingForFounder, foundedAt?, updatedAt?}], canFound}` |
+| GET | `/v1/dms` | `{dms: [{workspaceId, account, name, chatId?, safetyCode?, avatarUrl?, archived, waitingForFounder, foundedAt?, updatedAt?}], canFound}`. Through the tunnel, only the DMs the phone's person is a member of (none for a phone this box can't place); `/v1/chats`, a DM's message routes and the event stream follow the same rule |
 | POST | `/v1/dms` `{accountId}` | `{workspaceId, chatId?, invite?, delivered, safetyCode?}`: opens the kept DM with a co-member, or founds one (random `dm-` room and key, this box's account pinned as founder, a signed invite addressed to them, sealed to their verified devices and dropped into their contact box). `invite` (hand it over yourself) is set on creation; `delivered` says it reached their box. A box acting for its owner can't found one (409) |
 | GET | `/v1/chats/{id}/founder` | `{waiting, founderName?}` |
 

@@ -338,6 +338,7 @@ where
                     push_seq: 0,
                     last_seen: None,
                     owner_phone: false,
+                    push_kinds: None,
                     device_id: Some(device_id),
                 };
                 Ok((ts, Peer::Paired(pid), Some(PendingEnroll { rec, eid: eid.clone() })))
