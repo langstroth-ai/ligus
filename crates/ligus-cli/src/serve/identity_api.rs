@@ -195,7 +195,7 @@ pub fn person_extras(s: &Shared) -> HashMap<Uuid, Value> {
         ligus_proto::names::clean_display_name(&svc.author().display_name)
     };
     let my_skeleton = ligus_proto::names::name_skeleton(&me_name);
-    let dms = s.dm_rows(&people);
+    let dms = s.dm_rows_for(&people, s.dm_viewer());
     let mut out = HashMap::new();
     for p in &people {
         // Desktop's flag (two co-members alike), and one more: a co-member
@@ -635,7 +635,7 @@ impl Shared {
 pub async fn list_dms(State(s): S) -> ApiResult<Json<Value>> {
     s.resolve_concurrent_dms();
     let people = s.co_members();
-    let rows = s.dm_rows(&people);
+    let rows = s.dm_rows_for(&people, s.dm_viewer());
     let can_found = !s.lock().is_delegated();
     Ok(Json(json!({ "dms": rows, "canFound": can_found })))
 }

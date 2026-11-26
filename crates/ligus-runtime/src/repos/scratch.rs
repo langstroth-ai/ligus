@@ -304,8 +304,31 @@ pub fn check_root(root: &Path, forbidden: &[PathBuf]) -> Result<PathBuf> {
 
 // ── The registry ─────────────────────────────────────────────────────────
 
+/// Every entry here, for a reader: what [`try_load_all`] gives, or none
+/// when the registry can't be read.
 fn load_all(store: &EventStore) -> Vec<ScratchRepo> {
-    store.repo_setting(KEY_REGISTRY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    try_load_all(store).unwrap_or_else(|e| {
+        eprintln!("scratch: couldn't read the scratch registry: {e}");
+        Vec::new()
+    })
+}
+
+/// Every entry here, or an error when the store can't be read (a writer
+/// must not take that as "none" and save over the list). A registry that
+/// doesn't parse is kept, moved aside under `scratch:registry.corrupt-<ts>`,
+/// with a warning, and a new one starts: nothing saves over it.
+fn try_load_all(store: &EventStore) -> Result<Vec<ScratchRepo>> {
+    let Some(text) = store.repo_setting(KEY_REGISTRY).map_err(store_err)? else { return Ok(Vec::new()) };
+    match serde_json::from_str(&text) {
+        Ok(all) => Ok(all),
+        Err(e) => {
+            let aside = format!("{KEY_REGISTRY}.corrupt-{}", now());
+            store.set_repo_setting(&aside, Some(&text)).map_err(store_err)?;
+            store.set_repo_setting(KEY_REGISTRY, None).map_err(store_err)?;
+            eprintln!("scratch: the scratch registry couldn't be read ({e}); kept it as {aside} and started a new one");
+            Ok(Vec::new())
+        }
+    }
 }
 
 fn save_all(store: &EventStore, mut all: Vec<ScratchRepo>) -> Result<()> {
@@ -329,7 +352,7 @@ fn save_all(store: &EventStore, mut all: Vec<ScratchRepo>) -> Result<()> {
 }
 
 fn update(store: &EventStore, id: Uuid, f: impl FnOnce(&mut ScratchRepo)) -> Result<ScratchRepo> {
-    let mut all = load_all(store);
+    let mut all = try_load_all(store)?;
     let e = all.iter_mut().find(|e| e.id == id).ok_or(ScratchError::NotFound)?;
     f(e);
     let out = e.clone();
@@ -421,7 +444,7 @@ pub fn set_chat(store: &EventStore, id: Uuid, chat: Uuid, on: bool, now: i64) ->
 
 /// Drop `chat` from every scratch repository's chats here.
 pub fn forget_chat(store: &EventStore, chat: Uuid) -> Result<()> {
-    let mut all = load_all(store);
+    let mut all = try_load_all(store)?;
     let mut changed = false;
     for e in &mut all {
         let n = e.chats.len();
@@ -564,7 +587,7 @@ pub fn init_dir(root: &Path, workspace_id: Uuid, name: &str, created_by: &str, n
 /// (another request may have raced this one).
 pub fn record(store: &EventStore, settings: &Settings, entry: &ScratchRepo) -> Result<()> {
     reserve(store, settings, &entry.created_by)?;
-    let mut all = load_all(store);
+    let mut all = try_load_all(store)?;
     all.push(entry.clone());
     save_all(store, all)
 }

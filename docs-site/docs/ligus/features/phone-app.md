@@ -455,7 +455,8 @@ code rather than by name:
   a passkey, which a box (its own service member) can't do and the phone
   tier doesn't include; make the invite on your desktop. **Open an invite
   link** (paste or scan) shows who it's from before anything is joined.
-- **Direct messages** appear at the top of the chat list. A DM is a
+- **Direct messages** appear at the top of the chat list: only the box's
+  DMs you are in (none, if the box can't tell whose phone it is). A DM is a
   workspace of its own where the phone's key isn't certified, so what the
   phone sends there goes as the box, not as you; hold DMs as yourself from
   your desktop. Agents don't run in DMs and DMs never send a notification.
@@ -507,8 +508,9 @@ phone with the same collaboration state as the desktop's Review card:
   apply it. The request shows as *open* until that host reports *applied*
   (with its commit) or *failed* (with the reason); you can **Withdraw** it
   while it is open. One request at a time per proposal.
-- **Refinement thread.** Read the proposal's notes and add your own. Mark a
-  note as a change request.
+- **Refinement thread.** Read the proposal's notes. Adding a note (or a
+  reason with a vote) is for your desktop for now: a note sent through a box
+  would be signed as the box, not as you, so the box refuses it.
 - **Request changes.** *Send to agent to revise* bundles the change requests
   (or every note, if none is marked), records it on the thread and sends the
   instruction to the agent that produced the proposal. When that agent files
@@ -587,8 +589,10 @@ seconds is queued.
 - **What notifies.** In the app's notification settings, *Notify me about*
   has three switches, all on: *Votes, questions and approvals for you*,
   *Mentions and direct messages*, and *Runs you started*. Other chat
-  messages never notify. The phone sends the box the kinds it wants, but
-  boxes don't filter by them yet, so for now a box sends every kind above.
+  messages never notify. The phone sends the box the kinds it wants, and the
+  box sends only those. **Forget host** turns that box's notifications off
+  before the phone forgets it (if the box is offline then, revoke the
+  pairing on the box with `ligus phones revoke`).
 - **How loudly.** A run that finished arrives silently and groups with other
   finished runs; a failure alerts you. Something waiting on you is
   time-sensitive (it can break through a Focus) only when it has a deadline

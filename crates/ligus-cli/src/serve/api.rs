@@ -998,7 +998,7 @@ async fn health(State(s): S, Extension(Authorized(ok)): Extension<Authorized>) -
 
 async fn list_chats(State(s): S) -> ApiResult<Json<Value>> {
     let me = s.my_actor_id();
-    let mut chats = s.phone_chats()?;
+    let mut chats = s.phone_chats_for(s.dm_viewer())?;
     chats.sort_by_key(|c| std::cmp::Reverse(updated_at(c)));
     let ctx = PhoneChatCtx::new(&s);
     let list: Vec<Value> = chats.iter().map(|c| ctx.dto(&s, c, s.unread(c, &me))).collect();
@@ -1078,15 +1078,17 @@ pub(super) fn load_chat(s: &Shared, raw: &str) -> ApiResult<ChatSession> {
     s.workspace_chats()?.into_iter().find(|c| c.id == id).ok_or_else(|| ApiError::not_found("chat"))
 }
 
-/// A chat the phone may read and post in: the workspace's, or a DM's. Only
-/// the message routes (and the founder status) take a DM's chat; everything
+/// A chat the phone may read and post in: the workspace's, or a DM its
+/// person is in ([`Shared::dm_viewer`]).
+/// Only the message routes (and the founder status) take a DM's chat; everything
 /// else (agents, proposals, repos, guards) is the workspace's alone.
 pub(super) fn load_phone_chat(s: &Shared, raw: &str) -> ApiResult<ChatSession> {
     let id = parse_id(raw, "chat")?;
     if let Some(c) = s.workspace_chats()?.into_iter().find(|c| c.id == id) {
         return Ok(c);
     }
-    s.dm_chats().into_iter().find(|c| c.id == id).ok_or_else(|| ApiError::not_found("chat"))
+    let who = s.dm_viewer();
+    s.dm_chats().into_iter().find(|c| c.id == id && who.sees(c)).ok_or_else(|| ApiError::not_found("chat"))
 }
 
 #[derive(Deserialize)]
@@ -1553,11 +1555,27 @@ fn add_note(s: &Shared, chat: &ChatSession, pid: Uuid, text: &str, request_chang
         .ok_or_else(|| ApiError::not_found("proposal"))
 }
 
+/// What a phone is told when it tries to write a note: a note through this
+/// box would be signed as the box, not as the phone's person, and no
+/// phone-signed note exists yet.
+pub const PHONE_NOTE_REFUSAL: &str = "Add notes from your desktop for now.";
+
+/// Refuse a note a phone (through the tunnel, or on the direct path) asks
+/// for; only the operator on the box writes one as the box ([`add_note`]).
+fn refuse_phone_note() -> ApiResult<()> {
+    if is_operator() {
+        Ok(())
+    } else {
+        Err(ApiError(StatusCode::FORBIDDEN, PHONE_NOTE_REFUSAL.into()))
+    }
+}
+
 async fn post_comment(State(s): S, Path(id): Path<String>, Json(req): Json<NewComment>) -> ApiResult<Json<Value>> {
     let text = req.text.trim();
     if text.is_empty() {
         return Err(ApiError::bad_request("a refinement note can't be empty"));
     }
+    refuse_phone_note()?;
     let (chat, p) = find_proposal(&s, &id)?;
     let updated = add_note(&s, &chat, p.id, text, req.request_changes)?;
     s.after_write();
@@ -1614,6 +1632,10 @@ struct ChangesReq {
 /// request, so the phone can do both in one tap.
 async fn request_changes(State(s): S, Path(id): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
     let req: ChangesReq = optional_json(&body)?;
+    let note = req.note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+    if note.is_some() {
+        refuse_phone_note()?;
+    }
     let (chat, p) = find_proposal(&s, &id)?;
     if p.superseded_by.is_some() {
         return Err(ApiError(StatusCode::CONFLICT, "this proposal was already revised".into()));
@@ -1638,7 +1660,7 @@ async fn request_changes(State(s): S, Path(id): Path<String>, body: Bytes) -> Ap
                 "this proposal came from the chat's primary runtime — send it back from the desktop".into(),
             )
         })?;
-    if let Some(note) = req.note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
+    if let Some(note) = note {
         add_note(&s, &chat, p.id, &note, true)?;
     }
     let folded = load_chat(&s, &chat.id.to_string()).unwrap_or_else(|_| chat.clone());
@@ -1755,14 +1777,23 @@ struct PushPref {
     /// (on by default).
     #[serde(default)]
     previews: Option<bool>,
+    /// The push kinds the phone's notification switches allow (asks,
+    /// mentions, proposals, finished replies...). Absent = keep the stored
+    /// value (every kind for a phone that never said).
+    #[serde(default)]
+    kinds: Option<Vec<String>>,
 }
 
-/// `PUT /v1/tunnel/push {"enabled": bool, "previews"?: bool}` →
-/// `{"enabled": bool, "previews": bool}`.
+/// `PUT /v1/tunnel/push {"enabled": bool, "previews"?: bool, "kinds"?:
+/// [string]}` → `{"enabled": bool, "previews": bool}`.
 async fn tunnel_push(State(s): S, peer: Option<Extension<TunnelPeer>>, body: Bytes) -> ApiResult<Json<Value>> {
     let (t, rec) = tunnel_phone(&s, peer)?;
     let pref: PushPref = serde_json::from_slice(&body).map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?;
-    let (enabled, previews) = t.registry.set_push(&rec.pid, pref.enabled, pref.previews)?.ok_or_else(|| ApiError::not_found("phone"))?;
+    if pref.kinds.as_ref().is_some_and(|k| k.len() > 32 || k.iter().any(|x| x.len() > 64)) {
+        return Err(ApiError::bad_request("too many notification kinds"));
+    }
+    let (enabled, previews) =
+        t.registry.set_push(&rec.pid, pref.enabled, pref.previews, pref.kinds)?.ok_or_else(|| ApiError::not_found("phone"))?;
     Ok(Json(json!({ "enabled": enabled, "previews": previews })))
 }
 
@@ -1833,6 +1864,23 @@ async fn events(State(s): S, peer: Option<Extension<TunnelPeer>>, headers: Heade
     event_stream(s, peer, headers, slot).into_response()
 }
 
+/// Whether an event may go to a stream whose DMs are `dms`: anything not
+/// about a chat, a workspace chat's, or a DM's its person is in.
+fn dm_event_shown(s: &Shared, dms: super::dms::DmViewer, ev: &super::hub::SseEvent) -> bool {
+    if dms == super::dms::DmViewer::Box {
+        return true;
+    }
+    let d = &ev.data;
+    let chat = [&d["chatId"], &d["message"]["chatId"], &d["chat"]["id"]]
+        .into_iter()
+        .find_map(|v| v.as_str().and_then(|x| Uuid::parse_str(x).ok()));
+    let Some(chat) = chat else { return true };
+    if !s.is_dm_chat(chat) {
+        return true;
+    }
+    s.dm_chats().iter().any(|c| c.id == chat && dms.sees(c))
+}
+
 fn event_stream(
     s: Arc<Shared>,
     peer: Option<Extension<TunnelPeer>>,
@@ -1855,6 +1903,9 @@ fn event_stream(
     // Proposal events are built for this box's identity; a phone through the
     // tunnel gets them as its own person sees them (see `viewer`).
     let viewer = peer.as_ref().map(|Extension(p)| tunnel_viewer(&s, &p.pid)).filter(|v| *v != s.my_actor_id());
+    // A DM's events (its messages, typing) reach only a phone whose person
+    // is in it, as its list does ([`Shared::dm_viewer`]).
+    let dms = s.dm_viewer();
     let personal = {
         let s = s.clone();
         move |ev: super::hub::SseEvent| match viewer.as_deref() {
@@ -1862,12 +1913,18 @@ fn event_stream(
             None => ev,
         }
     };
+    let shown = {
+        let s = s.clone();
+        move |ev: &super::hub::SseEvent| dm_event_shown(&s, dms, ev)
+    };
     let foreground = peer.and_then(|Extension(p)| s.tunnel.as_ref().map(|t| t.foreground(&p.pid)));
     // Open with a comment so the client sees body bytes at once: URLSession
     // (the phone) doesn't hand back the response until the first body byte, so
     // without this a quiet stream looked "connecting" until the 15 s heartbeat.
     let hello = stream::once(async { Ok(Event::default().comment("connected")) });
-    let backlog = hello.chain(stream::iter(backlog.into_iter().map(|e| Ok(to_event(personal(e)))).collect::<Vec<_>>()));
+    let backlog = hello.chain(stream::iter(
+        backlog.into_iter().filter(|e| shown(e)).map(|e| Ok(to_event(personal(e)))).collect::<Vec<_>>(),
+    ));
     let live = stream::unfold((rx, (foreground, slot), token_gen), |(mut rx, foreground, mut token_gen)| async move {
         loop {
             let next = match token_gen.as_mut() {
@@ -1886,7 +1943,9 @@ fn event_stream(
             }
         }
     });
-    let live = live.map(move |ev: Result<super::hub::SseEvent, Infallible>| ev.map(|e| to_event(personal(e))));
+    let live = live
+        .filter(move |ev: &Result<super::hub::SseEvent, Infallible>| std::future::ready(ev.as_ref().map_or(true, &shown)))
+        .map(move |ev: Result<super::hub::SseEvent, Infallible>| ev.map(|e| to_event(personal(e))));
     Sse::new(backlog.chain(live)).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("heartbeat"))
 }
 
