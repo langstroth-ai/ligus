@@ -87,9 +87,8 @@ People pane before the phone's vote counts. Defining workspace runtimes
 
 - **Runtimes.** Copy `runtimes.toml.example` to `$LIGUS_DATA_DIR/runtimes.toml`
   and point it at your gateway. Agents you send to this host use the runtime
-  listed there under their runtime id, unless a workspace runtime with that id
-  exists. An agent whose runtime is in neither is refused, with the reason in
-  its chat; an `id = "*"` entry no longer catches it.
+  listed there (the `*` entry catches all), unless a workspace runtime with the
+  agent's runtime id exists.
 - **Repos.** Clone the checkouts agents should work on under `LIGUS_REPOS_DIR`
   and bind one:
 

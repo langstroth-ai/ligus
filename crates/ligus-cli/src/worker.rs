@@ -252,23 +252,16 @@ struct LocalRuntimesToml {
 /// The desktop binds an agent to one of its *device-local* runtimes, whose id
 /// means nothing on another box; a worker only knows the workspace-owned
 /// runtimes on the config log. This file maps such ids to what the agent runs
-/// on here — typically the lab's keyless llama.cpp gateway. An agent whose
-/// runtime is in neither is refused, with the reason in its chat: an
-/// `id = "*"` entry no longer catches it (it would run another model than
-/// the one the agent was set up with, without saying so). It is the box
-/// owner's own config, never synced. Workspace runtimes win.
+/// on here — typically the lab's keyless llama.cpp gateway — and an entry with
+/// `id = "*"` catches every agent sent to this host whose runtime isn't known.
+/// It is the box owner's own config, never synced. Workspace runtimes win.
 pub fn local_runtimes(data_dir: &std::path::Path) -> Vec<WorkspaceRuntime> {
     let path = local_runtimes_path(data_dir);
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
     match toml::from_str::<LocalRuntimesToml>(&text) {
-        Ok(doc) => {
-            if doc.runtimes.iter().any(|r| r.id == "*") {
-                warn_catch_all_once(&path);
-            }
-            doc.runtimes
-        }
+        Ok(doc) => doc.runtimes,
         Err(e) => {
             eprintln!("worker: ignoring {}: {e}", path.display());
             Vec::new()
@@ -276,32 +269,28 @@ pub fn local_runtimes(data_dir: &std::path::Path) -> Vec<WorkspaceRuntime> {
     }
 }
 
-/// Say once per process that a `runtimes.toml` `id = "*"` entry is ignored.
-fn warn_catch_all_once(path: &std::path::Path) {
-    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        eprintln!(
-            "worker: {}: the id = \"*\" entry is no longer used; add an entry for each runtime id this host should run",
-            path.display()
-        );
-    }
-}
-
 /// The runtime an agent runs on here: a workspace runtime with its id, else a
-/// host-local one with its id. `runtimes` is workspace runtimes first, then
-/// [`local_runtimes`]. Nothing stands in for a runtime this host doesn't
-/// have (see [`unknown_runtime_note`]).
+/// host-local one with its id, else the host-local catch-all (`id = "*"`).
+/// `runtimes` is workspace runtimes first, then [`local_runtimes`].
 pub fn runtime_for<'a>(runtimes: &'a [WorkspaceRuntime], agent: &WorkspaceAgent) -> Option<&'a WorkspaceRuntime> {
-    runtimes.iter().find(|r| r.id == agent.runtime_id && r.id != "*")
+    runtimes.iter().find(|r| r.id == agent.runtime_id).or_else(|| runtimes.iter().find(|r| r.id == "*"))
 }
 
-/// What the chat is told when this host doesn't have an agent's runtime.
-pub fn unknown_runtime_note(agent: &WorkspaceAgent) -> String {
-    format!(
-        "@{} did not run: this host doesn't have runtime '{}'; update it or pick another host",
-        agent.name,
-        ligus_proto::names::clean_display_name(&agent.runtime_id)
-    )
+/// What the chat is told about a turn of `agent` on runtime `rt` here: a
+/// line when it runs on the catch-all (`id = "*"`) because this host
+/// doesn't have the agent's own runtime (so another model answers), or
+/// when there is no runtime for it at all (the turn is refused). Nothing
+/// when it runs on its own runtime.
+pub fn runtime_note(agent: &WorkspaceAgent, rt: Option<&WorkspaceRuntime>) -> Option<String> {
+    let id = ligus_proto::names::clean_display_name(&agent.runtime_id);
+    match rt {
+        Some(r) if r.id == "*" && agent.runtime_id != "*" => {
+            let model = if r.model.trim().is_empty() { r.name.clone() } else { r.model.clone() };
+            Some(format!("@{} ran on this host's default runtime ({model}) because it doesn't have runtime '{id}'", agent.name))
+        }
+        Some(_) => None,
+        None => Some(format!("@{} did not run: this host doesn't have runtime '{id}'; update it or pick another host", agent.name)),
+    }
 }
 
 /// Build a ResolvedRuntime for an agent from its workspace runtime (or this
@@ -620,12 +609,17 @@ async fn run_turn(
         sink.status(pm.session_id, pm.agent_id, TurnState::Done, Some("agent no longer exists"));
         return Ok(());
     };
-    if runtime_for(runtimes, &agent).is_none() {
-        let _ = lock(svc).post_system_note(s.id, s.workspace_id, unknown_runtime_note(&agent));
+    // Never silently on another model: the chat says when the catch-all
+    // stands in, and why a turn with no runtime here doesn't run.
+    let found = runtime_for(runtimes, &agent);
+    if let Some(note) = runtime_note(&agent, found) {
+        let _ = lock(svc).post_system_note(s.id, s.workspace_id, note);
         sink.changed();
-        // An error puts the mention in the failed set, so the note isn't
-        // re-posted every tick.
-        return Err(anyhow!("refused: this host doesn't have runtime '{}'", agent.runtime_id));
+        if found.is_none() {
+            // An error puts the mention in the failed set, so the note
+            // isn't re-posted every tick.
+            return Err(anyhow!("refused: this host doesn't have runtime '{}'", agent.runtime_id));
+        }
     }
     let (mut rt, rt_label) = agent_workspace_runtime(runtimes, &agent)?;
     // The gateway's attribution (when its operator turned it on) hashes these.
@@ -989,7 +983,7 @@ mod tests {
     }
 
     #[test]
-    fn local_runtimes_map_device_local_ids_and_nothing_else() {
+    fn local_runtimes_map_device_local_ids_and_catch_all() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join(LOCAL_RUNTIMES_FILE),
@@ -1014,19 +1008,23 @@ credential = { kind = "none" }
         let rts = local_runtimes(dir.path());
         assert_eq!(rts.len(), 2);
         assert_eq!(runtime_for(&rts, &agent("lab")).unwrap().model, "gpt-oss:20b");
-        // A runtime this host doesn't have isn't run on the `*` entry's
-        // model: it is refused, and the chat says why.
-        assert!(runtime_for(&rts, &agent("desktop-local-id")).is_none());
-        assert!(runtime_for(&rts, &agent("*")).is_none());
-        assert!(agent_workspace_runtime(&rts, &agent("desktop-local-id")).is_err());
+        assert_eq!(runtime_for(&rts, &agent("desktop-local-id")).unwrap().model, "gemma4:12b");
+        let (rt, _) = agent_workspace_runtime(&rts, &agent("desktop-local-id")).unwrap();
+        assert!(rt.runs_agent_tools());
+        // It isn't silent: the chat is told which model stands in, and why.
         assert_eq!(
-            unknown_runtime_note(&agent("desktop-local-id")),
-            "@coder did not run: this host doesn't have runtime 'desktop-local-id'; update it or pick another host"
+            runtime_note(&agent("desktop-local-id"), runtime_for(&rts, &agent("desktop-local-id"))).as_deref(),
+            Some("@coder ran on this host's default runtime (gemma4:12b) because it doesn't have runtime 'desktop-local-id'")
         );
-        // A workspace runtime with the agent's id wins over a local one.
-        let mut all = vec![WorkspaceRuntime::new("lab", "WS", ModelProviderKind::Ollama, "llama3.2")];
+        assert_eq!(runtime_note(&agent("lab"), runtime_for(&rts, &agent("lab"))), None);
+        assert_eq!(
+            runtime_note(&agent("x"), None).as_deref(),
+            Some("@coder did not run: this host doesn't have runtime 'x'; update it or pick another host")
+        );
+        // A workspace runtime with the agent's id wins over the catch-all.
+        let mut all = vec![WorkspaceRuntime::new("desktop-local-id", "WS", ModelProviderKind::Ollama, "llama3.2")];
         all.extend(rts);
-        assert_eq!(runtime_for(&all, &agent("lab")).unwrap().name, "WS");
+        assert_eq!(runtime_for(&all, &agent("desktop-local-id")).unwrap().name, "WS");
         assert!(runtime_for(&[], &agent("x")).is_none());
     }
 

@@ -22,11 +22,12 @@ Full release notes are on the
   from the phone was written as the box, not as you. The box now refuses it
   and the phone hides the note field: add notes from your desktop for now.
   Votes and *Send to agent to revise* still work from the phone.
-- **An agent on a runtime the host doesn't have is refused, with the reason
-  in the chat.** A worker or box used to run it on its `runtimes.toml`
-  catch-all (`id = "*"`) with a different model, without saying. Now the chat
-  says "this host doesn't have runtime ...; update it or pick another host".
-  An `id = "*"` entry is no longer used: list each runtime id instead.
+- **The chat says when an agent runs on a host's default runtime.** A worker
+  or box without an agent's runtime runs it on its `runtimes.toml` catch-all
+  (`id = "*"`), with that entry's model, and used to do so without saying.
+  The turn still runs, and the chat now shows "@agent ran on this host's
+  default runtime (model) because it doesn't have runtime ...". With no
+  catch-all, the turn is refused as before, and the chat now says why.
 - **Scratch repositories survive a damaged list.** If the box's list of
   scratch repositories can't be read, it is kept aside instead of being
   replaced by an empty one.

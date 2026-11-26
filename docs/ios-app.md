@@ -46,12 +46,12 @@ API plus a Server-Sent Events stream.
   tools plus the MCP tools from `LIGUS_MCP_CONFIG`), under the same policy as
   the desktop. See "Tool policy" below.
 - **Runtimes.** An agent runs on its workspace runtime (config log). Failing
-  that, it runs on this host's own `runtimes.toml` entry for its runtime id,
-  typically the lab's keyless llama.cpp gateway. Desktop agents are bound to
-  the desktop's device-local runtime ids, so this mapping is what lets you
-  send them here. An agent whose runtime id is in neither is refused, and its
-  chat says "this host doesn't have runtime ...; update it or pick another
-  host" (an `id = "*"` entry is no longer used).
+  that, it runs on this host's own `runtimes.toml` entry for its runtime id, or
+  on the catch-all `id = "*"` entry, which is typically the lab's keyless
+  llama.cpp gateway. Desktop agents are bound to the desktop's device-local
+  runtime ids, so this mapping is what lets you send them here. A turn on the
+  catch-all posts one line in its chat naming the model and the missing
+  runtime id; with no catch-all the turn is refused and the chat says why.
 - **Repos.** Agents work on checkouts under `LIGUS_REPOS_DIR`
   (default `<LIGUS_DATA_DIR>/repos`). `ligus bind-repo <name|path> [--chat <id>]`
   binds the workspace (or one chat) to a checkout in
