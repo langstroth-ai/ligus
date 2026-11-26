@@ -217,4 +217,5 @@ containers and CI.
 | `workspace.joined` | the device has a workspace, is a member, and holds a local copy |
 | `relay.reachable` | one request to the relay (10 seconds at most): reachable and the access token accepted |
 | `sync.held` | events held aside until this device can judge them |
+| `runtimes.inline-key` | a warning when a workspace runtime's key was stored in the workspace by an older version (never used or shown): rotate it and use `--secret-ref` |
 | `gateway.<name>.hosted`, `gateway.<name>.cli`, `gateways.unlisted` | this host's model gateways, as `ligus gateway-check` proves them; `gateways` is skipped when the host lists none |

@@ -34,6 +34,7 @@ use crate::worker::{self, TurnSink, TurnState, WorkerCtx};
 use crate::{env_opt, open_service, sync_once, uuid_of_room, Config};
 
 pub mod admissions_api;
+pub mod approvals_api;
 pub mod api;
 pub mod appearance;
 pub mod contacts_api;
@@ -68,7 +69,7 @@ pub mod workspace_repos_api;
 #[cfg(test)]
 mod identity_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// How long `ligus serve` waits for a turn in flight on SIGTERM / Ctrl-C.
 const STOP_GRACE: Duration = Duration::from_secs(12);
@@ -345,6 +346,8 @@ pub struct Shared {
     pub typing: typing_api::Typing,
     /// Reverse-QR phone enrollment: requests relayed to desktops (`phone_enroll_api`).
     pub phone_enroll: phone_enroll_api::EnrollBox,
+    /// Code-match approval requests a paired phone approves (`approvals_api`).
+    pub approvals: approvals_api::Approvals,
 }
 
 /// How long a dashboard snapshot of the workspace is reused.
@@ -1219,6 +1222,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         pending_codes: identity_api::PendingCodes::default(),
         typing: typing_api::Typing::default(),
         phone_enroll: Default::default(),
+        approvals: Default::default(),
         ligus_snapshot: Mutex::new(None),
         dashboard_mcp: dashboard_mcp_registry(),
         repos: repos_api::RepoState::default(),
@@ -1251,6 +1255,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         tasks.push(tokio::spawn(presence_loop(shared.clone(), rx.clone())));
         tasks.push(tokio::spawn(contact_loop(shared.clone(), rx.clone())));
         tasks.push(tokio::spawn(phone_enroll_api::relay_loop(shared.clone(), rx.clone())));
+        tasks.push(tokio::spawn(approvals_api::poll_loop(shared.clone(), rx.clone())));
     }
     tasks.push(tokio::spawn(dms::dm_sync_loop(shared.clone(), rx.clone())));
     tasks.push(tokio::spawn(contacts_api::held_loop(shared.clone(), rx.clone())));

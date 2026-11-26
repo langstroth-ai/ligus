@@ -18,6 +18,13 @@
 //! [`MockBlobs`] to look at and age the stored blobs; `retain: false` is a
 //! relay older than the retain route.
 //!
+//! The approval mailbox routes (`docs/design/code-match-wire.md` section 4)
+//! are served in full, with every limit: 64 live requests, 10 messages per
+//! request, the 15-minute expiry, 10 puts a minute per client, no overwrite,
+//! the 8 KiB and 32 KiB caps, signed register and reset with the stale
+//! counter, member auth within 300 s, read keys scoped to their request, and
+//! delete. [`router_with_clock`] gives tests the clock they read.
+//!
 //! Deliberately omitted: the SSE `/events` stream (the client degrades to polling
 //! on 404, which the tests rely on) and everything social/directory/admin, which
 //! no test here touches.
@@ -71,6 +78,37 @@ fn unix_now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
+// A path from this file's directory, so the CLI's tests (which include this
+// file by path) find it too.
+#[path = "test_relay/mailbox.rs"]
+mod mailbox;
+#[allow(unused_imports)]
+pub use mailbox::{AUTH_WINDOW_MS, MAX_LIVE, MAX_MSGS, PUTS_PER_MIN};
+
+/// The clock a mock relay's mailboxes read: the system clock plus an offset
+/// tests move forward. [`TestClock::clock`] gives a client the same clock.
+#[derive(Clone, Default)]
+pub struct TestClock(Arc<std::sync::atomic::AtomicI64>);
+
+impl TestClock {
+    /// Unix ms.
+    pub fn now(&self) -> i64 {
+        let sys = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+        sys + self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Move the clock `ms` forward.
+    pub fn advance(&self, ms: i64) {
+        self.0.fetch_add(ms, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The same clock, for a [`crate::approval_mailbox::MailboxClient`].
+    pub fn clock(&self) -> Arc<dyn Fn() -> i64 + Send + Sync> {
+        let c = self.clone();
+        Arc::new(move || c.now())
+    }
+}
+
 /// The real relay's default and maximum page size.
 pub const DEFAULT_PAGE_CAP: usize = 1000;
 
@@ -88,19 +126,32 @@ pub fn router_with_page_cap(page_cap: usize) -> Router {
 
 /// Like [`router_with_page_cap`], plus a counter of `GET /envelopes` requests.
 pub fn router_with_stats(page_cap: usize) -> (Router, EnvelopeGets) {
+    let (router, gets, _) = build(page_cap, TestClock::default());
+    (router, gets)
+}
+
+/// A mock relay whose approval mailboxes read `clock` (tests move it to
+/// cross the 15-minute expiry, the rate window and the auth window).
+pub fn router_with_clock() -> (Router, TestClock) {
+    let clock = TestClock::default();
+    let (router, _, _) = build(DEFAULT_PAGE_CAP, clock.clone());
+    (router, clock)
+}
+
+fn build(page_cap: usize, clock: TestClock) -> (Router, EnvelopeGets, ()) {
     let state: Shared = Arc::new(Mutex::new(MockState { page_cap: page_cap.max(1), ..Default::default() }));
     let gets = EnvelopeGets(state.clone());
-    (routes(state, true), gets)
+    (routes(state, true, clock), gets, ())
 }
 
 /// A mock relay with a handle on its blobs; `retain: false` leaves out the
 /// retain route (a relay from before Ligus 0.4: plain `404`).
 pub fn router_with_blobs(retain: bool) -> (Router, MockBlobs) {
     let state: Shared = Arc::new(Mutex::new(MockState { page_cap: DEFAULT_PAGE_CAP, ..Default::default() }));
-    (routes(state.clone(), retain), MockBlobs(state))
+    (routes(state.clone(), retain, TestClock::default()), MockBlobs(state))
 }
 
-fn routes(state: Shared, retain: bool) -> Router {
+fn routes(state: Shared, retain: bool, clock: TestClock) -> Router {
     let mut router = Router::new()
         .route("/v1/workspaces/{ws}/blobs", post(post_blob))
         .route("/v1/workspaces/{ws}/blobs/{id}", get(get_blob).delete(delete_blob));
@@ -121,6 +172,7 @@ fn routes(state: Shared, retain: bool) -> Router {
         .route("/v1/pair", post(create_pair))
         .route("/v1/pair/{code}", get(resolve_pair))
         .with_state(state)
+        .merge(mailbox::router(clock))
 }
 
 /// Looks at and ages a mock relay's blobs.

@@ -888,6 +888,19 @@ export const workspaceClaimMembership = () =>
   invoke<boolean>("workspace_claim_membership");
 /// Server-side members of the active workspace (empty on open relays).
 export const workspaceMembers = () => invoke<MemberEntry[]>("workspace_members");
+/// Relay-side membership of the active workspace, as this device sees it.
+export interface RelayMembershipDto {
+  /// `off`: the relay has membership turned off. `unclaimed`: nobody claimed
+  /// the workspace yet. `claimed`: the relay enforces `members`. `hidden`:
+  /// claimed, and this device's relay token names no member.
+  state: "off" | "unclaimed" | "claimed" | "hidden";
+  members: MemberEntry[];
+  /// This device's relay token names an account, so a claim can work.
+  identified: boolean;
+  /// The relay is the community relay (no sign-in there).
+  community: boolean;
+}
+export const relayMembershipStatus = () => invoke<RelayMembershipDto>("relay_membership_status");
 /// What removing a relay member did in the workspace.
 export interface RelayRemoveResultDto {
   /** Whether the workspace key was rotated. */

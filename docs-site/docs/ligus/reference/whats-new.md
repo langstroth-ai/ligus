@@ -4,7 +4,62 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
-## Unreleased
+## 0.3.1
+
+A security release: permission requests from agents, devices that act only
+for their own account, and model keys that never sit in the workspace. Also
+easier linking of a computer and a calmer relay claim. Upgrade every member.
+
+### Security
+
+- **"Allow" always means once.** Ligus picks only an ACP agent's one-time
+  option. An agent that offers only a permission for the rest of its
+  session gets it only when a person explicitly says yes to a question
+  that says so; otherwise it is refused, even for a call your tier allows.
+  See [ACP permissions](../addons/acp.md#permissions).
+- **Only the host can ask for permission.** A permission request counts
+  only from the device that runs the agent's turn. One that any other
+  member or box posts shows as a plain question, attributed to them, and
+  grants nothing; the host waits only on the request it posted.
+- **Only the asker closes a question; only the right people grant.** A
+  question closes only from the agent or its host. A permission request is
+  granted only by the host's own person or the agent's owner, from one of
+  their own devices. Other closes and answers stay in the chat and change
+  nothing. See [Questions to the chat](../addons/ligus-mcp.md#asks).
+- **Devices act only for the account they chose.** A device key is public,
+  so any member could certify someone else's device for their own account.
+  That could stop a `ligus serve` box, break a phone, block linking a
+  computer, borrow a person on their private agents, inherit a removed
+  member's history, or keep a removed member's device getting new keys.
+  Now a device acts only for accounts it signed as itself and that
+  certified it; a foreign certificate blocks and redirects nothing, and is
+  shown quietly (`ligus devices list`, Add a computer). See
+  [Add a computer](../features/linked-devices.md).
+- **Model API keys are never stored in the workspace.** `ligus add-runtime
+  --secret` is gone (it's a usage error): give a workspace runtime a key with
+  `--secret-ref <NAME>` and set `LIGUS_WS_SECRET_<NAME>` on each worker. A
+  key an older version stored in the workspace is never used, shown or
+  exported; such a runtime reads as "stored key (unused)", runs only if it
+  can run keyless, and `ligus doctor` warns about it (`runtimes.inline-key`).
+  Every member's device received that key, so rotate it with the provider and
+  move the runtime to `--secret-ref`. See
+  [Headless agents](../../operate/concepts/headless-agents.md).
+
+### New
+
+- **Approve a box or a computer by comparing a code.** An Admin copies the
+  workspace's approval address (`ligus admit address`, or workspace menu →
+  **Admit a box…**); a box runs `ligus admit request --to ligusaddr1:…` and a
+  computer `ligus devices request --to ligusaddr1:…`. The request reaches the
+  Inbox and, for a box, a paired phone; both screens show the same 8-symbol
+  code, and the approval takes one passkey. A headless box joins only once the
+  approval is on the real workspace log, signed by an Admin's device. A
+  mismatch grants nothing. On the phone, a push-started approval asks which of
+  three codes the box shows. `ligus approvals list` and `approve` are the
+  headless approver; `ligus admit address --reset` cuts off a leaked address.
+  Paste and the fingerprint still work, and Kubernetes admissions are
+  unchanged. See [Admitting a box](../../operate/ops/admitting-a-box.md#code-match)
+  and [Add a computer](../features/linked-devices.md#code-match).
 
 ### Added
 
@@ -49,6 +104,36 @@ Full release notes are on the
   behind **Details** and **Hide from this list** (it stays revoked). One whose
   cleanup isn't finished stays in view with **Retry now**. See
   [Revoked devices](../features/linked-devices.md#revoked-devices).
+
+### Fixed
+
+- **Claiming a workspace on the relay.** The People pane offered
+  **Claim ownership** to every device, and a device whose relay token names
+  no account got "the relay refused (HTTP 401)". It now offers the claim
+  only when this device's token names an account; on a self-hosted relay
+  without one it offers **Add a relay token**, and on the community relay
+  (no sign-in) or a relay with membership off it offers nothing. The
+  warning is one calm line, with what the relay checks and what Ligus
+  enforces anyway behind **?**, a claim asks first, and a refused claim
+  says what's missing and how to fix it. A workspace that is claimed but
+  hides its roster from you no longer reads as "anyone can write". See
+  [Claiming a workspace](../../operate/ops/server-side-membership.md#claiming-a-workspace).
+- **Refusals say why.** A device signing as someone who is no longer a
+  member (for example an lt left open while the computer was linked to
+  your devices) is told to link the computer again or ask for an invite,
+  and a role that's too low is told which role it needs, instead of "role
+  Viewer cannot perform messageAppended".
+
+### Upgrading
+
+- **Upgrade every member.** The permission-request rules apply on each
+  member's own device: a 0.3.0 device still shows a forged permission
+  request as a real one and honours someone else's close (hosts already
+  check who granted a permission, so it can't grant one by mistake). 0.3.0
+  and 0.3.1 devices sync normally.
+- **Rotate a model key stored in the workspace.** If `ligus runtimes`
+  shows "stored key (unused)", rotate that key with the provider and set it
+  on each worker with `--secret-ref`.
 
 ## 0.3.0
 

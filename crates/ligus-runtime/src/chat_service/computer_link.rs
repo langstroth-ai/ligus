@@ -84,15 +84,8 @@ impl ChatService {
         })
     }
 
-    /// Approve `request` as one of **your** devices in `workspace_id`:
-    /// publish its certificate under your account key on the config log,
-    /// confirmed with your passkey (one ceremony: every account here holds a
-    /// credential first), and return the grant (`ligusgrant1:…`) to paste on
-    /// the computer, valid for [`GRANT_TTL_MS`] from `now_ms`. `conn` is the
-    /// workspace connection (`hivews1:` codec) without an invite. The computer
-    /// is a device that acts for you without your account key (delegated).
-    /// Sync to publish the certificate before the computer redeems.
-    pub fn issue_computer_link(&mut self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<String> {
+    /// Everything approving `request` checks first; the account it adds to.
+    fn computer_link_checks(&self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<Uuid> {
         request.check_fresh(now_ms).map_err(|e| refused(e.to_string()))?;
         if self.delegated {
             return Err(refused("only a device holding your account key can add a computer (do it on your desktop)"));
@@ -152,12 +145,52 @@ impl ChatService {
         if head.passkeys.get(&account_id).is_none_or(|m| m.is_empty()) {
             return Err(refused("add a passkey first (Settings > Passkeys & keys): adding a computer is confirmed with it"));
         }
+        Ok(account_id)
+    }
+
+    /// Approve `request` as one of **your** devices in `workspace_id`:
+    /// publish its certificate under your account key on the config log,
+    /// confirmed with your passkey (one ceremony: every account here holds a
+    /// credential first), and return the grant (`ligusgrant1:…`) to paste on
+    /// the computer, valid for [`GRANT_TTL_MS`] from `now_ms`. `conn` is the
+    /// workspace connection (`hivews1:` codec) without an invite. The computer
+    /// is a device that acts for you without your account key (delegated).
+    /// Sync to publish the certificate before the computer redeems.
+    pub fn issue_computer_link(&mut self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<String> {
+        self.computer_link_checks(workspace_id, request, conn, now_ms)?;
+        self.publish_link_certificate(workspace_id, request)?;
+        self.seal_link_grant(workspace_id, request, conn, now_ms)
+    }
+
+    /// Code-match approval, step one for a computer (identity model v2,
+    /// 8.1): every check [`Self::issue_computer_link`] makes, then the grant,
+    /// sealed now and **nothing written**. The caller offers its digest and,
+    /// once the computer acknowledged, calls [`Self::publish_computer_link`].
+    pub fn prepare_computer_link(&self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<String> {
+        self.computer_link_checks(workspace_id, request, conn, now_ms)?;
+        self.seal_link_grant(workspace_id, request, conn, now_ms)
+    }
+
+    /// Code-match approval, step two: the checks again, then the
+    /// certificate on the config log with the passkey ceremony, drafted
+    /// fresh now. Sync to publish it.
+    pub fn publish_computer_link(&mut self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<()> {
+        self.computer_link_checks(workspace_id, request, conn, now_ms)?;
+        self.publish_link_certificate(workspace_id, request)
+    }
+
+    fn publish_link_certificate(&mut self, workspace_id: Uuid, request: &LinkRequest) -> Result<()> {
+        let account_id = self.author.account_id.ok_or_else(|| refused("this device has no account identity"))?;
         let config_id = workspace_config_session_id(workspace_id);
         let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &request.device_public_key, Timestamp::now());
         // The account holds a credential, so the rules ask its presence for a
         // new device: `append_signed` runs the ceremony (the desktop's
         // passkey, the CLI's recovery key) or refuses.
         self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate })?;
+        Ok(())
+    }
+
+    fn seal_link_grant(&self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<String> {
         let person = crate::computer_link::device_local_cleared(&self.author);
         Grant::seal(request, workspace_id, conn, &person, self.device_id, &self.keypair, now_ms.saturating_add(GRANT_TTL_MS))
             .map_err(|e| refused(e.to_string()))

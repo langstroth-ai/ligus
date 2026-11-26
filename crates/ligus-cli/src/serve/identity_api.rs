@@ -323,7 +323,7 @@ fn ensure_can_write(s: &Shared) -> ApiResult<()> {
 }
 
 /// The workspace's name in an invite: the config log's title, else the room.
-fn workspace_name(s: &Shared) -> String {
+pub(super) fn workspace_name(s: &Shared) -> String {
     let svc = s.lock();
     svc.load_in(s.ws, workspace_config_session_id(s.ws))
         .ok()

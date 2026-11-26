@@ -590,8 +590,11 @@ async fn names_are_cleaned_and_look_alikes_flagged() {
         store.set_join_redeem(inv.workspace_id(), ligus_runtime::box_admission::redeem_key_of(&code).as_ref()).unwrap();
         store.set_workspace_pin(inv.workspace_id(), inv.founder_actor_id.as_deref().unwrap(), inv.fk.as_deref().unwrap()).unwrap();
     }
+    // B's first sync must find A's invite, or B starts as no member.
+    let b_cfg = cfg_for(&b_dir, &relay, &room, Some("p".into()));
+    relay_holds_invite(&a, &b_cfg, &tmp.path().join("probe"), inv.inv.as_deref().unwrap()).await;
     // B calls itself "Ada" with a Cyrillic a and a right-to-left override.
-    let b = Box_::start(cfg_for(&b_dir, &relay, &room, Some("p".into())), "\u{202E}\u{0430}da\u{200B}").await;
+    let b = Box_::start(b_cfg, "\u{202E}\u{0430}da\u{200B}").await;
     let b_acc = b.account();
     let a2 = &a;
     let row = until(&[&a, &b], 30, async || {
