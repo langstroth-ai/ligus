@@ -888,7 +888,22 @@ impl TunnelHost {
     }
 
     pub fn push_all_at(&self, content: &PushContent, at: Instant) -> usize {
-        let phones: Vec<PhoneRecord> = self.registry.list().into_iter().filter(|r| r.is_active()).collect();
+        self.push_some_at(content, None, at)
+    }
+
+    /// [`Self::push_all`], to the active phones among `pids` only (a "you"
+    /// notice goes only to its person's phones).
+    pub fn push_to(&self, content: &PushContent, pids: &[String]) -> usize {
+        self.push_some_at(content, Some(pids), Instant::now())
+    }
+
+    fn push_some_at(&self, content: &PushContent, only: Option<&[String]>, at: Instant) -> usize {
+        let phones: Vec<PhoneRecord> = self
+            .registry
+            .list()
+            .into_iter()
+            .filter(|r| r.is_active() && only.is_none_or(|p| p.contains(&r.pid)))
+            .collect();
         if phones.is_empty() {
             return 0;
         }
