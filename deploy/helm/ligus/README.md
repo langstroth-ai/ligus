@@ -62,8 +62,8 @@ it to a registry your cluster can pull from (the relay image,
 `ghcr.io/langstroth-ai/langstroth-relay:0.3.0`, is published):
 
 ```sh
-docker build -f deploy/container/Dockerfile -t registry.example.com/ligus:0.4.0 .
-docker push registry.example.com/ligus:0.4.0
+docker build -f deploy/container/Dockerfile -t registry.example.com/ligus:0.4.1 .
+docker push registry.example.com/ligus:0.4.1
 ```
 
 The chart's only dependency is the relay chart, which is optional but must be
@@ -90,7 +90,7 @@ kubectl label namespace ligus-ws-acme pod-security.kubernetes.io/enforce=restric
 kubectl -n ligus-ws-acme create secret generic acme-workspace \
   --from-literal=room=<room> --from-literal=key=<workspace key>
 helm install acme deploy/helm/ligus -n ligus-ws-acme \
-  --set image.repository=registry.example.com/ligus --set image.tag=0.4.0 \
+  --set image.repository=registry.example.com/ligus --set image.tag=0.4.1 \
   --set relayUrl=https://relay.example.com \
   --set networkPolicy.allowInternetHttps=true \
   --set workspace.existingSecret=acme-workspace

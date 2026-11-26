@@ -2,9 +2,9 @@ apiVersion: v2
 name: ligus
 description: Ligus on Kubernetes - an always-on serve device per workspace, optional worker hosts and MCP servers, with the relay as an optional dependency. Preview; install from a checkout (this chart and its image are not published).
 type: application
-version: 0.4.0
+version: 0.4.1
 # The CLI image this chart is tested against (it reads only LIGUS_* settings, so 0.1 or later).
-appVersion: "0.4.0"
+appVersion: "0.4.1"
 home: https://ligus.ai
 keywords:
   - ligus
