@@ -1698,6 +1698,112 @@ export type BoxAdmission = { code: string; sealed: boolean; expiresInMinutes: nu
 export const admitBox = (workspaceId: string, request: string | null, ttlMinutes: number | null) =>
   invoke<BoxAdmission>("admit_box", { workspaceId, request, ttlMinutes });
 
+// ── Code-match approval (docs/design/code-match-approval.md 7.2) ──────────
+
+/// Who is checking a request, as this device reads the claims.
+export type ApprovalClaimDto =
+  | { state: "unclaimed" }
+  | { state: "mine" }
+  | { state: "claimedBy"; name: string }
+  | { state: "contested"; name: string | null };
+
+/// A live request in a workspace's approval mailbox that this device can approve.
+export interface ApprovalDto {
+  workspaceId: string;
+  workspaceName: string;
+  rid: string;
+  kind: "box" | "computer" | "phone";
+  label: string;
+  /// The 80-bit fingerprint (Details only).
+  fingerprint: string;
+  createdAt: number;
+  expiresAt: number;
+  /// The approval address's relay.
+  relay: string;
+  claim: ApprovalClaimDto;
+  /// Live requests of the same group in this workspace ("2 devices are asking").
+  parallel: number;
+  /// The phase of this device's session for it, if one is open.
+  phase: ApprovalPhase | null;
+  /// The label looks like an existing device or member name.
+  nameClash?: boolean;
+}
+
+/// A device-local Inbox fact kept for a day.
+export interface ApprovalFactDto {
+  /// The request's rid (what dismisses it).
+  key: string;
+  kind: "mismatch" | "didntFinish";
+  workspaceId: string;
+  label: string;
+  at: number;
+  /// The Inbox line and its "?", worded by the runtime.
+  text?: string;
+  help?: string;
+}
+
+export interface ApprovalsDto {
+  requests: ApprovalDto[];
+  facts: ApprovalFactDto[];
+}
+
+export type ApprovalPhase =
+  | "waiting"
+  | "code"
+  | "confirming"
+  | "passkey"
+  | "approved"
+  | "mismatch"
+  | "declined"
+  | "expired"
+  | "didntFinish"
+  | "ended"
+  | "failed";
+
+/// An approval open on this device.
+export interface ApprovalSessionDto {
+  rid: string;
+  workspaceId: string;
+  kind: "box" | "computer" | "phone";
+  label: string;
+  fingerprint: string;
+  relay: string;
+  createdAt: number;
+  phase: ApprovalPhase;
+  /// "K7Q4 M9X2": compared by eye, never copied.
+  code: string | null;
+  spelled: string | null;
+  expiresAt: number | null;
+  /// When the code appeared (the 3-second hold starts here).
+  codeAt: number | null;
+  message: string | null;
+}
+
+/// A workspace's approval address (`ligusaddr1:`): not a secret.
+export interface ApprovalAddressDto {
+  address: string;
+  relay: string;
+  canReset: boolean;
+}
+
+export const listApprovals = () => invoke<ApprovalsDto>("list_approvals");
+export const approvalDismissFact = (key: string) => invoke<void>("approval_dismiss_fact", { key });
+export const getApprovalAddress = (workspaceId: string) => invoke<ApprovalAddressDto>("get_approval_address", { workspaceId });
+export const resetApprovalAddress = (workspaceId: string) => invoke<ApprovalAddressDto>("reset_approval_address", { workspaceId });
+/// Pasted request text that is a live request: run the code match for it.
+export const approvalMatchPaste = (text: string) => invoke<{ workspaceId: string; rid: string } | null>("approval_match_paste", { text });
+export const approvalSession = (rid: string) => invoke<ApprovalSessionDto | null>("approval_session", { rid });
+export const approvalOpen = (workspaceId: string, rid: string) => invoke<ApprovalSessionDto>("approval_open", { workspaceId, rid });
+export const approvalCodesMatch = (rid: string) => invoke<ApprovalSessionDto>("approval_codes_match", { rid });
+export const approvalDontMatch = (rid: string) => invoke<ApprovalSessionDto>("approval_dont_match", { rid });
+export const approvalExpire = (rid: string) => invoke<ApprovalSessionDto>("approval_expire", { rid });
+export const approvalEnd = (workspaceId: string, rid: string) => invoke<void>("approval_end", { workspaceId, rid });
+export const approvalDecline = (workspaceId: string, rid: string) => invoke<void>("approval_decline", { workspaceId, rid });
+export const approvalForget = (rid: string) => invoke<void>("approval_forget", { rid });
+export const onApprovalsChanged = (cb: () => void): Promise<UnlistenFn> => listen("approvals://changed", () => cb());
+export const onApprovalSession = (cb: (s: ApprovalSessionDto) => void): Promise<UnlistenFn> =>
+  listen<ApprovalSessionDto>("approvals://session", (evt) => cb(evt.payload));
+
 /// An invite delivered to this device's contact drop box (sealed to it,
 /// opened locally).
 export type PendingInvite = {

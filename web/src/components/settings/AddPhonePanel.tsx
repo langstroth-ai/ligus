@@ -20,6 +20,8 @@ import {
 import { openAdmitBox, openSettingsTab } from "@/lib/nav";
 import { Button, LinkButton, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
+import { ApprovalAddress } from "@/components/ApprovalAddress";
+import { shownWorkspace } from "@/lib/shownWorkspace";
 
 /// How often the panel asks the app for the phone's request.
 export const POLL_MS = 2_000;
@@ -506,6 +508,7 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
           {!unavailable && (
             <LinkButton onClick={() => setPaste((v) => !v)}>{paste ? "Hide the phone's code" : "Can't scan?"}</LinkButton>
           )}
+          {paste && shownWorkspace() && <ApprovalAddress workspaceId={shownWorkspace()} hint="A phone with no box to talk to sends its request here. It comes to your Inbox." />}
           {paste && <PastePhoneCode onDone={onDone} onCancel={unavailable ? onCancel : undefined} />}
         </div>
       )}

@@ -52,6 +52,15 @@ const settings = (tab) => async (p) => {
   await p.getByRole("dialog").getByRole("button", { name: tab, exact: true }).first().click();
 };
 
+const inbox = async (p) => {
+  await p.getByRole("button", { name: /^Inbox/ }).first().click();
+  await p.waitForTimeout(400);
+};
+const approvalSheet = async (p) => {
+  await inbox(p);
+  await p.getByText(/A box asks to join/).first().click();
+};
+
 export const VIEWS = [
   ["chat", "", null],
   ["chat-guards", "dearth=1&lockdown=1", null],
@@ -59,6 +68,8 @@ export const VIEWS = [
   ["workflows", "", pane("Workflows")],
   ["people", "", pane("People")],
   ["settings", "", settings("Appearance")],
+  ["inbox-approval", "approvals=box", inbox],
+  ["approval-sheet", "approvals=box", approvalSheet],
 ];
 
 function args(argv) {

@@ -6,6 +6,7 @@ import { Inbox, type InboxActions } from "./Inbox";
 import { needsYouItems } from "@/lib/needsYou";
 import { liveTurns } from "@/state/liveTurns";
 import { phoneAlerts } from "@/state/phoneAlerts";
+import { approvalSheet } from "@/state/approvals";
 
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
@@ -108,5 +109,39 @@ describe("Inbox", () => {
     const row = screen.getByText("serve box says it's your device").closest('[role="listitem"]') as HTMLElement;
     await userEvent.click(within(row).getByRole("button", { name: "Review" }));
     expect(a.openSettingsTab).toHaveBeenCalledWith("account");
+  });
+
+  it("an approval request is one line that opens the sheet, with nothing to approve on the row", async () => {
+    mount(needsYouItems({ approvals: [{ workspaceId: "w1", rid: "r1", kind: "box", label: "build-1", createdAt: Date.now() - 120_000 }] }));
+    const row = screen.getByText("A box asks to join: \u201Cbuild-1\u201D").closest('[role="listitem"]') as HTMLElement;
+    expect(within(row).getByText("2m")).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: /approve|codes match|admit/i })).toBeNull();
+    await userEvent.click(screen.getByText("A box asks to join: \u201Cbuild-1\u201D"));
+    expect(approvalSheet.snapshot()).toEqual({ workspaceId: "w1", rid: "r1" });
+    approvalSheet.close();
+  });
+
+  it("collapses more than three requests and expands them on click", async () => {
+    const reqs = ["b1", "b2", "b3", "b4"].map((l, i) => ({ workspaceId: "w1", rid: `r${i}`, kind: "box" as const, label: l, createdAt: Date.now() - i }));
+    mount(needsYouItems({ approvals: reqs }));
+    expect(screen.getByText("4 need you")).toBeInTheDocument();
+    expect(screen.queryByText("A box asks to join: \u201Cb1\u201D")).toBeNull();
+    await userEvent.click(screen.getByText("4 requests to approve"));
+    expect(screen.getByText("A box asks to join: \u201Cb4\u201D")).toBeInTheDocument();
+  });
+
+  it("shows a phone request read-only, pointing at Add a phone", async () => {
+    const a = mount(needsYouItems({ approvals: [{ workspaceId: "w1", rid: "p1", kind: "phone", label: "Ana's iPhone", createdAt: Date.now() }] }));
+    expect(screen.getByText("Add phones from My devices > Add a phone.")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("A phone asks to be your device: \u201CAna's iPhone\u201D"));
+    expect(approvalSheet.snapshot()).toBeNull();
+    expect(a.openSettingsTab).toHaveBeenCalledWith("account");
+  });
+
+  it("keeps a mismatch fact with a ? explaining it", () => {
+    mount(needsYouItems({ approvalFacts: [{ key: "mismatch:r1", kind: "mismatch", label: "build-1", at: Date.now() }] }));
+    const row = screen.getByText("Request from \u201Cbuild-1\u201D didn't match. Nothing was granted.").closest('[role="listitem"]') as HTMLElement;
+    expect(within(row).getByRole("button", { name: "About a request that didn't match" })).toBeInTheDocument();
+    expect(screen.getByText("Nothing needs you.")).toBeInTheDocument();
   });
 });

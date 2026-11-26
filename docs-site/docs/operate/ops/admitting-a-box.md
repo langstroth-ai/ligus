@@ -84,16 +84,16 @@ fingerprint to read out.
     It prints the join request and its fingerprint straight away (an older
     desktop can still [paste it](#paste)), then `Waiting for an approver…`.
 
-3. **An Admin opens it.** The request is in every Admin's Inbox, "build-1
-   wants to join", and reaches their phones as a push through a paired box.
+3. **An Admin opens it.** The request is in every Admin's Inbox, "A box
+   asks to join: “build-1”", and reaches their phones as a push through a paired box.
    Opening it shows a code, and the box prints the same one:
 
     ```text
     Code: K7Q4 M9X2  (the approver's screen must show the same)
     ```
 
-    On the desktop the sheet **Admit build-1?** shows the code large, on one
-    line. Compare it with the box. **Codes match** becomes available after 3
+    On the desktop the sheet **Admit a box?**, with “build-1” beneath it,
+    shows the code large, on one line. Compare it with the box. **Codes match** becomes available after 3
     seconds and asks for your passkey; the passkey prompt names the box and
     the code (`Admit box “build-1”, code K7Q4 M9X2`). **Don't match** ends
     the request. You need to be an Admin.
