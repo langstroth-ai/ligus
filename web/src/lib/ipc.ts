@@ -485,6 +485,9 @@ export interface SharedAttachmentView {
   nameClass: TypeClass;
   riskyByName: boolean;
   fromAgentOffer: boolean;
+  /// The relay no longer has it and this device holds no verified copy
+  /// (older desktops leave it out).
+  expired?: boolean;
   /// The sharer's own messages that place it (the only ones that show it).
   messageIds: string[];
 }
@@ -885,6 +888,19 @@ export const workspaceClaimMembership = () =>
   invoke<boolean>("workspace_claim_membership");
 /// Server-side members of the active workspace (empty on open relays).
 export const workspaceMembers = () => invoke<MemberEntry[]>("workspace_members");
+/// Relay-side membership of the active workspace, as this device sees it.
+export interface RelayMembershipDto {
+  /// `off`: the relay has membership turned off. `unclaimed`: nobody claimed
+  /// the workspace yet. `claimed`: the relay enforces `members`. `hidden`:
+  /// claimed, and this device's relay token names no member.
+  state: "off" | "unclaimed" | "claimed" | "hidden";
+  members: MemberEntry[];
+  /// This device's relay token names an account, so a claim can work.
+  identified: boolean;
+  /// The relay is the community relay (no sign-in there).
+  community: boolean;
+}
+export const relayMembershipStatus = () => invoke<RelayMembershipDto>("relay_membership_status");
 /// What removing a relay member did in the workspace.
 export interface RelayRemoveResultDto {
   /** Whether the workspace key was rotated. */
@@ -1332,6 +1348,10 @@ export interface MyDeviceDto {
   phone: boolean;
   /** The label is a real name, not the "Device 1a2b3c4d" fallback. */
   named: boolean;
+  /** One quiet line when another member also certified this device's key, or it never finished linking. */
+  note?: string;
+  /** Approved here but it never wrote anything: offered as Remove. */
+  neverWritten?: boolean;
 }
 export interface DeviceRequestDto {
   hostId: string;
@@ -1348,6 +1368,8 @@ export const inspectDeviceCode = (code: string) => invoke<DeviceCodeDto>("inspec
 export const approveDevice = (code: string, retireMember: boolean) =>
   invoke<ApproveDeviceDto>("approve_device", { code, retireMember });
 export const listMyDevices = () => invoke<MyDeviceDto[]>("list_my_devices");
+/// Rename one of your devices: a synced name every member sees; empty clears it.
+export const renameDevice = (deviceId: string, label: string) => invoke<void>("rename_device", { deviceId, label });
 
 /// Another computer's link request (`liguslink1:`), as Add a computer shows it.
 export interface ComputerRequestDto {
@@ -1357,8 +1379,10 @@ export interface ComputerRequestDto {
   fingerprint: string;
   alreadyMine: boolean;
   revoked: boolean;
-  /** Already in the workspace as someone else (their name). */
+  /** Already in the workspace as someone else (their name): it signed as them. */
   someoneElses: string | null;
+  /** Members who certified this computer's key without it acting for them: shown, never a refusal. */
+  alsoCertifiedBy?: string[];
   /** The separate member this computer proved it was here. */
   previousMember: { memberId: string; displayName: string } | null;
   /** This desktop's fingerprint: the computer shows it when it redeems. */
@@ -2339,6 +2363,10 @@ export type SecurityStatusDto = {
   /// This device counts on the workspace (rules v2: a new device of an
   /// account with a passkey needs Confirm this device).
   deviceConfirmed: boolean;
+  /** This account is an Owner here (only an Owner switches the rules). */
+  isOwner?: boolean;
+  /** Rules 3's readiness list: devices whose certificate would stop counting. */
+  rules3Gaps?: string[];
 };
 /** What the "Confirm with passkey" sheet shows while a ceremony runs. `via`:
  * `browser` (the hand-off page is open), `native` (the system passkey dialog

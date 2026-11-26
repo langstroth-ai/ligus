@@ -5,6 +5,15 @@ writes from callers who aren't on it. It is off unless the operator turns it
 on with `LANGSTROTH_RELAY_MEMBERSHIP=1`, and even then it only applies to
 workspaces someone has **claimed**.
 
+> **Deprecated for Ligus workspaces (Ligus 0.4).** Ligus never reads the
+> relay roster: every device enforces the signed roster in the workspace
+> log. A relay roster on a Ligus workspace is a second list that can drift
+> from it (someone removed in Ligus can stay on the relay's list, or the
+> other way round), and the relay can't check one against the other because
+> it holds no workspace keys. Gate a Ligus relay with signed tokens and
+> workspace scope instead. Relay membership stays a supported feature for
+> other clients.
+
 ## Why a relay-side roster
 
 The relay is content-blind: it forwards end-to-end encrypted envelopes. The
@@ -69,6 +78,53 @@ match to a workspace member is still removed from the relay and the key
 rotated, but the app warns that it may still read new traffic: remove its
 member under Members (**Remove & revoke**). See
 [Admitting a box](admitting-a-box.md#revoking-or-replacing-a-box).
+
+## Claiming a workspace
+
+Claiming needs a relay token that names your account: a signed `hrt1` token
+whose `sub` the relay trusts. An anonymous or opaque token (or none) can't
+claim; the relay answers `401 requires an identified access token`, and the
+desktop says what's missing instead of showing that text.
+
+**Where an identified token comes from.**
+
+| Path | Works on | How |
+|---|---|---|
+| Sign in through langstroth-auth | a relay whose operator runs [langstroth-auth](../deploy/ligus-auth.md) and set its issuer public key as `LANGSTROTH_RELAY_TOKEN_PUBKEY` (or `LANGSTROTH_RELAY_MEMBERSHIP_PUBKEY`) | desktop: **Settings → Team sync → Organization sign-in**; a box: `ligus auth login`. The `sub` is `<tenant>:<user id>` |
+| A token from the relay's operator | any relay with an issuer key (`LANGSTROTH_RELAY_TOKEN_PUBKEY` or `LANGSTROTH_RELAY_MEMBERSHIP_PUBKEY`) | the operator runs `langstroth-relay issue --key <issuer private key> --sub ligus:<account id> --exp-days 365` where the private key lives, and you paste the token in **Settings → Team sync → Relay access token** (or `ligus setup relay --token -` on stdin; `LIGUS_RELAY_ACCESS_TOKEN` on a box). Your account id is under **Settings → Profile**; the `ligus:` form lets the People pane match the roster entry to you |
+
+The **Relay issuer key** under Team sync is not a sign-in: the desktop uses
+it only to mint tokens for remote agents (**Add a remote agent**), never its
+own token.
+
+**What the People pane offers.** It asks the relay for the roster and checks,
+without sending or showing the token, whether this device's token is an
+unexpired `hrt1` token with a subject. The signature can't be checked on the
+device (only the relay knows its key), so a token from a different issuer
+still gets the relay's refusal, explained the same way.
+
+| Relay state | This device's token | The line under Members | Action |
+|---|---|---|---|
+| membership off (`/members` is 404) | any | Relay doesn't check membership | none |
+| unclaimed | names an account | Relay doesn't check membership | **Claim ownership** (asks first) |
+| unclaimed, self-hosted | names no account | Relay doesn't check membership | **Add a relay token** (opens Team sync) |
+| unclaimed, community relay | names no account | Relay doesn't check membership | none: only the operator can issue tokens there |
+| claimed, you're on the roster | | (the Members section is tagged *relay enforced*) | |
+| claimed, you aren't (`403`) | | Relay roster: you're not on it | none |
+
+The details behind **?** say the same thing every time about what Ligus
+enforces whatever the relay does: workspace events are end-to-end encrypted
+and signed, so a stranger who knows the workspace id can't read them, pose as
+a member or change anything. Without a claimed roster they can at most make
+the relay store junk, which every device drops.
+
+**Before you claim.** A claim can't be undone from Ligus (the last owner
+can't be removed). From then on the relay refuses reads and writes from every
+device whose token doesn't name a member, so each of your other devices and
+boxes needs its own identified token, and other people need one and a roster
+entry, before they can sync. Add boxes with **Add a remote agent** (it enrolls
+the box's `ligus-box:` identity) or `langstroth-relay bootstrap-agent
+--admin-sub ...`.
 
 ## How it composes with access tokens
 

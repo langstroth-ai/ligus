@@ -10,13 +10,80 @@ Ligus is short for *ligustica*, the Italian honeybee.
 
 ## How it works
 
+There are two ways to add a computer. Both end the same way: one passkey
+confirmation on your desktop, and the computer acts as you.
+
+### With the approval address (code match) {#code-match}
+
+From 0.4 the computer's request reaches your desktop by itself, and both
+screens show the same 8-symbol code to compare.
+
+1. **Copy the approval address.** On your desktop, **Settings → Profile → My
+    devices → Add a computer** shows it with **Copy** (it is the same address
+    as workspace menu → **Admit a box…**; `ligus admit address` prints it
+    too). It looks like `ligusaddr1:…`, isn't a secret and grants nothing.
+
+2. **On the new computer**, in a terminal:
+
+    ```sh
+    ligus devices request --to 'ligusaddr1:…' --label work-laptop
+    ```
+
+    It prints the link request and its fingerprint straight away (an older
+    desktop can still [paste it](#paste)), then waits for your desktop.
+
+3. **On your desktop**, the Inbox shows "work-laptop wants to be your
+    device". Open it: the sheet **Add work-laptop to your devices?** shows a
+    code, and the computer prints the same one:
+
+    ```text
+    Code: K7Q4 M9X2  (the approver's screen must show the same)
+    ```
+
+    Check the computer you are holding shows the same code, and choose
+    **Codes match** (or **Don't match**).
+
+4. **On the computer**, answer `Does your desktop show this code? [y/N]`.
+    Once both sides have said the codes match, the computer confirms it to
+    your desktop.
+
+5. **On your desktop**, confirm with your passkey. The desktop asks for it
+    only after the computer has confirmed, and the prompt names the computer
+    and the code (`Add computer “work-laptop” to your devices, code K7Q4
+    M9X2`).
+
+6. **On the computer**, the grant arrives. The computer checks it came from
+    the device that showed the code, for this workspace, then syncs and finds
+    your desktop's certificate for it on the workspace log. Last, it asks
+    `Link this computer as Ana (verified on the workspace log)? [y/N]`: check
+    it is your name. A yes links it; a no links nothing.
+
+The code isn't a secret: it may be on screen while you share it, and it is in
+the computer's output. It is good for one attempt, for 5 minutes. If the codes
+don't match, the request ends and nothing is added: check the computer and
+start again on a trusted network. The desktop's Inbox keeps "Request from
+work-laptop didn't match. Nothing was granted." for a day.
+
+A person confirms on the computer, so `ligus devices request --to` needs a
+terminal: without one it exits 4. If the computer doesn't confirm within 2
+minutes of your match, nothing is signed or added, and the desktop's Inbox
+shows "Linking work-laptop didn't finish. Nothing was added." Start again from
+the computer. With no approval mailbox on the relay it exits 3: use the paste
+path below.
+
+### By paste {#paste}
+
 1. **On the new computer**, ask to be added:
     - `lt`: on first run choose **Add to my devices** (or, in an install you
       already use, the palette's **Link this computer to my devices**).
-    - CLI: `ligus devices request`.
+    - CLI: `ligus devices request --copy` (or `ligus devices request | pbcopy`:
+      only the request goes to stdout).
 
     It shows a **link request** (a code that holds no secret) and a
-    **fingerprint**, five groups of four characters.
+    **fingerprint**, five groups of four characters. Press **c** in `lt` to
+    copy the request. Until you finish, `lt` (Settings) and `ligus status`
+    say **Linking waiting for your desktop's code** with when it started and
+    when it expires; an expired request is cleaned up on its own.
 
 2. **On your desktop**: **Settings → Profile → My devices → Add a computer**.
     Paste the request. Compare **all five groups** of the fingerprint with the
@@ -27,16 +94,52 @@ Ligus is short for *ligustica*, the Italian honeybee.
     ![Settings, Profile, My devices: this MacBook and a paired phone, with Add a computer (demo data)](../images/desktop-settings-profile-light.png#only-light){ width="720" loading=lazy }
     ![Settings, Profile, My devices: this MacBook and a paired phone, with Add a computer (demo data)](../images/desktop-settings-profile-dark.png#only-dark){ width="720" loading=lazy }
 
-3. The desktop shows a **grant**: copy it to the computer within 30 minutes
-    (any way you like: it is sealed so only that computer can open it). The
-    desktop also shows its own fingerprint, **This desktop**.
+3. The desktop shows the **grant** for the computer, sealed so only that
+    computer can open it. Choose **Copy for lt**: it copies the grant alone.
+    The desktop also shows its own fingerprint, **This desktop**, large, with
+    a copy button.
 
-4. **On the computer**, paste the grant (`lt`), or run
-    `ligus devices redeem --code-file grant`. It shows who approved it and the
-    approving desktop's fingerprint: check it is yours and confirm.
+4. **On the computer**, within 30 minutes:
+    - `lt`: paste with ⌘V (Ctrl+Shift+V on Linux) into **Desktop's code** in
+      **Add to my devices**. It moves on to the confirmation by itself.
+    - A shell: run `lt --plain link-redeem` or `ligus devices redeem` and
+      press Enter: it reads the grant from the clipboard (or paste it at the
+      hidden prompt). Pasting the whole old command, or a code with line
+      breaks around it, works too.
+
+    It shows who approved it, *Approved by Alex's desktop · fingerprint … ·
+    for acme. Is that your desktop?*: compare the fingerprint with **This
+    desktop** and answer **y**.
+
+    **Copy command** on the desktop copies
+    `lt --plain link-redeem --approver-fingerprint <this desktop>`, which
+    skips that question: run it, then choose **Copy for lt** and press Enter.
+    The command never holds the grant, so the grant stays out of your shell's
+    history. In a script: `pbpaste | ligus devices redeem - --approver-fingerprint FP`.
+
+### On your phone
+
+Approving a computer or a phone from the phone isn't in 0.4: adding a device
+needs the desktop that holds your account key. The phone lists device requests
+read-only, "Approve on your desktop". It can't show their code: the code comes
+from messages sealed to the computer and the approving device only, so neither
+the phone nor the box it goes through can work it out.
 
 From then on the computer acts as you in that workspace: your name, your
 role, your chats.
+
+## Its name, and your earlier member
+
+When it redeems the code, the computer **accepts** your desktop's approval
+(it publishes its own copy of the certificate; on a workspace on rules 3,
+every workspace 0.4 creates, the approval counts only then), names itself
+after its link request (rename it in My devices, or with `ligus devices
+rename this NAME` or `lt --plain device-rename NAME` on it), and, if it was
+already a separate member here, **retires** that member into you: the member
+leaves, and its history stays its own. It does that only when it's safe (the
+earlier member ranks no higher than you, isn't the founder or the last
+Owner, and has no passkey); otherwise it says so and an Admin removes it in
+People.
 
 ## What a linked computer can and can't do
 
@@ -53,6 +156,10 @@ proves who you are, which never leaves that desktop):
   linked accounts, creating workspaces and inviting people as their founder.
 - Applying a proposal yourself and sharing a file from the computer's disk:
   do those on the desktop.
+
+It can't change your name or picture (a stolen one would rename you
+everywhere): do that on the desktop. In a workspace it wasn't linked into, it
+is read-only and says how to link it there.
 
 A linked computer is one person's: it doesn't accept invites, can't be linked
 to someone else as well, and isn't a box (a `ligus serve` or `ligus worker`
@@ -124,11 +231,18 @@ a one-line warning and **Retry now**.
 | What you see | Why | What to do |
 |---|---|---|
 | "this request is too old" | requests last 15 minutes | make a new one on the computer |
+| "the clipboard doesn't hold a desktop code" | something else was copied last | on the desktop choose **Copy for lt** again, then press Enter |
+| "the clipboard holds this computer's request" | the computer's own request is still on the clipboard | add it on the desktop first, then **Copy for lt** |
 | "your desktop's approval hasn't reached this computer yet" | the desktop hasn't synced since you added it | keep the desktop online a moment, then try again (the grant lasts 30 minutes) |
-| "already in the workspace as someone else" | this computer's device key is another member's here | make a new request on it (`ligus devices request --new-device`) |
+| "already in the workspace as someone else" | this computer already acted as another member here (it signed as them) | make a new request on it (`ligus devices request --new-device`) |
+| "Ben also certified this computer's key. That gives them nothing over it." | another member certified the computer's public key for their own account | nothing: the link goes through, and the computer acts only as you. If you didn't expect it, tell an Admin |
 | "the workspace is in lockdown" | dearth mode is on | an Admin turns it off first |
 | "add a passkey first" | your account has no passkey here | Settings → Passkeys & keys |
 | the relay refuses the computer | a gated relay | sign in as yourself on the computer (`ligus auth login`) |
+| "a computer is linked by a person at it" (exit 4) | `--to` ran without a terminal | run it in a terminal, or use the paste path |
+| "this relay has no approval mailbox" (exit 3) | the relay doesn't offer it | paste the link request `--to` printed ([By paste](#paste)) |
+| "the approval wasn't found on the workspace log: nothing was linked" | your desktop hasn't published the certificate yet | keep the desktop online and synced, then start again |
+| "Linking … didn't finish. Nothing was added." (desktop Inbox) | the computer didn't confirm within 2 minutes | start again from the computer |
 
 For how this works underneath (the codes, what is sealed, what each side
 checks), see the design note `docs/design/link-a-computer.md` in the

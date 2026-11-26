@@ -118,11 +118,27 @@ pub(crate) async fn my_profile(ligus_app: tauri::AppHandle) -> Result<ProfileDto
 pub(crate) fn my_profile_sync(state: State<AppState>) -> Result<ProfileDto, String> {
     let (account, fk) = me(&state);
     let loaded = state.identity.load().map_err(map_err)?;
+    let ws = state.active_workspace_id();
     let (display_name, avatar_url) = {
         let svc = state.service.lock().unwrap();
         let a = svc.author();
-        let name = loaded.as_ref().map(|s| s.account.display_name.clone()).unwrap_or_else(|| a.display_name.clone());
-        (name, a.avatar_url.clone().or_else(|| loaded.as_ref().and_then(|s| s.account.avatar_url.clone())))
+        // The workspace's profile for this account first (identity model v2,
+        // 5.4), then the live author, then the local file.
+        let profile = account.and_then(|acct| {
+            svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).ok().flatten().and_then(|c| c.profiles.get(&acct).cloned())
+        });
+        let name = profile
+            .as_ref()
+            .and_then(|p| p.display_name.clone())
+            .or_else(|| (!a.display_name.is_empty()).then(|| a.display_name.clone()))
+            .or_else(|| loaded.as_ref().map(|s| s.account.display_name.clone()))
+            .unwrap_or_default();
+        let avatar = match profile.as_ref() {
+            Some(p) if p.avatar.is_some() => p.avatar.as_ref().map(|x| x.data_url()),
+            Some(p) if p.avatar_cleared => None,
+            _ => a.avatar_url.clone().or_else(|| loaded.as_ref().and_then(|s| s.account.avatar_url.clone())),
+        };
+        (name, avatar)
     };
     Ok(ProfileDto {
         account_id: account.map(|a| a.to_string()).unwrap_or_default(),
