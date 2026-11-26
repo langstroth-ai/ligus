@@ -15,6 +15,7 @@ compile_error!("ligus-runtime's `test-presence` feature must never be in an opti
 pub mod agent_tools;
 pub mod agent_turn;
 pub mod apply_host;
+pub mod approval_mailbox;
 pub mod attachment_blob;
 pub mod attachment_safety;
 pub mod agent_access;

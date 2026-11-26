@@ -240,18 +240,37 @@ pub const COMMANDS: &[Cmd] = &[
                   copies exactly it; the fingerprint, the time to approve by and the next step go to stderr. --copy \
                   copies it to the clipboard instead (pbcopy, wl-copy, xclip, xsel, clip.exe; printed when none works). \
                   --json prints one report whose result has code, fingerprint, label, expiresAt (unix ms: approve by \
-                  then) and newDevice. Expired requests are cleaned up as you go. An install that was already connected (it may have written as its own \
+                  then) and newDevice. Expired requests are cleaned up as you go. With --to (the approval address your \
+                  desktop shows under My devices) the request also goes to your desktop's Inbox: both screens then show \
+                  the same 8-symbol code, you confirm it here, your desktop confirms with your passkey, and this computer \
+                  links after checking the approval on the workspace log and asking \"Link this computer as <you>?\". The \
+                  paste text and fingerprint are printed straight away for an older desktop. An install that was already connected (it may have written as its own \
                   member) asks with a new device key, switched to only when you redeem, and adds a proof that it was that \
                   member, so the desktop can offer to remove the duplicate. A box can't: it joins with `ligus admit`.",
-        synopsis: &["ligus devices request [--label NAME] [--new-device] [--copy] [--json]"],
+        synopsis: &[
+            "ligus devices request [--label NAME] [--new-device] [--copy] [--json]",
+            "ligus devices request --to ligusaddr1:… [--label NAME] [--wait 15m] [--new-device] [--json]",
+        ],
         flags: &[
             f("--label NAME", "ligus on <host name>", "the label your desktop shows"),
             f("--new-device", "off (on when this data dir was connected)", "ask with a new device key"),
             f("--copy", "off", "copy the request to the clipboard instead of printing it"),
+            f("--to ligusaddr1:…", "none (print the request to paste)", "send the request to the workspace's approval address (code match): it reaches your desktop's Inbox"),
+            f("--wait DUR", "15m", "with --to: how long to wait for your desktop (90s, 5m, 1h)"),
+            f("--insecure-relay", "off", "with --to: allow an http:// relay that isn't loopback (tests)"),
             JSON,
         ],
-        examples: &["ligus devices request --copy", "ligus devices request --label work-laptop | pbcopy"],
-        exit: &[(6, "this data dir is a box")],
+        examples: &[
+            "ligus devices request --copy",
+            "ligus devices request --label work-laptop | pbcopy",
+            "ligus devices request --to ligusaddr1:… --label work-laptop",
+        ],
+        exit: &[
+            (3, "with --to: the relay has no approval mailbox (paste the request instead: ligus devices request)"),
+            (4, "with --to: no terminal (a person confirms the code and who they link as here), or nobody approved within --wait"),
+            (6, "this data dir is a box, or with --to the relay refused the access token"),
+            (7, "with --to: the relay is unreachable, rate-limited or its mailbox is full"),
+        ],
         see_also: &["ligus devices redeem", "desktop: Settings > Profile > My devices > Add a computer"],
         ..D
     },
@@ -1052,6 +1071,67 @@ pub const COMMANDS: &[Cmd] = &[
         ..D
     },
     Cmd {
+        name: "approvals",
+        group: G_BOX,
+        summary: "approval requests in the workspace's mailbox (code match)",
+        purpose: "Boxes and computers that asked through the approval address (`ligus admit address`). List them, or \
+                  approve one headless with the code its screen shows and your recovery key. Prefer the desktop or the \
+                  phone: they show the code next to Codes match.",
+        synopsis: &["ligus approvals list [--json]", "ligus approvals approve <rid> [--code -] --recovery-words-file PATH [--json]"],
+        conn: true,
+        examples: &["ligus approvals list --json"],
+        see_also: &["ligus approvals list", "ligus approvals approve", "ligus admit address"],
+        ..D
+    },
+    Cmd {
+        name: "approvals list",
+        group: G_BOX,
+        summary: "the live approval requests: kind, label, fingerprint, who is checking each",
+        purpose: "Read the approval mailboxes of the current key epoch and the previous two, verify each request, and \
+                  list the live ones: rid, kind (box, computer, phone), label, fingerprint, when it was asked, the relay, \
+                  and who claimed it (unclaimed, this device, another approver, or contested: opened by a device that \
+                  can't approve it). No code: a code exists only once an approver opens a request.",
+        synopsis: &["ligus approvals list [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus approvals list --json"],
+        exit: &[(3, "no relay, no key, or the relay has no approval mailbox"), (7, "the relay is unreachable")],
+        see_also: &["ligus approvals approve"],
+        ..D
+    },
+    Cmd {
+        name: "approvals approve",
+        group: G_BOX,
+        summary: "headless approver: open a request, compare its code, approve with your recovery key",
+        purpose: "A person's own step, like `ligus admit issue`. Opens the request (the requesting device then shows \
+                  a code), asks you to type the code it shows (or, with --code -, reads it from stdin), and approves only when it equals the \
+                  code this device computes; the CLI never offers the code. A box: an Admin issues the admission (recovery key), publishes it and sends it sealed \
+                  to the box. A computer of yours: the grant is built, the computer acknowledges it, then the certificate \
+                  is published with your recovery key and the grant sent. A wrong code ends the request and nothing is \
+                  granted; an expired code or an ended request writes nothing. A request another approver is checking \
+                  is refused (exit 6); a contested one (opened by a device that can't approve it) is never approved: \
+                  --end ends it.",
+        synopsis: &["ligus approvals approve <rid> [--code -] --recovery-words-file PATH [--json]", "ligus approvals approve <rid> --end [--json]"],
+        flags: &[
+            f("--code -", "asked at a terminal", "read the code from stdin once the request is opened (the code exists only then); case, spaces, I/L/O forgiven"),
+            f("--end", "off", "end a contested request (opened by a device that can't approve it) instead of approving it"),
+            f("--recovery-words-file PATH", "required", "your recovery key's 24 words (an owner-only file): your presence"),
+            JSON,
+        ],
+        conn: true,
+        examples: &["ligus approvals approve 3f2a…c9 --recovery-words-file ~/.ligus-words"],
+        exit: &[
+            (2, "--code with a value: the code exists only once the request is opened (type it, or --code -)"),
+            (4, "no terminal and no --code -, or no --recovery-words-file: a person's step"),
+            (5, "no live request with that rid"),
+            (4, "the request is contested: end it with --end"),
+            (6, "refused: another approver is checking it, not an Admin (box), a phone (use the desktop), lockdown"),
+            (7, "the relay is unreachable, or the requesting device didn't answer"),
+        ],
+        see_also: &["ligus approvals list", "ligus admit issue", "ligus devices approve"],
+        ..D
+    },
+    Cmd {
         name: "admit",
         group: G_BOX,
         summary: "box admission: request, redeem, issue, close",
@@ -1059,7 +1139,9 @@ pub const COMMANDS: &[Cmd] = &[
                   box prints a join request; an Admin approves it (desktop: workspace menu > Admit a box, or the \
                   phone) and hands back a code sealed to the box; the box redeems it and joins on its next start.",
         synopsis: &[
+            "ligus admit address [--reset] [--json]",
             "ligus admit request [--label NAME]",
+            "ligus admit request --to ligusaddr1:… [--label NAME] [--wait 15m] [--json]",
             "ligus admit redeem <ligusadmit1:code> | - | --file PATH",
             "ligus admit issue --recovery-words-file PATH [--ttl DUR] [--request ligusjoin1:…] [--out PATH]",
             "ligus admit close",
@@ -1071,20 +1153,54 @@ pub const COMMANDS: &[Cmd] = &[
         env: &["LIGUS_SERVE_LABEL", "LIGUS_ADMISSION_FILE"],
         conn: true,
         examples: &["ligus admit request --label home-box", "ligus admit redeem ligusadmit1:…", "ligus admit redeem --file ./admission"],
-        see_also: &["ligus admit request", "ligus admit redeem", "ligus admit issue", "ligus admit close", "ligus help box"],
+        see_also: &["ligus admit address", "ligus admit request", "ligus admit redeem", "ligus admit issue", "ligus admit close", "ligus approvals", "ligus help box"],
+        ..D
+    },
+    Cmd {
+        name: "admit address",
+        group: G_BOX,
+        summary: "print the workspace's approval address (ligusaddr1:) for boxes and computers",
+        purpose: "On any member: register the workspace's approval mailbox on its relay (idempotent) and print the \
+                  approval address (`ligusaddr1:…`). It is not a secret and grants nothing: a box or a computer sends its \
+                  request there (`--to`) and it reaches Admins' Inboxes and paired phones. --reset (Admins) cuts off a \
+                  leaked address: the old one stops taking requests. A key rotation gives a new address; members keep \
+                  reading the previous two.",
+        synopsis: &["ligus admit address [--reset] [--json]"],
+        flags: &[f("--reset", "off", "Admins: register a new put capability, so the old address stops working"), JSON],
+        conn: true,
+        examples: &["ligus admit address", "ligus admit address --reset --json"],
+        exit: &[(3, "no relay, no key yet, or the relay has no approval mailbox"), (6, "--reset by someone who isn't an Admin"), (7, "the relay is unreachable")],
+        see_also: &["ligus admit request", "ligus devices request", "ligus approvals"],
         ..D
     },
     Cmd {
         name: "admit request",
         group: G_BOX,
-        summary: "print this box's join request for an Admin",
+        summary: "print this box's join request for an Admin, or send it to the approval address",
         purpose: "Make this data dir a box (a service member; one way) and print its join request (`ligusjoin1:…`) and \
-                  fingerprint for an Admin to approve. Changes no workspace state.",
-        synopsis: &["ligus admit request [--label NAME]"],
-        flags: &[f("--label NAME", "LIGUS_SERVE_LABEL, else the host name, else \"box\"", "the label in the request")],
+                  fingerprint for an Admin to approve. Changes no workspace state. With --to the request also goes to the \
+                  workspace's approval address: it reaches Admins' Inboxes and phones, both screens show the same \
+                  8-symbol code (printed here as `Code: K7Q4 M9X2`), and at a terminal this asks whether the approver's \
+                  screen shows it. Without a terminal the box accepts only after checking the approval on the real \
+                  workspace log (signed by an Admin's device, with a passkey), then keeps the admission like `ligus admit \
+                  redeem`. The paste text is printed straight away for an older desktop.",
+        synopsis: &["ligus admit request [--label NAME]", "ligus admit request --to ligusaddr1:… [--label NAME] [--wait 15m] [--json]"],
+        flags: &[
+            f("--label NAME", "LIGUS_SERVE_LABEL, else the host name, else \"box\"", "the label in the request"),
+            f("--to ligusaddr1:…", "none (print the request to paste)", "send the request to the approval address (an Admin prints it: ligus admit address)"),
+            f("--wait DUR", "15m", "with --to: how long to wait for an approver (90s, 5m, 1h)"),
+            f("--insecure-relay", "off", "with --to: allow an http:// relay that isn't loopback (tests)"),
+            JSON,
+        ],
         env: &["LIGUS_SERVE_LABEL"],
         conn: true,
-        examples: &["ligus admit request --label home-box"],
+        examples: &["ligus admit request --label home-box", "ligus admit request --to ligusaddr1:… --label build-1 --json && ligus serve"],
+        exit: &[
+            (3, "with --to: the relay has no approval mailbox (paste the request instead: ligus admit request)"),
+            (4, "with --to: nobody approved within --wait, or the address is stale (ask an Admin for the current one)"),
+            (6, "with --to: the relay refused the access token"),
+            (7, "with --to: the relay is unreachable, rate-limited or its mailbox is full"),
+        ],
         see_also: &["ligus admit redeem", "ligus help box", "desktop: workspace menu > Admit a box (where the Admin approves)"],
         ..D
     },
@@ -2204,6 +2320,12 @@ With the deploy script (from a checkout of the repository; every step has --json
      (exits 4 until the box is admitted, and prints the next commands)
   4. Admit the box, with the env file loaded:
        set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
+     Live (code match), with the approval address an Admin gives you
+     (ligus admit address, or the desktop's workspace menu > Admit a box):
+       ligus admit request --to ligusaddr1:… --label home-box
+     It prints Code: XXXX XXXX; the Admin's screen shows the same code, they confirm
+     with a passkey, and the box keeps the admission once it is on the workspace log.
+     Or paste:
        ligus admit request --label home-box   # prints ligusjoin1:… and a fingerprint
      HUMAN: an Admin approves it (desktop: workspace menu > Admit a box…, or the
      phone), checks the fingerprint, confirms with a passkey, sends back a code.
@@ -2652,9 +2774,15 @@ Set up a box (serve) on this machine:
   $L preflight --role serve --data-dir ~/.ligus-serve --json         # verify: ok true
   $L install-cli --json                                              # verify: ligus --version
   $L configure --role serve --data-dir ~/.ligus-serve --json         # exit 4 until admitted; prints next[]
-  (env file loaded) ligus admit request --label <name>               # prints ligusjoin1:… + fingerprint
-  HUMAN: an Admin approves it (desktop: workspace menu > Admit a box…) and sends a code
-  ligus admit redeem ligusadmit1:…                                   # verify: ligus status --json (admissionKept)
+  (env file loaded) ligus admit request --to ligusaddr1:… --label <name> --json
+      # the approval address comes from an Admin (ligus admit address, or the desktop);
+      # it waits for an approver, prints Code: XXXX XXXX on stderr (check id match-code),
+      # and keeps the admission only once it is on the workspace log. Exit 3 (no
+      # mailbox on the relay): use the paste path below. Exit 4: nobody approved in --wait.
+  HUMAN: an Admin approves it in their Inbox or on the phone, checking the same code
+  (paste path: ligus admit request --label <name>, HUMAN approves it on the desktop
+   and sends a code, then ligus admit redeem ligusadmit1:…)
+  verify: ligus status --json (admissionKept)
   $L start --role serve --data-dir ~/.ligus-serve --systemd|--launchd --json
   $L verify --role serve --data-dir ~/.ligus-serve --json            # verify: ok true
   LIGUS_DATA_DIR=~/.ligus-serve ligus status --json                  # verify: member true
@@ -3044,6 +3172,8 @@ mod tests {
         let groups: &[(&str, String, &str, &str, &[&str])] = &[
             ("auth", src("auth.rs"), "pub fn cmd_auth", "\n}\n", &[]),
             ("admit", src("admit.rs"), "pub fn cmd_admit", "\n}\n", &[]),
+            ("admit", main.clone(), "\"admit\" => {", "\n        \"approvals\"", &[]),
+            ("approvals", main.clone(), "\"approvals\" => match", "\n        },\n", &[]),
             ("recovery-key", src("admit.rs"), "pub fn cmd_recovery_key", "\n}\n", &[]),
             ("config", main.clone(), "\"config\" => match", "\n        },\n", &[]),
             ("remote", main.clone(), "\"remote\" => {", "\n        }\n", &[]),

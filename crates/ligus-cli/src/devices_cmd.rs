@@ -82,6 +82,40 @@ fn print(report: &Report, code: i32, json: bool, extra: serde_json::Value, text:
     }
 }
 
+/// A link request for this computer, remembered as pending: with this
+/// install's device key, or a new one prepared next to it when the install
+/// was already connected (switched to only on redeem). Returns the request,
+/// the device it names and whether that is a new key.
+pub(crate) fn make_link_request(cfg: &Config, label: Option<String>, new_device: bool) -> Result<(LinkRequest, Uuid, bool)> {
+    let ids = identity(cfg);
+    let existed = ids.load()?.is_some();
+    let stored = bootstrap_identity(&ids)?;
+    let mut state = link_state(cfg)?;
+    // An install that has been connected (it may have written as its own
+    // member) asks with a new device key, switched to only on redeem.
+    let connected = load_file_config(&cfg.data_dir).room.is_some() || (existed && cfg.data_dir.join("ligus.db").exists());
+    let fresh_key = new_device || connected;
+    let now = now_ms();
+    state.prune_expired(now);
+    let (device_id, device_kp) = if fresh_key {
+        match state.latest_pending(now).filter(|p| p.device_id != stored.device.id) {
+            Some(p) => (p.device_id, ids.device_keypair(p.device_id)?),
+            None => ids.prepare_device()?,
+        }
+    } else {
+        (stored.device.id, ids.device_keypair(stored.device.id)?)
+    };
+    let ka = ids.key_agreement(device_id)?;
+    let account_kp = ids.account_keypair(stored.account.id)?;
+    let previous = fresh_key.then_some((stored.account.id, &account_kp));
+    let host = ligus_runtime::machine_hostname().unwrap_or_else(|| "this computer".into());
+    let label = label.map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).unwrap_or_else(|| format!("ligus on {host}"));
+    let request = LinkRequest::new(&device_kp, &ka.public_key_bytes(), &label, now, previous);
+    state.add_pending(&request, now);
+    state.save(&cfg.data_dir)?;
+    Ok((request, device_id, fresh_key))
+}
+
 /// Copies a code to the clipboard: the tool's name, `None` when none worked
 /// ([`crate::link_io::copy`]).
 pub type Copier<'a> = &'a mut dyn FnMut(&str) -> Option<&'static str>;
@@ -106,11 +140,7 @@ pub fn cmd_request(
             Some("on a box run `ligus admit request`; to link a person's computer use another LIGUS_DATA_DIR"),
         ));
     }
-    let existed = ids.load()?.is_some();
-    let stored = bootstrap_identity(&ids)?;
-    let mut state = link_state(cfg)?;
-    let ws = uuid_of_room(&cfg.room);
-    if let Some(p) = state.linked_in(ws) {
+    if let Some(p) = link_state(cfg)?.linked_in(uuid_of_room(&cfg.room)) {
         let mut r = Report::new("devices request");
         r.add(Check::ok("devices.linked", "linked", format!("this computer is already one of {}'s devices in '{}'", shown(&p.display_name), cfg.room)));
         if json {
@@ -120,28 +150,7 @@ pub fn cmd_request(
         }
         return Ok(());
     }
-    // An install that has been connected (it may have written as its own
-    // member) asks with a new device key, switched to only on redeem.
-    let connected = load_file_config(&cfg.data_dir).room.is_some() || (existed && cfg.data_dir.join("ligus.db").exists());
-    let fresh_key = new_device || connected;
-    let now = now_ms();
-    state.prune_expired(now);
-    let (device_id, device_kp) = if fresh_key {
-        match state.latest_pending(now).filter(|p| p.device_id != stored.device.id) {
-            Some(p) => (p.device_id, ids.device_keypair(p.device_id)?),
-            None => ids.prepare_device()?,
-        }
-    } else {
-        (stored.device.id, ids.device_keypair(stored.device.id)?)
-    };
-    let ka = ids.key_agreement(device_id)?;
-    let account_kp = ids.account_keypair(stored.account.id)?;
-    let previous = fresh_key.then_some((stored.account.id, &account_kp));
-    let host = ligus_runtime::machine_hostname().unwrap_or_else(|| "this computer".into());
-    let label = label.map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).unwrap_or_else(|| format!("ligus on {host}"));
-    let request = LinkRequest::new(&device_kp, &ka.public_key_bytes(), &label, now, previous);
-    state.add_pending(&request, now);
-    state.save(&cfg.data_dir)?;
+    let (request, _, fresh_key) = make_link_request(cfg, label, new_device)?;
     let code = request.encode();
     let fingerprint = request.fingerprint();
     let approve_by = request.created_at.saturating_add(ligus_runtime::computer_link::REQUEST_TTL_MS);
@@ -183,7 +192,7 @@ pub fn cmd_request(
 
 /// The workspace connection this CLI identity seals into a grant (no
 /// invite).
-fn connection(cfg: &Config, svc: &ligus_runtime::ChatService) -> Result<String> {
+pub(crate) fn connection(cfg: &Config, svc: &ligus_runtime::ChatService) -> Result<String> {
     let relay = cfg
         .relay_url
         .clone()
@@ -209,6 +218,9 @@ fn connection(cfg: &Config, svc: &ligus_runtime::ChatService) -> Result<String> 
     }
     Ok(ligus_runtime::workspace_invite::encode_workspace_invite(&conn))
 }
+
+/// Asks the person whether they link as this person (code-match check 6).
+pub type ConfirmPerson<'a> = &'a mut (dyn FnMut(&ligus_core::ActorIdentity) -> Result<bool> + Send);
 
 /// Asks the person at a terminal whether `what` matches; `Ok(true)` is yes.
 pub type Confirm<'a> = &'a mut dyn FnMut(&str) -> Result<bool>;
@@ -449,28 +461,7 @@ pub async fn cmd_redeem(
             ))
         }
     }
-    let (founder, fk) = grant.conn.founder_pin().ok_or_else(|| anyhow!("the grant has no founder pin"))?;
-    if !crate::usable_relay_url(&grant.conn.relay_url) && cfg.relay_url.as_deref().is_none_or(|r| !crate::usable_relay_url(r)) {
-        return Err(problem(EXIT_FIXABLE, "no_relay", "the workspace has no relay this computer can use", Some("set LIGUS_RELAY_URL")));
-    }
-    // The device the request named becomes this install's. Until the link
-    // is recorded nothing is written to the workspace; if it fails, the
-    // install goes back to its old device, so the new key never signs as the
-    // install's own member (it would become a bridge to the person).
-    let old_device = stored.device.id;
-    if device_id != old_device {
-        ids.adopt_device(device_id)?;
-    }
-    let linked = finish_redeem(cfg, &grant, &mut state, founder, fk).await;
-    let person = match linked {
-        Ok(p) => p,
-        Err(e) => {
-            if device_id != old_device {
-                ids.adopt_device(old_device)?;
-            }
-            return Err(e);
-        }
-    };
+    let person = link_with_grant(cfg, &grant, device_id, stored.device.id, &mut state, None).await?;
     let mut r = Report::new("devices redeem");
     r.add(Check::ok("devices.linked", "linked", format!("this computer is one of {}'s devices in '{}'", clamp(&shown(&person.display_name)), cfg.room)));
     r.next("ligus chats");
@@ -484,9 +475,53 @@ pub async fn cmd_redeem(
     Ok(())
 }
 
+/// The writes of a redeem for `grant` (already checked and confirmed):
+/// switch to the device it names (`device_id`; `old_device` is this
+/// install's), pin the founder, pull, check the certificate is on the log
+/// (code-match check 5), ask `confirm_person` (check 6, when given), then
+/// record the link. A failure or a No puts the install back as it was.
+pub(crate) async fn link_with_grant(
+    cfg: &mut Config,
+    grant: &OpenedGrant,
+    device_id: Uuid,
+    old_device: Uuid,
+    state: &mut LinkState,
+    confirm_person: Option<ConfirmPerson<'_>>,
+) -> Result<ligus_core::ActorIdentity> {
+    let ids = identity(cfg);
+    let (founder, fk) = grant.conn.founder_pin().ok_or_else(|| anyhow!("the grant has no founder pin"))?;
+    if !crate::usable_relay_url(&grant.conn.relay_url) && cfg.relay_url.as_deref().is_none_or(|r| !crate::usable_relay_url(r)) {
+        return Err(problem(EXIT_FIXABLE, "no_relay", "the workspace has no relay this computer can use", Some("set LIGUS_RELAY_URL")));
+    }
+    // The device the request named becomes this install's. Until the link
+    // is recorded nothing is written to the workspace; if it fails, the
+    // install goes back to its old device, so the new key never signs as the
+    // install's own member (it would become a bridge to the person).
+    if device_id != old_device {
+        ids.adopt_device(device_id)?;
+    }
+    let linked = finish_redeem(cfg, grant, state, founder, fk, confirm_person).await;
+    match linked {
+        Ok(p) => Ok(p),
+        Err(e) => {
+            if device_id != old_device {
+                ids.adopt_device(old_device)?;
+            }
+            Err(e)
+        }
+    }
+}
+
 /// The writes of a redeem, once the person confirmed: the connection, the
 /// pull, the check, the link record, the key-agreement key.
-async fn finish_redeem(cfg: &mut Config, grant: &OpenedGrant, state: &mut LinkState, founder: String, fk: String) -> Result<ligus_core::ActorIdentity> {
+async fn finish_redeem(
+    cfg: &mut Config,
+    grant: &OpenedGrant,
+    state: &mut LinkState,
+    founder: String,
+    fk: String,
+    confirm_person: Option<ConfirmPerson<'_>>,
+) -> Result<ligus_core::ActorIdentity> {
     // The connection lives in memory until the link is recorded (a failed
     // redeem must not leave this data dir connected as its own
     // identity with the device key the desktop certified for the person).
@@ -515,6 +550,11 @@ async fn finish_redeem(cfg: &mut Config, grant: &OpenedGrant, state: &mut LinkSt
             }
             Err(e) => return Err(e.into()),
         };
+        if let Some(ask) = confirm_person {
+            if !ask(&person)? {
+                return Err(problem(EXIT_ERROR, "not_confirmed", "not linked: the person wasn't confirmed", None));
+            }
+        }
         Ok((svc, person))
     }
     .await;

@@ -66,7 +66,7 @@ pub struct PhoneCode {
 /// isolates and marks and invisible format characters that can reorder or
 /// hide what a person reads next to the fingerprint (on the desktop's sheet,
 /// in a terminal).
-fn hidden_or_reordering(c: char) -> bool {
+pub(crate) fn hidden_or_reordering(c: char) -> bool {
     c.is_control()
         || matches!(
             c,

@@ -884,7 +884,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/tunnel/direct", get(tunnel_direct))
         .route("/v1/revocations", get(list_revocations))
         .route("/v1/revocations/{device}/retry", post(retry_revocation));
-    super::phone_enroll_api::routes(r)
+    super::approvals_api::routes(super::phone_enroll_api::routes(r))
         .layer(middleware::from_fn_with_state(shared.clone(), auth))
         .with_state(shared)
 }
