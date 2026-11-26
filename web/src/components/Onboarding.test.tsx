@@ -61,6 +61,7 @@ vi.mock("@/lib/ipc", () => ({
   redeemShortCode: vi.fn(async () => ({ kind: "workspace", label: "Acme" })),
   probeRelay: vi.fn(async () => ({ status: "ok", detail: "" })),
   probeRelayAt: vi.fn(async () => ({ status: "ok", detail: "" })),
+  listOllamaModels: vi.fn(async () => ({ base: "http://localhost:11434", host: "localhost", models: [], pulling: [] })),
 }));
 
 beforeEach(() => vi.clearAllMocks());
@@ -195,6 +196,56 @@ describe("Onboarding wizard flow", () => {
     expect(ipc.updateConnectionSettings).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: "sk-test-123", permissionMode: "runCommands" }),
     );
+  });
+
+  it("gives the Ollama runtime an installed model, never gpt-4o", async () => {
+    (ipc.detectEnvironment as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      claudeCode: false,
+      ollama: true,
+      anthropicEnv: false,
+      openaiEnv: false,
+      gitName: "Sam Dev",
+      gitEmail: "sam@example.com",
+    });
+    (ipc.listOllamaModels as ReturnType<typeof vi.fn>).mockResolvedValue({
+      base: "http://localhost:11434",
+      host: "localhost",
+      models: [{ name: "qwen2.5-coder:7b" }],
+      pulling: [],
+    });
+    render(<Onboarding onComplete={vi.fn()} />);
+    await screen.findByPlaceholderText("Your name");
+    await clickByName("Next"); // identity
+    await clickByName("Next"); // project
+    await screen.findByText("Choose your agent");
+    const field = (await screen.findByLabelText("Ollama model")) as HTMLInputElement;
+    await waitFor(() => expect(field.value).toBe("qwen2.5-coder:7b"));
+    await clickByName("Next");
+    await waitFor(() =>
+      expect(ipc.addRuntime).toHaveBeenCalledWith(
+        "ollama-local",
+        "Ollama (local)",
+        "ollama",
+        "local",
+        "http://localhost:11434",
+        "qwen2.5-coder:7b",
+        true,
+        false,
+      ),
+    );
+  });
+
+  it("says Next, the button's own name, when a probe fails", async () => {
+    (ipc.probeProvider as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, latency_ms: 0, reply: "", error: "401" });
+    render(<Onboarding onComplete={vi.fn()} />);
+    await screen.findByPlaceholderText("Your name");
+    await clickByName("Next");
+    await clickByName("Next");
+    await screen.findByText("Choose your agent");
+    await clickByName(/Anthropic API key/);
+    await userEvent.type(screen.getByPlaceholderText(/Anthropic API key/), "sk-ant-bad");
+    await clickByName("Next");
+    await screen.findByText(/press Next again/);
   });
 
   it("holds on a failed agent probe, then proceeds on a second Continue", async () => {
