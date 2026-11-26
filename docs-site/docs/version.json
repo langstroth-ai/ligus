@@ -1,6 +1,6 @@
 {
-  "tag": "v0.3.0",
-  "name": "Ligus 0.3.0",
+  "tag": "v0.4.0",
+  "name": "Ligus 0.4.0",
   "url": "https://github.com/langstroth-ai/ligus/releases/latest",
-  "notes": "Ligus (short for ligustica) 0.3.0 brings a calmer desktop, guided setup for everything you connect, a way to add a second computer to your own devices, custom themes, and security fixes for agent tools. See https://docs.langstroth.ai/ligus/reference/whats-new/."
+  "notes": "Ligus (short for ligustica) 0.4.0 lets you approve a box or a computer by comparing a short code, gives you one profile and named devices, brings stricter device rules, decision cards from agents (Claude Code's own prompts included), proposal archiving, scratch repositories, and keeps secrets out of the database. Upgrade every device, boxes and phones included. See https://docs.langstroth.ai/ligus/reference/whats-new/."
 }
