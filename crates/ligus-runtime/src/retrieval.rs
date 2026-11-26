@@ -66,7 +66,11 @@ impl RetrievalConfig {
     }
 
     fn top_k(&self) -> usize {
-        if self.top_k == 0 { DEFAULT_TOP_K } else { self.top_k }
+        if self.top_k == 0 {
+            DEFAULT_TOP_K
+        } else {
+            self.top_k
+        }
     }
 
     /// Prompt tokens to set aside for the passages block (`top_k` full
@@ -79,7 +83,11 @@ impl RetrievalConfig {
 
     /// Never fewer candidates than passages wanted.
     fn candidates(&self) -> usize {
-        let c = if self.candidates == 0 { DEFAULT_CANDIDATES } else { self.candidates };
+        let c = if self.candidates == 0 {
+            DEFAULT_CANDIDATES
+        } else {
+            self.candidates
+        };
         c.max(self.top_k())
     }
 }
@@ -106,7 +114,10 @@ pub fn embed_prefixes(model: &str) -> (&'static str, &'static str) {
     } else if m.contains("nomic") {
         ("search_query: ", "search_document: ")
     } else if m.contains("qwen3") {
-        ("Instruct: Given a question, retrieve passages that answer it\nQuery: ", "")
+        (
+            "Instruct: Given a question, retrieve passages that answer it\nQuery: ",
+            "",
+        )
     } else {
         ("", "")
     }
@@ -124,7 +135,11 @@ pub fn chunk_text(text: &str, size: usize, overlap: usize) -> Vec<String> {
     let mut start = 0;
     while start < n {
         let hard_end = (start + size).min(n);
-        let end = if hard_end == n { n } else { cut_point(&chars, start, hard_end) };
+        let end = if hard_end == n {
+            n
+        } else {
+            cut_point(&chars, start, hard_end)
+        };
         let chunk: String = chars[start..end].iter().collect();
         let chunk = chunk.trim();
         if !chunk.is_empty() {
@@ -215,7 +230,10 @@ impl Retriever {
             .timeout(HTTP_TIMEOUT)
             .build()
             .unwrap_or_else(|_| ligus_forge::new_http_client());
-        Self { http, cache: Mutex::new(HashMap::new()) }
+        Self {
+            http,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Number of cached chunk embeddings (for tests/diagnostics).
@@ -242,7 +260,10 @@ impl Retriever {
             }
         }
         if chunks.len() > MAX_CHUNKS {
-            tracing::warn!("retrieval: {} chunks, indexing the first {MAX_CHUNKS}", chunks.len());
+            tracing::warn!(
+                "retrieval: {} chunks, indexing the first {MAX_CHUNKS}",
+                chunks.len()
+            );
             chunks.truncate(MAX_CHUNKS);
         }
         if chunks.is_empty() || query.is_empty() {
@@ -252,17 +273,25 @@ impl Retriever {
         let model = cfg.embed_model.trim();
         let (qp, dp) = embed_prefixes(model);
         let embed_url = endpoint_url(&cfg.embed_url, "embeddings");
-        let keys: Vec<[u8; 32]> = chunks.iter().map(|(_, c)| cache_key(model, dp, c)).collect();
+        let keys: Vec<[u8; 32]> = chunks
+            .iter()
+            .map(|(_, c)| cache_key(model, dp, c))
+            .collect();
 
         // Embed what the cache lacks, in batches; each batch is cached as it
         // lands so an interrupted first index still makes progress.
         let missing: Vec<usize> = {
             let cache = self.cache.lock().unwrap();
             let mut seen = std::collections::HashSet::new();
-            (0..chunks.len()).filter(|&i| !cache.contains_key(&keys[i]) && seen.insert(keys[i])).collect()
+            (0..chunks.len())
+                .filter(|&i| !cache.contains_key(&keys[i]) && seen.insert(keys[i]))
+                .collect()
         };
         for batch in missing.chunks(EMBED_BATCH) {
-            let inputs: Vec<String> = batch.iter().map(|&i| format!("{dp}{}", chunks[i].1)).collect();
+            let inputs: Vec<String> = batch
+                .iter()
+                .map(|&i| format!("{dp}{}", chunks[i].1))
+                .collect();
             let vecs = self.embed(&embed_url, model, &inputs).await?;
             let mut cache = self.cache.lock().unwrap();
             if cache.len() + vecs.len() > CACHE_CAP {
@@ -282,7 +311,9 @@ impl Retriever {
             let cache = self.cache.lock().unwrap();
             let mut s = Vec::with_capacity(chunks.len());
             for (i, k) in keys.iter().enumerate() {
-                let v = cache.get(k).ok_or_else(|| RetrievalError::Bad("embedding evicted".into()))?;
+                let v = cache
+                    .get(k)
+                    .ok_or_else(|| RetrievalError::Bad("embedding evicted".into()))?;
                 s.push((i, cosine(&qv, v)));
             }
             s
@@ -296,7 +327,13 @@ impl Retriever {
         let picked: Vec<(usize, f32)> = if cfg.reranks() && scored.len() > 1 {
             let docs: Vec<&str> = scored.iter().map(|(i, _)| chunks[*i].1.as_str()).collect();
             let order = self
-                .rerank(&endpoint_url(&cfg.rerank_url, "rerank"), cfg.rerank_model.trim(), &query, &docs, cfg.top_k())
+                .rerank(
+                    &endpoint_url(&cfg.rerank_url, "rerank"),
+                    cfg.rerank_model.trim(),
+                    &query,
+                    &docs,
+                    cfg.top_k(),
+                )
                 .await?;
             order.into_iter().map(|(j, s)| (scored[j].0, s)).collect()
         } else {
@@ -313,7 +350,12 @@ impl Retriever {
             .collect())
     }
 
-    async fn embed(&self, url: &str, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>, RetrievalError> {
+    async fn embed(
+        &self,
+        url: &str,
+        model: &str,
+        inputs: &[String],
+    ) -> Result<Vec<Vec<f32>>, RetrievalError> {
         let resp = self
             .http
             .post(url)
@@ -323,7 +365,10 @@ impl Retriever {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(RetrievalError::Bad(format!("embeddings {status}: {}", snippet(&body))));
+            return Err(RetrievalError::Bad(format!(
+                "embeddings {status}: {}",
+                snippet(&body)
+            )));
         }
         parse_embeddings(&resp.json::<Value>().await?, inputs.len())
     }
@@ -345,7 +390,10 @@ impl Retriever {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(RetrievalError::Bad(format!("rerank {status}: {}", snippet(&body))));
+            return Err(RetrievalError::Bad(format!(
+                "rerank {status}: {}",
+                snippet(&body)
+            )));
         }
         parse_rerank(&resp.json::<Value>().await?, docs.len())
     }
@@ -372,7 +420,11 @@ fn parse_embeddings(v: &Value, expected: usize) -> Result<Vec<Vec<f32>>, Retriev
         .ok_or_else(|| RetrievalError::Bad("embeddings: no data[]".into()))?;
     let mut out: Vec<(usize, Vec<f32>)> = Vec::with_capacity(data.len());
     for (pos, item) in data.iter().enumerate() {
-        let idx = item.get("index").and_then(Value::as_u64).map(|i| i as usize).unwrap_or(pos);
+        let idx = item
+            .get("index")
+            .and_then(Value::as_u64)
+            .map(|i| i as usize)
+            .unwrap_or(pos);
         let emb = item
             .get("embedding")
             .and_then(Value::as_array)
@@ -387,7 +439,10 @@ fn parse_embeddings(v: &Value, expected: usize) -> Result<Vec<Vec<f32>>, Retriev
         out.push((idx, emb));
     }
     if out.len() != expected {
-        return Err(RetrievalError::Bad(format!("embeddings: {} vectors for {expected} inputs", out.len())));
+        return Err(RetrievalError::Bad(format!(
+            "embeddings: {} vectors for {expected} inputs",
+            out.len()
+        )));
     }
     out.sort_by_key(|(i, _)| *i);
     Ok(out.into_iter().map(|(_, e)| e).collect())
@@ -411,7 +466,8 @@ fn parse_rerank(v: &Value, docs: usize) -> Result<Vec<(usize, f32)>, RetrievalEr
             .get("relevance_score")
             .or_else(|| r.get("score"))
             .and_then(Value::as_f64)
-            .ok_or_else(|| RetrievalError::Bad("rerank: no relevance_score".into()))? as f32;
+            .ok_or_else(|| RetrievalError::Bad("rerank: no relevance_score".into()))?
+            as f32;
         out.push((idx, score));
     }
     out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -431,7 +487,12 @@ pub fn passages_section(passages: &[Passage]) -> String {
         "{PASSAGES_HEADER}\nPassages from workspace reference material that may help with this message — treat as background knowledge:\n"
     );
     for (n, p) in passages.iter().enumerate() {
-        out.push_str(&format!("--- {} (passage {}) ---\n{}\n", p.source, n + 1, p.text.trim()));
+        out.push_str(&format!(
+            "--- {} (passage {}) ---\n{}\n",
+            p.source,
+            n + 1,
+            p.text.trim()
+        ));
     }
     out.trim_end().to_string()
 }
@@ -469,16 +530,34 @@ mod tests {
 
     #[test]
     fn endpoint_urls_accept_base_or_full() {
-        assert_eq!(endpoint_url("http://h:8080", "embeddings"), "http://h:8080/v1/embeddings");
-        assert_eq!(endpoint_url("http://h:8080/v1/", "embeddings"), "http://h:8080/v1/embeddings");
-        assert_eq!(endpoint_url("http://h:8080/v1/embeddings", "embeddings"), "http://h:8080/v1/embeddings");
-        assert_eq!(endpoint_url(" http://h/v1/rerank ", "rerank"), "http://h/v1/rerank");
+        assert_eq!(
+            endpoint_url("http://h:8080", "embeddings"),
+            "http://h:8080/v1/embeddings"
+        );
+        assert_eq!(
+            endpoint_url("http://h:8080/v1/", "embeddings"),
+            "http://h:8080/v1/embeddings"
+        );
+        assert_eq!(
+            endpoint_url("http://h:8080/v1/embeddings", "embeddings"),
+            "http://h:8080/v1/embeddings"
+        );
+        assert_eq!(
+            endpoint_url(" http://h/v1/rerank ", "rerank"),
+            "http://h/v1/rerank"
+        );
     }
 
     #[test]
     fn prefixes_by_model_family() {
-        assert_eq!(embed_prefixes("embeddinggemma-300m"), ("task: search result | query: ", "title: none | text: "));
-        assert_eq!(embed_prefixes("nomic-embed-text"), ("search_query: ", "search_document: "));
+        assert_eq!(
+            embed_prefixes("embeddinggemma-300m"),
+            ("task: search result | query: ", "title: none | text: ")
+        );
+        assert_eq!(
+            embed_prefixes("nomic-embed-text"),
+            ("search_query: ", "search_document: ")
+        );
         let (q, d) = embed_prefixes("Qwen3-Embedding-0.6B");
         assert!(q.starts_with("Instruct: Given a question") && q.ends_with("\nQuery: "));
         assert_eq!(d, "");
@@ -487,7 +566,10 @@ mod tests {
 
     #[test]
     fn short_text_is_one_chunk() {
-        assert_eq!(chunk_text("  hello world  ", 1200, 200), vec!["hello world"]);
+        assert_eq!(
+            chunk_text("  hello world  ", 1200, 200),
+            vec!["hello world"]
+        );
         assert!(chunk_text("   ", 1200, 200).is_empty());
     }
 
@@ -498,7 +580,11 @@ mod tests {
         // after paragraph 2 (in the back half), not mid-paragraph 3.
         let text = format!("{}\n\n{}\n\n{}", para('a'), para('b'), para('c'));
         let chunks = chunk_text(&text, 1000, 200);
-        assert!(chunks[0].ends_with("bbb"), "{:?}", &chunks[0][chunks[0].len() - 10..]);
+        assert!(
+            chunks[0].ends_with("bbb"),
+            "{:?}",
+            &chunks[0][chunks[0].len() - 10..]
+        );
         assert!(!chunks[0].contains('c'));
         // Overlap: the second chunk starts inside paragraph 2, on a word start.
         assert!(chunks[1].starts_with("bbb "));
@@ -543,7 +629,10 @@ mod tests {
     #[test]
     fn parses_embeddings_in_index_order() {
         let v = json!({"data": [{"index": 1, "embedding": [0.0, 1.0]}, {"index": 0, "embedding": [1.0, 0.0]}]});
-        assert_eq!(parse_embeddings(&v, 2).unwrap(), vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+        assert_eq!(
+            parse_embeddings(&v, 2).unwrap(),
+            vec![vec![1.0, 0.0], vec![0.0, 1.0]]
+        );
         assert!(parse_embeddings(&v, 3).is_err());
         assert!(parse_embeddings(&json!({"error": "x"}), 1).is_err());
     }
@@ -552,7 +641,11 @@ mod tests {
     fn parses_rerank_best_first_and_rejects_bad_index() {
         let v = json!({"results": [{"index": 0, "relevance_score": -2.0}, {"index": 1, "relevance_score": 3.5}]});
         assert_eq!(parse_rerank(&v, 2).unwrap(), vec![(1, 3.5), (0, -2.0)]);
-        assert!(parse_rerank(&json!({"results": [{"index": 5, "relevance_score": 1.0}]}), 2).is_err());
+        assert!(parse_rerank(
+            &json!({"results": [{"index": 5, "relevance_score": 1.0}]}),
+            2
+        )
+        .is_err());
     }
 
     #[test]
@@ -570,7 +663,11 @@ mod tests {
     #[test]
     fn passages_ride_the_latest_user_turn() {
         use crate::provider::ChatTurn;
-        let mut turns = vec![ChatTurn::user("Ann: first"), ChatTurn::assistant("ok"), ChatTurn::user("Ann: second  ")];
+        let mut turns = vec![
+            ChatTurn::user("Ann: first"),
+            ChatTurn::assistant("ok"),
+            ChatTurn::user("Ann: second  "),
+        ];
         assert_eq!(latest_user_query(&turns), Some("Ann: second"));
         assert!(append_to_latest_user(&mut turns, "[P]"));
         assert_eq!(turns[0].content, "Ann: first");
@@ -584,7 +681,11 @@ mod tests {
     #[test]
     fn passages_section_format() {
         assert_eq!(passages_section(&[]), "");
-        let s = passages_section(&[Passage { source: "docs".into(), text: " body \n".into(), score: 1.0 }]);
+        let s = passages_section(&[Passage {
+            source: "docs".into(),
+            text: " body \n".into(),
+            score: 1.0,
+        }]);
         assert!(s.starts_with(PASSAGES_HEADER));
         assert!(s.ends_with("--- docs (passage 1) ---\nbody"));
     }
@@ -662,7 +763,10 @@ mod wire {
 
     fn sources() -> Vec<(String, String)> {
         vec![
-            ("pets".into(), "The cat sleeps all day. Cats purr.\n\nThe dog fetches the ball.".into()),
+            (
+                "pets".into(),
+                "The cat sleeps all day. Cats purr.\n\nThe dog fetches the ball.".into(),
+            ),
             ("water".into(), "A fish swims in the pond.".into()),
         ]
     }
@@ -671,8 +775,16 @@ mod wire {
         RetrievalConfig {
             embed_url: base.into(),
             embed_model: "embeddinggemma-300m".into(),
-            rerank_url: if rerank { format!("{base}/v1") } else { String::new() },
-            rerank_model: if rerank { "bge-reranker-v2-m3".into() } else { String::new() },
+            rerank_url: if rerank {
+                format!("{base}/v1")
+            } else {
+                String::new()
+            },
+            rerank_model: if rerank {
+                "bge-reranker-v2-m3".into()
+            } else {
+                String::new()
+            },
             top_k: 2,
             candidates: 20,
         }
@@ -683,27 +795,44 @@ mod wire {
         let f = Fake::default();
         let base = serve(f.clone()).await;
         let r = Retriever::new();
-        let got = r.retrieve(&cfg(&base, false), &sources(), "where is the fish?").await.unwrap();
+        let got = r
+            .retrieve(&cfg(&base, false), &sources(), "where is the fish?")
+            .await
+            .unwrap();
         assert_eq!(got[0].source, "water");
         assert_eq!(got[0].text, "A fish swims in the pond.");
         assert_eq!(got.len(), 2);
         let first = f.embed_inputs.lock().unwrap().clone();
-        assert!(first.iter().any(|s| s.starts_with("title: none | text: ")), "gemma doc prefix");
-        assert!(first.iter().any(|s| s == "task: search result | query: where is the fish?"));
+        assert!(
+            first.iter().any(|s| s.starts_with("title: none | text: ")),
+            "gemma doc prefix"
+        );
+        assert!(first
+            .iter()
+            .any(|s| s == "task: search result | query: where is the fish?"));
         let cached = r.cached();
         assert_eq!(cached, 2);
 
         // Second turn: only the query is embedded again.
         f.embed_inputs.lock().unwrap().clear();
-        let got = r.retrieve(&cfg(&base, false), &sources(), "a dog?").await.unwrap();
+        let got = r
+            .retrieve(&cfg(&base, false), &sources(), "a dog?")
+            .await
+            .unwrap();
         assert_eq!(got[0].source, "pets");
-        assert_eq!(*f.embed_inputs.lock().unwrap(), vec!["task: search result | query: a dog?".to_string()]);
+        assert_eq!(
+            *f.embed_inputs.lock().unwrap(),
+            vec!["task: search result | query: a dog?".to_string()]
+        );
         assert_eq!(r.cached(), cached);
     }
 
     #[tokio::test]
     async fn rerank_reorders_candidates_and_caps_top_k() {
-        let f = Fake { reverse: true, ..Default::default() };
+        let f = Fake {
+            reverse: true,
+            ..Default::default()
+        };
         let base = serve(f.clone()).await;
         let r = Retriever::new();
         let mut c = cfg(&base, true);
@@ -723,15 +852,24 @@ mod wire {
 
     #[tokio::test]
     async fn errors_surface_for_fallback() {
-        let f = Fake { fail_rerank: true, ..Default::default() };
+        let f = Fake {
+            fail_rerank: true,
+            ..Default::default()
+        };
         let base = serve(f).await;
         let r = Retriever::new();
-        assert!(r.retrieve(&cfg(&base, true), &sources(), "fish").await.is_err());
+        assert!(r
+            .retrieve(&cfg(&base, true), &sources(), "fish")
+            .await
+            .is_err());
         // Unreachable embedder.
         let dead = cfg("http://127.0.0.1:9", false);
         assert!(r.retrieve(&dead, &sources(), "fish").await.is_err());
         // Not configured.
-        assert!(r.retrieve(&RetrievalConfig::default(), &sources(), "fish").await.is_err());
+        assert!(r
+            .retrieve(&RetrievalConfig::default(), &sources(), "fish")
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -739,8 +877,16 @@ mod wire {
         let f = Fake::default();
         let base = serve(f.clone()).await;
         let r = Retriever::new();
-        assert!(r.retrieve(&cfg(&base, true), &[], "fish").await.unwrap().is_empty());
-        assert!(r.retrieve(&cfg(&base, true), &sources(), "  ").await.unwrap().is_empty());
+        assert!(r
+            .retrieve(&cfg(&base, true), &[], "fish")
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(r
+            .retrieve(&cfg(&base, true), &sources(), "  ")
+            .await
+            .unwrap()
+            .is_empty());
         assert!(f.embed_inputs.lock().unwrap().is_empty());
     }
 }

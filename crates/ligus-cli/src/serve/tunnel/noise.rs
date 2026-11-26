@@ -64,7 +64,9 @@ impl CryptoResolver for CheckedResolver {
         DefaultResolver.resolve_rng()
     }
     fn resolve_dh(&self, choice: &DHChoice) -> Option<Box<dyn Dh>> {
-        DefaultResolver.resolve_dh(choice).map(|d| Box::new(CheckedDh(d)) as Box<dyn Dh>)
+        DefaultResolver
+            .resolve_dh(choice)
+            .map(|d| Box::new(CheckedDh(d)) as Box<dyn Dh>)
     }
     fn resolve_hash(&self, choice: &HashChoice) -> Option<Box<dyn Hash>> {
         DefaultResolver.resolve_hash(choice)
@@ -76,11 +78,18 @@ impl CryptoResolver for CheckedResolver {
 
 fn builder(psk: Option<&[u8; 32]>) -> Builder<'_> {
     let name = if psk.is_some() { IK_PSK1 } else { IK };
-    Builder::with_resolver(name.parse().expect("valid Noise name"), Box::new(CheckedResolver))
+    Builder::with_resolver(
+        name.parse().expect("valid Noise name"),
+        Box::new(CheckedResolver),
+    )
 }
 
 /// The host's responder. `psk` = enrollment mode.
-pub fn responder(static_priv: &[u8; 32], host_id: &str, psk: Option<&[u8; 32]>) -> Result<HandshakeState, snow::Error> {
+pub fn responder(
+    static_priv: &[u8; 32],
+    host_id: &str,
+    psk: Option<&[u8; 32]>,
+) -> Result<HandshakeState, snow::Error> {
     responder_with(static_priv, host_id, psk, None)
 }
 
@@ -92,7 +101,9 @@ pub fn responder_with(
     ephemeral: Option<&[u8; 32]>,
 ) -> Result<HandshakeState, snow::Error> {
     let prologue = prologue(host_id);
-    let mut b = builder(psk).local_private_key(static_priv)?.prologue(&prologue)?;
+    let mut b = builder(psk)
+        .local_private_key(static_priv)?
+        .prologue(&prologue)?;
     if let Some(p) = psk {
         b = b.psk(1, p)?;
     }
@@ -111,7 +122,10 @@ pub fn initiator(
     ephemeral: Option<&[u8; 32]>,
 ) -> Result<HandshakeState, snow::Error> {
     let prologue = prologue(host_id);
-    let mut b = builder(psk).local_private_key(static_priv)?.remote_public_key(host_static_pub)?.prologue(&prologue)?;
+    let mut b = builder(psk)
+        .local_private_key(static_priv)?
+        .remote_public_key(host_static_pub)?
+        .prologue(&prologue)?;
     if let Some(p) = psk {
         b = b.psk(1, p)?;
     }

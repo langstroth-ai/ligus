@@ -102,9 +102,16 @@ impl DeviceEnrollment {
     pub fn new(workspace_id: Uuid, device_key: &SigningKeypair, label: &str) -> Self {
         let label = clamp_label(label);
         let key = device_key.public_key_bytes();
-        let device_id = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &key);
+        let device_id =
+            ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &key);
         let signature = device_key.sign(&preimage(workspace_id, device_id, &key, &label));
-        Self { workspace_id, device_id, device_public_key: key, label, signature }
+        Self {
+            workspace_id,
+            device_id,
+            device_public_key: key,
+            label,
+            signature,
+        }
     }
 
     /// The `hivedev1:` code: base64url of ws(16) ‖ device(16) ‖ key(32) ‖
@@ -123,13 +130,20 @@ impl DeviceEnrollment {
     /// copy are ignored).
     pub fn decode(code: &str) -> Result<Self, EnrollError> {
         let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
-        let body = compact.strip_prefix(CODE_PREFIX).ok_or(EnrollError::NotACode)?;
-        let b = URL_SAFE_NO_PAD.decode(body.as_bytes()).map_err(|_| EnrollError::Malformed)?;
+        let body = compact
+            .strip_prefix(CODE_PREFIX)
+            .ok_or(EnrollError::NotACode)?;
+        let b = URL_SAFE_NO_PAD
+            .decode(body.as_bytes())
+            .map_err(|_| EnrollError::Malformed)?;
         if b.len() < 128 || b.len() > 128 + MAX_LABEL {
             return Err(EnrollError::Malformed);
         }
-        let uuid = |r: std::ops::Range<usize>| Uuid::from_slice(&b[r]).map_err(|_| EnrollError::Malformed);
-        let label = std::str::from_utf8(&b[128..]).map_err(|_| EnrollError::Malformed)?.to_string();
+        let uuid =
+            |r: std::ops::Range<usize>| Uuid::from_slice(&b[r]).map_err(|_| EnrollError::Malformed);
+        let label = std::str::from_utf8(&b[128..])
+            .map_err(|_| EnrollError::Malformed)?
+            .to_string();
         let e = Self {
             workspace_id: uuid(0..16)?,
             device_id: uuid(16..32)?,
@@ -144,9 +158,20 @@ impl DeviceEnrollment {
     /// Proof of possession: the device key signed this request, for the
     /// device id that key derives.
     pub fn verify(&self) -> Result<(), EnrollError> {
-        let pre = preimage(self.workspace_id, self.device_id, &self.device_public_key, &self.label);
-        verify(&self.device_public_key, &pre, &self.signature).map_err(|_| EnrollError::BadSignature)?;
-        if self.device_id != ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &self.device_public_key) {
+        let pre = preimage(
+            self.workspace_id,
+            self.device_id,
+            &self.device_public_key,
+            &self.label,
+        );
+        verify(&self.device_public_key, &pre, &self.signature)
+            .map_err(|_| EnrollError::BadSignature)?;
+        if self.device_id
+            != ligus_core::crypto::device_id_for(
+                ligus_core::crypto::SigAlg::Ed25519,
+                &self.device_public_key,
+            )
+        {
             return Err(EnrollError::WrongDeviceId);
         }
         Ok(())
@@ -165,8 +190,15 @@ impl DeviceEnrollment {
 /// to cost about 2^80 work, not the 2^48 a 6-byte one did.
 pub fn fingerprint(key: &[u8]) -> String {
     let d = Sha256::digest(key);
-    let hex: String = d[..FINGERPRINT_BYTES].iter().map(|b| format!("{b:02X}")).collect();
-    hex.as_bytes().chunks(4).map(|g| std::str::from_utf8(g).expect("hex is ASCII")).collect::<Vec<_>>().join("-")
+    let hex: String = d[..FINGERPRINT_BYTES]
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect();
+    hex.as_bytes()
+        .chunks(4)
+        .map(|g| std::str::from_utf8(g).expect("hex is ASCII"))
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 /// How much of SHA-256(key) a device fingerprint shows.
@@ -188,11 +220,22 @@ fn account_keys(trust: &[SessionEventEnvelope]) -> HashMap<Uuid, Vec<Vec<u8>>> {
     let mut keys: HashMap<Uuid, Vec<Vec<u8>>> = HashMap::new();
     for env in trust {
         match &env.payload {
-            SessionEvent::AccountKeyRegistered { account_id, signing_public_key } => {
-                keys.entry(*account_id).or_default().push(signing_public_key.clone());
+            SessionEvent::AccountKeyRegistered {
+                account_id,
+                signing_public_key,
+            } => {
+                keys.entry(*account_id)
+                    .or_default()
+                    .push(signing_public_key.clone());
             }
-            SessionEvent::AccountKeyRotated { account_id, new_signing_public_key, .. } => {
-                keys.entry(*account_id).or_default().push(new_signing_public_key.clone());
+            SessionEvent::AccountKeyRotated {
+                account_id,
+                new_signing_public_key,
+                ..
+            } => {
+                keys.entry(*account_id)
+                    .or_default()
+                    .push(new_signing_public_key.clone());
             }
             _ => {}
         }
@@ -206,8 +249,12 @@ fn certified_devices(trust: &[SessionEventEnvelope]) -> HashMap<Uuid, (Vec<u8>, 
     let keys = account_keys(trust);
     let mut out: HashMap<Uuid, (Vec<u8>, HashSet<Uuid>)> = HashMap::new();
     for env in trust {
-        let SessionEvent::DeviceCertificateAdded { certificate: c } = &env.payload else { continue };
-        let valid = keys.get(&c.account_id).is_some_and(|ks| ks.iter().any(|k| c.verify(k).is_ok()));
+        let SessionEvent::DeviceCertificateAdded { certificate: c } = &env.payload else {
+            continue;
+        };
+        let valid = keys
+            .get(&c.account_id)
+            .is_some_and(|ks| ks.iter().any(|k| c.verify(k).is_ok()));
         if valid {
             out.entry(c.device_id)
                 .or_insert_with(|| (c.device_public_key.clone(), HashSet::new()))
@@ -225,13 +272,19 @@ fn certified_devices(trust: &[SessionEventEnvelope]) -> HashMap<Uuid, (Vec<u8>, 
 /// ingest stores some trust-bootstrap kinds from a signer it can't verify
 /// yet, so anyone could plant a row "signed by" a device; each candidate is
 /// checked, and an account already proved is not checked again.
-pub fn chosen_accounts(signed: impl IntoIterator<Item = SessionEventEnvelope>, device: Uuid, device_key: &[u8]) -> BTreeSet<Uuid> {
+pub fn chosen_accounts(
+    signed: impl IntoIterator<Item = SessionEventEnvelope>,
+    device: Uuid,
+    device_key: &[u8],
+) -> BTreeSet<Uuid> {
     let mut out = BTreeSet::new();
     for env in signed {
         if env.signer_device_id != Some(device) {
             continue;
         }
-        let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { continue };
+        let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else {
+            continue;
+        };
         if !out.contains(&account) && verify_envelope(&env, device_key).is_ok() {
             out.insert(account);
         }
@@ -263,7 +316,9 @@ pub fn standing(
     if roster.is_revoked(device_id) {
         return Standing::Revoked;
     }
-    let Some(config) = config else { return Standing::Own };
+    let Some(config) = config else {
+        return Standing::Own;
+    };
     let mut owners: Vec<&ligus_core::WorkspaceMember> = config
         .members
         .iter()
@@ -273,7 +328,9 @@ pub fn standing(
                 chosen.contains(&a)
                     && roster.device_signs_for(device_id, a)
                     && !roster.is_disputed(a)
-                    && roster.account_signing_key(a).is_some_and(|k| k != own_account_key)
+                    && roster
+                        .account_signing_key(a)
+                        .is_some_and(|k| k != own_account_key)
             })
         })
         .collect();
@@ -295,7 +352,9 @@ pub fn foreign_certifiers(
     own_account_key: &[u8],
     chosen: &BTreeSet<Uuid>,
 ) -> Vec<ActorIdentity> {
-    let Some(config) = config else { return Vec::new() };
+    let Some(config) = config else {
+        return Vec::new();
+    };
     let roster = build_roster(trust);
     let mut out: Vec<ActorIdentity> = config
         .members
@@ -304,7 +363,9 @@ pub fn foreign_certifiers(
             m.actor.account_id.is_some_and(|a| {
                 !chosen.contains(&a)
                     && roster.device_signs_for(device_id, a)
-                    && roster.account_signing_key(a).is_some_and(|k| k != own_account_key)
+                    && roster
+                        .account_signing_key(a)
+                        .is_some_and(|k| k != own_account_key)
             })
         })
         .map(|m| m.actor.clone())
@@ -317,12 +378,16 @@ pub fn foreign_certifiers(
 /// `(device, account)` pairs proven by the device's own signature among
 /// `trust`: an envelope signed by a certified device, stamped for the
 /// account, verifying under the device's certified key.
-fn signed_as(trust: &[SessionEventEnvelope], devices: &HashMap<Uuid, (Vec<u8>, HashSet<Uuid>)>) -> HashSet<(Uuid, Uuid)> {
+fn signed_as(
+    trust: &[SessionEventEnvelope],
+    devices: &HashMap<Uuid, (Vec<u8>, HashSet<Uuid>)>,
+) -> HashSet<(Uuid, Uuid)> {
     let mut out: HashSet<(Uuid, Uuid)> = HashSet::new();
     for env in trust {
-        let (Some(dev), Some(acct)) =
-            (env.signer_device_id, env.actor_stamp.as_ref().and_then(|s| s.actor.account_id))
-        else {
+        let (Some(dev), Some(acct)) = (
+            env.signer_device_id,
+            env.actor_stamp.as_ref().and_then(|s| s.actor.account_id),
+        ) else {
             continue;
         };
         if let Some((key, _)) = devices.get(&dev) {
@@ -340,7 +405,10 @@ fn signed_as(trust: &[SessionEventEnvelope], devices: &HashMap<Uuid, (Vec<u8>, H
 /// such a pair.
 pub fn acting_pairs(trust: &[SessionEventEnvelope]) -> HashSet<(Uuid, Uuid)> {
     let devices = certified_devices(trust);
-    signed_as(trust, &devices).into_iter().filter(|(d, a)| devices.get(d).is_some_and(|(_, accts)| accts.contains(a))).collect()
+    signed_as(trust, &devices)
+        .into_iter()
+        .filter(|(d, a)| devices.get(d).is_some_and(|(_, accts)| accts.contains(a)))
+        .collect()
 }
 
 /// Retired aliases: `(alias actor id, owner actor id)` for each actor that is
@@ -353,15 +421,24 @@ pub fn acting_pairs(trust: &[SessionEventEnvelope]) -> HashSet<(Uuid, Uuid)> {
 /// (identity model v2, 7.3): the device never vouched for them. A former
 /// member that certifies someone else's device under its own account gets
 /// nothing either: that device never signed as it.
-pub fn retired_aliases(trust: &[SessionEventEnvelope], config: &ChatSession) -> Vec<(String, String)> {
+pub fn retired_aliases(
+    trust: &[SessionEventEnvelope],
+    config: &ChatSession,
+) -> Vec<(String, String)> {
     let devices = certified_devices(trust);
     let signed_as = signed_as(trust, &devices);
     let member_of_account = |a: Uuid| {
-        config.members.iter().find(|m| m.actor.kind == ActorKind::Human && m.actor.account_id == Some(a))
+        config
+            .members
+            .iter()
+            .find(|m| m.actor.kind == ActorKind::Human && m.actor.account_id == Some(a))
     };
     let is_member = |a: Uuid| {
         let id = a.to_string();
-        config.members.iter().any(|m| m.actor.account_id == Some(a) || m.actor.id == id || m.id == id)
+        config
+            .members
+            .iter()
+            .any(|m| m.actor.account_id == Some(a) || m.actor.id == id || m.id == id)
     };
     let mut out = Vec::new();
     for (dev, (_, accounts)) in &devices {
@@ -410,7 +487,12 @@ pub fn devices_of(trust: &[SessionEventEnvelope], account: Uuid) -> Vec<OwnDevic
         .map(|(device_id, (key, accts))| {
             let mut also: Vec<Uuid> = accts.into_iter().filter(|a| *a != account).collect();
             also.sort();
-            OwnDevice { device_id, fingerprint: fingerprint(&key), revoked: revoked.contains(&device_id), also_certified_by: also }
+            OwnDevice {
+                device_id,
+                fingerprint: fingerprint(&key),
+                revoked: revoked.contains(&device_id),
+                also_certified_by: also,
+            }
         })
         .collect();
     out.sort_by_key(|d| d.device_id);
@@ -420,11 +502,18 @@ pub fn devices_of(trust: &[SessionEventEnvelope], account: Uuid) -> Vec<OwnDevic
 /// The accounts holding a valid certificate for `device` (one verifying
 /// under a key the account registered).
 pub fn certified_accounts(trust: &[SessionEventEnvelope], device: Uuid) -> HashSet<Uuid> {
-    certified_devices(trust).remove(&device).map(|(_, a)| a).unwrap_or_default()
+    certified_devices(trust)
+        .remove(&device)
+        .map(|(_, a)| a)
+        .unwrap_or_default()
 }
 
 /// Accounts (other than `except`) holding a valid certificate for `device`.
-pub fn accounts_certifying(trust: &[SessionEventEnvelope], device: Uuid, except: Uuid) -> Vec<Uuid> {
+pub fn accounts_certifying(
+    trust: &[SessionEventEnvelope],
+    device: Uuid,
+    except: Uuid,
+) -> Vec<Uuid> {
     let mut v: Vec<Uuid> = certified_devices(trust)
         .remove(&device)
         .map(|(_, a)| a.into_iter().filter(|a| *a != except).collect())
@@ -443,7 +532,10 @@ mod tests {
     fn enroll_constants_are_frozen() {
         let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02x}")).collect::<String>();
         // b"hive-device-enroll-v1\0"
-        assert_eq!(hex(PREIMAGE_TAG), "686976652d6465766963652d656e726f6c6c2d763100");
+        assert_eq!(
+            hex(PREIMAGE_TAG),
+            "686976652d6465766963652d656e726f6c6c2d763100"
+        );
         // "hivedev1:"
         assert_eq!(hex(CODE_PREFIX.as_bytes()), "68697665646576313a");
         let pre = preimage(Uuid::nil(), Uuid::nil(), &[5u8; 32], "box");
@@ -453,7 +545,13 @@ mod tests {
     #[test]
     fn code_roundtrips_and_verifies() {
         let kp = SigningKeypair::generate().unwrap();
-        let (ws, dev) = (Uuid::new_v4(), ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &kp.public_key_bytes()));
+        let (ws, dev) = (
+            Uuid::new_v4(),
+            ligus_core::crypto::device_id_for(
+                ligus_core::crypto::SigAlg::Ed25519,
+                &kp.public_key_bytes(),
+            ),
+        );
         let e = DeviceEnrollment::new(ws, &kp, "  home box  ");
         assert_eq!(e.device_id, dev, "the id is the one the key derives");
         assert_eq!(e.label, "home box");
@@ -474,23 +572,46 @@ mod tests {
         // Someone else's key under this signature.
         let mut swapped = e.clone();
         swapped.device_public_key = SigningKeypair::generate().unwrap().public_key_bytes();
-        assert_eq!(DeviceEnrollment::decode(&swapped.encode()), Err(EnrollError::BadSignature));
+        assert_eq!(
+            DeviceEnrollment::decode(&swapped.encode()),
+            Err(EnrollError::BadSignature)
+        );
         // A relabel.
         let mut relabeled = e.clone();
         relabeled.label = "Alex's MacBook".into();
-        assert_eq!(DeviceEnrollment::decode(&relabeled.encode()), Err(EnrollError::BadSignature));
+        assert_eq!(
+            DeviceEnrollment::decode(&relabeled.encode()),
+            Err(EnrollError::BadSignature)
+        );
         // Another device id.
         let mut other = e.clone();
         other.device_id = Uuid::new_v4();
-        assert_eq!(DeviceEnrollment::decode(&other.encode()), Err(EnrollError::BadSignature));
+        assert_eq!(
+            DeviceEnrollment::decode(&other.encode()),
+            Err(EnrollError::BadSignature)
+        );
         // Another device id, signed by the key all the same: not the id the
         // key derives.
         let mut other = e.clone();
         other.device_id = Uuid::new_v4();
-        other.signature = kp.sign(&preimage(other.workspace_id, other.device_id, &other.device_public_key, &other.label));
-        assert_eq!(DeviceEnrollment::decode(&other.encode()), Err(EnrollError::WrongDeviceId));
-        assert_eq!(DeviceEnrollment::decode("hivews1:abc"), Err(EnrollError::NotACode));
-        assert_eq!(DeviceEnrollment::decode("hivedev1:abc"), Err(EnrollError::Malformed));
+        other.signature = kp.sign(&preimage(
+            other.workspace_id,
+            other.device_id,
+            &other.device_public_key,
+            &other.label,
+        ));
+        assert_eq!(
+            DeviceEnrollment::decode(&other.encode()),
+            Err(EnrollError::WrongDeviceId)
+        );
+        assert_eq!(
+            DeviceEnrollment::decode("hivews1:abc"),
+            Err(EnrollError::NotACode)
+        );
+        assert_eq!(
+            DeviceEnrollment::decode("hivedev1:abc"),
+            Err(EnrollError::Malformed)
+        );
     }
 
     #[test]
@@ -509,7 +630,10 @@ mod tests {
 mod flow_tests {
     use std::path::{Path, PathBuf};
 
-    use ligus_core::{workspace_config_session_id, ActionProposal, MessageRole, ProposalKind, WorkspaceHost, WorkspaceRole};
+    use ligus_core::{
+        workspace_config_session_id, ActionProposal, MessageRole, ProposalKind, WorkspaceHost,
+        WorkspaceRole,
+    };
 
     use super::*;
     use crate::{ChatService, EventStore, FileKeyVault, IdentityStore, RelayClient, SyncEngine};
@@ -517,7 +641,11 @@ mod flow_tests {
     async fn spawn_relay() -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, crate::test_relay::router()).await.unwrap() });
+        tokio::spawn(async move {
+            axum::serve(listener, crate::test_relay::router())
+                .await
+                .unwrap()
+        });
         format!("http://{addr}")
     }
 
@@ -539,8 +667,14 @@ mod flow_tests {
                 me.account.actor(),
             );
             let key = ligus_core::derive_workspace_key("enroll flow passphrase");
-            let engine = SyncEngine::new(RelayClient::new(relay), ws.to_string()).with_room_workspace(ws).with_key(key);
-            Self { svc, dir: dir.to_path_buf(), engine }
+            let engine = SyncEngine::new(RelayClient::new(relay), ws.to_string())
+                .with_room_workspace(ws)
+                .with_key(key);
+            Self {
+                svc,
+                dir: dir.to_path_buf(),
+                engine,
+            }
         }
 
         async fn sync(&mut self) {
@@ -559,8 +693,20 @@ mod flow_tests {
             admin.sync().await;
             self.sync().await;
             self.svc.store().set_join_invite(ws, invite).unwrap();
-            self.svc.store().set_join_redeem(ws, admin.svc.take_invite_redeem_seed(ws, invite).unwrap().as_ref()).unwrap();
-            self.svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+            self.svc
+                .store()
+                .set_join_redeem(
+                    ws,
+                    admin
+                        .svc
+                        .take_invite_redeem_seed(ws, invite)
+                        .unwrap()
+                        .as_ref(),
+                )
+                .unwrap();
+            self.svc
+                .ensure_self_member(workspace_config_session_id(ws), ws)
+                .unwrap();
         }
 
         fn bodies(&self, chat: Uuid) -> Vec<(String, String)> {
@@ -571,7 +717,15 @@ mod flow_tests {
                 .messages
                 .iter()
                 .filter(|m| m.role == MessageRole::User)
-                .map(|m| (m.body.clone(), m.actor_identity.as_ref().map(|a| a.id.clone()).unwrap_or_default()))
+                .map(|m| {
+                    (
+                        m.body.clone(),
+                        m.actor_identity
+                            .as_ref()
+                            .map(|a| a.id.clone())
+                            .unwrap_or_default(),
+                    )
+                })
                 .collect()
         }
     }
@@ -592,11 +746,15 @@ mod flow_tests {
         taylor.sync().await;
         // Taylor (a Contributor) certifies a second device of hers.
         let spare = Dev::open(&tmp.path().join("spare"), "Spare", &relay, ws);
-        let request = DeviceEnrollment::decode(&spare.svc.enrollment_request(ws, "spare").encode()).unwrap();
+        let request =
+            DeviceEnrollment::decode(&spare.svc.enrollment_request(ws, "spare").encode()).unwrap();
         taylor.svc.certify_device(&request).unwrap();
         let spare_id = spare.svc.device_id();
         // She can't revoke Alex's desktop...
-        assert!(taylor.svc.revoke_device(cfg, ws, mac.svc.device_id()).is_err());
+        assert!(taylor
+            .svc
+            .revoke_device(cfg, ws, mac.svc.device_id())
+            .is_err());
         // ...but can revoke her own spare.
         taylor.svc.revoke_device(cfg, ws, spare_id).unwrap();
         taylor.sync().await;
@@ -615,7 +773,9 @@ mod flow_tests {
     /// phones of its own account(s).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn only_your_own_boxes_report_your_phones() {
-        use crate::revocation_status::{open_pairing_reports, pairing_slot, seal_pairing_report, PairedPhone, PairingReport};
+        use crate::revocation_status::{
+            open_pairing_reports, pairing_slot, seal_pairing_report, PairedPhone, PairingReport,
+        };
         let relay = spawn_relay().await;
         let tmp = tempfile::tempdir().unwrap();
         let ws = Uuid::new_v4();
@@ -627,9 +787,19 @@ mod flow_tests {
         taylor.join_via(&mut mac, ws).await;
         // Alex's box, enrolled as his device; Taylor's spare, as hers.
         let mut bx = Dev::open(&tmp.path().join("box"), "Box", &relay, ws);
-        mac.svc.certify_device(&DeviceEnrollment::decode(&bx.svc.enrollment_request(ws, "box").encode()).unwrap()).unwrap();
+        mac.svc
+            .certify_device(
+                &DeviceEnrollment::decode(&bx.svc.enrollment_request(ws, "box").encode()).unwrap(),
+            )
+            .unwrap();
         let spare = Dev::open(&tmp.path().join("spare"), "Spare", &relay, ws);
-        taylor.svc.certify_device(&DeviceEnrollment::decode(&spare.svc.enrollment_request(ws, "spare").encode()).unwrap()).unwrap();
+        taylor
+            .svc
+            .certify_device(
+                &DeviceEnrollment::decode(&spare.svc.enrollment_request(ws, "spare").encode())
+                    .unwrap(),
+            )
+            .unwrap();
         taylor.sync().await;
         mac.sync().await;
         // Rules 3: Alex's box accepts its certificate.
@@ -638,33 +808,67 @@ mod flow_tests {
         bx.svc.accept_device_certificate(ws).unwrap();
         bx.sync().await;
         mac.sync().await;
-        let (bx_id, td, sd) = (bx.svc.device_id(), taylor.svc.device_id(), spare.svc.device_id());
+        let (bx_id, td, sd) = (
+            bx.svc.device_id(),
+            taylor.svc.device_id(),
+            spare.svc.device_id(),
+        );
 
-        let ring = crate::keyring::KeyringEngine::passphrase(ws, ligus_core::derive_workspace_key("enroll flow passphrase"));
+        let ring = crate::keyring::KeyringEngine::passphrase(
+            ws,
+            ligus_core::derive_workspace_key("enroll flow passphrase"),
+        );
         let now = ligus_core::Timestamp::now().inner().unix_timestamp();
         // A report naming Alex's desktop as a phone "seen just now".
         let claim = |host: Uuid| PairingReport {
             host_id: host.to_string(),
             workspace_id: ws,
             at: now,
-            phones: vec![PairedPhone { device_id: mac.svc.device_id().to_string(), name: "Old iPhone (lost)".into(), last_seen: Some(now) }],
+            phones: vec![PairedPhone {
+                device_id: mac.svc.device_id().to_string(),
+                name: "Old iPhone (lost)".into(),
+                last_seen: Some(now),
+            }],
             signature: Vec::new(),
         };
         let mut blobs = std::collections::HashMap::new();
-        blobs.insert(pairing_slot(&td.to_string()), seal_pairing_report(&ring, &taylor.svc.sign_pairing_report(claim(td))).unwrap());
-        blobs.insert(pairing_slot(&bx_id.to_string()), seal_pairing_report(&ring, &bx.svc.sign_pairing_report(claim(bx_id))).unwrap());
+        blobs.insert(
+            pairing_slot(&td.to_string()),
+            seal_pairing_report(&ring, &taylor.svc.sign_pairing_report(claim(td))).unwrap(),
+        );
+        blobs.insert(
+            pairing_slot(&bx_id.to_string()),
+            seal_pairing_report(&ring, &bx.svc.sign_pairing_report(claim(bx_id))).unwrap(),
+        );
         // The rule the PR used accepts Taylor's report about Alex's phone.
-        let pr_rule = open_pairing_reports(&blobs, &ring, ws, now, |d| mac.svc.certified_device_key(ws, d).ok().flatten());
-        assert!(pr_rule.contains_key(&td.to_string()), "control: a teammate's signed report verifies as a certified device's");
+        let pr_rule = open_pairing_reports(&blobs, &ring, ws, now, |d| {
+            mac.svc.certified_device_key(ws, d).ok().flatten()
+        });
+        assert!(
+            pr_rule.contains_key(&td.to_string()),
+            "control: a teammate's signed report verifies as a certified device's"
+        );
         // The fix: only Alex's own box.
-        let shown = open_pairing_reports(&blobs, &ring, ws, now, |d| mac.svc.own_device_key(ws, d).ok().flatten());
-        assert_eq!(shown.keys().cloned().collect::<Vec<_>>(), vec![bx_id.to_string()], "a report from someone else's device was shown");
+        let shown = open_pairing_reports(&blobs, &ring, ws, now, |d| {
+            mac.svc.own_device_key(ws, d).ok().flatten()
+        });
+        assert_eq!(
+            shown.keys().cloned().collect::<Vec<_>>(),
+            vec![bx_id.to_string()],
+            "a report from someone else's device was shown"
+        );
         for d in [td, sd] {
-            assert!(mac.svc.own_device_key(ws, d).unwrap().is_none(), "{d} is Taylor's");
+            assert!(
+                mac.svc.own_device_key(ws, d).unwrap().is_none(),
+                "{d} is Taylor's"
+            );
         }
         // The box reports only its owner's devices, never Taylor's.
         let mine = mac.svc.devices_sharing_an_account(ws, bx_id).unwrap();
-        assert!(mine.contains(&mac.svc.device_id()) && mine.contains(&bx_id), "{mine:?}");
+        assert!(
+            mine.contains(&mac.svc.device_id()) && mine.contains(&bx_id),
+            "{mine:?}"
+        );
         assert!(!mine.contains(&td) && !mine.contains(&sd), "{mine:?}");
     }
 
@@ -693,7 +897,9 @@ mod flow_tests {
         let mut sff = Dev::open(&tmp.path().join("sff"), "ligus-cli", &relay, ws);
         sff.join_via(&mut mac, ws).await;
         let box_actor = sff.id();
-        sff.svc.post_user_message(chat, ws, "before enrollment").unwrap();
+        sff.svc
+            .post_user_message(chat, ws, "before enrollment")
+            .unwrap();
         sff.sync().await;
         assert_eq!(sff.svc.device_standing(ws).unwrap(), Standing::Own);
 
@@ -704,15 +910,24 @@ mod flow_tests {
         rogue.svc.act_as_owner_device(alex.clone());
         // Its own fold refuses to author it (the device isn't certified
         // for Alex); were it written anyway, every peer drops it.
-        assert!(rogue.svc.post_user_message(chat, ws, "forged as Alex").is_err());
+        assert!(rogue
+            .svc
+            .post_user_message(chat, ws, "forged as Alex")
+            .is_err());
         rogue.sync().await;
         drop(rogue);
         mac.sync().await;
         taylor.sync().await;
         for dev in [&mac, &taylor] {
             let bodies = dev.bodies(chat);
-            assert!(bodies.contains(&("before enrollment".into(), box_actor.clone())), "{bodies:?}");
-            assert!(!bodies.iter().any(|(b, _)| b == "forged as Alex"), "{bodies:?}");
+            assert!(
+                bodies.contains(&("before enrollment".into(), box_actor.clone())),
+                "{bodies:?}"
+            );
+            assert!(
+                !bodies.iter().any(|(b, _)| b == "forged as Alex"),
+                "{bodies:?}"
+            );
         }
         // A delegated box can't approve devices or publish an identity as Alex.
         let mut delegated = Dev::open(&tmp.path().join("sff"), "ligus-cli", &relay, ws);
@@ -725,13 +940,22 @@ mod flow_tests {
         // Alex approves the box's code on the desktop.
         let code = sff.svc.enrollment_request(ws, "sff").encode();
         let request = DeviceEnrollment::decode(&code).unwrap();
-        assert_eq!(request.fingerprint(), fingerprint(&sff.svc.device_public_key()));
+        assert_eq!(
+            request.fingerprint(),
+            fingerprint(&sff.svc.device_public_key())
+        );
         mac.svc.certify_device(&request).unwrap();
         // It's listed as Alex's device, also certified by the box's own account.
         let mine = mac.svc.own_devices(ws).unwrap();
-        let listed = mine.iter().find(|d| d.device_id == sff.svc.device_id()).unwrap();
+        let listed = mine
+            .iter()
+            .find(|d| d.device_id == sff.svc.device_id())
+            .unwrap();
         assert!(!listed.revoked);
-        assert_eq!(listed.also_certified_by, vec![Uuid::parse_str(&box_actor).unwrap()]);
+        assert_eq!(
+            listed.also_certified_by,
+            vec![Uuid::parse_str(&box_actor).unwrap()]
+        );
         mac.sync().await;
 
         // The box sees the certificate. A certificate alone adopts nothing
@@ -742,17 +966,42 @@ mod flow_tests {
         sff.svc.act_as_owner_device(alex.clone());
         // Rules 3: it accepts the certificate (its own copy) first.
         sff.svc.accept_device_certificate(ws).unwrap();
-        sff.svc.post_user_message(chat, ws, "from the phone").unwrap();
+        sff.svc
+            .post_user_message(chat, ws, "from the phone")
+            .unwrap();
         // Having signed as Alex, it is Alex's device.
-        let Standing::OwnerDevice(owner) = sff.svc.device_standing(ws).unwrap() else { panic!("not enrolled") };
+        let Standing::OwnerDevice(owner) = sff.svc.device_standing(ws).unwrap() else {
+            panic!("not enrolled")
+        };
         assert_eq!(owner.id, alex.id);
         // P0.6: a vote it signs as Alex needs Alex's passkey presence; without
         // it, it is refused here and would be dropped by every fold
         // (delegated_host_vote_not_counted_for_human_gate).
-        let refused = sff.svc.vote_on_proposal(chat, ws, pid, true).unwrap_err().to_string();
-        assert!(refused.contains(ligus_core::authz::PRESENCE_REQUIRED), "{refused}");
-        sff.svc.refine_proposal(chat, ws, pid, sff.id(), WorkspaceRole::Owner, "looks good", false).unwrap();
-        let mut host = WorkspaceHost::new(sff.svc.device_id().to_string(), ligus_core::HostKind::Worker, "sff");
+        let refused = sff
+            .svc
+            .vote_on_proposal(chat, ws, pid, true)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains(ligus_core::authz::PRESENCE_REQUIRED),
+            "{refused}"
+        );
+        sff.svc
+            .refine_proposal(
+                chat,
+                ws,
+                pid,
+                sff.id(),
+                WorkspaceRole::Owner,
+                "looks good",
+                false,
+            )
+            .unwrap();
+        let mut host = WorkspaceHost::new(
+            sff.svc.device_id().to_string(),
+            ligus_core::HostKind::Worker,
+            "sff",
+        );
         host.owner_actor_id = alex.id.clone();
         sff.svc.register_host(ws, host).unwrap();
         sff.sync().await;
@@ -763,13 +1012,18 @@ mod flow_tests {
         taylor.sync().await;
         for dev in [&mac, &taylor] {
             let bodies = dev.bodies(chat);
-            assert!(bodies.contains(&("from the phone".into(), alex.id.clone())), "{bodies:?}");
+            assert!(
+                bodies.contains(&("from the phone".into(), alex.id.clone())),
+                "{bodies:?}"
+            );
             let s = dev.svc.load(chat).unwrap().unwrap();
             let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
             assert!(p.approvals.is_empty(), "{:?}", p.approvals);
             assert_eq!(p.refinements[0].actor_id, alex.id);
             let hosts = dev.svc.list_hosts(ws).unwrap();
-            assert!(hosts.iter().any(|h| h.id == sff.svc.device_id().to_string() && h.owner_actor_id == alex.id));
+            assert!(hosts
+                .iter()
+                .any(|h| h.id == sff.svc.device_id().to_string() && h.owner_actor_id == alex.id));
         }
 
         // Alex votes on the desktop: that one counts.
@@ -788,13 +1042,20 @@ mod flow_tests {
         mac.svc.remove_member(cfg, ws, box_actor.clone()).unwrap();
         mac.sync().await;
         sff.sync().await;
-        assert!(matches!(sff.svc.device_standing(ws).unwrap(), Standing::OwnerDevice(_)));
-        sff.svc.post_user_message(chat, ws, "after retirement").unwrap();
+        assert!(matches!(
+            sff.svc.device_standing(ws).unwrap(),
+            Standing::OwnerDevice(_)
+        ));
+        sff.svc
+            .post_user_message(chat, ws, "after retirement")
+            .unwrap();
         sff.sync().await;
         mac.sync().await;
         taylor.sync().await;
         for dev in [&mac, &taylor] {
-            assert!(dev.bodies(chat).contains(&("after retirement".into(), alex.id.clone())));
+            assert!(dev
+                .bodies(chat)
+                .contains(&("after retirement".into(), alex.id.clone())));
             let links = dev.svc.device_links(ws).unwrap();
             assert_eq!(links.person(&box_actor), alex.id);
         }
@@ -806,19 +1067,29 @@ mod flow_tests {
         // Revocation: the desktop revokes the box's device.
         let old_device = sff.svc.device_id();
         mac.svc.revoke_device(cfg, ws, old_device).unwrap();
-        assert!(mac.svc.own_devices(ws).unwrap().iter().any(|d| d.device_id == old_device && d.revoked));
+        assert!(mac
+            .svc
+            .own_devices(ws)
+            .unwrap()
+            .iter()
+            .any(|d| d.device_id == old_device && d.revoked));
         mac.sync().await;
         taylor.sync().await;
         sff.sync().await;
         assert_eq!(sff.svc.device_standing(ws).unwrap(), Standing::Revoked);
         // Whatever the box still sends is dropped — by the desktop and by a
         // teammate that pulled the revocation in an earlier batch.
-        sff.svc.post_user_message(chat, ws, "after revocation").unwrap();
+        sff.svc
+            .post_user_message(chat, ws, "after revocation")
+            .unwrap();
         sff.sync().await;
         mac.sync().await;
         taylor.sync().await;
         for dev in [&mac, &taylor] {
-            assert!(!dev.bodies(chat).iter().any(|(b, _)| b == "after revocation"));
+            assert!(!dev
+                .bodies(chat)
+                .iter()
+                .any(|(b, _)| b == "after revocation"));
         }
         // A blocked service refuses writes outright.
         sff.svc.set_write_block(Some("revoked".into()));
@@ -826,25 +1097,39 @@ mod flow_tests {
         drop(sff);
 
         // Re-enroll: a fresh device key on the box, approved again.
-        let ids = IdentityStore::new(tmp.path().join("sff"), FileKeyVault::new(tmp.path().join("sff")));
+        let ids = IdentityStore::new(
+            tmp.path().join("sff"),
+            FileKeyVault::new(tmp.path().join("sff")),
+        );
         let rotated = ids.rotate_device().unwrap();
         assert_ne!(rotated.device.id, old_device);
         let mut sff2 = Dev::open(&tmp.path().join("sff"), "ligus-cli", &relay, ws);
-        sff2.engine = SyncEngine::new(RelayClient::new(&relay), ws.to_string()).with_room_workspace(ws)
+        sff2.engine = SyncEngine::new(RelayClient::new(&relay), ws.to_string())
+            .with_room_workspace(ws)
             .with_key(ligus_core::derive_workspace_key("enroll flow passphrase"));
         sff2.sync().await;
         assert_eq!(sff2.svc.device_standing(ws).unwrap(), Standing::Own);
-        let request = DeviceEnrollment::decode(&sff2.svc.enrollment_request(ws, "sff").encode()).unwrap();
+        let request =
+            DeviceEnrollment::decode(&sff2.svc.enrollment_request(ws, "sff").encode()).unwrap();
         mac.svc.certify_device(&request).unwrap();
         mac.sync().await;
         sff2.sync().await;
-        assert_eq!(sff2.svc.device_standing(ws).unwrap(), Standing::Own, "a certificate alone adopts nothing");
+        assert_eq!(
+            sff2.svc.device_standing(ws).unwrap(),
+            Standing::Own,
+            "a certificate alone adopts nothing"
+        );
         sff2.svc.act_as_owner_device(alex.clone());
         sff2.svc.accept_device_certificate(ws).unwrap();
         sff2.svc.post_user_message(chat, ws, "re-enrolled").unwrap();
-        assert!(matches!(sff2.svc.device_standing(ws).unwrap(), Standing::OwnerDevice(_)));
+        assert!(matches!(
+            sff2.svc.device_standing(ws).unwrap(),
+            Standing::OwnerDevice(_)
+        ));
         sff2.sync().await;
         mac.sync().await;
-        assert!(mac.bodies(chat).contains(&("re-enrolled".into(), alex.id.clone())));
+        assert!(mac
+            .bodies(chat)
+            .contains(&("re-enrolled".into(), alex.id.clone())));
     }
 }

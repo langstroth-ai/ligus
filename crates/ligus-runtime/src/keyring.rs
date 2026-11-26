@@ -43,7 +43,10 @@ pub struct KeySource {
 
 impl KeySource {
     pub fn passphrase_only(key: [u8; 32]) -> Self {
-        Self { passphrase: Some(key), ..Default::default() }
+        Self {
+            passphrase: Some(key),
+            ..Default::default()
+        }
     }
 
     /// What every host (desktop, serve, worker, CLI) holds, built one way.
@@ -56,8 +59,13 @@ impl KeySource {
         Self {
             device_id: Some(device_id),
             ka: Some(ka),
-            passphrase: passphrase.filter(|p| !p.is_empty()).map(ligus_core::derive_workspace_key),
-            delivered: delivered.iter().filter_map(|d| d.key().map(|k| (d.v, k))).collect(),
+            passphrase: passphrase
+                .filter(|p| !p.is_empty())
+                .map(ligus_core::derive_workspace_key),
+            delivered: delivered
+                .iter()
+                .filter_map(|d| d.key().map(|k| (d.v, k)))
+                .collect(),
         }
     }
 }
@@ -104,7 +112,10 @@ pub struct SealKey {
 
 impl std::fmt::Debug for SealKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SealKey").field("version", &self.version).field("kid", &self.kid).finish()
+        f.debug_struct("SealKey")
+            .field("version", &self.version)
+            .field("kid", &self.kid)
+            .finish()
     }
 }
 
@@ -153,10 +164,21 @@ impl KeyringEngine {
     /// Build the ring for `workspace_id` from its folded config log (`None`
     /// while it hasn't synced), what this device holds, and the raw rows of
     /// the relay keyring route (rotation bodies; anything else is ignored).
-    pub fn build(workspace_id: Uuid, cfg: Option<&ConfigTimeline>, src: &KeySource, relay_rows: &[Value]) -> Self {
+    pub fn build(
+        workspace_id: Uuid,
+        cfg: Option<&ConfigTimeline>,
+        src: &KeySource,
+        relay_rows: &[Value],
+    ) -> Self {
         let mut read: BTreeMap<(u32, String), [u8; 32]> = BTreeMap::new();
         let mut add = |version: u32, key: [u8; 32]| {
-            read.insert((version, kid_of(&key_commitment(workspace_id, version, &key))), key);
+            read.insert(
+                (
+                    version,
+                    kid_of(&key_commitment(workspace_id, version, &key)),
+                ),
+                key,
+            );
         };
         if let Some(k) = src.passphrase {
             add(0, k);
@@ -164,7 +186,9 @@ impl KeyringEngine {
         for (v, k) in &src.delivered {
             add(*v, *k);
         }
-        let mut bodies: Vec<SignedRotation> = cfg.map(|c| c.rotation_candidates().to_vec()).unwrap_or_default();
+        let mut bodies: Vec<SignedRotation> = cfg
+            .map(|c| c.rotation_candidates().to_vec())
+            .unwrap_or_default();
         bodies.extend(relay_rows.iter().filter_map(rotation_of_row));
         for r in &bodies {
             if let Some(k) = open_rotation(workspace_id, r, src) {
@@ -172,10 +196,16 @@ impl KeyringEngine {
             }
         }
 
-        let epochs = cfg.map(|c| c.current().key_epochs.clone()).unwrap_or_default();
+        let epochs = cfg
+            .map(|c| c.current().key_epochs.clone())
+            .unwrap_or_default();
         let head = epochs.head_version();
         let seal = match epochs.head() {
-            Some(e) => read.get(&(e.version, e.kid())).map(|k| SealKey { version: e.version, kid: e.kid(), key: *k }),
+            Some(e) => read.get(&(e.version, e.kid())).map(|k| SealKey {
+                version: e.version,
+                kid: e.kid(),
+                key: *k,
+            }),
             None => src.passphrase.map(|k| SealKey {
                 version: 0,
                 kid: kid_of(&key_commitment(workspace_id, 0, &k)),
@@ -184,14 +214,24 @@ impl KeyringEngine {
         };
         let lost = read
             .keys()
-            .filter(|(v, kid)| *v > 0 && *v <= head && epochs.get(*v).is_none_or(|e| e.kid() != *kid))
+            .filter(|(v, kid)| {
+                *v > 0 && *v <= head && epochs.get(*v).is_none_or(|e| e.kid() != *kid)
+            })
             .cloned()
             .collect();
-        let mut authorized: BTreeMap<u32, String> = epochs.epochs.iter().map(|e| (e.version, e.kid())).collect();
+        let mut authorized: BTreeMap<u32, String> =
+            epochs.epochs.iter().map(|e| (e.version, e.kid())).collect();
         if let Some(k) = src.passphrase {
             authorized.insert(0, kid_of(&key_commitment(workspace_id, 0, &k)));
         }
-        Self { workspace_id, read, seal, head, lost, authorized }
+        Self {
+            workspace_id,
+            read,
+            seal,
+            head,
+            lost,
+            authorized,
+        }
     }
 
     /// The ring for `workspace_id` from `store`'s config log, folded with this
@@ -199,8 +239,14 @@ impl KeyringEngine {
     /// one the ring holds what `src` holds and seals under the passphrase
     /// epoch, as [`crate::SyncEngine`] does).
     pub fn from_store(store: &crate::EventStore, workspace_id: Uuid, src: &KeySource) -> Self {
-        let pinned = store.workspace_pin(workspace_id).ok().flatten().map(|p| p.founder_account.to_string());
-        let loaded = pinned.as_deref().and_then(|pin| store.load_config(workspace_id, Some(pin), None).ok());
+        let pinned = store
+            .workspace_pin(workspace_id)
+            .ok()
+            .flatten()
+            .map(|p| p.founder_account.to_string());
+        let loaded = pinned
+            .as_deref()
+            .and_then(|pin| store.load_config(workspace_id, Some(pin), None).ok());
         match loaded {
             Some((Some(_), timeline)) => Self::build(workspace_id, Some(&timeline), src, &[]),
             _ => Self::build(workspace_id, None, src, &[]),
@@ -214,7 +260,13 @@ impl KeyringEngine {
         let prev = rotation.prev_version;
         self.authorized
             .get(&prev)
-            .and_then(|kid| self.read.get(&(prev, kid.clone())).map(|k| SealKey { version: prev, kid: kid.clone(), key: *k }))
+            .and_then(|kid| {
+                self.read.get(&(prev, kid.clone())).map(|k| SealKey {
+                    version: prev,
+                    kid: kid.clone(),
+                    key: *k,
+                })
+            })
             .or_else(|| self.seal.clone())
     }
 
@@ -253,8 +305,17 @@ impl KeyringEngine {
     /// Keys to try for a body sealed at `version` (by `kid` when it names one).
     pub fn keys_for(&self, version: u32, kid: Option<&str>) -> Vec<&[u8; 32]> {
         match kid {
-            Some(kid) => self.read.get(&(version, kid.to_string())).into_iter().collect(),
-            None => self.read.range((version, String::new())..).take_while(|((v, _), _)| *v == version).map(|(_, k)| k).collect(),
+            Some(kid) => self
+                .read
+                .get(&(version, kid.to_string()))
+                .into_iter()
+                .collect(),
+            None => self
+                .read
+                .range((version, String::new())..)
+                .take_while(|((v, _), _)| *v == version)
+                .map(|(_, k)| k)
+                .collect(),
         }
     }
 
@@ -283,7 +344,11 @@ impl KeyringEngine {
             .key_epochs
             .epochs
             .iter()
-            .filter_map(|e| self.read.get(&(e.version, e.kid())).map(|k| (e.version, *k)))
+            .filter_map(|e| {
+                self.read
+                    .get(&(e.version, e.kid()))
+                    .map(|k| (e.version, *k))
+            })
             .collect()
     }
 
@@ -338,8 +403,12 @@ fn open_rotation(workspace_id: Uuid, r: &SignedRotation, src: &KeySource) -> Opt
         None => r.sealed.values().collect(),
     };
     for blob in blobs {
-        let Ok(bytes) = open_blob(ka, blob) else { continue };
-        let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice()) else { continue };
+        let Ok(bytes) = open_blob(ka, blob) else {
+            continue;
+        };
+        let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice()) else {
+            continue;
+        };
         if key_commitment(workspace_id, r.version, &key) == r.key_commitment {
             return Some(key);
         }
@@ -350,22 +419,31 @@ fn open_rotation(workspace_id: Uuid, r: &SignedRotation, src: &KeySource) -> Opt
 /// A fresh rotation following `cfg`'s authorized head, sealed to every
 /// recipient at the head (see `RosterState::rotation_recipients`). Returns the
 /// body and the new key.
-pub fn new_rotation(workspace_id: Uuid, cfg: &ConfigTimeline) -> Result<(SignedRotation, [u8; 32]), RotateError> {
+pub fn new_rotation(
+    workspace_id: Uuid,
+    cfg: &ConfigTimeline,
+) -> Result<(SignedRotation, [u8; 32]), RotateError> {
     let roster = cfg.current();
     let recipients = roster.rotation_recipients();
     if recipients.is_empty() {
         return Err(RotateError::NoRecipients);
     }
-    let key = ligus_core::e2ee::generate_workspace_key().map_err(|e| RotateError::Crypto(e.to_string()))?;
+    let key = ligus_core::e2ee::generate_workspace_key()
+        .map_err(|e| RotateError::Crypto(e.to_string()))?;
     let prev = roster.key_epochs.head_version();
     let version = prev.checked_add(1).ok_or(RotateError::Exhausted)?;
     let mut sealed = BTreeMap::new();
     for (device, ka) in &recipients {
-        let blob = ligus_core::e2ee::seal(ka, &key).map_err(|e| RotateError::Crypto(e.to_string()))?;
+        let blob =
+            ligus_core::e2ee::seal(ka, &key).map_err(|e| RotateError::Crypto(e.to_string()))?;
         sealed.insert(device.to_string(), blob);
     }
-    let rotation =
-        SignedRotation { version, prev_version: prev, sealed, key_commitment: key_commitment(workspace_id, version, &key) };
+    let rotation = SignedRotation {
+        version,
+        prev_version: prev,
+        sealed,
+        key_commitment: key_commitment(workspace_id, version, &key),
+    };
     Ok((rotation, key))
 }
 
@@ -386,5 +464,7 @@ pub async fn publish_rotation(
     room: &str,
     rotation: &SignedRotation,
 ) -> Result<(), crate::relay_client::RelayError> {
-    relay.publish_keyring_row(room, &serde_json::to_value(rotation)?).await
+    relay
+        .publish_keyring_row(room, &serde_json::to_value(rotation)?)
+        .await
 }

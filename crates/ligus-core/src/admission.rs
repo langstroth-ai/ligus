@@ -76,7 +76,13 @@ impl Admission {
     /// A service admission until `expires_ms`, optionally bound to `account`,
     /// redeemable with the secret of `redeem_key`.
     pub fn service(expires_ms: i64, account_id: Option<Uuid>, redeem_key: [u8; 32]) -> Self {
-        Self { kind: ActorKind::Service, expires_ms, account_id, redeem_key: Some(redeem_key.to_vec()), device_key: None }
+        Self {
+            kind: ActorKind::Service,
+            expires_ms,
+            account_id,
+            redeem_key: Some(redeem_key.to_vec()),
+            device_key: None,
+        }
     }
 
     /// This admission, redeemable only through the device whose signing key
@@ -93,7 +99,12 @@ pub const REDEEM_CONTEXT: &[u8] = b"ligus-box-admission-redeem-v1\0";
 /// What a redemption's proof signs: the workspace, the invite, the member it
 /// adds and the device that signs the redemption, so the proof admits that
 /// member through that device only.
-pub fn redemption_message(workspace_id: Uuid, invite: Uuid, member_id: &str, device_id: Uuid) -> Vec<u8> {
+pub fn redemption_message(
+    workspace_id: Uuid,
+    invite: Uuid,
+    member_id: &str,
+    device_id: Uuid,
+) -> Vec<u8> {
     let mut m = Vec::with_capacity(REDEEM_CONTEXT.len() + 52 + member_id.len());
     m.extend_from_slice(REDEEM_CONTEXT);
     m.extend_from_slice(workspace_id.as_bytes());
@@ -111,9 +122,17 @@ pub const PERSON_REDEEM_CONTEXT: &[u8] = b"ligus-person-invite-redeem-v1\0";
 /// What a person invite's redemption proof signs: the workspace, the invite,
 /// the member it adds and the device that signs the redemption (as
 /// [`redemption_message`], under its own context).
-pub fn person_redemption_message(workspace_id: Uuid, invite: Uuid, member_id: &str, device_id: Uuid) -> Vec<u8> {
+pub fn person_redemption_message(
+    workspace_id: Uuid,
+    invite: Uuid,
+    member_id: &str,
+    device_id: Uuid,
+) -> Vec<u8> {
     let mut m = redemption_message(workspace_id, invite, member_id, device_id);
-    m.splice(..REDEEM_CONTEXT.len(), PERSON_REDEEM_CONTEXT.iter().copied());
+    m.splice(
+        ..REDEEM_CONTEXT.len(),
+        PERSON_REDEEM_CONTEXT.iter().copied(),
+    );
     m
 }
 
@@ -135,13 +154,39 @@ impl RedeemKey {
         self.0.public_key_bytes()
     }
     /// The proof that redeems `invite` for `member_id` through `device_id`.
-    pub fn prove(&self, workspace_id: Uuid, invite: Uuid, member_id: &str, device_id: Uuid) -> Vec<u8> {
-        self.0.sign(&redemption_message(workspace_id, invite, member_id, device_id)).to_vec()
+    pub fn prove(
+        &self,
+        workspace_id: Uuid,
+        invite: Uuid,
+        member_id: &str,
+        device_id: Uuid,
+    ) -> Vec<u8> {
+        self.0
+            .sign(&redemption_message(
+                workspace_id,
+                invite,
+                member_id,
+                device_id,
+            ))
+            .to_vec()
     }
     /// The proof that redeems person invite `invite` for `member_id` through
     /// `device_id`.
-    pub fn prove_person(&self, workspace_id: Uuid, invite: Uuid, member_id: &str, device_id: Uuid) -> Vec<u8> {
-        self.0.sign(&person_redemption_message(workspace_id, invite, member_id, device_id)).to_vec()
+    pub fn prove_person(
+        &self,
+        workspace_id: Uuid,
+        invite: Uuid,
+        member_id: &str,
+        device_id: Uuid,
+    ) -> Vec<u8> {
+        self.0
+            .sign(&person_redemption_message(
+                workspace_id,
+                invite,
+                member_id,
+                device_id,
+            ))
+            .to_vec()
     }
 }
 
@@ -153,7 +198,9 @@ pub fn envelope_ms(env: &SessionEventEnvelope) -> i64 {
 
 /// The invite id a `JoinApproved` subject issues, if it issues one.
 pub fn invite_of_subject(subject: &str) -> Option<Uuid> {
-    subject.strip_prefix("invite:").and_then(|s| Uuid::parse_str(s).ok())
+    subject
+        .strip_prefix("invite:")
+        .and_then(|s| Uuid::parse_str(s).ok())
 }
 
 /// The admission terms of invite `id`, if it is a box admission.
@@ -165,8 +212,19 @@ pub fn admission_of(fold: &ChatSession, id: Uuid) -> Option<&Admission> {
 /// fresh invite, admits a service, and expires after it was issued and within
 /// [`MAX_ADMISSION_TTL_MS`]. A plain `JoinApproved` may not re-issue a box
 /// admission's invite as a person's.
-pub fn issuance_refusal(env: &SessionEventEnvelope, fold: &ChatSession, on_config: bool) -> Option<&'static str> {
-    let SessionEvent::JoinApproved { subject, admission, redeem_key } = &env.payload else { return None };
+pub fn issuance_refusal(
+    env: &SessionEventEnvelope,
+    fold: &ChatSession,
+    on_config: bool,
+) -> Option<&'static str> {
+    let SessionEvent::JoinApproved {
+        subject,
+        admission,
+        redeem_key,
+    } = &env.payload
+    else {
+        return None;
+    };
     let invite = invite_of_subject(subject);
     if let Some(k) = redeem_key {
         // A person invite's redeem key: on an invite, well formed, and never
@@ -227,7 +285,11 @@ pub fn redemption_refusal(
     proof: Option<&[u8]>,
     fold: &ChatSession,
 ) -> Option<&'static str> {
-    let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+    let author = env
+        .actor_stamp
+        .as_ref()
+        .map(|s| s.actor.id.as_str())
+        .unwrap_or("");
     if member.id != author {
         // Not a self-enrollment: the role gate decides.
         return None;
@@ -243,15 +305,20 @@ pub fn redemption_refusal(
         if existing.actor.kind != member.actor.kind {
             return Some("a member's kind never changes when it re-adds itself");
         }
-        if existing.actor.account_id.is_some() && existing.actor.account_id != member.actor.account_id {
+        if existing.actor.account_id.is_some()
+            && existing.actor.account_id != member.actor.account_id
+        {
             return Some("a member's account never changes when it re-adds itself");
         }
         // A service member's record is the one its admission bound: its
         // account (never filled in later) and its actor id stay put.
         if existing.actor.kind == ActorKind::Service
-            && (existing.actor.account_id != member.actor.account_id || member.actor.id != member.id)
+            && (existing.actor.account_id != member.actor.account_id
+                || member.actor.id != member.id)
         {
-            return Some("a service member's account and identity never change when it re-adds itself");
+            return Some(
+                "a service member's account and identity never change when it re-adds itself",
+            );
         }
         return None;
     }
@@ -262,11 +329,19 @@ pub fn redemption_refusal(
         // A person invite issued with a redeem key: its code's holder,
         // through this device. The invite id alone (on the log for every
         // member) admits no one, before or after the invitee's redemption.
-        if let Some((id, key)) = invite.and_then(|id| fold.guards.invite_keys.get(&id).map(|k| (id, k))) {
+        if let Some((id, key)) =
+            invite.and_then(|id| fold.guards.invite_keys.get(&id).map(|k| (id, k)))
+        {
             let (Some(device), Some(proof)) = (env.signer_device_id, proof) else {
                 return Some("an invite is redeemed with its code's proof");
             };
-            if crate::crypto::verify(key, &person_redemption_message(env.workspace_id, id, &member.id, device), proof).is_err() {
+            if crate::crypto::verify(
+                key,
+                &person_redemption_message(env.workspace_id, id, &member.id, device),
+                proof,
+            )
+            .is_err()
+            {
                 return Some("that redemption's proof doesn't verify");
             }
         }
@@ -283,13 +358,24 @@ pub fn redemption_refusal(
     }
     // The code's holder, through this device: the invite id alone (on the
     // log for every member) admits no one.
-    let (Some(id), Some(key), Some(device), Some(proof)) = (invite, terms.redeem_key.as_deref(), env.signer_device_id, proof) else {
+    let (Some(id), Some(key), Some(device), Some(proof)) = (
+        invite,
+        terms.redeem_key.as_deref(),
+        env.signer_device_id,
+        proof,
+    ) else {
         return Some("a box admission is redeemed with its code's proof");
     };
     if fold.guards.closed_admissions.contains_key(&id) {
         return Some("that box admission was closed");
     }
-    if crate::crypto::verify(key, &redemption_message(env.workspace_id, id, &member.id, device), proof).is_err() {
+    if crate::crypto::verify(
+        key,
+        &redemption_message(env.workspace_id, id, &member.id, device),
+        proof,
+    )
+    .is_err()
+    {
         return Some("that redemption's proof doesn't verify");
     }
     if let Some(key) = terms.device_key.as_deref() {
@@ -316,8 +402,14 @@ pub fn redemption_refusal(
 /// Why closing an admission (`AdmissionClosed`) is refused, if it is: on the
 /// config log, of an admission issued here, naming (if anything) a
 /// redemption of that very invite.
-pub fn closure_refusal(env: &SessionEventEnvelope, fold: &ChatSession, on_config: bool) -> Option<&'static str> {
-    let SessionEvent::AdmissionClosed { invite, .. } = &env.payload else { return None };
+pub fn closure_refusal(
+    env: &SessionEventEnvelope,
+    fold: &ChatSession,
+    on_config: bool,
+) -> Option<&'static str> {
+    let SessionEvent::AdmissionClosed { invite, .. } = &env.payload else {
+        return None;
+    };
     if !on_config {
         return Some("an admission is closed on the workspace config log");
     }
@@ -352,15 +444,37 @@ pub fn closure_denials(
         return out;
     }
     let redemption = |e: &SessionEventEnvelope| -> Option<Uuid> {
-        let SessionEvent::MemberAdded { member, invite: Some(id), .. } = &e.payload else { return None };
-        let author = e.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+        let SessionEvent::MemberAdded {
+            member,
+            invite: Some(id),
+            ..
+        } = &e.payload
+        else {
+            return None;
+        };
+        let author = e
+            .actor_stamp
+            .as_ref()
+            .map(|s| s.actor.id.as_str())
+            .unwrap_or("");
         (member.id == author).then_some(*id)
     };
     // The code's holder could have made `e`: its proof verifies.
     let proven = |e: &SessionEventEnvelope, invite: Uuid| -> bool {
-        let SessionEvent::MemberAdded { member, proof: Some(proof), .. } = &e.payload else { return false };
-        let (Some(terms), Some(device)) = (invites.get(&invite), e.signer_device_id) else { return false };
-        let Some(key) = terms.redeem_key.as_deref() else { return false };
+        let SessionEvent::MemberAdded {
+            member,
+            proof: Some(proof),
+            ..
+        } = &e.payload
+        else {
+            return false;
+        };
+        let (Some(terms), Some(device)) = (invites.get(&invite), e.signer_device_id) else {
+            return false;
+        };
+        let Some(key) = terms.redeem_key.as_deref() else {
+            return false;
+        };
         // Under its own account (as `redemption_refusal` requires): a copy
         // of the box's record and proof replayed through the box's device id
         // certified for someone else is not the box's.
@@ -368,11 +482,20 @@ pub fn closure_denials(
         if stamped.is_none() || member.actor.account_id != stamped {
             return false;
         }
-        crate::crypto::verify(key, &redemption_message(e.workspace_id, invite, &member.id, device), proof).is_ok()
-            && terms.device_key.as_deref().is_none_or(|k| crate::crypto::verify_envelope(e, k).is_ok())
+        crate::crypto::verify(
+            key,
+            &redemption_message(e.workspace_id, invite, &member.id, device),
+            proof,
+        )
+        .is_ok()
+            && terms
+                .device_key
+                .as_deref()
+                .is_none_or(|k| crate::crypto::verify_envelope(e, k).is_ok())
     };
     // Redemptions per (invite, event id): more than one proven is ambiguous.
-    let mut under: std::collections::BTreeMap<(Uuid, Uuid), Vec<&SessionEventEnvelope>> = std::collections::BTreeMap::new();
+    let mut under: std::collections::BTreeMap<(Uuid, Uuid), Vec<&SessionEventEnvelope>> =
+        std::collections::BTreeMap::new();
     for e in envelopes {
         if let Some(invite) = redemption(e) {
             under.entry((invite, e.event_id)).or_default().push(e);
@@ -380,13 +503,16 @@ pub fn closure_denials(
     }
     let ambiguous: std::collections::BTreeSet<(Uuid, Uuid)> = under
         .iter()
-        .filter(|((invite, _), v)| v.len() > 1 && v.iter().filter(|e| proven(e, *invite)).count() > 1)
+        .filter(|((invite, _), v)| {
+            v.len() > 1 && v.iter().filter(|e| proven(e, *invite)).count() > 1
+        })
         .map(|(k, _)| *k)
         .collect();
     for e in envelopes {
         let Some(id) = redemption(e) else { continue };
         if let Some(named) = closures.get(&id) {
-            if ambiguous.contains(&(id, e.event_id)) || named.iter().any(|n| *n != Some(e.event_id)) {
+            if ambiguous.contains(&(id, e.event_id)) || named.iter().any(|n| *n != Some(e.event_id))
+            {
                 out.insert(copies.kept(e));
             }
         }
@@ -412,12 +538,26 @@ pub fn check_phone_admission_preimage(
     phone: Uuid,
     device_key: Option<&[u8]>,
 ) -> Result<(Uuid, Admission), &'static str> {
-    let confirmed = crate::phone_action::Confirmed { challenge, assertion: None };
-    let p = crate::phone_action::parse_phone_preimage(preimage, workspace_id, phone, None, Some(confirmed))?;
+    let confirmed = crate::phone_action::Confirmed {
+        challenge,
+        assertion: None,
+    };
+    let p = crate::phone_action::parse_phone_preimage(
+        preimage,
+        workspace_id,
+        phone,
+        None,
+        Some(confirmed),
+    )?;
     if p.session_id != crate::channel::workspace_config_session_id(workspace_id) {
         return Err("not on this workspace's config log");
     }
-    let SessionEvent::JoinApproved { subject, admission: Some(terms), .. } = p.event else {
+    let SessionEvent::JoinApproved {
+        subject,
+        admission: Some(terms),
+        ..
+    } = p.event
+    else {
         return Err("not a box admission");
     };
     let invite = invite_of_subject(&subject).ok_or("not a box admission")?;

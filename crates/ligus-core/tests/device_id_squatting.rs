@@ -17,9 +17,22 @@ use ligus_core::{SessionEvent, SessionEventEnvelope, Timestamp, Verdict, Workspa
 fn squat(w: &mut SignedWorld) -> SigningKeypair {
     let key = SigningKeypair::generate().unwrap();
     let mal = &w.people["mal"];
-    let cert = DeviceCertificate::issue_for_id(&mal.account, mal.account_id, w.people["con"].device_id, &key.public_key_bytes(), Timestamp::epoch());
-    let id = w.push("mal", SessionEvent::DeviceCertificateAdded { certificate: cert });
-    assert_eq!(w.verdict(id), Verdict::Denied, "a certificate under someone else's device id was allowed");
+    let cert = DeviceCertificate::issue_for_id(
+        &mal.account,
+        mal.account_id,
+        w.people["con"].device_id,
+        &key.public_key_bytes(),
+        Timestamp::epoch(),
+    );
+    let id = w.push(
+        "mal",
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
+    assert_eq!(
+        w.verdict(id),
+        Verdict::Denied,
+        "a certificate under someone else's device id was allowed"
+    );
     key
 }
 
@@ -31,13 +44,21 @@ fn world() -> SignedWorld {
 }
 
 fn ka(device: uuid::Uuid) -> SessionEvent {
-    SessionEvent::DeviceKeyAgreementPublished { device_id: device, ka_public: vec![7; 32] }
+    SessionEvent::DeviceKeyAgreementPublished {
+        device_id: device,
+        ka_public: vec![7; 32],
+    }
 }
 
 /// `by`'s config event drafted as if only the first `upto` config events
 /// existed: it names that older log head and sorts among them (backdated),
 /// with `by`'s presence.
-fn backdated(w: &mut SignedWorld, by: &str, upto: usize, payload: SessionEvent) -> SessionEventEnvelope {
+fn backdated(
+    w: &mut SignedWorld,
+    by: &str,
+    upto: usize,
+    payload: SessionEvent,
+) -> SessionEventEnvelope {
     let rest = w.cfg.split_off(upto);
     let mut env = w.draft(by, None, payload, None);
     let a = w.recovery_presence(by, &env);
@@ -62,13 +83,23 @@ fn a_squatted_device_id_keeps_its_own_key() {
     let con_device = w.people["con"].device_id;
     let roster = w.roster();
     let d = &roster.devices[&con_device];
-    assert_eq!(d.public_key, w.people["con"].device.public_key_bytes().to_vec());
-    assert!(!d.accounts.contains(&w.people["mal"].account_id), "the squat bound the id for mal");
+    assert_eq!(
+        d.public_key,
+        w.people["con"].device.public_key_bytes().to_vec()
+    );
+    assert!(
+        !d.accounts.contains(&w.people["mal"].account_id),
+        "the squat bound the id for mal"
+    );
     assert_ne!(d.public_key, key.public_key_bytes().to_vec());
     // con's device publishes its own key-agreement key: a key event, so the
     // fold checks the signature against the device's certified key.
     let id = w.push_bare("con", ka(con_device));
-    assert_eq!(w.verdict(id), Verdict::Allowed, "the victim's own key event no longer verifies");
+    assert_eq!(
+        w.verdict(id),
+        Verdict::Allowed,
+        "the victim's own key event no longer verifies"
+    );
 }
 
 /// Backdating doesn't help: a squat certificate naming an older log head,
@@ -79,13 +110,30 @@ fn a_backdated_squat_is_refused_wherever_it_sorts() {
     let at = cons_certificate_at(&w);
     let key = SigningKeypair::generate().unwrap();
     let mal = &w.people["mal"];
-    let cert = DeviceCertificate::issue_for_id(&mal.account, mal.account_id, w.people["con"].device_id, &key.public_key_bytes(), Timestamp::epoch());
-    let early = backdated(&mut w, "mal", at - 1, SessionEvent::DeviceCertificateAdded { certificate: cert });
-    assert!(early.canonical_key() < w.cfg[at].canonical_key(), "control: the squat sorts first");
+    let cert = DeviceCertificate::issue_for_id(
+        &mal.account,
+        mal.account_id,
+        w.people["con"].device_id,
+        &key.public_key_bytes(),
+        Timestamp::epoch(),
+    );
+    let early = backdated(
+        &mut w,
+        "mal",
+        at - 1,
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
+    assert!(
+        early.canonical_key() < w.cfg[at].canonical_key(),
+        "control: the squat sorts first"
+    );
     let id = w.push_env(None, early);
     assert_eq!(w.verdict(id), Verdict::Denied);
     let con_device = w.people["con"].device_id;
-    assert_eq!(w.roster().devices[&con_device].public_key, w.people["con"].device.public_key_bytes().to_vec());
+    assert_eq!(
+        w.roster().devices[&con_device].public_key,
+        w.people["con"].device.public_key_bytes().to_vec()
+    );
     let ka = w.push_bare("con", ka(con_device));
     assert_eq!(w.verdict(ka), Verdict::Allowed);
 }
@@ -101,7 +149,11 @@ fn a_squatter_cannot_sign_as_the_victim_through_the_victims_device_id() {
     forged.clear_raw();
     sign_envelope(&mut forged, con_device, &key);
     let id = w.push_env(None, forged);
-    assert_eq!(w.verdict(id), Verdict::Denied, "the squatter signed as the victim");
+    assert_eq!(
+        w.verdict(id),
+        Verdict::Denied,
+        "the squatter signed as the victim"
+    );
 }
 
 /// An agent hosted on the victim's device: the squatter can't certify a key
@@ -116,12 +168,27 @@ fn a_squatter_cannot_certify_a_key_for_an_agent_on_the_victims_device() {
     agent.host_id = con_device.to_string();
     let agent_id = agent.id;
     let up = w.push("owner", SessionEvent::AgentUpserted { agent });
-    assert_eq!(w.verdict(up), Verdict::Allowed, "control: an Owner binds the agent to con's device");
+    assert_eq!(
+        w.verdict(up),
+        Verdict::Allowed,
+        "control: an Owner binds the agent to con's device"
+    );
     let key = squat(&mut w);
 
     let evil = SigningKeypair::generate().unwrap();
-    let cert = ligus_core::AgentKeyCertificate::issue(&key, con_device, agent_id, &evil.public_key_bytes(), Timestamp::epoch());
-    let mut env = w.draft("mal", None, SessionEvent::AgentKeyCertified { cert: cert.clone() }, None);
+    let cert = ligus_core::AgentKeyCertificate::issue(
+        &key,
+        con_device,
+        agent_id,
+        &evil.public_key_bytes(),
+        Timestamp::epoch(),
+    );
+    let mut env = w.draft(
+        "mal",
+        None,
+        SessionEvent::AgentKeyCertified { cert: cert.clone() },
+        None,
+    );
     let presence = w.recovery_presence("mal", &env);
     if let Some(s) = env.actor_stamp.as_mut() {
         s.presence = Some(presence);
@@ -129,14 +196,31 @@ fn a_squatter_cannot_certify_a_key_for_an_agent_on_the_victims_device() {
     env.clear_raw();
     sign_envelope(&mut env, con_device, &key);
     let id = w.push_env(None, env);
-    assert_eq!(w.verdict(id), Verdict::Denied, "the squatter certified a key for the victim's agent");
+    assert_eq!(
+        w.verdict(id),
+        Verdict::Denied,
+        "the squatter certified a key for the victim's agent"
+    );
     assert!(w.roster().valid_agent_key(cert.key_id).is_none());
 
     // The victim's own device still certifies one.
     let good = SigningKeypair::generate().unwrap();
-    let cert = ligus_core::AgentKeyCertificate::issue(&w.people["con"].device, con_device, agent_id, &good.public_key_bytes(), Timestamp::epoch());
-    let id = w.push("con", SessionEvent::AgentKeyCertified { cert: cert.clone() });
-    assert_eq!(w.verdict(id), Verdict::Allowed, "the victim's device no longer hosts its agent's key");
+    let cert = ligus_core::AgentKeyCertificate::issue(
+        &w.people["con"].device,
+        con_device,
+        agent_id,
+        &good.public_key_bytes(),
+        Timestamp::epoch(),
+    );
+    let id = w.push(
+        "con",
+        SessionEvent::AgentKeyCertified { cert: cert.clone() },
+    );
+    assert_eq!(
+        w.verdict(id),
+        Verdict::Allowed,
+        "the victim's device no longer hosts its agent's key"
+    );
     assert!(w.roster().valid_agent_key(cert.key_id).is_some());
 }
 
@@ -150,17 +234,53 @@ fn a_squatter_cannot_revoke_the_victims_device_as_their_own() {
         let device = w.people[victim].device_id;
         let key = SigningKeypair::generate().unwrap();
         let mal = &w.people["mal"];
-        let cert = DeviceCertificate::issue_for_id(&mal.account, mal.account_id, device, &key.public_key_bytes(), Timestamp::epoch());
-        w.push("mal", SessionEvent::DeviceCertificateAdded { certificate: cert });
-        let id = w.push("mal", SessionEvent::DeviceRevoked { device_id: device, watermark: Vec::new() });
-        assert_eq!(w.verdict(id), Verdict::Denied, "mal revoked {victim}'s device through a squatted certificate");
-        assert!(!w.roster().devices[&device].revoked, "{victim}'s device is revoked");
+        let cert = DeviceCertificate::issue_for_id(
+            &mal.account,
+            mal.account_id,
+            device,
+            &key.public_key_bytes(),
+            Timestamp::epoch(),
+        );
+        w.push(
+            "mal",
+            SessionEvent::DeviceCertificateAdded { certificate: cert },
+        );
+        let id = w.push(
+            "mal",
+            SessionEvent::DeviceRevoked {
+                device_id: device,
+                watermark: Vec::new(),
+            },
+        );
+        assert_eq!(
+            w.verdict(id),
+            Verdict::Denied,
+            "mal revoked {victim}'s device through a squatted certificate"
+        );
+        assert!(
+            !w.roster().devices[&device].revoked,
+            "{victim}'s device is revoked"
+        );
         // The victim's device still writes.
         let ka = w.push_bare(victim, ka(device));
-        assert_eq!(w.verdict(ka), Verdict::Allowed, "{victim}'s device no longer signs");
+        assert_eq!(
+            w.verdict(ka),
+            Verdict::Allowed,
+            "{victim}'s device no longer signs"
+        );
         // The victim still revokes their own device (a lost laptop).
-        let own = w.push(victim, SessionEvent::DeviceRevoked { device_id: device, watermark: Vec::new() });
-        assert_eq!(w.verdict(own), Verdict::Allowed, "the squat blocked {victim}'s own revocation");
+        let own = w.push(
+            victim,
+            SessionEvent::DeviceRevoked {
+                device_id: device,
+                watermark: Vec::new(),
+            },
+        );
+        assert_eq!(
+            w.verdict(own),
+            Verdict::Allowed,
+            "the squat blocked {victim}'s own revocation"
+        );
     }
 }
 
@@ -182,10 +302,18 @@ fn certifying_someone_elses_device_key_holds_nothing_backdated_or_not() {
         let at = cons_certificate_at(&w);
         let (con_device, mal_account) = (w.people["con"].device_id, w.people["mal"].account_id);
         let mal = &w.people["mal"];
-        let cert = DeviceCertificate::issue(&mal.account, mal_account, &w.people["con"].device.public_key_bytes(), Timestamp::epoch());
+        let cert = DeviceCertificate::issue(
+            &mal.account,
+            mal_account,
+            &w.people["con"].device.public_key_bytes(),
+            Timestamp::epoch(),
+        );
         assert_eq!(cert.device_id, con_device);
         let adopt = SessionEvent::DeviceCertificateAdded { certificate: cert };
-        let revoke = SessionEvent::DeviceRevoked { device_id: con_device, watermark: Vec::new() };
+        let revoke = SessionEvent::DeviceRevoked {
+            device_id: con_device,
+            watermark: Vec::new(),
+        };
         let (adopted, revoked) = if backdate {
             // Both sort before con's own certificate (lamports one past the
             // older heads they name).
@@ -193,36 +321,64 @@ fn certifying_someone_elses_device_key_holds_nothing_backdated_or_not() {
             let id = a.event_id;
             w.cfg.insert(at - 2, a);
             let r = backdated(&mut w, "mal", at - 1, revoke.clone());
-            assert!(r.canonical_key() < w.cfg[at + 1].canonical_key(), "control: the revocation sorts before con's certificate");
+            assert!(
+                r.canonical_key() < w.cfg[at + 1].canonical_key(),
+                "control: the revocation sorts before con's certificate"
+            );
             (id, w.push_env(None, r))
         } else {
             (w.push("mal", adopt), w.push("mal", revoke.clone()))
         };
-        assert_eq!(w.verdict(adopted), Verdict::Allowed, "control: a well-formed certificate of mal's (backdated: {backdate})");
-        assert_eq!(w.verdict(revoked), Verdict::Denied, "mal revoked con's device (backdated: {backdate})");
+        assert_eq!(
+            w.verdict(adopted),
+            Verdict::Allowed,
+            "control: a well-formed certificate of mal's (backdated: {backdate})"
+        );
+        assert_eq!(
+            w.verdict(revoked),
+            Verdict::Denied,
+            "mal revoked con's device (backdated: {backdate})"
+        );
         // An Admin who has nothing else of it to revoke can't either, when
         // only mal's certificate is before the revocation.
         if backdate {
             let r = backdated(&mut w, "ada", at - 1, revoke.clone());
             let id = w.push_env(None, r);
-            assert_eq!(w.verdict(id), Verdict::Denied, "an Admin revoked a device only an adopter had certified there");
+            assert_eq!(
+                w.verdict(id),
+                Verdict::Denied,
+                "an Admin revoked a device only an adopter had certified there"
+            );
         }
         let roster = w.roster();
         let d = &roster.devices[&con_device];
         assert!(!d.revoked);
-        assert!(d.accounts.contains(&mal_account), "control: mal's certificate counts as a certificate");
+        assert!(
+            d.accounts.contains(&mal_account),
+            "control: mal's certificate counts as a certificate"
+        );
         assert!(roster.account_holds_device(w.people["con"].account_id, con_device));
-        assert!(!roster.account_holds_device(mal_account, con_device), "an adopter holds the device");
+        assert!(
+            !roster.account_holds_device(mal_account, con_device),
+            "an adopter holds the device"
+        );
         // An unbound agent of mal's never runs on con's device.
         let mut agent = ligus_core::WorkspaceAgent::new("helper", "gw");
         agent.owner_actor_id = "mal".into();
         let agent_id = agent.id;
         let up = w.push("mal", SessionEvent::AgentUpserted { agent });
         assert_eq!(w.verdict(up), Verdict::Allowed);
-        assert!(!w.roster().agent_bound_to(agent_id, con_device), "mal's agent runs on con's device");
+        assert!(
+            !w.roster().agent_bound_to(agent_id, con_device),
+            "mal's agent runs on con's device"
+        );
         // con still revokes their own device.
         let own = w.push("con", revoke);
-        assert_eq!(w.verdict(own), Verdict::Allowed, "the adoption blocked con's own revocation");
+        assert_eq!(
+            w.verdict(own),
+            Verdict::Allowed,
+            "the adoption blocked con's own revocation"
+        );
     }
 }
 
@@ -240,11 +396,25 @@ fn certifying_someone_elses_phone_key_signs_nothing() {
     w.admit("owner", "mal", WorkspaceRole::Contributor);
     let phone = Phone::new();
     let cert = w.phone_certificate("con", &phone);
-    let enrolled = w.push("con", SessionEvent::DeviceCertificateAdded { certificate: cert });
-    assert_eq!(w.verdict(enrolled), Verdict::Allowed, "control: con enrolls a phone");
+    let enrolled = w.push(
+        "con",
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
+    assert_eq!(
+        w.verdict(enrolled),
+        Verdict::Allowed,
+        "control: con enrolls a phone"
+    );
     let adopt = w.phone_certificate("mal", &phone);
-    w.push("mal", SessionEvent::DeviceCertificateAdded { certificate: adopt });
-    assert!(w.roster().account_holds_device(w.people["con"].account_id, phone.device_id), "the adoption took con's phone away");
+    w.push(
+        "mal",
+        SessionEvent::DeviceCertificateAdded { certificate: adopt },
+    );
+    assert!(
+        w.roster()
+            .account_holds_device(w.people["con"].account_id, phone.device_id),
+        "the adoption took con's phone away"
+    );
     // mal signs a key event as con under the phone's id with a key of mal's.
     let key = p256::ecdsa::SigningKey::from_slice(&[9u8; 32]).unwrap();
     let mut forged = w.draft("con", None, ka(phone.device_id), None);
@@ -254,15 +424,30 @@ fn certifying_someone_elses_phone_key_signs_nothing() {
     forged.clear_raw();
     ligus_core::crypto::sign_envelope_p256(&mut forged, phone.device_id, &key);
     let id = w.push_env(None, forged);
-    assert_eq!(w.verdict(id), Verdict::Denied, "mal signed as con through con's phone id");
-    let revoke = SessionEvent::DeviceRevoked { device_id: phone.device_id, watermark: Vec::new() };
+    assert_eq!(
+        w.verdict(id),
+        Verdict::Denied,
+        "mal signed as con through con's phone id"
+    );
+    let revoke = SessionEvent::DeviceRevoked {
+        device_id: phone.device_id,
+        watermark: Vec::new(),
+    };
     let mut owner = w.clone();
     let by_owner = owner.push("owner", revoke.clone());
-    assert_eq!(owner.verdict(by_owner), Verdict::Allowed, "an Owner can't revoke con's phone after the adoption");
+    assert_eq!(
+        owner.verdict(by_owner),
+        Verdict::Allowed,
+        "an Owner can't revoke con's phone after the adoption"
+    );
     // con's own revocation goes down the ranks over the adopter too (see
     // `an_adopter_cannot_revoke_a_phone_that_vouched_for_no_one`).
     let by_con = w.push("con", revoke);
-    assert_eq!(w.verdict(by_con), Verdict::Denied, "con, mal's peer, revoked a phone mal holds too");
+    assert_eq!(
+        w.verdict(by_con),
+        Verdict::Denied,
+        "con, mal's peer, revoked a phone mal holds too"
+    );
 }
 
 /// An adopter of a device that vouched for no one on the log (a phone, a box
@@ -280,14 +465,31 @@ fn an_adopter_cannot_revoke_a_phone_that_vouched_for_no_one() {
     w.admit("owner", "mal", WorkspaceRole::Contributor);
     let phone = Phone::new();
     let cert = w.phone_certificate("con", &phone);
-    w.push("con", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    w.push(
+        "con",
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
     let adopt = w.phone_certificate("mal", &phone);
-    let adopted = w.push("mal", SessionEvent::DeviceCertificateAdded { certificate: adopt });
-    assert_eq!(w.verdict(adopted), Verdict::Allowed, "control: a well-formed certificate of mal's");
-    let revoke = SessionEvent::DeviceRevoked { device_id: phone.device_id, watermark: Vec::new() };
+    let adopted = w.push(
+        "mal",
+        SessionEvent::DeviceCertificateAdded { certificate: adopt },
+    );
+    assert_eq!(
+        w.verdict(adopted),
+        Verdict::Allowed,
+        "control: a well-formed certificate of mal's"
+    );
+    let revoke = SessionEvent::DeviceRevoked {
+        device_id: phone.device_id,
+        watermark: Vec::new(),
+    };
     let mut by_mal = w.clone();
     let id = by_mal.push("mal", revoke.clone());
-    assert_eq!(by_mal.verdict(id), Verdict::Denied, "mal revoked con's phone by certifying its key for mal");
+    assert_eq!(
+        by_mal.verdict(id),
+        Verdict::Denied,
+        "mal revoked con's phone by certifying its key for mal"
+    );
     assert!(!by_mal.roster().devices[&phone.device_id].revoked);
     // An Owner revokes it.
     let mut by_owner = w.clone();
@@ -295,10 +497,24 @@ fn an_adopter_cannot_revoke_a_phone_that_vouched_for_no_one() {
     assert_eq!(by_owner.verdict(id), Verdict::Allowed);
     // Once mal is gone, con revokes it again.
     let mal_id = w.people["mal"].actor().id;
-    let removed = w.push("owner", SessionEvent::MemberRemoved { member_id: mal_id, watermark: Vec::new() });
-    assert_eq!(w.verdict(removed), Verdict::Allowed, "control: the Owner removes mal");
+    let removed = w.push(
+        "owner",
+        SessionEvent::MemberRemoved {
+            member_id: mal_id,
+            watermark: Vec::new(),
+        },
+    );
+    assert_eq!(
+        w.verdict(removed),
+        Verdict::Allowed,
+        "control: the Owner removes mal"
+    );
     let id = w.push("con", revoke);
-    assert_eq!(w.verdict(id), Verdict::Allowed, "con can't revoke their own phone once the adopter is gone");
+    assert_eq!(
+        w.verdict(id),
+        Verdict::Allowed,
+        "con can't revoke their own phone once the adopter is gone"
+    );
 }
 
 /// The same for an Ed25519 device that never signed anything on the config
@@ -309,14 +525,39 @@ fn an_adopter_cannot_revoke_a_box_that_vouched_for_no_one() {
     w.admit("owner", "con", WorkspaceRole::Contributor);
     w.admit("owner", "mal", WorkspaceRole::Contributor);
     let boxk = SigningKeypair::generate().unwrap();
-    let enroll = DeviceCertificate::issue(&w.people["con"].account, w.people["con"].account_id, &boxk.public_key_bytes(), Timestamp::epoch());
+    let enroll = DeviceCertificate::issue(
+        &w.people["con"].account,
+        w.people["con"].account_id,
+        &boxk.public_key_bytes(),
+        Timestamp::epoch(),
+    );
     let device = enroll.device_id;
-    w.push("con", SessionEvent::DeviceCertificateAdded { certificate: enroll });
-    let adopt = DeviceCertificate::issue(&w.people["mal"].account, w.people["mal"].account_id, &boxk.public_key_bytes(), Timestamp::epoch());
-    w.push("mal", SessionEvent::DeviceCertificateAdded { certificate: adopt });
-    let revoke = SessionEvent::DeviceRevoked { device_id: device, watermark: Vec::new() };
+    w.push(
+        "con",
+        SessionEvent::DeviceCertificateAdded {
+            certificate: enroll,
+        },
+    );
+    let adopt = DeviceCertificate::issue(
+        &w.people["mal"].account,
+        w.people["mal"].account_id,
+        &boxk.public_key_bytes(),
+        Timestamp::epoch(),
+    );
+    w.push(
+        "mal",
+        SessionEvent::DeviceCertificateAdded { certificate: adopt },
+    );
+    let revoke = SessionEvent::DeviceRevoked {
+        device_id: device,
+        watermark: Vec::new(),
+    };
     let id = w.push("mal", revoke);
-    assert_eq!(w.verdict(id), Verdict::Denied, "mal revoked con's box by certifying its key for mal");
+    assert_eq!(
+        w.verdict(id),
+        Verdict::Denied,
+        "mal revoked con's box by certifying its key for mal"
+    );
 }
 
 /// A phone certificate never takes over a device in the fold, with or
@@ -329,21 +570,52 @@ fn a_phone_certificate_never_takes_over_a_device_in_the_fold() {
     let mut w = world();
     let phone = Phone::new();
     let first = w.phone_certificate("con", &phone);
-    let id = w.push("con", SessionEvent::DeviceCertificateAdded { certificate: first });
-    assert_eq!(w.verdict(id), Verdict::Allowed, "control: con enrolls a phone");
+    let id = w.push(
+        "con",
+        SessionEvent::DeviceCertificateAdded { certificate: first },
+    );
+    assert_eq!(
+        w.verdict(id),
+        Verdict::Allowed,
+        "control: con enrolls a phone"
+    );
     let other = Phone::new();
     let people = w.people.clone();
     let con = &people["con"];
     for target in [con.device_id, phone.device_id, people["owner"].device_id] {
-        let cert = DeviceCertificate::issue_p256_for_id(&con.account, con.account_id, target, &other.public_key(), Timestamp::epoch());
-        let with = w.push("con", SessionEvent::DeviceCertificateAdded { certificate: cert.clone() });
-        let without = w.push_bare("con", SessionEvent::DeviceCertificateAdded { certificate: cert });
-        assert_eq!((w.verdict(with), w.verdict(without)), (Verdict::Denied, Verdict::Denied), "a phone certificate took over {target}");
+        let cert = DeviceCertificate::issue_p256_for_id(
+            &con.account,
+            con.account_id,
+            target,
+            &other.public_key(),
+            Timestamp::epoch(),
+        );
+        let with = w.push(
+            "con",
+            SessionEvent::DeviceCertificateAdded {
+                certificate: cert.clone(),
+            },
+        );
+        let without = w.push_bare(
+            "con",
+            SessionEvent::DeviceCertificateAdded { certificate: cert },
+        );
+        assert_eq!(
+            (w.verdict(with), w.verdict(without)),
+            (Verdict::Denied, Verdict::Denied),
+            "a phone certificate took over {target}"
+        );
     }
     let roster = w.roster();
-    assert_eq!(roster.devices[&con.device_id].public_key, con.device.public_key_bytes().to_vec());
+    assert_eq!(
+        roster.devices[&con.device_id].public_key,
+        con.device.public_key_bytes().to_vec()
+    );
     assert!(!roster.devices[&con.device_id].phone);
-    assert_eq!(roster.devices[&phone.device_id].public_key, phone.public_key());
+    assert_eq!(
+        roster.devices[&phone.device_id].public_key,
+        phone.public_key()
+    );
     assert!(!roster.devices.contains_key(&other.device_id));
 }
 
@@ -360,11 +632,29 @@ fn a_config_event_replayed_from_another_workspace_vouches_for_nothing() {
     // and certified by mal for mal too: contested, vouched for no one.
     let boxk = SigningKeypair::generate().unwrap();
     let people = w1.people.clone();
-    let enroll = DeviceCertificate::issue(&people["con"].account, people["con"].account_id, &boxk.public_key_bytes(), Timestamp::epoch());
+    let enroll = DeviceCertificate::issue(
+        &people["con"].account,
+        people["con"].account_id,
+        &boxk.public_key_bytes(),
+        Timestamp::epoch(),
+    );
     let device = enroll.device_id;
-    w1.push("con", SessionEvent::DeviceCertificateAdded { certificate: enroll });
-    let adopt = DeviceCertificate::issue(&people["mal"].account, people["mal"].account_id, &boxk.public_key_bytes(), Timestamp::epoch());
-    w1.push("mal", SessionEvent::DeviceCertificateAdded { certificate: adopt });
+    w1.push(
+        "con",
+        SessionEvent::DeviceCertificateAdded {
+            certificate: enroll,
+        },
+    );
+    let adopt = DeviceCertificate::issue(
+        &people["mal"].account,
+        people["mal"].account_id,
+        &boxk.public_key_bytes(),
+        Timestamp::epoch(),
+    );
+    w1.push(
+        "mal",
+        SessionEvent::DeviceCertificateAdded { certificate: adopt },
+    );
     // In another workspace the box signed a config event for mal (say mal
     // enrolled it there): replayed into this log.
     let mut w2 = SignedWorld::genesis(&["mal"], None);
@@ -378,7 +668,10 @@ fn a_config_event_replayed_from_another_workspace_vouches_for_nothing() {
     let mut log: Vec<&SessionEventEnvelope> = w1.cfg.iter().collect();
     log.push(&moved);
     let v = ligus_core::authz::RosterTracker::vouched(&log);
-    assert!(v.get(&device).is_none_or(|a| a.is_empty()), "a replayed event vouched: {v:?}");
+    assert!(
+        v.get(&device).is_none_or(|a| a.is_empty()),
+        "a replayed event vouched: {v:?}"
+    );
     // Control: the same event signed for this log does vouch.
     let mut here = w1.draft("mal", None, ka(device), None);
     here.clear_raw();
@@ -386,7 +679,11 @@ fn a_config_event_replayed_from_another_workspace_vouches_for_nothing() {
     let mut log: Vec<&SessionEventEnvelope> = w1.cfg.iter().collect();
     log.push(&here);
     let v = ligus_core::authz::RosterTracker::vouched(&log);
-    assert!(v.get(&device).is_some_and(|a| a.contains(&people["mal"].account_id)), "control: {v:?}");
+    assert!(
+        v.get(&device)
+            .is_some_and(|a| a.contains(&people["mal"].account_id)),
+        "control: {v:?}"
+    );
     // And unmoved, the other workspace's event verifies there.
     assert!(ligus_core::crypto::verify_envelope(&there, &boxk.public_key_bytes()).is_ok());
 }

@@ -12,11 +12,19 @@ use super::RosterState;
 /// that is neither delegated (a linked computer, a box acting for them) nor
 /// a phone, so a stolen linked computer or phone can't rename its person
 /// everywhere; never an agent or a runtime effect. Then the content checks.
-pub fn profile_ok(env: &SessionEventEnvelope, change: &ProfileChange, on_config: bool, roster: &RosterState) -> Result<(), String> {
+pub fn profile_ok(
+    env: &SessionEventEnvelope,
+    change: &ProfileChange,
+    on_config: bool,
+    roster: &RosterState,
+) -> Result<(), String> {
     if !on_config {
         return Err("a profile is set on the workspace config log".into());
     }
-    let stamp = env.actor_stamp.as_ref().ok_or("a profile names its author")?;
+    let stamp = env
+        .actor_stamp
+        .as_ref()
+        .ok_or("a profile names its author")?;
     if !matches!(stamp.actor.kind, ActorKind::Human | ActorKind::Service) || stamp.runtime_effect {
         return Err("only a person or a box sets a profile".into());
     }
@@ -28,7 +36,9 @@ pub fn profile_ok(env: &SessionEventEnvelope, change: &ProfileChange, on_config:
         return Err("a phone can't change its person's profile".into());
     }
     if device.delegated_for(change.account_id) {
-        return Err("a linked device can't change its person's profile: change it on their desktop".into());
+        return Err(
+            "a linked device can't change its person's profile: change it on their desktop".into(),
+        );
     }
     profile::change_ok(change).map_err(String::from)
 }
@@ -39,11 +49,19 @@ pub fn profile_ok(env: &SessionEventEnvelope, change: &ProfileChange, on_config:
 /// account (the person's desktop renaming their phone or computer). Labels
 /// are keyed by (device, account), so a member who certified someone else's
 /// device key for themselves only ever labels it under their own name.
-pub fn label_ok(env: &SessionEventEnvelope, label: &DeviceLabel, on_config: bool, roster: &RosterState) -> Result<(), String> {
+pub fn label_ok(
+    env: &SessionEventEnvelope,
+    label: &DeviceLabel,
+    on_config: bool,
+    roster: &RosterState,
+) -> Result<(), String> {
     if !on_config {
         return Err("a device name is set on the workspace config log".into());
     }
-    let stamp = env.actor_stamp.as_ref().ok_or("a device name names its author")?;
+    let stamp = env
+        .actor_stamp
+        .as_ref()
+        .ok_or("a device name names its author")?;
     if !matches!(stamp.actor.kind, ActorKind::Human | ActorKind::Service) || stamp.runtime_effect {
         return Err("only a person or a box names a device".into());
     }

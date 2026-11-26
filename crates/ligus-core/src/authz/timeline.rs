@@ -97,7 +97,9 @@ impl DeviceState {
         if account.is_some_and(|a| !self.accounts.contains(&a)) || self.public_key.is_empty() {
             return None;
         }
-        crate::crypto::verify_envelope(env, &self.public_key).is_ok().then_some(self.public_key.as_slice())
+        crate::crypto::verify_envelope(env, &self.public_key)
+            .is_ok()
+            .then_some(self.public_key.as_slice())
     }
 }
 
@@ -182,7 +184,9 @@ impl RosterState {
 
     /// Whether `account` certified `device` (and the device is not revoked).
     pub fn account_certified(&self, account: Uuid, device: Uuid) -> bool {
-        self.devices.get(&device).is_some_and(|d| d.accounts.contains(&account))
+        self.devices
+            .get(&device)
+            .is_some_and(|d| d.accounts.contains(&account))
     }
 
     /// Whether `account` holds the device `device` names
@@ -191,7 +195,9 @@ impl RosterState {
     /// only on a device that account holds. An account that certified
     /// someone else's device (its key) for itself holds nothing.
     pub fn account_holds_device(&self, account: Uuid, device: Uuid) -> bool {
-        self.devices.get(&device).is_some_and(|d| d.holders.contains(&account))
+        self.devices
+            .get(&device)
+            .is_some_and(|d| d.holders.contains(&account))
     }
 
     /// Whether `device` is `account`'s own to revoke (R5, and a service
@@ -205,20 +211,26 @@ impl RosterState {
         self.devices.get(&device).is_some_and(|d| {
             d.holders.contains(&account)
                 && (d.vouched
-                    || d.holders.iter().all(|h| *h == account || !self.members.values().any(|m| m.account_id == Some(*h))))
+                    || d.holders.iter().all(|h| {
+                        *h == account || !self.members.values().any(|m| m.account_id == Some(*h))
+                    }))
         })
     }
 
     /// Whether a device is certified (by some undisputed account) and not
     /// revoked.
     pub fn device_trusted(&self, device: Uuid) -> bool {
-        self.devices.get(&device).is_some_and(|d| !d.revoked && !d.accounts.is_empty())
+        self.devices
+            .get(&device)
+            .is_some_and(|d| !d.revoked && !d.accounts.is_empty())
     }
 
     /// Whether `host` may hold keys for `agent_id` here: the agent is bound
     /// to that host, or, unbound, its owner's account holds the host.
     pub fn agent_bound_to(&self, agent_id: Uuid, host: Uuid) -> bool {
-        let Some(agent) = self.agents.get(&agent_id) else { return false };
+        let Some(agent) = self.agents.get(&agent_id) else {
+            return false;
+        };
         if !self.device_trusted(host) {
             return false;
         }
@@ -239,7 +251,8 @@ impl RosterState {
     /// invalidates the old key from that position on.
     pub fn valid_agent_key(&self, key_id: Uuid) -> Option<&AgentKeyState> {
         let key = self.agent_keys.get(&key_id)?;
-        self.agent_bound_to(key.agent_id, key.host_device_id).then_some(key)
+        self.agent_bound_to(key.agent_id, key.host_device_id)
+            .then_some(key)
     }
 
     /// Who a rotation at this position seals the new key to (B1): every
@@ -258,7 +271,9 @@ impl RosterState {
         self.ka_keys
             .iter()
             .filter(|(device, _)| {
-                let Some(d) = self.devices.get(device) else { return false };
+                let Some(d) = self.devices.get(device) else {
+                    return false;
+                };
                 !d.revoked && d.holders.iter().any(|a| accounts.contains(a))
             })
             .map(|(d, k)| (*d, k.clone()))
@@ -321,7 +336,11 @@ impl RosterTracker {
     /// Index the log's certificates and registrations for the account-key
     /// rules (whole log, any position: a fold sets it before folding), and
     /// anchor the founder to the device that signed the base seed.
-    pub fn set_key_index(&mut self, index: Arc<crate::account_keys::KeyIndex>, seed: &SessionEventEnvelope) {
+    pub fn set_key_index(
+        &mut self,
+        index: Arc<crate::account_keys::KeyIndex>,
+        seed: &SessionEventEnvelope,
+    ) {
         self.book = crate::account_keys::KeyBook::new(index, None);
         if let Some((account, device)) = crate::account_keys::seed_anchor(seed) {
             self.book.anchor(account, device);
@@ -362,13 +381,18 @@ impl RosterTracker {
     /// one account alone on the whole log. A certificate someone puts on
     /// another device's public key is never accepted, so it counts for
     /// nothing: it can't hold, borrow, block or redirect the device.
-    pub fn accepted(envelopes: &[&SessionEventEnvelope], workspace_id: Uuid) -> BTreeSet<(Uuid, Uuid)> {
+    pub fn accepted(
+        envelopes: &[&SessionEventEnvelope],
+        workspace_id: Uuid,
+    ) -> BTreeSet<(Uuid, Uuid)> {
         let trust: Vec<SessionEventEnvelope> = envelopes
             .iter()
             .filter(|e| {
                 matches!(
                     e.payload,
-                    SessionEvent::AccountKeyRegistered { .. } | SessionEvent::AccountKeyRotated { .. } | SessionEvent::DeviceCertificateAdded { .. }
+                    SessionEvent::AccountKeyRegistered { .. }
+                        | SessionEvent::AccountKeyRotated { .. }
+                        | SessionEvent::DeviceCertificateAdded { .. }
                 )
             })
             .map(|e| (*e).clone())
@@ -386,9 +410,14 @@ impl RosterTracker {
             if let SessionEvent::DeviceCertificateAdded { certificate: c } = &e.payload {
                 let verified = c.alg == crate::crypto::SigAlg::P256
                     && c.id_matches_key()
-                    && devices.get(&c.device_id).is_some_and(|(key, claimants)| *key == c.device_public_key.as_slice() && claimants.contains(&c.account_id));
+                    && devices.get(&c.device_id).is_some_and(|(key, claimants)| {
+                        *key == c.device_public_key.as_slice() && claimants.contains(&c.account_id)
+                    });
                 if verified {
-                    phone_certifiers.entry(c.device_id).or_default().insert(c.account_id);
+                    phone_certifiers
+                        .entry(c.device_id)
+                        .or_default()
+                        .insert(c.account_id);
                     if c.phone_consent_ok(workspace_id) {
                         out.insert((c.device_id, c.account_id));
                     }
@@ -402,12 +431,18 @@ impl RosterTracker {
         }
         // Ed25519 devices: their own signature stamped for the account.
         for e in envelopes {
-            let Some(signer) = e.signer_device_id else { continue };
-            let Some((key, claimants)) = devices.get(&signer) else { continue };
+            let Some(signer) = e.signer_device_id else {
+                continue;
+            };
+            let Some((key, claimants)) = devices.get(&signer) else {
+                continue;
+            };
             if key.len() != crate::crypto::KEY_LEN {
                 continue;
             }
-            let Some(account) = e.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { continue };
+            let Some(account) = e.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else {
+                continue;
+            };
             if !claimants.contains(&account) || out.contains(&(signer, account)) {
                 continue;
             }
@@ -439,7 +474,10 @@ impl RosterTracker {
         let mut named: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
         for e in envelopes {
             if let SessionEvent::DeviceCertificateAdded { certificate } = &e.payload {
-                named.entry(certificate.device_id).or_default().insert(certificate.account_id);
+                named
+                    .entry(certificate.device_id)
+                    .or_default()
+                    .insert(certificate.account_id);
             }
         }
         if named.values().all(|a| a.len() < 2) {
@@ -450,29 +488,47 @@ impl RosterTracker {
             .filter(|e| {
                 matches!(
                     e.payload,
-                    SessionEvent::AccountKeyRegistered { .. } | SessionEvent::AccountKeyRotated { .. } | SessionEvent::DeviceCertificateAdded { .. }
+                    SessionEvent::AccountKeyRegistered { .. }
+                        | SessionEvent::AccountKeyRotated { .. }
+                        | SessionEvent::DeviceCertificateAdded { .. }
                 )
             })
             .map(|e| (*e).clone())
             .collect();
         let directory = crate::copies::SignerDirectory::of(&trust);
-        let contested: BTreeMap<Uuid, (&[u8], &BTreeSet<Uuid>)> =
-            directory.devices().filter(|(_, (k, a))| a.len() > 1 && k.len() == crate::crypto::KEY_LEN).collect();
+        let contested: BTreeMap<Uuid, (&[u8], &BTreeSet<Uuid>)> = directory
+            .devices()
+            .filter(|(_, (k, a))| a.len() > 1 && k.len() == crate::crypto::KEY_LEN)
+            .collect();
         let mut out: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
         if contested.is_empty() {
             return out;
         }
         for e in envelopes {
-            let Some((key, claimants)) = e.signer_device_id.and_then(|d| contested.get(&d)) else { continue };
-            let mut named: Vec<Uuid> = e.actor_stamp.as_ref().and_then(|s| s.actor.account_id).into_iter().collect();
+            let Some((key, claimants)) = e.signer_device_id.and_then(|d| contested.get(&d)) else {
+                continue;
+            };
+            let mut named: Vec<Uuid> = e
+                .actor_stamp
+                .as_ref()
+                .and_then(|s| s.actor.account_id)
+                .into_iter()
+                .collect();
             if let SessionEvent::DeviceCertificateAdded { certificate } = &e.payload {
                 if Some(certificate.device_id) == e.signer_device_id {
                     named.push(certificate.account_id);
                 }
             }
-            named.retain(|a| claimants.contains(a) && !out.get(&e.signer_device_id.unwrap_or_default()).is_some_and(|v| v.contains(a)));
+            named.retain(|a| {
+                claimants.contains(a)
+                    && !out
+                        .get(&e.signer_device_id.unwrap_or_default())
+                        .is_some_and(|v| v.contains(a))
+            });
             if !named.is_empty() && crate::crypto::verify_envelope(e, key).is_ok() {
-                out.entry(e.signer_device_id.unwrap_or_default()).or_default().extend(named);
+                out.entry(e.signer_device_id.unwrap_or_default())
+                    .or_default()
+                    .extend(named);
             }
         }
         out
@@ -481,7 +537,12 @@ impl RosterTracker {
     /// Fold the trust side of an event (account keys and device certificates
     /// are self-validating, not role-gated) and, for an allowed event, the
     /// roster side read back from the fold. Returns whether the state changed.
-    pub fn observe(&mut self, env: &SessionEventEnvelope, allowed: bool, fold: &ChatSession) -> bool {
+    pub fn observe(
+        &mut self,
+        env: &SessionEventEnvelope,
+        allowed: bool,
+        fold: &ChatSession,
+    ) -> bool {
         let before = self.state.clone();
         if allowed {
             // An account's own admission (its device signed the
@@ -490,7 +551,9 @@ impl RosterTracker {
             // rebuilds the devices.
             if let SessionEvent::MemberAdded { member, .. } = &env.payload {
                 let was_member = self.state.members.contains_key(&member.id);
-                if let Some((account, device)) = crate::account_keys::admission_anchor(env, was_member) {
+                if let Some((account, device)) =
+                    crate::account_keys::admission_anchor(env, was_member)
+                {
                     self.book.anchor(account, device);
                 }
             }
@@ -518,7 +581,9 @@ impl RosterTracker {
                     // key the certificate names (the one its id derives from)
                     // proves it, so nobody else can make one.
                     Some(s) if s == certificate.device_id => {
-                        if crate::crypto::verify_envelope(env, &certificate.device_public_key).is_ok() {
+                        if crate::crypto::verify_envelope(env, &certificate.device_public_key)
+                            .is_ok()
+                        {
                             self.self_published.insert(key);
                         }
                     }
@@ -527,7 +592,9 @@ impl RosterTracker {
                     // anyone else re-publishing a cert can't mark it delegated.
                     Some(s)
                         if self.state.devices.get(&s).is_some_and(|d| {
-                            !d.revoked && d.accounts.contains(&certificate.account_id) && !d.delegated_for(certificate.account_id)
+                            !d.revoked
+                                && d.accounts.contains(&certificate.account_id)
+                                && !d.delegated_for(certificate.account_id)
                         }) =>
                     {
                         self.enrolled_by_other.insert(key);
@@ -561,7 +628,10 @@ impl RosterTracker {
             SessionEvent::WorkspaceKeyRotated { rotation } if allowed => {
                 self.state.key_epochs.push(rotation, env.canonical_key());
             }
-            SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public } if allowed => {
+            SessionEvent::DeviceKeyAgreementPublished {
+                device_id,
+                ka_public,
+            } if allowed => {
                 self.state.ka_keys.insert(*device_id, ka_public.clone());
             }
             SessionEvent::PasskeyRegistered { credential } if allowed => {
@@ -570,9 +640,15 @@ impl RosterTracker {
                     .passkeys
                     .entry(credential.account_id)
                     .or_default()
-                    .insert(credential.credential_id.clone(), crate::presence::PasskeyKey::from(credential));
+                    .insert(
+                        credential.credential_id.clone(),
+                        crate::presence::PasskeyKey::from(credential),
+                    );
             }
-            SessionEvent::PasskeyRemoved { account_id, credential_id } if allowed => {
+            SessionEvent::PasskeyRemoved {
+                account_id,
+                credential_id,
+            } if allowed => {
                 if let Some(m) = self.state.passkeys.get_mut(account_id) {
                     m.remove(credential_id);
                     if m.is_empty() {
@@ -581,9 +657,20 @@ impl RosterTracker {
                 }
             }
             SessionEvent::WorkspaceRepoAdded { repo } if allowed => {
-                self.state.repos.insert(repo.id, crate::workspace_repo::RepoEntry { repo: repo.clone(), removed: false });
+                self.state.repos.insert(
+                    repo.id,
+                    crate::workspace_repo::RepoEntry {
+                        repo: repo.clone(),
+                        removed: false,
+                    },
+                );
             }
-            SessionEvent::WorkspaceRepoUpdated { repo_id, display_name, default_branch, scratch } if allowed => {
+            SessionEvent::WorkspaceRepoUpdated {
+                repo_id,
+                display_name,
+                default_branch,
+                scratch,
+            } if allowed => {
                 if let Some(r) = self.state.repos.get_mut(repo_id) {
                     r.repo.display_name = display_name.clone();
                     r.repo.default_branch = default_branch.clone();
@@ -619,7 +706,10 @@ impl RosterTracker {
                 m.retain(|_, l| l.subject_key() != link.subject_key());
                 m.insert(link.link_id, link.clone());
             }
-            SessionEvent::IdentityLinkRemoved { account_id, link_id } if allowed => {
+            SessionEvent::IdentityLinkRemoved {
+                account_id,
+                link_id,
+            } if allowed => {
                 if let Some(m) = self.state.links.get_mut(account_id) {
                     m.remove(link_id);
                     if m.is_empty() {
@@ -649,11 +739,20 @@ impl RosterTracker {
     /// grants nothing.
     fn note_grant(&mut self, e: &SessionEvent) {
         let account = match e {
-            SessionEvent::MemberAdded { member, .. } if !self.state.members.contains_key(&member.id) => member.actor.account_id,
-            SessionEvent::MemberRoleChanged { change, .. } => self.state.members.get(&change.member_id).and_then(|m| m.account_id),
+            SessionEvent::MemberAdded { member, .. }
+                if !self.state.members.contains_key(&member.id) =>
+            {
+                member.actor.account_id
+            }
+            SessionEvent::MemberRoleChanged { change, .. } => self
+                .state
+                .members
+                .get(&change.member_id)
+                .and_then(|m| m.account_id),
             _ => None,
         };
-        if let Some(a) = account.filter(|a| self.state.passkeys.get(a).is_none_or(|m| m.is_empty())) {
+        if let Some(a) = account.filter(|a| self.state.passkeys.get(a).is_none_or(|m| m.is_empty()))
+        {
             self.state.passkey_grants.insert(a);
         }
     }
@@ -662,12 +761,31 @@ impl RosterTracker {
         self.state.members = fold
             .members
             .iter()
-            .map(|m| (m.id.clone(), MemberState { role: m.role, account_id: m.actor.account_id, kind: m.actor.kind }))
+            .map(|m| {
+                (
+                    m.id.clone(),
+                    MemberState {
+                        role: m.role,
+                        account_id: m.actor.account_id,
+                        kind: m.actor.kind,
+                    },
+                )
+            })
             .collect();
         self.state.agents = fold
             .workspace_agents
             .iter()
-            .map(|a| (a.id, AgentState { host_id: a.host_id.clone(), runtime_id: a.runtime_id.clone(), owner: a.owner_actor_id.clone(), policy: a.policy() }))
+            .map(|a| {
+                (
+                    a.id,
+                    AgentState {
+                        host_id: a.host_id.clone(),
+                        runtime_id: a.runtime_id.clone(),
+                        owner: a.owner_actor_id.clone(),
+                        policy: a.policy(),
+                    },
+                )
+            })
             .collect();
         self.state.dearth = fold.guards.dearth_on().is_some();
         self.state.zones = fold.flow.zones.clone();
@@ -685,7 +803,9 @@ impl RosterTracker {
                 continue;
             }
             // A disputed account certifies nothing.
-            let Some(key) = self.book.key(cert.account_id) else { continue };
+            let Some(key) = self.book.key(cert.account_id) else {
+                continue;
+            };
             if cert.verify(key).is_ok() {
                 let d = devices.entry(cert.device_id).or_default();
                 d.accounts.insert(cert.account_id);
@@ -698,7 +818,10 @@ impl RosterTracker {
                 // A phone holds its own key and signs only as its person (the
                 // laptop enrolls it, but it never acts *for* them): not a
                 // delegated host.
-                if !phone && (!self.self_published.contains(&key) || self.enrolled_by_other.contains(&key)) {
+                if !phone
+                    && (!self.self_published.contains(&key)
+                        || self.enrolled_by_other.contains(&key))
+                {
                     d.delegated_for.insert(cert.account_id);
                 }
             }
@@ -809,9 +932,18 @@ pub struct Cut {
 impl Cut {
     /// Whether this cut concerns `env` (see [`crate::watermark`]).
     pub fn applies(&self, env: &SessionEventEnvelope) -> bool {
-        let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+        let author = env
+            .actor_stamp
+            .as_ref()
+            .map(|s| s.actor.id.as_str())
+            .unwrap_or("");
         match &self.kind {
-            CutKind::Removed(m) => author == m || env.signer_device_id.is_some_and(|k| self.agent_keys.contains(&k)),
+            CutKind::Removed(m) => {
+                author == m
+                    || env
+                        .signer_device_id
+                        .is_some_and(|k| self.agent_keys.contains(&k))
+            }
             CutKind::Demoted(m) => author == m,
             CutKind::Revoked(d) => env.signer_device_id == Some(*d),
         }
@@ -819,10 +951,19 @@ impl Cut {
 
     /// The events of one log this cut's watermark covers (held by its
     /// author), as `(signer, event id)`: an id names a signer's own event.
-    pub fn covered(&self, log: Uuid, chains: &crate::watermark::Chains) -> BTreeSet<(Option<Uuid>, Uuid)> {
+    pub fn covered(
+        &self,
+        log: Uuid,
+        chains: &crate::watermark::Chains,
+    ) -> BTreeSet<(Option<Uuid>, Uuid)> {
         let mut out = BTreeSet::new();
         for w in self.watermark.iter().filter(|w| w.log == log) {
-            out.extend(chains.ancestors(w.signer, &w.heads, &w.gaps).into_iter().map(|id| (Some(w.signer), id)));
+            out.extend(
+                chains
+                    .ancestors(w.signer, &w.heads, &w.gaps)
+                    .into_iter()
+                    .map(|id| (Some(w.signer), id)),
+            );
         }
         out
     }
@@ -835,14 +976,20 @@ impl Cut {
 
     /// The config position the cut's later events are judged at.
     pub fn frontier(&self) -> CfgFrontier {
-        CfgFrontier { lamport: self.key.0, event_id: self.key.1 }
+        CfgFrontier {
+            lamport: self.key.0,
+            event_id: self.key.1,
+        }
     }
 }
 
 impl ConfigTimeline {
     /// Start a timeline at the base seed.
     pub fn begin(seed: RosterState) -> Self {
-        Self { states: vec![Arc::new(seed)], ..Default::default() }
+        Self {
+            states: vec![Arc::new(seed)],
+            ..Default::default()
+        }
     }
 
     /// Note an event of the config log this device holds (folded or not).
@@ -862,7 +1009,8 @@ impl ConfigTimeline {
 
     /// Who can sign on this workspace, from the config log's certificates.
     pub fn signers(&self) -> &crate::copies::SignerDirectory {
-        self.signers.get_or_init(|| crate::copies::SignerDirectory::of(&self.signer_events))
+        self.signers
+            .get_or_init(|| crate::copies::SignerDirectory::of(&self.signer_events))
     }
 
     /// Note a rotation body seen on the log (authorized or not).
@@ -956,13 +1104,18 @@ impl ConfigTimeline {
 
     /// The newest folded config event: the frontier a new event stamps.
     pub fn head(&self) -> Option<CfgFrontier> {
-        self.keys.last().map(|&(lamport, event_id)| CfgFrontier { lamport, event_id })
+        self.keys
+            .last()
+            .map(|&(lamport, event_id)| CfgFrontier { lamport, event_id })
     }
 
     /// The roster in force now (empty for a log without a base).
     pub fn current(&self) -> &RosterState {
         static EMPTY: std::sync::OnceLock<RosterState> = std::sync::OnceLock::new();
-        self.states.last().map(|s| &**s).unwrap_or_else(|| EMPTY.get_or_init(RosterState::default))
+        self.states
+            .last()
+            .map(|s| &**s)
+            .unwrap_or_else(|| EMPTY.get_or_init(RosterState::default))
     }
 
     /// The roster after every folded config event up to and including
@@ -980,7 +1133,10 @@ impl ConfigTimeline {
         match self.held.get(&frontier.event_id) {
             None => {
                 let newest = self.held.values().flatten().copied().max().unwrap_or(0);
-                if !self.held.is_empty() && (frontier.lamport < newest || frontier.lamport > newest.saturating_add(FRONTIER_SLACK)) {
+                if !self.held.is_empty()
+                    && (frontier.lamport < newest
+                        || frontier.lamport > newest.saturating_add(FRONTIER_SLACK))
+                {
                     return Err(None);
                 }
                 return Err(Some(HoldReason::ConfigFrontierAhead));

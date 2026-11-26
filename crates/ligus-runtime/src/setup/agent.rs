@@ -4,7 +4,9 @@
 use ligus_core::WorkspaceRole;
 
 use super::validate::{agent_name_problem, url_problem, value};
-use super::{exit, gate, Choice, Ctx, Field, FieldKind, Inputs, Progress, RuntimeSpec, SetupOps, StepDef};
+use super::{
+    exit, gate, Choice, Ctx, Field, FieldKind, Inputs, Progress, RuntimeSpec, SetupOps, StepDef,
+};
 use crate::cli_detect::LoginState;
 
 /// The harnesses in the order the picker shows them.
@@ -55,8 +57,15 @@ pub(crate) fn steps(ops: &dyn SetupOps, inputs: &Inputs) -> Vec<StepDef> {
         .collect();
     let harness = inputs.get("harness").unwrap_or("");
     let endpoint = inputs.get("endpoint").unwrap_or("http://localhost:11434");
-    let models = if harness.is_empty() { Vec::new() } else { ops.models(harness, endpoint).models };
-    let model_options = models.into_iter().map(|m| Choice::new(m.id.clone(), m.label.unwrap_or(m.id))).collect();
+    let models = if harness.is_empty() {
+        Vec::new()
+    } else {
+        ops.models(harness, endpoint).models
+    };
+    let model_options = models
+        .into_iter()
+        .map(|m| Choice::new(m.id.clone(), m.label.unwrap_or(m.id)))
+        .collect();
     vec![
         StepDef::input(
             "harness",
@@ -116,23 +125,44 @@ pub(crate) fn preflight(ctx: &mut Ctx, ops: &dyn SetupOps) {
 }
 
 pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
-    let fields: Vec<Field> = steps(ops, inputs).into_iter().flat_map(|s| s.fields).collect();
+    let fields: Vec<Field> = steps(ops, inputs)
+        .into_iter()
+        .flat_map(|s| s.fields)
+        .collect();
     let harness = value(inputs, &fields, "harness").unwrap_or("").to_string();
-    let label = HARNESSES.iter().find(|(id, _)| *id == harness).map(|(_, l)| *l).unwrap_or("harness");
+    let label = HARNESSES
+        .iter()
+        .find(|(id, _)| *id == harness)
+        .map(|(_, l)| *l)
+        .unwrap_or("harness");
 
     // 1. The harness: installed and signed in.
     let endpoint = match harness.as_str() {
         "local" => {
-            let e = value(inputs, &fields, "endpoint").unwrap_or("http://localhost:11434").to_string();
+            let e = value(inputs, &fields, "endpoint")
+                .unwrap_or("http://localhost:11434")
+                .to_string();
             if let Some(p) = url_problem(&e) {
-                return ctx.fail("input.endpoint", "endpoint", p, "pass --endpoint https://… (or http://localhost:…)", exit::USAGE);
+                return ctx.fail(
+                    "input.endpoint",
+                    "endpoint",
+                    p,
+                    "pass --endpoint https://… (or http://localhost:…)",
+                    exit::USAGE,
+                );
             }
             e
         }
         "gateway" => {
             let g = value(inputs, &fields, "gateway").unwrap_or("").to_string();
             if !ligus_core::HostModelGateway::valid_name(&g) {
-                return ctx.fail("input.gateway", "gateway", format!("'{g}' is not a gateway name"), "ligus hosts lists the gateways hosts offer", exit::USAGE);
+                return ctx.fail(
+                    "input.gateway",
+                    "gateway",
+                    format!("'{g}' is not a gateway name"),
+                    "ligus hosts lists the gateways hosts offer",
+                    exit::USAGE,
+                );
             }
             g
         }
@@ -142,16 +172,25 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
         let fact = ops.harnesses().into_iter().find(|f| f.id == harness);
         match fact {
             Some(f) if f.installed => {
-                let v = f.version.as_deref().map(|v| format!(" {v}")).unwrap_or_default();
+                let v = f
+                    .version
+                    .as_deref()
+                    .map(|v| format!(" {v}"))
+                    .unwrap_or_default();
                 ctx.ok("harness.installed", label, format!("installed{v}"));
                 match f.login {
-                    LoginState::LoggedIn => ctx.ok("harness.signed-in", "sign-in", f.login_detail.clone()),
+                    LoginState::LoggedIn => {
+                        ctx.ok("harness.signed-in", "sign-in", f.login_detail.clone())
+                    }
                     LoginState::NotLoggedIn => {
                         return ctx.fail(
                             "harness.signed-in",
                             "sign-in",
                             format!("{label} isn't signed in on this device"),
-                            format!("run `{}` in a terminal on this device, then run this again", f.login_command),
+                            format!(
+                                "run `{}` in a terminal on this device, then run this again",
+                                f.login_command
+                            ),
                             exit::FIXABLE,
                         )
                     }
@@ -159,7 +198,10 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
                         "harness.signed-in",
                         "sign-in",
                         "can't tell from here whether it is signed in",
-                        Some(format!("if the test turn fails, run `{}` in a terminal", f.login_command)),
+                        Some(format!(
+                            "if the test turn fails, run `{}` in a terminal",
+                            f.login_command
+                        )),
                     ),
                     LoginState::Unknown => {}
                 }
@@ -169,12 +211,22 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
                     "harness.installed",
                     label,
                     "not installed on this device",
-                    if f.install_command.is_empty() { format!("install {label}, then run this again") } else { f.install_command },
+                    if f.install_command.is_empty() {
+                        format!("install {label}, then run this again")
+                    } else {
+                        f.install_command
+                    },
                     exit::FIXABLE,
                 )
             }
             None => {
-                return ctx.fail("harness.installed", label, "not found on this device", format!("install {label}, then run this again"), exit::FIXABLE)
+                return ctx.fail(
+                    "harness.installed",
+                    label,
+                    "not found on this device",
+                    format!("install {label}, then run this again"),
+                    exit::FIXABLE,
+                )
             }
         }
         if !ops.sandbox().confined() {
@@ -194,9 +246,15 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
     let runtimes = ops.runtimes();
     let agents = ops.agents();
     if let Some(a) = agents.iter().find(|a| a.name.eq_ignore_ascii_case(&name)) {
-        let same = runtimes.iter().any(|r| r.id == a.runtime_id && r.harness == harness && r.model == model);
+        let same = runtimes
+            .iter()
+            .any(|r| r.id == a.runtime_id && r.harness == harness && r.model == model);
         if same {
-            ctx.ok("agent", "agent", format!("@{} is already set up on {label}", a.name));
+            ctx.ok(
+                "agent",
+                "agent",
+                format!("@{} is already set up on {label}", a.name),
+            );
             ctx.result("agentId", a.id.to_string());
             ctx.result("runtimeId", a.runtime_id.clone());
             return verify(ctx, ops, inputs, &a.runtime_id, &name);
@@ -213,34 +271,83 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
     let list = ops.models(&harness, &endpoint);
     if let Some(e) = &list.error {
         if harness == "local" {
-            return ctx.fail("model.list", "models", format!("{}: {e}", super::validate::origin(&endpoint)), "start the model server, or check --endpoint", exit::OFFLINE);
+            return ctx.fail(
+                "model.list",
+                "models",
+                format!("{}: {e}", super::validate::origin(&endpoint)),
+                "start the model server, or check --endpoint",
+                exit::OFFLINE,
+            );
         }
-        ctx.warn("model.list", "models", format!("couldn't list models: {e}"), None);
+        ctx.warn(
+            "model.list",
+            "models",
+            format!("couldn't list models: {e}"),
+            None,
+        );
     }
     if harness == "local" && model.is_empty() {
-        return ctx.fail("input.model", "model", "a local model needs a model name", "pass --model <name> (ollama list shows them)", exit::USAGE);
+        return ctx.fail(
+            "input.model",
+            "model",
+            "a local model needs a model name",
+            "pass --model <name> (ollama list shows them)",
+            exit::USAGE,
+        );
     }
     if !model.is_empty() && list.complete && !list.models.iter().any(|m| m.id == model) {
         let some: Vec<&str> = list.models.iter().take(6).map(|m| m.id.as_str()).collect();
-        return ctx.fail("input.model", "model", format!("'{model}' isn't available here"), format!("pick one of: {}", some.join(", ")), exit::USAGE);
+        return ctx.fail(
+            "input.model",
+            "model",
+            format!("'{model}' isn't available here"),
+            format!("pick one of: {}", some.join(", ")),
+            exit::USAGE,
+        );
     }
-    ctx.ok("model", "model", if model.is_empty() { "the harness's default".to_string() } else { model.clone() });
+    ctx.ok(
+        "model",
+        "model",
+        if model.is_empty() {
+            "the harness's default".to_string()
+        } else {
+            model.clone()
+        },
+    );
 
     // 4. The runtime: reuse one this device may reuse, else define one.
-    let reuse = runtimes.iter().find(|r| r.harness == harness && r.model == model && r.endpoint == endpoint).map(|r| r.id.clone());
+    let reuse = runtimes
+        .iter()
+        .find(|r| r.harness == harness && r.model == model && r.endpoint == endpoint)
+        .map(|r| r.id.clone());
     let runtime_id = match reuse {
         Some(id) => {
             ctx.ok("runtime", "runtime", format!("reusing '{id}'"));
             id
         }
         None => {
-            if ops.runtimes_need_admin() && !gate::need(ctx, ops, WorkspaceRole::Admin, "defining a workspace runtime") {
+            if ops.runtimes_need_admin()
+                && !gate::need(
+                    ctx,
+                    ops,
+                    WorkspaceRole::Admin,
+                    "defining a workspace runtime",
+                )
+            {
                 return;
             }
-            let id = free_runtime_id(&harness, &model, &runtimes.iter().map(|r| r.id.as_str()).collect::<Vec<_>>());
+            let id = free_runtime_id(
+                &harness,
+                &model,
+                &runtimes.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            );
             let spec = RuntimeSpec {
                 id: id.clone(),
-                name: if model.is_empty() { label.to_string() } else { format!("{label} ({model})") },
+                name: if model.is_empty() {
+                    label.to_string()
+                } else {
+                    format!("{label} ({model})")
+                },
                 harness: harness.clone(),
                 model: model.clone(),
                 endpoint: endpoint.clone(),
@@ -252,10 +359,19 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
                 ctx.skip("runtime", "runtime", format!("would define runtime '{id}'"));
             } else {
                 if let Err(e) = ops.add_runtime(&spec) {
-                    return ctx.fail("runtime", "runtime", format!("couldn't define runtime '{id}': {e}"), "ligus doctor checks this device", ops_code(&e));
+                    return ctx.fail(
+                        "runtime",
+                        "runtime",
+                        format!("couldn't define runtime '{id}': {e}"),
+                        "fix what it says and run this again",
+                        ops_code(&e),
+                    );
                 }
                 let rid = id.clone();
-                ctx.undo(format!("runtime '{id}'"), Box::new(move |o| o.remove_runtime(&rid)));
+                ctx.undo(
+                    format!("runtime '{id}'"),
+                    Box::new(move |o| o.remove_runtime(&rid)),
+                );
                 ctx.ok("runtime", "runtime", format!("defined '{id}'"));
             }
             id
@@ -268,7 +384,11 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
         return;
     }
     if ctx.dry_run() {
-        ctx.skip("agent", "agent", format!("would create @{name} on '{runtime_id}'"));
+        ctx.skip(
+            "agent",
+            "agent",
+            format!("would create @{name} on '{runtime_id}'"),
+        );
         if inputs.on("test-turn") {
             ctx.skip("test-turn", "test turn", "would send one test message");
         }
@@ -280,26 +400,66 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs) {
             ctx.result("agentId", id.to_string());
             ctx.commit();
         }
-        Err(e) => return ctx.fail("agent", "agent", format!("couldn't create @{name}: {e}"), "fix what it says and run this again", ops_code(&e)),
+        Err(e) => {
+            return ctx.fail(
+                "agent",
+                "agent",
+                format!("couldn't create @{name}: {e}"),
+                "fix what it says and run this again",
+                ops_code(&e),
+            )
+        }
     }
     verify(ctx, ops, inputs, &runtime_id, &name);
 }
 
 fn verify(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, runtime_id: &str, name: &str) {
-    if !ops.agents().iter().any(|a| a.name.eq_ignore_ascii_case(name)) {
-        return ctx.fail("verify", "verify", format!("@{name} isn't on the roster"), "ligus agents lists the roster; run this again", exit::FAILED);
+    if !ops
+        .agents()
+        .iter()
+        .any(|a| a.name.eq_ignore_ascii_case(name))
+    {
+        return ctx.fail(
+            "verify",
+            "verify",
+            format!("@{name} isn't on the roster"),
+            "ligus agents lists the roster; run this again",
+            exit::FAILED,
+        );
     }
     if inputs.on("test-turn") {
         if ctx.cancelled() {
             return;
         }
         match ops.test_turn(runtime_id) {
-            Ok(t) if t.ok => ctx.ok("test-turn", "test turn", format!("answered in {} ms", t.latency_ms)),
+            Ok(t) if t.ok => ctx.ok(
+                "test-turn",
+                "test turn",
+                format!("answered in {} ms", t.latency_ms),
+            ),
             Ok(t) => {
-                return ctx.fail("test-turn", "test turn", t.detail, "check the sign-in and the model, then run this again with --test-turn", exit::FAILED)
+                return ctx.fail(
+                    "test-turn",
+                    "test turn",
+                    t.detail,
+                    "check the sign-in and the model, then run this again with --test-turn",
+                    exit::FAILED,
+                )
             }
-            Err(super::OpsError::Unsupported) => ctx.skip("test-turn", "test turn", "not available here; ask the agent something"),
-            Err(e) => return ctx.fail("test-turn", "test turn", e.to_string(), "check the sign-in and the model", ops_code(&e)),
+            Err(super::OpsError::Unsupported) => ctx.skip(
+                "test-turn",
+                "test turn",
+                "not available here; ask the agent something",
+            ),
+            Err(e) => {
+                return ctx.fail(
+                    "test-turn",
+                    "test turn",
+                    e.to_string(),
+                    "check the sign-in and the model",
+                    ops_code(&e),
+                )
+            }
         }
     }
     ctx.done();
@@ -318,11 +478,18 @@ pub(crate) fn free_runtime_id(harness: &str, model: &str, taken: &[&str]) -> Str
         }
         o.trim_matches('-').chars().take(40).collect::<String>()
     };
-    let base = if model.is_empty() { slug(harness) } else { format!("{}-{}", slug(harness), slug(model)) };
+    let base = if model.is_empty() {
+        slug(harness)
+    } else {
+        format!("{}-{}", slug(harness), slug(model))
+    };
     if !taken.contains(&base.as_str()) {
         return base;
     }
-    (2..).map(|n| format!("{base}-{n}")).find(|c| !taken.contains(&c.as_str())).unwrap_or(base)
+    (2..)
+        .map(|n| format!("{base}-{n}"))
+        .find(|c| !taken.contains(&c.as_str()))
+        .unwrap_or(base)
 }
 
 /// The exit code for an operation's error.

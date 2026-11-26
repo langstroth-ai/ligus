@@ -93,7 +93,10 @@ pub struct OpenAiClient {
     metered: bool,
     /// An operator-listed model gateway: its credential replaces any key
     /// (`Gateway::apply`, the same headers the egress proxy's route adds).
-    gateway: Option<(std::sync::Arc<crate::model_gateway::Gateway>, Option<crate::model_gateway::Attribution>)>,
+    gateway: Option<(
+        std::sync::Arc<crate::model_gateway::Gateway>,
+        Option<crate::model_gateway::Attribution>,
+    )>,
 }
 
 /// The assembled result of a chat with tools on offer.
@@ -167,7 +170,10 @@ impl ToolCallAssembler {
                 Some(i) => i,
                 None => {
                     let by_id = id.and_then(|id| {
-                        self.calls.iter().find(|(_, c)| c.id.as_deref() == Some(id)).map(|(k, _)| *k)
+                        self.calls
+                            .iter()
+                            .find(|(_, c)| c.id.as_deref() == Some(id))
+                            .map(|(k, _)| *k)
                     });
                     let last = self.calls.keys().next_back().copied();
                     match (by_id, last) {
@@ -207,12 +213,18 @@ impl ToolCallAssembler {
     /// The name of a call whose streamed arguments have fallen into a loop
     /// (see [`is_looping_arguments`]), if any.
     pub fn looping(&self) -> Option<&str> {
-        self.calls.values().find(|c| is_looping_call(&c.name, &c.arguments)).map(|c| c.name.as_str())
+        self.calls
+            .values()
+            .find(|c| is_looping_call(&c.name, &c.arguments))
+            .map(|c| c.name.as_str())
     }
 
     /// The calls, in index order; entries that never got a name are dropped.
     pub fn finish(self) -> Vec<AssembledCall> {
-        self.calls.into_values().filter(|c| !c.name.is_empty()).collect()
+        self.calls
+            .into_values()
+            .filter(|c| !c.name.is_empty())
+            .collect()
     }
 }
 
@@ -237,8 +249,16 @@ pub fn parse_chunk(v: &Value, provider: &'static str) -> Result<ChunkParts, Prov
             .get("message")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .unwrap_or_else(|| err.as_str().map(str::to_string).unwrap_or_else(|| err.to_string()));
-        return Err(ProviderError::Api { provider, status: 0, body });
+            .unwrap_or_else(|| {
+                err.as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| err.to_string())
+            });
+        return Err(ProviderError::Api {
+            provider,
+            status: 0,
+            body,
+        });
     }
     let mut parts = ChunkParts::default();
     let Some(choice) = v.get("choices").and_then(|c| c.get(0)) else {
@@ -300,7 +320,12 @@ struct RoundAssembly {
 
 impl RoundAssembly {
     fn new() -> Self {
-        Self { round: Round::default(), filter: ThinkFilter::new(), calls: ToolCallAssembler::default(), charged: Default::default() }
+        Self {
+            round: Round::default(),
+            filter: ThinkFilter::new(),
+            calls: ToolCallAssembler::default(),
+            charged: Default::default(),
+        }
     }
 
     fn absorb(
@@ -335,7 +360,11 @@ impl RoundAssembly {
         }
     }
 
-    fn finish(mut self, on_delta: &mut impl FnMut(String), on_thinking: &mut impl FnMut(String)) -> Round {
+    fn finish(
+        mut self,
+        on_delta: &mut impl FnMut(String),
+        on_thinking: &mut impl FnMut(String),
+    ) -> Round {
         let tail = self.filter.finish();
         if !tail.thinking.is_empty() {
             on_thinking(tail.thinking);
@@ -418,14 +447,21 @@ const CONTENT_LOOP_TAIL_BYTES: usize = 32 * 1024;
 /// large and repetitive.
 fn carries_content(name: &str) -> bool {
     use crate::builtin_tools::{EDIT_FILE, WRITE_FILE};
-    name == WRITE_FILE || name == EDIT_FILE || name.ends_with("__write_file") || name.ends_with("__edit_file")
+    name == WRITE_FILE
+        || name == EDIT_FILE
+        || name.ends_with("__write_file")
+        || name.ends_with("__edit_file")
 }
 
 /// [`is_looping_arguments`], with the looser bounds for calls that carry
 /// file content.
 fn is_looping_call(name: &str, args: &str) -> bool {
     if carries_content(name) {
-        is_periodic_tail(args.as_bytes(), CONTENT_LOOP_CHECK_BYTES, CONTENT_LOOP_TAIL_BYTES)
+        is_periodic_tail(
+            args.as_bytes(),
+            CONTENT_LOOP_CHECK_BYTES,
+            CONTENT_LOOP_TAIL_BYTES,
+        )
     } else {
         is_looping_arguments(args)
     }
@@ -476,7 +512,10 @@ fn props_key(endpoint: &str, model: &str) -> String {
 pub fn server_base(endpoint: &str) -> String {
     let mut base = endpoint.trim().trim_end_matches('/');
     for suffix in ["/chat/completions", "/v1"] {
-        base = base.strip_suffix(suffix).unwrap_or(base).trim_end_matches('/');
+        base = base
+            .strip_suffix(suffix)
+            .unwrap_or(base)
+            .trim_end_matches('/');
     }
     base.to_string()
 }
@@ -494,13 +533,20 @@ pub fn n_ctx_from_props(v: &Value) -> Option<u32> {
 
 /// A previously probed window for `endpoint` + `model`, without probing.
 pub fn cached_context_window(endpoint: &str, model: &str) -> Option<u32> {
-    props_cache().lock().unwrap().get(&props_key(endpoint, model)).and_then(|(n, _)| *n)
+    props_cache()
+        .lock()
+        .unwrap()
+        .get(&props_key(endpoint, model))
+        .and_then(|(n, _)| *n)
 }
 
 /// Record a probe result without a server (dispatch tests).
 #[cfg(test)]
 pub(crate) fn seed_context_probe(endpoint: &str, model: &str, n_ctx: Option<u32>) {
-    props_cache().lock().unwrap().insert(props_key(endpoint, model), (n_ctx, Instant::now()));
+    props_cache()
+        .lock()
+        .unwrap()
+        .insert(props_key(endpoint, model), (n_ctx, Instant::now()));
 }
 
 impl OpenAiClient {
@@ -531,7 +577,8 @@ impl OpenAiClient {
     pub fn with_spend_metering(mut self, yes: bool) -> Self {
         self.metered = yes;
         if yes {
-            self.extra_body.insert("stream_options".into(), json!({"include_usage": true}));
+            self.extra_body
+                .insert("stream_options".into(), json!({"include_usage": true}));
         }
         self
     }
@@ -573,14 +620,23 @@ impl OpenAiClient {
     /// Send every request through model gateway `gw` with its TLS client
     /// `http` (from `Gateway::client`): no key of the runtime is sent, the
     /// gateway's credential (and attribution, when on) is.
-    pub fn with_gateway(mut self, gw: std::sync::Arc<crate::model_gateway::Gateway>, attribution: Option<crate::model_gateway::Attribution>, http: reqwest::Client) -> Self {
+    pub fn with_gateway(
+        mut self,
+        gw: std::sync::Arc<crate::model_gateway::Gateway>,
+        attribution: Option<crate::model_gateway::Attribution>,
+        http: reqwest::Client,
+    ) -> Self {
         self.http = http;
         self.gateway = Some((gw, attribution));
         self
     }
 
     /// Add the credential: the gateway's, or the runtime's key.
-    fn authorize(&self, req: reqwest::RequestBuilder, api_key: Option<&str>) -> reqwest::RequestBuilder {
+    fn authorize(
+        &self,
+        req: reqwest::RequestBuilder,
+        api_key: Option<&str>,
+    ) -> reqwest::RequestBuilder {
         if let Some((gw, attr)) = &self.gateway {
             return gw.apply_or_warn(req, attr.as_ref());
         }
@@ -643,7 +699,16 @@ impl OpenAiClient {
         let messages = seed_messages(system, turns);
         let mut state = RoundState::default();
         let round = self
-            .stream_round(api_key, model, &messages, &[], false, &mut state, on_delta, on_thinking)
+            .stream_round(
+                api_key,
+                model,
+                &messages,
+                &[],
+                false,
+                &mut state,
+                on_delta,
+                on_thinking,
+            )
             .await?;
         Ok(round.text)
     }
@@ -701,7 +766,8 @@ impl OpenAiClient {
             }
             // The final round keeps the tools (the server's cached prefix has
             // them) and forbids calling them, unless the server can't do that.
-            let keep_tools = !state.tools_rejected && (!final_round || (self.final_tool_choice && !state.tool_choice_rejected));
+            let keep_tools = !state.tools_rejected
+                && (!final_round || (self.final_tool_choice && !state.tool_choice_rejected));
             let mut offered: &[Value] = if keep_tools { &defs } else { &[] };
             let r = loop {
                 let choice_none = final_round && !offered.is_empty();
@@ -762,11 +828,17 @@ impl OpenAiClient {
                 .iter()
                 .enumerate()
                 .map(|(idx, c)| {
-                    let id = c.id.clone().unwrap_or_else(|| format!("call_{round}_{idx}"));
+                    let id =
+                        c.id.clone()
+                            .unwrap_or_else(|| format!("call_{round}_{idx}"));
                     (id, c, c.parsed_arguments())
                 })
                 .collect();
-            let reasoning = if self.echo_reasoning { r.reasoning.as_str() } else { "" };
+            let reasoning = if self.echo_reasoning {
+                r.reasoning.as_str()
+            } else {
+                ""
+            };
             messages.push(assistant_message(&r.text, reasoning, &calls));
             for (id, call, args) in &calls {
                 on_activity(StreamActivity::Tool {
@@ -790,7 +862,8 @@ impl OpenAiClient {
                         }
                     },
                     Err(why) => {
-                        let raw: String = call.arguments.chars().take(MALFORMED_ECHO_CHARS).collect();
+                        let raw: String =
+                            call.arguments.chars().take(MALFORMED_ECHO_CHARS).collect();
                         tracing::info!(target: "dispatch", host = %self.host(), model, tool = %call.name, "malformed tool arguments: {why}");
                         (
                             format!(
@@ -802,7 +875,11 @@ impl OpenAiClient {
                     }
                 };
                 let content = clip_tool_result(content);
-                on_activity(StreamActivity::ToolResult { call_id: id.clone(), is_error, content: content.clone() });
+                on_activity(StreamActivity::ToolResult {
+                    call_id: id.clone(),
+                    is_error,
+                    content: content.clone(),
+                });
                 messages.push(json!({ "role": "tool", "tool_call_id": id, "content": content }));
             }
         }
@@ -834,7 +911,8 @@ impl OpenAiClient {
             }
             // A final round on a server without `tool_choice` drops the tools.
             let choice_none = tool_choice_none && !state.tool_choice_rejected;
-            let send_tools = !tools.is_empty() && !state.tools_rejected && (choice_none || !tool_choice_none);
+            let send_tools =
+                !tools.is_empty() && !state.tools_rejected && (choice_none || !tool_choice_none);
             if send_tools {
                 body["tools"] = json!(tools);
                 if choice_none {
@@ -849,7 +927,10 @@ impl OpenAiClient {
             }
             let status = resp.status().as_u16();
             let text = resp.text().await.unwrap_or_default();
-            if !self.extra_body.is_empty() && !state.extras_rejected && rejects_extras(status, &text, &self.extra_body) {
+            if !self.extra_body.is_empty()
+                && !state.extras_rejected
+                && rejects_extras(status, &text, &self.extra_body)
+            {
                 tracing::warn!(
                     target: "dispatch",
                     provider = self.provider_label,
@@ -888,7 +969,11 @@ impl OpenAiClient {
                 state.tools_rejected = true;
                 continue;
             }
-            return Err(ProviderError::Api { provider: self.provider_label, status, body: text });
+            return Err(ProviderError::Api {
+                provider: self.provider_label,
+                status,
+                body: text,
+            });
         };
 
         let mut asm = RoundAssembly::new();
@@ -908,7 +993,11 @@ impl OpenAiClient {
             let v: Value = serde_json::from_slice(&bytes)
                 .map_err(|e| ProviderError::Decode(format!("completion: {e}")))?;
             self.charge_usage(model, &v, &mut asm)?;
-            asm.absorb(parse_chunk(&v, self.provider_label)?, &mut on_delta, &mut on_thinking);
+            asm.absorb(
+                parse_chunk(&v, self.provider_label)?,
+                &mut on_delta,
+                &mut on_thinking,
+            );
             return Ok(asm.finish(&mut on_delta, &mut on_thinking));
         }
 
@@ -978,14 +1067,28 @@ impl OpenAiClient {
     /// Charge a chunk's `usage` (cumulative for the round) to the turn's
     /// spend meter. Cached prompt tokens are charged at the full input
     /// price. `Err` = the budget is used up; the round stops here.
-    fn charge_usage(&self, model: &str, v: &Value, asm: &mut RoundAssembly) -> Result<(), ProviderError> {
+    fn charge_usage(
+        &self,
+        model: &str,
+        v: &Value,
+        asm: &mut RoundAssembly,
+    ) -> Result<(), ProviderError> {
         if !self.metered {
             return Ok(());
         }
-        let Some(u) = v.get("usage").filter(|u| u.is_object()) else { return Ok(()) };
+        let Some(u) = v.get("usage").filter(|u| u.is_object()) else {
+            return Ok(());
+        };
         let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
-        let (input, output) = (n("prompt_tokens").max(asm.charged.input), n("completion_tokens").max(asm.charged.output));
-        let grow = crate::spend::Usage { input: input - asm.charged.input, output: output - asm.charged.output, ..Default::default() };
+        let (input, output) = (
+            n("prompt_tokens").max(asm.charged.input),
+            n("completion_tokens").max(asm.charged.output),
+        );
+        let grow = crate::spend::Usage {
+            input: input - asm.charged.input,
+            output: output - asm.charged.output,
+            ..Default::default()
+        };
         asm.charged.input = input;
         asm.charged.output = output;
         crate::spend::charge(model, grow)?;
@@ -1006,13 +1109,20 @@ impl OpenAiClient {
         }
         let n = self.fetch_props_n_ctx(api_key, model).await;
         tracing::debug!(target: "dispatch", host = %self.host(), model, n_ctx = ?n, "server /props probe");
-        props_cache().lock().unwrap().insert(key, (n, Instant::now()));
+        props_cache()
+            .lock()
+            .unwrap()
+            .insert(key, (n, Instant::now()));
         n
     }
 
     async fn fetch_props_n_ctx(&self, api_key: Option<&str>, model: &str) -> Option<u32> {
         let url = format!("{}/props", server_base(&self.endpoint));
-        let req = self.http.get(&url).query(&[("model", model)]).timeout(PROBE_TIMEOUT);
+        let req = self
+            .http
+            .get(&url)
+            .query(&[("model", model)])
+            .timeout(PROBE_TIMEOUT);
         let req = self.authorize(req, api_key);
         let resp = req.send().await.ok()?;
         if !resp.status().is_success() {
@@ -1032,7 +1142,10 @@ impl OpenAiClient {
     }
 
     fn peer(&self) -> Peer<'_> {
-        Peer { provider: self.provider_label, url: &self.endpoint }
+        Peer {
+            provider: self.provider_label,
+            url: &self.endpoint,
+        }
     }
 
     /// Send the request with the shared connect/idle/retry policy (see
@@ -1142,8 +1255,14 @@ mod tests {
 
     #[test]
     fn endpoint_host_strips_scheme_and_path() {
-        assert_eq!(endpoint_host("http://100.64.0.5:11434/v1/chat/completions"), "100.64.0.5:11434");
-        assert_eq!(endpoint_host("https://api.openai.com/v1/chat/completions"), "api.openai.com");
+        assert_eq!(
+            endpoint_host("http://100.64.0.5:11434/v1/chat/completions"),
+            "100.64.0.5:11434"
+        );
+        assert_eq!(
+            endpoint_host("https://api.openai.com/v1/chat/completions"),
+            "api.openai.com"
+        );
         assert_eq!(endpoint_host("localhost:1234"), "localhost:1234");
         assert_eq!(endpoint_host("http://u:p@host/x"), "host");
     }
@@ -1177,14 +1296,22 @@ mod wire {
     }
 
     fn sse(content: &str) -> String {
-        format!(r#"data: {{"choices":[{{"delta":{{"content":{}}}}}]}}"#, serde_json::json!(content))
+        format!(
+            r#"data: {{"choices":[{{"delta":{{"content":{}}}}}]}}"#,
+            serde_json::json!(content)
+        )
     }
 
-    async fn handler(State(f): State<Fake>, headers: HeaderMap, body: String) -> axum::response::Response {
+    async fn handler(
+        State(f): State<Fake>,
+        headers: HeaderMap,
+        body: String,
+    ) -> axum::response::Response {
         {
             let mut s = f.seen.lock().unwrap();
             s.headers.push(headers);
-            s.bodies.push(serde_json::from_str(&body).unwrap_or(serde_json::Value::Null));
+            s.bodies
+                .push(serde_json::from_str(&body).unwrap_or(serde_json::Value::Null));
         }
         let lines = f.reply.clone();
         let stall = f.stall;
@@ -1217,9 +1344,15 @@ mod wire {
     }
 
     async fn serve(reply: Vec<String>, stall: bool) -> (String, Arc<Mutex<Seen>>) {
-        let fake = Fake { seen: Arc::new(Mutex::new(Seen::default())), reply: Arc::new(reply), stall };
+        let fake = Fake {
+            seen: Arc::new(Mutex::new(Seen::default())),
+            reply: Arc::new(reply),
+            stall,
+        };
         let seen = fake.seen.clone();
-        let app = Router::new().route("/v1/chat/completions", post(handler)).with_state(fake);
+        let app = Router::new()
+            .route("/v1/chat/completions", post(handler))
+            .with_state(fake);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -1234,20 +1367,49 @@ mod wire {
     #[tokio::test]
     async fn api_spend_budget_cancels_the_turn() {
         use crate::agent_turn::{with_agent_turn, AgentTurnScope, SpendMeter};
-        let usage = r#"data: {"choices":[],"usage":{"prompt_tokens":2000000,"completion_tokens":10}}"#.to_string();
+        let usage =
+            r#"data: {"choices":[],"usage":{"prompt_tokens":2000000,"completion_tokens":10}}"#
+                .to_string();
         let (url, seen) = serve(vec![sse("Hi"), usage.clone()], false).await;
         let meter = SpendMeter::new(Some(1.0));
-        let scope = AgentTurnScope { spend: Some(meter.clone()), ..Default::default() };
+        let scope = AgentTurnScope {
+            spend: Some(meter.clone()),
+            ..Default::default()
+        };
         let client = OpenAiClient::new(&url).with_spend_metering(true);
-        let r = with_agent_turn(scope, client.stream_reply(Some("sk-test"), "unknown-model", None, &[ChatTurn::user("x")], |_| {})).await;
+        let r = with_agent_turn(
+            scope,
+            client.stream_reply(
+                Some("sk-test"),
+                "unknown-model",
+                None,
+                &[ChatTurn::user("x")],
+                |_| {},
+            ),
+        )
+        .await;
         assert!(matches!(r, Err(ProviderError::Budget(_))), "{r:?}");
-        assert!(meter.total() >= 30.0, "2M prompt tokens at the fallback price: {}", meter.total());
-        assert_eq!(seen.lock().unwrap().bodies[0]["stream_options"]["include_usage"], true);
+        assert!(
+            meter.total() >= 30.0,
+            "2M prompt tokens at the fallback price: {}",
+            meter.total()
+        );
+        assert_eq!(
+            seen.lock().unwrap().bodies[0]["stream_options"]["include_usage"],
+            true
+        );
         // Unmetered (a local server): usage is ignored.
         let (url, _) = serve(vec![sse("Hi"), usage], false).await;
         let meter = SpendMeter::new(Some(1.0));
-        let scope = AgentTurnScope { spend: Some(meter.clone()), ..Default::default() };
-        let r = with_agent_turn(scope, OpenAiClient::new(&url).stream_reply(None, "m", None, &[ChatTurn::user("x")], |_| {})).await;
+        let scope = AgentTurnScope {
+            spend: Some(meter.clone()),
+            ..Default::default()
+        };
+        let r = with_agent_turn(
+            scope,
+            OpenAiClient::new(&url).stream_reply(None, "m", None, &[ChatTurn::user("x")], |_| {}),
+        )
+        .await;
         assert_eq!(r.unwrap(), "Hi");
         assert_eq!(meter.total(), 0.0);
     }
@@ -1259,7 +1421,9 @@ mod wire {
         let turns = vec![ChatTurn::user("hello")];
         let mut deltas = Vec::new();
         let out = client
-            .stream_reply(Some("sk-test"), "qwen3.5", Some("be brief"), &turns, |d| deltas.push(d))
+            .stream_reply(Some("sk-test"), "qwen3.5", Some("be brief"), &turns, |d| {
+                deltas.push(d)
+            })
             .await
             .unwrap();
         assert_eq!(out, "Hi");
@@ -1300,7 +1464,12 @@ mod wire {
     #[tokio::test]
     async fn think_blocks_go_to_the_thinking_sink_not_the_reply() {
         let (url, _) = serve(
-            vec![sse("<think>let me "), sse("plan</think>\n\n"), sse("Answer"), sse(" here")],
+            vec![
+                sse("<think>let me "),
+                sse("plan</think>\n\n"),
+                sse("Answer"),
+                sse(" here"),
+            ],
             false,
         )
         .await;
@@ -1324,11 +1493,19 @@ mod wire {
 
     #[tokio::test]
     async fn reasoning_field_goes_to_the_thinking_sink() {
-        let reasoning = r#"data: {"choices":[{"delta":{"reasoning":"step 1","content":""}}]}"#.to_string();
+        let reasoning =
+            r#"data: {"choices":[{"delta":{"reasoning":"step 1","content":""}}]}"#.to_string();
         let (url, _) = serve(vec![reasoning, sse("Done")], false).await;
         let mut thinking = Vec::new();
         let out = OpenAiClient::new(&url)
-            .stream_reply_with_thinking(None, "m", None, &[ChatTurn::user("x")], |_| {}, |t| thinking.push(t))
+            .stream_reply_with_thinking(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("x")],
+                |_| {},
+                |t| thinking.push(t),
+            )
             .await
             .unwrap();
         assert_eq!(out, "Done");
@@ -1370,7 +1547,10 @@ mod wire {
         assert!(msg.contains(&addr.to_string()), "{msg}");
         assert!(msg.contains("Tailscale"), "{msg}");
         // One retry happened (the retry delay elapsed).
-        assert!(start.elapsed() >= http::RETRY_DELAY, "no retry delay observed");
+        assert!(
+            start.elapsed() >= http::RETRY_DELAY,
+            "no retry delay observed"
+        );
     }
 
     #[tokio::test]
@@ -1388,7 +1568,11 @@ mod wire {
             .await
             .unwrap_err();
         match err {
-            ProviderError::Api { provider, status, body } => {
+            ProviderError::Api {
+                provider,
+                status,
+                body,
+            } => {
                 assert_eq!(provider, "ollama");
                 assert_eq!(status, 404);
                 assert!(body.contains("not found"));
@@ -1415,7 +1599,14 @@ mod tool_parts {
         a.push(&[json!({"index": 1, "function": {"arguments": ":\"x\"}"}})]);
         let calls = a.finish();
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0], AssembledCall { id: Some("call_a".into()), name: "search".into(), arguments: r#"{"q":"rust"}"#.into() });
+        assert_eq!(
+            calls[0],
+            AssembledCall {
+                id: Some("call_a".into()),
+                name: "search".into(),
+                arguments: r#"{"q":"rust"}"#.into()
+            }
+        );
         assert_eq!(calls[1].name, "fetch");
         assert_eq!(calls[1].parsed_arguments().unwrap(), json!({"url": "x"}));
     }
@@ -1452,20 +1643,43 @@ mod tool_parts {
 
     #[test]
     fn argument_parsing_accepts_objects_and_rejects_the_rest() {
-        let c = |s: &str| AssembledCall { id: None, name: "t".into(), arguments: s.into() };
+        let c = |s: &str| AssembledCall {
+            id: None,
+            name: "t".into(),
+            arguments: s.into(),
+        };
         assert_eq!(c("").parsed_arguments().unwrap(), json!({}));
-        assert_eq!(c(" {\"a\":1} ").parsed_arguments().unwrap(), json!({"a": 1}));
+        assert_eq!(
+            c(" {\"a\":1} ").parsed_arguments().unwrap(),
+            json!({"a": 1})
+        );
         // Double-encoded.
-        assert_eq!(c(r#""{\"a\":1}""#).parsed_arguments().unwrap(), json!({"a": 1}));
-        assert!(c("{\"a\":").parsed_arguments().unwrap_err().contains("not valid JSON"));
-        assert!(c("[1,2]").parsed_arguments().unwrap_err().contains("JSON object"));
+        assert_eq!(
+            c(r#""{\"a\":1}""#).parsed_arguments().unwrap(),
+            json!({"a": 1})
+        );
+        assert!(c("{\"a\":")
+            .parsed_arguments()
+            .unwrap_err()
+            .contains("not valid JSON"));
+        assert!(c("[1,2]")
+            .parsed_arguments()
+            .unwrap_err()
+            .contains("JSON object"));
         assert!(c("42").parsed_arguments().is_err());
     }
 
     #[test]
     fn parses_delta_message_and_error_chunks() {
-        let p = parse_chunk(&json!({"choices": [{"delta": {"content": "hi", "reasoning_content": "hm"}}]}), "endpoint").unwrap();
-        assert_eq!((p.content.as_str(), p.reasoning.as_str(), p.whole_message), ("hi", "hm", false));
+        let p = parse_chunk(
+            &json!({"choices": [{"delta": {"content": "hi", "reasoning_content": "hm"}}]}),
+            "endpoint",
+        )
+        .unwrap();
+        assert_eq!(
+            (p.content.as_str(), p.reasoning.as_str(), p.whole_message),
+            ("hi", "hm", false)
+        );
         let p = parse_chunk(
             &json!({"choices": [{"message": {"content": "", "tool_calls": [{"id": "x", "function": {"name": "f", "arguments": "{}"}}]}}]}),
             "endpoint",
@@ -1473,32 +1687,63 @@ mod tool_parts {
         .unwrap();
         assert!(p.whole_message);
         assert_eq!(p.whole_tool_calls.unwrap().len(), 1);
-        let err = parse_chunk(&json!({"error": {"message": "context overflow"}}), "endpoint").unwrap_err();
-        assert!(matches!(err, ProviderError::Api { status: 0, ref body, .. } if body == "context overflow"), "{err:?}");
+        let err = parse_chunk(
+            &json!({"error": {"message": "context overflow"}}),
+            "endpoint",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ProviderError::Api { status: 0, ref body, .. } if body == "context overflow"),
+            "{err:?}"
+        );
         // A usage-only / empty-choices chunk carries nothing.
-        assert_eq!(parse_chunk(&json!({"choices": [], "usage": {}}), "endpoint").unwrap(), ChunkParts::default());
+        assert_eq!(
+            parse_chunk(&json!({"choices": [], "usage": {}}), "endpoint").unwrap(),
+            ChunkParts::default()
+        );
     }
 
     #[test]
     fn rejects_tools_only_on_400_404_or_422_naming_tools() {
-        assert!(rejects_tools(400, r#"{"error":{"message":"tools param requires --jinja flag"}}"#));
-        assert!(rejects_tools(422, "Tool calling is not supported for this model"));
+        assert!(rejects_tools(
+            400,
+            r#"{"error":{"message":"tools param requires --jinja flag"}}"#
+        ));
+        assert!(rejects_tools(
+            422,
+            "Tool calling is not supported for this model"
+        ));
         assert!(!rejects_tools(400, "model not found"));
         assert!(!rejects_tools(500, "tool crashed"));
         // OpenRouter: a model with no tool-capable endpoint.
-        assert!(rejects_tools(404, r#"{"error":{"message":"No endpoints found that support tool use."}}"#));
+        assert!(rejects_tools(
+            404,
+            r#"{"error":{"message":"No endpoints found that support tool use."}}"#
+        ));
         assert!(!rejects_tools(404, "model not found"));
     }
 
     #[test]
     fn server_base_and_props_parsing() {
-        assert_eq!(server_base("http://100.100.10.20:8080/v1/chat/completions"), "http://100.100.10.20:8080");
+        assert_eq!(
+            server_base("http://100.100.10.20:8080/v1/chat/completions"),
+            "http://100.100.10.20:8080"
+        );
         assert_eq!(server_base("http://h:8081/v1/"), "http://h:8081");
-        assert_eq!(server_base("http://h:8081/chat/completions"), "http://h:8081");
+        assert_eq!(
+            server_base("http://h:8081/chat/completions"),
+            "http://h:8081"
+        );
         assert_eq!(server_base("http://h:8081"), "http://h:8081");
-        assert_eq!(n_ctx_from_props(&json!({"default_generation_settings": {"n_ctx": 32768}})), Some(32_768));
+        assert_eq!(
+            n_ctx_from_props(&json!({"default_generation_settings": {"n_ctx": 32768}})),
+            Some(32_768)
+        );
         assert_eq!(n_ctx_from_props(&json!({"n_ctx": 8192})), Some(8192));
-        assert_eq!(n_ctx_from_props(&json!({"default_generation_settings": {"n_ctx": 0}})), None);
+        assert_eq!(
+            n_ctx_from_props(&json!({"default_generation_settings": {"n_ctx": 0}})),
+            None
+        );
         assert_eq!(n_ctx_from_props(&json!({"model": "x"})), None);
     }
 }
@@ -1545,7 +1790,9 @@ mod tool_wire {
     fn streamed_call(index: u64, id: &str, name: &str, args: &str) -> Vec<String> {
         let (a, b) = args.split_at(args.len() / 2);
         vec![
-            delta(json!({"tool_calls": [{"index": index, "id": id, "type": "function", "function": {"name": name, "arguments": ""}}]})),
+            delta(
+                json!({"tool_calls": [{"index": index, "id": id, "type": "function", "function": {"name": name, "arguments": ""}}]}),
+            ),
             delta(json!({"tool_calls": [{"index": index, "function": {"arguments": a}}]})),
             delta(json!({"tool_calls": [{"index": index, "function": {"arguments": b}}]})),
         ]
@@ -1567,7 +1814,9 @@ mod tool_wire {
         if f.reject_tool_choice && v.get("tool_choice").is_some() {
             return axum::response::Response::builder()
                 .status(400)
-                .body(Body::from(r#"{"error":{"code":400,"message":"Unsupported param: tool_choice"}}"#))
+                .body(Body::from(
+                    r#"{"error":{"code":400,"message":"Unsupported param: tool_choice"}}"#,
+                ))
                 .unwrap();
         }
         if f.reject_tools && v.get("tools").is_some() {
@@ -1576,13 +1825,23 @@ mod tool_wire {
                 .body(Body::from(r#"{"error":{"code":400,"message":"tools param requires --jinja flag","type":"invalid_request_error"}}"#))
                 .unwrap();
         }
-        let lines = f.rounds.get(n).or_else(|| f.rounds.last()).cloned().unwrap_or_default();
+        let lines = f
+            .rounds
+            .get(n)
+            .or_else(|| f.rounds.last())
+            .cloned()
+            .unwrap_or_default();
         // A round ending in `STALL` sends its lines, then keeps the stream
         // open without finishing — a server still generating.
         if lines.last().is_some_and(|l| l == "STALL") {
-            let sent: Vec<Result<String, std::io::Error>> =
-                lines[..lines.len() - 1].iter().map(|l| Ok(format!("{l}\n\n"))).collect();
-            let stream = futures_util::StreamExt::chain(futures_util::stream::iter(sent), futures_util::stream::pending());
+            let sent: Vec<Result<String, std::io::Error>> = lines[..lines.len() - 1]
+                .iter()
+                .map(|l| Ok(format!("{l}\n\n")))
+                .collect();
+            let stream = futures_util::StreamExt::chain(
+                futures_util::stream::iter(sent),
+                futures_util::stream::pending(),
+            );
             return axum::response::Response::builder()
                 .header("content-type", "text/event-stream")
                 .body(Body::from_stream(stream))
@@ -1609,7 +1868,10 @@ mod tool_wire {
                 .header("content-type", "application/json")
                 .body(Body::from(p.to_string()))
                 .unwrap(),
-            None => axum::response::Response::builder().status(404).body(Body::from("File Not Found")).unwrap(),
+            None => axum::response::Response::builder()
+                .status(404)
+                .body(Body::from("File Not Found"))
+                .unwrap(),
         }
     }
 
@@ -1629,12 +1891,17 @@ mod tool_wire {
     }
     impl ToolExecutor for Recorder {
         async fn call(&self, name: &str, input: &Value) -> (String, bool) {
-            self.calls.lock().unwrap().push((name.to_string(), input.clone()));
+            self.calls
+                .lock()
+                .unwrap()
+                .push((name.to_string(), input.clone()));
             (format!("result for {name}: 42"), false)
         }
     }
     fn recorder() -> Recorder {
-        Recorder { calls: Mutex::new(vec![]) }
+        Recorder {
+            calls: Mutex::new(vec![]),
+        }
     }
 
     fn search_tool() -> Vec<Value> {
@@ -1647,9 +1914,15 @@ mod tool_wire {
 
     #[tokio::test]
     async fn streamed_tool_call_round_trips_through_the_executor_and_back() {
-        let mut first = vec![delta(json!({"reasoning_content": "need to search"})), text("Let me check.")];
+        let mut first = vec![
+            delta(json!({"reasoning_content": "need to search"})),
+            text("Let me check."),
+        ];
         first.extend(streamed_call(0, "call_abc", "search", r#"{"q":"rust"}"#));
-        let f = Fake { rounds: Arc::new(vec![first, vec![text("final "), text("answer")]]), ..Default::default() };
+        let f = Fake {
+            rounds: Arc::new(vec![first, vec![text("final "), text("answer")]]),
+            ..Default::default()
+        };
         let bodies = f.bodies.clone();
         let url = serve(f).await;
         let exec = recorder();
@@ -1669,13 +1942,29 @@ mod tool_wire {
             .await
             .unwrap();
         assert_eq!(out.text, "Let me check.\n\nfinal answer");
-        assert_eq!(deltas.concat(), out.text, "the body is exactly what was streamed");
+        assert_eq!(
+            deltas.concat(),
+            out.text,
+            "the body is exactly what was streamed"
+        );
         assert_eq!(out.rounds, 2);
         assert!(!out.tools_unsupported);
-        assert_eq!(exec.calls.lock().unwrap().as_slice(), &[("search".to_string(), json!({"q": "rust"}))]);
-        assert!(matches!(&acts[0], StreamActivity::Thinking { text } if text == "need to search"), "{acts:?}");
-        assert!(matches!(&acts[1], StreamActivity::Tool { id, name, input_json } if id == "call_abc" && name == "search" && input_json == r#"{"q":"rust"}"#), "{acts:?}");
-        assert!(matches!(&acts[2], StreamActivity::ToolResult { call_id, is_error: false, content } if call_id == "call_abc" && content == "result for search: 42"), "{acts:?}");
+        assert_eq!(
+            exec.calls.lock().unwrap().as_slice(),
+            &[("search".to_string(), json!({"q": "rust"}))]
+        );
+        assert!(
+            matches!(&acts[0], StreamActivity::Thinking { text } if text == "need to search"),
+            "{acts:?}"
+        );
+        assert!(
+            matches!(&acts[1], StreamActivity::Tool { id, name, input_json } if id == "call_abc" && name == "search" && input_json == r#"{"q":"rust"}"#),
+            "{acts:?}"
+        );
+        assert!(
+            matches!(&acts[2], StreamActivity::ToolResult { call_id, is_error: false, content } if call_id == "call_abc" && content == "result for search: 42"),
+            "{acts:?}"
+        );
         assert_eq!(acts.len(), 3);
 
         let b = bodies.lock().unwrap();
@@ -1689,16 +1978,28 @@ mod tool_wire {
         let roles: Vec<&str> = msgs.iter().map(|m| m["role"].as_str().unwrap()).collect();
         assert_eq!(roles, ["system", "user", "assistant", "tool"]);
         assert_eq!(msgs[2]["content"], "Let me check.");
-        assert_eq!(msgs[2]["reasoning_content"], "need to search", "the round's reasoning rides back with its calls");
+        assert_eq!(
+            msgs[2]["reasoning_content"], "need to search",
+            "the round's reasoning rides back with its calls"
+        );
         assert_eq!(msgs[2]["tool_calls"][0]["id"], "call_abc");
         assert_eq!(msgs[2]["tool_calls"][0]["type"], "function");
         assert_eq!(msgs[2]["tool_calls"][0]["function"]["name"], "search");
         // Arguments go back as a JSON *string* on this wire.
-        assert_eq!(msgs[2]["tool_calls"][0]["function"]["arguments"], r#"{"q":"rust"}"#);
+        assert_eq!(
+            msgs[2]["tool_calls"][0]["function"]["arguments"],
+            r#"{"q":"rust"}"#
+        );
         assert_eq!(msgs[3]["tool_call_id"], "call_abc");
         assert_eq!(msgs[3]["content"], "result for search: 42");
-        assert!(b[1].get("tools").is_some(), "tools stay on offer until the last round");
-        assert!(b[1].get("tool_choice").is_none(), "an ordinary round lets the model choose");
+        assert!(
+            b[1].get("tools").is_some(),
+            "tools stay on offer until the last round"
+        );
+        assert!(
+            b[1].get("tool_choice").is_none(),
+            "an ordinary round lets the model choose"
+        );
         assert_eq!(msgs.len(), 4, "no nudge on an ordinary round");
     }
 
@@ -1706,12 +2007,25 @@ mod tool_wire {
     async fn reasoning_echo_can_be_turned_off() {
         let mut first = vec![delta(json!({"reasoning": "plan"}))];
         first.extend(streamed_call(0, "c", "search", r#"{"q":"rust"}"#));
-        let f = Fake { rounds: Arc::new(vec![first, vec![text("ok")]]), ..Default::default() };
+        let f = Fake {
+            rounds: Arc::new(vec![first, vec![text("ok")]]),
+            ..Default::default()
+        };
         let bodies = f.bodies.clone();
         let url = serve(f).await;
         OpenAiClient::new(&url)
             .with_reasoning_echo(false)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &recorder(), 4, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &recorder(),
+                4,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         let b = bodies.lock().unwrap();
@@ -1722,24 +2036,47 @@ mod tool_wire {
     async fn multi_round_with_parallel_calls_and_synthesized_ids() {
         // Round 1: two calls in one turn, no ids from the server.
         let r1 = vec![
-            delta(json!({"tool_calls": [{"index": 0, "function": {"name": "search", "arguments": "{\"q\":\"a\"}"}}]})),
-            delta(json!({"tool_calls": [{"index": 1, "function": {"name": "search", "arguments": "{\"q\":\"b\"}"}}]})),
+            delta(
+                json!({"tool_calls": [{"index": 0, "function": {"name": "search", "arguments": "{\"q\":\"a\"}"}}]}),
+            ),
+            delta(
+                json!({"tool_calls": [{"index": 1, "function": {"name": "search", "arguments": "{\"q\":\"b\"}"}}]}),
+            ),
         ];
         // Round 2: one more call. Round 3: the answer.
         let r2 = streamed_call(0, "srv_1", "search", r#"{"q":"c"}"#);
         let r3 = vec![text("done")];
-        let f = Fake { rounds: Arc::new(vec![r1, r2, r3]), ..Default::default() };
+        let f = Fake {
+            rounds: Arc::new(vec![r1, r2, r3]),
+            ..Default::default()
+        };
         let bodies = f.bodies.clone();
         let url = serve(f).await;
         let exec = recorder();
         let mut acts = Vec::new();
         let out = OpenAiClient::new(&url)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &exec, 6, |_| {}, |a| acts.push(a))
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &exec,
+                6,
+                |_| {},
+                |a| acts.push(a),
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "done");
         assert_eq!(out.rounds, 3);
-        let qs: Vec<Value> = exec.calls.lock().unwrap().iter().map(|(_, v)| v["q"].clone()).collect();
+        let qs: Vec<Value> = exec
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, v)| v["q"].clone())
+            .collect();
         assert_eq!(qs, [json!("a"), json!("b"), json!("c")]);
         let ids: Vec<String> = acts
             .iter()
@@ -1752,7 +2089,10 @@ mod tool_wire {
         let b = bodies.lock().unwrap();
         let msgs = b[2]["messages"].as_array().unwrap();
         let roles: Vec<&str> = msgs.iter().map(|m| m["role"].as_str().unwrap()).collect();
-        assert_eq!(roles, ["user", "assistant", "tool", "tool", "assistant", "tool"]);
+        assert_eq!(
+            roles,
+            ["user", "assistant", "tool", "tool", "assistant", "tool"]
+        );
         // Synthesized ids are used consistently in the call and its answer.
         assert_eq!(msgs[1]["tool_calls"][1]["id"], "call_0_1");
         assert_eq!(msgs[3]["tool_call_id"], "call_0_1");
@@ -1773,7 +2113,17 @@ mod tool_wire {
         let url = serve(f).await;
         let exec = recorder();
         let out = OpenAiClient::new(&url)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &exec, 3, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &exec,
+                3,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "giving up: 42");
@@ -1784,12 +2134,21 @@ mod tool_wire {
         assert!(b[1].get("tools").is_some());
         // The final round keeps the tools (the server's cached prefix renders
         // them) and forbids calling them.
-        assert_eq!(b[2]["tools"], b[1]["tools"], "the tools field is unchanged on the final round");
-        assert_eq!(b[2]["tool_choice"], "none", "the final round forces a text answer");
+        assert_eq!(
+            b[2]["tools"], b[1]["tools"],
+            "the tools field is unchanged on the final round"
+        );
+        assert_eq!(
+            b[2]["tool_choice"], "none",
+            "the final round forces a text answer"
+        );
         assert!(b[1].get("tool_choice").is_none());
         // The nudge is appended after the newest tool result: everything
         // before it is the prefix the server already has.
-        let (m1, m2) = (b[1]["messages"].as_array().unwrap(), b[2]["messages"].as_array().unwrap());
+        let (m1, m2) = (
+            b[1]["messages"].as_array().unwrap(),
+            b[2]["messages"].as_array().unwrap(),
+        );
         assert_eq!(&m2[..m1.len()], &m1[..]);
         assert_eq!(m2.len(), m1.len() + 3, "assistant, tool, nudge");
         assert_eq!(m2[m2.len() - 2]["content"], "result for search: 42");
@@ -1799,34 +2158,63 @@ mod tool_wire {
     #[tokio::test]
     async fn final_round_drops_tools_when_configured_to() {
         let f = Fake {
-            rounds: Arc::new(vec![streamed_call(0, "a", "search", r#"{"q":"1"}"#), vec![text("done")]]),
+            rounds: Arc::new(vec![
+                streamed_call(0, "a", "search", r#"{"q":"1"}"#),
+                vec![text("done")],
+            ]),
             ..Default::default()
         };
         let bodies = f.bodies.clone();
         let url = serve(f).await;
         let out = OpenAiClient::new(&url)
             .with_final_tool_choice(false)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &recorder(), 2, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &recorder(),
+                2,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "done");
         let b = bodies.lock().unwrap();
         assert!(b[1].get("tools").is_none() && b[1].get("tool_choice").is_none());
-        assert!(is_final_round_nudge(b[1]["messages"].as_array().unwrap().last().unwrap()));
+        assert!(is_final_round_nudge(
+            b[1]["messages"].as_array().unwrap().last().unwrap()
+        ));
     }
 
     #[tokio::test]
     async fn rejected_tool_choice_falls_back_to_dropping_tools() {
         let f = Fake {
             // Request 1 (tool_choice) is rejected; its script slot is never served.
-            rounds: Arc::new(vec![streamed_call(0, "a", "search", r#"{"q":"1"}"#), vec![], vec![text("done")]]),
+            rounds: Arc::new(vec![
+                streamed_call(0, "a", "search", r#"{"q":"1"}"#),
+                vec![],
+                vec![text("done")],
+            ]),
             reject_tool_choice: true,
             ..Default::default()
         };
         let bodies = f.bodies.clone();
         let url = serve(f).await;
         let out = OpenAiClient::new(&url)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &recorder(), 2, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &recorder(),
+                2,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "done");
@@ -1852,12 +2240,26 @@ mod tool_wire {
         let url = serve(f).await;
         let exec = recorder();
         let out = OpenAiClient::new(&url)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &exec, 2, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &exec,
+                2,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "answer");
         assert_eq!(out.rounds, 2);
-        assert_eq!(exec.calls.lock().unwrap().len(), 1, "the ignored call never runs");
+        assert_eq!(
+            exec.calls.lock().unwrap().len(),
+            1,
+            "the ignored call never runs"
+        );
         let b = bodies.lock().unwrap();
         assert_eq!(b.len(), 3);
         assert_eq!(b[1]["tool_choice"], "none");
@@ -1867,35 +2269,70 @@ mod tool_wire {
     #[tokio::test]
     async fn repeated_calls_are_answered_from_the_first_result_then_the_loop_winds_up() {
         let same = || streamed_call(0, "x", "search", r#"{"q": "stock.py"}"#);
-        let f = Fake { rounds: Arc::new(vec![same(), same(), same(), same(), vec![text("the bug is in stock.py")]]), ..Default::default() };
+        let f = Fake {
+            rounds: Arc::new(vec![
+                same(),
+                same(),
+                same(),
+                same(),
+                vec![text("the bug is in stock.py")],
+            ]),
+            ..Default::default()
+        };
         let bodies = f.bodies.clone();
         let url = serve(f).await;
         let exec = recorder();
         let mut results = Vec::new();
         let out = OpenAiClient::new(&url)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &exec, 24, |_| {}, |a| {
-                if let StreamActivity::ToolResult { content, .. } = a {
-                    results.push(content)
-                }
-            })
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &exec,
+                24,
+                |_| {},
+                |a| {
+                    if let StreamActivity::ToolResult { content, .. } = a {
+                        results.push(content)
+                    }
+                },
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "the bug is in stock.py");
         assert_eq!(out.rounds, 5, "four tool rounds, then the answer - not 24");
-        assert_eq!(exec.calls.lock().unwrap().len(), 1, "the repeats were not run again");
+        assert_eq!(
+            exec.calls.lock().unwrap().len(),
+            1,
+            "the repeats were not run again"
+        );
         assert_eq!(results[0], "result for search: 42");
-        assert!(results[1].starts_with("Not run again") && results[1].contains("result for search: 42"), "{}", results[1]);
+        assert!(
+            results[1].starts_with("Not run again") && results[1].contains("result for search: 42"),
+            "{}",
+            results[1]
+        );
         assert!(results[2].contains("Take the next step"), "{}", results[2]);
         assert!(results[3].contains("final answer"), "{}", results[3]);
         let b = bodies.lock().unwrap();
-        assert!(b[3].get("tool_choice").is_none(), "two repeats don't end the loop");
+        assert!(
+            b[3].get("tool_choice").is_none(),
+            "two repeats don't end the loop"
+        );
         assert_eq!(b[4]["tool_choice"], "none", "the third repeat does");
-        assert!(is_final_round_nudge(b[4]["messages"].as_array().unwrap().last().unwrap()));
+        assert!(is_final_round_nudge(
+            b[4]["messages"].as_array().unwrap().last().unwrap()
+        ));
     }
 
     fn extras() -> Map<String, Value> {
         let mut m = Map::new();
-        m.insert("chat_template_kwargs".into(), json!({"enable_thinking": false}));
+        m.insert(
+            "chat_template_kwargs".into(),
+            json!({"enable_thinking": false}),
+        );
         m.insert("reasoning_effort".into(), json!("low"));
         m
     }
@@ -1903,7 +2340,10 @@ mod tool_wire {
     #[tokio::test]
     async fn extra_fields_ride_every_round() {
         let f = Fake {
-            rounds: Arc::new(vec![streamed_call(0, "a", "search", r#"{"q":"1"}"#), vec![text("ok")]]),
+            rounds: Arc::new(vec![
+                streamed_call(0, "a", "search", r#"{"q":"1"}"#),
+                vec![text("ok")],
+            ]),
             ..Default::default()
         };
         let bodies = f.bodies.clone();
@@ -1911,30 +2351,62 @@ mod tool_wire {
         let exec = recorder();
         let out = OpenAiClient::new(&url)
             .with_extra_body(extras())
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &exec, 4, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &exec,
+                4,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "ok");
         let b = bodies.lock().unwrap();
         assert_eq!(b.len(), 2);
         for body in b.iter() {
-            assert_eq!(body["chat_template_kwargs"], json!({"enable_thinking": false}));
+            assert_eq!(
+                body["chat_template_kwargs"],
+                json!({"enable_thinking": false})
+            );
             assert_eq!(body["reasoning_effort"], "low");
-            assert!(body.get("max_tokens").is_none(), "no output cap on the OpenAI wire");
+            assert!(
+                body.get("max_tokens").is_none(),
+                "no output cap on the OpenAI wire"
+            );
         }
     }
 
     #[test]
     fn looping_arguments_are_detected() {
         let open = r#"{"path": "."#;
-        assert!(!is_looping_arguments(&format!("{open}{}", " ".repeat(LOOP_CHECK_BYTES - 64))), "too short to judge");
-        assert!(is_looping_arguments(&format!("{open}{}", " ".repeat(LOOP_CHECK_BYTES))));
-        assert!(is_looping_arguments(&format!("{open}{}", "/src/lib".repeat(2000))));
+        assert!(
+            !is_looping_arguments(&format!("{open}{}", " ".repeat(LOOP_CHECK_BYTES - 64))),
+            "too short to judge"
+        );
+        assert!(is_looping_arguments(&format!(
+            "{open}{}",
+            " ".repeat(LOOP_CHECK_BYTES)
+        )));
+        assert!(is_looping_arguments(&format!(
+            "{open}{}",
+            "/src/lib".repeat(2000)
+        )));
         // A unit longer than the period limit is not judged a loop.
-        let long_unit: String = (0..LOOP_MAX_PERIOD + 7).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
-        assert!(!is_looping_arguments(&format!("{open}{}", long_unit.repeat(40))));
+        let long_unit: String = (0..LOOP_MAX_PERIOD + 7)
+            .map(|i| char::from(b'a' + (i % 26) as u8))
+            .collect();
+        assert!(!is_looping_arguments(&format!(
+            "{open}{}",
+            long_unit.repeat(40)
+        )));
         // A big, ordinary file write is not a loop.
-        let file: String = (0..800).map(|i| format!("    total_{i} = price_{i} * (1 - rate_{i})\n")).collect();
+        let file: String = (0..800)
+            .map(|i| format!("    total_{i} = price_{i} * (1 - rate_{i})\n"))
+            .collect();
         let args = json!({ "path": "shop/big.py", "content": file }).to_string();
         assert!(args.len() > LOOP_CHECK_BYTES * 2);
         assert!(!is_looping_arguments(&args));
@@ -1945,25 +2417,50 @@ mod tool_wire {
     #[test]
     fn repetitive_file_content_is_not_cut_off() {
         let rows = format!("id,name\n{}", "0,placeholder,0,0,0\n".repeat(600));
-        let table = format!("static const unsigned char t[] = {{\n{}}};\n", "0x00, ".repeat(2000));
+        let table = format!(
+            "static const unsigned char t[] = {{\n{}}};\n",
+            "0x00, ".repeat(2000)
+        );
         let rule = format!("# Title\n{}\n", "=".repeat(9000));
         // The guard runs on every streamed chunk, so check every prefix.
         let prefixes = |args: &str| -> Vec<String> {
-            (1..=args.len() / 64).map(|i| args[..i * 64].to_string()).chain([args.to_string()]).collect()
+            (1..=args.len() / 64)
+                .map(|i| args[..i * 64].to_string())
+                .chain([args.to_string()])
+                .collect()
         };
-        for (path, content) in [("fixture.csv", rows), ("table.c", table), ("README.md", rule)] {
+        for (path, content) in [
+            ("fixture.csv", rows),
+            ("table.c", table),
+            ("README.md", rule),
+        ] {
             let args = json!({ "path": path, "content": format!("{}{content}", "header line\n".repeat(800)) }).to_string();
             assert!(args.len() > LOOP_CHECK_BYTES, "{path}");
             let streamed = prefixes(&args);
-            assert!(streamed.iter().any(|p| is_looping_arguments(p)), "the tight check would cut {path}");
+            assert!(
+                streamed.iter().any(|p| is_looping_arguments(p)),
+                "the tight check would cut {path}"
+            );
             for name in ["write_file", "fs__write_file"] {
-                assert!(!streamed.iter().any(|p| is_looping_call(name, p)), "{name} {path}");
+                assert!(
+                    !streamed.iter().any(|p| is_looping_call(name, p)),
+                    "{name} {path}"
+                );
             }
-            let edit = json!({ "path": path, "old_string": "x", "new_string": content }).to_string();
-            assert!(!prefixes(&edit).iter().any(|p| is_looping_call("edit_file", p)), "{path}");
+            let edit =
+                json!({ "path": path, "old_string": "x", "new_string": content }).to_string();
+            assert!(
+                !prefixes(&edit)
+                    .iter()
+                    .any(|p| is_looping_call("edit_file", p)),
+                "{path}"
+            );
         }
         // A write that really runs away is still cut, just later.
-        let runaway = format!(r#"{{"path": "a.txt", "content": "{}"#, "ab".repeat(CONTENT_LOOP_CHECK_BYTES));
+        let runaway = format!(
+            r#"{{"path": "a.txt", "content": "{}"#,
+            "ab".repeat(CONTENT_LOOP_CHECK_BYTES)
+        );
         assert!(is_looping_call("write_file", &runaway));
         // Other tools keep the tight bound.
         let looping_dir = format!(r#"{{"path": "{}"#, "/src/lib".repeat(2000));
@@ -1979,38 +2476,71 @@ mod tool_wire {
             json!({"tool_calls": [{"index": 0, "id": "a", "type": "function", "function": {"name": "search", "arguments": "{\"q\": \"x"}}]}),
         )];
         for _ in 0..(LOOP_CHECK_BYTES / 64 + 8) {
-            looping.push(delta(json!({"tool_calls": [{"index": 0, "function": {"arguments": " ".repeat(64)}}]})));
+            looping.push(delta(
+                json!({"tool_calls": [{"index": 0, "function": {"arguments": " ".repeat(64)}}]}),
+            ));
         }
         looping.push("STALL".into());
-        let f = Fake { rounds: Arc::new(vec![looping, vec![text("done")]]), ..Default::default() };
+        let f = Fake {
+            rounds: Arc::new(vec![looping, vec![text("done")]]),
+            ..Default::default()
+        };
         let bodies = f.bodies.clone();
         let url = serve(f).await;
         let exec = recorder();
         let mut results = Vec::new();
         let out = tokio::time::timeout(
             Duration::from_secs(20),
-            OpenAiClient::new(&url).stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &exec, 4, |_| {}, |a| {
-                if let StreamActivity::ToolResult { is_error, content, .. } = a {
-                    results.push((is_error, content));
-                }
-            }),
+            OpenAiClient::new(&url).stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &exec,
+                4,
+                |_| {},
+                |a| {
+                    if let StreamActivity::ToolResult {
+                        is_error, content, ..
+                    } = a
+                    {
+                        results.push((is_error, content));
+                    }
+                },
+            ),
         )
         .await
         .expect("the looping round was cut short")
         .unwrap();
         assert_eq!(out.text, "done");
-        assert!(exec.calls.lock().unwrap().is_empty(), "the truncated call never ran");
+        assert!(
+            exec.calls.lock().unwrap().is_empty(),
+            "the truncated call never ran"
+        );
         assert_eq!(results.len(), 1);
-        assert!(results[0].0, "reported to the model as an error: {:?}", results[0]);
+        assert!(
+            results[0].0,
+            "reported to the model as an error: {:?}",
+            results[0]
+        );
         assert!(results[0].1.contains("not valid JSON"), "{}", results[0].1);
-        assert_eq!(bodies.lock().unwrap().len(), 2, "the model got another round");
+        assert_eq!(
+            bodies.lock().unwrap().len(),
+            2,
+            "the model got another round"
+        );
     }
 
     #[tokio::test]
     async fn rejected_extra_fields_are_dropped_for_the_rest_of_the_turn() {
         let f = Fake {
             // Request 0 is the rejected one; its script slot is never served.
-            rounds: Arc::new(vec![vec![], streamed_call(0, "a", "search", r#"{"q":"1"}"#), vec![text("ok")]]),
+            rounds: Arc::new(vec![
+                vec![],
+                streamed_call(0, "a", "search", r#"{"q":"1"}"#),
+                vec![text("ok")],
+            ]),
             reject_extras: true,
             ..Default::default()
         };
@@ -2019,7 +2549,17 @@ mod tool_wire {
         let exec = recorder();
         let out = OpenAiClient::new(&url)
             .with_extra_body(extras())
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &exec, 4, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &exec,
+                4,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "ok");
@@ -2028,8 +2568,13 @@ mod tool_wire {
         // Rejected once, retried without, and never sent again.
         assert_eq!(b.len(), 3);
         assert!(b[0].get("chat_template_kwargs").is_some());
-        assert!(b[1].get("chat_template_kwargs").is_none() && b[1].get("reasoning_effort").is_none());
-        assert!(b[1].get("tools").is_some(), "tools survive an extras rejection");
+        assert!(
+            b[1].get("chat_template_kwargs").is_none() && b[1].get("reasoning_effort").is_none()
+        );
+        assert!(
+            b[1].get("tools").is_some(),
+            "tools survive an extras rejection"
+        );
         assert!(b[2].get("chat_template_kwargs").is_none());
     }
 
@@ -2044,31 +2589,60 @@ mod tool_wire {
     #[tokio::test]
     async fn tools_stop_being_offered_when_the_context_nears_the_window() {
         let f = Fake {
-            rounds: Arc::new(vec![streamed_call(0, "a", "search", r#"{"q":"1"}"#), vec![text("answer from what I have")]]),
+            rounds: Arc::new(vec![
+                streamed_call(0, "a", "search", r#"{"q":"1"}"#),
+                vec![text("answer from what I have")],
+            ]),
             ..Default::default()
         };
         let bodies = f.bodies.clone();
         let url = serve(f).await;
         let out = OpenAiClient::new(&url)
             .with_context_window(4096)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &Bulky, 24, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &Bulky,
+                24,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "answer from what I have");
         assert_eq!(out.rounds, 2, "the guard made round 2 the last");
         let b = bodies.lock().unwrap();
         assert!(b[0].get("tools").is_some());
-        assert_eq!(b[1]["tool_choice"], "none", "near the window the round may not call tools");
+        assert_eq!(
+            b[1]["tool_choice"], "none",
+            "near the window the round may not call tools"
+        );
     }
 
     #[tokio::test]
     async fn calls_on_a_tool_less_final_round_are_not_executed() {
         // A server that emits a call even with no tools offered.
-        let f = Fake { rounds: Arc::new(vec![streamed_call(0, "a", "search", r#"{"q":"1"}"#)]), ..Default::default() };
+        let f = Fake {
+            rounds: Arc::new(vec![streamed_call(0, "a", "search", r#"{"q":"1"}"#)]),
+            ..Default::default()
+        };
         let url = serve(f).await;
         let exec = recorder();
         let out = OpenAiClient::new(&url)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &exec, 1, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &exec,
+                1,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.rounds, 1);
@@ -2077,12 +2651,26 @@ mod tool_wire {
 
     #[tokio::test]
     async fn tools_rejected_by_the_server_fall_back_to_a_plain_chat() {
-        let f = Fake { rounds: Arc::new(vec![vec![text("plain")]]), reject_tools: true, ..Default::default() };
+        let f = Fake {
+            rounds: Arc::new(vec![vec![text("plain")]]),
+            reject_tools: true,
+            ..Default::default()
+        };
         let bodies = f.bodies.clone();
         let url = serve(f).await;
         let exec = recorder();
         let out = OpenAiClient::new(&url)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &exec, 4, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &exec,
+                4,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "plain");
@@ -2105,17 +2693,39 @@ mod tool_wire {
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let err = OpenAiClient::new(format!("http://{addr}/v1/chat/completions"))
             .with_provider_label("endpoint")
-            .stream_chat_with_tools(None, "x", None, &[ChatTurn::user("x")], &search_tool(), &recorder(), 4, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                None,
+                "x",
+                None,
+                &[ChatTurn::user("x")],
+                &search_tool(),
+                &recorder(),
+                4,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap_err();
-        assert!(matches!(err, ProviderError::Api { provider: "endpoint", status: 400, .. }), "{err:?}");
+        assert!(
+            matches!(
+                err,
+                ProviderError::Api {
+                    provider: "endpoint",
+                    status: 400,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]
     async fn malformed_arguments_get_an_error_result_not_a_crash() {
         let f = Fake {
             rounds: Arc::new(vec![
-                vec![delta(json!({"tool_calls": [{"index": 0, "id": "bad", "function": {"name": "search", "arguments": "{\"q\": \"unterminated"}}]}))],
+                vec![delta(
+                    json!({"tool_calls": [{"index": 0, "id": "bad", "function": {"name": "search", "arguments": "{\"q\": \"unterminated"}}]}),
+                )],
                 vec![text("sorry")],
             ]),
             ..Default::default()
@@ -2125,18 +2735,37 @@ mod tool_wire {
         let exec = recorder();
         let mut acts = Vec::new();
         let out = OpenAiClient::new(&url)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &exec, 4, |_| {}, |a| acts.push(a))
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &exec,
+                4,
+                |_| {},
+                |a| acts.push(a),
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "sorry");
-        assert!(exec.calls.lock().unwrap().is_empty(), "the executor never sees bad arguments");
-        assert!(matches!(&acts[1], StreamActivity::ToolResult { call_id, is_error: true, content } if call_id == "bad" && content.contains("not valid JSON")), "{acts:?}");
+        assert!(
+            exec.calls.lock().unwrap().is_empty(),
+            "the executor never sees bad arguments"
+        );
+        assert!(
+            matches!(&acts[1], StreamActivity::ToolResult { call_id, is_error: true, content } if call_id == "bad" && content.contains("not valid JSON")),
+            "{acts:?}"
+        );
         let b = bodies.lock().unwrap();
         let msgs = b[1]["messages"].as_array().unwrap();
         // History stays parseable: the echoed call carries `{}`, the result the raw text.
         assert_eq!(msgs[1]["tool_calls"][0]["function"]["arguments"], "{}");
         assert_eq!(msgs[2]["tool_call_id"], "bad");
-        assert!(msgs[2]["content"].as_str().unwrap().contains("unterminated"));
+        assert!(msgs[2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("unterminated"));
     }
 
     #[tokio::test]
@@ -2148,11 +2777,24 @@ mod tool_wire {
             "data: {}",
             json!({"choices": [{"index": 0, "finish_reason": "tool_calls", "message": {"role": "assistant", "content": null, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "search", "arguments": "{\"q\":\"z\"}"}}]}}]})
         ));
-        let f = Fake { rounds: Arc::new(vec![r1, vec![text("ok")]]), ..Default::default() };
+        let f = Fake {
+            rounds: Arc::new(vec![r1, vec![text("ok")]]),
+            ..Default::default()
+        };
         let url = serve(f).await;
         let exec = recorder();
         OpenAiClient::new(&url)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &exec, 4, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &exec,
+                4,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(exec.calls.lock().unwrap().len(), 1);
@@ -2166,33 +2808,62 @@ mod tool_wire {
         }}]})
         .to_string();
         let answer = json!({"choices": [{"index": 0, "message": {"role": "assistant", "content": "<think>hm</think>whole answer"}}]}).to_string();
-        let f = Fake { rounds: Arc::new(vec![vec![whole], vec![answer]]), ..Default::default() };
+        let f = Fake {
+            rounds: Arc::new(vec![vec![whole], vec![answer]]),
+            ..Default::default()
+        };
         let url = serve(f).await;
         let exec = recorder();
         let mut thinking = String::new();
         let out = OpenAiClient::new(&url)
-            .stream_chat_with_tools(None, "m", None, &[ChatTurn::user("go")], &search_tool(), &exec, 4, |_| {}, |a| {
-                if let StreamActivity::Thinking { text } = a {
-                    thinking.push_str(&text)
-                }
-            })
+            .stream_chat_with_tools(
+                None,
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &search_tool(),
+                &exec,
+                4,
+                |_| {},
+                |a| {
+                    if let StreamActivity::Thinking { text } = a {
+                        thinking.push_str(&text)
+                    }
+                },
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "whole answer");
         assert_eq!(thinking, "hm");
-        assert_eq!(exec.calls.lock().unwrap().as_slice(), &[("search".to_string(), json!({"q": "w"}))]);
+        assert_eq!(
+            exec.calls.lock().unwrap().as_slice(),
+            &[("search".to_string(), json!({"q": "w"}))]
+        );
     }
 
     #[tokio::test]
     async fn props_probe_reads_n_ctx_and_caches_it() {
-        let f = Fake { props: Some(json!({"default_generation_settings": {"n_ctx": 32768}, "total_slots": 1})), ..Default::default() };
+        let f = Fake {
+            props: Some(json!({"default_generation_settings": {"n_ctx": 32768}, "total_slots": 1})),
+            ..Default::default()
+        };
         let hits = f.props_hits.clone();
         let url = serve(f).await;
         let client = OpenAiClient::new(&url);
         assert_eq!(cached_context_window(&url, "gemma4:12b"), None);
-        assert_eq!(client.probe_context_window(None, "gemma4:12b").await, Some(32_768));
-        assert_eq!(client.probe_context_window(None, "gemma4:12b").await, Some(32_768));
-        assert_eq!(*hits.lock().unwrap(), 1, "second probe served from the cache");
+        assert_eq!(
+            client.probe_context_window(None, "gemma4:12b").await,
+            Some(32_768)
+        );
+        assert_eq!(
+            client.probe_context_window(None, "gemma4:12b").await,
+            Some(32_768)
+        );
+        assert_eq!(
+            *hits.lock().unwrap(),
+            1,
+            "second probe served from the cache"
+        );
         assert_eq!(cached_context_window(&url, "gemma4:12b"), Some(32_768));
     }
 
@@ -2205,7 +2876,11 @@ mod tool_wire {
         let client = OpenAiClient::new(&url);
         assert_eq!(client.probe_context_window(None, "m").await, None);
         assert_eq!(client.probe_context_window(None, "m").await, None);
-        assert_eq!(*hits.lock().unwrap(), 1, "a failed probe is remembered for a while");
+        assert_eq!(
+            *hits.lock().unwrap(),
+            1,
+            "a failed probe is remembered for a while"
+        );
         assert_eq!(cached_context_window(&url, "m"), None);
         // An unreachable server is also just `None`.
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -39,7 +39,9 @@ pub const POD_VOLUME_ENV: &str = "LIGUS_POD_VOLUME";
 pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        let pod_volume = std::env::var_os(POD_VOLUME_ENV).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
+        let pod_volume = std::env::var_os(POD_VOLUME_ENV)
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from);
         ensure_private_dir_with(dir, &UnixDirs, pod_volume.as_deref())
     }
     #[cfg(not(unix))]
@@ -74,15 +76,24 @@ pub struct UnixDirs;
 impl DirOps for UnixDirs {
     fn create(&self, dir: &Path) -> std::io::Result<()> {
         use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
     }
     fn facts(&self, dir: &Path) -> std::io::Result<DirFacts> {
         use std::os::unix::fs::MetadataExt;
         let m = std::fs::metadata(dir)?;
         if !m.is_dir() {
-            return Err(std::io::Error::other(format!("{} is not a directory", dir.display())));
+            return Err(std::io::Error::other(format!(
+                "{} is not a directory",
+                dir.display()
+            )));
         }
-        Ok(DirFacts { owner: m.uid(), mode: m.mode() & 0o7777 })
+        Ok(DirFacts {
+            owner: m.uid(),
+            mode: m.mode() & 0o7777,
+        })
     }
     fn chmod_owner_only(&self, dir: &Path) -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
@@ -108,7 +119,11 @@ pub enum DirVerdict {
 /// The decision, without touching the filesystem.
 pub fn dir_verdict(dir: &Path, facts: DirFacts, euid: u32, pod_volume: bool) -> DirVerdict {
     if facts.owner == euid {
-        return if facts.mode & 0o077 != 0 { DirVerdict::Tighten } else { DirVerdict::Keep };
+        return if facts.mode & 0o077 != 0 {
+            DirVerdict::Tighten
+        } else {
+            DirVerdict::Keep
+        };
     }
     if pod_volume {
         return DirVerdict::Keep;
@@ -143,14 +158,21 @@ pub fn dir_verdict(dir: &Path, facts: DirFacts, euid: u32, pod_volume: bool) -> 
 
 /// [`ensure_private_dir`] over `ops`, trusting `pod_volume` (if any) as a
 /// volume root only this pod mounts.
-pub fn ensure_private_dir_with(dir: &Path, ops: &impl DirOps, pod_volume: Option<&Path>) -> std::io::Result<()> {
+pub fn ensure_private_dir_with(
+    dir: &Path,
+    ops: &impl DirOps,
+    pod_volume: Option<&Path>,
+) -> std::io::Result<()> {
     ops.create(dir)?;
     let facts = ops.facts(dir)?;
     let trusted = pod_volume.is_some_and(|v| same_dir(v, dir));
     match dir_verdict(dir, facts, ops.euid(), trusted) {
         DirVerdict::Keep => Ok(()),
         DirVerdict::Tighten => ops.chmod_owner_only(dir),
-        DirVerdict::Refuse(why) => Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, why)),
+        DirVerdict::Refuse(why) => Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            why,
+        )),
     }
 }
 
@@ -171,11 +193,23 @@ pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// [`write_private_atomic`] with the randomness source for the temp name.
-fn write_private_atomic_with(path: &Path, bytes: &[u8], fill: fn(&mut [u8]) -> Result<(), getrandom::Error>) -> std::io::Result<()> {
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+fn write_private_atomic_with(
+    path: &Path,
+    bytes: &[u8],
+    fill: fn(&mut [u8]) -> Result<(), getrandom::Error>,
+) -> std::io::Result<()> {
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let mut rnd = [0u8; 6];
-    fill(&mut rnd).map_err(|e| std::io::Error::other(format!("no OS randomness for a temp file name: {e}")))?;
+    fill(&mut rnd).map_err(|e| {
+        std::io::Error::other(format!("no OS randomness for a temp file name: {e}"))
+    })?;
     let suffix: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
     let tmp = dir.join(format!(".{name}.{suffix}.tmp"));
     let mut opts = std::fs::OpenOptions::new();
@@ -220,7 +254,11 @@ mod tests {
 
     impl FakeDirs {
         fn new(owner: u32, mode: u32, euid: u32) -> Self {
-            Self { facts: Cell::new(DirFacts { owner, mode }), euid, chmods: RefCell::new(Vec::new()) }
+            Self {
+                facts: Cell::new(DirFacts { owner, mode }),
+                euid,
+                chmods: RefCell::new(Vec::new()),
+            }
         }
     }
 
@@ -236,7 +274,10 @@ mod tests {
                 return Err(std::io::Error::from_raw_os_error(1)); // EPERM, like the kernel
             }
             self.chmods.borrow_mut().push(dir.to_path_buf());
-            self.facts.set(DirFacts { owner: self.euid, mode: 0o700 });
+            self.facts.set(DirFacts {
+                owner: self.euid,
+                mode: 0o700,
+            });
             Ok(())
         }
         fn euid(&self) -> u32 {
@@ -266,7 +307,11 @@ mod tests {
         for mode in [0o777, 0o2775, 0o755, 0o711, 0o1777] {
             let fs = FakeDirs::new(0, mode, ME);
             let err = ensure_private_dir_with(Path::new(DATA), &fs, None).unwrap_err();
-            assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{mode:o}: {err}");
+            assert_eq!(
+                err.kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "{mode:o}: {err}"
+            );
             let msg = err.to_string();
             assert!(msg.contains("chmod o-rwx /var/lib/ligus"), "{msg}");
             assert!(msg.contains("chown 65532 /var/lib/ligus"), "{msg}");
@@ -276,7 +321,8 @@ mod tests {
             }
             assert!(fs.chmods.borrow().is_empty());
             // Declared as this pod's own volume (the chart): accepted, untouched.
-            ensure_private_dir_with(Path::new(DATA), &fs, Some(Path::new("/var/lib/ligus/"))).unwrap();
+            ensure_private_dir_with(Path::new(DATA), &fs, Some(Path::new("/var/lib/ligus/")))
+                .unwrap();
             assert!(fs.chmods.borrow().is_empty());
         }
     }
@@ -286,7 +332,12 @@ mod tests {
     #[test]
     fn pod_volume_trust_is_only_the_named_dir() {
         let fs = FakeDirs::new(1000, 0o777, ME);
-        let err = ensure_private_dir_with(Path::new("/var/lib/ligus/secrets"), &fs, Some(Path::new(DATA))).unwrap_err();
+        let err = ensure_private_dir_with(
+            Path::new("/var/lib/ligus/secrets"),
+            &fs,
+            Some(Path::new(DATA)),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("belongs to uid 1000"), "{err}");
     }
 
@@ -296,7 +347,11 @@ mod tests {
     fn other_users_dir_is_refused() {
         let fs = FakeDirs::new(1000, 0o700, ME);
         let err = ensure_private_dir_with(Path::new(DATA), &fs, None).unwrap_err();
-        assert!(err.to_string().contains("belongs to uid 1000, not to Ligus's uid 65532"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("belongs to uid 1000, not to Ligus's uid 65532"),
+            "{err}"
+        );
     }
 
     /// Ours: tightened to 0700 whenever group or others have any access.
@@ -347,10 +402,16 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&p).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
         // No temp files left behind.
-        let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names.len(), 1, "{names:?}");
     }
 
@@ -361,7 +422,8 @@ mod tests {
     fn refuses_to_write_without_randomness() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("settings.json");
-        let err = write_private_atomic_with(&p, b"secret", |_| Err(getrandom::Error::UNSUPPORTED)).unwrap_err();
+        let err = write_private_atomic_with(&p, b"secret", |_| Err(getrandom::Error::UNSUPPORTED))
+            .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }

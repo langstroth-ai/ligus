@@ -229,14 +229,26 @@ impl ProposedCommand {
         if self.argv.len() > MAX_COMMAND_ARGS {
             return Err(format!("at most {MAX_COMMAND_ARGS} arguments"));
         }
-        if self.argv.iter().any(|a| a.len() > MAX_COMMAND_ARG_BYTES || a.contains('\0')) {
+        if self
+            .argv
+            .iter()
+            .any(|a| a.len() > MAX_COMMAND_ARG_BYTES || a.contains('\0'))
+        {
             return Err("an argument is too long or contains NUL".into());
         }
         if let Some(c) = &self.cwd {
             let p = std::path::Path::new(c);
             // `has_root`: on Windows `/etc` isn't absolute (no drive) but
             // joining it onto the worktree still lands outside it.
-            if p.is_absolute() || p.has_root() || p.components().any(|x| matches!(x, std::path::Component::ParentDir | std::path::Component::Prefix(_))) {
+            if p.is_absolute()
+                || p.has_root()
+                || p.components().any(|x| {
+                    matches!(
+                        x,
+                        std::path::Component::ParentDir | std::path::Component::Prefix(_)
+                    )
+                })
+            {
                 return Err("cwd must be relative to the worktree, without ..".into());
             }
         }
@@ -348,8 +360,11 @@ impl ActionProposal {
             approval_role_floor: self.approval_role_floor,
         });
         self.required_approvals = required_approvals.max(own.required_approvals);
-        self.approval_role_floor =
-            if floor.rank() >= own.approval_role_floor.rank() { floor } else { own.approval_role_floor };
+        self.approval_role_floor = if floor.rank() >= own.approval_role_floor.rank() {
+            floor
+        } else {
+            own.approval_role_floor
+        };
         self.recompute_status();
     }
 
@@ -380,7 +395,8 @@ impl ActionProposal {
 
     /// Whether enough qualifying up-votes exist.
     pub fn is_quorum_met(&self) -> bool {
-        self.required_approvals > 0 && self.qualifying_approvals() >= self.required_approvals as usize
+        self.required_approvals > 0
+            && self.qualifying_approvals() >= self.required_approvals as usize
     }
 
     /// Whether the proposal may be carried out now: its folded status is
@@ -428,7 +444,9 @@ mod tests {
             actor_id: actor.into(),
             role,
             approved,
-            created_at: Timestamp::epoch(), diff_digest: None }
+            created_at: Timestamp::epoch(),
+            diff_digest: None,
+        }
     }
 
     #[test]

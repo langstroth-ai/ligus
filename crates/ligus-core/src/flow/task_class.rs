@@ -32,16 +32,136 @@ pub fn is_low_risk(class: &str) -> bool {
 /// word prefix) in the text. Checked in order, so `review the refactor` is a
 /// review.
 const RULES: &[(&str, &[&str])] = &[
-    (TRIAGE, &["triage", "flaky", "investigate", "repro", "reproduce", "root cause", "why is", "why does"]),
-    (REVIEW, &["review", "critique", "feedback on", "look over", "sanity check", "audit"]),
-    (TEST, &["test", "tests", "unit test", "coverage", "spec for", "e2e", "assert"]),
-    (DOCS, &["doc", "docs", "readme", "documentation", "changelog", "comment", "docstring", "tutorial", "guide"]),
-    (REFACTOR, &["refactor", "rename", "clean up", "cleanup", "simplify", "extract", "restructure", "deduplicate", "move "]),
-    (BUGFIX, &["fix", "bug", "broken", "crash", "error", "regression", "fails", "failing", "panic"]),
-    (FEATURE, &["add", "implement", "build", "create", "support", "feature", "new endpoint", "introduce"]),
-    (SUMMARIZE, &["summarize", "summarise", "summary", "tl;dr", "tldr", "recap", "explain this pr", "digest"]),
-    (OPS, &["deploy", "release", "ci", "pipeline", "docker", "kubernetes", "k8s", "infra", "migrate", "upgrade"]),
-    (QUESTION, &["?", "how do", "what is", "where is", "can you explain", "explain"]),
+    (
+        TRIAGE,
+        &[
+            "triage",
+            "flaky",
+            "investigate",
+            "repro",
+            "reproduce",
+            "root cause",
+            "why is",
+            "why does",
+        ],
+    ),
+    (
+        REVIEW,
+        &[
+            "review",
+            "critique",
+            "feedback on",
+            "look over",
+            "sanity check",
+            "audit",
+        ],
+    ),
+    (
+        TEST,
+        &[
+            "test",
+            "tests",
+            "unit test",
+            "coverage",
+            "spec for",
+            "e2e",
+            "assert",
+        ],
+    ),
+    (
+        DOCS,
+        &[
+            "doc",
+            "docs",
+            "readme",
+            "documentation",
+            "changelog",
+            "comment",
+            "docstring",
+            "tutorial",
+            "guide",
+        ],
+    ),
+    (
+        REFACTOR,
+        &[
+            "refactor",
+            "rename",
+            "clean up",
+            "cleanup",
+            "simplify",
+            "extract",
+            "restructure",
+            "deduplicate",
+            "move ",
+        ],
+    ),
+    (
+        BUGFIX,
+        &[
+            "fix",
+            "bug",
+            "broken",
+            "crash",
+            "error",
+            "regression",
+            "fails",
+            "failing",
+            "panic",
+        ],
+    ),
+    (
+        FEATURE,
+        &[
+            "add",
+            "implement",
+            "build",
+            "create",
+            "support",
+            "feature",
+            "new endpoint",
+            "introduce",
+        ],
+    ),
+    (
+        SUMMARIZE,
+        &[
+            "summarize",
+            "summarise",
+            "summary",
+            "tl;dr",
+            "tldr",
+            "recap",
+            "explain this pr",
+            "digest",
+        ],
+    ),
+    (
+        OPS,
+        &[
+            "deploy",
+            "release",
+            "ci",
+            "pipeline",
+            "docker",
+            "kubernetes",
+            "k8s",
+            "infra",
+            "migrate",
+            "upgrade",
+        ],
+    ),
+    (
+        QUESTION,
+        &[
+            "?",
+            "how do",
+            "what is",
+            "where is",
+            "can you explain",
+            "explain",
+        ],
+    ),
 ];
 
 fn has_word(text: &str, word: &str) -> bool {
@@ -192,7 +312,10 @@ mod tests {
 
     #[test]
     fn classifies_common_requests() {
-        assert_eq!(classify("Please refactor the parser into modules"), REFACTOR);
+        assert_eq!(
+            classify("Please refactor the parser into modules"),
+            REFACTOR
+        );
         assert_eq!(classify("fix the crash when the relay is down"), BUGFIX);
         assert_eq!(classify("write unit tests for the scheduler"), TEST);
         assert_eq!(classify("update the README with install steps"), DOCS);

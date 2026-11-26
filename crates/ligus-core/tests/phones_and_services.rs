@@ -6,7 +6,10 @@
 
 use ligus_core::crypto::{sign_envelope_p256, verify_envelope, verify_p256, SigAlg};
 use ligus_core::testkit::{Phone, SignedWorld};
-use ligus_core::{ActionProposal, ActorKind, ChatMessage, MessageRole, ProposalApproval, SessionEvent, Timestamp, Verdict, WorkspaceRole};
+use ligus_core::{
+    ActionProposal, ActorKind, ChatMessage, MessageRole, ProposalApproval, SessionEvent, Timestamp,
+    Verdict, WorkspaceRole,
+};
 use uuid::Uuid;
 
 fn world() -> SignedWorld {
@@ -18,7 +21,10 @@ fn world() -> SignedWorld {
 fn enrolled(w: &mut SignedWorld, who: &str) -> Phone {
     let phone = Phone::new();
     let cert = w.phone_certificate(who, &phone);
-    let id = w.push(who, SessionEvent::DeviceCertificateAdded { certificate: cert });
+    let id = w.push(
+        who,
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
     assert_eq!(w.verdict(id), Verdict::Allowed);
     phone
 }
@@ -29,13 +35,40 @@ fn a_phone_is_enrolled_only_by_a_trusted_device_of_its_person_with_presence() {
     let phone = Phone::new();
     let cert = w.phone_certificate("mara", &phone);
     // No presence: refused (even for an account that has a passkey).
-    let bare = w.push_bare("mara", SessionEvent::DeviceCertificateAdded { certificate: cert.clone() });
+    let bare = w.push_bare(
+        "mara",
+        SessionEvent::DeviceCertificateAdded {
+            certificate: cert.clone(),
+        },
+    );
     // The phone publishing its own certificate: refused (no self-enrollment).
-    let self_enrolled = w.phone_write("mara", &phone, None, SessionEvent::DeviceCertificateAdded { certificate: cert.clone() });
+    let self_enrolled = w.phone_write(
+        "mara",
+        &phone,
+        None,
+        SessionEvent::DeviceCertificateAdded {
+            certificate: cert.clone(),
+        },
+    );
     // Someone else's device, with their own presence: refused.
-    let by_owner = w.push("owner", SessionEvent::DeviceCertificateAdded { certificate: cert.clone() });
-    assert_eq!([w.verdict(bare), w.verdict(self_enrolled), w.verdict(by_owner)], [Verdict::Denied; 3]);
-    let ok = w.push("mara", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    let by_owner = w.push(
+        "owner",
+        SessionEvent::DeviceCertificateAdded {
+            certificate: cert.clone(),
+        },
+    );
+    assert_eq!(
+        [
+            w.verdict(bare),
+            w.verdict(self_enrolled),
+            w.verdict(by_owner)
+        ],
+        [Verdict::Denied; 3]
+    );
+    let ok = w.push(
+        "mara",
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
     assert_eq!(w.verdict(ok), Verdict::Allowed);
     let d = &w.roster().devices[&phone.device_id];
     assert!(d.phone && !d.delegated_for(w.people["mara"].account_id));
@@ -46,23 +79,74 @@ fn a_phone_posts_votes_and_asks_but_never_governs() {
     let mut w = world();
     let phone = enrolled(&mut w, "mara");
     let chat = w.chat("owner", "c");
-    let post = w.phone_write("mara", &phone, Some(chat), SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "mara", "from my phone") });
+    let post = w.phone_write(
+        "mara",
+        &phone,
+        Some(chat),
+        SessionEvent::MessageAppended {
+            message: ChatMessage::new(MessageRole::User, "mara", "from my phone"),
+        },
+    );
     let p = ActionProposal::new("q", ligus_core::ProposalKind::Decision, "owner");
     let pid = p.id;
-    w.say(chat, "owner", SessionEvent::ProposalUpserted { proposal: p });
-    let vote = w.phone_write("mara", &phone, Some(chat), SessionEvent::ProposalVoteCast {
-        proposal_id: pid,
-        approval: ProposalApproval { actor_id: "mara".into(), role: WorkspaceRole::Contributor, approved: true, created_at: Timestamp::epoch(), diff_digest: None },
-    });
+    w.say(
+        chat,
+        "owner",
+        SessionEvent::ProposalUpserted { proposal: p },
+    );
+    let vote = w.phone_write(
+        "mara",
+        &phone,
+        Some(chat),
+        SessionEvent::ProposalVoteCast {
+            proposal_id: pid,
+            approval: ProposalApproval {
+                actor_id: "mara".into(),
+                role: WorkspaceRole::Contributor,
+                approved: true,
+                created_at: Timestamp::epoch(),
+                diff_digest: None,
+            },
+        },
+    );
     let v = w.verdicts();
     assert_eq!((v[&post], v[&vote]), (Verdict::Allowed, Verdict::Allowed));
     // Never membership, roles, devices, keys or workspace config.
     let laptop = w.people["owner"].device_id;
     let denied = [
-        w.phone_write("mara", &phone, None, SessionEvent::DeviceRevoked { device_id: laptop, watermark: vec![] }),
-        w.phone_write("mara", &phone, None, SessionEvent::WorkspaceRulesSet { version: 2, presence: None }),
-        w.phone_write("mara", &phone, Some(chat), SessionEvent::SessionTitleChanged { title: "x".into() }),
-        w.phone_write("mara", &phone, Some(chat), SessionEvent::ChatRepoSet { repo_id: None, base_branch: String::new() }),
+        w.phone_write(
+            "mara",
+            &phone,
+            None,
+            SessionEvent::DeviceRevoked {
+                device_id: laptop,
+                watermark: vec![],
+            },
+        ),
+        w.phone_write(
+            "mara",
+            &phone,
+            None,
+            SessionEvent::WorkspaceRulesSet {
+                version: 2,
+                presence: None,
+            },
+        ),
+        w.phone_write(
+            "mara",
+            &phone,
+            Some(chat),
+            SessionEvent::SessionTitleChanged { title: "x".into() },
+        ),
+        w.phone_write(
+            "mara",
+            &phone,
+            Some(chat),
+            SessionEvent::ChatRepoSet {
+                repo_id: None,
+                base_branch: String::new(),
+            },
+        ),
     ];
     let v = w.verdicts();
     for id in denied {
@@ -70,9 +154,25 @@ fn a_phone_posts_votes_and_asks_but_never_governs() {
     }
     // Its own revocation is allowed, with its person's presence (the
     // presence table covers self-revocation too).
-    let bare = w.phone_write("mara", &phone, None, SessionEvent::DeviceRevoked { device_id: phone.device_id, watermark: vec![] });
+    let bare = w.phone_write(
+        "mara",
+        &phone,
+        None,
+        SessionEvent::DeviceRevoked {
+            device_id: phone.device_id,
+            watermark: vec![],
+        },
+    );
     assert_eq!(w.verdict(bare), Verdict::Denied);
-    let mut env = w.draft("mara", None, SessionEvent::DeviceRevoked { device_id: phone.device_id, watermark: vec![] }, None);
+    let mut env = w.draft(
+        "mara",
+        None,
+        SessionEvent::DeviceRevoked {
+            device_id: phone.device_id,
+            watermark: vec![],
+        },
+        None,
+    );
     env.actor_stamp.as_mut().unwrap().actor.device_id = Some(phone.device_id);
     env.actor_stamp.as_mut().unwrap().sig_alg = SigAlg::P256;
     let a = w.recovery_presence("mara", &env);
@@ -87,8 +187,17 @@ fn p256_envelopes_are_algorithm_tagged_low_s_and_bound() {
     let mut w = world();
     let phone = enrolled(&mut w, "mara");
     let chat = w.chat("owner", "c");
-    let id = w.phone_write("mara", &phone, Some(chat), SessionEvent::SessionTitleChanged { title: "t".into() });
-    let env = w.chats[&chat].iter().find(|e| e.event_id == id).unwrap().clone();
+    let id = w.phone_write(
+        "mara",
+        &phone,
+        Some(chat),
+        SessionEvent::SessionTitleChanged { title: "t".into() },
+    );
+    let env = w.chats[&chat]
+        .iter()
+        .find(|e| e.event_id == id)
+        .unwrap()
+        .clone();
     assert_eq!(env.actor_stamp.as_ref().unwrap().sig_alg, SigAlg::P256);
     verify_envelope(&env, &phone.public_key()).unwrap();
     // Untagged (claims Ed25519): no longer verifies.
@@ -118,8 +227,9 @@ fn p256_envelopes_are_algorithm_tagged_low_s_and_bound() {
 /// n - s for the P-256 group order n (big-endian 32-byte arithmetic).
 fn high_s(sig: &[u8]) -> Vec<u8> {
     const N: [u8; 32] = [
-        0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad,
-        0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63, 0x25, 0x51,
+        0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63,
+        0x25, 0x51,
     ];
     let s = &sig[32..];
     let mut out = [0u8; 32];
@@ -142,35 +252,103 @@ fn high_s(sig: &[u8]) -> Vec<u8> {
 fn a_service_member_is_capped_and_never_a_human() {
     let mut w = world();
     w.kinds.insert("box".into(), ActorKind::Service);
-    let as_admin = w.push("owner", SessionEvent::MemberAdded { member: w.member_of("box", WorkspaceRole::Admin), invite: None, proof: None });
-    assert_eq!(w.verdict(as_admin), Verdict::Denied, "a service member holds at most Contributor");
+    let as_admin = w.push(
+        "owner",
+        SessionEvent::MemberAdded {
+            member: w.member_of("box", WorkspaceRole::Admin),
+            invite: None,
+            proof: None,
+        },
+    );
+    assert_eq!(
+        w.verdict(as_admin),
+        Verdict::Denied,
+        "a service member holds at most Contributor"
+    );
     w.admit("owner", "box", WorkspaceRole::Contributor);
-    assert!(w.config().members.iter().any(|m| m.id == "box" && m.actor.kind == ActorKind::Service));
+    assert!(w
+        .config()
+        .members
+        .iter()
+        .any(|m| m.id == "box" && m.actor.kind == ActorKind::Service));
     // admit() also had it register a recovery key: refused for a service.
-    assert!(w.roster().passkeys.get(&w.people["box"].account_id).is_none(), "a service member holds no passkey");
-    let raise = w.push("owner", SessionEvent::MemberRoleChanged {
-        change: ligus_core::MemberRoleChange { member_id: "box".into(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Admin },
-        watermark: vec![],
-    });
+    assert!(
+        w.roster()
+            .passkeys
+            .get(&w.people["box"].account_id)
+            .is_none(),
+        "a service member holds no passkey"
+    );
+    let raise = w.push(
+        "owner",
+        SessionEvent::MemberRoleChanged {
+            change: ligus_core::MemberRoleChange {
+                member_id: "box".into(),
+                old_role: WorkspaceRole::Contributor,
+                new_role: WorkspaceRole::Admin,
+            },
+            watermark: vec![],
+        },
+    );
     assert_eq!(w.verdict(raise), Verdict::Denied);
     // It never applies on its own, and never decides a set.
     let chat = w.chat("owner", "c");
     let p = ActionProposal::new("q", ligus_core::ProposalKind::Decision, "owner");
     let pid = p.id;
-    w.say(chat, "owner", SessionEvent::ProposalUpserted { proposal: p });
+    w.say(
+        chat,
+        "owner",
+        SessionEvent::ProposalUpserted { proposal: p },
+    );
     let d = ligus_core::authz::votes::diff_digest(&w.state(chat).proposals[0]);
-    let vote = w.say(chat, "box", SessionEvent::ProposalVoteCast {
-        proposal_id: pid,
-        approval: ProposalApproval { actor_id: "box".into(), role: WorkspaceRole::Contributor, approved: true, created_at: Timestamp::epoch(), diff_digest: Some(d.clone()) },
-    });
-    assert_eq!(w.verdict(vote), Verdict::Allowed, "its vote counts by its role");
+    let vote = w.say(
+        chat,
+        "box",
+        SessionEvent::ProposalVoteCast {
+            proposal_id: pid,
+            approval: ProposalApproval {
+                actor_id: "box".into(),
+                role: WorkspaceRole::Contributor,
+                approved: true,
+                created_at: Timestamp::epoch(),
+                diff_digest: Some(d.clone()),
+            },
+        },
+    );
+    assert_eq!(
+        w.verdict(vote),
+        Verdict::Allowed,
+        "its vote counts by its role"
+    );
     let s = w.state(chat);
-    assert!(!ligus_core::guard::has_human_approval(&s, pid), "a service's approval never satisfies a human gate");
-    let apply = w.say(chat, "box", SessionEvent::ProposalApplied {
-        proposal_id: pid, diff_digest: d, commit: None, at: Timestamp::epoch(),
-        repo_id: None, applied_on: Some(w.people["box"].device_id), base_commit: None, applied_tree_hash: None, request_id: None,
-    });
-    let decide = w.say(chat, "box", SessionEvent::ProposalSetDecided { set_id: Uuid::new_v4(), winner: None, at: Timestamp::epoch() });
+    assert!(
+        !ligus_core::guard::has_human_approval(&s, pid),
+        "a service's approval never satisfies a human gate"
+    );
+    let apply = w.say(
+        chat,
+        "box",
+        SessionEvent::ProposalApplied {
+            proposal_id: pid,
+            diff_digest: d,
+            commit: None,
+            at: Timestamp::epoch(),
+            repo_id: None,
+            applied_on: Some(w.people["box"].device_id),
+            base_commit: None,
+            applied_tree_hash: None,
+            request_id: None,
+        },
+    );
+    let decide = w.say(
+        chat,
+        "box",
+        SessionEvent::ProposalSetDecided {
+            set_id: Uuid::new_v4(),
+            winner: None,
+            at: Timestamp::epoch(),
+        },
+    );
     let v = w.verdicts();
     assert_eq!((v[&apply], v[&decide]), (Verdict::Denied, Verdict::Denied));
 }
@@ -187,12 +365,18 @@ fn a_phone_is_revoked_only_from_above_or_by_its_person() {
     w.admit("owner", "vic", WorkspaceRole::Contributor);
     let maras = enrolled(&mut w, "mara");
     let owners = enrolled(&mut w, "owner");
-    let revoke = |d: Uuid| SessionEvent::DeviceRevoked { device_id: d, watermark: vec![] };
+    let revoke = |d: Uuid| SessionEvent::DeviceRevoked {
+        device_id: d,
+        watermark: vec![],
+    };
     // A peer Admin, and a lower-ranked Contributor: refused, not revoked.
     let peer = w.push("kit", revoke(maras.device_id));
     let lower = w.push("vic", revoke(maras.device_id));
     let up = w.push("mara", revoke(owners.device_id));
-    assert_eq!([w.verdict(peer), w.verdict(lower), w.verdict(up)], [Verdict::Denied; 3]);
+    assert_eq!(
+        [w.verdict(peer), w.verdict(lower), w.verdict(up)],
+        [Verdict::Denied; 3]
+    );
     assert!(!w.roster().devices[&maras.device_id].revoked);
     assert!(!w.roster().devices[&owners.device_id].revoked);
     // From above: revoked.

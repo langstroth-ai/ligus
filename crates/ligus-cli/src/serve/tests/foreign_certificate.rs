@@ -15,7 +15,10 @@ async fn health_until(h: &Harness, what: &str, f: impl Fn(&Value) -> bool) -> Va
         if f(&v) {
             return v;
         }
-        assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}: {v}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}: {v}"
+        );
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
@@ -27,9 +30,19 @@ async fn a_foreign_certificate_on_a_running_box_blocks_nothing_and_revocation_st
     let ws = h.handle.shared.ws;
     let (box_device, box_key, box_actor) = {
         let svc = h.handle.shared.lock();
-        (svc.device_id(), svc.device_public_key(), svc.author().clone())
+        (
+            svc.device_id(),
+            svc.device_public_key(),
+            svc.author().clone(),
+        )
     };
-    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "t" }))).await;
+    let chat = h
+        .send(
+            reqwest::Method::POST,
+            "/v1/chats",
+            Some(json!({ "title": "t" })),
+        )
+        .await;
     let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
 
     // The desktop's person certifies the box's public device key for their
@@ -53,34 +66,83 @@ async fn a_foreign_certificate_on_a_running_box_blocks_nothing_and_revocation_st
         if has {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "the foreign certificate never reached the box");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the foreign certificate never reached the box"
+        );
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     h.handle.shared.refresh_standing();
     let health = h.get("/v1/health").await;
     assert_eq!(health["identity"]["mode"], "member", "{health}");
-    assert_eq!(health["identity"]["actorId"], json!(box_actor.id), "the box still acts as itself: {health}");
-    assert!(health["identity"].get("alsoCertifiedBy").is_none(), "an unaccepted certificate counts: {health}");
+    assert_eq!(
+        health["identity"]["actorId"],
+        json!(box_actor.id),
+        "the box still acts as itself: {health}"
+    );
+    assert!(
+        health["identity"].get("alsoCertifiedBy").is_none(),
+        "an unaccepted certificate counts: {health}"
+    );
     assert_eq!(h.handle.shared.standing(), Standing::Own);
-    let cfg = h.handle.shared.lock().load_in(ws, workspace_config_session_id(ws)).unwrap().unwrap();
-    assert!(cfg.members.iter().any(|m| m.id == box_actor.id), "the backdated certificate undid the box's admission");
+    let cfg = h
+        .handle
+        .shared
+        .lock()
+        .load_in(ws, workspace_config_session_id(ws))
+        .unwrap()
+        .unwrap();
+    assert!(
+        cfg.members.iter().any(|m| m.id == box_actor.id),
+        "the backdated certificate undid the box's admission"
+    );
 
     // Writes still work, as the box itself.
-    let posted = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "still here" }))).await;
+    let posted = h
+        .send(
+            reqwest::Method::POST,
+            &format!("/v1/chats/{chat_id}/messages"),
+            Some(json!({ "body": "still here" })),
+        )
+        .await;
     let mid = Uuid::parse_str(posted["message"]["id"].as_str().unwrap()).unwrap();
-    let s = h.handle.shared.lock().load_resolving(chat_id).unwrap().unwrap();
+    let s = h
+        .handle
+        .shared
+        .lock()
+        .load_resolving(chat_id)
+        .unwrap()
+        .unwrap();
     let m = s.messages.iter().find(|m| m.id == mid).unwrap();
-    assert_eq!(m.actor_identity.as_ref().map(|a| a.id.clone()), Some(box_actor.id.clone()), "never redirected to {}", founder.id);
+    assert_eq!(
+        m.actor_identity.as_ref().map(|a| a.id.clone()),
+        Some(box_actor.id.clone()),
+        "never redirected to {}",
+        founder.id
+    );
 
     // A revocation still stops it.
     {
         let mut svc = open_service(&h.desktop).unwrap();
         sync_once(&h.desktop).await.unwrap();
-        svc.revoke_device(workspace_config_session_id(ws), ws, box_device).unwrap();
+        svc.revoke_device(workspace_config_session_id(ws), ws, box_device)
+            .unwrap();
     }
     sync_once(&h.desktop).await.unwrap();
-    health_until(&h, "the revocation to reach the box", |v| v["identity"]["mode"] == "revoked").await;
-    let (code, v) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "after" }))).await;
-    assert!(!(200..300).contains(&code), "a revoked box still wrote: {code} {v}");
+    health_until(&h, "the revocation to reach the box", |v| {
+        v["identity"]["mode"] == "revoked"
+    })
+    .await;
+    let (code, v) = status_of(
+        &h,
+        reqwest::Method::POST,
+        &format!("/v1/chats/{chat_id}/messages"),
+        Some(json!({ "body": "after" })),
+    )
+    .await;
+    assert!(
+        !(200..300).contains(&code),
+        "a revoked box still wrote: {code} {v}"
+    );
     h.handle.shutdown();
 }

@@ -17,18 +17,36 @@ fn png() -> Vec<u8> {
 
 fn name(account: Uuid, n: &str) -> SessionEvent {
     SessionEvent::ProfileUpdated {
-        profile: ProfileChange { account_id: account, display_name: Some(n.into()), avatar: None, clear_avatar: false, issued_at_ms: 1 },
+        profile: ProfileChange {
+            account_id: account,
+            display_name: Some(n.into()),
+            avatar: None,
+            clear_avatar: false,
+            issued_at_ms: 1,
+        },
     }
 }
 
 fn picture(account: Uuid, a: Avatar) -> SessionEvent {
     SessionEvent::ProfileUpdated {
-        profile: ProfileChange { account_id: account, display_name: None, avatar: Some(a), clear_avatar: false, issued_at_ms: 1 },
+        profile: ProfileChange {
+            account_id: account,
+            display_name: None,
+            avatar: Some(a),
+            clear_avatar: false,
+            issued_at_ms: 1,
+        },
     }
 }
 
 fn label(device: Uuid, account: Uuid, l: &str) -> SessionEvent {
-    SessionEvent::DeviceLabelSet { label: DeviceLabel { device_id: device, account_id: account, label: l.into() } }
+    SessionEvent::DeviceLabelSet {
+        label: DeviceLabel {
+            device_id: device,
+            account_id: account,
+            label: l.into(),
+        },
+    }
 }
 
 /// Ana (Owner), Ben (Admin) and Cy (Contributor), all members.
@@ -48,10 +66,21 @@ struct Extra {
 
 fn linked_device(w: &mut SignedWorld, who: &str) -> Extra {
     let kp = SigningKeypair::generate().unwrap();
-    let id = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &kp.public_key_bytes());
+    let id = ligus_core::crypto::device_id_for(
+        ligus_core::crypto::SigAlg::Ed25519,
+        &kp.public_key_bytes(),
+    );
     let p = &w.people[who];
-    let cert = DeviceCertificate::issue(&p.account, p.account_id, &kp.public_key_bytes(), Timestamp::epoch());
-    w.push(who, SessionEvent::DeviceCertificateAdded { certificate: cert });
+    let cert = DeviceCertificate::issue(
+        &p.account,
+        p.account_id,
+        &kp.public_key_bytes(),
+        Timestamp::epoch(),
+    );
+    w.push(
+        who,
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
     Extra { id, kp }
 }
 
@@ -79,17 +108,33 @@ fn a_person_sets_their_own_name_and_picture_from_their_desktop() {
     let c = w.config();
     let prof = &c.profiles[&ana];
     assert_eq!(prof.display_name.as_deref(), Some("Ana Ruiz"));
-    assert_eq!(prof.avatar.as_ref(), Some(&a), "a picture-only change keeps the name");
+    assert_eq!(
+        prof.avatar.as_ref(),
+        Some(&a),
+        "a picture-only change keeps the name"
+    );
     // Clearing the picture keeps the name.
-    w.push_bare("ana", SessionEvent::ProfileUpdated {
-        profile: ProfileChange { account_id: ana, display_name: None, avatar: None, clear_avatar: true, issued_at_ms: 2 },
-    });
+    w.push_bare(
+        "ana",
+        SessionEvent::ProfileUpdated {
+            profile: ProfileChange {
+                account_id: ana,
+                display_name: None,
+                avatar: None,
+                clear_avatar: true,
+                issued_at_ms: 2,
+            },
+        },
+    );
     let c = w.config();
     assert!(c.profiles[&ana].avatar.is_none());
     assert_eq!(c.profiles[&ana].display_name.as_deref(), Some("Ana Ruiz"));
     // A snapshot of the config never carries profiles (a snapshot can't plant one).
     let json = serde_json::to_string(&c).unwrap();
-    assert!(!json.contains("Ana Ruiz") || !json.contains("profiles"), "{json}");
+    assert!(
+        !json.contains("Ana Ruiz") || !json.contains("profiles"),
+        "{json}"
+    );
 }
 
 #[test]
@@ -107,7 +152,11 @@ fn a_linked_device_or_a_phone_cant_rename_its_person() {
     let ana = w.people["ana"].account_id;
     let lt = linked_device(&mut w, "ana");
     let id = from_device(&mut w, "ana", &lt, name(ana, "Stolen Laptop"));
-    assert_eq!(w.verdict(id), Verdict::Denied, "a delegated device renamed its person");
+    assert_eq!(
+        w.verdict(id),
+        Verdict::Denied,
+        "a delegated device renamed its person"
+    );
     // The linked device still names itself.
     let l = from_device(&mut w, "ana", &lt, label(lt.id, ana, "lt on mbp"));
     assert_eq!(w.verdict(l), Verdict::Allowed);
@@ -123,22 +172,41 @@ fn a_linked_device_or_a_phone_cant_rename_its_person() {
     // A phone: neither its person's profile nor a label.
     let phone = Phone::new();
     let cert = w.phone_certificate("ana", &phone);
-    w.push("ana", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    w.push(
+        "ana",
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
     let p1 = w.phone_write("ana", &phone, None, name(ana, "From Phone"));
-    let p2 = w.phone_write("ana", &phone, None, label(phone.device_id, ana, "Ana's iPhone"));
+    let p2 = w.phone_write(
+        "ana",
+        &phone,
+        None,
+        label(phone.device_id, ana, "Ana's iPhone"),
+    );
     assert_eq!(w.verdict(p1), Verdict::Denied);
     assert_eq!(w.verdict(p2), Verdict::Denied);
     // The desktop names the phone.
     let p3 = w.push_bare("ana", label(phone.device_id, ana, "Ana's iPhone"));
     assert_eq!(w.verdict(p3), Verdict::Allowed);
-    assert_eq!(w.config().device_labels[&phone.device_id][&ana], "Ana's iPhone");
+    assert_eq!(
+        w.config().device_labels[&phone.device_id][&ana],
+        "Ana's iPhone"
+    );
 }
 
 #[test]
 fn content_checks_are_in_the_fold() {
     let mut w = world();
     let cy = w.people["cy"].account_id;
-    let bad_names = ["", " Cy", "Cy ", "C  y", "C\u{202E}y", "C\u{200B}y", "Cy\u{0007}"];
+    let bad_names = [
+        "",
+        " Cy",
+        "Cy ",
+        "C  y",
+        "C\u{202E}y",
+        "C\u{200B}y",
+        "Cy\u{0007}",
+    ];
     for n in bad_names {
         let id = w.push_bare("cy", name(cy, n));
         assert_eq!(w.verdict(id), Verdict::Denied, "{n:?}");
@@ -148,12 +216,25 @@ fn content_checks_are_in_the_fold() {
     let id = w.push_bare("cy", name(cy, &"\u{1F41D}".repeat(65)));
     assert_eq!(w.verdict(id), Verdict::Denied, "over 256 bytes");
     let good = Avatar::new("image/png", &png()).unwrap();
-    let svg = Avatar { content_type: "image/svg+xml".into(), ..good.clone() };
+    let svg = Avatar {
+        content_type: "image/svg+xml".into(),
+        ..good.clone()
+    };
     let mut big = png();
     big.resize(MAX_AVATAR_BYTES + 1024, 0);
-    let big = Avatar { data: base64_of(&big), sha256: sha_of(&big), ..good.clone() };
-    let jpeg_label = Avatar { content_type: "image/jpeg".into(), ..good.clone() };
-    let wrong_sha = Avatar { sha256: "00".repeat(32), ..good.clone() };
+    let big = Avatar {
+        data: base64_of(&big),
+        sha256: sha_of(&big),
+        ..good.clone()
+    };
+    let jpeg_label = Avatar {
+        content_type: "image/jpeg".into(),
+        ..good.clone()
+    };
+    let wrong_sha = Avatar {
+        sha256: "00".repeat(32),
+        ..good.clone()
+    };
     for a in [svg, big, jpeg_label, wrong_sha] {
         let id = w.push_bare("cy", picture(cy, a.clone()));
         assert_eq!(w.verdict(id), Verdict::Denied, "{}", a.content_type);
@@ -170,7 +251,10 @@ fn base64_of(b: &[u8]) -> String {
 
 fn sha_of(b: &[u8]) -> String {
     use sha2::Digest as _;
-    sha2::Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+    sha2::Sha256::digest(b)
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect()
 }
 
 #[test]
@@ -197,21 +281,40 @@ fn a_foreign_certifier_labels_only_under_their_own_name() {
     let mut w = world();
     let (ana, ben) = (w.people["ana"].account_id, w.people["ben"].account_id);
     let desk = w.people["ana"].device_id;
-    let cert = DeviceCertificate::issue(&w.people["ben"].account, ben, &w.people["ana"].device.public_key_bytes(), Timestamp::epoch());
-    w.push("ben", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    let cert = DeviceCertificate::issue(
+        &w.people["ben"].account,
+        ben,
+        &w.people["ana"].device.public_key_bytes(),
+        Timestamp::epoch(),
+    );
+    w.push(
+        "ben",
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
     let mine = w.push_bare("ana", label(desk, ana, "Ana's MacBook Air"));
     let his = w.push_bare("ben", label(desk, ben, "Ana's phone"));
     let forged = w.push_bare("ben", label(desk, ana, "Ana's phone"));
     assert_eq!(w.verdict(mine), Verdict::Allowed);
-    assert_eq!(w.verdict(forged), Verdict::Denied, "under someone else's account");
+    assert_eq!(
+        w.verdict(forged),
+        Verdict::Denied,
+        "under someone else's account"
+    );
     let c = w.config();
     assert_eq!(c.device_labels[&desk][&ana], "Ana's MacBook Air");
     if w.verdict(his) == Verdict::Allowed {
-        assert_eq!(c.device_labels[&desk][&ben], "Ana's phone", "kept apart, under Ben");
+        assert_eq!(
+            c.device_labels[&desk][&ben], "Ana's phone",
+            "kept apart, under Ben"
+        );
     }
     // Clearing removes only that pair.
     w.push_bare("ana", label(desk, ana, ""));
-    assert!(w.config().device_labels.get(&desk).is_none_or(|m| !m.contains_key(&ana)));
+    assert!(w
+        .config()
+        .device_labels
+        .get(&desk)
+        .is_none_or(|m| !m.contains_key(&ana)));
 }
 
 /// A revoked device writes neither.
@@ -220,7 +323,13 @@ fn a_revoked_device_writes_no_profile() {
     let mut w = world();
     let ana = w.people["ana"].account_id;
     let lt = linked_device(&mut w, "ana");
-    w.push("ana", SessionEvent::DeviceRevoked { device_id: lt.id, watermark: Vec::new() });
+    w.push(
+        "ana",
+        SessionEvent::DeviceRevoked {
+            device_id: lt.id,
+            watermark: Vec::new(),
+        },
+    );
     let id = from_device(&mut w, "ana", &lt, label(lt.id, ana, "after revocation"));
     assert_eq!(w.verdict(id), Verdict::Denied);
 }
@@ -232,12 +341,18 @@ fn every_arrival_order_folds_the_same_profile() {
     let mut w = world();
     let ana = w.people["ana"].account_id;
     w.push_bare("ana", name(ana, "Ana One"));
-    w.push_bare("ana", picture(ana, Avatar::new("image/png", &png()).unwrap()));
+    w.push_bare(
+        "ana",
+        picture(ana, Avatar::new("image/png", &png()).unwrap()),
+    );
     w.push_bare("ana", name(ana, "Ana Two"));
     w.push_bare("ana", label(w.people["ana"].device_id, ana, "Desk"));
     w.push_bare("ana", name(ana, "Ana Three"));
     let expect = w.config();
-    assert_eq!(expect.profiles[&ana].display_name.as_deref(), Some("Ana Three"));
+    assert_eq!(
+        expect.profiles[&ana].display_name.as_deref(),
+        Some("Ana Three")
+    );
     let n = w.cfg.len();
     // Rotate and reverse the tail (the base seed stays first in canonical
     // order whatever the arrival order).
@@ -245,7 +360,9 @@ fn every_arrival_order_folds_the_same_profile() {
         let mut cfg = w.cfg.clone();
         cfg[n - k..].reverse();
         cfg.rotate_left(k % n);
-        let got = ligus_core::events::project_config(&cfg, None, None).0.unwrap();
+        let got = ligus_core::events::project_config(&cfg, None, None)
+            .0
+            .unwrap();
         assert_eq!(got.profiles, expect.profiles, "order {k}");
         assert_eq!(got.device_labels, expect.device_labels, "order {k}");
     }

@@ -16,7 +16,11 @@ pub const MAX_TOTAL_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 256 * 1024;
 
 fn env_limit(name: &str, default: usize) -> usize {
-    ligus_core::names::var(name).ok().and_then(|v| v.trim().parse().ok()).filter(|n: &usize| *n > 0).unwrap_or(default)
+    ligus_core::names::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|n: &usize| *n > 0)
+        .unwrap_or(default)
 }
 
 /// The per-line cap in force.
@@ -66,7 +70,13 @@ impl<R: AsyncBufRead + Unpin> BoundedLines<R> {
     }
 
     pub fn with_limits(inner: R, max_line: usize, max_total: usize) -> Self {
-        Self { inner, buf: Vec::new(), total: 0, max_line, max_total }
+        Self {
+            inner,
+            buf: Vec::new(),
+            total: 0,
+            max_line,
+            max_total,
+        }
     }
 
     /// The next line without its `\n` (and `\r`), `None` at end of stream.
@@ -148,8 +158,12 @@ mod tests {
         assert_eq!(l.next_line().await.unwrap().as_deref(), Some("three"));
         assert!(l.next_line().await.unwrap().is_none());
         let long = [b'x'; 100];
-        let mut l = BoundedLines::with_limits(tokio::io::BufReader::with_capacity(8, &long[..]), 16, 1024);
-        assert!(matches!(l.next_line().await, Err(LineError::LineTooLong(16))));
+        let mut l =
+            BoundedLines::with_limits(tokio::io::BufReader::with_capacity(8, &long[..]), 16, 1024);
+        assert!(matches!(
+            l.next_line().await,
+            Err(LineError::LineTooLong(16))
+        ));
         let many = b"ab\n".repeat(100);
         let mut l = BoundedLines::with_limits(tokio::io::BufReader::new(&many[..]), 16, 30);
         let mut n = 0;

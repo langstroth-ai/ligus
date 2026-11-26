@@ -50,9 +50,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use uuid::Uuid;
 use tauri::{Listener, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use uuid::Uuid;
 
 use crate::{AgentToolSettings, AppState, RetrievalSettings};
 
@@ -72,7 +72,10 @@ struct Config {
 }
 
 fn env(name: &str) -> Option<String> {
-    ligus_core::names::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    ligus_core::names::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 impl Config {
@@ -90,8 +93,10 @@ impl Config {
             model: env("LIGUS_APP_LIVE_MODEL").unwrap_or_else(|| "gemma4:12b".into()),
             model_b: env("LIGUS_APP_LIVE_MODEL_B").unwrap_or_else(|| "gpt-oss:20b".into()),
             quick_model: env("LIGUS_APP_LIVE_QUICK_MODEL").unwrap_or_else(|| "lfm2:8b".into()),
-            embed_model: env("LIGUS_APP_LIVE_EMBED_MODEL").unwrap_or_else(|| "embeddinggemma-300m".into()),
-            rerank_model: env("LIGUS_APP_LIVE_RERANK_MODEL").unwrap_or_else(|| "bge-reranker-v2-m3".into()),
+            embed_model: env("LIGUS_APP_LIVE_EMBED_MODEL")
+                .unwrap_or_else(|| "embeddinggemma-300m".into()),
+            rerank_model: env("LIGUS_APP_LIVE_RERANK_MODEL")
+                .unwrap_or_else(|| "bge-reranker-v2-m3".into()),
             mcp_url: env("LIGUS_APP_LIVE_MCP_URL"),
             mcp_token_file: env("LIGUS_APP_LIVE_MCP_TOKEN_FILE").map(PathBuf::from),
             scenarios: env("LIGUS_APP_LIVE_SCENARIOS")
@@ -125,10 +130,16 @@ impl Recorded {
         self.body["model"].as_str().unwrap_or("")
     }
     fn messages(&self) -> &[Value] {
-        self.body["messages"].as_array().map(Vec::as_slice).unwrap_or(&[])
+        self.body["messages"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
     fn system(&self) -> Option<&str> {
-        self.messages().first().filter(|m| m["role"] == "system").and_then(|m| m["content"].as_str())
+        self.messages()
+            .first()
+            .filter(|m| m["role"] == "system")
+            .and_then(|m| m["content"].as_str())
     }
     fn is_chat(&self) -> bool {
         self.method == "POST" && self.path.ends_with("/chat/completions")
@@ -137,24 +148,32 @@ impl Recorded {
     /// prompt that is neither the title nor the summary instruction.
     fn is_turn(&self) -> bool {
         self.is_chat()
-            && self
-                .system()
-                .is_some_and(|s| !s.starts_with(TITLE_SYSTEM_PREFIX) && s != crate::DEFAULT_CONTEXT_SUMMARY_PROMPT)
+            && self.system().is_some_and(|s| {
+                !s.starts_with(TITLE_SYSTEM_PREFIX) && s != crate::DEFAULT_CONTEXT_SUMMARY_PROMPT
+            })
     }
     fn is_summary(&self) -> bool {
         self.is_chat() && self.system() == Some(crate::DEFAULT_CONTEXT_SUMMARY_PROMPT)
     }
     fn is_title(&self) -> bool {
-        self.is_chat() && self.system().is_some_and(|s| s.starts_with(TITLE_SYSTEM_PREFIX))
+        self.is_chat()
+            && self
+                .system()
+                .is_some_and(|s| s.starts_with(TITLE_SYSTEM_PREFIX))
     }
     fn last_user(&self) -> Option<&str> {
-        self.messages().iter().rev().find(|m| m["role"] == "user").and_then(|m| m["content"].as_str())
+        self.messages()
+            .iter()
+            .rev()
+            .find(|m| m["role"] == "user")
+            .and_then(|m| m["content"].as_str())
     }
 
     /// One line on what the model sent back: finish reason, text and
     /// reasoning lengths, tool calls — from a streamed (SSE) or plain body.
     fn summary(&self) -> String {
-        let (mut text, mut reasoning, mut finish, mut tools) = (0usize, 0usize, String::new(), Vec::<String>::new());
+        let (mut text, mut reasoning, mut finish, mut tools) =
+            (0usize, 0usize, String::new(), Vec::<String>::new());
         let mut usage = String::new();
         let bodies: Vec<Value> = if self.response.trim_start().starts_with('{') {
             serde_json::from_str(&self.response).into_iter().collect()
@@ -170,7 +189,11 @@ impl Recorded {
                 usage = format!(" usage={u}");
             }
             for ch in b["choices"].as_array().into_iter().flatten() {
-                let d = if ch.get("delta").is_some() { &ch["delta"] } else { &ch["message"] };
+                let d = if ch.get("delta").is_some() {
+                    &ch["delta"]
+                } else {
+                    &ch["message"]
+                };
                 text += d["content"].as_str().map_or(0, str::len);
                 reasoning += d["reasoning_content"].as_str().map_or(0, str::len);
                 for tc in d["tool_calls"].as_array().into_iter().flatten() {
@@ -213,15 +236,27 @@ impl Proxy {
 /// Start the proxy on a loopback port. `GET /vault/*` is served locally
 /// from `vault_doc`; everything else is forwarded to `upstream`.
 async fn start_proxy(upstream: String, vault_doc: Arc<String>) -> Proxy {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind proxy");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind proxy");
     let base = format!("http://{}", listener.local_addr().unwrap());
     let log = Arc::new(Mutex::new(Vec::new()));
     let client = ligus_forge::http_client_builder().build().unwrap();
-    let proxy = Proxy { base, log: log.clone() };
+    let proxy = Proxy {
+        base,
+        log: log.clone(),
+    };
     tauri::async_runtime::spawn(async move {
         loop {
-            let Ok((sock, _)) = listener.accept().await else { continue };
-            let (upstream, client, log, vault) = (upstream.clone(), client.clone(), log.clone(), vault_doc.clone());
+            let Ok((sock, _)) = listener.accept().await else {
+                continue;
+            };
+            let (upstream, client, log, vault) = (
+                upstream.clone(),
+                client.clone(),
+                log.clone(),
+                vault_doc.clone(),
+            );
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = proxy_one(sock, &upstream, &client, &log, &vault).await {
                     eprintln!("[proxy] connection error: {e}");
@@ -265,7 +300,9 @@ async fn proxy_one(
     let mut content_length = 0usize;
     let mut forward_headers = Vec::new();
     for line in lines {
-        let Some((k, v)) = line.split_once(':') else { continue };
+        let Some((k, v)) = line.split_once(':') else {
+            continue;
+        };
         let (k, v) = (k.trim().to_ascii_lowercase(), v.trim().to_string());
         if k == "content-length" {
             content_length = v.parse().unwrap_or(0);
@@ -349,7 +386,8 @@ async fn proxy_one(
                 if response.len() < 400_000 {
                     response.extend_from_slice(&chunk);
                 }
-                sock.write_all(format!("{:x}\r\n", chunk.len()).as_bytes()).await?;
+                sock.write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                    .await?;
                 sock.write_all(&chunk).await?;
                 sock.write_all(b"\r\n").await?;
                 sock.flush().await?;
@@ -403,7 +441,10 @@ struct Checks {
 
 impl Checks {
     fn new() -> Self {
-        Self { notes: Vec::new(), failed: false }
+        Self {
+            notes: Vec::new(),
+            failed: false,
+        }
     }
     fn check(&mut self, ok: bool, what: impl Into<String>) {
         let what = what.into();
@@ -411,7 +452,8 @@ impl Checks {
         if !ok {
             self.failed = true;
         }
-        self.notes.push(format!("{}{what}", if ok { "" } else { "FAIL: " }));
+        self.notes
+            .push(format!("{}{what}", if ok { "" } else { "FAIL: " }));
     }
     fn note(&mut self, what: impl Into<String>) {
         let what = what.into();
@@ -421,8 +463,17 @@ impl Checks {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git").arg("-C").arg(dir).args(args).output().expect("git");
-    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("git");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
@@ -435,7 +486,11 @@ fn planted_repo(dir: &Path) {
     git(dir, &["init", "-q", "-b", "main"]);
     git(dir, &["config", "user.email", "e2e@example.invalid"]);
     git(dir, &["config", "user.name", "e2e"]);
-    std::fs::write(dir.join("README.md"), "# shop\n\nPricing helpers. Run `python3 test_pricing.py` to test.\n").unwrap();
+    std::fs::write(
+        dir.join("README.md"),
+        "# shop\n\nPricing helpers. Run `python3 test_pricing.py` to test.\n",
+    )
+    .unwrap();
     std::fs::write(dir.join("shop/__init__.py"), "").unwrap();
     std::fs::write(dir.join("shop/pricing.py"), BUGGY_PRICING).unwrap();
     std::fs::write(
@@ -458,14 +513,25 @@ fn turn_leftovers(repo: &Path) -> Vec<String> {
         .filter_map(|l| l.strip_prefix("worktree "))
         .map(|p| canon(Path::new(p)))
         .filter(|p| *p != root)
-        .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("chat-")))
+        .filter(|p| {
+            !p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("chat-"))
+        })
         .map(|p| p.display().to_string())
         .collect();
     left.extend(
-        git(repo, &["branch", "--list", "ligus/turn-*", "--format=%(refname:short)"])
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(str::to_string),
+        git(
+            repo,
+            &[
+                "branch",
+                "--list",
+                "ligus/turn-*",
+                "--format=%(refname:short)",
+            ],
+        )
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(str::to_string),
     );
     left
 }
@@ -501,7 +567,8 @@ impl Ctx {
 
     fn new_chat(&self, runtime_id: &str) -> String {
         let chat = crate::create_chat_sync(self.state(), String::new()).expect("create_chat");
-        crate::set_chat_runtime_sync(self.state(), chat.id.clone(), runtime_id.into()).expect("set_chat_runtime");
+        crate::set_chat_runtime_sync(self.state(), chat.id.clone(), runtime_id.into())
+            .expect("set_chat_runtime");
         chat.id
     }
 
@@ -509,12 +576,21 @@ impl Ctx {
     async fn send(&self, sid: &str, body: &str) -> (Result<(), String>, f64) {
         eprintln!("  > {}", body.chars().take(120).collect::<String>());
         let started = Instant::now();
-        let r = crate::send_message(self.app.clone(), self.state(), sid.into(), body.into(), None).await;
+        let r = crate::send_message(
+            self.app.clone(),
+            self.state(),
+            sid.into(),
+            body.into(),
+            None,
+        )
+        .await;
         (r, started.elapsed().as_secs_f64())
     }
 
     fn chat(&self, sid: &str) -> ligus_proto::ChatSessionDto {
-        crate::get_chat_sync(self.state(), sid.into()).expect("get_chat").expect("chat exists")
+        crate::get_chat_sync(self.state(), sid.into())
+            .expect("get_chat")
+            .expect("chat exists")
     }
 
     fn last_reply(&self, sid: &str) -> String {
@@ -533,7 +609,10 @@ impl Ctx {
         let (tx, rx) = std::sync::mpsc::channel();
         let (app, sid) = (self.app.clone(), sid.to_string());
         std::thread::spawn(move || {
-            let _ = tx.send(crate::get_context_telemetry_sync(app.state::<AppState>(), sid));
+            let _ = tx.send(crate::get_context_telemetry_sync(
+                app.state::<AppState>(),
+                sid,
+            ));
         });
         rx.recv_timeout(Duration::from_secs(20))
             .expect("get_context_telemetry did not return within 20s (deadlock?)")
@@ -542,14 +621,25 @@ impl Ctx {
     }
 
     fn activity_for(&self, sid: &str) -> Vec<Value> {
-        self.activity.lock().unwrap().iter().filter(|e| e["sessionId"] == sid).cloned().collect()
+        self.activity
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e["sessionId"] == sid)
+            .cloned()
+            .collect()
     }
 
     fn tool_calls(&self, sid: &str) -> Vec<(String, String)> {
         self.activity_for(sid)
             .iter()
             .filter(|e| e["kind"] == "tool")
-            .map(|e| (e["name"].as_str().unwrap_or("").to_string(), e["inputJson"].as_str().unwrap_or("").to_string()))
+            .map(|e| {
+                (
+                    e["name"].as_str().unwrap_or("").to_string(),
+                    e["inputJson"].as_str().unwrap_or("").to_string(),
+                )
+            })
             .collect()
     }
 }
@@ -575,17 +665,37 @@ Find the bug and fix it in the code (do not change the test). Keep the fix minim
         )
         .await;
     c.note(format!("turn took {secs:.1}s"));
-    c.check(r.is_ok(), format!("send_message returned Ok ({:?})", r.err()));
+    c.check(
+        r.is_ok(),
+        format!("send_message returned Ok ({:?})", r.err()),
+    );
     let calls = ctx.tool_calls(&sid);
     c.note(format!(
         "tool calls: {}",
-        calls.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+        calls
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     ));
-    for (n, req) in ctx.proxy.since(mark).iter().filter(|r| r.is_turn()).enumerate() {
+    for (n, req) in ctx
+        .proxy
+        .since(mark)
+        .iter()
+        .filter(|r| r.is_turn())
+        .enumerate()
+    {
         c.note(format!("round {}: {}", n + 1, req.summary()));
     }
     let reply = ctx.last_reply(&sid);
-    c.note(format!("reply: {}", reply.chars().take(200).collect::<String>().replace('\n', " ")));
+    c.note(format!(
+        "reply: {}",
+        reply
+            .chars()
+            .take(200)
+            .collect::<String>()
+            .replace('\n', " ")
+    ));
     c.check(!reply.starts_with("[error]"), "reply is not an error");
     c.check(!reply.trim().is_empty(), "reply is not empty");
 
@@ -596,15 +706,25 @@ Find the bug and fix it in the code (do not change the test). Keep the fix minim
         format!(
             "exactly one fileDiff proposal (got {}: {:?})",
             diffs.len(),
-            diffs.iter().map(|p| (&p.title, p.diff.is_some())).collect::<Vec<_>>()
+            diffs
+                .iter()
+                .map(|p| (&p.title, p.diff.is_some()))
+                .collect::<Vec<_>>()
         ),
     );
-    let others: Vec<_> = proposals.iter().filter(|p| p.kind != "fileDiff").map(|p| (&p.kind, &p.title)).collect();
+    let others: Vec<_> = proposals
+        .iter()
+        .filter(|p| p.kind != "fileDiff")
+        .map(|p| (&p.kind, &p.title))
+        .collect();
     if !others.is_empty() {
         c.note(format!("other proposals: {others:?}"));
     }
     if let Some(p) = diffs.first() {
-        c.note(format!("proposal: \"{}\" status={} files={:?}", p.title, p.status, p.changed_files));
+        c.note(format!(
+            "proposal: \"{}\" status={} files={:?}",
+            p.title, p.status, p.changed_files
+        ));
         c.check(p.status == "open", "proposal is open for review");
         c.check(
             p.changed_files.iter().any(|f| f == "shop/pricing.py"),
@@ -617,9 +737,20 @@ Find the bug and fix it in the code (do not change the test). Keep the fix minim
         // Implement = apply the stored diff. Do it on a scratch clone and
         // run the test there, so the proposal is proven to be the fix.
         let diff = p.diff.clone().unwrap_or_default();
-        let scratch = ctx.repo.with_file_name(format!("{}-apply-{runtime_id}", ctx.repo.file_name().unwrap().to_string_lossy()));
+        let scratch = ctx.repo.with_file_name(format!(
+            "{}-apply-{runtime_id}",
+            ctx.repo.file_name().unwrap().to_string_lossy()
+        ));
         let _ = std::fs::remove_dir_all(&scratch);
-        git(ctx.repo.parent().unwrap(), &["clone", "-q", ctx.repo.to_str().unwrap(), scratch.to_str().unwrap()]);
+        git(
+            ctx.repo.parent().unwrap(),
+            &[
+                "clone",
+                "-q",
+                ctx.repo.to_str().unwrap(),
+                scratch.to_str().unwrap(),
+            ],
+        );
         let patch = scratch.join("proposal.patch");
         std::fs::write(&patch, &diff).unwrap();
         let applied = std::process::Command::new("git")
@@ -628,26 +759,50 @@ Find the bug and fix it in the code (do not change the test). Keep the fix minim
             .args(["apply", "proposal.patch"])
             .output()
             .unwrap();
-        c.check(applied.status.success(), format!("diff applies cleanly ({})", String::from_utf8_lossy(&applied.stderr).trim()));
-        let test = std::process::Command::new("python3").arg("test_pricing.py").current_dir(&scratch).output().unwrap();
+        c.check(
+            applied.status.success(),
+            format!(
+                "diff applies cleanly ({})",
+                String::from_utf8_lossy(&applied.stderr).trim()
+            ),
+        );
+        let test = std::process::Command::new("python3")
+            .arg("test_pricing.py")
+            .current_dir(&scratch)
+            .output()
+            .unwrap();
         c.check(
             test.status.success(),
             format!(
                 "test passes with the proposal applied ({})",
-                format!("{}{}", String::from_utf8_lossy(&test.stdout), String::from_utf8_lossy(&test.stderr)).trim()
+                format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&test.stdout),
+                    String::from_utf8_lossy(&test.stderr)
+                )
+                .trim()
             ),
         );
         let _ = std::fs::remove_dir_all(&scratch);
     }
     let main_file = std::fs::read_to_string(ctx.repo.join("shop/pricing.py")).unwrap_or_default();
-    c.check(main_file == BUGGY_PRICING, "main tree untouched (the change waits in review)");
+    c.check(
+        main_file == BUGGY_PRICING,
+        "main tree untouched (the change waits in review)",
+    );
     let after = turn_leftovers(&ctx.repo);
     c.check(
         before.is_empty() && after.is_empty(),
         format!("no turn worktree or branch left behind (before {before:?}, after {after:?})"),
     );
-    let chat_dir = ctx.repo.join(".ligus/worktrees").join(format!("chat-{sid}"));
-    c.note(format!("chat base checkout (persistent by design) present: {}", chat_dir.exists()));
+    let chat_dir = ctx
+        .repo
+        .join(".ligus/worktrees")
+        .join(format!("chat-{sid}"));
+    c.note(format!(
+        "chat base checkout (persistent by design) present: {}",
+        chat_dir.exists()
+    ));
     c
 }
 
@@ -655,21 +810,37 @@ Find the bug and fix it in the code (do not change the test). Keep the fix minim
 /// calls `search_docs` and answers from it.
 async fn scenario_mcp(ctx: &Ctx) -> Checks {
     let mut c = Checks::new();
-    let (Some(url), Some(token_file)) = (ctx.cfg.mcp_url.clone(), ctx.cfg.mcp_token_file.clone()) else {
-        c.check(false, "LIGUS_APP_LIVE_MCP_URL / LIGUS_APP_LIVE_MCP_TOKEN_FILE unset");
+    let (Some(url), Some(token_file)) = (ctx.cfg.mcp_url.clone(), ctx.cfg.mcp_token_file.clone())
+    else {
+        c.check(
+            false,
+            "LIGUS_APP_LIVE_MCP_URL / LIGUS_APP_LIVE_MCP_TOKEN_FILE unset",
+        );
         return c;
     };
-    let token = std::fs::read_to_string(&token_file).map(|t| t.trim().to_string()).unwrap_or_default();
-    c.check(!token.is_empty(), "token file readable (value never printed)");
-    crate::add_remote_mcp_server(ctx.state(), "rdnamcp".into(), url, None).expect("add_remote_mcp_server");
-    let set = crate::set_mcp_bearer_token(ctx.state(), "rdnamcp".into(), token.clone()).expect("set_mcp_bearer_token");
+    let token = std::fs::read_to_string(&token_file)
+        .map(|t| t.trim().to_string())
+        .unwrap_or_default();
+    c.check(
+        !token.is_empty(),
+        "token file readable (value never printed)",
+    );
+    crate::add_remote_mcp_server(ctx.state(), "rdnamcp".into(), url, None)
+        .expect("add_remote_mcp_server");
+    let set = crate::set_mcp_bearer_token(ctx.state(), "rdnamcp".into(), token.clone())
+        .expect("set_mcp_bearer_token");
     c.check(set, "bearer token stored via set_mcp_bearer_token");
     crate::set_mcp_enabled(ctx.state(), "rdnamcp".into(), true).expect("set_mcp_enabled");
     let listed = crate::list_mcp_servers(ctx.state()).expect("list_mcp_servers");
     let entry = listed.iter().find(|s| s.id == "rdnamcp");
-    c.check(entry.is_some_and(|s| s.has_bearer_token && s.enabled), "list_mcp_servers: enabled, hasBearerToken");
     c.check(
-        !serde_json::to_string(&listed).unwrap_or_default().contains(&token),
+        entry.is_some_and(|s| s.has_bearer_token && s.enabled),
+        "list_mcp_servers: enabled, hasBearerToken",
+    );
+    c.check(
+        !serde_json::to_string(&listed)
+            .unwrap_or_default()
+            .contains(&token),
         "token never returned to the UI",
     );
 
@@ -684,23 +855,43 @@ the search returned.",
         )
         .await;
     c.note(format!("turn took {secs:.1}s"));
-    c.check(r.is_ok(), format!("send_message returned Ok ({:?})", r.err()));
+    c.check(
+        r.is_ok(),
+        format!("send_message returned Ok ({:?})", r.err()),
+    );
     let activity = ctx.activity_for(&sid);
     let calls = ctx.tool_calls(&sid);
-    c.note(format!("tool calls: {}", calls.iter().map(|(n, i)| format!("{n} {i}")).collect::<Vec<_>>().join(" | ")));
+    c.note(format!(
+        "tool calls: {}",
+        calls
+            .iter()
+            .map(|(n, i)| format!("{n} {i}"))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    ));
     let search = calls.iter().find(|(n, _)| n.contains("search_docs"));
     c.check(search.is_some(), "search_docs was called");
     if let Some((_, input)) = search {
         c.check(input.contains("rdna-docs"), "on the rdna-docs collection");
     }
     let results: Vec<&Value> = activity.iter().filter(|e| e["kind"] == "result").collect();
-    let ok_result = results
-        .iter()
-        .any(|e| e["isError"] == false && e["content"].as_str().is_some_and(|s| s.trim().len() > 40));
+    let ok_result = results.iter().any(|e| {
+        e["isError"] == false && e["content"].as_str().is_some_and(|s| s.trim().len() > 40)
+    });
     c.check(ok_result, "a tool returned a non-error, non-empty result");
     let reply = ctx.last_reply(&sid);
-    c.note(format!("reply: {}", reply.chars().take(300).collect::<String>().replace('\n', " ")));
-    c.check(!reply.trim().is_empty() && !reply.starts_with("[error]"), "answered");
+    c.note(format!(
+        "reply: {}",
+        reply
+            .chars()
+            .take(300)
+            .collect::<String>()
+            .replace('\n', " ")
+    ));
+    c.check(
+        !reply.trim().is_empty() && !reply.starts_with("[error]"),
+        "answered",
+    );
     c.check(
         reply.to_ascii_lowercase().contains("wave"),
         "answer is about waves",
@@ -747,8 +938,14 @@ async fn scenario_vault(ctx: &Ctx) -> Checks {
     .expect("set_retrieval_settings");
     ctx.add_runtime("gw-main", &ctx.cfg.model, true, None);
     let sid = ctx.new_chat("gw-main");
-    crate::add_vault_sync(ctx.state(), sid.clone(), "https".into(), format!("{}/vault/runbook.md", ctx.proxy.base), None)
-        .expect("add_vault");
+    crate::add_vault_sync(
+        ctx.state(),
+        sid.clone(),
+        "https".into(),
+        format!("{}/vault/runbook.md", ctx.proxy.base),
+        None,
+    )
+    .expect("add_vault");
 
     let questions = [
         ("What time does the nightly backup run, and which bucket are the snapshots uploaded to? Answer from the runbook.", ["02:30", "lab-snapshots-7781"]),
@@ -759,7 +956,10 @@ async fn scenario_vault(ctx: &Ctx) -> Checks {
         let mark = ctx.proxy.mark();
         let (r, secs) = ctx.send(&sid, q).await;
         c.note(format!("turn {} took {secs:.1}s", i + 1));
-        c.check(r.is_ok(), format!("turn {}: send_message Ok ({:?})", i + 1, r.err()));
+        c.check(
+            r.is_ok(),
+            format!("turn {}: send_message Ok ({:?})", i + 1, r.err()),
+        );
         let reqs = ctx.proxy.since(mark);
         let fetched = reqs.iter().any(|r| r.path.starts_with("/vault/"));
         if i == 0 {
@@ -777,11 +977,21 @@ async fn scenario_vault(ctx: &Ctx) -> Checks {
         );
         c.check(
             last_user.contains(facts[0]) && last_user.contains(facts[1]),
-            format!("turn {}: the retrieved passages hold the answer ({} / {})", i + 1, facts[0], facts[1]),
+            format!(
+                "turn {}: the retrieved passages hold the answer ({} / {})",
+                i + 1,
+                facts[0],
+                facts[1]
+            ),
         );
         c.check(
-            !system.contains(ligus_runtime::retrieval::PASSAGES_HEADER) && !system.contains("Reference vaults") && !system.contains("lab-snapshots-7781"),
-            format!("turn {}: nothing from the vault in the system prompt", i + 1),
+            !system.contains(ligus_runtime::retrieval::PASSAGES_HEADER)
+                && !system.contains("Reference vaults")
+                && !system.contains("lab-snapshots-7781"),
+            format!(
+                "turn {}: nothing from the vault in the system prompt",
+                i + 1
+            ),
         );
         let earlier_users_clean = first
             .messages()
@@ -789,32 +999,76 @@ async fn scenario_vault(ctx: &Ctx) -> Checks {
             .filter(|m| m["role"] == "user")
             .rev()
             .skip(1)
-            .all(|m| !m["content"].as_str().unwrap_or("").contains(ligus_runtime::retrieval::PASSAGES_HEADER));
-        c.check(earlier_users_clean, format!("turn {}: earlier user turns carry no passages", i + 1));
+            .all(|m| {
+                !m["content"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains(ligus_runtime::retrieval::PASSAGES_HEADER)
+            });
+        c.check(
+            earlier_users_clean,
+            format!("turn {}: earlier user turns carry no passages", i + 1),
+        );
         let reply = ctx.last_reply(&sid);
-        c.note(format!("reply {}: {}", i + 1, reply.chars().take(200).collect::<String>().replace('\n', " ")));
+        c.note(format!(
+            "reply {}: {}",
+            i + 1,
+            reply
+                .chars()
+                .take(200)
+                .collect::<String>()
+                .replace('\n', " ")
+        ));
         let hits = facts.iter().filter(|f| reply.contains(**f)).count();
-        c.check(hits == 2, format!("turn {}: answer states both facts ({hits}/2)", i + 1));
+        c.check(
+            hits == 2,
+            format!("turn {}: answer states both facts ({hits}/2)", i + 1),
+        );
         systems.push(system);
         if i == 0 {
             // A user reads the reply before typing again; by then the chat's
             // auto-title has landed. Wait for it so the next turn is planned
             // against the renamed chat, as in real use.
             let waited = Instant::now();
-            while crate::is_default_title(&ctx.chat(&sid).title) && waited.elapsed() < Duration::from_secs(60) {
+            while crate::is_default_title(&ctx.chat(&sid).title)
+                && waited.elapsed() < Duration::from_secs(60)
+            {
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
-            c.note(format!("chat titled \"{}\" before turn 2", ctx.chat(&sid).title));
+            c.note(format!(
+                "chat titled \"{}\" before turn 2",
+                ctx.chat(&sid).title
+            ));
         }
     }
     if systems.len() == 2 {
         let same = systems[0] == systems[1];
         if !same {
-            let diverge = systems[0].chars().zip(systems[1].chars()).take_while(|(a, b)| a == b).count();
-            let window = |s: &str| s.chars().skip(diverge.saturating_sub(60)).take(140).collect::<String>().replace('\n', "\\n");
-            c.note(format!("system prompts diverge at char {diverge}: 1st …{}… / 2nd …{}…", window(&systems[0]), window(&systems[1])));
+            let diverge = systems[0]
+                .chars()
+                .zip(systems[1].chars())
+                .take_while(|(a, b)| a == b)
+                .count();
+            let window = |s: &str| {
+                s.chars()
+                    .skip(diverge.saturating_sub(60))
+                    .take(140)
+                    .collect::<String>()
+                    .replace('\n', "\\n")
+            };
+            c.note(format!(
+                "system prompts diverge at char {diverge}: 1st …{}… / 2nd …{}…",
+                window(&systems[0]),
+                window(&systems[1])
+            ));
         }
-        c.check(same, format!("system prompt byte-identical across the two turns ({} bytes)", systems[0].len()));
+        c.check(
+            same,
+            format!(
+                "system prompt byte-identical across the two turns ({} bytes)",
+                systems[0].len()
+            ),
+        );
     }
     // Leave retrieval off for the later scenarios.
     crate::set_retrieval_settings(
@@ -839,7 +1093,10 @@ async fn scenario_title(ctx: &Ctx) -> Checks {
     ctx.add_runtime("gw-quick", &ctx.cfg.quick_model, false, None);
     crate::set_utility_runtime(ctx.state(), Some("gw-quick".into())).expect("set_utility_runtime");
     let sid = ctx.new_chat("gw-main");
-    c.check(crate::is_default_title(&ctx.chat(&sid).title), "new chat starts untitled");
+    c.check(
+        crate::is_default_title(&ctx.chat(&sid).title),
+        "new chat starts untitled",
+    );
     let mark = ctx.proxy.mark();
     let (r, secs) = ctx
         .send(&sid, "What is a good, short name for a Rust crate that parses TOML config files? One line, no tools needed.")
@@ -853,13 +1110,29 @@ async fn scenario_title(ctx: &Ctx) -> Checks {
         tokio::time::sleep(Duration::from_millis(250)).await;
         title = ctx.chat(&sid).title;
     }
-    c.note(format!("title \"{title}\" landed {:.1}s after the turn", waited.elapsed().as_secs_f64()));
+    c.note(format!(
+        "title \"{title}\" landed {:.1}s after the turn",
+        waited.elapsed().as_secs_f64()
+    ));
     c.check(!crate::is_default_title(&title), "chat got a title");
-    let title_reqs: Vec<Recorded> = ctx.proxy.since(mark).into_iter().filter(|r| r.is_title()).collect();
-    let quick: Vec<&Recorded> = title_reqs.iter().filter(|r| r.model() == ctx.cfg.quick_model).collect();
+    let title_reqs: Vec<Recorded> = ctx
+        .proxy
+        .since(mark)
+        .into_iter()
+        .filter(|r| r.is_title())
+        .collect();
+    let quick: Vec<&Recorded> = title_reqs
+        .iter()
+        .filter(|r| r.model() == ctx.cfg.quick_model)
+        .collect();
     c.check(
         quick.len() == 1 && quick[0].status == 200,
-        format!("one title request to {} (HTTP {:?}, {:.2}s)", ctx.cfg.quick_model, quick.first().map(|r| r.status), quick.first().map_or(0.0, |r| r.secs)),
+        format!(
+            "one title request to {} (HTTP {:?}, {:.2}s)",
+            ctx.cfg.quick_model,
+            quick.first().map(|r| r.status),
+            quick.first().map_or(0.0, |r| r.secs)
+        ),
     );
     c.check(
         title_reqs.iter().all(|r| r.model() == ctx.cfg.quick_model),
@@ -921,8 +1194,11 @@ async fn scenario_compaction(ctx: &Ctx) -> Checks {
         let mut svc = state.service.lock().unwrap();
         let ws = svc.load(uuid).unwrap().unwrap().workspace_id;
         let posted = svc.post_user_message(uuid, ws, user).unwrap();
-        let mid = svc.begin_assistant_message(uuid, ws, "Ligus", "gw-small", None, Some(posted.id)).unwrap();
-        svc.complete_assistant_message(uuid, ws, mid, reply).unwrap();
+        let mid = svc
+            .begin_assistant_message(uuid, ws, "Ligus", "gw-small", None, Some(posted.id))
+            .unwrap();
+        svc.complete_assistant_message(uuid, ws, mid, reply)
+            .unwrap();
     };
     for (fact, _) in FACTS {
         seed(fact, "Noted — I'll keep that in mind.");
@@ -946,16 +1222,25 @@ async fn scenario_compaction(ctx: &Ctx) -> Checks {
     let mark = ctx.proxy.mark();
     let (r, secs) = ctx.send(&sid, "Thanks. Of everything above, which item should we tackle first tomorrow? One sentence.").await;
     c.note(format!("turn 1 took {secs:.1}s"));
-    c.check(r.is_ok(), format!("turn 1: send_message Ok ({:?})", r.err()));
+    c.check(
+        r.is_ok(),
+        format!("turn 1: send_message Ok ({:?})", r.err()),
+    );
     let reqs1 = ctx.proxy.since(mark);
     let summaries1 = reqs1.iter().filter(|r| r.is_summary()).count();
-    c.check(summaries1 == 1, format!("turn 1 compacts with one summary call (got {summaries1})"));
+    c.check(
+        summaries1 == 1,
+        format!("turn 1 compacts with one summary call (got {summaries1})"),
+    );
     if let Some(s) = reqs1.iter().find(|r| r.is_summary()) {
         c.note(format!("summary request took {:.1}s", s.secs));
     }
     let first1 = reqs1.iter().find(|r| r.is_turn()).cloned();
     let after1 = telemetry();
-    c.note(format!("after turn 1: strategy={}, kept {} / overflow {}", after1.summary_strategy, after1.kept_message_count, after1.overflow_message_count));
+    c.note(format!(
+        "after turn 1: strategy={}, kept {} / overflow {}",
+        after1.summary_strategy, after1.kept_message_count, after1.overflow_message_count
+    ));
 
     let mark = ctx.proxy.mark();
     let (r, secs) = ctx
@@ -966,10 +1251,16 @@ listen on, and who is the release manager?",
         )
         .await;
     c.note(format!("turn 2 took {secs:.1}s"));
-    c.check(r.is_ok(), format!("turn 2: send_message Ok ({:?})", r.err()));
+    c.check(
+        r.is_ok(),
+        format!("turn 2: send_message Ok ({:?})", r.err()),
+    );
     let reqs2 = ctx.proxy.since(mark);
     let summaries2 = reqs2.iter().filter(|r| r.is_summary()).count();
-    c.check(summaries2 == 0, format!("turn 2 does not re-summarize (got {summaries2})"));
+    c.check(
+        summaries2 == 0,
+        format!("turn 2 does not re-summarize (got {summaries2})"),
+    );
     let first2 = reqs2.iter().find(|r| r.is_turn()).cloned();
     if let (Some(a), Some(b)) = (&first1, &first2) {
         // The summary rides as the first turn after the system prompt; the
@@ -980,18 +1271,41 @@ listen on, and who is the release manager?",
             "summary turn byte-identical across turns",
         );
         let shared = ma.iter().zip(mb.iter()).take_while(|(x, y)| x == y).count();
-        c.note(format!("turn 2's request shares its first {shared} of {} messages with turn 1's", ma.len()));
-        c.check(a.system() == b.system(), "system prompt byte-identical across turns");
+        c.note(format!(
+            "turn 2's request shares its first {shared} of {} messages with turn 1's",
+            ma.len()
+        ));
+        c.check(
+            a.system() == b.system(),
+            "system prompt byte-identical across turns",
+        );
         // Facts must have left the kept window: recall can only come from the summary.
-        let in_kept = mb.iter().skip(2).any(|m| m["content"].as_str().is_some_and(|s| s.contains("AMBER-FALCON-17") && s.starts_with("Note for later")));
+        let in_kept = mb.iter().skip(2).any(|m| {
+            m["content"]
+                .as_str()
+                .is_some_and(|s| s.contains("AMBER-FALCON-17") && s.starts_with("Note for later"))
+        });
         c.check(!in_kept, "the fact messages themselves were compacted away");
-        let summary_has = mb.get(1).and_then(|m| m["content"].as_str()).map_or(0, |s| FACTS.iter().filter(|(_, k)| s.contains(k)).count());
+        let summary_has = mb
+            .get(1)
+            .and_then(|m| m["content"].as_str())
+            .map_or(0, |s| FACTS.iter().filter(|(_, k)| s.contains(k)).count());
         c.note(format!("summary turn carries {summary_has}/3 facts"));
     }
     let reply = ctx.last_reply(&sid);
-    c.note(format!("reply: {}", reply.chars().take(300).collect::<String>().replace('\n', " ")));
+    c.note(format!(
+        "reply: {}",
+        reply
+            .chars()
+            .take(300)
+            .collect::<String>()
+            .replace('\n', " ")
+    ));
     let recalled = FACTS.iter().filter(|(_, k)| reply.contains(k)).count();
-    c.check(recalled == 3, format!("recalled {recalled}/3 compacted facts"));
+    c.check(
+        recalled == 3,
+        format!("recalled {recalled}/3 compacted facts"),
+    );
     c
 }
 
@@ -1016,17 +1330,37 @@ fn chat_model_choice(handle: &tauri::AppHandle, sid: &str) -> usize {
     };
     let session = state.service.lock().unwrap().load(id).unwrap().unwrap();
     let rid = session.runtime_id.clone();
-    let before = crate::responder_for(&state, &session, None).runtime.effective_model();
+    let before = crate::responder_for(&state, &session, None)
+        .runtime
+        .effective_model();
     crate::chat_models::set_chat_model_sync(&state, id, &rid, Some("picked-model")).unwrap();
     let primary = crate::responder_for(&state, &session, None);
-    check(primary.runtime.effective_model() == "picked-model", "the chat's choice runs the untagged turn");
-    check(primary.model_override.as_deref() == Some("picked-model"), "the choice rides the responder into the turn");
+    check(
+        primary.runtime.effective_model() == "picked-model",
+        "the chat's choice runs the untagged turn",
+    );
+    check(
+        primary.model_override.as_deref() == Some("picked-model"),
+        "the choice rides the responder into the turn",
+    );
     let agent = ligus_core::WorkspaceAgent::new("coder", &rid);
     let theirs = crate::responder_for(&state, &session, Some(&agent));
-    check(theirs.runtime.effective_model() == before, "an @agent keeps its own model");
-    check(crate::chat_models::override_for(&state, id, "some-other-runtime").is_none(), "the choice is for one runtime only");
+    check(
+        theirs.runtime.effective_model() == before,
+        "an @agent keeps its own model",
+    );
+    check(
+        crate::chat_models::override_for(&state, id, "some-other-runtime").is_none(),
+        "the choice is for one runtime only",
+    );
     crate::chat_models::set_chat_model_sync(&state, id, &rid, None).unwrap();
-    check(crate::responder_for(&state, &session, None).runtime.effective_model() == before, "Default goes back to the runtime's model");
+    check(
+        crate::responder_for(&state, &session, None)
+            .runtime
+            .effective_model()
+            == before,
+        "Default goes back to the runtime's model",
+    );
     failed
 }
 
@@ -1044,8 +1378,11 @@ fn headless_app(data_dir: &Path, repo: &Path) -> tauri::App {
     let handle = app.handle().clone();
     let state = crate::build_state_in(&handle, data_dir.to_path_buf()).expect("build_state_in");
     handle.manage(state);
-    crate::set_workspace_root(handle.state::<AppState>(), repo.to_string_lossy().into_owned())
-        .expect("set_workspace_root");
+    crate::set_workspace_root(
+        handle.state::<AppState>(),
+        repo.to_string_lossy().into_owned(),
+    )
+    .expect("set_workspace_root");
     app
 }
 
@@ -1063,17 +1400,25 @@ fn run_offline() -> usize {
     let handle = app.handle().clone();
     let mut failed = 0;
 
-    let sid = crate::create_chat_sync(handle.state::<AppState>(), String::new()).expect("create_chat").id;
+    let sid = crate::create_chat_sync(handle.state::<AppState>(), String::new())
+        .expect("create_chat")
+        .id;
     // Bounded: a deadlock must fail the run, not hang it.
     let (tx, rx) = std::sync::mpsc::channel();
     {
         let (handle, sid) = (handle.clone(), sid.clone());
         std::thread::spawn(move || {
-            let _ = tx.send(crate::get_context_telemetry_sync(handle.state::<AppState>(), sid));
+            let _ = tx.send(crate::get_context_telemetry_sync(
+                handle.state::<AppState>(),
+                sid,
+            ));
         });
     }
     match rx.recv_timeout(Duration::from_secs(20)) {
-        Ok(Ok(Some(t))) => eprintln!("PASS context meter on a fresh chat ({} messages)", t.message_count),
+        Ok(Ok(Some(t))) => eprintln!(
+            "PASS context meter on a fresh chat ({} messages)",
+            t.message_count
+        ),
         Ok(other) => {
             eprintln!("FAIL context meter on a fresh chat: {other:?}");
             failed += 1;
@@ -1109,7 +1454,9 @@ fn reads_while_the_service_is_held(handle: &tauri::AppHandle, sid: &str) -> usiz
             let _ = release_rx.recv_timeout(Duration::from_secs(30));
         })
     };
-    held_rx.recv_timeout(Duration::from_secs(10)).expect("the writer took the lock");
+    held_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the writer took the lock");
     let t0 = Instant::now();
     let chats = tauri::async_runtime::spawn(crate::list_chats(handle.clone()));
     let chat = tauri::async_runtime::spawn(crate::get_chat(handle.clone(), sid.to_string()));
@@ -1120,7 +1467,10 @@ fn reads_while_the_service_is_held(handle: &tauri::AppHandle, sid: &str) -> usiz
     if quick && settings.is_ok() && waited {
         eprintln!("PASS a settings read completes, and chat reads wait off the caller, while a write holds the service lock");
     } else {
-        eprintln!("FAIL reads under a held service lock: quick={quick} settings_ok={} waited={waited}", settings.is_ok());
+        eprintln!(
+            "FAIL reads under a held service lock: quick={quick} settings_ok={} waited={waited}",
+            settings.is_ok()
+        );
         failed += 1;
     }
     release_tx.send(()).unwrap();
@@ -1163,7 +1513,9 @@ fn redirecting_server() -> (String, Arc<std::sync::atomic::AtomicBool>, impl FnO
         while !stop2.load(Ordering::SeqCst) {
             if let Ok((mut c, _)) = elsewhere.accept() {
                 hit2.store(true, Ordering::SeqCst);
-                let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                let _ = c.write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
             }
             if let Ok((mut c, _)) = pinned.accept() {
                 let _ = c.set_nonblocking(false);
@@ -1182,7 +1534,8 @@ fn redirecting_server() -> (String, Arc<std::sync::atomic::AtomicBool>, impl FnO
     (format!("http://127.0.0.1:{a}/e2e/gamma.git"), hit, stopper)
 }
 
-const CONFIG_MCP: &str = "[[mcp_servers]]\nid = \"{id}\"\ntransport = \"stdio\"\ncommand = \"{cmd}\"\nenabled = true\n";
+const CONFIG_MCP: &str =
+    "[[mcp_servers]]\nid = \"{id}\"\ntransport = \"stdio\"\ncommand = \"{cmd}\"\nenabled = true\n";
 
 fn mcp_entry(id: &str, cmd: &str) -> String {
     CONFIG_MCP.replace("{id}", id).replace("{cmd}", cmd)
@@ -1191,7 +1544,13 @@ fn mcp_entry(id: &str, cmd: &str) -> String {
 /// A local "forge" (a bare repo) for `canonical` with `config` committed,
 /// and, unless `checkout` is `None`, a checkout of it whose origin URL names
 /// the canonical (fetches go through a `forge` remote).
-fn forge_repo(root: &Path, slug: &str, canonical: &str, config: &str, checkout: Option<&Path>) -> PathBuf {
+fn forge_repo(
+    root: &Path,
+    slug: &str,
+    canonical: &str,
+    config: &str,
+    checkout: Option<&Path>,
+) -> PathBuf {
     let seed = root.join(format!("seed-{slug}"));
     std::fs::create_dir_all(&seed).unwrap();
     git(&seed, &["init", "-q", "-b", "main"]);
@@ -1202,15 +1561,47 @@ fn forge_repo(root: &Path, slug: &str, canonical: &str, config: &str, checkout: 
     git(&seed, &["add", "-A"]);
     git(&seed, &["commit", "-qm", "init"]);
     let bare = root.join(format!("{slug}.git"));
-    git(root, &["clone", "-q", "--bare", &seed.to_string_lossy(), &bare.to_string_lossy()]);
+    git(
+        root,
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            &seed.to_string_lossy(),
+            &bare.to_string_lossy(),
+        ],
+    );
     if let Some(co) = checkout {
-        git(root, &["clone", "-q", &bare.to_string_lossy(), &co.to_string_lossy()]);
+        git(
+            root,
+            &[
+                "clone",
+                "-q",
+                &bare.to_string_lossy(),
+                &co.to_string_lossy(),
+            ],
+        );
         git(co, &["config", "user.email", "e2e@example.invalid"]);
         git(co, &["config", "user.name", "e2e"]);
         git(co, &["remote", "rename", "origin", "forge"]);
-        git(co, &["remote", "add", "origin", &format!("https://{canonical}.git")]);
+        git(
+            co,
+            &[
+                "remote",
+                "add",
+                "origin",
+                &format!("https://{canonical}.git"),
+            ],
+        );
         git(co, &["fetch", "-q", "forge"]);
-        git(co, &["update-ref", "refs/remotes/origin/main", "refs/remotes/forge/main"]);
+        git(
+            co,
+            &[
+                "update-ref",
+                "refs/remotes/origin/main",
+                "refs/remotes/forge/main",
+            ],
+        );
     }
     bare
 }
@@ -1220,7 +1611,10 @@ fn trust(data_dir: &Path, checkout: &Path, ids: &[&str]) {
     use ligus_runtime::workspace_trust as wt;
     let store = wt::TrustStore::open(data_dir).unwrap();
     let root = wt::root_id(checkout);
-    for item in wt::repo_items(checkout).into_iter().filter(|i| ids.contains(&i.id.as_str())) {
+    for item in wt::repo_items(checkout)
+        .into_iter()
+        .filter(|i| ids.contains(&i.id.as_str()))
+    {
         store.enable(&root, item.kind, &item.digest, "").unwrap();
     }
 }
@@ -1246,36 +1640,87 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     // and B, trusted only for B's repo.
     let alpha = base.join("Alpha");
     let beta = base.join("Beta");
-    forge_repo(&base, "alpha", "github.com/e2e/alpha", &format!("{}{}{}", mcp_entry("a-mcp", "mcp-a"), mcp_entry("a-untrusted", "mcp-evil"), mcp_entry("shared", "mcp-shared")), Some(&alpha));
-    forge_repo(&base, "beta", "github.com/e2e/beta", &format!("{}{}", mcp_entry("b-mcp", "mcp-b"), mcp_entry("shared", "mcp-shared")), Some(&beta));
+    forge_repo(
+        &base,
+        "alpha",
+        "github.com/e2e/alpha",
+        &format!(
+            "{}{}{}",
+            mcp_entry("a-mcp", "mcp-a"),
+            mcp_entry("a-untrusted", "mcp-evil"),
+            mcp_entry("shared", "mcp-shared")
+        ),
+        Some(&alpha),
+    );
+    forge_repo(
+        &base,
+        "beta",
+        "github.com/e2e/beta",
+        &format!(
+            "{}{}",
+            mcp_entry("b-mcp", "mcp-b"),
+            mcp_entry("shared", "mcp-shared")
+        ),
+        Some(&beta),
+    );
     let gamma_forge = forge_repo(&base, "gamma", "git.e2e.invalid/e2e/gamma", "", None);
     trust(&data_dir, &alpha, &["a-mcp"]);
     trust(&data_dir, &beta, &["b-mcp", "shared"]);
     // The workspace's bound folder gets a server of its own.
     let bound = PathBuf::from(state().workspace_repo_root());
-    std::fs::write(bound.join("ligus.config.toml"), mcp_entry("bound-mcp", "mcp-bound")).unwrap();
+    std::fs::write(
+        bound.join("ligus.config.toml"),
+        mcp_entry("bound-mcp", "mcp-bound"),
+    )
+    .unwrap();
     git(&bound, &["add", "ligus.config.toml"]);
     git(&bound, &["commit", "-qm", "config"]);
     trust(&data_dir, &bound, &["bound-mcp"]);
 
     let add = |input: &str, name: &str, path: Option<&Path>| {
-        crate::repos_ui::add_workspace_repo_sync(state(), input.into(), Some(name.into()), Some("github".into()), Some("main".into()), path.map(|p| p.to_string_lossy().into_owned()))
+        crate::repos_ui::add_workspace_repo_sync(
+            state(),
+            input.into(),
+            Some(name.into()),
+            Some("github".into()),
+            Some("main".into()),
+            path.map(|p| p.to_string_lossy().into_owned()),
+        )
     };
     let (a_id, b_id, g_id) = match (
         add("github.com/e2e/alpha", "Alpha", Some(&alpha)),
         add("github.com/e2e/beta", "Beta", Some(&beta)),
-        crate::repos_ui::add_workspace_repo_sync(state(), "git.e2e.invalid/e2e/gamma".into(), Some("Gamma".into()), None, Some("main".into()), None),
+        crate::repos_ui::add_workspace_repo_sync(
+            state(),
+            "git.e2e.invalid/e2e/gamma".into(),
+            Some("Gamma".into()),
+            None,
+            Some("main".into()),
+            None,
+        ),
     ) {
-        (Ok(a), Ok(b), Ok(g)) => (a["id"].as_str().unwrap().to_string(), b["id"].as_str().unwrap().to_string(), g["id"].as_str().unwrap().to_string()),
+        (Ok(a), Ok(b), Ok(g)) => (
+            a["id"].as_str().unwrap().to_string(),
+            b["id"].as_str().unwrap().to_string(),
+            g["id"].as_str().unwrap().to_string(),
+        ),
         other => {
             c.check(false, format!("add workspace repos: {other:?}"));
             return 1;
         }
     };
     let chat = |title: &str, repo: Option<&str>| {
-        let id = crate::create_chat_sync(state(), title.into()).expect("create_chat").id;
+        let id = crate::create_chat_sync(state(), title.into())
+            .expect("create_chat")
+            .id;
         if let Some(r) = repo {
-            crate::repos_ui::set_chat_workspace_repo_sync(state(), id.clone(), Some(r.into()), None).expect("set_chat_workspace_repo");
+            crate::repos_ui::set_chat_workspace_repo_sync(
+                state(),
+                id.clone(),
+                Some(r.into()),
+                None,
+            )
+            .expect("set_chat_workspace_repo");
         }
         Uuid::parse_str(&id).unwrap()
     };
@@ -1292,35 +1737,86 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     // The window views chat B: the global catalogs follow it.
     crate::set_active_chat_sync(state(), Some(chat_b.to_string())).unwrap();
     let viewed = state().workspace_root.lock().unwrap().clone();
-    c.check(mcp_ids(&state().combined_mcp_servers()) == ["b-mcp", "shared"], format!("the window's catalog follows chat B: {:?}", mcp_ids(&state().combined_mcp_servers())));
+    c.check(
+        mcp_ids(&state().combined_mcp_servers()) == ["b-mcp", "shared"],
+        format!(
+            "the window's catalog follows chat B: {:?}",
+            mcp_ids(&state().combined_mcp_servers())
+        ),
+    );
     // A turn in chat A sees only A's trusted servers: not B's, not the
     // bound folder's, and not "shared", which is trusted for B's repo only.
     match crate::turn_scope(&state(), &load(chat_a)) {
         Ok(scope) => {
-            c.check(mcp_ids(&scope.catalog.mcp) == ["a-mcp"], format!("chat A's turn sees only A's trusted servers: {:?}", mcp_ids(&scope.catalog.mcp)));
-            c.check(canon(Path::new(&scope.dir)).starts_with(canon(&alpha)), format!("chat A's turn runs in Alpha's chat worktree: {}", scope.dir));
-            c.check(scope.repo.as_ref().is_some_and(|r| canon(&r.checkout) == canon(&alpha)), "chat A's turn is gated on Alpha's checkout");
+            c.check(
+                mcp_ids(&scope.catalog.mcp) == ["a-mcp"],
+                format!(
+                    "chat A's turn sees only A's trusted servers: {:?}",
+                    mcp_ids(&scope.catalog.mcp)
+                ),
+            );
+            c.check(
+                canon(Path::new(&scope.dir)).starts_with(canon(&alpha)),
+                format!("chat A's turn runs in Alpha's chat worktree: {}", scope.dir),
+            );
+            c.check(
+                scope
+                    .repo
+                    .as_ref()
+                    .is_some_and(|r| canon(&r.checkout) == canon(&alpha)),
+                "chat A's turn is gated on Alpha's checkout",
+            );
         }
         Err(e) => c.check(false, format!("chat A's turn scope: {e}")),
     }
     // A chat without a repo: the bound folder's catalog, never the viewed repo's.
     match crate::turn_scope(&state(), &load(chat_c)) {
-        Ok(scope) => c.check(mcp_ids(&scope.catalog.mcp) == ["bound-mcp"], format!("a chat without a repo sees the bound folder's servers: {:?}", mcp_ids(&scope.catalog.mcp))),
+        Ok(scope) => c.check(
+            mcp_ids(&scope.catalog.mcp) == ["bound-mcp"],
+            format!(
+                "a chat without a repo sees the bound folder's servers: {:?}",
+                mcp_ids(&scope.catalog.mcp)
+            ),
+        ),
         Err(e) => c.check(false, format!("chat C's turn scope: {e}")),
     }
     // Resolving a turn changes nothing the window shows (root, catalogs).
-    c.check(*state().workspace_root.lock().unwrap() == viewed, "a turn leaves the window's folder alone");
-    c.check(mcp_ids(&state().combined_mcp_servers()) == ["b-mcp", "shared"], "a turn leaves the window's catalog alone");
+    c.check(
+        *state().workspace_root.lock().unwrap() == viewed,
+        "a turn leaves the window's folder alone",
+    );
+    c.check(
+        mcp_ids(&state().combined_mcp_servers()) == ["b-mcp", "shared"],
+        "a turn leaves the window's catalog alone",
+    );
     // Viewing chat A swaps the window (and its watcher) to A's folder.
     crate::set_active_chat_sync(state(), Some(chat_a.to_string())).unwrap();
-    c.check(mcp_ids(&state().combined_mcp_servers()) == ["a-mcp"], format!("viewing chat A shows A's catalog: {:?}", mcp_ids(&state().combined_mcp_servers())));
-    c.check(state().workspace_root.lock().unwrap().contains("Alpha"), "the window's folder (and watcher) follow the viewed chat's checkout");
+    c.check(
+        mcp_ids(&state().combined_mcp_servers()) == ["a-mcp"],
+        format!(
+            "viewing chat A shows A's catalog: {:?}",
+            mcp_ids(&state().combined_mcp_servers())
+        ),
+    );
+    c.check(
+        state().workspace_root.lock().unwrap().contains("Alpha"),
+        "the window's folder (and watcher) follow the viewed chat's checkout",
+    );
 
     // ---- The turn gate (5.3) ----
     let gated = crate::turn_scope(&state(), &load(chat_g));
-    c.check(gated.as_ref().is_err(), format!("a chat whose repo isn't here never runs a turn: {:?}", gated.as_ref().err()));
+    c.check(
+        gated.as_ref().is_err(),
+        format!(
+            "a chat whose repo isn't here never runs a turn: {:?}",
+            gated.as_ref().err()
+        ),
+    );
     let chip = crate::repos_ui::chat_workspace_repo_sync(state(), chat_g.to_string()).unwrap();
-    c.check(chip["here"]["state"] != "present", format!("the chip says Gamma isn't here: {chip}"));
+    c.check(
+        chip["here"]["state"] != "present",
+        format!("the chip says Gamma isn't here: {chip}"),
+    );
     let pinned = load(chat_a).repo.and_then(|r| r.base_commit).is_some();
     c.check(pinned, "the first turn pins chat A's base");
 
@@ -1328,42 +1824,117 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     let ws = load(chat_a).workspace_id;
     let file_diff = |title: &str, diff: &str| {
         // Made by an agent (an author's own vote never counts toward quorum).
-        let mut p = ligus_core::ActionProposal::new(title, ligus_core::ProposalKind::FileDiff, "coder");
+        let mut p =
+            ligus_core::ActionProposal::new(title, ligus_core::ProposalKind::FileDiff, "coder");
         p.diff = Some(diff.into());
         p.required_approvals = 1;
         let id = p.id;
-        state().service.lock().unwrap().upsert_proposal(chat_a, ws, p).expect("upsert_proposal");
+        state()
+            .service
+            .lock()
+            .unwrap()
+            .upsert_proposal(chat_a, ws, p)
+            .expect("upsert_proposal");
         crate::vote_proposal_sync(state(), chat_a.to_string(), id.to_string(), true).expect("vote");
         id
     };
     let add_file = "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+hello\n";
     let p1 = file_diff("add new.txt", add_file);
-    let r = crate::implement_proposal(handle.clone(), state(), chat_a.to_string(), p1.to_string(), None).await;
-    let chat_wt = ligus_runtime::git_worktree::chat_worktree_path_of(&alpha, &chat_a.to_string()).unwrap();
-    c.check(r.is_ok(), format!("an approved repo proposal applies: {:?}", r.err()));
-    c.check(chat_wt.join("new.txt").exists(), "it landed on chat A's branch, in Alpha's checkout");
-    c.check(!bound.join("new.txt").exists() && !alpha.join("new.txt").exists(), "never in the bound folder or Alpha's own worktree");
-    c.check(load(chat_a).proposals.iter().find(|p| p.id == p1).is_some_and(|p| p.status == ligus_core::ProposalStatus::Applied), "the proposal is applied");
+    let r = crate::implement_proposal(
+        handle.clone(),
+        state(),
+        chat_a.to_string(),
+        p1.to_string(),
+        None,
+    )
+    .await;
+    let chat_wt =
+        ligus_runtime::git_worktree::chat_worktree_path_of(&alpha, &chat_a.to_string()).unwrap();
+    c.check(
+        r.is_ok(),
+        format!("an approved repo proposal applies: {:?}", r.err()),
+    );
+    c.check(
+        chat_wt.join("new.txt").exists(),
+        "it landed on chat A's branch, in Alpha's checkout",
+    );
+    c.check(
+        !bound.join("new.txt").exists() && !alpha.join("new.txt").exists(),
+        "never in the bound folder or Alpha's own worktree",
+    );
+    c.check(
+        load(chat_a)
+            .proposals
+            .iter()
+            .find(|p| p.id == p1)
+            .is_some_and(|p| p.status == ligus_core::ProposalStatus::Applied),
+        "the proposal is applied",
+    );
     // The apply passes the turn's checkout gate: never into a checkout whose
     // remote moved, or one another host on this machine manages.
     let p_gate = file_diff("add gate.txt", "diff --git a/gate.txt b/gate.txt\nnew file mode 100644\n--- /dev/null\n+++ b/gate.txt\n@@ -0,0 +1 @@\n+g\n");
-    git(&alpha, &["remote", "set-url", "origin", "https://github.com/e2e/evil.git"]);
-    let r = crate::implement_proposal(handle.clone(), state(), chat_a.to_string(), p_gate.to_string(), None).await;
-    c.check(r.as_ref().is_err_and(|e| e.contains("no longer points")), format!("an apply into a checkout whose remote moved is refused: {r:?}"));
-    git(&alpha, &["remote", "set-url", "origin", "https://github.com/e2e/alpha.git"]);
+    git(
+        &alpha,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/e2e/evil.git",
+        ],
+    );
+    let r = crate::implement_proposal(
+        handle.clone(),
+        state(),
+        chat_a.to_string(),
+        p_gate.to_string(),
+        None,
+    )
+    .await;
+    c.check(
+        r.as_ref().is_err_and(|e| e.contains("no longer points")),
+        format!("an apply into a checkout whose remote moved is refused: {r:?}"),
+    );
+    git(
+        &alpha,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/e2e/alpha.git",
+        ],
+    );
     let me = state().service.lock().unwrap().device_id();
     ligus_runtime::repos::marker::take_over(&alpha, Uuid::new_v4(), "e2e-box").unwrap();
-    let r = crate::implement_proposal(handle.clone(), state(), chat_a.to_string(), p_gate.to_string(), None).await;
-    c.check(r.as_ref().is_err_and(|e| e.contains("managed by e2e-box")), format!("an apply into a checkout another host manages is refused: {r:?}"));
+    let r = crate::implement_proposal(
+        handle.clone(),
+        state(),
+        chat_a.to_string(),
+        p_gate.to_string(),
+        None,
+    )
+    .await;
+    c.check(
+        r.as_ref().is_err_and(|e| e.contains("managed by e2e-box")),
+        format!("an apply into a checkout another host manages is refused: {r:?}"),
+    );
     // Hygiene and legacy turns leave such a checkout alone too.
     let bound_before = git(&bound, &["worktree", "list"]);
     ligus_runtime::repos::marker::take_over(&bound, Uuid::new_v4(), "e2e-box").unwrap();
-    c.check(crate::turn_scope(&state(), &load(chat_c)).is_err_and(|e| e.contains("managed by e2e-box")), "a chat without a repo never runs in a bound folder another host manages");
+    c.check(
+        crate::turn_scope(&state(), &load(chat_c)).is_err_and(|e| e.contains("managed by e2e-box")),
+        "a chat without a repo never runs in a bound folder another host manages",
+    );
     let swept = crate::guards::run_hygiene_sweep(&state());
-    c.check(git(&bound, &["worktree", "list"]) == bound_before && swept.chat_checkouts_removed == 0, "hygiene never sweeps a checkout another host manages");
+    c.check(
+        git(&bound, &["worktree", "list"]) == bound_before && swept.chat_checkouts_removed == 0,
+        "hygiene never sweeps a checkout another host manages",
+    );
     ligus_runtime::repos::marker::take_over(&bound, me, "e2e").unwrap();
     ligus_runtime::repos::marker::take_over(&alpha, me, "e2e").unwrap();
-    c.check(!chat_wt.join("gate.txt").exists() && !alpha.join("gate.txt").exists(), "nothing landed while refused");
+    c.check(
+        !chat_wt.join("gate.txt").exists() && !alpha.join("gate.txt").exists(),
+        "nothing landed while refused",
+    );
 
     // Something else lands on the branch; a proposal made before it conflicts.
     std::fs::write(chat_wt.join("README.md"), "# mine\n").unwrap();
@@ -1371,83 +1942,208 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     let tip = git(&chat_wt, &["rev-parse", "HEAD"]);
     let conflicting = "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-# alpha\n+# theirs\n";
     let p2 = file_diff("retitle", conflicting);
-    let r = crate::implement_proposal(handle.clone(), state(), chat_a.to_string(), p2.to_string(), None).await;
-    c.check(r.as_ref().is_err_and(|e| e.starts_with("Not applied")), format!("a conflicting apply is refused: {r:?}"));
-    c.check(git(&chat_wt, &["rev-parse", "HEAD"]) == tip && git(&chat_wt, &["status", "--porcelain"]).is_empty(), "the conflict changed nothing");
+    let r = crate::implement_proposal(
+        handle.clone(),
+        state(),
+        chat_a.to_string(),
+        p2.to_string(),
+        None,
+    )
+    .await;
+    c.check(
+        r.as_ref().is_err_and(|e| e.starts_with("Not applied")),
+        format!("a conflicting apply is refused: {r:?}"),
+    );
+    c.check(
+        git(&chat_wt, &["rev-parse", "HEAD"]) == tip
+            && git(&chat_wt, &["status", "--porcelain"]).is_empty(),
+        "the conflict changed nothing",
+    );
     match crate::rebase_request(&state(), chat_a, p2) {
-        Ok(req) => c.check(req.instruction.contains("\"retitle\"") && req.instruction.contains("README.md") && req.instruction.contains(&tip.trim()[..12]), format!("the rebase turn carries the conflict: {}", req.instruction)),
+        Ok(req) => c.check(
+            req.instruction.contains("\"retitle\"")
+                && req.instruction.contains("README.md")
+                && req.instruction.contains(&tip.trim()[..12]),
+            format!("the rebase turn carries the conflict: {}", req.instruction),
+        ),
         Err(e) => c.check(false, format!("rebase request: {e}")),
     }
-    c.check(crate::rebase_request(&state(), chat_a, p1).is_err(), "an applied proposal isn't sent to rebase");
-    c.check(git(&chat_wt, &["rev-parse", "HEAD"]) == tip, "the probe changed nothing");
+    c.check(
+        crate::rebase_request(&state(), chat_a, p1).is_err(),
+        "an applied proposal isn't sent to rebase",
+    );
+    c.check(
+        git(&chat_wt, &["rev-parse", "HEAD"]) == tip,
+        "the probe changed nothing",
+    );
     // Open in editor: the chat's folder, with the OS handler (recorded here).
     let opened = Arc::new(Mutex::new(Vec::new()));
     {
         let o = opened.clone();
-        crate::repos_ui::set_open_hook(Some(Box::new(move |p: &Path| o.lock().unwrap().push(p.to_path_buf()))));
+        crate::repos_ui::set_open_hook(Some(Box::new(move |p: &Path| {
+            o.lock().unwrap().push(p.to_path_buf())
+        })));
     }
     let r = crate::repos_ui::open_chat_checkout_sync(state(), chat_a.to_string());
     crate::repos_ui::set_open_hook(None);
     let seen: Vec<PathBuf> = opened.lock().unwrap().iter().map(|p| canon(p)).collect();
-    c.check(r.is_ok() && seen == [canon(&chat_wt)], format!("open in editor opens chat A's folder: {r:?} {seen:?}"));
-    c.check(crate::repos_ui::open_chat_checkout_sync(state(), chat_c.to_string()).is_err(), "a chat without a repo checkout has nothing to open");
+    c.check(
+        r.is_ok() && seen == [canon(&chat_wt)],
+        format!("open in editor opens chat A's folder: {r:?} {seen:?}"),
+    );
+    c.check(
+        crate::repos_ui::open_chat_checkout_sync(state(), chat_c.to_string()).is_err(),
+        "a chat without a repo checkout has nothing to open",
+    );
 
     // ---- Re-pinning the chat's base (review residual 3) ----
     // Upstream moves on; the chat's creator re-pins. The chat branch carries
     // someone's own commit ("mine"), so this host refuses to follow and
     // says why; without it, the branch is rebuilt on the new base.
-    let pin_before = load(chat_a).repo.and_then(|r| r.base_commit).unwrap_or_default();
+    let pin_before = load(chat_a)
+        .repo
+        .and_then(|r| r.base_commit)
+        .unwrap_or_default();
     std::fs::write(alpha.join("upstream.txt"), "u\n").unwrap();
     git(&alpha, &["add", "upstream.txt"]);
     git(&alpha, &["commit", "-qm", "upstream"]);
     let upstream = git(&alpha, &["rev-parse", "HEAD"]).trim().to_string();
-    let r = crate::repos_ui::repin_chat_base_sync(state(), chat_a.to_string(), Some(upstream.clone()));
-    c.check(r.as_deref() == Ok(upstream.as_str()), format!("the chat's creator re-pins its base: {r:?}"));
+    let r =
+        crate::repos_ui::repin_chat_base_sync(state(), chat_a.to_string(), Some(upstream.clone()));
+    c.check(
+        r.as_deref() == Ok(upstream.as_str()),
+        format!("the chat's creator re-pins its base: {r:?}"),
+    );
     let folded = load(chat_a);
     c.check(
         folded.repo.as_ref().and_then(|r| r.base_commit.clone()) == Some(upstream.clone())
-            && folded.repo_bases.values().next().is_some_and(|h| h.first() == Some(&pin_before)),
+            && folded
+                .repo_bases
+                .values()
+                .next()
+                .is_some_and(|h| h.first() == Some(&pin_before)),
         "the fold keeps the first pin and moves to the new one",
     );
-    let r = crate::repos_ui::repin_chat_base_sync(state(), chat_a.to_string(), Some(upstream.clone()));
+    let r =
+        crate::repos_ui::repin_chat_base_sync(state(), chat_a.to_string(), Some(upstream.clone()));
     c.check(r.is_err(), "re-pinning onto the pin in force is refused");
     let refused = crate::turn_scope(&state(), &load(chat_a));
-    c.check(refused.as_ref().is_err_and(|e| e.contains("re-pinned") && e.contains("isn't from the chat's ledger")), format!("a branch with someone's own commit refuses to follow, visibly: {:?}", refused.as_ref().err()));
-    c.check(git(&chat_wt, &["rev-parse", "HEAD"]) == tip, "and changes nothing");
+    c.check(
+        refused
+            .as_ref()
+            .is_err_and(|e| e.contains("re-pinned") && e.contains("isn't from the chat's ledger")),
+        format!(
+            "a branch with someone's own commit refuses to follow, visibly: {:?}",
+            refused.as_ref().err()
+        ),
+    );
+    c.check(
+        git(&chat_wt, &["rev-parse", "HEAD"]) == tip,
+        "and changes nothing",
+    );
     git(&chat_wt, &["reset", "-q", "--hard", "HEAD~1"]);
     match crate::turn_scope(&state(), &load(chat_a)) {
-        Ok(_) => c.check(chat_wt.join("upstream.txt").exists() && chat_wt.join("new.txt").exists(), "the branch is rebuilt on the new base with the chat's ledger"),
+        Ok(_) => c.check(
+            chat_wt.join("upstream.txt").exists() && chat_wt.join("new.txt").exists(),
+            "the branch is rebuilt on the new base with the chat's ledger",
+        ),
         Err(e) => c.check(false, format!("following the re-pin: {e}")),
     }
 
     // ---- Clone into… (4.3) ----
     let parent = base.join("clones");
     std::fs::create_dir_all(&parent).unwrap();
-    let r = crate::repos_ui::clone_workspace_repo(state(), g_id.clone(), parent.to_string_lossy().into_owned()).await;
-    c.check(r.as_ref().is_err_and(|e| e.contains("isn't a code host connected")), format!("no connection to the repo's host: refused: {r:?}"));
-    let r = crate::repos_ui::clone_workspace_repo(state(), Uuid::new_v4().to_string(), parent.to_string_lossy().into_owned()).await;
+    let r = crate::repos_ui::clone_workspace_repo(
+        state(),
+        g_id.clone(),
+        parent.to_string_lossy().into_owned(),
+    )
+    .await;
+    c.check(
+        r.as_ref()
+            .is_err_and(|e| e.contains("isn't a code host connected")),
+        format!("no connection to the repo's host: refused: {r:?}"),
+    );
+    let r = crate::repos_ui::clone_workspace_repo(
+        state(),
+        Uuid::new_v4().to_string(),
+        parent.to_string_lossy().into_owned(),
+    )
+    .await;
     c.check(r.is_err(), "an unknown repo id is refused");
-    let gamma = state().service.lock().unwrap().workspace_roster(ws).unwrap().repos.get(&Uuid::parse_str(&g_id).unwrap()).unwrap().repo.clone();
-    let r = crate::repos_ui::clone_repo_into(&state(), ws, &gamma, &gamma_forge.to_string_lossy(), Path::new("relative"), None, &[]).await;
+    let gamma = state()
+        .service
+        .lock()
+        .unwrap()
+        .workspace_roster(ws)
+        .unwrap()
+        .repos
+        .get(&Uuid::parse_str(&g_id).unwrap())
+        .unwrap()
+        .repo
+        .clone();
+    let r = crate::repos_ui::clone_repo_into(
+        &state(),
+        ws,
+        &gamma,
+        &gamma_forge.to_string_lossy(),
+        Path::new("relative"),
+        None,
+        &[],
+    )
+    .await;
     c.check(r.is_err(), "a relative parent is refused");
     // Never a redirect (review F12), with or without a DNS pin: a server
     // at the repo's address that answers 302 to another one is not followed.
     let (redirect_url, elsewhere_hit, stop) = redirecting_server();
-    let r = crate::repos_ui::clone_repo_into(&state(), ws, &gamma, &redirect_url, &parent, None, &[]).await;
+    let r =
+        crate::repos_ui::clone_repo_into(&state(), ws, &gamma, &redirect_url, &parent, None, &[])
+            .await;
     stop();
-    c.check(r.is_err() && !elsewhere_hit.load(std::sync::atomic::Ordering::SeqCst), format!("a clone by id never follows a redirect: {r:?}"));
-    c.check(std::fs::read_dir(&parent).map(|d| d.count()).unwrap_or(0) == 0, "and leaves nothing behind");
-    let r = crate::repos_ui::clone_repo_into(&state(), ws, &gamma, &gamma_forge.to_string_lossy(), &parent, None, &[]).await;
-    c.check(r.as_ref().is_ok_and(|v| v["path"].as_str().is_some_and(|p| p.contains("gamma-"))), format!("Gamma clones into the chosen folder: {r:?}"));
     c.check(
-        r.as_ref().ok().and_then(|v| v["path"].as_str().map(PathBuf::from)).is_some_and(|p| canon(&p) == p && p.parent() == Some(canon(&parent).as_path())),
+        r.is_err() && !elsewhere_hit.load(std::sync::atomic::Ordering::SeqCst),
+        format!("a clone by id never follows a redirect: {r:?}"),
+    );
+    c.check(
+        std::fs::read_dir(&parent).map(|d| d.count()).unwrap_or(0) == 0,
+        "and leaves nothing behind",
+    );
+    let r = crate::repos_ui::clone_repo_into(
+        &state(),
+        ws,
+        &gamma,
+        &gamma_forge.to_string_lossy(),
+        &parent,
+        None,
+        &[],
+    )
+    .await;
+    c.check(
+        r.as_ref()
+            .is_ok_and(|v| v["path"].as_str().is_some_and(|p| p.contains("gamma-"))),
+        format!("Gamma clones into the chosen folder: {r:?}"),
+    );
+    c.check(
+        r.as_ref()
+            .ok()
+            .and_then(|v| v["path"].as_str().map(PathBuf::from))
+            .is_some_and(|p| canon(&p) == p && p.parent() == Some(canon(&parent).as_path())),
         "the bound clone path is the normalised one every later match compares",
     );
     let chip = crate::repos_ui::chat_workspace_repo_sync(state(), chat_g.to_string()).unwrap();
-    c.check(chip["here"]["state"] == "present", format!("the clone is bound: chat G can run here now: {chip}"));
-    c.check(crate::turn_scope(&state(), &load(chat_g)).is_ok(), "and its turn gate passes");
+    c.check(
+        chip["here"]["state"] == "present",
+        format!("the clone is bound: chat G can run here now: {chip}"),
+    );
+    c.check(
+        crate::turn_scope(&state(), &load(chat_g)).is_ok(),
+        "and its turn gate passes",
+    );
 
-    eprintln!("{} repos through the command layer", if c.failed { "FAIL" } else { "PASS" });
+    eprintln!(
+        "{} repos through the command layer",
+        if c.failed { "FAIL" } else { "PASS" }
+    );
     usize::from(c.failed)
 }
 
@@ -1462,8 +2158,14 @@ pub fn run_live() -> usize {
     };
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            ligus_core::names::var("LIGUS_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,dispatch=info,compaction=info,worktree=info")),
+            ligus_core::names::var("LIGUS_LOG")
+                .map_err(|_| ())
+                .and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
+                .unwrap_or_else(|_| {
+                    tracing_subscriber::EnvFilter::new(
+                        "warn,dispatch=info,compaction=info,worktree=info",
+                    )
+                }),
         )
         .with_writer(std::io::stderr)
         .try_init();
@@ -1482,7 +2184,11 @@ pub fn run_live() -> usize {
     let handle = app.handle().clone();
     crate::set_agent_tool_settings(
         handle.state::<AppState>(),
-        AgentToolSettings { enabled: true, write_in_place: false, run_command: false },
+        AgentToolSettings {
+            enabled: true,
+            write_in_place: false,
+            run_command: false,
+        },
     )
     .expect("set_agent_tool_settings");
 
@@ -1508,7 +2214,13 @@ pub fn run_live() -> usize {
             ligus_core::endpoint::endpoint_is_private(&cfg.upstream),
             repo.display()
         );
-        let ctx = Ctx { app: handle.clone(), proxy, repo: repo.clone(), cfg, activity };
+        let ctx = Ctx {
+            app: handle.clone(),
+            proxy,
+            repo: repo.clone(),
+            cfg,
+            activity,
+        };
         let mut outcomes = Vec::new();
         let wanted = ctx.cfg.scenarios.clone();
         for key in wanted {
@@ -1516,34 +2228,57 @@ pub fn run_live() -> usize {
             let (name, checks) = match key.as_str() {
                 "a" => {
                     eprintln!("\n== (a) fix a planted bug — {}", ctx.cfg.model);
-                    ("a: bug fix via built-in tools (model A)", scenario_fix_bug(&ctx, "gw-a", &ctx.cfg.model.clone()).await)
+                    (
+                        "a: bug fix via built-in tools (model A)",
+                        scenario_fix_bug(&ctx, "gw-a", &ctx.cfg.model.clone()).await,
+                    )
                 }
                 "b" => {
                     eprintln!("\n== (b) fix a planted bug — {}", ctx.cfg.model_b);
-                    ("b: bug fix via built-in tools (model B)", scenario_fix_bug(&ctx, "gw-b", &ctx.cfg.model_b.clone()).await)
+                    (
+                        "b: bug fix via built-in tools (model B)",
+                        scenario_fix_bug(&ctx, "gw-b", &ctx.cfg.model_b.clone()).await,
+                    )
                 }
                 "c" => {
                     eprintln!("\n== (c) MCP search_docs with a static bearer token");
-                    ("c: MCP search_docs (bearer token)", scenario_mcp(&ctx).await)
+                    (
+                        "c: MCP search_docs (bearer token)",
+                        scenario_mcp(&ctx).await,
+                    )
                 }
                 "d" => {
                     eprintln!("\n== (d) vault retrieval");
-                    ("d: vault retrieval + stable system prompt", scenario_vault(&ctx).await)
+                    (
+                        "d: vault retrieval + stable system prompt",
+                        scenario_vault(&ctx).await,
+                    )
                 }
                 "e" => {
                     eprintln!("\n== (e) Quick tasks title");
-                    ("e: title via Quick tasks runtime", scenario_title(&ctx).await)
+                    (
+                        "e: title via Quick tasks runtime",
+                        scenario_title(&ctx).await,
+                    )
                 }
                 "f" => {
                     eprintln!("\n== (f) compaction");
-                    ("f: compaction once + recall", scenario_compaction(&ctx).await)
+                    (
+                        "f: compaction once + recall",
+                        scenario_compaction(&ctx).await,
+                    )
                 }
                 other => {
                     eprintln!("unknown scenario {other}");
                     continue;
                 }
             };
-            outcomes.push(Outcome { name, ok: !checks.failed, secs: started.elapsed().as_secs_f64(), notes: checks.notes });
+            outcomes.push(Outcome {
+                name,
+                ok: !checks.failed,
+                secs: started.elapsed().as_secs_f64(),
+                notes: checks.notes,
+            });
         }
         // Let a still-running title task finish before tearing down.
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1551,9 +2286,17 @@ pub fn run_live() -> usize {
         outcomes
     });
 
-    eprintln!("\n================ in-app live results ({:.0}s) ================", started.elapsed().as_secs_f64());
+    eprintln!(
+        "\n================ in-app live results ({:.0}s) ================",
+        started.elapsed().as_secs_f64()
+    );
     for o in &outcomes {
-        eprintln!("{} {:<45} {:>7.1}s", if o.ok { "PASS" } else { "FAIL" }, o.name, o.secs);
+        eprintln!(
+            "{} {:<45} {:>7.1}s",
+            if o.ok { "PASS" } else { "FAIL" },
+            o.name,
+            o.secs
+        );
         for n in o.notes.iter().filter(|n| n.starts_with("FAIL")) {
             eprintln!("       {n}");
         }
@@ -1562,7 +2305,8 @@ pub fn run_live() -> usize {
     // Everything that crossed the proxy (prompts and raw responses; no
     // credentials go through it), for post-mortems of a slow or odd round.
     if let Some(proxy) = proxy_log.lock().unwrap().take() {
-        let path = std::env::temp_dir().join(format!("ligus-app-live-proxy-{}.jsonl", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("ligus-app-live-proxy-{}.jsonl", std::process::id()));
         let lines: Vec<String> = proxy
             .iter()
             .map(|r| {

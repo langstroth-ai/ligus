@@ -47,39 +47,102 @@ pub(crate) struct MemoryView {
     pub edited_after_removal: Vec<MemoryEntry>,
 }
 
-pub(crate) fn view_in(svc: &ChatService, wid: Uuid, query: &str, tags: &[String]) -> Result<MemoryView, String> {
+pub(crate) fn view_in(
+    svc: &ChatService,
+    wid: Uuid,
+    query: &str,
+    tags: &[String],
+) -> Result<MemoryView, String> {
     let m = svc.memory(wid).map_err(|e| e.to_string())?;
-    let entries: Vec<MemoryEntry> = memory::search(&m, query, tags, memory::MAX_LIVE_ENTRIES).into_iter().map(|h| ligus_runtime::display::memory_entry(h.entry)).collect();
-    let mut proposals: Vec<ProposalState> = m.proposals.values().map(ligus_runtime::display::memory_proposal).collect();
-    proposals.sort_by(|a, b| a.decision.is_some().cmp(&b.decision.is_some()).then(b.at_ms.cmp(&a.at_ms)));
+    let entries: Vec<MemoryEntry> = memory::search(&m, query, tags, memory::MAX_LIVE_ENTRIES)
+        .into_iter()
+        .map(|h| ligus_runtime::display::memory_entry(h.entry))
+        .collect();
+    let mut proposals: Vec<ProposalState> = m
+        .proposals
+        .values()
+        .map(ligus_runtime::display::memory_proposal)
+        .collect();
+    proposals.sort_by(|a, b| {
+        a.decision
+            .is_some()
+            .cmp(&b.decision.is_some())
+            .then(b.at_ms.cmp(&a.at_ms))
+    });
     let mut chat_titles = BTreeMap::new();
-    let chats = entries.iter().filter_map(|e| e.current.source.chat_id).chain(proposals.iter().filter_map(|p| p.proposal.source.chat_id));
+    let chats = entries
+        .iter()
+        .filter_map(|e| e.current.source.chat_id)
+        .chain(proposals.iter().filter_map(|p| p.proposal.source.chat_id));
     for c in chats {
         if let Ok(Some(s)) = svc.load_in(wid, c) {
             chat_titles.insert(c.to_string(), crate::shown(&s.title));
         }
     }
     let me = svc.author().id.clone();
-    let config = svc.load_in(wid, ligus_core::workspace_config_session_id(wid)).ok().flatten();
-    let mut agent_names: BTreeMap<String, String> =
-        config.iter().flat_map(|c| c.workspace_agents.iter()).map(|a| (a.id.to_string(), crate::shown(&a.name))).collect();
+    let config = svc
+        .load_in(wid, ligus_core::workspace_config_session_id(wid))
+        .ok()
+        .flatten();
+    let mut agent_names: BTreeMap<String, String> = config
+        .iter()
+        .flat_map(|c| c.workspace_agents.iter())
+        .map(|a| (a.id.to_string(), crate::shown(&a.name)))
+        .collect();
     agent_names.insert(ligus_core::flow::PRIMARY.to_string(), "Ligus".into());
-    let moderator = config.is_some_and(|c| c.role_of(&me).rank() >= ligus_core::WorkspaceRole::Admin.rank());
-    let mut edited_after_removal: Vec<MemoryEntry> = m.edited_after_removal().map(ligus_runtime::display::memory_entry).collect();
-    edited_after_removal.sort_by_key(|e| std::cmp::Reverse(e.edited_after_removal.iter().map(|r| r.at_ms).max().unwrap_or(0)));
-    Ok(MemoryView { total: m.live_count(), entries, proposals, chat_titles, agent_names, me, moderator, edited_after_removal })
+    let moderator =
+        config.is_some_and(|c| c.role_of(&me).rank() >= ligus_core::WorkspaceRole::Admin.rank());
+    let mut edited_after_removal: Vec<MemoryEntry> = m
+        .edited_after_removal()
+        .map(ligus_runtime::display::memory_entry)
+        .collect();
+    edited_after_removal.sort_by_key(|e| {
+        std::cmp::Reverse(
+            e.edited_after_removal
+                .iter()
+                .map(|r| r.at_ms)
+                .max()
+                .unwrap_or(0),
+        )
+    });
+    Ok(MemoryView {
+        total: m.live_count(),
+        entries,
+        proposals,
+        chat_titles,
+        agent_names,
+        me,
+        moderator,
+        edited_after_removal,
+    })
 }
 
 /// The Memory pane: entries matching `query` and `tags`, and the proposals.
 #[tauri::command]
-pub(crate) async fn memory_view(ligus_app: tauri::AppHandle, query: Option<String>, tags: Option<Vec<String>>) -> Result<MemoryView, String> {
-    crate::off_main(ligus_app, move |ligus_app| memory_view_sync(tauri::Manager::state::<AppState>(ligus_app), query, tags)).await
+pub(crate) async fn memory_view(
+    ligus_app: tauri::AppHandle,
+    query: Option<String>,
+    tags: Option<Vec<String>>,
+) -> Result<MemoryView, String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        memory_view_sync(tauri::Manager::state::<AppState>(ligus_app), query, tags)
+    })
+    .await
 }
 
-pub(crate) fn memory_view_sync(state: tauri::State<'_, AppState>, query: Option<String>, tags: Option<Vec<String>>) -> Result<MemoryView, String> {
+pub(crate) fn memory_view_sync(
+    state: tauri::State<'_, AppState>,
+    query: Option<String>,
+    tags: Option<Vec<String>>,
+) -> Result<MemoryView, String> {
     let wid = state.active_workspace_id();
     let svc = state.service.lock().unwrap();
-    view_in(&svc, wid, query.as_deref().unwrap_or(""), &tags.unwrap_or_default())
+    view_in(
+        &svc,
+        wid,
+        query.as_deref().unwrap_or(""),
+        &tags.unwrap_or_default(),
+    )
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,8 +156,30 @@ pub(crate) struct Written {
 /// resolving conflicts. `sourceChatId` records the chat it was written from.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn memory_write(ligus_app: tauri::AppHandle, entry_id: Option<String>, base: Option<String>, title: String, body: String, tags: Vec<String>, resolves: Option<Vec<String>>, source_chat_id: Option<String>) -> Result<Written, String> {
-    crate::off_main(ligus_app, move |ligus_app| memory_write_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), entry_id, base, title, body, tags, resolves, source_chat_id)).await
+pub(crate) async fn memory_write(
+    ligus_app: tauri::AppHandle,
+    entry_id: Option<String>,
+    base: Option<String>,
+    title: String,
+    body: String,
+    tags: Vec<String>,
+    resolves: Option<Vec<String>>,
+    source_chat_id: Option<String>,
+) -> Result<Written, String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        memory_write_sync(
+            ligus_app.clone(),
+            tauri::Manager::state::<AppState>(ligus_app),
+            entry_id,
+            base,
+            title,
+            body,
+            tags,
+            resolves,
+            source_chat_id,
+        )
+    })
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -116,18 +201,43 @@ pub(crate) fn memory_write_sync(
         title,
         body,
         tags,
-        source: MemorySource { chat_id: source_chat_id.as_deref().map(id).transpose()?, ..Default::default() },
+        source: MemorySource {
+            chat_id: source_chat_id.as_deref().map(id).transpose()?,
+            ..Default::default()
+        },
         resolves: ids(&resolves.unwrap_or_default())?,
     };
-    let (entry, rev) = state.service.lock().unwrap().write_memory(wid, draft).map_err(|e| e.to_string())?;
+    let (entry, rev) = state
+        .service
+        .lock()
+        .unwrap()
+        .write_memory(wid, draft)
+        .map_err(|e| e.to_string())?;
     let _ = app.emit("workspace://synced", 1);
-    Ok(Written { entry_id: entry.to_string(), rev: rev.to_string() })
+    Ok(Written {
+        entry_id: entry.to_string(),
+        rev: rev.to_string(),
+    })
 }
 
 /// Remove an entry from `base` (a tombstone; the history stays in the log).
 #[tauri::command]
-pub(crate) async fn memory_remove(ligus_app: tauri::AppHandle, entry_id: String, base: String, resolves: Option<Vec<String>>) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| memory_remove_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), entry_id, base, resolves)).await
+pub(crate) async fn memory_remove(
+    ligus_app: tauri::AppHandle,
+    entry_id: String,
+    base: String,
+    resolves: Option<Vec<String>>,
+) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        memory_remove_sync(
+            ligus_app.clone(),
+            tauri::Manager::state::<AppState>(ligus_app),
+            entry_id,
+            base,
+            resolves,
+        )
+    })
+    .await
 }
 
 pub(crate) fn memory_remove_sync(
@@ -142,7 +252,12 @@ pub(crate) fn memory_remove_sync(
         .service
         .lock()
         .unwrap()
-        .remove_memory(wid, id(&entry_id)?, id(&base)?, ids(&resolves.unwrap_or_default())?)
+        .remove_memory(
+            wid,
+            id(&entry_id)?,
+            id(&base)?,
+            ids(&resolves.unwrap_or_default())?,
+        )
         .map_err(|e| e.to_string())?;
     let _ = app.emit("workspace://synced", 1);
     Ok(())
@@ -150,8 +265,22 @@ pub(crate) fn memory_remove_sync(
 
 /// Accept or reject a memory proposal.
 #[tauri::command]
-pub(crate) async fn memory_decide(ligus_app: tauri::AppHandle, proposal_id: String, accepted: bool, note: Option<String>) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| memory_decide_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), proposal_id, accepted, note)).await
+pub(crate) async fn memory_decide(
+    ligus_app: tauri::AppHandle,
+    proposal_id: String,
+    accepted: bool,
+    note: Option<String>,
+) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        memory_decide_sync(
+            ligus_app.clone(),
+            tauri::Manager::state::<AppState>(ligus_app),
+            proposal_id,
+            accepted,
+            note,
+        )
+    })
+    .await
 }
 
 pub(crate) fn memory_decide_sync(
@@ -166,7 +295,13 @@ pub(crate) fn memory_decide_sync(
         .service
         .lock()
         .unwrap()
-        .decide_memory_proposal(wid, id(&proposal_id)?, accepted, note.as_deref().unwrap_or(""), vec![])
+        .decide_memory_proposal(
+            wid,
+            id(&proposal_id)?,
+            accepted,
+            note.as_deref().unwrap_or(""),
+            vec![],
+        )
         .map_err(|e| e.to_string())?;
     let _ = app.emit("workspace://synced", 1);
     Ok(())
@@ -187,7 +322,17 @@ pub(crate) async fn memory_propose(
     rationale: Option<String>,
 ) -> Result<String, String> {
     crate::off_main(ligus_app, move |ligus_app| {
-        memory_propose_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), op, entry_id, base, title, body, tags, rationale)
+        memory_propose_sync(
+            ligus_app.clone(),
+            tauri::Manager::state::<AppState>(ligus_app),
+            op,
+            entry_id,
+            base,
+            title,
+            body,
+            tags,
+            rationale,
+        )
     })
     .await
 }
@@ -205,19 +350,46 @@ pub(crate) fn memory_propose_sync(
     rationale: Option<String>,
 ) -> Result<String, String> {
     let wid = state.active_workspace_id();
-    let (title, body, tags) = (title.unwrap_or_default(), body.unwrap_or_default(), tags.unwrap_or_default());
-    let need = |o: &Option<String>| o.as_deref().ok_or_else(|| "an edit or removal names the entry and the version".to_string()).and_then(id);
+    let (title, body, tags) = (
+        title.unwrap_or_default(),
+        body.unwrap_or_default(),
+        tags.unwrap_or_default(),
+    );
+    let need = |o: &Option<String>| {
+        o.as_deref()
+            .ok_or_else(|| "an edit or removal names the entry and the version".to_string())
+            .and_then(id)
+    };
     let op = match op.as_str() {
-        "create" => MemoryOp::Create { entry_id: Uuid::new_v4(), title, body, tags },
-        "edit" => MemoryOp::Edit { entry_id: need(&entry_id)?, base: need(&base)?, title, body, tags },
-        "remove" => MemoryOp::Remove { entry_id: need(&entry_id)?, base: need(&base)? },
+        "create" => MemoryOp::Create {
+            entry_id: Uuid::new_v4(),
+            title,
+            body,
+            tags,
+        },
+        "edit" => MemoryOp::Edit {
+            entry_id: need(&entry_id)?,
+            base: need(&base)?,
+            title,
+            body,
+            tags,
+        },
+        "remove" => MemoryOp::Remove {
+            entry_id: need(&entry_id)?,
+            base: need(&base)?,
+        },
         _ => return Err("op is create, edit or remove".into()),
     };
     let pid = state
         .service
         .lock()
         .unwrap()
-        .propose_memory(wid, op, rationale.as_deref().unwrap_or(""), MemorySource::default())
+        .propose_memory(
+            wid,
+            op,
+            rationale.as_deref().unwrap_or(""),
+            MemorySource::default(),
+        )
         .map_err(|e| e.to_string())?;
     let _ = app.emit("workspace://synced", 1);
     Ok(pid.to_string())
@@ -236,16 +408,37 @@ pub(crate) struct TaskSlotDto {
     pub expires_at_ms: i64,
 }
 
-pub(crate) fn task_dtos(session: &ligus_core::ChatSession, agents: &[ligus_core::WorkspaceAgent], now_ms: i64) -> Vec<TaskSlotDto> {
+pub(crate) fn task_dtos(
+    session: &ligus_core::ChatSession,
+    agents: &[ligus_core::WorkspaceAgent],
+    now_ms: i64,
+) -> Vec<TaskSlotDto> {
     let mut out: Vec<TaskSlotDto> = session
         .flow
         .tasks
         .iter()
         .map(|s| {
             let agent_name = ligus_core::flow::agent_from_key(&s.update.agent_key)
-                .and_then(|a| agents.iter().find(|x| x.id == a).map(|x| crate::shown(&x.name)))
-                .unwrap_or_else(|| if s.update.agent_key == ligus_core::flow::PRIMARY { "Ligus".into() } else { crate::shown(&s.by.name) });
-            TaskSlotDto { agent_name, active: s.active(now_ms), stale: s.stale(now_ms), expires_at_ms: s.expires_at_ms(), slot: ligus_runtime::display::task_slot(s) }
+                .and_then(|a| {
+                    agents
+                        .iter()
+                        .find(|x| x.id == a)
+                        .map(|x| crate::shown(&x.name))
+                })
+                .unwrap_or_else(|| {
+                    if s.update.agent_key == ligus_core::flow::PRIMARY {
+                        "Ligus".into()
+                    } else {
+                        crate::shown(&s.by.name)
+                    }
+                });
+            TaskSlotDto {
+                agent_name,
+                active: s.active(now_ms),
+                stale: s.stale(now_ms),
+                expires_at_ms: s.expires_at_ms(),
+                slot: ligus_runtime::display::task_slot(s),
+            }
         })
         .collect();
     out.sort_by(|a, b| a.stale.cmp(&b.stale).then(b.slot.at_ms.cmp(&a.slot.at_ms)));
@@ -254,16 +447,30 @@ pub(crate) fn task_dtos(session: &ligus_core::ChatSession, agents: &[ligus_core:
 
 /// The chat's live task state, current first.
 #[tauri::command]
-pub(crate) async fn task_state(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<TaskSlotDto>, String> {
-    crate::off_main(ligus_app, move |ligus_app| task_state_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+pub(crate) async fn task_state(
+    ligus_app: tauri::AppHandle,
+    session_id: String,
+) -> Result<Vec<TaskSlotDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        task_state_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)
+    })
+    .await
 }
 
-pub(crate) fn task_state_sync(state: tauri::State<'_, AppState>, session_id: String) -> Result<Vec<TaskSlotDto>, String> {
+pub(crate) fn task_state_sync(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<TaskSlotDto>, String> {
     let sid = id(&session_id)?;
     let svc = state.service.lock().unwrap();
-    let Some(session) = svc.load_resolving(sid).map_err(|e| e.to_string())? else { return Ok(vec![]) };
+    let Some(session) = svc.load_resolving(sid).map_err(|e| e.to_string())? else {
+        return Ok(vec![]);
+    };
     let agents = svc
-        .load_in(session.workspace_id, ligus_core::workspace_config_session_id(session.workspace_id))
+        .load_in(
+            session.workspace_id,
+            ligus_core::workspace_config_session_id(session.workspace_id),
+        )
         .ok()
         .flatten()
         .map(|c| c.workspace_agents)
@@ -280,14 +487,23 @@ mod tests {
         let mut s = ligus_core::ChatSession::new("c", Uuid::new_v4(), "rt");
         let agent = ligus_core::WorkspaceAgent::new("coder", "rt");
         let slot = |key: String, at_ms: i64| TaskSlot {
-            update: ligus_core::memory::TaskStateUpdate { task_id: s.id, agent_key: key, turn_id: Uuid::new_v4(), summary: "s".into(), ..Default::default() },
+            update: ligus_core::memory::TaskStateUpdate {
+                task_id: s.id,
+                agent_key: key,
+                turn_id: Uuid::new_v4(),
+                summary: "s".into(),
+                ..Default::default()
+            },
             writer: Uuid::new_v4(),
             by: Default::default(),
             at_ms,
             rev: Uuid::new_v4(),
             updates: 1,
         };
-        s.flow.tasks = vec![slot(agent.id.to_string(), 0), slot("primary".into(), 10_000_000)];
+        s.flow.tasks = vec![
+            slot(agent.id.to_string(), 0),
+            slot("primary".into(), 10_000_000),
+        ];
         let d = task_dtos(&s, std::slice::from_ref(&agent), 10_000_001);
         assert_eq!(d[0].agent_name, "Ligus");
         assert!(d[0].active && !d[0].stale);

@@ -20,7 +20,9 @@ use tauri::Manager;
 use windows_sys::core::{GUID, HRESULT, PCWSTR};
 use windows_sys::Win32::Foundation::{HWND, NTE_EXISTS, NTE_USER_CANCELLED};
 use windows_sys::Win32::Networking::WindowsWebServices::*;
-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
+use windows_sys::Win32::System::LibraryLoader::{
+    GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
+};
 
 use super::{CreateRequest, GetRequest, NativeAuthenticator, NativeError, PendingOp};
 
@@ -75,22 +77,39 @@ impl Api {
         // exports whose signatures are webauthn.h's.
         unsafe {
             let name = wide("webauthn.dll");
-            let lib = LoadLibraryExW(name.as_ptr(), std::ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32);
+            let lib = LoadLibraryExW(
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                LOAD_LIBRARY_SEARCH_SYSTEM32,
+            );
             if lib.is_null() {
                 return None;
             }
             let sym = |n: &[u8]| GetProcAddress(lib, n.as_ptr());
-            let version = std::mem::transmute::<Proc, FnApiVersion>(sym(b"WebAuthNGetApiVersionNumber\0")?);
+            let version =
+                std::mem::transmute::<Proc, FnApiVersion>(sym(b"WebAuthNGetApiVersionNumber\0")?);
             if version() < WEBAUTHN_API_VERSION_1 {
                 return None;
             }
             Some(Self {
-                get_assertion: std::mem::transmute::<Proc, FnGetAssertion>(sym(b"WebAuthNAuthenticatorGetAssertion\0")?),
-                make_credential: std::mem::transmute::<Proc, FnMakeCredential>(sym(b"WebAuthNAuthenticatorMakeCredential\0")?),
-                free_assertion: std::mem::transmute::<Proc, FnFreeAssertion>(sym(b"WebAuthNFreeAssertion\0")?),
-                free_attestation: std::mem::transmute::<Proc, FnFreeAttestation>(sym(b"WebAuthNFreeCredentialAttestation\0")?),
-                cancellation_id: std::mem::transmute::<Proc, FnCancellationId>(sym(b"WebAuthNGetCancellationId\0")?),
-                cancel: std::mem::transmute::<Proc, FnCancel>(sym(b"WebAuthNCancelCurrentOperation\0")?),
+                get_assertion: std::mem::transmute::<Proc, FnGetAssertion>(sym(
+                    b"WebAuthNAuthenticatorGetAssertion\0",
+                )?),
+                make_credential: std::mem::transmute::<Proc, FnMakeCredential>(sym(
+                    b"WebAuthNAuthenticatorMakeCredential\0",
+                )?),
+                free_assertion: std::mem::transmute::<Proc, FnFreeAssertion>(sym(
+                    b"WebAuthNFreeAssertion\0",
+                )?),
+                free_attestation: std::mem::transmute::<Proc, FnFreeAttestation>(sym(
+                    b"WebAuthNFreeCredentialAttestation\0",
+                )?),
+                cancellation_id: std::mem::transmute::<Proc, FnCancellationId>(sym(
+                    b"WebAuthNGetCancellationId\0",
+                )?),
+                cancel: std::mem::transmute::<Proc, FnCancel>(sym(
+                    b"WebAuthNCancelCurrentOperation\0",
+                )?),
             })
         }
     }
@@ -100,7 +119,9 @@ fn map_hr(hr: HRESULT) -> NativeError {
     match hr {
         NTE_USER_CANCELLED | HR_CANCELLED => NativeError::Cancelled,
         // A credential on the exclude list is already on this authenticator.
-        NTE_EXISTS => NativeError::Refused("this device already has one of your Ligus passkeys".into()),
+        NTE_EXISTS => {
+            NativeError::Refused("this device already has one of your Ligus passkeys".into())
+        }
         _ => NativeError::Failed(format!("Windows passkey error 0x{:08X}", hr as u32)),
     }
 }
@@ -151,7 +172,10 @@ unsafe impl Sync for WinAuthenticator {}
 
 impl WinAuthenticator {
     pub fn load() -> Option<Self> {
-        Some(Self { api: Api::load()?, pending: PendingOp::new() })
+        Some(Self {
+            api: Api::load()?,
+            pending: PendingOp::new(),
+        })
     }
 
     /// The main window, read once on the main thread ([`remember_window`]):
@@ -160,14 +184,21 @@ impl WinAuthenticator {
     fn hwnd(&self) -> Result<HWND, NativeError> {
         match MAIN_HWND.get() {
             Some(&h) if h != 0 => Ok(h as HWND),
-            _ => Err(NativeError::Unavailable("no window to present the passkey dialog on".into())),
+            _ => Err(NativeError::Unavailable(
+                "no window to present the passkey dialog on".into(),
+            )),
         }
     }
 
     /// A fresh cancellation id, remembered for [`NativeAuthenticator::cancel`]
     /// (with this call's ticket, for [`PendingOp::end`]).
     fn begin(&self) -> (GUID, u64) {
-        let mut id: GUID = GUID { data1: 0, data2: 0, data3: 0, data4: [0; 8] };
+        let mut id: GUID = GUID {
+            data1: 0,
+            data2: 0,
+            data3: 0,
+            data4: [0; 8],
+        };
         // SAFETY: an out pointer to a GUID.
         let _ = unsafe { (self.api.cancellation_id)(&mut id) };
         let ticket = self.pending.begin(id);
@@ -186,7 +217,8 @@ impl NativeAuthenticator for WinAuthenticator {
     }
 
     fn get(&self, req: &GetRequest) -> Result<RawAssertion, NativeError> {
-        let client_data = client_data_json("webauthn.get", &req.challenge, &req.origin).into_bytes();
+        let client_data =
+            client_data_json("webauthn.get", &req.challenge, &req.origin).into_bytes();
         let rp = wide(&req.rp_id);
         let mut allow = credentials(&req.allow);
         let hwnd = self.hwnd()?;
@@ -203,7 +235,10 @@ impl NativeAuthenticator for WinAuthenticator {
             let mut opts: WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS = std::mem::zeroed();
             opts.dwVersion = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_4;
             opts.dwTimeoutMilliseconds = TIMEOUT_MS;
-            opts.CredentialList = WEBAUTHN_CREDENTIALS { cCredentials: allow.len() as u32, pCredentials: allow.as_mut_ptr() };
+            opts.CredentialList = WEBAUTHN_CREDENTIALS {
+                cCredentials: allow.len() as u32,
+                pCredentials: allow.as_mut_ptr(),
+            };
             opts.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_ANY;
             opts.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED;
             opts.pCancellationId = &mut cancel_id;
@@ -228,7 +263,8 @@ impl NativeAuthenticator for WinAuthenticator {
     }
 
     fn create(&self, req: &CreateRequest) -> Result<RawRegistration, NativeError> {
-        let client_data = client_data_json("webauthn.create", &req.challenge, &req.origin).into_bytes();
+        let client_data =
+            client_data_json("webauthn.create", &req.challenge, &req.origin).into_bytes();
         let rp_id = wide(&req.rp_id);
         let rp_name = wide("Ligus");
         let user_name = wide(&req.user_name);
@@ -257,7 +293,10 @@ impl NativeAuthenticator for WinAuthenticator {
                 pwszIcon: std::ptr::null(),
                 pwszDisplayName: user_name.as_ptr(),
             };
-            let cose = WEBAUTHN_COSE_CREDENTIAL_PARAMETERS { cCredentialParameters: params.len() as u32, pCredentialParameters: params.as_mut_ptr() };
+            let cose = WEBAUTHN_COSE_CREDENTIAL_PARAMETERS {
+                cCredentialParameters: params.len() as u32,
+                pCredentialParameters: params.as_mut_ptr(),
+            };
             let cd = WEBAUTHN_CLIENT_DATA {
                 dwVersion: WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,
                 cbClientDataJSON: client_data.len() as u32,
@@ -267,10 +306,14 @@ impl NativeAuthenticator for WinAuthenticator {
             let mut opts: WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS = std::mem::zeroed();
             opts.dwVersion = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_VERSION_3;
             opts.dwTimeoutMilliseconds = TIMEOUT_MS;
-            opts.CredentialList = WEBAUTHN_CREDENTIALS { cCredentials: exclude.len() as u32, pCredentials: exclude.as_mut_ptr() };
+            opts.CredentialList = WEBAUTHN_CREDENTIALS {
+                cCredentials: exclude.len() as u32,
+                pCredentials: exclude.as_mut_ptr(),
+            };
             opts.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_ANY;
             opts.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED;
-            opts.dwAttestationConveyancePreference = WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE;
+            opts.dwAttestationConveyancePreference =
+                WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE;
             opts.pCancellationId = &mut cancel_id;
             let mut result: *mut WEBAUTHN_CREDENTIAL_ATTESTATION = std::ptr::null_mut();
             let hr = (self.api.make_credential)(hwnd, &rp, &user, &cose, &cd, &opts, &mut result);
@@ -285,7 +328,9 @@ impl NativeAuthenticator for WinAuthenticator {
                 };
                 (self.api.free_attestation)(result);
                 if raw.attestation_object.is_empty() {
-                    Err(NativeError::Failed("Windows returned no attestation object".into()))
+                    Err(NativeError::Failed(
+                        "Windows returned no attestation object".into(),
+                    ))
                 } else {
                     Ok(raw)
                 }

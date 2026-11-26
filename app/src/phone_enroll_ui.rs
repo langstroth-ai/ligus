@@ -36,8 +36,8 @@ use ligus_core::ActorKind;
 use ligus_runtime::keyring::KeyringEngine;
 use ligus_runtime::phone_enroll::{PhoneCode, PhoneStanding};
 use ligus_runtime::phone_enroll_qr::{
-    answer_slot, check_relayed_request, open_relayed_requests, seal_relayed_answer, DesktopOffer, EnrollRequest, Outcome,
-    RelayedAnswer, Rid, Seen,
+    answer_slot, check_relayed_request, open_relayed_requests, seal_relayed_answer, DesktopOffer,
+    EnrollRequest, Outcome, RelayedAnswer, Rid, Seen,
 };
 use ligus_runtime::ChatService;
 use serde_json::Value;
@@ -54,7 +54,8 @@ pub(crate) const TRIPWIRE_EVENT: &str = "phone-enroll://tripwire";
 const WATCH_POLL_MS: u64 = 2_000;
 
 /// Approval refused: another phone answered the code (the poll's `aborted`).
-pub(crate) const TWO_PHONES: &str = "Two phones answered this code. Someone else may have seen it. Nothing was added. Start again.";
+pub(crate) const TWO_PHONES: &str =
+    "Two phones answered this code. Someone else may have seen it. Nothing was added. Start again.";
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -121,7 +122,13 @@ pub(crate) struct PollDto {
 
 impl PollDto {
     fn bare(state: &'static str) -> Self {
-        Self { state, rid: None, expires_at: None, phone: None, hold_remaining_ms: None }
+        Self {
+            state,
+            rid: None,
+            expires_at: None,
+            phone: None,
+            hold_remaining_ms: None,
+        }
     }
 }
 
@@ -181,14 +188,26 @@ pub(crate) struct PrecheckReason {
 
 impl PrecheckReason {
     fn blocking(code: &'static str, text: impl Into<String>) -> Self {
-        Self { code, text: text.into(), blocking: true }
+        Self {
+            code,
+            text: text.into(),
+            blocking: true,
+        }
     }
 }
 
 impl PrecheckDto {
     pub(crate) fn from_reasons(reasons: Vec<PrecheckReason>) -> Self {
-        let missing: Vec<String> = reasons.iter().filter(|r| r.blocking).map(|r| r.text.clone()).collect();
-        Self { ready: missing.is_empty(), missing, reasons }
+        let missing: Vec<String> = reasons
+            .iter()
+            .filter(|r| r.blocking)
+            .map(|r| r.text.clone())
+            .collect();
+        Self {
+            ready: missing.is_empty(),
+            missing,
+            reasons,
+        }
     }
 }
 
@@ -206,23 +225,43 @@ pub(crate) enum BoxReach {
 }
 
 /// Where the workspace's boxes stand, from the host roster and presence.
-pub(crate) fn box_reach(hosts: &[ligus_core::WorkspaceHost], online: impl Fn(&ligus_core::WorkspaceHost) -> bool, now_s: i64, last_seen_s: impl Fn(&ligus_core::WorkspaceHost) -> i64) -> BoxReach {
-    let boxes: Vec<_> = hosts.iter().filter(|h| h.kind == ligus_core::HostKind::Worker).collect();
+pub(crate) fn box_reach(
+    hosts: &[ligus_core::WorkspaceHost],
+    online: impl Fn(&ligus_core::WorkspaceHost) -> bool,
+    now_s: i64,
+    last_seen_s: impl Fn(&ligus_core::WorkspaceHost) -> i64,
+) -> BoxReach {
+    let boxes: Vec<_> = hosts
+        .iter()
+        .filter(|h| h.kind == ligus_core::HostKind::Worker)
+        .collect();
     if boxes.is_empty() {
         return BoxReach::None;
     }
     if boxes.iter().any(|h| online(h)) {
         return BoxReach::Online;
     }
-    let newest = boxes.iter().max_by_key(|h| last_seen_s(h)).expect("non-empty");
+    let newest = boxes
+        .iter()
+        .max_by_key(|h| last_seen_s(h))
+        .expect("non-empty");
     let label = crate::shown(&newest.label);
     BoxReach::Quiet {
-        label: if label.trim().is_empty() { "your box".into() } else { label },
+        label: if label.trim().is_empty() {
+            "your box".into()
+        } else {
+            label
+        },
         minutes: ((now_s - last_seen_s(newest)) / 60).max(1),
     }
 }
 
-fn phone_dto(code: &PhoneCode, standing: &PhoneStanding, via: String, duplicate_label: bool) -> EnrollPhoneDto {
+fn phone_dto(
+    code: &PhoneCode,
+    standing: &PhoneStanding,
+    via: String,
+    duplicate_label: bool,
+) -> EnrollPhoneDto {
     let (standing, problem) = crate::phones_ui::standing_dto(standing.clone());
     EnrollPhoneDto {
         device_id: code.device_id.to_string(),
@@ -236,7 +275,11 @@ fn phone_dto(code: &PhoneCode, standing: &PhoneStanding, via: String, duplicate_
 }
 
 fn tripwire_phone(code: &PhoneCode) -> TripwirePhoneDto {
-    TripwirePhoneDto { device_id: code.device_id.to_string(), label: crate::shown(&code.label), fingerprint: code.fingerprint() }
+    TripwirePhoneDto {
+        device_id: code.device_id.to_string(),
+        label: crate::shown(&code.label),
+        fingerprint: code.fingerprint(),
+    }
 }
 
 // ---- the QR ----
@@ -245,7 +288,8 @@ fn tripwire_phone(code: &PhoneCode) -> TripwirePhoneDto {
 /// here so the page never holds the offer as text.
 pub(crate) fn qr_svg(text: &str) -> Result<String, String> {
     use qrcodegen::{QrCode, QrCodeEcc};
-    let qr = QrCode::encode_text(text, QrCodeEcc::Medium).map_err(|_| "Couldn't draw the code.".to_string())?;
+    let qr = QrCode::encode_text(text, QrCodeEcc::Medium)
+        .map_err(|_| "Couldn't draw the code.".to_string())?;
     const QUIET: i32 = 4;
     let n = qr.size();
     let dim = n + 2 * QUIET;
@@ -279,7 +323,10 @@ pub(crate) fn valid_requests(
     relay_key: impl Fn(Uuid) -> Option<Vec<u8>>,
 ) -> Vec<(Uuid, EnrollRequest)> {
     let prefix = offer.request_slot_prefix();
-    let mut slots: Vec<_> = open_relayed_requests(blobs, ring).into_iter().filter(|(slot, _)| slot.starts_with(&prefix)).collect();
+    let mut slots: Vec<_> = open_relayed_requests(blobs, ring)
+        .into_iter()
+        .filter(|(slot, _)| slot.starts_with(&prefix))
+        .collect();
     slots.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = Vec::new();
     for (slot, relayed) in slots {
@@ -289,7 +336,9 @@ pub(crate) fn valid_requests(
         }
         match offer.check_request(&relayed.request, now_ms) {
             Ok(req) => out.push((relayed.relay, req)),
-            Err(e) => tracing::debug!(target: "identity", rid = %offer.rid(), reason = e.code(), "refused an add-a-phone request"),
+            Err(e) => {
+                tracing::debug!(target: "identity", rid = %offer.rid(), reason = e.code(), "refused an add-a-phone request")
+            }
         }
     }
     out
@@ -333,12 +382,19 @@ fn look(
     duplicate: impl Fn(&PhoneCode) -> bool,
 ) {
     for (relay, req) in valid_requests(&c.offer, blobs, ring, now_ms, &relay_key) {
-        let Some(st) = standing(&req.code) else { continue };
+        let Some(st) = standing(&req.code) else {
+            continue;
+        };
         match c.offer.observe(&req, now_ms) {
             Ok(Seen::First) => {
                 tracing::info!(target: "identity", rid = %c.offer.rid(), "a phone answered an add-a-phone code");
                 let card = phone_dto(&req.code, &st, via(relay), duplicate(&req.code));
-                c.phone = Some(Locked { request: req, standing: st, card, first_seen_ms: now_ms });
+                c.phone = Some(Locked {
+                    request: req,
+                    standing: st,
+                    card,
+                    first_seen_ms: now_ms,
+                });
             }
             Ok(Seen::SamePhone) => {
                 // The same phone again (re-published, or rescanned after a
@@ -380,14 +436,34 @@ impl EnrollDesk {
         now_ms: i64,
         shield: &dyn Fn(bool),
     ) -> Result<OfferDto, String> {
-        if self.current.lock().unwrap().as_ref().is_some_and(|c| c.approving) {
+        if self
+            .current
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|c| c.approving)
+        {
             return Err("Finish adding the phone first: your passkey is waiting.".into());
         }
-        let offer = DesktopOffer::start(ws, desktop, now_ms).map_err(|_| "Couldn't draw a secret for the code.".to_string())?;
+        let offer = DesktopOffer::start(ws, desktop, now_ms)
+            .map_err(|_| "Couldn't draw a secret for the code.".to_string())?;
         let qr_svg = qr_svg(&offer.qr_text())?;
-        let dto = OfferDto { qr_svg, rid: offer.rid().to_string(), expires_at: offer.expires_at(), account: account.clone() };
+        let dto = OfferDto {
+            qr_svg,
+            rid: offer.rid().to_string(),
+            expires_at: offer.expires_at(),
+            account: account.clone(),
+        };
         tracing::info!(target: "identity", rid = %offer.rid(), "add-a-phone offer started");
-        *self.current.lock().unwrap() = Some(Current { offer, ws, account, shown: true, phone: None, other: None, approving: false });
+        *self.current.lock().unwrap() = Some(Current {
+            offer,
+            ws,
+            account,
+            shown: true,
+            phone: None,
+            other: None,
+            approving: false,
+        });
         shield(true);
         Ok(dto)
     }
@@ -395,7 +471,9 @@ impl EnrollDesk {
     /// Show the offer's QR again (after it was hidden on blur).
     pub(crate) fn show(&self, now_ms: i64, shield: &dyn Fn(bool)) -> Result<OfferDto, String> {
         let mut cur = self.current.lock().unwrap();
-        let c = cur.as_mut().ok_or("This code was closed. Show a new code.")?;
+        let c = cur
+            .as_mut()
+            .ok_or("This code was closed. Show a new code.")?;
         if c.offer.is_over(now_ms) {
             *cur = None;
             shield(false);
@@ -404,7 +482,12 @@ impl EnrollDesk {
         let qr_svg = qr_svg(&c.offer.qr_text())?;
         c.shown = true;
         shield(true);
-        Ok(OfferDto { qr_svg, rid: c.offer.rid().to_string(), expires_at: c.offer.expires_at(), account: c.account.clone() })
+        Ok(OfferDto {
+            qr_svg,
+            rid: c.offer.rid().to_string(),
+            expires_at: c.offer.expires_at(),
+            account: c.account.clone(),
+        })
     }
 
     /// Hide the QR (the window lost focus, the panel closed); the offer stays.
@@ -437,13 +520,20 @@ impl EnrollDesk {
 
     #[cfg(test)]
     fn is_shown(&self) -> bool {
-        self.current.lock().unwrap().as_ref().is_some_and(|c| c.shown)
+        self.current
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|c| c.shown)
     }
 
     /// The offer's expiry passed: close it.
     pub(crate) fn expire_if_over(&self, now_ms: i64, shield: &dyn Fn(bool)) -> bool {
         let mut cur = self.current.lock().unwrap();
-        if cur.as_ref().is_some_and(|c| c.offer.is_over(now_ms) && !c.approving) {
+        if cur
+            .as_ref()
+            .is_some_and(|c| c.offer.is_over(now_ms) && !c.approving)
+        {
             *cur = None;
             shield(false);
             return true;
@@ -467,7 +557,9 @@ impl EnrollDesk {
         shield: &dyn Fn(bool),
     ) -> PollDto {
         let mut cur = self.current.lock().unwrap();
-        let Some(c) = cur.as_mut() else { return PollDto::bare("none") };
+        let Some(c) = cur.as_mut() else {
+            return PollDto::bare("none");
+        };
         if c.offer.is_aborted() {
             return PollDto::bare("aborted");
         }
@@ -487,13 +579,21 @@ impl EnrollDesk {
         let rid = Some(c.offer.rid().to_string());
         let expires_at = Some(c.offer.expires_at());
         match &c.phone {
-            None => PollDto { state: "waiting", rid, expires_at, phone: None, hold_remaining_ms: None },
+            None => PollDto {
+                state: "waiting",
+                rid,
+                expires_at,
+                phone: None,
+                hold_remaining_ms: None,
+            },
             Some(l) => PollDto {
                 state: "request",
                 rid,
                 expires_at,
                 phone: Some(l.card.clone()),
-                hold_remaining_ms: Some((l.first_seen_ms + ligus_runtime::phone_enroll_qr::HOLD_MS - now_ms).max(0)),
+                hold_remaining_ms: Some(
+                    (l.first_seen_ms + ligus_runtime::phone_enroll_qr::HOLD_MS - now_ms).max(0),
+                ),
             },
         }
     }
@@ -519,22 +619,45 @@ impl EnrollDesk {
         standing: impl Fn(&PhoneCode) -> Option<PhoneStanding>,
     ) -> Result<(Uuid, PhoneCode), String> {
         let mut cur = self.current.lock().unwrap();
-        let c = cur.as_mut().ok_or("This code was closed. Show a new code.")?;
+        let c = cur
+            .as_mut()
+            .ok_or("This code was closed. Show a new code.")?;
         let rid = Rid::from_b64u(rid).ok_or("This is for another code.")?;
         if rid != c.offer.rid() {
             return Err("This is for another code.".into());
         }
         if !c.offer.is_aborted() {
-            look(c, blobs, ring, now_ms, relay_key, standing, |_| "a serve box".into(), |_| false);
+            look(
+                c,
+                blobs,
+                ring,
+                now_ms,
+                relay_key,
+                standing,
+                |_| "a serve box".into(),
+                |_| false,
+            );
         }
         if c.offer.is_aborted() {
             // Kept (aborted) so the page's next poll shows the two-phones panel.
             tracing::warn!(target: "identity", rid = %c.offer.rid(), "approval refused: two phones answered one add-a-phone code");
             return Err(TWO_PHONES.into());
         }
-        let code = c.offer.check_approve(rid, fingerprint.trim(), now_ms).map_err(|e| e.to_string())?.clone();
-        crate::phones_ui::confirm_matches_preview(&code, fingerprint, &c.ws.to_string(), active_ws)?;
-        if c.phone.as_ref().is_some_and(|l| !matches!(l.standing, PhoneStanding::New | PhoneStanding::AlreadyMine)) {
+        let code = c
+            .offer
+            .check_approve(rid, fingerprint.trim(), now_ms)
+            .map_err(|e| e.to_string())?
+            .clone();
+        crate::phones_ui::confirm_matches_preview(
+            &code,
+            fingerprint,
+            &c.ws.to_string(),
+            active_ws,
+        )?;
+        if c.phone
+            .as_ref()
+            .is_some_and(|l| !matches!(l.standing, PhoneStanding::New | PhoneStanding::AlreadyMine))
+        {
             return Err("This phone can't be added here.".into());
         }
         c.approving = true;
@@ -551,7 +674,10 @@ impl EnrollDesk {
     /// The certificate was written: the offer leaves the screen for a
     /// watch until its expiry. If another phone answered while the passkey
     /// ran (the offer aborted), the watch starts with that phone's alert.
-    pub(crate) fn finish_approve(&self, shield: &dyn Fn(bool)) -> Option<(Watch, Option<TripwireDto>)> {
+    pub(crate) fn finish_approve(
+        &self,
+        shield: &dyn Fn(bool),
+    ) -> Option<(Watch, Option<TripwireDto>)> {
         let c = self.current.lock().unwrap().take()?;
         shield(false);
         // Kept here, not read back from the offer: an aborted offer has no lock.
@@ -567,9 +693,15 @@ impl EnrollDesk {
     /// answer is `declined` (`refused` when its standing refuses it), and
     /// the offer leaves the screen. Returns the watch that publishes the
     /// answer until the offer's expiry, if a phone was locked.
-    pub(crate) fn decline(&self, rid: &str, shield: &dyn Fn(bool)) -> Result<Option<Watch>, String> {
+    pub(crate) fn decline(
+        &self,
+        rid: &str,
+        shield: &dyn Fn(bool),
+    ) -> Result<Option<Watch>, String> {
         let mut cur = self.current.lock().unwrap();
-        let Some(c) = cur.as_ref() else { return Ok(None) };
+        let Some(c) = cur.as_ref() else {
+            return Ok(None);
+        };
         if Rid::from_b64u(rid) != Some(c.offer.rid()) {
             return Err("This is for another code.".into());
         }
@@ -578,17 +710,30 @@ impl EnrollDesk {
         }
         let c = cur.take().expect("checked");
         shield(false);
-        let Some(locked) = c.phone else { return Ok(None) };
-        let refused = matches!(locked.standing, PhoneStanding::Revoked | PhoneStanding::Conflict(_));
+        let Some(locked) = c.phone else {
+            return Ok(None);
+        };
+        let refused = matches!(
+            locked.standing,
+            PhoneStanding::Revoked | PhoneStanding::Conflict(_)
+        );
         let req = locked.request;
         tracing::info!(target: "identity", rid = %c.offer.rid(), refused, "declined an add-a-phone request");
-        let outcome = if refused { Outcome::Refused } else { Outcome::Declined };
+        let outcome = if refused {
+            Outcome::Refused
+        } else {
+            Outcome::Declined
+        };
         Ok(Some(Watch::new(c.offer, c.ws, outcome, req, false)))
     }
 
     #[cfg(test)]
     fn hold_first_seen(&self) -> Option<i64> {
-        self.current.lock().unwrap().as_ref().and_then(|c| c.phone.as_ref().map(|p| p.first_seen_ms))
+        self.current
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.phone.as_ref().map(|p| p.first_seen_ms))
     }
 }
 
@@ -608,8 +753,22 @@ pub(crate) struct Watch {
 }
 
 impl Watch {
-    fn new(offer: DesktopOffer, ws: Uuid, outcome: Outcome, added: EnrollRequest, tripwire: bool) -> Self {
-        Self { offer, ws, outcome, added, tripwire, alerted: HashSet::new(), last_published_ms: None }
+    fn new(
+        offer: DesktopOffer,
+        ws: Uuid,
+        outcome: Outcome,
+        added: EnrollRequest,
+        tripwire: bool,
+    ) -> Self {
+        Self {
+            offer,
+            ws,
+            outcome,
+            added,
+            tripwire,
+            alerted: HashSet::new(),
+            last_published_ms: None,
+        }
     }
 
     pub(crate) fn ws(&self) -> Uuid {
@@ -636,11 +795,18 @@ impl Watch {
         if !self.tripwire || other.same_phone(&self.added) {
             return None;
         }
-        if !self.alerted.insert((other.code.device_id, other.code.public_key.clone())) {
+        if !self
+            .alerted
+            .insert((other.code.device_id, other.code.public_key.clone()))
+        {
             return None;
         }
         tracing::warn!(target: "identity", rid = %self.offer.rid(), "another phone answered an add-a-phone code after its phone was added");
-        Some(TripwireDto { rid: self.offer.rid().to_string(), added: tripwire_phone(&self.added.code), other: tripwire_phone(&other.code) })
+        Some(TripwireDto {
+            rid: self.offer.rid().to_string(),
+            added: tripwire_phone(&self.added.code),
+            other: tripwire_phone(&other.code),
+        })
     }
 
     /// One look at a presence listing: an alert for each new other phone.
@@ -709,7 +875,13 @@ fn shield_for(app: &AppHandle) -> impl Fn(bool) + '_ {
 /// The reasons this desktop can't finish an enrollment in `ws`, and the
 /// warnings worth knowing first. Each names what's missing; the panel adds
 /// the link to the fix.
-pub(crate) fn precheck_reasons(svc: &ChatService, ws: Uuid, local: bool, presence: bool, boxes: &BoxReach) -> Vec<PrecheckReason> {
+pub(crate) fn precheck_reasons(
+    svc: &ChatService,
+    ws: Uuid,
+    local: bool,
+    presence: bool,
+    boxes: &BoxReach,
+) -> Vec<PrecheckReason> {
     let mut out = Vec::new();
     if local {
         out.push(PrecheckReason::blocking(
@@ -766,14 +938,24 @@ fn account_for(svc: &ChatService, ws: Uuid, workspace_name: String) -> EnrollAcc
         .flatten()
         .map(|c| c.members)
         .unwrap_or_default();
-    let role = members.iter().find(|m| m.id == me.id).map(|m| format!("{:?}", m.role)).unwrap_or_default();
+    let role = members
+        .iter()
+        .find(|m| m.id == me.id)
+        .map(|m| format!("{:?}", m.role))
+        .unwrap_or_default();
     let name_collision = !mine.is_empty()
         && members.iter().any(|m| {
             m.id != me.id
                 && m.actor.kind == ActorKind::Human
-                && ligus_proto::names::clean_display_name(&m.actor.display_name).eq_ignore_ascii_case(&mine)
+                && ligus_proto::names::clean_display_name(&m.actor.display_name)
+                    .eq_ignore_ascii_case(&mine)
         });
-    EnrollAccountDto { display_name: crate::shown(&me.display_name), role, workspace_name, name_collision }
+    EnrollAccountDto {
+        display_name: crate::shown(&me.display_name),
+        role,
+        workspace_name,
+        name_collision,
+    }
 }
 
 fn workspace_name(state: &AppState, ws: Uuid) -> String {
@@ -787,7 +969,10 @@ fn workspace_name(state: &AppState, ws: Uuid) -> String {
 }
 
 /// The active workspace's presence channel, when it is `ws`'s.
-fn conn_for(state: &AppState, ws: Uuid) -> Option<(ligus_runtime::RelayClient, String, KeyringEngine)> {
+fn conn_for(
+    state: &AppState,
+    ws: Uuid,
+) -> Option<(ligus_runtime::RelayClient, String, KeyringEngine)> {
     crate::active_presence_conn(state).filter(|(_, room, _)| crate::room_workspace_id(room) == ws)
 }
 
@@ -811,7 +996,10 @@ pub(crate) fn precheck_for(app: &AppHandle) -> Vec<(&'static str, String, bool)>
     let local = ws == state.local_workspace_id;
     let svc = state.service.lock().unwrap();
     let boxes = box_reach_for(&state, &svc, ws);
-    precheck_reasons(&svc, ws, local, presence, &boxes).into_iter().map(|r| (r.code, r.text, r.blocking)).collect()
+    precheck_reasons(&svc, ws, local, presence, &boxes)
+        .into_iter()
+        .map(|r| (r.code, r.text, r.blocking))
+        .collect()
 }
 
 /// Can this desktop add a phone by QR right now? Otherwise the panel opens
@@ -825,7 +1013,9 @@ pub(crate) async fn phone_enroll_precheck(ligus_app: AppHandle) -> Result<Preche
         let local = ws == state.local_workspace_id;
         let svc = state.service.lock().unwrap();
         let boxes = box_reach_for(&state, &svc, ws);
-        Ok(PrecheckDto::from_reasons(precheck_reasons(&svc, ws, local, presence, &boxes)))
+        Ok(PrecheckDto::from_reasons(precheck_reasons(
+            &svc, ws, local, presence, &boxes,
+        )))
     })
     .await
 }
@@ -842,12 +1032,17 @@ pub(crate) async fn phone_enroll_offer_start(ligus_app: AppHandle) -> Result<Off
         let (account, desktop) = {
             let svc = state.service.lock().unwrap();
             let boxes = box_reach_for(&state, &svc, ws);
-            if let Some(first) = precheck_reasons(&svc, ws, local, presence, &boxes).into_iter().find(|r| r.blocking) {
+            if let Some(first) = precheck_reasons(&svc, ws, local, presence, &boxes)
+                .into_iter()
+                .find(|r| r.blocking)
+            {
                 return Err(first.text);
             }
             (account_for(&svc, ws, name), svc.device_id())
         };
-        state.phone_enroll.start(ws, desktop, account, now_ms(), &shield_for(app))
+        state
+            .phone_enroll
+            .start(ws, desktop, account, now_ms(), &shield_for(app))
     })
     .await
 }
@@ -862,13 +1057,19 @@ pub(crate) fn phone_enroll_offer_show(ligus_app: AppHandle) -> Result<OfferDto, 
 /// Hide the QR (the window lost focus); the offer stays.
 #[tauri::command]
 pub(crate) fn phone_enroll_offer_hide(ligus_app: AppHandle) {
-    ligus_app.state::<AppState>().phone_enroll.hide(&shield_for(&ligus_app));
+    ligus_app
+        .state::<AppState>()
+        .phone_enroll
+        .hide(&shield_for(&ligus_app));
 }
 
 /// Close the offer on screen.
 #[tauri::command]
 pub(crate) fn phone_enroll_offer_cancel(ligus_app: AppHandle) {
-    ligus_app.state::<AppState>().phone_enroll.cancel(&shield_for(&ligus_app));
+    ligus_app
+        .state::<AppState>()
+        .phone_enroll
+        .cancel(&shield_for(&ligus_app));
 }
 
 /// Look for the phone's request (the page calls this every 2 s, one at a
@@ -876,14 +1077,25 @@ pub(crate) fn phone_enroll_offer_cancel(ligus_app: AppHandle) {
 #[tauri::command]
 pub(crate) async fn phone_enroll_offer_poll(ligus_app: AppHandle) -> Result<PollDto, String> {
     let state = ligus_app.state::<AppState>();
-    let Some(ws) = state.phone_enroll.current_ws() else { return Ok(PollDto::bare("none")) };
-    if state.phone_enroll.expire_if_over(now_ms(), &shield_for(&ligus_app)) {
+    let Some(ws) = state.phone_enroll.current_ws() else {
+        return Ok(PollDto::bare("none"));
+    };
+    if state
+        .phone_enroll
+        .expire_if_over(now_ms(), &shield_for(&ligus_app))
+    {
         return Ok(PollDto::bare("expired"));
     }
     let Some((relay, room, ring)) = conn_for(&state, ws) else {
-        return Err("No relay connection for this code's workspace. Close this and open Add a phone again.".into());
+        return Err(
+            "No relay connection for this code's workspace. Close this and open Add a phone again."
+                .into(),
+        );
     };
-    let blobs = relay.list_presence(&room).await.map_err(|e| format!("Couldn't reach the relay: {e}"))?;
+    let blobs = relay
+        .list_presence(&room)
+        .await
+        .map_err(|e| format!("Couldn't reach the relay: {e}"))?;
     crate::off_main(ligus_app, move |app| {
         let state = app.state::<AppState>();
         let phone_labels = state.settings.lock().unwrap().phone_labels.clone();
@@ -907,7 +1119,9 @@ pub(crate) async fn phone_enroll_offer_poll(ligus_app: AppHandle) -> Result<Poll
             |code| {
                 let label = crate::shown(&code.label);
                 !label.trim().is_empty()
-                    && mine.iter().any(|(id, l)| *id != code.device_id && l.eq_ignore_ascii_case(&label))
+                    && mine
+                        .iter()
+                        .any(|(id, l)| *id != code.device_id && l.eq_ignore_ascii_case(&label))
             },
             &shield_for(app),
         ))
@@ -920,18 +1134,28 @@ pub(crate) async fn phone_enroll_offer_poll(ligus_app: AppHandle) -> Result<Poll
 /// person's passkey, answers `certified`, and keeps
 /// watching for other phones until the offer expires.
 #[tauri::command(async)]
-pub(crate) async fn phone_enroll_offer_approve(ligus_app: AppHandle, rid: String, fingerprint: String) -> Result<ApprovedDto, String> {
+pub(crate) async fn phone_enroll_offer_approve(
+    ligus_app: AppHandle,
+    rid: String,
+    fingerprint: String,
+) -> Result<ApprovedDto, String> {
     let app = ligus_app.clone();
     // A last look for other phones, right before certifying (fails closed:
     // no listing, no approval).
     let (ws, relay, room, ring) = {
         let state = ligus_app.state::<AppState>();
-        let ws = state.phone_enroll.current_ws().ok_or("This code was closed. Show a new code.")?;
+        let ws = state
+            .phone_enroll
+            .current_ws()
+            .ok_or("This code was closed. Show a new code.")?;
         let (relay, room, ring) = conn_for(&state, ws)
             .ok_or("No relay connection for this code's workspace, so Ligus can't check that no other phone answered it.")?;
         (ws, relay, room, ring)
     };
-    let blobs = relay.list_presence(&room).await.map_err(|e| format!("Couldn't check that no other phone answered this code: {e}"))?;
+    let blobs = relay
+        .list_presence(&room)
+        .await
+        .map_err(|e| format!("Couldn't check that no other phone answered this code: {e}"))?;
     let (watch, alert) = crate::off_main(ligus_app, move |app| {
         let state = app.state::<AppState>();
         let (ws, code) = {
@@ -964,7 +1188,11 @@ pub(crate) async fn phone_enroll_offer_approve(ligus_app: AppHandle, rid: String
     })
     .await?;
     let code = watch.added_code().clone();
-    let dto = ApprovedDto { device_id: code.device_id.to_string(), label: crate::shown(&code.label), watching_until: watch.expires_at() };
+    let dto = ApprovedDto {
+        device_id: code.device_id.to_string(),
+        label: crate::shown(&code.label),
+        watching_until: watch.expires_at(),
+    };
     if let Some(a) = alert {
         let _ = app.emit(TRIPWIRE_EVENT, a);
     }
@@ -1001,7 +1229,10 @@ fn spawn_watch(app: AppHandle, watch: Watch) {
                 let due = {
                     let svc = state.service.lock().unwrap();
                     let desktop = svc.device_id();
-                    watch.lock().unwrap().answer_due(now_ms(), &ring, desktop, |a| svc.sign_relayed_answer(a))
+                    watch
+                        .lock()
+                        .unwrap()
+                        .answer_due(now_ms(), &ring, desktop, |a| svc.sign_relayed_answer(a))
                 };
                 if let Some((slot, blob)) = due {
                     if let Err(e) = relay.publish_presence(&room, &slot, &blob).await {
@@ -1011,7 +1242,10 @@ fn spawn_watch(app: AppHandle, watch: Watch) {
                 if let Ok(blobs) = relay.list_presence(&room).await {
                     let alerts = {
                         let svc = state.service.lock().unwrap();
-                        watch.lock().unwrap().step(&blobs, &ring, now_ms(), |d| svc.enroll_relay_key(ws, d))
+                        watch
+                            .lock()
+                            .unwrap()
+                            .step(&blobs, &ring, now_ms(), |d| svc.enroll_relay_key(ws, d))
                     };
                     for a in alerts {
                         let _ = app.emit(TRIPWIRE_EVENT, a);
@@ -1022,7 +1256,9 @@ fn spawn_watch(app: AppHandle, watch: Watch) {
         }
         let state = app.state::<AppState>();
         if let Some((relay, room, _)) = conn_for(&state, ws) {
-            let _ = relay.publish_presence(&room, &answer_slot(rid), &serde_json::json!({})).await;
+            let _ = relay
+                .publish_presence(&room, &answer_slot(rid), &serde_json::json!({}))
+                .await;
         }
         tracing::info!(target: "identity", rid = %rid, "add-a-phone offer closed");
     });

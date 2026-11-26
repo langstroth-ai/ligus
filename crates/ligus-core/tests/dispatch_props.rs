@@ -26,8 +26,8 @@ use ligus_core::dispatch::{self, Coverage, Step, View};
 use ligus_core::testkit::SignedWorld;
 use ligus_core::workspace_repo::{repo_id, ChatRepo, WorkspaceRepo};
 use ligus_core::{
-    ActorStamp, CfgFrontier, ChatMessage, ChatSession, MessageRole, SessionEvent, SessionEventEnvelope, Timestamp, WorkspaceAuthz,
-    WorkspaceRole,
+    ActorStamp, CfgFrontier, ChatMessage, ChatSession, MessageRole, SessionEvent,
+    SessionEventEnvelope, Timestamp, WorkspaceAuthz, WorkspaceRole,
 };
 use proptest::prelude::*;
 use uuid::Uuid;
@@ -68,8 +68,19 @@ fn base() -> &'static SignedWorld {
 /// when given: a backdating author), its chain link its own last event
 /// there, its config frontier `frontier` (or the config head).
 #[allow(clippy::too_many_arguments)]
-fn draft(w: &SignedWorld, clock: &mut u64, by: &str, chat: Uuid, payload: SessionEvent, local: &[SessionEventEnvelope], frontier: Option<CfgFrontier>, head: Option<Option<CfgFrontier>>) -> SessionEventEnvelope {
-    draft_at(w, clock, by, chat, payload, local, frontier, head, None, false)
+fn draft(
+    w: &SignedWorld,
+    clock: &mut u64,
+    by: &str,
+    chat: Uuid,
+    payload: SessionEvent,
+    local: &[SessionEventEnvelope],
+    frontier: Option<CfgFrontier>,
+    head: Option<Option<CfgFrontier>>,
+) -> SessionEventEnvelope {
+    draft_at(
+        w, clock, by, chat, payload, local, frontier, head, None, false,
+    )
 }
 
 thread_local! {
@@ -87,14 +98,33 @@ fn ts(secs: u64) -> Timestamp {
 /// [`draft`] with a chosen signed time (`at`, in ticks; default: now) and,
 /// for a hostile author, no chain link.
 #[allow(clippy::too_many_arguments)]
-fn draft_at(w: &SignedWorld, clock: &mut u64, by: &str, chat: Uuid, payload: SessionEvent, local: &[SessionEventEnvelope], frontier: Option<CfgFrontier>, head: Option<Option<CfgFrontier>>, at: Option<u64>, no_prev: bool) -> SessionEventEnvelope {
+fn draft_at(
+    w: &SignedWorld,
+    clock: &mut u64,
+    by: &str,
+    chat: Uuid,
+    payload: SessionEvent,
+    local: &[SessionEventEnvelope],
+    frontier: Option<CfgFrontier>,
+    head: Option<Option<CfgFrontier>>,
+    at: Option<u64>,
+    no_prev: bool,
+) -> SessionEventEnvelope {
     *clock += 1;
     let mut env = SessionEventEnvelope::new(chat, w.wid, 10_000 + *clock as i64, payload);
     env.timestamp = ts(at.unwrap_or_else(|| NOW.with(|n| n.get())));
     let p = &w.people[by];
     let mut actor = p.actor();
     actor.device_id = Some(p.device_id);
-    let prev = if no_prev { None } else { local.iter().rev().find(|e| e.signer_device_id == Some(p.device_id)).map(|e| e.event_id) };
+    let prev = if no_prev {
+        None
+    } else {
+        local
+            .iter()
+            .rev()
+            .find(|e| e.signer_device_id == Some(p.device_id))
+            .map(|e| e.event_id)
+    };
     env.actor_stamp = Some(ActorStamp {
         actor,
         recorded_at: Timestamp::epoch(),
@@ -138,7 +168,16 @@ struct Scenario {
 
 fn scenario() -> impl Strategy<Value = Scenario> {
     (2usize..=5, any::<bool>(), any::<u64>()).prop_flat_map(|(n, repo_chat, seed)| {
-        let dev = (any::<bool>(), any::<bool>(), prop::option::weighted(0.3, 0u64..90)).prop_map(|(eligible, covers, crash_at)| DevSpec { eligible, covers, crash_at });
+        let dev = (
+            any::<bool>(),
+            any::<bool>(),
+            prop::option::weighted(0.3, 0u64..90),
+        )
+            .prop_map(|(eligible, covers, crash_at)| DevSpec {
+                eligible,
+                covers,
+                crash_at,
+            });
         (
             Just(repo_chat),
             prop::collection::vec(dev, n),
@@ -149,7 +188,14 @@ fn scenario() -> impl Strategy<Value = Scenario> {
         )
             .prop_map(|(repo_chat, devs, cuts, seed, revoke, hostile)| {
                 let hostile = hostile.filter(|(h, _)| revoke.is_none_or(|(r, _)| r != *h));
-                Scenario { repo_chat, devs, cuts, seed, revoke, hostile }
+                Scenario {
+                    repo_chat,
+                    devs,
+                    cuts,
+                    seed,
+                    revoke,
+                    hostile,
+                }
             })
     })
 }
@@ -175,14 +221,19 @@ struct Dev {
 }
 
 fn fold(log: &[SessionEventEnvelope], t: &ligus_core::authz::ConfigTimeline) -> ChatSession {
-    ligus_core::project_authorized(log, None, None, WorkspaceAuthz::Timeline(t)).expect("the chat folds")
+    ligus_core::project_authorized(log, None, None, WorkspaceAuthz::Timeline(t))
+        .expect("the chat folds")
 }
 
 /// Committed answers to `trigger` (answers not superseded).
 fn committed(s: &ChatSession, trigger: Uuid) -> Vec<Uuid> {
     s.messages
         .iter()
-        .filter(|m| m.role == MessageRole::Assistant && m.reply_to_message_id == Some(trigger) && !m.superseded)
+        .filter(|m| {
+            m.role == MessageRole::Assistant
+                && m.reply_to_message_id == Some(trigger)
+                && !m.superseded
+        })
         .map(|m| m.id)
         .collect()
 }
@@ -196,7 +247,11 @@ fn check_at_most_one(s: &ChatSession, trigger: Uuid) -> Result<(), TestCaseError
 }
 
 fn cut(sc: &Scenario, a: usize, b: usize, tick: u64) -> bool {
-    tick < HEAL_BY && sc.cuts.iter().any(|&(x, y)| (x == a && y == b) || (x == b && y == a))
+    tick < HEAL_BY
+        && sc
+            .cuts
+            .iter()
+            .any(|&(x, y)| (x == a && y == b) || (x == b && y == a))
 }
 
 fn run(sc: Scenario) -> Result<(), TestCaseError> {
@@ -205,11 +260,24 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
     let chat = w.chat("owner", "t");
     let repo = repo_id(WEFIT);
     if sc.repo_chat {
-        w.say(chat, "owner", SessionEvent::ChatRepoSet { repo_id: Some(repo), base_branch: String::new() });
+        w.say(
+            chat,
+            "owner",
+            SessionEvent::ChatRepoSet {
+                repo_id: Some(repo),
+                base_branch: String::new(),
+            },
+        );
     }
     let trigger_msg = ChatMessage::new(MessageRole::User, "owner", "@ligus go");
     let trigger = trigger_msg.id;
-    w.say(chat, "owner", SessionEvent::MessageAppended { message: trigger_msg });
+    w.say(
+        chat,
+        "owner",
+        SessionEvent::MessageAppended {
+            message: trigger_msg,
+        },
+    );
     let base_log = w.chats[&chat].clone();
     let pre_revoke_frontier = w.head();
     let mut timeline = w.timeline();
@@ -217,14 +285,22 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
         .devs
         .iter()
         .enumerate()
-        .map(|(i, spec)| Dev { name: NAMES[i], id: w.people[NAMES[i]].device_id, spec: spec.clone(), log: base_log.clone(), wait_until: 0, seen_holder: None })
+        .map(|(i, spec)| Dev {
+            name: NAMES[i],
+            id: w.people[NAMES[i]].device_id,
+            spec: spec.clone(),
+            log: base_log.clone(),
+            wait_until: 0,
+            seen_holder: None,
+        })
         .collect();
     let n = devs.len();
     let mut rng = Rng(sc.seed | 1);
     // (to, event, due tick)
     let mut wire: Vec<(usize, SessionEventEnvelope, u64)> = Vec::new();
     let mut revoked: Option<(usize, BTreeSet<Uuid>)> = None;
-    let mut all: BTreeMap<Uuid, SessionEventEnvelope> = base_log.iter().map(|e| (e.event_id, e.clone())).collect();
+    let mut all: BTreeMap<Uuid, SessionEventEnvelope> =
+        base_log.iter().map(|e| (e.event_id, e.clone())).collect();
 
     let crashed = |d: &Dev, tick: u64| d.spec.crash_at.is_some_and(|c| tick >= c);
 
@@ -234,7 +310,10 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
         // Deliver what is due (a cut pair waits for the heal).
         let mut later = Vec::new();
         for (to, env, due) in wire.drain(..) {
-            let from = devs.iter().position(|d| Some(d.id) == env.signer_device_id).unwrap_or(0);
+            let from = devs
+                .iter()
+                .position(|d| Some(d.id) == env.signer_device_id)
+                .unwrap_or(0);
             if due > tick || cut(&sc, from, to, tick) {
                 later.push((to, env, due));
             } else if !devs[to].log.iter().any(|e| e.event_id == env.event_id) {
@@ -247,8 +326,15 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
         if let Some((k, at)) = sc.revoke {
             if tick == at && revoked.is_none() {
                 let kid = devs[k].id;
-                let wm = ligus_core::watermark::heads_of(&devs[0].log, chat, &BTreeSet::from([kid]));
-                w.push("owner", SessionEvent::DeviceRevoked { device_id: kid, watermark: wm });
+                let wm =
+                    ligus_core::watermark::heads_of(&devs[0].log, chat, &BTreeSet::from([kid]));
+                w.push(
+                    "owner",
+                    SessionEvent::DeviceRevoked {
+                        device_id: kid,
+                        watermark: wm,
+                    },
+                );
                 timeline = w.timeline();
                 revoked = Some((k, BTreeSet::new()));
             }
@@ -261,17 +347,38 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
             if let Some((k, ref mut written)) = revoked {
                 if k == i && !crashed(&devs[i], tick) && rng.next().is_multiple_of(4) {
                     let s = fold(&devs[i].log, &timeline);
-                    let (epoch, holder) = s.turn_dispatch.get(&trigger).map(|x| (x.epoch, x.holder)).unwrap_or((0, None));
-                    let early = ligus_core::lamport::plausible_keys(&base_log).last().copied();
+                    let (epoch, holder) = s
+                        .turn_dispatch
+                        .get(&trigger)
+                        .map(|x| (x.epoch, x.holder))
+                        .unwrap_or((0, None));
+                    let early = ligus_core::lamport::plausible_keys(&base_log)
+                        .last()
+                        .copied();
                     let payload = if rng.next().is_multiple_of(2) {
-                        SessionEvent::TurnClaimed { trigger_id: trigger, device_id: me, epoch: epoch + 1, supersedes: holder, repo_id: Some(repo) }
+                        SessionEvent::TurnClaimed {
+                            trigger_id: trigger,
+                            device_id: me,
+                            epoch: epoch + 1,
+                            supersedes: holder,
+                            repo_id: Some(repo),
+                        }
                     } else {
                         let mut m = ChatMessage::new(MessageRole::Assistant, "ligus", "forged");
                         m.reply_to_message_id = Some(trigger);
                         m.origin_device_id = Some(me);
                         SessionEvent::MessageAppended { message: m }
                     };
-                    let env = draft(&w, &mut clock, devs[i].name, chat, payload, &devs[i].log, pre_revoke_frontier, Some(early));
+                    let env = draft(
+                        &w,
+                        &mut clock,
+                        devs[i].name,
+                        chat,
+                        payload,
+                        &devs[i].log,
+                        pre_revoke_frontier,
+                        Some(early),
+                    );
                     written.insert(env.event_id);
                     all.insert(env.event_id, env.clone());
                     devs[i].log.push(env.clone());
@@ -291,8 +398,14 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
                 if hrng.next().is_multiple_of(5) {
                     let s = fold(&devs[i].log, &timeline);
                     let slot = s.turn_dispatch.get(&trigger).cloned().unwrap_or_default();
-                    let early = ligus_core::lamport::plausible_keys(&base_log).last().copied();
-                    let head = if hrng.next().is_multiple_of(2) { Some(early) } else { None };
+                    let early = ligus_core::lamport::plausible_keys(&base_log)
+                        .last()
+                        .copied();
+                    let head = if hrng.next().is_multiple_of(2) {
+                        Some(early)
+                    } else {
+                        None
+                    };
                     let since = (slot.since - EPOCH_SECS * 1000).max(0) as u64 / 1000;
                     let at = match hrng.next() % 4 {
                         0 => Some(since + 15),
@@ -301,17 +414,47 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
                         _ => Some(hrng.next() % 60),
                     };
                     let payload = match hrng.next() % 5 {
-                        0 => SessionEvent::TurnClaimed { trigger_id: trigger, device_id: me, epoch: 1, supersedes: None, repo_id: Some(repo) },
-                        1 => SessionEvent::TurnClaimed { trigger_id: trigger, device_id: me, epoch: slot.epoch + 1, supersedes: Some(me), repo_id: Some(repo) },
-                        2 | 3 => SessionEvent::TurnClaimed { trigger_id: trigger, device_id: me, epoch: slot.epoch + 1, supersedes: slot.holder, repo_id: Some(repo) },
+                        0 => SessionEvent::TurnClaimed {
+                            trigger_id: trigger,
+                            device_id: me,
+                            epoch: 1,
+                            supersedes: None,
+                            repo_id: Some(repo),
+                        },
+                        1 => SessionEvent::TurnClaimed {
+                            trigger_id: trigger,
+                            device_id: me,
+                            epoch: slot.epoch + 1,
+                            supersedes: Some(me),
+                            repo_id: Some(repo),
+                        },
+                        2 | 3 => SessionEvent::TurnClaimed {
+                            trigger_id: trigger,
+                            device_id: me,
+                            epoch: slot.epoch + 1,
+                            supersedes: slot.holder,
+                            repo_id: Some(repo),
+                        },
                         _ => {
-                            let mut m = ChatMessage::new(MessageRole::Assistant, "ligus", "hostile");
+                            let mut m =
+                                ChatMessage::new(MessageRole::Assistant, "ligus", "hostile");
                             m.reply_to_message_id = Some(trigger);
                             m.origin_device_id = Some(me);
                             SessionEvent::MessageAppended { message: m }
                         }
                     };
-                    let env = draft_at(&w, &mut clock, devs[i].name, chat, payload, &devs[i].log, None, head, at, hrng.next().is_multiple_of(2));
+                    let env = draft_at(
+                        &w,
+                        &mut clock,
+                        devs[i].name,
+                        chat,
+                        payload,
+                        &devs[i].log,
+                        None,
+                        head,
+                        at,
+                        hrng.next().is_multiple_of(2),
+                    );
                     all.insert(env.event_id, env.clone());
                     devs[i].log.push(env.clone());
                     for to in 0..n {
@@ -351,7 +494,9 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
                 age: Duration::from_secs(tick),
                 holder_live: holder_idx.is_some_and(|h| {
                     let hostile = sc.hostile.is_some_and(|(x, _)| x == h);
-                    (hostile || !crashed(&devs[h], tick)) && !cut(&sc, h, i, tick) && revoked.as_ref().is_none_or(|(k, _)| *k != h)
+                    (hostile || !crashed(&devs[h], tick))
+                        && !cut(&sc, h, i, tick)
+                        && revoked.as_ref().is_none_or(|(k, _)| *k != h)
                 }),
                 holder_gone: holder.is_some_and(|h| dispatch::holder_gone(&roster, h)),
             };
@@ -359,8 +504,23 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
             let mut step = dispatch::decide(&s, trigger, chat_repo, &view);
             let mut fresh = s;
             if let Step::Claim(c) = step {
-                let payload = SessionEvent::TurnClaimed { trigger_id: trigger, device_id: me, epoch: c.epoch, supersedes: c.supersedes, repo_id: c.repo_id };
-                let env = draft(&w, &mut clock, devs[i].name, chat, payload, &devs[i].log, None, None);
+                let payload = SessionEvent::TurnClaimed {
+                    trigger_id: trigger,
+                    device_id: me,
+                    epoch: c.epoch,
+                    supersedes: c.supersedes,
+                    repo_id: c.repo_id,
+                };
+                let env = draft(
+                    &w,
+                    &mut clock,
+                    devs[i].name,
+                    chat,
+                    payload,
+                    &devs[i].log,
+                    None,
+                    None,
+                );
                 all.insert(env.event_id, env.clone());
                 devs[i].log.push(env.clone());
                 for to in 0..n {
@@ -369,13 +529,25 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
                     }
                 }
                 fresh = fold(&devs[i].log, &timeline);
-                step = if fresh.turn_claims.get(&trigger) == Some(&me) { Step::Run } else { Step::Wait(Duration::from_secs(1)) };
+                step = if fresh.turn_claims.get(&trigger) == Some(&me) {
+                    Step::Run
+                } else {
+                    Step::Wait(Duration::from_secs(1))
+                };
             }
             match step {
                 Step::Run => {
                     // Already answered (and not fenced) here: nothing to do.
-                    let mine = fresh.messages.iter().any(|m| m.reply_to_message_id == Some(trigger) && m.origin_device_id == Some(me) && !m.superseded && m.role == MessageRole::Assistant);
-                    let refused = fresh.messages.iter().any(|m| m.role == MessageRole::System && m.origin_device_id == Some(me));
+                    let mine = fresh.messages.iter().any(|m| {
+                        m.reply_to_message_id == Some(trigger)
+                            && m.origin_device_id == Some(me)
+                            && !m.superseded
+                            && m.role == MessageRole::Assistant
+                    });
+                    let refused = fresh
+                        .messages
+                        .iter()
+                        .any(|m| m.role == MessageRole::System && m.origin_device_id == Some(me));
                     if mine || (sc.repo_chat && !devs[i].spec.covers && refused) {
                         devs[i].wait_until = tick + 1;
                         continue;
@@ -390,7 +562,16 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
                         m
                     };
                     m.origin_device_id = Some(me);
-                    let env = draft(&w, &mut clock, devs[i].name, chat, SessionEvent::MessageAppended { message: m }, &devs[i].log, None, None);
+                    let env = draft(
+                        &w,
+                        &mut clock,
+                        devs[i].name,
+                        chat,
+                        SessionEvent::MessageAppended { message: m },
+                        &devs[i].log,
+                        None,
+                        None,
+                    );
                     all.insert(env.event_id, env.clone());
                     devs[i].log.push(env.clone());
                     for to in 0..n {
@@ -442,14 +623,33 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
     // Nothing the revoked device wrote after its revocation holds or commits.
     if let Some((k, written)) = &revoked {
         let kid = devs[*k].id;
-        if let Some(a) = final_fold.turn_dispatch.get(&trigger).and_then(|x| x.answer) {
+        if let Some(a) = final_fold
+            .turn_dispatch
+            .get(&trigger)
+            .and_then(|x| x.answer)
+        {
             let e = everything.iter().find(|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == a)).unwrap();
-            prop_assert!(!written.contains(&e.event_id), "a post-revocation answer committed");
+            prop_assert!(
+                !written.contains(&e.event_id),
+                "a post-revocation answer committed"
+            );
         }
-        let claims_after: Vec<&SessionEventEnvelope> = everything.iter().filter(|e| written.contains(&e.event_id)).collect();
-        let verdicts = ligus_core::fold_decisions(&everything, None, None, WorkspaceAuthz::Timeline(&timeline));
+        let claims_after: Vec<&SessionEventEnvelope> = everything
+            .iter()
+            .filter(|e| written.contains(&e.event_id))
+            .collect();
+        let verdicts = ligus_core::fold_decisions(
+            &everything,
+            None,
+            None,
+            WorkspaceAuthz::Timeline(&timeline),
+        );
         for e in claims_after {
-            prop_assert_ne!(verdicts.get(&e.event_id).copied(), Some(ligus_core::Verdict::Allowed), "post-revocation event folded");
+            prop_assert_ne!(
+                verdicts.get(&e.event_id).copied(),
+                Some(ligus_core::Verdict::Allowed),
+                "post-revocation event folded"
+            );
         }
         let _ = kid;
     }
@@ -467,13 +667,24 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
         .collect();
     let answers = committed(&final_fold, trigger);
     if !able.is_empty() {
-        prop_assert_eq!(answers.len(), 1, "no answer although {:?} could answer", able);
+        prop_assert_eq!(
+            answers.len(),
+            1,
+            "no answer although {:?} could answer",
+            able
+        );
     }
     if let Some(a) = answers.first() {
         let m = final_fold.messages.iter().find(|m| m.id == *a).unwrap();
-        let by = devs.iter().position(|d| Some(d.id) == m.origin_device_id).unwrap();
+        let by = devs
+            .iter()
+            .position(|d| Some(d.id) == m.origin_device_id)
+            .unwrap();
         if sc.repo_chat && sc.hostile.is_none_or(|(h, _)| h != by) {
-            prop_assert!(devs[by].spec.covers, "a repo chat answered by a device without the repo");
+            prop_assert!(
+                devs[by].spec.covers,
+                "a repo chat answered by a device without the repo"
+            );
         }
     }
     Ok(())
@@ -494,7 +705,14 @@ fn signed_chat(repo_chat: bool) -> (SignedWorld, Uuid, Uuid) {
     let mut w = base().clone();
     let chat = w.chat("owner", "t");
     if repo_chat {
-        w.say(chat, "owner", SessionEvent::ChatRepoSet { repo_id: Some(repo_id(WEFIT)), base_branch: String::new() });
+        w.say(
+            chat,
+            "owner",
+            SessionEvent::ChatRepoSet {
+                repo_id: Some(repo_id(WEFIT)),
+                base_branch: String::new(),
+            },
+        );
     }
     let m = ChatMessage::new(MessageRole::User, "owner", "@ligus go");
     let t = m.id;
@@ -502,10 +720,28 @@ fn signed_chat(repo_chat: bool) -> (SignedWorld, Uuid, Uuid) {
     (w, chat, t)
 }
 
-fn claim(w: &mut SignedWorld, chat: Uuid, by: &str, t: Uuid, epoch: u32, supersedes: Option<&str>, repo: Option<Uuid>) -> Uuid {
+fn claim(
+    w: &mut SignedWorld,
+    chat: Uuid,
+    by: &str,
+    t: Uuid,
+    epoch: u32,
+    supersedes: Option<&str>,
+    repo: Option<Uuid>,
+) -> Uuid {
     let device_id = w.people[by].device_id;
     let supersedes = supersedes.map(|s| w.people[s].device_id);
-    w.say(chat, by, SessionEvent::TurnClaimed { trigger_id: t, device_id, epoch, supersedes, repo_id: repo })
+    w.say(
+        chat,
+        by,
+        SessionEvent::TurnClaimed {
+            trigger_id: t,
+            device_id,
+            epoch,
+            supersedes,
+            repo_id: repo,
+        },
+    )
 }
 
 fn answer(w: &mut SignedWorld, chat: Uuid, by: &str, t: Uuid) -> Uuid {
@@ -549,7 +785,13 @@ fn a_backdated_claim_from_a_revoked_device_is_ignored_and_its_old_claim_hands_ov
     // The owner revokes d1, holding its claim (covered by the watermark).
     let d1 = w.people["d1"].device_id;
     let wm = ligus_core::watermark::heads_of(&w.chats[&chat], chat, &BTreeSet::from([d1]));
-    w.push("owner", SessionEvent::DeviceRevoked { device_id: d1, watermark: wm });
+    w.push(
+        "owner",
+        SessionEvent::DeviceRevoked {
+            device_id: d1,
+            watermark: wm,
+        },
+    );
     let roster = w.roster();
     assert!(dispatch::holder_gone(&roster, d1));
     // d1 keeps writing with an old frontier: a hand-over to itself and an
@@ -558,7 +800,13 @@ fn a_backdated_claim_from_a_revoked_device_is_ignored_and_its_old_claim_hands_ov
     let mut clock = 0;
     let base = ligus_core::lamport::plausible_keys(&local).first().copied();
     for payload in [
-        SessionEvent::TurnClaimed { trigger_id: t, device_id: d1, epoch: 2, supersedes: Some(d1), repo_id: None },
+        SessionEvent::TurnClaimed {
+            trigger_id: t,
+            device_id: d1,
+            epoch: 2,
+            supersedes: Some(d1),
+            repo_id: None,
+        },
         {
             let mut m = ChatMessage::new(MessageRole::Assistant, "ligus", "late");
             m.reply_to_message_id = Some(t);
@@ -566,7 +814,16 @@ fn a_backdated_claim_from_a_revoked_device_is_ignored_and_its_old_claim_hands_ov
             SessionEvent::MessageAppended { message: m }
         },
     ] {
-        let env = draft(&w, &mut clock, "d1", chat, payload, &local, before, Some(base));
+        let env = draft(
+            &w,
+            &mut clock,
+            "d1",
+            chat,
+            payload,
+            &local,
+            before,
+            Some(base),
+        );
         w.push_env(Some(chat), env);
     }
     let s = w.state(chat);
@@ -574,8 +831,18 @@ fn a_backdated_claim_from_a_revoked_device_is_ignored_and_its_old_claim_hands_ov
     assert!(s.turn_dispatch[&t].answer.is_none());
     // Another eligible device hands the turn over at once.
     let me = w.people["d2"].device_id;
-    let v = View { me, eligible: true, coverage: Coverage::NoRepo, waited: Duration::ZERO, age: Duration::ZERO, holder_live: true, holder_gone: true };
-    let Step::Claim(c) = dispatch::decide(&s, t, None, &v) else { panic!("expected a hand-over") };
+    let v = View {
+        me,
+        eligible: true,
+        coverage: Coverage::NoRepo,
+        waited: Duration::ZERO,
+        age: Duration::ZERO,
+        holder_live: true,
+        holder_gone: true,
+    };
+    let Step::Claim(c) = dispatch::decide(&s, t, None, &v) else {
+        panic!("expected a hand-over")
+    };
     assert_eq!((c.epoch, c.supersedes), (2, Some(d1)));
     claim(&mut w, chat, "d2", t, 2, Some("d1"), None);
     let a = answer(&mut w, chat, "d2", t);
@@ -589,11 +856,32 @@ fn a_removed_members_device_is_gone_and_its_later_claims_never_fold() {
     let d3 = w.people["d3"].device_id;
     let wm = ligus_core::watermark::heads_of(&w.chats[&chat], chat, &BTreeSet::from([d3]));
     let member = w.people["d3"].actor().id;
-    w.push("owner", SessionEvent::MemberRemoved { member_id: member, watermark: wm });
+    w.push(
+        "owner",
+        SessionEvent::MemberRemoved {
+            member_id: member,
+            watermark: wm,
+        },
+    );
     assert!(dispatch::holder_gone(&w.roster(), d3));
     let local = w.chats[&chat].clone();
     let mut clock = 0;
-    let env = draft(&w, &mut clock, "d3", chat, SessionEvent::TurnClaimed { trigger_id: t, device_id: d3, epoch: 0, supersedes: None, repo_id: None }, &local, before, None);
+    let env = draft(
+        &w,
+        &mut clock,
+        "d3",
+        chat,
+        SessionEvent::TurnClaimed {
+            trigger_id: t,
+            device_id: d3,
+            epoch: 0,
+            supersedes: None,
+            repo_id: None,
+        },
+        &local,
+        before,
+        None,
+    );
     w.push_env(Some(chat), env);
     assert!(!w.state(chat).turn_claims.contains_key(&t));
     // The turn is still free for a member's device.
@@ -604,7 +892,13 @@ fn a_removed_members_device_is_gone_and_its_later_claims_never_fold() {
 #[test]
 fn the_chat_repo_set_in_the_fold_is_what_a_claim_covers() {
     let (w, chat, _) = signed_chat(true);
-    assert_eq!(w.state(chat).repo, Some(ChatRepo { repo_id: Some(repo_id(WEFIT)), ..Default::default() }));
+    assert_eq!(
+        w.state(chat).repo,
+        Some(ChatRepo {
+            repo_id: Some(repo_id(WEFIT)),
+            ..Default::default()
+        })
+    );
 }
 
 /// Review (adversarial, prove-then-fix): a member's device slips a hand-over
@@ -619,25 +913,72 @@ fn a_member_cannot_retroactively_take_a_promptly_answered_turn() {
     let d1 = w.people["d1"].device_id;
     let d2 = w.people["d2"].device_id;
     let mut log = w.chats[&chat].clone();
-    let claim = draft_at(&w, &mut clock, "d1", chat, SessionEvent::TurnClaimed { trigger_id: t, device_id: d1, epoch: 0, supersedes: None, repo_id: None }, &log, None, None, Some(100), false);
+    let claim = draft_at(
+        &w,
+        &mut clock,
+        "d1",
+        chat,
+        SessionEvent::TurnClaimed {
+            trigger_id: t,
+            device_id: d1,
+            epoch: 0,
+            supersedes: None,
+            repo_id: None,
+        },
+        &log,
+        None,
+        None,
+        Some(100),
+        false,
+    );
     log.push(claim.clone());
     let mut m = ChatMessage::new(MessageRole::Assistant, "ligus", "real");
     m.reply_to_message_id = Some(t);
     m.origin_device_id = Some(d1);
     let real = m.id;
-    let ans = draft_at(&w, &mut clock, "d1", chat, SessionEvent::MessageAppended { message: m }, &log, None, None, Some(101), false);
+    let ans = draft_at(
+        &w,
+        &mut clock,
+        "d1",
+        chat,
+        SessionEvent::MessageAppended { message: m },
+        &log,
+        None,
+        None,
+        Some(101),
+        false,
+    );
     // d2 holds only up to d1's claim (backdated): its events sort before
     // d1's answer.
     let upto_claim = log.clone();
     log.push(ans.clone());
-    let claim_key = ligus_core::lamport::plausible_keys(&upto_claim).last().copied();
+    let claim_key = ligus_core::lamport::plausible_keys(&upto_claim)
+        .last()
+        .copied();
     for when in [102u64, 125] {
         let mut w2 = w.clone();
         let mut c2 = clock;
         // Same lamport as the real answer: the attacker grinds its event id
         // to sort first.
         let hand = loop {
-            let h = draft_at(&w2, &mut c2, "d2", chat, SessionEvent::TurnClaimed { trigger_id: t, device_id: d2, epoch: 2, supersedes: Some(d1), repo_id: None }, &upto_claim, None, Some(claim_key), Some(when), true);
+            let h = draft_at(
+                &w2,
+                &mut c2,
+                "d2",
+                chat,
+                SessionEvent::TurnClaimed {
+                    trigger_id: t,
+                    device_id: d2,
+                    epoch: 2,
+                    supersedes: Some(d1),
+                    repo_id: None,
+                },
+                &upto_claim,
+                None,
+                Some(claim_key),
+                Some(when),
+                true,
+            );
             if h.canonical_key() < ans.canonical_key() {
                 break h;
             }
@@ -648,14 +989,41 @@ fn a_member_cannot_retroactively_take_a_promptly_answered_turn() {
         fake.reply_to_message_id = Some(t);
         fake.origin_device_id = Some(d2);
         let fake_id = fake.id;
-        let fake_env = draft_at(&w2, &mut c2, "d2", chat, SessionEvent::MessageAppended { message: fake }, &mine, None, Some(Some(CfgFrontier { lamport: hand.lamport, event_id: hand.event_id })), Some(when), true);
+        let fake_env = draft_at(
+            &w2,
+            &mut c2,
+            "d2",
+            chat,
+            SessionEvent::MessageAppended { message: fake },
+            &mine,
+            None,
+            Some(Some(CfgFrontier {
+                lamport: hand.lamport,
+                event_id: hand.event_id,
+            })),
+            Some(when),
+            true,
+        );
         for e in [claim.clone(), ans.clone(), hand, fake_env] {
             w2.push_env(Some(chat), e);
         }
         let s = w2.state(chat);
-        assert!(hand_sorted_before(&w2, chat, real), "the attack's events sort before the real answer");
-        assert_eq!(s.turn_dispatch[&t].answer, Some(real), "hand-over signed at {when}");
-        assert!(s.messages.iter().find(|m| m.id == fake_id).unwrap().superseded);
+        assert!(
+            hand_sorted_before(&w2, chat, real),
+            "the attack's events sort before the real answer"
+        );
+        assert_eq!(
+            s.turn_dispatch[&t].answer,
+            Some(real),
+            "hand-over signed at {when}"
+        );
+        assert!(
+            s.messages
+                .iter()
+                .find(|m| m.id == fake_id)
+                .unwrap()
+                .superseded
+        );
     }
 }
 
@@ -664,6 +1032,8 @@ fn hand_sorted_before(w: &SignedWorld, chat: Uuid, real: Uuid) -> bool {
     evs.sort_by_key(|e| e.canonical_key());
     let pos = |pred: &dyn Fn(&SessionEventEnvelope) -> bool| evs.iter().position(pred);
     let hand = pos(&|e| matches!(e.payload, SessionEvent::TurnClaimed { epoch: 2, .. }));
-    let ans = pos(&|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == real));
+    let ans = pos(
+        &|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == real),
+    );
     hand < ans
 }

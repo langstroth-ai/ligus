@@ -63,8 +63,11 @@ pub fn clean_display_name(name: &str) -> String {
 /// that look alike.
 pub fn name_skeleton(name: &str) -> String {
     // A capital I looks like a small l in most UI fonts: fold it first.
-    let lower: String =
-        clean_display_name(name).chars().map(|c| if c == 'I' { 'l' } else { c }).flat_map(char::to_lowercase).collect();
+    let lower: String = clean_display_name(name)
+        .chars()
+        .map(|c| if c == 'I' { 'l' } else { c })
+        .flat_map(char::to_lowercase)
+        .collect();
     let folded: String = lower
         .chars()
         .filter(|c| !c.is_whitespace() && !matches!(c, '.' | '_' | '-' | '\u{00B7}'))
@@ -121,12 +124,21 @@ mod tests {
     fn display_name_bidi_controls_stripped() {
         // "Ada" with a right-to-left override and a pop: renders reversed.
         assert_eq!(clean_display_name("\u{202E}adA\u{202C}"), "adA");
-        assert_eq!(clean_display_name("A\u{200B}d\u{200D}a\u{2066}\u{2069}"), "Ada");
-        assert_eq!(clean_display_name("\u{FEFF}Ada\u{2028}Lovelace\u{0007}"), "Ada Lovelace");
+        assert_eq!(
+            clean_display_name("A\u{200B}d\u{200D}a\u{2066}\u{2069}"),
+            "Ada"
+        );
+        assert_eq!(
+            clean_display_name("\u{FEFF}Ada\u{2028}Lovelace\u{0007}"),
+            "Ada Lovelace"
+        );
         assert_eq!(clean_display_name("  Ada \t\n Lovelace  "), "Ada Lovelace");
         assert_eq!(clean_display_name("\u{3164}"), "");
         assert_eq!(clean_display_name("Zoë Ångström 李"), "Zoë Ångström 李");
-        for c in ['\u{202A}', '\u{202B}', '\u{202D}', '\u{2067}', '\u{2068}', '\u{200E}', '\u{200F}', '\u{061C}'] {
+        for c in [
+            '\u{202A}', '\u{202B}', '\u{202D}', '\u{2067}', '\u{2068}', '\u{200E}', '\u{200F}',
+            '\u{061C}',
+        ] {
             assert_eq!(clean_display_name(&format!("x{c}y")), "xy", "{:?}", c);
         }
     }
@@ -148,7 +160,10 @@ mod tests {
             #[serde(serialize_with = "ser_clean")]
             n: String,
         }
-        let j = serde_json::to_string(&D { n: "\u{202E}x".into() }).unwrap();
+        let j = serde_json::to_string(&D {
+            n: "\u{202E}x".into(),
+        })
+        .unwrap();
         assert_eq!(j, r#"{"n":"x"}"#);
     }
 }

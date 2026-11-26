@@ -66,7 +66,6 @@ pub fn token_channel_ok(listen: std::net::SocketAddr, via_tunnel: bool, operator
     via_tunnel || (operator && listen.ip().is_loopback())
 }
 
-
 fn require_secure(s: &Shared, peer: Option<&TunnelPeer>) -> ApiResult<()> {
     if secure_channel(s, peer) {
         Ok(())
@@ -91,7 +90,12 @@ pub fn forge_presence_applies(_delegated: bool, _rules: u32) -> bool {
 fn forge_gate(s: &Shared, peer: Option<&TunnelPeer>, action: &str) -> ApiResult<()> {
     let (delegated, rules) = {
         let svc = s.lock();
-        let rules = svc.load_in(s.ws, ligus_core::workspace_config_session_id(s.ws)).ok().flatten().map(|c| c.authz.rules).unwrap_or(1);
+        let rules = svc
+            .load_in(s.ws, ligus_core::workspace_config_session_id(s.ws))
+            .ok()
+            .flatten()
+            .map(|c| c.authz.rules)
+            .unwrap_or(1);
         (svc.is_delegated(), rules)
     };
     if !forge_presence_applies(delegated, rules) {
@@ -105,7 +109,9 @@ fn parse_id(raw: &str) -> ApiResult<ForgeId> {
 }
 
 fn handle(s: &Shared, id: &ForgeId) -> ApiResult<ForgeHandle> {
-    s.repos.forge(&s.cfg.data_dir, id).ok_or_else(|| ApiError::not_found("code host connection"))
+    s.repos
+        .forge(&s.cfg.data_dir, id)
+        .ok_or_else(|| ApiError::not_found("code host connection"))
 }
 
 fn forge_err(e: ligus_forge::ForgeError) -> ApiError {
@@ -123,8 +129,13 @@ fn forge_err(e: ligus_forge::ForgeError) -> ApiError {
 /// Edit `forges.toml` under the data dir's forges lock (a token refresh in
 /// another process saves its expiry under it too) and the repos lock, then
 /// reload.
-async fn edit_connections<T>(s: &Shared, f: impl FnOnce(&mut Connections) -> ApiResult<T>) -> ApiResult<T> {
-    let _forges = ligus_forge::conn::ForgesLock::acquire_async(&s.cfg.data_dir).await.map_err(forge_err)?;
+async fn edit_connections<T>(
+    s: &Shared,
+    f: impl FnOnce(&mut Connections) -> ApiResult<T>,
+) -> ApiResult<T> {
+    let _forges = ligus_forge::conn::ForgesLock::acquire_async(&s.cfg.data_dir)
+        .await
+        .map_err(forge_err)?;
     let out = {
         let _g = s.repos.bindings.lock().unwrap_or_else(|e| e.into_inner());
         let mut all = Connections::load(&s.cfg.data_dir);
@@ -140,7 +151,11 @@ async fn dto(s: &Shared, h: &ForgeHandle) -> Value {
     let st = super::repos_api::forge_status_pub(&s.repos, h).await;
     let mut v = forge_dto(h, Some(&st));
     let present = forge_cmd::token_store(&s.cfg.data_dir).present(h.id());
-    v["hasRead"] = json!(h.conn.auth == AuthSource::Gh || present.contains(&Purpose::Read) || present.contains(&Purpose::Write));
+    v["hasRead"] = json!(
+        h.conn.auth == AuthSource::Gh
+            || present.contains(&Purpose::Read)
+            || present.contains(&Purpose::Write)
+    );
     v
 }
 
@@ -150,7 +165,9 @@ pub async fn list(State(s): S, peer: Option<Extension<TunnelPeer>>) -> ApiResult
     for h in s.repos.forges(&s.cfg.data_dir) {
         out.push(dto(&s, &h).await);
     }
-    Ok(Json(json!({ "forges": out, "tokenEntry": secure_channel(&s, peer.as_deref()) })))
+    Ok(Json(
+        json!({ "forges": out, "tokenEntry": secure_channel(&s, peer.as_deref()) }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -168,13 +185,24 @@ pub struct AddReq {
 }
 
 /// `POST /v1/forges`
-pub async fn add(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Json<AddReq>) -> ApiResult<Json<Value>> {
+pub async fn add(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Json(req): Json<AddReq>,
+) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
     forge_gate(&s, peer.as_deref(), "forge_add")?;
-    let (kind, flavor) = forge_cmd::parse_kind(&req.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let (kind, flavor) =
+        forge_cmd::parse_kind(&req.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
     let auth = match req.auth.as_deref().map(str::trim) {
         None | Some("") => {
-            if kind == ligus_forge::ForgeKind::GitHub && ligus_forge::conn::validate_base_url(&req.base_url).ok().and_then(|b| ligus_forge::spec::host_of(&b)).as_deref() == Some("github.com") {
+            if kind == ligus_forge::ForgeKind::GitHub
+                && ligus_forge::conn::validate_base_url(&req.base_url)
+                    .ok()
+                    .and_then(|b| ligus_forge::spec::host_of(&b))
+                    .as_deref()
+                    == Some("github.com")
+            {
                 AuthSource::Gh
             } else {
                 AuthSource::None
@@ -183,19 +211,31 @@ pub async fn add(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Js
         Some("gh") => AuthSource::Gh,
         Some("token") => AuthSource::Token,
         Some("none") => AuthSource::None,
-        Some(o) => return Err(ApiError::bad_request(format!("auth is gh, token or none (got {o}); device sign-in sets itself"))),
+        Some(o) => {
+            return Err(ApiError::bad_request(format!(
+                "auth is gh, token or none (got {o}); device sign-in sets itself"
+            )))
+        }
     };
     let mut c = Connection::new(kind, &req.base_url, auth).map_err(forge_err)?;
     if flavor.is_some() && c.flavor.is_none() {
         c.flavor = flavor;
     }
-    c.client_id = req.client_id.map(|x| x.trim().to_string()).filter(|x| !x.is_empty() && x.len() <= 200 && x.chars().all(|ch| ch.is_ascii_graphic()));
+    c.client_id = req
+        .client_id
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty() && x.len() <= 200 && x.chars().all(|ch| ch.is_ascii_graphic()));
     c.internal = req.internal.unwrap_or(false);
-    ligus_forge::conn::check_address(&c).await.map_err(forge_err)?;
+    ligus_forge::conn::check_address(&c)
+        .await
+        .map_err(forge_err)?;
     let id = c.id.clone();
     edit_connections(&s, |all| {
         if all.get(&id).is_some() {
-            return Err(ApiError::new(StatusCode::CONFLICT, format!("{id} is already connected")));
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                format!("{id} is already connected"),
+            ));
         }
         all.upsert(c);
         Ok(())
@@ -206,14 +246,24 @@ pub async fn add(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Js
 }
 
 /// `DELETE /v1/forges/:id`
-pub async fn remove(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+pub async fn remove(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
     forge_gate(&s, peer.as_deref(), "forge_remove")?;
     let id = parse_id(&id)?;
     // First end any device sign-in for it: its poll then stores nothing.
-    s.repos.device.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+    s.repos
+        .device
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
     let removed = edit_connections(&s, |all| Ok(all.remove(&id))).await?;
-    forge_cmd::token_store(&s.cfg.data_dir).delete_all(&id).map_err(forge_err)?;
+    forge_cmd::token_store(&s.cfg.data_dir)
+        .delete_all(&id)
+        .map_err(forge_err)?;
     if !removed {
         return Err(ApiError::not_found("code host connection"));
     }
@@ -223,13 +273,19 @@ pub async fn remove(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): 
 /// `POST /v1/forges/:id/test`: sign in and remember who as. Gated like the
 /// other writes (it sends the box's token and saves the login); the answer
 /// is the status only, never what the host sent back.
-pub async fn test(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+pub async fn test(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
     forge_gate(&s, peer.as_deref(), "forge_test")?;
     let id = parse_id(&id)?;
     let h = handle(&s, &id)?;
     if !s.repos.online() {
-        return Ok(Json(json!({ "ok": false, "error": super::repos_api::OFFLINE })));
+        return Ok(Json(
+            json!({ "ok": false, "error": super::repos_api::OFFLINE }),
+        ));
     }
     let res = h.forge.whoami().await;
     let v = match res {
@@ -245,7 +301,9 @@ pub async fn test(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Pa
             .await?;
             json!({ "ok": true, "user": u.login, "userId": u.id })
         }
-        Ok(None) => json!({ "ok": false, "error": h.forge.signed_out_reason().unwrap_or_else(|| "no credentials".into()) }),
+        Ok(None) => {
+            json!({ "ok": false, "error": h.forge.signed_out_reason().unwrap_or_else(|| "no credentials".into()) })
+        }
         Err(e) => json!({ "ok": false, "error": e.summary() }),
     };
     Ok(Json(v))
@@ -258,18 +316,30 @@ pub struct TokenReq {
 }
 
 /// `PUT /v1/forges/:id/token`: tunnel or loopback only.
-pub async fn put_token(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Json(req): Json<TokenReq>) -> ApiResult<Json<Value>> {
+pub async fn put_token(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+    Json(req): Json<TokenReq>,
+) -> ApiResult<Json<Value>> {
     require_secure(&s, peer.as_deref())?;
     ensure_can_write(&s, None)?;
     forge_gate(&s, peer.as_deref(), "forge_token")?;
     let id = parse_id(&id)?;
     let h = handle(&s, &id)?;
     if h.conn.auth == AuthSource::Gh {
-        return Err(ApiError::new(StatusCode::CONFLICT, "this connection uses the box's gh login; add a token connection instead"));
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "this connection uses the box's gh login; add a token connection instead",
+        ));
     }
-    let purpose = Purpose::parse(&req.purpose).ok_or_else(|| ApiError::bad_request("purpose is read or write"))?;
-    let token = forge_cmd::clean_token(&req.token).map_err(|e| ApiError::bad_request(e.to_string()))?;
-    forge_cmd::token_store(&s.cfg.data_dir).put(&id, purpose, &token).map_err(forge_err)?;
+    let purpose = Purpose::parse(&req.purpose)
+        .ok_or_else(|| ApiError::bad_request("purpose is read or write"))?;
+    let token =
+        forge_cmd::clean_token(&req.token).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    forge_cmd::token_store(&s.cfg.data_dir)
+        .put(&id, purpose, &token)
+        .map_err(forge_err)?;
     drop(token);
     edit_connections(&s, |all| {
         if let Some(c) = all.get_mut(&id) {
@@ -290,18 +360,28 @@ pub struct PurposeQuery {
 }
 
 /// `DELETE /v1/forges/:id/token?purpose=`
-pub async fn delete_token(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Query(q): Query<PurposeQuery>) -> ApiResult<Json<Value>> {
+pub async fn delete_token(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+    Query(q): Query<PurposeQuery>,
+) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
     forge_gate(&s, peer.as_deref(), "forge_token")?;
     let id = parse_id(&id)?;
-    let purpose = Purpose::parse(&q.purpose).ok_or_else(|| ApiError::bad_request("purpose is read or write"))?;
-    forge_cmd::token_store(&s.cfg.data_dir).delete(&id, purpose).map_err(forge_err)?;
+    let purpose = Purpose::parse(&q.purpose)
+        .ok_or_else(|| ApiError::bad_request("purpose is read or write"))?;
+    forge_cmd::token_store(&s.cfg.data_dir)
+        .delete(&id, purpose)
+        .map_err(forge_err)?;
     s.repos.invalidate();
     Ok(Json(json!({ "deleted": purpose.as_str() })))
 }
 
 /// A device sign-in's nonce: tells a stale poller from the current one.
-fn device_nonce(fill: fn(&mut [u8]) -> Result<(), getrandom::Error>) -> Result<u64, getrandom::Error> {
+fn device_nonce(
+    fill: fn(&mut [u8]) -> Result<(), getrandom::Error>,
+) -> Result<u64, getrandom::Error> {
     let mut b = [0u8; 8];
     fill(&mut b)?;
     Ok(u64::from_le_bytes(b))
@@ -309,21 +389,36 @@ fn device_nonce(fill: fn(&mut [u8]) -> Result<(), getrandom::Error>) -> Result<u
 
 /// `POST /v1/forges/:id/auth/device`: start a device sign-in (only ever on
 /// this request: S12). The box polls; the phone opens the URI.
-pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+pub async fn device_start(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
     require_secure(&s, peer.as_deref())?;
     ensure_can_write(&s, None)?;
     forge_gate(&s, peer.as_deref(), "forge_token")?;
     let id = parse_id(&id)?;
     let h = handle(&s, &id)?;
     if h.conn.auth == AuthSource::Gh {
-        return Err(ApiError::new(StatusCode::CONFLICT, "this connection uses the box's gh login"));
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "this connection uses the box's gh login",
+        ));
     }
     let ep = ligus_forge::device::endpoints(&h.conn).map_err(forge_err)?;
     if !s.repos.online() {
-        return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, super::repos_api::OFFLINE));
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            super::repos_api::OFFLINE,
+        ));
     }
     let start = ligus_forge::device::start(&ep).await.map_err(forge_err)?;
-    let nonce = device_nonce(getrandom::fill).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("no OS randomness: {e}")))?;
+    let nonce = device_nonce(getrandom::fill).map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("no OS randomness: {e}"),
+        )
+    })?;
     let session = DeviceSession {
         nonce,
         user_code: start.user_code.clone(),
@@ -332,14 +427,25 @@ pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path
         state: "pending",
         error: None,
     };
-    s.repos.device.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), session);
+    s.repos
+        .device
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id.clone(), session);
     let shared = s.clone();
     let (poll_id, expires_in) = (id.clone(), start.expires_in);
     tokio::spawn(async move {
         let mut interval = start.interval;
         let deadline = Instant::now() + Duration::from_secs(expires_in);
         let set = |state: &'static str, error: Option<String>| {
-            if let Some(d) = shared.repos.device.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&poll_id).filter(|d| d.nonce == nonce) {
+            if let Some(d) = shared
+                .repos
+                .device
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(&poll_id)
+                .filter(|d| d.nonce == nonce)
+            {
                 d.state = state;
                 d.error = error;
             }
@@ -351,7 +457,14 @@ pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path
                 return;
             }
             // Removed (or replaced by another sign-in): stop polling.
-            if shared.repos.device.lock().unwrap_or_else(|e| e.into_inner()).get(&poll_id).is_none_or(|d| d.nonce != nonce) {
+            if shared
+                .repos
+                .device
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&poll_id)
+                .is_none_or(|d| d.nonce != nonce)
+            {
                 return;
             }
             match ligus_forge::device::poll(&ep, &start.device_code).await {
@@ -366,8 +479,21 @@ pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path
                     let pid = poll_id.clone();
                     let r = tokio::task::spawn_blocking(move || {
                         let data_dir = sh.cfg.data_dir.clone();
-                        let current = || sh.repos.device.lock().unwrap_or_else(|e| e.into_inner()).get(&pid).is_some_and(|d| d.nonce == nonce);
-                        ligus_forge::conn::save_device_sign_in(&data_dir, forge_cmd::token_store(&data_dir).as_ref(), &pid, &t, current)
+                        let current = || {
+                            sh.repos
+                                .device
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .get(&pid)
+                                .is_some_and(|d| d.nonce == nonce)
+                        };
+                        ligus_forge::conn::save_device_sign_in(
+                            &data_dir,
+                            forge_cmd::token_store(&data_dir).as_ref(),
+                            &pid,
+                            &t,
+                            current,
+                        )
                     })
                     .await
                     .map_err(|e| e.to_string())
@@ -383,16 +509,29 @@ pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path
             }
         }
     });
-    Ok(Json(json!({ "userCode": start.user_code, "verificationUri": start.verification_uri, "expiresIn": start.expires_in, "state": "pending" })))
+    Ok(Json(
+        json!({ "userCode": start.user_code, "verificationUri": start.verification_uri, "expiresIn": start.expires_in, "state": "pending" }),
+    ))
 }
 
 /// `GET /v1/forges/:id/auth/device`. The user code redeems the sign-in for
 /// whoever approves it first, so it is only read back over a channel a token
 /// may travel on (as starting one is).
-pub async fn device_status(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+pub async fn device_status(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
     require_secure(&s, peer.as_deref())?;
     let id = parse_id(&id)?;
-    let d = s.repos.device.lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned().ok_or_else(|| ApiError::not_found("device sign-in"))?;
+    let d = s
+        .repos
+        .device
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("device sign-in"))?;
     let mut v = json!({ "state": d.state, "userCode": d.user_code, "verificationUri": d.verification_uri, "expiresIn": d.expires_at.saturating_duration_since(Instant::now()).as_secs() });
     if let Some(e) = d.error {
         v["error"] = json!(e);
@@ -407,7 +546,10 @@ mod tests {
     #[test]
     fn device_nonce_needs_randomness() {
         assert!(super::device_nonce(|_| Err(getrandom::Error::UNSUPPORTED)).is_err());
-        assert_ne!(super::device_nonce(getrandom::fill).unwrap(), super::device_nonce(getrandom::fill).unwrap());
+        assert_ne!(
+            super::device_nonce(getrandom::fill).unwrap(),
+            super::device_nonce(getrandom::fill).unwrap()
+        );
     }
 
     #[test]
@@ -416,14 +558,35 @@ mod tests {
         let tailnet: std::net::SocketAddr = "100.101.102.103:8787".parse().unwrap();
         let wildcard: std::net::SocketAddr = "0.0.0.0:8787".parse().unwrap();
         for a in [lan, tailnet, wildcard] {
-            assert!(!super::token_channel_ok(a, false, false), "{a}: plain HTTP on a network");
-            assert!(!super::token_channel_ok(a, false, true), "{a}: plain HTTP on a network, even for the operator");
-            assert!(super::token_channel_ok(a, true, false), "{a}: through the tunnel");
+            assert!(
+                !super::token_channel_ok(a, false, false),
+                "{a}: plain HTTP on a network"
+            );
+            assert!(
+                !super::token_channel_ok(a, false, true),
+                "{a}: plain HTTP on a network, even for the operator"
+            );
+            assert!(
+                super::token_channel_ok(a, true, false),
+                "{a}: through the tunnel"
+            );
         }
-        assert!(super::token_channel_ok("127.0.0.1:8787".parse().unwrap(), false, true));
-        assert!(super::token_channel_ok("[::1]:8787".parse().unwrap(), false, true));
+        assert!(super::token_channel_ok(
+            "127.0.0.1:8787".parse().unwrap(),
+            false,
+            true
+        ));
+        assert!(super::token_channel_ok(
+            "[::1]:8787".parse().unwrap(),
+            false,
+            true
+        ));
         // D5: the phones' token on loopback (a reverse proxy on this host).
-        assert!(!super::token_channel_ok("127.0.0.1:8787".parse().unwrap(), false, false));
+        assert!(!super::token_channel_ok(
+            "127.0.0.1:8787".parse().unwrap(),
+            false,
+            false
+        ));
     }
 
     /// 5.7: presence applies to the forges API on every box (every

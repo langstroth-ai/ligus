@@ -61,7 +61,11 @@ pub struct Drafts(super::drafts::OwnedDrafts<Pending>);
 
 impl Default for Drafts {
     fn default() -> Self {
-        Self(super::drafts::OwnedDrafts::new(TTL, PER_CALLER, MAX_PENDING))
+        Self(super::drafts::OwnedDrafts::new(
+            TTL,
+            PER_CALLER,
+            MAX_PENDING,
+        ))
     }
 }
 
@@ -80,16 +84,25 @@ fn unb64(s: &str, what: &str) -> ApiResult<Vec<u8>> {
 /// one the request names (a pairing never drafts for another phone).
 pub(super) fn bound_device(s: &Shared, peer: Option<&TunnelPeer>, device: Uuid) -> ApiResult<()> {
     let Some(p) = peer else { return Ok(()) };
-    let bound = s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)).and_then(|r| r.device_id);
+    let bound = s
+        .tunnel
+        .as_ref()
+        .and_then(|t| t.registry.get(&p.pid))
+        .and_then(|r| r.device_id);
     if bound != Some(device) {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "this pairing isn't that phone's"));
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "this pairing isn't that phone's",
+        ));
     }
     Ok(())
 }
 
 fn refused(e: ChatError) -> ApiError {
     match e {
-        ChatError::Unauthorized(m) if m == ligus_runtime::chat_service::STALE_DRAFT => ApiError::new(StatusCode::CONFLICT, m),
+        ChatError::Unauthorized(m) if m == ligus_runtime::chat_service::STALE_DRAFT => {
+            ApiError::new(StatusCode::CONFLICT, m)
+        }
         ChatError::Unauthorized(m) => ApiError::new(StatusCode::FORBIDDEN, m),
         other => other.into(),
     }
@@ -111,14 +124,28 @@ fn preview(s: &Shared, action: &PhoneAction) -> Value {
     let mut v = json!({ "chatTitle": title });
     match action {
         PhoneAction::Post { .. } => v["summary"] = json!("Post a message"),
-        PhoneAction::Vote { proposal_id, approved, .. } => {
-            let p = chat.as_ref().and_then(|c| c.proposals.iter().find(|p| p.id == *proposal_id));
-            v["summary"] = json!(if *approved { "Approve a proposal" } else { "Reject a proposal" });
+        PhoneAction::Vote {
+            proposal_id,
+            approved,
+            ..
+        } => {
+            let p = chat
+                .as_ref()
+                .and_then(|c| c.proposals.iter().find(|p| p.id == *proposal_id));
+            v["summary"] = json!(if *approved {
+                "Approve a proposal"
+            } else {
+                "Reject a proposal"
+            });
             v["proposalTitle"] = json!(p.map(|p| shown(&p.title)).unwrap_or_default());
         }
         PhoneAction::Answer { ask_id, .. } => {
             v["summary"] = json!("Answer an agent's question");
-            v["question"] = json!(chat.as_ref().and_then(|c| c.flow.asks.get(ask_id)).map(|a| a.ask.question.clone()).unwrap_or_default());
+            v["question"] = json!(chat
+                .as_ref()
+                .and_then(|c| c.flow.asks.get(ask_id))
+                .map(|a| a.ask.question.clone())
+                .unwrap_or_default());
         }
         PhoneAction::ClearLockdown { chat_id, raises } => {
             v["summary"] = json!("Clear this chat's lockdowns");
@@ -132,18 +159,37 @@ fn preview(s: &Shared, action: &PhoneAction) -> Value {
                 .collect();
             v["lockdowns"] = json!(named);
         }
-        PhoneAction::RequestApply { proposal_id, host_device_id, .. } => {
-            let p = chat.as_ref().and_then(|c| c.proposals.iter().find(|p| p.id == *proposal_id));
+        PhoneAction::RequestApply {
+            proposal_id,
+            host_device_id,
+            ..
+        } => {
+            let p = chat
+                .as_ref()
+                .and_then(|c| c.proposals.iter().find(|p| p.id == *proposal_id));
             v["summary"] = json!("Apply an approved proposal on a host");
             v["proposalTitle"] = json!(p.map(|p| shown(&p.title)).unwrap_or_default());
             let hosts = s.lock().list_hosts(s.ws).unwrap_or_default();
-            let label = hosts.iter().find(|h| h.id == host_device_id.to_string()).map(|h| shown(&h.label));
+            let label = hosts
+                .iter()
+                .find(|h| h.id == host_device_id.to_string())
+                .map(|h| shown(&h.label));
             v["hostLabel"] = json!(label.unwrap_or_else(|| host_device_id.to_string()));
         }
         PhoneAction::WithdrawApply { .. } => v["summary"] = json!("Withdraw an apply request"),
-        PhoneAction::Archive { proposal_id, archived, .. } => {
-            let p = chat.as_ref().and_then(|c| c.proposals.iter().find(|p| p.id == *proposal_id));
-            v["summary"] = json!(if *archived { "Archive a proposal for everyone" } else { "Restore a proposal to the inbox" });
+        PhoneAction::Archive {
+            proposal_id,
+            archived,
+            ..
+        } => {
+            let p = chat
+                .as_ref()
+                .and_then(|c| c.proposals.iter().find(|p| p.id == *proposal_id));
+            v["summary"] = json!(if *archived {
+                "Archive a proposal for everyone"
+            } else {
+                "Restore a proposal to the inbox"
+            });
             v["proposalTitle"] = json!(p.map(|p| shown(&p.title)).unwrap_or_default());
         }
         PhoneAction::ProposeMemory { op, .. } => {
@@ -151,8 +197,20 @@ fn preview(s: &Shared, action: &PhoneAction) -> Value {
             let m = s.lock().memory(s.ws).unwrap_or_default();
             let (summary, title) = match op {
                 MemoryOp::Create { title, .. } => ("Propose a new memory note", shown(title)),
-                MemoryOp::Edit { entry_id, .. } => ("Propose an edit to a memory note", m.entries.get(entry_id).map(|e| shown(&e.current.title)).unwrap_or_default()),
-                MemoryOp::Remove { entry_id, .. } => ("Propose removing a memory note", m.entries.get(entry_id).map(|e| shown(&e.current.title)).unwrap_or_default()),
+                MemoryOp::Edit { entry_id, .. } => (
+                    "Propose an edit to a memory note",
+                    m.entries
+                        .get(entry_id)
+                        .map(|e| shown(&e.current.title))
+                        .unwrap_or_default(),
+                ),
+                MemoryOp::Remove { entry_id, .. } => (
+                    "Propose removing a memory note",
+                    m.entries
+                        .get(entry_id)
+                        .map(|e| shown(&e.current.title))
+                        .unwrap_or_default(),
+                ),
             };
             v["summary"] = json!(summary);
             v["noteTitle"] = json!(title);
@@ -163,18 +221,32 @@ fn preview(s: &Shared, action: &PhoneAction) -> Value {
 
 /// `POST /v1/phone-actions/prepare` → `{prepareId, kind, eventKind,
 /// presenceRequired, challenge | preimage, preview}`.
-pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Json(req): Json<PrepareReq>) -> ApiResult<Json<Value>> {
+pub async fn prepare(
+    State(s): State<std::sync::Arc<Shared>>,
+    peer: Option<Extension<TunnelPeer>>,
+    Json(req): Json<PrepareReq>,
+) -> ApiResult<Json<Value>> {
     bound_device(&s, peer.as_deref(), req.device_id)?;
     if let Some(reason) = s.lock().write_block() {
         return Err(ApiError::new(StatusCode::FORBIDDEN, reason.to_string()));
     }
     if let PhoneAction::ClearLockdown { chat_id, .. } = &req.action {
-        let locked = !s.lock().workspace_guards(s.ws)?.lockdowns_of(*chat_id).is_empty();
+        let locked = !s
+            .lock()
+            .workspace_guards(s.ws)?
+            .lockdowns_of(*chat_id)
+            .is_empty();
         if !locked {
-            return Err(ApiError::new(StatusCode::CONFLICT, "this chat isn't locked down"));
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "this chat isn't locked down",
+            ));
         }
     }
-    let (draft, presence_required) = s.lock().draft_phone_action(s.ws, req.device_id, &req.action).map_err(refused)?;
+    let (draft, presence_required) = s
+        .lock()
+        .draft_phone_action(s.ws, req.device_id, &req.action)
+        .map_err(refused)?;
     let mut preview = preview(&s, &req.action);
     let mut out = json!({
         "kind": req.action.kind(),
@@ -190,13 +262,23 @@ pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, peer: Option<Exten
         preview["origins"] = json!(r.policy.origins);
         preview["allowCredentials"] = json!(r.credential_ids);
     } else {
-        out["preimage"] = json!(b64url(&ligus_runtime::ChatService::phone_unconfirmed_preimage(&mut draft)));
+        out["preimage"] = json!(b64url(
+            &ligus_runtime::ChatService::phone_unconfirmed_preimage(&mut draft)
+        ));
     }
     out["preview"] = preview;
     let id = s
         .phone_action_drafts
         .0
-        .put(&caller(), Pending { draft, action: req.action, presence_required, presence: false })
+        .put(
+            &caller(),
+            Pending {
+                draft,
+                action: req.action,
+                presence_required,
+                presence: false,
+            },
+        )
         .map_err(super::api::draft_refused)?;
     out["prepareId"] = json!(id);
     Ok(Json(out))
@@ -220,18 +302,28 @@ pub struct PresenceReq {
 }
 
 /// `POST /v1/phone-actions/presence` → `{preimage}` (base64url).
-pub async fn presence(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<PresenceReq>) -> ApiResult<Json<Value>> {
+pub async fn presence(
+    State(s): State<std::sync::Arc<Shared>>,
+    Json(req): Json<PresenceReq>,
+) -> ApiResult<Json<Value>> {
     let (mut p, at) = s
         .phone_action_drafts
         .0
         .take_aged(&caller(), &req.prepare_id)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
     if !p.presence_required {
-        s.phone_action_drafts.0.put_back(&caller(), req.prepare_id, p, at);
-        return Err(ApiError::new(StatusCode::CONFLICT, "this action needs no passkey: sign the preimage from prepare"));
+        s.phone_action_drafts
+            .0
+            .put_back(&caller(), req.prepare_id, p, at);
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "this action needs no passkey: sign the preimage from prepare",
+        ));
     }
     if p.presence {
-        s.phone_action_drafts.0.put_back(&caller(), req.prepare_id, p, at);
+        s.phone_action_drafts
+            .0
+            .put_back(&caller(), req.prepare_id, p, at);
         return Err(ApiError::new(StatusCode::CONFLICT, "already confirmed"));
     }
     let a = PresenceAssertion {
@@ -242,7 +334,9 @@ pub async fn presence(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<P
     };
     let preimage = ligus_runtime::ChatService::phone_preimage(&mut p.draft, a);
     p.presence = true;
-    s.phone_action_drafts.0.put_back(&caller(), req.prepare_id, p, at);
+    s.phone_action_drafts
+        .0
+        .put_back(&caller(), req.prepare_id, p, at);
     Ok(Json(json!({ "preimage": b64url(&preimage) })))
 }
 
@@ -256,38 +350,70 @@ pub struct CommitReq {
 
 /// `POST /v1/phone-actions/commit` → `{committed, eventId, kind, messageId?,
 /// requestId?, proposalId?}`.
-pub async fn commit(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<CommitReq>) -> ApiResult<Json<Value>> {
-    let p = s.phone_action_drafts.0.take(&caller(), &req.prepare_id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
+pub async fn commit(
+    State(s): State<std::sync::Arc<Shared>>,
+    Json(req): Json<CommitReq>,
+) -> ApiResult<Json<Value>> {
+    let p = s
+        .phone_action_drafts
+        .0
+        .take(&caller(), &req.prepare_id)
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
     if p.presence_required && !p.presence {
-        return Err(ApiError::new(StatusCode::CONFLICT, "confirm with a passkey first (phone-actions/presence)"));
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "confirm with a passkey first (phone-actions/presence)",
+        ));
     }
     let signature = unb64(&req.signature, "signature")?;
     let action = p.action.clone();
-    let env = s.lock().append_phone_signed(p.draft, signature).map_err(refused)?;
+    let env = s
+        .lock()
+        .append_phone_signed(p.draft, signature)
+        .map_err(refused)?;
     let mut out = json!({ "committed": true, "eventId": env.event_id, "kind": action.kind() });
     match (&action, &env.payload) {
-        (PhoneAction::Post { chat_id, .. }, ligus_core::SessionEvent::MessageAppended { message }) => {
+        (
+            PhoneAction::Post { chat_id, .. },
+            ligus_core::SessionEvent::MessageAppended { message },
+        ) => {
             out["messageId"] = json!(message.id);
             let chat = s.lock().load_resolving(*chat_id).ok().flatten();
             if let Some(c) = chat {
                 s.mark_read(&c, message.id);
             }
         }
-        (PhoneAction::RequestApply { host_device_id, .. }, ligus_core::SessionEvent::ProposalApplyRequested { request }) => {
+        (
+            PhoneAction::RequestApply { host_device_id, .. },
+            ligus_core::SessionEvent::ProposalApplyRequested { request },
+        ) => {
             out["requestId"] = json!(request.id);
             if host_device_id.to_string() == s.host_id {
                 // This box applies it on its next worker tick.
                 s.worker_kick.notify_one();
             }
         }
-        (PhoneAction::ProposeMemory { .. }, ligus_core::SessionEvent::FlowRecorded { record: ligus_core::flow::FlowRecord::MemoryProposed(p) }) => {
+        (
+            PhoneAction::ProposeMemory { .. },
+            ligus_core::SessionEvent::FlowRecorded {
+                record: ligus_core::flow::FlowRecord::MemoryProposed(p),
+            },
+        ) => {
             out["proposalId"] = json!(p.proposal_id);
         }
         (PhoneAction::ClearLockdown { chat_id, .. }, _) => {
-            let who = env.actor_stamp.as_ref().map(|st| st.actor.display_name.clone()).unwrap_or_default();
+            let who = env
+                .actor_stamp
+                .as_ref()
+                .map(|st| st.actor.display_name.clone())
+                .unwrap_or_default();
             let mut svc = s.lock();
             if svc.load_resolving(*chat_id).ok().flatten().is_some() {
-                let _ = svc.post_system_note(*chat_id, s.ws, format!("{who} cleared this chat's lockdown from their phone."));
+                let _ = svc.post_system_note(
+                    *chat_id,
+                    s.ws,
+                    format!("{who} cleared this chat's lockdown from their phone."),
+                );
             }
         }
         _ => {}

@@ -1,9 +1,11 @@
-
 /// Build-time env lookup of `LIGUS_<suffix>` (blank = unset).
 fn build_env(suffix: &str) -> Option<String> {
     let name = format!("LIGUS_{suffix}");
     println!("cargo:rerun-if-env-changed={name}");
-    std::env::var(&name).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    std::env::var(&name)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn main() {
@@ -19,4 +21,3 @@ fn bake_release_tag() {
     let tag = build_env("RELEASE_TAG").unwrap_or_else(|| "dev".to_string());
     println!("cargo:rustc-env=LIGUS_RELEASE_TAG={tag}");
 }
-

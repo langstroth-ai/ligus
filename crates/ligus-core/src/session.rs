@@ -10,7 +10,6 @@ use uuid::Uuid;
 
 use crate::agent::WorkspaceAgent;
 use crate::channel::Channel;
-use crate::workspace_runtime::WorkspaceRuntime;
 use crate::chat::{ChatMessage, MessageRole};
 use crate::identity::{WorkspaceMember, WorkspaceRole};
 use crate::proposal_sets::ProposalSet;
@@ -20,6 +19,7 @@ use crate::time_util::Timestamp;
 use crate::vault::MountedVault;
 use crate::workflow::{WorkflowDefinition, WorkflowRun};
 use crate::workspace_host::WorkspaceHost;
+use crate::workspace_runtime::WorkspaceRuntime;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -200,10 +200,12 @@ impl ChatSession {
         &'a self,
         proposal: &'a ActionProposal,
     ) -> impl Iterator<Item = &'a crate::proposals::ProposalRefinement> + 'a {
-        proposal
-            .refinements
-            .iter()
-            .filter(move |r| self.authz.refinement_authors.get(&r.id).is_some_and(|a| *a == r.actor_id))
+        proposal.refinements.iter().filter(move |r| {
+            self.authz
+                .refinement_authors
+                .get(&r.id)
+                .is_some_and(|a| *a == r.actor_id)
+        })
     }
 
     /// The workspace role `actor_id` holds in this session's projected roster,
@@ -221,13 +223,20 @@ impl ChatSession {
     /// The open apply request of `proposal_id`, if any: one a person filed
     /// that no apply, failure or withdrawal has closed. A proposal has at
     /// most one (one applier per proposal; the fold refuses a second).
-    pub fn open_apply_request(&self, proposal_id: Uuid) -> Option<&crate::workspace_repo::ApplyRequest> {
+    pub fn open_apply_request(
+        &self,
+        proposal_id: Uuid,
+    ) -> Option<&crate::workspace_repo::ApplyRequest> {
         self.apply_requests
             .values()
             .find(|r| r.proposal_id == proposal_id && !self.apply_outcomes.contains_key(&r.id))
     }
 
-    pub fn new(title: impl Into<String>, workspace_id: Uuid, runtime_id: impl Into<String>) -> Self {
+    pub fn new(
+        title: impl Into<String>,
+        workspace_id: Uuid,
+        runtime_id: impl Into<String>,
+    ) -> Self {
         let now = Timestamp::now();
         Self {
             id: Uuid::new_v4(),

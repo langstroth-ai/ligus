@@ -54,7 +54,11 @@ use crate::events::{SessionEvent, SessionEventEnvelope};
 pub(crate) type CopyKey = (Option<Uuid>, Option<Vec<u8>>, Vec<u8>);
 
 pub(crate) fn copy_key(e: &SessionEventEnvelope) -> CopyKey {
-    (e.signer_device_id, e.signature.clone(), crate::crypto::canonical_preimage(e))
+    (
+        e.signer_device_id,
+        e.signature.clone(),
+        crate::crypto::canonical_preimage(e),
+    )
 }
 
 /// One kept copy as the fold tells them apart: its event id, and `0` for an
@@ -113,14 +117,24 @@ impl SignerDirectory {
         type Rotations<'r> = Vec<(&'r [u8], &'r [u8])>;
         let mut pending: BTreeMap<Uuid, Rotations<'_>> = BTreeMap::new();
         for e in &ordered {
-            if let SessionEvent::AccountKeyRotated { account_id, new_signing_public_key, succession_signature } = &e.payload {
-                pending.entry(*account_id).or_default().push((new_signing_public_key, succession_signature));
+            if let SessionEvent::AccountKeyRotated {
+                account_id,
+                new_signing_public_key,
+                succession_signature,
+            } = &e.payload
+            {
+                pending
+                    .entry(*account_id)
+                    .or_default()
+                    .push((new_signing_public_key, succession_signature));
             }
         }
         // Account → the keys rotations reached.
         let mut rotated: BTreeMap<Uuid, Vec<Vec<u8>>> = BTreeMap::new();
         for (account, mut rotations) in pending {
-            let Some(regs) = registered.get(&account) else { continue };
+            let Some(regs) = registered.get(&account) else {
+                continue;
+            };
             let mut known: Vec<Vec<u8>> = regs.iter().take(MAX_ACCOUNT_KEYS).cloned().collect();
             let base = known.len();
             let mut next = 0;
@@ -131,7 +145,8 @@ impl SignerDirectory {
                     if known.iter().any(|x| x.as_slice() == *new) {
                         return false;
                     }
-                    if known.len() < MAX_ACCOUNT_KEYS && crate::crypto::verify(&k, new, sig).is_ok() {
+                    if known.len() < MAX_ACCOUNT_KEYS && crate::crypto::verify(&k, new, sig).is_ok()
+                    {
                         known.push(new.to_vec());
                         return false;
                     }
@@ -145,7 +160,11 @@ impl SignerDirectory {
             if let SessionEvent::DeviceCertificateAdded { certificate: c } = &e.payload {
                 // An account already known to certify this device adds
                 // nothing (its certificate is checked once).
-                if out.devices.get(&c.device_id).is_some_and(|(_, a)| a.contains(&c.account_id)) {
+                if out
+                    .devices
+                    .get(&c.device_id)
+                    .is_some_and(|(_, a)| a.contains(&c.account_id))
+                {
                     continue;
                 }
                 // The keys it may be under: the ones the certified device
@@ -162,16 +181,25 @@ impl SignerDirectory {
                     .chain(rotated.get(&c.account_id).into_iter().flatten())
                     .any(|k| c.verify(k).is_ok());
                 if ok {
-                    let entry = out.devices.entry(c.device_id).or_insert_with(|| (c.device_public_key.clone(), BTreeSet::new()));
+                    let entry = out
+                        .devices
+                        .entry(c.device_id)
+                        .or_insert_with(|| (c.device_public_key.clone(), BTreeSet::new()));
                     entry.1.insert(c.account_id);
                 }
             }
         }
         for e in &ordered {
             if let SessionEvent::AgentKeyCertified { cert } = &e.payload {
-                let host_ok = out.devices.get(&cert.host_device_id).is_some_and(|(k, _)| cert.verify(k).is_ok());
+                let host_ok = out
+                    .devices
+                    .get(&cert.host_device_id)
+                    .is_some_and(|(k, _)| cert.verify(k).is_ok());
                 if host_ok {
-                    push_unique(out.agents.entry(cert.key_id).or_default(), (cert.signing_public_key.clone(), cert.agent_id));
+                    push_unique(
+                        out.agents.entry(cert.key_id).or_default(),
+                        (cert.signing_public_key.clone(), cert.agent_id),
+                    );
                 }
             }
         }
@@ -181,7 +209,10 @@ impl SignerDirectory {
     /// Add every signer `other` knows.
     pub fn extend(&mut self, other: &SignerDirectory) {
         for (d, (k, accounts)) in &other.devices {
-            let mine = self.devices.entry(*d).or_insert_with(|| (k.clone(), BTreeSet::new()));
+            let mine = self
+                .devices
+                .entry(*d)
+                .or_insert_with(|| (k.clone(), BTreeSet::new()));
             mine.1.extend(accounts.iter().copied());
         }
         for (d, ks) in &other.agents {
@@ -194,7 +225,9 @@ impl SignerDirectory {
 
     /// Each device id with its key and every account that certified it.
     pub fn devices(&self) -> impl Iterator<Item = (Uuid, (&[u8], &BTreeSet<Uuid>))> {
-        self.devices.iter().map(|(d, (k, a))| (*d, (k.as_slice(), a)))
+        self.devices
+            .iter()
+            .map(|(d, (k, a))| (*d, (k.as_slice(), a)))
     }
 
     /// The key that attests `e` (see the module docs), if any: the one key of
@@ -206,13 +239,17 @@ impl SignerDirectory {
         let stamp = e.actor_stamp.as_ref();
         if let Some(keys) = self.agents.get(&signer) {
             for (k, agent) in keys {
-                if stamp.is_some_and(|s| s.actor.id == agent.to_string()) && crate::crypto::verify_envelope(e, k).is_ok() {
+                if stamp.is_some_and(|s| s.actor.id == agent.to_string())
+                    && crate::crypto::verify_envelope(e, k).is_ok()
+                {
                     return Some(k);
                 }
             }
         }
         let (k, _) = self.devices.get(&signer)?;
-        crate::crypto::verify_envelope(e, k).is_ok().then_some(k.as_slice())
+        crate::crypto::verify_envelope(e, k)
+            .is_ok()
+            .then_some(k.as_slice())
     }
 }
 
@@ -261,7 +298,9 @@ impl Copies {
             Some(kept) if kept.len() == 1 => (kept[0] == copy_key(e)).then_some((e.event_id, 0)),
             Some(kept) => {
                 let k = copy_key(e);
-                kept.iter().position(|x| *x == k).map(|i| (e.event_id, i as u32 + 1))
+                kept.iter()
+                    .position(|x| *x == k)
+                    .map(|i| (e.event_id, i as u32 + 1))
             }
         }
     }
@@ -284,17 +323,28 @@ pub(crate) struct Resolved<'a> {
 
 /// Resolve `envelopes` (witnesses already left out). `directory` is built
 /// only when some id is held under more than one different copy.
-pub(crate) fn resolve<'a>(envelopes: &'a [SessionEventEnvelope], directory: impl FnOnce() -> SignerDirectory) -> Resolved<'a> {
+pub(crate) fn resolve<'a>(
+    envelopes: &'a [SessionEventEnvelope],
+    directory: impl FnOnce() -> SignerDirectory,
+) -> Resolved<'a> {
     let mut count: HashMap<Uuid, usize> = HashMap::new();
     for e in envelopes {
         *count.entry(e.event_id).or_default() += 1;
     }
     if count.values().all(|c| *c == 1) {
-        return Resolved { kept: Cow::Borrowed(envelopes), dropped: BTreeSet::new(), copies: Copies::default() };
+        return Resolved {
+            kept: Cow::Borrowed(envelopes),
+            dropped: BTreeSet::new(),
+            copies: Copies::default(),
+        };
     }
     // The different copies of each repeated id, by first position.
     let mut groups: BTreeMap<Uuid, Vec<(usize, CopyKey)>> = BTreeMap::new();
-    for (i, e) in envelopes.iter().enumerate().filter(|(_, e)| count[&e.event_id] > 1) {
+    for (i, e) in envelopes
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| count[&e.event_id] > 1)
+    {
         let k = copy_key(e);
         let g = groups.entry(e.event_id).or_default();
         if !g.iter().any(|(_, x)| *x == k) {
@@ -315,12 +365,20 @@ pub(crate) fn resolve<'a>(envelopes: &'a [SessionEventEnvelope], directory: impl
             built = directory.take().map(|f| f());
         }
         let d = built.as_ref().expect("built once");
-        let attested: Vec<(usize, &CopyKey, &[u8])> =
-            group.iter().filter_map(|(i, k)| d.attesting_key(&envelopes[*i]).map(|key| (*i, k, key))).collect();
+        let attested: Vec<(usize, &CopyKey, &[u8])> = group
+            .iter()
+            .filter_map(|(i, k)| d.attesting_key(&envelopes[*i]).map(|key| (*i, k, key)))
+            .collect();
         let kept: Vec<(usize, &CopyKey)> = if attested.is_empty() {
-            let signed = |i: usize| envelopes[i].signer_device_id.is_some() && envelopes[i].signature.is_some();
+            let signed = |i: usize| {
+                envelopes[i].signer_device_id.is_some() && envelopes[i].signature.is_some()
+            };
             let best = group.iter().any(|(i, _)| signed(*i));
-            let candidates: Vec<(usize, &CopyKey)> = group.iter().filter(|(i, _)| signed(*i) == best).map(|(i, k)| (*i, k)).collect();
+            let candidates: Vec<(usize, &CopyKey)> = group
+                .iter()
+                .filter(|(i, _)| signed(*i) == best)
+                .map(|(i, k)| (*i, k))
+                .collect();
             if candidates.len() == 1 {
                 candidates
             } else {
@@ -331,10 +389,16 @@ pub(crate) fn resolve<'a>(envelopes: &'a [SessionEventEnvelope], directory: impl
             type Signer<'k> = (Uuid, &'k [u8]);
             let mut by_signer: BTreeMap<Signer<'_>, Vec<(usize, &CopyKey)>> = BTreeMap::new();
             for (i, k, key) in attested {
-                let signer = envelopes[i].signer_device_id.expect("an attested copy is signed");
+                let signer = envelopes[i]
+                    .signer_device_id
+                    .expect("an attested copy is signed");
                 by_signer.entry((signer, key)).or_default().push((i, k));
             }
-            by_signer.into_values().filter(|v| v.len() == 1).map(|v| v[0]).collect()
+            by_signer
+                .into_values()
+                .filter(|v| v.len() == 1)
+                .map(|v| v[0])
+                .collect()
         };
         let mut keys: Vec<CopyKey> = kept.iter().map(|(_, k)| (*k).clone()).collect();
         keys.sort();
@@ -345,10 +409,18 @@ pub(crate) fn resolve<'a>(envelopes: &'a [SessionEventEnvelope], directory: impl
         multi.insert(id, keys);
     }
     let copies = Copies { multi };
-    let mut kept: Vec<SessionEventEnvelope> =
-        envelopes.iter().enumerate().filter(|(i, e)| count[&e.event_id] == 1 || keep.contains(i)).map(|(_, e)| e.clone()).collect();
+    let mut kept: Vec<SessionEventEnvelope> = envelopes
+        .iter()
+        .enumerate()
+        .filter(|(i, e)| count[&e.event_id] == 1 || keep.contains(i))
+        .map(|(_, e)| e.clone())
+        .collect();
     if copies.multi.values().any(|k| k.len() > 1) {
         kept.sort_by_cached_key(|e| (e.canonical_key(), copies.kept(e).1));
     }
-    Resolved { kept: Cow::Owned(kept), dropped, copies }
+    Resolved {
+        kept: Cow::Owned(kept),
+        dropped,
+        copies,
+    }
 }

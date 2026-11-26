@@ -140,7 +140,9 @@ fn on_path(program: &str) -> Option<PathBuf> {
         return p.is_file().then(|| p.to_path_buf());
     }
     let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path).map(|d| d.join(program)).find(|c| c.is_file())
+    std::env::split_paths(&path)
+        .map(|d| d.join(program))
+        .find(|c| c.is_file())
 }
 
 /// Which driver a turn uses: `Ok(cmd)` = ACP with `cmd`, `Err(why)` =
@@ -165,13 +167,18 @@ pub fn resolve(rt: &ResolvedRuntime, restricted: bool) -> Result<AcpCommand, Leg
     }
     let program = match pin.program {
         Some(p) => p.to_string(),
-        None if rt.endpoint.trim().is_empty() => super::cli_agent::default_program_for(rt.provider).to_string(),
+        None if rt.endpoint.trim().is_empty() => {
+            super::cli_agent::default_program_for(rt.provider).to_string()
+        }
         None => rt.endpoint.trim().to_string(),
     };
     if on_path(&program).is_none() {
         return Err(LegacyReason::NotInstalled(pin.install.to_string()));
     }
-    Ok(AcpCommand { program, args: pin.args.iter().map(|s| s.to_string()).collect() })
+    Ok(AcpCommand {
+        program,
+        args: pin.args.iter().map(|s| s.to_string()).collect(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +198,13 @@ pub enum PermDecision {
 /// (the turn isn't the Owner's and the agent has no grant), an `execute`
 /// request is denied outright, never escalated: a person answering the
 /// prompt can't widen the gate.
-pub fn judge_request(tool_kind: &str, mode: &str, writes_allowed: bool, egress_open: bool, shell_allowed: bool) -> PermDecision {
+pub fn judge_request(
+    tool_kind: &str,
+    mode: &str,
+    writes_allowed: bool,
+    egress_open: bool,
+    shell_allowed: bool,
+) -> PermDecision {
     if tool_kind == "execute" && !shell_allowed {
         return PermDecision::Deny;
     }
@@ -209,7 +222,12 @@ pub fn judge_request(tool_kind: &str, mode: &str, writes_allowed: bool, egress_o
 ///   outright (a human can't widen the gate from a permission prompt).
 /// - Network fetches are allowed only under `bypassPermissions` with open
 ///   egress; otherwise escalated (open egress) or denied (restricted).
-pub fn judge_permission(tool_kind: &str, mode: &str, writes_allowed: bool, egress_open: bool) -> PermDecision {
+pub fn judge_permission(
+    tool_kind: &str,
+    mode: &str,
+    writes_allowed: bool,
+    egress_open: bool,
+) -> PermDecision {
     let rank = match mode {
         "acceptEdits" => 1,
         "runCommands" => 2,
@@ -259,15 +277,29 @@ pub fn judge_permission(tool_kind: &str, mode: &str, writes_allowed: bool, egres
 /// `ligus/`, `ligus.`, `ligus:`) matches; a bare name (another server could
 /// offer a tool of the same name), a shell command or an edit never does.
 pub fn is_ligus_tool_call(tool: &Value) -> bool {
-    if !matches!(tool.get("kind").and_then(Value::as_str), None | Some("other")) {
+    if !matches!(
+        tool.get("kind").and_then(Value::as_str),
+        None | Some("other")
+    ) {
         return false;
     }
     let id = crate::executor::LIGUS_MCP_ID;
-    let prefixes = [format!("mcp__{id}__"), format!("mcp_{id}_"), format!("{id}-"), format!("{id}/"), format!("{id}."), format!("{id}:")];
+    let prefixes = [
+        format!("mcp__{id}__"),
+        format!("mcp_{id}_"),
+        format!("{id}-"),
+        format!("{id}/"),
+        format!("{id}."),
+        format!("{id}:"),
+    ];
     let names = crate::ligus_mcp::tools::TOOLS.iter().map(|(n, _)| *n);
     let is_ligus = |c: &str| {
         let c = c.trim();
-        names.clone().any(|n| prefixes.iter().any(|p| c.strip_prefix(p.as_str()) == Some(n)))
+        names.clone().any(|n| {
+            prefixes
+                .iter()
+                .any(|p| c.strip_prefix(p.as_str()) == Some(n))
+        })
     };
     let title = tool.get("title").and_then(Value::as_str).map(|t| {
         // `Run <tool>` (agy) or the bare tool name; anything longer is not
@@ -278,7 +310,8 @@ pub fn is_ligus_tool_call(tool: &Value) -> bool {
     let candidates = [
         tool.get("name").and_then(Value::as_str),
         title,
-        tool.pointer("/_meta/claudeCode/toolName").and_then(Value::as_str),
+        tool.pointer("/_meta/claudeCode/toolName")
+            .and_then(Value::as_str),
     ];
     candidates.into_iter().flatten().any(is_ligus)
 }
@@ -288,7 +321,11 @@ pub fn is_ligus_tool_call(tool: &Value) -> bool {
 /// a standing permission is only ever a person's explicit choice
 /// ([`standing_option`]).
 pub fn option_for(options: &[Value], allow: bool) -> Option<String> {
-    let kinds: &[&str] = if allow { &["allow_once"] } else { &["reject_once", "reject_always"] };
+    let kinds: &[&str] = if allow {
+        &["allow_once"]
+    } else {
+        &["reject_once", "reject_always"]
+    };
     kinds.iter().find_map(|k| option_of_kind(options, k))
 }
 
@@ -330,8 +367,16 @@ impl FsPolicy {
         Self {
             root: crate::executor::canonical(&plan.worktree),
             writable: plan.worktree_writable && tier_writes,
-            read_only: plan.read_only.iter().map(|p| crate::executor::canonical(p)).collect(),
-            deny_read: plan.deny_read.iter().map(|p| crate::executor::canonical(p)).collect(),
+            read_only: plan
+                .read_only
+                .iter()
+                .map(|p| crate::executor::canonical(p))
+                .collect(),
+            deny_read: plan
+                .deny_read
+                .iter()
+                .map(|p| crate::executor::canonical(p))
+                .collect(),
         }
     }
 
@@ -340,7 +385,9 @@ impl FsPolicy {
         if !p.is_absolute() {
             return Err("path must be absolute".into());
         }
-        if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        if p.components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             return Err("path may not contain ..".into());
         }
         let c = crate::executor::canonical(p);
@@ -352,28 +399,45 @@ impl FsPolicy {
         // for the agent in its own, unsandboxed process. A root that is
         // itself inside a denied dir (a checkout under the data dir) is the
         // turn's own and stays usable.
-        if self.deny_read.iter().any(|d| d.starts_with(&self.root) && d != &self.root && c.starts_with(d)) {
+        if self
+            .deny_read
+            .iter()
+            .any(|d| d.starts_with(&self.root) && d != &self.root && c.starts_with(d))
+        {
             return Err("that path is not readable by agents".into());
         }
         Ok(c)
     }
 
     /// `fs/read_text_file`: `line` is 1-based, `limit` a line count.
-    pub fn read(&self, path: &str, line: Option<u64>, limit: Option<u64>) -> Result<String, String> {
+    pub fn read(
+        &self,
+        path: &str,
+        line: Option<u64>,
+        limit: Option<u64>,
+    ) -> Result<String, String> {
         let c = self.inside(path)?;
         use std::io::Read;
-        let rel = c.strip_prefix(&self.root).map_err(|_| "outside the turn's directory".to_string())?;
+        let rel = c
+            .strip_prefix(&self.root)
+            .map_err(|_| "outside the turn's directory".to_string())?;
         // Opened beneath the root one component at a time, never following
         // a symlink (a directory swapped after the check above can't
         // redirect it), non-blocking (a FIFO is refused below, not waited on).
         crate::safe_fs::race_point(&c);
-        let f = crate::safe_fs::open_beneath(&self.root, rel, crate::safe_fs::Mode::Read).map_err(|e| e.to_string())?;
+        let f = crate::safe_fs::open_beneath(&self.root, rel, crate::safe_fs::Mode::Read)
+            .map_err(|e| e.to_string())?;
         let meta = f.metadata().map_err(|e| e.to_string())?;
         if !meta.is_file() || meta.len() > MAX_FS_READ_BYTES {
-            return Err(format!("not a regular file of at most {} MiB", MAX_FS_READ_BYTES / (1024 * 1024)));
+            return Err(format!(
+                "not a regular file of at most {} MiB",
+                MAX_FS_READ_BYTES / (1024 * 1024)
+            ));
         }
         let mut text = String::new();
-        f.take(MAX_FS_READ_BYTES).read_to_string(&mut text).map_err(|e| e.to_string())?;
+        f.take(MAX_FS_READ_BYTES)
+            .read_to_string(&mut text)
+            .map_err(|e| e.to_string())?;
         if line.is_none() && limit.is_none() {
             return Ok(text);
         }
@@ -397,7 +461,11 @@ impl FsPolicy {
             .filter_map(|r| r.file_name().map(|n| n.to_string_lossy().to_lowercase()))
             .collect();
         let rel = p.strip_prefix(&self.root).unwrap_or(p);
-        rel.components().any(|c| names.iter().any(|n| *n == c.as_os_str().to_string_lossy().to_lowercase()))
+        rel.components().any(|c| {
+            names
+                .iter()
+                .any(|n| *n == c.as_os_str().to_string_lossy().to_lowercase())
+        })
     }
 
     /// `fs/write_text_file`.
@@ -419,12 +487,15 @@ impl FsPolicy {
         if std::fs::symlink_metadata(&c).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err("that path is a symbolic link".into());
         }
-        let rel = c.strip_prefix(&self.root).map_err(|_| "outside the turn's directory".to_string())?;
+        let rel = c
+            .strip_prefix(&self.root)
+            .map_err(|_| "outside the turn's directory".to_string())?;
         // Missing directories are made and every component is opened
         // beneath the root without following a symlink, so a directory the
         // agent swaps for a link after these checks can't redirect the
         // write; only a regular file is written (O_NOFOLLOW, non-blocking).
-        crate::safe_fs::write_beneath(&self.root, rel, content.as_bytes()).map_err(|e| e.to_string())
+        crate::safe_fs::write_beneath(&self.root, rel, content.as_bytes())
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -476,7 +547,9 @@ pub fn tier_from_args(kind: ModelProviderKind, args: &[String]) -> &'static str 
     let pair = |flag: &str, val: &str| args.windows(2).any(|w| w[0] == flag && w[1] == val);
     match kind {
         ModelProviderKind::ClaudeCode => {
-            if pair("--permission-mode", "bypassPermissions") || has("--dangerously-skip-permissions") {
+            if pair("--permission-mode", "bypassPermissions")
+                || has("--dangerously-skip-permissions")
+            {
                 "bypassPermissions"
             } else if pair("--allowedTools", "Bash") {
                 "runCommands"
@@ -526,7 +599,10 @@ impl Conn {
     async fn send(&mut self, v: &Value) -> Result<(), String> {
         let mut line = serde_json::to_vec(v).map_err(|e| e.to_string())?;
         line.push(b'\n');
-        self.stdin.write_all(&line).await.map_err(|e| format!("write: {e}"))?;
+        self.stdin
+            .write_all(&line)
+            .await
+            .map_err(|e| format!("write: {e}"))?;
         self.stdin.flush().await.map_err(|e| format!("write: {e}"))
     }
 }
@@ -574,10 +650,19 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
         let kind = u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("");
         let content_text = |v: &Value| -> String {
             match v.get("content") {
-                Some(Value::Object(o)) => o.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
+                Some(Value::Object(o)) => o
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 Some(Value::Array(a)) => a
                     .iter()
-                    .filter_map(|c| c.get("content").and_then(|c| c.get("text")).or_else(|| c.get("text")).and_then(Value::as_str))
+                    .filter_map(|c| {
+                        c.get("content")
+                            .and_then(|c| c.get("text"))
+                            .or_else(|| c.get("text"))
+                            .and_then(Value::as_str)
+                    })
                     .collect::<Vec<_>>()
                     .join("\n"),
                 _ => String::new(),
@@ -586,21 +671,41 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
         match kind {
             "agent_message_chunk" => {
                 let t = content_text(u);
-                let mid = u.get("messageId").and_then(Value::as_str).map(str::to_owned);
+                let mid = u
+                    .get("messageId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 self.text(mid.as_deref(), &t);
             }
-            "agent_thought_chunk" => (self.on_activity)(StreamActivity::Thinking { text: content_text(u) }),
+            "agent_thought_chunk" => (self.on_activity)(StreamActivity::Thinking {
+                text: content_text(u),
+            }),
             "tool_call" => (self.on_activity)(StreamActivity::Tool {
-                id: u.get("toolCallId").and_then(Value::as_str).unwrap_or("").to_string(),
-                name: u.get("title").and_then(Value::as_str).unwrap_or("tool").to_string(),
-                input_json: u.get("rawInput").map(Value::to_string).unwrap_or_else(|| "{}".into()),
+                id: u
+                    .get("toolCallId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                name: u
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("tool")
+                    .to_string(),
+                input_json: u
+                    .get("rawInput")
+                    .map(Value::to_string)
+                    .unwrap_or_else(|| "{}".into()),
             }),
             "tool_call_update" => {
                 let status = u.get("status").and_then(Value::as_str).unwrap_or("");
                 if matches!(status, "completed" | "failed") {
                     let content = content_text(u);
                     (self.on_activity)(StreamActivity::ToolResult {
-                        call_id: u.get("toolCallId").and_then(Value::as_str).unwrap_or("").to_string(),
+                        call_id: u
+                            .get("toolCallId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
                         is_error: status == "failed",
                         content: super::cli_agent::cap_preview(content),
                     })
@@ -609,11 +714,18 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
             "plan" => (self.on_activity)(StreamActivity::Tool {
                 id: "plan".into(),
                 name: "plan".into(),
-                input_json: u.get("entries").map(Value::to_string).unwrap_or_else(|| "[]".into()),
+                input_json: u
+                    .get("entries")
+                    .map(Value::to_string)
+                    .unwrap_or_else(|| "[]".into()),
             }),
             "usage_update" => {
-                let Some(meter) = self.scope.as_ref().and_then(|s| s.spend.clone()) else { return Ok(()) };
-                let Some(cost) = u.get("cost").filter(|c| !c.is_null()) else { return Ok(()) };
+                let Some(meter) = self.scope.as_ref().and_then(|s| s.spend.clone()) else {
+                    return Ok(());
+                };
+                let Some(cost) = u.get("cost").filter(|c| !c.is_null()) else {
+                    return Ok(());
+                };
                 match usage_delta(cost, self.last_cost) {
                     Ok((total, delta)) => {
                         self.last_cost = total;
@@ -622,7 +734,11 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
                     // Without a budget a bad report is only noted; with one,
                     // spend it can't count can't be held to the budget.
                     Err(why) if meter.max().is_some() => {
-                        return Err(crate::agent_turn::SpendError::Invalid(format!("{} {why}", self.agent_label)).to_string());
+                        return Err(crate::agent_turn::SpendError::Invalid(format!(
+                            "{} {why}",
+                            self.agent_label
+                        ))
+                        .to_string());
                     }
                     Err(why) => crate::agent_turn::note(format!("acp_usage_ignored:{why}")),
                 }
@@ -636,13 +752,23 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
     async fn request(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
         match method {
             "session/request_permission" => {
-                let options: Vec<Value> = params.get("options").and_then(Value::as_array).cloned().unwrap_or_default();
+                let options: Vec<Value> = params
+                    .get("options")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
                 let tool = params.get("toolCall").cloned().unwrap_or(Value::Null);
                 let tool_kind = tool.get("kind").and_then(Value::as_str).unwrap_or("other");
                 let decision = if is_ligus_tool_call(&tool) {
                     PermDecision::Allow
                 } else {
-                    judge_request(tool_kind, self.mode, self.writes_allowed, self.egress_open, self.shell_allowed)
+                    judge_request(
+                        tool_kind,
+                        self.mode,
+                        self.writes_allowed,
+                        self.egress_open,
+                        self.shell_allowed,
+                    )
                 };
                 // Allowing means `allow_once`. An agent that offers only a
                 // standing permission gets one only when a person picks it
@@ -667,17 +793,27 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
                 Ok(json!({ "outcome": outcome }))
             }
             "fs/read_text_file" => {
-                let fs = self.fs.as_ref().ok_or((-32603, "no filesystem for this turn".to_string()))?;
+                let fs = self
+                    .fs
+                    .as_ref()
+                    .ok_or((-32603, "no filesystem for this turn".to_string()))?;
                 let path = params.get("path").and_then(Value::as_str).unwrap_or("");
                 let line = params.get("line").and_then(Value::as_u64);
                 let limit = params.get("limit").and_then(Value::as_u64);
-                fs.read(path, line, limit).map(|content| json!({ "content": content })).map_err(|e| (-32602, e))
+                fs.read(path, line, limit)
+                    .map(|content| json!({ "content": content }))
+                    .map_err(|e| (-32602, e))
             }
             "fs/write_text_file" => {
-                let fs = self.fs.as_ref().ok_or((-32603, "no filesystem for this turn".to_string()))?;
+                let fs = self
+                    .fs
+                    .as_ref()
+                    .ok_or((-32603, "no filesystem for this turn".to_string()))?;
                 let path = params.get("path").and_then(Value::as_str).unwrap_or("");
                 let content = params.get("content").and_then(Value::as_str).unwrap_or("");
-                fs.write(path, content).map(|_| json!({})).map_err(|e| (-32602, e))
+                fs.write(path, content)
+                    .map(|_| json!({}))
+                    .map_err(|e| (-32602, e))
             }
             other => Err((-32601, format!("method not supported by Ligus: {other}"))),
         }
@@ -688,10 +824,21 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
     /// a permission that lasts the rest of its session, and the question
     /// says so. Allowed only by the first option.
     async fn escalate(&mut self, tool: &Value, standing: bool) -> bool {
-        let Some(scope) = self.scope.clone() else { return false };
-        let Some(asker) = scope.asker.clone() else { return false };
+        let Some(scope) = self.scope.clone() else {
+            return false;
+        };
+        let Some(asker) = scope.asker.clone() else {
+            return false;
+        };
         let root = self.fs.as_ref().map(|f| f.root.clone());
-        let req = grant_request(&self.agent_label, tool, standing, root.as_deref(), self.egress_open, ask_timeout());
+        let req = grant_request(
+            &self.agent_label,
+            tool,
+            standing,
+            root.as_deref(),
+            self.egress_open,
+            ask_timeout(),
+        );
         let too_large = req.too_large;
         let _pause = scope.pause();
         let answer = asker.ask_grant(req).await;
@@ -704,14 +851,34 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
 /// (the raw input, the command, the locations and diffs ACP gives), the
 /// agent's title labelled as its own, and whether it reaches outside the
 /// turn's worktree (`root`) or out through open egress.
-pub fn grant_request(agent_label: &str, tool: &Value, standing: bool, root: Option<&Path>, egress_open: bool, timeout: std::time::Duration) -> crate::agent_turn::GrantRequest {
-    let kind = tool.get("kind").and_then(Value::as_str).unwrap_or("other").to_string();
-    let title = tool.get("title").and_then(Value::as_str).unwrap_or("").to_string();
+pub fn grant_request(
+    agent_label: &str,
+    tool: &Value,
+    standing: bool,
+    root: Option<&Path>,
+    egress_open: bool,
+    timeout: std::time::Duration,
+) -> crate::agent_turn::GrantRequest {
+    let kind = tool
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("other")
+        .to_string();
+    let title = tool
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let mut detail = String::new();
     if let Some(raw) = tool.get("rawInput").filter(|v| !v.is_null()) {
         let command = match raw.get("command") {
             Some(Value::String(c)) => Some(c.clone()),
-            Some(Value::Array(a)) if a.iter().all(Value::is_string) => Some(a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")),
+            Some(Value::Array(a)) if a.iter().all(Value::is_string) => Some(
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
             _ => None,
         };
         match command {
@@ -720,10 +887,16 @@ pub fn grant_request(agent_label: &str, tool: &Value, standing: bool, root: Opti
             Some(c) => {
                 detail.push_str(&c);
                 if let Some(o) = raw.as_object() {
-                    let rest: serde_json::Map<String, Value> = o.iter().filter(|(k, _)| k.as_str() != "command").map(|(k, v)| (k.clone(), v.clone())).collect();
+                    let rest: serde_json::Map<String, Value> = o
+                        .iter()
+                        .filter(|(k, _)| k.as_str() != "command")
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
                     if !rest.is_empty() {
                         detail.push_str("\n");
-                        detail.push_str(&serde_json::to_string_pretty(&Value::Object(rest)).unwrap_or_default());
+                        detail.push_str(
+                            &serde_json::to_string_pretty(&Value::Object(rest)).unwrap_or_default(),
+                        );
                     }
                 }
             }
@@ -731,12 +904,22 @@ pub fn grant_request(agent_label: &str, tool: &Value, standing: bool, root: Opti
         }
     }
     let mut paths: Vec<String> = Vec::new();
-    for loc in tool.get("locations").and_then(Value::as_array).into_iter().flatten() {
+    for loc in tool
+        .get("locations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         if let Some(p) = loc.get("path").and_then(Value::as_str) {
             paths.push(p.to_string());
         }
     }
-    for c in tool.get("content").and_then(Value::as_array).into_iter().flatten() {
+    for c in tool
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         if c.get("type").and_then(Value::as_str) == Some("diff") {
             let path = c.get("path").and_then(Value::as_str).unwrap_or("");
             if !path.is_empty() && !paths.iter().any(|p| p == path) {
@@ -754,7 +937,11 @@ pub fn grant_request(agent_label: &str, tool: &Value, standing: bool, root: Opti
         || root.is_some_and(|r| {
             paths.iter().any(|p| {
                 let p = Path::new(p);
-                let abs = if p.is_absolute() { p.to_path_buf() } else { r.join(p) };
+                let abs = if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    r.join(p)
+                };
                 !crate::executor::canonical(&abs).starts_with(r)
             })
         });
@@ -779,15 +966,25 @@ pub fn grant_request(agent_label: &str, tool: &Value, standing: bool, root: Opti
         cwd: root.map(|r| r.display().to_string()).unwrap_or_default(),
         standing,
         outside_sandbox: outside,
-        subagent: tool.pointer("/_meta/claudeCode/parentToolUseId").and_then(Value::as_str).is_some_and(|p| !p.is_empty()),
+        subagent: tool
+            .pointer("/_meta/claudeCode/parentToolUseId")
+            .and_then(Value::as_str)
+            .is_some_and(|p| !p.is_empty()),
         timeout,
     }
 }
 
 /// The question and the choices a permission request is put to people
 /// with. The first choice allows, in the words of what the agent will get.
-pub fn permission_question(agent_label: &str, tool: &Value, standing: bool) -> (String, Vec<String>) {
-    let title = tool.get("title").and_then(Value::as_str).unwrap_or("a tool");
+pub fn permission_question(
+    agent_label: &str,
+    tool: &Value,
+    standing: bool,
+) -> (String, Vec<String>) {
+    let title = tool
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("a tool");
     let kind = tool.get("kind").and_then(Value::as_str).unwrap_or("other");
     if standing {
         (
@@ -797,7 +994,10 @@ pub fn permission_question(agent_label: &str, tool: &Value, standing: bool) -> (
             vec!["Allow for the rest of the session".to_string(), "Deny".to_string()],
         )
     } else {
-        (format!("{agent_label} asks permission to run {title} ({kind}). Allow it once?"), vec!["Allow once".to_string(), "Deny".to_string()])
+        (
+            format!("{agent_label} asks permission to run {title} ({kind}). Allow it once?"),
+            vec!["Allow once".to_string(), "Deny".to_string()],
+        )
     }
 }
 
@@ -806,11 +1006,22 @@ pub fn permission_question(agent_label: &str, tool: &Value, standing: bool) -> (
 /// can't be counted. The currency must be named and be USD; the amount
 /// must be a finite, non-negative number that never goes down.
 pub fn usage_delta(cost: &Value, last_total: f64) -> Result<(f64, f64), String> {
-    let currency = cost.get("currency").and_then(Value::as_str).map(str::trim).unwrap_or("");
+    let currency = cost
+        .get("currency")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
     if !currency.eq_ignore_ascii_case("usd") {
-        return Err(if currency.is_empty() { "reported a cost without a currency".into() } else { format!("reported a cost in {currency:.8}, not USD") });
+        return Err(if currency.is_empty() {
+            "reported a cost without a currency".into()
+        } else {
+            format!("reported a cost in {currency:.8}, not USD")
+        });
     }
-    let amount = cost.get("amount").and_then(Value::as_f64).ok_or_else(|| "reported a cost without an amount".to_string())?;
+    let amount = cost
+        .get("amount")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| "reported a cost without an amount".to_string())?;
     if !amount.is_finite() || amount < 0.0 {
         return Err("reported a negative cost".into());
     }
@@ -823,11 +1034,19 @@ pub fn usage_delta(cost: &Value, last_total: f64) -> Result<(f64, f64), String> 
 /// How long a permission escalation waits for a person.
 pub fn ask_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(
-        ligus_core::names::var("LIGUS_ACP_ASK_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|s: &u64| *s > 0).unwrap_or(600),
+        ligus_core::names::var("LIGUS_ACP_ASK_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|s: &u64| *s > 0)
+            .unwrap_or(600),
     )
 }
 
-async fn read_line(conn: &mut Conn, idle: std::time::Duration, label: &str) -> Result<Option<String>, String> {
+async fn read_line(
+    conn: &mut Conn,
+    idle: std::time::Duration,
+    label: &str,
+) -> Result<Option<String>, String> {
     match crate::agent_turn::idle_timeout(idle, conn.lines.next_line()).await {
         Ok(Ok(l)) => Ok(l),
         Ok(Err(e)) => Err(format!("{label}: {e}")),
@@ -848,12 +1067,15 @@ async fn call<D: FnMut(String), A: FnMut(StreamActivity)>(
 ) -> Result<Result<Value, Value>, String> {
     let id = conn.next_id;
     conn.next_id += 1;
-    conn.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})).await?;
+    conn.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
+        .await?;
     loop {
         let Some(line) = read_line(conn, idle, h.agent_label).await? else {
             return Err(format!("the agent exited before answering {method}"));
         };
-        let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else { continue };
+        let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
         let m = msg.get("method").and_then(Value::as_str).map(str::to_owned);
         match (m, msg.get("id").cloned()) {
             // A request from the agent.
@@ -861,7 +1083,9 @@ async fn call<D: FnMut(String), A: FnMut(StreamActivity)>(
                 let params = msg.get("params").cloned().unwrap_or(Value::Null);
                 let reply = match h.request(&m, &params).await {
                     Ok(result) => json!({"jsonrpc": "2.0", "id": rid, "result": result}),
-                    Err((code, message)) => json!({"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}),
+                    Err((code, message)) => {
+                        json!({"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}})
+                    }
                 };
                 conn.send(&reply).await?;
             }
@@ -890,7 +1114,11 @@ async fn call<D: FnMut(String), A: FnMut(StreamActivity)>(
 
 fn is_auth_error(e: &Value) -> bool {
     let code = e.get("code").and_then(Value::as_i64).unwrap_or(0);
-    let msg = e.get("message").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+    let msg = e
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
     code == -32000 || msg.contains("auth")
 }
 
@@ -901,7 +1129,10 @@ pub fn non_interactive_method(methods: &[Value]) -> Option<String> {
         let id = m.get("id").and_then(Value::as_str)?;
         let ty = m.get("type").and_then(Value::as_str).unwrap_or("agent");
         let lid = id.to_ascii_lowercase();
-        let keyish = lid.contains("api-key") || lid.contains("api_key") || lid.contains("apikey") || lid.contains("env");
+        let keyish = lid.contains("api-key")
+            || lid.contains("api_key")
+            || lid.contains("apikey")
+            || lid.contains("env");
         (ty != "terminal" && keyish && !lid.contains("login")).then(|| id.to_string())
     })
 }
@@ -916,29 +1147,55 @@ pub async fn stream_reply(
     let mode = tier_from_args(t.kind, t.tier_args);
     let gate_writes = crate::executor::agent_policy().gate.allows_writes();
     let tier_writes = gate_writes && mode != "default";
-    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Agent(t.kind), t.command.program.as_str(), &t.command.args)
-        .cwd(t.working_dir.map(Path::new))
-        .env(t.extra_env);
-    let spec = crate::executor::SpawnSpec { provider_key: t.api_key, writes: Some(tier_writes), ..spec };
+    let spec = crate::executor::SpawnSpec::new(
+        crate::executor::Purpose::Agent(t.kind),
+        t.command.program.as_str(),
+        &t.command.args,
+    )
+    .cwd(t.working_dir.map(Path::new))
+    .env(t.extra_env);
+    let spec = crate::executor::SpawnSpec {
+        provider_key: t.api_key,
+        writes: Some(tier_writes),
+        ..spec
+    };
     let (mut cmd, guard) = crate::executor::tokio_command(spec).map_err(|e| {
         // A refused sandbox is the turn's error, not an ACP start failure.
         if e.kind() == std::io::ErrorKind::PermissionDenied {
-            AcpFailure::Turn(ProviderError::Subprocess(format!("sandbox {}: {e}", t.command.program)))
+            AcpFailure::Turn(ProviderError::Subprocess(format!(
+                "sandbox {}: {e}",
+                t.command.program
+            )))
         } else {
             AcpFailure::Init(format!("sandbox {}: {e}", t.command.program))
         }
     })?;
-    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     super::subprocess::suppress_console_window(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| AcpFailure::Init(format!("spawn {}: {e}", t.command.program)))?;
-    let stdin = child.stdin.take().ok_or_else(|| AcpFailure::Init("no stdin".into()))?;
-    let stdout = child.stdout.take().ok_or_else(|| AcpFailure::Init("no stdout".into()))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| AcpFailure::Init(format!("spawn {}: {e}", t.command.program)))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| AcpFailure::Init("no stdin".into()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AcpFailure::Init("no stdout".into()))?;
     let stderr_task = child.stderr.take().map(|mut e| {
         tokio::spawn(async move {
             super::bounded::read_capped(&mut e, super::bounded::MAX_STDERR_BYTES).await
         })
     });
-    let mut conn = Conn { stdin, lines: super::bounded::BoundedLines::new(BufReader::new(stdout)), next_id: 1 };
+    let mut conn = Conn {
+        stdin,
+        lines: super::bounded::BoundedLines::new(BufReader::new(stdout)),
+        next_id: 1,
+    };
     let scope = crate::agent_turn::current();
     let egress_open = matches!(guard.plan().egress, crate::executor::EgressPlan::Open)
         || crate::executor::agent_policy().envelope.egress.is_open();
@@ -962,13 +1219,21 @@ pub async fn stream_reply(
     // A short window for initialize: an agent that doesn't speak ACP (an old
     // CLI without the flag) fails fast and the turn falls back.
     let init_idle = std::time::Duration::from_secs(
-        ligus_core::names::var("LIGUS_ACP_INIT_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|s: &u64| *s > 0).unwrap_or(60),
+        ligus_core::names::var("LIGUS_ACP_INIT_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|s: &u64| *s > 0)
+            .unwrap_or(60),
     );
     let stderr_of = |task: Option<tokio::task::JoinHandle<String>>| async move {
         match task {
             // Bounded: a child that keeps stderr open (or a grandchild that
             // inherited it) must not hold the turn's error.
-            Some(t) => tokio::time::timeout(std::time::Duration::from_secs(2), t).await.ok().and_then(Result::ok).unwrap_or_default(),
+            Some(t) => tokio::time::timeout(std::time::Duration::from_secs(2), t)
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default(),
             None => String::new(),
         }
     };
@@ -992,14 +1257,25 @@ pub async fn stream_reply(
             drop(conn);
             let _ = child.start_kill();
             let err = stderr_of(stderr_task).await;
-            return Err(AcpFailure::Init(format!("{e} {}", err.trim()).trim().to_string()));
+            return Err(AcpFailure::Init(
+                format!("{e} {}", err.trim()).trim().to_string(),
+            ));
         }
     };
-    let version = init.get("protocolVersion").and_then(Value::as_u64).unwrap_or(0);
+    let version = init
+        .get("protocolVersion")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     if version != ACP_PROTOCOL_VERSION {
-        return Err(AcpFailure::Init(format!("the agent speaks ACP version {version}, Ligus speaks {ACP_PROTOCOL_VERSION}")));
+        return Err(AcpFailure::Init(format!(
+            "the agent speaks ACP version {version}, Ligus speaks {ACP_PROTOCOL_VERSION}"
+        )));
     }
-    let auth_methods: Vec<Value> = init.get("authMethods").and_then(Value::as_array).cloned().unwrap_or_default();
+    let auth_methods: Vec<Value> = init
+        .get("authMethods")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
 
     // MCP servers: the Ligus server first (it always holds its slot), then
     // the chat's allowed servers.
@@ -1008,27 +1284,59 @@ pub async fn stream_reply(
         mcp.push(attach.acp_entry());
     }
     mcp.extend(t.extra_mcp.iter().cloned());
-    let cwd = crate::executor::canonical(&guard.plan().worktree).to_string_lossy().into_owned();
+    let cwd = crate::executor::canonical(&guard.plan().worktree)
+        .to_string_lossy()
+        .into_owned();
     let new_params = json!({ "cwd": cwd, "mcpServers": mcp });
     let turn_err = |e: String| AcpFailure::Turn(super::cli_agent::failure_error_for(t.kind, &e));
-    let mut session = call(&mut conn, &mut h, "session/new", new_params.clone(), idle).await.map_err(turn_err)?;
+    let mut session = call(&mut conn, &mut h, "session/new", new_params.clone(), idle)
+        .await
+        .map_err(turn_err)?;
     if let Err(e) = &session {
         if is_auth_error(e) {
             if let Some(method) = non_interactive_method(&auth_methods) {
-                let _ = call(&mut conn, &mut h, "authenticate", json!({ "methodId": method }), idle).await.map_err(turn_err)?;
-                session = call(&mut conn, &mut h, "session/new", new_params, idle).await.map_err(turn_err)?;
+                let _ = call(
+                    &mut conn,
+                    &mut h,
+                    "authenticate",
+                    json!({ "methodId": method }),
+                    idle,
+                )
+                .await
+                .map_err(turn_err)?;
+                session = call(&mut conn, &mut h, "session/new", new_params, idle)
+                    .await
+                    .map_err(turn_err)?;
             }
         }
     }
-    let session = session.map_err(|e| turn_err(e.get("message").and_then(Value::as_str).unwrap_or("session/new failed").to_string()))?;
-    let session_id = session.get("sessionId").and_then(Value::as_str).unwrap_or("").to_string();
+    let session = session.map_err(|e| {
+        turn_err(
+            e.get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("session/new failed")
+                .to_string(),
+        )
+    })?;
+    let session_id = session
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     if session_id.is_empty() {
         return Err(turn_err("the agent returned no session id".into()));
     }
     h.session_id = Some(session_id.clone());
     if !t.model.trim().is_empty() {
         // Best effort: not every agent supports picking a model per session.
-        let _ = call(&mut conn, &mut h, "session/set_model", json!({ "sessionId": session_id, "modelId": t.model.trim() }), idle).await;
+        let _ = call(
+            &mut conn,
+            &mut h,
+            "session/set_model",
+            json!({ "sessionId": session_id, "modelId": t.model.trim() }),
+            idle,
+        )
+        .await;
     }
     let prompt = super::subprocess::render_prompt(t.system, t.turns);
     let res = call(
@@ -1046,28 +1354,46 @@ pub async fn stream_reply(
             // output Ligus stopped reading (an over-long line) never exits on
             // its own, and its stderr only closes when it does.
             let cancel = json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}});
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), conn.send(&cancel)).await;
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_secs(2), conn.send(&cancel)).await;
             let _ = child.start_kill();
             if let Some(why) = h.stopped.take() {
                 // Ligus ended it (the spend budget): say so as is.
-                return Err(AcpFailure::Turn(ProviderError::Subprocess(format!("{label}: {why}"))));
+                return Err(AcpFailure::Turn(ProviderError::Subprocess(format!(
+                    "{label}: {why}"
+                ))));
             }
             let err = stderr_of(stderr_task).await;
             return Err(turn_err(format!("{e} {}", err.trim()).trim().to_string()));
         }
     };
     let stop = match res {
-        Ok(v) => v.get("stopReason").and_then(Value::as_str).unwrap_or("end_turn").to_string(),
-        Err(e) => return Err(turn_err(e.get("message").and_then(Value::as_str).unwrap_or("session/prompt failed").to_string())),
+        Ok(v) => v
+            .get("stopReason")
+            .and_then(Value::as_str)
+            .unwrap_or("end_turn")
+            .to_string(),
+        Err(e) => {
+            return Err(turn_err(
+                e.get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("session/prompt failed")
+                    .to_string(),
+            ))
+        }
     };
     drop(conn);
     let _ = child.start_kill();
     let _ = child.wait().await;
     if stop == "cancelled" {
-        return Err(AcpFailure::Turn(ProviderError::Subprocess(format!("{label}: the turn was cancelled"))));
+        return Err(AcpFailure::Turn(ProviderError::Subprocess(format!(
+            "{label}: the turn was cancelled"
+        ))));
     }
     if stop == "refusal" && h.assembled.trim().is_empty() {
-        return Err(AcpFailure::Turn(ProviderError::Subprocess(format!("{label} refused the request"))));
+        return Err(AcpFailure::Turn(ProviderError::Subprocess(format!(
+            "{label} refused the request"
+        ))));
     }
     drop(guard);
     Ok(h.assembled)
@@ -1086,17 +1412,46 @@ mod tests {
         let t = std::time::Duration::from_secs(5);
         let call = json!({"kind": "execute", "title": "Run safe cleanup", "rawInput": {"command": "rm -rf build"}});
         let r = grant_request("Builder", &call, false, Some(&root), false, t);
-        assert_eq!((r.detail.as_str(), r.title.as_str(), r.outside_sandbox, r.too_large, r.subagent), ("rm -rf build", "Run safe cleanup", false, false, false));
+        assert_eq!(
+            (
+                r.detail.as_str(),
+                r.title.as_str(),
+                r.outside_sandbox,
+                r.too_large,
+                r.subagent
+            ),
+            ("rm -rf build", "Run safe cleanup", false, false, false)
+        );
         let edit = json!({"kind": "edit", "locations": [{"path": "/etc/hosts"}], "content": [{"type": "diff", "path": "/etc/hosts", "newText": "x"}], "_meta": {"claudeCode": {"parentToolUseId": "toolu_1"}}});
         let r = grant_request("Builder", &edit, false, Some(&root), false, t);
         assert!(r.outside_sandbox && r.detail.starts_with("/etc/hosts") && r.subagent);
         let inside = json!({"kind": "edit", "locations": [{"path": "src/a.rs"}]});
         assert!(!grant_request("Builder", &inside, false, Some(&root), false, t).outside_sandbox);
-        assert!(grant_request("Builder", &inside, false, Some(&root), true, t).outside_sandbox, "open egress");
+        assert!(
+            grant_request("Builder", &inside, false, Some(&root), true, t).outside_sandbox,
+            "open egress"
+        );
         let extra = json!({"kind": "execute", "rawInput": {"command": "make", "cwd": "/", "dangerouslyDisableSandbox": true}});
         let r = grant_request("Builder", &extra, false, Some(&root), false, t);
-        assert!(r.detail.starts_with("make\n") && r.detail.contains("dangerouslyDisableSandbox") && r.detail.contains("\"cwd\""), "{}", r.detail);
-        assert!(grant_request("Builder", &json!({"kind": "execute"}), false, Some(&root), false, t).too_large, "nothing to show, nothing to allow");
+        assert!(
+            r.detail.starts_with("make\n")
+                && r.detail.contains("dangerouslyDisableSandbox")
+                && r.detail.contains("\"cwd\""),
+            "{}",
+            r.detail
+        );
+        assert!(
+            grant_request(
+                "Builder",
+                &json!({"kind": "execute"}),
+                false,
+                Some(&root),
+                false,
+                t
+            )
+            .too_large,
+            "nothing to show, nothing to allow"
+        );
         let big = json!({"kind": "edit", "content": [{"type": "diff", "path": "a", "newText": "y".repeat(9000)}]});
         let r = grant_request("Builder", &big, false, Some(&root), false, t);
         assert!(r.too_large && r.detail.len() <= crate::agent_turn::MAX_GRANT_DETAIL_BYTES);
@@ -1147,37 +1502,92 @@ mod tests {
         // Edits: escalated below the tier, allowed at it, denied without a write gate.
         assert_eq!(judge_permission("edit", "default", true, true), Escalate);
         assert_eq!(judge_permission("edit", "acceptEdits", true, true), Allow);
-        assert_eq!(judge_permission("edit", "bypassPermissions", false, true), Deny);
+        assert_eq!(
+            judge_permission("edit", "bypassPermissions", false, true),
+            Deny
+        );
         // Commands.
-        assert_eq!(judge_permission("execute", "acceptEdits", true, true), Escalate);
-        assert_eq!(judge_permission("execute", "runCommands", true, true), Allow);
-        assert_eq!(judge_permission("execute", "runCommands", false, true), Deny);
+        assert_eq!(
+            judge_permission("execute", "acceptEdits", true, true),
+            Escalate
+        );
+        assert_eq!(
+            judge_permission("execute", "runCommands", true, true),
+            Allow
+        );
+        assert_eq!(
+            judge_permission("execute", "runCommands", false, true),
+            Deny
+        );
         // Phase C: no shell, no execute, at any tier; nothing else changes.
         for mode in ["default", "acceptEdits", "runCommands", "bypassPermissions"] {
-            assert_eq!(judge_request("execute", mode, true, true, false), Deny, "{mode}");
+            assert_eq!(
+                judge_request("execute", mode, true, true, false),
+                Deny,
+                "{mode}"
+            );
             for kind in ["read", "edit", "fetch", "other"] {
-                assert_eq!(judge_request(kind, mode, true, true, false), judge_permission(kind, mode, true, true), "{kind} {mode}");
+                assert_eq!(
+                    judge_request(kind, mode, true, true, false),
+                    judge_permission(kind, mode, true, true),
+                    "{kind} {mode}"
+                );
             }
         }
-        assert_eq!(judge_request("execute", "runCommands", true, true, true), Allow);
+        assert_eq!(
+            judge_request("execute", "runCommands", true, true, true),
+            Allow
+        );
         // Network.
-        assert_eq!(judge_permission("fetch", "bypassPermissions", true, false), Deny);
-        assert_eq!(judge_permission("fetch", "runCommands", true, true), Escalate);
-        assert_eq!(judge_permission("fetch", "bypassPermissions", true, true), Allow);
+        assert_eq!(
+            judge_permission("fetch", "bypassPermissions", true, false),
+            Deny
+        );
+        assert_eq!(
+            judge_permission("fetch", "runCommands", true, true),
+            Escalate
+        );
+        assert_eq!(
+            judge_permission("fetch", "bypassPermissions", true, true),
+            Allow
+        );
         // Unknown kinds go to a person.
-        assert_eq!(judge_permission("switch_mode", "bypassPermissions", true, true), Escalate);
+        assert_eq!(
+            judge_permission("switch_mode", "bypassPermissions", true, true),
+            Escalate
+        );
         assert_eq!(judge_permission("other", "default", true, true), Escalate);
     }
 
     #[test]
     fn usage_reports_must_be_usd_and_never_go_down() {
-        assert_eq!(usage_delta(&json!({"amount": 0.5, "currency": "USD"}), 0.25), Ok((0.5, 0.25)));
-        assert_eq!(usage_delta(&json!({"amount": 0.5, "currency": "usd"}), 0.0), Ok((0.5, 0.5)));
-        assert!(usage_delta(&json!({"amount": 0.5, "currency": "EUR"}), 0.0).unwrap_err().contains("EUR"));
-        assert!(usage_delta(&json!({"amount": 0.5}), 0.0).is_err(), "no currency");
-        assert!(usage_delta(&json!({"amount": -1.0, "currency": "USD"}), 0.0).is_err(), "negative");
-        assert!(usage_delta(&json!({"amount": 0.1, "currency": "USD"}), 0.25).is_err(), "decreasing");
-        assert!(usage_delta(&json!({"currency": "USD"}), 0.0).is_err(), "no amount");
+        assert_eq!(
+            usage_delta(&json!({"amount": 0.5, "currency": "USD"}), 0.25),
+            Ok((0.5, 0.25))
+        );
+        assert_eq!(
+            usage_delta(&json!({"amount": 0.5, "currency": "usd"}), 0.0),
+            Ok((0.5, 0.5))
+        );
+        assert!(usage_delta(&json!({"amount": 0.5, "currency": "EUR"}), 0.0)
+            .unwrap_err()
+            .contains("EUR"));
+        assert!(
+            usage_delta(&json!({"amount": 0.5}), 0.0).is_err(),
+            "no currency"
+        );
+        assert!(
+            usage_delta(&json!({"amount": -1.0, "currency": "USD"}), 0.0).is_err(),
+            "negative"
+        );
+        assert!(
+            usage_delta(&json!({"amount": 0.1, "currency": "USD"}), 0.25).is_err(),
+            "decreasing"
+        );
+        assert!(
+            usage_delta(&json!({"currency": "USD"}), 0.0).is_err(),
+            "no amount"
+        );
     }
 
     #[test]
@@ -1190,7 +1600,11 @@ mod tests {
         assert_eq!(option_for(&opts, true).as_deref(), Some("a0"));
         assert_eq!(option_for(&opts, false).as_deref(), Some("r0"));
         assert_eq!(option_for(&opts[..1], false), None);
-        assert_eq!(standing_option(&opts), None, "a one-time option is on offer");
+        assert_eq!(
+            standing_option(&opts),
+            None,
+            "a one-time option is on offer"
+        );
     }
 
     /// A standing permission is never picked for anyone: with no
@@ -1207,11 +1621,20 @@ mod tests {
         assert_eq!(option_for(&opts, false).as_deref(), Some("r0"));
         assert_eq!(standing_option(&opts).as_deref(), Some("a1"));
         assert_eq!(option_for(&opts[..1], true), None);
-        assert_eq!(option_for(&opts[..1], false), None, "nothing to reject with: cancelled");
-        let (q, choices) = permission_question("@coder", &json!({"title": "rm -rf build", "kind": "execute"}), true);
+        assert_eq!(
+            option_for(&opts[..1], false),
+            None,
+            "nothing to reject with: cancelled"
+        );
+        let (q, choices) = permission_question(
+            "@coder",
+            &json!({"title": "rm -rf build", "kind": "execute"}),
+            true,
+        );
         assert!(q.contains("rest of its session"), "{q}");
         assert_eq!(choices[0], "Allow for the rest of the session");
-        let (q, choices) = permission_question("@coder", &json!({"title": "rm", "kind": "execute"}), false);
+        let (q, choices) =
+            permission_question("@coder", &json!({"title": "rm", "kind": "execute"}), false);
         assert!(q.ends_with("Allow it once?"), "{q}");
         assert_eq!(choices, vec!["Allow once".to_string(), "Deny".to_string()]);
     }
@@ -1224,10 +1647,18 @@ mod tests {
         ];
         assert_eq!(non_interactive_method(&m), None);
         let m = vec![json!({"id": "anthropic-api-key", "name": "API key"})];
-        assert_eq!(non_interactive_method(&m).as_deref(), Some("anthropic-api-key"));
+        assert_eq!(
+            non_interactive_method(&m).as_deref(),
+            Some("anthropic-api-key")
+        );
     }
 
-    fn rt(kind: ModelProviderKind, key: Option<&str>, driver: Driver, endpoint: &str) -> ResolvedRuntime {
+    fn rt(
+        kind: ModelProviderKind,
+        key: Option<&str>,
+        driver: Driver,
+        endpoint: &str,
+    ) -> ResolvedRuntime {
         ResolvedRuntime {
             provider: kind,
             model: String::new(),
@@ -1254,10 +1685,27 @@ mod tests {
         // whether or not the adapter is present.
         let sub = rt(ModelProviderKind::ClaudeCode, None, Driver::Acp, "claude");
         assert_eq!(resolve(&sub, false), Err(LegacyReason::ClaudeSubscription));
-        let keyed = rt(ModelProviderKind::ClaudeCode, Some("sk-test"), Driver::Auto, "claude");
+        let keyed = rt(
+            ModelProviderKind::ClaudeCode,
+            Some("sk-test"),
+            Driver::Auto,
+            "claude",
+        );
         assert_eq!(resolve(&keyed, true), Err(LegacyReason::RestrictedClaude));
-        assert_eq!(resolve(&rt(ModelProviderKind::Copilot, None, Driver::Legacy, "copilot"), false), Err(LegacyReason::Configured));
-        assert_eq!(resolve(&rt(ModelProviderKind::Aider, None, Driver::Acp, "aider"), false), Err(LegacyReason::NoAcp));
+        assert_eq!(
+            resolve(
+                &rt(ModelProviderKind::Copilot, None, Driver::Legacy, "copilot"),
+                false
+            ),
+            Err(LegacyReason::Configured)
+        );
+        assert_eq!(
+            resolve(
+                &rt(ModelProviderKind::Aider, None, Driver::Acp, "aider"),
+                false
+            ),
+            Err(LegacyReason::NoAcp)
+        );
     }
 
     #[test]
@@ -1265,18 +1713,44 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("copilot");
         std::fs::write(&bin, "#!/bin/sh\n").unwrap();
-        let r = resolve(&rt(ModelProviderKind::Copilot, None, Driver::Auto, bin.to_str().unwrap()), false).unwrap();
+        let r = resolve(
+            &rt(
+                ModelProviderKind::Copilot,
+                None,
+                Driver::Auto,
+                bin.to_str().unwrap(),
+            ),
+            false,
+        )
+        .unwrap();
         assert_eq!(r.program, bin.to_str().unwrap());
         // The built-in GitHub MCP server acts on GitHub with the user's
         // sign-in; a Ligus turn gets only the servers Ligus passes.
         assert_eq!(r.args, vec!["--acp", "--disable-builtin-mcps"]);
         let agy = dir.path().join("agy");
         std::fs::write(&agy, "#!/bin/sh\n").unwrap();
-        let r = resolve(&rt(ModelProviderKind::Antigravity, None, Driver::Auto, agy.to_str().unwrap()), false).unwrap();
+        let r = resolve(
+            &rt(
+                ModelProviderKind::Antigravity,
+                None,
+                Driver::Auto,
+                agy.to_str().unwrap(),
+            ),
+            false,
+        )
+        .unwrap();
         assert_eq!(r.args, vec!["acp"]);
         // Missing binary: legacy, with the install hint.
         assert!(matches!(
-            resolve(&rt(ModelProviderKind::Copilot, None, Driver::Auto, "/nonexistent/copilot"), false),
+            resolve(
+                &rt(
+                    ModelProviderKind::Copilot,
+                    None,
+                    Driver::Auto,
+                    "/nonexistent/copilot"
+                ),
+                false
+            ),
             Err(LegacyReason::NotInstalled(_))
         ));
     }
@@ -1287,13 +1761,29 @@ mod tests {
         let root = crate::executor::canonical(wt.path());
         std::fs::create_dir_all(root.join(".git")).unwrap();
         std::fs::write(root.join("a.txt"), "1\n2\n3\n").unwrap();
-        let fs = FsPolicy { root: root.clone(), writable: true, read_only: vec![root.join(".git")], deny_read: vec![] };
-        assert_eq!(fs.read(root.join("a.txt").to_str().unwrap(), Some(2), Some(1)).unwrap(), "2\n");
+        let fs = FsPolicy {
+            root: root.clone(),
+            writable: true,
+            read_only: vec![root.join(".git")],
+            deny_read: vec![],
+        };
+        assert_eq!(
+            fs.read(root.join("a.txt").to_str().unwrap(), Some(2), Some(1))
+                .unwrap(),
+            "2\n"
+        );
         assert!(fs.read("/etc/hosts", None, None).is_err());
-        assert!(fs.read(&format!("{}/../x", root.display()), None, None).is_err());
+        assert!(fs
+            .read(&format!("{}/../x", root.display()), None, None)
+            .is_err());
         assert!(fs.write(root.join("b.txt").to_str().unwrap(), "ok").is_ok());
-        assert!(fs.write(root.join(".git/config").to_str().unwrap(), "x").is_err());
-        let ro = FsPolicy { writable: false, ..fs };
+        assert!(fs
+            .write(root.join(".git/config").to_str().unwrap(), "x")
+            .is_err());
+        let ro = FsPolicy {
+            writable: false,
+            ..fs
+        };
         assert!(ro.write(root.join("c.txt").to_str().unwrap(), "x").is_err());
     }
 
@@ -1311,11 +1801,24 @@ mod tests {
         // And one pointing at a protected path that doesn't exist yet.
         std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
         std::os::unix::fs::symlink(root.join(".git/hooks/pre-commit"), root.join("hook")).unwrap();
-        let fs = FsPolicy { root: root.clone(), writable: true, read_only: vec![root.join(".git")], deny_read: vec![] };
+        let fs = FsPolicy {
+            root: root.clone(),
+            writable: true,
+            read_only: vec![root.join(".git")],
+            deny_read: vec![],
+        };
         assert!(fs.write(root.join("evil").to_str().unwrap(), "x").is_err());
-        assert!(!target.exists(), "wrote outside the worktree through a dangling symlink");
-        assert!(fs.write(root.join("hook").to_str().unwrap(), "#!/bin/sh").is_err());
-        assert!(!root.join(".git/hooks/pre-commit").exists(), "wrote a git hook through a dangling symlink");
+        assert!(
+            !target.exists(),
+            "wrote outside the worktree through a dangling symlink"
+        );
+        assert!(fs
+            .write(root.join("hook").to_str().unwrap(), "#!/bin/sh")
+            .is_err());
+        assert!(
+            !root.join(".git/hooks/pre-commit").exists(),
+            "wrote a git hook through a dangling symlink"
+        );
     }
 
     /// The host serves fs/read_text_file in its own process. An agent can make
@@ -1326,9 +1829,20 @@ mod tests {
         let wt = tempfile::tempdir().unwrap();
         let root = crate::executor::canonical(wt.path());
         let big = root.join("big.txt");
-        std::fs::File::create(&big).unwrap().set_len(MAX_FS_READ_BYTES + 1).unwrap();
-        let fs = FsPolicy { root: root.clone(), writable: false, read_only: vec![], deny_read: vec![] };
-        assert!(fs.read(big.to_str().unwrap(), None, None).is_err(), "read a file past the cap into the host");
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(MAX_FS_READ_BYTES + 1)
+            .unwrap();
+        let fs = FsPolicy {
+            root: root.clone(),
+            writable: false,
+            read_only: vec![],
+            deny_read: vec![],
+        };
+        assert!(
+            fs.read(big.to_str().unwrap(), None, None).is_err(),
+            "read a file past the cap into the host"
+        );
         assert!(fs.read(big.to_str().unwrap(), Some(1), Some(1)).is_err());
         // A FIFO would block the host's open() forever.
         #[cfg(unix)]
@@ -1338,13 +1852,29 @@ mod tests {
             assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
             let (tx, rx) = std::sync::mpsc::channel();
             let fs2 = fs.clone();
-            std::thread::spawn(move || tx.send(fs2.read(fifo.to_str().unwrap(), None, None).is_err()).unwrap());
-            assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true), "a FIFO hung or was read");
-            let w = FsPolicy { writable: true, ..fs.clone() };
+            std::thread::spawn(move || {
+                tx.send(fs2.read(fifo.to_str().unwrap(), None, None).is_err())
+                    .unwrap()
+            });
+            assert_eq!(
+                rx.recv_timeout(std::time::Duration::from_secs(5)),
+                Ok(true),
+                "a FIFO hung or was read"
+            );
+            let w = FsPolicy {
+                writable: true,
+                ..fs.clone()
+            };
             let (tx, rx) = std::sync::mpsc::channel();
             let p = root.join("pipe");
-            std::thread::spawn(move || tx.send(w.write(p.to_str().unwrap(), "x").is_err()).unwrap());
-            assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true), "a FIFO write hung");
+            std::thread::spawn(move || {
+                tx.send(w.write(p.to_str().unwrap(), "x").is_err()).unwrap()
+            });
+            assert_eq!(
+                rx.recv_timeout(std::time::Duration::from_secs(5)),
+                Ok(true),
+                "a FIFO write hung"
+            );
         }
     }
 
@@ -1359,13 +1889,40 @@ mod tests {
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::write(root.join("data/serve.token"), "secret").unwrap();
         std::fs::write(root.join("ok.txt"), "fine").unwrap();
-        let fs = FsPolicy { root: root.clone(), writable: true, read_only: vec![], deny_read: vec![root.join("data")] };
-        assert!(fs.read(root.join("data/serve.token").to_str().unwrap(), None, None).is_err(), "read a denied path");
-        assert!(fs.write(root.join("data/x").to_str().unwrap(), "x").is_err(), "wrote a denied path");
-        assert_eq!(fs.read(root.join("ok.txt").to_str().unwrap(), None, None).unwrap(), "fine");
+        let fs = FsPolicy {
+            root: root.clone(),
+            writable: true,
+            read_only: vec![],
+            deny_read: vec![root.join("data")],
+        };
+        assert!(
+            fs.read(root.join("data/serve.token").to_str().unwrap(), None, None)
+                .is_err(),
+            "read a denied path"
+        );
+        assert!(
+            fs.write(root.join("data/x").to_str().unwrap(), "x")
+                .is_err(),
+            "wrote a denied path"
+        );
+        assert_eq!(
+            fs.read(root.join("ok.txt").to_str().unwrap(), None, None)
+                .unwrap(),
+            "fine"
+        );
         // The root inside a denied dir: the root's own files stay readable.
-        let inner = FsPolicy { root: root.join("data"), writable: false, read_only: vec![], deny_read: vec![root.clone()] };
-        assert_eq!(inner.read(root.join("data/serve.token").to_str().unwrap(), None, None).unwrap(), "secret");
+        let inner = FsPolicy {
+            root: root.join("data"),
+            writable: false,
+            read_only: vec![],
+            deny_read: vec![root.clone()],
+        };
+        assert_eq!(
+            inner
+                .read(root.join("data/serve.token").to_str().unwrap(), None, None)
+                .unwrap(),
+            "secret"
+        );
     }
 
     /// The host serves fs/* in its own process: a directory on the way that
@@ -1379,7 +1936,12 @@ mod tests {
         let root = crate::executor::canonical(wt.path());
         let out = crate::executor::canonical(outside.path());
         std::fs::write(out.join("secret.txt"), "OUTSIDE").unwrap();
-        let fs = FsPolicy { root: root.clone(), writable: true, read_only: vec![], deny_read: vec![] };
+        let fs = FsPolicy {
+            root: root.clone(),
+            writable: true,
+            read_only: vec![],
+            deny_read: vec![],
+        };
         let swap = |root: std::path::PathBuf, out: std::path::PathBuf| {
             move || {
                 std::fs::rename(root.join("sub"), root.join("sub.real")).unwrap();
@@ -1389,14 +1951,20 @@ mod tests {
         std::fs::create_dir_all(root.join("sub")).unwrap();
         crate::safe_fs::set_race_hook(&root, swap(root.clone(), out.clone()));
         let _ = fs.write(root.join("sub/planted.txt").to_str().unwrap(), "x");
-        assert!(!out.join("planted.txt").exists(), "wrote outside the worktree through a swapped parent");
+        assert!(
+            !out.join("planted.txt").exists(),
+            "wrote outside the worktree through a swapped parent"
+        );
         std::fs::remove_file(root.join("sub")).unwrap();
         std::fs::remove_dir_all(root.join("sub.real")).unwrap();
         std::fs::create_dir_all(root.join("sub")).unwrap();
         std::fs::write(root.join("sub/secret.txt"), "inside").unwrap();
         crate::safe_fs::set_race_hook(&root, swap(root.clone(), out.clone()));
         let r = fs.read(root.join("sub/secret.txt").to_str().unwrap(), None, None);
-        assert!(r.as_deref() != Ok("OUTSIDE"), "read outside the worktree through a swapped parent");
+        assert!(
+            r.as_deref() != Ok("OUTSIDE"),
+            "read outside the worktree through a swapped parent"
+        );
     }
 
     /// Protected paths are compared by name, case-insensitively and at any
@@ -1410,12 +1978,26 @@ mod tests {
         let fs = FsPolicy {
             root: root.clone(),
             writable: true,
-            read_only: vec![root.join(".git"), root.join(".claude"), root.join("ligus.config.toml")],
+            read_only: vec![
+                root.join(".git"),
+                root.join(".claude"),
+                root.join("ligus.config.toml"),
+            ],
             deny_read: vec![],
         };
-        for p in [".CLAUDE/settings.json", ".Git/hooks/pre-commit", "LIGUS.CONFIG.TOML", "sub/.claude/settings.json"] {
-            assert!(fs.write(root.join(p).to_str().unwrap(), "{}").is_err(), "{p} must be protected");
+        for p in [
+            ".CLAUDE/settings.json",
+            ".Git/hooks/pre-commit",
+            "LIGUS.CONFIG.TOML",
+            "sub/.claude/settings.json",
+        ] {
+            assert!(
+                fs.write(root.join(p).to_str().unwrap(), "{}").is_err(),
+                "{p} must be protected"
+            );
         }
-        assert!(fs.write(root.join("sub/ok.txt").to_str().unwrap(), "ok").is_ok());
+        assert!(fs
+            .write(root.join("sub/ok.txt").to_str().unwrap(), "ok")
+            .is_ok());
     }
 }

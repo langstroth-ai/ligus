@@ -70,7 +70,11 @@ pub async fn stream_reply(
         // Inside Ligus's own OS sandbox Codex's Seatbelt/bwrap can't nest
         // (sandbox_apply fails), so Ligus's sandbox replaces it: writes only
         // in the worktree, network only through the turn's egress proxy.
-        if crate::executor::os_confined() { "danger-full-access".into() } else { "workspace-write".into() },
+        if crate::executor::os_confined() {
+            "danger-full-access".into()
+        } else {
+            "workspace-write".into()
+        },
         "--color".into(),
         "never".into(),
     ];
@@ -82,13 +86,21 @@ pub async fn stream_reply(
     args.extend(extra_args.iter().cloned());
     args.push(prompt);
 
-    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Agent(ligus_core::ModelProviderKind::Codex), program, &args)
-        .cwd(working_dir.map(std::path::Path::new))
-        .env(extra_env);
-    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| ProviderError::Subprocess(format!("sandbox {program}: {e}")))?;
+    let spec = crate::executor::SpawnSpec::new(
+        crate::executor::Purpose::Agent(ligus_core::ModelProviderKind::Codex),
+        program,
+        &args,
+    )
+    .cwd(working_dir.map(std::path::Path::new))
+    .env(extra_env);
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec)
+        .map_err(|e| ProviderError::Subprocess(format!("sandbox {program}: {e}")))?;
     // Null stdin: the prompt is a positional arg, so codex must not sit
     // "Reading additional input from stdin…". Killed if this future drops.
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     super::subprocess::suppress_console_window(&mut cmd);
 
     let mut child = cmd
@@ -144,10 +156,27 @@ mod tests {
     #[test]
     fn user_codex_config_only_with_opt_in_and_open_egress() {
         use super::super::claude_code::Confine;
-        let c = Confine { egress_open: true, user_config: false, writes_allowed: true, connectors: false, shell: true };
+        let c = Confine {
+            egress_open: true,
+            user_config: false,
+            writes_allowed: true,
+            connectors: false,
+            shell: true,
+        };
         assert_eq!(confine_args(c), vec!["--ignore-user-config"]);
-        assert!(confine_args(Confine { user_config: true, ..c }).is_empty());
-        assert_eq!(confine_args(Confine { user_config: true, egress_open: false, ..c }), vec!["--ignore-user-config"]);
+        assert!(confine_args(Confine {
+            user_config: true,
+            ..c
+        })
+        .is_empty());
+        assert_eq!(
+            confine_args(Confine {
+                user_config: true,
+                egress_open: false,
+                ..c
+            }),
+            vec!["--ignore-user-config"]
+        );
     }
 
     #[test]

@@ -53,8 +53,11 @@ impl McpAttach {
 
     /// The `mcpServers` entry for Claude Code / Copilot JSON configs.
     pub fn json_entry(&self) -> serde_json::Value {
-        let env: serde_json::Map<String, serde_json::Value> =
-            self.env.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
+        let env: serde_json::Map<String, serde_json::Value> = self
+            .env
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect();
         serde_json::json!({
             "type": "stdio",
             "command": self.command.to_string_lossy(),
@@ -65,7 +68,11 @@ impl McpAttach {
 
     /// Write `{"mcpServers":{<name>: entry, ..extra}}` to a 0600 file in the
     /// endpoint's 0700 dir and return its path.
-    pub fn write_config_file(&self, file: &str, extra: &serde_json::Map<String, serde_json::Value>) -> std::io::Result<PathBuf> {
+    pub fn write_config_file(
+        &self,
+        file: &str,
+        extra: &serde_json::Map<String, serde_json::Value>,
+    ) -> std::io::Result<PathBuf> {
         let mut servers = extra.clone();
         servers.insert(self.name.clone(), self.json_entry());
         let body = serde_json::json!({ "mcpServers": servers }).to_string();
@@ -85,14 +92,23 @@ pub struct HumanAnswer {
 /// Something that can put a question to the chat's humans and wait for the
 /// first answer (D.4.2). `None` = timed out (or the turn ended).
 pub trait HumanAsker: Send + Sync {
-    fn ask(&self, question: String, options: Vec<String>, timeout: Duration) -> Pin<Box<dyn Future<Output = Option<HumanAnswer>> + Send + '_>>;
+    fn ask(
+        &self,
+        question: String,
+        options: Vec<String>,
+        timeout: Duration,
+    ) -> Pin<Box<dyn Future<Output = Option<HumanAnswer>> + Send + '_>>;
 
     /// Put a permission request to the people who may grant it, as a grant
     /// card (`docs/design/agent-questions.md` 6.2). The default asks it as
     /// a question with Ligus's labels (an asker without grant cards).
-    fn ask_grant(&self, req: GrantRequest) -> Pin<Box<dyn Future<Output = Option<HumanAnswer>> + Send + '_>> {
+    fn ask_grant(
+        &self,
+        req: GrantRequest,
+    ) -> Pin<Box<dyn Future<Output = Option<HumanAnswer>> + Send + '_>> {
         let tool = serde_json::json!({"title": if req.title.is_empty() { "a tool" } else { req.title.as_str() }, "kind": req.tool});
-        let (question, choices) = crate::provider::acp::permission_question(&req.agent_label, &tool, req.standing);
+        let (question, choices) =
+            crate::provider::acp::permission_question(&req.agent_label, &tool, req.standing);
         self.ask(question, choices, req.timeout)
     }
 }
@@ -183,7 +199,10 @@ pub struct SpendMeter {
 
 impl SpendMeter {
     pub fn new(max: Option<f64>) -> Arc<Self> {
-        Arc::new(Self { max: max.filter(|m| m.is_finite() && *m > 0.0), total: std::sync::Mutex::new(0.0) })
+        Arc::new(Self {
+            max: max.filter(|m| m.is_finite() && *m > 0.0),
+            total: std::sync::Mutex::new(0.0),
+        })
     }
 
     pub fn max(&self) -> Option<f64> {
@@ -230,7 +249,9 @@ pub fn charge_spend(usd: f64) -> Result<(), SpendError> {
 
 /// Whether the current turn has a spend budget.
 pub fn has_spend_budget() -> bool {
-    current().and_then(|s| s.spend.clone()).is_some_and(|m| m.max().is_some())
+    current()
+        .and_then(|s| s.spend.clone())
+        .is_some_and(|m| m.max().is_some())
 }
 
 /// Holds the turn paused (idle timers suspended) until dropped.
@@ -312,11 +333,19 @@ mod tests {
         with_agent_turn(scope, async move {
             // Paused: a 50ms idle window doesn't fire for a 200ms wait.
             let g = pause_counter(&counter);
-            let r = idle_timeout(Duration::from_millis(50), tokio::time::sleep(Duration::from_millis(200))).await;
+            let r = idle_timeout(
+                Duration::from_millis(50),
+                tokio::time::sleep(Duration::from_millis(200)),
+            )
+            .await;
             assert!(r.is_ok());
             drop(g);
             // Not paused: it fires.
-            let r = idle_timeout(Duration::from_millis(50), tokio::time::sleep(Duration::from_millis(500))).await;
+            let r = idle_timeout(
+                Duration::from_millis(50),
+                tokio::time::sleep(Duration::from_millis(500)),
+            )
+            .await;
             assert!(r.is_err());
         })
         .await;

@@ -36,8 +36,14 @@ fn live() -> Option<Live> {
         format!("{raw}/v1/chat/completions")
     };
     let model = std::env::var("LIGUS_OPENAI_LIVE_MODEL").unwrap_or_else(|_| "gemma4:12b".into());
-    let api_key = std::env::var("LIGUS_OPENAI_LIVE_API_KEY").ok().filter(|k| !k.is_empty());
-    Some(Live { endpoint, model, api_key })
+    let api_key = std::env::var("LIGUS_OPENAI_LIVE_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty());
+    Some(Live {
+        endpoint,
+        model,
+        api_key,
+    })
 }
 
 /// A trivial local tool whose answer the model can't guess.
@@ -73,7 +79,9 @@ async fn plain_chat_streams() {
         eprintln!("LIGUS_OPENAI_LIVE_ENDPOINT unset; skipping live OpenAI-wire test");
         return;
     };
-    let client = OpenAiClient::new(&l.endpoint).with_provider_label("endpoint").with_idle_timeout(Duration::from_secs(120));
+    let client = OpenAiClient::new(&l.endpoint)
+        .with_provider_label("endpoint")
+        .with_idle_timeout(Duration::from_secs(120));
     let mut deltas = 0usize;
     let start = Instant::now();
     let out = client
@@ -86,10 +94,17 @@ async fn plain_chat_streams() {
         )
         .await
         .expect("plain chat");
-    eprintln!("plain: {:?} in {:?} ({deltas} deltas)", out.trim(), start.elapsed());
+    eprintln!(
+        "plain: {:?} in {:?} ({deltas} deltas)",
+        out.trim(),
+        start.elapsed()
+    );
     assert!(!out.trim().is_empty(), "got a reply");
     assert!(deltas > 0, "reply arrived as stream deltas");
-    assert!(!out.contains("<think>"), "think tags never leak into the reply");
+    assert!(
+        !out.contains("<think>"),
+        "think tags never leak into the reply"
+    );
 }
 
 #[tokio::test]
@@ -98,8 +113,12 @@ async fn one_tool_round_trip() {
         eprintln!("LIGUS_OPENAI_LIVE_ENDPOINT unset; skipping live OpenAI-wire test");
         return;
     };
-    let client = OpenAiClient::new(&l.endpoint).with_provider_label("endpoint").with_idle_timeout(Duration::from_secs(180));
-    let exec = SecretNumber { calls: Mutex::new(vec![]) };
+    let client = OpenAiClient::new(&l.endpoint)
+        .with_provider_label("endpoint")
+        .with_idle_timeout(Duration::from_secs(180));
+    let exec = SecretNumber {
+        calls: Mutex::new(vec![]),
+    };
     let mut acts = Vec::new();
     let mut streamed = String::new();
     let start = Instant::now();
@@ -120,7 +139,9 @@ async fn one_tool_round_trip() {
     let tools: Vec<String> = acts
         .iter()
         .filter_map(|a| match a {
-            StreamActivity::Tool { name, input_json, .. } => Some(format!("{name}({input_json})")),
+            StreamActivity::Tool {
+                name, input_json, ..
+            } => Some(format!("{name}({input_json})")),
             _ => None,
         })
         .collect();
@@ -138,12 +159,28 @@ async fn one_tool_round_trip() {
         start.elapsed(),
         out.text.trim()
     );
-    assert!(!out.tools_unsupported, "the server accepted the tools field");
-    assert!(!exec.calls.lock().unwrap().is_empty(), "the model called the tool");
+    assert!(
+        !out.tools_unsupported,
+        "the server accepted the tools field"
+    );
+    assert!(
+        !exec.calls.lock().unwrap().is_empty(),
+        "the model called the tool"
+    );
     assert!(out.rounds >= 2, "a tool round then an answer round");
-    assert!(out.text.contains("7319"), "the tool's result reached the answer: {:?}", out.text);
+    assert!(
+        out.text.contains("7319"),
+        "the tool's result reached the answer: {:?}",
+        out.text
+    );
     assert_eq!(streamed, out.text, "the body is exactly what was streamed");
-    assert!(acts.iter().any(|a| matches!(a, StreamActivity::ToolResult { is_error: false, .. })));
+    assert!(acts.iter().any(|a| matches!(
+        a,
+        StreamActivity::ToolResult {
+            is_error: false,
+            ..
+        }
+    )));
 }
 
 #[tokio::test]
@@ -154,15 +191,25 @@ async fn props_probe_is_quiet_or_reports_a_window() {
     };
     // The gateway itself: a window, or quietly nothing (no /props route).
     let start = Instant::now();
-    let n = OpenAiClient::new(&l.endpoint).probe_context_window(l.api_key.as_deref(), &l.model).await;
+    let n = OpenAiClient::new(&l.endpoint)
+        .probe_context_window(l.api_key.as_deref(), &l.model)
+        .await;
     eprintln!("gateway /props: {n:?} in {:?}", start.elapsed());
-    assert!(start.elapsed() < Duration::from_secs(10), "a probe never holds up a turn for long");
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "a probe never holds up a turn for long"
+    );
     assert_eq!(cached_context_window(&l.endpoint, &l.model), n);
 
     if let Ok(direct) = std::env::var("LIGUS_OPENAI_LIVE_PROPS_ENDPOINT") {
-        let n = OpenAiClient::new(direct.trim()).probe_context_window(None, &l.model).await;
+        let n = OpenAiClient::new(direct.trim())
+            .probe_context_window(None, &l.model)
+            .await;
         eprintln!("llama-server /props at {direct}: n_ctx={n:?}");
-        assert!(n.is_some_and(|n| n >= 1024), "a llama-server reports its per-slot window");
+        assert!(
+            n.is_some_and(|n| n >= 1024),
+            "a llama-server reports its per-slot window"
+        );
     }
 }
 
@@ -179,10 +226,17 @@ struct Directory {
 
 impl Directory {
     fn id(&self, prefix: &str, salt: u64) -> String {
-        format!("{prefix}-{}", 1000 + (self.seed * 7919 + salt * 104_729) % 9000)
+        format!(
+            "{prefix}-{}",
+            1000 + (self.seed * 7919 + salt * 104_729) % 9000
+        )
     }
     fn phone(&self, salt: u64) -> String {
-        format!("+351 21 {} {}", 100 + (self.seed * 31 + salt * 17) % 900, 1000 + (self.seed * 131 + salt * 71) % 9000)
+        format!(
+            "+351 21 {} {}",
+            100 + (self.seed * 31 + salt * 17) % 900,
+            1000 + (self.seed * 131 + salt * 71) % 9000
+        )
     }
     fn reports(&self, salt: u64) -> u64 {
         3 + (self.seed + salt) % 7
@@ -192,7 +246,14 @@ impl Directory {
 impl ToolExecutor for Directory {
     async fn call(&self, name: &str, input: &Value) -> (String, bool) {
         *self.calls.lock().unwrap() += 1;
-        let arg = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let arg = |k: &str| {
+            input
+                .get(k)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
         // Salt 1 = Ana's side, 2 = Rui Costa (Porto), 3 = the other Rui (Lisbon).
         let dept = |s| self.id("D", s);
         let mgr = |s| self.id("E", s + 10);
@@ -200,7 +261,9 @@ impl ToolExecutor for Directory {
             "find_employee" => {
                 let n = arg("name").to_lowercase();
                 if n.contains("ana") {
-                    Some(json!({"matches": [{"name": "Ana Duarte", "office": "Lisbon", "department_id": dept(1)}]}))
+                    Some(
+                        json!({"matches": [{"name": "Ana Duarte", "office": "Lisbon", "department_id": dept(1)}]}),
+                    )
                 } else if n.contains("rui") {
                     Some(json!({"matches": [
                         {"name": "Rui Costa", "office": "Lisbon", "department_id": dept(3)},
@@ -213,15 +276,22 @@ impl ToolExecutor for Directory {
             "get_department" => (1..=3)
                 .find(|s| dept(*s) == arg("department_id"))
                 .map(|s| json!({"department_id": dept(s), "manager_employee_id": mgr(s)})),
-            "get_contact" => (1..=3).find(|s| mgr(*s) == arg("employee_id")).map(|s| json!({"phone": self.phone(s)})),
-            "count_reports" => (1..=3).find(|s| mgr(*s) == arg("employee_id")).map(|s| json!({"direct_reports": self.reports(s)})),
+            "get_contact" => (1..=3)
+                .find(|s| mgr(*s) == arg("employee_id"))
+                .map(|s| json!({"phone": self.phone(s)})),
+            "count_reports" => (1..=3)
+                .find(|s| mgr(*s) == arg("employee_id"))
+                .map(|s| json!({"direct_reports": self.reports(s)})),
             _ => None,
         };
         match found {
             Some(v) => (v.to_string(), false),
             None => {
                 *self.bad_calls.lock().unwrap() += 1;
-                (json!({"error": format!("{name}: no such record")}).to_string(), true)
+                (
+                    json!({"error": format!("{name}: no such record")}).to_string(),
+                    true,
+                )
             }
         }
     }
@@ -233,10 +303,26 @@ fn directory_tools() -> Vec<Value> {
                "input_schema": {"type": "object", "properties": {arg: {"type": "string"}}, "required": [arg]}})
     };
     vec![
-        tool("find_employee", "Look up employees by full name; returns every match with office and department id.", "name"),
-        tool("get_department", "Get a department by id; returns its manager's employee id.", "department_id"),
-        tool("get_contact", "Get contact details (phone) for an employee id.", "employee_id"),
-        tool("count_reports", "Number of direct reports of an employee id.", "employee_id"),
+        tool(
+            "find_employee",
+            "Look up employees by full name; returns every match with office and department id.",
+            "name",
+        ),
+        tool(
+            "get_department",
+            "Get a department by id; returns its manager's employee id.",
+            "department_id",
+        ),
+        tool(
+            "get_contact",
+            "Get contact details (phone) for an employee id.",
+            "employee_id",
+        ),
+        tool(
+            "count_reports",
+            "Number of direct reports of an employee id.",
+            "employee_id",
+        ),
     ]
 }
 
@@ -270,17 +356,27 @@ async fn reasoning_echo_ab_on_a_multi_step_task() {
         eprintln!("LIGUS_OPENAI_LIVE_ENDPOINT unset; skipping live OpenAI-wire test");
         return;
     };
-    let runs: u64 = std::env::var("LIGUS_OPENAI_LIVE_ECHO_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let runs: u64 = std::env::var("LIGUS_OPENAI_LIVE_ECHO_RUNS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
     let mut extra = serde_json::Map::new();
     if l.model.contains("gpt-oss") {
         extra.insert("reasoning_effort".into(), json!("low"));
     } else {
-        extra.insert("chat_template_kwargs".into(), json!({"enable_thinking": false}));
+        extra.insert(
+            "chat_template_kwargs".into(),
+            json!({"enable_thinking": false}),
+        );
     }
     for echo in [true, false] {
         let (mut correct, mut calls, mut bad, mut secs) = (0usize, 0usize, 0usize, 0f64);
         for seed in 0..runs {
-            let dir = Directory { seed, bad_calls: Mutex::new(0), calls: Mutex::new(0) };
+            let dir = Directory {
+                seed,
+                bad_calls: Mutex::new(0),
+                calls: Mutex::new(0),
+            };
             let client = OpenAiClient::new(&l.endpoint)
                 .with_provider_label("endpoint")
                 .with_idle_timeout(Duration::from_secs(180))
@@ -306,7 +402,9 @@ async fn reasoning_echo_ab_on_a_multi_step_task() {
                 .expect("chat with tools");
             let took = start.elapsed().as_secs_f64();
             let d = digits(&out.text);
-            let ok = d.contains(&digits(&dir.phone(1))) && d.contains(&digits(&dir.phone(2))) && !d.contains(&digits(&dir.phone(3)));
+            let ok = d.contains(&digits(&dir.phone(1)))
+                && d.contains(&digits(&dir.phone(2)))
+                && !d.contains(&digits(&dir.phone(3)));
             let (n, b) = (*dir.calls.lock().unwrap(), *dir.bad_calls.lock().unwrap());
             println!(
                 "{}",

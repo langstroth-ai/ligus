@@ -159,7 +159,11 @@ pub fn parse(body: &str) -> FlowDirectives {
         cleaned.push(c);
         i += c.len_utf8();
     }
-    out.cleaned = if matched { tidy(&cleaned) } else { body.to_string() };
+    out.cleaned = if matched {
+        tidy(&cleaned)
+    } else {
+        body.to_string()
+    };
     out
 }
 
@@ -186,9 +190,18 @@ fn take(name: &str, json: &str, out: &mut FlowDirectives) {
     match name {
         "handoff:" => {
             if let Ok(r) = serde_json::from_str::<RawParcel>(json) {
-                let parcel = ContextParcel { key_files: r.key_files, decisions: r.decisions, ruled_out: r.ruled_out, notes: r.notes }.bounded();
+                let parcel = ContextParcel {
+                    key_files: r.key_files,
+                    decisions: r.decisions,
+                    ruled_out: r.ruled_out,
+                    notes: r.notes,
+                }
+                .bounded();
                 if !parcel.is_empty() {
-                    out.parcels.push(ParcelDirective { to: r.to.map(|t| t.trim_start_matches('@').to_string()), parcel });
+                    out.parcels.push(ParcelDirective {
+                        to: r.to.map(|t| t.trim_start_matches('@').to_string()),
+                        parcel,
+                    });
                 }
             }
         }
@@ -198,7 +211,12 @@ fn take(name: &str, json: &str, out: &mut FlowDirectives) {
                     let path = super::keys::normalize_path(r.path.trim());
                     if !path.is_empty() && !path.contains("..") {
                         let lines = r.lines.map(|(a, b)| (a.min(b), a.max(b)));
-                        out.marks.push(MarkDirective { kind, path, lines, note: r.note.chars().take(200).collect() });
+                        out.marks.push(MarkDirective {
+                            kind,
+                            path,
+                            lines,
+                            note: r.note.chars().take(200).collect(),
+                        });
                     }
                 }
             }
@@ -207,7 +225,10 @@ fn take(name: &str, json: &str, out: &mut FlowDirectives) {
             if let Ok(r) = serde_json::from_str::<RawUnmark>(json) {
                 let u = UnmarkDirective {
                     id: r.id,
-                    path: r.path.map(|p| super::keys::normalize_path(p.trim())).filter(|p| !p.is_empty()),
+                    path: r
+                        .path
+                        .map(|p| super::keys::normalize_path(p.trim()))
+                        .filter(|p| !p.is_empty()),
                     kind: r.kind.as_deref().and_then(MarkKind::parse),
                 };
                 if u != UnmarkDirective::default() {
@@ -230,9 +251,20 @@ mod tests {
         assert_eq!(d.parcels.len(), 1);
         assert_eq!(d.parcels[0].to.as_deref(), Some("reviewer"));
         assert_eq!(d.parcels[0].parcel.ruled_out, vec!["regex ]] rewrite"]);
-        assert_eq!(d.marks, vec![MarkDirective { kind: MarkKind::UnderConstruction, path: "src/p.rs".into(), lines: Some((10, 40)), note: String::new() }]);
+        assert_eq!(
+            d.marks,
+            vec![MarkDirective {
+                kind: MarkKind::UnderConstruction,
+                path: "src/p.rs".into(),
+                lines: Some((10, 40)),
+                note: String::new()
+            }]
+        );
         assert_eq!(d.unmarks[0].path.as_deref(), Some("src/old.rs"));
-        assert_eq!(d.cleaned, "Done with the parser.\n\n@reviewer please check.");
+        assert_eq!(
+            d.cleaned,
+            "Done with the parser.\n\n@reviewer please check."
+        );
     }
 
     #[test]

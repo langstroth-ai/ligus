@@ -141,7 +141,9 @@ fn name_of(session: &ChatSession, id: &str, fallback: &str) -> String {
         .find(|m| m.id == id)
         .map(|m| ligus_proto::names::clean_display_name(&m.actor.display_name))
         .filter(|n| !n.is_empty())
-        .or_else(|| Some(ligus_proto::names::clean_display_name(fallback)).filter(|n| !n.is_empty()))
+        .or_else(|| {
+            Some(ligus_proto::names::clean_display_name(fallback)).filter(|n| !n.is_empty())
+        })
         .unwrap_or_else(|| id.to_string())
 }
 
@@ -156,13 +158,19 @@ fn role_str(r: WorkspaceRole) -> &'static str {
 /// Whether `me` (a member id) may answer `st` here: what the fold will
 /// count, judged at this device's roster (the fold has the last word).
 pub fn eligible(session: &ChatSession, st: &AskState, me: &str) -> bool {
-    let Some(m) = session.members.iter().find(|m| m.id == me) else { return false };
+    let Some(m) = session.members.iter().find(|m| m.id == me) else {
+        return false;
+    };
     if m.actor.kind != ActorKind::Human || m.role.rank() < WorkspaceRole::Contributor.rank() {
         return false;
     }
     let audience_ok = match st.ask.audience.as_ref() {
-        Some(a) if a.kind == ligus_core::flow::AUDIENCE_PEOPLE => a.member_ids.iter().any(|x| x == me),
-        Some(a) if a.kind == ligus_core::flow::AUDIENCE_ROOM => a.floor().is_some_and(|f| m.role.rank() >= f.rank()),
+        Some(a) if a.kind == ligus_core::flow::AUDIENCE_PEOPLE => {
+            a.member_ids.iter().any(|x| x == me)
+        }
+        Some(a) if a.kind == ligus_core::flow::AUDIENCE_ROOM => {
+            a.floor().is_some_and(|f| m.role.rank() >= f.rank())
+        }
         Some(_) => false,
         None => true,
     };
@@ -174,23 +182,42 @@ pub fn eligible(session: &ChatSession, st: &AskState, me: &str) -> bool {
         let owner = ligus_core::flow::agent_from_key(&st.ask.agent_key)
             .and_then(|a| session.workspace_agents.iter().find(|x| x.id == a))
             .map(|a| a.owner_actor_id.clone());
-        let host_person = st.host.is_some_and(|h| session.members.iter().any(|x| x.id == me && x.actor.device_id == Some(h)));
+        let host_person = st.host.is_some_and(|h| {
+            session
+                .members
+                .iter()
+                .any(|x| x.id == me && x.actor.device_id == Some(h))
+        });
         return owner.as_deref() == Some(me) || host_person || st.host.is_none();
     }
     true
 }
 
 fn vote_view(session: &ChatSession, v: &AskVote) -> VoteView {
-    VoteView { member_id: v.member_id.clone(), name: name_of(session, &v.member_id, &v.name), device_id: v.device_id.map(|d| d.to_string()), at_ms: v.at_ms }
+    VoteView {
+        member_id: v.member_id.clone(),
+        name: name_of(session, &v.member_id, &v.name),
+        device_id: v.device_id.map(|d| d.to_string()),
+        at_ms: v.at_ms,
+    }
 }
 
 /// The card for one ask, for `me` (this device's person) at `now_ms`.
 /// `host_label` names a device (its workspace host label), when known.
-pub fn view(session: &ChatSession, st: &AskState, me: &str, now_ms: i64, host_label: &dyn Fn(uuid::Uuid) -> Option<String>) -> AskView {
+pub fn view(
+    session: &ChatSession,
+    st: &AskState,
+    me: &str,
+    now_ms: i64,
+    host_label: &dyn Fn(uuid::Uuid) -> Option<String>,
+) -> AskView {
     // Someone else's ask under an agent's name keeps no origin of its own
     // (an "outside Ligus" header is drawn only for a prompt whose grant
     // counted).
-    let origin = st.ask.origin.as_ref().filter(|o| st.posted_by.is_none() || (o.via == ORIGIN_OUTSIDE && st.grant().is_some()));
+    let origin =
+        st.ask.origin.as_ref().filter(|o| {
+            st.posted_by.is_none() || (o.via == ORIGIN_OUTSIDE && st.grant().is_some())
+        });
     let outside = origin.is_some_and(|o| o.via == ORIGIN_OUTSIDE) && st.grant().is_some();
     let agent_name = if outside {
         match st.ask.origin.as_ref().map(|o| o.runtime.as_str()) {
@@ -199,7 +226,13 @@ pub fn view(session: &ChatSession, st: &AskState, me: &str, now_ms: i64, host_la
         }
     } else {
         ligus_core::flow::agent_from_key(&st.ask.agent_key)
-            .and_then(|id| session.workspace_agents.iter().find(|a| a.id == id).map(|a| ligus_proto::names::clean_display_name(&a.name)))
+            .and_then(|id| {
+                session
+                    .workspace_agents
+                    .iter()
+                    .find(|a| a.id == id)
+                    .map(|a| ligus_proto::names::clean_display_name(&a.name))
+            })
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Ligus".into())
     };
@@ -211,7 +244,11 @@ pub fn view(session: &ChatSession, st: &AskState, me: &str, now_ms: i64, host_la
         detail: visible_detail(&e.detail),
         cwd: ask_text::clean_option(&e.cwd),
         host_device_id: e.host_device_id.or(st.host).map(|d| d.to_string()),
-        host_label: e.host_device_id.or(st.host).and_then(host_label).unwrap_or_default(),
+        host_label: e
+            .host_device_id
+            .or(st.host)
+            .and_then(host_label)
+            .unwrap_or_default(),
         presence_required: st.grant_needs_presence(),
         standing: e.standing,
         too_large: e.too_large,
@@ -223,19 +260,53 @@ pub fn view(session: &ChatSession, st: &AskState, me: &str, now_ms: i64, host_la
     };
     // A grant's buttons are Ligus's labels by index, never the record's.
     let options: Vec<String> = match &grant {
-        Some(e) if e.standing => ask_text::STANDING_GRANT_LABELS.iter().map(|s| s.to_string()).collect(),
-        Some(_) => ask_text::GRANT_LABELS.iter().map(|s| s.to_string()).collect(),
-        None => st.ask.options.iter().map(|o| ask_text::cut(&ask_text::clean_option(o), if st.is_v2() { ask_text::MAX_OPTION_CHARS } else { 200 })).collect(),
+        Some(e) if e.standing => ask_text::STANDING_GRANT_LABELS
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        Some(_) => ask_text::GRANT_LABELS
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        None => st
+            .ask
+            .options
+            .iter()
+            .map(|o| {
+                ask_text::cut(
+                    &ask_text::clean_option(o),
+                    if st.is_v2() {
+                        ask_text::MAX_OPTION_CHARS
+                    } else {
+                        200
+                    },
+                )
+            })
+            .collect(),
     };
     let audience = match st.ask.audience.as_ref() {
         Some(a) if a.kind == ligus_core::flow::AUDIENCE_PEOPLE => AudienceView {
             kind: "people",
             member_ids: a.member_ids.clone(),
-            names: a.member_ids.iter().map(|id| name_of(session, id, "")).collect(),
+            names: a
+                .member_ids
+                .iter()
+                .map(|id| name_of(session, id, ""))
+                .collect(),
             min_role: None,
         },
-        Some(a) => AudienceView { kind: "room", member_ids: Vec::new(), names: Vec::new(), min_role: Some(a.floor().map(role_str).unwrap_or("owner")) },
-        None => AudienceView { kind: "room", member_ids: Vec::new(), names: Vec::new(), min_role: Some("contributor") },
+        Some(a) => AudienceView {
+            kind: "room",
+            member_ids: Vec::new(),
+            names: Vec::new(),
+            min_role: Some(a.floor().map(role_str).unwrap_or("owner")),
+        },
+        None => AudienceView {
+            kind: "room",
+            member_ids: Vec::new(),
+            names: Vec::new(),
+            min_role: Some("contributor"),
+        },
     };
     let answer = st.answer.as_ref();
     AskView {
@@ -245,9 +316,20 @@ pub fn view(session: &ChatSession, st: &AskState, me: &str, now_ms: i64, host_la
         agent_name,
         kind,
         v: st.ask.v,
-        question: ask_text::cut(&ask_text::clean_question(&st.ask.question), if st.is_v2() { ask_text::MAX_QUESTION_CHARS } else { 2000 }),
+        question: ask_text::cut(
+            &ask_text::clean_question(&st.ask.question),
+            if st.is_v2() {
+                ask_text::MAX_QUESTION_CHARS
+            } else {
+                2000
+            },
+        ),
         options: options.clone(),
-        allow_text: if st.is_v2() { st.ask.allow_text && grant.is_none() } else { grant.is_none() },
+        allow_text: if st.is_v2() {
+            st.ask.allow_text && grant.is_none()
+        } else {
+            grant.is_none()
+        },
         audience,
         quorum: st.quorum(),
         eligible: eligible(session, st, me),
@@ -263,23 +345,45 @@ pub fn view(session: &ChatSession, st: &AskState, me: &str, now_ms: i64, host_la
         open: st.is_open(),
         live: st.is_live(now_ms),
         declined: st.declined,
-        answer: answer.map(|a| match a.option_index.and_then(|i| options.get(i as usize)) {
-            Some(o) => o.clone(),
-            None => ask_text::cut(&ask_text::clean_option(&a.answer), 200),
-        }),
-        answer_text: answer.map(|a| ask_text::clean_question(&a.text)).filter(|t| !t.is_empty()),
-        answered_by: st.answered_by.iter().map(|v| vote_view(session, v)).collect(),
-        older_answer_uncounted: st.uncounted.iter().any(|v| v.why == "answered on an older version"),
-        posted_by: st.poster_name(&session.members).map(|n| ligus_proto::names::clean_display_name(&n)),
+        answer: answer.map(
+            |a| match a.option_index.and_then(|i| options.get(i as usize)) {
+                Some(o) => o.clone(),
+                None => ask_text::cut(&ask_text::clean_option(&a.answer), 200),
+            },
+        ),
+        answer_text: answer
+            .map(|a| ask_text::clean_question(&a.text))
+            .filter(|t| !t.is_empty()),
+        answered_by: st
+            .answered_by
+            .iter()
+            .map(|v| vote_view(session, v))
+            .collect(),
+        older_answer_uncounted: st
+            .uncounted
+            .iter()
+            .any(|v| v.why == "answered on an older version"),
+        posted_by: st
+            .poster_name(&session.members)
+            .map(|n| ligus_proto::names::clean_display_name(&n)),
         at_ms: st.ask.at_ms,
     }
 }
 
 /// Every card in a chat, newest first (at most `limit`).
-pub fn views(session: &ChatSession, me: &str, now_ms: i64, limit: usize, host_label: &dyn Fn(uuid::Uuid) -> Option<String>) -> Vec<AskView> {
+pub fn views(
+    session: &ChatSession,
+    me: &str,
+    now_ms: i64,
+    limit: usize,
+    host_label: &dyn Fn(uuid::Uuid) -> Option<String>,
+) -> Vec<AskView> {
     let mut v: Vec<&AskState> = session.flow.asks.values().collect();
     v.sort_by_key(|a| std::cmp::Reverse(a.ask.at_ms));
-    v.into_iter().take(limit).map(|st| view(session, st, me, now_ms, host_label)).collect()
+    v.into_iter()
+        .take(limit)
+        .map(|st| view(session, st, me, now_ms, host_label))
+        .collect()
 }
 
 #[cfg(test)]
@@ -289,7 +393,11 @@ mod tests {
 
     fn session() -> ChatSession {
         let mut s = ChatSession::new("t", uuid::Uuid::nil(), "rt");
-        for (id, role) in [("ana", WorkspaceRole::Owner), ("bo", WorkspaceRole::Contributor), ("cy", WorkspaceRole::Viewer)] {
+        for (id, role) in [
+            ("ana", WorkspaceRole::Owner),
+            ("bo", WorkspaceRole::Contributor),
+            ("cy", WorkspaceRole::Viewer),
+        ] {
             s.members.push(ligus_core::identity::WorkspaceMember {
                 id: id.into(),
                 actor: ligus_core::ActorIdentity::new(id, &id.to_uppercase(), ActorKind::Human),
@@ -328,7 +436,12 @@ mod tests {
                 options: vec!["Deny".into(), "Allow once".into()],
                 permission: true,
                 v: ASK_V2,
-                effect: Some(AskEffect { kind: EFFECT_PERMISSION.into(), detail: "rm -rf build".into(), presence: "required".into(), ..Default::default() }),
+                effect: Some(AskEffect {
+                    kind: EFFECT_PERMISSION.into(),
+                    detail: "rm -rf build".into(),
+                    presence: "required".into(),
+                    ..Default::default()
+                }),
                 audience: Some(AskAudience::people(vec!["ana".into()])),
                 ..Default::default()
             },
@@ -336,17 +449,35 @@ mod tests {
         };
         let v = view(&s, &g, "ana", 0, &|_| None);
         assert_eq!(v.kind, "permission");
-        assert_eq!(v.options, vec!["Allow once", "Deny"], "labels by index, never the record's swapped ones");
+        assert_eq!(
+            v.options,
+            vec!["Allow once", "Deny"],
+            "labels by index, never the record's swapped ones"
+        );
         assert!(v.effect.as_ref().unwrap().presence_required && !v.allow_text);
-        assert_eq!(visible_detail("rm -rf /tmp/a\u{200B}b\nx"), "rm -rf /tmp/a\u{27E8}U+200B\u{27E9}b\nx", "hidden characters are shown, never dropped");
+        assert_eq!(
+            visible_detail("rm -rf /tmp/a\u{200B}b\nx"),
+            "rm -rf /tmp/a\u{27E8}U+200B\u{27E9}b\nx",
+            "hidden characters are shown, never dropped"
+        );
     }
 
     #[test]
     fn viewers_and_rooms_below_the_floor_are_not_eligible() {
         let s = session();
-        let st = AskState { ask: HumanAsk { v: ASK_V2, audience: Some(AskAudience::room(WorkspaceRole::Owner)), ..Default::default() }, ..Default::default() };
+        let st = AskState {
+            ask: HumanAsk {
+                v: ASK_V2,
+                audience: Some(AskAudience::room(WorkspaceRole::Owner)),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         assert!(eligible(&s, &st, "ana") && !eligible(&s, &st, "bo"));
         let open = AskState::default();
-        assert!(eligible(&s, &open, "bo") && !eligible(&s, &open, "cy"), "a Viewer never answers");
+        assert!(
+            eligible(&s, &open, "bo") && !eligible(&s, &open, "cy"),
+            "a Viewer never answers"
+        );
     }
 }

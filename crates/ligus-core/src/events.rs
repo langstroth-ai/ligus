@@ -18,8 +18,6 @@ use uuid::Uuid;
 use crate::agent::WorkspaceAgent;
 use crate::channel::Channel;
 use crate::chat::{ChatMessage, MessageReaction};
-use crate::workspace_host::WorkspaceHost;
-use crate::workspace_runtime::WorkspaceRuntime;
 use crate::crypto::DeviceCertificate;
 use crate::identity::{ActorStamp, WorkspaceMember, WorkspaceRole};
 use crate::proposal_sets::{PreflightReport, ProposalSet, ScoutAssessment, SetChange, StopReason};
@@ -29,6 +27,8 @@ use crate::skills::SkillProfile;
 use crate::time_util::Timestamp;
 use crate::vault::MountedVault;
 use crate::workflow::{WorkflowDefinition, WorkflowRun};
+use crate::workspace_host::WorkspaceHost;
+use crate::workspace_runtime::WorkspaceRuntime;
 
 /// Which log a signed event belongs to. Workspace-scoped events fold into the
 /// canonical roster; run-scoped events are run-internal; the rest are session.
@@ -54,13 +54,25 @@ pub struct MemberRoleChange {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SessionEvent {
     /// Full state seed — the base a delta stream is folded onto.
-    SessionSnapshot { session: Box<ChatSession> },
-    MessageAppended { message: ChatMessage },
-    MessageChunkReceived { message_id: Uuid, chunk: String },
-    MessageCompleted { message_id: Uuid, body: String },
+    SessionSnapshot {
+        session: Box<ChatSession>,
+    },
+    MessageAppended {
+        message: ChatMessage,
+    },
+    MessageChunkReceived {
+        message_id: Uuid,
+        chunk: String,
+    },
+    MessageCompleted {
+        message_id: Uuid,
+        body: String,
+    },
     /// Drop a message from the transcript (used by "regenerate" to replace the
     /// last assistant turn). Idempotent — removing an unknown id is a no-op.
-    MessageRemoved { message_id: Uuid },
+    MessageRemoved {
+        message_id: Uuid,
+    },
     /// A device claims the right to answer `trigger_id` (a user message). Because
     /// ownership is account-scoped, all of a person's online devices otherwise
     /// self-elect and double-answer. The fold applies events in canonical
@@ -119,27 +131,43 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         watermark: Vec<crate::watermark::Watermark>,
     },
-    AgentRosterUpdated { agents: Vec<WorkspaceAgent> },
+    AgentRosterUpdated {
+        agents: Vec<WorkspaceAgent>,
+    },
     /// Upsert a single workspace agent (by id) — the per-item delta that
     /// supersedes the whole-list `AgentRosterUpdated`. Two admins each adding a
     /// *different* agent concurrently from their own base both survive; the
     /// list-replace form dropped whichever event sorted earlier in canonical
     /// order. Rides the config log; workspace-scoped.
-    AgentUpserted { agent: WorkspaceAgent },
+    AgentUpserted {
+        agent: WorkspaceAgent,
+    },
     /// Remove a single workspace agent by id (delta). Idempotent — removing an
     /// unknown id is a no-op. Supersedes list-replace `AgentRosterUpdated`.
-    AgentRemoved { agent_id: Uuid },
-    SessionRuntimeChanged { runtime_id: String },
+    AgentRemoved {
+        agent_id: Uuid,
+    },
+    SessionRuntimeChanged {
+        runtime_id: String,
+    },
     /// Rename the session (manual, or auto-generated from the first exchange).
-    SessionTitleChanged { title: String },
+    SessionTitleChanged {
+        title: String,
+    },
     /// Soft delete / restore — flips the session's `archived` flag.
-    SessionArchivedChanged { archived: bool },
+    SessionArchivedChanged {
+        archived: bool,
+    },
     /// Replace the session's loaded skill set.
-    SkillsUpdated { skills: Vec<SkillProfile> },
+    SkillsUpdated {
+        skills: Vec<SkillProfile>,
+    },
     /// Create or update a proposal (upsert by id) — carries the full snapshot.
     /// Used for creation/metadata only; votes ride `ProposalVoteCast` so they
     /// don't clobber each other.
-    ProposalUpserted { proposal: ActionProposal },
+    ProposalUpserted {
+        proposal: ActionProposal,
+    },
     /// A single vote on a proposal (a delta, not a whole-object snapshot). It
     /// merges into the proposal's approvals set — per-actor last-writer-wins by
     /// canonical order, with quorum recomputed deterministically — so concurrent
@@ -155,13 +183,18 @@ pub enum SessionEvent {
     /// can't clobber a concurrent vote from another. Deliberately *not* a row
     /// delete: the session is an event-sourced log, so a delete wouldn't survive
     /// a re-fold and wouldn't replicate.
-    ProposalDismissed { proposal_id: Uuid, dismissed: bool },
+    ProposalDismissed {
+        proposal_id: Uuid,
+        dismissed: bool,
+    },
     /// Set how many days a settled proposal stays in the Review inbox before
     /// it is auto-archived (config log; Admin; 0 = off). Auto-archive is a
     /// view rule over the settled time every device folds alike
     /// ([`crate::proposal_archive`]): no event is written when a proposal
     /// ages out. Additive: an older build decodes it as `Unknown`.
-    ProposalArchivePolicySet { policy: crate::proposal_archive::ProposalArchivePolicy },
+    ProposalArchivePolicySet {
+        policy: crate::proposal_archive::ProposalArchivePolicy,
+    },
     /// Append a note to a proposal's refinement thread (a comment or change
     /// request) from a human member or role-qualified agent. A delta, like a vote
     /// — it merges into the proposal's `refinements` (idempotent by note id) so
@@ -174,7 +207,9 @@ pub enum SessionEvent {
     /// first, as ordinary `ProposalUpserted`s carrying `set_id`). The fold
     /// resets every folded field, so an opener can't seed scores or a decision.
     /// See `proposal_sets` for the whole process.
-    ProposalSetOpened { set: Box<ProposalSet> },
+    ProposalSetOpened {
+        set: Box<ProposalSet>,
+    },
     /// Add an alternative to an open set — a revision of one (`revises`), or a
     /// later agent's competing proposal for the same request.
     ProposalSetAlternativeAdded {
@@ -185,7 +220,10 @@ pub enum SessionEvent {
     },
     /// One scout agent's blind assessment of one alternative (a delta; the
     /// latest per scout and alternative wins). The fold stamps its round.
-    ScoutAssessmentPosted { set_id: Uuid, assessment: ScoutAssessment },
+    ScoutAssessmentPosted {
+        set_id: Uuid,
+        assessment: ScoutAssessment,
+    },
     /// New evidence arrived (a revision, a human comment, test results): the
     /// set's evaluation round advances and agent support decays. Only
     /// `round == current + 1` folds, so concurrent advances collapse.
@@ -240,13 +278,22 @@ pub enum SessionEvent {
         at: Timestamp,
     },
     /// An applied proposal's change was reverted.
-    ProposalReverted { proposal_id: Uuid, at: Timestamp },
+    ProposalReverted {
+        proposal_id: Uuid,
+        at: Timestamp,
+    },
     /// Replace the session's vault source set.
-    VaultSourcesUpdated { sources: Vec<MountedVault> },
+    VaultSourcesUpdated {
+        sources: Vec<MountedVault>,
+    },
     /// Replace the session's workflow definition set.
-    WorkflowDefinitionsUpdated { definitions: Vec<WorkflowDefinition> },
+    WorkflowDefinitionsUpdated {
+        definitions: Vec<WorkflowDefinition>,
+    },
     /// Create or update a workflow run (upsert by id) — full snapshot.
-    WorkflowRunUpserted { run: Box<WorkflowRun> },
+    WorkflowRunUpserted {
+        run: Box<WorkflowRun>,
+    },
     MessageReactionAdded {
         message_id: Uuid,
         reaction: MessageReaction,
@@ -298,7 +345,9 @@ pub enum SessionEvent {
     },
     /// Create (or upsert by id) a channel. Rides the workspace-config log
     /// (spec §11); folded into `ChatSession.channels`. Workspace-scoped.
-    ChannelCreated { channel: Channel },
+    ChannelCreated {
+        channel: Channel,
+    },
     /// Rename a channel and/or set its one-line purpose (by id). `purpose` is a
     /// field-level delta, not a co-overwrite of the name: `None` means **leave the
     /// existing purpose unchanged** (a plain rename must not wipe a concurrently or
@@ -312,43 +361,68 @@ pub enum SessionEvent {
         purpose: Option<String>,
     },
     /// Reorder channels; `channel_ids` is the new order (ascending position).
-    ChannelReordered { channel_ids: Vec<String> },
+    ChannelReordered {
+        channel_ids: Vec<String>,
+    },
     /// Soft delete / restore a channel and its chats (by id).
-    ChannelArchived { channel_id: String, archived: bool },
+    ChannelArchived {
+        channel_id: String,
+        archived: bool,
+    },
     /// Assign THIS chat to a channel (per-chat, session-scoped — not on the
     /// config log). Empty clears the assignment.
-    ChatChannelChanged { channel_id: String },
+    ChatChannelChanged {
+        channel_id: String,
+    },
     /// Replace the workspace-owned runtime set (spec §12.5) — detached/headless
     /// agents run on these. Rides the config log; workspace-scoped.
-    WorkspaceRuntimesUpdated { runtimes: Vec<WorkspaceRuntime> },
+    WorkspaceRuntimesUpdated {
+        runtimes: Vec<WorkspaceRuntime>,
+    },
     /// Upsert a single workspace runtime (by id) — the per-item delta that
     /// supersedes whole-list `WorkspaceRuntimesUpdated`, so two concurrent adds
     /// of different runtimes both survive. Rides the config log; workspace-scoped.
-    WorkspaceRuntimeUpserted { runtime: WorkspaceRuntime },
+    WorkspaceRuntimeUpserted {
+        runtime: WorkspaceRuntime,
+    },
     /// Remove a single workspace runtime by id (delta). Idempotent.
-    WorkspaceRuntimeRemoved { runtime_id: String },
+    WorkspaceRuntimeRemoved {
+        runtime_id: String,
+    },
     /// Replace the workspace host roster (spec §12.4) — devices + workers.
     /// Rides the config log; workspace-scoped.
-    WorkspaceHostsUpdated { hosts: Vec<WorkspaceHost> },
+    WorkspaceHostsUpdated {
+        hosts: Vec<WorkspaceHost>,
+    },
     /// Upsert a single workspace host (by id) — the per-item delta that
     /// supersedes whole-list `WorkspaceHostsUpdated`, so two concurrent host
     /// registrations/heartbeats don't clobber each other. Rides the config log;
     /// workspace-scoped.
-    WorkspaceHostUpserted { host: WorkspaceHost },
+    WorkspaceHostUpserted {
+        host: WorkspaceHost,
+    },
     /// Remove a single workspace host by id (delta). Idempotent.
-    WorkspaceHostRemoved { host_id: String },
+    WorkspaceHostRemoved {
+        host_id: String,
+    },
     /// A device claims the coordinator lease for a scope (a workflow run on its
     /// chat log, or the workspace on the config log) at `lease.epoch`. Folded by
     /// `lease::fold_claim`: strictly increasing epochs, first claim per epoch in
     /// canonical order wins (split-brain fencing). Projection also requires the
     /// envelope to be signed by the device it names as holder.
-    CoordinatorLeaseClaimed { lease: crate::lease::CoordinatorLease },
+    CoordinatorLeaseClaimed {
+        lease: crate::lease::CoordinatorLease,
+    },
     /// The holder releases its lease, optionally naming a successor (planned
     /// handover). Must be signed by the holder.
-    CoordinatorLeaseReleased { release: crate::lease::LeaseRelease },
+    CoordinatorLeaseReleased {
+        release: crate::lease::LeaseRelease,
+    },
     /// Switch dearth mode (a workspace-wide tight entrance) on or off, with its
     /// settings. Config log; Admin+, re-checked on ingest.
-    DearthModeChanged { dearth: crate::guard::DearthMode },
+    DearthModeChanged {
+        dearth: crate::guard::DearthMode,
+    },
     /// An Admin's approval of a pending join: `subject` is a member id (added
     /// during dearth mode) or a device id (certified during dearth mode). A
     /// second approval from another Admin admits it. Config log; Admin+.
@@ -387,12 +461,17 @@ pub enum SessionEvent {
     /// an agent's shell grant on or off is the Owner's. Agents never set it
     /// (they hold no presence). Additive (Phase C): an older build decodes it
     /// as `Unknown`, and its agents run without the grants (narrower).
-    WorkspaceSandboxSet { grants: crate::sandbox::SandboxGrants },
+    WorkspaceSandboxSet {
+        grants: crate::sandbox::SandboxGrants,
+    },
     /// An infection signal locked a chat down (self-medication): its envelope
     /// closes egress and every proposal needs a human approval until a member
     /// clears it. Config log (so the workspace roster authorizes the clear);
     /// any keyholder may raise one, since it only ever tightens.
-    ChatLockdownRaised { chat_id: Uuid, lockdown: crate::guard::ChatLockdown },
+    ChatLockdownRaised {
+        chat_id: Uuid,
+        lockdown: crate::guard::ChatLockdown,
+    },
     /// A human member (Contributor+) clears lockdowns of a chat: exactly the
     /// raises it names (`raises`, the `ChatLockdownRaised` event ids, at
     /// least one and at most `MAX_LOCKDOWNS_PER_CHAT`), as the clearer saw
@@ -407,11 +486,15 @@ pub enum SessionEvent {
     /// The hygiene sweep found a proposal's diff no longer applies to its
     /// chat's branch ("capped dead brood"): marked stale. Session-scoped
     /// content, like a dismissal.
-    ProposalMarkedStale { proposal_id: Uuid },
+    ProposalMarkedStale {
+        proposal_id: Uuid,
+    },
     /// A flow record (routing decision, hand-off card, workspace mark, …; see
     /// [`crate::flow::FlowRecord`]). Additive: an older build decodes it as
     /// `Unknown`. Config records ride the workspace-config log.
-    FlowRecorded { record: crate::flow::FlowRecord },
+    FlowRecorded {
+        record: crate::flow::FlowRecord,
+    },
     /// Set the workspace rules version (config log; Owner only). The fold picks
     /// rules by config position; a version this build doesn't enforce makes
     /// the workspace read-only here (see [`crate::authz::RULES_SUPPORTED`]).
@@ -453,7 +536,9 @@ pub enum SessionEvent {
     /// Contributor+ through their own device; never an agent; presence when
     /// the proposal is human-gated). See
     /// [`crate::workspace_repo::ApplyRequest`].
-    ProposalApplyRequested { request: crate::workspace_repo::ApplyRequest },
+    ProposalApplyRequested {
+        request: crate::workspace_repo::ApplyRequest,
+    },
     /// The host an open apply request named couldn't apply it (chat log;
     /// signed by that very host; Phase B). Closes the request, so a person
     /// may ask again (on this host or another): one applier per proposal.
@@ -466,9 +551,14 @@ pub enum SessionEvent {
     /// A person withdraws an open apply request (chat log; its requester or
     /// an Admin, a human through their own device; Phase B). Closes the
     /// request; a host that sees it no longer applies it.
-    ProposalApplyWithdrawn { request_id: Uuid, proposal_id: Uuid },
+    ProposalApplyWithdrawn {
+        request_id: Uuid,
+        proposal_id: Uuid,
+    },
     /// Add a repository to the workspace (config log; Admin, presence).
-    WorkspaceRepoAdded { repo: crate::workspace_repo::WorkspaceRepo },
+    WorkspaceRepoAdded {
+        repo: crate::workspace_repo::WorkspaceRepo,
+    },
     /// Edit a live repo's display name and default branch (config log;
     /// Admin, no presence: cosmetic). Its canonical name and id never change.
     WorkspaceRepoUpdated {
@@ -485,7 +575,9 @@ pub enum SessionEvent {
     },
     /// Remove a repository (config log; Admin, presence). A tombstone until a
     /// later add of the same id.
-    WorkspaceRepoRemoved { repo_id: Uuid },
+    WorkspaceRepoRemoved {
+        repo_id: Uuid,
+    },
     /// Name other spellings of a live repo (config log; Admin, presence;
     /// never an agent): normal-form canonicals the same repo also goes by
     /// (an old owner, a case split on a case-sensitive forge). Replaces the
@@ -517,7 +609,10 @@ pub enum SessionEvent {
     },
     /// Pin the commit this chat's branch was cut from, for its repo (chat
     /// log; Contributor; never an agent).
-    ChatBasePinned { repo_id: Uuid, commit: String },
+    ChatBasePinned {
+        repo_id: Uuid,
+        commit: String,
+    },
     /// Move this chat's pinned base for its repo from `previous` to `commit`
     /// (chat log; Admin or the chat's creator, a human through their own
     /// device, with presence under rules v2). The only way a pin changes:
@@ -525,61 +620,94 @@ pub enum SessionEvent {
     /// force, so two re-pins racing can't both land. Every host with a chat
     /// branch on an earlier pin rebases it onto `commit` by replaying the
     /// chat's ledger there, or refuses the chat's turns visibly.
-    ChatBaseRepinned { repo_id: Uuid, commit: String, previous: String },
+    ChatBaseRepinned {
+        repo_id: Uuid,
+        commit: String,
+        previous: String,
+    },
     /// A host device certifies an agent's own signing key (config log;
     /// Contributor, plus the certificate's own checks in `authz`). Agent-signed
     /// events are judged with the capped Agent tier (`authz::agent`).
-    AgentKeyCertified { cert: crate::crypto::AgentKeyCertificate },
+    AgentKeyCertified {
+        cert: crate::crypto::AgentKeyCertificate,
+    },
     /// A signed workspace-key rotation (Phase 0, B1; config log, Admin, plus
     /// presence under rules v2). Its version must follow the authorized head
     /// by one; see [`crate::keys`].
-    WorkspaceKeyRotated { rotation: crate::keys::SignedRotation },
+    WorkspaceKeyRotated {
+        rotation: crate::keys::SignedRotation,
+    },
     /// A device publishes its own X25519 key-agreement key (config log;
     /// signed by that device, `signer_device_id == device_id`). Rotations
     /// seal only to keys published this way, never to a relay directory entry.
-    DeviceKeyAgreementPublished { device_id: Uuid, ka_public: Vec<u8> },
+    DeviceKeyAgreementPublished {
+        device_id: Uuid,
+        ka_public: Vec<u8>,
+    },
     /// A passkey (or recovery key) for one account (Phase 0, B3; config log).
     /// Signed by a certified, non-delegated device of that account. The
     /// account's first carries its own proof (an assertion by the new
     /// credential over this event, or the recovery key's signature); every
     /// later one needs
     /// presence from a credential the account already has.
-    PasskeyRegistered { credential: crate::presence::PasskeyCredential },
+    PasskeyRegistered {
+        credential: crate::presence::PasskeyCredential,
+    },
     /// Remove one of an account's credentials (the account itself, or an
     /// Admin; presence under rules v2).
-    PasskeyRemoved { account_id: Uuid, credential_id: String },
+    PasskeyRemoved {
+        account_id: Uuid,
+        credential_id: String,
+    },
     /// A linked identity for one account (IDENTITY-AND-FORGES §2.2; config
     /// log). Published by a certified, non-delegated device of that account;
     /// a newer link with the same `(provider, host, subject)` supersedes an
     /// older one. Grants nothing: whether it verifies against its forge is
     /// device-local, never fold state. Read by the roster tracker.
-    IdentityLinkPublished { link: crate::identity_link::IdentityLink },
+    IdentityLinkPublished {
+        link: crate::identity_link::IdentityLink,
+    },
     /// A person's name and picture (config log; identity model v2, 5):
     /// render-only. Written by the account itself from one of its own,
     /// non-delegated, non-phone devices; content checks in
     /// [`crate::profile::change_ok`]. Never read by a rule.
-    ProfileUpdated { profile: crate::profile::ProfileChange },
+    ProfileUpdated {
+        profile: crate::profile::ProfileChange,
+    },
     /// A device's name under one account (config log; identity model v2, 6):
     /// render-only. Written by the device itself or by a non-delegated,
     /// non-phone device of the account. Never read by a rule.
-    DeviceLabelSet { label: crate::profile::DeviceLabel },
+    DeviceLabelSet {
+        label: crate::profile::DeviceLabel,
+    },
     /// A computer that linked as its person retires the separate member it
     /// was (config log; identity model v2, 8.3). Rules 3 only: removes that
     /// member like a self-leave. See [`crate::retirement`].
-    MemberRetired { retirement: crate::retirement::MemberRetirement },
+    MemberRetired {
+        retirement: crate::retirement::MemberRetirement,
+    },
     /// Remove a linked identity (the account itself, or an Admin for
     /// moderation).
-    IdentityLinkRemoved { account_id: Uuid, link_id: Uuid },
+    IdentityLinkRemoved {
+        account_id: Uuid,
+        link_id: Uuid,
+    },
     /// The workspace attachment policy (issue #118; config log; Admin, with
     /// presence): part of the workspace rules. Off until one is set; see
     /// [`crate::attachment::AttachmentPolicy`]. Read by the roster tracker.
-    AttachmentPolicySet { policy: crate::attachment::AttachmentPolicy },
+    AttachmentPolicySet {
+        policy: crate::attachment::AttachmentPolicy,
+    },
     /// Block a file by the SHA-256 of its plaintext (config log; Admin; no
     /// presence: it only narrows). A blocked file is refused when shared and
     /// when downloaded, whenever it was shared.
-    AttachmentHashBlocked { sha256: String },
+    AttachmentHashBlocked {
+        sha256: String,
+    },
     /// Lift a block (config log; Admin, with presence).
-    AttachmentHashUnblocked { sha256: String },
+    AttachmentHashUnblocked {
+        sha256: String,
+    },
     /// A file shared in a chat (chat log): binds the relay blob to its
     /// author's device, the plaintext's hash and size, its declared type and
     /// its cleaned name. Judged against the attachment policy and the
@@ -587,11 +715,15 @@ pub enum SessionEvent {
     /// exactly these bytes is refused. An agent never signs one: a file an
     /// agent produced is shared by its host only once a person approved the
     /// proposal it was filed as (`proposal_id`).
-    AttachmentShared { attachment: crate::attachment::AttachmentRef },
+    AttachmentShared {
+        attachment: crate::attachment::AttachmentRef,
+    },
     /// Remove a shared file (chat log; its sharer or an Admin). Every client
     /// stops offering it; the sharer's or the Admin's device also deletes the
     /// blob from the relay.
-    AttachmentDeleted { attachment_id: Uuid },
+    AttachmentDeleted {
+        attachment_id: Uuid,
+    },
     /// Forward-compat catch-all: an event `kind` this build does not recognize
     /// (produced by a newer client). Serde deserializes an unknown tag here
     /// instead of failing the whole stream; it projects as a no-op. The raw
@@ -810,12 +942,7 @@ impl PartialEq for SessionEventEnvelope {
 
 impl SessionEventEnvelope {
     /// Build an unsigned envelope, deriving scope from the payload.
-    pub fn new(
-        session_id: Uuid,
-        workspace_id: Uuid,
-        sequence: i64,
-        payload: SessionEvent,
-    ) -> Self {
+    pub fn new(session_id: Uuid, workspace_id: Uuid, sequence: i64, payload: SessionEvent) -> Self {
         let scope = payload.scope();
         // A new memory entry and a memory proposal are known by the event
         // that made them (`memory::bound_event_id`).
@@ -888,14 +1015,25 @@ impl ChatSession {
                 self.messages.retain(|m| &m.id != message_id);
                 crate::dispatch::note_removed(self, *message_id);
             }
-            SessionEvent::TurnClaimed { trigger_id, device_id, epoch, supersedes, repo_id } => {
+            SessionEvent::TurnClaimed {
+                trigger_id,
+                device_id,
+                epoch,
+                supersedes,
+                repo_id,
+            } => {
                 // The dispatcher's fold (`crate::dispatch`): a plain first
                 // claim wins in canonical order as it always did; a covering
                 // claim or a hand-over may move the turn. Deterministic.
                 crate::dispatch::fold_claim(
                     self,
                     *trigger_id,
-                    crate::dispatch::Claim { device: *device_id, epoch: *epoch, supersedes: *supersedes, repo_id: *repo_id },
+                    crate::dispatch::Claim {
+                        device: *device_id,
+                        epoch: *epoch,
+                        supersedes: *supersedes,
+                        repo_id: *repo_id,
+                    },
                 );
             }
             SessionEvent::MemberAdded { member, invite, .. } => {
@@ -928,7 +1066,9 @@ impl ChatSession {
             // resolves them deterministically on every device.
             SessionEvent::AgentRosterUpdated { agents } => {
                 self.workspace_agents = agents.clone();
-                self.workspace_agents.iter_mut().for_each(WorkspaceAgent::sanitize_color);
+                self.workspace_agents
+                    .iter_mut()
+                    .for_each(WorkspaceAgent::sanitize_color);
             }
             // Per-item agent delta — upsert by id (mirrors `ChannelCreated`).
             SessionEvent::AgentUpserted { agent } => {
@@ -979,7 +1119,9 @@ impl ChatSession {
                     // reviewed: a re-upsert that changes what would be
                     // applied (patch, files, kind, workflow, command, base)
                     // drops it, so the human gate re-arms for the new content.
-                    if crate::authz::votes::diff_digest(slot) != crate::authz::votes::diff_digest(&proposal) {
+                    if crate::authz::votes::diff_digest(slot)
+                        != crate::authz::votes::diff_digest(&proposal)
+                    {
                         self.guards.verified_approvals.remove(&proposal.id);
                     }
                     *slot = proposal.clone();
@@ -995,28 +1137,47 @@ impl ChatSession {
                     proposal.keep_unarchived = false;
                     self.proposals.push(proposal.clone());
                 }
-                crate::proposal_sets::restamp(&self.proposal_sets, &mut self.proposals, proposal.id);
+                crate::proposal_sets::restamp(
+                    &self.proposal_sets,
+                    &mut self.proposals,
+                    proposal.id,
+                );
             }
-            SessionEvent::ProposalVoteCast { proposal_id, approval } => {
+            SessionEvent::ProposalVoteCast {
+                proposal_id,
+                approval,
+            } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     // Per-actor LWW + quorum recompute; folded in canonical order
                     // so the latest vote per actor wins on every device.
                     p.cast_vote(approval.clone());
                 }
             }
-            SessionEvent::ProposalDismissed { proposal_id, dismissed } => {
+            SessionEvent::ProposalDismissed {
+                proposal_id,
+                dismissed,
+            } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     p.dismissed = *dismissed;
                 }
             }
-            SessionEvent::ProposalRefined { proposal_id, refinement } => {
+            SessionEvent::ProposalRefined {
+                proposal_id,
+                refinement,
+            } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     // Idempotent by note id (add_refinement dedups), so a re-folded
                     // event from sync doesn't duplicate the note.
                     p.add_refinement(refinement.clone());
                 }
             }
-            SessionEvent::ProposalApplied { proposal_id, diff_digest, request_id, commit, .. } => {
+            SessionEvent::ProposalApplied {
+                proposal_id,
+                diff_digest,
+                request_id,
+                commit,
+                ..
+            } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     if p.ready_to_apply() && crate::authz::votes::diff_digest(p) == *diff_digest {
                         p.status = crate::proposals::ProposalStatus::Applied;
@@ -1026,39 +1187,63 @@ impl ChatSession {
                     }
                 }
                 if let Some(rid) = request_id.filter(|r| self.apply_requests.contains_key(r)) {
-                    self.apply_outcomes
-                        .entry(rid)
-                        .or_insert_with(|| crate::workspace_repo::ApplyOutcome::Applied { commit: commit.clone() });
+                    self.apply_outcomes.entry(rid).or_insert_with(|| {
+                        crate::workspace_repo::ApplyOutcome::Applied {
+                            commit: commit.clone(),
+                        }
+                    });
                 }
             }
             SessionEvent::ProposalApplyRequested { request } => {
-                self.apply_requests.entry(request.id).or_insert_with(|| request.clone());
+                self.apply_requests
+                    .entry(request.id)
+                    .or_insert_with(|| request.clone());
             }
-            SessionEvent::ProposalApplyFailed { request_id, reason, .. } => {
+            SessionEvent::ProposalApplyFailed {
+                request_id, reason, ..
+            } => {
                 if self.apply_requests.contains_key(request_id) {
-                    self.apply_outcomes
-                        .entry(*request_id)
-                        .or_insert_with(|| crate::workspace_repo::ApplyOutcome::Failed { reason: reason.clone() });
+                    self.apply_outcomes.entry(*request_id).or_insert_with(|| {
+                        crate::workspace_repo::ApplyOutcome::Failed {
+                            reason: reason.clone(),
+                        }
+                    });
                 }
             }
             SessionEvent::ProposalApplyWithdrawn { request_id, .. } => {
                 if self.apply_requests.contains_key(request_id) {
-                    self.apply_outcomes.entry(*request_id).or_insert(crate::workspace_repo::ApplyOutcome::Withdrawn);
+                    self.apply_outcomes
+                        .entry(*request_id)
+                        .or_insert(crate::workspace_repo::ApplyOutcome::Withdrawn);
                 }
             }
             // A chat's pin is per repo and outlives switching repos: pointing
             // the chat away and back restores the repo's pin, never clears
             // it (else any Contributor could re-pin by switching twice,
             // review residual 3).
-            SessionEvent::ChatRepoSet { repo_id, base_branch } => {
-                let base_commit = repo_id.and_then(|r| self.repo_bases.get(&r)).and_then(|h| h.last().cloned());
-                self.repo = Some(crate::workspace_repo::ChatRepo { repo_id: *repo_id, base_branch: base_branch.clone(), base_commit });
+            SessionEvent::ChatRepoSet {
+                repo_id,
+                base_branch,
+            } => {
+                let base_commit = repo_id
+                    .and_then(|r| self.repo_bases.get(&r))
+                    .and_then(|h| h.last().cloned());
+                self.repo = Some(crate::workspace_repo::ChatRepo {
+                    repo_id: *repo_id,
+                    base_branch: base_branch.clone(),
+                    base_commit,
+                });
             }
             // First pin wins: a later `ChatBasePinned` for a repo that has a
             // pin (two hosts cutting the branch at once, or a member trying
             // to move it) changes nothing. Moving it is `ChatBaseRepinned`.
             SessionEvent::ChatBasePinned { repo_id, commit } => {
-                if !self.repo_bases.contains_key(repo_id) && self.repo.as_ref().is_some_and(|r| r.repo_id == Some(*repo_id)) {
+                if !self.repo_bases.contains_key(repo_id)
+                    && self
+                        .repo
+                        .as_ref()
+                        .is_some_and(|r| r.repo_id == Some(*repo_id))
+                {
                     self.repo_bases.insert(*repo_id, vec![commit.clone()]);
                     if let Some(r) = self.repo.as_mut() {
                         r.base_commit = Some(commit.clone());
@@ -1069,9 +1254,19 @@ impl ChatSession {
             // compare-and-swap in the fold; authz checks the same), and
             // keeps the earlier pins: a host's branch on any of them
             // follows by rebasing.
-            SessionEvent::ChatBaseRepinned { repo_id, commit, previous } => {
+            SessionEvent::ChatBaseRepinned {
+                repo_id,
+                commit,
+                previous,
+            } => {
                 let current = self.repo_bases.get(repo_id).and_then(|h| h.last());
-                if current == Some(previous) && commit != previous && self.repo.as_ref().is_some_and(|r| r.repo_id == Some(*repo_id)) {
+                if current == Some(previous)
+                    && commit != previous
+                    && self
+                        .repo
+                        .as_ref()
+                        .is_some_and(|r| r.repo_id == Some(*repo_id))
+                {
                     let history = self.repo_bases.entry(*repo_id).or_default();
                     if history.len() < crate::workspace_repo::MAX_BASE_PINS {
                         history.push(commit.clone());
@@ -1107,7 +1302,9 @@ impl ChatSession {
             // Allowed only under rules 3 (`authz::retire`): the member leaves.
             SessionEvent::MemberRetired { retirement } => {
                 if self.members.iter().any(|m| m.id == retirement.member_id) {
-                    self.guards.removed_members.insert(retirement.member_id.clone());
+                    self.guards
+                        .removed_members
+                        .insert(retirement.member_id.clone());
                 }
                 // The linked computer's host passes to the person (8.3).
                 let successor = self
@@ -1124,7 +1321,10 @@ impl ChatSession {
                     }
                 }
                 self.members.retain(|m| m.id != retirement.member_id);
-                self.retired.insert(retirement.member_id.clone(), retirement.successor_account_id);
+                self.retired.insert(
+                    retirement.member_id.clone(),
+                    retirement.successor_account_id,
+                );
             }
             SessionEvent::ProposalReverted { proposal_id, .. } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
@@ -1141,7 +1341,11 @@ impl ChatSession {
             | SessionEvent::ProposalSetPreflightRecorded { .. }
             | SessionEvent::ProposalSetDecided { .. } => {
                 if let Some(change) = set_change(event) {
-                    crate::proposal_sets::apply(&mut self.proposal_sets, &mut self.proposals, change);
+                    crate::proposal_sets::apply(
+                        &mut self.proposal_sets,
+                        &mut self.proposals,
+                        change,
+                    );
                 }
             }
             SessionEvent::VaultSourcesUpdated { sources } => {
@@ -1163,7 +1367,8 @@ impl ChatSession {
                 }
                 if let Some(slot) = self.workflow_runs.iter_mut().find(|r| r.id == run.id) {
                     // Who created the run is fixed by its first write (S4).
-                    let (creator, initiator) = (slot.creator_device_id, slot.initiator_actor_id.clone());
+                    let (creator, initiator) =
+                        (slot.creator_device_id, slot.initiator_actor_id.clone());
                     *slot = (**run).clone();
                     slot.creator_device_id = creator;
                     slot.initiator_actor_id = initiator;
@@ -1201,7 +1406,11 @@ impl ChatSession {
                     self.channels.push(channel.clone());
                 }
             }
-            SessionEvent::ChannelRenamed { channel_id, name, purpose } => {
+            SessionEvent::ChannelRenamed {
+                channel_id,
+                name,
+                purpose,
+            } => {
                 if let Some(c) = self.channels.iter_mut().find(|c| &c.id == channel_id) {
                     c.name = name.clone();
                     // Field-level delta: `None` leaves the existing purpose intact
@@ -1219,7 +1428,10 @@ impl ChatSession {
                     }
                 }
             }
-            SessionEvent::ChannelArchived { channel_id, archived } => {
+            SessionEvent::ChannelArchived {
+                channel_id,
+                archived,
+            } => {
                 if let Some(c) = self.channels.iter_mut().find(|c| &c.id == channel_id) {
                     c.archived = *archived;
                 }
@@ -1234,7 +1446,11 @@ impl ChatSession {
             }
             // Per-item runtime delta — upsert / remove by id.
             SessionEvent::WorkspaceRuntimeUpserted { runtime } => {
-                if let Some(slot) = self.workspace_runtimes.iter_mut().find(|r| r.id == runtime.id) {
+                if let Some(slot) = self
+                    .workspace_runtimes
+                    .iter_mut()
+                    .find(|r| r.id == runtime.id)
+                {
                     *slot = runtime.clone();
                 } else {
                     self.workspace_runtimes.push(runtime.clone());
@@ -1294,7 +1510,11 @@ impl ChatSession {
             // (`fold_log`).
             SessionEvent::AdmissionClosed { invite, redeemed } => {
                 self.guards.used_invites.insert(*invite);
-                self.guards.closed_admissions.entry(*invite).or_default().push(*redeemed);
+                self.guards
+                    .closed_admissions
+                    .entry(*invite)
+                    .or_default()
+                    .push(*redeemed);
             }
             SessionEvent::WorkspaceSandboxSet { grants } => {
                 self.guards.sandbox_grants = grants.clone();
@@ -1345,42 +1565,72 @@ fn is_zero_u32(n: &u32) -> bool {
 fn set_change(event: &SessionEvent) -> Option<SetChange<'_>> {
     Some(match event {
         SessionEvent::ProposalSetOpened { set } => SetChange::Opened(set),
-        SessionEvent::ProposalSetAlternativeAdded { set_id, proposal_id, revises } => {
-            SetChange::AlternativeAdded { set_id: *set_id, proposal_id: *proposal_id, revises: *revises }
-        }
-        SessionEvent::ScoutAssessmentPosted { set_id, assessment } => {
-            SetChange::Assessed { set_id: *set_id, assessment }
-        }
-        SessionEvent::ProposalSetRoundAdvanced { set_id, round, .. } => {
-            SetChange::RoundAdvanced { set_id: *set_id, round: *round }
-        }
-        SessionEvent::ProposalSetQuorumReached { set_id, proposal_id, tie_break, at } => SetChange::QuorumReached {
+        SessionEvent::ProposalSetAlternativeAdded {
+            set_id,
+            proposal_id,
+            revises,
+        } => SetChange::AlternativeAdded {
+            set_id: *set_id,
+            proposal_id: *proposal_id,
+            revises: *revises,
+        },
+        SessionEvent::ScoutAssessmentPosted { set_id, assessment } => SetChange::Assessed {
+            set_id: *set_id,
+            assessment,
+        },
+        SessionEvent::ProposalSetRoundAdvanced { set_id, round, .. } => SetChange::RoundAdvanced {
+            set_id: *set_id,
+            round: *round,
+        },
+        SessionEvent::ProposalSetQuorumReached {
+            set_id,
+            proposal_id,
+            tie_break,
+            at,
+        } => SetChange::QuorumReached {
             set_id: *set_id,
             proposal_id: *proposal_id,
             tie_break: *tie_break,
             at: *at,
         },
-        SessionEvent::ProposalSetAlternativeStopped { set_id, proposal_id, stopped_by, reason } => SetChange::Stopped {
+        SessionEvent::ProposalSetAlternativeStopped {
+            set_id,
+            proposal_id,
+            stopped_by,
+            reason,
+        } => SetChange::Stopped {
             set_id: *set_id,
             proposal_id: *proposal_id,
             stopped_by: *stopped_by,
             reason: *reason,
         },
-        SessionEvent::ProposalSetTuned { set_id, agent_quorum, required_approvals, quality_bar } => SetChange::Tuned {
+        SessionEvent::ProposalSetTuned {
+            set_id,
+            agent_quorum,
+            required_approvals,
+            quality_bar,
+        } => SetChange::Tuned {
             set_id: *set_id,
             agent_quorum: *agent_quorum,
             required_approvals: *required_approvals,
             quality_bar: *quality_bar,
         },
-        SessionEvent::ProposalSetPreflightRecorded { set_id, proposal_id, report, at } => SetChange::Preflight {
+        SessionEvent::ProposalSetPreflightRecorded {
+            set_id,
+            proposal_id,
+            report,
+            at,
+        } => SetChange::Preflight {
             set_id: *set_id,
             proposal_id: *proposal_id,
             report,
             at: *at,
         },
-        SessionEvent::ProposalSetDecided { set_id, winner, at } => {
-            SetChange::Decided { set_id: *set_id, winner: *winner, at: *at }
-        }
+        SessionEvent::ProposalSetDecided { set_id, winner, at } => SetChange::Decided {
+            set_id: *set_id,
+            winner: *winner,
+            at: *at,
+        },
         _ => return None,
     })
 }
@@ -1488,7 +1738,14 @@ pub fn project_with_options(
     trusted_founder: Option<&str>,
     trusted_workspace: Option<Uuid>,
 ) -> Option<ChatSession> {
-    fold(envelopes, trusted_founder, trusted_workspace, WorkspaceAuthz::Unchecked, None, None)
+    fold(
+        envelopes,
+        trusted_founder,
+        trusted_workspace,
+        WorkspaceAuthz::Unchecked,
+        None,
+        None,
+    )
 }
 
 /// How a chat log's workspace-authorized events are judged.
@@ -1512,7 +1769,14 @@ pub fn project_authorized(
     trusted_workspace: Option<Uuid>,
     workspace: WorkspaceAuthz<'_>,
 ) -> Option<ChatSession> {
-    fold(envelopes, trusted_founder, trusted_workspace, workspace, None, None)
+    fold(
+        envelopes,
+        trusted_founder,
+        trusted_workspace,
+        workspace,
+        None,
+        None,
+    )
 }
 
 /// Fold a **workspace-config** log and record its roster at every position.
@@ -1522,8 +1786,14 @@ pub fn project_config(
     trusted_workspace: Option<Uuid>,
 ) -> (Option<ChatSession>, crate::authz::ConfigTimeline) {
     let mut timeline = crate::authz::ConfigTimeline::default();
-    let session =
-        fold(envelopes, trusted_founder, trusted_workspace, WorkspaceAuthz::Unchecked, Some(&mut timeline), None);
+    let session = fold(
+        envelopes,
+        trusted_founder,
+        trusted_workspace,
+        WorkspaceAuthz::Unchecked,
+        Some(&mut timeline),
+        None,
+    );
     (session, timeline.finish_if_begun())
 }
 
@@ -1549,7 +1819,14 @@ pub fn fold_decisions(
     workspace: WorkspaceAuthz<'_>,
 ) -> std::collections::BTreeMap<Uuid, Verdict> {
     let mut out = std::collections::BTreeMap::new();
-    fold(envelopes, trusted_founder, trusted_workspace, workspace, None, Some(&mut out));
+    fold(
+        envelopes,
+        trusted_founder,
+        trusted_workspace,
+        workspace,
+        None,
+        Some(&mut out),
+    );
     out
 }
 
@@ -1585,7 +1862,14 @@ pub fn fold_copy_decisions(
     workspace: WorkspaceAuthz<'_>,
 ) -> CopyVerdicts {
     let mut by_copy = std::collections::BTreeMap::new();
-    let (_, copies, _) = fold_copies(envelopes, trusted_founder, trusted_workspace, workspace, None, Some(&mut by_copy));
+    let (_, copies, _) = fold_copies(
+        envelopes,
+        trusted_founder,
+        trusted_workspace,
+        workspace,
+        None,
+        Some(&mut by_copy),
+    );
     CopyVerdicts { by_copy, copies }
 }
 
@@ -1603,8 +1887,17 @@ fn fold(
     timeline: Option<&mut crate::authz::ConfigTimeline>,
     decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
 ) -> Option<ChatSession> {
-    let mut by_copy = decisions.as_ref().map(|_| std::collections::BTreeMap::new());
-    let (out, _, dropped) = fold_copies(envelopes, trusted_founder, trusted_workspace, workspace, timeline, by_copy.as_mut());
+    let mut by_copy = decisions
+        .as_ref()
+        .map(|_| std::collections::BTreeMap::new());
+    let (out, _, dropped) = fold_copies(
+        envelopes,
+        trusted_founder,
+        trusted_workspace,
+        workspace,
+        timeline,
+        by_copy.as_mut(),
+    );
     if let (Some(d), Some(by_copy)) = (decisions, by_copy) {
         let rank = |v: Verdict| match v {
             Verdict::Allowed => 2,
@@ -1633,17 +1926,28 @@ fn fold_copies(
     workspace: WorkspaceAuthz<'_>,
     timeline: Option<&mut crate::authz::ConfigTimeline>,
     decisions: Option<&mut std::collections::BTreeMap<crate::copies::CopyRef, Verdict>>,
-) -> (Option<ChatSession>, crate::copies::Copies, std::collections::BTreeSet<Uuid>) {
+) -> (
+    Option<ChatSession>,
+    crate::copies::Copies,
+    std::collections::BTreeSet<Uuid>,
+) {
     // Lamport bounds (see [`crate::lamport`]): judged over every envelope
     // the log holds, every copy of an id included (any event is a witness).
     let bounds = crate::lamport::Bounds::of(envelopes);
     // Lamport witnesses count for the bounds only: they fold as nothing, and
     // one sharing an id with a stored event is never a copy of it.
-    let real: std::borrow::Cow<'_, [SessionEventEnvelope]> = if envelopes.iter().any(crate::lamport::is_witness) {
-        std::borrow::Cow::Owned(envelopes.iter().filter(|e| !crate::lamport::is_witness(e)).cloned().collect())
-    } else {
-        std::borrow::Cow::Borrowed(envelopes)
-    };
+    let real: std::borrow::Cow<'_, [SessionEventEnvelope]> =
+        if envelopes.iter().any(crate::lamport::is_witness) {
+            std::borrow::Cow::Owned(
+                envelopes
+                    .iter()
+                    .filter(|e| !crate::lamport::is_witness(e))
+                    .cloned()
+                    .collect(),
+            )
+        } else {
+            std::borrow::Cow::Borrowed(envelopes)
+        };
     // Copies of one id (see [`crate::copies`]): only an attested copy
     // counts against an attested one, and only the same signer's second
     // copy is an equivocation (review P-A2c, owner decision): that signer's
@@ -1678,7 +1982,9 @@ fn fold_copies(
 /// copies [`crate::copies`] tells apart (an equivocation only when one
 /// signer signed both).
 pub fn equivocates(a: &SessionEventEnvelope, b: &SessionEventEnvelope) -> bool {
-    a.event_id == b.event_id && a.session_id == b.session_id && crate::copies::copy_key(a) != crate::copies::copy_key(b)
+    a.event_id == b.event_id
+        && a.session_id == b.session_id
+        && crate::copies::copy_key(a) != crate::copies::copy_key(b)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1693,16 +1999,47 @@ fn fold_log(
     copies: &crate::copies::Copies,
 ) -> Option<ChatSession> {
     let none = std::collections::BTreeSet::new();
-    let is_config = envelopes
-        .first()
-        .is_some_and(|e| e.session_id == crate::channel::workspace_config_session_id(e.workspace_id));
+    let is_config = envelopes.first().is_some_and(|e| {
+        e.session_id == crate::channel::workspace_config_session_id(e.workspace_id)
+    });
     if !is_config {
-        return fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, LeftOut { cut: &none, bounds, copies });
+        return fold_pass(
+            envelopes,
+            trusted_founder,
+            trusted_workspace,
+            workspace,
+            timeline,
+            decisions,
+            LeftOut {
+                cut: &none,
+                bounds,
+                copies,
+            },
+        );
     }
     let mut first = crate::authz::ConfigTimeline::default();
-    let pass1 =
-        fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut first), None, LeftOut { cut: &none, bounds, copies });
-    let mut deny = config_denials_with_rejudged_cuts(envelopes, trusted_founder, trusted_workspace, workspace, &first, bounds, copies);
+    let pass1 = fold_pass(
+        envelopes,
+        trusted_founder,
+        trusted_workspace,
+        workspace,
+        Some(&mut first),
+        None,
+        LeftOut {
+            cut: &none,
+            bounds,
+            copies,
+        },
+    );
+    let mut deny = config_denials_with_rejudged_cuts(
+        envelopes,
+        trusted_founder,
+        trusted_workspace,
+        workspace,
+        &first,
+        bounds,
+        copies,
+    );
     // Closed box admissions (Phase B): the redemptions no allowed closure
     // names, wherever they sort. The closures are read from the fold the
     // denials so far leave, never from the first pass alone: a denial can
@@ -1716,14 +2053,37 @@ fn fold_log(
     // is a function of the event set, so every device reaches the same set
     // in any arrival order. A denial a later step would no longer make stays
     // (fail closed).
-    if envelopes.iter().any(|e| matches!(e.payload, SessionEvent::AdmissionClosed { .. })) {
+    if envelopes
+        .iter()
+        .any(|e| matches!(e.payload, SessionEvent::AdmissionClosed { .. }))
+    {
         loop {
             let (closed, invites) = if deny.is_empty() {
-                pass1.as_ref().map(|s| (s.guards.closed_admissions.clone(), s.guards.service_invites.clone())).unwrap_or_default()
-            } else {
-                fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, None, None, LeftOut { cut: &deny, bounds, copies })
-                    .map(|s| (s.guards.closed_admissions, s.guards.service_invites))
+                pass1
+                    .as_ref()
+                    .map(|s| {
+                        (
+                            s.guards.closed_admissions.clone(),
+                            s.guards.service_invites.clone(),
+                        )
+                    })
                     .unwrap_or_default()
+            } else {
+                fold_pass(
+                    envelopes,
+                    trusted_founder,
+                    trusted_workspace,
+                    workspace,
+                    None,
+                    None,
+                    LeftOut {
+                        cut: &deny,
+                        bounds,
+                        copies,
+                    },
+                )
+                .map(|s| (s.guards.closed_admissions, s.guards.service_invites))
+                .unwrap_or_default()
             };
             let more = crate::admission::closure_denials(envelopes, &closed, &invites, copies);
             if more.is_subset(&deny) {
@@ -1738,7 +2098,19 @@ fn fold_log(
         }
         return pass1;
     }
-    fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, LeftOut { cut: &deny, bounds, copies })
+    fold_pass(
+        envelopes,
+        trusted_founder,
+        trusted_workspace,
+        workspace,
+        timeline,
+        decisions,
+        LeftOut {
+            cut: &deny,
+            bounds,
+            copies,
+        },
+    )
 }
 
 /// The config events a cut denies outright: by a cut member or device,
@@ -1769,13 +2141,16 @@ fn cut_exclusion(
     copies: &crate::copies::Copies,
 ) -> std::collections::BTreeSet<crate::copies::CopyRef> {
     let mut out = std::collections::BTreeSet::new();
-    let Some(log) = envelopes.first().map(|e| e.session_id) else { return out };
+    let Some(log) = envelopes.first().map(|e| e.session_id) else {
+        return out;
+    };
     let covered = cut.covered(log, chains);
     for e in envelopes {
         // Before the cut in the fold's order: another signer's copy under
         // the cut's own id and lamport is no exception.
         let copy = copies.kept(e);
-        let before = cut.is_before(e, copy.1) || matches!(cut.kind, crate::authz::CutKind::Revoked(_));
+        let before =
+            cut.is_before(e, copy.1) || matches!(cut.kind, crate::authz::CutKind::Revoked(_));
         // Judged as of the cut, not erased: a removed or demoted member's
         // self-validating publications (keys, certificates, passkeys) stand,
         // as they would after the cut. Any other uncovered config event of
@@ -1784,7 +2159,8 @@ fn cut_exclusion(
         // member's lockdowns (below).
         let still_ok = match &cut.kind {
             crate::authz::CutKind::Removed(_) => {
-                crate::authz::is_trust_publication(&e.payload) || matches!(e.payload, SessionEvent::PasskeyRegistered { .. })
+                crate::authz::is_trust_publication(&e.payload)
+                    || matches!(e.payload, SessionEvent::PasskeyRegistered { .. })
             }
             // A demoted member stays a member, and every role may raise a
             // lockdown (it only tightens), so their uncovered lockdowns stand
@@ -1793,7 +2169,11 @@ fn cut_exclusion(
             // `ChatLockdownCleared`, no human Contributor and no presence.
             crate::authz::CutKind::Demoted(..) => {
                 crate::authz::is_trust_publication(&e.payload)
-                    || matches!(e.payload, SessionEvent::PasskeyRegistered { .. } | SessionEvent::ChatLockdownRaised { .. })
+                    || matches!(
+                        e.payload,
+                        SessionEvent::PasskeyRegistered { .. }
+                            | SessionEvent::ChatLockdownRaised { .. }
+                    )
             }
             // A revoked device's own certificate stands (the revocation is
             // of a certified device); nothing else it signed uncovered does.
@@ -1815,16 +2195,32 @@ fn cut_exclusion(
 /// demoting yourself, or a device revoking itself; a role change counts
 /// when the payload says it lowers the role, which the re-judging pass
 /// confirms against the roster).
-fn candidate_cut(env: &SessionEventEnvelope, roster: &crate::authz::RosterState, copy: u32) -> Option<crate::authz::Cut> {
+fn candidate_cut(
+    env: &SessionEventEnvelope,
+    roster: &crate::authz::RosterState,
+    copy: u32,
+) -> Option<crate::authz::Cut> {
     use crate::authz::CutKind;
-    let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+    let author = env
+        .actor_stamp
+        .as_ref()
+        .map(|s| s.actor.id.as_str())
+        .unwrap_or("");
     let (kind, agent_keys, watermark) = match &env.payload {
-        SessionEvent::MemberRemoved { member_id, watermark } if member_id != author => (
+        SessionEvent::MemberRemoved {
+            member_id,
+            watermark,
+        } if member_id != author => (
             CutKind::Removed(member_id.clone()),
             roster
                 .agent_keys
                 .iter()
-                .filter(|(_, k)| roster.agents.get(&k.agent_id).is_some_and(|a| a.owner == *member_id))
+                .filter(|(_, k)| {
+                    roster
+                        .agents
+                        .get(&k.agent_id)
+                        .is_some_and(|a| a.owner == *member_id)
+                })
                 .map(|(id, _)| *id)
                 .collect(),
             watermark.clone(),
@@ -1832,14 +2228,29 @@ fn candidate_cut(env: &SessionEventEnvelope, roster: &crate::authz::RosterState,
         SessionEvent::MemberRoleChanged { change, watermark }
             if change.member_id != author && change.new_role.rank() < change.old_role.rank() =>
         {
-            (CutKind::Demoted(change.member_id.clone()), Default::default(), watermark.clone())
+            (
+                CutKind::Demoted(change.member_id.clone()),
+                Default::default(),
+                watermark.clone(),
+            )
         }
-        SessionEvent::DeviceRevoked { device_id, watermark } if env.signer_device_id != Some(*device_id) => {
-            (CutKind::Revoked(*device_id), Default::default(), watermark.clone())
-        }
+        SessionEvent::DeviceRevoked {
+            device_id,
+            watermark,
+        } if env.signer_device_id != Some(*device_id) => (
+            CutKind::Revoked(*device_id),
+            Default::default(),
+            watermark.clone(),
+        ),
         _ => return None,
     };
-    Some(crate::authz::Cut { key: env.canonical_key(), copy, kind, agent_keys, watermark })
+    Some(crate::authz::Cut {
+        key: env.canonical_key(),
+        copy,
+        kind,
+        agent_keys,
+        watermark,
+    })
 }
 
 /// Phase A, item 2 (review P-A2b): a cut is judged without its subject's
@@ -1863,10 +2274,14 @@ fn config_denials_with_rejudged_cuts(
     // A cut is known by its position and its copy (two signers' copies can
     // share a position, see `crate::copies`).
     let at = |c: &crate::authz::Cut| (c.key, c.copy);
-    let mut accepted: std::collections::BTreeSet<((u64, Uuid), u32)> = first.cuts().iter().map(at).collect();
+    let mut accepted: std::collections::BTreeSet<((u64, Uuid), u32)> =
+        first.cuts().iter().map(at).collect();
     // Candidates the positional pass refused whose subject has uncovered
     // earlier events (the only ones re-judging can change).
-    let mut candidates: Vec<(crate::authz::Cut, std::collections::BTreeSet<crate::copies::CopyRef>)> = envelopes
+    let mut candidates: Vec<(
+        crate::authz::Cut,
+        std::collections::BTreeSet<crate::copies::CopyRef>,
+    )> = envelopes
         .iter()
         .filter_map(|e| candidate_cut(e, first.current(), copies.kept(e).1))
         .filter(|c| !accepted.contains(&at(c)))
@@ -1883,12 +2298,28 @@ fn config_denials_with_rejudged_cuts(
             if accepted.contains(&at(c)) {
                 continue;
             }
-            let trial: std::collections::BTreeSet<crate::copies::CopyRef> = deny.union(x).copied().collect();
+            let trial: std::collections::BTreeSet<crate::copies::CopyRef> =
+                deny.union(x).copied().collect();
             let mut t = crate::authz::ConfigTimeline::default();
-            fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut t), None, LeftOut { cut: &trial, bounds, copies });
+            fold_pass(
+                envelopes,
+                trusted_founder,
+                trusted_workspace,
+                workspace,
+                Some(&mut t),
+                None,
+                LeftOut {
+                    cut: &trial,
+                    bounds,
+                    copies,
+                },
+            );
             if t.cuts().iter().any(|k| at(k) == at(c)) {
                 accepted.extend(t.cuts().iter().map(at));
-                deny = trial.union(&config_cut_denials(envelopes, &t, copies)).copied().collect();
+                deny = trial
+                    .union(&config_cut_denials(envelopes, &t, copies))
+                    .copied()
+                    .collect();
                 changed = true;
             }
         }
@@ -1925,7 +2356,11 @@ fn fold_pass(
     left_out: LeftOut<'_>,
 ) -> Option<ChatSession> {
     use crate::authz::{self, Decision, HeldEvent, HoldReason};
-    let LeftOut { cut: cut_denied, bounds, copies } = left_out;
+    let LeftOut {
+        cut: cut_denied,
+        bounds,
+        copies,
+    } = left_out;
     use crate::lamport::Plausibility;
 
     let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
@@ -1943,12 +2378,20 @@ fn fold_pass(
     //   lamport-0 seed is no candidate at all.
     let plausible = |e: &SessionEventEnvelope| bounds.of_env(e) == Plausibility::Plausible;
     let base = trusted_founder
-        .and_then(|founder| ordered.iter().position(|e| plausible(e) && is_founder_seed(e, founder)))
-        .or_else(|| ordered.iter().position(|e| plausible(e) && is_self_consistent_seed(e)))
+        .and_then(|founder| {
+            ordered
+                .iter()
+                .position(|e| plausible(e) && is_founder_seed(e, founder))
+        })
         .or_else(|| {
             ordered
                 .iter()
-                .position(|e| plausible(e) && matches!(e.payload, SessionEvent::SessionSnapshot { .. }))
+                .position(|e| plausible(e) && is_self_consistent_seed(e))
+        })
+        .or_else(|| {
+            ordered.iter().position(|e| {
+                plausible(e) && matches!(e.payload, SessionEvent::SessionSnapshot { .. })
+            })
         })?;
     let mut session = match &ordered[base].payload {
         SessionEvent::SessionSnapshot { session } => (**session).clone(),
@@ -1963,7 +2406,11 @@ fn fold_pass(
     if let WorkspaceAuthz::Timeline(t) = workspace {
         if trusted_workspace != Some(ordered[base].workspace_id) {
             let seed = ordered[base];
-            let author = seed.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+            let author = seed
+                .actor_stamp
+                .as_ref()
+                .map(|s| s.actor.id.as_str())
+                .unwrap_or("");
             let member_then = seed
                 .actor_stamp
                 .as_ref()
@@ -1985,50 +2432,73 @@ fn fold_pass(
     // thief's, backdated before its account's own, dispute the account,
     // un-certify the device that revoked it and so undo the revocation that
     // denies it.
-    let is_registration = |e: &SessionEventEnvelope| matches!(e.payload, SessionEvent::AccountKeyRegistered { .. });
-    let cut_registrations: Vec<&SessionEventEnvelope> =
-        ordered.iter().copied().filter(|e| is_registration(e) && cut_denied.contains(&copies.kept(e))).collect();
-    let dropped_registrations: std::collections::BTreeSet<crate::copies::CopyRef> = if cut_registrations.is_empty() {
-        Default::default()
-    } else {
-        let others = crate::account_keys::KeyIndex::of(
-            ordered.iter().copied().filter(|e| !(is_registration(e) && cut_denied.contains(&copies.kept(e)))),
-        )
-        .registered_keys();
-        cut_registrations
-            .iter()
-            .filter(|e| match &e.payload {
-                SessionEvent::AccountKeyRegistered { account_id, signing_public_key } => {
-                    others.get(account_id).is_some_and(|ks| !ks.contains(signing_public_key))
-                }
-                _ => false,
-            })
-            .map(|e| copies.kept(e))
-            .collect()
-    };
+    let is_registration =
+        |e: &SessionEventEnvelope| matches!(e.payload, SessionEvent::AccountKeyRegistered { .. });
+    let cut_registrations: Vec<&SessionEventEnvelope> = ordered
+        .iter()
+        .copied()
+        .filter(|e| is_registration(e) && cut_denied.contains(&copies.kept(e)))
+        .collect();
+    let dropped_registrations: std::collections::BTreeSet<crate::copies::CopyRef> =
+        if cut_registrations.is_empty() {
+            Default::default()
+        } else {
+            let others = crate::account_keys::KeyIndex::of(
+                ordered
+                    .iter()
+                    .copied()
+                    .filter(|e| !(is_registration(e) && cut_denied.contains(&copies.kept(e)))),
+            )
+            .registered_keys();
+            cut_registrations
+                .iter()
+                .filter(|e| match &e.payload {
+                    SessionEvent::AccountKeyRegistered {
+                        account_id,
+                        signing_public_key,
+                    } => others
+                        .get(account_id)
+                        .is_some_and(|ks| !ks.contains(signing_public_key)),
+                    _ => false,
+                })
+                .map(|e| copies.kept(e))
+                .collect()
+        };
     let keyed: Vec<&SessionEventEnvelope> = if dropped_registrations.is_empty() {
         ordered.clone()
     } else {
-        ordered.iter().copied().filter(|e| !dropped_registrations.contains(&copies.kept(e))).collect()
+        ordered
+            .iter()
+            .copied()
+            .filter(|e| !dropped_registrations.contains(&copies.kept(e)))
+            .collect()
     };
-    if keyed
-        .iter()
-        .any(|e| matches!(e.payload, SessionEvent::AccountKeyRegistered { .. } | SessionEvent::AccountKeyRotated { .. }))
-    {
-        tracker.set_key_index(std::sync::Arc::new(crate::account_keys::KeyIndex::of(keyed.iter().copied())), ordered[base]);
+    if keyed.iter().any(|e| {
+        matches!(
+            e.payload,
+            SessionEvent::AccountKeyRegistered { .. } | SessionEvent::AccountKeyRotated { .. }
+        )
+    }) {
+        tracker.set_key_index(
+            std::sync::Arc::new(crate::account_keys::KeyIndex::of(keyed.iter().copied())),
+            ordered[base],
+        );
         // Registrations sorting before the base (backdated to the log's
         // start) count as they do at ingest: the rules read them wherever
         // they sort. Plausible ones only, as everywhere.
-        for e in ordered[..base]
-            .iter()
-            .filter(|e| bounds.of_env(e) == crate::lamport::Plausibility::Plausible && !dropped_registrations.contains(&copies.kept(e)))
-        {
+        for e in ordered[..base].iter().filter(|e| {
+            bounds.of_env(e) == crate::lamport::Plausibility::Plausible
+                && !dropped_registrations.contains(&copies.kept(e))
+        }) {
             tracker.register_key_before_base(e);
         }
     }
     // Whom each device vouched for anywhere on this log: who holds a device
     // never depends on a position (see `authz::DeviceState::holders`).
-    if keyed.iter().any(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. })) {
+    if keyed
+        .iter()
+        .any(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. }))
+    {
         tracker.set_vouched(authz::RosterTracker::vouched(&keyed));
         // Which certificates their devices accepted: read only once the log
         // names rules 3 (an unallowed rules set changes nothing it reads).
@@ -2038,10 +2508,14 @@ fn fold_pass(
     }
     // Each voter's last folded vote per proposal: its lamport and whether it
     // approved (see the concurrent-vote rule below).
-    let mut last_vote: std::collections::HashMap<(Uuid, String), (u64, bool)> = std::collections::HashMap::new();
+    let mut last_vote: std::collections::HashMap<(Uuid, String), (u64, bool)> =
+        std::collections::HashMap::new();
     if let Some(t) = timeline.as_deref_mut() {
         *t = authz::ConfigTimeline::begin(tracker.state.clone());
-        for e in ordered.iter().filter(|e| bounds.of_env(e) != Plausibility::Implausible) {
+        for e in ordered
+            .iter()
+            .filter(|e| bounds.of_env(e) != Plausibility::Implausible)
+        {
             t.note_held(e.event_id, e.lamport);
             if let SessionEvent::WorkspaceKeyRotated { rotation } = &e.payload {
                 t.note_rotation(rotation);
@@ -2073,7 +2547,11 @@ fn fold_pass(
             continue;
         }
         let trusted = trusted_workspace == Some(env.workspace_id);
-        let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+        let author = env
+            .actor_stamp
+            .as_ref()
+            .map(|s| s.actor.id.as_str())
+            .unwrap_or("");
         let mut allowed = false;
         let mut held = false;
         'judge: {
@@ -2092,7 +2570,12 @@ fn fold_pass(
             // Its log head isn't here yet: held until it arrives.
             if plausibility == Plausibility::Unresolved {
                 let (proposal_id, set_id) = authz::subject_of(&env.payload);
-                session.authz.held.push(HeldEvent { event_id: env.event_id, reason: HoldReason::LogHeadAhead, proposal_id, set_id });
+                session.authz.held.push(HeldEvent {
+                    event_id: env.event_id,
+                    reason: HoldReason::LogHeadAhead,
+                    proposal_id,
+                    set_id,
+                });
                 held = true;
                 break 'judge;
             }
@@ -2118,7 +2601,8 @@ fn fold_pass(
                     WorkspaceAuthz::Timeline(t) => {
                         // Every 0.1 author stamps the frontier; one without it
                         // can't be placed and is refused.
-                        let Some(mut f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) else {
+                        let Some(mut f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier)
+                        else {
                             break 'judge;
                         };
                         // A cut member's or device's event its cut's
@@ -2126,7 +2610,9 @@ fn fold_pass(
                         // whatever frontier it claims; a revoked device's
                         // never folds (Phase A, item 2).
                         for (cut, covered) in t.cuts().iter().zip(&cut_cover) {
-                            if !cut.applies(env) || covered.contains(&(env.signer_device_id, env.event_id)) {
+                            if !cut.applies(env)
+                                || covered.contains(&(env.signer_device_id, env.event_id))
+                            {
                                 continue;
                             }
                             if matches!(cut.kind, authz::CutKind::Revoked(_)) {
@@ -2151,12 +2637,23 @@ fn fold_pass(
                 };
                 if let Some(reason) = hold {
                     let (proposal_id, set_id) = authz::subject_of(&env.payload);
-                    session.authz.held.push(HeldEvent { event_id: env.event_id, reason, proposal_id, set_id });
+                    session.authz.held.push(HeldEvent {
+                        event_id: env.event_id,
+                        reason,
+                        proposal_id,
+                        set_id,
+                    });
                     held = true;
                     break 'judge;
                 }
             }
-            let ctx = authz::Ctx { fold: &session, running: &tracker.state, workspace: at, trusted, checked };
+            let ctx = authz::Ctx {
+                fold: &session,
+                running: &tracker.state,
+                workspace: at,
+                trusted,
+                checked,
+            };
             if authz::authorize(env, &ctx) != Decision::Allow {
                 break 'judge;
             }
@@ -2168,24 +2665,41 @@ fn fold_pass(
                 // retroactively deny everything they did (members they
                 // added included). What they could backdate afterwards they
                 // could have done before leaving.
-                let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+                let author = env
+                    .actor_stamp
+                    .as_ref()
+                    .map(|s| s.actor.id.as_str())
+                    .unwrap_or("");
                 let cut = match &env.payload {
-                    SessionEvent::MemberRemoved { member_id, .. } | SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id, .. }, .. }
-                        if member_id == author =>
-                    {
-                        None
-                    }
+                    SessionEvent::MemberRemoved { member_id, .. }
+                    | SessionEvent::MemberRoleChanged {
+                        change: MemberRoleChange { member_id, .. },
+                        ..
+                    } if member_id == author => None,
                     // Nor is a device revoking itself (its watermark would be
                     // its own word; another device of the account revoking it
                     // is a cut).
-                    SessionEvent::DeviceRevoked { device_id, .. } if env.signer_device_id == Some(*device_id) => None,
-                    SessionEvent::MemberRemoved { member_id, watermark } => Some((
+                    SessionEvent::DeviceRevoked { device_id, .. }
+                        if env.signer_device_id == Some(*device_id) =>
+                    {
+                        None
+                    }
+                    SessionEvent::MemberRemoved {
+                        member_id,
+                        watermark,
+                    } => Some((
                         authz::CutKind::Removed(member_id.clone()),
                         tracker
                             .state
                             .agent_keys
                             .iter()
-                            .filter(|(_, k)| tracker.state.agents.get(&k.agent_id).is_some_and(|a| a.owner == *member_id))
+                            .filter(|(_, k)| {
+                                tracker
+                                    .state
+                                    .agents
+                                    .get(&k.agent_id)
+                                    .is_some_and(|a| a.owner == *member_id)
+                            })
                             .map(|(id, _)| *id)
                             .collect(),
                         watermark.clone(),
@@ -2193,15 +2707,30 @@ fn fold_pass(
                     SessionEvent::MemberRoleChanged { change, watermark }
                         if change.new_role.rank() < session.role_of(&change.member_id).rank() =>
                     {
-                        Some((authz::CutKind::Demoted(change.member_id.clone()), Default::default(), watermark.clone()))
+                        Some((
+                            authz::CutKind::Demoted(change.member_id.clone()),
+                            Default::default(),
+                            watermark.clone(),
+                        ))
                     }
-                    SessionEvent::DeviceRevoked { device_id, watermark } => {
-                        Some((authz::CutKind::Revoked(*device_id), Default::default(), watermark.clone()))
-                    }
+                    SessionEvent::DeviceRevoked {
+                        device_id,
+                        watermark,
+                    } => Some((
+                        authz::CutKind::Revoked(*device_id),
+                        Default::default(),
+                        watermark.clone(),
+                    )),
                     _ => None,
                 };
                 if let Some((kind, agent_keys, watermark)) = cut {
-                    t.push_cut(authz::Cut { key: env.canonical_key(), copy: copy.1, kind, agent_keys, watermark });
+                    t.push_cut(authz::Cut {
+                        key: env.canonical_key(),
+                        copy: copy.1,
+                        kind,
+                        agent_keys,
+                        watermark,
+                    });
                 }
             }
             // Checked-fold rewrites: votes carry the signer's real role, and an
@@ -2222,61 +2751,109 @@ fn fold_pass(
                 SessionEvent::ChatLockdownRaised { chat_id, lockdown } => {
                     let mut lockdown = lockdown.clone();
                     lockdown.raise_event_id = Some(env.event_id);
-                    rewritten = SessionEvent::ChatLockdownRaised { chat_id: *chat_id, lockdown };
+                    rewritten = SessionEvent::ChatLockdownRaised {
+                        chat_id: *chat_id,
+                        lockdown,
+                    };
                     &rewritten
                 }
-                SessionEvent::ProposalVoteCast { proposal_id, approval } if checked && !trusted => {
+                SessionEvent::ProposalVoteCast {
+                    proposal_id,
+                    approval,
+                } if checked && !trusted => {
                     let mut approval = approval.clone();
                     if let Some(role) = at.and_then(|r| authz::counted_role(r, author)) {
                         approval.role = role;
                     }
-                    rewritten = SessionEvent::ProposalVoteCast { proposal_id: *proposal_id, approval };
+                    rewritten = SessionEvent::ProposalVoteCast {
+                        proposal_id: *proposal_id,
+                        approval,
+                    };
                     &rewritten
                 }
                 // A comment carries its signer's real role, as a vote does.
-                SessionEvent::ProposalRefined { proposal_id, refinement } if checked && !trusted => {
+                SessionEvent::ProposalRefined {
+                    proposal_id,
+                    refinement,
+                } if checked && !trusted => {
                     let mut refinement = refinement.clone();
                     if let Some(role) = at.and_then(|r| authz::counted_role(r, author)) {
                         refinement.role = role;
                     }
-                    rewritten = SessionEvent::ProposalRefined { proposal_id: *proposal_id, refinement };
+                    rewritten = SessionEvent::ProposalRefined {
+                        proposal_id: *proposal_id,
+                        refinement,
+                    };
                     &rewritten
                 }
                 other => other,
             };
             // Who wrote each comment (see `AuthzState::refinement_authors`).
             if trusted || checked {
-                if let SessionEvent::ProposalRefined { proposal_id, refinement } = payload {
+                if let SessionEvent::ProposalRefined {
+                    proposal_id,
+                    refinement,
+                } = payload
+                {
                     let first = session
                         .proposals
                         .iter()
                         .find(|p| p.id == *proposal_id)
                         .is_some_and(|p| !p.refinements.iter().any(|r| r.id == refinement.id));
                     if first && refinement.actor_id == author {
-                        session.authz.refinement_authors.insert(refinement.id, author.to_string());
+                        session
+                            .authz
+                            .refinement_authors
+                            .insert(refinement.id, author.to_string());
                     }
                 }
             }
             if let SessionEvent::ChatLockdownRaised { lockdown, .. } = payload {
-                session.authz.lockdown_raisers.entry(lockdown.raise_event_id.unwrap_or(lockdown.id)).or_insert_with(|| author.to_string());
+                session
+                    .authz
+                    .lockdown_raisers
+                    .entry(lockdown.raise_event_id.unwrap_or(lockdown.id))
+                    .or_insert_with(|| author.to_string());
             }
             if checked && !trusted {
                 if let SessionEvent::MessageAppended { message } = payload {
-                    session.authz.message_authors.entry(message.id).or_insert_with(|| author.to_string());
+                    session
+                        .authz
+                        .message_authors
+                        .entry(message.id)
+                        .or_insert_with(|| author.to_string());
                 }
             }
             // The turns a person wrote themselves (see
             // `AuthzState::person_messages`).
             if trusted || checked {
-                let personal = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == crate::identity::ActorKind::Human && !s.runtime_effect);
+                let personal = env.actor_stamp.as_ref().is_some_and(|s| {
+                    s.actor.kind == crate::identity::ActorKind::Human && !s.runtime_effect
+                });
                 let touched = match payload {
-                    SessionEvent::MessageAppended { message } => Some((message.id, message.role == crate::chat::MessageRole::User)),
-                    SessionEvent::MessageChunkReceived { message_id, .. } | SessionEvent::MessageCompleted { message_id, .. } => Some((*message_id, false)),
+                    SessionEvent::MessageAppended { message } => {
+                        Some((message.id, message.role == crate::chat::MessageRole::User))
+                    }
+                    SessionEvent::MessageChunkReceived { message_id, .. }
+                    | SessionEvent::MessageCompleted { message_id, .. } => {
+                        Some((*message_id, false))
+                    }
                     _ => None,
                 };
                 if let Some((id, user_turn)) = touched {
-                    let first_author = session.authz.message_authors.get(&id).is_none_or(|a| a == author);
-                    if personal && user_turn && first_author && !session.messages.iter().any(|m| m.id == id && !session.authz.person_messages.contains_key(&id)) {
+                    let first_author = session
+                        .authz
+                        .message_authors
+                        .get(&id)
+                        .is_none_or(|a| a == author);
+                    if personal
+                        && user_turn
+                        && first_author
+                        && !session
+                            .messages
+                            .iter()
+                            .any(|m| m.id == id && !session.authz.person_messages.contains_key(&id))
+                    {
                         session.authz.person_messages.insert(id, author.to_string());
                     } else {
                         session.authz.person_messages.remove(&id);
@@ -2284,7 +2861,11 @@ fn fold_pass(
                 }
             }
             if let SessionEvent::ProposalApplyRequested { request } = payload {
-                session.authz.apply_requesters.entry(request.id).or_insert_with(|| author.to_string());
+                session
+                    .authz
+                    .apply_requesters
+                    .entry(request.id)
+                    .or_insert_with(|| author.to_string());
             }
             // Attachments (issue #118) are folded with their signed author.
             match payload {
@@ -2295,16 +2876,20 @@ fn fold_pass(
                         .map(|m| m.kind)
                         .or_else(|| stamp.map(|s| s.actor.kind))
                         .unwrap_or(crate::identity::ActorKind::Human);
-                    session.attachments.entry(attachment.id).or_insert_with(|| crate::attachment::SharedAttachment {
-                        attachment: attachment.clone(),
-                        author: author.to_string(),
-                        author_kind,
-                        author_name: stamp.map(|s| s.actor.display_name.clone()).unwrap_or_default(),
-                        author_account: stamp.and_then(|s| s.actor.account_id),
-                        signer_device: env.signer_device_id,
-                        event_id: env.event_id,
-                        shared_at: env.timestamp,
-                        deleted: false,
+                    session.attachments.entry(attachment.id).or_insert_with(|| {
+                        crate::attachment::SharedAttachment {
+                            attachment: attachment.clone(),
+                            author: author.to_string(),
+                            author_kind,
+                            author_name: stamp
+                                .map(|s| s.actor.display_name.clone())
+                                .unwrap_or_default(),
+                            author_account: stamp.and_then(|s| s.actor.account_id),
+                            signer_device: env.signer_device_id,
+                            event_id: env.event_id,
+                            shared_at: env.timestamp,
+                            deleted: false,
+                        }
                     });
                 }
                 SessionEvent::AttachmentDeleted { attachment_id } => {
@@ -2315,7 +2900,11 @@ fn fold_pass(
                 // Render-only (identity model v2, 5 and 6): last writer wins
                 // per field in fold order.
                 SessionEvent::ProfileUpdated { profile } => {
-                    session.profiles.entry(profile.account_id).or_default().apply(profile, env.event_id);
+                    session
+                        .profiles
+                        .entry(profile.account_id)
+                        .or_default()
+                        .apply(profile, env.event_id);
                 }
                 SessionEvent::DeviceLabelSet { label } => {
                     let per = session.device_labels.entry(label.device_id).or_default();
@@ -2335,9 +2924,14 @@ fn fold_pass(
                 if let Some(f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) {
                     match payload {
                         SessionEvent::ProposalUpserted { proposal } => {
-                            let changed = session.proposals.iter().find(|p| p.id == proposal.id).is_none_or(|old| {
-                                authz::votes::diff_digest(old) != authz::votes::diff_digest(proposal)
-                            });
+                            let changed = session
+                                .proposals
+                                .iter()
+                                .find(|p| p.id == proposal.id)
+                                .is_none_or(|old| {
+                                    authz::votes::diff_digest(old)
+                                        != authz::votes::diff_digest(proposal)
+                                });
                             if changed {
                                 session.authz.content_frontier.insert(proposal.id, f);
                             }
@@ -2357,9 +2951,14 @@ fn fold_pass(
             // doesn't supersede it. A later vote (a higher lamport, which its
             // author drafted after holding the earlier one) still does.
             let superseded = match payload {
-                SessionEvent::ProposalVoteCast { proposal_id, approval } => {
+                SessionEvent::ProposalVoteCast {
+                    proposal_id,
+                    approval,
+                } => {
                     let key = (*proposal_id, approval.actor_id.clone());
-                    let tie = last_vote.get(&key).is_some_and(|(l, approved)| *l == env.lamport && !approved && approval.approved);
+                    let tie = last_vote.get(&key).is_some_and(|(l, approved)| {
+                        *l == env.lamport && !approved && approval.approved
+                    });
                     if !tie {
                         last_vote.insert(key, (env.lamport, approval.approved));
                     }
@@ -2375,12 +2974,18 @@ fn fold_pass(
                     // Asks and answers fold with who signed them
                     // (`flow::asks`), judged at the event's position.
                     let roster = at.unwrap_or(&tracker.state);
-                    match crate::flow::asks::AskProvenance::of(record, env, &session, roster, trusted) {
+                    match crate::flow::asks::AskProvenance::of(
+                        record, env, &session, roster, trusted,
+                    ) {
                         Some(p) => {
                             session.flow.apply_ask(record, &p);
                             true
                         }
-                        None => crate::memory::apply_enveloped(&mut session.flow, record, &crate::memory::RevCtx::of(env)),
+                        None => crate::memory::apply_enveloped(
+                            &mut session.flow,
+                            record,
+                            &crate::memory::RevCtx::of(env),
+                        ),
                     }
                 }
                 _ => false,
@@ -2389,9 +2994,19 @@ fn fold_pass(
             // event's own recorded time, and who from its signed stamp.
             let archive_before = crate::proposal_archive::touches_proposals(payload)
                 .then(|| crate::proposal_archive::settled_states(&session));
-            if !superseded && !enveloped && !crate::guard::fold_authored(&mut session, payload, author) {
+            if !superseded
+                && !enveloped
+                && !crate::guard::fold_authored(&mut session, payload, author)
+            {
                 let ms = crate::admission::envelope_ms(env);
-                if let SessionEvent::TurnClaimed { trigger_id, device_id, epoch, supersedes, repo_id } = payload {
+                if let SessionEvent::TurnClaimed {
+                    trigger_id,
+                    device_id,
+                    epoch,
+                    supersedes,
+                    repo_id,
+                } = payload
+                {
                     // The dispatcher's fold (`crate::dispatch`) with the
                     // claim's signed time and whether the holder it would
                     // displace is gone at its position.
@@ -2399,8 +3014,21 @@ fn fold_pass(
                         .turn_claims
                         .get(trigger_id)
                         .is_some_and(|h| at.is_some_and(|r| crate::dispatch::holder_gone(r, *h)));
-                    let claim = crate::dispatch::Claim { device: *device_id, epoch: *epoch, supersedes: *supersedes, repo_id: *repo_id };
-                    crate::dispatch::fold_claim_at(&mut session, *trigger_id, claim, crate::dispatch::ClaimAt { ms: Some(ms), holder_gone });
+                    let claim = crate::dispatch::Claim {
+                        device: *device_id,
+                        epoch: *epoch,
+                        supersedes: *supersedes,
+                        repo_id: *repo_id,
+                    };
+                    crate::dispatch::fold_claim_at(
+                        &mut session,
+                        *trigger_id,
+                        claim,
+                        crate::dispatch::ClaimAt {
+                            ms: Some(ms),
+                            holder_gone,
+                        },
+                    );
                 } else {
                     session.apply(payload);
                 }
@@ -2422,9 +3050,10 @@ fn fold_pass(
                             .or_else(|| tracker.state.valid_agent_key(k))
                             .map(|key| key.host_device_id)
                     };
-                    let origin = message
-                        .origin_device_id
-                        .filter(|o| env.signer_device_id == Some(*o) || env.signer_device_id.and_then(agent_host) == Some(*o));
+                    let origin = message.origin_device_id.filter(|o| {
+                        env.signer_device_id == Some(*o)
+                            || env.signer_device_id.and_then(agent_host) == Some(*o)
+                    });
                     if let Some(o) = origin {
                         crate::dispatch::note_answer_at(&mut session, message.id, o, Some(ms));
                     }
@@ -2441,8 +3070,17 @@ fn fold_pass(
                 // inbox ignores it (`ActionProposal::archive_mark`).
                 let may_archive = !checked
                     || trusted
-                    || at.and_then(|r| r.role_of(author)).is_some_and(|r| r.rank() >= crate::identity::WorkspaceRole::Contributor.rank());
-                crate::proposal_archive::note_event(&mut session, &before, payload, env.timestamp, account, may_archive);
+                    || at.and_then(|r| r.role_of(author)).is_some_and(|r| {
+                        r.rank() >= crate::identity::WorkspaceRole::Contributor.rank()
+                    });
+                crate::proposal_archive::note_event(
+                    &mut session,
+                    &before,
+                    payload,
+                    env.timestamp,
+                    account,
+                    may_archive,
+                );
             }
             session.updated_at = env.timestamp;
         }
@@ -2459,7 +3097,8 @@ fn fold_pass(
         // A registration left out of the account-key rules (see `keyed`
         // above) doesn't count here either; every other one is judged by
         // them wherever it sorts, whatever its verdict.
-        let changed = !dropped_registrations.contains(&copy) && tracker.observe(env, allowed, &session);
+        let changed =
+            !dropped_registrations.contains(&copy) && tracker.observe(env, allowed, &session);
         if let Some(t) = timeline.as_deref_mut() {
             t.push(env.canonical_key(), &tracker.state, changed);
         }
@@ -2473,12 +3112,17 @@ fn fold_pass(
     };
     // Rules 3: a host whose owner isn't a member any more is inert (agents
     // bound to it become unbound everywhere at once).
-    if session.authz.rules >= authz::RULES_V3 && session.id == crate::channel::workspace_config_session_id(session.workspace_id) {
-        let members: std::collections::BTreeSet<&str> = session.members.iter().map(|m| m.id.as_str()).collect();
+    if session.authz.rules >= authz::RULES_V3
+        && session.id == crate::channel::workspace_config_session_id(session.workspace_id)
+    {
+        let members: std::collections::BTreeSet<&str> =
+            session.members.iter().map(|m| m.id.as_str()).collect();
         let gone: Vec<String> = session
             .workspace_hosts
             .iter()
-            .filter(|h| !h.owner_actor_id.is_empty() && !members.contains(h.owner_actor_id.as_str()))
+            .filter(|h| {
+                !h.owner_actor_id.is_empty() && !members.contains(h.owner_actor_id.as_str())
+            })
             .map(|h| h.id.clone())
             .collect();
         if !gone.is_empty() {
@@ -2562,7 +3206,10 @@ mod tests {
     fn project(envelopes: &[SessionEventEnvelope]) -> Option<ChatSession> {
         super::project(&crate::testkit::honest_chain(envelopes))
     }
-    fn project_with_founder(envelopes: &[SessionEventEnvelope], founder: Option<&str>) -> Option<ChatSession> {
+    fn project_with_founder(
+        envelopes: &[SessionEventEnvelope],
+        founder: Option<&str>,
+    ) -> Option<ChatSession> {
         super::project_with_founder(&crate::testkit::honest_chain(envelopes), founder)
     }
 
@@ -2596,15 +3243,54 @@ mod tests {
         placeholder.created_at = start;
         placeholder.completed_at = Some(Timestamp::from_unix_seconds(1_900_000_000));
         let mid = placeholder.id;
-        let mut done = SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MessageCompleted { message_id: mid, body: "You said yes.".into() });
+        let mut done = SessionEventEnvelope::new(
+            sid,
+            wid,
+            3,
+            SessionEvent::MessageCompleted {
+                message_id: mid,
+                body: "You said yes.".into(),
+            },
+        );
         done.timestamp = Timestamp::from_unix_seconds(1_800_000_120);
-        let streaming = project(&[snapshot_env(base.clone(), 1), SessionEventEnvelope::new(sid, wid, 2, SessionEvent::MessageAppended { message: placeholder.clone() })]).unwrap();
-        assert_eq!(streaming.messages[0].completed_at, None, "an author's completedAt is not folded");
+        let streaming = project(&[
+            snapshot_env(base.clone(), 1),
+            SessionEventEnvelope::new(
+                sid,
+                wid,
+                2,
+                SessionEvent::MessageAppended {
+                    message: placeholder.clone(),
+                },
+            ),
+        ])
+        .unwrap();
+        assert_eq!(
+            streaming.messages[0].completed_at, None,
+            "an author's completedAt is not folded"
+        );
         assert_eq!(streaming.messages[0].posted_at(), start);
-        let envs = vec![snapshot_env(base, 1), SessionEventEnvelope::new(sid, wid, 2, SessionEvent::MessageAppended { message: placeholder }), done];
+        let envs = vec![
+            snapshot_env(base, 1),
+            SessionEventEnvelope::new(
+                sid,
+                wid,
+                2,
+                SessionEvent::MessageAppended {
+                    message: placeholder,
+                },
+            ),
+            done,
+        ];
         let s = project(&envs).unwrap();
-        assert_eq!(s.messages[0].created_at, start, "created_at stays the turn's start");
-        assert_eq!(s.messages[0].posted_at(), Timestamp::from_unix_seconds(1_800_000_120));
+        assert_eq!(
+            s.messages[0].created_at, start,
+            "created_at stays the turn's start"
+        );
+        assert_eq!(
+            s.messages[0].posted_at(),
+            Timestamp::from_unix_seconds(1_800_000_120)
+        );
     }
 
     #[test]
@@ -2679,8 +3365,10 @@ mod tests {
 
     fn owner_and_viewer_base() -> ChatSession {
         let mut b = base_session();
-        b.members.push(member("owner", "owner", WorkspaceRole::Owner));
-        b.members.push(member("mallory", "mallory", WorkspaceRole::Viewer));
+        b.members
+            .push(member("owner", "owner", WorkspaceRole::Owner));
+        b.members
+            .push(member("mallory", "mallory", WorkspaceRole::Viewer));
         b
     }
 
@@ -2702,19 +3390,31 @@ mod tests {
         let envs = vec![
             snapshot_env(base, 1),
             // A Viewer can't set the review bar (governance flow record).
-            by("mallory", env(sid, wid, 2, rec(FlowRecord::Zone(zone("evil/"))))),
-            by("owner", env(sid, wid, 3, rec(FlowRecord::Zone(zone("crates/core/"))))),
+            by(
+                "mallory",
+                env(sid, wid, 2, rec(FlowRecord::Zone(zone("evil/")))),
+            ),
+            by(
+                "owner",
+                env(sid, wid, 3, rec(FlowRecord::Zone(zone("crates/core/")))),
+            ),
         ];
         let s = project(&envs).unwrap();
         assert_eq!(s.flow.zones.len(), 1);
         assert_eq!(s.flow.zones[0].pattern, "crates/core/");
-        assert_eq!(rec(FlowRecord::Zone(zone("x"))).scope(), EventScope::Workspace);
+        assert_eq!(
+            rec(FlowRecord::Zone(zone("x"))).scope(),
+            EventScope::Workspace
+        );
         assert_eq!(rec(FlowRecord::Unknown).kind_str(), "flowRecorded");
         // An unknown flow record type from a newer build decodes and is inert.
         let json = r#"{"kind":"flowRecorded","record":{"type":"futureThing","x":1}}"#;
         let ev: SessionEvent = serde_json::from_str(json).unwrap();
         assert_eq!(ev, rec(FlowRecord::Unknown));
-        assert_eq!(crate::authorization::min_role_for(&ev), WorkspaceRole::Admin);
+        assert_eq!(
+            crate::authorization::min_role_for(&ev),
+            WorkspaceRole::Admin
+        );
     }
 
     #[test]
@@ -2727,32 +3427,68 @@ mod tests {
         let forged = vec![
             snapshot_env(base, 1),
             // Self-promotion Viewer → Owner (validly signed by mallory).
-            by("mallory", env(sid, wid, 2, SessionEvent::MemberRoleChanged {
-                change: MemberRoleChange {
-                    member_id: "mallory".into(),
-                    old_role: WorkspaceRole::Viewer,
-                    new_role: WorkspaceRole::Owner,
-                }, watermark: Vec::new(),
-            })),
+            by(
+                "mallory",
+                env(
+                    sid,
+                    wid,
+                    2,
+                    SessionEvent::MemberRoleChanged {
+                        change: MemberRoleChange {
+                            member_id: "mallory".into(),
+                            old_role: WorkspaceRole::Viewer,
+                            new_role: WorkspaceRole::Owner,
+                        },
+                        watermark: Vec::new(),
+                    },
+                ),
+            ),
             // Eviction of the real owner (forged MemberRemoved → also a trust DoS).
-            by("mallory", env(sid, wid, 3, SessionEvent::MemberRemoved { member_id: "owner".into(), watermark: Vec::new() })),
+            by(
+                "mallory",
+                env(
+                    sid,
+                    wid,
+                    3,
+                    SessionEvent::MemberRemoved {
+                        member_id: "owner".into(),
+                        watermark: Vec::new(),
+                    },
+                ),
+            ),
         ];
         let s = project(&forged).unwrap();
-        assert_eq!(s.role_of("mallory"), WorkspaceRole::Viewer, "forged self-promotion must be dropped");
-        assert!(s.members.iter().any(|m| m.id == "owner"), "forged owner-removal must be dropped");
+        assert_eq!(
+            s.role_of("mallory"),
+            WorkspaceRole::Viewer,
+            "forged self-promotion must be dropped"
+        );
+        assert!(
+            s.members.iter().any(|m| m.id == "owner"),
+            "forged owner-removal must be dropped"
+        );
 
         // Control: the SAME role change, authored by the owner, IS applied.
         let legit_base = owner_and_viewer_base();
         let (sid2, wid2) = (legit_base.id, legit_base.workspace_id);
         let legit = vec![
             snapshot_env(legit_base, 1),
-            by("owner", env(sid2, wid2, 2, SessionEvent::MemberRoleChanged {
-                change: MemberRoleChange {
-                    member_id: "mallory".into(),
-                    old_role: WorkspaceRole::Viewer,
-                    new_role: WorkspaceRole::Contributor,
-                }, watermark: Vec::new(),
-            })),
+            by(
+                "owner",
+                env(
+                    sid2,
+                    wid2,
+                    2,
+                    SessionEvent::MemberRoleChanged {
+                        change: MemberRoleChange {
+                            member_id: "mallory".into(),
+                            old_role: WorkspaceRole::Viewer,
+                            new_role: WorkspaceRole::Contributor,
+                        },
+                        watermark: Vec::new(),
+                    },
+                ),
+            ),
         ];
         assert_eq!(
             project(&legit).unwrap().role_of("mallory"),
@@ -2764,7 +3500,8 @@ mod tests {
     #[test]
     fn member_add_remove_and_role_change() {
         let mut base = base_session();
-        base.members.push(member("owner", "owner", WorkspaceRole::Owner));
+        base.members
+            .push(member("owner", "owner", WorkspaceRole::Owner));
         let sid = base.id;
         let wid = base.workspace_id;
         let member = WorkspaceMember {
@@ -2785,7 +3522,9 @@ mod tests {
                     sid,
                     wid,
                     2,
-                    SessionEvent::MemberAdded { invite: None, proof: None,
+                    SessionEvent::MemberAdded {
+                        invite: None,
+                        proof: None,
                         member: member.clone(),
                     },
                 ),
@@ -2801,7 +3540,8 @@ mod tests {
                             member_id: "m1".into(),
                             old_role: WorkspaceRole::Contributor,
                             new_role: WorkspaceRole::Admin,
-                        }, watermark: Vec::new(),
+                        },
+                        watermark: Vec::new(),
                     },
                 ),
             ),
@@ -2814,7 +3554,8 @@ mod tests {
         // membership events are workspace-scoped
         assert_eq!(
             SessionEvent::MemberRemoved {
-                member_id: "m1".into(), watermark: Vec::new()
+                member_id: "m1".into(),
+                watermark: Vec::new()
             }
             .scope(),
             EventScope::Workspace
@@ -2882,8 +3623,14 @@ mod tests {
     fn by(author: &str, mut e: SessionEventEnvelope) -> SessionEventEnvelope {
         e.actor_stamp = Some(ActorStamp {
             actor: ActorIdentity::new(author, author, ActorKind::Human),
-            recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: None,
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head: None,
+        });
         e
     }
 
@@ -2892,7 +3639,8 @@ mod tests {
     /// authorized during projection.
     fn owned_base() -> ChatSession {
         let mut s = base_session();
-        s.members.push(member("owner", "owner", WorkspaceRole::Owner));
+        s.members
+            .push(member("owner", "owner", WorkspaceRole::Owner));
         s
     }
 
@@ -2942,7 +3690,8 @@ mod tests {
     #[test]
     fn projection_converges_across_all_permutations() {
         let mut base = base_session();
-        base.members.push(member("owner", "owner", WorkspaceRole::Owner));
+        base.members
+            .push(member("owner", "owner", WorkspaceRole::Owner));
         let (sid, wid) = (base.id, base.workspace_id);
         let msg = ChatMessage::new(MessageRole::Assistant, "Ligus", "draft");
         let mid = msg.id;
@@ -2950,36 +3699,155 @@ mod tests {
         // Governance events are authored by the owner (stamped), as in production;
         // content events don't need attribution.
         let events = vec![
-            env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(base),
+                },
+            ),
             env(sid, wid, 2, SessionEvent::MessageAppended { message: msg }),
-            by("owner", env(sid, wid, 3, SessionEvent::MemberAdded { invite: None, proof: None, member: member("m1", "u1", WorkspaceRole::Contributor) })),
-            by("owner", env(sid, wid, 4, SessionEvent::MemberAdded { invite: None, proof: None, member: member("m2", "u2", WorkspaceRole::Contributor) })),
-            env(sid, wid, 5, SessionEvent::SessionTitleChanged { title: "Foo".into() }),
-            env(sid, wid, 6, SessionEvent::MessageReactionAdded { message_id: mid, reaction: reaction("u1", "👍") }),
-            by("owner", env(sid, wid, 7, SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id: "m1".into(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Admin }, watermark: Vec::new() })),
-            by("owner", env(sid, wid, 8, SessionEvent::MemberRemoved { member_id: "m2".into(), watermark: Vec::new() })),
-            env(sid, wid, 9, SessionEvent::SessionTitleChanged { title: "Bar".into() }),
-            env(sid, wid, 10, SessionEvent::MessageReactionRemoved { message_id: mid, actor_id: "u1".into(), emoji: "👍".into() }),
-            env(sid, wid, 11, SessionEvent::MessageReactionAdded { message_id: mid, reaction: reaction("u2", "🎉") }),
-            env(sid, wid, 12, SessionEvent::MessageCompleted { message_id: mid, body: "final".into() }),
+            by(
+                "owner",
+                env(
+                    sid,
+                    wid,
+                    3,
+                    SessionEvent::MemberAdded {
+                        invite: None,
+                        proof: None,
+                        member: member("m1", "u1", WorkspaceRole::Contributor),
+                    },
+                ),
+            ),
+            by(
+                "owner",
+                env(
+                    sid,
+                    wid,
+                    4,
+                    SessionEvent::MemberAdded {
+                        invite: None,
+                        proof: None,
+                        member: member("m2", "u2", WorkspaceRole::Contributor),
+                    },
+                ),
+            ),
+            env(
+                sid,
+                wid,
+                5,
+                SessionEvent::SessionTitleChanged {
+                    title: "Foo".into(),
+                },
+            ),
+            env(
+                sid,
+                wid,
+                6,
+                SessionEvent::MessageReactionAdded {
+                    message_id: mid,
+                    reaction: reaction("u1", "👍"),
+                },
+            ),
+            by(
+                "owner",
+                env(
+                    sid,
+                    wid,
+                    7,
+                    SessionEvent::MemberRoleChanged {
+                        change: MemberRoleChange {
+                            member_id: "m1".into(),
+                            old_role: WorkspaceRole::Contributor,
+                            new_role: WorkspaceRole::Admin,
+                        },
+                        watermark: Vec::new(),
+                    },
+                ),
+            ),
+            by(
+                "owner",
+                env(
+                    sid,
+                    wid,
+                    8,
+                    SessionEvent::MemberRemoved {
+                        member_id: "m2".into(),
+                        watermark: Vec::new(),
+                    },
+                ),
+            ),
+            env(
+                sid,
+                wid,
+                9,
+                SessionEvent::SessionTitleChanged {
+                    title: "Bar".into(),
+                },
+            ),
+            env(
+                sid,
+                wid,
+                10,
+                SessionEvent::MessageReactionRemoved {
+                    message_id: mid,
+                    actor_id: "u1".into(),
+                    emoji: "👍".into(),
+                },
+            ),
+            env(
+                sid,
+                wid,
+                11,
+                SessionEvent::MessageReactionAdded {
+                    message_id: mid,
+                    reaction: reaction("u2", "🎉"),
+                },
+            ),
+            env(
+                sid,
+                wid,
+                12,
+                SessionEvent::MessageCompleted {
+                    message_id: mid,
+                    body: "final".into(),
+                },
+            ),
         ];
 
         let expected = project(&events).expect("session");
         // Correct deterministic resolution (not just self-consistency):
-        assert_eq!(expected.title, "Bar", "latest title wins by canonical order");
+        assert_eq!(
+            expected.title, "Bar",
+            "latest title wins by canonical order"
+        );
         // owner (seeded) + m1; m2 was added then removed.
         assert_eq!(expected.members.len(), 2, "m2 removed, owner + m1 remain");
         assert!(expected.members.iter().any(|m| m.id == "owner"));
         assert!(!expected.members.iter().any(|m| m.id == "m2"), "m2 removed");
-        assert_eq!(expected.role_of("m1"), WorkspaceRole::Admin, "role change applied");
+        assert_eq!(
+            expected.role_of("m1"),
+            WorkspaceRole::Admin,
+            "role change applied"
+        );
         assert_eq!(expected.messages[0].body, "final");
-        assert_eq!(expected.messages[0].reactions.len(), 1, "no resurrection: 👍 stays removed");
+        assert_eq!(
+            expected.messages[0].reactions.len(),
+            1,
+            "no resurrection: 👍 stays removed"
+        );
         assert_eq!(expected.messages[0].reactions[0].actor_id, "u2");
 
         // Property: every permutation projects to identical state.
         for seed in 0..500u64 {
             let permuted = shuffled(events.clone(), seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-            assert_eq!(project(&permuted).expect("session"), expected, "divergence at seed {seed}");
+            assert_eq!(
+                project(&permuted).expect("session"),
+                expected,
+                "divergence at seed {seed}"
+            );
         }
     }
 
@@ -2989,31 +3857,81 @@ mod tests {
     #[test]
     fn compaction_never_drops_a_concurrent_delta() {
         let mut base = base_session();
-        base.members.push(member("owner", "owner", WorkspaceRole::Owner));
+        base.members
+            .push(member("owner", "owner", WorkspaceRole::Owner));
         let (sid, wid) = (base.id, base.workspace_id);
 
         // A device compacted after seeing m1 but BEFORE a concurrent m2 from a peer.
         let mut compacted = base_session();
-        compacted.members.push(member("owner", "owner", WorkspaceRole::Owner));
-        compacted.members.push(member("m1", "u1", WorkspaceRole::Contributor));
+        compacted
+            .members
+            .push(member("owner", "owner", WorkspaceRole::Owner));
+        compacted
+            .members
+            .push(member("m1", "u1", WorkspaceRole::Contributor));
 
         let events = vec![
-            env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
-            by("owner", env(sid, wid, 2, SessionEvent::MemberAdded { invite: None, proof: None, member: member("m1", "u1", WorkspaceRole::Contributor) })),
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(base),
+                },
+            ),
+            by(
+                "owner",
+                env(
+                    sid,
+                    wid,
+                    2,
+                    SessionEvent::MemberAdded {
+                        invite: None,
+                        proof: None,
+                        member: member("m1", "u1", WorkspaceRole::Contributor),
+                    },
+                ),
+            ),
             // Concurrent — authored by a peer, canonically before the snapshot below.
-            by("owner", env(sid, wid, 3, SessionEvent::MemberAdded { invite: None, proof: None, member: member("m2", "u2", WorkspaceRole::Contributor) })),
+            by(
+                "owner",
+                env(
+                    sid,
+                    wid,
+                    3,
+                    SessionEvent::MemberAdded {
+                        invite: None,
+                        proof: None,
+                        member: member("m2", "u2", WorkspaceRole::Contributor),
+                    },
+                ),
+            ),
             // A later snapshot whose captured state is missing m2.
-            env(sid, wid, 5, SessionEvent::SessionSnapshot { session: Box::new(compacted) }),
+            env(
+                sid,
+                wid,
+                5,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(compacted),
+                },
+            ),
         ];
 
         let s = project(&events).expect("session");
         let ids: Vec<_> = s.members.iter().map(|m| m.id.as_str()).collect();
         assert!(ids.contains(&"m1"), "m1 present");
-        assert!(ids.contains(&"m2"), "concurrent m2 must NOT be dropped by the later snapshot");
+        assert!(
+            ids.contains(&"m2"),
+            "concurrent m2 must NOT be dropped by the later snapshot"
+        );
 
         // And it still converges under every delivery order.
         for seed in 0..200u64 {
-            assert_eq!(project(&shuffled(events.clone(), seed | 1)).expect("session"), s, "divergence at seed {seed}");
+            assert_eq!(
+                project(&shuffled(events.clone(), seed | 1)).expect("session"),
+                s,
+                "divergence at seed {seed}"
+            );
         }
     }
 
@@ -3026,12 +3944,34 @@ mod tests {
         let trigger = Uuid::new_v4();
         let device_a = Uuid::new_v4();
         let device_b = Uuid::new_v4();
-        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a, epoch: 0, supersedes: None, repo_id: None });
-        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_b, epoch: 0, supersedes: None, repo_id: None });
-        assert_eq!(s.turn_claims.get(&trigger), Some(&device_a), "first claim wins");
+        s.apply(&SessionEvent::TurnClaimed {
+            trigger_id: trigger,
+            device_id: device_a,
+            epoch: 0,
+            supersedes: None,
+            repo_id: None,
+        });
+        s.apply(&SessionEvent::TurnClaimed {
+            trigger_id: trigger,
+            device_id: device_b,
+            epoch: 0,
+            supersedes: None,
+            repo_id: None,
+        });
+        assert_eq!(
+            s.turn_claims.get(&trigger),
+            Some(&device_a),
+            "first claim wins"
+        );
         // A different trigger claims independently.
         let t2 = Uuid::new_v4();
-        s.apply(&SessionEvent::TurnClaimed { trigger_id: t2, device_id: device_b, epoch: 0, supersedes: None, repo_id: None });
+        s.apply(&SessionEvent::TurnClaimed {
+            trigger_id: t2,
+            device_id: device_b,
+            epoch: 0,
+            supersedes: None,
+            repo_id: None,
+        });
         assert_eq!(s.turn_claims.get(&t2), Some(&device_b));
     }
 
@@ -3071,7 +4011,10 @@ mod tests {
             name: "authn".into(),
             purpose: Some(String::new()),
         });
-        assert_eq!(s.channels[0].purpose, None, "empty string clears the purpose");
+        assert_eq!(
+            s.channels[0].purpose, None,
+            "empty string clears the purpose"
+        );
     }
 
     /// A concurrent purpose-set and rename on the same channel must not clobber
@@ -3082,25 +4025,61 @@ mod tests {
         let base = owned_base();
         let (sid, wid) = (base.id, base.workspace_id);
         let events = vec![
-            env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
-            by("owner", env(sid, wid, 2, SessionEvent::ChannelCreated { channel: Channel::new("c1", "auth") })),
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(base),
+                },
+            ),
+            by(
+                "owner",
+                env(
+                    sid,
+                    wid,
+                    2,
+                    SessionEvent::ChannelCreated {
+                        channel: Channel::new("c1", "auth"),
+                    },
+                ),
+            ),
             // Set the purpose (carries the current name).
-            by("owner", env(sid, wid, 3, SessionEvent::ChannelRenamed {
-                channel_id: "c1".into(),
-                name: "auth".into(),
-                purpose: Some("login flows".into()),
-            })),
+            by(
+                "owner",
+                env(
+                    sid,
+                    wid,
+                    3,
+                    SessionEvent::ChannelRenamed {
+                        channel_id: "c1".into(),
+                        name: "auth".into(),
+                        purpose: Some("login flows".into()),
+                    },
+                ),
+            ),
             // A concurrent rename that only changes the name (purpose None).
-            by("owner", env(sid, wid, 4, SessionEvent::ChannelRenamed {
-                channel_id: "c1".into(),
-                name: "authentication".into(),
-                purpose: None,
-            })),
+            by(
+                "owner",
+                env(
+                    sid,
+                    wid,
+                    4,
+                    SessionEvent::ChannelRenamed {
+                        channel_id: "c1".into(),
+                        name: "authentication".into(),
+                        purpose: None,
+                    },
+                ),
+            ),
         ];
 
         let expected = project(&events).expect("session");
         let ch = expected.channels.iter().find(|c| c.id == "c1").unwrap();
-        assert_eq!(ch.name, "authentication", "latest name wins by canonical order");
+        assert_eq!(
+            ch.name, "authentication",
+            "latest name wins by canonical order"
+        );
         assert_eq!(
             ch.purpose.as_deref(),
             Some("login flows"),
@@ -3109,7 +4088,11 @@ mod tests {
 
         for seed in 0..300u64 {
             let permuted = shuffled(events.clone(), seed | 1);
-            assert_eq!(project(&permuted).expect("session"), expected, "divergence at seed {seed}");
+            assert_eq!(
+                project(&permuted).expect("session"),
+                expected,
+                "divergence at seed {seed}"
+            );
         }
     }
 
@@ -3128,24 +4111,69 @@ mod tests {
             actor_id: actor.into(),
             role: WorkspaceRole::Contributor,
             approved,
-            created_at: Timestamp::epoch(), diff_digest: None };
+            created_at: Timestamp::epoch(),
+            diff_digest: None,
+        };
 
         let events = vec![
-            env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(base),
+                },
+            ),
             env(sid, wid, 2, SessionEvent::ProposalUpserted { proposal }),
-            env(sid, wid, 3, SessionEvent::ProposalVoteCast { proposal_id: pid, approval: vote("u1", true) }),
-            env(sid, wid, 4, SessionEvent::ProposalVoteCast { proposal_id: pid, approval: vote("u2", true) }),
-            env(sid, wid, 5, SessionEvent::ProposalVoteCast { proposal_id: pid, approval: vote("u1", false) }),
+            env(
+                sid,
+                wid,
+                3,
+                SessionEvent::ProposalVoteCast {
+                    proposal_id: pid,
+                    approval: vote("u1", true),
+                },
+            ),
+            env(
+                sid,
+                wid,
+                4,
+                SessionEvent::ProposalVoteCast {
+                    proposal_id: pid,
+                    approval: vote("u2", true),
+                },
+            ),
+            env(
+                sid,
+                wid,
+                5,
+                SessionEvent::ProposalVoteCast {
+                    proposal_id: pid,
+                    approval: vote("u1", false),
+                },
+            ),
         ];
 
         let expected = project(&events).expect("session");
         let p = &expected.proposals[0];
-        assert_eq!(p.approvals.len(), 2, "both actors' votes preserved (no clobber)");
-        assert_eq!(p.status, ProposalStatus::Rejected, "u1's later reject wins per-actor");
+        assert_eq!(
+            p.approvals.len(),
+            2,
+            "both actors' votes preserved (no clobber)"
+        );
+        assert_eq!(
+            p.status,
+            ProposalStatus::Rejected,
+            "u1's later reject wins per-actor"
+        );
 
         for seed in 0..300u64 {
             let permuted = shuffled(events.clone(), seed | 1);
-            assert_eq!(project(&permuted).expect("session"), expected, "vote divergence at seed {seed}");
+            assert_eq!(
+                project(&permuted).expect("session"),
+                expected,
+                "vote divergence at seed {seed}"
+            );
         }
     }
 
@@ -3163,7 +4191,14 @@ mod tests {
         let pid = proposal.id;
 
         let events = vec![
-            env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(base),
+                },
+            ),
             env(sid, wid, 2, SessionEvent::ProposalUpserted { proposal }),
             env(
                 sid,
@@ -3175,21 +4210,43 @@ mod tests {
                         actor_id: "u1".into(),
                         role: WorkspaceRole::Contributor,
                         approved: true,
-                        created_at: Timestamp::epoch(), diff_digest: None },
+                        created_at: Timestamp::epoch(),
+                        diff_digest: None,
+                    },
                 },
             ),
-            env(sid, wid, 4, SessionEvent::ProposalDismissed { proposal_id: pid, dismissed: true }),
+            env(
+                sid,
+                wid,
+                4,
+                SessionEvent::ProposalDismissed {
+                    proposal_id: pid,
+                    dismissed: true,
+                },
+            ),
         ];
 
         let expected = project(&events).expect("session");
         let p = &expected.proposals[0];
         assert!(p.dismissed, "dismissed");
-        assert_eq!(expected.proposals.len(), 1, "hidden, not deleted — the record survives a re-fold");
-        assert_eq!(p.status, ProposalStatus::Approved, "the concurrent vote still counts");
+        assert_eq!(
+            expected.proposals.len(),
+            1,
+            "hidden, not deleted — the record survives a re-fold"
+        );
+        assert_eq!(
+            p.status,
+            ProposalStatus::Approved,
+            "the concurrent vote still counts"
+        );
 
         for seed in 0..300u64 {
             let permuted = shuffled(events.clone(), seed | 1);
-            assert_eq!(project(&permuted).expect("session"), expected, "divergence at seed {seed}");
+            assert_eq!(
+                project(&permuted).expect("session"),
+                expected,
+                "divergence at seed {seed}"
+            );
         }
     }
 
@@ -3205,10 +4262,33 @@ mod tests {
         let pid = proposal.id;
 
         let session = project(&[
-            env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(base),
+                },
+            ),
             env(sid, wid, 2, SessionEvent::ProposalUpserted { proposal }),
-            env(sid, wid, 3, SessionEvent::ProposalDismissed { proposal_id: pid, dismissed: true }),
-            env(sid, wid, 4, SessionEvent::ProposalDismissed { proposal_id: pid, dismissed: false }),
+            env(
+                sid,
+                wid,
+                3,
+                SessionEvent::ProposalDismissed {
+                    proposal_id: pid,
+                    dismissed: true,
+                },
+            ),
+            env(
+                sid,
+                wid,
+                4,
+                SessionEvent::ProposalDismissed {
+                    proposal_id: pid,
+                    dismissed: false,
+                },
+            ),
         ])
         .expect("session");
 
@@ -3237,7 +4317,11 @@ mod tests {
         assert!(matches!(future.payload, SessionEvent::Unknown));
 
         let s = project(&[snapshot_env(base, 1), future, known]).unwrap();
-        assert_eq!(s.messages.len(), 1, "known append survived; unknown was inert");
+        assert_eq!(
+            s.messages.len(),
+            1,
+            "known append survived; unknown was inert"
+        );
     }
 
     #[test]
@@ -3266,9 +4350,12 @@ mod tests {
 
     fn admin_base() -> ChatSession {
         let mut b = base_session();
-        b.members.push(member("owner", "owner", WorkspaceRole::Owner));
-        b.members.push(member("admin1", "admin1", WorkspaceRole::Admin));
-        b.members.push(member("admin2", "admin2", WorkspaceRole::Admin));
+        b.members
+            .push(member("owner", "owner", WorkspaceRole::Owner));
+        b.members
+            .push(member("admin1", "admin1", WorkspaceRole::Admin));
+        b.members
+            .push(member("admin2", "admin2", WorkspaceRole::Admin));
         b
     }
 
@@ -3283,12 +4370,29 @@ mod tests {
         // Same lamport (2) → genuinely concurrent, tie-broken by event_id. Two
         // different authors, each adding a different agent from their own base.
         let events = vec![
-            env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
-            by("admin1", env(sid, wid, 2, SessionEvent::AgentUpserted { agent: a1 })),
-            by("admin2", env(sid, wid, 2, SessionEvent::AgentUpserted { agent: a2 })),
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(base),
+                },
+            ),
+            by(
+                "admin1",
+                env(sid, wid, 2, SessionEvent::AgentUpserted { agent: a1 }),
+            ),
+            by(
+                "admin2",
+                env(sid, wid, 2, SessionEvent::AgentUpserted { agent: a2 }),
+            ),
         ];
         let expected = project(&events).expect("session");
-        assert_eq!(expected.workspace_agents.len(), 2, "both concurrent agent adds survive");
+        assert_eq!(
+            expected.workspace_agents.len(),
+            2,
+            "both concurrent agent adds survive"
+        );
         assert!(expected.workspace_agents.iter().any(|a| a.id == id1));
         assert!(expected.workspace_agents.iter().any(|a| a.id == id2));
 
@@ -3312,12 +4416,39 @@ mod tests {
         h2.owner_actor_id = "admin2".into();
 
         let events = vec![
-            env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
-            by("admin1", env(sid, wid, 2, SessionEvent::WorkspaceHostUpserted { host: h1 })),
-            by("admin2", env(sid, wid, 2, SessionEvent::WorkspaceHostUpserted { host: h2 })),
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(base),
+                },
+            ),
+            by(
+                "admin1",
+                env(
+                    sid,
+                    wid,
+                    2,
+                    SessionEvent::WorkspaceHostUpserted { host: h1 },
+                ),
+            ),
+            by(
+                "admin2",
+                env(
+                    sid,
+                    wid,
+                    2,
+                    SessionEvent::WorkspaceHostUpserted { host: h2 },
+                ),
+            ),
         ];
         let expected = project(&events).expect("session");
-        assert_eq!(expected.workspace_hosts.len(), 2, "both concurrent host adds survive");
+        assert_eq!(
+            expected.workspace_hosts.len(),
+            2,
+            "both concurrent host adds survive"
+        );
 
         for seed in 0..300u64 {
             assert_eq!(
@@ -3338,12 +4469,39 @@ mod tests {
         let r2 = WorkspaceRuntime::new("rt2", "Two", ModelProviderKind::Anthropic, "m");
 
         let events = vec![
-            env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
-            by("admin1", env(sid, wid, 2, SessionEvent::WorkspaceRuntimeUpserted { runtime: r1 })),
-            by("admin2", env(sid, wid, 2, SessionEvent::WorkspaceRuntimeUpserted { runtime: r2 })),
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(base),
+                },
+            ),
+            by(
+                "admin1",
+                env(
+                    sid,
+                    wid,
+                    2,
+                    SessionEvent::WorkspaceRuntimeUpserted { runtime: r1 },
+                ),
+            ),
+            by(
+                "admin2",
+                env(
+                    sid,
+                    wid,
+                    2,
+                    SessionEvent::WorkspaceRuntimeUpserted { runtime: r2 },
+                ),
+            ),
         ];
         let expected = project(&events).expect("session");
-        assert_eq!(expected.workspace_runtimes.len(), 2, "both concurrent runtime adds survive");
+        assert_eq!(
+            expected.workspace_runtimes.len(),
+            2,
+            "both concurrent runtime adds survive"
+        );
 
         for seed in 0..300u64 {
             assert_eq!(
@@ -3368,16 +4526,47 @@ mod tests {
         a1.name = "reviewer".into();
 
         let events = vec![
-            env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
-            by("admin1", env(sid, wid, 2, SessionEvent::AgentUpserted { agent: a1 })),
-            by("admin1", env(sid, wid, 3, SessionEvent::AgentUpserted { agent: a2 })),
-            by("admin1", env(sid, wid, 4, SessionEvent::AgentUpserted { agent: a1_renamed })),
-            by("admin1", env(sid, wid, 5, SessionEvent::AgentRemoved { agent_id: id2 })),
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(base),
+                },
+            ),
+            by(
+                "admin1",
+                env(sid, wid, 2, SessionEvent::AgentUpserted { agent: a1 }),
+            ),
+            by(
+                "admin1",
+                env(sid, wid, 3, SessionEvent::AgentUpserted { agent: a2 }),
+            ),
+            by(
+                "admin1",
+                env(
+                    sid,
+                    wid,
+                    4,
+                    SessionEvent::AgentUpserted { agent: a1_renamed },
+                ),
+            ),
+            by(
+                "admin1",
+                env(sid, wid, 5, SessionEvent::AgentRemoved { agent_id: id2 }),
+            ),
         ];
         let s = project(&events).expect("session");
-        assert_eq!(s.workspace_agents.len(), 1, "renamed upsert is in place; id2 removed");
+        assert_eq!(
+            s.workspace_agents.len(),
+            1,
+            "renamed upsert is in place; id2 removed"
+        );
         assert_eq!(s.workspace_agents[0].id, id1);
-        assert_eq!(s.workspace_agents[0].name, "critic", "later upsert wins by canonical order");
+        assert_eq!(
+            s.workspace_agents[0].name, "critic",
+            "later upsert wins by canonical order"
+        );
     }
 
     #[test]
@@ -3385,8 +4574,8 @@ mod tests {
         // Backward-compat: events written by an OLD client used the whole-list
         // `*Updated` variants. They must still fold (canonical order handles
         // mixing old whole-list and new per-item events on every device).
-        use crate::workspace_host::{HostKind, WorkspaceHost};
         use crate::runtime::ModelProviderKind;
+        use crate::workspace_host::{HostKind, WorkspaceHost};
         use crate::workspace_runtime::WorkspaceRuntime;
         let base = admin_base();
         let (sid, wid) = (base.id, base.workspace_id);
@@ -3395,18 +4584,48 @@ mod tests {
             WorkspaceAgent::new("b", "ws-claude"),
         ];
         let hosts = vec![WorkspaceHost::new("box1", HostKind::Worker, "one")];
-        let runtimes = vec![WorkspaceRuntime::new("rt1", "One", ModelProviderKind::Anthropic, "m")];
+        let runtimes = vec![WorkspaceRuntime::new(
+            "rt1",
+            "One",
+            ModelProviderKind::Anthropic,
+            "m",
+        )];
 
         let events = vec![
-            env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
-            by("admin1", env(sid, wid, 2, SessionEvent::AgentRosterUpdated { agents })),
-            by("admin1", env(sid, wid, 3, SessionEvent::WorkspaceHostsUpdated { hosts })),
-            by("admin1", env(sid, wid, 4, SessionEvent::WorkspaceRuntimesUpdated { runtimes })),
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(base),
+                },
+            ),
+            by(
+                "admin1",
+                env(sid, wid, 2, SessionEvent::AgentRosterUpdated { agents }),
+            ),
+            by(
+                "admin1",
+                env(sid, wid, 3, SessionEvent::WorkspaceHostsUpdated { hosts }),
+            ),
+            by(
+                "admin1",
+                env(
+                    sid,
+                    wid,
+                    4,
+                    SessionEvent::WorkspaceRuntimesUpdated { runtimes },
+                ),
+            ),
         ];
         let s = project(&events).expect("session");
         assert_eq!(s.workspace_agents.len(), 2, "legacy agent roster projects");
         assert_eq!(s.workspace_hosts.len(), 1, "legacy host list projects");
-        assert_eq!(s.workspace_runtimes.len(), 1, "legacy runtime list projects");
+        assert_eq!(
+            s.workspace_runtimes.len(),
+            1,
+            "legacy runtime list projects"
+        );
     }
 
     #[test]
@@ -3419,18 +4638,31 @@ mod tests {
         let forged = WorkspaceAgent::new("evil", "ws-claude");
         let events = vec![
             snapshot_env(base, 1),
-            by("mallory", env(sid, wid, 2, SessionEvent::AgentUpserted { agent: forged })),
+            by(
+                "mallory",
+                env(sid, wid, 2, SessionEvent::AgentUpserted { agent: forged }),
+            ),
         ];
-        assert!(project(&events).unwrap().workspace_agents.is_empty(), "Viewer's forged upsert dropped");
+        assert!(
+            project(&events).unwrap().workspace_agents.is_empty(),
+            "Viewer's forged upsert dropped"
+        );
 
         let legit_base = owner_and_viewer_base();
         let (sid2, wid2) = (legit_base.id, legit_base.workspace_id);
         let good = WorkspaceAgent::new("reviewer", "ws-claude");
         let legit = vec![
             snapshot_env(legit_base, 1),
-            by("owner", env(sid2, wid2, 2, SessionEvent::AgentUpserted { agent: good })),
+            by(
+                "owner",
+                env(sid2, wid2, 2, SessionEvent::AgentUpserted { agent: good }),
+            ),
         ];
-        assert_eq!(project(&legit).unwrap().workspace_agents.len(), 1, "owner's upsert applied");
+        assert_eq!(
+            project(&legit).unwrap().workspace_agents.len(),
+            1,
+            "owner's upsert applied"
+        );
     }
 
     #[test]
@@ -3449,13 +4681,17 @@ mod tests {
                 sid,
                 wid,
                 2,
-                SessionEvent::WorkflowDefinitionsUpdated { definitions: vec![def.clone()] },
+                SessionEvent::WorkflowDefinitionsUpdated {
+                    definitions: vec![def.clone()],
+                },
             ),
             SessionEventEnvelope::new(
                 sid,
                 wid,
                 3,
-                SessionEvent::WorkflowRunUpserted { run: Box::new(run.clone()) },
+                SessionEvent::WorkflowRunUpserted {
+                    run: Box::new(run.clone()),
+                },
             ),
         ];
         // Same run id again with a new status → updated in place, not duplicated.
@@ -3470,13 +4706,21 @@ mod tests {
         // S4: a write without a lease epoch is accepted from the run's creator
         // (here, a run without a creator device: its stamped initiator).
         let unstamped = project(&envs).unwrap();
-        assert!(unstamped.workflow_runs.is_empty(), "an unattributed run write is refused");
+        assert!(
+            unstamped.workflow_runs.is_empty(),
+            "an unattributed run write is refused"
+        );
         for e in &mut envs[2..] {
             e.actor_stamp = Some(ActorStamp {
                 actor: ActorIdentity::new("u1", "U", ActorKind::Human),
                 recorded_at: Timestamp::epoch(),
                 cfg_frontier: None,
-                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+                presence: None,
+                runtime_effect: false,
+                prev: None,
+                sig_alg: Default::default(),
+                log_head: None,
+            });
         }
         let s = project(&envs).unwrap();
         assert_eq!(s.workflow_definitions.len(), 1);
@@ -3505,7 +4749,8 @@ mod tests {
         s.id = sid;
         s.workspace_id = wid;
         s.creator_actor_id = creator.into();
-        s.members.push(member(creator, creator, WorkspaceRole::Owner));
+        s.members
+            .push(member(creator, creator, WorkspaceRole::Owner));
         s
     }
 
@@ -3521,18 +4766,56 @@ mod tests {
         forged.id = sid;
         forged.workspace_id = wid;
         forged.creator_actor_id = "mallory".into();
-        forged.members.push(member("alice", "alice", WorkspaceRole::Owner));
-        forged.members.push(member("mallory", "mallory", WorkspaceRole::Owner));
+        forged
+            .members
+            .push(member("alice", "alice", WorkspaceRole::Owner));
+        forged
+            .members
+            .push(member("mallory", "mallory", WorkspaceRole::Owner));
 
         let events = vec![
-            by("mallory", env(sid, wid, 0, SessionEvent::SessionSnapshot { session: Box::new(forged) })),
-            by("alice", env(sid, wid, 5, SessionEvent::SessionSnapshot { session: Box::new(alice) })),
+            by(
+                "mallory",
+                env(
+                    sid,
+                    wid,
+                    0,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(forged),
+                    },
+                ),
+            ),
+            by(
+                "alice",
+                env(
+                    sid,
+                    wid,
+                    5,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(alice),
+                    },
+                ),
+            ),
         ];
         let s = project(&events).expect("session");
-        assert_eq!(s.creator_actor_id, "alice", "forged seed must not rewrite the creator");
-        assert_eq!(s.role_of("alice"), WorkspaceRole::Owner, "legit creator remains Owner");
-        assert_ne!(s.role_of("mallory"), WorkspaceRole::Owner, "forged seed did not make Mallory Owner");
-        assert!(!s.members.iter().any(|m| m.id == "mallory"), "Mallory not injected into the roster");
+        assert_eq!(
+            s.creator_actor_id, "alice",
+            "forged seed must not rewrite the creator"
+        );
+        assert_eq!(
+            s.role_of("alice"),
+            WorkspaceRole::Owner,
+            "legit creator remains Owner"
+        );
+        assert_ne!(
+            s.role_of("mallory"),
+            WorkspaceRole::Owner,
+            "forged seed did not make Mallory Owner"
+        );
+        assert!(
+            !s.members.iter().any(|m| m.id == "mallory"),
+            "Mallory not injected into the roster"
+        );
     }
 
     #[test]
@@ -3546,13 +4829,39 @@ mod tests {
         forged.id = sid;
         forged.workspace_id = wid;
         forged.creator_actor_id = "alice".into();
-        forged.members.push(member("mallory", "mallory", WorkspaceRole::Owner));
+        forged
+            .members
+            .push(member("mallory", "mallory", WorkspaceRole::Owner));
         let events = vec![
-            by("mallory", env(sid, wid, 0, SessionEvent::SessionSnapshot { session: Box::new(forged) })),
-            by("alice", env(sid, wid, 5, SessionEvent::SessionSnapshot { session: Box::new(alice) })),
+            by(
+                "mallory",
+                env(
+                    sid,
+                    wid,
+                    0,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(forged),
+                    },
+                ),
+            ),
+            by(
+                "alice",
+                env(
+                    sid,
+                    wid,
+                    5,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(alice),
+                    },
+                ),
+            ),
         ];
         let s = project(&events).expect("session");
-        assert_eq!(s.role_of("alice"), WorkspaceRole::Owner, "author≠creator seed rejected → Alice wins");
+        assert_eq!(
+            s.role_of("alice"),
+            WorkspaceRole::Owner,
+            "author≠creator seed rejected → Alice wins"
+        );
         assert_ne!(s.role_of("mallory"), WorkspaceRole::Owner);
     }
 
@@ -3562,8 +4871,17 @@ mod tests {
         let sid = Uuid::new_v4();
         let wid = Uuid::nil();
         let alice = seed_session("alice", sid, wid);
-        let events =
-            vec![by("alice", env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(alice) }))];
+        let events = vec![by(
+            "alice",
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(alice),
+                },
+            ),
+        )];
         let s = project(&events).expect("session");
         assert_eq!(s.role_of("alice"), WorkspaceRole::Owner);
         assert_eq!(s.creator_actor_id, "alice");
@@ -3581,10 +4899,23 @@ mod tests {
         compacted.id = sid;
         compacted.workspace_id = wid;
         compacted.creator_actor_id = "alice".into();
-        compacted.members.push(member("alice", "alice", WorkspaceRole::Owner));
-        compacted.members.push(member("bob", "bob", WorkspaceRole::Admin));
-        let events =
-            vec![by("bob", env(sid, wid, 9, SessionEvent::SessionSnapshot { session: Box::new(compacted) }))];
+        compacted
+            .members
+            .push(member("alice", "alice", WorkspaceRole::Owner));
+        compacted
+            .members
+            .push(member("bob", "bob", WorkspaceRole::Admin));
+        let events = vec![by(
+            "bob",
+            env(
+                sid,
+                wid,
+                9,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(compacted),
+                },
+            ),
+        )];
         let s = project(&events).expect("compaction snapshot must still project");
         assert_eq!(s.role_of("alice"), WorkspaceRole::Owner);
         assert_eq!(s.role_of("bob"), WorkspaceRole::Admin);
@@ -3601,14 +4932,50 @@ mod tests {
         let mut compacted = seed_session("alice", sid, wid);
         compacted.members.push(bob.clone());
         let events = vec![
-            by("alice", env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(alice) })),
-            by("alice", env(sid, wid, 2, SessionEvent::MemberAdded { invite: None, proof: None, member: bob })),
-            by("bob", env(sid, wid, 3, SessionEvent::SessionSnapshot { session: Box::new(compacted) })),
+            by(
+                "alice",
+                env(
+                    sid,
+                    wid,
+                    1,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(alice),
+                    },
+                ),
+            ),
+            by(
+                "alice",
+                env(
+                    sid,
+                    wid,
+                    2,
+                    SessionEvent::MemberAdded {
+                        invite: None,
+                        proof: None,
+                        member: bob,
+                    },
+                ),
+            ),
+            by(
+                "bob",
+                env(
+                    sid,
+                    wid,
+                    3,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(compacted),
+                    },
+                ),
+            ),
         ];
         let s = project(&events).expect("session");
         assert_eq!(s.creator_actor_id, "alice");
         assert_eq!(s.role_of("alice"), WorkspaceRole::Owner);
-        assert_eq!(s.role_of("bob"), WorkspaceRole::Admin, "bob added by alice survives");
+        assert_eq!(
+            s.role_of("bob"),
+            WorkspaceRole::Admin,
+            "bob added by alice survives"
+        );
     }
 
     #[test]
@@ -3622,12 +4989,36 @@ mod tests {
         forged.id = sid;
         forged.workspace_id = wid;
         forged.creator_actor_id = "mallory".into();
-        forged.members.push(member("alice", "alice", WorkspaceRole::Owner));
-        forged.members.push(member("mallory", "mallory", WorkspaceRole::Owner));
+        forged
+            .members
+            .push(member("alice", "alice", WorkspaceRole::Owner));
+        forged
+            .members
+            .push(member("mallory", "mallory", WorkspaceRole::Owner));
         let msg = ChatMessage::new(MessageRole::User, "alice", "hi");
         let events = vec![
-            by("mallory", env(sid, wid, 0, SessionEvent::SessionSnapshot { session: Box::new(forged) })),
-            by("alice", env(sid, wid, 5, SessionEvent::SessionSnapshot { session: Box::new(alice) })),
+            by(
+                "mallory",
+                env(
+                    sid,
+                    wid,
+                    0,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(forged),
+                    },
+                ),
+            ),
+            by(
+                "alice",
+                env(
+                    sid,
+                    wid,
+                    5,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(alice),
+                    },
+                ),
+            ),
             env(sid, wid, 6, SessionEvent::MessageAppended { message: msg }),
         ];
         let expected = project(&events).expect("session");
@@ -3635,7 +5026,11 @@ mod tests {
         assert_ne!(expected.role_of("mallory"), WorkspaceRole::Owner);
         for seed in 0..500u64 {
             let permuted = shuffled(events.clone(), seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-            assert_eq!(project(&permuted).expect("session"), expected, "divergence at seed {seed}");
+            assert_eq!(
+                project(&permuted).expect("session"),
+                expected,
+                "divergence at seed {seed}"
+            );
         }
     }
 
@@ -3658,23 +5053,60 @@ mod tests {
         // in-band self-consistency check alone cannot catch.
         let mallory = seed_session("mallory", sid, wid);
         let events = vec![
-            by("mallory", env(sid, wid, 0, SessionEvent::SessionSnapshot { session: Box::new(mallory) })),
-            by("alice", env(sid, wid, 5, SessionEvent::SessionSnapshot { session: Box::new(alice) })),
+            by(
+                "mallory",
+                env(
+                    sid,
+                    wid,
+                    0,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(mallory),
+                    },
+                ),
+            ),
+            by(
+                "alice",
+                env(
+                    sid,
+                    wid,
+                    5,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(alice),
+                    },
+                ),
+            ),
         ];
 
         // Pinned to Alice (from the invite): her seed is the base despite the
         // lower-lamport forgery; Alice stays Owner, Mallory is not injected.
         let s = project_with_founder(&events, Some("alice")).expect("session");
-        assert_eq!(s.creator_actor_id, "alice", "founder's seed wins over lower-lamport forgery");
-        assert_eq!(s.role_of("alice"), WorkspaceRole::Owner, "founder stays Owner");
-        assert_ne!(s.role_of("mallory"), WorkspaceRole::Owner, "forger did not become Owner");
-        assert!(!s.members.iter().any(|m| m.id == "mallory"), "Mallory not injected into the roster");
+        assert_eq!(
+            s.creator_actor_id, "alice",
+            "founder's seed wins over lower-lamport forgery"
+        );
+        assert_eq!(
+            s.role_of("alice"),
+            WorkspaceRole::Owner,
+            "founder stays Owner"
+        );
+        assert_ne!(
+            s.role_of("mallory"),
+            WorkspaceRole::Owner,
+            "forger did not become Owner"
+        );
+        assert!(
+            !s.members.iter().any(|m| m.id == "mallory"),
+            "Mallory not injected into the roster"
+        );
 
         // Documented residual: with NO pin, the earliest self-consistent seed still
         // wins — here Mallory's lamport-0 forgery — which is exactly why the pin
         // exists (the pre-existing B2 partial behavior).
         let unpinned = project(&events).expect("session");
-        assert_eq!(unpinned.creator_actor_id, "mallory", "no pin ⇒ earliest self-consistent seed wins");
+        assert_eq!(
+            unpinned.creator_actor_id, "mallory",
+            "no pin ⇒ earliest self-consistent seed wins"
+        );
     }
 
     #[test]
@@ -3688,14 +5120,50 @@ mod tests {
         let mut compacted = seed_session("alice", sid, wid);
         compacted.members.push(bob.clone());
         let events = vec![
-            by("alice", env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(alice) })),
-            by("alice", env(sid, wid, 2, SessionEvent::MemberAdded { invite: None, proof: None, member: bob })),
-            by("bob", env(sid, wid, 3, SessionEvent::SessionSnapshot { session: Box::new(compacted) })),
+            by(
+                "alice",
+                env(
+                    sid,
+                    wid,
+                    1,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(alice),
+                    },
+                ),
+            ),
+            by(
+                "alice",
+                env(
+                    sid,
+                    wid,
+                    2,
+                    SessionEvent::MemberAdded {
+                        invite: None,
+                        proof: None,
+                        member: bob,
+                    },
+                ),
+            ),
+            by(
+                "bob",
+                env(
+                    sid,
+                    wid,
+                    3,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(compacted),
+                    },
+                ),
+            ),
         ];
         let s = project_with_founder(&events, Some("alice")).expect("session");
         assert_eq!(s.creator_actor_id, "alice");
         assert_eq!(s.role_of("alice"), WorkspaceRole::Owner);
-        assert_eq!(s.role_of("bob"), WorkspaceRole::Admin, "bob added by the founder survives");
+        assert_eq!(
+            s.role_of("bob"),
+            WorkspaceRole::Admin,
+            "bob added by the founder survives"
+        );
     }
 
     #[test]
@@ -3708,9 +5176,19 @@ mod tests {
         let sid = Uuid::new_v4();
         let wid = Uuid::nil();
         let bob = seed_session("bob", sid, wid);
-        let events =
-            vec![by("bob", env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(bob) }))];
-        let s = project_with_founder(&events, Some("alice")).expect("member-created chat must project");
+        let events = vec![by(
+            "bob",
+            env(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(bob),
+                },
+            ),
+        )];
+        let s =
+            project_with_founder(&events, Some("alice")).expect("member-created chat must project");
         assert_eq!(s.creator_actor_id, "bob");
         assert_eq!(s.role_of("bob"), WorkspaceRole::Owner);
     }
@@ -3725,8 +5203,28 @@ mod tests {
         let mallory = seed_session("mallory", sid, wid);
         let msg = ChatMessage::new(MessageRole::User, "alice", "hi");
         let events = vec![
-            by("mallory", env(sid, wid, 0, SessionEvent::SessionSnapshot { session: Box::new(mallory) })),
-            by("alice", env(sid, wid, 5, SessionEvent::SessionSnapshot { session: Box::new(alice) })),
+            by(
+                "mallory",
+                env(
+                    sid,
+                    wid,
+                    0,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(mallory),
+                    },
+                ),
+            ),
+            by(
+                "alice",
+                env(
+                    sid,
+                    wid,
+                    5,
+                    SessionEvent::SessionSnapshot {
+                        session: Box::new(alice),
+                    },
+                ),
+            ),
             env(sid, wid, 6, SessionEvent::MessageAppended { message: msg }),
         ];
         let expected = project_with_founder(&events, Some("alice")).expect("session");

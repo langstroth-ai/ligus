@@ -62,7 +62,9 @@ impl CliKind {
     pub fn install_command(self) -> &'static str {
         match self {
             CliKind::Antigravity => "curl -fsSL https://antigravity.google/cli/install.sh | bash",
-            CliKind::Copilot => "brew install --cask copilot-cli   (or: npm install -g @github/copilot)",
+            CliKind::Copilot => {
+                "brew install --cask copilot-cli   (or: npm install -g @github/copilot)"
+            }
         }
     }
     fn usage_hint(self) -> &'static str {
@@ -136,11 +138,25 @@ pub fn classify_failure(text: &str) -> CliFailure {
 /// login or a usage limit, else the CLI's own message.
 pub fn failure_error(kind: CliKind, detail: &str) -> ProviderError {
     let detail = detail.trim();
-    let detail = if detail.len() > 1500 { &detail[..floor_char_boundary(detail, 1500)] } else { detail };
+    let detail = if detail.len() > 1500 {
+        &detail[..floor_char_boundary(detail, 1500)]
+    } else {
+        detail
+    };
     let msg = match classify_failure(detail) {
-        CliFailure::NotLoggedIn => format!("{} is not signed in on this host. {} ({detail})", kind.display(), kind.login_hint()),
-        CliFailure::UsageLimit => format!("{} hit a usage limit. {} ({detail})", kind.display(), kind.usage_hint()),
-        CliFailure::Other if detail.is_empty() => format!("{} failed without an error message.", kind.display()),
+        CliFailure::NotLoggedIn => format!(
+            "{} is not signed in on this host. {} ({detail})",
+            kind.display(),
+            kind.login_hint()
+        ),
+        CliFailure::UsageLimit => format!(
+            "{} hit a usage limit. {} ({detail})",
+            kind.display(),
+            kind.usage_hint()
+        ),
+        CliFailure::Other if detail.is_empty() => {
+            format!("{} failed without an error message.", kind.display())
+        }
         CliFailure::Other => format!("{}: {detail}", kind.display()),
     };
     ProviderError::Subprocess(msg)
@@ -179,7 +195,11 @@ pub fn failure_error_for(kind: ligus_core::ModelProviderKind, detail: &str) -> P
         K::Copilot => failure_error(CliKind::Copilot, detail),
         other => {
             let d = detail.trim();
-            let d = if d.len() > 1500 { &d[..floor_char_boundary(d, 1500)] } else { d };
+            let d = if d.len() > 1500 {
+                &d[..floor_char_boundary(d, 1500)]
+            } else {
+                d
+            };
             ProviderError::Subprocess(format!("{}: {d}", display_for(other)))
         }
     }
@@ -214,7 +234,11 @@ pub trait CliStreamParser {
     fn feed(&mut self, line: &str) -> Vec<CliOut>;
     /// The reply body, or the error to show. `exit_ok` and `stderr` come from
     /// the process. May return a last [`CliOut::Delta`] (a non-streamed reply).
-    fn finish(&mut self, exit_ok: bool, stderr: &str) -> Result<(String, Option<String>), ProviderError>;
+    fn finish(
+        &mut self,
+        exit_ok: bool,
+        stderr: &str,
+    ) -> Result<(String, Option<String>), ProviderError>;
 }
 
 /// Spawn `program args…` (prompt already in `args`, stdin closed) in
@@ -231,13 +255,21 @@ pub(crate) async fn run_cli<P: CliStreamParser>(
     mut on_activity: impl FnMut(StreamActivity),
 ) -> Result<String, ProviderError> {
     // Confined to the turn's sandbox plan (see `executor`).
-    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Agent(kind.provider()), program, args)
-        .cwd(working_dir.map(std::path::Path::new))
-        .env(extra_env);
-    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| ProviderError::Subprocess(format!("sandbox {program}: {e}")))?;
+    let spec = crate::executor::SpawnSpec::new(
+        crate::executor::Purpose::Agent(kind.provider()),
+        program,
+        args,
+    )
+    .cwd(working_dir.map(std::path::Path::new))
+    .env(extra_env);
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec)
+        .map_err(|e| ProviderError::Subprocess(format!("sandbox {program}: {e}")))?;
     // The prompt is an argument; a closed stdin means the CLI never waits
     // on the terminal. Stop → the future is dropped → the CLI is killed.
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     super::subprocess::suppress_console_window(&mut cmd);
 
     let mut child = cmd.spawn().map_err(|e| {
@@ -267,7 +299,12 @@ pub(crate) async fn run_cli<P: CliStreamParser>(
         let line = match tokio::time::timeout(idle, reader.next_line()).await {
             Ok(Ok(Some(line))) => line,
             Ok(Ok(None)) => break,
-            Ok(Err(e)) => return Err(ProviderError::Subprocess(format!("{}: {e}", kind.display()))),
+            Ok(Err(e)) => {
+                return Err(ProviderError::Subprocess(format!(
+                    "{}: {e}",
+                    kind.display()
+                )))
+            }
             Err(_) => {
                 return Err(ProviderError::Subprocess(format!(
                     "{} produced no output for {}s — it may be waiting on sign-in or a blocked tool. {} Raise LIGUS_TURN_IDLE_TIMEOUT_SECS for long silent steps.",
@@ -304,7 +341,12 @@ pub(crate) async fn run_cli<P: CliStreamParser>(
 
 /// Appends `text` to `assembled`, starting a new line when a new message /
 /// step begins so narration around tool calls doesn't run together.
-pub(crate) fn push_segment(assembled: &mut String, new_segment: bool, text: &str, out: &mut Vec<CliOut>) {
+pub(crate) fn push_segment(
+    assembled: &mut String,
+    new_segment: bool,
+    text: &str,
+    out: &mut Vec<CliOut>,
+) {
     if text.is_empty() {
         return;
     }
@@ -322,16 +364,32 @@ mod tests {
 
     #[test]
     fn classifies_auth_and_limits() {
-        assert_eq!(classify_failure("Error: No authentication information found."), CliFailure::NotLoggedIn);
-        assert_eq!(classify_failure("HTTP 401 Unauthorized"), CliFailure::NotLoggedIn);
-        assert_eq!(classify_failure("RESOURCE_EXHAUSTED: quota exceeded for model"), CliFailure::UsageLimit);
-        assert_eq!(classify_failure("429 Too Many Requests"), CliFailure::UsageLimit);
+        assert_eq!(
+            classify_failure("Error: No authentication information found."),
+            CliFailure::NotLoggedIn
+        );
+        assert_eq!(
+            classify_failure("HTTP 401 Unauthorized"),
+            CliFailure::NotLoggedIn
+        );
+        assert_eq!(
+            classify_failure("RESOURCE_EXHAUSTED: quota exceeded for model"),
+            CliFailure::UsageLimit
+        );
+        assert_eq!(
+            classify_failure("429 Too Many Requests"),
+            CliFailure::UsageLimit
+        );
         assert_eq!(classify_failure("model 'x' not found"), CliFailure::Other);
     }
 
     #[test]
     fn failure_messages_name_the_fix() {
-        let e = failure_error(CliKind::Copilot, "Error: No authentication information found.").to_string();
+        let e = failure_error(
+            CliKind::Copilot,
+            "Error: No authentication information found.",
+        )
+        .to_string();
         assert!(e.contains("copilot login"), "{e}");
         let e = failure_error(CliKind::Antigravity, "not signed in").to_string();
         assert!(e.contains("Run `agy` once"), "{e}");

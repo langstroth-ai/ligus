@@ -24,7 +24,12 @@ use ligus_core::attachment::{self, ArchiveLimits, Assessment};
 /// archive, the types of what it holds (a zip of programs is refused where
 /// programs are), plus a decompression bomb. A save re-runs it against the
 /// policy as it is now, since the policy may have changed since the check.
-pub fn policy_refusal(policy: &attachment::AttachmentPolicy, name: &str, size: u64, bytes: &[u8]) -> Option<String> {
+pub fn policy_refusal(
+    policy: &attachment::AttachmentPolicy,
+    name: &str,
+    size: u64,
+    bytes: &[u8],
+) -> Option<String> {
     let assessment = attachment::assess(name, bytes);
     let archive = archive_report(bytes, &assessment);
     let mut tokens = attachment::type_tokens(name, Some(&assessment.detected));
@@ -32,9 +37,15 @@ pub fn policy_refusal(policy: &attachment::AttachmentPolicy, name: &str, size: u
         tokens.extend(r.entry_types.iter().cloned());
     }
     if let Some(why) = policy.file_refusal(&tokens, size) {
-        return Some(if archive.is_some() { format!("{why} (inside this archive)") } else { why });
+        return Some(if archive.is_some() {
+            format!("{why} (inside this archive)")
+        } else {
+            why
+        });
     }
-    archive.and_then(|r| r.bomb).map(|bomb| format!("this archive looks like a decompression bomb ({bomb})"))
+    archive
+        .and_then(|r| r.bomb)
+        .map(|bomb| format!("this archive looks like a decompression bomb ({bomb})"))
 }
 
 /// Why an archive looks like a decompression bomb, if it does.
@@ -47,7 +58,8 @@ pub fn archive_bomb(bytes: &[u8], a: &Assessment) -> Option<String> {
 pub fn archive_report(bytes: &[u8], a: &Assessment) -> Option<attachment::ArchiveReport> {
     let limits = ArchiveLimits::default();
     match a.detected.ext {
-        "zip" | "jar" | "apk" | "ipa" | "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "odt" | "ods" | "epub" => {
+        "zip" | "jar" | "apk" | "ipa" | "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm"
+        | "odt" | "ods" | "epub" => {
             let mut budget = inflate_cap(bytes.len(), &limits);
             Some(zip_report(bytes, &limits, 0, &mut budget))
         }
@@ -63,7 +75,10 @@ const MAX_INNER_ARCHIVE: usize = 32 * 1024 * 1024;
 
 /// How many bytes an archive of `len` bytes may unpack to, in all.
 fn inflate_cap(len: usize, limits: &ArchiveLimits) -> u64 {
-    limits.max_total.min(len as u64 * limits.max_ratio).max(1024 * 1024)
+    limits
+        .max_total
+        .min(len as u64 * limits.max_ratio)
+        .max(1024 * 1024)
 }
 
 /// A zip's directory ([`attachment::inspect_zip`]) checked against what an
@@ -73,12 +88,19 @@ fn inflate_cap(len: usize, limits: &ArchiveLimits) -> u64 {
 /// zip that unpacks past the cap, is a bomb; a zip or gzip inside (whatever
 /// its name) is inspected the same way, at most [`MAX_ZIP_DEPTH`] deep, and
 /// what it holds counts for the policy.
-fn zip_report(bytes: &[u8], limits: &ArchiveLimits, depth: usize, budget: &mut u64) -> attachment::ArchiveReport {
+fn zip_report(
+    bytes: &[u8],
+    limits: &ArchiveLimits,
+    depth: usize,
+    budget: &mut u64,
+) -> attachment::ArchiveReport {
     let mut r = attachment::inspect_zip(bytes, limits);
     if r.bomb.is_some() {
         return r;
     }
-    let Ok(listing) = attachment::zip_entries(bytes) else { return r };
+    let Ok(listing) = attachment::zip_entries(bytes) else {
+        return r;
+    };
     for e in &listing.entries {
         if e.name.ends_with('/') && e.uncompressed == 0 {
             continue;
@@ -93,7 +115,9 @@ fn zip_report(bytes: &[u8], limits: &ArchiveLimits, depth: usize, budget: &mut u
         }
         let data = &bytes[start..];
         let mut src: Box<dyn Read> = if e.method == 0 {
-            let n = usize::try_from(e.compressed).unwrap_or(usize::MAX).min(data.len());
+            let n = usize::try_from(e.compressed)
+                .unwrap_or(usize::MAX)
+                .min(data.len());
             Box::new(&data[..n])
         } else {
             Box::new(flate2::read::DeflateDecoder::new(data))
@@ -108,7 +132,10 @@ fn zip_report(bytes: &[u8], limits: &ArchiveLimits, depth: usize, budget: &mut u
                 Ok(n) => {
                     if got == 0 {
                         let head = &buf[..n];
-                        if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") || head.starts_with(&[0x1F, 0x8B]) {
+                        if head.starts_with(b"PK\x03\x04")
+                            || head.starts_with(b"PK\x05\x06")
+                            || head.starts_with(&[0x1F, 0x8B])
+                        {
                             kept = Some(Vec::new());
                         }
                     }
@@ -163,7 +190,9 @@ fn merge_inner(r: &mut attachment::ArchiveReport, name: &str, child: attachment:
     r.risky_entries += child.risky_entries;
     r.opaque_entries += child.opaque_entries;
     r.hidden_entries |= child.hidden_entries;
-    r.total_uncompressed = r.total_uncompressed.saturating_add(child.total_uncompressed);
+    r.total_uncompressed = r
+        .total_uncompressed
+        .saturating_add(child.total_uncompressed);
     for t in child.entry_types {
         if r.entry_types.len() < 256 && !r.entry_types.contains(&t) {
             r.entry_types.push(t);
@@ -183,8 +212,14 @@ fn merge_inner(r: &mut attachment::ArchiveReport, name: &str, child: attachment:
 /// Inflate a gzip stream into a counter, at most `max_total` bytes; a stream
 /// that expands past the cap or the ratio is a bomb.
 fn gzip_report(bytes: &[u8], limits: &ArchiveLimits) -> attachment::ArchiveReport {
-    let mut r = attachment::ArchiveReport { entries: 1, ..Default::default() };
-    let cap = limits.max_total.min(bytes.len() as u64 * limits.max_ratio).max(1024 * 1024);
+    let mut r = attachment::ArchiveReport {
+        entries: 1,
+        ..Default::default()
+    };
+    let cap = limits
+        .max_total
+        .min(bytes.len() as u64 * limits.max_ratio)
+        .max(1024 * 1024);
     let mut d = flate2::read::MultiGzDecoder::new(bytes).take(cap + 1);
     let mut buf = [0u8; 64 * 1024];
     loop {
@@ -215,17 +250,31 @@ pub fn mark_quarantined(path: &Path, sender: &str) -> std::io::Result<bool> {
     {
         use std::ffi::CString;
         use std::os::unix::ffi::OsStrExt;
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         // flags;hex timestamp;agent;event id. 0x0081 = downloaded + user
         // approval needed (what browsers set); 0x0002 marks it as coming from
         // another person.
-        let value = format!("0083;{now:08x};{QUARANTINE_AGENT};{}", uuid::Uuid::new_v4().to_string().to_uppercase());
+        let value = format!(
+            "0083;{now:08x};{QUARANTINE_AGENT};{}",
+            uuid::Uuid::new_v4().to_string().to_uppercase()
+        );
         let _ = sender;
-        let p = CString::new(path.as_os_str().as_bytes()).map_err(|_| std::io::Error::other("path contains NUL"))?;
+        let p = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| std::io::Error::other("path contains NUL"))?;
         let name = CString::new("com.apple.quarantine").expect("static");
         // SAFETY: valid NUL-terminated strings and a buffer of `value.len()` bytes.
         let rc = unsafe {
-            libc::setxattr(p.as_ptr(), name.as_ptr(), value.as_ptr() as *const libc::c_void, value.len(), 0, libc::XATTR_NOFOLLOW)
+            libc::setxattr(
+                p.as_ptr(),
+                name.as_ptr(),
+                value.as_ptr() as *const libc::c_void,
+                value.len(),
+                0,
+                libc::XATTR_NOFOLLOW,
+            )
         };
         if rc != 0 {
             return Err(std::io::Error::last_os_error());
@@ -236,8 +285,15 @@ pub fn mark_quarantined(path: &Path, sender: &str) -> std::io::Result<bool> {
     {
         let mut ads = path.as_os_str().to_owned();
         ads.push(":Zone.Identifier");
-        let referrer: String = sender.chars().filter(|c| c.is_ascii_alphanumeric() || *c == ' ').take(64).collect();
-        std::fs::write(PathBuf::from(ads), format!("[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=ligus:{referrer}\r\n"))?;
+        let referrer: String = sender
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == ' ')
+            .take(64)
+            .collect();
+        std::fs::write(
+            PathBuf::from(ads),
+            format!("[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=ligus:{referrer}\r\n"),
+        )?;
         Ok(true)
     }
     #[cfg(not(any(target_os = "macos", windows)))]
@@ -255,11 +311,26 @@ fn mark_quarantined_file(f: &std::fs::File, path: &Path, sender: &str) -> std::i
         use std::ffi::CString;
         use std::os::unix::io::AsRawFd;
         let _ = (path, sender);
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let value = format!("0083;{now:08x};{QUARANTINE_AGENT};{}", uuid::Uuid::new_v4().to_string().to_uppercase());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let value = format!(
+            "0083;{now:08x};{QUARANTINE_AGENT};{}",
+            uuid::Uuid::new_v4().to_string().to_uppercase()
+        );
         let name = CString::new("com.apple.quarantine").expect("static");
         // SAFETY: a valid descriptor, a NUL-terminated name and a buffer of `value.len()` bytes.
-        let rc = unsafe { libc::fsetxattr(f.as_raw_fd(), name.as_ptr(), value.as_ptr() as *const libc::c_void, value.len(), 0, 0) };
+        let rc = unsafe {
+            libc::fsetxattr(
+                f.as_raw_fd(),
+                name.as_ptr(),
+                value.as_ptr() as *const libc::c_void,
+                value.len(),
+                0,
+                0,
+            )
+        };
         if rc != 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -282,7 +353,16 @@ pub fn quarantine_of(path: &Path) -> Option<String> {
         let name = CString::new("com.apple.quarantine").ok()?;
         let mut buf = vec![0u8; 512];
         // SAFETY: valid NUL-terminated strings and a writable buffer of its length.
-        let n = unsafe { libc::getxattr(p.as_ptr(), name.as_ptr(), buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0, libc::XATTR_NOFOLLOW) };
+        let n = unsafe {
+            libc::getxattr(
+                p.as_ptr(),
+                name.as_ptr(),
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len(),
+                0,
+                libc::XATTR_NOFOLLOW,
+            )
+        };
         if n < 0 {
             return None;
         }
@@ -305,17 +385,30 @@ pub fn quarantine_of(path: &Path) -> Option<String> {
 /// Write a verified received file into `dir` under its cleaned `name`: a new
 /// file only (never over an existing one or through a symlink; `name (2).ext`
 /// when taken), not executable, and quarantine-marked. Returns the path.
-pub fn save_received(dir: &Path, name: &str, bytes: &[u8], sender: &str) -> std::io::Result<PathBuf> {
+pub fn save_received(
+    dir: &Path,
+    name: &str,
+    bytes: &[u8],
+    sender: &str,
+) -> std::io::Result<PathBuf> {
     use std::io::Write;
     let clean = attachment::sanitize_filename(name);
     // Split on the name itself, keeping the extension's own case: the
     // lowercase `extension()` can be a different length (`.\u{212A}` → `k`).
     let (stem, ext) = match clean.rsplit_once('.') {
-        Some((stem, ext)) if !attachment::extension(&clean).is_empty() => (stem.to_string(), ext.to_string()),
+        Some((stem, ext)) if !attachment::extension(&clean).is_empty() => {
+            (stem.to_string(), ext.to_string())
+        }
         _ => (clean.clone(), String::new()),
     };
     for n in 1..1000 {
-        let candidate = if n == 1 { clean.clone() } else if ext.is_empty() { format!("{stem} ({n})") } else { format!("{stem} ({n}).{ext}") };
+        let candidate = if n == 1 {
+            clean.clone()
+        } else if ext.is_empty() {
+            format!("{stem} ({n})")
+        } else {
+            format!("{stem} ({n}).{ext}")
+        };
         let path = dir.join(&candidate);
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create_new(true);
@@ -336,7 +429,9 @@ pub fn save_received(dir: &Path, name: &str, bytes: &[u8], sender: &str) -> std:
         if let Err(e) = mark_quarantined_file(&f, &path, sender) {
             drop(f);
             let _ = std::fs::remove_file(&path);
-            return Err(std::io::Error::other(format!("couldn't mark the file as downloaded: {e}")));
+            return Err(std::io::Error::other(format!(
+                "couldn't mark the file as downloaded: {e}"
+            )));
         }
         let written = f.write_all(bytes).and_then(|_| f.sync_all());
         if let Err(e) = written {
@@ -363,10 +458,17 @@ pub fn read_inside(root: &Path, rel: &str, max_bytes: u64) -> Result<(Vec<u8>, S
     let rel_path = Path::new(rel);
     // `has_root` and a prefix catch Windows' `\x` and `C:x`, which `join`
     // would otherwise let replace the worktree.
-    if rel.is_empty() || rel_path.is_absolute() || rel_path.has_root() || rel_path.components().any(|c| matches!(c, std::path::Component::Prefix(_))) {
+    if rel.is_empty()
+        || rel_path.is_absolute()
+        || rel_path.has_root()
+        || rel_path
+            .components()
+            .any(|c| matches!(c, std::path::Component::Prefix(_)))
+    {
         return Err("give a path relative to your worktree".into());
     }
-    let root = std::fs::canonicalize(root).map_err(|_| "this turn's worktree is gone".to_string())?;
+    let root =
+        std::fs::canonicalize(root).map_err(|_| "this turn's worktree is gone".to_string())?;
     let root = without_verbatim_prefix(&root);
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true);
@@ -382,12 +484,17 @@ pub fn read_inside(root: &Path, rel: &str, max_bytes: u64) -> Result<(Vec<u8>, S
         // it points at (refused below).
         opts.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    let file = opts.open(root.join(rel_path)).map_err(|_| format!("no such regular file in your worktree: {rel}"))?;
+    let file = opts
+        .open(root.join(rel_path))
+        .map_err(|_| format!("no such regular file in your worktree: {rel}"))?;
     let meta = file.metadata().map_err(|e| e.to_string())?;
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        if meta.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        if meta.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+        {
             return Err("a link (a symlink, junction or other reparse point) can't be offered; copy the file into your worktree first".into());
         }
     }
@@ -399,7 +506,11 @@ pub fn read_inside(root: &Path, rel: &str, max_bytes: u64) -> Result<(Vec<u8>, S
     // read) must not leave through the host, which reads it unconfined.
     match link_count(&file, &meta) {
         Some(1) => {}
-        Some(_) => return Err("a file with more than one hard link can't be offered; copy it first".into()),
+        Some(_) => {
+            return Err(
+                "a file with more than one hard link can't be offered; copy it first".into(),
+            )
+        }
         None => return Err(UNCONFIRMED.into()),
     }
     let real = opened_path(&file).ok_or(UNCONFIRMED)?;
@@ -410,11 +521,16 @@ pub fn read_inside(root: &Path, rel: &str, max_bytes: u64) -> Result<(Vec<u8>, S
         return Err("the file is larger than this workspace allows".into());
     }
     let mut bytes = Vec::new();
-    file.take(max_bytes + 1).read_to_end(&mut bytes).map_err(|e| format!("couldn't read the file: {e}"))?;
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("couldn't read the file: {e}"))?;
     if bytes.len() as u64 > max_bytes {
         return Err("the file is larger than this workspace allows".into());
     }
-    let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = real
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     Ok((bytes, name))
 }
 
@@ -430,7 +546,9 @@ fn link_count(f: &std::fs::File, meta: &std::fs::Metadata) -> Option<u64> {
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
         let _ = meta;
         // SAFETY: an all-zero BY_HANDLE_FILE_INFORMATION is a valid value
         // (plain integers and FILETIMEs), and the call writes only into it.
@@ -471,13 +589,22 @@ fn opened_path(f: &std::fs::File) -> Option<PathBuf> {
     {
         use std::os::windows::ffi::OsStringExt;
         use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Storage::FileSystem::{GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED, VOLUME_NAME_DOS};
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED, VOLUME_NAME_DOS,
+        };
         let mut buf = vec![0u16; 512];
         for _ in 0..3 {
             let cap = u32::try_from(buf.len()).ok()?;
             // SAFETY: the handle is the open file's; the call writes at most
             // `cap` UTF-16 units into buf.
-            let n = unsafe { GetFinalPathNameByHandleW(f.as_raw_handle(), buf.as_mut_ptr(), cap, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS) } as usize;
+            let n = unsafe {
+                GetFinalPathNameByHandleW(
+                    f.as_raw_handle(),
+                    buf.as_mut_ptr(),
+                    cap,
+                    FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+                )
+            } as usize;
             if n == 0 {
                 return None;
             }
@@ -515,7 +642,11 @@ fn without_verbatim_prefix(path: &Path) -> PathBuf {
             out.extend_from_slice(&wide[unc.len()..]);
             return PathBuf::from(std::ffi::OsString::from_wide(&out));
         }
-        let drive = |w: &[u16]| w.len() >= 2 && w[1] == u16::from(b':') && char::from_u32(u32::from(w[0])).is_some_and(|c| c.is_ascii_alphabetic());
+        let drive = |w: &[u16]| {
+            w.len() >= 2
+                && w[1] == u16::from(b':')
+                && char::from_u32(u32::from(w[0])).is_some_and(|c| c.is_ascii_alphabetic())
+        };
         if wide.starts_with(&verbatim) && drive(&wide[verbatim.len()..]) {
             return PathBuf::from(std::ffi::OsString::from_wide(&wide[verbatim.len()..]));
         }
@@ -536,8 +667,23 @@ pub fn credential_in(name: &str, bytes: &[u8]) -> Option<String> {
     let named = lower == ".env"
         || lower.starts_with(".env.")
         || lower.ends_with(".env")
-        || matches!(lower.as_str(), "id_rsa" | "id_dsa" | "id_ecdsa" | "id_ed25519" | ".netrc" | ".npmrc" | ".pypirc" | "credentials" | ".git-credentials" | "known_hosts")
-        || matches!(ext.as_str(), "pem" | "key" | "p12" | "pfx" | "jks" | "keystore" | "kdbx" | "ppk" | "asc" | "gpg");
+        || matches!(
+            lower.as_str(),
+            "id_rsa"
+                | "id_dsa"
+                | "id_ecdsa"
+                | "id_ed25519"
+                | ".netrc"
+                | ".npmrc"
+                | ".pypirc"
+                | "credentials"
+                | ".git-credentials"
+                | "known_hosts"
+        )
+        || matches!(
+            ext.as_str(),
+            "pem" | "key" | "p12" | "pfx" | "jks" | "keystore" | "kdbx" | "ppk" | "asc" | "gpg"
+        );
     if named {
         return Some("this looks like a credential or key file; it can't be offered".into());
     }
@@ -553,7 +699,8 @@ pub fn credential_in(name: &str, bytes: &[u8]) -> Option<String> {
         regex::Regex::new(r"(AKIA|ASIA)[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{32,}|(?i)aws_secret_access_key\s*=")
             .expect("static regex")
     });
-    re.is_match(&text).then(|| "the file contains what looks like an access token; it can't be offered".into())
+    re.is_match(&text)
+        .then(|| "the file contains what looks like an access token; it can't be offered".into())
 }
 
 /// A scanner's verdict.
@@ -562,11 +709,19 @@ pub fn credential_in(name: &str, bytes: &[u8]) -> Option<String> {
 pub enum ScanResult {
     /// No scanner configured (nothing ran).
     NotConfigured,
-    Clean { scanner: String },
+    Clean {
+        scanner: String,
+    },
     /// The scanner found something; the save is refused.
-    Infected { scanner: String, detail: String },
+    Infected {
+        scanner: String,
+        detail: String,
+    },
     /// The scanner failed to run or gave no verdict (shown; not a block).
-    Failed { scanner: String, detail: String },
+    Failed {
+        scanner: String,
+        detail: String,
+    },
 }
 
 /// An optional client-side scanning hook: a program run on the verified
@@ -585,22 +740,42 @@ impl Scanner {
     /// `auto` for ClamAV's `clamdscan` or `clamscan` on the PATH. Unset =
     /// none.
     pub fn from_env() -> Option<Scanner> {
-        let v = std::env::var("LIGUS_ATTACHMENT_SCANNER").ok().filter(|v| !v.trim().is_empty())?;
+        let v = std::env::var("LIGUS_ATTACHMENT_SCANNER")
+            .ok()
+            .filter(|v| !v.trim().is_empty())?;
         let timeout = Duration::from_secs(120);
         if v.trim() == "auto" {
-            for (bin, args) in [("clamdscan", vec!["--no-summary", "--fdpass"]), ("clamscan", vec!["--no-summary"])] {
+            for (bin, args) in [
+                ("clamdscan", vec!["--no-summary", "--fdpass"]),
+                ("clamscan", vec!["--no-summary"]),
+            ] {
                 if let Some(p) = find_on_path(bin) {
-                    return Some(Scanner { program: p, args: args.into_iter().map(String::from).collect(), timeout });
+                    return Some(Scanner {
+                        program: p,
+                        args: args.into_iter().map(String::from).collect(),
+                        timeout,
+                    });
                 }
             }
             return None;
         }
-        let args = std::env::var("LIGUS_ATTACHMENT_SCANNER_ARGS").unwrap_or_default().split_whitespace().map(String::from).collect();
-        Some(Scanner { program: PathBuf::from(v.trim()), args, timeout })
+        let args = std::env::var("LIGUS_ATTACHMENT_SCANNER_ARGS")
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        Some(Scanner {
+            program: PathBuf::from(v.trim()),
+            args,
+            timeout,
+        })
     }
 
     fn name(&self) -> String {
-        self.program.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "scanner".into())
+        self.program
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "scanner".into())
     }
 
     /// Run the scanner on `file` (blocking, bounded by the timeout).
@@ -615,21 +790,41 @@ impl Scanner {
         let scanner = self.name();
         let scratch = match ScanScratch::new() {
             Ok(s) => s,
-            Err(e) => return ScanResult::Failed { scanner, detail: format!("couldn't make its scratch dir: {e}") },
+            Err(e) => {
+                return ScanResult::Failed {
+                    scanner,
+                    detail: format!("couldn't make its scratch dir: {e}"),
+                }
+            }
         };
         // The scanner sees a copy in its scratch dir: the original lives in
         // Ligus's data dir (the attachment cache), which it can't read.
-        let copy = scratch.0.join(file.file_name().unwrap_or_else(|| std::ffi::OsStr::new("attachment")));
+        let copy = scratch.0.join(
+            file.file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("attachment")),
+        );
         if let Err(e) = std::fs::copy(file, &copy) {
-            return ScanResult::Failed { scanner, detail: format!("couldn't stage the file: {e}") };
+            return ScanResult::Failed {
+                scanner,
+                detail: format!("couldn't stage the file: {e}"),
+            };
         }
         let (mut cmd, wrapped) = confined_scanner(&self.program, &scratch.0);
-        cmd.args(&self.args).arg(&copy).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        cmd.args(&self.args)
+            .arg(&copy)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
         cmd.current_dir(&scratch.0);
         scanner_env(&mut cmd, &scratch.0);
         let mut child = match cmd.spawn() {
             Ok(c) => c,
-            Err(e) => return ScanResult::Failed { scanner, detail: format!("couldn't start: {e}") },
+            Err(e) => {
+                return ScanResult::Failed {
+                    scanner,
+                    detail: format!("couldn't start: {e}"),
+                }
+            }
         };
         // Drained while it runs: a scanner that writes more than a pipe holds
         // (verbose output on a big archive) would otherwise block until the
@@ -661,28 +856,63 @@ impl Scanner {
                 Ok(None) if start.elapsed() > self.timeout => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return ScanResult::Failed { scanner, detail: "timed out".into() };
+                    return ScanResult::Failed {
+                        scanner,
+                        detail: "timed out".into(),
+                    };
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-                Err(e) => return ScanResult::Failed { scanner, detail: e.to_string() },
+                Err(e) => {
+                    return ScanResult::Failed {
+                        scanner,
+                        detail: e.to_string(),
+                    }
+                }
             }
         };
         // A grandchild still holding a pipe open doesn't hold the verdict.
-        let out = out_task.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
-        let err = err_task.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
-        let detail: String = out.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().filter(|c| !c.is_control()).take(200).collect();
+        let out = out_task
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or_default();
+        let err = err_task
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or_default();
+        let detail: String = out
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(200)
+            .collect();
         // The sandbox itself failing to start is no verdict (bubblewrap exits
         // 1 then, which would read as "infected").
         if wrapped && status.code() != Some(0) {
-            if err.lines().any(|l| l.starts_with("bwrap:") || l.starts_with("sandbox-exec:")) {
-                let why: String = err.lines().next().unwrap_or("").chars().filter(|c| !c.is_control()).take(200).collect();
-                return ScanResult::Failed { scanner, detail: format!("its sandbox didn't start: {why}") };
+            if err
+                .lines()
+                .any(|l| l.starts_with("bwrap:") || l.starts_with("sandbox-exec:"))
+            {
+                let why: String = err
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(200)
+                    .collect();
+                return ScanResult::Failed {
+                    scanner,
+                    detail: format!("its sandbox didn't start: {why}"),
+                };
             }
         }
         match status.code() {
             Some(0) => ScanResult::Clean { scanner },
             Some(1) => ScanResult::Infected { scanner, detail },
-            other => ScanResult::Failed { scanner, detail: format!("exit {other:?} {detail}") },
+            other => ScanResult::Failed {
+                scanner,
+                detail: format!("exit {other:?} {detail}"),
+            },
         }
     }
 }
@@ -734,11 +964,24 @@ fn scanner_env(cmd: &mut std::process::Command, scratch: &Path) {
         ligus_core::process_util::scrub_ligus_secrets(cmd);
         for (k, _) in std::env::vars_os() {
             let n = k.to_string_lossy().to_ascii_uppercase();
-            if ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSPHRASE", "CREDENTIAL"].iter().any(|w| n.contains(w)) {
+            if [
+                "KEY",
+                "TOKEN",
+                "SECRET",
+                "PASSWORD",
+                "PASSPHRASE",
+                "CREDENTIAL",
+            ]
+            .iter()
+            .any(|w| n.contains(w))
+            {
                 cmd.env_remove(&k);
             }
         }
-        cmd.env("TEMP", scratch).env("TMP", scratch).env("USERPROFILE", scratch).env("HOME", scratch);
+        cmd.env("TEMP", scratch)
+            .env("TMP", scratch)
+            .env("USERPROFILE", scratch)
+            .env("HOME", scratch);
     }
 }
 
@@ -755,7 +998,10 @@ fn confined_scanner(program: &Path, scratch: &Path) -> (std::process::Command, b
     if crate::executor::default_executor().kind() == crate::executor::ExecutorKind::Bwrap {
         if let Some(bwrap) = find_on_path("bwrap") {
             let mut cmd = ligus_core::process_util::command(bwrap);
-            cmd.args(["--ro-bind", "/", "/", "--dev", "/dev"]).arg("--bind").arg(scratch).arg(scratch);
+            cmd.args(["--ro-bind", "/", "/", "--dev", "/dev"])
+                .arg("--bind")
+                .arg(scratch)
+                .arg(scratch);
             // What the agent sandbox hides, hidden from a scanner a hostile
             // file may have hijacked: Ligus's data, the credential dirs, the
             // session bus and Secret Service, and the host sockets it could
@@ -767,7 +1013,8 @@ fn confined_scanner(program: &Path, scratch: &Path) -> (std::process::Command, b
                     cmd.arg("--ro-bind").arg("/dev/null").arg(&d);
                 }
             }
-            cmd.args(["--unshare-net", "--die-with-parent", "--new-session", "--"]).arg(program);
+            cmd.args(["--unshare-net", "--die-with-parent", "--new-session", "--"])
+                .arg(program);
             return (cmd, true);
         }
     }
@@ -781,17 +1028,40 @@ fn confined_scanner(program: &Path, scratch: &Path) -> (std::process::Command, b
 #[cfg(unix)]
 fn scanner_denied() -> Vec<PathBuf> {
     let host = crate::executor::host_paths();
-    let mut v: Vec<PathBuf> = host.data_dirs.iter().chain(host.secret_files.iter()).cloned().collect();
-    for h in crate::executor::home_dir().into_iter().chain(crate::executor::passwd_home()) {
-        v.extend(crate::executor::home_secret_dirs(&h, crate::executor::Purpose::McpServer));
+    let mut v: Vec<PathBuf> = host
+        .data_dirs
+        .iter()
+        .chain(host.secret_files.iter())
+        .cloned()
+        .collect();
+    for h in crate::executor::home_dir()
+        .into_iter()
+        .chain(crate::executor::passwd_home())
+    {
+        v.extend(crate::executor::home_secret_dirs(
+            &h,
+            crate::executor::Purpose::McpServer,
+        ));
         v.push(h.join(".docker/run/docker.sock"));
         v.push(h.join(".orbstack/run/docker.sock"));
         v.push(h.join(".colima/default/docker.sock"));
     }
     v.extend(std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from));
     v.extend(std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from));
-    v.extend(["/var/run/docker.sock", "/run/docker.sock", "/run/podman/podman.sock", "/run/containerd/containerd.sock"].iter().map(PathBuf::from));
-    let mut v: Vec<PathBuf> = v.into_iter().map(|p| crate::executor::canonical(&p)).collect();
+    v.extend(
+        [
+            "/var/run/docker.sock",
+            "/run/docker.sock",
+            "/run/podman/podman.sock",
+            "/run/containerd/containerd.sock",
+        ]
+        .iter()
+        .map(PathBuf::from),
+    );
+    let mut v: Vec<PathBuf> = v
+        .into_iter()
+        .map(|p| crate::executor::canonical(&p))
+        .collect();
     v.sort_by_key(|p| p.components().count());
     v.dedup();
     v
@@ -803,7 +1073,11 @@ fn scanner_denied() -> Vec<PathBuf> {
 /// scratch dir.
 #[cfg(target_os = "macos")]
 fn scanner_profile(scratch: &Path) -> String {
-    let q = |p: &Path| p.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+    let q = |p: &Path| {
+        p.to_string_lossy()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+    };
     format!(
         "(version 1)\n(allow default)\n(deny network-outbound (remote ip))\n(deny network-inbound (local ip))\n(deny network-bind (local ip))\n(allow network-outbound (remote ip \"localhost:3310\"))\n(deny file-write*)\n(allow file-write* (subpath \"{}\") (literal \"/dev/null\") (literal \"/dev/tty\") (regex #\"^/dev/fd/\"))\n{}",
         q(scratch),
@@ -852,7 +1126,10 @@ fn find_on_path(bin: &str) -> Option<PathBuf> {
 /// (`.`, an empty one) would resolve against wherever Ligus was started,
 /// such as a repository a scanner of the same name could be planted in.
 fn find_in(bin: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
-    std::env::split_paths(path).filter(|d| d.is_absolute()).map(|d| d.join(bin)).find(|c| c.is_file())
+    std::env::split_paths(path)
+        .filter(|d| d.is_absolute())
+        .map(|d| d.join(bin))
+        .find(|c| c.is_file())
 }
 
 #[cfg(test)]
@@ -908,7 +1185,13 @@ mod tests {
     }
 
     fn ent(name: &str, data: Vec<u8>) -> Ent<'_> {
-        Ent { name, data, deflate: true, claim: None, upath: None }
+        Ent {
+            name,
+            data,
+            deflate: true,
+            claim: None,
+            upath: None,
+        }
     }
 
     /// A real zip (local headers with data, the central directory, the end
@@ -924,7 +1207,8 @@ mod tests {
         let mut cd = Vec::new();
         for e in entries {
             let packed = if e.deflate {
-                let mut z = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+                let mut z =
+                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
                 z.write_all(&e.data).unwrap();
                 z.finish().unwrap()
             } else {
@@ -998,12 +1282,21 @@ mod tests {
     fn a_save_rechecks_the_types_inside_an_archive() {
         let zip = build_zip(&[ent("bin/tool.exe", b"MZ\x90\0".to_vec())]);
         let open = attachment::AttachmentPolicy::default();
-        assert_eq!(policy_refusal(&open, "tools.zip", zip.len() as u64, &zip), None);
-        let strict = attachment::AttachmentPolicy { blocked_types: vec!["@executable".into()], ..Default::default() };
+        assert_eq!(
+            policy_refusal(&open, "tools.zip", zip.len() as u64, &zip),
+            None
+        );
+        let strict = attachment::AttachmentPolicy {
+            blocked_types: vec!["@executable".into()],
+            ..Default::default()
+        };
         let why = policy_refusal(&strict, "tools.zip", zip.len() as u64, &zip).expect("refused");
         assert!(why.contains("inside this archive"), "{why}");
         let notes = build_zip(&[ent("notes.txt", b"hello".to_vec())]);
-        assert_eq!(policy_refusal(&strict, "notes.zip", notes.len() as u64, &notes), None);
+        assert_eq!(
+            policy_refusal(&strict, "notes.zip", notes.len() as u64, &notes),
+            None
+        );
     }
 
     /// Second review: what an extractor would actually unpack is what the
@@ -1015,23 +1308,44 @@ mod tests {
         assert!(ok.bomb.is_none() && ok.risky_entries == 0, "{ok:?}");
         // The Unicode Path field (0x7075) renames the entry for Info-ZIP,
         // 7-Zip and libarchive: the policy must see that name too.
-        let renamed = report(&build_zip(&[Ent { upath: Some("evil.exe"), ..ent("notes.txt", b"MZ".to_vec()) }]));
-        assert!(renamed.entry_types.contains(&"@executable".to_string()) && renamed.risky_entries == 1, "{renamed:?}");
+        let renamed = report(&build_zip(&[Ent {
+            upath: Some("evil.exe"),
+            ..ent("notes.txt", b"MZ".to_vec())
+        }]));
+        assert!(
+            renamed.entry_types.contains(&"@executable".to_string()) && renamed.risky_entries == 1,
+            "{renamed:?}"
+        );
         // A directory that understates what an entry unpacks to: 64 MiB of
         // zeros claimed as 100 bytes.
-        let lying = report(&build_zip(&[Ent { claim: Some(100), ..ent("zeros.bin", vec![0u8; 64 * 1024 * 1024]) }]));
+        let lying = report(&build_zip(&[Ent {
+            claim: Some(100),
+            ..ent("zeros.bin", vec![0u8; 64 * 1024 * 1024])
+        }]));
         assert!(lying.bomb.is_some(), "{lying:?}");
         // A program inside a zip inside the zip reaches the policy.
         let inner = build_zip(&[ent("bin/tool.exe", b"MZ\x90\0".to_vec())]);
-        let nested = report(&build_zip(&[Ent { deflate: false, ..ent("inner.zip", inner.clone()) }]));
-        assert!(nested.entry_types.contains(&"@executable".to_string()), "{nested:?}");
+        let nested = report(&build_zip(&[Ent {
+            deflate: false,
+            ..ent("inner.zip", inner.clone())
+        }]));
+        assert!(
+            nested.entry_types.contains(&"@executable".to_string()),
+            "{nested:?}"
+        );
         // ... also when the inner zip is named like a document.
         let disguised = report(&build_zip(&[ent("report.txt", inner)]));
-        assert!(disguised.entry_types.contains(&"@executable".to_string()), "{disguised:?}");
+        assert!(
+            disguised.entry_types.contains(&"@executable".to_string()),
+            "{disguised:?}"
+        );
         // Zips nested deeper than three levels are refused.
         let mut z = build_zip(&[ent("x.exe", b"MZ".to_vec())]);
         for i in 0..5 {
-            z = build_zip(&[Ent { deflate: false, ..ent(["a.zip", "b.zip", "c.zip", "d.zip", "e.zip"][i], z) }]);
+            z = build_zip(&[Ent {
+                deflate: false,
+                ..ent(["a.zip", "b.zip", "c.zip", "d.zip", "e.zip"][i], z)
+            }]);
         }
         assert!(report(&z).bomb.is_some(), "deep nesting");
     }
@@ -1044,7 +1358,11 @@ mod tests {
         assert_eq!(p.file_name().unwrap(), "report.pdf");
         let p2 = save_received(dir.path(), "report.pdf", b"%PDF-1.4 two", "Mara").unwrap();
         assert_eq!(p2.file_name().unwrap(), "report (2).pdf");
-        assert_eq!(std::fs::read(&p).unwrap(), b"%PDF-1.4", "never written over");
+        assert_eq!(
+            std::fs::read(&p).unwrap(),
+            b"%PDF-1.4",
+            "never written over"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1097,9 +1415,16 @@ mod tests {
                 assert!(z.contains("ZoneId=3"), "{z}");
             }
             #[cfg(target_os = "macos")]
-            assert!(quarantine_of(&p).is_some_and(|q| q.starts_with("0083;")), "{raw:?}");
+            assert!(
+                quarantine_of(&p).is_some_and(|q| q.starts_with("0083;")),
+                "{raw:?}"
+            );
         }
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), cases.len(), "one plain file per save, nothing else");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            cases.len(),
+            "one plain file per save, nothing else"
+        );
     }
 
     #[cfg(unix)]
@@ -1108,14 +1433,27 @@ mod tests {
         let wt = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(wt.path().join("report.md"), b"# ok").unwrap();
-        std::fs::write(outside.path().join("id_ed25519"), b"-----BEGIN OPENSSH PRIVATE KEY-----").unwrap();
+        std::fs::write(
+            outside.path().join("id_ed25519"),
+            b"-----BEGIN OPENSSH PRIVATE KEY-----",
+        )
+        .unwrap();
         std::fs::create_dir(wt.path().join("sub")).unwrap();
         std::fs::write(outside.path().join("notes.txt"), b"outside").unwrap();
-        std::os::unix::fs::symlink(outside.path().join("notes.txt"), wt.path().join("link.txt")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("notes.txt"), wt.path().join("link.txt"))
+            .unwrap();
         std::os::unix::fs::symlink(outside.path(), wt.path().join("dirlink")).unwrap();
         let (b, n) = read_inside(wt.path(), "report.md", 100).unwrap();
         assert_eq!((b.as_slice(), n.as_str()), (&b"# ok"[..], "report.md"));
-        for bad in ["link.txt", "dirlink/notes.txt", "../x", "/etc/hosts", "sub", "nope", "sub/../../x"] {
+        for bad in [
+            "link.txt",
+            "dirlink/notes.txt",
+            "../x",
+            "/etc/hosts",
+            "sub",
+            "nope",
+            "sub/../../x",
+        ] {
             assert!(read_inside(wt.path(), bad, 100).is_err(), "{bad}");
         }
         assert!(read_inside(wt.path(), "report.md", 2).is_err(), "size cap");
@@ -1123,8 +1461,15 @@ mod tests {
         // (made by an agent that can link but not read there) names a path
         // inside the worktree; it is refused.
         std::fs::write(outside.path().join("private.txt"), b"outside, linked").unwrap();
-        std::fs::hard_link(outside.path().join("private.txt"), wt.path().join("linked.txt")).unwrap();
-        assert!(read_inside(wt.path(), "linked.txt", 100).is_err(), "a hard link to a file outside");
+        std::fs::hard_link(
+            outside.path().join("private.txt"),
+            wt.path().join("linked.txt"),
+        )
+        .unwrap();
+        assert!(
+            read_inside(wt.path(), "linked.txt", 100).is_err(),
+            "a hard link to a file outside"
+        );
         assert!(credential_in("id_ed25519", b"x").is_some());
         assert!(credential_in(".env.production", b"X=1").is_some());
         assert!(credential_in("notes.txt", b"-----BEGIN RSA PRIVATE KEY-----\nabc").is_some());
@@ -1147,8 +1492,21 @@ mod tests {
         std::fs::write(outside.path().join("notes.txt"), b"outside").unwrap();
         let (b, n) = read_inside(wt.path(), "report.md", 100).unwrap();
         assert_eq!((b.as_slice(), n.as_str()), (&b"# ok"[..], "report.md"));
-        assert_eq!(read_inside(wt.path(), "sub\\inner.txt", 100).unwrap().0, b"inner");
-        for bad in ["..\\x", "C:\\Windows\\win.ini", "\\Windows\\win.ini", "C:x", "/etc/hosts", "sub", "nope", "sub\\..\\..\\x", ""] {
+        assert_eq!(
+            read_inside(wt.path(), "sub\\inner.txt", 100).unwrap().0,
+            b"inner"
+        );
+        for bad in [
+            "..\\x",
+            "C:\\Windows\\win.ini",
+            "\\Windows\\win.ini",
+            "C:x",
+            "/etc/hosts",
+            "sub",
+            "nope",
+            "sub\\..\\..\\x",
+            "",
+        ] {
             assert!(read_inside(wt.path(), bad, 100).is_err(), "{bad}");
         }
         assert!(read_inside(wt.path(), "report.md", 2).is_err(), "size cap");
@@ -1156,31 +1514,60 @@ mod tests {
         // A junction (no admin needed) to a folder outside: neither the
         // junction nor a file through it can be offered.
         let junction = |link: &Path, target: &Path| {
-            let ok = std::process::Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).output().unwrap();
-            assert!(ok.status.success(), "mklink /J: {}", String::from_utf8_lossy(&ok.stdout));
+            let ok = std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(link)
+                .arg(target)
+                .output()
+                .unwrap();
+            assert!(
+                ok.status.success(),
+                "mklink /J: {}",
+                String::from_utf8_lossy(&ok.stdout)
+            );
         };
         junction(&wt.path().join("out"), outside.path());
-        assert_eq!(std::fs::read(wt.path().join("out").join("notes.txt")).unwrap(), b"outside", "the junction works");
+        assert_eq!(
+            std::fs::read(wt.path().join("out").join("notes.txt")).unwrap(),
+            b"outside",
+            "the junction works"
+        );
         let e = read_inside(wt.path(), "out\\notes.txt", 100).unwrap_err();
         assert!(e.contains("inside your worktree"), "{e}");
-        assert!(read_inside(wt.path(), "out", 100).is_err(), "the junction itself");
+        assert!(
+            read_inside(wt.path(), "out", 100).is_err(),
+            "the junction itself"
+        );
         // One to a folder inside resolves inside, so it's allowed.
         junction(&wt.path().join("in"), &wt.path().join("sub"));
-        assert_eq!(read_inside(wt.path(), "in\\inner.txt", 100).unwrap().0, b"inner");
+        assert_eq!(
+            read_inside(wt.path(), "in\\inner.txt", 100).unwrap().0,
+            b"inner"
+        );
 
         // A hard link inside the worktree to a file outside it.
         std::fs::write(outside.path().join("private.txt"), b"outside, linked").unwrap();
-        std::fs::hard_link(outside.path().join("private.txt"), wt.path().join("linked.txt")).unwrap();
+        std::fs::hard_link(
+            outside.path().join("private.txt"),
+            wt.path().join("linked.txt"),
+        )
+        .unwrap();
         let e = read_inside(wt.path(), "linked.txt", 100).unwrap_err();
         assert!(e.contains("hard link"), "{e}");
 
         // Symlinks need Developer Mode or admin; checked when this host can
         // make them.
-        match std::os::windows::fs::symlink_file(outside.path().join("notes.txt"), wt.path().join("link.txt")) {
+        match std::os::windows::fs::symlink_file(
+            outside.path().join("notes.txt"),
+            wt.path().join("link.txt"),
+        ) {
             Ok(()) => {
                 let e = read_inside(wt.path(), "link.txt", 100).unwrap_err();
                 assert!(e.contains("link"), "{e}");
-                std::os::windows::fs::symlink_dir(outside.path(), wt.path().join("dirlink")).unwrap();
+                std::os::windows::fs::symlink_dir(outside.path(), wt.path().join("dirlink"))
+                    .unwrap();
                 assert!(read_inside(wt.path(), "dirlink\\notes.txt", 100).is_err());
                 assert!(read_inside(wt.path(), "dirlink", 100).is_err());
             }
@@ -1191,10 +1578,22 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn verbatim_prefixes_are_dropped_for_comparison() {
-        assert_eq!(without_verbatim_prefix(Path::new(r"\\?\C:\Users\x")), PathBuf::from(r"C:\Users\x"));
-        assert_eq!(without_verbatim_prefix(Path::new(r"\\?\UNC\srv\share\x")), PathBuf::from(r"\\srv\share\x"));
-        assert_eq!(without_verbatim_prefix(Path::new(r"C:\x")), PathBuf::from(r"C:\x"));
-        assert_eq!(without_verbatim_prefix(Path::new(r"\\?\Volume{0}\x")), PathBuf::from(r"\\?\Volume{0}\x"));
+        assert_eq!(
+            without_verbatim_prefix(Path::new(r"\\?\C:\Users\x")),
+            PathBuf::from(r"C:\Users\x")
+        );
+        assert_eq!(
+            without_verbatim_prefix(Path::new(r"\\?\UNC\srv\share\x")),
+            PathBuf::from(r"\\srv\share\x")
+        );
+        assert_eq!(
+            without_verbatim_prefix(Path::new(r"C:\x")),
+            PathBuf::from(r"C:\x")
+        );
+        assert_eq!(
+            without_verbatim_prefix(Path::new(r"\\?\Volume{0}\x")),
+            PathBuf::from(r"\\?\Volume{0}\x")
+        );
     }
 
     #[cfg(unix)]
@@ -1210,33 +1609,63 @@ mod tests {
         };
         let file = dir.path().join("x; touch pwned");
         std::fs::write(&file, b"data").unwrap();
-        let clean = Scanner { program: script("clean.sh", "exit 0"), args: vec![], timeout: Duration::from_secs(10) };
+        let clean = Scanner {
+            program: script("clean.sh", "exit 0"),
+            args: vec![],
+            timeout: Duration::from_secs(10),
+        };
         assert!(matches!(clean.scan(&file), ScanResult::Clean { .. }));
-        let infected = Scanner { program: script("inf.sh", "echo \"$1: Eicar-Test-Signature FOUND\"; exit 1"), args: vec![], timeout: Duration::from_secs(10) };
+        let infected = Scanner {
+            program: script("inf.sh", "echo \"$1: Eicar-Test-Signature FOUND\"; exit 1"),
+            args: vec![],
+            timeout: Duration::from_secs(10),
+        };
         match infected.scan(&file) {
             ScanResult::Infected { detail, .. } => assert!(detail.contains("FOUND"), "{detail}"),
             other => panic!("{other:?}"),
         }
-        let broken = Scanner { program: script("err.sh", "exit 2"), args: vec![], timeout: Duration::from_secs(10) };
+        let broken = Scanner {
+            program: script("err.sh", "exit 2"),
+            args: vec![],
+            timeout: Duration::from_secs(10),
+        };
         assert!(matches!(broken.scan(&file), ScanResult::Failed { .. }));
-        let slow = Scanner { program: script("slow.sh", "sleep 5"), args: vec![], timeout: Duration::from_millis(200) };
+        let slow = Scanner {
+            program: script("slow.sh", "sleep 5"),
+            args: vec![],
+            timeout: Duration::from_millis(200),
+        };
         assert!(matches!(slow.scan(&file), ScanResult::Failed { .. }));
-        let missing = Scanner { program: dir.path().join("nope"), args: vec![], timeout: Duration::from_secs(1) };
+        let missing = Scanner {
+            program: dir.path().join("nope"),
+            args: vec![],
+            timeout: Duration::from_secs(1),
+        };
         assert!(matches!(missing.scan(&file), ScanResult::Failed { .. }));
-        assert!(!dir.path().join("pwned").exists(), "the path never reached a shell");
+        assert!(
+            !dir.path().join("pwned").exists(),
+            "the path never reached a shell"
+        );
         // Second review: "auto" never finds a scanner through a relative PATH
         // entry (the directory Ligus was started in).
         let cwd = std::env::current_dir().unwrap();
-        let rel = dir.path().strip_prefix(&cwd).map(|p| p.to_path_buf()).unwrap_or_else(|_| {
-            let mut up = PathBuf::new();
-            for _ in cwd.components().skip(1) {
-                up.push("..");
-            }
-            up.join(dir.path().strip_prefix("/").unwrap())
-        });
+        let rel = dir
+            .path()
+            .strip_prefix(&cwd)
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|_| {
+                let mut up = PathBuf::new();
+                for _ in cwd.components().skip(1) {
+                    up.push("..");
+                }
+                up.join(dir.path().strip_prefix("/").unwrap())
+            });
         assert!(rel.is_relative());
         assert!(find_in("clean.sh", rel.as_os_str()).is_none(), "{rel:?}");
-        assert_eq!(find_in("clean.sh", dir.path().as_os_str()), Some(dir.path().join("clean.sh")));
+        assert_eq!(
+            find_in("clean.sh", dir.path().as_os_str()),
+            Some(dir.path().join("clean.sh"))
+        );
     }
 
     /// The scanner runs with a scratch home and none of Ligus's environment.
@@ -1247,15 +1676,29 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("env.sh");
         // `infected` so its first output line comes back as the detail.
-        std::fs::write(&p, "#!/bin/sh\necho \"home=$HOME token=${CARGO_MANIFEST_DIR:-none}\"; exit 1\n").unwrap();
+        std::fs::write(
+            &p,
+            "#!/bin/sh\necho \"home=$HOME token=${CARGO_MANIFEST_DIR:-none}\"; exit 1\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).unwrap();
         let file = dir.path().join("f.bin");
         std::fs::write(&file, b"data").unwrap();
-        let s = Scanner { program: p, args: vec![], timeout: Duration::from_secs(20) };
+        let s = Scanner {
+            program: p,
+            args: vec![],
+            timeout: Duration::from_secs(20),
+        };
         match s.scan(&file) {
             ScanResult::Infected { detail, .. } => {
-                assert!(detail.contains("ligus-scan-"), "its home is a scratch dir: {detail}");
-                assert!(detail.contains("token=none"), "no inherited variables: {detail}");
+                assert!(
+                    detail.contains("ligus-scan-"),
+                    "its home is a scratch dir: {detail}"
+                );
+                assert!(
+                    detail.contains("token=none"),
+                    "no inherited variables: {detail}"
+                );
             }
             other => panic!("{other:?}"),
         }
@@ -1268,14 +1711,37 @@ mod tests {
     #[test]
     fn final_review_scanner_profile_denies_what_the_agent_profile_does() {
         let prof = scanner_profile(Path::new("/tmp/ligus-scan-x"));
-        for want in ["com.apple.runningboard", "com.apple.coreservices.", "(deny appleevent-send)", "com.apple.pasteboard", "(deny signal)", "(deny user-preference-write)", "xpc-service-name-regex", "run/docker.sock"] {
-            assert!(prof.contains(want), "{want} missing from the scanner profile:\n{prof}");
+        for want in [
+            "com.apple.runningboard",
+            "com.apple.coreservices.",
+            "(deny appleevent-send)",
+            "com.apple.pasteboard",
+            "(deny signal)",
+            "(deny user-preference-write)",
+            "xpc-service-name-regex",
+            "run/docker.sock",
+        ] {
+            assert!(
+                prof.contains(want),
+                "{want} missing from the scanner profile:\n{prof}"
+            );
         }
         for d in crate::executor::host_paths().data_dirs {
-            assert!(prof.contains(&crate::executor::canonical(&d).display().to_string()), "data dir {} readable to the scanner", d.display());
+            assert!(
+                prof.contains(&crate::executor::canonical(&d).display().to_string()),
+                "data dir {} readable to the scanner",
+                d.display()
+            );
         }
         if let Some(h) = crate::executor::home_dir() {
-            assert!(prof.contains(&crate::executor::canonical(&h.join(".ssh")).display().to_string()), "~/.ssh readable to the scanner");
+            assert!(
+                prof.contains(
+                    &crate::executor::canonical(&h.join(".ssh"))
+                        .display()
+                        .to_string()
+                ),
+                "~/.ssh readable to the scanner"
+            );
         }
     }
 
@@ -1291,7 +1757,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (cmd, wrapped) = confined_scanner(Path::new("/bin/true"), dir.path());
         assert!(wrapped);
-        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         for d in scanner_denied().into_iter().filter(|d| d.exists()) {
             let d = d.display().to_string();
             assert!(args.windows(2).any(|w| (w[0] == "--tmpfs" && w[1] == d) || (w[0] == "/dev/null" && w[1] == d)), "{d} not masked: {args:?}");
@@ -1310,8 +1779,17 @@ mod tests {
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).unwrap();
         let file = dir.path().join("cached.bin");
         std::fs::write(&file, b"payload").unwrap();
-        match (Scanner { program: p, args: vec![], timeout: Duration::from_secs(20) }).scan(&file) {
-            ScanResult::Infected { detail, .. } => assert!(detail.contains("ligus-scan-") && detail.ends_with("payload"), "{detail}"),
+        match (Scanner {
+            program: p,
+            args: vec![],
+            timeout: Duration::from_secs(20),
+        })
+        .scan(&file)
+        {
+            ScanResult::Infected { detail, .. } => assert!(
+                detail.contains("ligus-scan-") && detail.ends_with("payload"),
+                "{detail}"
+            ),
             other => panic!("{other:?}"),
         }
     }
@@ -1338,12 +1816,21 @@ mod tests {
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).unwrap();
         let file = dir.path().join("f.bin");
         std::fs::write(&file, b"data").unwrap();
-        let s = Scanner { program: p, args: vec![], timeout: Duration::from_secs(20) };
+        let s = Scanner {
+            program: p,
+            args: vec![],
+            timeout: Duration::from_secs(20),
+        };
         match s.scan(&file) {
-            ScanResult::Infected { detail, .. } => assert_eq!(detail, "nonet", "no IP network for the scanner"),
+            ScanResult::Infected { detail, .. } => {
+                assert_eq!(detail, "nonet", "no IP network for the scanner")
+            }
             other => panic!("{other:?}"),
         }
-        assert!(!outside.exists(), "the scanner wrote outside its scratch dir");
+        assert!(
+            !outside.exists(),
+            "the scanner wrote outside its scratch dir"
+        );
         drop(listener);
     }
 }

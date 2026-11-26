@@ -37,9 +37,17 @@ pub struct BlobRenewal {
 impl EventStore {
     /// Every blob of `workspace_id` this device has renewed or seen gone.
     pub fn blob_renewals(&self, workspace_id: Uuid) -> Result<HashMap<String, BlobRenewal>> {
-        let mut stmt = self.conn.prepare("SELECT blob_id, renewed_at, gone_at FROM blob_renewals WHERE workspace_id = ?1")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT blob_id, renewed_at, gone_at FROM blob_renewals WHERE workspace_id = ?1",
+        )?;
         let rows = stmt.query_map(params![workspace_id.to_string()], |r| {
-            Ok((r.get::<_, String>(0)?, BlobRenewal { renewed_at: r.get(1)?, gone_at: r.get(2)? }))
+            Ok((
+                r.get::<_, String>(0)?,
+                BlobRenewal {
+                    renewed_at: r.get(1)?,
+                    gone_at: r.get(2)?,
+                },
+            ))
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -80,8 +88,24 @@ mod tests {
         store.mark_blob_gone(a, "y", 300).unwrap();
         store.mark_blob_gone(a, "y", 400).unwrap();
         let got = store.blob_renewals(a).unwrap();
-        assert_eq!(got["x"], BlobRenewal { renewed_at: Some(200), gone_at: None });
-        assert_eq!(got["y"], BlobRenewal { renewed_at: None, gone_at: Some(300) }, "the first sighting stands");
-        assert!(store.blob_renewals(b).unwrap().is_empty(), "another workspace's blob of the same id is its own");
+        assert_eq!(
+            got["x"],
+            BlobRenewal {
+                renewed_at: Some(200),
+                gone_at: None
+            }
+        );
+        assert_eq!(
+            got["y"],
+            BlobRenewal {
+                renewed_at: None,
+                gone_at: Some(300)
+            },
+            "the first sighting stands"
+        );
+        assert!(
+            store.blob_renewals(b).unwrap().is_empty(),
+            "another workspace's blob of the same id is its own"
+        );
     }
 }

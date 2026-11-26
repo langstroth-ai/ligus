@@ -24,7 +24,10 @@ pub const LOG_CHECK_RETRY_MS: i64 = 2 * 60 * 1000;
 pub enum LogSubject<'a> {
     /// A box admission: the invite the opened admission names, and this
     /// box's device key the admission must be bound to.
-    Box { invite_id: Uuid, device_key: &'a [u8] },
+    Box {
+        invite_id: Uuid,
+        device_key: &'a [u8],
+    },
     /// A computer link: the opened grant (its certificate for this device).
     Computer { grant: &'a OpenedGrant },
 }
@@ -62,7 +65,11 @@ pub trait LogApprovalCheck {
 /// [`LogVerdict::Verified`] or [`LogVerdict::Refused`], or `budget` passed
 /// (then the last `NotYet`: "the approval wasn't found on the workspace
 /// log", exit 1).
-pub async fn retry_log_check<F, Fut>(mut attempt: F, budget: Duration, interval: Duration) -> LogVerdict
+pub async fn retry_log_check<F, Fut>(
+    mut attempt: F,
+    budget: Duration,
+    interval: Duration,
+) -> LogVerdict
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = LogVerdict>,

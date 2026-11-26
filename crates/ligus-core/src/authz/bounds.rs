@@ -24,12 +24,24 @@ pub const MAX_ZONE_PATTERN_GLOBSTARS: usize = 4;
 /// (`AuthzState::lockdown_raisers`). Every raise is a new lockdown: one
 /// reusing an active lockdown's id is no re-raise of it.
 pub fn lockdown_within_bounds(fold: &ChatSession, chat: uuid::Uuid, raiser: &str) -> bool {
-    let raises: std::collections::BTreeSet<uuid::Uuid> =
-        fold.guards.lockdowns_of(chat).iter().map(|l| l.raise_event_id.unwrap_or(l.id)).collect();
+    let raises: std::collections::BTreeSet<uuid::Uuid> = fold
+        .guards
+        .lockdowns_of(chat)
+        .iter()
+        .map(|l| l.raise_event_id.unwrap_or(l.id))
+        .collect();
     if raises.len() >= MAX_LOCKDOWNS_PER_CHAT {
         return false;
     }
-    let mine = raises.iter().filter(|r| fold.authz.lockdown_raisers.get(r).is_some_and(|a| a == raiser)).count();
+    let mine = raises
+        .iter()
+        .filter(|r| {
+            fold.authz
+                .lockdown_raisers
+                .get(r)
+                .is_some_and(|a| a == raiser)
+        })
+        .count();
     mine < MAX_LOCKDOWNS_PER_RAISER
 }
 
@@ -63,26 +75,43 @@ pub fn flow_within_bounds(fold: &ChatSession, record: &FlowRecord) -> bool {
     let f = &fold.flow;
     match record {
         FlowRecord::Zone(z) => {
-            zone_pattern_ok(&z.pattern) && (f.zones.iter().any(|x| x.id == z.id) || f.zones.len() < MAX_ZONES)
+            zone_pattern_ok(&z.pattern)
+                && (f.zones.iter().any(|x| x.id == z.id) || f.zones.len() < MAX_ZONES)
         }
         FlowRecord::Mark(m) => {
             f.marks.contains_key(&m.id)
-                || f.marks.values().filter(|x| x.session_id == m.session_id).count() < MAX_MARKS_PER_CHAT
+                || f.marks
+                    .values()
+                    .filter(|x| x.session_id == m.session_id)
+                    .count()
+                    < MAX_MARKS_PER_CHAT
         }
-        FlowRecord::AgentProfile(p) => f.profiles.contains_key(&p.agent_id) || f.profiles.len() < MAX_AGENT_PROFILES,
+        FlowRecord::AgentProfile(p) => {
+            f.profiles.contains_key(&p.agent_id) || f.profiles.len() < MAX_AGENT_PROFILES
+        }
         FlowRecord::Recruit(r) => {
             f.recruits.iter().any(|x| x.id == r.id)
-                || f.recruits.iter().filter(|x| x.reference == r.reference).count() < MAX_RECRUITS_PER_PROPOSAL
+                || f.recruits
+                    .iter()
+                    .filter(|x| x.reference == r.reference)
+                    .count()
+                    < MAX_RECRUITS_PER_PROPOSAL
         }
         FlowRecord::HumanAsk(a) => {
             use crate::flow::{MAX_ASK_OPTIONS, MAX_ASK_OPTION_CHARS, MAX_ASK_QUESTION_CHARS};
             a.question.chars().count() <= MAX_ASK_QUESTION_CHARS
                 && a.options.len() <= MAX_ASK_OPTIONS
-                && a.options.iter().all(|o| o.chars().count() <= MAX_ASK_OPTION_CHARS)
+                && a.options
+                    .iter()
+                    .all(|o| o.chars().count() <= MAX_ASK_OPTION_CHARS)
         }
         FlowRecord::HumanAnswered(a) => {
             a.answer.chars().count() <= crate::flow::MAX_ANSWER_CHARS
-                && a.option_index.is_none_or(|i| f.asks.get(&a.ask_id).is_some_and(|s| (i as usize) < s.ask.options.len()))
+                && a.option_index.is_none_or(|i| {
+                    f.asks
+                        .get(&a.ask_id)
+                        .is_some_and(|s| (i as usize) < s.ask.options.len())
+                })
         }
         FlowRecord::TurnToolSummary(t) => t.calls.len() <= crate::flow::MAX_SUMMARY_TOOLS,
         _ => true,

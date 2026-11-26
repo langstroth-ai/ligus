@@ -12,7 +12,9 @@
 use ligus_core::flow::directives::{MarkDirective, UnmarkDirective};
 use ligus_core::flow::{self, ContextParcel, FlowRecord, HandoffCard, WorkspaceMark};
 use ligus_core::proposal_sets::ProposalSet;
-use ligus_core::{ActionProposal, ChatSession, MessageRole, ProposalKind, ProposedCommand, Timestamp};
+use ligus_core::{
+    ActionProposal, ChatSession, MessageRole, ProposalKind, ProposedCommand, Timestamp,
+};
 use uuid::Uuid;
 
 use crate::directives::{ParsedAlternatives, ParsedAssessment};
@@ -57,7 +59,9 @@ impl EffectCtx {
     /// responder is an agent (an agent files as itself, never under a
     /// person's name: A-6), else the responder's label (the primary).
     pub fn author_id(&self) -> String {
-        self.agent_id.map(|a| a.to_string()).unwrap_or_else(|| self.author.clone())
+        self.agent_id
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| self.author.clone())
     }
 }
 
@@ -68,7 +72,13 @@ fn err(e: impl std::fmt::Display) -> String {
 /// Agent text quoted in a system note the host signs: one line, at most
 /// `max` characters, so it can't add lines that read as the host's own.
 pub fn quote_line(t: &str, max: usize) -> String {
-    let one: String = t.split_whitespace().collect::<Vec<_>>().join(" ").chars().filter(|c| !c.is_control()).collect();
+    let one: String = t
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
     if one.chars().count() > max {
         let mut cut: String = one.chars().take(max).collect();
         cut.push('\u{2026}');
@@ -98,7 +108,11 @@ pub fn propose(svc: &mut ChatService, ctx: &EffectCtx, np: NewProposal) -> Resul
     if title.is_empty() {
         return Err("a proposal needs a title".into());
     }
-    let kind = np.kind.unwrap_or(if np.command.is_some() { ProposalKind::Command } else { ProposalKind::Decision });
+    let kind = np.kind.unwrap_or(if np.command.is_some() {
+        ProposalKind::Command
+    } else {
+        ProposalKind::Decision
+    });
     if let Some(c) = &np.command {
         c.validate()?;
         if kind != ProposalKind::Command {
@@ -111,35 +125,67 @@ pub fn propose(svc: &mut ChatService, ctx: &EffectCtx, np: NewProposal) -> Resul
     p.required_approvals = np.required_approvals.map_or(default, |r| r.max(default));
     p.producing_agent_id = ctx.agent_id;
     p.command = np.command;
-    p.task_class = np.task_class.filter(|c| !c.trim().is_empty()).map(|c| c.trim().chars().take(40).collect());
+    p.task_class = np
+        .task_class
+        .filter(|c| !c.trim().is_empty())
+        .map(|c| c.trim().chars().take(40).collect());
     let id = p.id;
-    svc.as_agent(ctx.agent_id, |svc| svc.upsert_proposal(ctx.session_id, ctx.workspace_id, p)).map_err(err)?;
+    svc.as_agent(ctx.agent_id, |svc| {
+        svc.upsert_proposal(ctx.session_id, ctx.workspace_id, p)
+    })
+    .map_err(err)?;
     let _ = svc.post_system_note(
         ctx.session_id,
         ctx.workspace_id,
-        format!("\u{1f4dd} {} proposed \u{201c}{}\u{201d}. Review and approve it in the Review pane.", ctx.author, quote_line(title, 200)),
+        format!(
+            "\u{1f4dd} {} proposed \u{201c}{}\u{201d}. Review and approve it in the Review pane.",
+            ctx.author,
+            quote_line(title, 200)
+        ),
     );
     Ok(id)
 }
 
 /// React to a message as the agent.
-pub fn react(svc: &mut ChatService, ctx: &EffectCtx, message_id: Uuid, emoji: &str) -> Result<(), String> {
+pub fn react(
+    svc: &mut ChatService,
+    ctx: &EffectCtx,
+    message_id: Uuid,
+    emoji: &str,
+) -> Result<(), String> {
     let emoji = emoji.trim();
     if emoji.is_empty() || emoji.chars().count() > 8 {
         return Err("one emoji".into());
     }
-    let id = ctx.agent_id.map(|a| a.to_string()).unwrap_or_else(|| ctx.author.clone());
-    let actor = ligus_core::ActorIdentity::new(id, ctx.author.as_str(), ligus_core::ActorKind::Agent);
-    svc.as_agent(ctx.agent_id, |svc| svc.add_reaction(ctx.session_id, ctx.workspace_id, message_id, emoji, &actor)).map_err(err)
+    let id = ctx
+        .agent_id
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| ctx.author.clone());
+    let actor =
+        ligus_core::ActorIdentity::new(id, ctx.author.as_str(), ligus_core::ActorKind::Agent);
+    svc.as_agent(ctx.agent_id, |svc| {
+        svc.add_reaction(ctx.session_id, ctx.workspace_id, message_id, emoji, &actor)
+    })
+    .map_err(err)
 }
 
 /// Validate and file a workflow definition as a proposal.
 pub fn file_workflow(svc: &mut ChatService, ctx: &EffectCtx, json: &str) -> Result<String, String> {
-    let session = svc.load_in(ctx.workspace_id, ctx.session_id).map_err(err)?.ok_or("unknown chat")?;
+    let session = svc
+        .load_in(ctx.workspace_id, ctx.session_id)
+        .map_err(err)?
+        .ok_or("unknown chat")?;
     let def = crate::workflow_directive::definition_from_directive(json, &session)?;
     let name = def.name.clone();
     svc.as_agent(ctx.agent_id, |svc| {
-        crate::workflow_directive::file_workflow_proposal(svc, &session, ctx.workspace_id, def, &ctx.author_id(), ctx.agent_id)
+        crate::workflow_directive::file_workflow_proposal(
+            svc,
+            &session,
+            ctx.workspace_id,
+            def,
+            &ctx.author_id(),
+            ctx.agent_id,
+        )
     })?;
     let _ = svc.post_system_note(
         ctx.session_id,
@@ -157,14 +203,23 @@ pub fn open_alternatives(
     trigger_message_id: Option<Uuid>,
     base_commit: Option<String>,
 ) -> Result<Uuid, String> {
-    let options: Vec<_> = alts.options.iter().filter(|o| !o.title.trim().is_empty()).take(ligus_core::proposal_sets::MAX_ALTERNATIVES).collect();
+    let options: Vec<_> = alts
+        .options
+        .iter()
+        .filter(|o| !o.title.trim().is_empty())
+        .take(ligus_core::proposal_sets::MAX_ALTERNATIVES)
+        .collect();
     if options.len() < 2 {
         return Err("a proposal set needs at least two options".into());
     }
     let proposals: Vec<ActionProposal> = options
         .iter()
         .map(|o| {
-            let mut p = ActionProposal::new(o.title.trim(), o.kind.unwrap_or(ProposalKind::Decision), ctx.author_id());
+            let mut p = ActionProposal::new(
+                o.title.trim(),
+                o.kind.unwrap_or(ProposalKind::Decision),
+                ctx.author_id(),
+            );
             p.body = o.body.clone();
             p.producing_agent_id = ctx.agent_id;
             p
@@ -181,7 +236,11 @@ pub fn open_alternatives(
         set.agent_quorum = k.max(set.agent_quorum);
     }
     let n = proposals.len();
-    let set = svc.as_agent(ctx.agent_id, |svc| svc.open_proposal_set(ctx.session_id, ctx.workspace_id, set, proposals)).map_err(err)?;
+    let set = svc
+        .as_agent(ctx.agent_id, |svc| {
+            svc.open_proposal_set(ctx.session_id, ctx.workspace_id, set, proposals)
+        })
+        .map_err(err)?;
     let _ = svc.post_system_note(
         ctx.session_id,
         ctx.workspace_id,
@@ -196,10 +255,19 @@ pub fn open_alternatives(
 
 /// Resolve an assessment target: a proposal id (optionally within `set`),
 /// or a letter ("B") when exactly one set is open (or `set` is given).
-pub fn resolve_alternative(session: &ChatSession, set: Option<Uuid>, target: &str) -> Option<(Uuid, Uuid)> {
+pub fn resolve_alternative(
+    session: &ChatSession,
+    set: Option<Uuid>,
+    target: &str,
+) -> Option<(Uuid, Uuid)> {
     let t = target.trim();
     if let Ok(id) = Uuid::parse_str(t) {
-        return session.proposal_sets.iter().filter(|s| set.is_none_or(|x| x == s.id)).find(|s| s.contains(id)).map(|s| (s.id, id));
+        return session
+            .proposal_sets
+            .iter()
+            .filter(|s| set.is_none_or(|x| x == s.id))
+            .find(|s| s.contains(id))
+            .map(|s| (s.id, id));
     }
     let chosen = match set {
         Some(id) => session.proposal_sets.iter().find(|s| s.id == id)?,
@@ -221,11 +289,24 @@ pub fn resolve_alternative(session: &ChatSession, set: Option<Uuid>, target: &st
 
 /// Record one scout assessment. The scout is the responder, never the
 /// payload. Returns `(set, proposal)` when the fold kept it.
-pub fn assess(svc: &mut ChatService, ctx: &EffectCtx, set: Option<Uuid>, a: &ParsedAssessment) -> Result<(Uuid, Uuid), String> {
-    let session = svc.load_in(ctx.workspace_id, ctx.session_id).map_err(err)?.ok_or("unknown chat")?;
-    let (set_id, pid) = resolve_alternative(&session, set, &a.alternative).ok_or("no such alternative in an open proposal set")?;
+pub fn assess(
+    svc: &mut ChatService,
+    ctx: &EffectCtx,
+    set: Option<Uuid>,
+    a: &ParsedAssessment,
+) -> Result<(Uuid, Uuid), String> {
+    let session = svc
+        .load_in(ctx.workspace_id, ctx.session_id)
+        .map_err(err)?
+        .ok_or("unknown chat")?;
+    let (set_id, pid) = resolve_alternative(&session, set, &a.alternative)
+        .ok_or("no such alternative in an open proposal set")?;
     let runtime = match ctx.agent_id {
-        Some(id) => session.workspace_agents.iter().find(|x| x.id == id).map(|x| x.runtime_id.clone()),
+        Some(id) => session
+            .workspace_agents
+            .iter()
+            .find(|x| x.id == id)
+            .map(|x| x.runtime_id.clone()),
         None => Some(session.runtime_id.clone()),
     }
     .unwrap_or_default();
@@ -241,7 +322,9 @@ pub fn assess(svc: &mut ChatService, ctx: &EffectCtx, set: Option<Uuid>, a: &Par
         attempt: 0,
         created_at: Timestamp::now(),
     };
-    match svc.as_agent(ctx.agent_id, |svc| svc.post_scout_assessment(ctx.session_id, ctx.workspace_id, set_id, assessment)) {
+    match svc.as_agent(ctx.agent_id, |svc| {
+        svc.post_scout_assessment(ctx.session_id, ctx.workspace_id, set_id, assessment)
+    }) {
         Ok(Some(_)) => Ok((set_id, pid)),
         Ok(None) => Err("the alternative is frozen or the set is closed".into()),
         Err(e) => Err(err(e)),
@@ -251,7 +334,11 @@ pub fn assess(svc: &mut ChatService, ctx: &EffectCtx, set: Option<Uuid>, a: &Par
 /// Leave a workspace mark.
 pub fn mark(svc: &mut ChatService, ctx: &EffectCtx, m: &MarkDirective) -> Result<Uuid, String> {
     let mark_path = std::path::Path::new(&m.path);
-    if m.path.trim().is_empty() || m.path.len() > 1024 || mark_path.is_absolute() || mark_path.has_root() {
+    if m.path.trim().is_empty()
+        || m.path.len() > 1024
+        || mark_path.is_absolute()
+        || mark_path.has_root()
+    {
         return Err("a mark needs a workspace-relative path".into());
     }
     let now = flow::now_ms();
@@ -269,22 +356,36 @@ pub fn mark(svc: &mut ChatService, ctx: &EffectCtx, m: &MarkDirective) -> Result
         expires_ms: m.kind.default_ttl_ms().map(|t| now + t),
     };
     let id = mark.id;
-    svc.as_agent(ctx.agent_id, |svc| svc.record_flow(ctx.session_id, ctx.workspace_id, FlowRecord::Mark(mark))).map_err(err)?;
+    svc.as_agent(ctx.agent_id, |svc| {
+        svc.record_flow(ctx.session_id, ctx.workspace_id, FlowRecord::Mark(mark))
+    })
+    .map_err(err)?;
     Ok(id)
 }
 
 /// Clear the agent's own marks matching `u`. Returns how many.
-pub fn unmark(svc: &mut ChatService, ctx: &EffectCtx, u: &UnmarkDirective) -> Result<usize, String> {
+pub fn unmark(
+    svc: &mut ChatService,
+    ctx: &EffectCtx,
+    u: &UnmarkDirective,
+) -> Result<usize, String> {
     let me = ctx.agent_key();
     let config = svc.flow_config(ctx.workspace_id).map_err(err)?;
     let mut n = 0;
     for m in config.marks.values().filter(|m| m.agent == me) {
         let hit = u.id == Some(m.id)
-            || (u.path.as_deref().is_some_and(|p| m.covers(p, None)) && u.kind.is_none_or(|k| k == m.kind))
+            || (u.path.as_deref().is_some_and(|p| m.covers(p, None))
+                && u.kind.is_none_or(|k| k == m.kind))
             || (u.id.is_none() && u.path.is_none() && u.kind == Some(m.kind));
         if hit {
-            svc.as_agent(ctx.agent_id, |svc| svc.record_flow(ctx.session_id, ctx.workspace_id, FlowRecord::MarkCleared { mark_id: m.id }))
-                .map_err(err)?;
+            svc.as_agent(ctx.agent_id, |svc| {
+                svc.record_flow(
+                    ctx.session_id,
+                    ctx.workspace_id,
+                    FlowRecord::MarkCleared { mark_id: m.id },
+                )
+            })
+            .map_err(err)?;
             n += 1;
         }
     }
@@ -302,24 +403,44 @@ pub struct Handoff {
 /// Record a hand-off card to `to` (an agent or a person, by name) with a
 /// parcel. A hand-off to an agent queues its turn (`pending_turns`); the host
 /// starts it immediately.
-pub fn handoff(svc: &mut ChatService, ctx: &EffectCtx, to: &str, parcel: ContextParcel) -> Result<Handoff, String> {
-    let session = svc.load_in(ctx.workspace_id, ctx.session_id).map_err(err)?.ok_or("unknown chat")?;
+pub fn handoff(
+    svc: &mut ChatService,
+    ctx: &EffectCtx,
+    to: &str,
+    parcel: ContextParcel,
+) -> Result<Handoff, String> {
+    let session = svc
+        .load_in(ctx.workspace_id, ctx.session_id)
+        .map_err(err)?
+        .ok_or("unknown chat")?;
     let name = to.trim().trim_start_matches('@');
     if name.is_empty() {
         return Err("hand off to whom?".into());
     }
-    let agent = session.workspace_agents.iter().find(|a| a.name.eq_ignore_ascii_case(name));
-    let person = session.members.iter().find(|m| m.actor.display_name.eq_ignore_ascii_case(name) || m.id == name);
+    let agent = session
+        .workspace_agents
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case(name));
+    let person = session
+        .members
+        .iter()
+        .find(|m| m.actor.display_name.eq_ignore_ascii_case(name) || m.id == name);
     let (to_key, to_name, agent_id) = match (agent, person) {
         (Some(a), _) => (flow::agent_key(Some(a.id)), a.name.clone(), Some(a.id)),
-        (None, Some(p)) => (format!("member:{}", p.id), p.actor.display_name.clone(), None),
+        (None, Some(p)) => (
+            format!("member:{}", p.id),
+            p.actor.display_name.clone(),
+            None,
+        ),
         (None, None) => return Err(format!("no agent or person named {name:?} in this chat")),
     };
     if agent_id.is_some() && agent_id == ctx.agent_id {
         return Err("an agent can't hand off to itself".into());
     }
     let parcel = parcel.bounded();
-    let reply = ctx.message_id.and_then(|id| session.messages.iter().find(|m| m.id == id));
+    let reply = ctx
+        .message_id
+        .and_then(|id| session.messages.iter().find(|m| m.id == id));
     let card = HandoffCard {
         id: Uuid::new_v4(),
         from: ctx.agent_key(),
@@ -327,7 +448,10 @@ pub fn handoff(svc: &mut ChatService, ctx: &EffectCtx, to: &str, parcel: Context
         from_name: ctx.author.clone(),
         to_name: to_name.clone(),
         message_id: ctx.message_id,
-        task: reply.map(|r| flow::handoff::task_line(&r.body, &to_name)).filter(|t| !t.is_empty()).unwrap_or_else(|| parcel.notes.clone()),
+        task: reply
+            .map(|r| flow::handoff::task_line(&r.body, &to_name))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| parcel.notes.clone()),
         task_class: String::new(),
         branch: format!("ligus/chat/{}", ctx.session_id),
         files: parcel.key_files.clone(),
@@ -336,15 +460,35 @@ pub fn handoff(svc: &mut ChatService, ctx: &EffectCtx, to: &str, parcel: Context
         parcel: (!parcel.is_empty()).then_some(parcel),
         at_ms: flow::now_ms(),
     };
-    svc.as_agent(ctx.agent_id, |svc| svc.record_flow(ctx.session_id, ctx.workspace_id, FlowRecord::Handoff(card.clone()))).map_err(err)?;
+    svc.as_agent(ctx.agent_id, |svc| {
+        svc.record_flow(
+            ctx.session_id,
+            ctx.workspace_id,
+            FlowRecord::Handoff(card.clone()),
+        )
+    })
+    .map_err(err)?;
     if agent_id.is_none() {
-        let _ = svc.post_system_note(ctx.session_id, ctx.workspace_id, format!("\u{1f91d} {} handed this to {to_name}.", ctx.author));
+        let _ = svc.post_system_note(
+            ctx.session_id,
+            ctx.workspace_id,
+            format!("\u{1f91d} {} handed this to {to_name}.", ctx.author),
+        );
     }
-    Ok(Handoff { card, agent: agent_id })
+    Ok(Handoff {
+        card,
+        agent: agent_id,
+    })
 }
 
 /// The trigger of a turn: the last human message before `reply`.
 pub fn trigger_of(session: &ChatSession, reply: Option<Uuid>) -> Option<Uuid> {
-    let upto = reply.and_then(|r| session.messages.iter().position(|m| m.id == r)).unwrap_or(session.messages.len());
-    session.messages[..upto].iter().rev().find(|m| m.role == MessageRole::User).map(|m| m.id)
+    let upto = reply
+        .and_then(|r| session.messages.iter().position(|m| m.id == r))
+        .unwrap_or(session.messages.len());
+    session.messages[..upto]
+        .iter()
+        .rev()
+        .find(|m| m.role == MessageRole::User)
+        .map(|m| m.id)
 }

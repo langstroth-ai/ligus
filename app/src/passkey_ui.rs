@@ -25,7 +25,9 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ligus_core::presence::{self, b64url, returned_challenge, PasskeyCredential, PresenceAssertion, RecoveryKey};
+use ligus_core::presence::{
+    self, b64url, returned_challenge, PasskeyCredential, PresenceAssertion, RecoveryKey,
+};
 use ligus_runtime::chat_service::{PresenceProvider, PresenceRequest};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -76,7 +78,9 @@ struct HandOff {
 fn urlencode(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
             _ => format!("%{b:02X}"),
         })
         .collect()
@@ -91,7 +95,11 @@ fn urldecode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        match (b[i], b.get(i + 1).copied().and_then(hex), b.get(i + 2).copied().and_then(hex)) {
+        match (
+            b[i],
+            b.get(i + 1).copied().and_then(hex),
+            b.get(i + 2).copied().and_then(hex),
+        ) {
             (b'%', Some(hi), Some(lo)) => {
                 out.push(hi << 4 | lo);
                 i += 3;
@@ -106,7 +114,12 @@ fn urldecode(s: &str) -> String {
 }
 
 /// Run one ceremony in the system browser and wait for its result.
-fn hand_off(app: &AppHandle, page_url: &str, prompt: PresencePrompt, fragment: String) -> Result<Outcome, String> {
+fn hand_off(
+    app: &AppHandle,
+    page_url: &str,
+    prompt: PresencePrompt,
+    fragment: String,
+) -> Result<Outcome, String> {
     // A `get` can be answered by the recovery key the person enters for
     // this request (bound to the digest the sheet shows).
     let recovery_for = (prompt.op == "get").then(|| prompt.digest_short.clone());
@@ -117,10 +130,17 @@ fn hand_off(app: &AppHandle, page_url: &str, prompt: PresencePrompt, fragment: S
     let nonce = b64url(uuid::Uuid::new_v4().as_bytes());
     let url = format!("{page_url}#{fragment}&p={port}&n={nonce}");
     SIGNALS.reset();
-    let _ = app.emit("presence://requested", &PresencePrompt { via: "browser".into(), ..prompt });
+    let _ = app.emit(
+        "presence://requested",
+        &PresencePrompt {
+            via: "browser".into(),
+            ..prompt
+        },
+    );
     // The nonce goes through a private redirect page, never the command line.
     let dir = app.state::<AppState>().data_dir.join("presence");
-    let page = redirect_page(&dir, &url).map_err(|e| format!("couldn't prepare the passkey page: {e}"))?;
+    let page =
+        redirect_page(&dir, &url).map_err(|e| format!("couldn't prepare the passkey page: {e}"))?;
     let opened = crate::open_url_in_browser(&page.to_string_lossy());
     if let Err(e) = opened {
         let _ = std::fs::remove_file(&page);
@@ -145,7 +165,9 @@ fn hand_off(app: &AppHandle, page_url: &str, prompt: PresencePrompt, fragment: S
                     break Ok(Outcome::Browser(r));
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100))
+            }
             Err(e) => break Err(e.to_string()),
         }
     };
@@ -162,7 +184,9 @@ fn read_submission(mut stream: std::net::TcpStream, nonce: &str) -> Option<HandO
     let body = match parse_submission(stream.try_clone().ok()?, nonce) {
         Ok(body) => body,
         Err(()) => {
-            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
             return None;
         }
     };
@@ -199,7 +223,11 @@ const MAX_BODY: usize = 64 * 1024;
 /// One line of at most [`MAX_LINE`] bytes, ending in `\n`.
 fn capped_line(reader: &mut impl BufRead) -> Result<String, ()> {
     let mut buf = Vec::new();
-    reader.by_ref().take(MAX_LINE).read_until(b'\n', &mut buf).map_err(|_| ())?;
+    reader
+        .by_ref()
+        .take(MAX_LINE)
+        .read_until(b'\n', &mut buf)
+        .map_err(|_| ())?;
     if buf.last() != Some(&b'\n') {
         return Err(()); // too long, or the connection ended mid-line
     }
@@ -250,7 +278,10 @@ fn redirect_page(dir: &std::path::Path, url: &str) -> std::io::Result<std::path:
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     }
     let target = serde_json::to_string(url).map_err(std::io::Error::other)?;
-    let attr = url.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
+    let attr = url
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;");
     let page = format!(
         "<!doctype html><meta charset=utf-8><meta name=referrer content=no-referrer>\
          <meta http-equiv=refresh content=\"0;url={attr}\"><title>Ligus</title>\
@@ -273,7 +304,13 @@ impl crate::passkey_native::Events for SheetEvents<'_> {
             crate::passkey_native::Stage::Native => "native",
             crate::passkey_native::Stage::Dismissed => "dismissed",
         };
-        let _ = self.app.emit("presence://requested", &PresencePrompt { via: via.into(), ..self.prompt.clone() });
+        let _ = self.app.emit(
+            "presence://requested",
+            &PresencePrompt {
+                via: via.into(),
+                ..self.prompt.clone()
+            },
+        );
     }
     fn done(&self, ok: bool) {
         let _ = self.app.emit("presence://done", ok);
@@ -283,14 +320,32 @@ impl crate::passkey_native::Events for SheetEvents<'_> {
 /// A presence `get` over `req.challenge`: natively when this OS serves the
 /// workspace's RP, else (and on any fallback) through the browser.
 pub fn presence_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAssertion, String> {
-    let prompt = PresencePrompt { kind: req.kind.clone(), summary: req.summary.clone(), digest_short: req.digest_short.clone(), op: "get".into(), via: String::new() };
+    let prompt = PresencePrompt {
+        kind: req.kind.clone(),
+        summary: req.summary.clone(),
+        digest_short: req.digest_short.clone(),
+        op: "get".into(),
+        via: String::new(),
+    };
     let events = SheetEvents { app, prompt };
-    crate::passkey_native::run_get(crate::passkey_native::platform(app), req, &SIGNALS, WAIT, &events, || browser_get(app, req))
+    crate::passkey_native::run_get(
+        crate::passkey_native::platform(app),
+        req,
+        &SIGNALS,
+        WAIT,
+        &events,
+        || browser_get(app, req),
+    )
 }
 
 /// A `create` for a new passkey, natively when this OS serves the
 /// workspace's RP, else through the browser.
-fn presence_create(app: &AppHandle, req: &PresenceRequest, user_id: &[u8], user_name: &str) -> Result<PresenceAssertion, String> {
+fn presence_create(
+    app: &AppHandle,
+    req: &PresenceRequest,
+    user_id: &[u8],
+    user_name: &str,
+) -> Result<PresenceAssertion, String> {
     let prompt = PresencePrompt {
         kind: "passkeyRegistered".into(),
         summary: "Create a Ligus passkey".into(),
@@ -299,7 +354,16 @@ fn presence_create(app: &AppHandle, req: &PresenceRequest, user_id: &[u8], user_
         via: String::new(),
     };
     let events = SheetEvents { app, prompt };
-    crate::passkey_native::run_create(crate::passkey_native::platform(app), req, user_id, user_name, &SIGNALS, WAIT, &events, || browser_create(app, req, user_id, user_name))
+    crate::passkey_native::run_create(
+        crate::passkey_native::platform(app),
+        req,
+        user_id,
+        user_name,
+        &SIGNALS,
+        WAIT,
+        &events,
+        || browser_create(app, req, user_id, user_name),
+    )
 }
 
 /// `navigator.credentials.get` over `challenge` in the browser.
@@ -312,7 +376,13 @@ fn browser_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAsserti
         urlencode(&req.kind),
         urlencode(&req.summary),
     );
-    let prompt = PresencePrompt { kind: req.kind.clone(), summary: req.summary.clone(), digest_short: req.digest_short.clone(), op: "get".into(), via: "browser".into() };
+    let prompt = PresencePrompt {
+        kind: req.kind.clone(),
+        summary: req.summary.clone(),
+        digest_short: req.digest_short.clone(),
+        op: "get".into(),
+        via: "browser".into(),
+    };
     let r = match hand_off(app, &req.policy.page_url(), prompt, fragment)? {
         Outcome::Browser(r) => r,
         // The recovery key signs the very challenge requested, here.
@@ -331,7 +401,12 @@ fn browser_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAsserti
 
 /// `navigator.credentials.create` over `challenge`: the new credential and
 /// its proof (the attestation object rides in `authenticator_data`).
-fn browser_create(app: &AppHandle, req: &PresenceRequest, user_id: &[u8], user_name: &str) -> Result<PresenceAssertion, String> {
+fn browser_create(
+    app: &AppHandle,
+    req: &PresenceRequest,
+    user_id: &[u8],
+    user_name: &str,
+) -> Result<PresenceAssertion, String> {
     let fragment = format!(
         "op=create&rp={}&c={}&u={}&un={}&x={}",
         urlencode(&req.policy.rp_id),
@@ -402,7 +477,10 @@ pub struct SecurityStatusDto {
 /// the key version.
 #[tauri::command]
 pub async fn security_status(ligus_app: tauri::AppHandle) -> Result<SecurityStatusDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| security_status_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+    crate::off_main(ligus_app, move |ligus_app| {
+        security_status_sync(tauri::Manager::state::<AppState>(ligus_app))
+    })
+    .await
 }
 
 pub fn security_status_sync(state: State<'_, AppState>) -> Result<SecurityStatusDto, String> {
@@ -413,13 +491,27 @@ pub fn security_status_sync(state: State<'_, AppState>) -> Result<SecurityStatus
         .map(|a| svc.passkeys_of(ws, a).unwrap_or_default())
         .unwrap_or_default()
         .into_iter()
-        .map(|(credential_id, recovery)| PasskeyDto { credential_id, recovery })
+        .map(|(credential_id, recovery)| PasskeyDto {
+            credential_id,
+            recovery,
+        })
         .collect();
-    let cfg = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).ok().flatten();
-    let rules = cfg.as_ref().map(|c| c.authz.rules).unwrap_or(ligus_core::authz::RULES_GENESIS);
-    let (_, timeline) = svc.store().load_config(ws, None, None).map_err(|e| e.to_string())?;
+    let cfg = svc
+        .load_in(ws, ligus_core::workspace_config_session_id(ws))
+        .ok()
+        .flatten();
+    let rules = cfg
+        .as_ref()
+        .map(|c| c.authz.rules)
+        .unwrap_or(ligus_core::authz::RULES_GENESIS);
+    let (_, timeline) = svc
+        .store()
+        .load_config(ws, None, None)
+        .map_err(|e| e.to_string())?;
     let me = svc.author().id.clone();
-    let is_owner = cfg.as_ref().is_some_and(|c| c.role_of(&me) == ligus_core::WorkspaceRole::Owner);
+    let is_owner = cfg
+        .as_ref()
+        .is_some_and(|c| c.role_of(&me) == ligus_core::WorkspaceRole::Owner);
     let rules3_gaps = if rules < ligus_core::authz::RULES_V3 {
         let name_of = |account: uuid::Uuid| {
             cfg.as_ref()
@@ -433,7 +525,10 @@ pub fn security_status_sync(state: State<'_, AppState>) -> Result<SecurityStatus
             .map(|g| {
                 let kind = if g.phone { "phone" } else { "device" };
                 let short = &g.device_id.to_string()[..8];
-                format!("{}'s {kind} {short} would stop counting until it confirms", name_of(g.account_id))
+                format!(
+                    "{}'s {kind} {short} would stop counting until it confirms",
+                    name_of(g.account_id)
+                )
             })
             .collect()
     } else {
@@ -445,7 +540,10 @@ pub fn security_status_sync(state: State<'_, AppState>) -> Result<SecurityStatus
         passkeys,
         rules,
         key_version: timeline.current().key_epochs.head_version(),
-        secret_backend: ligus_runtime::secret_store::for_data_dir(&state.data_dir).backend().as_str().into(),
+        secret_backend: ligus_runtime::secret_store::for_data_dir(&state.data_dir)
+            .backend()
+            .as_str()
+            .into(),
         device_confirmed: svc.device_confirmed(ws).unwrap_or(false),
     })
 }
@@ -475,9 +573,19 @@ pub async fn passkey_register(app: AppHandle, label: String) -> Result<(), Strin
         let ws = state.active_workspace_id();
         let (account, name, existing, policy) = {
             let svc = state.service.lock().unwrap();
-            let account = svc.author().account_id.ok_or("this device has no account")?;
-            let existing: Vec<String> = svc.passkeys_of(ws, account).map_err(|e| e.to_string())?.into_iter().map(|(id, _)| id).collect();
-            let policy = svc.workspace_presence_policy(ws).map_err(|e| e.to_string())?;
+            let account = svc
+                .author()
+                .account_id
+                .ok_or("this device has no account")?;
+            let existing: Vec<String> = svc
+                .passkeys_of(ws, account)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            let policy = svc
+                .workspace_presence_policy(ws)
+                .map_err(|e| e.to_string())?;
             (account, svc.author().display_name.clone(), existing, policy)
         };
         // 1. Create the key (its challenge only binds this ceremony).
@@ -493,8 +601,15 @@ pub async fn passkey_register(app: AppHandle, label: String) -> Result<(), Strin
             summary: "Create a Ligus passkey".into(),
             policy: policy.clone(),
         };
-        let att = presence_create(&app, &create_req, &crate::passkey_native::user_handle(account, ws), &name)?;
-        let (id, alg, pk) = policy.with(|p| presence::verify_create(&att, &challenge, p)).map_err(|e| e.0)?;
+        let att = presence_create(
+            &app,
+            &create_req,
+            &crate::passkey_native::user_handle(account, ws),
+            &name,
+        )?;
+        let (id, alg, pk) = policy
+            .with(|p| presence::verify_create(&att, &challenge, p))
+            .map_err(|e| e.0)?;
         let new_id = b64url(&id);
         let credential = PasskeyCredential {
             account_id: account,
@@ -531,14 +646,23 @@ pub async fn recovery_key_create(app: AppHandle) -> Result<String, String> {
         let state = app.state::<AppState>();
         let ws = state.active_workspace_id();
         let mut svc = state.service.lock().unwrap();
-        let account = svc.author().account_id.ok_or("this device has no account")?;
-        if svc.passkeys_of(ws, account).map_err(|e| e.to_string())?.is_empty() {
+        let account = svc
+            .author()
+            .account_id
+            .ok_or("this device has no account")?;
+        if svc
+            .passkeys_of(ws, account)
+            .map_err(|e| e.to_string())?
+            .is_empty()
+        {
             return Err("register a passkey first".to_string());
         }
         let key = RecoveryKey::generate().map_err(|e| e.0)?;
         let app2 = app.clone();
-        svc.register_passkey(ws, key.credential(account, "Recovery key"), &move |req| presence_get(&app2, req))
-            .map_err(|e| e.to_string())?;
+        svc.register_passkey(ws, key.credential(account, "Recovery key"), &move |req| {
+            presence_get(&app2, req)
+        })
+        .map_err(|e| e.to_string())?;
         Ok(key.words())
     })
     .await
@@ -548,12 +672,18 @@ pub async fn recovery_key_create(app: AppHandle) -> Result<String, String> {
 /// Turn on (or set) the workspace rules version; v2 needs a passkey and a
 /// recovery key first, and the switch itself is confirmed with a passkey.
 #[tauri::command]
-pub async fn workspace_rules_set(app: AppHandle, workspace_id: String, version: u32) -> Result<(), String> {
+pub async fn workspace_rules_set(
+    app: AppHandle,
+    workspace_id: String,
+    version: u32,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let ws = crate::shown_workspace(&state, &workspace_id)?;
         let mut svc = state.service.lock().unwrap();
-        svc.set_workspace_rules(ws, version).map(|_| ()).map_err(|e| e.to_string())
+        svc.set_workspace_rules(ws, version)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -562,13 +692,22 @@ pub async fn workspace_rules_set(app: AppHandle, workspace_id: String, version: 
 /// Remove one of this account's passkeys (or the recovery key) on the
 /// active workspace.
 #[tauri::command]
-pub async fn passkey_remove(app: AppHandle, workspace_id: String, credential_id: String) -> Result<(), String> {
+pub async fn passkey_remove(
+    app: AppHandle,
+    workspace_id: String,
+    credential_id: String,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let ws = crate::shown_workspace(&state, &workspace_id)?;
         let mut svc = state.service.lock().unwrap();
-        let account = svc.author().account_id.ok_or("this device has no account")?;
-        svc.remove_passkey(ws, account, &credential_id).map(|_| ()).map_err(|e| e.to_string())
+        let account = svc
+            .author()
+            .account_id
+            .ok_or("this device has no account")?;
+        svc.remove_passkey(ws, account, &credential_id)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -578,12 +717,18 @@ pub async fn passkey_remove(app: AppHandle, workspace_id: String, credential_id:
 /// again (rules v2): an Admin's re-grant of their role, confirmed with this
 /// account's passkey.
 #[tauri::command]
-pub async fn passkey_regrant(app: AppHandle, workspace_id: String, member_id: String) -> Result<(), String> {
+pub async fn passkey_regrant(
+    app: AppHandle,
+    workspace_id: String,
+    member_id: String,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let ws = crate::shown_workspace(&state, &workspace_id)?;
         let mut svc = state.service.lock().unwrap();
-        svc.regrant_passkey(ws, &member_id).map(|_| ()).map_err(|e| e.to_string())
+        svc.regrant_passkey(ws, &member_id)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -618,7 +763,11 @@ pub fn presence_use_recovery(words: String, digest: String) -> Result<(), String
 /// Install the desktop's presence provider (native, else the hand-off).
 pub fn install(state: &AppState, app: &AppHandle) {
     crate::passkey_native::remember_window(app);
-    state.service.lock().unwrap().set_presence_provider(Some(Arc::new(DesktopPresence(app.clone()))));
+    state
+        .service
+        .lock()
+        .unwrap()
+        .set_presence_provider(Some(Arc::new(DesktopPresence(app.clone()))));
 }
 
 #[cfg(test)]
@@ -635,11 +784,18 @@ mod tests {
 
     impl Read for Endless {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            assert!(self.read < 1 << 20, "the loopback kept reading an endless request");
+            assert!(
+                self.read < 1 << 20,
+                "the loopback kept reading an endless request"
+            );
             let n = buf.len().min(4096);
             for (i, b) in buf[..n].iter_mut().enumerate() {
                 let at = self.read + i;
-                *b = if at < self.prefix.len() { self.prefix[at] } else { self.fill[(at - self.prefix.len()) % self.fill.len()] };
+                *b = if at < self.prefix.len() {
+                    self.prefix[at]
+                } else {
+                    self.fill[(at - self.prefix.len()) % self.fill.len()]
+                };
             }
             self.read += n;
             Ok(n)
@@ -651,15 +807,32 @@ mod tests {
     /// the body are capped.
     #[test]
     fn loopback_reads_are_capped() {
-        let endless_line = Endless { prefix: b"POST /n".to_vec(), fill: b"AAAAAAAA", read: 0 };
+        let endless_line = Endless {
+            prefix: b"POST /n".to_vec(),
+            fill: b"AAAAAAAA",
+            read: 0,
+        };
         assert!(parse_submission(endless_line, "n").is_err());
-        let endless_headers = Endless { prefix: b"POST /n HTTP/1.1\r\n".to_vec(), fill: b"X-A: b\r\n", read: 0 };
+        let endless_headers = Endless {
+            prefix: b"POST /n HTTP/1.1\r\n".to_vec(),
+            fill: b"X-A: b\r\n",
+            read: 0,
+        };
         assert!(parse_submission(endless_headers, "n").is_err());
-        let endless_header = Endless { prefix: b"POST /n HTTP/1.1\r\nX-A: ".to_vec(), fill: b"bbbbbbbb", read: 0 };
+        let endless_header = Endless {
+            prefix: b"POST /n HTTP/1.1\r\nX-A: ".to_vec(),
+            fill: b"bbbbbbbb",
+            read: 0,
+        };
         assert!(parse_submission(endless_header, "n").is_err());
         let huge_body = b"POST /n HTTP/1.1\r\nContent-Length: 99999999\r\n\r\nab".to_vec();
         assert!(parse_submission(&huge_body[..], "n").is_err());
-        let many_headers = [b"POST /n HTTP/1.1\r\n".to_vec(), b"X: y\r\n".repeat(MAX_HEADERS + 1), b"\r\n".to_vec()].concat();
+        let many_headers = [
+            b"POST /n HTTP/1.1\r\n".to_vec(),
+            b"X: y\r\n".repeat(MAX_HEADERS + 1),
+            b"\r\n".to_vec(),
+        ]
+        .concat();
         assert!(parse_submission(&many_headers[..], "n").is_err());
         // A well-formed submission still goes through; a wrong nonce doesn't.
         let ok = b"POST /n HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 5\r\n\r\nab=cd".to_vec();
@@ -671,17 +844,39 @@ mod tests {
     /// loopback nonce isn't in the `open` command's arguments.
     #[test]
     fn the_nonce_stays_off_the_command_line() {
-        let dir = std::env::temp_dir().join(format!("ligus-presence-test-{}", uuid::Uuid::new_v4().simple()));
-        let url = format!("{}#op=get&c=abc&p=4242&n=secret-nonce-123", ligus_core::presence::PresencePolicy::ligus().page_url());
+        let dir = std::env::temp_dir().join(format!(
+            "ligus-presence-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let url = format!(
+            "{}#op=get&c=abc&p=4242&n=secret-nonce-123",
+            ligus_core::presence::PresencePolicy::ligus().page_url()
+        );
         let page = redirect_page(&dir.join("presence"), &url).unwrap();
-        assert!(!page.to_string_lossy().contains("secret-nonce-123"), "the nonce is in the path");
+        assert!(
+            !page.to_string_lossy().contains("secret-nonce-123"),
+            "the nonce is in the path"
+        );
         let html = std::fs::read_to_string(&page).unwrap();
-        assert!(html.contains(&serde_json::to_string(&url).unwrap()), "{html}");
+        assert!(
+            html.contains(&serde_json::to_string(&url).unwrap()),
+            "{html}"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&page).unwrap().permissions().mode() & 0o777, 0o600);
-            assert_eq!(std::fs::metadata(page.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+            assert_eq!(
+                std::fs::metadata(&page).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                std::fs::metadata(page.parent().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

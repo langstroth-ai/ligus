@@ -17,8 +17,9 @@ use ligus_runtime::checks::Check;
 use ligus_runtime::cli_detect::DetectEnv;
 use ligus_runtime::model_catalog::{ModelList, ModelOption, ModelSource};
 use ligus_runtime::setup::{
-    self, service, AgentFact, FlowId, FolderFact, HarnessFact, HostFact, Inputs, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RunOpts,
-    RuntimeFact, RuntimeSpec, Secrets, SetupOps, Surface, TestTurn,
+    self, service, AgentFact, FlowId, FolderFact, HarnessFact, HostFact, Inputs, InviteFact,
+    McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RunOpts, RuntimeFact, RuntimeSpec, Secrets,
+    SetupOps, Surface, TestTurn,
 };
 use ligus_runtime::{McpReach, McpServerSpec, McpTransport};
 use serde_json::{json, Value};
@@ -64,7 +65,12 @@ pub(crate) fn apply_reach(data_dir: &std::path::Path, ws: Uuid, servers: &mut Ve
 /// then only those that name the agent (or every agent). For the paths that
 /// hand servers to a CLI agent directly (Claude Code's `--mcp-config`),
 /// which don't go through `tool_set`.
-pub(crate) fn servers_for_agent(data_dir: &std::path::Path, ws: Uuid, agent: Option<Uuid>, servers: &[McpServerSpec]) -> Vec<McpServerSpec> {
+pub(crate) fn servers_for_agent(
+    data_dir: &std::path::Path,
+    ws: Uuid,
+    agent: Option<Uuid>,
+    servers: &[McpServerSpec],
+) -> Vec<McpServerSpec> {
     let mut v = servers.to_vec();
     apply_reach(data_dir, ws, &mut v);
     v.retain(|s| s.reaches(agent));
@@ -94,7 +100,11 @@ impl SetupOps for DesktopOps<'_> {
         }
         let s = self.state();
         let s = s.settings.lock().unwrap();
-        s.workspaces.iter().find(|w| w.id() == self.ws).map(|w| w.relay_url.clone()).filter(|u| !u.trim().is_empty())
+        s.workspaces
+            .iter()
+            .find(|w| w.id() == self.ws)
+            .map(|w| w.relay_url.clone())
+            .filter(|u| !u.trim().is_empty())
     }
 
     // agent
@@ -109,7 +119,13 @@ impl SetupOps for DesktopOps<'_> {
                 .filter(|(v, _)| !v.is_empty())
                 .map(|(v, l)| ModelOption::new(v, Some(l)))
                 .collect();
-            return ModelList { models, source: ModelSource::Aliases, complete: false, note: None, error: None };
+            return ModelList {
+                models,
+                source: ModelSource::Aliases,
+                complete: false,
+                note: None,
+                error: None,
+            };
         }
         service::models(harness, endpoint, &DetectEnv::from_process())
     }
@@ -125,7 +141,13 @@ impl SetupOps for DesktopOps<'_> {
                     id: r.id.clone(),
                     harness: h.into(),
                     model: r.model_id.clone(),
-                    endpoint: if gw { r.gateway.clone().unwrap_or_default() } else if h == "local" { r.endpoint.clone() } else { String::new() },
+                    endpoint: if gw {
+                        r.gateway.clone().unwrap_or_default()
+                    } else if h == "local" {
+                        r.endpoint.clone()
+                    } else {
+                        String::new()
+                    },
                 })
             })
             .collect()
@@ -173,20 +195,34 @@ impl SetupOps for DesktopOps<'_> {
         service::member_names(&self.state().service.lock().unwrap(), self.ws)
     }
     fn add_agent(&mut self, name: &str, runtime_id: &str) -> OpsResult<Uuid> {
-        service::add_agent(&mut self.state().service.lock().unwrap(), self.ws, name, runtime_id)
+        service::add_agent(
+            &mut self.state().service.lock().unwrap(),
+            self.ws,
+            name,
+            runtime_id,
+        )
     }
     fn test_turn(&mut self, runtime_id: &str) -> OpsResult<TestTurn> {
         let state = self.state();
         let rt = state.resolve_runtime(runtime_id);
-        let root = Some(state.workspace_root.lock().unwrap().clone()).filter(|r| !r.trim().is_empty());
-        service::block_on(async move { service::ping(&rt, root.as_deref()).await }).ok_or_else(|| OpsError::Failed("couldn't run the test turn".into()))
+        let root =
+            Some(state.workspace_root.lock().unwrap().clone()).filter(|r| !r.trim().is_empty());
+        service::block_on(async move { service::ping(&rt, root.as_deref()).await })
+            .ok_or_else(|| OpsError::Failed("couldn't run the test turn".into()))
     }
 
     // tool
     fn mcp_servers(&self) -> Vec<McpFact> {
         let state = self.state();
         let reach = McpReach::load(&state.data_dir).unwrap_or_default();
-        let tokens: Vec<String> = state.settings.lock().unwrap().mcp_bearer_tokens.keys().cloned().collect();
+        let tokens: Vec<String> = state
+            .settings
+            .lock()
+            .unwrap()
+            .mcp_bearer_tokens
+            .keys()
+            .cloned()
+            .collect();
         state
             .combined_mcp_servers()
             .into_iter()
@@ -196,7 +232,10 @@ impl SetupOps for DesktopOps<'_> {
                     McpTransport::Http { .. } => "http".into(),
                 },
                 target: match &s.transport {
-                    McpTransport::Stdio { command, args } => std::iter::once(command.clone()).chain(args.clone()).collect::<Vec<_>>().join(" "),
+                    McpTransport::Stdio { command, args } => std::iter::once(command.clone())
+                        .chain(args.clone())
+                        .collect::<Vec<_>>()
+                        .join(" "),
                     McpTransport::Http { url } => setup::validate::origin(url),
                 },
                 enabled: s.enabled,
@@ -206,7 +245,11 @@ impl SetupOps for DesktopOps<'_> {
             })
             .collect()
     }
-    fn mcp_handshake(&mut self, spec: &McpServerSpec, token: Option<&Zeroizing<String>>) -> OpsResult<Vec<String>> {
+    fn mcp_handshake(
+        &mut self,
+        spec: &McpServerSpec,
+        token: Option<&Zeroizing<String>>,
+    ) -> OpsResult<Vec<String>> {
         service::mcp_handshake(spec, token)
     }
     fn put_mcp_secret(&mut self, id: &str, url: &str, secret: &Zeroizing<String>) -> OpsResult<()> {
@@ -247,14 +290,33 @@ impl SetupOps for DesktopOps<'_> {
         service::inspect_folder(&self.state().service.lock().unwrap(), self.ws, path)
     }
     fn add_repo(&mut self, folder: &FolderFact, name: &str, branch: &str) -> OpsResult<String> {
-        service::add_repo(&mut self.state().service.lock().unwrap(), self.ws, folder, name, branch)
+        service::add_repo(
+            &mut self.state().service.lock().unwrap(),
+            self.ws,
+            folder,
+            name,
+            branch,
+        )
     }
     fn bind_folder(&mut self, repo_id: &str, path: &str) -> OpsResult<()> {
-        service::bind_folder(&self.state().service.lock().unwrap(), self.ws, &crate::repos_ui::host_label(), repo_id, path)
+        service::bind_folder(
+            &self.state().service.lock().unwrap(),
+            self.ws,
+            &crate::repos_ui::host_label(),
+            repo_id,
+            path,
+        )
     }
     fn create_scratch(&mut self, name: &str) -> OpsResult<(String, String)> {
         let root = self.state().data_dir.join("scratch");
-        service::create_scratch(&mut self.state().service.lock().unwrap(), self.ws, &crate::repos_ui::host_label(), &root, &[], name)
+        service::create_scratch(
+            &mut self.state().service.lock().unwrap(),
+            self.ws,
+            &crate::repos_ui::host_label(),
+            &root,
+            &[],
+            name,
+        )
     }
 
     // box, phone, invite
@@ -289,18 +351,29 @@ impl SetupOps for DesktopOps<'_> {
         let (saved, room) = {
             let state = self.state();
             let s = state.settings.lock().unwrap();
-            (s.relay_access_token.clone().map(Zeroizing::new), s.sync_room.clone())
+            (
+                s.relay_access_token.clone().map(Zeroizing::new),
+                s.sync_room.clone(),
+            )
         };
-        let same = current.as_deref().is_some_and(|r| setup::validate::same_origin(r, url));
+        let same = current
+            .as_deref()
+            .is_some_and(|r| setup::validate::same_origin(r, url));
         service::probe_relay(url, token.or(saved.as_ref().filter(|_| same)), &room)
     }
     fn switch_relay(&mut self, url: &str, token: Option<&Zeroizing<String>>) -> OpsResult<()> {
         if self.local() {
-            return Err(OpsError::Failed("My workspace stays on this device; create a shared workspace to use a relay".into()));
+            return Err(OpsError::Failed(
+                "My workspace stays on this device; create a shared workspace to use a relay"
+                    .into(),
+            ));
         }
         // The live settings and the workspace's entry change together, in one
         // save (crate::mirror_relay_into_synced_workspace).
-        let moved = !self.relay_url().as_deref().is_some_and(|r| setup::validate::same_origin(r, url));
+        let moved = !self
+            .relay_url()
+            .as_deref()
+            .is_some_and(|r| setup::validate::same_origin(r, url));
         let state = self.state();
         let mut s = state.settings.lock().unwrap();
         s.relay_url = Some(url.to_string());
@@ -341,16 +414,27 @@ pub(crate) fn setup_flows() -> Value {
 /// What each flow has done in the active workspace.
 #[tauri::command]
 pub(crate) async fn setup_status(ligus_app: AppHandle) -> Result<Value, String> {
-    crate::off_main(ligus_app, move |app| Ok(json!(setup::status(&DesktopOps::new(app))))).await
+    crate::off_main(ligus_app, move |app| {
+        Ok(json!(setup::status(&DesktopOps::new(app))))
+    })
+    .await
 }
 
 /// A flow's preflight and steps for the current inputs (the models of the
 /// chosen harness, the agents a tool may reach).
 #[tauri::command]
-pub(crate) async fn setup_form(ligus_app: AppHandle, flow: String, inputs: Option<BTreeMap<String, String>>) -> Result<Value, String> {
+pub(crate) async fn setup_form(
+    ligus_app: AppHandle,
+    flow: String,
+    inputs: Option<BTreeMap<String, String>>,
+) -> Result<Value, String> {
     let flow = flow_of(&flow)?;
     crate::off_main(ligus_app, move |app| {
-        let form = setup::form(flow, &DesktopOps::new(app), &Inputs(inputs.unwrap_or_default()));
+        let form = setup::form(
+            flow,
+            &DesktopOps::new(app),
+            &Inputs(inputs.unwrap_or_default()),
+        );
         serde_json::to_value(&form).map_err(|e| e.to_string())
     })
     .await
@@ -373,11 +457,24 @@ pub(crate) async fn setup_run(
         s.set(&k, Zeroizing::new(v));
     }
     let cancel = Arc::new(AtomicBool::new(false));
-    cancels().lock().unwrap().insert(flow.as_str(), cancel.clone());
+    cancels()
+        .lock()
+        .unwrap()
+        .insert(flow.as_str(), cancel.clone());
     let dry_run = dry_run.unwrap_or(false);
     let out = crate::off_main(ligus_app, move |app| {
         let mut ops = DesktopOps::new(app);
-        setup::run(flow, &mut ops, &Inputs(inputs.unwrap_or_default()), &s, &RunOpts { dry_run, cancel: Some(cancel), ..Default::default() })
+        setup::run(
+            flow,
+            &mut ops,
+            &Inputs(inputs.unwrap_or_default()),
+            &s,
+            &RunOpts {
+                dry_run,
+                cancel: Some(cancel),
+                ..Default::default()
+            },
+        )
     })
     .await;
     cancels().lock().unwrap().remove(flow.as_str());
@@ -402,7 +499,12 @@ mod tests {
     fn a_malformed_reach_file_offers_no_servers() {
         let d = tempfile::tempdir().unwrap();
         let ws = Uuid::new_v4();
-        let mut servers = vec![McpServerSpec::new("a", McpTransport::Http { url: "https://m.example.com".into() })];
+        let mut servers = vec![McpServerSpec::new(
+            "a",
+            McpTransport::Http {
+                url: "https://m.example.com".into(),
+            },
+        )];
         apply_reach(d.path(), ws, &mut servers);
         assert_eq!(servers.len(), 1, "no file: every agent");
         std::fs::write(d.path().join(McpReach::FILE), b"{").unwrap();
@@ -417,23 +519,52 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (ws, a, b) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
         let servers = vec![
-            McpServerSpec::new("limited", McpTransport::Stdio { command: "x".into(), args: vec![] }),
-            McpServerSpec::new("open", McpTransport::Stdio { command: "y".into(), args: vec![] }),
+            McpServerSpec::new(
+                "limited",
+                McpTransport::Stdio {
+                    command: "x".into(),
+                    args: vec![],
+                },
+            ),
+            McpServerSpec::new(
+                "open",
+                McpTransport::Stdio {
+                    command: "y".into(),
+                    args: vec![],
+                },
+            ),
         ];
         let mut r = McpReach::default();
         r.set(ws, "limited", &[a]);
         r.save(d.path()).unwrap();
-        let ids = |agent| servers_for_agent(d.path(), ws, agent, &servers).into_iter().map(|s| s.id).collect::<Vec<_>>();
+        let ids = |agent| {
+            servers_for_agent(d.path(), ws, agent, &servers)
+                .into_iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(ids(Some(a)), ["limited", "open"]);
         assert_eq!(ids(Some(b)), ["open"]);
-        assert_eq!(ids(None), ["open"], "the default agent gets only every-agent servers");
+        assert_eq!(
+            ids(None),
+            ["open"],
+            "the default agent gets only every-agent servers"
+        );
     }
 
     #[test]
     fn the_flows_serialize_for_the_wizard() {
         let v = setup_flows();
-        let ids: Vec<&str> = v.as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, ["agent", "tool", "folder", "box", "phone", "invite", "relay"]);
+        let ids: Vec<&str> = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            ["agent", "tool", "folder", "box", "phone", "invite", "relay"]
+        );
         assert!(v[0]["title"].is_string() && v[0]["why"].is_string());
         assert_eq!(v[5]["minRole"], "Admin");
     }
@@ -466,7 +597,15 @@ mod tests {
         let mut s = Secrets::new();
         s.set("token", Zeroizing::new(canary.into()));
         for flow in FlowId::ALL {
-            let o: Outcome = setup::run(flow, &mut NoOps, &Inputs::new().with("kind", "own").with("url", "https://r.example.com"), &s, &RunOpts::default());
+            let o: Outcome = setup::run(
+                flow,
+                &mut NoOps,
+                &Inputs::new()
+                    .with("kind", "own")
+                    .with("url", "https://r.example.com"),
+                &s,
+                &RunOpts::default(),
+            );
             assert!(!o.to_json(false).to_string().contains(canary), "{flow:?}");
         }
     }

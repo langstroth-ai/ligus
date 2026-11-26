@@ -73,7 +73,10 @@ fn deny_paths(path: &Path) -> Vec<PathBuf> {
 
 /// Whether `name` may become part of an environment variable name.
 fn valid_ref(name: &str) -> bool {
-    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// Resolve the `_FILE` variables and `LIGUS_WS_SECRET_DIR` with `get` (an
@@ -81,9 +84,12 @@ fn valid_ref(name: &str) -> bool {
 pub fn resolve_secret_files(get: impl Fn(&str) -> Option<String>) -> SecretFiles {
     let mut out = SecretFiles::default();
     for name in FILE_SECRETS {
-        let Some(file) = get(&format!("{name}_FILE")) else { continue };
+        let Some(file) = get(&format!("{name}_FILE")) else {
+            continue;
+        };
         if get(name).is_some() {
-            out.errors.push(format!("both {name} and {name}_FILE are set; using {name}"));
+            out.errors
+                .push(format!("both {name} and {name}_FILE are set; using {name}"));
             continue;
         }
         let path = PathBuf::from(file.trim());
@@ -92,8 +98,12 @@ pub fn resolve_secret_files(get: impl Fn(&str) -> Option<String>) -> SecretFiles
                 out.vars.push((name.to_string(), v));
                 out.deny.extend(deny_paths(&path));
             }
-            Ok(_) => out.errors.push(format!("{name}_FILE {} is empty", path.display())),
-            Err(e) => out.errors.push(format!("{name}_FILE {}: {e}", path.display())),
+            Ok(_) => out
+                .errors
+                .push(format!("{name}_FILE {} is empty", path.display())),
+            Err(e) => out
+                .errors
+                .push(format!("{name}_FILE {}: {e}", path.display())),
         }
     }
     // The k8s secret-store backend's mount (`LIGUS_SECRETS_DIR`, read by
@@ -101,9 +111,11 @@ pub fn resolve_secret_files(get: impl Fn(&str) -> Option<String>) -> SecretFiles
     // items, so agents never read it.
     // With the k8s backend and no LIGUS_SECRETS_DIR the store reads its
     // default mount; that one is Ligus's too.
-    let k8s_backend = get("LIGUS_SECRET_BACKEND").is_some_and(|b| b.trim().eq_ignore_ascii_case("k8s"));
-    let store_dir = get(SECRETS_DIR)
-        .or_else(|| k8s_backend.then(|| ligus_runtime::secret_store::K8S_SECRETS_DIR_DEFAULT.to_string()));
+    let k8s_backend =
+        get("LIGUS_SECRET_BACKEND").is_some_and(|b| b.trim().eq_ignore_ascii_case("k8s"));
+    let store_dir = get(SECRETS_DIR).or_else(|| {
+        k8s_backend.then(|| ligus_runtime::secret_store::K8S_SECRETS_DIR_DEFAULT.to_string())
+    });
     if let Some(dir) = store_dir {
         let dir = PathBuf::from(dir.trim());
         if let Ok(c) = std::fs::canonicalize(&dir) {
@@ -131,7 +143,9 @@ pub fn resolve_secret_files(get: impl Fn(&str) -> Option<String>) -> SecretFiles
                 names.sort();
                 for n in names {
                     if !valid_ref(&n) {
-                        out.errors.push(format!("{WS_SECRET_DIR}: skipping {n:?} (letters, digits, _ and - only)"));
+                        out.errors.push(format!(
+                            "{WS_SECRET_DIR}: skipping {n:?} (letters, digits, _ and - only)"
+                        ));
                         continue;
                     }
                     let var = ligus_core::WorkspaceCredential::env_var(&n);
@@ -151,7 +165,9 @@ pub fn resolve_secret_files(get: impl Fn(&str) -> Option<String>) -> SecretFiles
                     }
                 }
             }
-            Err(e) => out.errors.push(format!("{WS_SECRET_DIR} {}: {e}", dir.display())),
+            Err(e) => out
+                .errors
+                .push(format!("{WS_SECRET_DIR} {}: {e}", dir.display())),
         }
     }
     out
@@ -179,7 +195,10 @@ pub fn set_not_dumpable() {
     // SAFETY: prctl(PR_SET_DUMPABLE) takes integer arguments only.
     unsafe {
         if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
-            eprintln!("warning: prctl(PR_SET_DUMPABLE, 0) failed: {}", std::io::Error::last_os_error());
+            eprintln!(
+                "warning: prctl(PR_SET_DUMPABLE, 0) failed: {}",
+                std::io::Error::last_os_error()
+            );
         }
     }
 }
@@ -204,7 +223,10 @@ pub fn sandbox_required() -> bool {
 /// `off`, any case) requires the sandbox, so `TRUE` or a typo never quietly
 /// turns the guard off.
 fn require_sandbox_value(v: Option<&str>) -> bool {
-    let Some(v) = v.map(|v| v.trim().to_ascii_lowercase()).filter(|v| !v.is_empty()) else {
+    let Some(v) = v
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+    else {
         return false;
     };
     !matches!(v.as_str(), "0" | "false" | "no" | "off")
@@ -246,13 +268,20 @@ mod tests {
         std::fs::write(&tok, "hrt1.a.b").unwrap();
         let env: HashMap<String, String> = [
             ("LIGUS_WORKSPACE_KEY_FILE".into(), key.display().to_string()),
-            ("LIGUS_RELAY_ACCESS_TOKEN_FILE".into(), tok.display().to_string()),
+            (
+                "LIGUS_RELAY_ACCESS_TOKEN_FILE".into(),
+                tok.display().to_string(),
+            ),
         ]
         .into();
         let got = resolve_secret_files(lookup(&env));
         assert!(got.errors.is_empty(), "{:?}", got.errors);
-        assert!(got.vars.contains(&("LIGUS_WORKSPACE_KEY".into(), "s3cret-key".into())));
-        assert!(got.vars.contains(&("LIGUS_RELAY_ACCESS_TOKEN".into(), "hrt1.a.b".into())));
+        assert!(got
+            .vars
+            .contains(&("LIGUS_WORKSPACE_KEY".into(), "s3cret-key".into())));
+        assert!(got
+            .vars
+            .contains(&("LIGUS_RELAY_ACCESS_TOKEN".into(), "hrt1.a.b".into())));
         assert!(got.deny.contains(&key) && got.deny.contains(&tok));
     }
 
@@ -275,12 +304,16 @@ mod tests {
         std::fs::write(dir.path().join("anthropic"), "sk-ant\n").unwrap();
         std::fs::write(dir.path().join("bad name"), "x").unwrap();
         std::fs::create_dir(dir.path().join("..data")).unwrap();
-        let env: HashMap<String, String> = [
-            (WS_SECRET_DIR.into(), dir.path().display().to_string()),
-        ]
-        .into();
+        let env: HashMap<String, String> =
+            [(WS_SECRET_DIR.into(), dir.path().display().to_string())].into();
         let got = resolve_secret_files(lookup(&env));
-        assert_eq!(got.vars, vec![("LIGUS_WS_SECRET_anthropic".to_string(), "sk-ant".to_string())]);
+        assert_eq!(
+            got.vars,
+            vec![(
+                "LIGUS_WS_SECRET_anthropic".to_string(),
+                "sk-ant".to_string()
+            )]
+        );
         assert_eq!(got.errors.len(), 1, "{:?}", got.errors);
         assert!(got.deny.contains(&dir.path().to_path_buf()));
     }
@@ -299,7 +332,8 @@ mod tests {
     #[test]
     fn the_secret_store_mount_is_denied_to_agents() {
         let dir = tempfile::tempdir().unwrap();
-        let env: HashMap<String, String> = [(SECRETS_DIR.into(), dir.path().display().to_string())].into();
+        let env: HashMap<String, String> =
+            [(SECRETS_DIR.into(), dir.path().display().to_string())].into();
         let got = resolve_secret_files(lookup(&env));
         assert!(got.vars.is_empty());
         assert!(got.deny.contains(&dir.path().to_path_buf()));
@@ -316,11 +350,19 @@ mod tests {
 
     #[test]
     fn require_sandbox_fails_closed_on_any_truthy_spelling() {
-        for v in ["1", "true", "TRUE", "True", "yes", "Yes", "on", "ON", "2", "enabled", " 1 "] {
-            assert!(require_sandbox_value(Some(v)), "{v:?} must require the sandbox");
+        for v in [
+            "1", "true", "TRUE", "True", "yes", "Yes", "on", "ON", "2", "enabled", " 1 ",
+        ] {
+            assert!(
+                require_sandbox_value(Some(v)),
+                "{v:?} must require the sandbox"
+            );
         }
         for v in ["", " ", "0", "false", "FALSE", "no", "off", "Off"] {
-            assert!(!require_sandbox_value(Some(v)), "{v:?} must not require the sandbox");
+            assert!(
+                !require_sandbox_value(Some(v)),
+                "{v:?} must not require the sandbox"
+            );
         }
         assert!(!require_sandbox_value(None));
     }
@@ -330,7 +372,9 @@ mod tests {
         let env: HashMap<String, String> = [("LIGUS_SECRET_BACKEND".into(), " K8s ".into())].into();
         let got = resolve_secret_files(lookup(&env));
         assert!(
-            got.deny.contains(&PathBuf::from(ligus_runtime::secret_store::K8S_SECRETS_DIR_DEFAULT)),
+            got.deny.contains(&PathBuf::from(
+                ligus_runtime::secret_store::K8S_SECRETS_DIR_DEFAULT
+            )),
             "{:?}",
             got.deny
         );

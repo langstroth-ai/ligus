@@ -52,10 +52,17 @@ async fn claude_code_turn_gets_ligus_tools_in_seatbelt() {
     executor::configure_host(data.path(), &[], &[]);
     std::env::set_var("LIGUS_MCP_BRIDGE", env!("CARGO_BIN_EXE_ligus-mcp-bridge"));
     let store = EventStore::open(data.path().join("ligus.db")).unwrap();
-    let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ActorIdentity::new("u", "U", ActorKind::Human));
+    let mut svc = ChatService::new(
+        store,
+        SigningKeypair::generate().unwrap(),
+        SigningKeypair::generate().unwrap(),
+        ActorIdentity::new("u", "U", ActorKind::Human),
+    );
     let wid = Uuid::new_v4();
     let chat = svc.create_chat("Ligustica-7341", wid, "rt").unwrap();
-    let reply = svc.begin_assistant_message(chat.id, wid, "ligus", "rt", None, None).unwrap();
+    let reply = svc
+        .begin_assistant_message(chat.id, wid, "ligus", "rt", None, None)
+        .unwrap();
     let mcp = LigusMcp::new(Arc::new(Host(Mutex::new(svc))));
     let turn = mcp.begin_turn(TurnSpec {
         workspace_id: wid,
@@ -68,7 +75,11 @@ async fn claude_code_turn_gets_ligus_tools_in_seatbelt() {
         ttl: Duration::from_secs(600),
     });
     let socket = turn.listen().unwrap();
-    let mut policy = TurnPolicy::new(HostKind::Desktop, SandboxEnvelope::workspace_default(), GatePlan::ReadOnly);
+    let mut policy = TurnPolicy::new(
+        HostKind::Desktop,
+        SandboxEnvelope::workspace_default(),
+        GatePlan::ReadOnly,
+    );
     policy.ligus_mcp_socket = Some(socket);
     policy.cli_user_config = std::env::var("LIGUS_LIVE_USER_CONFIG").ok().as_deref() == Some("1");
     let denials = policy.denials.clone();
@@ -90,7 +101,8 @@ async fn claude_code_turn_gets_ligus_tools_in_seatbelt() {
         gateway: None,
     };
     let bound = tempfile::tempdir().unwrap();
-    let working_dir = (std::env::var("LIGUS_LIVE_BOUND").ok().as_deref() == Some("1")).then(|| bound.path().to_string_lossy().into_owned());
+    let working_dir = (std::env::var("LIGUS_LIVE_BOUND").ok().as_deref() == Some("1"))
+        .then(|| bound.path().to_string_lossy().into_owned());
     let turns = vec![ChatTurn {
         role: "user".into(),
         content: "First call the ligus_list_chats tool and write the exact title of a chat it returns on the first line (or FAILED and the error if the call failed). \
@@ -98,10 +110,17 @@ async fn claude_code_turn_gets_ligus_tools_in_seatbelt() {
             .into(),
     }];
     let scope = turn.agent_scope();
-    let extra_env: Vec<(String, String)> = std::env::var("LIGUS_LIVE_ENV").unwrap_or_default().split(',').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let extra_env: Vec<(String, String)> = std::env::var("LIGUS_LIVE_ENV")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|kv| kv.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     if std::env::var("LIGUS_LIVE_PAUSE").is_ok() {
         let a = scope.mcp.clone().unwrap();
-        let f = a.write_config_file("debug-mcp.json", &Default::default()).unwrap();
+        let f = a
+            .write_config_file("debug-mcp.json", &Default::default())
+            .unwrap();
         println!("PAUSE config={}", f.display());
         tokio::time::sleep(Duration::from_secs(90)).await;
     }
@@ -110,7 +129,16 @@ async fn claude_code_turn_gets_ligus_tools_in_seatbelt() {
         policy,
         ligus_runtime::agent_turn::with_agent_turn(
             scope,
-            dispatch::stream(&rt, None, &turns, working_dir.as_deref(), &extra_env, 512, |_| {}, |a| acts.push(format!("{a:?}"))),
+            dispatch::stream(
+                &rt,
+                None,
+                &turns,
+                working_dir.as_deref(),
+                &extra_env,
+                512,
+                |_| {},
+                |a| acts.push(format!("{a:?}")),
+            ),
         ),
     )
     .await;
@@ -118,12 +146,26 @@ async fn claude_code_turn_gets_ligus_tools_in_seatbelt() {
     println!("LIVE bound={} reply={out:?}", working_dir.is_some());
     println!("LIVE refused endpoints: {refused:?}");
     let reply = out.expect("the turn ran");
-    assert!(reply.contains("ligus_"), "the Ligus tools reached the model: {reply}");
+    assert!(
+        reply.contains("ligus_"),
+        "the Ligus tools reached the model: {reply}"
+    );
     // The call itself went through (pre-approved; in `-p` mode an
     // unapproved MCP tool is refused) and returned the chat store's data.
-    assert!(reply.contains("Ligustica-7341"), "ligus_list_chats returned data: {reply}\n{acts:?}");
+    assert!(
+        reply.contains("Ligustica-7341"),
+        "ligus_list_chats returned data: {reply}\n{acts:?}"
+    );
     // None of the tools that run work outside the turn.
-    for t in ["RemoteTrigger", "CronCreate", "ScheduleWakeup", "Monitor", "PushNotification", "SendMessage", "Workflow"] {
+    for t in [
+        "RemoteTrigger",
+        "CronCreate",
+        "ScheduleWakeup",
+        "Monitor",
+        "PushNotification",
+        "SendMessage",
+        "Workflow",
+    ] {
         assert!(!reply.contains(t), "{t} offered to a Ligus turn: {reply}");
     }
 }

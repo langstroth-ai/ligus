@@ -66,7 +66,13 @@ pub fn host_binding(host_id: &str, this_device: &str) -> HostBinding {
 ///
 /// An agent sent to a host (`binding`) runs on that host only: the worker
 /// there answers every mention for it (`ligus worker` / `ligus serve`).
-pub fn turn_runs_here(local_only: bool, solo: bool, local: &str, owner: &str, binding: HostBinding) -> bool {
+pub fn turn_runs_here(
+    local_only: bool,
+    solo: bool,
+    local: &str,
+    owner: &str,
+    binding: HostBinding,
+) -> bool {
     match binding {
         _ if local_only => true,
         HostBinding::ThisDevice => true,
@@ -118,7 +124,12 @@ pub enum DispatchTarget {
 /// every roster member was necessarily created here and *is this user*: the
 /// workspace is solo by definition however many members a churned roster
 /// shows. A relay-backed room uses the real human count.
-pub fn dispatch_target(body: &str, session: &ChatSession, local_only: bool, links: &DeviceLinks) -> Option<DispatchTarget> {
+pub fn dispatch_target(
+    body: &str,
+    session: &ChatSession,
+    local_only: bool,
+    links: &DeviceLinks,
+) -> Option<DispatchTarget> {
     let mentions = parse_mentions(body, session);
     if let Some(id) = mentions.agents.first().copied() {
         return Some(DispatchTarget::Agent(id));
@@ -174,14 +185,17 @@ pub fn turn_still_open(session: &ChatSession, trigger_id: Uuid) -> bool {
     let answered = session.messages[at + 1..].iter().any(|m| {
         m.role == MessageRole::Assistant
             && !m.superseded
-            && m.reply_to_message_id.is_some_and(|id| session.messages[at..].iter().any(|target| target.id == id))
+            && m.reply_to_message_id
+                .is_some_and(|id| session.messages[at..].iter().any(|target| target.id == id))
     });
     if answered {
         return false;
     }
     // 3. The user moved on: a later user turn supersedes this one, and its own
     //    send arms a fresh fallback against the fuller history.
-    !session.messages[at + 1..].iter().any(|m| m.role == MessageRole::User)
+    !session.messages[at + 1..]
+        .iter()
+        .any(|m| m.role == MessageRole::User)
 }
 
 /// Whether `trigger` (a user message) already has an answer: a later reply
@@ -195,7 +209,12 @@ pub fn user_turn_answered(session: &ChatSession, trigger: Uuid) -> bool {
         return true; // Gone (deleted): nothing to answer.
     };
     let keys: Vec<Uuid> = std::iter::once(trigger)
-        .chain(session.messages[at + 1..].iter().take_while(|m| m.role == MessageRole::System).map(|m| m.id))
+        .chain(
+            session.messages[at + 1..]
+                .iter()
+                .take_while(|m| m.role == MessageRole::System)
+                .map(|m| m.id),
+        )
         .collect();
     session.messages[at + 1..].iter().any(|m| {
         matches!(m.role, MessageRole::Assistant | MessageRole::Agent)
@@ -224,7 +243,10 @@ pub fn synced_user_triggers(session: &ChatSession, arrived: &[Uuid]) -> Vec<Uuid
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ligus_core::{ActorIdentity, ActorKind, ChatMessage, Timestamp, WorkspaceAgent, WorkspaceMember, WorkspaceRole};
+    use ligus_core::{
+        ActorIdentity, ActorKind, ChatMessage, Timestamp, WorkspaceAgent, WorkspaceMember,
+        WorkspaceRole,
+    };
 
     fn member(id: &str) -> WorkspaceMember {
         WorkspaceMember {
@@ -255,7 +277,13 @@ mod tests {
         assert_eq!(elsewhere, HostBinding::Elsewhere);
         assert!(!turn_runs_here(false, true, "me", "me", elsewhere));
         assert!(turn_runs_here(true, false, "me", "me", elsewhere));
-        assert!(turn_runs_here(false, false, "me", "you", host_binding("desk", "desk")));
+        assert!(turn_runs_here(
+            false,
+            false,
+            "me",
+            "you",
+            host_binding("desk", "desk")
+        ));
         assert_eq!(host_binding("", "desk"), HostBinding::Unbound);
     }
 
@@ -266,14 +294,31 @@ mod tests {
         assert!(turn_runs_here(true, false, "me", "stale-self", u));
         assert!(!turn_runs_here(false, false, "me", "teammate", u));
         assert!(turn_runs_here(false, false, "me", "me", u));
-        assert!(turn_runs_here(false, false, "me", "", u), "unowned runs anywhere");
+        assert!(
+            turn_runs_here(false, false, "me", "", u),
+            "unowned runs anywhere"
+        );
     }
 
     #[test]
     fn the_linked_gate_counts_people_not_member_records() {
         let links = DeviceLinks::default();
-        assert!(runs_here_linked(false, &links, &session(&["me"]), "me", "other", HostBinding::Unbound));
-        assert!(!runs_here_linked(false, &links, &session(&["me", "you"]), "me", "you", HostBinding::Unbound));
+        assert!(runs_here_linked(
+            false,
+            &links,
+            &session(&["me"]),
+            "me",
+            "other",
+            HostBinding::Unbound
+        ));
+        assert!(!runs_here_linked(
+            false,
+            &links,
+            &session(&["me", "you"]),
+            "me",
+            "you",
+            HostBinding::Unbound
+        ));
     }
 
     #[test]
@@ -281,11 +326,20 @@ mod tests {
         let links = DeviceLinks::default();
         let mut room = session(&["me", "you"]);
         assert_eq!(dispatch_target("hi", &room, false, &links), None);
-        assert_eq!(dispatch_target("hi", &room, true, &links), Some(DispatchTarget::Primary));
-        assert_eq!(dispatch_target("hi", &session(&["me"]), false, &links), Some(DispatchTarget::Primary));
+        assert_eq!(
+            dispatch_target("hi", &room, true, &links),
+            Some(DispatchTarget::Primary)
+        );
+        assert_eq!(
+            dispatch_target("hi", &session(&["me"]), false, &links),
+            Some(DispatchTarget::Primary)
+        );
         let agent = WorkspaceAgent::new("coder", "rt");
         room.workspace_agents.push(agent.clone());
-        assert_eq!(dispatch_target("@coder fix it", &room, false, &links), Some(DispatchTarget::Agent(agent.id)));
+        assert_eq!(
+            dispatch_target("@coder fix it", &room, false, &links),
+            Some(DispatchTarget::Agent(agent.id))
+        );
     }
 
     #[test]

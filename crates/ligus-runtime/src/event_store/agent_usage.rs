@@ -59,7 +59,13 @@ pub fn parse_day(day: &str) -> Option<time::Date> {
 
 impl EventStore {
     /// Count one turn of `agent` for `member` on `day`.
-    pub fn record_agent_turn(&self, workspace_id: Uuid, agent: Uuid, member: &str, day: &str) -> Result<()> {
+    pub fn record_agent_turn(
+        &self,
+        workspace_id: Uuid,
+        agent: Uuid,
+        member: &str,
+        day: &str,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO agent_usage (day, workspace_id, agent_id, member, turns) VALUES (?1, ?2, ?3, ?4, 1) \
              ON CONFLICT (day, agent_id, member) DO UPDATE SET turns = turns + 1",
@@ -71,7 +77,14 @@ impl EventStore {
 
     /// Add a finished turn's estimated cost (`None`: the runtime reported no
     /// usage, counted as an uncosted turn).
-    pub fn add_agent_cost(&self, workspace_id: Uuid, agent: Uuid, member: &str, day: &str, usd: Option<f64>) -> Result<()> {
+    pub fn add_agent_cost(
+        &self,
+        workspace_id: Uuid,
+        agent: Uuid,
+        member: &str,
+        day: &str,
+        usd: Option<f64>,
+    ) -> Result<()> {
         let (micros, uncosted) = match usd.filter(|u| u.is_finite() && *u >= 0.0) {
             Some(u) => ((u * 1_000_000.0).round().min(i64::MAX as f64) as i64, 0),
             None => (0, 1),
@@ -104,10 +117,18 @@ impl EventStore {
     }
 
     fn prune_agent_usage(&self, today: &str) -> Result<()> {
-        let Some(d) = parse_day(today) else { return Ok(()) };
+        let Some(d) = parse_day(today) else {
+            return Ok(());
+        };
         let cutoff = d - time::Duration::days(KEEP_DAYS);
-        let cutoff = format!("{:04}-{:02}-{:02}", cutoff.year(), u8::from(cutoff.month()), cutoff.day());
-        self.conn.execute("DELETE FROM agent_usage WHERE day < ?1", params![cutoff])?;
+        let cutoff = format!(
+            "{:04}-{:02}-{:02}",
+            cutoff.year(),
+            u8::from(cutoff.month()),
+            cutoff.day()
+        );
+        self.conn
+            .execute("DELETE FROM agent_usage WHERE day < ?1", params![cutoff])?;
         Ok(())
     }
 }
@@ -120,21 +141,55 @@ mod tests {
     fn turns_and_costs_add_up_per_member_and_day() {
         let store = EventStore::open_in_memory().unwrap();
         let (ws, a, b) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        store.record_agent_turn(ws, a, "mara", "2026-11-20").unwrap();
-        store.record_agent_turn(ws, a, "mara", "2026-11-20").unwrap();
-        store.add_agent_cost(ws, a, "mara", "2026-11-20", Some(0.25)).unwrap();
-        store.add_agent_cost(ws, a, "mara", "2026-11-20", None).unwrap();
-        store.record_agent_turn(ws, a, "carl", "2026-11-19").unwrap();
-        store.record_agent_turn(ws, b, "mara", "2026-11-20").unwrap();
+        store
+            .record_agent_turn(ws, a, "mara", "2026-11-20")
+            .unwrap();
+        store
+            .record_agent_turn(ws, a, "mara", "2026-11-20")
+            .unwrap();
+        store
+            .add_agent_cost(ws, a, "mara", "2026-11-20", Some(0.25))
+            .unwrap();
+        store
+            .add_agent_cost(ws, a, "mara", "2026-11-20", None)
+            .unwrap();
+        store
+            .record_agent_turn(ws, a, "carl", "2026-11-19")
+            .unwrap();
+        store
+            .record_agent_turn(ws, b, "mara", "2026-11-20")
+            .unwrap();
         let today = store.agent_usage(a, "2026-11-20", "2026-11-20").unwrap();
-        assert_eq!(today, vec![AgentUsageRow { member: "mara".into(), turns: 2, cost_usd: 0.25, uncosted: 1 }]);
+        assert_eq!(
+            today,
+            vec![AgentUsageRow {
+                member: "mara".into(),
+                turns: 2,
+                cost_usd: 0.25,
+                uncosted: 1
+            }]
+        );
         let month = store.agent_usage(a, "2026-11-01", "2026-11-30").unwrap();
-        assert_eq!(month.iter().map(|r| (r.member.as_str(), r.turns)).collect::<Vec<_>>(), vec![("carl", 1), ("mara", 2)]);
+        assert_eq!(
+            month
+                .iter()
+                .map(|r| (r.member.as_str(), r.turns))
+                .collect::<Vec<_>>(),
+            vec![("carl", 1), ("mara", 2)]
+        );
         // A new day starts from zero.
-        assert!(store.agent_usage(a, "2026-11-21", "2026-11-21").unwrap().is_empty());
+        assert!(store
+            .agent_usage(a, "2026-11-21", "2026-11-21")
+            .unwrap()
+            .is_empty());
         // Old rows go.
-        store.record_agent_turn(ws, a, "mara", "2028-01-01").unwrap();
-        assert!(store.agent_usage(a, "2026-01-01", "2026-12-31").unwrap().is_empty());
+        store
+            .record_agent_turn(ws, a, "mara", "2028-01-01")
+            .unwrap();
+        assert!(store
+            .agent_usage(a, "2026-01-01", "2026-12-31")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -142,6 +197,10 @@ mod tests {
         let t = time::OffsetDateTime::from_unix_timestamp(1_795_000_000).unwrap();
         assert_eq!(utc_day(t), "2026-11-18");
         let local = t.to_offset(time::UtcOffset::from_hms(-10, 0, 0).unwrap());
-        assert_eq!(utc_day(local), "2026-11-18", "a local offset doesn't move the UTC day");
+        assert_eq!(
+            utc_day(local),
+            "2026-11-18",
+            "a local offset doesn't move the UTC day"
+        );
     }
 }

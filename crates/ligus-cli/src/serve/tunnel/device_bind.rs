@@ -63,16 +63,32 @@ pub fn bind_message(host_id: &str, static_pub: &[u8; 32]) -> Vec<u8> {
 }
 
 /// Check `claim` for the pairing with Noise static `static_pub` on host `host_id`.
-pub fn check(claim: &DeviceClaim, host_id: &str, static_pub: &[u8; 32], lookup: impl Fn(Uuid) -> DeviceLookup) -> BindCheck {
+pub fn check(
+    claim: &DeviceClaim,
+    host_id: &str,
+    static_pub: &[u8; 32],
+    lookup: impl Fn(Uuid) -> DeviceLookup,
+) -> BindCheck {
     match lookup(claim.id) {
         // A revoked device is refused whatever the signature: claiming one
         // can only lock the claimant out.
         DeviceLookup::Revoked => BindCheck::Revoked(claim.id),
         DeviceLookup::Unknown => BindCheck::Unknown,
-        DeviceLookup::Certified { phone: false, .. } => BindCheck::Invalid("the device is not a phone"),
-        DeviceLookup::Certified { public_key, phone: true } => {
-            let Ok(sig) = b64u_decode(&claim.sig) else { return BindCheck::Invalid("malformed signature") };
-            match ligus_core::crypto::verify_p256(&public_key, &bind_message(host_id, static_pub), &sig) {
+        DeviceLookup::Certified { phone: false, .. } => {
+            BindCheck::Invalid("the device is not a phone")
+        }
+        DeviceLookup::Certified {
+            public_key,
+            phone: true,
+        } => {
+            let Ok(sig) = b64u_decode(&claim.sig) else {
+                return BindCheck::Invalid("malformed signature");
+            };
+            match ligus_core::crypto::verify_p256(
+                &public_key,
+                &bind_message(host_id, static_pub),
+                &sig,
+            ) {
                 Ok(()) => BindCheck::Bind(claim.id),
                 Err(_) => BindCheck::Invalid("the device signature does not verify"),
             }
@@ -85,13 +101,19 @@ pub fn check(claim: &DeviceClaim, host_id: &str, static_pub: &[u8; 32], lookup: 
 /// P-256 point): the key is a valid point, the claim's id is the one it
 /// derives, and the claim's signature verifies under it over the same
 /// `ctx("device-bind", host_id, phone_static)`. Returns the key.
-pub fn check_provisional(claim: &DeviceClaim, enroll_key: &str, host_id: &str, static_pub: &[u8; 32]) -> Result<Vec<u8>, &'static str> {
+pub fn check_provisional(
+    claim: &DeviceClaim,
+    enroll_key: &str,
+    host_id: &str,
+    static_pub: &[u8; 32],
+) -> Result<Vec<u8>, &'static str> {
     let key = b64u_decode(enroll_key).map_err(|_| "malformed enrollKey")?;
     if ligus_runtime::phone_enroll::check_device_id(claim.id, &key).is_err() {
         return Err("the device id isn't the one enrollKey derives");
     }
     let sig = b64u_decode(&claim.sig).map_err(|_| "malformed signature")?;
-    ligus_core::crypto::verify_p256(&key, &bind_message(host_id, static_pub), &sig).map_err(|_| "the device signature does not verify under enrollKey")?;
+    ligus_core::crypto::verify_p256(&key, &bind_message(host_id, static_pub), &sig)
+        .map_err(|_| "the device signature does not verify under enrollKey")?;
     Ok(key)
 }
 
@@ -108,17 +130,44 @@ mod tests {
         let st = [9u8; 32];
         let sig = ligus_core::crypto::sign_p256(&key, &bind_message("HOST", &st));
         let claim = DeviceClaim { id, sig: b64u(sig) };
-        let certified = |_| DeviceLookup::Certified { public_key: pubkey.clone(), phone: true };
+        let certified = |_| DeviceLookup::Certified {
+            public_key: pubkey.clone(),
+            phone: true,
+        };
         assert_eq!(check(&claim, "HOST", &st, certified), BindCheck::Bind(id));
         // Another pairing (static) or another host: refused.
-        assert!(matches!(check(&claim, "HOST", &[8u8; 32], certified), BindCheck::Invalid(_)));
-        assert!(matches!(check(&claim, "OTHER", &st, certified), BindCheck::Invalid(_)));
+        assert!(matches!(
+            check(&claim, "HOST", &[8u8; 32], certified),
+            BindCheck::Invalid(_)
+        ));
+        assert!(matches!(
+            check(&claim, "OTHER", &st, certified),
+            BindCheck::Invalid(_)
+        ));
         // A desktop device can't be a tunnel phone.
-        assert!(matches!(check(&claim, "HOST", &st, |_| DeviceLookup::Certified { public_key: pubkey.clone(), phone: false }), BindCheck::Invalid(_)));
-        assert_eq!(check(&claim, "HOST", &st, |_| DeviceLookup::Revoked), BindCheck::Revoked(id));
-        assert_eq!(check(&claim, "HOST", &st, |_| DeviceLookup::Unknown), BindCheck::Unknown);
-        let bad = DeviceClaim { id, sig: "!!".into() };
-        assert!(matches!(check(&bad, "HOST", &st, certified), BindCheck::Invalid(_)));
+        assert!(matches!(
+            check(&claim, "HOST", &st, |_| DeviceLookup::Certified {
+                public_key: pubkey.clone(),
+                phone: false
+            }),
+            BindCheck::Invalid(_)
+        ));
+        assert_eq!(
+            check(&claim, "HOST", &st, |_| DeviceLookup::Revoked),
+            BindCheck::Revoked(id)
+        );
+        assert_eq!(
+            check(&claim, "HOST", &st, |_| DeviceLookup::Unknown),
+            BindCheck::Unknown
+        );
+        let bad = DeviceClaim {
+            id,
+            sig: "!!".into(),
+        };
+        assert!(matches!(
+            check(&bad, "HOST", &st, certified),
+            BindCheck::Invalid(_)
+        ));
     }
 
     /// E3b, P1: only a key that derives the claim's id and signed this
@@ -128,16 +177,43 @@ mod tests {
         let p = ligus_core::testkit::Phone::new();
         let st = [7u8; 32];
         let key = b64u(p.public_key());
-        let claim = DeviceClaim { id: p.device_id, sig: b64u(ligus_core::crypto::sign_p256(&p.key, &bind_message("HOST", &st))) };
-        assert_eq!(check_provisional(&claim, &key, "HOST", &st), Ok(p.public_key()));
-        assert!(check_provisional(&claim, &key, "HOST", &[8u8; 32]).is_err(), "another pairing");
-        assert!(check_provisional(&claim, &key, "OTHER", &st).is_err(), "another host");
+        let claim = DeviceClaim {
+            id: p.device_id,
+            sig: b64u(ligus_core::crypto::sign_p256(
+                &p.key,
+                &bind_message("HOST", &st),
+            )),
+        };
+        assert_eq!(
+            check_provisional(&claim, &key, "HOST", &st),
+            Ok(p.public_key())
+        );
+        assert!(
+            check_provisional(&claim, &key, "HOST", &[8u8; 32]).is_err(),
+            "another pairing"
+        );
+        assert!(
+            check_provisional(&claim, &key, "OTHER", &st).is_err(),
+            "another host"
+        );
         let other = ligus_core::testkit::Phone::new();
-        assert!(check_provisional(&claim, &b64u(other.public_key()), "HOST", &st).is_err(), "a key that doesn't derive the id");
-        let theirs = DeviceClaim { id: other.device_id, sig: claim.sig.clone() };
-        assert!(check_provisional(&theirs, &b64u(other.public_key()), "HOST", &st).is_err(), "a signature by another key");
+        assert!(
+            check_provisional(&claim, &b64u(other.public_key()), "HOST", &st).is_err(),
+            "a key that doesn't derive the id"
+        );
+        let theirs = DeviceClaim {
+            id: other.device_id,
+            sig: claim.sig.clone(),
+        };
+        assert!(
+            check_provisional(&theirs, &b64u(other.public_key()), "HOST", &st).is_err(),
+            "a signature by another key"
+        );
         assert!(check_provisional(&claim, "!!", "HOST", &st).is_err());
-        assert!(check_provisional(&claim, &b64u([4u8; 65]), "HOST", &st).is_err(), "not a point");
+        assert!(
+            check_provisional(&claim, &b64u([4u8; 65]), "HOST", &st).is_err(),
+            "not a point"
+        );
     }
 
     #[test]

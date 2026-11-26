@@ -49,7 +49,11 @@ impl ScheduleTrigger {
                 // The most recent occurrence of `at` at or before `now`: today's
                 // boundary if it has already passed, otherwise yesterday's.
                 let today = now.replace_time(at);
-                let boundary = if today <= now { today } else { today - Duration::days(1) };
+                let boundary = if today <= now {
+                    today
+                } else {
+                    today - Duration::days(1)
+                };
                 match last_run {
                     None => true,
                     Some(prev) => prev < boundary,
@@ -161,22 +165,47 @@ mod tests {
 
     #[test]
     fn daily_invalid_time_never_fires() {
-        let t = ScheduleTrigger::DailyAt { hour: 25, minute: 0 };
+        let t = ScheduleTrigger::DailyAt {
+            hour: 25,
+            minute: 0,
+        };
         assert!(!t.is_due(None, dt(2026, 6, 22, 12, 0, 0, 0)));
     }
 
     #[test]
     fn validate_rejects_bad_input() {
-        assert!(ScheduleTrigger::Interval { every_secs: 0 }.validate().is_err());
-        assert!(ScheduleTrigger::Interval { every_secs: 60 }.validate().is_ok());
-        assert!(ScheduleTrigger::DailyAt { hour: 24, minute: 0 }.validate().is_err());
-        assert!(ScheduleTrigger::DailyAt { hour: 9, minute: 60 }.validate().is_err());
-        assert!(ScheduleTrigger::DailyAt { hour: 23, minute: 59 }.validate().is_ok());
+        assert!(ScheduleTrigger::Interval { every_secs: 0 }
+            .validate()
+            .is_err());
+        assert!(ScheduleTrigger::Interval { every_secs: 60 }
+            .validate()
+            .is_ok());
+        assert!(ScheduleTrigger::DailyAt {
+            hour: 24,
+            minute: 0
+        }
+        .validate()
+        .is_err());
+        assert!(ScheduleTrigger::DailyAt {
+            hour: 9,
+            minute: 60
+        }
+        .validate()
+        .is_err());
+        assert!(ScheduleTrigger::DailyAt {
+            hour: 23,
+            minute: 59
+        }
+        .validate()
+        .is_ok());
     }
 
     #[test]
     fn serde_tagged_round_trip() {
-        let t = ScheduleTrigger::DailyAt { hour: 9, minute: 30 };
+        let t = ScheduleTrigger::DailyAt {
+            hour: 9,
+            minute: 30,
+        };
         let j = serde_json::to_string(&t).unwrap();
         assert!(j.contains("daily_at"), "got {j}");
         assert_eq!(serde_json::from_str::<ScheduleTrigger>(&j).unwrap(), t);

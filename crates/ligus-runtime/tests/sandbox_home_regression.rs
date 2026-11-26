@@ -27,7 +27,11 @@ fn have(tool: &str) -> bool {
 }
 
 fn policy() -> TurnPolicy {
-    let mut p = TurnPolicy::new(HostKind::Desktop, SandboxEnvelope::workspace_default(), GatePlan::Full);
+    let mut p = TurnPolicy::new(
+        HostKind::Desktop,
+        SandboxEnvelope::workspace_default(),
+        GatePlan::Full,
+    );
     p.worktree_is_isolated = true;
     p
 }
@@ -39,9 +43,21 @@ fn run(purpose: Purpose, dir: &std::path::Path, script: &str) -> (bool, String) 
         spec.writes = Some(true);
         let executor::Prepared { mut command, guard } = executor::prepare(spec).expect("prepare");
         assert_ne!(guard.kind(), executor::ExecutorKind::Unconfined);
-        let out = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).output().expect("spawn");
+        let out = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("spawn");
         drop(guard);
-        (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
     })
 }
 
@@ -95,13 +111,38 @@ fn regression_cargo_build_in_the_worktree() {
     }
     let wt = worktree();
     std::fs::create_dir_all(wt.join("src")).unwrap();
-    std::fs::write(wt.join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n").unwrap();
-    std::fs::write(wt.join("src/main.rs"), "fn main() { println!(\"built-{}\", 6 * 7); }\n").unwrap();
-    landlock_tier_prepare(&wt, &[("Cargo.lock", Some("version = 3\n\n[[package]]\nname = \"demo\"\nversion = \"0.1.0\"\n")), ("target", None)]);
-    let (ok, out) = run(Purpose::Tool, &wt, "cargo build --offline -q && ./target/debug/demo");
+    std::fs::write(
+        wt.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        wt.join("src/main.rs"),
+        "fn main() { println!(\"built-{}\", 6 * 7); }\n",
+    )
+    .unwrap();
+    landlock_tier_prepare(
+        &wt,
+        &[
+            (
+                "Cargo.lock",
+                Some("version = 3\n\n[[package]]\nname = \"demo\"\nversion = \"0.1.0\"\n"),
+            ),
+            ("target", None),
+        ],
+    );
+    let (ok, out) = run(
+        Purpose::Tool,
+        &wt,
+        "cargo build --offline -q && ./target/debug/demo",
+    );
     assert!(ok && out.contains("built-42"), "{out}");
     // As a CLI agent's own shell (its per-turn home) too.
-    let (ok, out) = run(Purpose::Agent(ModelProviderKind::ClaudeCode), &wt, "cargo build --offline -q && ./target/debug/demo");
+    let (ok, out) = run(
+        Purpose::Agent(ModelProviderKind::ClaudeCode),
+        &wt,
+        "cargo build --offline -q && ./target/debug/demo",
+    );
     assert!(ok && out.contains("built-42"), "{out}");
 }
 
@@ -130,12 +171,17 @@ with zipfile.ZipFile("demo-0.1-py3-none-any.whl", "w") as z:
 #[test]
 fn regression_python_and_pip_into_a_venv_in_the_worktree() {
     if !sandboxed("regression_python_and_pip_into_a_venv_in_the_worktree") || !have("python3") {
-        eprintln!("SKIPPED regression_python_and_pip_into_a_venv_in_the_worktree: no python3 or sandbox");
+        eprintln!(
+            "SKIPPED regression_python_and_pip_into_a_venv_in_the_worktree: no python3 or sandbox"
+        );
         return;
     }
     let wt = worktree();
     std::fs::write(wt.join("make_wheel.py"), MAKE_WHEEL).unwrap();
-    landlock_tier_prepare(&wt, &[("demo-0.1-py3-none-any.whl", Some("")), (".venv", None)]);
+    landlock_tier_prepare(
+        &wt,
+        &[("demo-0.1-py3-none-any.whl", Some("")), (".venv", None)],
+    );
     let (ok, out) = run(
         Purpose::Tool,
         &wt,
@@ -158,12 +204,25 @@ fn live() -> bool {
 fn run_cli(kind: ModelProviderKind, program: &str, args: &[&str]) -> (bool, String) {
     let wt = worktree();
     executor::with_turn_sync(policy(), || {
-        let mut spec = SpawnSpec::new(Purpose::Agent(kind), program, args.iter().copied()).cwd(Some(&wt));
+        let mut spec =
+            SpawnSpec::new(Purpose::Agent(kind), program, args.iter().copied()).cwd(Some(&wt));
         spec.writes = Some(false);
         let executor::Prepared { mut command, guard } = executor::prepare(spec).expect("prepare");
-        let out = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).output().expect("spawn");
+        let out = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("spawn");
         drop(guard);
-        (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
     })
 }
 
@@ -174,7 +233,16 @@ fn live_claude_code_print_answers() {
         eprintln!("SKIPPED live_claude_code_print_answers (LIGUS_LIVE_CLI=1 and claude needed)");
         return;
     }
-    let (ok, out) = run_cli(ModelProviderKind::ClaudeCode, "claude", &["-p", "Reply with exactly the word PONG and nothing else.", "--output-format", "text"]);
+    let (ok, out) = run_cli(
+        ModelProviderKind::ClaudeCode,
+        "claude",
+        &[
+            "-p",
+            "Reply with exactly the word PONG and nothing else.",
+            "--output-format",
+            "text",
+        ],
+    );
     assert!(ok && out.contains("PONG"), "{out}");
 }
 
@@ -182,13 +250,18 @@ fn live_claude_code_print_answers() {
 #[ignore]
 fn live_codex_version_and_login_status() {
     if !live() || !have("codex") {
-        eprintln!("SKIPPED live_codex_version_and_login_status (LIGUS_LIVE_CLI=1 and codex needed)");
+        eprintln!(
+            "SKIPPED live_codex_version_and_login_status (LIGUS_LIVE_CLI=1 and codex needed)"
+        );
         return;
     }
     let (ok, out) = run_cli(ModelProviderKind::Codex, "codex", &["--version"]);
     assert!(ok && out.to_ascii_lowercase().contains("codex"), "{out}");
     let (ok, out) = run_cli(ModelProviderKind::Codex, "codex", &["login", "status"]);
-    assert!(ok && out.to_ascii_lowercase().contains("logged in"), "{out}");
+    assert!(
+        ok && out.to_ascii_lowercase().contains("logged in"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -208,6 +281,9 @@ fn live_other_clis_start() {
             continue;
         }
         let (ok, out) = run_cli(kind, program, &["--version"]);
-        assert!(ok && out.chars().any(|c| c.is_ascii_digit()), "{program}: {out}");
+        assert!(
+            ok && out.chars().any(|c| c.is_ascii_digit()),
+            "{program}: {out}"
+        );
     }
 }

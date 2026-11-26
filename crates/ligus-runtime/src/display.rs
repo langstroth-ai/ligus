@@ -10,7 +10,9 @@
 //! list row or a "Remove …?" confirm. Bodies and prose are left as written:
 //! they are rendered as text, not as one-line labels.
 
-use ligus_core::memory::{MemoryAuthor, MemoryEntry, MemoryOp, MemoryRevision, ProposalState, TaskSlot};
+use ligus_core::memory::{
+    MemoryAuthor, MemoryEntry, MemoryOp, MemoryRevision, ProposalState, TaskSlot,
+};
 use ligus_core::workflow::{WorkflowDefinition, WorkflowRun};
 
 pub use ligus_proto::names::clean_display_name as shown;
@@ -23,7 +25,12 @@ pub const MAX_WORKSPACE_NAME_CHARS: usize = 120;
 /// API show it: cleaned like any peer-chosen label and at most
 /// [`MAX_WORKSPACE_NAME_CHARS`] characters, whoever wrote it.
 pub fn workspace_name(title: &str) -> String {
-    shown(title).chars().take(MAX_WORKSPACE_NAME_CHARS).collect::<String>().trim().to_string()
+    shown(title)
+        .chars()
+        .take(MAX_WORKSPACE_NAME_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 fn author(a: &mut MemoryAuthor) {
@@ -99,20 +106,34 @@ mod tests {
     }
 
     fn rev(title: &str) -> MemoryRevision {
-        MemoryRevision { title: title.into(), body: EVIL.into(), author: MemoryAuthor { name: EVIL.into(), ..Default::default() }, ..Default::default() }
+        MemoryRevision {
+            title: title.into(),
+            body: EVIL.into(),
+            author: MemoryAuthor {
+                name: EVIL.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
     }
 
     #[test]
     fn a_workspace_name_is_cleaned_and_bounded() {
         assert_eq!(workspace_name("Comb\u{202E} Council"), "Comb Council");
-        assert_eq!(workspace_name(&"x".repeat(5000)).chars().count(), MAX_WORKSPACE_NAME_CHARS);
+        assert_eq!(
+            workspace_name(&"x".repeat(5000)).chars().count(),
+            MAX_WORKSPACE_NAME_CHARS
+        );
     }
 
     #[test]
     fn memory_titles_and_authors_are_cleaned_bodies_kept() {
         let e = MemoryEntry {
             current: rev(EVIL),
-            created_by: MemoryAuthor { name: EVIL.into(), ..Default::default() },
+            created_by: MemoryAuthor {
+                name: EVIL.into(),
+                ..Default::default()
+            },
             conflicts: vec![rev(EVIL)],
             removed: Some(rev(EVIL)),
             edited_after_removal: vec![rev(EVIL)],
@@ -120,7 +141,12 @@ mod tests {
         };
         let c = memory_entry(&e);
         assert_eq!(c.current.title, "Notestxt.exe x");
-        for r in [&c.current, &c.conflicts[0], c.removed.as_ref().unwrap(), &c.edited_after_removal[0]] {
+        for r in [
+            &c.current,
+            &c.conflicts[0],
+            c.removed.as_ref().unwrap(),
+            &c.edited_after_removal[0],
+        ] {
             assert!(!hidden(&r.title) && !hidden(&r.author.name), "{r:?}");
             assert_eq!(r.body, EVIL, "a body is prose, rendered as text");
         }
@@ -132,18 +158,38 @@ mod tests {
         let p = ProposalState {
             proposal: MemoryProposal {
                 proposal_id: Default::default(),
-                op: MemoryOp::Create { entry_id: Default::default(), title: EVIL.into(), body: EVIL.into(), tags: vec![] },
+                op: MemoryOp::Create {
+                    entry_id: Default::default(),
+                    title: EVIL.into(),
+                    body: EVIL.into(),
+                    tags: vec![],
+                },
                 proposer: String::new(),
                 source: MemorySource::default(),
                 rationale: String::new(),
             },
-            by: MemoryAuthor { name: EVIL.into(), ..Default::default() },
+            by: MemoryAuthor {
+                name: EVIL.into(),
+                ..Default::default()
+            },
             signer: None,
             at_ms: 0,
-            decision: Some(DecisionState { accepted: true, by: MemoryAuthor { name: EVIL.into(), ..Default::default() }, at_ms: 0, note: String::new(), rev: Default::default(), conflicted: false }),
+            decision: Some(DecisionState {
+                accepted: true,
+                by: MemoryAuthor {
+                    name: EVIL.into(),
+                    ..Default::default()
+                },
+                at_ms: 0,
+                note: String::new(),
+                rev: Default::default(),
+                conflicted: false,
+            }),
         };
         let c = memory_proposal(&p);
-        let MemoryOp::Create { title, body, .. } = &c.proposal.op else { unreachable!() };
+        let MemoryOp::Create { title, body, .. } = &c.proposal.op else {
+            unreachable!()
+        };
         assert!(!hidden(title) && body == EVIL);
         assert!(!hidden(&c.by.name) && !hidden(&c.decision.unwrap().by.name));
     }
@@ -154,7 +200,10 @@ mod tests {
             id: "a".into(),
             name: EVIL.into(),
             depends_on: vec![],
-            kind: ligus_core::workflow::WorkflowNodeKind::Agent { agent_id: None, prompt_template: EVIL.into() },
+            kind: ligus_core::workflow::WorkflowNodeKind::Agent {
+                agent_id: None,
+                prompt_template: EVIL.into(),
+            },
             x: None,
             y: None,
         };

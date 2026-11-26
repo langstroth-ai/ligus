@@ -14,18 +14,31 @@ use super::{RosterState, RULES_V3};
 /// successor, isn't the founder or the last Owner, and holds no passkey
 /// (its presence can't be given from the computer; an Admin removes it
 /// instead).
-pub fn retirement_ok(env: &SessionEventEnvelope, r: &MemberRetirement, on_config: bool, roster: &RosterState, fold: &ChatSession) -> Result<(), String> {
+pub fn retirement_ok(
+    env: &SessionEventEnvelope,
+    r: &MemberRetirement,
+    on_config: bool,
+    roster: &RosterState,
+    fold: &ChatSession,
+) -> Result<(), String> {
     if !on_config {
         return Err("a member is retired on the workspace config log".into());
     }
     if roster.rules < RULES_V3 {
         return Err("a member is retired into their person only under workspace rules 3".into());
     }
-    let stamp = env.actor_stamp.as_ref().ok_or("a retirement names its author")?;
+    let stamp = env
+        .actor_stamp
+        .as_ref()
+        .ok_or("a retirement names its author")?;
     if stamp.actor.kind != ActorKind::Human || stamp.runtime_effect {
         return Err("only a person retires a member".into());
     }
-    if !stamp.actor.account_id.is_some_and(|a| a == r.account_id || a == r.successor_account_id) {
+    if !stamp
+        .actor
+        .account_id
+        .is_some_and(|a| a == r.account_id || a == r.successor_account_id)
+    {
         return Err("a member is retired by itself or by its person".into());
     }
     super::certified_signer(env, roster)?;
@@ -40,14 +53,23 @@ pub fn retirement_ok(env: &SessionEventEnvelope, r: &MemberRetirement, on_config
     let old = fold
         .members
         .iter()
-        .find(|m| m.id == r.member_id && m.actor.kind == ActorKind::Human && m.actor.account_id == Some(r.account_id))
+        .find(|m| {
+            m.id == r.member_id
+                && m.actor.kind == ActorKind::Human
+                && m.actor.account_id == Some(r.account_id)
+        })
         .ok_or("no such member")?;
     let new = fold
         .members
         .iter()
-        .find(|m| m.actor.kind == ActorKind::Human && m.actor.account_id == Some(r.successor_account_id))
+        .find(|m| {
+            m.actor.kind == ActorKind::Human && m.actor.account_id == Some(r.successor_account_id)
+        })
         .ok_or("the person isn't a member here")?;
-    let key = roster.account_keys.get(&r.account_id).ok_or("the retired account has no key here")?;
+    let key = roster
+        .account_keys
+        .get(&r.account_id)
+        .ok_or("the retired account has no key here")?;
     if !r.verifies(env.workspace_id, key) {
         return Err("a retirement carries the retired account's own signature".into());
     }
@@ -63,10 +85,21 @@ pub fn retirement_ok(env: &SessionEventEnvelope, r: &MemberRetirement, on_config
     if !roster.founder.is_empty() && roster.founder == old.id {
         return Err("the founder isn't retired".into());
     }
-    if old.role == WorkspaceRole::Owner && fold.members.iter().filter(|m| m.role == WorkspaceRole::Owner).count() < 2 {
+    if old.role == WorkspaceRole::Owner
+        && fold
+            .members
+            .iter()
+            .filter(|m| m.role == WorkspaceRole::Owner)
+            .count()
+            < 2
+    {
         return Err("the last Owner isn't retired".into());
     }
-    if roster.passkeys.get(&r.account_id).is_some_and(|m| !m.is_empty()) {
+    if roster
+        .passkeys
+        .get(&r.account_id)
+        .is_some_and(|m| !m.is_empty())
+    {
         return Err("a member with a passkey is removed by an Admin, not retired".into());
     }
     Ok(())

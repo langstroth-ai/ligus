@@ -6,20 +6,40 @@
 use ligus_core::events::{fold_decisions, project_authorized, WorkspaceAuthz};
 use ligus_core::testkit::SignedWorld;
 use ligus_core::watermark::heads_of;
-use ligus_core::{workspace_config_session_id, ChatMessage, MessageRole, SessionEvent, SessionEventEnvelope, Verdict, WorkspaceRole};
+use ligus_core::{
+    workspace_config_session_id, ChatMessage, MessageRole, SessionEvent, SessionEventEnvelope,
+    Verdict, WorkspaceRole,
+};
 use proptest::prelude::*;
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
 fn post(w: &mut SignedWorld, chat: Uuid, by: &str, body: &str) -> Uuid {
-    w.say(chat, by, SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, by, body) })
+    w.say(
+        chat,
+        by,
+        SessionEvent::MessageAppended {
+            message: ChatMessage::new(MessageRole::User, by, body),
+        },
+    )
 }
 
 /// A second envelope under `id`'s event id with other content, signed by
 /// the same device (an equivocation), appended to the chat log.
 fn equivocate(w: &mut SignedWorld, chat: Uuid, by: &str, id: Uuid) {
-    let orig = w.chats[&chat].iter().find(|e| e.event_id == id).unwrap().clone();
-    let mut twin = w.draft(by, Some(chat), SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, by, "the other story") }, None);
+    let orig = w.chats[&chat]
+        .iter()
+        .find(|e| e.event_id == id)
+        .unwrap()
+        .clone();
+    let mut twin = w.draft(
+        by,
+        Some(chat),
+        SessionEvent::MessageAppended {
+            message: ChatMessage::new(MessageRole::User, by, "the other story"),
+        },
+        None,
+    );
     twin.event_id = id;
     twin.lamport = orig.lamport;
     if let Some(s) = twin.actor_stamp.as_mut() {
@@ -29,14 +49,22 @@ fn equivocate(w: &mut SignedWorld, chat: Uuid, by: &str, id: Uuid) {
     w.push_env(Some(chat), twin);
 }
 
-fn chat_verdicts(w: &SignedWorld, log: &[SessionEventEnvelope]) -> std::collections::BTreeMap<Uuid, Verdict> {
+fn chat_verdicts(
+    w: &SignedWorld,
+    log: &[SessionEventEnvelope],
+) -> std::collections::BTreeMap<Uuid, Verdict> {
     let t = w.timeline();
     fold_decisions(log, None, None, WorkspaceAuthz::Timeline(&t))
 }
 
 fn bodies(w: &SignedWorld, log: &[SessionEventEnvelope]) -> Vec<String> {
     let t = w.timeline();
-    project_authorized(log, None, None, WorkspaceAuthz::Timeline(&t)).unwrap().messages.into_iter().map(|m| m.body).collect()
+    project_authorized(log, None, None, WorkspaceAuthz::Timeline(&t))
+        .unwrap()
+        .messages
+        .into_iter()
+        .map(|m| m.body)
+        .collect()
 }
 
 #[test]
@@ -54,10 +82,19 @@ fn both_envelopes_of_an_equivocated_id_are_denied_in_any_order() {
     let v = chat_verdicts(&w, &log);
     assert_eq!(v[&b], Verdict::Denied, "an equivocated id never folds");
     assert_eq!((v[&a], v[&c]), (Verdict::Allowed, Verdict::Allowed));
-    assert_eq!(v, chat_verdicts(&w, &rev), "the same in either arrival order");
+    assert_eq!(
+        v,
+        chat_verdicts(&w, &rev),
+        "the same in either arrival order"
+    );
     let shown = bodies(&w, &log);
     assert_eq!(shown, bodies(&w, &rev));
-    assert!(!shown.iter().any(|m| m == "one story" || m == "the other story"), "{shown:?}");
+    assert!(
+        !shown
+            .iter()
+            .any(|m| m == "one story" || m == "the other story"),
+        "{shown:?}"
+    );
     // An identical duplicate (the same envelope twice) is not an equivocation.
     let mut dup = log.clone();
     dup.push(log.iter().find(|e| e.event_id == a).unwrap().clone());
@@ -78,11 +115,21 @@ fn watermark_coverage_stops_at_an_equivocated_id() {
     let mut wm = heads_of(&w.cfg, workspace_config_session_id(w.wid), &signers);
     wm.extend(heads_of(&w.chats[&chat], chat, &signers));
     equivocate(&mut w, chat, "con", e2);
-    w.push("owner", SessionEvent::MemberRemoved { member_id: "con".into(), watermark: wm });
+    w.push(
+        "owner",
+        SessionEvent::MemberRemoved {
+            member_id: "con".into(),
+            watermark: wm,
+        },
+    );
     let v = w.verdicts();
     assert_eq!(v[&e3], Verdict::Allowed, "the head is covered");
     assert_eq!(v[&e2], Verdict::Denied, "the equivocated id");
-    assert_eq!(v[&e1], Verdict::Denied, "behind an equivocated id: not covered, judged as of the removal");
+    assert_eq!(
+        v[&e1],
+        Verdict::Denied,
+        "behind an equivocated id: not covered, judged as of the removal"
+    );
 }
 
 proptest! {

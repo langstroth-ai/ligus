@@ -131,7 +131,9 @@ impl WorkspaceConn {
 
     /// The single-use invite id, when it parses.
     pub fn invite_id(&self) -> Option<Uuid> {
-        self.inv.as_deref().and_then(|i| Uuid::parse_str(i.trim()).ok())
+        self.inv
+            .as_deref()
+            .and_then(|i| Uuid::parse_str(i.trim()).ok())
     }
 
     /// The founder pin `(founder account id, key fingerprint)`, when the
@@ -148,7 +150,10 @@ pub fn encode_workspace_invite(conn: &WorkspaceConn) -> String {
     use base64::Engine;
     // Icons are local rail decoration; never embed a (potentially large) data
     // URL in an invite code.
-    let conn = WorkspaceConn { icon: None, ..conn.clone() };
+    let conn = WorkspaceConn {
+        icon: None,
+        ..conn.clone()
+    };
     let json = serde_json::to_vec(&conn).unwrap_or_default();
     let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json);
     format!("{INVITE_PREFIX}{b64}")
@@ -165,7 +170,8 @@ pub fn decode_workspace_invite(invite: &str) -> Result<WorkspaceConn, String> {
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(body.trim().as_bytes())
         .map_err(|e| format!("invalid invite encoding: {e}"))?;
-    let mut conn: WorkspaceConn = serde_json::from_slice(&bytes).map_err(|e| format!("invalid invite payload: {e}"))?;
+    let mut conn: WorkspaceConn =
+        serde_json::from_slice(&bytes).map_err(|e| format!("invalid invite payload: {e}"))?;
     if conn.room.trim().is_empty() {
         return Err("invite is missing a room".to_string());
     }
@@ -175,7 +181,9 @@ pub fn decode_workspace_invite(invite: &str) -> Result<WorkspaceConn, String> {
 
 /// A relay URL a client can sync with: an http(s) address with a host.
 pub fn usable_relay_url(raw: &str) -> bool {
-    url::Url::parse(raw.trim()).is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some_and(|h| !h.is_empty()))
+    url::Url::parse(raw.trim()).is_ok_and(|u| {
+        matches!(u.scheme(), "http" | "https") && u.host_str().is_some_and(|h| !h.is_empty())
+    })
 }
 
 /// Why an invite for a workspace at `relay_url` couldn't be used, if it
@@ -234,15 +242,25 @@ mod tests {
         let code = encode_workspace_invite(&c);
         assert!(code.starts_with(INVITE_PREFIX));
         let back = decode_workspace_invite(&format!("  {code}\n")).unwrap();
-        assert_eq!(back, WorkspaceConn { icon: None, ..c.clone() });
+        assert_eq!(
+            back,
+            WorkspaceConn {
+                icon: None,
+                ..c.clone()
+            }
+        );
         assert_eq!(back.invite_id().map(|u| u.to_string()), c.inv);
-        assert_eq!(back.founder_pin(), c.founder_actor_id.clone().zip(c.fk.clone()));
+        assert_eq!(
+            back.founder_pin(),
+            c.founder_actor_id.clone().zip(c.fk.clone())
+        );
         assert_eq!(back.id(), ligus_core::room_workspace_id("r00m"));
     }
 
     #[test]
     fn an_unnamed_invite_decodes_to_its_room() {
-        let back = decode_workspace_invite(&encode_workspace_invite(&conn("", "plain-room"))).unwrap();
+        let back =
+            decode_workspace_invite(&encode_workspace_invite(&conn("", "plain-room"))).unwrap();
         assert_eq!(back.name, "plain-room");
     }
 
@@ -251,7 +269,10 @@ mod tests {
         assert!(decode_workspace_invite("nope").is_err());
         assert!(decode_workspace_invite("hivews1:!!!notbase64").is_err());
         let no_room = encode_workspace_invite(&conn("x", " "));
-        assert_eq!(decode_workspace_invite(&no_room).unwrap_err(), "invite is missing a room");
+        assert_eq!(
+            decode_workspace_invite(&no_room).unwrap_err(),
+            "invite is missing a room"
+        );
     }
 
     #[test]
@@ -260,16 +281,39 @@ mod tests {
         let account = SigningKeypair::generate().unwrap();
         let device = SigningKeypair::generate().unwrap();
         let founder = Uuid::new_v4();
-        let cert = DeviceCertificate::issue(&account, founder, &device.public_key_bytes(), ligus_core::Timestamp::epoch());
+        let cert = DeviceCertificate::issue(
+            &account,
+            founder,
+            &device.public_key_bytes(),
+            ligus_core::Timestamp::epoch(),
+        );
         let mut c = conn("", "r00m");
         c.founder_actor_id = Some(founder.to_string());
-        c.fk = Some(crate::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes()));
+        c.fk = Some(crate::envelope_verifier::FounderPin::fingerprint_hex(
+            &account.public_key_bytes(),
+        ));
         let (n, ek) = (c.display_name(), c.ek_json());
-        c.sig = Some(crate::invite_sig::sign(&c.sig_claims(&n, &ek), 1, &device, &cert, &account.public_key_bytes()));
+        c.sig = Some(crate::invite_sig::sign(
+            &c.sig_claims(&n, &ek),
+            1,
+            &device,
+            &cert,
+            &account.public_key_bytes(),
+        ));
         let back = decode_workspace_invite(&encode_workspace_invite(&c)).unwrap();
         assert_eq!(back.signed_by(&|_| false), Some(founder));
-        assert_eq!(WorkspaceConn { relay_url: "https://evil.example".into(), ..back.clone() }.signed_by(&|_| false), None);
-        assert_eq!(WorkspaceConn { sig: None, ..back }.signed_by(&|_| false), None);
+        assert_eq!(
+            WorkspaceConn {
+                relay_url: "https://evil.example".into(),
+                ..back.clone()
+            }
+            .signed_by(&|_| false),
+            None
+        );
+        assert_eq!(
+            WorkspaceConn { sig: None, ..back }.signed_by(&|_| false),
+            None
+        );
     }
 
     /// An invite with no relay field decodes (to an empty relay) so the
@@ -277,11 +321,20 @@ mod tests {
     #[test]
     fn a_relayless_invite_decodes_to_an_empty_relay() {
         use base64::Engine;
-        let code = |json: &str| format!("{INVITE_PREFIX}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json));
+        let code = |json: &str| {
+            format!(
+                "{INVITE_PREFIX}{}",
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
+            )
+        };
         let c = decode_workspace_invite(&code(r#"{"room":"r","key":"k"}"#)).unwrap();
         assert_eq!((c.relay_url.as_str(), c.room.as_str()), ("", "r"));
-        assert!(invite_relay_problem(&c.relay_url).unwrap().starts_with(NO_RELAY_ERR));
-        assert!(decode_workspace_invite(&code(r#"{"relay_url":"https://relay.example"}"#)).is_err());
+        assert!(invite_relay_problem(&c.relay_url)
+            .unwrap()
+            .starts_with(NO_RELAY_ERR));
+        assert!(
+            decode_workspace_invite(&code(r#"{"relay_url":"https://relay.example"}"#)).is_err()
+        );
     }
 
     #[test]
@@ -290,7 +343,11 @@ mod tests {
             let e = invite_relay_problem(bad).unwrap_or_else(|| panic!("{bad:?} accepted"));
             assert!(e.starts_with(NO_RELAY_ERR), "{e}");
         }
-        for good in ["https://relay.example", "http://127.0.0.1:8443", " https://relay.example/ "] {
+        for good in [
+            "https://relay.example",
+            "http://127.0.0.1:8443",
+            " https://relay.example/ ",
+        ] {
             assert_eq!(invite_relay_problem(good), None, "{good:?}");
             assert!(usable_relay_url(good));
         }

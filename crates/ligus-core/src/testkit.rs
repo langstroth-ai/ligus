@@ -14,7 +14,9 @@ use uuid::Uuid;
 
 use crate::crypto::{sign_envelope, DeviceCertificate, SigningKeypair};
 use crate::events::{SessionEvent, SessionEventEnvelope};
-use crate::identity::{ActorIdentity, ActorKind, ActorStamp, CfgFrontier, WorkspaceMember, WorkspaceRole};
+use crate::identity::{
+    ActorIdentity, ActorKind, ActorStamp, CfgFrontier, WorkspaceMember, WorkspaceRole,
+};
 use crate::presence::{PresenceAssertion, PresencePolicy, RecoveryKey};
 use crate::session::ChatSession;
 use crate::time_util::Timestamp;
@@ -37,7 +39,10 @@ impl Person {
             name: name.into(),
             account_id: Uuid::new_v4(),
             account: SigningKeypair::generate().unwrap(),
-            device_id: crate::crypto::device_id_for(crate::crypto::SigAlg::Ed25519, &device.public_key_bytes()),
+            device_id: crate::crypto::device_id_for(
+                crate::crypto::SigAlg::Ed25519,
+                &device.public_key_bytes(),
+            ),
             device,
             recovery: RecoveryKey::from_seed([0; 32]),
         }
@@ -63,11 +68,23 @@ impl Person {
     }
 
     pub fn member(&self, role: WorkspaceRole) -> WorkspaceMember {
-        WorkspaceMember { id: self.name.clone(), actor: self.actor(), role, title: String::new(), index: 0, joined_at: Timestamp::epoch() }
+        WorkspaceMember {
+            id: self.name.clone(),
+            actor: self.actor(),
+            role,
+            title: String::new(),
+            index: 0,
+            joined_at: Timestamp::epoch(),
+        }
     }
 
     pub fn certificate(&self) -> DeviceCertificate {
-        DeviceCertificate::issue(&self.account, self.account_id, &self.device.public_key_bytes(), Timestamp::epoch())
+        DeviceCertificate::issue(
+            &self.account,
+            self.account_id,
+            &self.device.public_key_bytes(),
+            Timestamp::epoch(),
+        )
     }
 }
 
@@ -107,34 +124,73 @@ impl SignedWorld {
     /// [`SignedWorld::genesis`] with these people (the first founds).
     pub fn genesis_of(people: Vec<Person>, policy: Option<PresencePolicy>) -> Self {
         let founder_name = people[0].name.clone();
-        let people: BTreeMap<String, Person> = people.into_iter().map(|p| (p.name.clone(), p)).collect();
-        let mut w = Self { wid: Uuid::new_v4(), clock: 0, cfg: Vec::new(), chats: BTreeMap::new(), people: Arc::new(people), kinds: BTreeMap::new() };
+        let people: BTreeMap<String, Person> =
+            people.into_iter().map(|p| (p.name.clone(), p)).collect();
+        let mut w = Self {
+            wid: Uuid::new_v4(),
+            clock: 0,
+            cfg: Vec::new(),
+            chats: BTreeMap::new(),
+            people: Arc::new(people),
+            kinds: BTreeMap::new(),
+        };
         let founder = founder_name.as_str();
         let mut seed = ChatSession::new("", w.wid, "");
         seed.id = workspace_config_session_id(w.wid);
         seed.creator_actor_id = founder.into();
         seed.members = vec![w.people[founder].member(WorkspaceRole::Owner)];
-        w.push_bare(founder, SessionEvent::SessionSnapshot { session: Box::new(seed) });
+        w.push_bare(
+            founder,
+            SessionEvent::SessionSnapshot {
+                session: Box::new(seed),
+            },
+        );
         w.publish_identity(founder);
         w.register_recovery(founder);
-        w.push(founder, SessionEvent::WorkspaceRulesSet { version: 2, presence: policy });
+        w.push(
+            founder,
+            SessionEvent::WorkspaceRulesSet {
+                version: 2,
+                presence: policy,
+            },
+        );
         w
     }
 
     /// `name` publishes their account key and device certificate.
     pub fn publish_identity(&mut self, name: &str) {
         let p = &self.people[name];
-        let (account_id, pk, cert) = (p.account_id, p.account.public_key_bytes().to_vec(), p.certificate());
-        self.push_bare(name, SessionEvent::AccountKeyRegistered { account_id, signing_public_key: pk });
-        self.push_bare(name, SessionEvent::DeviceCertificateAdded { certificate: cert });
+        let (account_id, pk, cert) = (
+            p.account_id,
+            p.account.public_key_bytes().to_vec(),
+            p.certificate(),
+        );
+        self.push_bare(
+            name,
+            SessionEvent::AccountKeyRegistered {
+                account_id,
+                signing_public_key: pk,
+            },
+        );
+        self.push_bare(
+            name,
+            SessionEvent::DeviceCertificateAdded { certificate: cert },
+        );
     }
 
     /// `name` registers their recovery key (it proves itself).
     pub fn register_recovery(&mut self, name: &str) -> Uuid {
         let p = &self.people[name];
         let cred = p.recovery.credential(p.account_id, "Recovery key");
-        let mut env = self.draft(name, None, SessionEvent::PasskeyRegistered { credential: cred }, None);
-        let a = self.people[name].recovery.assert(&crate::presence::challenge(&env));
+        let mut env = self.draft(
+            name,
+            None,
+            SessionEvent::PasskeyRegistered { credential: cred },
+            None,
+        );
+        let a = self.people[name]
+            .recovery
+            .assert(&crate::presence::challenge(&env));
         self.finish(&mut env, name, Some(a));
         self.push_env(None, env)
     }
@@ -143,7 +199,14 @@ impl SignedWorld {
     /// publishes their identity and registers their recovery key.
     pub fn admit(&mut self, by: &str, name: &str, role: WorkspaceRole) {
         let m = self.member_of(name, role);
-        self.push(by, SessionEvent::MemberAdded { member: m, invite: None, proof: None });
+        self.push(
+            by,
+            SessionEvent::MemberAdded {
+                member: m,
+                invite: None,
+                proof: None,
+            },
+        );
         self.publish_identity(name);
         self.register_recovery(name);
     }
@@ -163,7 +226,13 @@ impl SignedWorld {
     /// Draft an envelope by `by` on `chat` (`None` = the config log), stamped
     /// at `frontier` (`None` for the config log = the head), signed, without
     /// presence.
-    pub fn draft(&mut self, by: &str, chat: Option<Uuid>, payload: SessionEvent, frontier: Option<CfgFrontier>) -> SessionEventEnvelope {
+    pub fn draft(
+        &mut self,
+        by: &str,
+        chat: Option<Uuid>,
+        payload: SessionEvent,
+        frontier: Option<CfgFrontier>,
+    ) -> SessionEventEnvelope {
         self.clock += 1;
         let sid = chat.unwrap_or_else(|| workspace_config_session_id(self.wid));
         let mut env = SessionEventEnvelope::new(sid, self.wid, self.clock as i64, payload);
@@ -178,8 +247,21 @@ impl SignedWorld {
             None => &self.cfg,
             Some(c) => self.chats.get(&c).map(Vec::as_slice).unwrap_or(&[]),
         };
-        let prev = log.iter().rev().find(|e| e.signer_device_id == Some(p.device_id)).map(|e| e.event_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier, presence: None, runtime_effect: false, prev, sig_alg: Default::default(), log_head: None });
+        let prev = log
+            .iter()
+            .rev()
+            .find(|e| e.signer_device_id == Some(p.device_id))
+            .map(|e| e.event_id);
+        env.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier,
+            presence: None,
+            runtime_effect: false,
+            prev,
+            sig_alg: Default::default(),
+            log_head: None,
+        });
         // Its lamport counts from the newest event of its own log.
         crate::lamport::stamp_after(&mut env, log);
         sign_envelope(&mut env, p.device_id, &p.device);
@@ -187,7 +269,12 @@ impl SignedWorld {
     }
 
     /// Attach `presence` (inside the stamp) and re-sign as `by`.
-    pub fn finish(&self, env: &mut SessionEventEnvelope, by: &str, presence: Option<PresenceAssertion>) {
+    pub fn finish(
+        &self,
+        env: &mut SessionEventEnvelope,
+        by: &str,
+        presence: Option<PresenceAssertion>,
+    ) {
         if let Some(s) = env.actor_stamp.as_mut() {
             s.presence = presence;
         }
@@ -198,7 +285,9 @@ impl SignedWorld {
 
     /// The author's recovery-key presence over `env`'s digest.
     pub fn recovery_presence(&self, by: &str, env: &SessionEventEnvelope) -> PresenceAssertion {
-        self.people[by].recovery.assert(&crate::presence::challenge(env))
+        self.people[by]
+            .recovery
+            .assert(&crate::presence::challenge(env))
     }
 
     /// Store `env` on its log; returns its event id.
@@ -223,7 +312,14 @@ impl SignedWorld {
 
     /// Any event: on `chat` (or the config log), at `frontier` (or the head),
     /// with `proof`.
-    pub fn write(&mut self, by: &str, chat: Option<Uuid>, payload: SessionEvent, frontier: Option<CfgFrontier>, proof: Proof) -> Uuid {
+    pub fn write(
+        &mut self,
+        by: &str,
+        chat: Option<Uuid>,
+        payload: SessionEvent,
+        frontier: Option<CfgFrontier>,
+        proof: Proof,
+    ) -> Uuid {
         let mut env = self.draft(by, chat, payload, frontier);
         if let Proof::Recovery = proof {
             let a = self.recovery_presence(by, &env);
@@ -238,7 +334,15 @@ impl SignedWorld {
         s.creator_actor_id = by.into();
         s.members = vec![self.people[by].member(WorkspaceRole::Owner)];
         let id = s.id;
-        self.write(by, Some(id), SessionEvent::SessionSnapshot { session: Box::new(s) }, None, Proof::None);
+        self.write(
+            by,
+            Some(id),
+            SessionEvent::SessionSnapshot {
+                session: Box::new(s),
+            },
+            None,
+            Proof::None,
+        );
         id
     }
 
@@ -260,21 +364,39 @@ impl SignedWorld {
 
     /// The config fold.
     pub fn config(&self) -> ChatSession {
-        crate::events::project_config(&self.cfg, None, None).0.unwrap()
+        crate::events::project_config(&self.cfg, None, None)
+            .0
+            .unwrap()
     }
 
     /// A chat's checked fold.
     pub fn state(&self, chat: Uuid) -> ChatSession {
         let t = self.timeline();
-        crate::events::project_authorized(&self.chats[&chat], None, None, crate::events::WorkspaceAuthz::Timeline(&t)).unwrap()
+        crate::events::project_authorized(
+            &self.chats[&chat],
+            None,
+            None,
+            crate::events::WorkspaceAuthz::Timeline(&t),
+        )
+        .unwrap()
     }
 
     /// Every verdict: the config log's and every chat's.
     pub fn verdicts(&self) -> BTreeMap<Uuid, crate::events::Verdict> {
         let t = self.timeline();
-        let mut v = crate::events::fold_decisions(&self.cfg, None, None, crate::events::WorkspaceAuthz::Unchecked);
+        let mut v = crate::events::fold_decisions(
+            &self.cfg,
+            None,
+            None,
+            crate::events::WorkspaceAuthz::Unchecked,
+        );
         for log in self.chats.values() {
-            v.extend(crate::events::fold_decisions(log, None, None, crate::events::WorkspaceAuthz::Timeline(&t)));
+            v.extend(crate::events::fold_decisions(
+                log,
+                None,
+                None,
+                crate::events::WorkspaceAuthz::Timeline(&t),
+            ));
         }
         v
     }
@@ -304,7 +426,12 @@ pub fn recovery_registration(account: Uuid) -> SessionEvent {
 /// Stamp `account`'s test recovery-key presence over `env` (the event's own
 /// digest) and re-sign it with `device`. Works for a recovery registration's
 /// self-proof and for any presence-gated event once the key is registered.
-pub fn prove_recovery(env: &mut SessionEventEnvelope, account: Uuid, device_id: Uuid, device: &SigningKeypair) {
+pub fn prove_recovery(
+    env: &mut SessionEventEnvelope,
+    account: Uuid,
+    device_id: Uuid,
+    device: &SigningKeypair,
+) {
     let a = test_recovery_key(account).assert(&crate::presence::challenge(env));
     if let Some(s) = env.actor_stamp.as_mut() {
         s.presence = Some(a);
@@ -325,7 +452,10 @@ impl Phone {
         loop {
             getrandom::fill(&mut b).expect("randomness");
             if let Ok(key) = p256::ecdsa::SigningKey::from_slice(&b) {
-                let device_id = crate::crypto::device_id_for(crate::crypto::SigAlg::P256, &crate::crypto::p256_public_key(&key));
+                let device_id = crate::crypto::device_id_for(
+                    crate::crypto::SigAlg::P256,
+                    &crate::crypto::p256_public_key(&key),
+                );
                 return Self { device_id, key };
             }
         }
@@ -350,11 +480,22 @@ impl SignedWorld {
     /// `owner`'s certificate for `phone` (P-256, signed by their account key).
     pub fn phone_certificate(&self, owner: &str, phone: &Phone) -> DeviceCertificate {
         let p = &self.people[owner];
-        DeviceCertificate::issue_p256(&p.account, p.account_id, &phone.public_key(), Timestamp::epoch())
+        DeviceCertificate::issue_p256(
+            &p.account,
+            p.account_id,
+            &phone.public_key(),
+            Timestamp::epoch(),
+        )
     }
 
     /// An event by `by`, signed by their phone's P-256 key (no presence).
-    pub fn phone_write(&mut self, by: &str, phone: &Phone, chat: Option<Uuid>, payload: SessionEvent) -> Uuid {
+    pub fn phone_write(
+        &mut self,
+        by: &str,
+        phone: &Phone,
+        chat: Option<Uuid>,
+        payload: SessionEvent,
+    ) -> Uuid {
         let mut env = self.draft(by, chat, payload, None);
         if let Some(s) = env.actor_stamp.as_mut() {
             s.actor.device_id = Some(phone.device_id);
@@ -362,7 +503,11 @@ impl SignedWorld {
                 None => &self.cfg,
                 Some(c) => self.chats.get(&c).map(Vec::as_slice).unwrap_or(&[]),
             };
-            s.prev = log.iter().rev().find(|e| e.signer_device_id == Some(phone.device_id)).map(|e| e.event_id);
+            s.prev = log
+                .iter()
+                .rev()
+                .find(|e| e.signer_device_id == Some(phone.device_id))
+                .map(|e| e.event_id);
         }
         crate::crypto::sign_envelope_p256(&mut env, phone.device_id, &phone.key);
         self.push_env(chat, env)
@@ -403,7 +548,10 @@ pub fn honest_chain(envelopes: &[SessionEventEnvelope]) -> Vec<SessionEventEnvel
             });
         }
         crate::lamport::stamp_next(e, head);
-        let key = CfgFrontier { lamport: e.lamport, event_id: e.event_id };
+        let key = CfgFrontier {
+            lamport: e.lamport,
+            event_id: e.event_id,
+        };
         if newest[level].is_none_or(|n| key > n) {
             newest[level] = Some(key);
         }

@@ -53,7 +53,11 @@ pub struct ShortFrame;
 
 impl Frame {
     pub fn new(ty: u8, stream: u32, payload: Vec<u8>) -> Self {
-        Self { ty, stream, payload }
+        Self {
+            ty,
+            stream,
+            payload,
+        }
     }
 
     pub fn encode(&self) -> Vec<u8> {
@@ -68,7 +72,11 @@ impl Frame {
         if b.len() < HEADER_LEN {
             return Err(ShortFrame);
         }
-        Ok(Self { ty: b[0], stream: u32::from_be_bytes([b[1], b[2], b[3], b[4]]), payload: b[HEADER_LEN..].to_vec() })
+        Ok(Self {
+            ty: b[0],
+            stream: u32::from_be_bytes([b[1], b[2], b[3], b[4]]),
+            payload: b[HEADER_LEN..].to_vec(),
+        })
     }
 
     pub fn open(stream: u32, head: &RequestHead) -> Self {
@@ -131,5 +139,8 @@ pub struct ResponseHead {
 
 /// Hop-by-hop headers that MUST NOT cross the mux (§9).
 pub fn is_hop_by_hop(name: &str) -> bool {
-    matches!(name, "connection" | "keep-alive" | "transfer-encoding" | "te" | "upgrade" | "host") || name.starts_with("proxy-")
+    matches!(
+        name,
+        "connection" | "keep-alive" | "transfer-encoding" | "te" | "upgrade" | "host"
+    ) || name.starts_with("proxy-")
 }

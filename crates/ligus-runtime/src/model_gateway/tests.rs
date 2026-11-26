@@ -35,7 +35,11 @@ pub(crate) fn fake_gateway() -> (u16, Arc<Mutex<Seen>>) {
                 let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
                 let len: usize = head
                     .lines()
-                    .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0)))
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse().unwrap_or(0))
+                    })
                     .unwrap_or(0);
                 while buf.len() < head_end + len {
                     match c.read(&mut chunk) {
@@ -79,7 +83,10 @@ fn api_key_gateway(port: u16, key_file: &Path, attribution: bool) -> Gateway {
         api: Api::Openai,
         allow_plaintext: true,
         attribution,
-        auth: AuthConfig::ApiKey { key_file: key_file.to_path_buf(), header: None },
+        auth: AuthConfig::ApiKey {
+            key_file: key_file.to_path_buf(),
+            header: None,
+        },
         ca_file: None,
     })
     .unwrap()
@@ -91,7 +98,10 @@ fn config_validation() {
         "auth":{"mode":"serviceAccountToken","tokenFile":"/etc/ligus/model-gateways/litellm/token"}}]}"#;
     let g = cfg(ok).unwrap();
     assert_eq!(g[0].name(), "litellm");
-    assert_eq!(g[0].chat_endpoint(), "https://litellm.gw.svc:4000/v1/chat/completions");
+    assert_eq!(
+        g[0].chat_endpoint(),
+        "https://litellm.gw.svc:4000/v1/chat/completions"
+    );
     let bad = [
         // plaintext without the opt-in
         r#"{"gateways":[{"name":"a","url":"http://gw:4000","auth":{"mode":"none"}}]}"#,
@@ -124,15 +134,37 @@ fn routes_named_covered_direct_and_exclusive() {
     let excl = ModelGateways::new(gws, true, None);
     let open = ModelGateways::new(cfg(r#"{"gateways":[{"name":"litellm","url":"https://litellm.gw.svc:4000","auth":{"mode":"none"}}]}"#).unwrap(), false, None);
     let sel = |n: &str| GatewaySelection::named(n);
-    let r = excl.route(ModelProviderKind::Custom, "", Some(&sel("litellm"))).unwrap().unwrap();
+    let r = excl
+        .route(ModelProviderKind::Custom, "", Some(&sel("litellm")))
+        .unwrap()
+        .unwrap();
     assert_eq!(r.gateway.name(), "litellm");
     // Named but not offered here: refused on every host.
-    assert!(excl.route(ModelProviderKind::Custom, "", Some(&sel("other"))).unwrap_err().contains("doesn't offer"));
-    assert!(ModelGateways::default().route(ModelProviderKind::Custom, "", Some(&sel("litellm"))).is_err());
+    assert!(excl
+        .route(ModelProviderKind::Custom, "", Some(&sel("other")))
+        .unwrap_err()
+        .contains("doesn't offer"));
+    assert!(ModelGateways::default()
+        .route(ModelProviderKind::Custom, "", Some(&sel("litellm")))
+        .is_err());
     // An endpoint on a listed gateway goes through it (credential injected).
-    let r = excl.route(ModelProviderKind::Custom, "https://LITELLM.gw.svc:4000/v1/chat/completions", None).unwrap().unwrap();
+    let r = excl
+        .route(
+            ModelProviderKind::Custom,
+            "https://LITELLM.gw.svc:4000/v1/chat/completions",
+            None,
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(r.gateway.name(), "litellm");
-    let r = excl.route(ModelProviderKind::Anthropic, "https://ai.example.com/anthropic/v1/messages", None).unwrap().unwrap();
+    let r = excl
+        .route(
+            ModelProviderKind::Anthropic,
+            "https://ai.example.com/anthropic/v1/messages",
+            None,
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(r.gateway.name(), "claude-gw");
     // Lookalikes are not on the gateway.
     for e in [
@@ -142,20 +174,56 @@ fn routes_named_covered_direct_and_exclusive() {
         "https://ai.example.com.evil.net/anthropic/v1/messages",
         "https://user@litellm.gw.svc:4000/v1",
     ] {
-        assert!(excl.route(ModelProviderKind::Custom, e, None).is_err(), "{e} counted as the gateway");
+        assert!(
+            excl.route(ModelProviderKind::Custom, e, None).is_err(),
+            "{e} counted as the gateway"
+        );
     }
     // An unlisted endpoint: refused on an exclusive host, direct otherwise.
-    assert!(excl.route(ModelProviderKind::OpenAI, "https://api.openai.com/v1/chat/completions", None).unwrap_err().contains("only through"));
-    assert!(excl.route(ModelProviderKind::ClaudeCode, "", None).is_err(), "a CLI's vendor endpoint on an exclusive host");
-    assert!(open.route(ModelProviderKind::OpenAI, "https://api.openai.com/v1/chat/completions", None).unwrap().is_none());
-    assert!(ModelGateways::default().route(ModelProviderKind::ClaudeCode, "", None).unwrap().is_none());
+    assert!(excl
+        .route(
+            ModelProviderKind::OpenAI,
+            "https://api.openai.com/v1/chat/completions",
+            None
+        )
+        .unwrap_err()
+        .contains("only through"));
+    assert!(
+        excl.route(ModelProviderKind::ClaudeCode, "", None).is_err(),
+        "a CLI's vendor endpoint on an exclusive host"
+    );
+    assert!(open
+        .route(
+            ModelProviderKind::OpenAI,
+            "https://api.openai.com/v1/chat/completions",
+            None
+        )
+        .unwrap()
+        .is_none());
+    assert!(ModelGateways::default()
+        .route(ModelProviderKind::ClaudeCode, "", None)
+        .unwrap()
+        .is_none());
     // CLIs that can't take a base URL, or speak the other wire.
-    assert!(excl.route(ModelProviderKind::Copilot, "", Some(&sel("litellm"))).is_err());
-    assert!(excl.route(ModelProviderKind::ClaudeCode, "", Some(&sel("litellm"))).is_err(), "claude speaks the anthropic wire");
-    assert!(excl.route(ModelProviderKind::ClaudeCode, "", Some(&sel("claude-gw"))).is_ok());
-    assert!(excl.route(ModelProviderKind::Codex, "", Some(&sel("litellm"))).is_ok());
+    assert!(excl
+        .route(ModelProviderKind::Copilot, "", Some(&sel("litellm")))
+        .is_err());
+    assert!(
+        excl.route(ModelProviderKind::ClaudeCode, "", Some(&sel("litellm")))
+            .is_err(),
+        "claude speaks the anthropic wire"
+    );
+    assert!(excl
+        .route(ModelProviderKind::ClaudeCode, "", Some(&sel("claude-gw")))
+        .is_ok());
+    assert!(excl
+        .route(ModelProviderKind::Codex, "", Some(&sel("litellm")))
+        .is_ok());
     assert_eq!(
-        excl.offers().iter().map(|o| (o.name.as_str(), o.api.as_str())).collect::<Vec<_>>(),
+        excl.offers()
+            .iter()
+            .map(|o| (o.name.as_str(), o.api.as_str()))
+            .collect::<Vec<_>>(),
         vec![("claude-gw", "anthropic"), ("litellm", "openai")]
     );
 }
@@ -171,7 +239,9 @@ fn token_rotation_is_picked_up_per_request() {
         api: Api::Openai,
         allow_plaintext: false,
         attribution: false,
-        auth: AuthConfig::ServiceAccountToken { token_file: tok.clone() },
+        auth: AuthConfig::ServiceAccountToken {
+            token_file: tok.clone(),
+        },
         ca_file: None,
     })
     .unwrap();
@@ -181,20 +251,33 @@ fn token_rotation_is_picked_up_per_request() {
     std::fs::rename(dir.path().join("token.new"), &tok).unwrap();
     assert_eq!(g.auth_headers().unwrap()[0].1.as_str(), "Bearer jwt-two");
     std::fs::write(&tok, "has space").unwrap();
-    assert!(g.auth_headers().is_err(), "a malformed token is refused, not sent");
+    assert!(
+        g.auth_headers().is_err(),
+        "a malformed token is refused, not sent"
+    );
     std::fs::remove_file(&tok).unwrap();
     let e = g.auth_headers().unwrap_err().to_string();
-    assert!(e.contains("ServiceAccount token") && !e.contains("jwt"), "{e}");
+    assert!(
+        e.contains("ServiceAccount token") && !e.contains("jwt"),
+        "{e}"
+    );
     let key = dir.path().join("k");
     std::fs::write(&key, "sk-gw").unwrap();
-    for (h, want) in [(None, ("authorization", "Bearer sk-gw")), (Some("x-api-key"), ("x-api-key", "sk-gw")), (Some("api-key"), ("api-key", "sk-gw"))] {
+    for (h, want) in [
+        (None, ("authorization", "Bearer sk-gw")),
+        (Some("x-api-key"), ("x-api-key", "sk-gw")),
+        (Some("api-key"), ("api-key", "sk-gw")),
+    ] {
         let g = Gateway::new(GatewayConfig {
             name: "k".into(),
             url: "https://gw.example".into(),
             api: Api::Anthropic,
             allow_plaintext: false,
             attribution: false,
-            auth: AuthConfig::ApiKey { key_file: key.clone(), header: h.map(Into::into) },
+            auth: AuthConfig::ApiKey {
+                key_file: key.clone(),
+                header: h.map(Into::into),
+            },
             ca_file: None,
         })
         .unwrap();
@@ -215,12 +298,21 @@ fn attribution_is_pseudonymous() {
     assert!(ws.bytes().all(|b| b.is_ascii_hexdigit()));
     assert_eq!(ws, pseudonym(&k1, b"w", w), "stable");
     assert_ne!(ws, pseudonym(&k2, b"w", w), "keyed");
-    assert_ne!(pseudonym(&k1, b"w", a), ag, "workspace and agent ids are separated");
+    assert_ne!(
+        pseudonym(&k1, b"w", a),
+        ag,
+        "workspace and agent ids are separated"
+    );
     for v in [&ws, &ag] {
-        assert!(!v.contains(&w.simple().to_string()[..8]) && !v.contains(&a.simple().to_string()[24..]));
+        assert!(
+            !v.contains(&w.simple().to_string()[..8]) && !v.contains(&a.simple().to_string()[24..])
+        );
     }
     assert_eq!(pseudonym(&[0u8; 32], b"w", Uuid::nil()), pseudonym_vector());
-    assert_eq!(ATTRIBUTION_CONTEXT, b"ligus-gateway-attribution-v1\0", "frozen once released (phase0-specs 0.1)");
+    assert_eq!(
+        ATTRIBUTION_CONTEXT, b"ligus-gateway-attribution-v1\0",
+        "frozen once released (phase0-specs 0.1)"
+    );
 }
 
 /// The attribution vector, computed independently of `pseudonym` (HMAC by
@@ -241,7 +333,15 @@ fn pseudonym_vector() -> String {
 
 #[test]
 fn client_credential_headers_and_forbidden_addresses() {
-    for h in ["Authorization", "proxy-authorization", "X-Api-Key", "api-key", "Cookie", "X-Ligus-Agent", "x-ligus-workspace"] {
+    for h in [
+        "Authorization",
+        "proxy-authorization",
+        "X-Api-Key",
+        "api-key",
+        "Cookie",
+        "X-Ligus-Agent",
+        "x-ligus-workspace",
+    ] {
         assert!(is_client_credential_header(h), "{h}");
     }
     for h in ["content-type", "anthropic-version", "x-request-id"] {
@@ -249,7 +349,10 @@ fn client_credential_headers_and_forbidden_addresses() {
     }
     assert!(addr_forbidden("169.254.169.254".parse().unwrap(), true));
     assert!(addr_forbidden("100.100.100.200".parse().unwrap(), true));
-    assert!(addr_forbidden("::ffff:169.254.169.254".parse().unwrap(), true));
+    assert!(addr_forbidden(
+        "::ffff:169.254.169.254".parse().unwrap(),
+        true
+    ));
     assert!(addr_forbidden("127.0.0.1".parse().unwrap(), false));
     assert!(!addr_forbidden("127.0.0.1".parse().unwrap(), true));
     assert!(!addr_forbidden("10.96.0.10".parse().unwrap(), false));
@@ -257,7 +360,9 @@ fn client_credential_headers_and_forbidden_addresses() {
 
 async fn raw_request(port: u16, raw: String) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
     s.write_all(raw.as_bytes()).await.unwrap();
     let mut out = Vec::new();
     let _ = tokio::time::timeout(std::time::Duration::from_secs(10), s.read_to_end(&mut out)).await;
@@ -277,10 +382,21 @@ async fn gateway_route_injects_and_strips() {
     let w = Uuid::from_u128(42);
     let a = Uuid::from_u128(43);
     let attr = Attribution::new(&[1u8; 32], Some(w), Some(a));
-    let proxy = crate::egress::EgressProxy::start_with(Vec::new(), None, vec![ResolvedGateway { gateway: g, attribution: Some(attr.clone()) }]).unwrap();
+    let proxy = crate::egress::EgressProxy::start_with(
+        Vec::new(),
+        None,
+        vec![ResolvedGateway {
+            gateway: g,
+            attribution: Some(attr.clone()),
+        }],
+    )
+    .unwrap();
     let pp = proxy.port();
     let base = proxy.gateway_url("test-gw");
-    let path = base.strip_prefix(&format!("http://127.0.0.1:{pp}")).unwrap().to_string();
+    let path = base
+        .strip_prefix(&format!("http://127.0.0.1:{pp}"))
+        .unwrap()
+        .to_string();
 
     let body = r#"{"model":"m","messages":[]}"#;
     let raw = format!(
@@ -294,11 +410,27 @@ async fn gateway_route_injects_and_strips() {
         let s = seen.lock().unwrap();
         let head = &s.heads[0];
         assert!(head.starts_with("POST /v1/chat/completions?x=1 "), "{head}");
-        assert_eq!(header(head, "authorization"), vec!["Bearer sk-REAL-GATEWAY-KEY"], "{head}");
-        assert!(header(head, "x-api-key").is_empty() && header(head, "cookie").is_empty(), "{head}");
-        assert_eq!(header(head, "x-ligus-agent"), vec![attr.agent.as_deref().unwrap()]);
-        assert_eq!(header(head, "x-ligus-workspace"), vec![attr.workspace.as_deref().unwrap()]);
-        assert!(!head.contains(&w.to_string()) && !head.contains("FORGED") && !head.contains("forged"), "{head}");
+        assert_eq!(
+            header(head, "authorization"),
+            vec!["Bearer sk-REAL-GATEWAY-KEY"],
+            "{head}"
+        );
+        assert!(
+            header(head, "x-api-key").is_empty() && header(head, "cookie").is_empty(),
+            "{head}"
+        );
+        assert_eq!(
+            header(head, "x-ligus-agent"),
+            vec![attr.agent.as_deref().unwrap()]
+        );
+        assert_eq!(
+            header(head, "x-ligus-workspace"),
+            vec![attr.workspace.as_deref().unwrap()]
+        );
+        assert!(
+            !head.contains(&w.to_string()) && !head.contains("FORGED") && !head.contains("forged"),
+            "{head}"
+        );
         assert_eq!(s.bodies[0], body.as_bytes());
     }
     // Chunked request bodies are decoded and forwarded whole.
@@ -307,9 +439,17 @@ async fn gateway_route_injects_and_strips() {
     assert_eq!(seen.lock().unwrap().bodies[1], b"hello world");
     // A wrong token, or a gateway the turn doesn't have: refused, nothing forwarded.
     let wrong = path.replacen(proxy.token(), "0000", 1);
-    assert!(raw_request(pp, format!("GET {wrong}/v1/models HTTP/1.1\r\n\r\n")).await.starts_with("HTTP/1.1 403"));
+    assert!(
+        raw_request(pp, format!("GET {wrong}/v1/models HTTP/1.1\r\n\r\n"))
+            .await
+            .starts_with("HTTP/1.1 403")
+    );
     let other = path.replace("/test-gw", "/other-gw");
-    assert!(raw_request(pp, format!("GET {other}/v1/models HTTP/1.1\r\n\r\n")).await.starts_with("HTTP/1.1 404"));
+    assert!(
+        raw_request(pp, format!("GET {other}/v1/models HTTP/1.1\r\n\r\n"))
+            .await
+            .starts_with("HTTP/1.1 404")
+    );
     // Only the model API: the gateway's admin routes (LiteLLM's key minting,
     // say) never get the credential, and no path climbs out of a prefix.
     for (m, bad) in [
@@ -320,7 +460,11 @@ async fn gateway_route_injects_and_strips() {
         ("DELETE", "/v1/models/x"),
         ("POST", "/v1/messages"),
     ] {
-        let resp = raw_request(pp, format!("{m} {path}{bad} HTTP/1.1\r\nContent-Length: 0\r\n\r\n")).await;
+        let resp = raw_request(
+            pp,
+            format!("{m} {path}{bad} HTTP/1.1\r\nContent-Length: 0\r\n\r\n"),
+        )
+        .await;
         assert!(resp.starts_with("HTTP/1.1 403"), "{m} {bad}: {resp}");
     }
     assert_eq!(seen.lock().unwrap().heads.len(), 2);
@@ -343,7 +487,11 @@ fn route_paths_are_the_model_api_only() {
         (Api::Anthropic, "POST", "/v1/chat/completions"),
         (Api::Openai, "POST", "/key/generate"),
         (Api::Openai, "GET", "/v1/chat/completions"),
-        (Api::Openai, "POST", "/v1/chat/completions/../../key/generate"),
+        (
+            Api::Openai,
+            "POST",
+            "/v1/chat/completions/../../key/generate",
+        ),
         (Api::Openai, "POST", "/v1/%2E%2E/key"),
         (Api::Openai, "POST", "v1/chat/completions"),
     ] {
@@ -361,16 +509,26 @@ async fn hosted_turn_uses_the_gateway_credential() {
     std::fs::write(&key, "sk-REAL-GATEWAY-KEY").unwrap();
     let g = Arc::new(api_key_gateway(port, &key, false));
     let http = g.client().await.unwrap();
-    let client = crate::provider::OpenAiClient::new(g.chat_endpoint()).with_gateway(g.clone(), None, http);
+    let client =
+        crate::provider::OpenAiClient::new(g.chat_endpoint()).with_gateway(g.clone(), None, http);
     let out = client
-        .stream_reply(Some("sk-RUNTIME-OWN-KEY"), "m", None, &[crate::provider::ChatTurn::user("ping")], |_| {})
+        .stream_reply(
+            Some("sk-RUNTIME-OWN-KEY"),
+            "m",
+            None,
+            &[crate::provider::ChatTurn::user("ping")],
+            |_| {},
+        )
         .await
         .unwrap();
     assert_eq!(out, "pong from gateway");
     let s = seen.lock().unwrap();
     let head = &s.heads[0];
     assert!(head.starts_with("POST /v1/chat/completions "), "{head}");
-    assert_eq!(header(head, "authorization"), vec!["Bearer sk-REAL-GATEWAY-KEY"]);
+    assert_eq!(
+        header(head, "authorization"),
+        vec!["Bearer sk-REAL-GATEWAY-KEY"]
+    );
     assert!(!head.contains("RUNTIME-OWN-KEY"), "{head}");
 }
 
@@ -380,7 +538,9 @@ async fn hosted_turn_uses_the_gateway_credential() {
 #[test]
 fn gateway_credential_absent_from_child() {
     use crate::executor::{self, Purpose, RuntimeScope, SpawnSpec};
-    let Some(e) = executor::tests::real_executor() else { return };
+    let Some(e) = executor::tests::real_executor() else {
+        return;
+    };
     if !std::path::Path::new("/usr/bin/curl").exists() {
         eprintln!("SKIPPED gateway_credential_absent_from_child: no /usr/bin/curl");
         return;
@@ -398,7 +558,10 @@ fn gateway_credential_absent_from_child() {
         api: Api::Openai,
         allow_plaintext: true,
         attribution: false,
-        auth: AuthConfig::ApiKey { key_file: key.clone(), header: None },
+        auth: AuthConfig::ApiKey {
+            key_file: key.clone(),
+            header: None,
+        },
         ca_file: None,
     })
     .unwrap();
@@ -410,27 +573,68 @@ fn gateway_credential_absent_from_child() {
          /usr/bin/curl -s -m 5 http://127.0.0.1:{port}/direct && echo DIRECT-OK",
         key = key.display()
     );
-    let rt = RuntimeScope { gateway: Some(GatewaySelection::named(&name)), ..Default::default() };
+    let rt = RuntimeScope {
+        gateway: Some(GatewaySelection::named(&name)),
+        ..Default::default()
+    };
     let out = executor::with_runtime_sync(rt, || {
-        let policy = executor::TurnPolicy { worktree_is_isolated: true, ..executor::TurnPolicy::baseline(executor::HostKind::Serve) };
+        let policy = executor::TurnPolicy {
+            worktree_is_isolated: true,
+            ..executor::TurnPolicy::baseline(executor::HostKind::Serve)
+        };
         executor::with_turn_sync(policy, || {
-            let spec = SpawnSpec::new(Purpose::Agent(ModelProviderKind::Hermes), "/bin/sh", ["-c", script.as_str()]).cwd(Some(&f.worktree));
+            let spec = SpawnSpec::new(
+                Purpose::Agent(ModelProviderKind::Hermes),
+                "/bin/sh",
+                ["-c", script.as_str()],
+            )
+            .cwd(Some(&f.worktree));
             let mut p = executor::prepare_with(&*e, spec).expect("prepare");
             let argv = format!("{:?}", p.command);
-            assert!(!argv.contains("CHILD-MUST-NOT-SEE"), "credential in the command: {argv}");
+            assert!(
+                !argv.contains("CHILD-MUST-NOT-SEE"),
+                "credential in the command: {argv}"
+            );
             let o = p.command.output().expect("spawn");
             drop(p.guard);
-            format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            )
         })
     });
-    assert!(!out.contains("CHILD-MUST-NOT-SEE") && !out.contains("READ-OK"), "the child saw the credential: {out}");
-    assert!(out.contains(&format!("OPENAI_API_KEY={DUMMY_KEY}")), "{out}");
-    assert!(out.contains("/ligus-gw/"), "base URL is the proxy route: {out}");
-    assert!(out.contains("pong from gateway"), "the turn reached the gateway through the route: {out}");
-    assert!(!out.contains("DIRECT-OK"), "the child reached the gateway directly: {out}");
+    assert!(
+        !out.contains("CHILD-MUST-NOT-SEE") && !out.contains("READ-OK"),
+        "the child saw the credential: {out}"
+    );
+    assert!(
+        out.contains(&format!("OPENAI_API_KEY={DUMMY_KEY}")),
+        "{out}"
+    );
+    assert!(
+        out.contains("/ligus-gw/"),
+        "base URL is the proxy route: {out}"
+    );
+    assert!(
+        out.contains("pong from gateway"),
+        "the turn reached the gateway through the route: {out}"
+    );
+    assert!(
+        !out.contains("DIRECT-OK"),
+        "the child reached the gateway directly: {out}"
+    );
     let s = seen.lock().unwrap();
-    assert_eq!(s.heads.len(), 1, "only the routed request arrived: {:?}", s.heads);
-    assert_eq!(header(&s.heads[0], "authorization"), vec!["Bearer sk-CHILD-MUST-NOT-SEE"]);
+    assert_eq!(
+        s.heads.len(),
+        1,
+        "only the routed request arrived: {:?}",
+        s.heads
+    );
+    assert_eq!(
+        header(&s.heads[0], "authorization"),
+        vec!["Bearer sk-CHILD-MUST-NOT-SEE"]
+    );
     assert!(!s.heads[0].contains("FORGED"));
 }
 
@@ -467,7 +671,8 @@ fn redirecting_server(location: String) -> (u16, Arc<Mutex<usize>>) {
 #[tokio::test]
 async fn gateway_redirects_are_not_followed() {
     let (elsewhere, seen) = fake_gateway();
-    let (gw_port, hits) = redirecting_server(format!("http://127.0.0.1:{elsewhere}/v1/chat/completions"));
+    let (gw_port, hits) =
+        redirecting_server(format!("http://127.0.0.1:{elsewhere}/v1/chat/completions"));
     let dir = tempfile::tempdir().unwrap();
     let key = dir.path().join("api-key");
     std::fs::write(&key, "sk-MUST-STAY-ON-THE-GATEWAY").unwrap();
@@ -478,25 +683,66 @@ async fn gateway_redirects_are_not_followed() {
             api: Api::Openai,
             allow_plaintext: true,
             attribution: false,
-            auth: AuthConfig::ApiKey { key_file: key.clone(), header: Some("x-api-key".into()) },
+            auth: AuthConfig::ApiKey {
+                key_file: key.clone(),
+                header: Some("x-api-key".into()),
+            },
             ca_file: None,
         })
         .unwrap(),
     );
     // Through the proxy route.
-    let proxy = crate::egress::EgressProxy::start_with(Vec::new(), None, vec![ResolvedGateway { gateway: g.clone(), attribution: None }]).unwrap();
+    let proxy = crate::egress::EgressProxy::start_with(
+        Vec::new(),
+        None,
+        vec![ResolvedGateway {
+            gateway: g.clone(),
+            attribution: None,
+        }],
+    )
+    .unwrap();
     let pp = proxy.port();
-    let path = proxy.gateway_url("redir-gw").strip_prefix(&format!("http://127.0.0.1:{pp}")).unwrap().to_string();
+    let path = proxy
+        .gateway_url("redir-gw")
+        .strip_prefix(&format!("http://127.0.0.1:{pp}"))
+        .unwrap()
+        .to_string();
     let body = r#"{"model":"m","messages":[]}"#;
-    let resp = raw_request(pp, format!("POST {path}/v1/chat/completions HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len())).await;
-    assert!(resp.starts_with("HTTP/1.1 307"), "the redirect goes back to the client, unfollowed: {resp}");
+    let resp = raw_request(
+        pp,
+        format!(
+            "POST {path}/v1/chat/completions HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    )
+    .await;
+    assert!(
+        resp.starts_with("HTTP/1.1 307"),
+        "the redirect goes back to the client, unfollowed: {resp}"
+    );
     // A hosted-API turn.
     let http = g.client().await.unwrap();
-    let client = crate::provider::OpenAiClient::new(g.chat_endpoint()).with_gateway(g.clone(), None, http);
-    let _ = client.stream_reply(None, "m", None, &[crate::provider::ChatTurn::user("ping")], |_| {}).await;
-    assert!(*hits.lock().unwrap() >= 2, "both requests reached the gateway");
+    let client =
+        crate::provider::OpenAiClient::new(g.chat_endpoint()).with_gateway(g.clone(), None, http);
+    let _ = client
+        .stream_reply(
+            None,
+            "m",
+            None,
+            &[crate::provider::ChatTurn::user("ping")],
+            |_| {},
+        )
+        .await;
+    assert!(
+        *hits.lock().unwrap() >= 2,
+        "both requests reached the gateway"
+    );
     let s = seen.lock().unwrap();
-    assert!(s.heads.is_empty(), "a redirect was followed with the gateway's credential: {:?}", s.heads);
+    assert!(
+        s.heads.is_empty(),
+        "a redirect was followed with the gateway's credential: {:?}",
+        s.heads
+    );
 }
 
 /// An HTTP runtime whose endpoint is on a gateway goes through it only for
@@ -513,18 +759,53 @@ fn covered_endpoint_must_be_the_model_api() {
         None,
     );
     for (p, e) in [
-        (ModelProviderKind::Custom, "https://litellm.gw.svc:4000/key/generate"),
-        (ModelProviderKind::OpenAI, "https://litellm.gw.svc:4000/user/new"),
-        (ModelProviderKind::Custom, "https://litellm.gw.svc:4000/v1/chat/completions/../../key/generate"),
-        (ModelProviderKind::Custom, "https://litellm.gw.svc:4000/v1/%2e%2e/key/generate"),
+        (
+            ModelProviderKind::Custom,
+            "https://litellm.gw.svc:4000/key/generate",
+        ),
+        (
+            ModelProviderKind::OpenAI,
+            "https://litellm.gw.svc:4000/user/new",
+        ),
+        (
+            ModelProviderKind::Custom,
+            "https://litellm.gw.svc:4000/v1/chat/completions/../../key/generate",
+        ),
+        (
+            ModelProviderKind::Custom,
+            "https://litellm.gw.svc:4000/v1/%2e%2e/key/generate",
+        ),
         (ModelProviderKind::Custom, "https://litellm.gw.svc:4000"),
-        (ModelProviderKind::Anthropic, "https://ai.example.com/anthropic/admin/keys"),
-        (ModelProviderKind::Anthropic, "https://litellm.gw.svc:4000/v1/chat/completions"),
+        (
+            ModelProviderKind::Anthropic,
+            "https://ai.example.com/anthropic/admin/keys",
+        ),
+        (
+            ModelProviderKind::Anthropic,
+            "https://litellm.gw.svc:4000/v1/chat/completions",
+        ),
     ] {
-        assert!(gws.route(p, e, None).is_err(), "{p:?} {e} got the gateway's credential");
+        assert!(
+            gws.route(p, e, None).is_err(),
+            "{p:?} {e} got the gateway's credential"
+        );
     }
-    assert!(gws.route(ModelProviderKind::Custom, "https://litellm.gw.svc:4000/v1/chat/completions", None).unwrap().is_some());
-    assert!(gws.route(ModelProviderKind::Anthropic, "https://ai.example.com/anthropic/v1/messages", None).unwrap().is_some());
+    assert!(gws
+        .route(
+            ModelProviderKind::Custom,
+            "https://litellm.gw.svc:4000/v1/chat/completions",
+            None
+        )
+        .unwrap()
+        .is_some());
+    assert!(gws
+        .route(
+            ModelProviderKind::Anthropic,
+            "https://ai.example.com/anthropic/v1/messages",
+            None
+        )
+        .unwrap()
+        .is_some());
 }
 
 /// On a gateway-exclusive host, the `/props` context probe of a Custom
@@ -532,7 +813,9 @@ fn covered_endpoint_must_be_the_model_api() {
 /// runtime's own key) before the turn is refused.
 #[tokio::test]
 async fn context_probe_respects_the_gateway_route() {
-    let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let l = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
     let port = l.local_addr().unwrap().port();
     let excl = ModelGateways::new(cfg(r#"{"gateways":[{"name":"litellm","url":"https://litellm.gw.svc:4000","auth":{"mode":"none"}}]}"#).unwrap(), true, None);
     let rt = crate::provider::ResolvedRuntime {
@@ -554,26 +837,100 @@ async fn context_probe_respects_the_gateway_route() {
     };
     crate::provider::dispatch::warm_context_probe_on(&excl, &rt).await;
     let got = tokio::time::timeout(std::time::Duration::from_millis(300), l.accept()).await;
-    assert!(got.is_err(), "the probe connected to an unlisted endpoint on an exclusive host");
+    assert!(
+        got.is_err(),
+        "the probe connected to an unlisted endpoint on an exclusive host"
+    );
 }
 
 /// `openssl` for the TLS tests (skipped without it).
 fn openssl() -> Option<&'static str> {
-    ["/opt/homebrew/bin/openssl", "/usr/bin/openssl", "/usr/local/bin/openssl"].into_iter().find(|p| Path::new(p).exists())
+    [
+        "/opt/homebrew/bin/openssl",
+        "/usr/bin/openssl",
+        "/usr/local/bin/openssl",
+    ]
+    .into_iter()
+    .find(|p| Path::new(p).exists())
 }
 
 fn run_openssl(bin: &str, dir: &Path, args: &[&str]) {
-    let o = std::process::Command::new(bin).current_dir(dir).args(args).output().unwrap();
-    assert!(o.status.success(), "openssl {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+    let o = std::process::Command::new(bin)
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        o.status.success(),
+        "openssl {args:?}: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
 }
 
 /// A CA (`<ca>.crt`/`<ca>.key`) and a `localhost` server cert it signed
 /// (`<ca>-srv.crt`/`<ca>-srv.key`), all decoys in `dir`.
 fn ca_and_server_cert(bin: &str, dir: &Path, ca: &str) {
-    run_openssl(bin, dir, &["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", &format!("/CN={ca}"), "-keyout", &format!("{ca}.key"), "-out", &format!("{ca}.crt")]);
-    run_openssl(bin, dir, &["req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost", "-keyout", &format!("{ca}-srv.key"), "-out", &format!("{ca}-srv.csr")]);
-    std::fs::write(dir.join("ext.cnf"), "subjectAltName=DNS:localhost\nbasicConstraints=CA:FALSE\n").unwrap();
-    run_openssl(bin, dir, &["x509", "-req", "-in", &format!("{ca}-srv.csr"), "-CA", &format!("{ca}.crt"), "-CAkey", &format!("{ca}.key"), "-CAcreateserial", "-days", "2", "-extfile", "ext.cnf", "-out", &format!("{ca}-srv.crt")]);
+    run_openssl(
+        bin,
+        dir,
+        &[
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "2",
+            "-subj",
+            &format!("/CN={ca}"),
+            "-keyout",
+            &format!("{ca}.key"),
+            "-out",
+            &format!("{ca}.crt"),
+        ],
+    );
+    run_openssl(
+        bin,
+        dir,
+        &[
+            "req",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-subj",
+            "/CN=localhost",
+            "-keyout",
+            &format!("{ca}-srv.key"),
+            "-out",
+            &format!("{ca}-srv.csr"),
+        ],
+    );
+    std::fs::write(
+        dir.join("ext.cnf"),
+        "subjectAltName=DNS:localhost\nbasicConstraints=CA:FALSE\n",
+    )
+    .unwrap();
+    run_openssl(
+        bin,
+        dir,
+        &[
+            "x509",
+            "-req",
+            "-in",
+            &format!("{ca}-srv.csr"),
+            "-CA",
+            &format!("{ca}.crt"),
+            "-CAkey",
+            &format!("{ca}.key"),
+            "-CAcreateserial",
+            "-days",
+            "2",
+            "-extfile",
+            "ext.cnf",
+            "-out",
+            &format!("{ca}-srv.crt"),
+        ],
+    );
 }
 
 /// A TLS server (`openssl s_server -www`) on localhost with `cert`/`key`.
@@ -585,10 +942,24 @@ impl Drop for TlsServer {
     }
 }
 fn tls_server(bin: &str, dir: &Path, cert: &str, key: &str) -> TlsServer {
-    let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let child = std::process::Command::new(bin)
         .current_dir(dir)
-        .args(["s_server", "-quiet", "-www", "-accept", &port.to_string(), "-cert", cert, "-key", key])
+        .args([
+            "s_server",
+            "-quiet",
+            "-www",
+            "-accept",
+            &port.to_string(),
+            "-cert",
+            cert,
+            "-key",
+            key,
+        ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -634,10 +1005,16 @@ async fn pinned_ca_holds_without_system_roots() {
         let g = gw(good.1);
         let c = g.client_with_roots(platform_roots).await.unwrap();
         let r = c.get(g.join("/")).send().await;
-        assert!(r.is_ok(), "platform_roots={platform_roots}: the pinned CA wasn't trusted: {r:?}");
+        assert!(
+            r.is_ok(),
+            "platform_roots={platform_roots}: the pinned CA wasn't trusted: {r:?}"
+        );
         let g = gw(bad.1);
         let c = g.client_with_roots(platform_roots).await.unwrap();
-        assert!(c.get(g.join("/")).send().await.is_err(), "platform_roots={platform_roots}: a cert from another CA was accepted");
+        assert!(
+            c.get(g.join("/")).send().await.is_err(),
+            "platform_roots={platform_roots}: a cert from another CA was accepted"
+        );
     }
     // An mTLS identity would be dropped the same way: without a pinned CA
     // on such a host the gateway is refused, not dialed without it.
@@ -647,7 +1024,10 @@ async fn pinned_ca_holds_without_system_roots() {
         api: Api::Openai,
         allow_plaintext: false,
         attribution: false,
-        auth: AuthConfig::Mtls { cert_file: dir.path().join("ca-a-srv.crt"), client_key_file: dir.path().join("ca-a-srv.key") },
+        auth: AuthConfig::Mtls {
+            cert_file: dir.path().join("ca-a-srv.crt"),
+            client_key_file: dir.path().join("ca-a-srv.key"),
+        },
         ca_file: None,
     })
     .unwrap();
@@ -660,11 +1040,28 @@ async fn pinned_ca_holds_without_system_roots() {
 #[test]
 fn ligus_daemon_is_exempt_only_on_loopback() {
     let excl = ModelGateways::new(cfg(r#"{"gateways":[{"name":"litellm","url":"https://litellm.gw.svc:4000","auth":{"mode":"none"}}]}"#).unwrap(), true, None);
-    for e in ["https://attacker.example/v1/chat/completions", "http://10.0.0.5:8080/v1/chat/completions", "http://localhost.attacker.example/v1", ""] {
-        assert!(excl.route(ModelProviderKind::LigusDaemon, e, None).is_err(), "ligus-daemon at {e:?} went around the gateways");
+    for e in [
+        "https://attacker.example/v1/chat/completions",
+        "http://10.0.0.5:8080/v1/chat/completions",
+        "http://localhost.attacker.example/v1",
+        "",
+    ] {
+        assert!(
+            excl.route(ModelProviderKind::LigusDaemon, e, None).is_err(),
+            "ligus-daemon at {e:?} went around the gateways"
+        );
     }
-    for e in ["http://127.0.0.1:8080/v1/chat/completions", "http://localhost:8080/v1/chat/completions", "http://[::1]:8080/v1/chat/completions"] {
-        assert!(excl.route(ModelProviderKind::LigusDaemon, e, None).unwrap().is_none(), "{e}");
+    for e in [
+        "http://127.0.0.1:8080/v1/chat/completions",
+        "http://localhost:8080/v1/chat/completions",
+        "http://[::1]:8080/v1/chat/completions",
+    ] {
+        assert!(
+            excl.route(ModelProviderKind::LigusDaemon, e, None)
+                .unwrap()
+                .is_none(),
+            "{e}"
+        );
     }
 }
 
@@ -714,7 +1111,14 @@ const SPOOFED: &[&str] = &[
 #[test]
 fn request_header_allow_list() {
     for api in [Api::Openai, Api::Anthropic] {
-        for h in ["content-type", "Content-Type", "accept", "accept-encoding", "user-agent", "idempotency-key"] {
+        for h in [
+            "content-type",
+            "Content-Type",
+            "accept",
+            "accept-encoding",
+            "user-agent",
+            "idempotency-key",
+        ] {
             assert!(forwardable_request_header(api, h), "{api:?} {h}");
         }
         for h in SPOOFED {
@@ -723,7 +1127,10 @@ fn request_header_allow_list() {
     }
     for h in ["anthropic-version", "anthropic-beta", "Anthropic-Beta"] {
         assert!(forwardable_request_header(Api::Anthropic, h), "{h}");
-        assert!(!forwardable_request_header(Api::Openai, h), "{h} on the OpenAI wire");
+        assert!(
+            !forwardable_request_header(Api::Openai, h),
+            "{h} on the OpenAI wire"
+        );
     }
     assert!(forwardable_request_header(Api::Openai, "OpenAI-Beta"));
     assert!(!forwardable_request_header(Api::Anthropic, "openai-beta"));
@@ -745,10 +1152,26 @@ async fn replay_fixture(api: Api, fixture: &str) -> (String, Attribution) {
     std::fs::write(&key, "sk-REAL-GATEWAY-KEY").unwrap();
     let mut g = api_key_gateway(port, &key, true);
     g.cfg.api = api;
-    let attr = Attribution::new(&[2u8; 32], Some(Uuid::from_u128(7)), Some(Uuid::from_u128(8)));
-    let proxy = crate::egress::EgressProxy::start_with(Vec::new(), None, vec![ResolvedGateway { gateway: Arc::new(g), attribution: Some(attr.clone()) }]).unwrap();
+    let attr = Attribution::new(
+        &[2u8; 32],
+        Some(Uuid::from_u128(7)),
+        Some(Uuid::from_u128(8)),
+    );
+    let proxy = crate::egress::EgressProxy::start_with(
+        Vec::new(),
+        None,
+        vec![ResolvedGateway {
+            gateway: Arc::new(g),
+            attribution: Some(attr.clone()),
+        }],
+    )
+    .unwrap();
     let pp = proxy.port();
-    let path = proxy.gateway_url("test-gw").strip_prefix(&format!("http://127.0.0.1:{pp}")).unwrap().to_string();
+    let path = proxy
+        .gateway_url("test-gw")
+        .strip_prefix(&format!("http://127.0.0.1:{pp}"))
+        .unwrap()
+        .to_string();
     let mut lines = fixture.lines();
     let (method, rest) = lines.next().unwrap().split_once(' ').unwrap();
     let target = rest.split(' ').next().unwrap();
@@ -773,14 +1196,34 @@ async fn replay_fixture(api: Api, fixture: &str) -> (String, Attribution) {
 /// header the wire needs, the gateway's own credential and Ligus's own
 /// attribution ids.
 fn assert_clean(head: &str, attr: &Attribution) {
-    assert!(!head.contains("SPOOFED") && !head.contains("dummy-capture"), "{head}");
-    assert_eq!(header(head, "authorization"), vec!["Bearer sk-REAL-GATEWAY-KEY"], "{head}");
-    assert_eq!(header(head, "x-ligus-agent"), vec![attr.agent.as_deref().unwrap()]);
-    assert_eq!(header(head, "x-ligus-workspace"), vec![attr.workspace.as_deref().unwrap()]);
-    for h in head.lines().skip(1).filter_map(|l| l.split_once(':')).map(|(k, _)| k.trim().to_ascii_lowercase()) {
+    assert!(
+        !head.contains("SPOOFED") && !head.contains("dummy-capture"),
+        "{head}"
+    );
+    assert_eq!(
+        header(head, "authorization"),
+        vec!["Bearer sk-REAL-GATEWAY-KEY"],
+        "{head}"
+    );
+    assert_eq!(
+        header(head, "x-ligus-agent"),
+        vec![attr.agent.as_deref().unwrap()]
+    );
+    assert_eq!(
+        header(head, "x-ligus-workspace"),
+        vec![attr.workspace.as_deref().unwrap()]
+    );
+    for h in head
+        .lines()
+        .skip(1)
+        .filter_map(|l| l.split_once(':'))
+        .map(|(k, _)| k.trim().to_ascii_lowercase())
+    {
         assert!(
-            matches!(h.as_str(), "host" | "content-length" | "authorization" | "x-ligus-agent" | "x-ligus-workspace")
-                || request_header_allow_list_of(Api::Openai).any(|a| a == h)
+            matches!(
+                h.as_str(),
+                "host" | "content-length" | "authorization" | "x-ligus-agent" | "x-ligus-workspace"
+            ) || request_header_allow_list_of(Api::Openai).any(|a| a == h)
                 || request_header_allow_list_of(Api::Anthropic).any(|a| a == h),
             "forwarded {h}: {head}"
         );
@@ -791,15 +1234,29 @@ fn assert_clean(head: &str, attr: &Attribution) {
 /// route: its version and beta headers arrive, the rest is dropped.
 #[tokio::test]
 async fn claude_code_request_shape_through_the_route() {
-    let (head, attr) = replay_fixture(Api::Anthropic, include_str!("fixtures/claude-code-2.1.312-messages.http")).await;
+    let (head, attr) = replay_fixture(
+        Api::Anthropic,
+        include_str!("fixtures/claude-code-2.1.312-messages.http"),
+    )
+    .await;
     assert!(head.starts_with("POST /v1/messages?beta=true "), "{head}");
     assert_clean(&head, &attr);
     assert_eq!(header(&head, "anthropic-version"), vec!["2023-06-01"]);
-    assert!(header(&head, "anthropic-beta")[0].starts_with("claude-code-20250219,"), "{head}");
+    assert!(
+        header(&head, "anthropic-beta")[0].starts_with("claude-code-20250219,"),
+        "{head}"
+    );
     assert_eq!(header(&head, "content-type"), vec!["application/json"]);
     assert_eq!(header(&head, "accept"), vec!["application/json"]);
-    assert!(header(&head, "user-agent")[0].starts_with("claude-cli/"), "{head}");
-    assert!(header(&head, "x-stainless-lang").is_empty() && header(&head, "x-claude-code-session-id").is_empty() && header(&head, "x-app").is_empty());
+    assert!(
+        header(&head, "user-agent")[0].starts_with("claude-cli/"),
+        "{head}"
+    );
+    assert!(
+        header(&head, "x-stainless-lang").is_empty()
+            && header(&head, "x-claude-code-session-id").is_empty()
+            && header(&head, "x-app").is_empty()
+    );
 }
 
 /// Codex CLI's recorded `/v1/responses` request still works through the
@@ -807,13 +1264,24 @@ async fn claude_code_request_shape_through_the_route() {
 /// don't.
 #[tokio::test]
 async fn codex_request_shape_through_the_route() {
-    let (head, attr) = replay_fixture(Api::Openai, include_str!("fixtures/codex-0.145.0-responses.http")).await;
+    let (head, attr) = replay_fixture(
+        Api::Openai,
+        include_str!("fixtures/codex-0.145.0-responses.http"),
+    )
+    .await;
     assert!(head.starts_with("POST /v1/responses "), "{head}");
     assert_clean(&head, &attr);
     assert_eq!(header(&head, "accept"), vec!["text/event-stream"]);
     assert_eq!(header(&head, "content-type"), vec!["application/json"]);
-    assert!(header(&head, "user-agent")[0].starts_with("codex_exec/"), "{head}");
-    assert!(header(&head, "x-codex-turn-metadata").is_empty() && header(&head, "session-id").is_empty() && header(&head, "originator").is_empty());
+    assert!(
+        header(&head, "user-agent")[0].starts_with("codex_exec/"),
+        "{head}"
+    );
+    assert!(
+        header(&head, "x-codex-turn-metadata").is_empty()
+            && header(&head, "session-id").is_empty()
+            && header(&head, "originator").is_empty()
+    );
 }
 
 /// Review: the allow-list holds against header tricks a sandboxed agent
@@ -831,10 +1299,26 @@ async fn allow_list_survives_header_tricks() {
     std::fs::write(&key, "sk-REAL-GATEWAY-KEY").unwrap();
     let mut g = api_key_gateway(port, &key, true);
     g.cfg.api = Api::Anthropic;
-    let attr = Attribution::new(&[3u8; 32], Some(Uuid::from_u128(9)), Some(Uuid::from_u128(10)));
-    let proxy = crate::egress::EgressProxy::start_with(Vec::new(), None, vec![ResolvedGateway { gateway: Arc::new(g), attribution: Some(attr.clone()) }]).unwrap();
+    let attr = Attribution::new(
+        &[3u8; 32],
+        Some(Uuid::from_u128(9)),
+        Some(Uuid::from_u128(10)),
+    );
+    let proxy = crate::egress::EgressProxy::start_with(
+        Vec::new(),
+        None,
+        vec![ResolvedGateway {
+            gateway: Arc::new(g),
+            attribution: Some(attr.clone()),
+        }],
+    )
+    .unwrap();
     let pp = proxy.port();
-    let path = proxy.gateway_url("test-gw").strip_prefix(&format!("http://127.0.0.1:{pp}")).unwrap().to_string();
+    let path = proxy
+        .gateway_url("test-gw")
+        .strip_prefix(&format!("http://127.0.0.1:{pp}"))
+        .unwrap()
+        .to_string();
     let smuggled = "POST /key/generate HTTP/1.1\r\nHost: gw\r\nContent-Length: 0\r\n\r\n";
     let chunk = format!("{{\"model\":\"m\"}}{smuggled}");
     let raw = format!(
@@ -858,11 +1342,24 @@ async fn allow_list_survives_header_tricks() {
         let head = &s.heads[0];
         assert!(!head.contains("EVIL"), "{head}");
         assert_clean(head, &attr);
-        assert!(header(head, "transfer-encoding").is_empty() && header(head, "te").is_empty() && header(head, "trailer").is_empty(), "{head}");
-        assert_eq!(header(head, "content-length"), vec![chunk.len().to_string().as_str()], "{head}");
+        assert!(
+            header(head, "transfer-encoding").is_empty()
+                && header(head, "te").is_empty()
+                && header(head, "trailer").is_empty(),
+            "{head}"
+        );
+        assert_eq!(
+            header(head, "content-length"),
+            vec![chunk.len().to_string().as_str()],
+            "{head}"
+        );
         assert_eq!(header(head, "user-agent"), vec!["agent/1"]);
         assert_eq!(header(head, "anthropic-version"), vec!["2023-06-01"]);
-        assert_eq!(s.bodies[0], chunk.as_bytes(), "the smuggled request is only body bytes");
+        assert_eq!(
+            s.bodies[0],
+            chunk.as_bytes(),
+            "the smuggled request is only body bytes"
+        );
     }
     // A bare LF can't split an allowed header into a second one: the proxy
     // refuses to build the request rather than forward it.
@@ -887,7 +1384,10 @@ fn attribution_names_the_requesting_member_pseudonymously() {
     assert!(!m.contains(&member[..8]));
     assert_eq!(m, member_pseudonym(&key, w, member), "stable");
     assert_ne!(m, member_pseudonym(&[8u8; 32], w, member), "keyed");
-    assert!(at.headers().iter().any(|(h, v)| *h == HEADER_MEMBER && v == &m));
+    assert!(at
+        .headers()
+        .iter()
+        .any(|(h, v)| *h == HEADER_MEMBER && v == &m));
     assert_eq!(HEADER_MEMBER, "x-ligus-member");
     // Inside the reserved set: a caller can't set it.
     assert!(at.headers().iter().all(|(h, _)| h.starts_with("x-ligus-")));
@@ -897,7 +1397,10 @@ fn attribution_names_the_requesting_member_pseudonymously() {
     // A UUID member id hashes the same way as its string form, not as raw
     // bytes: separated from an agent id of the same value.
     let u = Uuid::from_u128(9);
-    assert_ne!(pseudonym_bytes(&key, b"m", u.to_string().as_bytes()), pseudonym(&key, b"a", u));
+    assert_ne!(
+        pseudonym_bytes(&key, b"m", u.to_string().as_bytes()),
+        pseudonym(&key, b"a", u)
+    );
 }
 
 /// The member pseudonym is scoped to its workspace: one person's turns in
@@ -909,9 +1412,25 @@ fn the_member_pseudonym_is_unlinkable_across_workspaces() {
     let key = [7u8; 32];
     let member = "3f6c1a2e-5b7d-4c11-9a0b-2d4e6f8a1c3e";
     let (w1, w2) = (Uuid::from_u128(1), Uuid::from_u128(2));
-    let a = Attribution::new(&key, Some(w1), None).with_member(&key, Some(w1), Some(member)).member.unwrap();
-    let b = Attribution::new(&key, Some(w2), None).with_member(&key, Some(w2), Some(member)).member.unwrap();
+    let a = Attribution::new(&key, Some(w1), None)
+        .with_member(&key, Some(w1), Some(member))
+        .member
+        .unwrap();
+    let b = Attribution::new(&key, Some(w2), None)
+        .with_member(&key, Some(w2), Some(member))
+        .member
+        .unwrap();
     assert_ne!(a, b);
-    assert_eq!(a, Attribution::new(&key, Some(w1), None).with_member(&key, Some(w1), Some(member)).member.unwrap(), "stable within a workspace");
-    assert!(Attribution::new(&key, None, None).with_member(&key, None, Some(member)).member.is_none());
+    assert_eq!(
+        a,
+        Attribution::new(&key, Some(w1), None)
+            .with_member(&key, Some(w1), Some(member))
+            .member
+            .unwrap(),
+        "stable within a workspace"
+    );
+    assert!(Attribution::new(&key, None, None)
+        .with_member(&key, None, Some(member))
+        .member
+        .is_none());
 }

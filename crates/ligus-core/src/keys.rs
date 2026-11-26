@@ -66,7 +66,10 @@ pub fn key_id(workspace_id: Uuid, version: u32, key: &[u8; 32]) -> String {
 
 /// Whether `commitment` is well formed (64 lower-case hex characters).
 pub fn commitment_well_formed(commitment: &str) -> bool {
-    commitment.len() == 64 && commitment.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    commitment.len() == 64
+        && commitment
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// One authorized rotation, as the roster remembers it.
@@ -104,7 +107,12 @@ impl KeyEpochs {
     /// The seal epoch a device that had folded the config log up to `key`
     /// must have used: the newest authorized version at or before it.
     pub fn version_at(&self, key: (u64, Uuid)) -> u32 {
-        self.epochs.iter().rev().find(|e| e.at <= key).map(|e| e.version).unwrap_or(0)
+        self.epochs
+            .iter()
+            .rev()
+            .find(|e| e.at <= key)
+            .map(|e| e.version)
+            .unwrap_or(0)
     }
 
     /// The authorized epoch `version`, if any.
@@ -116,10 +124,17 @@ impl KeyEpochs {
     pub fn check_next(&self, rotation: &SignedRotation) -> Result<(), String> {
         let head = self.head_version();
         if rotation.prev_version != head {
-            return Err(format!("rotation follows version {}, but the head is {head}", rotation.prev_version));
+            return Err(format!(
+                "rotation follows version {}, but the head is {head}",
+                rotation.prev_version
+            ));
         }
         if rotation.version != head.saturating_add(1) || rotation.version == 0 {
-            return Err(format!("rotation version {} must be {}", rotation.version, head.saturating_add(1)));
+            return Err(format!(
+                "rotation version {} must be {}",
+                rotation.version,
+                head.saturating_add(1)
+            ));
         }
         if !commitment_well_formed(&rotation.key_commitment) {
             return Err("malformed key commitment".into());
@@ -131,7 +146,11 @@ impl KeyEpochs {
     }
 
     pub fn push(&mut self, rotation: &SignedRotation, at: (u64, Uuid)) {
-        self.epochs.push(KeyEpoch { version: rotation.version, key_commitment: rotation.key_commitment.clone(), at });
+        self.epochs.push(KeyEpoch {
+            version: rotation.version,
+            key_commitment: rotation.key_commitment.clone(),
+            at,
+        });
     }
 }
 
@@ -142,13 +161,20 @@ mod tests {
     #[test]
     fn commitment_context_is_pinned() {
         // b"ligus-workspace-key-commit-v1\0", as hex so a rename can't "update" it.
-        assert_eq!(hex(KEY_COMMIT_CONTEXT), "6c696775732d776f726b73706163652d6b65792d636f6d6d69742d763100");
+        assert_eq!(
+            hex(KEY_COMMIT_CONTEXT),
+            "6c696775732d776f726b73706163652d6b65792d636f6d6d69742d763100"
+        );
         let ws = Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef);
         let c = key_commitment(ws, 3, &[7u8; 32]);
         assert!(commitment_well_formed(&c));
         assert_eq!(kid_of(&c).len(), 16);
         assert_ne!(c, key_commitment(ws, 4, &[7u8; 32]), "the version is bound");
-        assert_ne!(c, key_commitment(Uuid::nil(), 3, &[7u8; 32]), "the workspace is bound");
+        assert_ne!(
+            c,
+            key_commitment(Uuid::nil(), 3, &[7u8; 32]),
+            "the workspace is bound"
+        );
     }
 
     #[test]
@@ -158,7 +184,13 @@ mod tests {
         let rot = |v: u32| SignedRotation {
             version: v,
             prev_version: v - 1,
-            sealed: BTreeMap::from([("d".into(), SealedBlob { ephemeral_public: vec![], ciphertext: vec![] })]),
+            sealed: BTreeMap::from([(
+                "d".into(),
+                SealedBlob {
+                    ephemeral_public: vec![],
+                    ciphertext: vec![],
+                },
+            )]),
             key_commitment: "a".repeat(64),
         };
         assert!(k.check_next(&rot(1)).is_ok());

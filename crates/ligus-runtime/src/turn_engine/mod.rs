@@ -198,7 +198,11 @@ pub trait TurnHost: Sync {
     /// The MCP servers the turn may reach under `egress` (`shell`: whether
     /// the turn has the shell; the engine drops shell tools from what the
     /// servers list either way). Empty: no MCP tools.
-    fn mcp_servers(&self, _egress: &EgressPolicy, _shell: bool) -> impl Future<Output = Vec<McpServerSpec>> + Send {
+    fn mcp_servers(
+        &self,
+        _egress: &EgressPolicy,
+        _shell: bool,
+    ) -> impl Future<Output = Vec<McpServerSpec>> + Send {
         async { Vec::new() }
     }
     /// The tools the servers listed (before shell tools are dropped).
@@ -216,11 +220,20 @@ pub trait TurnHost: Sync {
     /// The repo gate: where the turn runs. Called once the reply placeholder
     /// `message_id` is posted; `Err` is the text the placeholder is completed
     /// with.
-    fn checkout(&self, _session: &ChatSession, _message_id: Uuid) -> impl Future<Output = Result<Checkout, String>> + Send {
+    fn checkout(
+        &self,
+        _session: &ChatSession,
+        _message_id: Uuid,
+    ) -> impl Future<Output = Result<Checkout, String>> + Send {
         async { Ok(Checkout::default()) }
     }
     /// Cut a writing CLI agent's worktree.
-    fn cut_worktree(&self, repo_root: &Path, chat_id: &str, turn_id: &str) -> std::io::Result<Worktree> {
+    fn cut_worktree(
+        &self,
+        repo_root: &Path,
+        chat_id: &str,
+        turn_id: &str,
+    ) -> std::io::Result<Worktree> {
         if self.reuse_worktrees() {
             crate::git_worktree::cut_turn_worktree_reusing(repo_root, chat_id, turn_id)
         } else {
@@ -232,7 +245,11 @@ pub trait TurnHost: Sync {
     }
     /// Done with a turn's worktree (its diff is captured).
     fn release_worktree(&self, wt: Worktree, chat_id: Uuid) {
-        let result = if self.reuse_worktrees() { wt.park(&chat_id.to_string()) } else { wt.remove() };
+        let result = if self.reuse_worktrees() {
+            wt.park(&chat_id.to_string())
+        } else {
+            wt.remove()
+        };
         if let Err(e) = result {
             tracing::warn!(target: "worktree", "couldn't release a turn worktree: {e}");
         }
@@ -266,7 +283,8 @@ pub trait TurnHost: Sync {
             Err(e) => {
                 tracing::warn!(target: "dispatch", "finalize failed: {e}");
                 if let Some(mid) = mid {
-                    svc.complete_assistant_message(sid, wid, mid, a.full.to_string()).map_err(|e| e.to_string())?;
+                    svc.complete_assistant_message(sid, wid, mid, a.full.to_string())
+                        .map_err(|e| e.to_string())?;
                 }
                 Ok(a.full.to_string())
             }
@@ -346,13 +364,19 @@ pub fn effective_endpoint(rt: &ResolvedRuntime) -> String {
 pub fn wants_builtin_tools(rt: &ResolvedRuntime, tools: &ToolOptions) -> bool {
     tools.builtin
         && rt.runs_agent_tools()
-        && (tools.remote_file_tools || rt.allow_remote_file_tools || ligus_core::endpoint::endpoint_is_private(&effective_endpoint(rt)))
+        && (tools.remote_file_tools
+            || rt.allow_remote_file_tools
+            || ligus_core::endpoint::endpoint_is_private(&effective_endpoint(rt)))
 }
 
 /// The turn's wall-clock backstop: `LIGUS_TURN_TIMEOUT_SECS`, default 1 h.
 pub fn turn_timeout() -> Duration {
     Duration::from_secs(
-        ligus_core::names::var("LIGUS_TURN_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|&s| s > 0).unwrap_or(3600),
+        ligus_core::names::var("LIGUS_TURN_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&s| s > 0)
+            .unwrap_or(3600),
     )
 }
 
@@ -363,7 +387,10 @@ pub const TURN_FENCED: &str = "another device answered this turn first";
 
 /// Whether this device's placeholder `mid` was fenced by the dispatcher.
 fn placeholder_fenced(svc: &ChatService, chat_id: Uuid, mid: Uuid) -> bool {
-    svc.load(chat_id).ok().flatten().is_some_and(|s| s.messages.iter().any(|m| m.id == mid && m.superseded))
+    svc.load(chat_id)
+        .ok()
+        .flatten()
+        .is_some_and(|s| s.messages.iter().any(|m| m.id == mid && m.superseded))
 }
 
 pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome, TurnError> {
@@ -390,7 +417,11 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     let stop = stop.unwrap_or_default();
     // Stopped before it began: nothing to undo.
     if stop.is_stopped() {
-        return Err(TurnError { message: STOPPED.into(), stopped: true, message_id: None });
+        return Err(TurnError {
+            message: STOPPED.into(),
+            stopped: true,
+            message_id: None,
+        });
     }
     // Agent access controls (`agent_access`): who may use this agent and its
     // daily budgets, decided here on every host before anything is spent.
@@ -404,9 +435,17 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     let mut responder = responder;
     let gated = match (responder.agent_id, reply_to) {
         // Bound first: the service isn't held while the host is told.
-        (Some(agent), Some(trigger)) => Some((Some(agent), locked(host).admit_agent_turn(chat_id, workspace_id, trigger, agent))),
+        (Some(agent), Some(trigger)) => Some((
+            Some(agent),
+            locked(host).admit_agent_turn(chat_id, workspace_id, trigger, agent),
+        )),
         (None, Some(trigger)) => {
-            let r = locked(host).gate_primary_turn(chat_id, workspace_id, trigger, options.primary_open_to_members);
+            let r = locked(host).gate_primary_turn(
+                chat_id,
+                workspace_id,
+                trigger,
+                options.primary_open_to_members,
+            );
             Some((None, r.map(|r| r.map(|u| (u, String::new())))))
         }
         _ => None,
@@ -416,10 +455,18 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
             Ok(Ok((u, day))) => agent.map(|a| (a, u, day)),
             Ok(Err(note)) => {
                 host.changed();
-                return Err(TurnError { message: note, stopped: false, message_id: None });
+                return Err(TurnError {
+                    message: note,
+                    stopped: false,
+                    message_id: None,
+                });
             }
             Err(e) => {
-                return Err(TurnError { message: format!("couldn't check who may use this agent: {e}"), stopped: false, message_id: None });
+                return Err(TurnError {
+                    message: format!("couldn't check who may use this agent: {e}"),
+                    stopped: false,
+                    message_id: None,
+                });
             }
         },
         None => None,
@@ -442,7 +489,8 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     let tools_allowed = gate.allows_tools();
     let restricted = !envelope.egress.is_open();
     let cli = rt.provider.is_cli_agent();
-    let anthropic_loop = tools_allowed && rt.provider == ModelProviderKind::Anthropic && rt.api_key.is_some();
+    let anthropic_loop =
+        tools_allowed && rt.provider == ModelProviderKind::Anthropic && rt.api_key.is_some();
 
     // MCP tools: the Anthropic loop, and HTTP runtimes that run the tool
     // loop. Injection markers in their results lock the chat down after.
@@ -451,8 +499,17 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         let servers = host.mcp_servers(&envelope.egress, shell_allowed).await;
         // Listing starts stdio servers: under the turn's policy and executor,
         // like every other child of the turn.
-        let listing = mcp::tool_set(servers, responder.agent_id, shell_allowed, options.scan_injections.then(|| hits.clone()), |t| host.mcp_listed(t));
-        let listing = crate::executor::with_executor(executor.clone(), crate::executor::with_turn(policy.clone(), listing));
+        let listing = mcp::tool_set(
+            servers,
+            responder.agent_id,
+            shell_allowed,
+            options.scan_injections.then(|| hits.clone()),
+            |t| host.mcp_listed(t),
+        );
+        let listing = crate::executor::with_executor(
+            executor.clone(),
+            crate::executor::with_turn(policy.clone(), listing),
+        );
         tokio::select! {
             biased;
             _ = stop.stopped() => return Err(TurnError { message: STOPPED.into(), stopped: true, message_id: None }),
@@ -463,39 +520,75 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     };
     // An Anthropic runtime with neither MCP tools nor the Ligus tools streams
     // plain chat.
-    let anthropic_loop = anthropic_loop && (mcp_tools.is_some() || (host.ligus().is_some() && crate::ligus_mcp::offered_for(rt, restricted)));
-    let builtin_wanted = tools_allowed && wants_builtin_tools(rt, &tools) && crate::executor::local_tools_allowed_on(executor.kind());
+    let anthropic_loop = anthropic_loop
+        && (mcp_tools.is_some()
+            || (host.ligus().is_some() && crate::ligus_mcp::offered_for(rt, restricted)));
+    let builtin_wanted = tools_allowed
+        && wants_builtin_tools(rt, &tools)
+        && crate::executor::local_tools_allowed_on(executor.kind());
 
     // Git commit attribution: credit the humans who drove this turn, so a
     // CLI agent's commits on this host aren't credited to its owner.
     let humans: Vec<ligus_core::ActorIdentity> = if options.git_attribution && cli {
-        session.messages.iter().filter(|m| matches!(m.role, MessageRole::User)).filter_map(|m| m.actor_identity.clone()).collect()
+        session
+            .messages
+            .iter()
+            .filter(|m| matches!(m.role, MessageRole::User))
+            .filter_map(|m| m.actor_identity.clone())
+            .collect()
     } else {
         Vec::new()
     };
-    let git_env = humans.last().map(crate::git_attribution::author_env).unwrap_or_default();
+    let git_env = humans
+        .last()
+        .map(crate::git_attribution::author_env)
+        .unwrap_or_default();
     let system = match humans.last() {
         Some(req) => {
             let note = crate::git_attribution::commit_attribution_note(req, &humans);
-            if note.is_empty() { system } else { format!("{system}\n\n{note}") }
+            if note.is_empty() {
+                system
+            } else {
+                format!("{system}\n\n{note}")
+            }
         }
         None => system,
     };
 
     let mid = locked(host)
-        .begin_assistant_message_with_model(chat_id, workspace_id, responder.author.clone(), responder.runtime_id.clone(), Some(rt.effective_model()), responder.agent_id, reply_to)
-        .map_err(|e| TurnError { message: e.to_string(), stopped: false, message_id: None })?;
+        .begin_assistant_message_with_model(
+            chat_id,
+            workspace_id,
+            responder.author.clone(),
+            responder.runtime_id.clone(),
+            Some(rt.effective_model()),
+            responder.agent_id,
+            reply_to,
+        )
+        .map_err(|e| TurnError {
+            message: e.to_string(),
+            stopped: false,
+            message_id: None,
+        })?;
     stop.bind_message(mid);
     host.begun(mid);
     host.changed();
-    let fail = |message: String| TurnError { message, stopped: false, message_id: Some(mid) };
+    let fail = |message: String| TurnError {
+        message,
+        stopped: false,
+        message_id: Some(mid),
+    };
     // Stopped before the stream: the placeholder is completed empty.
     let stopped_early = || {
         tracing::info!(target: "dispatch", "turn stopped by user before it streamed");
         let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, String::new());
         host.changed();
         host.phase(mid, Phase::Completed, "");
-        TurnError { message: STOPPED.into(), stopped: true, message_id: Some(mid) }
+        TurnError {
+            message: STOPPED.into(),
+            stopped: true,
+            message_id: Some(mid),
+        }
     };
     // The placeholder is the dispatcher's commit (design repos-and-checkouts
     // 11.5): fenced means another device's answer to this turn committed
@@ -521,7 +614,8 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     let checkout = match gated {
         Ok(c) => c,
         Err(note) => {
-            let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, note.clone());
+            let _ =
+                locked(host).complete_assistant_message(chat_id, workspace_id, mid, note.clone());
             host.changed();
             host.phase(mid, Phase::Error, &note);
             return Err(fail(note));
@@ -529,38 +623,56 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     };
     let system = join_system(&system, &checkout.context);
     let workspace_root = checkout.workspace_root.clone().unwrap_or_default();
-    let repo_root = checkout.repo_root.clone().filter(|r| !r.as_os_str().is_empty() && crate::git_worktree::is_git_repo(r));
+    let repo_root = checkout
+        .repo_root
+        .clone()
+        .filter(|r| !r.as_os_str().is_empty() && crate::git_worktree::is_git_repo(r));
     let turn_key = mid.to_string();
 
     // Per-turn isolation: a writing CLI agent runs in a worktree cut up
     // front from the chat's branch; an HTTP turn with the built-in tools cuts
     // one on its first write. Either diff comes back as a proposal.
     let worktree = match &repo_root {
-        Some(root) if cli && write_capable && !anthropic_loop => match host.cut_worktree(root, &chat_id.to_string(), &turn_key) {
-            Ok(wt) => Some(wt),
-            Err(e) => {
-                tracing::warn!(target: "worktree", "isolation unavailable, running in place: {e}");
-                None
+        Some(root) if cli && write_capable && !anthropic_loop => {
+            match host.cut_worktree(root, &chat_id.to_string(), &turn_key) {
+                Ok(wt) => Some(wt),
+                Err(e) => {
+                    tracing::warn!(target: "worktree", "isolation unavailable, running in place: {e}");
+                    None
+                }
             }
-        },
+        }
         _ => None,
     };
-    let lazy = repo_root.as_ref().filter(|_| builtin_wanted && !anthropic_loop).map(|root| {
-        Arc::new(LazyTurnWorktree::new(root.clone(), chat_id.to_string(), turn_key.clone()).with_reuse(host.reuse_worktrees()))
-    });
+    let lazy = repo_root
+        .as_ref()
+        .filter(|_| builtin_wanted && !anthropic_loop)
+        .map(|root| {
+            Arc::new(
+                LazyTurnWorktree::new(root.clone(), chat_id.to_string(), turn_key.clone())
+                    .with_reuse(host.reuse_worktrees()),
+            )
+        });
     // Until it writes, a lazily isolated turn reads its own chat's base
     // worktree: the tree its worktree will be cut from.
     let builtin_read_root = match (&lazy, &repo_root) {
-        (Some(_), Some(root)) => match crate::git_worktree::chat_worktree(root, &chat_id.to_string()) {
-            Ok(dir) => dir.to_string_lossy().into_owned(),
-            Err(e) => {
-                tracing::warn!(target: "worktree", "chat base worktree unavailable, reading the checkout: {e}");
-                root.to_string_lossy().into_owned()
+        (Some(_), Some(root)) => {
+            match crate::git_worktree::chat_worktree(root, &chat_id.to_string()) {
+                Ok(dir) => dir.to_string_lossy().into_owned(),
+                Err(e) => {
+                    tracing::warn!(target: "worktree", "chat base worktree unavailable, reading the checkout: {e}");
+                    root.to_string_lossy().into_owned()
+                }
             }
-        },
+        }
         _ => String::new(),
     };
-    if worktree.is_none() && lazy.is_none() && !cli && mcp_tools.is_some() && crate::git_worktree::is_git_repo(Path::new(&workspace_root)) {
+    if worktree.is_none()
+        && lazy.is_none()
+        && !cli
+        && mcp_tools.is_some()
+        && crate::git_worktree::is_git_repo(Path::new(&workspace_root))
+    {
         tracing::warn!(target: "dispatch", provider = ?rt.provider, "API turn has MCP tools enabled and runs in place: its file writes are not worktree-isolated or diff-gated");
     }
     if require_isolation && cli && write_capable && worktree.is_none() {
@@ -570,7 +682,10 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         host.phase(mid, Phase::Error, &note);
         return Err(fail(note));
     }
-    let effective_root = worktree.as_ref().map(|w| w.path.to_string_lossy().into_owned()).unwrap_or_else(|| workspace_root.clone());
+    let effective_root = worktree
+        .as_ref()
+        .map(|w| w.path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| workspace_root.clone());
     // Never an empty working dir for a CLI (the spawn would fail): `None`
     // runs it in its turn's scratch dir.
     let working_dir = (!effective_root.trim().is_empty()).then_some(effective_root.as_str());
@@ -598,10 +713,19 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
 
     // Built-in file tools, confined to the turn's dir: in a repo their edits
     // land in the lazily cut worktree; outside one, in place only if allowed.
-    let builtin_root = if lazy.is_some() { builtin_read_root.as_str() } else { effective_root.as_str() };
+    let builtin_root = if lazy.is_some() {
+        builtin_read_root.as_str()
+    } else {
+        effective_root.as_str()
+    };
     let builtin = if builtin_wanted && !anthropic_loop && !builtin_root.trim().is_empty() {
-        let p = crate::agent_tools::builtin_policy(builtin_root, lazy.is_some(), tools.write_in_place, tools.run_command && shell_allowed)
-            .with_protected_dirs(&envelope.protected_dirs);
+        let p = crate::agent_tools::builtin_policy(
+            builtin_root,
+            lazy.is_some(),
+            tools.write_in_place,
+            tools.run_command && shell_allowed,
+        )
+        .with_protected_dirs(&envelope.protected_dirs);
         let made = match &lazy {
             Some(l) => crate::BuiltinTools::lazy(p, l.clone(), tools.write_in_place),
             None => crate::BuiltinTools::new(p),
@@ -616,7 +740,12 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     } else {
         None
     };
-    let last_user = turns.iter().rev().find(|t| t.role == "user").map_or("", |t| t.content.as_str()).to_string();
+    let last_user = turns
+        .iter()
+        .rev()
+        .find(|t| t.role == "user")
+        .map_or("", |t| t.content.as_str())
+        .to_string();
 
     let mut pending = String::new();
     let mut last_flush = Instant::now();
@@ -643,7 +772,10 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     let (http_tools, anthropic_mcp) = if anthropic_loop {
         (None, mcp_tools)
     } else {
-        let workflow_tool = if (builtin.is_some() || mcp_tools.is_some()) && folded.is_none() && crate::workflow_tool::wanted(&last_user) {
+        let workflow_tool = if (builtin.is_some() || mcp_tools.is_some())
+            && folded.is_none()
+            && crate::workflow_tool::wanted(&last_user)
+        {
             // Loaded first: the hook never runs under the service lock.
             let session = locked(host).load(chat_id).ok().flatten();
             session.and_then(|s| host.workflow_tool(&s))
@@ -651,11 +783,17 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
             None
         };
         let tools_set = (builtin.is_some() || mcp_tools.is_some() || folded.is_some()).then(|| {
-            let ligus_slots = if folded.is_some() { crate::ligus_mcp::tools::FOLDED.len() } else { 0 };
+            let ligus_slots = if folded.is_some() {
+                crate::ligus_mcp::tools::FOLDED.len()
+            } else {
+                0
+            };
             let t = crate::agent_tools::CompositeTools::with_hints(
                 builtin,
                 mcp_tools,
-                crate::agent_tools::MAX_OFFERED_TOOLS - usize::from(workflow_tool.is_some()) - ligus_slots,
+                crate::agent_tools::MAX_OFFERED_TOOLS
+                    - usize::from(workflow_tool.is_some())
+                    - ligus_slots,
                 &crate::agent_tools::tool_hints(&system, &turns),
             )
             .allow_mcp_after_reads(tools.mcp_after_reads);
@@ -704,7 +842,9 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     let meter = scope.spend.clone();
     let stream = async {
         if anthropic_loop {
-            let Some(api_key) = rt.api_key.clone() else { return Err(ProviderError::Subprocess("no API key".into())) };
+            let Some(api_key) = rt.api_key.clone() else {
+                return Err(ProviderError::Subprocess("no API key".into()));
+            };
             let (mut defs, exec) = match anthropic_mcp {
                 Some((d, e)) => (d, Some(e)),
                 None => (Vec::new(), None),
@@ -721,16 +861,47 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
                 system: Some(system.clone()),
                 max_tokens: MAX_TOKENS,
             };
-            let routed = crate::ligus_mcp::WithLigus { turn: iface.turn.as_deref(), inner: exec.as_ref() };
-            let text = crate::tool_loop::run_with_messages(&model, &routed, mcp::turns_to_messages(&turns), defs, crate::agent_tools::ANTHROPIC_TOOL_ROUNDS).await?;
+            let routed = crate::ligus_mcp::WithLigus {
+                turn: iface.turn.as_deref(),
+                inner: exec.as_ref(),
+            };
+            let text = crate::tool_loop::run_with_messages(
+                &model,
+                &routed,
+                mcp::turns_to_messages(&turns),
+                defs,
+                crate::agent_tools::ANTHROPIC_TOOL_ROUNDS,
+            )
+            .await?;
             on_delta(text.clone());
             Ok(text)
         } else {
-            let set = http_tools.as_ref().filter(|t| !t.is_empty()).map(|t| dispatch::ToolSet { defs: t.defs(), executor: t, max_rounds: rounds });
-            dispatch::stream_with_tools(rt, Some(&system), &turns, working_dir, &git_env, MAX_TOKENS, set, &mut on_delta, on_activity).await
+            let set = http_tools
+                .as_ref()
+                .filter(|t| !t.is_empty())
+                .map(|t| dispatch::ToolSet {
+                    defs: t.defs(),
+                    executor: t,
+                    max_rounds: rounds,
+                });
+            dispatch::stream_with_tools(
+                rt,
+                Some(&system),
+                &turns,
+                working_dir,
+                &git_env,
+                MAX_TOKENS,
+                set,
+                &mut on_delta,
+                on_activity,
+            )
+            .await
         }
     };
-    let fut = crate::executor::with_executor(executor, crate::executor::with_turn(policy, crate::agent_turn::with_agent_turn(scope, stream)));
+    let fut = crate::executor::with_executor(
+        executor,
+        crate::executor::with_turn(policy, crate::agent_turn::with_agent_turn(scope, stream)),
+    );
     let mut stopped = false;
     let result = tokio::select! {
         biased;
@@ -748,7 +919,8 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     // (`None`: the runtime reported no usage; counted in turns only).
     if let (Some((agent, u)), Some(day)) = (&agent_use, &usage_day) {
         let usd = meter.as_ref().map(|m| m.total()).filter(|t| *t > 0.0);
-        if let Err(e) = locked(host).record_agent_cost(workspace_id, *agent, &u.requester, day, usd) {
+        if let Err(e) = locked(host).record_agent_cost(workspace_id, *agent, &u.requester, day, usd)
+        {
             tracing::warn!(target: "dispatch", "couldn't count the turn's cost: {e}");
         }
     }
@@ -761,22 +933,44 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     match result {
         Ok(full) => {
             tracing::info!(target: "dispatch", chars = full.len(), "turn completed");
-            let accepted = http_tools.as_ref().map(|t| t.accepted_workflows()).unwrap_or_default();
+            let accepted = http_tools
+                .as_ref()
+                .map(|t| t.accepted_workflows())
+                .unwrap_or_default();
             let full = crate::workflow_tool::append_as_directives(&full, &accepted);
             // The worktree's changes, read before the reply is finalized so
             // its directives know the edits are already in review.
-            let captured = worktree.as_ref().and_then(|wt| wt.diff().ok()).filter(|d| !d.trim().is_empty());
-            let changed = worktree.as_ref().and_then(|wt| wt.changed_files().ok()).unwrap_or_default();
+            let captured = worktree
+                .as_ref()
+                .and_then(|wt| wt.diff().ok())
+                .filter(|d| !d.trim().is_empty());
+            let changed = worktree
+                .as_ref()
+                .and_then(|wt| wt.changed_files().ok())
+                .unwrap_or_default();
             // Self-medication: an injection marker in a tool result, a
             // credential in the diff, or an unrequested CI change locks the
             // chat down before its proposal reaches anyone.
-            self_medicate(host, workspace_id, chat_id, mid, &hits.take(), captured.as_deref(), &changed, &last_user);
+            self_medicate(
+                host,
+                workspace_id,
+                chat_id,
+                mid,
+                &hits.take(),
+                captured.as_deref(),
+                &changed,
+                &last_user,
+            );
             let effects = iface.effects();
             let empty = options.empty_reply_notice
                 && full.trim().is_empty()
                 && captured.is_none()
                 && effects.as_ref().is_none_or(|m| m.is_empty());
-            let full = if empty { crate::empty_reply_notice(&responder.effect_author) } else { full };
+            let full = if empty {
+                crate::empty_reply_notice(&responder.effect_author)
+            } else {
+                full
+            };
             let body = {
                 let mut s = locked(host);
                 host.finalize(
@@ -802,7 +996,12 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
             if let Some(wt) = worktree {
                 if let (true, Some(diff)) = (body.is_ok(), captured) {
                     let n = changed.len();
-                    let title = format!("{} proposed changes to {} file{}", responder.effect_author, n, if n == 1 { "" } else { "s" });
+                    let title = format!(
+                        "{} proposed changes to {} file{}",
+                        responder.effect_author,
+                        n,
+                        if n == 1 { "" } else { "s" }
+                    );
                     // Authorless: the human reviewing can approve it.
                     let mut prop = ActionProposal::file_diff(title, "", diff, changed.clone());
                     prop.producing_agent_id = responder.agent_id;
@@ -821,12 +1020,16 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
                     let id = prop.id;
                     let mut s = locked(host);
                     // Filed as the agent's own effect (A3 key, Agent tier).
-                    match s.as_agent(responder.agent_id, |s| s.upsert_proposal(chat_id, workspace_id, prop)) {
+                    match s.as_agent(responder.agent_id, |s| {
+                        s.upsert_proposal(chat_id, workspace_id, prop)
+                    }) {
                         Ok(()) => {
                             host.proposal_filed(&mut s, id);
                             proposal = Some(id);
                         }
-                        Err(e) => tracing::warn!(target: "dispatch", "the turn's proposal wasn't filed: {e}"),
+                        Err(e) => {
+                            tracing::warn!(target: "dispatch", "the turn's proposal wasn't filed: {e}")
+                        }
                     }
                     drop(s);
                     host.changed();
@@ -834,7 +1037,14 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
                 host.release_worktree(wt, chat_id);
             }
             let notes = turn_notes.lock().map(|n| n.clone()).unwrap_or_default();
-            iface.finish(|| locked(host), chat_id, workspace_id, &responder.effect_author, &notes, options.detailed_report);
+            iface.finish(
+                || locked(host),
+                chat_id,
+                workspace_id,
+                &responder.effect_author,
+                &notes,
+                options.detailed_report,
+            );
             host.changed();
             let body = match body {
                 Ok(b) => b,
@@ -842,9 +1052,14 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
                     // Finalize failed: the reply never stays a live placeholder.
                     // It keeps what the model wrote unless finalize completed it.
                     let mut s = locked(host);
-                    let streaming = s.load_in(workspace_id, chat_id).ok().flatten().is_some_and(|c| c.messages.iter().any(|m| m.id == mid && m.is_streaming));
+                    let streaming = s
+                        .load_in(workspace_id, chat_id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|c| c.messages.iter().any(|m| m.id == mid && m.is_streaming));
                     if streaming {
-                        let _ = s.complete_assistant_message(chat_id, workspace_id, mid, full.clone());
+                        let _ =
+                            s.complete_assistant_message(chat_id, workspace_id, mid, full.clone());
                     }
                     drop(s);
                     host.changed();
@@ -853,11 +1068,32 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
                 }
             };
             host.phase(mid, Phase::Completed, &body);
-            Ok(TurnOutcome { message_id: mid, body, proposal, empty })
+            Ok(TurnOutcome {
+                message_id: mid,
+                body,
+                proposal,
+                empty,
+            })
         }
         Err(e) => {
-            iface.finish(|| locked(host), chat_id, workspace_id, &responder.effect_author, &[], options.detailed_report);
-            self_medicate(host, workspace_id, chat_id, mid, &hits.take(), None, &[], &last_user);
+            iface.finish(
+                || locked(host),
+                chat_id,
+                workspace_id,
+                &responder.effect_author,
+                &[],
+                options.detailed_report,
+            );
+            self_medicate(
+                host,
+                workspace_id,
+                chat_id,
+                mid,
+                &hits.take(),
+                None,
+                &[],
+                &last_user,
+            );
             // A failed or stopped turn's partial edits are discarded.
             if let Some(wt) = worktree {
                 host.release_worktree(wt, chat_id);
@@ -865,15 +1101,29 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
             let msg = e.to_string();
             if stopped {
                 tracing::info!(target: "dispatch", "turn stopped by user");
-                let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, String::new());
+                let _ = locked(host).complete_assistant_message(
+                    chat_id,
+                    workspace_id,
+                    mid,
+                    String::new(),
+                );
                 host.changed();
                 host.phase(mid, Phase::Completed, "");
-                return Err(TurnError { message: STOPPED.into(), stopped: true, message_id: Some(mid) });
+                return Err(TurnError {
+                    message: STOPPED.into(),
+                    stopped: true,
+                    message_id: Some(mid),
+                });
             }
             tracing::error!(target: "dispatch", error = %msg, "turn failed");
             host.usage_error(rt.provider, &msg);
             let shown = host.error_text(&msg);
-            let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, format!("[error] {shown}"));
+            let _ = locked(host).complete_assistant_message(
+                chat_id,
+                workspace_id,
+                mid,
+                format!("[error] {shown}"),
+            );
             host.changed();
             host.phase(mid, Phase::Error, &msg);
             Err(fail(shown))
@@ -898,7 +1148,9 @@ fn self_medicate<H: TurnHost>(
         return;
     }
     match locked(host).self_medicate(workspace_id, chat_id, Some(message_id), &findings) {
-        Ok(n) => tracing::warn!(target: "guards", chat = %chat_id, signals = n, "chat locked down by self-medication"),
+        Ok(n) => {
+            tracing::warn!(target: "guards", chat = %chat_id, signals = n, "chat locked down by self-medication")
+        }
         Err(e) => tracing::error!(target: "guards", "couldn't lock chat {chat_id} down: {e}"),
     }
     host.locked_down();
@@ -938,11 +1190,26 @@ pub fn decide_gate(
     grants_setting: Option<bool>,
 ) -> Result<Gated, String> {
     // The dispatching chat's own workspace: its log is (workspace, chat).
-    let author_role = svc.trigger_author_role_in(session.workspace_id, session.id, trigger).ok().flatten();
-    let shell_role = svc.trigger_shell_role_in(session.workspace_id, session.id, trigger).ok().flatten();
-    let grants = svc.sandbox_grants_here(session.workspace_id, grants_setting).0;
+    let author_role = svc
+        .trigger_author_role_in(session.workspace_id, session.id, trigger)
+        .ok()
+        .flatten();
+    let shell_role = svc
+        .trigger_shell_role_in(session.workspace_id, session.id, trigger)
+        .ok()
+        .flatten();
+    let grants = svc
+        .sandbox_grants_here(session.workspace_id, grants_setting)
+        .0;
     let granted = agent_id.is_some_and(|id| grants.shell_granted(id));
-    decide_gate_with(session, rt, author_role, shell_role, granted, grants.paths_for(agent_id))
+    decide_gate_with(
+        session,
+        rt,
+        author_role,
+        shell_role,
+        granted,
+        grants.paths_for(agent_id),
+    )
 }
 
 /// [`decide_gate`] with the roles already resolved: `author_role` for the
@@ -968,7 +1235,14 @@ pub fn decide_gate_with(
     crate::executor::turn_allowed(rt.provider)?;
     crate::author_gate::gate_shell(rt.provider, &mut rt.args, shell_allowed)?;
     rt.args.extend(enforcement.extra_args);
-    Ok(Gated { runtime: rt, gate, envelope, shell_allowed, allow_run_command: enforcement.allow_run_command, grants })
+    Ok(Gated {
+        runtime: rt,
+        gate,
+        envelope,
+        shell_allowed,
+        allow_run_command: enforcement.allow_run_command,
+        grants,
+    })
 }
 
 impl Gated {
@@ -992,33 +1266,72 @@ impl Gated {
 /// confirmed checkout of it, on its chat branch brought up to date with the
 /// chat's ledger (a base this device just cut is pinned). `Err` is the
 /// refusal (still cloning, no checkout here, a moved remote).
-pub fn repo_checkout(svc: &Mutex<ChatService>, session: &ChatSession, host_label: &str, legacy: Option<PathBuf>) -> Result<Checkout, String> {
+pub fn repo_checkout(
+    svc: &Mutex<ChatService>,
+    session: &ChatSession,
+    host_label: &str,
+    legacy: Option<PathBuf>,
+) -> Result<Checkout, String> {
     use crate::repos::{self as rr, TurnCheckout};
     let gate = {
         let svc = svc.lock().unwrap_or_else(|e| e.into_inner());
-        let roster = svc.workspace_roster(session.workspace_id).map_err(|e| e.to_string())?;
-        rr::turn_checkout(svc.store(), svc.device_id(), host_label, session, &roster, &rr::cloning())
+        let roster = svc
+            .workspace_roster(session.workspace_id)
+            .map_err(|e| e.to_string())?;
+        rr::turn_checkout(
+            svc.store(),
+            svc.device_id(),
+            host_label,
+            session,
+            &roster,
+            &rr::cloning(),
+        )
     };
     let ready = match gate {
         TurnCheckout::NoRepo => {
             let root = legacy.filter(|p| crate::git_worktree::is_git_repo(p));
-            return Ok(Checkout { workspace_root: None, repo_root: root, ..Default::default() });
+            return Ok(Checkout {
+                workspace_root: None,
+                repo_root: root,
+                ..Default::default()
+            });
         }
         TurnCheckout::Ready(r) => r,
-        TurnCheckout::Cloning { repo_name } => return Err(format!("{repo_name} is still cloning on {host_label}; ask again when it finishes")),
+        TurnCheckout::Cloning { repo_name } => {
+            return Err(format!(
+                "{repo_name} is still cloning on {host_label}; ask again when it finishes"
+            ))
+        }
         TurnCheckout::Refused { reason, .. } => return Err(reason),
     };
     let prepared = rr::prepare_chat(&ready, session, host_label)?;
     // A turn in a scratch repository is activity: its cleanup clock restarts.
-    rr::scratch::turn_in(svc.lock().unwrap_or_else(|e| e.into_inner()).store(), &ready.path, rr::scratch::now());
+    rr::scratch::turn_in(
+        svc.lock().unwrap_or_else(|e| e.into_inner()).store(),
+        &ready.path,
+        rr::scratch::now(),
+    );
     if let Some(pin) = &prepared.pin {
-        let r = svc.lock().unwrap_or_else(|e| e.into_inner()).pin_chat_base(session.id, session.workspace_id, ready.repo.id, pin);
+        let r = svc.lock().unwrap_or_else(|e| e.into_inner()).pin_chat_base(
+            session.id,
+            session.workspace_id,
+            ready.repo.id,
+            pin,
+        );
         if let Err(e) = r {
             tracing::warn!(target: "repos", "couldn't pin the chat's base: {e}");
         }
     }
-    let base_branch = session.repo.as_ref().map(|r| r.base_branch.clone()).unwrap_or_default();
-    let context = rr::turn_context(&TurnCheckout::Ready(ready.clone()), session.id, &base_branch);
+    let base_branch = session
+        .repo
+        .as_ref()
+        .map(|r| r.base_branch.clone())
+        .unwrap_or_default();
+    let context = rr::turn_context(
+        &TurnCheckout::Ready(ready.clone()),
+        session.id,
+        &base_branch,
+    );
     Ok(Checkout {
         context,
         workspace_root: Some(prepared.chat_worktree.to_string_lossy().into_owned()),

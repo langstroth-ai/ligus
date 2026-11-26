@@ -85,7 +85,10 @@ pub trait TokenStore: Send + Sync {
     fn delete(&self, forge: &ForgeId, purpose: Purpose) -> Result<()>;
     /// Which purposes hold a token (never the tokens).
     fn present(&self, forge: &ForgeId) -> Vec<Purpose> {
-        [Purpose::Read, Purpose::Write, Purpose::Refresh].into_iter().filter(|p| self.get(forge, *p).ok().flatten().is_some()).collect()
+        [Purpose::Read, Purpose::Write, Purpose::Refresh]
+            .into_iter()
+            .filter(|p| self.get(forge, *p).ok().flatten().is_some())
+            .collect()
     }
     /// Remove every token of a connection.
     fn delete_all(&self, forge: &ForgeId) -> Result<()> {
@@ -104,14 +107,25 @@ pub struct MemoryTokens {
 
 impl TokenStore for MemoryTokens {
     fn get(&self, forge: &ForgeId, purpose: Purpose) -> Result<Option<Secret>> {
-        Ok(self.map.lock().unwrap_or_else(|e| e.into_inner()).get(&secret_name(forge, purpose)).cloned())
+        Ok(self
+            .map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&secret_name(forge, purpose))
+            .cloned())
     }
     fn put(&self, forge: &ForgeId, purpose: Purpose, token: &Secret) -> Result<()> {
-        self.map.lock().unwrap_or_else(|e| e.into_inner()).insert(secret_name(forge, purpose), token.clone());
+        self.map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(secret_name(forge, purpose), token.clone());
         Ok(())
     }
     fn delete(&self, forge: &ForgeId, purpose: Purpose) -> Result<()> {
-        self.map.lock().unwrap_or_else(|e| e.into_inner()).remove(&secret_name(forge, purpose));
+        self.map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&secret_name(forge, purpose));
         Ok(())
     }
 }
@@ -214,7 +228,12 @@ pub struct StoreCredentials {
 }
 
 impl StoreCredentials {
-    pub fn new(store: Arc<dyn TokenStore>, forge: ForgeId, source: AuthSource, helper: Option<String>) -> Self {
+    pub fn new(
+        store: Arc<dyn TokenStore>,
+        forge: ForgeId,
+        source: AuthSource,
+        helper: Option<String>,
+    ) -> Self {
         Self {
             store,
             forge,
@@ -233,7 +252,9 @@ impl StoreCredentials {
     }
 
     async fn refresh_if_expired(&self) -> Result<()> {
-        let Some(cfg) = &self.refresh else { return Ok(()) };
+        let Some(cfg) = &self.refresh else {
+            return Ok(());
+        };
         let exp = || *self.expires_at.lock().unwrap_or_else(|e| e.into_inner());
         let now = crate::device::now_unix();
         if Self::fresh(exp(), now) {
@@ -252,14 +273,18 @@ impl StoreCredentials {
             None => None,
         };
         if let Some(d) = &self.data_dir {
-            let saved = crate::conn::Connections::load(d).get(&self.forge).and_then(|c| c.token_expires_at);
+            let saved = crate::conn::Connections::load(d)
+                .get(&self.forge)
+                .and_then(|c| c.token_expires_at);
             if saved.is_some_and(|e| e > now + 60) {
                 *self.expires_at.lock().unwrap_or_else(|e| e.into_inner()) = saved;
                 return Ok(());
             }
         }
         let Some(rt) = self.store.get(&self.forge, Purpose::Refresh)? else {
-            return Err(ForgeError::NotSignedIn("the device sign-in for this code host expired: sign in again".into()));
+            return Err(ForgeError::NotSignedIn(
+                "the device sign-in for this code host expired: sign in again".into(),
+            ));
         };
         let set = crate::device::refresh(&cfg.token_url, &cfg.client_id, &rt, cfg.internal).await?;
         self.store.put(&self.forge, Purpose::Write, &set.access)?;
@@ -283,17 +308,34 @@ impl CredentialSource for StoreCredentials {
     async fn token(&self, purpose: Purpose) -> Result<Option<Secret>> {
         self.refresh_if_expired().await?;
         match purpose {
-            Purpose::Read => Ok(self.store.get(&self.forge, Purpose::Read)?.or(self.store.get(&self.forge, Purpose::Write)?)),
+            Purpose::Read => Ok(self
+                .store
+                .get(&self.forge, Purpose::Read)?
+                .or(self.store.get(&self.forge, Purpose::Write)?)),
             Purpose::Write => self.store.get(&self.forge, Purpose::Write),
-            Purpose::Refresh => Err(ForgeError::Invalid("a refresh token is never handed out".into())),
+            Purpose::Refresh => Err(ForgeError::Invalid(
+                "a refresh token is never handed out".into(),
+            )),
         }
     }
     fn has_write(&self) -> bool {
-        self.store.get(&self.forge, Purpose::Write).ok().flatten().is_some()
+        self.store
+            .get(&self.forge, Purpose::Write)
+            .ok()
+            .flatten()
+            .is_some()
     }
     fn signed_out_reason(&self) -> Option<String> {
-        let any = self.store.get(&self.forge, Purpose::Read).ok().flatten().is_some() || self.has_write();
-        (!any).then(|| "no token for this code host on this device: add one in Settings > Code hosts".into())
+        let any = self
+            .store
+            .get(&self.forge, Purpose::Read)
+            .ok()
+            .flatten()
+            .is_some()
+            || self.has_write();
+        (!any).then(|| {
+            "no token for this code host on this device: add one in Settings > Code hosts".into()
+        })
     }
     fn git_helper(&self) -> Option<String> {
         self.helper.clone().filter(|_| self.has_write())
@@ -314,13 +356,18 @@ pub struct GhCredentials {
 }
 
 /// Why `gh` can't be used: not installed.
-pub const GH_MISSING: &str = "Install the GitHub CLI (gh) on the host, then run gh auth login on the host";
+pub const GH_MISSING: &str =
+    "Install the GitHub CLI (gh) on the host, then run gh auth login on the host";
 /// Why `gh` can't be used: not signed in.
 pub const GH_SIGNED_OUT: &str = "Run gh auth login on the host";
 
 impl GhCredentials {
     pub fn new(host: impl Into<String>) -> Self {
-        Self { host: host.into(), gh: "gh".into(), cache: Arc::new(Mutex::new(None)) }
+        Self {
+            host: host.into(),
+            gh: "gh".into(),
+            cache: Arc::new(Mutex::new(None)),
+        }
     }
 
     /// Ask `gh` (cached for a minute, both ways).
@@ -366,7 +413,9 @@ impl CredentialSource for GhCredentials {
     }
     async fn token(&self, _purpose: Purpose) -> Result<Option<Secret>> {
         let me = self.clone();
-        let r = tokio::task::spawn_blocking(move || me.probe()).await.map_err(|e| ForgeError::Transport(e.to_string()))?;
+        let r = tokio::task::spawn_blocking(move || me.probe())
+            .await
+            .map_err(|e| ForgeError::Transport(e.to_string()))?;
         Ok(r.ok())
     }
     fn has_write(&self) -> bool {
@@ -376,7 +425,9 @@ impl CredentialSource for GhCredentials {
         self.probe().err()
     }
     fn git_helper(&self) -> Option<String> {
-        self.probe().ok().map(|_| format!("{} auth git-credential", self.gh))
+        self.probe()
+            .ok()
+            .map(|_| format!("{} auth git-credential", self.gh))
     }
 }
 
@@ -389,7 +440,11 @@ pub fn sh_quote(s: &str) -> String {
 
 /// The helper command for a connection: `'<ligus>' forge git-credential '<id>'`.
 pub fn store_helper_command(program: &std::path::Path, forge: &ForgeId) -> String {
-    format!("{} forge git-credential {}", sh_quote(&program.to_string_lossy()), sh_quote(forge.as_str()))
+    format!(
+        "{} forge git-credential {}",
+        sh_quote(&program.to_string_lossy()),
+        sh_quote(forge.as_str())
+    )
 }
 
 /// `git -c` args for `base` (`https://host[:port]`) with `helper` (the part
@@ -397,7 +452,12 @@ pub fn store_helper_command(program: &std::path::Path, forge: &ForgeId) -> Strin
 /// token is not in them.
 pub fn helper_args(base: &str, helper: &str) -> Vec<String> {
     let base = base.trim_end_matches('/');
-    vec!["-c".into(), format!("credential.{base}.helper="), "-c".into(), format!("credential.{base}.helper=!{helper}")]
+    vec![
+        "-c".into(),
+        format!("credential.{base}.helper="),
+        "-c".into(),
+        format!("credential.{base}.helper=!{helper}"),
+    ]
 }
 
 /// The username git sends with a token. GitHub ignores it for tokens
@@ -419,7 +479,13 @@ pub fn git_username(kind: ForgeKind, source: AuthSource, login: Option<&str>) ->
 /// (a helper scoped by URL can still be asked about another host through
 /// redirects or config mistakes: the token never goes anywhere else).
 /// `store`/`erase` are ignored: git never writes into Ligus's store.
-pub fn answer_git_credential(action: &str, input: &str, host: &str, username: &str, token: Option<&Secret>) -> Option<String> {
+pub fn answer_git_credential(
+    action: &str,
+    input: &str,
+    host: &str,
+    username: &str,
+    token: Option<&Secret>,
+) -> Option<String> {
     if action != "get" {
         return None;
     }
@@ -445,7 +511,10 @@ pub fn answer_git_credential(action: &str, input: &str, host: &str, username: &s
     if username.chars().any(char::is_control) {
         return None;
     }
-    Some(format!("protocol=https\nhost={asked}\nusername={username}\npassword={}\n", token.expose()))
+    Some(format!(
+        "protocol=https\nhost={asked}\nusername={username}\npassword={}\n",
+        token.expose()
+    ))
 }
 
 #[cfg(test)]
@@ -463,44 +532,146 @@ mod tests {
     fn reads_fall_back_to_write_but_writes_never_use_read() {
         let store: Arc<dyn TokenStore> = Arc::new(MemoryTokens::default());
         let id = ForgeId::github_com();
-        let c = StoreCredentials::new(store.clone(), id.clone(), AuthSource::Token, Some("h".into()));
-        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let c = StoreCredentials::new(
+            store.clone(),
+            id.clone(),
+            AuthSource::Token,
+            Some("h".into()),
+        );
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
         store.put(&id, Purpose::Read, &Secret::new("r")).unwrap();
-        assert_eq!(rt.block_on(c.token(Purpose::Read)).unwrap().unwrap().expose(), "r");
-        assert!(rt.block_on(c.token(Purpose::Write)).unwrap().is_none(), "a read token never writes");
-        assert!(!c.has_write() && c.git_helper().is_none(), "no write token, no git helper");
+        assert_eq!(
+            rt.block_on(c.token(Purpose::Read))
+                .unwrap()
+                .unwrap()
+                .expose(),
+            "r"
+        );
+        assert!(
+            rt.block_on(c.token(Purpose::Write)).unwrap().is_none(),
+            "a read token never writes"
+        );
+        assert!(
+            !c.has_write() && c.git_helper().is_none(),
+            "no write token, no git helper"
+        );
         store.put(&id, Purpose::Write, &Secret::new("w")).unwrap();
-        assert_eq!(rt.block_on(c.token(Purpose::Write)).unwrap().unwrap().expose(), "w");
+        assert_eq!(
+            rt.block_on(c.token(Purpose::Write))
+                .unwrap()
+                .unwrap()
+                .expose(),
+            "w"
+        );
         store.delete(&id, Purpose::Read).unwrap();
-        assert_eq!(rt.block_on(c.token(Purpose::Read)).unwrap().unwrap().expose(), "w", "the host reads with the write token when it is the only one");
-        assert!(rt.block_on(c.token(Purpose::Refresh)).is_err(), "a refresh token is never handed out");
+        assert_eq!(
+            rt.block_on(c.token(Purpose::Read))
+                .unwrap()
+                .unwrap()
+                .expose(),
+            "w",
+            "the host reads with the write token when it is the only one"
+        );
+        assert!(
+            rt.block_on(c.token(Purpose::Refresh)).is_err(),
+            "a refresh token is never handed out"
+        );
         assert_eq!(store.present(&id), vec![Purpose::Write]);
     }
 
     #[test]
     fn git_helper_answers_get_for_its_own_https_host_only() {
         let t = Secret::new("tok");
-        let ok = answer_git_credential("get", "protocol=https\nhost=github.com\npath=a/b.git\n", "github.com", "x-access-token", Some(&t)).unwrap();
-        assert_eq!(ok, "protocol=https\nhost=github.com\nusername=x-access-token\npassword=tok\n");
-        assert!(answer_git_credential("get", "protocol=https\nhost=evil.example\n", "github.com", "u", Some(&t)).is_none());
-        assert!(answer_git_credential("get", "protocol=http\nhost=github.com\n", "github.com", "u", Some(&t)).is_none(), "never over plain http");
-        assert!(answer_git_credential("store", "protocol=https\nhost=github.com\npassword=x\n", "github.com", "u", Some(&t)).is_none());
-        assert!(answer_git_credential("get", "protocol=https\nhost=github.com\n", "github.com", "u", None).is_none());
-        assert!(answer_git_credential("get", "protocol=https\nhost=github.com\n", "github.com", "u", Some(&Secret::new("a\nb"))).is_none());
+        let ok = answer_git_credential(
+            "get",
+            "protocol=https\nhost=github.com\npath=a/b.git\n",
+            "github.com",
+            "x-access-token",
+            Some(&t),
+        )
+        .unwrap();
+        assert_eq!(
+            ok,
+            "protocol=https\nhost=github.com\nusername=x-access-token\npassword=tok\n"
+        );
+        assert!(answer_git_credential(
+            "get",
+            "protocol=https\nhost=evil.example\n",
+            "github.com",
+            "u",
+            Some(&t)
+        )
+        .is_none());
+        assert!(
+            answer_git_credential(
+                "get",
+                "protocol=http\nhost=github.com\n",
+                "github.com",
+                "u",
+                Some(&t)
+            )
+            .is_none(),
+            "never over plain http"
+        );
+        assert!(answer_git_credential(
+            "store",
+            "protocol=https\nhost=github.com\npassword=x\n",
+            "github.com",
+            "u",
+            Some(&t)
+        )
+        .is_none());
+        assert!(answer_git_credential(
+            "get",
+            "protocol=https\nhost=github.com\n",
+            "github.com",
+            "u",
+            None
+        )
+        .is_none());
+        assert!(answer_git_credential(
+            "get",
+            "protocol=https\nhost=github.com\n",
+            "github.com",
+            "u",
+            Some(&Secret::new("a\nb"))
+        )
+        .is_none());
         // The login comes from the code host (cached by the last check): a
         // newline in it must not add credential-protocol keys.
-        let inj = answer_git_credential("get", "protocol=https\nhost=codeberg.org\n", "codeberg.org", "ana\nhost=evil.example\nquit=1", Some(&t));
-        assert!(inj.clone().is_none_or(|o| o.lines().count() == 4 && !o.contains("evil.example")), "{inj:?}");
+        let inj = answer_git_credential(
+            "get",
+            "protocol=https\nhost=codeberg.org\n",
+            "codeberg.org",
+            "ana\nhost=evil.example\nquit=1",
+            Some(&t),
+        );
+        assert!(
+            inj.clone()
+                .is_none_or(|o| o.lines().count() == 4 && !o.contains("evil.example")),
+            "{inj:?}"
+        );
     }
 
     #[test]
     fn helper_args_never_carry_the_token_and_quote_paths() {
-        let cmd = store_helper_command(std::path::Path::new("/Applications/Ligus it's.app/ligus"), &ForgeId::parse("gitlab:gitlab.example.com").unwrap());
+        let cmd = store_helper_command(
+            std::path::Path::new("/Applications/Ligus it's.app/ligus"),
+            &ForgeId::parse("gitlab:gitlab.example.com").unwrap(),
+        );
         assert_eq!(cmd, "'/Applications/Ligus it'\\''s.app/ligus' forge git-credential 'gitlab:gitlab.example.com'");
         let args = helper_args("https://gitlab.example.com/", &cmd);
         assert_eq!(args[1], "credential.https://gitlab.example.com.helper=");
         assert!(args[3].starts_with("credential.https://gitlab.example.com.helper=!'/Applications"));
-        assert_eq!(git_username(ForgeKind::GitLab, AuthSource::Oauth, Some("ana")), "oauth2");
-        assert_eq!(git_username(ForgeKind::Gitea, AuthSource::Token, Some("ana")), "ana");
+        assert_eq!(
+            git_username(ForgeKind::GitLab, AuthSource::Oauth, Some("ana")),
+            "oauth2"
+        );
+        assert_eq!(
+            git_username(ForgeKind::Gitea, AuthSource::Token, Some("ana")),
+            "ana"
+        );
     }
 }

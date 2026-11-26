@@ -11,7 +11,10 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::tokens::{Anonymous, AuthSource, CredentialSource, GhCredentials, RefreshConfig, StoreCredentials, TokenStore};
+use crate::tokens::{
+    Anonymous, AuthSource, CredentialSource, GhCredentials, RefreshConfig, StoreCredentials,
+    TokenStore,
+};
 use crate::{spec, Forge, ForgeError, ForgeId, ForgeKind, Result};
 
 pub const FILE: &str = "forges.toml";
@@ -33,9 +36,17 @@ pub struct ForgesLock {
 impl ForgesLock {
     /// Block until this process holds the lock.
     pub fn acquire(data_dir: &Path) -> Result<Self> {
-        let io = |e: std::io::Error| ForgeError::Store(format!("couldn't lock the code host connections: {e}"));
+        let io = |e: std::io::Error| {
+            ForgeError::Store(format!("couldn't lock the code host connections: {e}"))
+        };
         std::fs::create_dir_all(data_dir).map_err(io)?;
-        let file = std::fs::OpenOptions::new().create(true).read(true).write(true).truncate(false).open(data_dir.join(LOCK_FILE)).map_err(io)?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(data_dir.join(LOCK_FILE))
+            .map_err(io)?;
         #[cfg(unix)]
         {
             use std::os::unix::io::AsRawFd;
@@ -61,7 +72,9 @@ impl ForgesLock {
     /// [`ForgesLock::acquire`] off the async runtime.
     pub async fn acquire_async(data_dir: &Path) -> Result<Self> {
         let d = data_dir.to_path_buf();
-        tokio::task::spawn_blocking(move || Self::acquire(&d)).await.map_err(|e| ForgeError::Store(e.to_string()))?
+        tokio::task::spawn_blocking(move || Self::acquire(&d))
+            .await
+            .map_err(|e| ForgeError::Store(e.to_string()))?
     }
 }
 
@@ -111,19 +124,38 @@ pub fn validate_base_url(raw: &str) -> Result<String> {
     // parser), percent-escapes in the authority, spaces or control bytes would
     // let the host shown differ from the host requests reach.
     if !raw.bytes().all(|b| b.is_ascii_graphic()) || raw.contains('\\') {
-        return Err(ForgeError::Invalid(format!("'{raw}' has characters a code host URL can't have")));
+        return Err(ForgeError::Invalid(format!(
+            "'{raw}' has characters a code host URL can't have"
+        )));
     }
-    let u = url::Url::parse(raw).map_err(|_| ForgeError::Invalid(format!("'{raw}' isn't a URL")))?;
-    let host = u.host_str().ok_or_else(|| ForgeError::Invalid("the URL has no host".into()))?.to_ascii_lowercase();
-    let loopback = host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
+    let u =
+        url::Url::parse(raw).map_err(|_| ForgeError::Invalid(format!("'{raw}' isn't a URL")))?;
+    let host = u
+        .host_str()
+        .ok_or_else(|| ForgeError::Invalid("the URL has no host".into()))?
+        .to_ascii_lowercase();
+    let loopback = host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
     match u.scheme() {
         "https" => {}
         "http" if loopback => {}
-        "http" => return Err(ForgeError::Invalid("a code host must be https (tokens never travel over plain http)".into())),
+        "http" => {
+            return Err(ForgeError::Invalid(
+                "a code host must be https (tokens never travel over plain http)".into(),
+            ))
+        }
         _ => return Err(ForgeError::Invalid("a code host URL is https://…".into())),
     }
-    if !u.username().is_empty() || u.password().is_some() || u.query().is_some() || u.fragment().is_some() {
-        return Err(ForgeError::Invalid("a code host URL can't carry credentials, a query or a fragment".into()));
+    if !u.username().is_empty()
+        || u.password().is_some()
+        || u.query().is_some()
+        || u.fragment().is_some()
+    {
+        return Err(ForgeError::Invalid(
+            "a code host URL can't carry credentials, a query or a fragment".into(),
+        ));
     }
     if raw.split('/').any(|s| s == ".." || s == ".") {
         return Err(ForgeError::Invalid("bad path in the code host URL".into()));
@@ -133,7 +165,9 @@ pub fn validate_base_url(raw: &str) -> Result<String> {
         None => host.clone(),
     };
     if spec::host_of(raw).as_deref() != Some(parsed_host.as_str()) {
-        return Err(ForgeError::Invalid(format!("'{raw}' doesn't name one clear host")));
+        return Err(ForgeError::Invalid(format!(
+            "'{raw}' doesn't name one clear host"
+        )));
     }
     Ok(raw.to_string())
 }
@@ -145,7 +179,13 @@ pub fn validate_base_url(raw: &str) -> Result<String> {
 /// perhaps added again, or another sign-in started since): a background
 /// poll must never leave a stray token behind, nor attach one to a
 /// connection nobody signed in on. Not for use while holding the lock.
-pub fn save_device_sign_in(data_dir: &Path, store: &dyn TokenStore, id: &ForgeId, t: &crate::device::TokenSet, still_current: impl FnOnce() -> bool) -> Result<bool> {
+pub fn save_device_sign_in(
+    data_dir: &Path,
+    store: &dyn TokenStore,
+    id: &ForgeId,
+    t: &crate::device::TokenSet,
+    still_current: impl FnOnce() -> bool,
+) -> Result<bool> {
     let _lock = ForgesLock::acquire(data_dir)?;
     let mut all = Connections::load(data_dir);
     if all.get(id).is_none() || !still_current() {
@@ -174,14 +214,22 @@ pub async fn check_address(c: &Connection) -> Result<()> {
     }
     for raw in std::iter::once(c.base_url.as_str()).chain(c.api_url.as_deref()) {
         crate::http::check_url_address(raw, false)?;
-        let Ok(u) = url::Url::parse(raw) else { continue };
-        let Some(url::Host::Domain(host)) = u.host() else { continue };
+        let Ok(u) = url::Url::parse(raw) else {
+            continue;
+        };
+        let Some(url::Host::Domain(host)) = u.host() else {
+            continue;
+        };
         let host = host.to_ascii_lowercase();
         if crate::http::real_hosts_denied() && host != "localhost" {
             continue;
         }
         let port = u.port_or_known_default().unwrap_or(443);
-        let lookup = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::net::lookup_host((host.as_str(), port))).await;
+        let lookup = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::net::lookup_host((host.as_str(), port)),
+        )
+        .await;
         if let Ok(Ok(addrs)) = lookup {
             let addrs: Vec<_> = addrs.collect();
             if !addrs.is_empty() && addrs.iter().all(|a| !crate::http::is_public_ip(a.ip())) {
@@ -204,14 +252,22 @@ pub async fn git_resolve_pin(c: &Connection) -> Result<Option<String>> {
         return Ok(None);
     }
     crate::http::check_url_address(&c.base_url, false)?;
-    let Ok(u) = url::Url::parse(&c.base_url) else { return Ok(None) };
-    let Some(url::Host::Domain(host)) = u.host() else { return Ok(None) };
+    let Ok(u) = url::Url::parse(&c.base_url) else {
+        return Ok(None);
+    };
+    let Some(url::Host::Domain(host)) = u.host() else {
+        return Ok(None);
+    };
     let host = host.to_ascii_lowercase();
     if crate::http::real_hosts_denied() && host != "localhost" {
         return Ok(None);
     }
     let port = u.port_or_known_default().unwrap_or(443);
-    let lookup = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::net::lookup_host((host.as_str(), port))).await;
+    let lookup = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::net::lookup_host((host.as_str(), port)),
+    )
+    .await;
     let addrs: Vec<std::net::SocketAddr> = match lookup {
         Ok(Ok(a)) => a.collect(),
         _ => return Err(ForgeError::Invalid(format!("{host} doesn't resolve"))),
@@ -240,12 +296,30 @@ impl Connection {
     /// A new connection (validated).
     pub fn new(kind: ForgeKind, base_url: &str, auth: AuthSource) -> Result<Self> {
         let base_url = validate_base_url(base_url)?;
-        let host = spec::host_of(&base_url).ok_or_else(|| ForgeError::Invalid("the URL has no valid host".into()))?;
+        let host = spec::host_of(&base_url)
+            .ok_or_else(|| ForgeError::Invalid("the URL has no valid host".into()))?;
         if auth == AuthSource::Gh && kind != ForgeKind::GitHub {
-            return Err(ForgeError::Invalid("the gh login works only for GitHub".into()));
+            return Err(ForgeError::Invalid(
+                "the gh login works only for GitHub".into(),
+            ));
         }
-        let flavor = known_kind(&host).and_then(|(_, f)| f).map(str::to_string).or_else(|| (kind == ForgeKind::GitHub && host != "github.com").then(|| "ghes".into()));
-        Ok(Self { id: ForgeId::new(kind, &host), kind, base_url, api_url: None, flavor, auth, client_id: None, login: None, user_id: None, token_expires_at: None, internal: false })
+        let flavor = known_kind(&host)
+            .and_then(|(_, f)| f)
+            .map(str::to_string)
+            .or_else(|| (kind == ForgeKind::GitHub && host != "github.com").then(|| "ghes".into()));
+        Ok(Self {
+            id: ForgeId::new(kind, &host),
+            kind,
+            base_url,
+            api_url: None,
+            flavor,
+            auth,
+            client_id: None,
+            login: None,
+            user_id: None,
+            token_expires_at: None,
+            internal: false,
+        })
     }
 
     /// The default connection: github.com through the host's `gh` login.
@@ -286,8 +360,17 @@ impl Connection {
     }
 
     /// The credential source for this connection.
-    pub fn credentials(&self, store: Arc<dyn TokenStore>, helper_program: Option<&Path>, data_dir: Option<&Path>) -> Arc<dyn CredentialSource> {
-        self.credentials_with_helper(store, helper_program.map(|p| crate::tokens::store_helper_command(p, &self.id)), data_dir)
+    pub fn credentials(
+        &self,
+        store: Arc<dyn TokenStore>,
+        helper_program: Option<&Path>,
+        data_dir: Option<&Path>,
+    ) -> Arc<dyn CredentialSource> {
+        self.credentials_with_helper(
+            store,
+            helper_program.map(|p| crate::tokens::store_helper_command(p, &self.id)),
+            data_dir,
+        )
     }
 
     /// [`Connection::credentials`] with a ready-made helper command (the
@@ -296,16 +379,26 @@ impl Connection {
     /// `data_dir` is where `forges.toml` lives: a refreshed device sign-in's
     /// expiry is saved there (once, under [`ForgesLock`]), and refreshes are
     /// serialised with every other process using that data dir.
-    pub fn credentials_with_helper(&self, store: Arc<dyn TokenStore>, helper: Option<String>, data_dir: Option<&Path>) -> Arc<dyn CredentialSource> {
+    pub fn credentials_with_helper(
+        &self,
+        store: Arc<dyn TokenStore>,
+        helper: Option<String>,
+        data_dir: Option<&Path>,
+    ) -> Arc<dyn CredentialSource> {
         match self.auth {
             AuthSource::Gh => Arc::new(GhCredentials::new(self.host())),
             AuthSource::None => Arc::new(Anonymous),
             AuthSource::Token | AuthSource::Oauth => {
                 let mut c = StoreCredentials::new(store, self.id.clone(), self.auth, helper);
                 if self.auth == AuthSource::Oauth {
-                    *c.expires_at.get_mut().unwrap_or_else(|e| e.into_inner()) = self.token_expires_at;
+                    *c.expires_at.get_mut().unwrap_or_else(|e| e.into_inner()) =
+                        self.token_expires_at;
                     if let Ok(ep) = crate::device::endpoints(self) {
-                        c.refresh = Some(RefreshConfig { token_url: ep.token_url, client_id: ep.client_id, internal: self.internal });
+                        c.refresh = Some(RefreshConfig {
+                            token_url: ep.token_url,
+                            client_id: ep.client_id,
+                            internal: self.internal,
+                        });
                     }
                     if let Some(dir) = data_dir {
                         c.data_dir = Some(dir.to_path_buf());
@@ -317,7 +410,9 @@ impl Connection {
                             if let Some(c) = all.get_mut(&id) {
                                 c.token_expires_at = exp;
                                 if let Err(e) = all.save(&dir) {
-                                    tracing::warn!("couldn't save the refreshed sign-in expiry for {id}: {e}");
+                                    tracing::warn!(
+                                        "couldn't save the refreshed sign-in expiry for {id}: {e}"
+                                    );
                                 }
                             }
                         }));
@@ -360,12 +455,18 @@ impl Connections {
                 // names another host than its URL, is dropped: a token is only
                 // ever sent to the host the connection is shown as.
                 cs.forges.retain(|c| {
-                    validate_base_url(&c.base_url).is_ok_and(|b| spec::host_of(&b).is_some_and(|h| c.id == ForgeId::new(c.kind, &h)))
-                        && c.api_url.as_deref().is_none_or(|a| validate_base_url(a).is_ok())
+                    validate_base_url(&c.base_url).is_ok_and(|b| {
+                        spec::host_of(&b).is_some_and(|h| c.id == ForgeId::new(c.kind, &h))
+                    }) && c
+                        .api_url
+                        .as_deref()
+                        .is_none_or(|a| validate_base_url(a).is_ok())
                 });
                 cs
             }
-            Err(_) => Self { forges: vec![Connection::github_gh()] },
+            Err(_) => Self {
+                forges: vec![Connection::github_gh()],
+            },
         }
     }
 
@@ -397,7 +498,9 @@ impl Connections {
 
     /// The connection for a host (`github.com`, `codeberg.org`).
     pub fn for_host(&self, host: &str) -> Option<&Connection> {
-        self.forges.iter().find(|c| spec::same_host(&c.host(), host))
+        self.forges
+            .iter()
+            .find(|c| spec::same_host(&c.host(), host))
     }
 
     /// Add or replace (by id).
@@ -435,7 +538,15 @@ mod tests {
         assert!(validate_base_url("https://gitlab.example.com/").is_ok());
         assert!(validate_base_url("https://git.example.com/gitlab").is_ok());
         assert!(validate_base_url("http://127.0.0.1:3000").is_ok());
-        for bad in ["http://gitlab.example.com", "ftp://x", "https://u:p@x.com", "https://x.com/?a=1", "https://x.com/#f", "nope", "https://x.com/a/../b"] {
+        for bad in [
+            "http://gitlab.example.com",
+            "ftp://x",
+            "https://u:p@x.com",
+            "https://x.com/?a=1",
+            "https://x.com/#f",
+            "nope",
+            "https://x.com/a/../b",
+        ] {
             assert!(validate_base_url(bad).is_err(), "{bad}");
         }
     }
@@ -443,13 +554,39 @@ mod tests {
     #[test]
     fn ids_api_bases_and_names() {
         let gh = Connection::github_gh();
-        assert_eq!((gh.id.as_str(), gh.api_base().as_str()), ("github:github.com", "https://api.github.com"));
-        let ghes = Connection::new(ForgeKind::GitHub, "https://ghe.corp.example", AuthSource::Token).unwrap();
-        assert_eq!((ghes.api_base().as_str(), ghes.flavor.as_deref()), ("https://ghe.corp.example/api/v3", Some("ghes")));
-        let gl = Connection::new(ForgeKind::GitLab, "https://gitlab.example.com", AuthSource::Token).unwrap();
-        assert_eq!((gl.id.as_str(), gl.api_base().as_str()), ("gitlab:gitlab.example.com", "https://gitlab.example.com/api/v4"));
-        let cb = Connection::new(ForgeKind::Gitea, "https://codeberg.org", AuthSource::Token).unwrap();
-        assert_eq!((cb.display().as_str(), cb.api_base().as_str()), ("Codeberg", "https://codeberg.org/api/v1"));
+        assert_eq!(
+            (gh.id.as_str(), gh.api_base().as_str()),
+            ("github:github.com", "https://api.github.com")
+        );
+        let ghes = Connection::new(
+            ForgeKind::GitHub,
+            "https://ghe.corp.example",
+            AuthSource::Token,
+        )
+        .unwrap();
+        assert_eq!(
+            (ghes.api_base().as_str(), ghes.flavor.as_deref()),
+            ("https://ghe.corp.example/api/v3", Some("ghes"))
+        );
+        let gl = Connection::new(
+            ForgeKind::GitLab,
+            "https://gitlab.example.com",
+            AuthSource::Token,
+        )
+        .unwrap();
+        assert_eq!(
+            (gl.id.as_str(), gl.api_base().as_str()),
+            (
+                "gitlab:gitlab.example.com",
+                "https://gitlab.example.com/api/v4"
+            )
+        );
+        let cb =
+            Connection::new(ForgeKind::Gitea, "https://codeberg.org", AuthSource::Token).unwrap();
+        assert_eq!(
+            (cb.display().as_str(), cb.api_base().as_str()),
+            ("Codeberg", "https://codeberg.org/api/v1")
+        );
         assert!(Connection::new(ForgeKind::GitLab, "https://gitlab.com", AuthSource::Gh).is_err());
         assert_eq!(ForgeId::parse("github.com").unwrap(), ForgeId::github_com());
         assert!(ForgeId::parse("svn:x.com").is_err() && ForgeId::parse("gitea:bad host").is_err());
@@ -458,13 +595,25 @@ mod tests {
     #[test]
     fn the_file_holds_no_tokens_and_defaults_to_gh() {
         let d = tempfile::tempdir().unwrap();
-        assert_eq!(Connections::load(d.path()).forges, vec![Connection::github_gh()]);
+        assert_eq!(
+            Connections::load(d.path()).forges,
+            vec![Connection::github_gh()]
+        );
         let mut cs = Connections::default();
-        cs.upsert(Connection::new(ForgeKind::Gitea, "https://codeberg.org", AuthSource::Token).unwrap());
+        cs.upsert(
+            Connection::new(ForgeKind::Gitea, "https://codeberg.org", AuthSource::Token).unwrap(),
+        );
         cs.save(d.path()).unwrap();
         let text = std::fs::read_to_string(Connections::path(d.path())).unwrap();
-        assert!(!text.to_lowercase().contains("token =") && text.contains("codeberg.org"), "{text}");
-        assert_eq!(Connections::load(d.path()), cs, "a saved empty-of-GitHub list stays that way");
+        assert!(
+            !text.to_lowercase().contains("token =") && text.contains("codeberg.org"),
+            "{text}"
+        );
+        assert_eq!(
+            Connections::load(d.path()),
+            cs,
+            "a saved empty-of-GitHub list stays that way"
+        );
         assert!(cs.for_host("www.codeberg.org").is_some());
     }
 
@@ -474,12 +623,25 @@ mod tests {
     /// `evil.example` while a naive split reads `gitlab.com`.
     #[test]
     fn base_url_host_is_the_host_requests_reach() {
-        for raw in ["https://evil.example\\@gitlab.com", "https://evil.example\\@codeberg.org/", "https://evil.example%5C@gitlab.com"] {
+        for raw in [
+            "https://evil.example\\@gitlab.com",
+            "https://evil.example\\@codeberg.org/",
+            "https://evil.example%5C@gitlab.com",
+        ] {
             match Connection::new(ForgeKind::GitLab, raw, AuthSource::Token) {
                 Err(_) => {}
                 Ok(c) => {
-                    let reached = url::Url::parse(&c.api_base()).unwrap().host_str().unwrap().to_string();
-                    assert_eq!(c.host(), reached, "{raw}: shown as {} but requests go to {reached}", c.display());
+                    let reached = url::Url::parse(&c.api_base())
+                        .unwrap()
+                        .host_str()
+                        .unwrap()
+                        .to_string();
+                    assert_eq!(
+                        c.host(),
+                        reached,
+                        "{raw}: shown as {} but requests go to {reached}",
+                        c.display()
+                    );
                 }
             }
         }
@@ -488,7 +650,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(Connections::path(d.path()), toml).unwrap();
         for c in Connections::load(d.path()).forges {
-            let reached = url::Url::parse(&c.api_base()).unwrap().host_str().unwrap().to_string();
+            let reached = url::Url::parse(&c.api_base())
+                .unwrap()
+                .host_str()
+                .unwrap()
+                .to_string();
             assert_eq!(c.host(), reached);
         }
     }

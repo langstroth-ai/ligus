@@ -44,8 +44,12 @@ use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::Router;
 use ligus_core::chat::{ChatMessage, MessageRole};
-use ligus_core::context_budget::{plan_with_hysteresis, token_estimator, DEFAULT_HIGH_WATERMARK, DEFAULT_LOW_WATERMARK};
-use ligus_core::{ActorIdentity, ActorKind, ChatSession, ModelProviderKind, WorkspaceMember, WorkspaceRole};
+use ligus_core::context_budget::{
+    plan_with_hysteresis, token_estimator, DEFAULT_HIGH_WATERMARK, DEFAULT_LOW_WATERMARK,
+};
+use ligus_core::{
+    ActorIdentity, ActorKind, ChatSession, ModelProviderKind, WorkspaceMember, WorkspaceRole,
+};
 use ligus_runtime::agent_tools::{builtin_policy, CompositeTools, MAX_OFFERED_TOOLS};
 use ligus_runtime::chat_service::turns_with_summary;
 use ligus_runtime::provider::dispatch::{self, NoTools, ResolvedRuntime, ToolSet};
@@ -83,18 +87,29 @@ async fn forward(State(p): State<Proxy>, body: Bytes) -> axum::response::Respons
     let bytes = resp.bytes().await.expect("upstream body");
     let (mut cache_n, mut prompt_n, mut cached_tokens) = (None, None, None);
     for line in String::from_utf8_lossy(&bytes).lines() {
-        let Some(v) = line.strip_prefix("data: ").and_then(|d| serde_json::from_str::<Value>(d).ok()) else {
+        let Some(v) = line
+            .strip_prefix("data: ")
+            .and_then(|d| serde_json::from_str::<Value>(d).ok())
+        else {
             continue;
         };
         if let Some(t) = v.get("timings") {
             cache_n = t.get("cache_n").and_then(Value::as_u64).or(cache_n);
             prompt_n = t.get("prompt_n").and_then(Value::as_u64).or(prompt_n);
         }
-        if let Some(c) = v.pointer("/usage/prompt_tokens_details/cached_tokens").and_then(Value::as_u64) {
+        if let Some(c) = v
+            .pointer("/usage/prompt_tokens_details/cached_tokens")
+            .and_then(Value::as_u64)
+        {
             cached_tokens = Some(c);
         }
     }
-    p.seen.lock().unwrap().push(Exchange { body: req, cache_n, prompt_n, cached_tokens });
+    p.seen.lock().unwrap().push(Exchange {
+        body: req,
+        cache_n,
+        prompt_n,
+        cached_tokens,
+    });
     (
         axum::http::StatusCode::from_u16(status).unwrap(),
         [(header::CONTENT_TYPE, "text/event-stream")],
@@ -105,8 +120,14 @@ async fn forward(State(p): State<Proxy>, body: Bytes) -> axum::response::Respons
 
 async fn start_proxy(upstream: String) -> (String, Arc<Mutex<Vec<Exchange>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let proxy = Proxy { upstream, http: ligus_forge::new_http_client(), seen: seen.clone() };
-    let app = Router::new().route("/v1/chat/completions", post(forward)).with_state(proxy);
+    let proxy = Proxy {
+        upstream,
+        http: ligus_forge::new_http_client(),
+        seen: seen.clone(),
+    };
+    let app = Router::new()
+        .route("/v1/chat/completions", post(forward))
+        .with_state(proxy);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -209,7 +230,13 @@ async fn run_turn(
     tools: Option<&CompositeTools<NoTools>>,
     seen: &Arc<Mutex<Vec<Exchange>>>,
 ) -> TurnResult {
-    let hp = plan_with_hysteresis(history, budget, prior_boundary, DEFAULT_HIGH_WATERMARK, DEFAULT_LOW_WATERMARK);
+    let hp = plan_with_hysteresis(
+        history,
+        budget,
+        prior_boundary,
+        DEFAULT_HIGH_WATERMARK,
+        DEFAULT_LOW_WATERMARK,
+    );
     let summary = summary.filter(|_| !hp.plan.overflow.is_empty());
     let turns = turns_with_summary(&hp.plan.kept, None, "Ligus", summary);
     let before = seen.lock().unwrap().len();
@@ -221,7 +248,11 @@ async fn run_turn(
         None,
         &[],
         1024,
-        tools.map(|t| ToolSet { defs: t.defs(), executor: t, max_rounds: 4 }),
+        tools.map(|t| ToolSet {
+            defs: t.defs(),
+            executor: t,
+            max_rounds: 4,
+        }),
         |_| {},
         |_| {},
     )
@@ -229,7 +260,14 @@ async fn run_turn(
     .expect("turn completes");
     let secs = start.elapsed().as_secs_f64();
     let all = seen.lock().unwrap();
-    TurnResult { first: all[before].clone(), boundary: hp.boundary, moved: hp.moved, requests: all.len() - before, reply, secs }
+    TurnResult {
+        first: all[before].clone(),
+        boundary: hp.boundary,
+        moved: hp.moved,
+        requests: all.len() - before,
+        reply,
+        secs,
+    }
 }
 
 fn messages(e: &Exchange) -> Vec<Value> {
@@ -256,16 +294,25 @@ async fn second_turn_reuses_the_cached_prefix() {
 
     for variant in ["plain", "tools", "compacted"] {
         let tools = (variant == "tools").then(|| {
-            let builtin = BuiltinTools::new(builtin_policy(dir.path(), false, false, false)).unwrap();
+            let builtin =
+                BuiltinTools::new(builtin_policy(dir.path(), false, false, false)).unwrap();
             CompositeTools::<NoTools>::new(Some(builtin), None, MAX_OFFERED_TOOLS)
         });
         let summary = "Mara and Ligus discussed the gateway deploy pipeline and ROCm prefill speed. \
                        Decisions: pin llama.cpp versions; keep prompts stable for the prompt cache.";
         // A per-variant opener keeps variants from sharing a cached prefix.
-        let mut hist = vec![ChatMessage::new(MessageRole::User, "Mara", format!("Session tag: {variant}-{}", Uuid::new_v4()))];
+        let mut hist = vec![ChatMessage::new(
+            MessageRole::User,
+            "Mara",
+            format!("Session tag: {variant}-{}", Uuid::new_v4()),
+        )];
         hist.push(ChatMessage::new(MessageRole::Assistant, "Ligus", "Noted."));
         hist.extend(history());
-        hist.push(ChatMessage::new(MessageRole::User, "Mara", "In one sentence: what should we cache?"));
+        hist.push(ChatMessage::new(
+            MessageRole::User,
+            "Mara",
+            "In one sentence: what should we cache?",
+        ));
         // The compacted variant gets a budget turn 1's history just overflows
         // (so it compacts in one batch down to the low watermark) and turn 2's
         // short exchange stays inside; the others keep the whole history. The
@@ -277,11 +324,39 @@ async fn second_turn_reuses_the_cached_prefix() {
             20_000
         };
 
-        let t1 = run_turn(&rt, &system, &hist, budget, None, Some(summary), tools.as_ref(), &seen).await;
-        hist.push(ChatMessage::new(MessageRole::Assistant, "Ligus", t1.reply.clone()));
-        hist.push(ChatMessage::new(MessageRole::User, "Mara", "And in one sentence: what should we never cache?"));
+        let t1 = run_turn(
+            &rt,
+            &system,
+            &hist,
+            budget,
+            None,
+            Some(summary),
+            tools.as_ref(),
+            &seen,
+        )
+        .await;
+        hist.push(ChatMessage::new(
+            MessageRole::Assistant,
+            "Ligus",
+            t1.reply.clone(),
+        ));
+        hist.push(ChatMessage::new(
+            MessageRole::User,
+            "Mara",
+            "And in one sentence: what should we never cache?",
+        ));
         // The app persists the boundary between turns; carry it forward.
-        let t2 = run_turn(&rt, &system, &hist, budget, t1.boundary, Some(summary), tools.as_ref(), &seen).await;
+        let t2 = run_turn(
+            &rt,
+            &system,
+            &hist,
+            budget,
+            t1.boundary,
+            Some(summary),
+            tools.as_ref(),
+            &seen,
+        )
+        .await;
 
         // The prompt builder's half of the bargain: turn 1's request messages
         // are a byte-identical prefix of turn 2's, system prompt included.
@@ -312,8 +387,15 @@ async fn second_turn_reuses_the_cached_prefix() {
         );
         // Turn 1's messages — except a trailing user message, which the
         // repair step may merge with the new user message — stay unchanged.
-        assert!(shared + 1 >= m1.len(), "{variant}: turn 2 rewrote turn 1's prompt ({shared}/{} shared)", m1.len());
-        assert!(tools_same, "{variant}: the offered tools changed between turns");
+        assert!(
+            shared + 1 >= m1.len(),
+            "{variant}: turn 2 rewrote turn 1's prompt ({shared}/{} shared)",
+            m1.len()
+        );
+        assert!(
+            tools_same,
+            "{variant}: the offered tools changed between turns"
+        );
         if variant == "compacted" {
             assert!(t1.moved, "compacted: turn 1 did not compact");
         }
@@ -377,13 +459,24 @@ async fn final_round_keeps_the_tool_prefix_cached() {
         "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
     })];
     let system = prompt::with_tools_offered_for(
-        &format!("{}\n\n{}", prompt::primary_system_prompt(&session), prompt::runtime_identity_block(&rt, "Lab Mac (this device)")),
+        &format!(
+            "{}\n\n{}",
+            prompt::primary_system_prompt(&session),
+            prompt::runtime_identity_block(&rt, "Lab Mac (this device)")
+        ),
         &tools,
     );
-    let runs: usize = std::env::var("LIGUS_PREFIX_LIVE_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+    let runs: usize = std::env::var("LIGUS_PREFIX_LIVE_RUNS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
     for run in 0..runs {
         for variant in ["tool_choice_none", "drop_tools"] {
-            let mut hist = vec![ChatMessage::new(MessageRole::User, "Mara", format!("Session tag: {variant}-{}", Uuid::new_v4()))];
+            let mut hist = vec![ChatMessage::new(
+                MessageRole::User,
+                "Mara",
+                format!("Session tag: {variant}-{}", Uuid::new_v4()),
+            )];
             hist.push(ChatMessage::new(MessageRole::Assistant, "Ligus", "Noted."));
             hist.extend(history());
             hist.push(ChatMessage::new(
@@ -397,18 +490,32 @@ async fn final_round_keeps_the_tool_prefix_cached() {
                 .with_final_tool_choice(variant == "tool_choice_none");
             let before = seen.lock().unwrap().len();
             let out = client
-                .stream_chat_with_tools(None, &model, Some(&system), &turns, &tools, &Weather, 2, |_| {}, |_| {})
+                .stream_chat_with_tools(
+                    None,
+                    &model,
+                    Some(&system),
+                    &turns,
+                    &tools,
+                    &Weather,
+                    2,
+                    |_| {},
+                    |_| {},
+                )
                 .await
                 .expect("turn completes");
             let all = seen.lock().unwrap()[before..].to_vec();
             if all.len() < 2 {
-                eprintln!("{variant}: the model answered without calling the tool; nothing to measure");
+                eprintln!(
+                    "{variant}: the model answered without calling the tool; nothing to measure"
+                );
                 continue;
             }
             let (r1, r2) = (&all[0], &all[1]);
             let r1_prompt = r1.cache_n.unwrap_or(0) + r1.prompt_n.unwrap_or(0);
             let r2_prompt = r2.cache_n.unwrap_or(0) + r2.prompt_n.unwrap_or(0);
-            let leaked = ["<|tool_call>", "<tool_call>", "<|channel|>", "to=functions"].iter().any(|m| out.text.contains(m));
+            let leaked = ["<|tool_call>", "<tool_call>", "<|channel|>", "to=functions"]
+                .iter()
+                .any(|m| out.text.contains(m));
             println!(
                 "{}",
                 serde_json::json!({
@@ -429,13 +536,30 @@ async fn final_round_keeps_the_tool_prefix_cached() {
                     "reply": out.text.chars().take(160).collect::<String>(),
                 })
             );
-            assert!(!out.text.trim().is_empty(), "{variant}: the final round produced no answer");
-            assert!(!leaked, "{variant}: the reply is raw tool-call markup: {}", out.text);
+            assert!(
+                !out.text.trim().is_empty(),
+                "{variant}: the final round produced no answer"
+            );
+            assert!(
+                !leaked,
+                "{variant}: the reply is raw tool-call markup: {}",
+                out.text
+            );
             if variant == "tool_choice_none" {
-                assert_eq!(r2.body["tool_choice"], "none", "the final round forbids tools");
-                assert_eq!(r2.body.get("tools"), r1.body.get("tools"), "the tools field is unchanged");
+                assert_eq!(
+                    r2.body["tool_choice"], "none",
+                    "the final round forbids tools"
+                );
+                assert_eq!(
+                    r2.body.get("tools"),
+                    r1.body.get("tools"),
+                    "the tools field is unchanged"
+                );
                 if let Some(c) = r2.cache_n {
-                    assert!(c as f64 >= 0.9 * r1_prompt as f64, "round 2 reused only {c} of round 1's {r1_prompt} tokens");
+                    assert!(
+                        c as f64 >= 0.9 * r1_prompt as f64,
+                        "round 2 reused only {c} of round 1's {r1_prompt} tokens"
+                    );
                 }
             } else {
                 assert!(r2.body.get("tools").is_none());

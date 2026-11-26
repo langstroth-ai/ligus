@@ -62,7 +62,9 @@ pub fn deep_link(rest: &str) -> String {
 /// for any other link.
 pub fn strip_deep_link_scheme(link: &str) -> Option<&str> {
     let (scheme, rest) = link.split_once("://")?;
-    scheme.eq_ignore_ascii_case(DEEP_LINK_SCHEME).then_some(rest)
+    scheme
+        .eq_ignore_ascii_case(DEEP_LINK_SCHEME)
+        .then_some(rest)
 }
 
 // ---------------------------------------------------------------------------
@@ -71,7 +73,10 @@ pub fn strip_deep_link_scheme(link: &str) -> Option<&str> {
 
 /// `$HOME` (or `%USERPROFILE%`).
 pub fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|v| !v.is_empty()).map(PathBuf::from)
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
 }
 
 /// `p` with symlinks resolved, also when `p` (or a tail of it) doesn't exist
@@ -166,9 +171,15 @@ mod tests {
     #[test]
     fn paths_use_ligus_names() {
         let root = Path::new("/r");
-        assert_eq!(workspace_state_path(root, "mcp-servers.json").unwrap(), root.join(".ligus/mcp-servers.json"));
+        assert_eq!(
+            workspace_state_path(root, "mcp-servers.json").unwrap(),
+            root.join(".ligus/mcp-servers.json")
+        );
         assert_eq!(config_file_for_write(root), root.join("ligus.config.toml"));
-        assert_eq!(config_candidates(&[root, Path::new("/d")]), [root.join(CONFIG_FILE), Path::new("/d").join(CONFIG_FILE)]);
+        assert_eq!(
+            config_candidates(&[root, Path::new("/d")]),
+            [root.join(CONFIG_FILE), Path::new("/d").join(CONFIG_FILE)]
+        );
         assert_eq!(home_data_dir(Path::new("/h")), Path::new("/h/.ligus"));
     }
 

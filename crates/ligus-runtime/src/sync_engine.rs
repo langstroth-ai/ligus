@@ -15,10 +15,12 @@ use ligus_core::{open_symmetric, seal_symmetric_kid, SealedEnvelope, SessionEven
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::event_store::EventStore;
-use crate::keyring::{KeyringEngine, KeySource};
 use crate::envelope_verifier::verdict_for;
-use crate::identity_verifier::{gate_ingest, shared_cache, IdentityMode, IngestAction, SharedIdentityCache};
+use crate::event_store::EventStore;
+use crate::identity_verifier::{
+    gate_ingest, shared_cache, IdentityMode, IngestAction, SharedIdentityCache,
+};
+use crate::keyring::{KeySource, KeyringEngine};
 use crate::relay_client::{RelayClient, RelayError, ENVELOPE_PAGE_LIMIT};
 use crate::relay_refusal::{human_duration, RefusalClass, RelayRefusal};
 
@@ -75,7 +77,10 @@ pub enum SyncAttention {
     /// or this client's quota is used up). New events wait in the local
     /// store; one push is tried again at `until` (for a client quota, an
     /// hour at least).
-    WritesPaused { refusal: RelayRefusal, until: Option<std::time::Instant> },
+    WritesPaused {
+        refusal: RelayRefusal,
+        until: Option<std::time::Instant>,
+    },
     /// A fresh fold (cursor 0) whose first envelope isn't seq 1: the relay
     /// expired the room or trimmed its front, so this device can't rebuild
     /// the workspace from the founder's seed.
@@ -247,7 +252,10 @@ const REFETCH_PER_ROUND: usize = 256;
 
 /// Unix milliseconds now (held events' ages).
 fn now_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// What ingest made of one decoded event.
@@ -332,9 +340,13 @@ impl SyncEngine {
     /// relay refusal, or a truncated room), if anything. A write pause wins.
     pub fn attention(&self) -> Option<SyncAttention> {
         if let Some((refusal, until)) = &self.write_pause {
-            return Some(SyncAttention::WritesPaused { refusal: refusal.clone(), until: *until });
+            return Some(SyncAttention::WritesPaused {
+                refusal: refusal.clone(),
+                until: *until,
+            });
         }
-        self.truncated_at.map(|first_seq| SyncAttention::RoomTruncated { first_seq })
+        self.truncated_at
+            .map(|first_seq| SyncAttention::RoomTruncated { first_seq })
     }
 
     /// The `Idempotency-Key` this engine pushes `event_id` under.
@@ -426,7 +438,11 @@ impl SyncEngine {
 
     /// The workspace this room's keys belong to (the commitment binds it).
     fn room_workspace(&self) -> Uuid {
-        self.scope.iter().next().copied().unwrap_or_else(|| ligus_core::room_workspace_id(&self.workspace))
+        self.scope
+            .iter()
+            .next()
+            .copied()
+            .unwrap_or_else(|| ligus_core::room_workspace_id(&self.workspace))
     }
 
     /// E2EE with only the passphrase-derived epoch-0 key: the solo,
@@ -460,13 +476,22 @@ impl SyncEngine {
     /// Rebuild the ring from the store's folded config log (no-op without a
     /// key source, or when nothing it depends on changed).
     pub fn refresh_keyring(&mut self, store: &EventStore) -> Result<(), SyncError> {
-        let Some(src) = self.key_source.as_ref() else { return Ok(()) };
+        let Some(src) = self.key_source.as_ref() else {
+            return Ok(());
+        };
         let ws = self.room_workspace();
         // Only a pinned fold decides keys (B2 residual): without a founder pin
         // this device seals under the passphrase epoch and adopts no rotation.
-        let pin = store.workspace_pin(ws)?.map(|p| p.founder_account.to_string());
+        let pin = store
+            .workspace_pin(ws)?
+            .map(|p| p.founder_account.to_string());
         let (config, timeline) = store.load_config(ws, pin.as_deref(), None)?;
-        let from = (timeline.fingerprint(), timeline.rotation_candidates().len(), self.relay_rows.len(), pin.is_some());
+        let from = (
+            timeline.fingerprint(),
+            timeline.rotation_candidates().len(),
+            self.relay_rows.len(),
+            pin.is_some(),
+        );
         if self.ring_built_from == Some(from) {
             return Ok(());
         }
@@ -485,7 +510,9 @@ impl SyncEngine {
             return;
         }
         let wanted = self.rows_wanted || self.keyring.seal_key().is_none();
-        let recent = self.rows_fetched.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(60));
+        let recent = self
+            .rows_fetched
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(60));
         if !wanted || recent {
             return;
         }
@@ -495,7 +522,9 @@ impl SyncEngine {
                 self.rows_fetched = Some(std::time::Instant::now());
                 self.rows_wanted = false;
             }
-            Err(e) => tracing::debug!(error = %e, "keyring route unavailable; using the config log alone"),
+            Err(e) => {
+                tracing::debug!(error = %e, "keyring route unavailable; using the config log alone")
+            }
         }
     }
 
@@ -511,13 +540,17 @@ impl SyncEngine {
         // A rotation is sealed under the epoch it follows, so the devices that
         // hold that epoch can read it and learn the new key.
         let rotation_key = match &env.payload {
-            ligus_core::SessionEvent::WorkspaceKeyRotated { rotation } => self.keyring.seal_key_for_rotation(rotation),
+            ligus_core::SessionEvent::WorkspaceKeyRotated { rotation } => {
+                self.keyring.seal_key_for_rotation(rotation)
+            }
             _ => None,
         };
         match rotation_key.as_ref().or(self.keyring.seal_key()) {
             Some(k) => {
                 let plain = serde_json::to_vec(env)?;
-                Ok(serde_json::to_value(seal_symmetric_kid(&k.key, k.version, &k.kid, &plain)?)?)
+                Ok(serde_json::to_value(seal_symmetric_kid(
+                    &k.key, k.version, &k.kid, &plain,
+                )?)?)
             }
             None if self.keyring.is_empty() => Err(SyncError::RelayRequiresEncryption),
             None => Err(SyncError::NotARecipient(self.keyring.authorized_head())),
@@ -646,7 +679,10 @@ impl SyncEngine {
                 j += 1;
             }
             let span = (due[j] - start + 1) as u32;
-            let page = self.relay.fetch_page(&self.workspace, start.saturating_sub(1), span).await?;
+            let page = self
+                .relay
+                .fetch_page(&self.workspace, start.saturating_sub(1), span)
+                .await?;
             let want: std::collections::HashSet<u64> = due[i..=j].iter().copied().collect();
             rows.extend(page.rows.into_iter().filter(|(seq, _)| want.contains(seq)));
             i = j + 1;
@@ -665,7 +701,12 @@ impl SyncEngine {
     /// Each sequence tried spends one of its tries; one judged now (applied
     /// or refused) is done; one dropped again waits for the next roster
     /// change, until its tries run out.
-    pub fn apply_refetched(&mut self, store: &mut EventStore, tried: &[u64], rows: &[(u64, Value)]) -> Result<usize, SyncError> {
+    pub fn apply_refetched(
+        &mut self,
+        store: &mut EventStore,
+        tried: &[u64],
+        rows: &[(u64, Value)],
+    ) -> Result<usize, SyncError> {
         let ws = self.room_workspace();
         store.held_refetch_tried(ws, tried)?;
         let (walk_hold, behind, page_after) = (self.walk_hold, self.behind, self.page_after);
@@ -694,10 +735,18 @@ impl SyncEngine {
         let rows = store.held_refetch_candidates(ws)?;
         if !rows.is_empty() {
             let pin = store.workspace_pin(ws)?;
-            let roster = crate::envelope_verifier::roster_with_batch(store.trust_envelopes(ws)?, &[], pin.as_ref());
+            let roster = crate::envelope_verifier::roster_with_batch(
+                store.trust_envelopes(ws)?,
+                &[],
+                pin.as_ref(),
+            );
             let due: Vec<u64> = rows
                 .iter()
-                .filter(|r| r.signer.is_some_and(|d| crate::envelope_verifier::may_judge_now(&roster, d, r.claimed)))
+                .filter(|r| {
+                    r.signer.is_some_and(|d| {
+                        crate::envelope_verifier::may_judge_now(&roster, d, r.claimed)
+                    })
+                })
                 .map(|r| r.seq)
                 .collect();
             store.mark_refetch_due(ws, &due)?;
@@ -709,7 +758,11 @@ impl SyncEngine {
     /// Pull rounds until caught up, or `max_rounds` rounds have run. For
     /// one-shot callers (a CLI sync, a daemon's first sync) that need the whole
     /// room before they act. Returns how many events were newly applied.
-    pub async fn catch_up(&mut self, store: &mut EventStore, max_rounds: usize) -> Result<usize, SyncError> {
+    pub async fn catch_up(
+        &mut self,
+        store: &mut EventStore,
+        max_rounds: usize,
+    ) -> Result<usize, SyncError> {
         let mut applied = self.pull_round(store).await?;
         for _ in 1..max_rounds {
             if !self.behind {
@@ -836,7 +889,10 @@ impl SyncEngine {
     /// push fails mid-batch we **roll back** `seen` for the failed envelope and
     /// every one after it, so the next round re-pushes them instead of silently
     /// dropping the tail.
-    pub async fn push_envelopes(&mut self, envelopes: &[SessionEventEnvelope]) -> Result<(), SyncError> {
+    pub async fn push_envelopes(
+        &mut self,
+        envelopes: &[SessionEventEnvelope],
+    ) -> Result<(), SyncError> {
         for (i, env) in envelopes.iter().enumerate() {
             // `encode` refuses when there's no key (E2EE mandatory); roll back
             // the optimistic `seen` marks just like a network failure so the
@@ -855,18 +911,31 @@ impl SyncEngine {
             // device refuses to write one, but an older build or a peer may
             // have) is set aside instead of holding the outbox: every event
             // after it would wait for good.
-            let size = serde_json::to_vec(&body).map(|b| b.len()).unwrap_or(usize::MAX);
+            let size = serde_json::to_vec(&body)
+                .map(|b| b.len())
+                .unwrap_or(usize::MAX);
             if size > MAX_PUSH_BODY_BYTES {
-                self.set_aside(env, &format!("{size} bytes sealed, past the relay's {MAX_PUSH_BODY_BYTES}-byte cap"));
+                self.set_aside(
+                    env,
+                    &format!(
+                        "{size} bytes sealed, past the relay's {MAX_PUSH_BODY_BYTES}-byte cap"
+                    ),
+                );
                 continue;
             }
             // The key makes a re-push (after a refusal or a lost answer) the
             // same write to the relay, not a second copy.
             let key = self.push_key(env.event_id);
-            if let Err(e) = self.relay.push_value_keyed(&self.workspace, &body, Some(&key)).await {
+            if let Err(e) = self
+                .relay
+                .push_value_keyed(&self.workspace, &body, Some(&key))
+                .await
+            {
                 // `413`: this relay's cap is lower than this envelope; it never
                 // will take it. Set aside, as above, and go on.
-                if matches!(&e, RelayError::Status(413)) || e.refusal().is_some_and(|r| r.status == 413) {
+                if matches!(&e, RelayError::Status(413))
+                    || e.refusal().is_some_and(|r| r.status == 413)
+                {
                     self.set_aside(env, "the relay refused it as too large (413)");
                     continue;
                 }
@@ -882,7 +951,8 @@ impl SyncEngine {
                         // Every pause ends (a client quota rechecks after an
                         // hour at least), so one refusal can't stop this
                         // room's writes until a restart.
-                        let until = Some(std::time::Instant::now() + r.class().write_pause(r.retry_after));
+                        let until =
+                            Some(std::time::Instant::now() + r.class().write_pause(r.retry_after));
                         tracing::warn!(target: "sync", room = %self.workspace, code = %r.code, "relay refused writes: {}", r.user_message());
                         self.write_pause = Some((r.clone(), until));
                         return Ok(());
@@ -936,11 +1006,20 @@ impl SyncEngine {
                 self.last_fetched_seq
             }
         };
-        let page = self.relay.fetch_page(&self.workspace, after, self.page_limit).await?;
+        let page = self
+            .relay
+            .fetch_page(&self.workspace, after, self.page_limit)
+            .await?;
         // A fresh fold starts at the founder's seed (seq 1). A first envelope
         // past it means the relay expired or trimmed the room: say so.
         if after == 0 {
-            if let Some(first) = page.rows.iter().map(|(seq, _)| *seq).min().filter(|s| *s > 1) {
+            if let Some(first) = page
+                .rows
+                .iter()
+                .map(|(seq, _)| *seq)
+                .min()
+                .filter(|s| *s > 1)
+            {
                 tracing::warn!(target: "sync", room = %self.workspace, first, "room expired or truncated: its log starts past seq 1");
                 self.truncated_at = Some(first);
             }
@@ -1013,7 +1092,11 @@ impl SyncEngine {
                     decoded.push(*env);
                 }
                 Decoded::Malformed(reason) => {
-                    tracing::warn!(seq = *seq, reason, "skipping a malformed relay body; advancing the cursor past it");
+                    tracing::warn!(
+                        seq = *seq,
+                        reason,
+                        "skipping a malformed relay body; advancing the cursor past it"
+                    );
                     resolved.push(*seq);
                 }
                 // A-13: with the one keyring, a body sealed under a key this
@@ -1021,7 +1104,11 @@ impl SyncEngine {
                 // moves on: a junk epoch nobody announced can't pin it. Parked
                 // bodies are retried whenever the ring changes.
                 Decoded::NotYetOpenable(reason) if self.key_source.is_some() => {
-                    tracing::debug!(seq = *seq, reason, "parking a body sealed under a key this device doesn't hold");
+                    tracing::debug!(
+                        seq = *seq,
+                        reason,
+                        "parking a body sealed under a key this device doesn't hold"
+                    );
                     to_park.push((*seq, body, self.park_priority(body)));
                     self.rows_wanted = true;
                     parked_now.push(*seq);
@@ -1053,11 +1140,16 @@ impl SyncEngine {
         // held event the batch completes (its certificate, its admission) is
         // released in the same pass, as if it had arrived after it.
         let roster_relevant = decoded.iter().any(|e| {
-            crate::envelope_verifier::is_trust_kind(&e.payload) || e.session_id == ligus_core::workspace_config_session_id(e.workspace_id)
+            crate::envelope_verifier::is_trust_kind(&e.payload)
+                || e.session_id == ligus_core::workspace_config_session_id(e.workspace_id)
         });
         let mut held_in: Vec<(Uuid, crate::event_store::HeldEvent)> = Vec::new();
         if roster_relevant && !self.in_held_retry {
-            for ws in store.held_workspaces()?.into_iter().filter(|w| self.in_scope(*w)) {
+            for ws in store
+                .held_workspaces()?
+                .into_iter()
+                .filter(|w| self.in_scope(*w))
+            {
                 held_in.extend(store.held_events(ws)?.into_iter().map(|h| (ws, h)));
             }
         }
@@ -1065,7 +1157,8 @@ impl SyncEngine {
         decoded.extend(held_in.iter().map(|(_, h)| h.env.clone()));
         let judged = self.judge(store, &decoded, batch_len)?;
         decoded.truncate(batch_len);
-        let mut released: std::collections::HashMap<Uuid, Vec<String>> = std::collections::HashMap::new();
+        let mut released: std::collections::HashMap<Uuid, Vec<String>> =
+            std::collections::HashMap::new();
         for ((ws, h), outcome) in held_in.iter().zip(&judged.outcomes[batch_len..]) {
             if !matches!(outcome, Judgement::Held(_)) {
                 released.entry(*ws).or_default().push(h.digest.clone());
@@ -1081,11 +1174,16 @@ impl SyncEngine {
             // held table, never before the cursor.
             resolved.push(*seq);
             match outcome {
-                Judgement::Held(reason) => {
-                    to_hold.push(crate::event_store::HoldItem { env, reason, seq: (!self.in_legacy_retry).then_some(*seq) })
-                }
+                Judgement::Held(reason) => to_hold.push(crate::event_store::HoldItem {
+                    env,
+                    reason,
+                    seq: (!self.in_legacy_retry).then_some(*seq),
+                }),
                 // Fetched again and judged now: nothing more to fetch.
-                _ if self.in_refetch => store.held_refetch_done(self.room_workspace_scope(std::slice::from_ref(env)), *seq)?,
+                _ if self.in_refetch => store.held_refetch_done(
+                    self.room_workspace_scope(std::slice::from_ref(env)),
+                    *seq,
+                )?,
                 _ => {}
             }
         }
@@ -1127,7 +1225,11 @@ impl SyncEngine {
         // past the lowest not-yet-openable sequence (so it's re-fetched), and
         // never backwards. Later openable events above `retry_at` were still
         // applied above; the cursor just waits for the gap to fill.
-        let settled: Vec<u64> = if self.in_retry { resolved.clone() } else { Vec::new() };
+        let settled: Vec<u64> = if self.in_retry {
+            resolved.clone()
+        } else {
+            Vec::new()
+        };
         for seq in resolved.into_iter().filter(|_| !self.in_legacy_retry) {
             if retry_at.is_none_or(|r| seq < r) {
                 self.last_fetched_seq = self.last_fetched_seq.max(seq);
@@ -1180,7 +1282,12 @@ impl SyncEngine {
     /// `envs[held_from..]` come from the held table: one that arrived over P2P
     /// (unsealed) isn't marked as on the relay when applied, so this device
     /// still pushes it.
-    fn judge(&mut self, store: &mut EventStore, envs: &[SessionEventEnvelope], held_from: usize) -> Result<Judged, SyncError> {
+    fn judge(
+        &mut self,
+        store: &mut EventStore,
+        envs: &[SessionEventEnvelope],
+        held_from: usize,
+    ) -> Result<Judged, SyncError> {
         // Verify-on-ingest (S1): build the trust roster from what we already hold
         // plus the trust events in this batch, then classify each envelope.
         // Reject only the *provably bad* (bad signature, revoked device,
@@ -1204,10 +1311,14 @@ impl SyncEngine {
 
         // The authorized head this device folds now (B1 ingest rule).
         let head = self.head_roster(store)?;
-        let mut out = Judged { outcomes: Vec::with_capacity(envs.len()), applied: 0 };
+        let mut out = Judged {
+            outcomes: Vec::with_capacity(envs.len()),
+            applied: 0,
+        };
         // Guard signals (device-local, content-free): every rejection, and one
         // accept per signing device per batch.
-        let mut accepted_from: std::collections::HashSet<(Uuid, Option<Uuid>)> = std::collections::HashSet::new();
+        let mut accepted_from: std::collections::HashSet<(Uuid, Option<Uuid>)> =
+            std::collections::HashSet::new();
         for (i, env) in envs.iter().enumerate() {
             let from_relay = i < held_from || env.sealed_epoch().is_some();
             let roster = rosters.get(&env.workspace_id).unwrap_or(&empty);
@@ -1223,7 +1334,13 @@ impl SyncEngine {
                 .and_then(|s| s.actor.account_id)
                 .or_else(|| env.signer_device_id.and_then(|d| roster.account_of(d)));
             let account_key = signer_account.and_then(|a| roster.account_signing_key(a));
-            let outcome = match gate_ingest(self.identity_mode(), base, signer_account, account_key, &identity) {
+            let outcome = match gate_ingest(
+                self.identity_mode(),
+                base,
+                signer_account,
+                account_key,
+                &identity,
+            ) {
                 IngestAction::Quarantine(reason) => {
                     tracing::warn!(?reason, event_id = %env.event_id, "quarantined a fetched event");
                     // Kept as a lamport witness when the refusal depends on
@@ -1238,10 +1355,18 @@ impl SyncEngine {
                     // one counted from it, and a witness of it would let anyone
                     // with the room's key lengthen a log's lamport chain with
                     // junk no one can attribute.
-                    if !matches!(reason, crate::envelope_verifier::QuarantineReason::Unsigned | crate::envelope_verifier::QuarantineReason::BadSignature) {
+                    if !matches!(
+                        reason,
+                        crate::envelope_verifier::QuarantineReason::Unsigned
+                            | crate::envelope_verifier::QuarantineReason::BadSignature
+                    ) {
                         store.note_lamport_witness(env)?;
                     }
-                    let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, &format!("{reason:?}")));
+                    let _ = store.record_signal(
+                        env.workspace_id,
+                        None,
+                        &sync_decision(roster, env, false, &format!("{reason:?}")),
+                    );
                     Judgement::Refused
                 }
                 IngestAction::Hold(reason) => {
@@ -1262,19 +1387,35 @@ impl SyncEngine {
                     tracing::warn!(event_id = %env.event_id, "refused an event sealed under an old key by a non-member");
                     // Refused: a lamport witness (see above).
                     store.note_lamport_witness(env)?;
-                    let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, "stale_epoch_non_member"));
+                    let _ = store.record_signal(
+                        env.workspace_id,
+                        None,
+                        &sync_decision(roster, env, false, "stale_epoch_non_member"),
+                    );
                     Judgement::Refused
                 }
                 IngestAction::Accept => {
                     if accepted_from.insert((env.workspace_id, env.signer_device_id)) {
-                        let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, true, "accepted"));
+                        let _ = store.record_signal(
+                            env.workspace_id,
+                            None,
+                            &sync_decision(roster, env, true, "accepted"),
+                        );
                     }
                     // A key registration or rotation the roster refused is
                     // stored (inert: the account-key rules refuse it in every
                     // fold, wherever it sorts) and attributed to its signer.
-                    if roster.refused_keys().iter().any(|r| r.event_id == env.event_id) {
+                    if roster
+                        .refused_keys()
+                        .iter()
+                        .any(|r| r.event_id == env.event_id)
+                    {
                         tracing::warn!(event_id = %env.event_id, signer = ?env.signer_device_id, "an account key event its account's lineage didn't sign: refused, attributed to its signer");
-                        let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, "account_key_refused"));
+                        let _ = store.record_signal(
+                            env.workspace_id,
+                            None,
+                            &sync_decision(roster, env, false, "account_key_refused"),
+                        );
                     }
                     if from_relay {
                         self.seen.insert(env.event_id);
@@ -1308,12 +1449,19 @@ impl SyncEngine {
         self.retry_held_inner(store, true)
     }
 
-    fn retry_held_inner(&mut self, store: &mut EventStore, force: bool) -> Result<usize, SyncError> {
+    fn retry_held_inner(
+        &mut self,
+        store: &mut EventStore,
+        force: bool,
+    ) -> Result<usize, SyncError> {
         if self.in_retry || self.in_held_retry {
             return Ok(0);
         }
         let now = std::time::Instant::now();
-        let timer = force || self.held_checked.is_none_or(|t| now.duration_since(t) >= crate::event_store::HELD_RETRY_EVERY);
+        let timer = force
+            || self
+                .held_checked
+                .is_none_or(|t| now.duration_since(t) >= crate::event_store::HELD_RETRY_EVERY);
         if timer {
             self.held_checked = Some(now);
             let n = store.expire_held(now_ms())?;
@@ -1321,7 +1469,11 @@ impl SyncEngine {
                 tracing::warn!(room = %self.workspace, expired = n, "dropped held events that waited longer than 30 days");
             }
         }
-        let workspaces: Vec<Uuid> = store.held_workspaces()?.into_iter().filter(|w| self.in_scope(*w)).collect();
+        let workspaces: Vec<Uuid> = store
+            .held_workspaces()?
+            .into_iter()
+            .filter(|w| self.in_scope(*w))
+            .collect();
         self.in_held_retry = true;
         let r = self.rejudge_held(store, &workspaces, timer);
         self.in_held_retry = false;
@@ -1335,7 +1487,12 @@ impl SyncEngine {
 
     /// Judge the held events of `workspaces` again (those whose trust rows
     /// changed since the last look, or all of them when `all`).
-    fn rejudge_held(&mut self, store: &mut EventStore, workspaces: &[Uuid], all: bool) -> Result<usize, SyncError> {
+    fn rejudge_held(
+        &mut self,
+        store: &mut EventStore,
+        workspaces: &[Uuid],
+        all: bool,
+    ) -> Result<usize, SyncError> {
         let mut applied = 0;
         for &ws in workspaces {
             let sig = store.trust_rows_sig(ws)?;
@@ -1371,7 +1528,10 @@ impl SyncEngine {
     }
 
     /// What this room's workspace holds (sync diagnostics).
-    pub fn held_stats(&self, store: &EventStore) -> Result<crate::event_store::HeldStats, SyncError> {
+    pub fn held_stats(
+        &self,
+        store: &EventStore,
+    ) -> Result<crate::event_store::HeldStats, SyncError> {
         Ok(store.held_stats(self.room_workspace())?)
     }
 
@@ -1394,12 +1554,19 @@ impl SyncEngine {
         }
         // B-11: re-rank what is parked against the new ring, so the cap
         // evicts junk before a body waiting for an authorized rotation.
-        let ranks: Vec<(u64, u8)> = parked.iter().map(|(seq, body)| (*seq, self.park_priority(body))).collect();
+        let ranks: Vec<(u64, u8)> = parked
+            .iter()
+            .map(|(seq, body)| (*seq, self.park_priority(body)))
+            .collect();
         store.set_parked_priorities(&key, &ranks)?;
         let (hold, behind) = (self.walk_hold, self.behind);
         self.in_retry = true;
         self.behind = false;
-        let mut r = if parked.is_empty() { Ok(0) } else { self.apply_fetched(store, &parked) };
+        let mut r = if parked.is_empty() {
+            Ok(0)
+        } else {
+            self.apply_fetched(store, &parked)
+        };
         if r.is_ok() && !legacy.is_empty() {
             self.in_legacy_retry = true;
             let more = self.apply_fetched(store, &legacy);
@@ -1442,12 +1609,20 @@ impl SyncEngine {
 impl SyncEngine {
     /// The roster at the head of this room's config log, when this device
     /// follows rotations (a key source) and the log has synced.
-    fn head_roster(&self, store: &EventStore) -> Result<Option<Box<ligus_core::authz::RosterState>>, SyncError> {
+    fn head_roster(
+        &self,
+        store: &EventStore,
+    ) -> Result<Option<Box<ligus_core::authz::RosterState>>, SyncError> {
         if self.key_source.is_none() {
             return Ok(None);
         }
         let ws = self.room_workspace();
-        let Some(pin) = store.workspace_pin(ws)?.map(|p| p.founder_account.to_string()) else { return Ok(None) };
+        let Some(pin) = store
+            .workspace_pin(ws)?
+            .map(|p| p.founder_account.to_string())
+        else {
+            return Ok(None);
+        };
         let (config, timeline) = store.load_config(ws, Some(&pin), None)?;
         Ok(config.map(|_| Box::new(timeline.current().clone())))
     }
@@ -1457,12 +1632,19 @@ impl SyncEngine {
 /// older than the authorized head, from an account that isn't a member at the
 /// head. A removed member keeps their old keys but can't write with them once
 /// this device knows of the removal and the rotation.
-pub(crate) fn late_from_outsider(head: Option<&ligus_core::authz::RosterState>, env: &SessionEventEnvelope) -> bool {
-    let (Some(head), Some(sealed)) = (head, env.sealed_epoch()) else { return false };
+pub(crate) fn late_from_outsider(
+    head: Option<&ligus_core::authz::RosterState>,
+    env: &SessionEventEnvelope,
+) -> bool {
+    let (Some(head), Some(sealed)) = (head, env.sealed_epoch()) else {
+        return false;
+    };
     if sealed >= head.key_epochs.head_version() {
         return false;
     }
-    let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { return false };
+    let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else {
+        return false;
+    };
     !head.members.values().any(|m| m.account_id == Some(account))
 }
 
@@ -1482,9 +1664,16 @@ fn sync_decision(
     };
     GuardSignal::GuardDecision {
         gate: GuardGate::SyncEvent,
-        verdict: if accept { GuardVerdict::Accept } else { GuardVerdict::Reject },
+        verdict: if accept {
+            GuardVerdict::Accept
+        } else {
+            GuardVerdict::Reject
+        },
         subject,
-        source: env.signer_device_id.map(|d| d.to_string()).unwrap_or_else(|| "relay".into()),
+        source: env
+            .signer_device_id
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| "relay".into()),
         reason: reason.to_string(),
     }
 }
@@ -1495,18 +1684,41 @@ mod tests {
     fn sync_decisions_name_the_subject_without_content() {
         use ligus_core::signal::{GuardSignal, GuardSubject, GuardVerdict};
         let roster = crate::envelope_verifier::build_roster(&[]);
-        let mut env = SessionEventEnvelope::new(Uuid::new_v4(), Uuid::new_v4(), 1, ligus_core::SessionEvent::MessageAppended {
-            message: ligus_core::ChatMessage::new(ligus_core::MessageRole::User, "x", "secret body"),
-        });
+        let mut env = SessionEventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            ligus_core::SessionEvent::MessageAppended {
+                message: ligus_core::ChatMessage::new(
+                    ligus_core::MessageRole::User,
+                    "x",
+                    "secret body",
+                ),
+            },
+        );
         env.signer_device_id = Some(Uuid::new_v4());
-        let GuardSignal::GuardDecision { verdict, subject, reason, .. } = super::sync_decision(&roster, &env, false, "BadSignature") else {
+        let GuardSignal::GuardDecision {
+            verdict,
+            subject,
+            reason,
+            ..
+        } = super::sync_decision(&roster, &env, false, "BadSignature")
+        else {
             panic!("guard decision expected")
         };
-        assert_eq!((verdict, subject, reason.as_str()), (GuardVerdict::Reject, GuardSubject::Stranger, "BadSignature"));
-        let json = serde_json::to_string(&super::sync_decision(&roster, &env, true, "accepted")).unwrap();
+        assert_eq!(
+            (verdict, subject, reason.as_str()),
+            (GuardVerdict::Reject, GuardSubject::Stranger, "BadSignature")
+        );
+        let json =
+            serde_json::to_string(&super::sync_decision(&roster, &env, true, "accepted")).unwrap();
         assert!(!json.contains("secret body"));
         env.signer_device_id = None;
-        assert!(serde_json::to_string(&super::sync_decision(&roster, &env, false, "Unsigned")).unwrap().contains("relay"));
+        assert!(
+            serde_json::to_string(&super::sync_decision(&roster, &env, false, "Unsigned"))
+                .unwrap()
+                .contains("relay")
+        );
     }
 
     use super::*;
@@ -1517,7 +1729,9 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            axum::serve(listener, crate::test_relay::router()).await.unwrap();
+            axum::serve(listener, crate::test_relay::router())
+                .await
+                .unwrap();
         });
         format!("http://{addr}")
     }
@@ -1530,7 +1744,9 @@ mod tests {
             sid,
             wid,
             1,
-            SessionEvent::SessionSnapshot { session: Box::new(session) },
+            SessionEvent::SessionSnapshot {
+                session: Box::new(session),
+            },
         );
         store.ingest_next(&snap).unwrap();
         (sid, wid)
@@ -1541,14 +1757,23 @@ mod tests {
         let session = ChatSession::new("Chat", wid, "anthropic");
         let sid = session.id;
         store
-            .ingest_next(&SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(session) }))
+            .ingest_next(&SessionEventEnvelope::new(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(session),
+                },
+            ))
             .unwrap();
         store
             .ingest_next(&SessionEventEnvelope::new(
                 sid,
                 wid,
                 2,
-                SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", body) },
+                SessionEvent::MessageAppended {
+                    message: ChatMessage::new(MessageRole::User, "Alex", body),
+                },
             ))
             .unwrap();
         sid
@@ -1568,10 +1793,18 @@ mod tests {
         let mut store = EventStore::open_in_memory().unwrap();
         seed_chat_in(&mut store, room_ws, "team message");
         seed_chat_in(&mut store, Uuid::new_v4(), "PRIVATE local-only note");
-        seed_chat_in(&mut store, ligus_core::room_workspace_id("room-beta"), "PRIVATE other-room message");
+        seed_chat_in(
+            &mut store,
+            ligus_core::room_workspace_id("room-beta"),
+            "PRIVATE other-room message",
+        );
 
         let mut eng = SyncEngine::new(RelayClient::new(&base), room).with_key(key);
-        assert_eq!(eng.push_new(&store).await.unwrap(), 2, "only the room's snapshot + message");
+        assert_eq!(
+            eng.push_new(&store).await.unwrap(),
+            2,
+            "only the room's snapshot + message"
+        );
         // A later round, incremental or full, still never picks the others up.
         assert_eq!(eng.push_new(&store).await.unwrap(), 0);
         let mut fresh = SyncEngine::new(RelayClient::new(&base), room).with_key(key);
@@ -1581,7 +1814,8 @@ mod tests {
         assert_eq!(raw.len(), 2);
         for (_, body) in &raw {
             let sealed: SealedEnvelope = serde_json::from_value(body.clone()).unwrap();
-            let env: SessionEventEnvelope = serde_json::from_slice(&open_symmetric(&key, &sealed).unwrap()).unwrap();
+            let env: SessionEventEnvelope =
+                serde_json::from_slice(&open_symmetric(&key, &sealed).unwrap()).unwrap();
             assert_eq!(env.workspace_id, room_ws);
             assert!(!serde_json::to_string(&env).unwrap().contains("PRIVATE"));
         }
@@ -1603,8 +1837,22 @@ mod tests {
         let sid_a = seed_chat_in(&mut writer_a, ws, "on relay A");
         let mut writer_b = EventStore::open_in_memory().unwrap();
         let sid_b = seed_chat_in(&mut writer_b, ws, "on relay B");
-        assert_eq!(SyncEngine::new(RelayClient::new(&a), room).with_key(key).push_new(&writer_a).await.unwrap(), 2);
-        assert_eq!(SyncEngine::new(RelayClient::new(&b), room).with_key(key).push_new(&writer_b).await.unwrap(), 2);
+        assert_eq!(
+            SyncEngine::new(RelayClient::new(&a), room)
+                .with_key(key)
+                .push_new(&writer_a)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            SyncEngine::new(RelayClient::new(&b), room)
+                .with_key(key)
+                .push_new(&writer_b)
+                .await
+                .unwrap(),
+            2
+        );
 
         // The reader synced relay A under 0.3: its room-keyed cursor is at 2.
         let dir = tempfile::tempdir().unwrap();
@@ -1616,16 +1864,30 @@ mod tests {
         let mut store = EventStore::open(&db).unwrap();
         let conns = vec![(a.clone(), room.to_string()), (b.clone(), room.to_string())];
         let migrated = store.migrate_sync_tables(&conns).unwrap();
-        assert!(matches!(&migrated, crate::event_store::SyncMigration::Migrated { copied, .. } if copied.is_empty()), "{migrated:?}");
+        assert!(
+            matches!(&migrated, crate::event_store::SyncMigration::Migrated { copied, .. } if copied.is_empty()),
+            "{migrated:?}"
+        );
 
         let mut on_a = SyncEngine::new(RelayClient::new(&a), room).with_key(key);
         let mut on_b = SyncEngine::new(RelayClient::new(&b), room).with_key(key);
         assert_ne!(on_a.sync_key(), on_b.sync_key());
-        assert_eq!(on_b.pull(&mut store).await.unwrap(), 2, "relay B's events, from 0");
-        assert_eq!(on_a.pull(&mut store).await.unwrap(), 2, "relay A's events, from 0");
+        assert_eq!(
+            on_b.pull(&mut store).await.unwrap(),
+            2,
+            "relay B's events, from 0"
+        );
+        assert_eq!(
+            on_a.pull(&mut store).await.unwrap(),
+            2,
+            "relay A's events, from 0"
+        );
         for (writer, sid) in [(&writer_a, sid_a), (&writer_b, sid_b)] {
             for env in writer.list_in(ws, sid).unwrap() {
-                assert!(store.has_event_in(ws, env.event_id).unwrap(), "no event skipped");
+                assert!(
+                    store.has_event_in(ws, env.event_id).unwrap(),
+                    "no event skipped"
+                );
             }
         }
         assert_eq!(store.sync_cursor(&on_a.sync_key()).unwrap(), 2);
@@ -1642,12 +1904,27 @@ mod tests {
         let room = "team";
         let ws = ligus_core::room_workspace_id(room);
         let source = || {
-            crate::keyring::KeySource::for_device(Uuid::new_v4(), ligus_core::e2ee::KeyAgreementKeypair::generate().unwrap(), Some("team pass"), &[])
+            crate::keyring::KeySource::for_device(
+                Uuid::new_v4(),
+                ligus_core::e2ee::KeyAgreementKeypair::generate().unwrap(),
+                Some("team pass"),
+                &[],
+            )
         };
         let mut writer = EventStore::open_in_memory().unwrap();
         let sid = seed_chat_in(&mut writer, ws, "parked under 0.3");
-        assert_eq!(SyncEngine::new(RelayClient::new(&other), room).with_key_source(source()).push_new(&writer).await.unwrap(), 2);
-        let bodies = RelayClient::new(&other).fetch_values(room, 0).await.unwrap();
+        assert_eq!(
+            SyncEngine::new(RelayClient::new(&other), room)
+                .with_key_source(source())
+                .push_new(&writer)
+                .await
+                .unwrap(),
+            2
+        );
+        let bodies = RelayClient::new(&other)
+            .fetch_values(room, 0)
+            .await
+            .unwrap();
 
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("ligus.db");
@@ -1663,7 +1940,12 @@ mod tests {
         old.execute_batch("PRAGMA user_version = 0;").unwrap();
         drop(old);
         let mut store = EventStore::open(&db).unwrap();
-        store.migrate_sync_tables(&[(relay.clone(), room.to_string()), (other.clone(), room.to_string())]).unwrap();
+        store
+            .migrate_sync_tables(&[
+                (relay.clone(), room.to_string()),
+                (other.clone(), room.to_string()),
+            ])
+            .unwrap();
         assert_eq!(store.legacy_parked_bodies(room).unwrap().len(), 2);
 
         let mut eng = SyncEngine::new(RelayClient::new(&relay), room).with_key_source(source());
@@ -1671,8 +1953,15 @@ mod tests {
         for env in writer.list_in(ws, sid).unwrap() {
             assert!(store.has_event_in(ws, env.event_id).unwrap());
         }
-        assert!(store.legacy_parked_bodies(room).unwrap().is_empty(), "drained");
-        assert_eq!(eng.cursor(), 0, "another relay's sequences never move this cursor");
+        assert!(
+            store.legacy_parked_bodies(room).unwrap().is_empty(),
+            "drained"
+        );
+        assert_eq!(
+            eng.cursor(),
+            0,
+            "another relay's sequences never move this cursor"
+        );
         assert_eq!(store.sync_cursor(&eng.sync_key()).unwrap(), 0);
     }
 
@@ -1695,7 +1984,10 @@ mod tests {
         let mut store = EventStore::open_in_memory().unwrap();
         let mut eng = SyncEngine::new(RelayClient::new(&base), room).with_key(key);
         assert_eq!(eng.pull(&mut store).await.unwrap(), 2);
-        assert!(store.load_session(foreign).unwrap().is_none(), "foreign chat never ingested");
+        assert!(
+            store.load_session(foreign).unwrap().is_none(),
+            "foreign chat never ingested"
+        );
         assert!(store.load_session(ours).unwrap().is_some());
         assert_eq!(eng.cursor(), 4, "cursor moves past the dropped events");
         assert_eq!(store.list_session_ids().unwrap(), vec![ours]);
@@ -1731,7 +2023,10 @@ mod tests {
         assert_eq!(applied, 2);
 
         // B now projects the same conversation.
-        let session_b = store_b.load_session(sid).unwrap().expect("session synced to B");
+        let session_b = store_b
+            .load_session(sid)
+            .unwrap()
+            .expect("session synced to B");
         assert_eq!(session_b.title, "Shared");
         assert_eq!(session_b.messages.len(), 1);
         assert_eq!(session_b.messages[0].body, "hello from A");
@@ -1800,18 +2095,30 @@ mod tests {
         let mut store = EventStore::open_in_memory().unwrap();
         let (sid, wid) = seed_chat(&mut store);
         let msg = |seq: i64, body: String| {
-            SessionEventEnvelope::new(sid, wid, seq, SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", body) })
+            SessionEventEnvelope::new(
+                sid,
+                wid,
+                seq,
+                SessionEvent::MessageAppended {
+                    message: ChatMessage::new(MessageRole::User, "Alex", body),
+                },
+            )
         };
         // Sent and refused (413), then never sent (past the real relay's cap).
         store.ingest_next(&msg(2, "x".repeat(2_500_000))).unwrap();
         store.ingest_next(&msg(3, "y".repeat(5_000_000))).unwrap();
-        store.ingest_next(&msg(4, "after the big ones".into())).unwrap();
+        store
+            .ingest_next(&msg(4, "after the big ones".into()))
+            .unwrap();
         let room = Uuid::new_v4().to_string();
         let mut eng = SyncEngine::unscoped(RelayClient::new(&base), &room).with_key(key);
         for _ in 0..3 {
             let _ = eng.push_new(&store).await;
         }
-        let raw = RelayClient::new(&base).fetch_values(&room, 0).await.unwrap();
+        let raw = RelayClient::new(&base)
+            .fetch_values(&room, 0)
+            .await
+            .unwrap();
         let bodies: Vec<String> = raw
             .iter()
             .map(|(_, b)| {
@@ -1819,8 +2126,15 @@ mod tests {
                 String::from_utf8(open_symmetric(&key, &sealed).unwrap()).unwrap()
             })
             .collect();
-        assert!(bodies.iter().any(|b| b.contains("after the big ones")), "the outbox is blocked behind an envelope the relay refuses");
-        assert_eq!(eng.push_new(&store).await.unwrap(), 0, "nothing is retried forever");
+        assert!(
+            bodies.iter().any(|b| b.contains("after the big ones")),
+            "the outbox is blocked behind an envelope the relay refuses"
+        );
+        assert_eq!(
+            eng.push_new(&store).await.unwrap(),
+            0,
+            "nothing is retried forever"
+        );
     }
 
     /// The local cap leaves room for sealing: an envelope at it seals to a
@@ -1829,7 +2143,8 @@ mod tests {
     fn an_envelope_at_the_local_cap_seals_within_the_relays() {
         let key = ligus_core::derive_workspace_key("cap");
         let plain = vec![b'a'; crate::event_store::MAX_ENVELOPE_BYTES];
-        let sealed = ligus_core::e2ee::seal_symmetric_kid(&key, u32::MAX, &"k".repeat(64), &plain).unwrap();
+        let sealed =
+            ligus_core::e2ee::seal_symmetric_kid(&key, u32::MAX, &"k".repeat(64), &plain).unwrap();
         assert!(serde_json::to_vec(&sealed).unwrap().len() <= MAX_PUSH_BODY_BYTES);
     }
 
@@ -1838,8 +2153,11 @@ mod tests {
         // Relay pointed at a closed port → every push errors mid-batch.
         let mut store = EventStore::open_in_memory().unwrap();
         seed_chat(&mut store); // one event (the snapshot)
-        let mut eng = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:9"), Uuid::new_v4().to_string())
-            .with_key(ligus_core::derive_workspace_key("rollback room"));
+        let mut eng = SyncEngine::unscoped(
+            RelayClient::new("http://127.0.0.1:9"),
+            Uuid::new_v4().to_string(),
+        )
+        .with_key(ligus_core::derive_workspace_key("rollback room"));
 
         let batch = eng.take_unpushed(&store).unwrap();
         assert_eq!(batch.len(), 1);
@@ -1847,7 +2165,11 @@ mod tests {
         // unseen so the next round re-pushes them instead of dropping the tail.
         assert!(eng.push_envelopes(&batch).await.is_err());
         let retry = eng.take_unpushed(&store).unwrap();
-        assert_eq!(retry.len(), 1, "unsent events must be retryable after a failed push");
+        assert_eq!(
+            retry.len(),
+            1,
+            "unsent events must be retryable after a failed push"
+        );
     }
 
     /// After the first full scan, rounds scan only new rows — and still find
@@ -1864,18 +2186,29 @@ mod tests {
         eng.push_envelopes(&first).await.unwrap();
         assert!(eng.take_unpushed(&store).unwrap().is_empty());
 
-        let msg = |body: &str| SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Mara", body) };
+        let msg = |body: &str| SessionEvent::MessageAppended {
+            message: ChatMessage::new(MessageRole::User, "Mara", body),
+        };
         let e = store.append(sid, wid, msg("hi")).unwrap();
         let batch = eng.take_unpushed(&store).unwrap();
-        assert_eq!(batch.iter().map(|e| e.event_id).collect::<Vec<_>>(), [e.event_id]);
+        assert_eq!(
+            batch.iter().map(|e| e.event_id).collect::<Vec<_>>(),
+            [e.event_id]
+        );
 
         // That push fails (relay gone): the next round finds it again.
-        let mut offline = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:9"), Uuid::new_v4().to_string())
-            .with_key(ligus_core::derive_workspace_key("incremental room"));
+        let mut offline = SyncEngine::unscoped(
+            RelayClient::new("http://127.0.0.1:9"),
+            Uuid::new_v4().to_string(),
+        )
+        .with_key(ligus_core::derive_workspace_key("incremental room"));
         std::mem::swap(&mut eng.relay, &mut offline.relay);
         assert!(eng.push_envelopes(&batch).await.is_err());
         let retry = eng.take_unpushed(&store).unwrap();
-        assert_eq!(retry.iter().map(|e| e.event_id).collect::<Vec<_>>(), [e.event_id]);
+        assert_eq!(
+            retry.iter().map(|e| e.event_id).collect::<Vec<_>>(),
+            [e.event_id]
+        );
     }
 
     #[tokio::test]
@@ -1903,7 +2236,11 @@ mod tests {
         );
         // No plaintext value was produced or sent: the relay holds nothing.
         assert!(
-            RelayClient::new(&base).fetch_values(&workspace, 0).await.unwrap().is_empty(),
+            RelayClient::new(&base)
+                .fetch_values(&workspace, 0)
+                .await
+                .unwrap()
+                .is_empty(),
             "a refused keyless push must not write anything to the relay"
         );
         // Rolled back → retryable once a key is configured (not silently dropped).
@@ -1919,7 +2256,10 @@ mod tests {
         eng.set_key(ligus_core::derive_workspace_key("now keyed"));
         assert!(eng.is_encrypted());
         eng.push_envelopes(&retry).await.unwrap();
-        let raw = RelayClient::new(&base).fetch_values(&workspace, 0).await.unwrap();
+        let raw = RelayClient::new(&base)
+            .fetch_values(&workspace, 0)
+            .await
+            .unwrap();
         assert_eq!(raw.len(), 1);
         assert!(
             raw[0].1.get("ciphertext").is_some(),
@@ -1957,13 +2297,20 @@ mod tests {
         let mut store_b = EventStore::open_in_memory().unwrap();
         let mut sync_b = SyncEngine::unscoped(RelayClient::new(&base), &workspace);
         assert_eq!(sync_b.pull(&mut store_b).await.unwrap(), 0);
-        assert_eq!(sync_b.cursor(), 0, "not-yet-openable events must not be skipped");
+        assert_eq!(
+            sync_b.cursor(),
+            0,
+            "not-yet-openable events must not be skipped"
+        );
 
         // The epoch-1 key reaches B (e.g. a rotation catches up). The retained
         // events are re-fetched and now converge — not lost.
         sync_b.add_key(1, k1);
         assert_eq!(sync_b.pull(&mut store_b).await.unwrap(), 2);
-        assert_eq!(store_b.load_session(sid).unwrap().unwrap().messages.len(), 1);
+        assert_eq!(
+            store_b.load_session(sid).unwrap().unwrap().messages.len(),
+            1
+        );
     }
 
     /// A keyed (E2EE) workspace never accepts plaintext from the relay: the
@@ -1973,20 +2320,40 @@ mod tests {
     fn keyed_engine_never_applies_relay_supplied_plaintext() {
         let session = ChatSession::new("Injected", Uuid::new_v4(), "anthropic");
         let (sid, wid) = (session.id, session.workspace_id);
-        let snap = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(session) });
+        let snap = SessionEventEnvelope::new(
+            sid,
+            wid,
+            1,
+            SessionEvent::SessionSnapshot {
+                session: Box::new(session),
+            },
+        );
         let msg = SessionEventEnvelope::new(
             sid,
             wid,
             2,
-            SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "relay", "injected") },
+            SessionEvent::MessageAppended {
+                message: ChatMessage::new(MessageRole::User, "relay", "injected"),
+            },
         );
-        let batch: Vec<(u64, Value)> =
-            vec![(1, serde_json::to_value(&snap).unwrap()), (2, serde_json::to_value(&msg).unwrap())];
+        let batch: Vec<(u64, Value)> = vec![
+            (1, serde_json::to_value(&snap).unwrap()),
+            (2, serde_json::to_value(&msg).unwrap()),
+        ];
         let mut store = EventStore::open_in_memory().unwrap();
-        let mut eng = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string());
+        let mut eng = SyncEngine::unscoped(
+            RelayClient::new("http://127.0.0.1:0"),
+            Uuid::new_v4().to_string(),
+        );
         eng.set_key(ligus_core::derive_workspace_key("keyed"));
-        assert_eq!(eng.apply_fetched(&mut store, &batch).unwrap(), 0, "plaintext applied in a keyed workspace");
-        assert!(!store.has_event(snap.event_id).unwrap() && !store.has_event(msg.event_id).unwrap());
+        assert_eq!(
+            eng.apply_fetched(&mut store, &batch).unwrap(),
+            0,
+            "plaintext applied in a keyed workspace"
+        );
+        assert!(
+            !store.has_event(snap.event_id).unwrap() && !store.has_event(msg.event_id).unwrap()
+        );
         assert_eq!(eng.cursor(), 2, "skipped for good, not retried");
     }
 
@@ -1997,28 +2364,59 @@ mod tests {
     fn a_newer_builds_envelope_is_stored_and_re_pushed_byte_identically() {
         let kp = ligus_core::SigningKeypair::from_seed(&[11u8; 32]).unwrap();
         let (sid, wid) = (Uuid::new_v4(), Uuid::new_v4());
-        let base = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::MessageRemoved { message_id: Uuid::nil() });
+        let base = SessionEventEnvelope::new(
+            sid,
+            wid,
+            1,
+            SessionEvent::MessageRemoved {
+                message_id: Uuid::nil(),
+            },
+        );
         let mut v = serde_json::to_value(&base).unwrap();
-        v["payload"] = serde_json::json!({"kind": "zz21Kind", "nested": {"b": [1, 2.5, "✓"], "a": null}});
+        v["payload"] =
+            serde_json::json!({"kind": "zz21Kind", "nested": {"b": [1, 2.5, "✓"], "a": null}});
         v["zz21Field"] = serde_json::json!({"z": 1, "y": "two"});
         let mut env: SessionEventEnvelope = serde_json::from_str(&v.to_string()).unwrap();
         ligus_core::sign_envelope(&mut env, Uuid::from_u128(3), &kp);
         // The 2.1 encoder's exact bytes, with its own spacing.
-        let wire = serde_json::to_string(&env).unwrap().replacen("\"zz21Field\":", "\"zz21Field\" : ", 1);
+        let wire =
+            serde_json::to_string(&env)
+                .unwrap()
+                .replacen("\"zz21Field\":", "\"zz21Field\" : ", 1);
 
         let key = ligus_core::derive_workspace_key("newer build");
         let sealed = ligus_core::seal_symmetric(&key, 0, wire.as_bytes()).unwrap();
         let mut store = EventStore::open_in_memory().unwrap();
-        let mut eng = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string()).with_key(key);
-        assert_eq!(eng.apply_fetched(&mut store, &[(1, serde_json::to_value(&sealed).unwrap())]).unwrap(), 1);
+        let mut eng = SyncEngine::unscoped(
+            RelayClient::new("http://127.0.0.1:0"),
+            Uuid::new_v4().to_string(),
+        )
+        .with_key(key);
+        assert_eq!(
+            eng.apply_fetched(&mut store, &[(1, serde_json::to_value(&sealed).unwrap())])
+                .unwrap(),
+            1
+        );
 
         let stored = store.list(sid).unwrap().remove(0);
-        assert_eq!(stored.payload, SessionEvent::Unknown, "this build doesn't know the kind");
+        assert_eq!(
+            stored.payload,
+            SessionEvent::Unknown,
+            "this build doesn't know the kind"
+        );
         assert!(ligus_core::verify_envelope(&stored, &kp.public_key_bytes()).is_ok());
-        assert_eq!(serde_json::to_string(&stored).unwrap(), wire, "stored byte for byte");
+        assert_eq!(
+            serde_json::to_string(&stored).unwrap(),
+            wire,
+            "stored byte for byte"
+        );
         // Re-push: what the relay gets opens to the very same bytes.
-        let out: ligus_core::SealedEnvelope = serde_json::from_value(eng.encode(&stored).unwrap()).unwrap();
-        assert_eq!(ligus_core::open_symmetric(&key, &out).unwrap(), wire.as_bytes());
+        let out: ligus_core::SealedEnvelope =
+            serde_json::from_value(eng.encode(&stored).unwrap()).unwrap();
+        assert_eq!(
+            ligus_core::open_symmetric(&key, &out).unwrap(),
+            wire.as_bytes()
+        );
     }
 
     #[test]
@@ -2033,7 +2431,9 @@ mod tests {
             sid,
             wid,
             1,
-            SessionEvent::SessionSnapshot { session: Box::new(session) },
+            SessionEvent::SessionSnapshot {
+                session: Box::new(session),
+            },
         );
         let msg = SessionEventEnvelope::new(
             sid,
@@ -2052,11 +2452,16 @@ mod tests {
         ];
 
         let mut store = EventStore::open_in_memory().unwrap();
-        let mut eng =
-            SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string());
+        let mut eng = SyncEngine::unscoped(
+            RelayClient::new("http://127.0.0.1:0"),
+            Uuid::new_v4().to_string(),
+        );
         assert_eq!(eng.apply_fetched(&mut store, &batch).unwrap(), 2);
         assert!(store.has_event(snap.event_id).unwrap());
-        assert!(store.has_event(msg.event_id).unwrap(), "event after the bad body applies");
+        assert!(
+            store.has_event(msg.event_id).unwrap(),
+            "event after the bad body applies"
+        );
         assert_eq!(eng.cursor(), 3, "cursor advances past the malformed body");
         // No infinite re-fetch: re-applying the same batch does nothing new.
         assert_eq!(eng.apply_fetched(&mut store, &batch).unwrap(), 0);
@@ -2071,8 +2476,11 @@ mod tests {
         // the behavior must be deterministic across repeated passes.
         let held = ligus_core::derive_workspace_key("held epoch 0");
         let missing = ligus_core::e2ee::generate_workspace_key().unwrap(); // epoch 7, unheld
-        let mut eng = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string())
-            .with_key(held);
+        let mut eng = SyncEngine::unscoped(
+            RelayClient::new("http://127.0.0.1:0"),
+            Uuid::new_v4().to_string(),
+        )
+        .with_key(held);
 
         let session = ChatSession::new("Shared", Uuid::new_v4(), "anthropic");
         let sid = session.id;
@@ -2081,7 +2489,9 @@ mod tests {
             sid,
             wid,
             1,
-            SessionEvent::SessionSnapshot { session: Box::new(session) },
+            SessionEvent::SessionSnapshot {
+                session: Box::new(session),
+            },
         );
         let msg = SessionEventEnvelope::new(
             sid,
@@ -2104,9 +2514,19 @@ mod tests {
 
         let mut store = EventStore::open_in_memory().unwrap();
         assert_eq!(eng.apply_fetched(&mut store, &batch).unwrap(), 1);
-        assert!(store.has_event(msg.event_id).unwrap(), "later openable event is not stranded");
-        assert!(!store.has_event(snap.event_id).unwrap(), "not-yet-openable body is not applied");
-        assert_eq!(eng.cursor(), 0, "cursor stays before the not-yet-openable seq (retry point)");
+        assert!(
+            store.has_event(msg.event_id).unwrap(),
+            "later openable event is not stranded"
+        );
+        assert!(
+            !store.has_event(snap.event_id).unwrap(),
+            "not-yet-openable body is not applied"
+        );
+        assert_eq!(
+            eng.cursor(),
+            0,
+            "cursor stays before the not-yet-openable seq (retry point)"
+        );
 
         // Deterministic: another pass over the same batch changes nothing.
         assert_eq!(eng.apply_fetched(&mut store, &batch).unwrap(), 0);
@@ -2133,13 +2553,25 @@ mod tests {
         seed.id = ligus_core::workspace_config_session_id(ws);
         seed.creator_actor_id = member.id.clone();
         seed.members = vec![member.clone()];
-        let mut e = SessionEventEnvelope::new(seed.id, ws, lamport, SessionEvent::SessionSnapshot { session: Box::new(seed) });
+        let mut e = SessionEventEnvelope::new(
+            seed.id,
+            ws,
+            lamport,
+            SessionEvent::SessionSnapshot {
+                session: Box::new(seed),
+            },
+        );
         e.lamport = lamport as u64;
         e.actor_stamp = Some(ligus_core::ActorStamp {
             actor: member.actor.clone(),
             recorded_at: ligus_core::Timestamp::epoch(),
             cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head: None,
+        });
         ligus_core::sign_envelope(&mut e, device_id, device);
         e
     }
@@ -2147,14 +2579,24 @@ mod tests {
     #[test]
     fn apply_fetched_rejects_provably_bad_keeps_good() {
         use ligus_core::crypto::{DeviceCertificate, SigningKeypair};
-        use ligus_core::identity::{ActorIdentity, ActorKind, ActorStamp, WorkspaceMember, WorkspaceRole};
+        use ligus_core::identity::{
+            ActorIdentity, ActorKind, ActorStamp, WorkspaceMember, WorkspaceRole,
+        };
         use ligus_core::Timestamp;
 
         let account = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
-        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
+        let device_id = ligus_core::crypto::device_id_for(
+            ligus_core::crypto::SigAlg::Ed25519,
+            &device.public_key_bytes(),
+        );
+        let cert = DeviceCertificate::issue(
+            &account,
+            account_id,
+            &device.public_key_bytes(),
+            Timestamp::epoch(),
+        );
         let member = WorkspaceMember {
             id: account_id.to_string(),
             actor: ActorIdentity {
@@ -2180,7 +2622,9 @@ mod tests {
                 Uuid::nil(),
                 Uuid::nil(),
                 lamport,
-                SessionEvent::SessionTitleChanged { title: format!("t{lamport}") },
+                SessionEvent::SessionTitleChanged {
+                    title: format!("t{lamport}"),
+                },
             );
             e.actor_stamp = Some(ActorStamp {
                 actor: ActorIdentity {
@@ -2194,8 +2638,14 @@ mod tests {
                     avatar_url: None,
                     contact: None,
                 },
-                recorded_at: Timestamp::epoch(), cfg_frontier: None,
-                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+                recorded_at: Timestamp::epoch(),
+                cfg_frontier: None,
+                presence: None,
+                runtime_effect: false,
+                prev: None,
+                sig_alg: Default::default(),
+                log_head: None,
+            });
             ligus_core::sign_envelope(&mut e, device_id, &device);
             e
         };
@@ -2213,19 +2663,43 @@ mod tests {
             {
                 // Signed and stamped by the account's own device, as
                 // `publish_identity` does.
-                let mut e = plain(2, SessionEvent::AccountKeyRegistered {
-                    account_id,
-                    signing_public_key: account.public_key_bytes().to_vec(),
+                let mut e = plain(
+                    2,
+                    SessionEvent::AccountKeyRegistered {
+                        account_id,
+                        signing_public_key: account.public_key_bytes().to_vec(),
+                    },
+                );
+                e.actor_stamp = Some(ActorStamp {
+                    actor: member.actor.clone(),
+                    recorded_at: Timestamp::epoch(),
+                    cfg_frontier: None,
+                    presence: None,
+                    runtime_effect: false,
+                    prev: None,
+                    sig_alg: Default::default(),
+                    log_head: None,
                 });
-                e.actor_stamp = Some(ActorStamp { actor: member.actor.clone(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
                 ligus_core::sign_envelope(&mut e, device_id, &device);
                 e
             },
             {
                 // The device publishes its own certificate, as
                 // `publish_identity` does.
-                let mut e = plain(3, SessionEvent::DeviceCertificateAdded { certificate: cert });
-                e.actor_stamp = Some(ActorStamp { actor: member.actor.clone(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+                let mut e = plain(
+                    3,
+                    SessionEvent::DeviceCertificateAdded { certificate: cert },
+                );
+                e.actor_stamp = Some(ActorStamp {
+                    actor: member.actor.clone(),
+                    recorded_at: Timestamp::epoch(),
+                    cfg_frontier: None,
+                    presence: None,
+                    runtime_effect: false,
+                    prev: None,
+                    sig_alg: Default::default(),
+                    log_head: None,
+                });
                 ligus_core::sign_envelope(&mut e, device_id, &device);
                 e
             },
@@ -2240,12 +2714,24 @@ mod tests {
             .collect();
 
         let mut store = EventStore::open_in_memory().unwrap();
-        let mut eng = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string());
+        let mut eng = SyncEngine::unscoped(
+            RelayClient::new("http://127.0.0.1:0"),
+            Uuid::new_v4().to_string(),
+        );
         eng.apply_fetched(&mut store, &batch).unwrap();
 
-        assert!(store.has_event(good.event_id).unwrap(), "valid signed event ingested");
-        assert!(!store.has_event(tampered.event_id).unwrap(), "tampered event rejected");
-        assert!(!store.has_event(spoof.event_id).unwrap(), "impersonating event rejected");
+        assert!(
+            store.has_event(good.event_id).unwrap(),
+            "valid signed event ingested"
+        );
+        assert!(
+            !store.has_event(tampered.event_id).unwrap(),
+            "tampered event rejected"
+        );
+        assert!(
+            !store.has_event(spoof.event_id).unwrap(),
+            "impersonating event rejected"
+        );
         // A refusal no roster can change (a signature that doesn't verify
         // under the one key its device id derives from, or none at all) is
         // no lamport witness: no device ever accepted it or counted from it,
@@ -2254,13 +2740,29 @@ mod tests {
         // impersonation (roster-dependent: another device may hold the
         // certificate that makes it valid) stays one.
         let witnesses = store.witness_ids(Uuid::nil()).unwrap();
-        assert!(!witnesses.contains(&tampered.event_id), "a bad signature became a lamport witness");
-        assert!(witnesses.contains(&spoof.event_id), "a roster-dependent refusal stays a witness");
+        assert!(
+            !witnesses.contains(&tampered.event_id),
+            "a bad signature became a lamport witness"
+        );
+        assert!(
+            witnesses.contains(&spoof.event_id),
+            "a roster-dependent refusal stays a witness"
+        );
         let mut unsigned = content(103, account_id);
         unsigned.signature = None;
         unsigned.signer_device_id = None;
-        eng.apply_fetched(&mut store, &[(100, serde_json::to_value(&unsigned).unwrap())]).unwrap();
-        assert!(!store.witness_ids(Uuid::nil()).unwrap().contains(&unsigned.event_id), "an unsigned event became a lamport witness");
+        eng.apply_fetched(
+            &mut store,
+            &[(100, serde_json::to_value(&unsigned).unwrap())],
+        )
+        .unwrap();
+        assert!(
+            !store
+                .witness_ids(Uuid::nil())
+                .unwrap()
+                .contains(&unsigned.event_id),
+            "an unsigned event became a lamport witness"
+        );
     }
 
     #[tokio::test]
@@ -2303,7 +2805,10 @@ mod tests {
         sync_b.add_key(1, k1);
         sync_b.pull(&mut store_b).await.unwrap();
         let sb = store_b.load_session(sid).unwrap().unwrap();
-        assert_eq!(sb.title, "Shared", "epoch-0 history still readable after rotation");
+        assert_eq!(
+            sb.title, "Shared",
+            "epoch-0 history still readable after rotation"
+        );
         assert_eq!(sb.messages.len(), 1, "epoch-1 message now readable");
         assert_eq!(sb.messages[0].body, "after rotation");
     }
@@ -2338,14 +2843,26 @@ mod tests {
         assert_eq!(sync_b1.pull(&mut store_b).await.unwrap(), 2);
         let cursor = sync_b1.cursor();
         assert!(cursor > 0, "cursor advanced");
-        assert_eq!(store_b.sync_cursor(&sync_b1.sync_key()).unwrap(), cursor, "cursor is durable");
+        assert_eq!(
+            store_b.sync_cursor(&sync_b1.sync_key()).unwrap(),
+            cursor,
+            "cursor is durable"
+        );
         drop(sync_b1);
 
         // A brand-new engine (simulating a restart) resumes from the durable
         // cursor: it fetches nothing new and starts at the persisted cursor.
         let mut sync_b2 = SyncEngine::unscoped(RelayClient::new(&base), &workspace).with_key(key);
-        assert_eq!(sync_b2.pull(&mut store_b).await.unwrap(), 0, "resumes; nothing re-fetched");
-        assert_eq!(sync_b2.cursor(), cursor, "cursor restored from the durable store");
+        assert_eq!(
+            sync_b2.pull(&mut store_b).await.unwrap(),
+            0,
+            "resumes; nothing re-fetched"
+        );
+        assert_eq!(
+            sync_b2.cursor(),
+            cursor,
+            "cursor restored from the durable store"
+        );
     }
 
     #[tokio::test]
@@ -2373,16 +2890,34 @@ mod tests {
         assert_eq!(sync1.push_new(&store).await.unwrap(), 2);
         let sync_key = sync1.sync_key();
         drop(sync1);
-        assert_eq!(store.pushed_ids(&sync_key).unwrap().len(), 2, "pushes are durable");
+        assert_eq!(
+            store.pushed_ids(&sync_key).unwrap().len(),
+            2,
+            "pushes are durable"
+        );
 
         // Fresh engine, same store: the durable `pushed` set makes take_unpushed
         // collect nothing, so a restart re-push is a no-op and the relay keeps
         // exactly two bodies (no duplicates).
         let mut sync2 = SyncEngine::unscoped(RelayClient::new(&base), &workspace).with_key(key);
-        assert!(sync2.take_unpushed(&store).unwrap().is_empty(), "already-pushed not re-collected");
-        assert_eq!(sync2.push_new(&store).await.unwrap(), 0, "restart re-push is a no-op");
-        let raw = RelayClient::new(&base).fetch_values(&workspace, 0).await.unwrap();
-        assert_eq!(raw.len(), 2, "no duplicate bodies on the relay after restart");
+        assert!(
+            sync2.take_unpushed(&store).unwrap().is_empty(),
+            "already-pushed not re-collected"
+        );
+        assert_eq!(
+            sync2.push_new(&store).await.unwrap(),
+            0,
+            "restart re-push is a no-op"
+        );
+        let raw = RelayClient::new(&base)
+            .fetch_values(&workspace, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            raw.len(),
+            2,
+            "no duplicate bodies on the relay after restart"
+        );
     }
 
     #[test]
@@ -2404,7 +2939,9 @@ mod tests {
             sid,
             wid,
             1,
-            SessionEvent::SessionSnapshot { session: Box::new(session) },
+            SessionEvent::SessionSnapshot {
+                session: Box::new(session),
+            },
         );
         let msg = SessionEventEnvelope::new(
             sid,
@@ -2426,20 +2963,36 @@ mod tests {
         ];
 
         let mut store = EventStore::open_in_memory().unwrap();
-        let mut eng1 = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), &workspace)
-            .with_key(held);
+        let mut eng1 =
+            SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), &workspace).with_key(held);
         assert_eq!(eng1.apply_fetched(&mut store, &batch).unwrap(), 1);
-        assert_eq!(eng1.cursor(), 0, "cursor held before the not-yet-openable seq");
-        assert_eq!(store.sync_cursor(&eng1.sync_key()).unwrap(), 0, "durable cursor is the retry point");
+        assert_eq!(
+            eng1.cursor(),
+            0,
+            "cursor held before the not-yet-openable seq"
+        );
+        assert_eq!(
+            store.sync_cursor(&eng1.sync_key()).unwrap(),
+            0,
+            "durable cursor is the retry point"
+        );
         drop(eng1);
 
         // Fresh engine (restart), STILL without epoch 7: resumes cursor 0, the
         // openable event is already ingested so nothing new applies, and the
         // cursor stays before the missing body.
-        let mut eng2 = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), &workspace)
-            .with_key(held);
-        assert_eq!(eng2.apply_fetched(&mut store, &batch).unwrap(), 0, "openable already applied");
-        assert_eq!(eng2.cursor(), 0, "resumed cursor still before the retry point");
+        let mut eng2 =
+            SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), &workspace).with_key(held);
+        assert_eq!(
+            eng2.apply_fetched(&mut store, &batch).unwrap(),
+            0,
+            "openable already applied"
+        );
+        assert_eq!(
+            eng2.cursor(),
+            0,
+            "resumed cursor still before the retry point"
+        );
 
         // Epoch 7 arrives: the retained body converges and the cursor jumps,
         // durably.
@@ -2447,7 +3000,11 @@ mod tests {
         assert_eq!(eng2.apply_fetched(&mut store, &batch).unwrap(), 1);
         assert!(store.has_event(snap.event_id).unwrap());
         assert_eq!(eng2.cursor(), 2);
-        assert_eq!(store.sync_cursor(&eng2.sync_key()).unwrap(), 2, "durable cursor advanced past the gap");
+        assert_eq!(
+            store.sync_cursor(&eng2.sync_key()).unwrap(),
+            2,
+            "durable cursor advanced past the gap"
+        );
     }
 
     #[tokio::test]
@@ -2484,7 +3041,9 @@ mod tests {
 
     // --- Option C (github-signing-keys identity mode) ------------------------
 
-    use crate::identity_verifier::{shared_cache, IdentityMode, IdentityVerdict, SharedIdentityCache};
+    use crate::identity_verifier::{
+        shared_cache, IdentityMode, IdentityVerdict, SharedIdentityCache,
+    };
 
     /// A member principal with its trust events (`MemberAdded`, `AccountKeyRegistered`,
     /// `DeviceCertificateAdded`) + an account signing key we can mark verified.
@@ -2504,8 +3063,16 @@ mod tests {
         let account = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
-        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
+        let device_id = ligus_core::crypto::device_id_for(
+            ligus_core::crypto::SigAlg::Ed25519,
+            &device.public_key_bytes(),
+        );
+        let cert = DeviceCertificate::issue(
+            &account,
+            account_id,
+            &device.public_key_bytes(),
+            Timestamp::epoch(),
+        );
         let member = WorkspaceMember {
             id: account_id.to_string(),
             actor: ActorIdentity {
@@ -2532,7 +3099,12 @@ mod tests {
                 actor: member.actor.clone(),
                 recorded_at: Timestamp::epoch(),
                 cfg_frontier: None,
-                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+                presence: None,
+                runtime_effect: false,
+                prev: None,
+                sig_alg: Default::default(),
+                log_head: None,
+            });
             ligus_core::sign_envelope(&mut e, device_id, &device);
             e
         };
@@ -2545,7 +3117,10 @@ mod tests {
                     signing_public_key: account.public_key_bytes().to_vec(),
                 },
             ),
-            signed(3, SessionEvent::DeviceCertificateAdded { certificate: cert }),
+            signed(
+                3,
+                SessionEvent::DeviceCertificateAdded { certificate: cert },
+            ),
         ];
         OcPrincipal {
             account_id,
@@ -2563,7 +3138,9 @@ mod tests {
             Uuid::nil(),
             Uuid::nil(),
             lamport,
-            SessionEvent::SessionTitleChanged { title: format!("t{lamport}") },
+            SessionEvent::SessionTitleChanged {
+                title: format!("t{lamport}"),
+            },
         );
         e.actor_stamp = Some(ActorStamp {
             actor: ActorIdentity {
@@ -2577,16 +3154,25 @@ mod tests {
                 avatar_url: None,
                 contact: None,
             },
-            recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: None,
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head: None,
+        });
         ligus_core::sign_envelope(&mut e, p.device_id, &p.device_kp);
         e
     }
 
     fn oc_engine(cache: SharedIdentityCache) -> SyncEngine {
-        SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string())
-            .with_identity_mode(IdentityMode::GithubSigningKeys)
-            .with_identity_cache(cache)
+        SyncEngine::unscoped(
+            RelayClient::new("http://127.0.0.1:0"),
+            Uuid::new_v4().to_string(),
+        )
+        .with_identity_mode(IdentityMode::GithubSigningKeys)
+        .with_identity_cache(cache)
     }
 
     fn oc_batch(p: &OcPrincipal, content: &SessionEventEnvelope) -> Vec<(u64, Value)> {
@@ -2611,16 +3197,30 @@ mod tests {
         // GitHub not fetched yet: the roster-valid content event is HELD, not
         // dropped. Trust events themselves are unsigned → also held under Option C.
         assert_eq!(eng.apply_fetched(&mut store, &batch).unwrap(), 0);
-        assert!(!store.has_event(content.event_id).unwrap(), "unverified content is held, not applied");
+        assert!(
+            !store.has_event(content.event_id).unwrap(),
+            "unverified content is held, not applied"
+        );
         // Held events no longer pin the cursor: they wait in the held table.
-        assert_eq!(eng.cursor(), batch.len() as u64, "the cursor moves past held events");
+        assert_eq!(
+            eng.cursor(),
+            batch.len() as u64,
+            "the cursor moves past held events"
+        );
         let held = store.held_events(Uuid::nil()).unwrap();
-        assert!(held.iter().any(|h| h.env.event_id == content.event_id), "the content waits in the held table");
+        assert!(
+            held.iter().any(|h| h.env.event_id == content.event_id),
+            "the content waits in the held table"
+        );
 
         // Deterministic: replaying the same batch changes nothing while unverified.
         assert_eq!(eng.apply_fetched(&mut store, &batch).unwrap(), 0);
         assert!(!store.has_event(content.event_id).unwrap());
-        assert_eq!(store.held_events(Uuid::nil()).unwrap().len(), held.len(), "a re-delivery is one held row");
+        assert_eq!(
+            store.held_events(Uuid::nil()).unwrap().len(),
+            held.len(),
+            "a re-delivery is one held row"
+        );
 
         // GitHub verification completes → the held event is promoted when the
         // held table is judged again (the slow timer, or now).
@@ -2631,8 +3231,14 @@ mod tests {
             std::time::Duration::from_secs(600),
         );
         eng.retry_held_now(&mut store).unwrap();
-        assert!(store.has_event(content.event_id).unwrap(), "promoted once verified");
-        assert!(store.held_events(Uuid::nil()).unwrap().is_empty(), "released from the held table");
+        assert!(
+            store.has_event(content.event_id).unwrap(),
+            "promoted once verified"
+        );
+        assert!(
+            store.held_events(Uuid::nil()).unwrap().is_empty(),
+            "released from the held table"
+        );
     }
 
     #[test]
@@ -2653,9 +3259,16 @@ mod tests {
         let mut store = EventStore::open_in_memory().unwrap();
 
         eng.apply_fetched(&mut store, &batch).unwrap();
-        assert!(!store.has_event(content.event_id).unwrap(), "provably-bad identity is quarantined");
+        assert!(
+            !store.has_event(content.event_id).unwrap(),
+            "provably-bad identity is quarantined"
+        );
         // Quarantine is stable → the cursor advances past it (re-fetching won't help).
-        assert_eq!(eng.cursor() as usize, batch.len(), "cursor advances past a quarantined event");
+        assert_eq!(
+            eng.cursor() as usize,
+            batch.len(),
+            "cursor advances past a quarantined event"
+        );
     }
 
     #[test]
@@ -2674,13 +3287,19 @@ mod tests {
             IdentityVerdict::NotListed,
             std::time::Duration::from_secs(600),
         );
-        let mut eng = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string())
-            .with_identity_mode(IdentityMode::Relay)
-            .with_identity_cache(cache);
+        let mut eng = SyncEngine::unscoped(
+            RelayClient::new("http://127.0.0.1:0"),
+            Uuid::new_v4().to_string(),
+        )
+        .with_identity_mode(IdentityMode::Relay)
+        .with_identity_cache(cache);
         let mut store = EventStore::open_in_memory().unwrap();
 
         eng.apply_fetched(&mut store, &batch).unwrap();
-        assert!(store.has_event(content.event_id).unwrap(), "Option A ingests regardless of GitHub state");
+        assert!(
+            store.has_event(content.event_id).unwrap(),
+            "Option A ingests regardless of GitHub state"
+        );
     }
 
     #[test]
@@ -2711,8 +3330,14 @@ mod tests {
         let mut store_b = EventStore::open_in_memory().unwrap();
         eng_b.apply_fetched(&mut store_b, &batch).unwrap();
 
-        assert!(store_a.has_event(content.event_id).unwrap(), "A applied (verified)");
-        assert!(!store_b.has_event(content.event_id).unwrap(), "B held (not yet verified) — NOT dropped");
+        assert!(
+            store_a.has_event(content.event_id).unwrap(),
+            "A applied (verified)"
+        );
+        assert!(
+            !store_b.has_event(content.event_id).unwrap(),
+            "B held (not yet verified) — NOT dropped"
+        );
 
         // B's GitHub verification catches up (shared authority → same verdict) and
         // it re-fetches the held event → converges to A's applied state.
@@ -2723,7 +3348,10 @@ mod tests {
             std::time::Duration::from_secs(600),
         );
         eng_b.apply_fetched(&mut store_b, &batch).unwrap();
-        assert!(store_b.has_event(content.event_id).unwrap(), "B converges once verified");
+        assert!(
+            store_b.has_event(content.event_id).unwrap(),
+            "B converges once verified"
+        );
 
         // Both devices now hold the identical event.
         assert_eq!(
@@ -2820,10 +3448,18 @@ mod tests {
         let mut b = SyncEngine::unscoped(RelayClient::new(&base), &workspace).with_key(key);
         let before = gets.count();
         let first = b.pull_round(&mut store_b).await.unwrap();
-        assert_eq!(first, 3 * PULL_PAGES_PER_ROUND, "one round = a bounded number of pages");
+        assert_eq!(
+            first,
+            3 * PULL_PAGES_PER_ROUND,
+            "one round = a bounded number of pages"
+        );
         assert_eq!(gets.count() - before, PULL_PAGES_PER_ROUND);
         assert!(b.is_behind(), "more pages remain");
-        assert_eq!(store_b.sync_cursor(&b.sync_key()).unwrap(), first as u64, "progress is durable per page");
+        assert_eq!(
+            store_b.sync_cursor(&b.sync_key()).unwrap(),
+            first as u64,
+            "progress is durable per page"
+        );
 
         let second = b.pull_round(&mut store_b).await.unwrap();
         assert_eq!(first + second, 41);
@@ -2842,7 +3478,10 @@ mod tests {
         let mut c = SyncEngine::unscoped(RelayClient::new(&base), &workspace).with_key(key);
         assert_eq!(c.catch_up(&mut store_c, 100).await.unwrap(), 41);
         assert!(!c.is_behind());
-        assert_eq!(store_c.load_session(sid).unwrap().unwrap().messages.len(), 40);
+        assert_eq!(
+            store_c.load_session(sid).unwrap().unwrap().messages.len(),
+            40
+        );
 
         // A restarted engine resumes from the durable cursor, not from 0.
         let mut c2 = SyncEngine::unscoped(RelayClient::new(&base), &workspace).with_key(key);
@@ -2886,11 +3525,21 @@ mod tests {
         // seq 1: a snapshot sealed under epoch 7 (not held yet).
         let session = ChatSession::new("Shared", Uuid::new_v4(), "anthropic");
         let (sid, wid) = (session.id, session.workspace_id);
-        let snap = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(session) });
+        let snap = SessionEventEnvelope::new(
+            sid,
+            wid,
+            1,
+            SessionEvent::SessionSnapshot {
+                session: Box::new(session),
+            },
+        );
         let snap = crate::event_store::fixture_signed(&snap);
         let relay = RelayClient::new(&base);
         let sealed = seal_symmetric(&missing, 7, &serde_json::to_vec(&snap).unwrap()).unwrap();
-        relay.push_value(&workspace, &serde_json::to_value(sealed).unwrap()).await.unwrap();
+        relay
+            .push_value(&workspace, &serde_json::to_value(sealed).unwrap())
+            .await
+            .unwrap();
         // seqs 2..=7: openable messages in another chat.
         let mut store_a = EventStore::open_in_memory().unwrap();
         let other = seed_long_chat(&mut store_a, 5);
@@ -2899,15 +3548,25 @@ mod tests {
 
         let mut store_b = EventStore::open_in_memory().unwrap();
         let mut b = SyncEngine::unscoped(RelayClient::new(&base), &workspace).with_key(held);
-        assert_eq!(b.catch_up(&mut store_b, 10).await.unwrap(), 6, "every openable event applied");
+        assert_eq!(
+            b.catch_up(&mut store_b, 10).await.unwrap(),
+            6,
+            "every openable event applied"
+        );
         assert!(!b.is_behind(), "reached the head despite the held body");
         assert_eq!(b.cursor(), 0, "durable cursor still at the retry point");
-        assert_eq!(store_b.load_session(other).unwrap().unwrap().messages.len(), 5);
+        assert_eq!(
+            store_b.load_session(other).unwrap().unwrap().messages.len(),
+            5
+        );
 
         // The key arrives: the next round starts at the retry point again.
         b.add_key(7, missing);
         b.catch_up(&mut store_b, 10).await.unwrap();
-        assert!(store_b.has_event(snap.event_id).unwrap(), "held body converges");
+        assert!(
+            store_b.has_event(snap.event_id).unwrap(),
+            "held body converges"
+        );
         assert_eq!(b.cursor(), 7);
         assert_eq!(store_b.sync_cursor(&b.sync_key()).unwrap(), 7);
     }
@@ -2922,10 +3581,16 @@ mod tests {
         seed_long_chat(&mut store_a, 4);
         let mut a = SyncEngine::unscoped(RelayClient::new(&base), &workspace).with_key(key);
         a.push_new(&store_a).await.unwrap();
-        let page = RelayClient::new(&base).fetch_page(&workspace, 0, 1).await.unwrap();
+        let page = RelayClient::new(&base)
+            .fetch_page(&workspace, 0, 1)
+            .await
+            .unwrap();
         assert_eq!(page.rows.len(), 1);
         assert!(page.more);
         assert_eq!(page.next_after, 1);
-        assert_eq!(RelayClient::new(&base).probe(&workspace).await, crate::relay_client::RelayProbe::Ok);
+        assert_eq!(
+            RelayClient::new(&base).probe(&workspace).await,
+            crate::relay_client::RelayProbe::Ok
+        );
     }
 }

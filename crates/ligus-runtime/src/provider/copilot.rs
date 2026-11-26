@@ -42,10 +42,22 @@ use super::dispatch::StreamActivity;
 pub fn permission_args(mode: &str) -> Vec<String> {
     let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     match mode {
-        "acceptEdits" => v(&["--allow-tool=read", "--allow-tool=write", "--deny-tool=shell"]),
-        "runCommands" => v(&["--allow-tool=read", "--allow-tool=write", "--allow-tool=shell"]),
+        "acceptEdits" => v(&[
+            "--allow-tool=read",
+            "--allow-tool=write",
+            "--deny-tool=shell",
+        ]),
+        "runCommands" => v(&[
+            "--allow-tool=read",
+            "--allow-tool=write",
+            "--allow-tool=shell",
+        ]),
         "bypassPermissions" => v(&["--allow-all-tools"]),
-        _ => v(&["--allow-tool=read", "--deny-tool=write", "--deny-tool=shell"]),
+        _ => v(&[
+            "--allow-tool=read",
+            "--deny-tool=write",
+            "--deny-tool=shell",
+        ]),
     }
 }
 
@@ -126,13 +138,22 @@ impl CliStreamParser for CopilotParser {
             t if t.starts_with("assistant.reasoning") => {
                 let id = str_at(&data, "reasoningId").to_string();
                 if self.thinking_marked.insert(id) {
-                    out.push(CliOut::Activity(StreamActivity::Thinking { text: String::new() }));
+                    out.push(CliOut::Activity(StreamActivity::Thinking {
+                        text: String::new(),
+                    }));
                 }
             }
             "tool.execution_start" => out.push(CliOut::Activity(StreamActivity::Tool {
                 id: str_at(&data, "toolCallId").to_string(),
-                name: data.get("toolName").and_then(Value::as_str).unwrap_or("tool").to_string(),
-                input_json: data.get("arguments").map(Value::to_string).unwrap_or_default(),
+                name: data
+                    .get("toolName")
+                    .and_then(Value::as_str)
+                    .unwrap_or("tool")
+                    .to_string(),
+                input_json: data
+                    .get("arguments")
+                    .map(Value::to_string)
+                    .unwrap_or_default(),
             })),
             "tool.execution_complete" => {
                 let ok = data.get("success").and_then(Value::as_bool).unwrap_or(true);
@@ -146,7 +167,12 @@ impl CliStreamParser for CopilotParser {
                         .unwrap_or_else(|| result.to_string()),
                     _ => data
                         .get("error")
-                        .map(|e| e.get("message").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| e.to_string()))
+                        .map(|e| {
+                            e.get("message")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| e.to_string())
+                        })
                         .unwrap_or_default(),
                 };
                 out.push(CliOut::Activity(StreamActivity::ToolResult {
@@ -173,7 +199,11 @@ impl CliStreamParser for CopilotParser {
         out
     }
 
-    fn finish(&mut self, exit_ok: bool, stderr: &str) -> Result<(String, Option<String>), ProviderError> {
+    fn finish(
+        &mut self,
+        exit_ok: bool,
+        stderr: &str,
+    ) -> Result<(String, Option<String>), ProviderError> {
         let failed = !exit_ok || self.exit_code.is_some_and(|c| c != 0);
         // An error event with no reply at all is a failed turn even on exit 0.
         if failed || (self.assembled.is_empty() && !self.errors.is_empty()) {
@@ -185,7 +215,12 @@ impl CliStreamParser for CopilotParser {
                 detail.push_str(stderr.trim());
             }
             if detail.is_empty() {
-                detail = format!("exit code {}", self.exit_code.map(|c| c.to_string()).unwrap_or_else(|| "non-zero".into()));
+                detail = format!(
+                    "exit code {}",
+                    self.exit_code
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "non-zero".into())
+                );
             }
             return Err(cli_agent::failure_error(CliKind::Copilot, &detail));
         }
@@ -214,12 +249,25 @@ pub async fn stream_reply(
     on_delta: impl FnMut(String),
     on_activity: impl FnMut(StreamActivity),
 ) -> Result<String, ProviderError> {
-    let program = if program.trim().is_empty() { CliKind::Copilot.default_program() } else { program };
+    let program = if program.trim().is_empty() {
+        CliKind::Copilot.default_program()
+    } else {
+        program
+    };
     let prompt = super::claude_code::render_prompt(system, turns);
     let args = build_args(model, extra_args, prompt);
     let mut parser = CopilotParser::default();
-    cli_agent::run_cli(CliKind::Copilot, program, &args, working_dir, extra_env, &mut parser, on_delta, on_activity)
-        .await
+    cli_agent::run_cli(
+        CliKind::Copilot,
+        program,
+        &args,
+        working_dir,
+        extra_env,
+        &mut parser,
+        on_delta,
+        on_activity,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -252,7 +300,11 @@ mod tests {
     #[test]
     fn recorded_tool_turn_streams_text_and_tool_activity() {
         let (outs, mut p) = run(FIXTURE_TOOL_TURN);
-        assert_eq!(text(&outs), "banana", "deltas once, final message not repeated");
+        assert_eq!(
+            text(&outs),
+            "banana",
+            "deltas once, final message not repeated"
+        );
         let acts: Vec<_> = outs
             .iter()
             .filter_map(|o| match o {
@@ -261,7 +313,15 @@ mod tests {
             })
             .collect();
         match acts.as_slice() {
-            [StreamActivity::Tool { id, name, input_json }, StreamActivity::ToolResult { call_id, is_error, content }] => {
+            [StreamActivity::Tool {
+                id,
+                name,
+                input_json,
+            }, StreamActivity::ToolResult {
+                call_id,
+                is_error,
+                content,
+            }] => {
                 assert_eq!(name, "view");
                 assert!(input_json.contains("a.txt"));
                 assert_eq!(id, call_id);
@@ -271,7 +331,11 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert_eq!(p.finish(true, "").unwrap().0, "banana");
-        assert_eq!(p.premium_requests, Some(15.0), "a premium model costs several requests");
+        assert_eq!(
+            p.premium_requests,
+            Some(15.0),
+            "a premium model costs several requests"
+        );
     }
 
     #[test]
@@ -290,7 +354,10 @@ mod tests {
             .finish(false, "Error: No authentication information found.\n\nCopilot can be authenticated with GitHub using an OAuth Token or a Fine-Grained Personal Access Token.")
             .unwrap_err()
             .to_string();
-        assert!(e.contains("not signed in") && e.contains("copilot login"), "{e}");
+        assert!(
+            e.contains("not signed in") && e.contains("copilot login"),
+            "{e}"
+        );
     }
 
     #[test]
@@ -306,21 +373,35 @@ mod tests {
     fn failed_tool_is_an_error_result() {
         let mut p = CopilotParser::default();
         let outs = p.feed(r#"{"type":"tool.execution_complete","data":{"toolCallId":"t1","success":false,"error":{"message":"Permission denied: shell"}}}"#);
-        assert!(matches!(&outs[..], [CliOut::Activity(StreamActivity::ToolResult { is_error: true, content, .. })] if content.contains("Permission denied")));
+        assert!(
+            matches!(&outs[..], [CliOut::Activity(StreamActivity::ToolResult { is_error: true, content, .. })] if content.contains("Permission denied"))
+        );
     }
 
     #[test]
     fn permission_tiers_mirror_claude_code() {
         let d = permission_args("default");
-        assert!(d.contains(&"--deny-tool=write".to_string()) && d.contains(&"--deny-tool=shell".to_string()));
+        assert!(
+            d.contains(&"--deny-tool=write".to_string())
+                && d.contains(&"--deny-tool=shell".to_string())
+        );
         assert!(!d.iter().any(|a| a.starts_with("--allow-all")));
         let e = permission_args("acceptEdits");
-        assert!(e.contains(&"--allow-tool=write".to_string()) && e.contains(&"--deny-tool=shell".to_string()));
+        assert!(
+            e.contains(&"--allow-tool=write".to_string())
+                && e.contains(&"--deny-tool=shell".to_string())
+        );
         assert!(permission_args("runCommands").contains(&"--allow-tool=shell".to_string()));
-        assert_eq!(permission_args("bypassPermissions"), vec!["--allow-all-tools"]);
+        assert_eq!(
+            permission_args("bypassPermissions"),
+            vec!["--allow-all-tools"]
+        );
         for mode in ["default", "acceptEdits", "runCommands", "bypassPermissions"] {
             let a = permission_args(mode);
-            assert!(!a.iter().any(|x| x == "--yolo" || x == "--allow-all" || x == "--allow-all-paths" || x == "--allow-all-urls"));
+            assert!(!a.iter().any(|x| x == "--yolo"
+                || x == "--allow-all"
+                || x == "--allow-all-paths"
+                || x == "--allow-all-urls"));
         }
     }
 
@@ -331,6 +412,9 @@ mod tests {
         assert!(a.windows(2).any(|w| w == ["--model", "gpt-5.3-codex"]));
         assert!(a.windows(2).any(|w| w == ["--output-format", "json"]));
         assert!(a.contains(&"--no-ask-user".to_string()));
-        assert!(a.contains(&"--disable-builtin-mcps".to_string()), "the GitHub MCP server stays off: {a:?}");
+        assert!(
+            a.contains(&"--disable-builtin-mcps".to_string()),
+            "the GitHub MCP server stays off: {a:?}"
+        );
     }
 }

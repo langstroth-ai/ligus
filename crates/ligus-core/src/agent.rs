@@ -124,7 +124,9 @@ pub enum Access {
 /// member's client; anything else (a `url(...)`, a gradient) would reach the
 /// viewer's CSS, so it is dropped on fold and refused on edit.
 pub fn is_valid_color_hex(s: &str) -> bool {
-    let Some(hex) = s.strip_prefix('#') else { return false };
+    let Some(hex) = s.strip_prefix('#') else {
+        return false;
+    };
     (3..=8).contains(&hex.len()) && hex.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
@@ -150,8 +152,18 @@ pub const LEGACY_PRIMARY_HANDLE: &str = "hive";
 
 /// Mention words no new agent may take: they would shadow the default agent
 /// (`primary`, `ligus`, the legacy `hive`) or a group (`you`, `all`, ...).
-pub const RESERVED_AGENT_NAMES: &[&str] =
-    &["primary", PRIMARY_HANDLE, LEGACY_PRIMARY_HANDLE, "you", "all", "everyone", "owners", "admins", "contributors", "viewers"];
+pub const RESERVED_AGENT_NAMES: &[&str] = &[
+    "primary",
+    PRIMARY_HANDLE,
+    LEGACY_PRIMARY_HANDLE,
+    "you",
+    "all",
+    "everyone",
+    "owners",
+    "admins",
+    "contributors",
+    "viewers",
+];
 
 /// A name's comparison form for the reserved checks: cleaned (invisible and
 /// bidi characters dropped), lowercased, spaces and `.`/`_`/`-` removed and
@@ -166,7 +178,9 @@ fn reserved_skeleton(name: &str) -> String {
 /// of one.
 pub fn is_reserved_agent_name(name: &str) -> bool {
     let n = reserved_skeleton(name);
-    RESERVED_AGENT_NAMES.iter().any(|r| reserved_skeleton(r) == n)
+    RESERVED_AGENT_NAMES
+        .iter()
+        .any(|r| reserved_skeleton(r) == n)
 }
 
 /// Whether `name` means the default agent (`ligus` or `primary`, or a
@@ -237,13 +251,21 @@ impl WorkspaceAgent {
     /// Drops an accent color that isn't a plain hex color (see
     /// [`is_valid_color_hex`]).
     pub fn sanitize_color(&mut self) {
-        if self.avatar_color_hex.as_deref().is_some_and(|c| !is_valid_color_hex(c)) {
+        if self
+            .avatar_color_hex
+            .as_deref()
+            .is_some_and(|c| !is_valid_color_hex(c))
+        {
             self.avatar_color_hex = None;
         }
     }
 
     pub fn policy(&self) -> AgentPolicy {
-        AgentPolicy { access: self.access.clone(), limits: self.limits.clone(), notify_on_use: self.notify_on_use }
+        AgentPolicy {
+            access: self.access.clone(),
+            limits: self.limits.clone(),
+            notify_on_use: self.notify_on_use,
+        }
     }
 
     /// Who may use this agent: its `access`, or the default for its kind.
@@ -270,13 +292,20 @@ pub fn effective_access(access: &str, owner: &str) -> Access {
 }
 
 /// [`WorkspaceAgent::usable_by`] from its parts.
-pub fn usable_by(access: Access, owner: &str, member: &str, role: Option<crate::WorkspaceRole>) -> bool {
+pub fn usable_by(
+    access: Access,
+    owner: &str,
+    member: &str,
+    role: Option<crate::WorkspaceRole>,
+) -> bool {
     if member.is_empty() {
         return false;
     }
     match access {
         Access::Everyone => true,
-        Access::Owner if owner.is_empty() => role.is_some_and(|r| r.rank() >= crate::WorkspaceRole::Admin.rank()),
+        Access::Owner if owner.is_empty() => {
+            role.is_some_and(|r| r.rank() >= crate::WorkspaceRole::Admin.rank())
+        }
         Access::Owner => member == owner,
     }
 }
@@ -292,10 +321,22 @@ mod tests {
         }
         assert!(!is_reserved_agent_name("scout"));
         // Look-alikes and invisible characters are reserved too.
-        for n in ["l\u{0456}gus", "li\u{200B}gus", "LIGUS", "li-gus", "pr\u{0456}mary", "h\u{0456}ve"] {
+        for n in [
+            "l\u{0456}gus",
+            "li\u{200B}gus",
+            "LIGUS",
+            "li-gus",
+            "pr\u{0456}mary",
+            "h\u{0456}ve",
+        ] {
             assert!(is_reserved_agent_name(n), "{n:?}");
         }
-        assert!(names_primary("Ligus") && names_primary("primary") && names_primary("L\u{0456}gus") && !names_primary("hive"));
+        assert!(
+            names_primary("Ligus")
+                && names_primary("primary")
+                && names_primary("L\u{0456}gus")
+                && !names_primary("hive")
+        );
         assert!(!names_primary("ligusbot") && !names_primary("scout"));
         let mut s = crate::ChatSession::new("t", Uuid::new_v4(), "rt");
         s.workspace_agents = vec![WorkspaceAgent::new("scout", "rt")];
@@ -357,9 +398,16 @@ mod tests {
         a.owner_actor_id = "me".into();
         assert_eq!(a.effective_access(), Access::Owner, "personal: only me");
         assert!(a.usable_by("me", Some(Contributor)));
-        assert!(!a.usable_by("you", Some(Owner)), "an Owner role doesn't open someone's personal agent");
+        assert!(
+            !a.usable_by("you", Some(Owner)),
+            "an Owner role doesn't open someone's personal agent"
+        );
         a.access = "members:you".into();
-        assert_eq!(a.effective_access(), Access::Owner, "an unknown value fails closed");
+        assert_eq!(
+            a.effective_access(),
+            Access::Owner,
+            "an unknown value fails closed"
+        );
         a.access = ACCESS_EVERYONE.into();
         assert!(a.usable_by("you", Some(Viewer)));
         assert!(!a.usable_by("", Some(Owner)), "no person, no use");
@@ -374,7 +422,11 @@ mod tests {
     fn member_turn_cap() {
         let mut l = AgentLimits::default();
         assert_eq!(l.member_turn_cap(true), Some(DEFAULT_MEMBER_TURNS_PER_DAY));
-        assert_eq!(l.member_turn_cap(false), None, "a shared agent has no default cap");
+        assert_eq!(
+            l.member_turn_cap(false),
+            None,
+            "a shared agent has no default cap"
+        );
         l.member_turns_per_day = Some(0);
         assert_eq!(l.member_turn_cap(true), None);
         l.member_turns_per_day = Some(3);

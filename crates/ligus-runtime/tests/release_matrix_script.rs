@@ -23,7 +23,11 @@ fn release_matrix_keeps_api_keys_off_the_command_line() {
     )
     .unwrap();
     std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let path = format!("{}:{}", stub.path().display(), std::env::var("PATH").unwrap_or_default());
+    let path = format!(
+        "{}:{}",
+        stub.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
     let out = std::process::Command::new("bash")
         .arg(root.join("scripts/release-matrix.sh"))
         .env("PATH", path)
@@ -40,11 +44,21 @@ fn release_matrix_keeps_api_keys_off_the_command_line() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let argv = std::fs::read_to_string(rec.join("argv")).unwrap_or_default();
     let headers = std::fs::read_to_string(rec.join("headers")).unwrap_or_default();
-    for key in ["fake-anthropic-key-1", "fake-openai-key-2", "fake-gemini-key-3"] {
+    for key in [
+        "fake-anthropic-key-1",
+        "fake-openai-key-2",
+        "fake-gemini-key-3",
+    ] {
         assert!(!argv.contains(key), "{key} was on curl's command line");
-        assert!(headers.contains(key), "{key} never reached curl (headers: {headers:?}); output: {stdout}");
+        assert!(
+            headers.contains(key),
+            "{key} never reached curl (headers: {headers:?}); output: {stdout}"
+        );
         assert!(!stdout.contains(key), "{key} was printed");
     }
     assert_eq!(stdout.matches("| pass |").count(), 3, "{stdout}");
-    assert!(!stub.path().join("out").exists(), "the script left its logs behind");
+    assert!(
+        !stub.path().join("out").exists(),
+        "the script left its logs behind"
+    );
 }

@@ -4,10 +4,12 @@
 use uuid::Uuid;
 
 use crate::events::{SessionEvent, SessionEventEnvelope};
-use crate::testkit::project_honest as project;
 use crate::identity::{ActorIdentity, ActorKind, ActorStamp, WorkspaceMember, WorkspaceRole};
-use crate::lease::{lease_key, CoordinatorLease, LeaseClaimReason, LeaseRelease, LeaseScope, DEFAULT_LEASE_MS};
+use crate::lease::{
+    lease_key, CoordinatorLease, LeaseClaimReason, LeaseRelease, LeaseScope, DEFAULT_LEASE_MS,
+};
 use crate::session::ChatSession;
+use crate::testkit::project_honest as project;
 use crate::time_util::Timestamp;
 use crate::workflow::{WorkflowDefinition, WorkflowRun, WorkflowRunStatus};
 
@@ -32,20 +34,42 @@ pub(crate) fn base() -> ChatSession {
 }
 
 pub(crate) fn seed(s: &ChatSession) -> SessionEventEnvelope {
-    let mut e = SessionEventEnvelope::new(s.id, s.workspace_id, 1, SessionEvent::SessionSnapshot { session: Box::new(s.clone()) });
+    let mut e = SessionEventEnvelope::new(
+        s.id,
+        s.workspace_id,
+        1,
+        SessionEvent::SessionSnapshot {
+            session: Box::new(s.clone()),
+        },
+    );
     e.lamport = 0;
     stamp(e, "owner", None)
 }
 
 /// An envelope at `lamport`, authored by `author`, signed (claimed) by `device`.
-pub(crate) fn ev(s: &ChatSession, lamport: u64, author: &str, device: Option<Uuid>, payload: SessionEvent) -> SessionEventEnvelope {
+pub(crate) fn ev(
+    s: &ChatSession,
+    lamport: u64,
+    author: &str,
+    device: Option<Uuid>,
+    payload: SessionEvent,
+) -> SessionEventEnvelope {
     let mut e = SessionEventEnvelope::new(s.id, s.workspace_id, lamport as i64, payload);
     e.lamport = lamport;
     stamp(e, author, device)
 }
 
 fn stamp(mut e: SessionEventEnvelope, author: &str, device: Option<Uuid>) -> SessionEventEnvelope {
-    e.actor_stamp = Some(ActorStamp { actor: ActorIdentity::new(author, author, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+    e.actor_stamp = Some(ActorStamp {
+        actor: ActorIdentity::new(author, author, ActorKind::Human),
+        recorded_at: Timestamp::epoch(),
+        cfg_frontier: None,
+        presence: None,
+        runtime_effect: false,
+        prev: None,
+        sig_alg: Default::default(),
+        log_head: None,
+    });
     e.signer_device_id = device;
     e
 }
@@ -65,7 +89,15 @@ fn claim(run: Uuid, holder: Uuid, epoch: u64) -> SessionEvent {
 }
 
 fn run_write(run_id: Uuid, input: &str, epoch: Option<u64>) -> SessionEvent {
-    let def = WorkflowDefinition { id: Uuid::nil(), name: "wf".into(), description: String::new(), input_label: None, nodes: Vec::new(), created_at: Timestamp::epoch(), disabled: false };
+    let def = WorkflowDefinition {
+        id: Uuid::nil(),
+        name: "wf".into(),
+        description: String::new(),
+        input_label: None,
+        nodes: Vec::new(),
+        created_at: Timestamp::epoch(),
+        disabled: false,
+    };
     let mut run: WorkflowRun = crate::workflow::new_run(&def, input, "alice");
     run.id = run_id;
     run.status = WorkflowRunStatus::Running;
@@ -108,7 +140,10 @@ fn a_viewer_cannot_author_a_claim_and_a_member_outside_the_chat_roster_can_proje
     let mut chat = base();
     chat.members.retain(|m| m.id == "owner");
     let dev = Uuid::new_v4();
-    let envs = vec![seed(&chat), ev(&chat, 1, "alice", Some(dev), claim(run, dev, 1))];
+    let envs = vec![
+        seed(&chat),
+        ev(&chat, 1, "alice", Some(dev), claim(run, dev, 1)),
+    ];
     assert_eq!(holder(&project(&envs).unwrap(), run), Some((dev, 1)));
 }
 
@@ -127,7 +162,11 @@ fn stale_epochs_are_fenced_and_replays_ignored() {
     let p = project(&envs).unwrap();
     assert_eq!(holder(&p, run), Some((b, 2)));
     let st = &p.guards.leases[&lease_key(LeaseScope::WorkflowRun, &run.to_string())];
-    assert_eq!(st.fenced.len(), 2, "both stale claims are recorded for the split-brain view");
+    assert_eq!(
+        st.fenced.len(),
+        2,
+        "both stale claims are recorded for the split-brain view"
+    );
 }
 
 #[test]
@@ -136,7 +175,12 @@ fn concurrent_successors_converge_on_one_holder_in_any_order() {
     // (same Lamport value, so the canonical tie-break decides). Every device
     // must project the same single holder whatever order the events arrive in.
     let s = base();
-    let (run, a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let (run, a, b, c) = (
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    );
     let e_seed = seed(&s);
     let e1 = ev(&s, 1, "alice", Some(a), claim(run, a, 1));
     let eb = ev(&s, 5, "owner", Some(b), claim(run, b, 2));
@@ -150,7 +194,10 @@ fn concurrent_successors_converge_on_one_holder_in_any_order() {
     assert_eq!(winner.1, 2);
     let expected_input = if winner.0 == b { "from-b" } else { "from-c" };
     assert_eq!(first.workflow_runs.len(), 1);
-    assert_eq!(first.workflow_runs[0].input, expected_input, "only the winner's write survives");
+    assert_eq!(
+        first.workflow_runs[0].input, expected_input,
+        "only the winner's write survives"
+    );
     // Every permutation converges.
     let mut perm = all.clone();
     for round in 0..12 {
@@ -194,7 +241,13 @@ fn forged_epoch_stamps_are_dropped() {
         ev(&s, 1, "alice", Some(m), run_write(run, "no-lease", Some(1))),
         ev(&s, 2, "alice", Some(a), claim(run, a, 1)),
         // Current epoch, but signed by a device that does not hold it.
-        ev(&s, 3, "alice", Some(m), run_write(run, "not-holder", Some(1))),
+        ev(
+            &s,
+            3,
+            "alice",
+            Some(m),
+            run_write(run, "not-holder", Some(1)),
+        ),
         // A future epoch nobody claimed.
         ev(&s, 4, "alice", Some(a), run_write(run, "future", Some(9))),
         // Legacy unstamped writes (a cancel from another device) still land.
@@ -208,9 +261,20 @@ fn forged_epoch_stamps_are_dropped() {
 #[test]
 fn planned_handover_reserves_the_next_epoch() {
     let s = base();
-    let (run, a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let (run, a, b, c) = (
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    );
     let release = |signer: Uuid| SessionEvent::CoordinatorLeaseReleased {
-        release: LeaseRelease { scope: LeaseScope::WorkflowRun, scope_id: run.to_string(), holder: signer, epoch: 1, successor: Some(b) },
+        release: LeaseRelease {
+            scope: LeaseScope::WorkflowRun,
+            scope_id: run.to_string(),
+            holder: signer,
+            epoch: 1,
+            successor: Some(b),
+        },
     };
     let envs = vec![
         seed(&s),

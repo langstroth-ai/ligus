@@ -58,7 +58,14 @@ struct Wire {
 impl ApprovalAddress {
     /// The address every member derives from epoch `epoch`'s 32-byte key and
     /// the relay's reset `counter` ([`super::MailboxClient::ensure_registered`]).
-    pub fn derive(relay: &str, workspace_id: Uuid, founder_pin_hex: &str, epoch: u32, epoch_key: &[u8; 32], counter: u32) -> Self {
+    pub fn derive(
+        relay: &str,
+        workspace_id: Uuid,
+        founder_pin_hex: &str,
+        epoch: u32,
+        epoch_key: &[u8; 32],
+        counter: u32,
+    ) -> Self {
         let keys = MailboxKeys::derive(epoch_key);
         Self {
             relay: relay.trim().trim_end_matches('/').to_string(),
@@ -88,7 +95,10 @@ impl ApprovalAddress {
             seal_key: b64::enc(&self.seal_key),
             put_cap: b64::enc(&self.put_cap),
         };
-        format!("{ADDRESS_PREFIX}{}", b64::enc(&serde_json::to_vec(&w).expect("serialize an address")))
+        format!(
+            "{ADDRESS_PREFIX}{}",
+            b64::enc(&serde_json::to_vec(&w).expect("serialize an address"))
+        )
     }
 
     /// Parse an address, refusing a non-`https` relay.
@@ -103,7 +113,9 @@ impl ApprovalAddress {
         if compact.len() > MAX_ADDRESS_LEN {
             return Err(AddressError::Malformed);
         }
-        let body = compact.strip_prefix(ADDRESS_PREFIX).ok_or(AddressError::NotAnAddress)?;
+        let body = compact
+            .strip_prefix(ADDRESS_PREFIX)
+            .ok_or(AddressError::NotAnAddress)?;
         let bytes = b64::dec(body).ok_or(AddressError::Malformed)?;
         let w: Wire = serde_json::from_slice(&bytes).map_err(|_| AddressError::Malformed)?;
         if w.v != 1 {
@@ -126,7 +138,8 @@ impl ApprovalAddress {
             workspace_id: w.workspace_id,
             founder_pin,
             epoch: w.epoch,
-            mailbox: hex_fixed::<16>(&w.mailbox.to_ascii_lowercase()).ok_or(AddressError::Malformed)?,
+            mailbox: hex_fixed::<16>(&w.mailbox.to_ascii_lowercase())
+                .ok_or(AddressError::Malformed)?,
             seal_key: b64::fixed::<32>(&w.seal_key).ok_or(AddressError::Malformed)?,
             put_cap: b64::fixed::<16>(&w.put_cap).ok_or(AddressError::Malformed)?,
         })

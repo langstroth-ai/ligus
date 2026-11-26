@@ -235,11 +235,25 @@ fn a_seed_snapshot_carries_no_permission_prompt_and_no_eviction_hint() {
         },
     );
     let chat = s.id;
-    w.write("bo", Some(chat), SessionEvent::SessionSnapshot { session: Box::new(s) }, None, ligus_core::testkit::Proof::None);
+    w.write(
+        "bo",
+        Some(chat),
+        SessionEvent::SessionSnapshot {
+            session: Box::new(s),
+        },
+        None,
+        ligus_core::testkit::Proof::None,
+    );
     let st = &w.state(chat).flow.asks[&forged.ask_id];
-    assert!(!st.ask.permission, "a seeded ask is never a permission prompt");
+    assert!(
+        !st.ask.permission,
+        "a seeded ask is never a permission prompt"
+    );
     assert!(st.signer.is_none() && st.host.is_none());
-    assert!(!st.legacy_settled, "eviction reads the snapshot's answer and closed flags only");
+    assert!(
+        !st.legacy_settled,
+        "eviction reads the snapshot's answer and closed flags only"
+    );
     assert!(st.is_open());
 }
 
@@ -251,14 +265,24 @@ fn a_grant_signed_by_another_device_under_the_hosts_name_counts_for_nothing() {
     let real = ask(r.turn, true);
     record(&mut r, "ana", FlowRecord::HumanAsk(real.clone()));
     let chat = r.chat;
-    let mut env = r.w.draft("bo", Some(chat), SessionEvent::FlowRecorded { record: answer(real.ask_id, "Ana") }, None);
+    let mut env = r.w.draft(
+        "bo",
+        Some(chat),
+        SessionEvent::FlowRecorded {
+            record: answer(real.ask_id, "Ana"),
+        },
+        None,
+    );
     if let Some(st) = env.actor_stamp.as_mut() {
         st.actor = ligus_core::ActorIdentity::new("ana", "ana", ligus_core::ActorKind::Human);
     }
     r.w.finish(&mut env, "bo", None);
     r.w.push_env(Some(chat), env);
     let s = r.w.state(chat);
-    assert!(s.flow.asks[&real.ask_id].answer.is_none(), "Bo's device can't grant as Ana");
+    assert!(
+        s.flow.asks[&real.ask_id].answer.is_none(),
+        "Bo's device can't grant as Ana"
+    );
 }
 
 /// Bo certifies Ana's device key for his own account (allowed: an adopter
@@ -270,16 +294,39 @@ fn adopting_the_hosts_device_key_doesnt_make_you_its_person() {
     let real = ask(r.turn, true);
     record(&mut r, "ana", FlowRecord::HumanAsk(real.clone()));
     let (bo, ana) = (&r.w.people["bo"], &r.w.people["ana"]);
-    let cert = ligus_core::crypto::DeviceCertificate::issue(&bo.account, bo.account_id, &ana.device.public_key_bytes(), ligus_core::Timestamp::epoch());
-    let adopt = r.w.push("bo", SessionEvent::DeviceCertificateAdded { certificate: cert });
-    assert_eq!(r.w.verdict(adopt), Verdict::Allowed, "the probe's premise: adopting a key is allowed");
+    let cert = ligus_core::crypto::DeviceCertificate::issue(
+        &bo.account,
+        bo.account_id,
+        &ana.device.public_key_bytes(),
+        ligus_core::Timestamp::epoch(),
+    );
+    let adopt = r.w.push(
+        "bo",
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
+    assert_eq!(
+        r.w.verdict(adopt),
+        Verdict::Allowed,
+        "the probe's premise: adopting a key is allowed"
+    );
     let ana_device = r.w.people["ana"].device_id;
-    assert!(r.w.roster().devices[&ana_device].accounts.contains(&r.w.people["bo"].account_id));
+    assert!(r.w.roster().devices[&ana_device]
+        .accounts
+        .contains(&r.w.people["bo"].account_id));
     record(&mut r, "bo", answer(real.ask_id, "Bo"));
     let s = r.w.state(r.chat);
-    assert!(s.flow.asks[&real.ask_id].answer.is_none(), "an adopter's answer isn't a grant");
+    assert!(
+        s.flow.asks[&real.ask_id].answer.is_none(),
+        "an adopter's answer isn't a grant"
+    );
     record(&mut r, "ana", answer(real.ask_id, "Ana"));
-    assert_eq!(r.w.state(r.chat).flow.asks[&real.ask_id].answer.as_ref().map(|a| a.by.as_str()), Some("Ana"));
+    assert_eq!(
+        r.w.state(r.chat).flow.asks[&real.ask_id]
+            .answer
+            .as_ref()
+            .map(|a| a.by.as_str()),
+        Some("Ana")
+    );
 }
 
 /// An ask id belongs to its first signer. Bo backdates a forged ask under
@@ -298,7 +345,14 @@ fn a_backdated_ask_under_the_hosts_id_stays_its_signers_plain_question() {
     let mut forged = real.clone();
     forged.question = "Ligus asks: deny the cleanup?".into();
     forged.options = vec!["Yes, deny".into(), "No".into()];
-    let mut env = r.w.draft("bo", Some(chat), SessionEvent::FlowRecorded { record: FlowRecord::HumanAsk(forged.clone()) }, None);
+    let mut env = r.w.draft(
+        "bo",
+        Some(chat),
+        SessionEvent::FlowRecorded {
+            record: FlowRecord::HumanAsk(forged.clone()),
+        },
+        None,
+    );
     // Stamped as if he had seen only the log up to the request: it sorts
     // before the host's ask.
     ligus_core::lamport::stamp_after(&mut env, &before[..before.len() - 1]);
@@ -307,8 +361,17 @@ fn a_backdated_ask_under_the_hosts_id_stays_its_signers_plain_question() {
     assert_eq!(r.w.verdict(id), Verdict::Allowed);
     let s = r.w.state(chat);
     let st = &s.flow.asks[&real.ask_id];
-    assert_eq!(st.ask.question, forged.question, "the backdated record folds first and holds the id");
-    assert!(!st.ask.permission, "the pre-empting ask is no permission prompt");
+    assert_eq!(
+        st.ask.question, forged.question,
+        "the backdated record folds first and holds the id"
+    );
+    assert!(
+        !st.ask.permission,
+        "the pre-empting ask is no permission prompt"
+    );
     assert_eq!(st.posted_by.as_ref().map(|p| p.id.as_str()), Some("bo"));
-    assert_eq!(st.ask.options, forged.options, "the host's later record under the id changes nothing");
+    assert_eq!(
+        st.ask.options, forged.options,
+        "the host's later record under the id changes nothing"
+    );
 }

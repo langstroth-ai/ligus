@@ -25,8 +25,8 @@ use ligus_runtime::display::shown;
 use std::collections::HashSet;
 
 use ligus_core::{
-    ActionProposal, ActorIdentity, ChatMessage, ChatSession, DeviceLinks, MessageRole, ProposalKind, TranscriptEventKind, WorkflowRun,
-    WorkspaceRole,
+    ActionProposal, ActorIdentity, ChatMessage, ChatSession, DeviceLinks, MessageRole,
+    ProposalKind, TranscriptEventKind, WorkflowRun, WorkspaceRole,
 };
 
 use super::ntfy::{self, Notice};
@@ -43,7 +43,10 @@ pub struct Me {
 
 impl Me {
     pub fn in_chat(author: &ActorIdentity, s: &ChatSession, links: &DeviceLinks) -> Self {
-        let mut me = Me { display_name: author.display_name.clone(), ..Default::default() };
+        let mut me = Me {
+            display_name: author.display_name.clone(),
+            ..Default::default()
+        };
         let person = links.person(&author.id).to_string();
         me.ids.insert(author.id.clone());
         me.ids.extend(links.ids_of(&person).map(str::to_string));
@@ -86,7 +89,11 @@ impl Me {
         if !m.body.contains('@') {
             return false;
         }
-        ligus_runtime::message_mentions(m, s).reaches(|id| self.ids.contains(id), &self.roles, &self.display_name)
+        ligus_runtime::message_mentions(m, s).reaches(
+            |id| self.ids.contains(id),
+            &self.roles,
+            &self.display_name,
+        )
     }
 
     /// The user is the requester of agent reply `m`: the person whose message
@@ -108,13 +115,28 @@ fn is_reply(role: MessageRole) -> bool {
 }
 
 fn base(kind: &str, s: &ChatSession, title: String) -> PushContent {
-    PushContent { kind: kind.into(), chat_id: Some(s.id.to_string()), title, ..Default::default() }
+    PushContent {
+        kind: kind.into(),
+        chat_id: Some(s.id.to_string()),
+        title,
+        ..Default::default()
+    }
 }
 
 /// A message just finished (agent reply) or appeared (anyone else's):
 /// `message.done`, `mention`, or nothing.
-pub fn for_message(s: &ChatSession, m: &ChatMessage, done: bool, me: &Me) -> Option<(Notice, PushContent)> {
-    if m.is_streaming || m.superseded || m.role == MessageRole::System || m.kind != TranscriptEventKind::Message || me.wrote(m) {
+pub fn for_message(
+    s: &ChatSession,
+    m: &ChatMessage,
+    done: bool,
+    me: &Me,
+) -> Option<(Notice, PushContent)> {
+    if m.is_streaming
+        || m.superseded
+        || m.role == MessageRole::System
+        || m.kind != TranscriptEventKind::Message
+        || me.wrote(m)
+    {
         return None;
     }
     let reply = is_reply(m.role);
@@ -150,7 +172,9 @@ pub fn for_message(s: &ChatSession, m: &ChatMessage, done: bool, me: &Me) -> Opt
 /// the run), not `proposal.created`. An authorless decision is a gate whose
 /// run hasn't synced in yet.
 pub fn is_gate_proposal(s: &ChatSession, p: &ActionProposal) -> bool {
-    s.workflow_runs.iter().any(|r| r.nodes.iter().any(|n| n.proposal_id == Some(p.id)))
+    s.workflow_runs
+        .iter()
+        .any(|r| r.nodes.iter().any(|n| n.proposal_id == Some(p.id)))
         || (p.author_actor_id.is_empty() && p.kind == ProposalKind::Decision)
 }
 
@@ -170,10 +194,17 @@ pub fn for_proposal(s: &ChatSession, p: &ActionProposal) -> Option<(Notice, Push
 /// it names, a role at or above its room's floor, or (an older ask, which
 /// asks anyone at Contributor or above) any member who can answer.
 pub fn in_audience(st: &ligus_core::flow::AskState, me: &Me) -> bool {
-    let answers = me.roles.iter().any(|r| r.rank() >= WorkspaceRole::Contributor.rank());
+    let answers = me
+        .roles
+        .iter()
+        .any(|r| r.rank() >= WorkspaceRole::Contributor.rank());
     match st.ask.audience.as_ref() {
-        Some(a) if a.kind == ligus_core::flow::AUDIENCE_PEOPLE => a.member_ids.iter().any(|id| me.is(id)),
-        Some(a) if a.kind == ligus_core::flow::AUDIENCE_ROOM => a.floor().is_some_and(|f| me.roles.iter().any(|r| r.rank() >= f.rank())),
+        Some(a) if a.kind == ligus_core::flow::AUDIENCE_PEOPLE => {
+            a.member_ids.iter().any(|id| me.is(id))
+        }
+        Some(a) if a.kind == ligus_core::flow::AUDIENCE_ROOM => a
+            .floor()
+            .is_some_and(|f| me.roles.iter().any(|r| r.rank() >= f.rank())),
         Some(_) => false,
         None => answers,
     }
@@ -188,7 +219,11 @@ pub const ASK_PUSH_CHARS: usize = 80;
 /// setting applies) and no options or actions: nothing is decided from the
 /// lock screen. Only when the user is in its audience, and never for an ask
 /// someone other than the agent or its host posted.
-pub fn for_ask(s: &ChatSession, st: &ligus_core::flow::AskState, me: &Me) -> Option<(Notice, PushContent)> {
+pub fn for_ask(
+    s: &ChatSession,
+    st: &ligus_core::flow::AskState,
+    me: &Me,
+) -> Option<(Notice, PushContent)> {
     let a = &st.ask;
     // A member-posted ask (someone signed it under an agent's name) is shown
     // as theirs in the chat, but never pushed: a member can't use the
@@ -197,7 +232,10 @@ pub fn for_ask(s: &ChatSession, st: &ligus_core::flow::AskState, me: &Me) -> Opt
     if !st.is_open() || !in_audience(st, me) || st.posted_by.is_some() {
         return None;
     }
-    let outside = a.origin.as_ref().is_some_and(|o| o.via == ligus_core::flow::ORIGIN_OUTSIDE);
+    let outside = a
+        .origin
+        .as_ref()
+        .is_some_and(|o| o.via == ligus_core::flow::ORIGIN_OUTSIDE);
     let agent_name = if outside {
         Some("Claude Code".to_string())
     } else {
@@ -213,14 +251,21 @@ pub fn for_ask(s: &ChatSession, st: &ligus_core::flow::AskState, me: &Me) -> Opt
         _ => "asks the room",
     };
     let chat = shown(&s.title);
-    let chat = if chat.trim().is_empty() { "Untitled".to_string() } else { chat };
+    let chat = if chat.trim().is_empty() {
+        "Untitled".to_string()
+    } else {
+        chat
+    };
     let mut notice = ntfy::ask_notice(&agent, &chat, s.id);
     let title = format!("{agent} {whom} · {chat}");
     let title = ligus_proto::ask_text::cut(&title, ASK_PUSH_CHARS);
     notice.title = title.clone();
     let mut push = base("ask.pending", s, title);
     push.sender = Some(agent);
-    push.preview = Some(ligus_proto::ask_text::cut(&ligus_proto::ask_text::clean_option(&a.question), ASK_PUSH_CHARS));
+    push.preview = Some(ligus_proto::ask_text::cut(
+        &ligus_proto::ask_text::clean_option(&a.question),
+        ASK_PUSH_CHARS,
+    ));
     Some((notice, push))
 }
 
@@ -252,7 +297,11 @@ impl AskPushCap {
             return AskPush::Hold;
         }
         let hour = std::time::Duration::from_secs(3600);
-        while self.sent.front().is_some_and(|t| now.duration_since(*t) >= hour) {
+        while self
+            .sent
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= hour)
+        {
             self.sent.pop_front();
         }
         if self.sent.len() >= ASK_PUSHES_PER_HOUR {
@@ -281,10 +330,21 @@ pub fn several_asking(s: &ChatSession) -> (Notice, PushContent) {
 }
 
 /// A workflow run's gate `node` waiting for approval.
-pub fn for_workflow_gate(s: &ChatSession, run: &WorkflowRun, node: &str) -> Option<(Notice, PushContent)> {
+pub fn for_workflow_gate(
+    s: &ChatSession,
+    run: &WorkflowRun,
+    node: &str,
+) -> Option<(Notice, PushContent)> {
     let state = run.node_state(node)?;
-    let stage = shown(run.definition.nodes.iter().find(|n| n.id == node).map_or(node, |n| n.name.as_str()));
-    let notice = ntfy::workflow_notice(&shown(&run.definition.name), &stage, &shown(&s.title), s.id);
+    let stage = shown(
+        run.definition
+            .nodes
+            .iter()
+            .find(|n| n.id == node)
+            .map_or(node, |n| n.name.as_str()),
+    );
+    let notice =
+        ntfy::workflow_notice(&shown(&run.definition.name), &stage, &shown(&s.title), s.id);
     let mut push = base("workflow.approval", s, notice.title.clone());
     push.proposal_id = state.proposal_id.map(|p| p.to_string());
     push.workflow_run_id = Some(run.id.to_string());
@@ -296,24 +356,53 @@ pub fn for_workflow_gate(s: &ChatSession, run: &WorkflowRun, node: &str) -> Opti
 /// The proposal a reviewer recruit points the user at: the open one that has
 /// waited longest for them (they haven't voted on it and didn't write it),
 /// preferring the chat the recruit fired in.
-pub fn waiting_for(sessions: &[ChatSession], chat: uuid::Uuid, me: &Me) -> Option<(uuid::Uuid, uuid::Uuid)> {
+pub fn waiting_for(
+    sessions: &[ChatSession],
+    chat: uuid::Uuid,
+    me: &Me,
+) -> Option<(uuid::Uuid, uuid::Uuid)> {
     let waiting = |s: &ChatSession| {
         s.proposals
             .iter()
-            .filter(|p| super::hub::is_open(p, s) && !me.is(&p.author_actor_id) && !p.approvals.iter().any(|a| me.is(&a.actor_id)))
+            .filter(|p| {
+                super::hub::is_open(p, s)
+                    && !me.is(&p.author_actor_id)
+                    && !p.approvals.iter().any(|a| me.is(&a.actor_id))
+            })
             .map(|p| (p.created_at, s.id, p.id))
             .collect::<Vec<_>>()
     };
-    let oldest = |v: Vec<(ligus_core::Timestamp, uuid::Uuid, uuid::Uuid)>| v.into_iter().min_by_key(|(t, _, _)| *t).map(|(_, c, p)| (c, p));
-    let here = sessions.iter().find(|s| s.id == chat).map(waiting).unwrap_or_default();
-    oldest(here).or_else(|| oldest(sessions.iter().filter(|s| !s.archived).flat_map(waiting).collect()))
+    let oldest = |v: Vec<(ligus_core::Timestamp, uuid::Uuid, uuid::Uuid)>| {
+        v.into_iter()
+            .min_by_key(|(t, _, _)| *t)
+            .map(|(_, c, p)| (c, p))
+    };
+    let here = sessions
+        .iter()
+        .find(|s| s.id == chat)
+        .map(waiting)
+        .unwrap_or_default();
+    oldest(here).or_else(|| {
+        oldest(
+            sessions
+                .iter()
+                .filter(|s| !s.archived)
+                .flat_map(waiting)
+                .collect(),
+        )
+    })
 }
 
 /// A reviewer recruit that names the user (by member or actor id):
 /// `review.recruit`, deep-linking to the proposal waiting longest for them.
 /// The preview is the proposal's title, so it obeys the phone's previews
 /// setting like every other push.
-pub fn for_recruit(sessions: &[ChatSession], s: &ChatSession, r: &ligus_core::flow::RecruitNotice, me: &Me) -> Option<(Notice, PushContent)> {
+pub fn for_recruit(
+    sessions: &[ChatSession],
+    s: &ChatSession,
+    r: &ligus_core::flow::RecruitNotice,
+    me: &Me,
+) -> Option<(Notice, PushContent)> {
     if r.action != "approvers" || !r.member_ids.iter().any(|id| me.is(id)) {
         return None;
     }
@@ -326,7 +415,11 @@ pub fn for_recruit(sessions: &[ChatSession], s: &ChatSession, r: &ligus_core::fl
     let mut push = base("review.recruit", chat, notice.title.clone());
     if let Some((_, pid)) = target {
         push.proposal_id = Some(pid.to_string());
-        push.preview = chat.proposals.iter().find(|p| p.id == pid).map(|p| shown(&p.title));
+        push.preview = chat
+            .proposals
+            .iter()
+            .find(|p| p.id == pid)
+            .map(|p| shown(&p.title));
     } else {
         push.fixed_body = notice.body.clone();
     }
@@ -341,13 +434,23 @@ mod tests {
     use uuid::Uuid;
 
     fn actor(id: &str, name: &str) -> ActorIdentity {
-        let a: ActorIdentity = serde_json::from_value(serde_json::json!({ "id": id, "displayName": name, "kind": "human" })).unwrap();
+        let a: ActorIdentity = serde_json::from_value(
+            serde_json::json!({ "id": id, "displayName": name, "kind": "human" }),
+        )
+        .unwrap();
         assert_eq!(a.kind, ActorKind::Human);
         a
     }
 
     fn member(a: &ActorIdentity, role: WorkspaceRole, index: u32) -> WorkspaceMember {
-        WorkspaceMember { id: a.id.clone(), actor: a.clone(), role, title: String::new(), index, joined_at: Default::default() }
+        WorkspaceMember {
+            id: a.id.clone(),
+            actor: a.clone(),
+            role,
+            title: String::new(),
+            index,
+            joined_at: Default::default(),
+        }
     }
 
     struct Fixture {
@@ -371,8 +474,14 @@ mod tests {
         s.workspace_agents = vec![WorkspaceAgent::new("coder", "rt")];
         let mut links = DeviceLinks::default();
         assert!(links.link_retired(&s, "box-1", "desk-1"));
-        s.members.push(member(&me_actor, WorkspaceRole::Contributor, 2));
-        Fixture { s, me_actor, other, links }
+        s.members
+            .push(member(&me_actor, WorkspaceRole::Contributor, 2));
+        Fixture {
+            s,
+            me_actor,
+            other,
+            links,
+        }
     }
 
     impl Fixture {
@@ -404,17 +513,26 @@ mod tests {
             r
         };
         let (notice, p) = for_message(&f.s, &mine("Done: the build is green."), true, &me).unwrap();
-        assert_eq!((p.kind.as_str(), p.title.as_str(), p.sender.as_deref()), ("message.done", "coder replied", Some("coder")));
+        assert_eq!(
+            (p.kind.as_str(), p.title.as_str(), p.sender.as_deref()),
+            ("message.done", "coder replied", Some("coder"))
+        );
         assert_eq!(p.chat_id, Some(f.s.id.to_string()));
         assert_eq!(notice.title, "coder replied");
         let on = push_plaintext(&p, true, 1, 0);
-        assert_eq!((on["body"].as_str(), on["preview"].as_bool()), (Some("Done: the build is green."), Some(true)));
+        assert_eq!(
+            (on["body"].as_str(), on["preview"].as_bool()),
+            (Some("Done: the build is green."), Some(true))
+        );
         let off = push_plaintext(&p, false, 2, 0);
         assert_eq!(off["body"], "");
         assert!(!off.to_string().contains("green"));
         // Errored turn.
         let (_, p) = for_message(&f.s, &mine("[error] model unreachable"), true, &me).unwrap();
-        assert_eq!((p.kind.as_str(), p.title.as_str()), ("message.done", "coder hit an error"));
+        assert_eq!(
+            (p.kind.as_str(), p.title.as_str()),
+            ("message.done", "coder hit an error")
+        );
         // Not on creation (still streaming / not done), never for a streaming one.
         assert!(for_message(&f.s, &reply("x"), false, &me).is_none());
         let mut streaming = reply("x");
@@ -422,18 +540,34 @@ mod tests {
         assert!(for_message(&f.s, &streaming, true, &me).is_none());
         // User messages and system notes are never message.done.
         assert!(for_message(&f.s, &from(&f.other, "hello"), false, &me).is_none());
-        assert!(for_message(&f.s, &ChatMessage::new(MessageRole::System, "ligus", "note"), true, &me).is_none());
+        assert!(for_message(
+            &f.s,
+            &ChatMessage::new(MessageRole::System, "ligus", "note"),
+            true,
+            &me
+        )
+        .is_none());
     }
 
     #[test]
     fn a_reply_that_mentions_you_is_one_mention_push() {
         let f = fixture();
         let me = f.me();
-        let (notice, p) = for_message(&f.s, &reply("@Zoe can you check the token?"), true, &me).unwrap();
-        assert_eq!((p.kind.as_str(), p.title.as_str(), p.sender.as_deref()), ("mention", "coder mentioned you", Some("coder")));
+        let (notice, p) =
+            for_message(&f.s, &reply("@Zoe can you check the token?"), true, &me).unwrap();
+        assert_eq!(
+            (p.kind.as_str(), p.title.as_str(), p.sender.as_deref()),
+            ("mention", "coder mentioned you", Some("coder"))
+        );
         assert_eq!(notice.title, "coder mentioned you");
-        assert!(!p.title.contains("token"), "titles never carry message text");
-        assert_eq!(push_plaintext(&p, true, 1, 0)["body"], "@Zoe can you check the token?");
+        assert!(
+            !p.title.contains("token"),
+            "titles never carry message text"
+        );
+        assert_eq!(
+            push_plaintext(&p, true, 1, 0)["body"],
+            "@Zoe can you check the token?"
+        );
         assert_eq!(push_plaintext(&p, false, 1, 0)["body"], "");
     }
 
@@ -442,7 +576,10 @@ mod tests {
         let f = fixture();
         let me = f.me();
         let (_, p) = for_message(&f.s, &from(&f.other, "@zoe take a look"), false, &me).unwrap();
-        assert_eq!((p.kind.as_str(), p.title.as_str(), p.sender.as_deref()), ("mention", "Ana mentioned you", Some("Ana")));
+        assert_eq!(
+            (p.kind.as_str(), p.title.as_str(), p.sender.as_deref()),
+            ("mention", "Ana mentioned you", Some("Ana"))
+        );
         assert!(for_message(&f.s, &from(&f.other, "heads up @all"), false, &me).is_some());
         // The owner's desktop is the same person (linked): @owners includes "you".
         assert!(for_message(&f.s, &from(&f.other, "@owners please approve"), false, &me).is_some());
@@ -451,13 +588,23 @@ mod tests {
         assert!(for_message(&f.s, &from(&f.other, "@coder fix it"), false, &me).is_none());
         assert!(for_message(&f.s, &from(&f.other, "mail zoe@example.com"), false, &me).is_none());
         // Mentioning someone else.
-        assert!(for_message(&f.s, &from(&f.me_actor, "@Ana ping"), false, &Me::in_chat(&f.other, &f.s, &f.links)).is_some());
+        assert!(for_message(
+            &f.s,
+            &from(&f.me_actor, "@Ana ping"),
+            false,
+            &Me::in_chat(&f.other, &f.s, &f.links)
+        )
+        .is_some());
     }
 
     /// Three people, each with their own box: Ana asks (contributor), Ben is
     /// another member (contributor), Olu owns the workspace.
     fn trio() -> (ChatSession, [ActorIdentity; 3]) {
-        let (ana, ben, olu) = (actor("ana-1", "Ana"), actor("ben-1", "Ben"), actor("olu-1", "Olu"));
+        let (ana, ben, olu) = (
+            actor("ana-1", "Ana"),
+            actor("ben-1", "Ben"),
+            actor("olu-1", "Olu"),
+        );
         let mut s = ChatSession::new("Release", Uuid::new_v4(), "rt");
         s.members = vec![
             member(&olu, WorkspaceRole::Owner, 1),
@@ -496,11 +643,18 @@ mod tests {
         let r = answer(&mut s, &ask, "Fixed. @you can you confirm on your machine?");
         assert_eq!(pinged(&s, &r, &people), vec!["Ana"]);
         // The others get nothing: not a mention, not a "replied".
-        assert_eq!(notified(&s, &r, &people), vec![("Ana".to_string(), "mention".to_string())]);
+        assert_eq!(
+            notified(&s, &r, &people),
+            vec![("Ana".to_string(), "mention".to_string())]
+        );
     }
 
     /// Every notification each of the three gets for message `m`.
-    fn notified(s: &ChatSession, m: &ChatMessage, people: &[ActorIdentity; 3]) -> Vec<(String, String)> {
+    fn notified(
+        s: &ChatSession,
+        m: &ChatMessage,
+        people: &[ActorIdentity; 3],
+    ) -> Vec<(String, String)> {
         let done = matches!(m.role, MessageRole::Assistant | MessageRole::Agent);
         people
             .iter()
@@ -516,21 +670,33 @@ mod tests {
         let (mut s, people) = trio();
         let ask = from(&people[0], "@coder fix the build");
         let r = answer(&mut s, &ask, "Fixed.");
-        assert_eq!(notified(&s, &r, &people), vec![("Ana".to_string(), "message.done".to_string())]);
+        assert_eq!(
+            notified(&s, &r, &people),
+            vec![("Ana".to_string(), "message.done".to_string())]
+        );
         // An errored turn too.
         let err = answer(&mut s, &ask, "[error] model unreachable");
-        assert_eq!(notified(&s, &err, &people), vec![("Ana".to_string(), "message.done".to_string())]);
+        assert_eq!(
+            notified(&s, &err, &people),
+            vec![("Ana".to_string(), "message.done".to_string())]
+        );
         // A hand-off's reply is still Ana's.
         let first = answer(&mut s, &ask, "@coder over to you");
         let mut second = reply("All done.");
         second.reply_to_message_id = Some(first.id);
         s.messages.push(second.clone());
-        assert_eq!(notified(&s, &second, &people), vec![("Ana".to_string(), "message.done".to_string())]);
+        assert_eq!(
+            notified(&s, &second, &people),
+            vec![("Ana".to_string(), "message.done".to_string())]
+        );
         // Mentioning someone else: Ana gets "replied", Ben one mention, Olu nothing.
         let cc = answer(&mut s, &ask, "Fixed. @Ben FYI");
         assert_eq!(
             notified(&s, &cc, &people),
-            vec![("Ana".to_string(), "message.done".to_string()), ("Ben".to_string(), "mention".to_string())]
+            vec![
+                ("Ana".to_string(), "message.done".to_string()),
+                ("Ben".to_string(), "mention".to_string())
+            ]
         );
     }
 
@@ -560,7 +726,8 @@ mod tests {
         let r = answer(&mut s, &ask, "@you fixed");
         for (p, mine) in people.iter().zip([true, false, false]) {
             let me = Me::in_chat(p, &s, &DeviceLinks::default());
-            let mut v = crate::serve::api::message_dto(s.id, &r, crate::serve::api::Viewer::default());
+            let mut v =
+                crate::serve::api::message_dto(s.id, &r, crate::serve::api::Viewer::default());
             crate::serve::api::add_requester(&mut v, &s, &r, &me);
             assert_eq!(v["requester"]["name"], "Ana", "{}", p.display_name);
             assert_eq!(v["requester"]["actorId"], "ana-1");
@@ -571,7 +738,12 @@ mod tests {
         let m = from(&people[1], "thanks @you");
         s.messages.push(m.clone());
         let mut v = crate::serve::api::message_dto(s.id, &m, crate::serve::api::Viewer::default());
-        crate::serve::api::add_requester(&mut v, &s, &m, &Me::in_chat(&people[0], &s, &DeviceLinks::default()));
+        crate::serve::api::add_requester(
+            &mut v,
+            &s,
+            &m,
+            &Me::in_chat(&people[0], &s, &DeviceLinks::default()),
+        );
         assert!(v.get("requester").is_none());
     }
 
@@ -612,7 +784,13 @@ mod tests {
     fn your_own_messages_never_notify() {
         let f = fixture();
         let me = f.me();
-        assert!(for_message(&f.s, &from(&f.me_actor, "@all @Zoe note to self"), false, &me).is_none());
+        assert!(for_message(
+            &f.s,
+            &from(&f.me_actor, "@all @Zoe note to self"),
+            false,
+            &me
+        )
+        .is_none());
         // …nor from the owner's desktop identity (the same person).
         let desktop = f.s.members[0].actor.clone();
         assert!(for_message(&f.s, &from(&desktop, "@all hi"), false, &me).is_none());
@@ -644,15 +822,31 @@ mod tests {
     #[test]
     fn proposal_push_carries_ids_and_title_preview() {
         let f = fixture();
-        let p = ActionProposal::new("coder proposed changes to 2 files", ProposalKind::FileDiff, "agent-1");
+        let p = ActionProposal::new(
+            "coder proposed changes to 2 files",
+            ProposalKind::FileDiff,
+            "agent-1",
+        );
         let (notice, push) = for_proposal(&f.s, &p).unwrap();
-        assert_eq!((push.kind.as_str(), push.title.as_str()), ("proposal.created", "Change ready for review"));
+        assert_eq!(
+            (push.kind.as_str(), push.title.as_str()),
+            ("proposal.created", "Change ready for review")
+        );
         assert_eq!(notice.title, "Change ready for review");
         let pt = push_plaintext(&push, true, 3, 0);
-        assert_eq!((pt["chatId"].as_str(), pt["proposalId"].as_str()), (Some(f.s.id.to_string().as_str()), Some(p.id.to_string().as_str())));
+        assert_eq!(
+            (pt["chatId"].as_str(), pt["proposalId"].as_str()),
+            (
+                Some(f.s.id.to_string().as_str()),
+                Some(p.id.to_string().as_str())
+            )
+        );
         assert_eq!(pt["body"], "coder proposed changes to 2 files");
         let off = push_plaintext(&push, false, 4, 0);
-        assert_eq!((off["body"].as_str(), off["proposalId"].as_str()), (Some(""), Some(p.id.to_string().as_str())));
+        assert_eq!(
+            (off["body"].as_str(), off["proposalId"].as_str()),
+            (Some(""), Some(p.id.to_string().as_str()))
+        );
     }
 
     #[test]
@@ -720,7 +914,10 @@ mod tests {
         let off = push_plaintext(&p, false, 2, 0);
         assert_eq!(off["body"], "");
         assert_eq!(off["proposalId"], old_id.to_string());
-        assert!(!off.to_string().contains("cache"), "previews off hides the title");
+        assert!(
+            !off.to_string().contains("cache"),
+            "previews off hides the title"
+        );
         // Someone else's recruit, or another action, isn't yours.
         assert!(for_recruit(&sessions, &f.s, &r(vec!["ana-1"]), &me).is_none());
         let mut stop = r(vec!["desk-1"]);
@@ -739,13 +936,27 @@ mod tests {
         let key = agent.id.to_string();
         s.workspace_agents.push(agent);
         let st = ligus_core::flow::AskState {
-            ask: ligus_core::flow::HumanAsk { agent_key: key.clone(), question: "Allow once?".into(), ..Default::default() },
-            posted_by: Some(ligus_core::flow::AskPoster { id: "bo-1".into(), name: "@coder".into() }),
+            ask: ligus_core::flow::HumanAsk {
+                agent_key: key.clone(),
+                question: "Allow once?".into(),
+                ..Default::default()
+            },
+            posted_by: Some(ligus_core::flow::AskPoster {
+                id: "bo-1".into(),
+                name: "@coder".into(),
+            }),
             ..Default::default()
         };
         let me = Me::in_chat(&bo, &s, &DeviceLinks::default());
         assert!(for_ask(&s, &st, &me).is_none());
-        let own = ligus_core::flow::AskState { ask: ligus_core::flow::HumanAsk { agent_key: key, question: "Which db?".into(), ..Default::default() }, ..Default::default() };
+        let own = ligus_core::flow::AskState {
+            ask: ligus_core::flow::HumanAsk {
+                agent_key: key,
+                question: "Which db?".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let (notice, _) = for_ask(&s, &own, &me).unwrap();
         assert_eq!(notice.title, "@coder asks the room · Fixes");
     }
@@ -755,7 +966,11 @@ mod tests {
     #[test]
     fn a_question_is_pushed_only_to_its_audience() {
         use ligus_core::flow::{AskAudience, AskState, HumanAsk, ASK_V2};
-        let mut s = ChatSession::new("Fixtures for the long-running integration suite of the shop", Uuid::new_v4(), "rt");
+        let mut s = ChatSession::new(
+            "Fixtures for the long-running integration suite of the shop",
+            Uuid::new_v4(),
+            "rt",
+        );
         let ana = actor("ana-1", "Ana");
         let bo = actor("bo-1", "Bo");
         s.members.push(member(&ana, WorkspaceRole::Owner, 1));
@@ -764,7 +979,14 @@ mod tests {
         let key = agent.id.to_string();
         s.workspace_agents.push(agent);
         let ask = |audience| AskState {
-            ask: HumanAsk { agent_key: key.clone(), question: "Use Postgres or SQLite?".into(), options: vec!["Postgres".into(), "SQLite".into()], v: ASK_V2, audience: Some(audience), ..Default::default() },
+            ask: HumanAsk {
+                agent_key: key.clone(),
+                question: "Use Postgres or SQLite?".into(),
+                options: vec!["Postgres".into(), "SQLite".into()],
+                v: ASK_V2,
+                audience: Some(audience),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let ana_me = Me::in_chat(&ana, &s, &DeviceLinks::default());
@@ -772,12 +994,23 @@ mod tests {
         let to_bo = ask(AskAudience::people(vec!["bo-1".into()]));
         assert!(for_ask(&s, &to_bo, &ana_me).is_none(), "not asked: no push");
         let (n, p) = for_ask(&s, &to_bo, &bo_me).unwrap();
-        assert!(n.title.starts_with("@Builder asks you · Fixtures"), "{}", n.title);
+        assert!(
+            n.title.starts_with("@Builder asks you · Fixtures"),
+            "{}",
+            n.title
+        );
         assert!(n.title.chars().count() <= ASK_PUSH_CHARS);
-        assert!(!n.title.contains("Postgres") && !p.title.contains("SQLite"), "no options in a push");
+        assert!(
+            !n.title.contains("Postgres") && !p.title.contains("SQLite"),
+            "no options in a push"
+        );
         let admins = ask(AskAudience::room(WorkspaceRole::Admin));
         assert!(for_ask(&s, &admins, &bo_me).is_none());
-        assert!(for_ask(&s, &admins, &ana_me).unwrap().0.title.contains("asks Admins"));
+        assert!(for_ask(&s, &admins, &ana_me)
+            .unwrap()
+            .0
+            .title
+            .contains("asks Admins"));
         let mut done = to_bo.clone();
         done.ask.closed = true;
         assert!(for_ask(&s, &done, &bo_me).is_none());
@@ -791,8 +1024,15 @@ mod tests {
             assert_eq!(cap.admit(t0), AskPush::Send);
         }
         assert_eq!(cap.admit(t0), AskPush::Summary, "one summary");
-        assert_eq!(cap.admit(t0 + std::time::Duration::from_secs(7200)), AskPush::Hold, "held until opened, even an hour later");
+        assert_eq!(
+            cap.admit(t0 + std::time::Duration::from_secs(7200)),
+            AskPush::Hold,
+            "held until opened, even an hour later"
+        );
         cap.opened();
-        assert_eq!(cap.admit(t0 + std::time::Duration::from_secs(7200)), AskPush::Send);
+        assert_eq!(
+            cap.admit(t0 + std::time::Duration::from_secs(7200)),
+            AskPush::Send
+        );
     }
 }

@@ -56,7 +56,8 @@ impl ProposalArchivePolicy {
 
 /// Whether `p` is settled: applied, rejected, or replaced by a newer revision.
 pub fn is_settled(p: &ActionProposal) -> bool {
-    matches!(p.status, ProposalStatus::Applied | ProposalStatus::Rejected) || p.superseded_by.is_some()
+    matches!(p.status, ProposalStatus::Applied | ProposalStatus::Rejected)
+        || p.superseded_by.is_some()
 }
 
 /// Whether `p` still waits on someone: open or approved-not-applied, not
@@ -90,7 +91,9 @@ pub fn archived(p: &ActionProposal, session: &ChatSession, now: Timestamp) -> Op
     // A proposal seeded from a snapshot that predates `settled_at` ages from
     // when it was filed.
     let since = p.settled_at.unwrap_or(p.created_at);
-    let due = since.inner().saturating_add(time::Duration::days(days as i64));
+    let due = since
+        .inner()
+        .saturating_add(time::Duration::days(days as i64));
     (now.inner() >= due).then_some(Archived::Auto)
 }
 
@@ -107,7 +110,11 @@ pub fn auto_archive_due(p: &ActionProposal, session: &ChatSession) -> Option<Tim
     }
     let days = ProposalArchivePolicy::days_in_force(session.guards.proposal_archive.as_ref())?;
     let since = p.settled_at.unwrap_or(p.created_at);
-    Some(Timestamp(since.inner().saturating_add(time::Duration::days(days as i64))))
+    Some(Timestamp(
+        since
+            .inner()
+            .saturating_add(time::Duration::days(days as i64)),
+    ))
 }
 
 /// The fold's bookkeeping for one event that may have settled, unsettled,
@@ -124,7 +131,10 @@ pub(crate) fn note_event(
     may_archive: bool,
 ) {
     for p in session.proposals.iter_mut() {
-        let was = before.iter().find(|(id, _, _)| *id == p.id).map(|(_, s, _)| *s);
+        let was = before
+            .iter()
+            .find(|(id, _, _)| *id == p.id)
+            .map(|(_, s, _)| *s);
         let now = is_settled(p);
         match (was, now) {
             // Settled by this event (or filed settled): its time, never
@@ -141,7 +151,11 @@ pub(crate) fn note_event(
             _ => {}
         }
     }
-    if let crate::events::SessionEvent::ProposalDismissed { proposal_id, dismissed } = payload {
+    if let crate::events::SessionEvent::ProposalDismissed {
+        proposal_id,
+        dismissed,
+    } = payload
+    {
         let Some(p) = session.proposals.iter_mut().find(|p| p.id == *proposal_id) else {
             return;
         };
@@ -149,7 +163,10 @@ pub(crate) fn note_event(
             // Pin what it was before this event, so a proposal seeded
             // without a mark doesn't fall back to the flag it just flipped.
             if p.archive_mark.is_none() {
-                p.archive_mark = before.iter().find(|(id, _, _)| *id == p.id).map(|(_, _, d)| *d);
+                p.archive_mark = before
+                    .iter()
+                    .find(|(id, _, _)| *id == p.id)
+                    .map(|(_, _, d)| *d);
             }
             return;
         }
@@ -168,7 +185,11 @@ pub(crate) fn note_event(
 
 /// Each proposal's settled and dismissed state, taken before an event applies.
 pub(crate) fn settled_states(session: &ChatSession) -> Vec<(Uuid, bool, bool)> {
-    session.proposals.iter().map(|p| (p.id, is_settled(p), p.dismissed)).collect()
+    session
+        .proposals
+        .iter()
+        .map(|p| (p.id, is_settled(p), p.dismissed))
+        .collect()
 }
 
 /// Whether `payload` can change a proposal's settled or archived state.

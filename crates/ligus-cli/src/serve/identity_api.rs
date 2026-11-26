@@ -68,10 +68,17 @@ impl PendingCodes {
         }
     }
     fn get(&self, relay: &str, seq: u64) -> Option<String> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).get(&(relay.to_string(), seq)).cloned()
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(relay.to_string(), seq))
+            .cloned()
     }
     fn remove(&self, relay: &str, seq: u64) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).remove(&(relay.to_string(), seq));
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&(relay.to_string(), seq));
     }
 }
 
@@ -115,7 +122,12 @@ impl Shared {
     /// The DM rule for `conn` (`dm::accept_dm_invite`): the other person's
     /// account, or why not. `confirmed`: the person compared a stranger's
     /// safety code.
-    pub fn dm_refusal(&self, conn: &InviteConn, _trust: FounderTrust, confirmed: bool) -> Result<Uuid, String> {
+    pub fn dm_refusal(
+        &self,
+        conn: &InviteConn,
+        _trust: FounderTrust,
+        confirmed: bool,
+    ) -> Result<Uuid, String> {
         let me = self.my_account().ok_or("this box has no account yet")?;
         let people = self.co_members();
         let known = dm::known_fingerprints(&people);
@@ -150,7 +162,12 @@ pub async fn profile(State(s): S) -> ApiResult<Json<Value>> {
     let (account, name, avatar, delegated) = {
         let svc = s.lock();
         let a = svc.author();
-        (a.account_id, ligus_proto::names::clean_display_name(&a.display_name), a.avatar_url.clone(), svc.is_delegated())
+        (
+            a.account_id,
+            ligus_proto::names::clean_display_name(&a.display_name),
+            a.avatar_url.clone(),
+            svc.is_delegated(),
+        )
     };
     let fk = s.my_fingerprint();
     let mut v = json!({
@@ -164,7 +181,11 @@ pub async fn profile(State(s): S) -> ApiResult<Json<Value>> {
     if let Some(code) = safety(fk.as_deref()) {
         v["safetyCode"] = json!(code);
     }
-    if let Some(u) = avatar.filter(|u| u.trim_start().get(..11).is_some_and(|p| p.eq_ignore_ascii_case("data:image/"))) {
+    if let Some(u) = avatar.filter(|u| {
+        u.trim_start()
+            .get(..11)
+            .is_some_and(|p| p.eq_ignore_ascii_case("data:image/"))
+    }) {
         v["avatarUrl"] = json!(u);
     }
     Ok(Json(v))
@@ -174,7 +195,10 @@ impl Shared {
     /// The last contacts status this box saw (`on`, `unsupported`,
     /// `noRelay`, `delegated`; `unknown` before the first check).
     pub fn contact_status(&self) -> String {
-        self.contact_state.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.contact_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn set_contact_status(&self, status: &str) {
@@ -200,7 +224,8 @@ pub fn person_extras(s: &Shared) -> HashMap<Uuid, Value> {
     for p in &people {
         // Desktop's flag (two co-members alike), and one more: a co-member
         // whose name looks like this box's own (someone posing as you).
-        let looks_like_me = !my_skeleton.is_empty() && ligus_proto::names::name_skeleton(&p.display_name) == my_skeleton;
+        let looks_like_me = !my_skeleton.is_empty()
+            && ligus_proto::names::name_skeleton(&p.display_name) == my_skeleton;
         let mut v = json!({
             "accountId": p.account_id.to_string(),
             "keyConflict": p.key_conflict,
@@ -214,7 +239,9 @@ pub fn person_extras(s: &Shared) -> HashMap<Uuid, Value> {
         if !chips.is_empty() {
             v["links"] = json!(chips);
         }
-        if let Some(dm) = dms.iter().find(|d| d["account"] == json!(p.account_id.to_string()) && d["archived"] == json!(false)) {
+        if let Some(dm) = dms.iter().find(|d| {
+            d["account"] == json!(p.account_id.to_string()) && d["archived"] == json!(false)
+        }) {
             v["dmChatId"] = dm["chatId"].clone();
             v["dmWorkspaceId"] = dm["workspaceId"].clone();
         }
@@ -230,7 +257,9 @@ pub fn person_extras(s: &Shared) -> HashMap<Uuid, Value> {
 /// else).
 pub fn link_chips(s: &Shared, account: Uuid) -> Vec<Value> {
     let svc = s.lock();
-    let Ok(wl) = svc.identity_links(s.ws) else { return Vec::new() };
+    let Ok(wl) = svc.identity_links(s.ws) else {
+        return Vec::new();
+    };
     let me = svc.author().account_id;
     let agreed: Option<Vec<u8>> = if me == Some(account) && !svc.is_delegated() {
         Some(svc.account_public_key().to_vec())
@@ -242,12 +271,16 @@ pub fn link_chips(s: &Shared, account: Uuid) -> Vec<Value> {
             .and_then(|c| c.fingerprint);
         let key = wl.account_keys.get(&account).cloned();
         match (fp, key) {
-            (Some(fp), Some(k)) if FounderPin::fingerprint_hex(&k).eq_ignore_ascii_case(&fp) => Some(k),
+            (Some(fp), Some(k)) if FounderPin::fingerprint_hex(&k).eq_ignore_ascii_case(&fp) => {
+                Some(k)
+            }
             (None, Some(k)) if me == Some(account) => Some(k),
             _ => None,
         }
     };
-    let Some(agreed) = agreed else { return Vec::new() };
+    let Some(agreed) = agreed else {
+        return Vec::new();
+    };
     let now = ligus_core::Timestamp::now();
     let per_ws = vec![(s.ws, wl)];
     ligus_runtime::chat_service::links_for_account(&per_ws, account, |k| k == agreed.as_slice())
@@ -255,18 +288,39 @@ pub fn link_chips(s: &Shared, account: Uuid) -> Vec<Value> {
         .filter_map(|shown| {
             let l = shown.link;
             let ws = shown.workspaces[0];
-            let ctx = ligus_runtime::identity_links::LinkContext { workspace_id: ws, account_key: Some(&shown.account_key) };
-            let cached = svc.store().get_check(&ligus_runtime::identity_links::cache_key(&l, ws, &shown.account_key));
-            let status = ligus_runtime::identity_links::cached_status(cached.as_ref(), &l, ctx, now, true);
-            if matches!(status, Some(ligus_runtime::identity_links::LinkStatus::Invalid { .. })) {
+            let ctx = ligus_runtime::identity_links::LinkContext {
+                workspace_id: ws,
+                account_key: Some(&shown.account_key),
+            };
+            let cached = svc
+                .store()
+                .get_check(&ligus_runtime::identity_links::cache_key(
+                    &l,
+                    ws,
+                    &shown.account_key,
+                ));
+            let status =
+                ligus_runtime::identity_links::cached_status(cached.as_ref(), &l, ctx, now, true);
+            if matches!(
+                status,
+                Some(ligus_runtime::identity_links::LinkStatus::Invalid { .. })
+            ) {
                 return None;
             }
             let mut status = serde_json::to_value(&status).unwrap_or(Value::Null);
             // A forge-confirmed handle is the forge's text: shown cleaned.
-            if let Some(h) = status.get("handle").and_then(Value::as_str).map(clean_handle) {
+            if let Some(h) = status
+                .get("handle")
+                .and_then(Value::as_str)
+                .map(clean_handle)
+            {
                 status["handle"] = json!(h);
             }
-            if let Some(r) = status.get("reason").and_then(Value::as_str).map(|r| ligus_proto::names::clean_display_name(r)) {
+            if let Some(r) = status
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(|r| ligus_proto::names::clean_display_name(r))
+            {
                 status["reason"] = json!(r);
             }
             Some(json!({
@@ -283,13 +337,16 @@ pub fn link_chips(s: &Shared, account: Uuid) -> Vec<Value> {
 /// A handle or id as shown: hidden and control characters removed (the
 /// fold refuses them in links; a forge's answer is cleaned here).
 fn clean_handle(h: &str) -> String {
-    h.chars().filter(|c| !ligus_proto::names::is_hidden_name_char(*c) && !c.is_whitespace()).collect()
+    h.chars()
+        .filter(|c| !ligus_proto::names::is_hidden_name_char(*c) && !c.is_whitespace())
+        .collect()
 }
 
 /// `GET /v1/people/{account}/links` → `{links: [...]}`.
 pub async fn person_links(State(s): S, Path(account): Path<String>) -> ApiResult<Json<Value>> {
     let account = Uuid::parse_str(account.trim()).map_err(|_| ApiError::not_found("person"))?;
-    let known = s.my_account() == Some(account) || s.co_members().iter().any(|c| c.account_id == account);
+    let known =
+        s.my_account() == Some(account) || s.co_members().iter().any(|c| c.account_id == account);
     if !known {
         return Err(ApiError::not_found("person"));
     }
@@ -311,7 +368,10 @@ pub fn require_secret_channel(s: &Shared, peer: Option<&TunnelPeer>) -> ApiResul
     if super::forges_api::secure_channel(s, peer) {
         Ok(())
     } else {
-        Err(ApiError::new(StatusCode::FORBIDDEN, SECRET_PLAINTEXT_REFUSED))
+        Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            SECRET_PLAINTEXT_REFUSED,
+        ))
     }
 }
 
@@ -343,7 +403,10 @@ pub fn finish_invite(s: &Shared, mut conn: InviteConn, inv: Uuid, cfg: &crate::C
             conn.ek = keys;
         }
     }
-    let identity = ligus_runtime::IdentityStore::new(&s.cfg.data_dir, ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&s.cfg.data_dir));
+    let identity = ligus_runtime::IdentityStore::new(
+        &s.cfg.data_dir,
+        ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&s.cfg.data_dir),
+    );
     if let Some(stored) = identity.load().ok().flatten() {
         let sig = {
             let svc = s.lock();
@@ -354,7 +417,12 @@ pub fn finish_invite(s: &Shared, mut conn: InviteConn, inv: Uuid, cfg: &crate::C
     let code = conn.encode();
     // The invite's redeem key seed, kept when it was issued: only the code's
     // holder can redeem it (`ligus_core::admission`).
-    match s.lock().take_invite_redeem_seed(conn.workspace_id(), inv).ok().flatten() {
+    match s
+        .lock()
+        .take_invite_redeem_seed(conn.workspace_id(), inv)
+        .ok()
+        .flatten()
+    {
         Some(seed) => ligus_runtime::box_admission::with_redeem_key(&code, &seed).unwrap_or(code),
         None => code,
     }
@@ -362,8 +430,17 @@ pub fn finish_invite(s: &Shared, mut conn: InviteConn, inv: Uuid, cfg: &crate::C
 
 /// The box's workspace as an invite names it (no `inv` yet).
 fn workspace_conn(s: &Shared) -> ApiResult<InviteConn> {
-    let relay = s.cfg.relay_url.clone().ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "this box has no relay, so nobody could join"))?;
-    let pin = s.lock().store().workspace_pin(s.ws).map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
+    let relay = s.cfg.relay_url.clone().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "this box has no relay, so nobody could join",
+        )
+    })?;
+    let pin = s
+        .lock()
+        .store()
+        .workspace_pin(s.ws)
+        .map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
     Ok(InviteConn {
         name: workspace_name(s),
         relay_url: relay,
@@ -372,7 +449,9 @@ fn workspace_conn(s: &Shared) -> ApiResult<InviteConn> {
         icon: None,
         dm_account: None,
         founder_actor_id: pin.as_ref().map(|p| p.founder_account.to_string()),
-        fk: pin.as_ref().map(|p| p.fk.iter().map(|b| format!("{b:02x}")).collect()),
+        fk: pin
+            .as_ref()
+            .map(|p| p.fk.iter().map(|b| format!("{b:02x}")).collect()),
         inv: None,
         ek: Vec::new(),
         sig: None,
@@ -382,7 +461,11 @@ fn workspace_conn(s: &Shared) -> ApiResult<InviteConn> {
 /// The workspace's name for the passkey sheet's preview.
 pub fn invite_preview_name(s: &Shared) -> String {
     let n = workspace_name(s);
-    if n.is_empty() { s.cfg.room.clone() } else { n }
+    if n.is_empty() {
+        s.cfg.room.clone()
+    } else {
+        n
+    }
 }
 
 /// The JSON for a fresh workspace invite.
@@ -403,7 +486,10 @@ pub fn invite_json(s: &Shared, code: &str) -> Value {
 /// pass for the owner's own: it needs presence (`presence_required`; the
 /// passkey path is `POST /v1/presence/prepare {action: "invite"}`), as it
 /// does on any workspace running rules v2.
-pub async fn create_invite(State(s): S, peer: Option<Extension<TunnelPeer>>) -> ApiResult<Json<Value>> {
+pub async fn create_invite(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+) -> ApiResult<Json<Value>> {
     require_secret_channel(&s, peer.as_deref())?;
     ensure_can_write(&s)?;
     super::api::presence_gate(&s, peer.as_deref(), "invite")?;
@@ -417,11 +503,15 @@ pub async fn create_invite(State(s): S, peer: Option<Extension<TunnelPeer>>) -> 
 /// After a passkey-confirmed `JoinApproved` (presence commit): the invite
 /// code for it, when it is an invite to the box's workspace.
 pub fn invite_after_commit(s: &Shared, env: &ligus_core::SessionEventEnvelope) -> Option<Value> {
-    let ligus_core::SessionEvent::JoinApproved { subject, .. } = &env.payload else { return None };
+    let ligus_core::SessionEvent::JoinApproved { subject, .. } = &env.payload else {
+        return None;
+    };
     if env.workspace_id != s.ws {
         return None;
     }
-    let inv = subject.strip_prefix("invite:").and_then(|i| Uuid::parse_str(i).ok())?;
+    let inv = subject
+        .strip_prefix("invite:")
+        .and_then(|i| Uuid::parse_str(i).ok())?;
     let conn = workspace_conn(s).ok()?;
     let code = finish_invite(s, conn, inv, &s.cfg);
     Some(invite_json(s, &code))
@@ -439,15 +529,22 @@ fn inspect_json(s: &Shared, conn: &InviteConn) -> Value {
     let people = s.co_members();
     let trust = conn.trust(&people);
     let me = s.my_account();
-    let founder = conn.founder_actor_id.as_deref().and_then(|f| Uuid::parse_str(f.trim()).ok());
-    let addressed = me.is_some_and(|m| conn.dm_account.as_deref().map(str::trim) == Some(m.to_string().as_str()));
+    let founder = conn
+        .founder_actor_id
+        .as_deref()
+        .and_then(|f| Uuid::parse_str(f.trim()).ok());
+    let addressed = me
+        .is_some_and(|m| conn.dm_account.as_deref().map(str::trim) == Some(m.to_string().as_str()));
     let (acceptable, refusal) = if conn.is_dm() {
         match s.dm_refusal(conn, trust, true) {
             Ok(_) => (true, None),
             Err(e) => (false, Some(e)),
         }
     } else if conn.room == s.cfg.room {
-        (false, Some("This box is already in that workspace.".to_string()))
+        (
+            false,
+            Some("This box is already in that workspace.".to_string()),
+        )
     } else {
         (false, Some("This is an invite to another workspace. A box serves one workspace: open it on your desktop.".to_string()))
     };
@@ -467,7 +564,11 @@ fn inspect_json(s: &Shared, conn: &InviteConn) -> Value {
 
 /// `POST /v1/invites/inspect {code}` → who the invite says it's from, and
 /// whether this box can take it. Nothing is stored.
-pub async fn inspect(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Json<CodeReq>) -> ApiResult<Json<Value>> {
+pub async fn inspect(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Json(req): Json<CodeReq>,
+) -> ApiResult<Json<Value>> {
     require_secret_channel(&s, peer.as_deref())?;
     let conn = InviteConn::decode(&req.code).map_err(ApiError::bad_request)?;
     Ok(Json(inspect_json(&s, &conn)))
@@ -475,20 +576,40 @@ pub async fn inspect(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req)
 
 /// Join a DM from its (checked) invite: pin its founder, keep the invite to
 /// redeem, save it, and start syncing. Returns the DM's JSON.
-fn join_dm(s: &Shared, conn: InviteConn, redeem: Option<[u8; 32]>, confirmed: bool) -> ApiResult<Value> {
+fn join_dm(
+    s: &Shared,
+    conn: InviteConn,
+    redeem: Option<[u8; 32]>,
+    confirmed: bool,
+) -> ApiResult<Value> {
     ensure_can_write(s)?;
     let trust = conn.trust(&s.co_members());
-    let peer = s.dm_refusal(&conn, trust, confirmed).map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
+    let peer = s
+        .dm_refusal(&conn, trust, confirmed)
+        .map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
     let ws = conn.workspace_id();
-    let (founder, fk) = (conn.founder_actor_id.clone().unwrap_or_default(), conn.fk.clone().unwrap_or_default().to_ascii_lowercase());
+    let (founder, fk) = (
+        conn.founder_actor_id.clone().unwrap_or_default(),
+        conn.fk.clone().unwrap_or_default().to_ascii_lowercase(),
+    );
     {
         let svc = s.lock();
         let store = svc.store();
-        if let Some(inv) = conn.inv.as_deref().and_then(|i| Uuid::parse_str(i.trim()).ok()) {
-            store.set_join_invite(ws, inv).map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
-            store.set_join_redeem(ws, redeem.as_ref()).map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
+        if let Some(inv) = conn
+            .inv
+            .as_deref()
+            .and_then(|i| Uuid::parse_str(i.trim()).ok())
+        {
+            store
+                .set_join_invite(ws, inv)
+                .map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
+            store
+                .set_join_redeem(ws, redeem.as_ref())
+                .map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
         }
-        store.set_workspace_pin(ws, &founder, &fk).map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
+        store
+            .set_workspace_pin(ws, &founder, &fk)
+            .map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
     }
     let name = s
         .co_members()
@@ -497,7 +618,14 @@ fn join_dm(s: &Shared, conn: InviteConn, redeem: Option<[u8; 32]>, confirmed: bo
         .map(|p| p.display_name)
         .filter(|n| !n.trim().is_empty())
         .unwrap_or_else(|| "Direct message".into());
-    let dm = DmConn { name, relay_url: conn.relay_url.trim().to_string(), room: conn.room.clone(), peer: peer.to_string(), founder_actor_id: founder, fk };
+    let dm = DmConn {
+        name,
+        relay_url: conn.relay_url.trim().to_string(),
+        room: conn.room.clone(),
+        peer: peer.to_string(),
+        founder_actor_id: founder,
+        fk,
+    };
     s.dms
         .add(dm, conn.key.as_deref().unwrap_or_default(), &conn.ek)
         .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?;
@@ -508,7 +636,11 @@ fn join_dm(s: &Shared, conn: InviteConn, redeem: Option<[u8; 32]>, confirmed: bo
 
 /// `POST /v1/invites/join {code, confirmSafetyCode}`: a DM invite only
 /// (a box serves one workspace).
-pub async fn join(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Json<CodeReq>) -> ApiResult<Json<Value>> {
+pub async fn join(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Json(req): Json<CodeReq>,
+) -> ApiResult<Json<Value>> {
     require_secret_channel(&s, peer.as_deref())?;
     let conn = InviteConn::decode(&req.code).map_err(ApiError::bad_request)?;
     if !conn.is_dm() {
@@ -517,8 +649,15 @@ pub async fn join(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): J
             "This is an invite to another workspace. A box serves one workspace: open it on your desktop.",
         ));
     }
-    dms::foreign_relay_check(&s.cfg, &conn.relay_url).await.map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
-    Ok(Json(join_dm(&s, conn, ligus_runtime::box_admission::redeem_key_of(&req.code), req.confirm_safety_code)?))
+    dms::foreign_relay_check(&s.cfg, &conn.relay_url)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
+    Ok(Json(join_dm(
+        &s,
+        conn,
+        ligus_runtime::box_admission::redeem_key_of(&req.code),
+        req.confirm_safety_code,
+    )?))
 }
 
 /// `GET /v1/invites/pending` → `{contacts, invites}` (codes stay on the box).
@@ -550,7 +689,10 @@ pub struct DropRef {
 
 /// `POST /v1/invites/pending/accept {relay, seq, confirmSafetyCode}`.
 pub async fn accept_pending(State(s): S, Json(req): Json<DropRef>) -> ApiResult<Json<Value>> {
-    let code = s.pending_codes.get(&req.relay, req.seq).ok_or_else(|| ApiError::not_found("pending invite (list them again)"))?;
+    let code = s
+        .pending_codes
+        .get(&req.relay, req.seq)
+        .ok_or_else(|| ApiError::not_found("pending invite (list them again)"))?;
     let conn = InviteConn::decode(&code).map_err(ApiError::bad_request)?;
     if !conn.is_dm() {
         return Err(ApiError::new(
@@ -558,8 +700,15 @@ pub async fn accept_pending(State(s): S, Json(req): Json<DropRef>) -> ApiResult<
             "This is an invite to another workspace. A box serves one workspace: open it on your desktop.",
         ));
     }
-    dms::foreign_relay_check(&s.cfg, &conn.relay_url).await.map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
-    let out = join_dm(&s, conn, ligus_runtime::box_admission::redeem_key_of(&code), req.confirm_safety_code)?;
+    dms::foreign_relay_check(&s.cfg, &conn.relay_url)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
+    let out = join_dm(
+        &s,
+        conn,
+        ligus_runtime::box_admission::redeem_key_of(&code),
+        req.confirm_safety_code,
+    )?;
     contacts_api::accepted(&s, &req.relay, req.seq);
     s.pending_codes.remove(&req.relay, req.seq);
     Ok(Json(out))
@@ -591,7 +740,11 @@ impl Shared {
                     l.sort_by_key(|c| c.created_at);
                     l.into_iter().next()
                 });
-                (chat, svc.waiting_for_founder(ws).ok().flatten(), svc.store().config_founded_at(ws).ok().flatten())
+                (
+                    chat,
+                    svc.waiting_for_founder(ws).ok().flatten(),
+                    svc.store().config_founded_at(ws).ok().flatten(),
+                )
             };
             let peer = Uuid::parse_str(&d.peer).ok();
             let person = peer.and_then(|p| people.iter().find(|c| c.account_id == p));
@@ -609,7 +762,13 @@ impl Shared {
             });
             if let Some(c) = chat {
                 v["chatId"] = json!(c.id);
-                v["updatedAt"] = json!(iso(c.messages.iter().rev().find(|m| !m.superseded).map(|m| m.created_at).unwrap_or(c.updated_at)));
+                v["updatedAt"] = json!(iso(c
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| !m.superseded)
+                    .map(|m| m.created_at)
+                    .unwrap_or(c.updated_at)));
             }
             if let Some(t) = founded {
                 v["foundedAt"] = json!(iso(t));
@@ -621,7 +780,11 @@ impl Shared {
                 if let Some(code) = p.safety_code().filter(|_| !p.key_conflict) {
                     v["safetyCode"] = json!(code);
                 }
-                if let Some(u) = p.avatar_url.as_ref().filter(|u| u.trim_start().get(..11).is_some_and(|x| x.eq_ignore_ascii_case("data:image/"))) {
+                if let Some(u) = p.avatar_url.as_ref().filter(|u| {
+                    u.trim_start()
+                        .get(..11)
+                        .is_some_and(|x| x.eq_ignore_ascii_case("data:image/"))
+                }) {
                     v["avatarUrl"] = json!(u);
                 }
             }
@@ -653,10 +816,17 @@ pub struct OpenDm {
 /// random room and key, this box's account as founder (pinned), a signed
 /// invite addressed to them, sealed to their verified devices and dropped
 /// into their contact box when they have one.
-pub async fn open_dm(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Json(req): Json<OpenDm>) -> ApiResult<Json<Value>> {
+pub async fn open_dm(
+    State(s): S,
+    peer_ext: Option<Extension<TunnelPeer>>,
+    Json(req): Json<OpenDm>,
+) -> ApiResult<Json<Value>> {
     ensure_can_write(&s)?;
-    let peer = Uuid::parse_str(req.account_id.trim()).map_err(|_| ApiError::bad_request("not an account id"))?;
-    let me = s.my_account().ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "this box has no account yet"))?;
+    let peer = Uuid::parse_str(req.account_id.trim())
+        .map_err(|_| ApiError::bad_request("not an account id"))?;
+    let me = s
+        .my_account()
+        .ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "this box has no account yet"))?;
     if peer == me {
         return Err(ApiError::bad_request("That's you."));
     }
@@ -666,7 +836,9 @@ pub async fn open_dm(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Json(
             "You can open a DM with someone you share a workspace with. Otherwise send them an invite link.",
         )
     })?;
-    person.seal_plan().map_err(|e| ApiError::new(StatusCode::CONFLICT, e))?;
+    person
+        .seal_plan()
+        .map_err(|e| ApiError::new(StatusCode::CONFLICT, e))?;
     // "Message <peer>" lands only in a DM whose founding verifies (theirs
     // or this box's), never in one that merely names them.
     s.resolve_concurrent_dms();
@@ -676,11 +848,22 @@ pub async fn open_dm(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Json(
             .list()
             .into_iter()
             .filter(|d| d.peer == peer.to_string() && !s.dms.archived().contains(&d.room))
-            .find(|d| svc.founder_verified(d.workspace_id()).unwrap_or(false) && svc.store().workspace_pin(d.workspace_id()).ok().flatten().is_some())
+            .find(|d| {
+                svc.founder_verified(d.workspace_id()).unwrap_or(false)
+                    && svc
+                        .store()
+                        .workspace_pin(d.workspace_id())
+                        .ok()
+                        .flatten()
+                        .is_some()
+            })
     };
     if let Some(d) = existing {
         let rows = s.dm_rows(&[person.clone()]);
-        let row = rows.into_iter().find(|r| r["workspaceId"] == json!(d.workspace_id())).unwrap_or(Value::Null);
+        let row = rows
+            .into_iter()
+            .find(|r| r["workspaceId"] == json!(d.workspace_id()))
+            .unwrap_or(Value::Null);
         let held = s.held.get(d.workspace_id());
         return Ok(Json(json!({
             "workspaceId": d.workspace_id(),
@@ -699,9 +882,20 @@ pub async fn open_dm(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Json(
             "This box acts for its owner without the owner's account key, so it can't start a DM. Start it on your desktop.",
         ));
     }
-    let relay = s.cfg.relay_url.clone().ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "this box has no relay"))?;
-    let my_fk = s.my_fingerprint().ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "this box has no account key"))?;
-    let key = random_hex(24).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("no OS randomness: {e}")))?;
+    let relay = s
+        .cfg
+        .relay_url
+        .clone()
+        .ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "this box has no relay"))?;
+    let my_fk = s
+        .my_fingerprint()
+        .ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "this box has no account key"))?;
+    let key = random_hex(24).map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("no OS randomness: {e}"),
+        )
+    })?;
     let conn = InviteConn {
         name: person.display_name.clone(),
         relay_url: relay.clone(),
@@ -724,12 +918,16 @@ pub async fn open_dm(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Json(
         founder_actor_id: me.to_string(),
         fk: my_fk.clone(),
     };
-    s.dms.add(dm_conn.clone(), &key, &[]).map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?;
+    s.dms
+        .add(dm_conn.clone(), &key, &[])
+        .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?;
     // Found it: pin this account, seed the roster as Owner, a #general with
     // its chat, this device's key-agreement key, and the single-use invite.
     let inv = {
         let mut svc = s.lock();
-        svc.store().set_workspace_pin(ws, &me.to_string(), &my_fk).map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
+        svc.store()
+            .set_workspace_pin(ws, &me.to_string(), &my_fk)
+            .map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
         svc.ensure_self_member(workspace_config_session_id(ws), ws)?;
         svc.ensure_default_channel(ws, "")?;
         drop(svc);
@@ -740,15 +938,25 @@ pub async fn open_dm(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Json(
     let invite = finish_invite(&s, conn, inv, &dm_cfg);
     // Delivered now, or held (sealed on this box) and delivered once their
     // contact id arrives.
-    let plan = person.seal_plan().map_err(|e| ApiError::new(StatusCode::CONFLICT, e))?;
-    let delivered = contacts_api::deliver_invite(&s, &person, &plan, &invite).await == Delivery::Delivered;
-    let held = if delivered { None } else { contacts_api::hold_invite(&s, ws, &person, &plan, &invite) };
+    let plan = person
+        .seal_plan()
+        .map_err(|e| ApiError::new(StatusCode::CONFLICT, e))?;
+    let delivered =
+        contacts_api::deliver_invite(&s, &person, &plan, &invite).await == Delivery::Delivered;
+    let held = if delivered {
+        None
+    } else {
+        contacts_api::hold_invite(&s, ws, &person, &plan, &invite)
+    };
     s.dm_kick.notify_one();
     s.refresh();
     s.hub.emit("dms.changed", json!({}));
     let chat = {
         let svc = s.lock();
-        super::chats_of(&svc, ws).ok().and_then(|l| l.into_iter().min_by_key(|c| c.created_at)).map(|c| c.id)
+        super::chats_of(&svc, ws)
+            .ok()
+            .and_then(|l| l.into_iter().min_by_key(|c| c.created_at))
+            .map(|c| c.id)
     };
     Ok(Json(json!({
         "workspaceId": ws,
@@ -764,22 +972,34 @@ pub async fn open_dm(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Json(
 fn held_ws(s: &Shared, id: &str) -> ApiResult<Uuid> {
     let ws = Uuid::parse_str(id.trim()).map_err(|_| ApiError::bad_request("not a workspace id"))?;
     if s.held.get(ws).is_none() {
-        return Err(ApiError::new(StatusCode::NOT_FOUND, "no invite waits for delivery in this DM"));
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "no invite waits for delivery in this DM",
+        ));
     }
     Ok(ws)
 }
 
 /// `GET /v1/dms/{workspaceId}/invite` → `{invite, inviteDelivery}`: the held
 /// invite's link, to share by hand while it waits (secure channel only).
-pub async fn held_invite(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+pub async fn held_invite(
+    State(s): S,
+    peer_ext: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
     require_secret_channel(&s, peer_ext.as_deref())?;
     let ws = held_ws(&s, &id)?;
-    let ka = contacts_api::own_ka(&s).ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "this box has no key-agreement key"))?;
-    let invite = s
-        .held
-        .open_invite(ws, &ka)
-        .ok_or_else(|| ApiError::new(StatusCode::GONE, "the invite no longer waits here (delivered, joined or expired)"))?;
-    Ok(Json(json!({ "invite": invite.as_str(), "inviteDelivery": s.held.get(ws).map(|h| h.status_json()) })))
+    let ka = contacts_api::own_ka(&s)
+        .ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "this box has no key-agreement key"))?;
+    let invite = s.held.open_invite(ws, &ka).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::GONE,
+            "the invite no longer waits here (delivered, joined or expired)",
+        )
+    })?;
+    Ok(Json(
+        json!({ "invite": invite.as_str(), "inviteDelivery": s.held.get(ws).map(|h| h.status_json()) }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -794,7 +1014,11 @@ pub struct ConfirmHeld {
 /// changed since the DM was opened), deliver to their current verified
 /// devices. 409 unless `safetyCode` is theirs now (it changed again since
 /// it was shown).
-pub async fn confirm_held_invite(State(s): S, Path(id): Path<String>, Json(req): Json<ConfirmHeld>) -> ApiResult<Json<Value>> {
+pub async fn confirm_held_invite(
+    State(s): S,
+    Path(id): Path<String>,
+    Json(req): Json<ConfirmHeld>,
+) -> ApiResult<Json<Value>> {
     ensure_can_write(&s)?;
     let ws = held_ws(&s, &id)?;
     let h = s.held.get(ws).expect("checked");
@@ -802,8 +1026,16 @@ pub async fn confirm_held_invite(State(s): S, Path(id): Path<String>, Json(req):
         .co_members()
         .into_iter()
         .find(|c| c.account_id == h.account_id)
-        .ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "you no longer share a workspace with them"))?;
-    let h = s.held.confirm(ws, &person, &req.safety_code, contacts_api::unix_now()).map_err(|e| ApiError::new(StatusCode::CONFLICT, e))?;
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "you no longer share a workspace with them",
+            )
+        })?;
+    let h = s
+        .held
+        .confirm(ws, &person, &req.safety_code, contacts_api::unix_now())
+        .map_err(|e| ApiError::new(StatusCode::CONFLICT, e))?;
     s.held_kick.notify_one();
     s.hub.emit("dms.changed", json!({}));
     Ok(Json(json!({ "inviteDelivery": h.status_json() })))
@@ -816,7 +1048,9 @@ pub async fn dismiss_held_invite(State(s): S, Path(id): Path<String>) -> ApiResu
     let ws = held_ws(&s, &id)?;
     s.held.dismiss(ws);
     s.hub.emit("dms.changed", json!({}));
-    Ok(Json(json!({ "inviteDelivery": s.held.get(ws).map(|h| h.status_json()) })))
+    Ok(Json(
+        json!({ "inviteDelivery": s.held.get(ws).map(|h| h.status_json()) }),
+    ))
 }
 
 // ── Waiting for the founder ────────────────────────────────────────────────
@@ -825,7 +1059,9 @@ pub async fn dismiss_held_invite(State(s): S, Path(id): Path<String>) -> ApiResu
 /// when they are a co-member.
 pub fn founder_wait(s: &Shared, ws: Uuid) -> (bool, Option<String>) {
     let waiting = s.lock().waiting_for_founder(ws).ok().flatten();
-    let name = waiting.and_then(|f| s.co_members().into_iter().find(|c| c.account_id == f)).map(|c| c.display_name);
+    let name = waiting
+        .and_then(|f| s.co_members().into_iter().find(|c| c.account_id == f))
+        .map(|c| c.display_name);
     (waiting.is_some(), name)
 }
 

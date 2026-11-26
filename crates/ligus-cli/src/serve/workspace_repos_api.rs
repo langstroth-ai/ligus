@@ -32,13 +32,15 @@ use uuid::Uuid;
 use super::api::{load_chat, ApiError, ApiResult};
 use super::repos_api::{ensure_can_write, owner_gate};
 use super::tunnel::TunnelPeer;
-use axum::Extension;
 use super::Shared;
+use axum::Extension;
 
 type S = State<Arc<Shared>>;
 
 fn folder_name(p: &std::path::Path) -> String {
-    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 fn parse_repo(raw: &str) -> ApiResult<Uuid> {
@@ -49,12 +51,22 @@ fn parse_repo(raw: &str) -> ApiResult<Uuid> {
 pub fn listing(s: &Shared) -> ApiResult<Value> {
     let svc = s.lock();
     let roster = svc.workspace_roster(s.ws)?;
-    let hosts = svc.load_in(s.ws, ligus_core::workspace_config_session_id(s.ws))?.map(|c| c.workspace_hosts).unwrap_or_default();
+    let hosts = svc
+        .load_in(s.ws, ligus_core::workspace_config_session_id(s.ws))?
+        .map(|c| c.workspace_hosts)
+        .unwrap_or_default();
     let reports = rr::host_reports(&roster, &hosts, &s.presence);
     let entries = rr::workspace_repos(&roster);
-    let live: Vec<_> = entries.iter().filter(|e| !e.removed).map(|e| e.repo.clone()).collect();
+    let live: Vec<_> = entries
+        .iter()
+        .filter(|e| !e.removed)
+        .map(|e| e.repo.clone())
+        .collect();
     let mine = rr::coverage_in(svc.store(), s.ws, &roster, &rr::cloning());
-    let maps = svc.store().repo_mappings(s.ws).map_err(ligus_runtime::chat_service::ChatError::from)?;
+    let maps = svc
+        .store()
+        .repo_mappings(s.ws)
+        .map_err(ligus_runtime::chat_service::ChatError::from)?;
     let looks = ligus_core::workspace_repo::lookalikes(&live);
     let repos: Vec<Value> = entries
         .iter()
@@ -101,8 +113,14 @@ pub fn listing(s: &Shared) -> ApiResult<Value> {
             })
         })
         .collect();
-    let host_aliases: Vec<Value> = roster.host_aliases.iter().map(|(a, h)| json!({ "alias": shown(a), "host": h })).collect();
-    Ok(json!({ "repos": repos, "hostAliases": host_aliases, "hostId": s.host_id, "label": s.opts.label }))
+    let host_aliases: Vec<Value> = roster
+        .host_aliases
+        .iter()
+        .map(|(a, h)| json!({ "alias": shown(a), "host": h }))
+        .collect();
+    Ok(
+        json!({ "repos": repos, "hostAliases": host_aliases, "hostId": s.host_id, "label": s.opts.label }),
+    )
 }
 
 pub async fn list(State(s): S) -> ApiResult<Json<Value>> {
@@ -121,16 +139,26 @@ pub struct AddReq {
     branch: String,
 }
 
-pub async fn add(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Json<AddReq>) -> ApiResult<Json<Value>> {
+pub async fn add(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Json(req): Json<AddReq>,
+) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
     // Publishes a repo workspace-wide and runs the (owner-gated) rescan.
     owner_gate(&s, peer.as_deref())?;
-    let kind = req.kind.unwrap_or_else(|| crate::repos_cmd::guess_kind(&req.input));
-    let repo = s.lock().add_workspace_repo(s.ws, &req.input, &req.name, &kind, &req.branch, None)?;
+    let kind = req
+        .kind
+        .unwrap_or_else(|| crate::repos_cmd::guess_kind(&req.input));
+    let repo =
+        s.lock()
+            .add_workspace_repo(s.ws, &req.input, &req.name, &kind, &req.branch, None)?;
     s.after_write();
     let sh = s.clone();
     let _ = tokio::task::spawn_blocking(move || super::repos_refresh(&sh)).await;
-    Ok(Json(json!({ "id": repo.id, "canonical": repo.canonical, "name": shown(&repo.display_name) })))
+    Ok(Json(
+        json!({ "id": repo.id, "canonical": repo.canonical, "name": shown(&repo.display_name) }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -141,20 +169,36 @@ pub struct RenameReq {
     branch: Option<String>,
 }
 
-pub async fn rename(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Json(req): Json<RenameReq>) -> ApiResult<Json<Value>> {
+pub async fn rename(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+    Json(req): Json<RenameReq>,
+) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
     owner_gate(&s, peer.as_deref())?;
     let id = parse_repo(&id)?;
     let branch = match req.branch {
         Some(b) => b,
-        None => s.lock().workspace_roster(s.ws)?.repos.get(&id).map(|e| e.repo.default_branch.clone()).unwrap_or_default(),
+        None => s
+            .lock()
+            .workspace_roster(s.ws)?
+            .repos
+            .get(&id)
+            .map(|e| e.repo.default_branch.clone())
+            .unwrap_or_default(),
     };
-    s.lock().update_workspace_repo(s.ws, id, &req.name, &branch)?;
+    s.lock()
+        .update_workspace_repo(s.ws, id, &req.name, &branch)?;
     s.after_write();
     Ok(Json(json!({ "ok": true })))
 }
 
-pub async fn remove(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+pub async fn remove(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
     owner_gate(&s, peer.as_deref())?;
     let id = parse_repo(&id)?;
@@ -169,7 +213,12 @@ pub struct ConfirmReq {
 }
 
 /// "Found WeFit on this host as WeFit. Use it?": confirm by folder name.
-pub async fn confirm(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Json(req): Json<ConfirmReq>) -> ApiResult<Json<Value>> {
+pub async fn confirm(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+    Json(req): Json<ConfirmReq>,
+) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
     owner_gate(&s, peer.as_deref())?;
     let id = parse_repo(&id)?;
@@ -177,14 +226,28 @@ pub async fn confirm(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id):
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
         let svc = sh.lock();
         let roster = svc.workspace_roster(sh.ws)?;
-        let repo = roster.repos.get(&id).filter(|e| !e.removed).map(|e| e.repo.clone()).ok_or_else(|| ApiError::not_found("workspace repository"))?;
+        let repo = roster
+            .repos
+            .get(&id)
+            .filter(|e| !e.removed)
+            .map(|e| e.repo.clone())
+            .ok_or_else(|| ApiError::not_found("workspace repository"))?;
         let m = svc
             .store()
-            .repo_mappings(sh.ws).map_err(ligus_runtime::chat_service::ChatError::from)?
+            .repo_mappings(sh.ws)
+            .map_err(ligus_runtime::chat_service::ChatError::from)?
             .into_iter()
             .find(|m| m.repo_id == id && !m.confirmed && folder_name(&m.path) == req.checkout)
             .ok_or_else(|| ApiError::not_found("a found checkout by that name"))?;
-        rr::confirm(svc.store(), svc.device_id(), &sh.opts.label, sh.ws, &repo, &m.path).map_err(|e| ApiError::bad_request(e.to_string()))?;
+        rr::confirm(
+            svc.store(),
+            svc.device_id(),
+            &sh.opts.label,
+            sh.ws,
+            &repo,
+            &m.path,
+        )
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
         Ok(())
     })
     .await
@@ -208,11 +271,17 @@ pub struct SetChatRepo {
     base_branch: String,
 }
 
-pub async fn set_chat_repo(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Json(req): Json<SetChatRepo>) -> ApiResult<Json<Value>> {
+pub async fn set_chat_repo(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+    Json(req): Json<SetChatRepo>,
+) -> ApiResult<Json<Value>> {
     let chat = load_chat(&s, &id)?;
     ensure_can_write(&s, Some(&chat))?;
     owner_gate(&s, peer.as_deref())?;
-    s.lock().set_chat_repo(chat.id, chat.workspace_id, req.repo_id, &req.base_branch)?;
+    s.lock()
+        .set_chat_repo(chat.id, chat.workspace_id, req.repo_id, &req.base_branch)?;
     s.after_write();
     Ok(Json(chat_repo(&s, chat.id)?))
 }
@@ -220,12 +289,23 @@ pub async fn set_chat_repo(State(s): S, peer: Option<Extension<TunnelPeer>>, Pat
 /// A chat's workspace repo for `GET /v1/chats/:id/details` (`workspaceRepo`).
 pub fn chat_repo(s: &Shared, chat: Uuid) -> ApiResult<Value> {
     let svc = s.lock();
-    let Some(c) = svc.load_resolving(chat)? else { return Ok(Value::Null) };
-    let Some(cr) = c.repo.clone().filter(|r| r.repo_id.is_some()) else { return Ok(Value::Null) };
+    let Some(c) = svc.load_resolving(chat)? else {
+        return Ok(Value::Null);
+    };
+    let Some(cr) = c.repo.clone().filter(|r| r.repo_id.is_some()) else {
+        return Ok(Value::Null);
+    };
     let roster = svc.workspace_roster(s.ws)?;
     let id = cr.repo_id.unwrap_or_default();
     let entry = roster.repos.get(&id);
-    let gate = rr::turn_checkout(svc.store(), svc.device_id(), &s.opts.label, &c, &roster, &rr::cloning());
+    let gate = rr::turn_checkout(
+        svc.store(),
+        svc.device_id(),
+        &s.opts.label,
+        &c,
+        &roster,
+        &rr::cloning(),
+    );
     let (state, reason) = match gate {
         rr::TurnCheckout::Ready(_) => ("present", String::new()),
         rr::TurnCheckout::Cloning { .. } => ("cloning", String::new()),

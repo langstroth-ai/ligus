@@ -177,7 +177,10 @@ pub const PASTE_PROMPT: &str =
 
 /// The desktop's code, from a hidden paste or, when the person just pressed
 /// Enter, the clipboard. Errors say what was there instead (never the text).
-pub fn read_pasted(hidden: &mut dyn FnMut(&str) -> Result<String>, clipboard: &mut dyn FnMut() -> Option<String>) -> Result<String> {
+pub fn read_pasted(
+    hidden: &mut dyn FnMut(&str) -> Result<String>,
+    clipboard: &mut dyn FnMut() -> Option<String>,
+) -> Result<String> {
     let typed = hidden(PASTE_PROMPT)?;
     let (text, from) = if typed.trim().is_empty() {
         match clipboard() {
@@ -223,7 +226,10 @@ fn paste_tools() -> Vec<Tool> {
         v.push(("pbpaste", &[]));
     }
     if cfg!(windows) {
-        v.push(("powershell.exe", &["-NoProfile", "-Command", "Get-Clipboard"]));
+        v.push((
+            "powershell.exe",
+            &["-NoProfile", "-Command", "Get-Clipboard"],
+        ));
     }
     if cfg!(all(unix, not(target_os = "macos"))) {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -234,7 +240,10 @@ fn paste_tools() -> Vec<Tool> {
             v.push(("xsel", &["--clipboard", "--output"]));
         }
         if std::env::var_os("WSL_DISTRO_NAME").is_some() {
-            v.push(("powershell.exe", &["-NoProfile", "-Command", "Get-Clipboard"]));
+            v.push((
+                "powershell.exe",
+                &["-NoProfile", "-Command", "Get-Clipboard"],
+            ));
         }
     }
     v
@@ -244,10 +253,19 @@ fn paste_tools() -> Vec<Tool> {
 /// line): the tool's name, or `None` when none worked.
 pub fn copy(text: &str) -> Option<&'static str> {
     for (tool, args) in copy_tools() {
-        let Ok(mut child) = Command::new(tool).args(args).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else {
+        let Ok(mut child) = Command::new(tool)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
             continue;
         };
-        let wrote = child.stdin.take().is_some_and(|mut i| i.write_all(text.as_bytes()).is_ok());
+        let wrote = child
+            .stdin
+            .take()
+            .is_some_and(|mut i| i.write_all(text.as_bytes()).is_ok());
         if wrote && child.wait().is_ok_and(|s| s.success()) {
             return Some(tool);
         }
@@ -259,7 +277,14 @@ pub fn copy(text: &str) -> Option<&'static str> {
 /// worked.
 pub fn paste() -> Option<String> {
     for (tool, args) in paste_tools() {
-        let Ok(out) = Command::new(tool).args(args).stdin(Stdio::null()).stderr(Stdio::null()).output() else { continue };
+        let Ok(out) = Command::new(tool)
+            .args(args)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+        else {
+            continue;
+        };
         if out.status.success() {
             let cut = out.stdout.len().min(MAX_CODE_LEN + 1);
             return Some(String::from_utf8_lossy(&out.stdout[..cut]).into_owned());
@@ -274,7 +299,12 @@ pub fn hh_mm(unix_ms: i64) -> String {
     match time::OffsetDateTime::from_unix_timestamp(unix_ms.div_euclid(1000)) {
         Ok(t) => {
             let t = t.to_offset(offset);
-            format!("{:02}:{:02}{}", t.hour(), t.minute(), if offset.is_utc() { " UTC" } else { "" })
+            format!(
+                "{:02}:{:02}{}",
+                t.hour(),
+                t.minute(),
+                if offset.is_utc() { " UTC" } else { "" }
+            )
         }
         Err(_) => "?".into(),
     }
@@ -284,9 +314,16 @@ pub fn hh_mm(unix_ms: i64) -> String {
 /// waiting for the desktop's code.
 pub fn pending_line(p: &ligus_runtime::computer_link::PendingStatus, now_ms: i64) -> String {
     if p.approvable(now_ms) {
-        format!("Linking waiting for your desktop's code (started {}; expires {})", hh_mm(p.created_at), hh_mm(p.approve_by))
+        format!(
+            "Linking waiting for your desktop's code (started {}; expires {})",
+            hh_mm(p.created_at),
+            hh_mm(p.approve_by)
+        )
     } else {
-        format!("Linking waiting: the code your desktop showed works until {}", hh_mm(p.expires_at))
+        format!(
+            "Linking waiting: the code your desktop showed works until {}",
+            hh_mm(p.expires_at)
+        )
     }
 }
 
@@ -300,15 +337,30 @@ mod tests {
     fn the_grant_comes_out_of_whatever_was_pasted() {
         assert_eq!(extract_grant(G).as_deref(), Some(G));
         assert_eq!(extract_grant(&format!("\n  {G}\n\n")).as_deref(), Some(G));
-        assert_eq!(extract_grant(&format!("lt --plain link-redeem '{G}' --approver-fingerprint 2C41-88E0")).as_deref(), Some(G));
-        assert_eq!(extract_grant(&format!("ligus devices redeem {G} --approver-fingerprint X")).as_deref(), Some(G));
+        assert_eq!(
+            extract_grant(&format!(
+                "lt --plain link-redeem '{G}' --approver-fingerprint 2C41-88E0"
+            ))
+            .as_deref(),
+            Some(G)
+        );
+        assert_eq!(
+            extract_grant(&format!(
+                "ligus devices redeem {G} --approver-fingerprint X"
+            ))
+            .as_deref(),
+            Some(G)
+        );
         assert_eq!(extract_grant(&format!("\"{G}\"")).as_deref(), Some(G));
         // Wrapped by a terminal.
         let (a, b) = G.split_at(20);
         assert_eq!(extract_grant(&format!("{a}\n{b}\n")).as_deref(), Some(G));
         assert_eq!(extract_grant(&format!("{a}\r\n   {b}")).as_deref(), Some(G));
         // A flag on the next line isn't part of it.
-        assert_eq!(extract_grant(&format!("{G}\n--approver-fingerprint X")).as_deref(), Some(G));
+        assert_eq!(
+            extract_grant(&format!("{G}\n--approver-fingerprint X")).as_deref(),
+            Some(G)
+        );
         assert_eq!(extract_grant("liguslink1:abc"), None);
         assert_eq!(extract_grant("ligusgrant1:"), None);
         assert_eq!(extract_grant(""), None);
@@ -317,7 +369,10 @@ mod tests {
     #[test]
     fn a_paste_without_a_grant_says_what_it_was_and_never_echoes_it() {
         let m = no_grant_message("liguslink1:SECRETISH", "the clipboard");
-        assert!(m.contains("this computer's request") && !m.contains("SECRETISH"), "{m}");
+        assert!(
+            m.contains("this computer's request") && !m.contains("SECRETISH"),
+            "{m}"
+        );
         let m = no_grant_message("hello there", "the clipboard");
         assert!(m.contains("Copy for lt") && !m.contains("hello"), "{m}");
     }
@@ -335,9 +390,15 @@ mod tests {
         .unwrap();
         assert_eq!(got, G);
         assert_eq!(asked, PASTE_PROMPT);
-        let got = read_pasted(&mut |_| Ok(format!("  {G} \n")), &mut || panic!("the clipboard isn't read after a paste")).unwrap();
+        let got = read_pasted(&mut |_| Ok(format!("  {G} \n")), &mut || {
+            panic!("the clipboard isn't read after a paste")
+        })
+        .unwrap();
         assert_eq!(got, G);
-        let e = read_pasted(&mut |_| Ok(String::new()), &mut || Some("liguslink1:abc".into())).unwrap_err();
+        let e = read_pasted(&mut |_| Ok(String::new()), &mut || {
+            Some("liguslink1:abc".into())
+        })
+        .unwrap_err();
         assert!(e.to_string().contains("this computer's request"), "{e}");
         let e = read_pasted(&mut |_| Ok(String::new()), &mut || None).unwrap_err();
         assert!(e.to_string().contains("couldn't read the clipboard"), "{e}");
@@ -346,9 +407,18 @@ mod tests {
     #[test]
     fn a_fingerprint_matches_however_it_was_copied() {
         use crate::devices_cmd::same_fingerprint;
-        assert!(same_fingerprint("2c41 88e0 1b9d 04af 6e73", "2C41-88E0-1B9D-04AF-6E73"));
-        assert!(same_fingerprint(" 2C41-88E0-1B9D-04AF-6E73\n", "2C41-88E0-1B9D-04AF-6E73"));
-        assert!(!same_fingerprint("2C41-88E0-1B9D-04AF-6E74", "2C41-88E0-1B9D-04AF-6E73"));
+        assert!(same_fingerprint(
+            "2c41 88e0 1b9d 04af 6e73",
+            "2C41-88E0-1B9D-04AF-6E73"
+        ));
+        assert!(same_fingerprint(
+            " 2C41-88E0-1B9D-04AF-6E73\n",
+            "2C41-88E0-1B9D-04AF-6E73"
+        ));
+        assert!(!same_fingerprint(
+            "2C41-88E0-1B9D-04AF-6E74",
+            "2C41-88E0-1B9D-04AF-6E73"
+        ));
         assert!(!same_fingerprint("", ""));
     }
 
@@ -364,8 +434,15 @@ mod tests {
 
     #[test]
     fn a_pending_link_reads_as_one_line() {
-        let p = ligus_runtime::computer_link::PendingStatus { created_at: 0, approve_by: 900_000, expires_at: 2_700_000, count: 1 };
-        assert!(pending_line(&p, 1_000).starts_with("Linking waiting for your desktop's code (started "));
-        assert!(pending_line(&p, 1_000_000).starts_with("Linking waiting: the code your desktop showed works until "));
+        let p = ligus_runtime::computer_link::PendingStatus {
+            created_at: 0,
+            approve_by: 900_000,
+            expires_at: 2_700_000,
+            count: 1,
+        };
+        assert!(pending_line(&p, 1_000)
+            .starts_with("Linking waiting for your desktop's code (started "));
+        assert!(pending_line(&p, 1_000_000)
+            .starts_with("Linking waiting: the code your desktop showed works until "));
     }
 }

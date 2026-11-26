@@ -419,7 +419,11 @@ pub fn invite_subject(id: uuid::Uuid) -> String {
 /// which the fold only keeps from an Admin+) and not yet redeemed.
 pub fn invite_redeemable(session: &ChatSession, id: uuid::Uuid) -> bool {
     !session.guards.used_invites.contains(&id)
-        && session.guards.join_approvals.get(&invite_subject(id)).is_some_and(|by| !by.is_empty())
+        && session
+            .guards
+            .join_approvals
+            .get(&invite_subject(id))
+            .is_some_and(|by| !by.is_empty())
 }
 
 /// The hosts that differ between the current roster (`old`) and a proposed one
@@ -429,15 +433,21 @@ fn hosts_changed<'a>(
     old: &'a [WorkspaceHost],
     new: &'a [WorkspaceHost],
 ) -> impl Iterator<Item = &'a WorkspaceHost> {
-    let added_or_modified =
-        new.iter().filter(move |n| !old.iter().any(|o| o.id == n.id && o == *n));
-    let removed = old.iter().filter(move |o| !new.iter().any(|n| n.id == o.id));
+    let added_or_modified = new
+        .iter()
+        .filter(move |n| !old.iter().any(|o| o.id == n.id && o == *n));
+    let removed = old
+        .iter()
+        .filter(move |o| !new.iter().any(|n| n.id == o.id));
     added_or_modified.chain(removed)
 }
 
 /// Whether host `id` exists and someone other than `actor_id` owns it.
 fn owned_by_other(session: &ChatSession, id: &str, actor_id: &str) -> bool {
-    session.workspace_hosts.iter().any(|h| h.id == id && h.owner_actor_id != actor_id)
+    session
+        .workspace_hosts
+        .iter()
+        .any(|h| h.id == id && h.owner_actor_id != actor_id)
 }
 
 /// The **self-host allowance** for `WorkspaceHostsUpdated`: a change that only
@@ -509,7 +519,10 @@ pub fn evaluate(
     // talk its own chat out of quarantine.
     if let SessionEvent::ChatLockdownCleared { .. } = event {
         if !crate::guard::is_human_member(&session.members, actor_id) {
-            return AuthzDecision::deny(AuthzReason::InsufficientRole, "only a human member can clear a lockdown");
+            return AuthzDecision::deny(
+                AuthzReason::InsufficientRole,
+                "only a human member can clear a lockdown",
+            );
         }
     }
     if actor_role.rank() < min_role_for(event).rank() {
@@ -538,7 +551,13 @@ pub fn evaluate(
             }
         }
         SessionEvent::MemberRoleChanged {
-            change: MemberRoleChange { member_id, new_role, .. }, ..
+            change:
+                MemberRoleChange {
+                    member_id,
+                    new_role,
+                    ..
+                },
+            ..
         } => {
             let demoting_owner = *new_role != WorkspaceRole::Owner
                 && session
@@ -590,7 +609,9 @@ mod tests {
         add_member_role("new", WorkspaceRole::Contributor)
     }
     fn add_member_role(id: &str, role: WorkspaceRole) -> SessionEvent {
-        SessionEvent::MemberAdded { invite: None, proof: None,
+        SessionEvent::MemberAdded {
+            invite: None,
+            proof: None,
             member: WorkspaceMember {
                 id: id.into(),
                 actor: ActorIdentity::new(id, id, ActorKind::Human),
@@ -617,8 +638,12 @@ mod tests {
     fn non_member_may_register_its_own_host() {
         // A worker box (Viewer floor, not a member) registers a host it owns.
         let s = session_with_members(vec![("owner", WorkspaceRole::Owner)]);
-        let d = evaluate(&hosts_event(vec![host_owned("box1", "worker")]), "worker",
-            WorkspaceRole::Viewer, &s);
+        let d = evaluate(
+            &hosts_event(vec![host_owned("box1", "worker")]),
+            "worker",
+            WorkspaceRole::Viewer,
+            &s,
+        );
         assert!(d.allowed);
         assert_eq!(d.reason, AuthzReason::SelfHost);
     }
@@ -629,7 +654,15 @@ mod tests {
         s.workspace_hosts = vec![host_owned("box1", "worker")];
         let mut beat = host_owned("box1", "worker");
         beat.label = "prod-box".into(); // a heartbeat mutates the host in place
-        assert!(evaluate(&hosts_event(vec![beat]), "worker", WorkspaceRole::Viewer, &s).allowed);
+        assert!(
+            evaluate(
+                &hosts_event(vec![beat]),
+                "worker",
+                WorkspaceRole::Viewer,
+                &s
+            )
+            .allowed
+        );
     }
 
     #[test]
@@ -643,7 +676,15 @@ mod tests {
         // Hijacking (modifying) a foreign host is likewise denied.
         let mut hijack = host_owned("box1", "someone-else");
         hijack.label = "stolen".into();
-        assert!(!evaluate(&hosts_event(vec![hijack]), "worker", WorkspaceRole::Viewer, &s).allowed);
+        assert!(
+            !evaluate(
+                &hosts_event(vec![hijack]),
+                "worker",
+                WorkspaceRole::Viewer,
+                &s
+            )
+            .allowed
+        );
     }
 
     #[test]
@@ -668,7 +709,10 @@ mod tests {
     #[test]
     fn cannot_remove_or_demote_last_owner() {
         let s = session_with_members(vec![("o1", WorkspaceRole::Owner)]);
-        let remove = SessionEvent::MemberRemoved { member_id: "o1".into(), watermark: Vec::new() };
+        let remove = SessionEvent::MemberRemoved {
+            member_id: "o1".into(),
+            watermark: Vec::new(),
+        };
         assert_eq!(
             evaluate(&remove, "o1", WorkspaceRole::Owner, &s).reason,
             AuthzReason::TargetIsLastOwner
@@ -678,7 +722,8 @@ mod tests {
                 member_id: "o1".into(),
                 old_role: WorkspaceRole::Owner,
                 new_role: WorkspaceRole::Admin,
-            }, watermark: Vec::new(),
+            },
+            watermark: Vec::new(),
         };
         assert!(!evaluate(&demote, "o1", WorkspaceRole::Owner, &s).allowed);
     }
@@ -689,7 +734,10 @@ mod tests {
             ("o1", WorkspaceRole::Owner),
             ("o2", WorkspaceRole::Owner),
         ]);
-        let remove = SessionEvent::MemberRemoved { member_id: "o1".into(), watermark: Vec::new() };
+        let remove = SessionEvent::MemberRemoved {
+            member_id: "o1".into(),
+            watermark: Vec::new(),
+        };
         assert!(evaluate(&remove, "o2", WorkspaceRole::Owner, &s).allowed);
     }
 
@@ -713,19 +761,36 @@ mod tests {
         // not enough; it needs an invite an Admin issued, used once.
         let mut s = session_with_members(vec![("owner", WorkspaceRole::Owner)]);
         let join = add_member_role("newbie", WorkspaceRole::Contributor);
-        assert!(!evaluate(&join, "newbie", WorkspaceRole::Viewer, &s).allowed, "key possession alone");
+        assert!(
+            !evaluate(&join, "newbie", WorkspaceRole::Viewer, &s).allowed,
+            "key possession alone"
+        );
         let id = Uuid::new_v4();
         let with = |invite| match add_member_role("newbie", WorkspaceRole::Contributor) {
-            SessionEvent::MemberAdded { member, .. } => SessionEvent::MemberAdded { member, invite: Some(invite), proof: None },
+            SessionEvent::MemberAdded { member, .. } => SessionEvent::MemberAdded {
+                member,
+                invite: Some(invite),
+                proof: None,
+            },
             _ => unreachable!(),
         };
-        assert!(!evaluate(&with(id), "newbie", WorkspaceRole::Viewer, &s).allowed, "an invite nobody issued");
-        s.guards.join_approvals.entry(invite_subject(id)).or_default().insert("owner".into());
+        assert!(
+            !evaluate(&with(id), "newbie", WorkspaceRole::Viewer, &s).allowed,
+            "an invite nobody issued"
+        );
+        s.guards
+            .join_approvals
+            .entry(invite_subject(id))
+            .or_default()
+            .insert("owner".into());
         let d = evaluate(&with(id), "newbie", WorkspaceRole::Viewer, &s);
         assert!(d.allowed);
         assert_eq!(d.reason, AuthzReason::SelfEnroll);
         s.guards.used_invites.insert(id);
-        assert!(!evaluate(&with(id), "newbie", WorkspaceRole::Viewer, &s).allowed, "an invite admits one member");
+        assert!(
+            !evaluate(&with(id), "newbie", WorkspaceRole::Viewer, &s).allowed,
+            "an invite admits one member"
+        );
     }
 
     #[test]
@@ -759,14 +824,18 @@ mod tests {
             ("owner", WorkspaceRole::Owner),
             ("victim", WorkspaceRole::Contributor),
         ]);
-        let remove = SessionEvent::MemberRemoved { member_id: "victim".into(), watermark: Vec::new() };
+        let remove = SessionEvent::MemberRemoved {
+            member_id: "victim".into(),
+            watermark: Vec::new(),
+        };
         assert!(!evaluate(&remove, "outsider", WorkspaceRole::Viewer, &s).allowed);
         let demote = SessionEvent::MemberRoleChanged {
             change: MemberRoleChange {
                 member_id: "victim".into(),
                 old_role: WorkspaceRole::Contributor,
                 new_role: WorkspaceRole::Viewer,
-            }, watermark: Vec::new(),
+            },
+            watermark: Vec::new(),
         };
         assert!(!evaluate(&demote, "outsider", WorkspaceRole::Viewer, &s).allowed);
     }
@@ -778,13 +847,17 @@ mod tests {
         // The self-host carve-out extends to the per-item `WorkspaceHostUpserted`
         // (worker self-registration / heartbeat as a single-host delta).
         let s = session_with_members(vec![("owner", WorkspaceRole::Owner)]);
-        let own = SessionEvent::WorkspaceHostUpserted { host: host_owned("box1", "worker") };
+        let own = SessionEvent::WorkspaceHostUpserted {
+            host: host_owned("box1", "worker"),
+        };
         let d = evaluate(&own, "worker", WorkspaceRole::Viewer, &s);
         assert!(d.allowed);
         assert_eq!(d.reason, AuthzReason::SelfHost);
 
         // A non-member registering someone else's host is gated → denied.
-        let foreign = SessionEvent::WorkspaceHostUpserted { host: host_owned("box2", "someone-else") };
+        let foreign = SessionEvent::WorkspaceHostUpserted {
+            host: host_owned("box2", "someone-else"),
+        };
         let d = evaluate(&foreign, "worker", WorkspaceRole::Viewer, &s);
         assert!(!d.allowed);
         assert_eq!(d.reason, AuthzReason::InsufficientRole);
@@ -796,20 +869,44 @@ mod tests {
         // self-registration. Neither form may use the self-host carve-out.
         let mut s = session_with_members(vec![("owner", WorkspaceRole::Owner)]);
         s.workspace_hosts = vec![host_owned("box1", "someone-else")];
-        let upsert = SessionEvent::WorkspaceHostUpserted { host: host_owned("box1", "worker") };
-        assert!(!evaluate(&upsert, "worker", WorkspaceRole::Viewer, &s).allowed, "per-item takeover");
-        assert!(!evaluate(&hosts_event(vec![host_owned("box1", "worker")]), "worker", WorkspaceRole::Viewer, &s).allowed, "whole-list takeover");
+        let upsert = SessionEvent::WorkspaceHostUpserted {
+            host: host_owned("box1", "worker"),
+        };
+        assert!(
+            !evaluate(&upsert, "worker", WorkspaceRole::Viewer, &s).allowed,
+            "per-item takeover"
+        );
+        assert!(
+            !evaluate(
+                &hosts_event(vec![host_owned("box1", "worker")]),
+                "worker",
+                WorkspaceRole::Viewer,
+                &s
+            )
+            .allowed,
+            "whole-list takeover"
+        );
     }
 
     #[test]
     fn non_member_may_remove_its_own_host_delta_but_not_a_foreign_one() {
         let mut s = session_with_members(vec![("owner", WorkspaceRole::Owner)]);
-        s.workspace_hosts = vec![host_owned("box1", "worker"), host_owned("box2", "someone-else")];
+        s.workspace_hosts = vec![
+            host_owned("box1", "worker"),
+            host_owned("box2", "someone-else"),
+        ];
         // Removing a host the actor owns → self-scoped, allowed.
-        let own = SessionEvent::WorkspaceHostRemoved { host_id: "box1".into() };
-        assert_eq!(evaluate(&own, "worker", WorkspaceRole::Viewer, &s).reason, AuthzReason::SelfHost);
+        let own = SessionEvent::WorkspaceHostRemoved {
+            host_id: "box1".into(),
+        };
+        assert_eq!(
+            evaluate(&own, "worker", WorkspaceRole::Viewer, &s).reason,
+            AuthzReason::SelfHost
+        );
         // Removing a foreign host → gated → denied for a non-member.
-        let foreign = SessionEvent::WorkspaceHostRemoved { host_id: "box2".into() };
+        let foreign = SessionEvent::WorkspaceHostRemoved {
+            host_id: "box2".into(),
+        };
         assert!(!evaluate(&foreign, "worker", WorkspaceRole::Viewer, &s).allowed);
     }
 
@@ -824,7 +921,9 @@ mod tests {
         // Agent upsert/remove: Contributor floor (same as list `AgentRosterUpdated`).
         assert!(!evaluate(&agent, "a", WorkspaceRole::Viewer, &s).allowed);
         assert!(evaluate(&agent, "a", WorkspaceRole::Contributor, &s).allowed);
-        let agent_rm = SessionEvent::AgentRemoved { agent_id: uuid::Uuid::nil() };
+        let agent_rm = SessionEvent::AgentRemoved {
+            agent_id: uuid::Uuid::nil(),
+        };
         assert!(!evaluate(&agent_rm, "a", WorkspaceRole::Viewer, &s).allowed);
         assert!(evaluate(&agent_rm, "a", WorkspaceRole::Contributor, &s).allowed);
 
@@ -834,7 +933,9 @@ mod tests {
         };
         assert!(!evaluate(&rt, "a", WorkspaceRole::Contributor, &s).allowed);
         assert!(evaluate(&rt, "a", WorkspaceRole::Admin, &s).allowed);
-        let rt_rm = SessionEvent::WorkspaceRuntimeRemoved { runtime_id: "rt1".into() };
+        let rt_rm = SessionEvent::WorkspaceRuntimeRemoved {
+            runtime_id: "rt1".into(),
+        };
         assert!(!evaluate(&rt_rm, "a", WorkspaceRole::Contributor, &s).allowed);
         assert!(evaluate(&rt_rm, "a", WorkspaceRole::Admin, &s).allowed);
     }
@@ -844,18 +945,35 @@ mod tests {
         // All six deltas must be re-authorized during projection (governance/
         // config), same as the whole-list events they replace.
         for ev in [
-            SessionEvent::AgentUpserted { agent: crate::agent::WorkspaceAgent::new("r", "ws-claude") },
-            SessionEvent::AgentRemoved { agent_id: uuid::Uuid::nil() },
-            SessionEvent::WorkspaceHostUpserted { host: host_owned("b", "o") },
-            SessionEvent::WorkspaceHostRemoved { host_id: "b".into() },
+            SessionEvent::AgentUpserted {
+                agent: crate::agent::WorkspaceAgent::new("r", "ws-claude"),
+            },
+            SessionEvent::AgentRemoved {
+                agent_id: uuid::Uuid::nil(),
+            },
+            SessionEvent::WorkspaceHostUpserted {
+                host: host_owned("b", "o"),
+            },
+            SessionEvent::WorkspaceHostRemoved {
+                host_id: "b".into(),
+            },
             SessionEvent::WorkspaceRuntimeUpserted {
                 runtime: crate::workspace_runtime::WorkspaceRuntime::new(
-                    "rt", "n", crate::runtime::ModelProviderKind::Anthropic, "m",
+                    "rt",
+                    "n",
+                    crate::runtime::ModelProviderKind::Anthropic,
+                    "m",
                 ),
             },
-            SessionEvent::WorkspaceRuntimeRemoved { runtime_id: "rt".into() },
+            SessionEvent::WorkspaceRuntimeRemoved {
+                runtime_id: "rt".into(),
+            },
         ] {
-            assert!(requires_projection_authz(&ev), "{} must be projection-gated", ev.kind_str());
+            assert!(
+                requires_projection_authz(&ev),
+                "{} must be projection-gated",
+                ev.kind_str()
+            );
         }
     }
 

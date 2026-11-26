@@ -110,7 +110,8 @@ pub fn valid_owner(s: &str) -> bool {
 /// A GitHub repository name: 1–100 of `[A-Za-z0-9._-]`, never `.` or `..`.
 pub fn valid_repo_name(s: &str) -> bool {
     (1..=100).contains(&s.len())
-        && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
         && s != "."
         && s != ".."
 }
@@ -120,12 +121,14 @@ pub fn valid_repo_name(s: &str) -> bool {
 /// fragments.
 pub fn parse_repo_spec(input: &str) -> Result<(String, String)> {
     let raw = input.trim();
-    if raw.is_empty() || raw.len() > 300 || raw.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if raw.is_empty() || raw.len() > 300 || raw.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
         bail!("give a GitHub repository as owner/name or https://github.com/owner/name");
     }
     let path = if let Some(rest) = raw.strip_prefix("https://") {
         let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
-        if !host.eq_ignore_ascii_case("github.com") && !host.eq_ignore_ascii_case("www.github.com") {
+        if !host.eq_ignore_ascii_case("github.com") && !host.eq_ignore_ascii_case("www.github.com")
+        {
             bail!("only github.com repositories can be cloned here");
         }
         if path.contains(['?', '#']) {
@@ -160,7 +163,8 @@ pub fn valid_checkout_dir_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 160
         && !s.starts_with('.')
-        && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 /// Where a checkout's `origin` points, with any credentials stripped: host
@@ -187,12 +191,23 @@ pub fn parse_remote(url: &str) -> Option<RemoteRef> {
             (String::new(), rest.to_string())
         } else {
             let (auth_host, path) = rest.split_once('/')?;
-            let host = auth_host.rsplit('@').next()?.split(':').next()?.to_ascii_lowercase();
+            let host = auth_host
+                .rsplit('@')
+                .next()?
+                .split(':')
+                .next()?
+                .to_ascii_lowercase();
             (host, path.to_string())
         }
-    } else if let Some((left, path)) = url.split_once(':').filter(|(l, _)| !l.contains('/') && l.len() > 1) {
+    } else if let Some((left, path)) = url
+        .split_once(':')
+        .filter(|(l, _)| !l.contains('/') && l.len() > 1)
+    {
         // scp-like `git@github.com:owner/name.git`
-        (left.rsplit('@').next()?.to_ascii_lowercase(), path.to_string())
+        (
+            left.rsplit('@').next()?.to_ascii_lowercase(),
+            path.to_string(),
+        )
     } else {
         (String::new(), url.to_string())
     };
@@ -206,7 +221,11 @@ pub fn parse_remote(url: &str) -> Option<RemoteRef> {
     if owner.is_empty() || name.is_empty() {
         return None;
     }
-    Some(RemoteRef { host, owner: owner.to_string(), name: name.to_string() })
+    Some(RemoteRef {
+        host,
+        owner: owner.to_string(),
+        name: name.to_string(),
+    })
 }
 
 // ── Checkout inspection ───────────────────────────────────────────────────
@@ -221,7 +240,9 @@ pub fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
         .stdin(std::process::Stdio::null())
         .output()
         .ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// What the phone shows for one checkout. Never a filesystem path.
@@ -278,29 +299,54 @@ pub fn fork_layout(dir: &Path) -> Option<ForkLayout> {
         return None;
     }
     let prefix = format!("{UPSTREAM_REMOTE}/");
-    let base_branch = git_out(dir, &["symbolic-ref", "--quiet", "--short", &format!("refs/remotes/{UPSTREAM_REMOTE}/HEAD")])
-        .and_then(|r| r.strip_prefix(&prefix).map(str::to_string))
-        .or_else(|| {
-            ["main", "master"]
-                .into_iter()
-                .find(|b| ref_exists(dir, &format!("refs/remotes/{UPSTREAM_REMOTE}/{b}")))
+    let base_branch = git_out(
+        dir,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            &format!("refs/remotes/{UPSTREAM_REMOTE}/HEAD"),
+        ],
+    )
+    .and_then(|r| r.strip_prefix(&prefix).map(str::to_string))
+    .or_else(|| {
+        ["main", "master"]
+            .into_iter()
+            .find(|b| ref_exists(dir, &format!("refs/remotes/{UPSTREAM_REMOTE}/{b}")))
+            .map(str::to_string)
+    })
+    .or_else(|| {
+        // A local branch configured to track upstream (e.g. master → upstream/master).
+        git_out(
+            dir,
+            &[
+                "for-each-ref",
+                "--format=%(refname:short) %(upstream:short)",
+                "refs/heads",
+            ],
+        )?
+        .lines()
+        .find_map(|l| {
+            l.split_once(' ')
+                .and_then(|(_, up)| up.strip_prefix(&prefix))
                 .map(str::to_string)
         })
-        .or_else(|| {
-            // A local branch configured to track upstream (e.g. master → upstream/master).
-            git_out(dir, &["for-each-ref", "--format=%(refname:short) %(upstream:short)", "refs/heads"])?
-                .lines()
-                .find_map(|l| l.split_once(' ').and_then(|(_, up)| up.strip_prefix(&prefix)).map(str::to_string))
-        })?;
+    })?;
     let push_disabled = !upstream_push_enabled(dir);
-    Some(ForkLayout { upstream, base_branch, push_disabled })
+    Some(ForkLayout {
+        upstream,
+        base_branch,
+        push_disabled,
+    })
 }
 
 /// `upstream`'s push URL points at the upstream repository itself (pushes
 /// would land there).
 pub fn upstream_push_enabled(dir: &Path) -> bool {
-    let fetch = git_out(dir, &["remote", "get-url", UPSTREAM_REMOTE]).and_then(|u| parse_remote(&u));
-    let push = git_out(dir, &["remote", "get-url", "--push", UPSTREAM_REMOTE]).and_then(|u| parse_remote(&u));
+    let fetch =
+        git_out(dir, &["remote", "get-url", UPSTREAM_REMOTE]).and_then(|u| parse_remote(&u));
+    let push = git_out(dir, &["remote", "get-url", "--push", UPSTREAM_REMOTE])
+        .and_then(|u| parse_remote(&u));
     matches!((fetch, push), (Some(f), Some(p)) if same_repo(&f, &p))
 }
 
@@ -319,17 +365,26 @@ pub fn ref_exists(dir: &Path, r: &str) -> bool {
 /// Refuse a push whose destination is the parent project of a fork: the
 /// remote's push URL must not resolve to `upstream`'s repository (or to
 /// `forbidden`, e.g. the parent GitHub reports). `Ok` names the repo pushed to.
-pub fn check_push_target(dir: &Path, remote: &str, forbidden: Option<&RemoteRef>) -> std::result::Result<RemoteRef, String> {
+pub fn check_push_target(
+    dir: &Path,
+    remote: &str,
+    forbidden: Option<&RemoteRef>,
+) -> std::result::Result<RemoteRef, String> {
     // `git push <remote>` pushes to every push URL, not just the first.
-    let urls = git_out(dir, &["remote", "get-url", "--push", "--all", remote]).ok_or_else(|| format!("no remote named {remote}"))?;
-    let upstream = git_out(dir, &["remote", "get-url", UPSTREAM_REMOTE]).and_then(|u| parse_remote(&u));
+    let urls = git_out(dir, &["remote", "get-url", "--push", "--all", remote])
+        .ok_or_else(|| format!("no remote named {remote}"))?;
+    let upstream =
+        git_out(dir, &["remote", "get-url", UPSTREAM_REMOTE]).and_then(|u| parse_remote(&u));
     let mut first: Option<RemoteRef> = None;
     for url in urls.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        let target = parse_remote(url).ok_or_else(|| format!("can't tell where {remote} pushes to"))?;
+        let target =
+            parse_remote(url).ok_or_else(|| format!("can't tell where {remote} pushes to"))?;
         for no in upstream.iter().chain(forbidden) {
             // Hosts are ignored here: the same repository is reachable as
             // ssh.github.com, www.github.com or an ssh config alias.
-            if target.owner.eq_ignore_ascii_case(&no.owner) && target.name.eq_ignore_ascii_case(&no.name) {
+            if target.owner.eq_ignore_ascii_case(&no.owner)
+                && target.name.eq_ignore_ascii_case(&no.name)
+            {
                 return Err(format!(
                     "refusing to push: {remote} points at {}, the upstream project; this host pushes only to your fork",
                     no.full_name()
@@ -339,7 +394,11 @@ pub fn check_push_target(dir: &Path, remote: &str, forbidden: Option<&RemoteRef>
         match &first {
             None => first = Some(target),
             Some(f) if same_repo(f, &target) => {}
-            Some(_) => return Err(format!("refusing to push: {remote} has push URLs for different repositories")),
+            Some(_) => {
+                return Err(format!(
+                    "refusing to push: {remote} has push URLs for different repositories"
+                ))
+            }
         }
     }
     first.ok_or_else(|| format!("can't tell where {remote} pushes to"))
@@ -368,7 +427,10 @@ pub fn ensure_chat_base(dir: &Path) {
 
 /// (behind, ahead) of `a` relative to `b` (`git rev-list --left-right --count b...a`).
 pub fn behind_ahead(dir: &Path, b: &str, a: &str) -> Option<(u64, u64)> {
-    let out = git_out(dir, &["rev-list", "--left-right", "--count", &format!("{b}...{a}")])?;
+    let out = git_out(
+        dir,
+        &["rev-list", "--left-right", "--count", &format!("{b}...{a}")],
+    )?;
     let mut it = out.split_whitespace().map(|n| n.parse::<u64>().ok());
     Some((it.next()??, it.next()??))
 }
@@ -397,7 +459,10 @@ impl PrBranches {
 
     pub fn save(&self, data_dir: &Path) -> Result<()> {
         std::fs::create_dir_all(data_dir)?;
-        let tmp = data_dir.join(format!(".{PR_BRANCHES_FILE}.{}.tmp", Uuid::new_v4().simple()));
+        let tmp = data_dir.join(format!(
+            ".{PR_BRANCHES_FILE}.{}.tmp",
+            Uuid::new_v4().simple()
+        ));
         std::fs::write(&tmp, toml::to_string_pretty(self)?)?;
         std::fs::rename(&tmp, data_dir.join(PR_BRANCHES_FILE)).inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
@@ -406,7 +471,10 @@ impl PrBranches {
     }
 
     pub fn get(&self, checkout: &str, chat: Uuid) -> Option<&str> {
-        self.checkouts.get(checkout)?.get(&chat.to_string()).map(String::as_str)
+        self.checkouts
+            .get(checkout)?
+            .get(&chat.to_string())
+            .map(String::as_str)
     }
 
     /// The branch for (checkout, chat): the recorded one, else a new readable
@@ -416,7 +484,10 @@ impl PrBranches {
             return b.to_string();
         }
         let b = pr_branch_name(title, chat);
-        self.checkouts.entry(checkout.to_string()).or_default().insert(chat.to_string(), b.clone());
+        self.checkouts
+            .entry(checkout.to_string())
+            .or_default()
+            .insert(chat.to_string(), b.clone());
         b
     }
 }
@@ -442,17 +513,33 @@ pub fn pr_branch_name(title: &str, chat: Uuid) -> String {
 }
 
 pub fn inspect(dir: &Path) -> CheckoutInfo {
-    let branch = git_out(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).filter(|b| !b.is_empty());
+    let branch =
+        git_out(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).filter(|b| !b.is_empty());
     let sha = git_out(dir, &["rev-parse", "--short", "HEAD"]).filter(|s| !s.is_empty());
     let remote = git_out(dir, &["remote", "get-url", "origin"]).and_then(|u| parse_remote(&u));
     // origin's HEAD, else main or master, else the current branch (one
     // detector for the desktop, `ligus repos` and `ligus setup folder`).
-    let default_branch = ligus_runtime::setup::validate::default_branch(dir).or_else(|| branch.clone());
-    let dirty = git_out(dir, &["status", "--porcelain", "--", ".", ":(exclude).ligus"]).is_some_and(|s| !s.is_empty());
+    let default_branch =
+        ligus_runtime::setup::validate::default_branch(dir).or_else(|| branch.clone());
+    let dirty = git_out(
+        dir,
+        &["status", "--porcelain", "--", ".", ":(exclude).ligus"],
+    )
+    .is_some_and(|s| !s.is_empty());
     let fork = fork_layout(dir);
     // A fork's base is upstream's default branch, not origin's.
-    let default_branch = fork.as_ref().map(|f| f.base_branch.clone()).or(default_branch);
-    CheckoutInfo { branch, sha, default_branch, remote, dirty, fork }
+    let default_branch = fork
+        .as_ref()
+        .map(|f| f.base_branch.clone())
+        .or(default_branch);
+    CheckoutInfo {
+        branch,
+        sha,
+        default_branch,
+        remote,
+        dirty,
+        fork,
+    }
 }
 
 /// The chat's persistent branch in every repo (`ligus/chat/<id>`, see
@@ -472,13 +559,18 @@ pub fn turn_context(data_dir: &Path, chat: Uuid) -> String {
             .into();
     };
     let dir = resolve_path(&repos_dir(data_dir), raw);
-    let label = Path::new(raw.trim()).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| raw.into());
+    let label = Path::new(raw.trim())
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| raw.into());
     if !ligus_runtime::git_worktree::is_git_repo(&dir) {
         return format!("Repository: this chat is bound to `{label}`, but that checkout is missing on this host.");
     }
     let info = inspect(&dir);
     let what = match &info.remote {
-        Some(r) if !r.host.is_empty() => format!("`{}` ({} checkout `{label}`)", r.full_name(), r.host),
+        Some(r) if !r.host.is_empty() => {
+            format!("`{}` ({} checkout `{label}`)", r.full_name(), r.host)
+        }
         _ => format!("the local checkout `{label}`"),
     };
     if let Some(f) = &info.fork {
@@ -495,7 +587,10 @@ pub fn turn_context(data_dir: &Path, chat: Uuid) -> String {
             base = f.base_branch,
         );
     }
-    let base = info.branch.or(info.default_branch).unwrap_or_else(|| "HEAD".into());
+    let base = info
+        .branch
+        .or(info.default_branch)
+        .unwrap_or_else(|| "HEAD".into());
     format!(
         "Repository: this chat currently works in {what} on this host. Base branch: `{base}`; the chat's own branch is \
          `{}`, and file changes you make come back as a reviewable proposal applied there. The owner can switch this \
@@ -506,9 +601,16 @@ pub fn turn_context(data_dir: &Path, chat: Uuid) -> String {
 }
 
 /// `ligus bind-repo <name|path> [--chat <id>]` / `ligus bind-repo --clear [--chat <id>]`.
-pub fn cmd_bind_repo(data_dir: &Path, target: Option<&str>, chat: Option<&str>, clear: bool) -> Result<()> {
+pub fn cmd_bind_repo(
+    data_dir: &Path,
+    target: Option<&str>,
+    chat: Option<&str>,
+    clear: bool,
+) -> Result<()> {
     let mut b = RepoBindings::load(data_dir);
-    let chat = chat.map(|c| Uuid::parse_str(c.trim()).context("--chat must be a chat id")).transpose()?;
+    let chat = chat
+        .map(|c| Uuid::parse_str(c.trim()).context("--chat must be a chat id"))
+        .transpose()?;
     if clear {
         match chat {
             Some(c) => {
@@ -525,7 +627,10 @@ pub fn cmd_bind_repo(data_dir: &Path, target: Option<&str>, chat: Option<&str>, 
     };
     let dir = resolve_path(&repos_dir(data_dir), target);
     if !ligus_runtime::git_worktree::is_git_repo(&dir) {
-        bail!("{} is not a git checkout (clone it there first)", dir.display());
+        bail!(
+            "{} is not a git checkout (clone it there first)",
+            dir.display()
+        );
     }
     match chat {
         Some(c) => {
@@ -534,7 +639,12 @@ pub fn cmd_bind_repo(data_dir: &Path, target: Option<&str>, chat: Option<&str>, 
         None => b.workspace = Some(target.to_string()),
     }
     b.save(data_dir)?;
-    println!("bound {} to {}.", chat.map(|c| format!("chat {c}")).unwrap_or_else(|| "the workspace".into()), dir.display());
+    println!(
+        "bound {} to {}.",
+        chat.map(|c| format!("chat {c}"))
+            .unwrap_or_else(|| "the workspace".into()),
+        dir.display()
+    );
     Ok(())
 }
 
@@ -565,7 +675,10 @@ pub fn cmd_repos(data_dir: &Path) -> Result<()> {
         if target.trim().is_empty() {
             println!("chat {chat} : (no repository)");
         } else {
-            println!("chat {chat} : {target} -> {}", resolve_path(&dir, target).display());
+            println!(
+                "chat {chat} : {target} -> {}",
+                resolve_path(&dir, target).display()
+            );
         }
     }
     for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
@@ -575,7 +688,11 @@ pub fn cmd_repos(data_dir: &Path) -> Result<()> {
                 e.file_name().to_string_lossy(),
                 f.upstream.full_name(),
                 f.base_branch,
-                if f.push_disabled { "disabled" } else { "ENABLED: set a dummy push URL" }
+                if f.push_disabled {
+                    "disabled"
+                } else {
+                    "ENABLED: set a dummy push URL"
+                }
             );
         }
     }
@@ -590,20 +707,38 @@ mod tests {
     fn chat_binding_wins_over_workspace_and_names_resolve_under_repos_dir() {
         let chat = Uuid::new_v4();
         let other = Uuid::new_v4();
-        let mut b = RepoBindings { workspace: Some("main".into()), ..Default::default() };
+        let mut b = RepoBindings {
+            workspace: Some("main".into()),
+            ..Default::default()
+        };
         b.chats.insert(chat.to_string(), "/abs/elsewhere".into());
         let repos = Path::new("/data/repos");
-        assert_eq!(b.resolve(repos, chat), Some(PathBuf::from("/abs/elsewhere")));
-        assert_eq!(b.resolve(repos, other), Some(PathBuf::from("/data/repos/main")));
+        assert_eq!(
+            b.resolve(repos, chat),
+            Some(PathBuf::from("/abs/elsewhere"))
+        );
+        assert_eq!(
+            b.resolve(repos, other),
+            Some(PathBuf::from("/data/repos/main"))
+        );
         assert_eq!(RepoBindings::default().resolve(repos, other), None);
     }
 
     #[test]
     fn repo_specs_accept_only_github_owner_name() {
         let ok = |s: &str| parse_repo_spec(s).unwrap();
-        assert_eq!(ok("langstroth-ai/ligus"), ("langstroth-ai".into(), "ligus".into()));
-        assert_eq!(ok(" https://github.com/acme/web-app.git "), ("acme".into(), "web-app".into()));
-        assert_eq!(ok("https://github.com/a/b.c_d-e/"), ("a".into(), "b.c_d-e".into()));
+        assert_eq!(
+            ok("langstroth-ai/ligus"),
+            ("langstroth-ai".into(), "ligus".into())
+        );
+        assert_eq!(
+            ok(" https://github.com/acme/web-app.git "),
+            ("acme".into(), "web-app".into())
+        );
+        assert_eq!(
+            ok("https://github.com/a/b.c_d-e/"),
+            ("a".into(), "b.c_d-e".into())
+        );
         assert_eq!(ok("a/.github"), ("a".into(), ".github".into()));
         for bad in [
             "",
@@ -645,10 +780,25 @@ mod tests {
     #[test]
     fn remotes_parse_and_drop_credentials() {
         let r = parse_remote("https://x-access-token:SECRET@github.com/Owner/Repo.git").unwrap();
-        assert_eq!(r, RemoteRef { host: "github.com".into(), owner: "Owner".into(), name: "Repo".into() });
+        assert_eq!(
+            r,
+            RemoteRef {
+                host: "github.com".into(),
+                owner: "Owner".into(),
+                name: "Repo".into()
+            }
+        );
         assert!(!format!("{r:?}").contains("SECRET"));
-        assert_eq!(parse_remote("git@github.com:o/n.git").unwrap().host, "github.com");
-        assert_eq!(parse_remote("ssh://git@github.com:22/o/n").unwrap().full_name(), "o/n");
+        assert_eq!(
+            parse_remote("git@github.com:o/n.git").unwrap().host,
+            "github.com"
+        );
+        assert_eq!(
+            parse_remote("ssh://git@github.com:22/o/n")
+                .unwrap()
+                .full_name(),
+            "o/n"
+        );
         let f = parse_remote("file:///tmp/remotes/o/n.git").unwrap();
         assert_eq!((f.host.as_str(), f.full_name().as_str()), ("", "o/n"));
         assert_eq!(parse_remote("/srv/git/o/n").unwrap().full_name(), "o/n");
@@ -663,7 +813,10 @@ mod tests {
             b.chats.insert(Uuid::new_v4().to_string(), format!("r{i}"));
             b.save(dir.path()).unwrap();
         }
-        let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names, vec![std::ffi::OsString::from(BINDINGS_FILE)]);
         assert_eq!(RepoBindings::load(dir.path()), b);
         let chat = Uuid::new_v4();
@@ -677,11 +830,20 @@ mod tests {
     #[test]
     fn pr_branch_names_are_readable_and_stable() {
         let chat = Uuid::parse_str("6f1c2d3e-0000-4000-8000-000000000000").unwrap();
-        assert_eq!(pr_branch_name("Fix: the v2 compiler (again)!", chat), "ligus/fix-the-v2-compiler-again-6f1c2d3e");
+        assert_eq!(
+            pr_branch_name("Fix: the v2 compiler (again)!", chat),
+            "ligus/fix-the-v2-compiler-again-6f1c2d3e"
+        );
         assert_eq!(pr_branch_name("  ", chat), "ligus/chat-6f1c2d3e");
-        assert_eq!(pr_branch_name("Ünïcode ✨ only", chat), "ligus/n-code-only-6f1c2d3e");
+        assert_eq!(
+            pr_branch_name("Ünïcode ✨ only", chat),
+            "ligus/n-code-only-6f1c2d3e"
+        );
         let long = pr_branch_name(&"word ".repeat(40), chat);
-        assert!(long.len() <= "ligus/".len() + 40 + 9 && !long.contains("--"), "{long}");
+        assert!(
+            long.len() <= "ligus/".len() + 40 + 9 && !long.contains("--"),
+            "{long}"
+        );
         let mut m = PrBranches::default();
         let first = m.get_or_assign("o__n", chat, "First title");
         assert_eq!(m.get_or_assign("o__n", chat, "Renamed later"), first);
@@ -692,31 +854,97 @@ mod tests {
     fn fork_layout_and_push_guard() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        let run = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(dir).args(args).status().unwrap().success());
+        let run = |args: &[&str]| {
+            assert!(std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .status()
+                .unwrap()
+                .success())
+        };
         run(&["init", "-q"]);
-        run(&["remote", "add", "origin", "https://github.com/me/pipelines.git"]);
+        run(&[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/me/pipelines.git",
+        ]);
         assert_eq!(fork_layout(dir), None, "no upstream remote");
-        run(&["remote", "add", "upstream", "https://github.com/kubeflow/pipelines.git"]);
-        assert_eq!(fork_layout(dir), None, "upstream has no branches fetched yet");
-        run(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"]);
+        run(&[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/kubeflow/pipelines.git",
+        ]);
+        assert_eq!(
+            fork_layout(dir),
+            None,
+            "upstream has no branches fetched yet"
+        );
+        run(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ]);
         run(&["update-ref", "refs/remotes/upstream/master", "HEAD"]);
         let f = fork_layout(dir).unwrap();
-        assert_eq!((f.upstream.full_name().as_str(), f.base_branch.as_str(), f.push_disabled), ("kubeflow/pipelines", "master", false));
+        assert_eq!(
+            (
+                f.upstream.full_name().as_str(),
+                f.base_branch.as_str(),
+                f.push_disabled
+            ),
+            ("kubeflow/pipelines", "master", false)
+        );
         assert_eq!(f.base_ref(), "refs/remotes/upstream/master");
         assert_eq!(inspect(dir).default_branch.as_deref(), Some("master"));
         // Pushing to origin is fine; to upstream (or anything resolving to it) is not.
-        assert_eq!(check_push_target(dir, "origin", None).unwrap().full_name(), "me/pipelines");
-        assert!(check_push_target(dir, "upstream", None).unwrap_err().contains("refusing"));
-        run(&["remote", "set-url", "--push", "origin", "git@github.com:KubeFlow/Pipelines.git"]);
+        assert_eq!(
+            check_push_target(dir, "origin", None).unwrap().full_name(),
+            "me/pipelines"
+        );
+        assert!(check_push_target(dir, "upstream", None)
+            .unwrap_err()
+            .contains("refusing"));
+        run(&[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            "git@github.com:KubeFlow/Pipelines.git",
+        ]);
         assert!(check_push_target(dir, "origin", None).is_err());
-        run(&["remote", "set-url", "--push", "origin", "https://github.com/me/pipelines.git"]);
-        let parent = RemoteRef { host: "github.com".into(), owner: "me".into(), name: "pipelines".into() };
-        assert!(check_push_target(dir, "origin", Some(&parent)).is_err(), "a forbidden parent from GitHub");
+        run(&[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            "https://github.com/me/pipelines.git",
+        ]);
+        let parent = RemoteRef {
+            host: "github.com".into(),
+            owner: "me".into(),
+            name: "pipelines".into(),
+        };
+        assert!(
+            check_push_target(dir, "origin", Some(&parent)).is_err(),
+            "a forbidden parent from GitHub"
+        );
         run(&["remote", "set-url", "--push", "upstream", "DISABLED"]);
         assert!(fork_layout(dir).unwrap().push_disabled);
         // ligus.chatBase follows the layout.
         ensure_chat_base(dir);
-        assert_eq!(git_out(dir, &["config", "ligus.chatBase"]).as_deref(), Some("refs/remotes/upstream/master"));
+        assert_eq!(
+            git_out(dir, &["config", "ligus.chatBase"]).as_deref(),
+            Some("refs/remotes/upstream/master")
+        );
         run(&["remote", "remove", "upstream"]);
         ensure_chat_base(dir);
         assert_eq!(git_out(dir, &["config", "ligus.chatBase"]), None);
@@ -729,24 +957,69 @@ mod tests {
     fn push_guard_checks_every_push_url_and_host_aliases() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        let run = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(dir).args(args).status().unwrap().success());
+        let run = |args: &[&str]| {
+            assert!(std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .status()
+                .unwrap()
+                .success())
+        };
         run(&["init", "-q"]);
-        run(&["remote", "add", "origin", "https://github.com/me/pipelines.git"]);
-        run(&["remote", "add", "upstream", "https://github.com/kubeflow/pipelines.git"]);
-        run(&["config", "--add", "remote.origin.pushurl", "https://github.com/me/pipelines.git"]);
-        run(&["config", "--add", "remote.origin.pushurl", "https://github.com/kubeflow/pipelines.git"]);
-        assert!(check_push_target(dir, "origin", None).is_err(), "second push URL is upstream");
+        run(&[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/me/pipelines.git",
+        ]);
+        run(&[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/kubeflow/pipelines.git",
+        ]);
+        run(&[
+            "config",
+            "--add",
+            "remote.origin.pushurl",
+            "https://github.com/me/pipelines.git",
+        ]);
+        run(&[
+            "config",
+            "--add",
+            "remote.origin.pushurl",
+            "https://github.com/kubeflow/pipelines.git",
+        ]);
+        assert!(
+            check_push_target(dir, "origin", None).is_err(),
+            "second push URL is upstream"
+        );
         run(&["config", "--unset-all", "remote.origin.pushurl"]);
-        run(&["config", "--add", "remote.origin.pushurl", "ssh://git@ssh.github.com:443/kubeflow/pipelines.git"]);
-        assert!(check_push_target(dir, "origin", None).is_err(), "ssh.github.com is github.com");
+        run(&[
+            "config",
+            "--add",
+            "remote.origin.pushurl",
+            "ssh://git@ssh.github.com:443/kubeflow/pipelines.git",
+        ]);
+        assert!(
+            check_push_target(dir, "origin", None).is_err(),
+            "ssh.github.com is github.com"
+        );
         run(&["config", "--unset-all", "remote.origin.pushurl"]);
-        assert_eq!(check_push_target(dir, "origin", None).unwrap().full_name(), "me/pipelines");
+        assert_eq!(
+            check_push_target(dir, "origin", None).unwrap().full_name(),
+            "me/pipelines"
+        );
     }
 
     #[test]
     fn round_trips_through_toml() {
         let dir = tempfile::tempdir().unwrap();
-        let mut b = RepoBindings { workspace: Some("ligus".into()), ..Default::default() };
+        let mut b = RepoBindings {
+            workspace: Some("ligus".into()),
+            ..Default::default()
+        };
         b.chats.insert(Uuid::nil().to_string(), "x".into());
         b.save(dir.path()).unwrap();
         assert_eq!(RepoBindings::load(dir.path()), b);

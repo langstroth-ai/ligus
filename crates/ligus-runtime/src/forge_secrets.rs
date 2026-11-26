@@ -42,14 +42,28 @@ impl TokenPurpose {
 /// The secret id of one forge connection's token for `purpose`.
 pub fn secret_id(forge_id: &str, purpose: TokenPurpose) -> Result<SecretId, SecretError> {
     let f = forge_id.trim();
-    if f.is_empty() || f.chars().any(|c| c.is_control() || c.is_whitespace() || c == '/') {
-        return Err(SecretError::Backend { backend: "forge", message: "invalid forge connection id".into() });
+    if f.is_empty()
+        || f.chars()
+            .any(|c| c.is_control() || c.is_whitespace() || c == '/')
+    {
+        return Err(SecretError::Backend {
+            backend: "forge",
+            message: "invalid forge connection id".into(),
+        });
     }
-    Ok(SecretId::new(FORGE_SCOPE, format!("{f}:{}", purpose.as_str())))
+    Ok(SecretId::new(
+        FORGE_SCOPE,
+        format!("{f}:{}", purpose.as_str()),
+    ))
 }
 
 /// Store a forge token. An empty token deletes it.
-pub fn put_token(store: &dyn SecretStore, forge_id: &str, purpose: TokenPurpose, token: &str) -> Result<(), SecretError> {
+pub fn put_token(
+    store: &dyn SecretStore,
+    forge_id: &str,
+    purpose: TokenPurpose,
+    token: &str,
+) -> Result<(), SecretError> {
     let id = secret_id(forge_id, purpose)?;
     let t = token.trim();
     if t.is_empty() {
@@ -60,7 +74,11 @@ pub fn put_token(store: &dyn SecretStore, forge_id: &str, purpose: TokenPurpose,
 }
 
 /// Read a forge token for exactly `purpose`.
-pub fn get_token(store: &dyn SecretStore, forge_id: &str, purpose: TokenPurpose) -> Result<Option<Zeroizing<String>>, SecretError> {
+pub fn get_token(
+    store: &dyn SecretStore,
+    forge_id: &str,
+    purpose: TokenPurpose,
+) -> Result<Option<Zeroizing<String>>, SecretError> {
     let t = store.get_string(&secret_id(forge_id, purpose)?)?;
     if let Some(t) = &t {
         crate::secret_redact::register(t);
@@ -107,17 +125,38 @@ fn forge_err(e: SecretError) -> ligus_forge::ForgeError {
 }
 
 impl ligus_forge::TokenStore for ForgeSecrets {
-    fn get(&self, forge: &ligus_forge::ForgeId, purpose: ligus_forge::Purpose) -> Result<Option<ligus_forge::Secret>, ligus_forge::ForgeError> {
+    fn get(
+        &self,
+        forge: &ligus_forge::ForgeId,
+        purpose: ligus_forge::Purpose,
+    ) -> Result<Option<ligus_forge::Secret>, ligus_forge::ForgeError> {
         Ok(get_token(&*self.store, forge.as_str(), purpose_of(purpose))
             .map_err(forge_err)?
             .filter(|t| !t.trim().is_empty())
             .map(|t| ligus_forge::Secret::new(t.as_str())))
     }
-    fn put(&self, forge: &ligus_forge::ForgeId, purpose: ligus_forge::Purpose, token: &ligus_forge::Secret) -> Result<(), ligus_forge::ForgeError> {
-        put_token(&*self.store, forge.as_str(), purpose_of(purpose), token.expose()).map_err(forge_err)
+    fn put(
+        &self,
+        forge: &ligus_forge::ForgeId,
+        purpose: ligus_forge::Purpose,
+        token: &ligus_forge::Secret,
+    ) -> Result<(), ligus_forge::ForgeError> {
+        put_token(
+            &*self.store,
+            forge.as_str(),
+            purpose_of(purpose),
+            token.expose(),
+        )
+        .map_err(forge_err)
     }
-    fn delete(&self, forge: &ligus_forge::ForgeId, purpose: ligus_forge::Purpose) -> Result<(), ligus_forge::ForgeError> {
-        self.store.delete(&secret_id(forge.as_str(), purpose_of(purpose)).map_err(forge_err)?).map_err(forge_err)
+    fn delete(
+        &self,
+        forge: &ligus_forge::ForgeId,
+        purpose: ligus_forge::Purpose,
+    ) -> Result<(), ligus_forge::ForgeError> {
+        self.store
+            .delete(&secret_id(forge.as_str(), purpose_of(purpose)).map_err(forge_err)?)
+            .map_err(forge_err)
     }
 }
 
@@ -128,18 +167,47 @@ mod tests {
 
     #[test]
     fn read_and_write_tokens_are_separate() {
-        let dir = std::env::temp_dir().join(format!("ligus-forge-secrets-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("ligus-forge-secrets-{}", uuid::Uuid::new_v4()));
         let store = File0600::new(&dir);
         put_token(&store, "github.com", TokenPurpose::Read, "read-token-1").unwrap();
-        assert_eq!(get_token(&store, "github.com", TokenPurpose::Read).unwrap().as_deref().map(String::as_str), Some("read-token-1"));
-        assert!(get_token(&store, "github.com", TokenPurpose::Write).unwrap().is_none(), "a read token never answers a write");
-        put_token(&store, "gitlab:gitlab.example.com", TokenPurpose::Write, "write-token-2").unwrap();
-        assert!(get_token(&store, "gitlab:gitlab.example.com", TokenPurpose::Read).unwrap().is_none());
-        assert_eq!(secret_id("github.com", TokenPurpose::Write).unwrap().account(), "forge:github.com:write");
+        assert_eq!(
+            get_token(&store, "github.com", TokenPurpose::Read)
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
+            Some("read-token-1")
+        );
+        assert!(
+            get_token(&store, "github.com", TokenPurpose::Write)
+                .unwrap()
+                .is_none(),
+            "a read token never answers a write"
+        );
+        put_token(
+            &store,
+            "gitlab:gitlab.example.com",
+            TokenPurpose::Write,
+            "write-token-2",
+        )
+        .unwrap();
+        assert!(
+            get_token(&store, "gitlab:gitlab.example.com", TokenPurpose::Read)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            secret_id("github.com", TokenPurpose::Write)
+                .unwrap()
+                .account(),
+            "forge:github.com:write"
+        );
         assert!(secret_id("", TokenPurpose::Read).is_err());
         assert!(secret_id("../x", TokenPurpose::Read).is_err());
         delete_connection(&store, "github.com").unwrap();
-        assert!(get_token(&store, "github.com", TokenPurpose::Read).unwrap().is_none());
+        assert!(get_token(&store, "github.com", TokenPurpose::Read)
+            .unwrap()
+            .is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -149,22 +217,60 @@ mod tests {
     #[test]
     fn forge_crate_uses_the_same_slots() {
         use ligus_forge::TokenStore as _;
-        let dir = std::env::temp_dir().join(format!("ligus-forge-secrets-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("ligus-forge-secrets-{}", uuid::Uuid::new_v4()));
         let store: std::sync::Arc<dyn SecretStore> = std::sync::Arc::new(File0600::new(&dir));
         let t = ForgeSecrets::new(store.clone());
         let id = ligus_forge::ForgeId::parse("gitea:codeberg.org").unwrap();
-        t.put(&id, ligus_forge::Purpose::Write, &ligus_forge::Secret::new("cb-token-XYZ-0123456789")).unwrap();
-        assert_eq!(get_token(&*store, "gitea:codeberg.org", TokenPurpose::Write).unwrap().as_deref().map(String::as_str), Some("cb-token-XYZ-0123456789"));
+        t.put(
+            &id,
+            ligus_forge::Purpose::Write,
+            &ligus_forge::Secret::new("cb-token-XYZ-0123456789"),
+        )
+        .unwrap();
+        assert_eq!(
+            get_token(&*store, "gitea:codeberg.org", TokenPurpose::Write)
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
+            Some("cb-token-XYZ-0123456789")
+        );
         assert!(t.get(&id, ligus_forge::Purpose::Read).unwrap().is_none());
-        t.put(&id, ligus_forge::Purpose::Refresh, &ligus_forge::Secret::new("refresh-0123456789abcdef")).unwrap();
-        assert_eq!(t.present(&id), vec![ligus_forge::Purpose::Write, ligus_forge::Purpose::Refresh]);
+        t.put(
+            &id,
+            ligus_forge::Purpose::Refresh,
+            &ligus_forge::Secret::new("refresh-0123456789abcdef"),
+        )
+        .unwrap();
+        assert_eq!(
+            t.present(&id),
+            vec![ligus_forge::Purpose::Write, ligus_forge::Purpose::Refresh]
+        );
         let mut conns = ligus_forge::Connections::default();
-        conns.upsert(ligus_forge::Connection::new(ligus_forge::ForgeKind::Gitea, "https://codeberg.org", ligus_forge::AuthSource::Token).unwrap());
+        conns.upsert(
+            ligus_forge::Connection::new(
+                ligus_forge::ForgeKind::Gitea,
+                "https://codeberg.org",
+                ligus_forge::AuthSource::Token,
+            )
+            .unwrap(),
+        );
         conns.save(&dir).unwrap();
-        assert!(!std::fs::read_to_string(ligus_forge::Connections::path(&dir)).unwrap().contains("cb-token-XYZ"));
-        assert!(!crate::secret_redact::redacted("leak cb-token-XYZ-0123456789 here").contains("cb-token-XYZ-0123456789"), "a token read is masked in logs");
+        assert!(
+            !std::fs::read_to_string(ligus_forge::Connections::path(&dir))
+                .unwrap()
+                .contains("cb-token-XYZ")
+        );
+        assert!(
+            !crate::secret_redact::redacted("leak cb-token-XYZ-0123456789 here")
+                .contains("cb-token-XYZ-0123456789"),
+            "a token read is masked in logs"
+        );
         delete_connection(&*store, "gitea:codeberg.org").unwrap();
-        assert!(t.present(&id).is_empty(), "removing a connection removes its refresh token too");
+        assert!(
+            t.present(&id).is_empty(),
+            "removing a connection removes its refresh token too"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

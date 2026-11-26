@@ -98,7 +98,10 @@ impl DmStore {
             .ok()
             .and_then(|t| serde_json::from_str::<DmFile>(&t).ok())
             .unwrap_or_default();
-        Self { data_dir: data_dir.to_path_buf(), file: Mutex::new(file) }
+        Self {
+            data_dir: data_dir.to_path_buf(),
+            file: Mutex::new(file),
+        }
     }
 
     /// The DM rooms' workspaces as `serve-dms.json` lists them, or an error
@@ -131,7 +134,10 @@ impl DmStore {
     }
 
     fn save(&self, f: &DmFile) -> Result<()> {
-        super::tunnel::write_private(&path(&self.data_dir), serde_json::to_string_pretty(f)?.as_bytes())
+        super::tunnel::write_private(
+            &path(&self.data_dir),
+            serde_json::to_string_pretty(f)?.as_bytes(),
+        )
     }
 
     pub fn list(&self) -> Vec<DmConn> {
@@ -139,7 +145,11 @@ impl DmStore {
     }
 
     pub fn get(&self, workspace_id: Uuid) -> Option<DmConn> {
-        self.lock().dms.iter().find(|d| d.workspace_id() == workspace_id).cloned()
+        self.lock()
+            .dms
+            .iter()
+            .find(|d| d.workspace_id() == workspace_id)
+            .cloned()
     }
 
     pub fn holds_room(&self, room: &str) -> bool {
@@ -156,7 +166,9 @@ impl DmStore {
 
     pub fn is_archived(&self, workspace_id: Uuid) -> bool {
         let f = self.lock();
-        f.dms.iter().any(|d| d.workspace_id() == workspace_id && f.archived.contains(&d.room))
+        f.dms
+            .iter()
+            .any(|d| d.workspace_id() == workspace_id && f.archived.contains(&d.room))
     }
 
     /// Add a DM and keep its secrets. Refuses a room this box already holds.
@@ -184,7 +196,10 @@ impl DmStore {
     /// holds). Returns whether it changed.
     pub fn set_archived(&self, archived: Vec<String>) -> bool {
         let mut f = self.lock();
-        let mut next: Vec<String> = archived.into_iter().filter(|r| f.dms.iter().any(|d| &d.room == r)).collect();
+        let mut next: Vec<String> = archived
+            .into_iter()
+            .filter(|r| f.dms.iter().any(|d| &d.room == r))
+            .collect();
         next.sort();
         next.dedup();
         let mut cur = f.archived.clone();
@@ -205,13 +220,25 @@ impl DmStore {
     /// relay.
     pub fn config_for(&self, base: &Config, conn: &DmConn) -> Config {
         let store = ligus_runtime::secret_store::for_data_dir(&self.data_dir);
-        let get = |id: &SecretId| store.get_string(id).ok().flatten().map(|z| z.to_string()).filter(|v| !v.is_empty());
+        let get = |id: &SecretId| {
+            store
+                .get_string(id)
+                .ok()
+                .flatten()
+                .map(|z| z.to_string())
+                .filter(|v| !v.is_empty())
+        };
         let key = get(&key_id(&conn.room));
         if let Some(k) = &key {
             ligus_runtime::secret_redact::register(k);
         }
-        let ek: Vec<DeliveredKey> = get(&ek_id(&conn.room)).and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
-        let own_relay = base.relay_url.as_deref().is_some_and(|r| same_relay(r, &conn.relay_url));
+        let ek: Vec<DeliveredKey> = get(&ek_id(&conn.room))
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_default();
+        let own_relay = base
+            .relay_url
+            .as_deref()
+            .is_some_and(|r| same_relay(r, &conn.relay_url));
         Config {
             data_dir: base.data_dir.clone(),
             relay_url: Some(conn.relay_url.clone()),
@@ -226,7 +253,9 @@ impl DmStore {
 /// Two relay base URLs name the same relay (case and a trailing slash
 /// ignored).
 pub fn same_relay(a: &str, b: &str) -> bool {
-    a.trim().trim_end_matches('/').eq_ignore_ascii_case(b.trim().trim_end_matches('/'))
+    a.trim()
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case(b.trim().trim_end_matches('/'))
 }
 
 /// A client for `relay` with the box's sign-in only when it is the box's own
@@ -235,9 +264,14 @@ pub fn same_relay(a: &str, b: &str) -> bool {
 /// (so a name re-pointed inside the box's network after the invite was
 /// checked is refused; [`dm_relay_allowed`] refuses internal literals).
 pub fn relay_client_for(base: &Config, relay: &str) -> RelayClient {
-    let own = base.relay_url.as_deref().is_some_and(|r| same_relay(r, relay));
+    let own = base
+        .relay_url
+        .as_deref()
+        .is_some_and(|r| same_relay(r, relay));
     if own {
-        RelayClient::new(relay).with_auth(base.token.clone()).with_auth_cell(crate::auth::cell())
+        RelayClient::new(relay)
+            .with_auth(base.token.clone())
+            .with_auth_cell(crate::auth::cell())
     } else {
         RelayClient::public_only(relay)
     }
@@ -250,16 +284,27 @@ pub fn relay_client_for(base: &Config, relay: &str) -> RelayClient {
 /// (`ligus_forge::http::check_proxied_target`). The box's own relay and
 /// direct connections are unaffected. `Err` is why, for the log or the phone.
 pub async fn foreign_relay_check(base: &Config, relay: &str) -> Result<(), String> {
-    if base.relay_url.as_deref().is_some_and(|r| same_relay(r, relay)) {
+    if base
+        .relay_url
+        .as_deref()
+        .is_some_and(|r| same_relay(r, relay))
+    {
         return Ok(());
     }
-    ligus_forge::http::check_proxied_target(relay.trim()).await.map_err(|e| e.to_string())
+    ligus_forge::http::check_proxied_target(relay.trim())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// A DM relay URL the box will sync with: http(s), no credentials.
 pub fn valid_relay_url(raw: &str) -> bool {
-    let Ok(u) = reqwest::Url::parse(raw.trim()) else { return false };
-    matches!(u.scheme(), "http" | "https") && u.host_str().is_some() && u.username().is_empty() && u.password().is_none()
+    let Ok(u) = reqwest::Url::parse(raw.trim()) else {
+        return false;
+    };
+    matches!(u.scheme(), "http" | "https")
+        && u.host_str().is_some()
+        && u.username().is_empty()
+        && u.password().is_none()
 }
 
 /// Whether the box will sync a DM through `relay`, which the invite's sender
@@ -274,17 +319,25 @@ pub fn dm_relay_allowed(own_relay: Option<&str>, relay: &str) -> bool {
     if own_relay.is_some_and(|o| same_relay(o, relay)) {
         return true;
     }
-    let Ok(u) = reqwest::Url::parse(relay.trim()) else { return false };
+    let Ok(u) = reqwest::Url::parse(relay.trim()) else {
+        return false;
+    };
     if u.scheme() != "https" {
         return false;
     }
-    let Some(host) = u.host_str() else { return false };
+    let Some(host) = u.host_str() else {
+        return false;
+    };
     let host = host.trim_start_matches('[').trim_end_matches(']');
     match host.parse::<std::net::IpAddr>() {
         Ok(ip) => ligus_forge::http::is_public_ip(ip),
         Err(_) => {
             let d = host.trim_end_matches('.').to_ascii_lowercase();
-            d.contains('.') && d != "localhost" && ![".local", ".internal", ".lan", ".home.arpa", ".localhost"].iter().any(|s| d.ends_with(s))
+            d.contains('.')
+                && d != "localhost"
+                && ![".local", ".internal", ".lan", ".home.arpa", ".localhost"]
+                    .iter()
+                    .any(|s| d.ends_with(s))
         }
     }
 }
@@ -333,7 +386,11 @@ impl Shared {
                     .filter(|d| svc.founder_verified(d.workspace_id()).unwrap_or(false))
                     .map(|d| ligus_runtime::dm::DmCandidate {
                         room: d.room.clone(),
-                        created_at: svc.store().config_founded_at(d.workspace_id()).ok().flatten(),
+                        created_at: svc
+                            .store()
+                            .config_founded_at(d.workspace_id())
+                            .ok()
+                            .flatten(),
                     })
                     .filter(|c| c.created_at.is_some())
                     .collect();
@@ -377,20 +434,28 @@ const DM_SYNC_EVERY: Duration = Duration::from_secs(4);
 /// seconds. One engine per room, kept for the life of the loop.
 pub async fn dm_sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let mut engines: HashMap<String, SyncEngine> = HashMap::new();
-    let mut store = match crate::open_store_patiently(shared.cfg.data_dir.join("ligus.db"), "dm sync", || !shared.stopping()).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("dm sync: cannot open the store: {e}");
-            return;
-        }
-    };
+    let mut store =
+        match crate::open_store_patiently(shared.cfg.data_dir.join("ligus.db"), "dm sync", || {
+            !shared.stopping()
+        })
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("dm sync: cannot open the store: {e}");
+                return;
+            }
+        };
     let mut fails: HashMap<String, u32> = HashMap::new();
     let mut skip_until: HashMap<String, tokio::time::Instant> = HashMap::new();
     while !shared.stopping() {
         // Checked before the list is read, so a DM added after the hold is
         // set is never synced until it is released.
         #[cfg(test)]
-        if shared.dm_sync_held.load(std::sync::atomic::Ordering::SeqCst) {
+        if shared
+            .dm_sync_held
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(20)) => {}
                 _ = stop.wait_for(|s| *s) => return,
@@ -400,7 +465,10 @@ pub async fn dm_sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) 
         let dms = shared.dms.list();
         let mut changed = false;
         for conn in &dms {
-            if skip_until.get(&conn.room).is_some_and(|t| tokio::time::Instant::now() < *t) {
+            if skip_until
+                .get(&conn.room)
+                .is_some_and(|t| tokio::time::Instant::now() < *t)
+            {
                 continue;
             }
             if !engines.contains_key(&conn.room) {
@@ -413,9 +481,14 @@ pub async fn dm_sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) 
                         continue;
                     }
                 };
-                engines.insert(conn.room.clone(), SyncEngine::new(client, conn.room.clone()).with_key_source(src));
+                engines.insert(
+                    conn.room.clone(),
+                    SyncEngine::new(client, conn.room.clone()).with_key_source(src),
+                );
             }
-            let Some(engine) = engines.get_mut(&conn.room) else { continue };
+            let Some(engine) = engines.get_mut(&conn.room) else {
+                continue;
+            };
             let round = match foreign_relay_check(&shared.cfg, &conn.relay_url).await {
                 Ok(()) => crate::sync_round(engine, &mut store).await,
                 Err(e) => Err(anyhow::anyhow!(e)),
@@ -433,9 +506,14 @@ pub async fn dm_sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) 
                     *n = n.saturating_add(1);
                     let secs = crate::sync_backoff_secs(*n);
                     if *n == 1 || *n % 10 == 0 {
-                        eprintln!("dm sync: a direct message's relay failed ({e}); retrying in {secs}s");
+                        eprintln!(
+                            "dm sync: a direct message's relay failed ({e}); retrying in {secs}s"
+                        );
                     }
-                    skip_until.insert(conn.room.clone(), tokio::time::Instant::now() + Duration::from_secs(secs));
+                    skip_until.insert(
+                        conn.room.clone(),
+                        tokio::time::Instant::now() + Duration::from_secs(secs),
+                    );
                 }
             }
         }
@@ -461,8 +539,14 @@ mod tests {
 
     #[test]
     fn relay_matching_and_validation() {
-        assert!(same_relay("https://Relay.example/", "https://relay.example"));
-        assert!(!same_relay("https://relay.example", "https://relay.example.evil"));
+        assert!(same_relay(
+            "https://Relay.example/",
+            "https://relay.example"
+        ));
+        assert!(!same_relay(
+            "https://relay.example",
+            "https://relay.example.evil"
+        ));
         assert!(valid_relay_url("http://127.0.0.1:8443"));
         assert!(valid_relay_url("https://relay.example"));
         assert!(!valid_relay_url("https://user:pw@relay.example"));
@@ -528,13 +612,23 @@ mod tests {
             epoch_keys: Vec::new(),
         };
         // The box's own relay: reached.
-        assert!(relay_client_for(&base, &format!("http://127.0.0.1:{port}")).contact_get(&cid).await.is_ok());
+        assert!(relay_client_for(&base, &format!("http://127.0.0.1:{port}"))
+            .contact_get(&cid)
+            .await
+            .is_ok());
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
         // Another relay whose name resolves to loopback: refused before any
         // request leaves the box.
         let foreign = format!("http://localhost:{port}");
-        assert!(relay_client_for(&base, &foreign).contact_get(&cid).await.is_err());
-        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1, "the internal address was reached");
+        assert!(relay_client_for(&base, &foreign)
+            .contact_get(&cid)
+            .await
+            .is_err());
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the internal address was reached"
+        );
     }
 
     #[test]
@@ -565,10 +659,20 @@ mod tests {
         };
         let cfg = back.config_for(&base, &conn);
         assert_eq!(cfg.key.as_deref(), Some("secret-passphrase"));
-        assert_eq!(cfg.token, None, "another relay never gets the workspace token");
-        let same = DmConn { relay_url: "https://box-relay.example/".into(), room: ligus_runtime::dm::new_room(), ..conn };
+        assert_eq!(
+            cfg.token, None,
+            "another relay never gets the workspace token"
+        );
+        let same = DmConn {
+            relay_url: "https://box-relay.example/".into(),
+            room: ligus_runtime::dm::new_room(),
+            ..conn
+        };
         back.add(same.clone(), "k2", &[]).unwrap();
-        assert_eq!(back.config_for(&base, &same).token.as_deref(), Some("hrt1-secret"));
+        assert_eq!(
+            back.config_for(&base, &same).token.as_deref(),
+            Some("hrt1-secret")
+        );
         assert!(back.set_archived(vec![same.room.clone(), "not-ours".into()]));
         assert_eq!(back.archived(), vec![same.room.clone()]);
         assert!(back.is_archived(same.workspace_id()));

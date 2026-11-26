@@ -33,8 +33,10 @@ use std::time::{Duration, Instant};
 use ligus_core::match_code::MatchKind;
 use ligus_core::WorkspaceRole;
 use ligus_runtime::approval_mailbox::{
-    claim_view, current_address, end_request, hint, list_live, AbortReason, ApprovalAddress, ApproverError, ApproverIdentity, ApproverPerson, ApproverSession,
-    ClaimView, EpochKey, LiveRequest, MailboxClient, MailboxError, Notice, NoticeKind, Notices, RequestSubject, SeenSet, Signer, VerifiedRequest,
+    claim_view, current_address, end_request, hint, list_live, AbortReason, ApprovalAddress,
+    ApproverError, ApproverIdentity, ApproverPerson, ApproverSession, ClaimView, EpochKey,
+    LiveRequest, MailboxClient, MailboxError, Notice, NoticeKind, Notices, RequestSubject, SeenSet,
+    Signer, VerifiedRequest,
 };
 use ligus_runtime::chat_service::{MatchContext, WorkspaceApprovers};
 use serde::Serialize;
@@ -70,12 +72,19 @@ fn now_ms() -> i64 {
 /// The live request whose code the pasted `text` is, byte for byte after
 /// trimming (wire note 7). Only join and link requests: a phone's code has
 /// its own flow.
-pub(crate) fn paste_match<'a>(text: &str, live: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<&'a str> {
+pub(crate) fn paste_match<'a>(
+    text: &str,
+    live: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Option<&'a str> {
     let t = text.trim();
-    if !(t.starts_with(ligus_runtime::box_admission::JOIN_PREFIX) || t.starts_with(ligus_runtime::computer_link::REQUEST_PREFIX)) {
+    if !(t.starts_with(ligus_runtime::box_admission::JOIN_PREFIX)
+        || t.starts_with(ligus_runtime::computer_link::REQUEST_PREFIX))
+    {
         return None;
     }
-    live.into_iter().find(|(_, code)| code.trim() == t).map(|(rid, _)| rid)
+    live.into_iter()
+        .find(|(_, code)| code.trim() == t)
+        .map(|(rid, _)| rid)
 }
 
 /// A name folded for "looks the same": lower case, confusable letters and
@@ -243,13 +252,21 @@ struct Desk {
 static DESK: LazyLock<Desk> = LazyLock::new(Desk::default);
 
 fn slot(rid: &str) -> Result<Arc<Slot>, String> {
-    DESK.sessions.lock().unwrap().get(rid).cloned().ok_or_else(|| "This request isn't open on this device.".to_string())
+    DESK.sessions
+        .lock()
+        .unwrap()
+        .get(rid)
+        .cloned()
+        .ok_or_else(|| "This request isn't open on this device.".to_string())
 }
 
 fn found_request(ws: Uuid, rid: &str) -> Option<(Target, LiveRequest)> {
     let st = DESK.state.lock().unwrap();
     let f = st.found.get(&ws)?;
-    f.live.iter().find(|l| l.rid_hex() == rid).map(|l| (f.target.clone(), l.clone()))
+    f.live
+        .iter()
+        .find(|l| l.rid_hex() == rid)
+        .map(|l| (f.target.clone(), l.clone()))
 }
 
 // ── DTOs ─────────────────────────────────────────────────────────────────
@@ -267,12 +284,17 @@ impl ClaimDto {
     /// The view, naming a claimer by its folded name where the log knows
     /// the device, else by its own (bounded) hint.
     fn from_view(v: ClaimView, names: &HashMap<Uuid, String>) -> Self {
-        let name = |hinted: String, id: Uuid| names.get(&id).cloned().unwrap_or_else(|| hint(&hinted));
+        let name =
+            |hinted: String, id: Uuid| names.get(&id).cloned().unwrap_or_else(|| hint(&hinted));
         match v {
             ClaimView::Unclaimed => Self::Unclaimed,
             ClaimView::Mine => Self::Mine,
-            ClaimView::ClaimedBy { name: n, device_id } => Self::ClaimedBy { name: name(n, device_id) },
-            ClaimView::Contested { by } => Self::Contested { name: by.map(|(n, id)| name(n, id)) },
+            ClaimView::ClaimedBy { name: n, device_id } => Self::ClaimedBy {
+                name: name(n, device_id),
+            },
+            ClaimView::Contested { by } => Self::Contested {
+                name: by.map(|(n, id)| name(n, id)),
+            },
         }
     }
 }
@@ -351,14 +373,25 @@ fn phase(slot: &Slot) -> String {
 /// Where an error leaves the session, in words for the sheet.
 fn ended_by(e: &ApproverError) -> (&'static str, String) {
     match e {
-        ApproverError::Aborted(AbortReason::Mismatch) | ApproverError::RevealMismatch => ("mismatch", "The codes didn't match. Nothing was granted.".into()),
-        ApproverError::CodeExpired | ApproverError::RequestExpired => ("expired", "Expired. Nothing was granted.".into()),
-        ApproverError::DidntFinish => ("didntFinish", "The computer didn't confirm in time. Nothing was added.".into()),
+        ApproverError::Aborted(AbortReason::Mismatch) | ApproverError::RevealMismatch => (
+            "mismatch",
+            "The codes didn't match. Nothing was granted.".into(),
+        ),
+        ApproverError::CodeExpired | ApproverError::RequestExpired => {
+            ("expired", "Expired. Nothing was granted.".into())
+        }
+        ApproverError::DidntFinish => (
+            "didntFinish",
+            "The computer didn't confirm in time. Nothing was added.".into(),
+        ),
         ApproverError::Aborted(_)
         | ApproverError::Mailbox(MailboxError::RequestUnknown)
         | ApproverError::Ended
         | ApproverError::NoCode
-        | ApproverError::NotAcknowledged => ("ended", "The request was ended. Nothing was granted.".into()),
+        | ApproverError::NotAcknowledged => (
+            "ended",
+            "The request was ended. Nothing was granted.".into(),
+        ),
         other => ("failed", other.to_string()),
     }
 }
@@ -367,20 +400,42 @@ fn ended_by(e: &ApproverError) -> (&'static str, String) {
 
 /// The log's names: each certified device as "<member>'s device" (or
 /// phone), and the skeletons of the member names.
-fn folded_names(svc: &ligus_runtime::ChatService, ws: Uuid, local: Uuid) -> (HashMap<Uuid, String>, HashSet<String>) {
+fn folded_names(
+    svc: &ligus_runtime::ChatService,
+    ws: Uuid,
+    local: Uuid,
+) -> (HashMap<Uuid, String>, HashSet<String>) {
     let mut names = HashMap::new();
     let mut skeletons = HashSet::new();
-    let Some(pin) = svc.store().workspace_pin(ws).ok().flatten() else { return (names, skeletons) };
-    let Ok((config, timeline)) = svc.store().load_config(ws, Some(&pin.founder_account.to_string()), Some(local)) else { return (names, skeletons) };
+    let Some(pin) = svc.store().workspace_pin(ws).ok().flatten() else {
+        return (names, skeletons);
+    };
+    let Ok((config, timeline)) =
+        svc.store()
+            .load_config(ws, Some(&pin.founder_account.to_string()), Some(local))
+    else {
+        return (names, skeletons);
+    };
     let members: HashMap<Uuid, String> = config
-        .map(|c| c.members.iter().filter_map(|m| Some((m.actor.account_id?, crate::shown(&m.actor.display_name)))).collect())
+        .map(|c| {
+            c.members
+                .iter()
+                .filter_map(|m| Some((m.actor.account_id?, crate::shown(&m.actor.display_name))))
+                .collect()
+        })
         .unwrap_or_default();
     for n in members.values() {
         skeletons.insert(skeleton(n));
     }
     for (id, d) in &timeline.current().devices {
         if let Some(n) = d.accounts.iter().find_map(|a| members.get(a)) {
-            names.insert(*id, hint(&format!("{n}'s {}", if d.phone { "phone" } else { "device" })));
+            names.insert(
+                *id,
+                hint(&format!(
+                    "{n}'s {}",
+                    if d.phone { "phone" } else { "device" }
+                )),
+            );
         }
     }
     (names, skeletons)
@@ -390,24 +445,34 @@ fn folded_names(svc: &ligus_runtime::ChatService, ws: Uuid, local: Uuid) -> (Has
 fn targets(state: &AppState) -> Vec<Target> {
     let (conns, static_token, phone_labels) = {
         let s = state.settings.lock().unwrap();
-        (s.workspaces.clone(), s.relay_access_token.clone(), s.phone_labels.values().cloned().collect::<Vec<String>>())
+        (
+            s.workspaces.clone(),
+            s.relay_access_token.clone(),
+            s.phone_labels.values().cloned().collect::<Vec<String>>(),
+        )
     };
     let mut out = Vec::new();
     for conn in conns {
         let ws = conn.id();
-        if conn.dm_account.is_some() || ws == state.local_workspace_id || !ligus_runtime::workspace_invite::usable_relay_url(&conn.relay_url) {
+        if conn.dm_account.is_some()
+            || ws == state.local_workspace_id
+            || !ligus_runtime::workspace_invite::usable_relay_url(&conn.relay_url)
+        {
             continue;
         }
         let src = crate::key_source_for(state, Some(&conn));
         let svc = state.service.lock().unwrap();
         let epochs = svc.approval_epoch_keys(ws, &src).unwrap_or_default();
-        let Some(founder_pin) = svc.founder_pin_hex(ws).ok().flatten() else { continue };
+        let Some(founder_pin) = svc.founder_pin_hex(ws).ok().flatten() else {
+            continue;
+        };
         if epochs.is_empty() {
             continue;
         }
         let role = svc.my_workspace_role(ws);
         let is_admin = role.is_some_and(|r| r.rank() >= WorkspaceRole::Admin.rank());
-        let human = svc.author().kind == ligus_core::ActorKind::Human && svc.author().account_id.is_some();
+        let human =
+            svc.author().kind == ligus_core::ActorKind::Human && svc.author().account_id.is_some();
         let approvers = svc.approval_classifier(ws).unwrap_or_default();
         let (device_names, mut name_skeletons) = folded_names(&svc, ws, state.local_workspace_id);
         for h in svc.list_hosts(ws).unwrap_or_default() {
@@ -457,7 +522,10 @@ pub(crate) async fn run_poll_loop(app: AppHandle) {
         let targets = crate::off_main(app.clone(), |app| targets(&app.state::<AppState>())).await;
         let ids: HashSet<Uuid> = targets.iter().map(|t| t.id).collect();
         for t in targets {
-            if backoff.get(&t.id).is_some_and(|(next, _)| Instant::now() < *next) {
+            if backoff
+                .get(&t.id)
+                .is_some_and(|(next, _)| Instant::now() < *next)
+            {
                 continue;
             }
             match poll_one(&t).await {
@@ -503,7 +571,17 @@ fn listing_sig(st: &DeskState) -> String {
     let mut parts: Vec<String> = st
         .found
         .values()
-        .flat_map(|f| f.live.iter().map(|l| format!("{}:{}:{}:{}", l.rid_hex(), l.claims.len(), l.opened_without_claim, l.ended.is_some())))
+        .flat_map(|f| {
+            f.live.iter().map(|l| {
+                format!(
+                    "{}:{}:{}:{}",
+                    l.rid_hex(),
+                    l.claims.len(),
+                    l.opened_without_claim,
+                    l.ended.is_some()
+                )
+            })
+        })
         .collect();
     parts.sort();
     parts.join(",")
@@ -525,7 +603,11 @@ pub(crate) fn list_approvals(state: tauri::State<AppState>) -> ApprovalsDto {
         for l in &f.live {
             let rid = l.rid_hex();
             let session = sessions.get(&rid);
-            let allowed = if l.kind() == MatchKind::Box { t.can_box } else { t.can_devices };
+            let allowed = if l.kind() == MatchKind::Box {
+                t.can_box
+            } else {
+                t.can_devices
+            };
             if !allowed {
                 continue;
             }
@@ -546,14 +628,22 @@ pub(crate) fn list_approvals(state: tauri::State<AppState>) -> ApprovalsDto {
                 expires_at: l.expires_at,
                 relay: l.relay.clone(),
                 claim,
-                parallel: open.iter().filter(|o| same_group(o.kind(), l.kind())).count(),
+                parallel: open
+                    .iter()
+                    .filter(|o| same_group(o.kind(), l.kind()))
+                    .count(),
                 phase: session.map(|s| phase(s)),
                 name_clash: t.name_skeletons.contains(&skeleton(&l.label())),
             });
         }
     }
     requests.sort_by_key(|r| r.created_at);
-    let facts = Notices::new(&state.data_dir).live(now_ms()).unwrap_or_default().iter().map(fact_dto).collect();
+    let facts = Notices::new(&state.data_dir)
+        .live(now_ms())
+        .unwrap_or_default()
+        .iter()
+        .map(fact_dto)
+        .collect();
     ApprovalsDto { requests, facts }
 }
 
@@ -575,13 +665,16 @@ pub(crate) struct AddressDto {
     pub can_reset: bool,
 }
 
-const NO_ROUTES_TEXT: &str = "This workspace's relay has no approval mailbox. Paste the request instead.";
+const NO_ROUTES_TEXT: &str =
+    "This workspace's relay has no approval mailbox. Paste the request instead.";
 
 fn target_for(app: &AppHandle, ws: Uuid) -> Result<Target, String> {
     targets(&app.state::<AppState>())
         .into_iter()
         .find(|t| t.id == ws)
-        .ok_or_else(|| "Requests reach a team workspace with a relay and its key on this device.".to_string())
+        .ok_or_else(|| {
+            "Requests reach a team workspace with a relay and its key on this device.".to_string()
+        })
 }
 
 fn mailbox_text(e: MailboxError) -> String {
@@ -593,26 +686,46 @@ fn mailbox_text(e: MailboxError) -> String {
 
 /// The workspace's approval address (Admit a box, My devices: Copy).
 #[tauri::command]
-pub(crate) async fn get_approval_address(app: AppHandle, workspace_id: String) -> Result<AddressDto, String> {
+pub(crate) async fn get_approval_address(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<AddressDto, String> {
     let ws = Uuid::parse_str(&workspace_id).map_err(|e| e.to_string())?;
     let t = crate::off_main(app.clone(), move |app| target_for(app, ws)).await?;
-    let a = current_address(&t.client(), t.id, &t.founder_pin, &t.epochs).await.map_err(mailbox_text)?;
-    Ok(AddressDto { address: a.encode(), relay: a.relay, can_reset: t.is_admin })
+    let a = current_address(&t.client(), t.id, &t.founder_pin, &t.epochs)
+        .await
+        .map_err(mailbox_text)?;
+    Ok(AddressDto {
+        address: a.encode(),
+        relay: a.relay,
+        can_reset: t.is_admin,
+    })
 }
 
 /// Reset address: the old one stops working (Admins only, by convention).
 #[tauri::command]
-pub(crate) async fn reset_approval_address(app: AppHandle, workspace_id: String) -> Result<AddressDto, String> {
+pub(crate) async fn reset_approval_address(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<AddressDto, String> {
     let ws = Uuid::parse_str(&workspace_id).map_err(|e| e.to_string())?;
     let t = crate::off_main(app.clone(), move |app| target_for(app, ws)).await?;
     if !t.is_admin {
         return Err("Only an Admin resets the approval address.".into());
     }
     let cur = t.current().ok_or("No workspace key on this device yet.")?;
-    let counter = t.client().reset_address(&cur.key).await.map_err(mailbox_text)?;
+    let counter = t
+        .client()
+        .reset_address(&cur.key)
+        .await
+        .map_err(mailbox_text)?;
     tracing::info!(target: "approvals", workspace = %ws, "reset the approval address");
     let a = ApprovalAddress::derive(&t.relay, t.id, &t.founder_pin, cur.epoch, &cur.key, counter);
-    Ok(AddressDto { address: a.encode(), relay: a.relay, can_reset: true })
+    Ok(AddressDto {
+        address: a.encode(),
+        relay: a.relay,
+        can_reset: true,
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -625,13 +738,24 @@ pub(crate) struct PasteMatchDto {
 /// Pasted request text that is a live request's code: run the code match
 /// for it instead of the fingerprint compare. `None`: compare as today.
 #[tauri::command]
-pub(crate) fn approval_match_paste(state: tauri::State<AppState>, text: String) -> Option<PasteMatchDto> {
+pub(crate) fn approval_match_paste(
+    state: tauri::State<AppState>,
+    text: String,
+) -> Option<PasteMatchDto> {
     let ws = state.active_workspace_id();
     let st = DESK.state.lock().unwrap();
     let f = st.found.get(&ws)?;
-    let codes: Vec<(String, &str)> = f.live.iter().filter(|l| l.ended.is_none()).map(|l| (l.rid_hex(), l.request.code.as_str())).collect();
+    let codes: Vec<(String, &str)> = f
+        .live
+        .iter()
+        .filter(|l| l.ended.is_none())
+        .map(|l| (l.rid_hex(), l.request.code.as_str()))
+        .collect();
     let rid = paste_match(&text, codes.iter().map(|(r, c)| (r.as_str(), *c)))?;
-    Some(PasteMatchDto { workspace_id: ws.to_string(), rid: rid.to_string() })
+    Some(PasteMatchDto {
+        workspace_id: ws.to_string(),
+        rid: rid.to_string(),
+    })
 }
 
 fn identity(state: &AppState) -> Result<ApproverIdentity, String> {
@@ -639,8 +763,13 @@ fn identity(state: &AppState) -> Result<ApproverIdentity, String> {
         let svc = state.service.lock().unwrap();
         (svc.device_id(), svc.author().clone())
     };
-    let kp = state.identity.device_keypair(device_id).map_err(|e| e.to_string())?;
-    let account_id = author.account_id.ok_or("This device has no account identity.")?;
+    let kp = state
+        .identity
+        .device_keypair(device_id)
+        .map_err(|e| e.to_string())?;
+    let account_id = author
+        .account_id
+        .ok_or("This device has no account identity.")?;
     let name = crate::shown(&author.display_name);
     Ok(ApproverIdentity {
         signer: Signer::Ed25519(kp),
@@ -652,14 +781,22 @@ fn identity(state: &AppState) -> Result<ApproverIdentity, String> {
 /// The open session's view, if this device has one for `rid`.
 #[tauri::command]
 pub(crate) fn approval_session(rid: String) -> Option<SessionDto> {
-    DESK.sessions.lock().unwrap().get(&rid).map(|s| s.view.lock().unwrap().clone())
+    DESK.sessions
+        .lock()
+        .unwrap()
+        .get(&rid)
+        .map(|s| s.view.lock().unwrap().clone())
 }
 
 /// Open a request: claim it, open the exchange, and wait in the background
 /// for the other device's answer (the code arrives as [`SESSION_EVENT`]).
 /// Reopening a request already open here returns its session.
 #[tauri::command]
-pub(crate) async fn approval_open(app: AppHandle, workspace_id: String, rid: String) -> Result<SessionDto, String> {
+pub(crate) async fn approval_open(
+    app: AppHandle,
+    workspace_id: String,
+    rid: String,
+) -> Result<SessionDto, String> {
     if let Some(v) = approval_session(rid.clone()) {
         return Ok(v);
     }
@@ -674,7 +811,11 @@ pub(crate) async fn approval_open(app: AppHandle, workspace_id: String, rid: Str
     if live.kind() == MatchKind::Phone {
         return Err(PHONE_READ_ONLY.into());
     }
-    let allowed = if live.kind() == MatchKind::Box { t.can_box } else { t.can_devices };
+    let allowed = if live.kind() == MatchKind::Box {
+        t.can_box
+    } else {
+        t.can_devices
+    };
     if !allowed {
         return Err(if live.kind() == MatchKind::Box {
             "Only a workspace Admin can admit a box.".into()
@@ -682,13 +823,20 @@ pub(crate) async fn approval_open(app: AppHandle, workspace_id: String, rid: Str
             "Add devices from a desktop that holds your account key.".into()
         });
     }
-    let epoch = t.epochs.iter().find(|e| e.epoch == live.epoch).cloned().ok_or("That request's key epoch isn't on this device.")?;
+    let epoch = t
+        .epochs
+        .iter()
+        .find(|e| e.epoch == live.epoch)
+        .cloned()
+        .ok_or("That request's key epoch isn't on this device.")?;
     let (me, data_dir) = {
         let st = app.state::<AppState>();
         (identity(&st)?, st.data_dir.clone())
     };
     let mut seen = SeenSet::load(&data_dir).map_err(|e| e.to_string())?;
-    let session = ApproverSession::begin(t.client(), &epoch, &live.request, me, &mut seen).await.map_err(|e| e.to_string())?;
+    let session = ApproverSession::begin(t.client(), &epoch, &live.request, me, &mut seen)
+        .await
+        .map_err(|e| e.to_string())?;
     tracing::info!(target: "approvals", rid = %rid, kind = kind_str(live.kind()), "opened an approval request");
     let view = SessionDto {
         rid: rid.clone(),
@@ -733,7 +881,9 @@ async fn await_code(app: AppHandle, slot: Arc<Slot>) {
                 return;
             }
             Ok(None) => continue,
-            Err(ApproverError::Mailbox(e)) if e.retryable() => tokio::time::sleep(Duration::from_secs(2)).await,
+            Err(ApproverError::Mailbox(e)) if e.retryable() => {
+                tokio::time::sleep(Duration::from_secs(2)).await
+            }
             Err(e) => {
                 let (p, msg) = ended_by(&e);
                 if p == "mismatch" {
@@ -778,7 +928,10 @@ fn back_to_code(app: &AppHandle, slot: &Slot, why: String) -> SessionDto {
 /// the passkey and the log write ([`commit_if_ready`]); anything else ends
 /// it with nothing written.
 #[tauri::command]
-pub(crate) async fn approval_codes_match(app: AppHandle, rid: String) -> Result<SessionDto, String> {
+pub(crate) async fn approval_codes_match(
+    app: AppHandle,
+    rid: String,
+) -> Result<SessionDto, String> {
     let slot = slot(&rid)?;
     if app.state::<AppState>().active_workspace_id() != slot.ws {
         return Err("Switch back to this request's workspace to approve it.".into());
@@ -796,7 +949,10 @@ pub(crate) async fn approval_codes_match(app: AppHandle, rid: String) -> Result<
     if let Err(e) = slot.session.lock().await.ready_to_commit().await {
         return Ok(fail(&app, &slot, &e));
     }
-    let ctx = MatchContext { label: slot.label.clone(), code };
+    let ctx = MatchContext {
+        label: slot.label.clone(),
+        code,
+    };
     let ws = slot.ws;
     if slot.kind == MatchKind::Computer {
         return computer_match(app, slot, ctx).await;
@@ -820,7 +976,12 @@ pub(crate) async fn approval_codes_match(app: AppHandle, rid: String) -> Result<
         Ok(Ok(d)) => d,
     };
     tracing::info!(target: "approvals", rid = %rid, "admitted a box by code match");
-    let r = slot.session.lock().await.finish_approved(Some(&dto.code)).await;
+    let r = slot
+        .session
+        .lock()
+        .await
+        .finish_approved(Some(&dto.code))
+        .await;
     Ok(match r {
         Ok(()) => set_view(&app, &slot, |v| v.phase = "approved".into()),
         Err(e) => fail(&app, &slot, &e),
@@ -837,15 +998,26 @@ pub(crate) fn claim_codes_match(v: &mut SessionDto, now: i64) -> Result<String, 
     if now.saturating_sub(v.code_at.unwrap_or(i64::MAX)) < HOLD_MS {
         return Err("Compare the codes first.".into());
     }
-    v.phase = if v.kind == "computer" { "confirming" } else { "passkey" }.into();
+    v.phase = if v.kind == "computer" {
+        "confirming"
+    } else {
+        "passkey"
+    }
+    .into();
     v.message = None;
     Ok(code)
 }
 
 /// Identity model v2, 8.1: grant sealed now, offer, wait for the ack (2
 /// minutes), only then the passkey and the certificate, then the result.
-async fn computer_match(app: AppHandle, slot: Arc<Slot>, ctx: MatchContext) -> Result<SessionDto, String> {
-    let RequestSubject::Computer(req) = slot.request.subject.clone() else { return Err("Not a computer request.".into()) };
+async fn computer_match(
+    app: AppHandle,
+    slot: Arc<Slot>,
+    ctx: MatchContext,
+) -> Result<SessionDto, String> {
+    let RequestSubject::Computer(req) = slot.request.subject.clone() else {
+        return Err("Not a computer request.".into());
+    };
     let ws = slot.ws;
     let acked = slot.session.lock().await.acknowledged();
     if !acked {
@@ -854,7 +1026,8 @@ async fn computer_match(app: AppHandle, slot: Arc<Slot>, ctx: MatchContext) -> R
             let st = app.state::<AppState>();
             let conn = crate::computer_link_conn(&st, ws)?;
             let svc = st.service.lock().unwrap();
-            svc.prepare_computer_link(ws, &req2, &conn, now_ms()).map_err(|e| e.to_string())
+            svc.prepare_computer_link(ws, &req2, &conn, now_ms())
+                .map_err(|e| e.to_string())
         })
         .await;
         let grant = match grant {
@@ -877,7 +1050,9 @@ async fn computer_match(app: AppHandle, slot: Arc<Slot>, ctx: MatchContext) -> R
             match r {
                 Ok(true) => break,
                 Ok(false) => continue,
-                Err(ApproverError::Mailbox(e)) if e.retryable() => tokio::time::sleep(Duration::from_secs(2)).await,
+                Err(ApproverError::Mailbox(e)) if e.retryable() => {
+                    tokio::time::sleep(Duration::from_secs(2)).await
+                }
                 Err(e) => return Ok(fail(&app, &slot, &e)),
             }
         }
@@ -893,7 +1068,9 @@ async fn computer_match(app: AppHandle, slot: Arc<Slot>, ctx: MatchContext) -> R
             let conn = crate::computer_link_conn(&st, ws)?;
             let mut svc = st.service.lock().unwrap();
             svc.set_match_context(Some(ctx));
-            let r = svc.publish_computer_link(ws, &req, &conn, now_ms()).map_err(|e| e.to_string());
+            let r = svc
+                .publish_computer_link(ws, &req, &conn, now_ms())
+                .map_err(|e| e.to_string());
             svc.set_match_context(None);
             r
         })
@@ -945,11 +1122,23 @@ pub(crate) async fn approval_expire(app: AppHandle, rid: String) -> Result<Sessi
     }))
 }
 
-async fn end_without_session(app: &AppHandle, ws: Uuid, rid: &str, reason: AbortReason) -> Result<(), String> {
+async fn end_without_session(
+    app: &AppHandle,
+    ws: Uuid,
+    rid: &str,
+    reason: AbortReason,
+) -> Result<(), String> {
     let (t, live) = found_request(ws, rid).ok_or("This request is gone (expired or ended).")?;
-    let epoch = t.epochs.iter().find(|e| e.epoch == live.epoch).cloned().ok_or("That request's key epoch isn't on this device.")?;
+    let epoch = t
+        .epochs
+        .iter()
+        .find(|e| e.epoch == live.epoch)
+        .cloned()
+        .ok_or("That request's key epoch isn't on this device.")?;
     let me = identity(&app.state::<AppState>())?;
-    end_request(&t.client(), &epoch, &live.request, &me.signer, reason).await.map_err(|e| e.to_string())?;
+    end_request(&t.client(), &epoch, &live.request, &me.signer, reason)
+        .await
+        .map_err(|e| e.to_string())?;
     let mut st = DESK.state.lock().unwrap();
     if let Some(f) = st.found.get_mut(&ws) {
         f.live.retain(|l| l.rid_hex() != rid);
@@ -959,11 +1148,22 @@ async fn end_without_session(app: &AppHandle, ws: Uuid, rid: &str, reason: Abort
 
 /// **End this request** (the contested sheet): an abort as contested.
 #[tauri::command]
-pub(crate) async fn approval_end(app: AppHandle, workspace_id: String, rid: String) -> Result<(), String> {
+pub(crate) async fn approval_end(
+    app: AppHandle,
+    workspace_id: String,
+    rid: String,
+) -> Result<(), String> {
     if let Ok(slot) = slot(&rid) {
         set_view(&app, &slot, |v| v.phase = "ended".into());
-        slot.session.lock().await.contested().await.map_err(|e| e.to_string())?;
-        set_view(&app, &slot, |v| v.message = Some("The request was ended. Nothing was granted.".into()));
+        slot.session
+            .lock()
+            .await
+            .contested()
+            .await
+            .map_err(|e| e.to_string())?;
+        set_view(&app, &slot, |v| {
+            v.message = Some("The request was ended. Nothing was granted.".into())
+        });
         return Ok(());
     }
     let ws = Uuid::parse_str(&workspace_id).map_err(|e| e.to_string())?;
@@ -974,10 +1174,19 @@ pub(crate) async fn approval_end(app: AppHandle, workspace_id: String, rid: Stri
 
 /// Decline (the row menu, or the sheet before a code): nothing is granted.
 #[tauri::command]
-pub(crate) async fn approval_decline(app: AppHandle, workspace_id: String, rid: String) -> Result<(), String> {
+pub(crate) async fn approval_decline(
+    app: AppHandle,
+    workspace_id: String,
+    rid: String,
+) -> Result<(), String> {
     if let Ok(slot) = slot(&rid) {
         set_view(&app, &slot, |v| v.phase = "declined".into());
-        slot.session.lock().await.decline().await.map_err(|e| e.to_string())?;
+        slot.session
+            .lock()
+            .await
+            .decline()
+            .await
+            .map_err(|e| e.to_string())?;
         return Ok(());
     }
     let ws = Uuid::parse_str(&workspace_id).map_err(|e| e.to_string())?;
@@ -990,7 +1199,12 @@ pub(crate) async fn approval_decline(app: AppHandle, workspace_id: String, rid: 
 #[tauri::command]
 pub(crate) fn approval_forget(app: AppHandle, rid: String) {
     let mut s = DESK.sessions.lock().unwrap();
-    if s.get(&rid).is_some_and(|slot| !matches!(phase(slot).as_str(), "waiting" | "code" | "confirming" | "passkey")) {
+    if s.get(&rid).is_some_and(|slot| {
+        !matches!(
+            phase(slot).as_str(),
+            "waiting" | "code" | "confirming" | "passkey"
+        )
+    }) {
         s.remove(&rid);
         drop(s);
         let _ = app.emit(CHANGED_EVENT, ());
@@ -1006,9 +1220,17 @@ mod tests {
         let live = [("r1", "ligusjoin1:AAAA"), ("r2", "liguslink1:BBBB")];
         assert_eq!(paste_match("  ligusjoin1:AAAA\n", live), Some("r1"));
         assert_eq!(paste_match("liguslink1:BBBB", live), Some("r2"));
-        assert_eq!(paste_match("ligusjoin1:AAAB", live), None, "one byte off: the fingerprint compare");
+        assert_eq!(
+            paste_match("ligusjoin1:AAAB", live),
+            None,
+            "one byte off: the fingerprint compare"
+        );
         assert_eq!(paste_match("ligusjoin1:aaaa", live), None, "case matters");
-        assert_eq!(paste_match("ligusphone1:AAAA", [("r3", "ligusphone1:AAAA")]), None, "phones have their own flow");
+        assert_eq!(
+            paste_match("ligusphone1:AAAA", [("r3", "ligusphone1:AAAA")]),
+            None,
+            "phones have their own flow"
+        );
         assert_eq!(paste_match("", live), None);
     }
 
@@ -1026,29 +1248,66 @@ mod tests {
         let d = fact_dto(&n);
         assert_eq!(d.kind, "mismatch");
         assert_eq!(d.key, n.rid);
-        assert_eq!(d.text, "Request from build-1 didn't match. Nothing was granted.");
+        assert_eq!(
+            d.text,
+            "Request from build-1 didn't match. Nothing was granted."
+        );
         assert_eq!(d.help, n.help());
-        let d = fact_dto(&Notice { kind: NoticeKind::DidntFinish, ..n });
-        assert_eq!((d.kind.as_str(), d.text.as_str()), ("didntFinish", "Linking build-1 didn't finish. Nothing was added."));
+        let d = fact_dto(&Notice {
+            kind: NoticeKind::DidntFinish,
+            ..n
+        });
+        assert_eq!(
+            (d.kind.as_str(), d.text.as_str()),
+            (
+                "didntFinish",
+                "Linking build-1 didn't finish. Nothing was added."
+            )
+        );
     }
 
     fn view(phase: &str, code_at: i64) -> SessionDto {
-        SessionDto { phase: phase.into(), kind: "box".into(), code: Some("K7Q4 M9X2".into()), code_at: Some(code_at), ..SessionDto::default() }
+        SessionDto {
+            phase: phase.into(),
+            kind: "box".into(),
+            code: Some("K7Q4 M9X2".into()),
+            code_at: Some(code_at),
+            ..SessionDto::default()
+        }
     }
 
     #[test]
     fn codes_match_is_refused_inside_the_hold_and_runs_once() {
         let mut v = view("code", 10_000);
-        assert!(claim_codes_match(&mut v, 10_000 + HOLD_MS - 1).is_err(), "inside the 3-second hold");
+        assert!(
+            claim_codes_match(&mut v, 10_000 + HOLD_MS - 1).is_err(),
+            "inside the 3-second hold"
+        );
         assert_eq!(v.phase, "code");
-        assert_eq!(claim_codes_match(&mut v, 10_000 + HOLD_MS).unwrap(), "K7Q4 M9X2");
+        assert_eq!(
+            claim_codes_match(&mut v, 10_000 + HOLD_MS).unwrap(),
+            "K7Q4 M9X2"
+        );
         assert_eq!(v.phase, "passkey");
-        assert!(claim_codes_match(&mut v, 10_000 + HOLD_MS + 1).is_err(), "a second Codes match");
-        let mut c = SessionDto { kind: "computer".into(), ..view("code", 0) };
+        assert!(
+            claim_codes_match(&mut v, 10_000 + HOLD_MS + 1).is_err(),
+            "a second Codes match"
+        );
+        let mut c = SessionDto {
+            kind: "computer".into(),
+            ..view("code", 0)
+        };
         claim_codes_match(&mut c, HOLD_MS).unwrap();
         assert_eq!(c.phase, "confirming");
         assert!(claim_codes_match(&mut view("waiting", 0), HOLD_MS).is_err());
-        assert!(claim_codes_match(&mut SessionDto { code_at: None, ..view("code", 0) }, i64::MAX).is_err());
+        assert!(claim_codes_match(
+            &mut SessionDto {
+                code_at: None,
+                ..view("code", 0)
+            },
+            i64::MAX
+        )
+        .is_err());
     }
 
     #[test]
@@ -1065,7 +1324,7 @@ mod tests {
     async fn past_the_code_ttl_codes_match_writes_nothing() {
         use ligus_core::crypto::{device_id_for, SigAlg, SigningKeypair};
         use ligus_core::e2ee::KeyAgreementKeypair;
-        use ligus_runtime::approval_mailbox::{Requester, RequestSpec};
+        use ligus_runtime::approval_mailbox::{RequestSpec, Requester};
         let (router, clock) = ligus_runtime::test_relay::router_with_clock();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -1073,27 +1332,65 @@ mod tests {
         let client = MailboxClient::new(&base).with_clock(clock.clock());
         let key = [7u8; 32];
         let counter = client.ensure_registered(&key).await.unwrap();
-        let address = ApprovalAddress::derive(&base, Uuid::new_v4(), &"ab".repeat(16), 1, &key, counter);
+        let address =
+            ApprovalAddress::derive(&base, Uuid::new_v4(), &"ab".repeat(16), 1, &key, counter);
         let epoch = EpochKey { epoch: 1, key };
         // A box asks.
         let bk = SigningKeypair::generate().unwrap();
         let ka = KeyAgreementKeypair::generate().unwrap();
         let pk = bk.public_key_bytes();
-        let join = ligus_runtime::box_admission::JoinRequest::new(Uuid::new_v4(), device_id_for(SigAlg::Ed25519, &pk), &pk, &ka.public_key_bytes(), "build-1");
-        let spec = RequestSpec { kind: MatchKind::Box, code: join.encode(), signer: Signer::Ed25519(bk), ka: Some(ka) };
+        let join = ligus_runtime::box_admission::JoinRequest::new(
+            Uuid::new_v4(),
+            device_id_for(SigAlg::Ed25519, &pk),
+            &pk,
+            &ka.public_key_bytes(),
+            "build-1",
+        );
+        let spec = RequestSpec {
+            kind: MatchKind::Box,
+            code: join.encode(),
+            signer: Signer::Ed25519(bk),
+            ka: Some(ka),
+        };
         let tmp = tempfile::tempdir().unwrap();
-        let mut req = Requester::post(client.clone(), &address, spec, Some(tmp.path())).await.unwrap();
-        let live = list_live(&client, std::slice::from_ref(&epoch)).await.unwrap().live.remove(0);
+        let mut req = Requester::post(client.clone(), &address, spec, Some(tmp.path()))
+            .await
+            .unwrap();
+        let live = list_live(&client, std::slice::from_ref(&epoch))
+            .await
+            .unwrap()
+            .live
+            .remove(0);
         let ak = SigningKeypair::generate().unwrap();
         let me = ApproverIdentity {
             signer: Signer::Ed25519(ak),
             device_name: "Ana's desktop".into(),
-            person: ApproverPerson { account_id: Uuid::new_v4(), name: "Ana".into() },
+            person: ApproverPerson {
+                account_id: Uuid::new_v4(),
+                name: "Ana".into(),
+            },
         };
-        let session = ApproverSession::begin(client.clone(), &epoch, &live.request, me, &mut SeenSet::in_memory()).await.unwrap();
+        let session = ApproverSession::begin(
+            client.clone(),
+            &epoch,
+            &live.request,
+            me,
+            &mut SeenSet::in_memory(),
+        )
+        .await
+        .unwrap();
         let session = tokio::sync::Mutex::new(session);
         req.poll(0).await.unwrap();
-        assert!(session.lock().await.await_reveal(0).await.unwrap().is_some(), "the code shows");
+        assert!(
+            session
+                .lock()
+                .await
+                .await_reveal(0)
+                .await
+                .unwrap()
+                .is_some(),
+            "the code shows"
+        );
         // Ready while the code lasts.
         let wrote = std::sync::atomic::AtomicBool::new(false);
         assert!(commit_if_ready(&session, || async {}).await.is_ok());
@@ -1104,8 +1401,14 @@ mod tests {
         })
         .await;
         assert_eq!(r.unwrap_err(), ApproverError::CodeExpired);
-        assert!(!wrote.load(std::sync::atomic::Ordering::SeqCst), "no passkey, nothing on the log");
-        assert_eq!(ended_by(&ApproverError::CodeExpired).1, "Expired. Nothing was granted.");
+        assert!(
+            !wrote.load(std::sync::atomic::Ordering::SeqCst),
+            "no passkey, nothing on the log"
+        );
+        assert_eq!(
+            ended_by(&ApproverError::CodeExpired).1,
+            "Expired. Nothing was granted."
+        );
     }
 
     #[test]

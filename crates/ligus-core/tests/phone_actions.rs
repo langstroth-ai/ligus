@@ -13,8 +13,9 @@ use ligus_core::presence::PresenceAssertion;
 use ligus_core::testkit::{Phone, SignedWorld};
 use ligus_core::workspace_repo::ApplyRequest;
 use ligus_core::{
-    workspace_config_session_id, ActionProposal, ActorKind, ChatMessage, MemberRoleChange, MessageRole, ProposalApproval, ProposalStatus,
-    SessionEvent, SessionEventEnvelope, Timestamp, Verdict, WorkspaceRole,
+    workspace_config_session_id, ActionProposal, ActorKind, ChatMessage, MemberRoleChange,
+    MessageRole, ProposalApproval, ProposalStatus, SessionEvent, SessionEventEnvelope, Timestamp,
+    Verdict, WorkspaceRole,
 };
 use proptest::prelude::*;
 use uuid::Uuid;
@@ -38,16 +39,31 @@ fn fixture() -> Fixture {
     w.admit("owner", "box", WorkspaceRole::Contributor);
     let phone = Phone::new();
     let cert = w.phone_certificate("mara", &phone);
-    let enrolled = w.push("mara", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    let enrolled = w.push(
+        "mara",
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
     assert_eq!(w.verdict(enrolled), Verdict::Allowed);
     let chat = w.chat("owner", "c");
-    let mut p = ActionProposal::file_diff("p", "ada", "diff --git a/f b/f\n+1\n".into(), vec!["f".into()]);
+    let mut p = ActionProposal::file_diff(
+        "p",
+        "ada",
+        "diff --git a/f b/f\n+1\n".into(),
+        vec!["f".into()],
+    );
     p.created_at = Timestamp::epoch();
     let pid = p.id;
     w.say(chat, "ada", SessionEvent::ProposalUpserted { proposal: p });
     let digest = diff_digest(&w.state(chat).proposals[0]);
     let host = w.people["box"].device_id;
-    Fixture { w, phone, chat, pid, digest, host }
+    Fixture {
+        w,
+        phone,
+        chat,
+        pid,
+        digest,
+        host,
+    }
 }
 
 /// The event a box drafts for `action` (as `ChatService::draft_phone_action` does).
@@ -55,13 +71,19 @@ fn payload(f: &Fixture, action: &PhoneAction) -> SessionEvent {
     let mara = f.w.people["mara"].actor();
     match action {
         PhoneAction::Post { text, .. } => {
-            let mut m = ChatMessage::new(MessageRole::User, mara.display_name.clone(), text.clone());
+            let mut m =
+                ChatMessage::new(MessageRole::User, mara.display_name.clone(), text.clone());
             let mut id = mara.clone();
             id.device_id = Some(f.phone.device_id);
             m.actor_identity = Some(id);
             SessionEvent::MessageAppended { message: m }
         }
-        PhoneAction::Vote { proposal_id, diff_digest, approved, .. } => SessionEvent::ProposalVoteCast {
+        PhoneAction::Vote {
+            proposal_id,
+            diff_digest,
+            approved,
+            ..
+        } => SessionEvent::ProposalVoteCast {
             proposal_id: *proposal_id,
             approval: ProposalApproval {
                 actor_id: mara.id.clone(),
@@ -71,7 +93,12 @@ fn payload(f: &Fixture, action: &PhoneAction) -> SessionEvent {
                 diff_digest: Some(diff_digest.clone()),
             },
         },
-        PhoneAction::Answer { ask_id, answer, option_index, .. } => SessionEvent::FlowRecorded {
+        PhoneAction::Answer {
+            ask_id,
+            answer,
+            option_index,
+            ..
+        } => SessionEvent::FlowRecorded {
             record: FlowRecord::HumanAnswered(HumanAnswered {
                 ask_id: *ask_id,
                 answer: answer.clone(),
@@ -81,30 +108,59 @@ fn payload(f: &Fixture, action: &PhoneAction) -> SessionEvent {
                 ..Default::default()
             }),
         },
-        PhoneAction::ClearLockdown { chat_id, raises } => SessionEvent::ChatLockdownCleared { chat_id: *chat_id, raises: raises.clone() },
-        PhoneAction::RequestApply { proposal_id, diff_digest, host_device_id, expected_base_commit, repo_id, .. } => {
-            SessionEvent::ProposalApplyRequested {
-                request: ApplyRequest {
-                    id: Uuid::new_v4(),
-                    proposal_id: *proposal_id,
-                    diff_digest: diff_digest.clone(),
-                    host_device_id: *host_device_id,
-                    expected_base_commit: expected_base_commit.clone(),
-                    repo_id: *repo_id,
-                },
-            }
-        }
-        PhoneAction::WithdrawApply { proposal_id, request_id, .. } => {
-            SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id }
-        }
-        PhoneAction::Archive { proposal_id, archived, .. } => SessionEvent::ProposalDismissed { proposal_id: *proposal_id, dismissed: *archived },
-        PhoneAction::ProposeMemory { chat_id, op, rationale } => {
+        PhoneAction::ClearLockdown { chat_id, raises } => SessionEvent::ChatLockdownCleared {
+            chat_id: *chat_id,
+            raises: raises.clone(),
+        },
+        PhoneAction::RequestApply {
+            proposal_id,
+            diff_digest,
+            host_device_id,
+            expected_base_commit,
+            repo_id,
+            ..
+        } => SessionEvent::ProposalApplyRequested {
+            request: ApplyRequest {
+                id: Uuid::new_v4(),
+                proposal_id: *proposal_id,
+                diff_digest: diff_digest.clone(),
+                host_device_id: *host_device_id,
+                expected_base_commit: expected_base_commit.clone(),
+                repo_id: *repo_id,
+            },
+        },
+        PhoneAction::WithdrawApply {
+            proposal_id,
+            request_id,
+            ..
+        } => SessionEvent::ProposalApplyWithdrawn {
+            request_id: *request_id,
+            proposal_id: *proposal_id,
+        },
+        PhoneAction::Archive {
+            proposal_id,
+            archived,
+            ..
+        } => SessionEvent::ProposalDismissed {
+            proposal_id: *proposal_id,
+            dismissed: *archived,
+        },
+        PhoneAction::ProposeMemory {
+            chat_id,
+            op,
+            rationale,
+        } => {
             // A new entry is named by its proposal (the box's id).
             let id = Uuid::new_v4();
             let op = match op {
-                ligus_core::memory::MemoryOp::Create { title, body, tags, .. } => {
-                    ligus_core::memory::MemoryOp::Create { entry_id: id, title: title.clone(), body: body.clone(), tags: tags.clone() }
-                }
+                ligus_core::memory::MemoryOp::Create {
+                    title, body, tags, ..
+                } => ligus_core::memory::MemoryOp::Create {
+                    entry_id: id,
+                    title: title.clone(),
+                    body: body.clone(),
+                    tags: tags.clone(),
+                },
                 other => other.clone(),
             };
             SessionEvent::FlowRecorded {
@@ -112,7 +168,12 @@ fn payload(f: &Fixture, action: &PhoneAction) -> SessionEvent {
                     proposal_id: id,
                     op,
                     proposer: String::new(),
-                    source: ligus_core::memory::MemorySource { chat_id: Some(*chat_id), message_id: None, turn_id: None, egress: None },
+                    source: ligus_core::memory::MemorySource {
+                        chat_id: Some(*chat_id),
+                        message_id: None,
+                        turn_id: None,
+                        egress: None,
+                    },
                     rationale: rationale.clone(),
                 }),
             }
@@ -152,10 +213,29 @@ fn confirm(f: &Fixture, env: &mut SessionEventEnvelope) -> ([u8; 32], PresenceAs
 
 fn actions(f: &Fixture) -> Vec<PhoneAction> {
     vec![
-        PhoneAction::Post { chat_id: f.chat, text: "from my phone".into() },
-        PhoneAction::Vote { chat_id: f.chat, proposal_id: f.pid, diff_digest: f.digest.clone(), approved: true },
-        PhoneAction::Answer { chat_id: f.chat, ask_id: Uuid::from_u128(5), answer: "yes".into(), option_index: Some(0), ask_digest: String::new(), text: String::new(), decline: false },
-        PhoneAction::ClearLockdown { chat_id: f.chat, raises: vec![Uuid::from_u128(0x77)] },
+        PhoneAction::Post {
+            chat_id: f.chat,
+            text: "from my phone".into(),
+        },
+        PhoneAction::Vote {
+            chat_id: f.chat,
+            proposal_id: f.pid,
+            diff_digest: f.digest.clone(),
+            approved: true,
+        },
+        PhoneAction::Answer {
+            chat_id: f.chat,
+            ask_id: Uuid::from_u128(5),
+            answer: "yes".into(),
+            option_index: Some(0),
+            ask_digest: String::new(),
+            text: String::new(),
+            decline: false,
+        },
+        PhoneAction::ClearLockdown {
+            chat_id: f.chat,
+            raises: vec![Uuid::from_u128(0x77)],
+        },
         PhoneAction::RequestApply {
             chat_id: f.chat,
             proposal_id: f.pid,
@@ -164,17 +244,38 @@ fn actions(f: &Fixture) -> Vec<PhoneAction> {
             expected_base_commit: Some(SHA.into()),
             repo_id: None,
         },
-        PhoneAction::WithdrawApply { chat_id: f.chat, proposal_id: f.pid, request_id: Uuid::from_u128(9) },
+        PhoneAction::WithdrawApply {
+            chat_id: f.chat,
+            proposal_id: f.pid,
+            request_id: Uuid::from_u128(9),
+        },
         PhoneAction::ProposeMemory {
             chat_id: f.chat,
-            op: ligus_core::memory::MemoryOp::Create { entry_id: Uuid::from_u128(0x31), title: "Deploy day".into(), body: "Thursdays".into(), tags: vec![] },
+            op: ligus_core::memory::MemoryOp::Create {
+                entry_id: Uuid::from_u128(0x31),
+                title: "Deploy day".into(),
+                body: "Thursdays".into(),
+                tags: vec![],
+            },
             rationale: "from standup".into(),
         },
     ]
 }
 
-fn check(f: &Fixture, preimage: &[u8], confirmed: Option<Confirmed<'_>>, action: &PhoneAction) -> Result<ligus_core::phone_action::CheckedPhoneAction, &'static str> {
-    check_phone_action_preimage(preimage, confirmed, f.w.wid, f.phone.device_id, f.w.people["mara"].account_id, action)
+fn check(
+    f: &Fixture,
+    preimage: &[u8],
+    confirmed: Option<Confirmed<'_>>,
+    action: &PhoneAction,
+) -> Result<ligus_core::phone_action::CheckedPhoneAction, &'static str> {
+    check_phone_action_preimage(
+        preimage,
+        confirmed,
+        f.w.wid,
+        f.phone.device_id,
+        f.w.people["mara"].account_id,
+        action,
+    )
 }
 
 #[test]
@@ -185,22 +286,51 @@ fn every_action_round_trips_with_and_without_presence() {
         let __a1 = payload(&f, &action);
         let mut env = draft(&mut f, __a0, __a1);
         let bare = envelope_preimage(&env);
-        let ok = check(&f, &bare, None, &action).unwrap_or_else(|e| panic!("{}: {e}", action.kind()));
-        assert_eq!((ok.event_id, ok.session_id, ok.actor_id.as_str()), (env.event_id, action.session_id(f.w.wid), "mara"));
+        let ok =
+            check(&f, &bare, None, &action).unwrap_or_else(|e| panic!("{}: {e}", action.kind()));
+        assert_eq!(
+            (ok.event_id, ok.session_id, ok.actor_id.as_str()),
+            (env.event_id, action.session_id(f.w.wid), "mara")
+        );
         // The box said no presence, but stamped one anyway: refused.
         let (c, a) = confirm(&f, &mut env);
         let with = envelope_preimage(&env);
-        assert!(check(&f, &with, None, &action).is_err(), "{}", action.kind());
+        assert!(
+            check(&f, &with, None, &action).is_err(),
+            "{}",
+            action.kind()
+        );
         // Confirmed: passes; the bare preimage (no presence) doesn't.
-        let conf = Confirmed { challenge: &c, assertion: Some(&a) };
+        let conf = Confirmed {
+            challenge: &c,
+            assertion: Some(&a),
+        };
         check(&f, &with, Some(conf), &action).unwrap_or_else(|e| panic!("{}: {e}", action.kind()));
         assert!(check(&f, &bare, Some(conf), &action).is_err());
         // Another challenge, or another assertion than the phone produced.
         let other = [7u8; 32];
-        assert!(check(&f, &with, Some(Confirmed { challenge: &other, assertion: Some(&a) }), &action).is_err());
+        assert!(check(
+            &f,
+            &with,
+            Some(Confirmed {
+                challenge: &other,
+                assertion: Some(&a)
+            }),
+            &action
+        )
+        .is_err());
         let mut forged = a.clone();
         forged.signature.push('A');
-        assert!(check(&f, &with, Some(Confirmed { challenge: &c, assertion: Some(&forged) }), &action).is_err());
+        assert!(check(
+            &f,
+            &with,
+            Some(Confirmed {
+                challenge: &c,
+                assertion: Some(&forged)
+            }),
+            &action
+        )
+        .is_err());
     }
 }
 
@@ -215,13 +345,37 @@ fn a_preimage_for_anything_else_is_refused() {
         let good = envelope_preimage(&env);
         // Checked as any other action: refused.
         for other in all.iter().filter(|o| *o != action) {
-            assert!(check(&f, &good, None, other).is_err(), "{} as {}", action.kind(), other.kind());
+            assert!(
+                check(&f, &good, None, other).is_err(),
+                "{} as {}",
+                action.kind(),
+                other.kind()
+            );
         }
         // Another workspace, phone, account; truncated; trailing bytes.
         let account = f.w.people["mara"].account_id;
-        assert!(check_phone_action_preimage(&good, None, Uuid::new_v4(), f.phone.device_id, account, action).is_err());
-        assert!(check_phone_action_preimage(&good, None, f.w.wid, Uuid::new_v4(), account, action).is_err());
-        assert!(check_phone_action_preimage(&good, None, f.w.wid, f.phone.device_id, Uuid::new_v4(), action).is_err());
+        assert!(check_phone_action_preimage(
+            &good,
+            None,
+            Uuid::new_v4(),
+            f.phone.device_id,
+            account,
+            action
+        )
+        .is_err());
+        assert!(
+            check_phone_action_preimage(&good, None, f.w.wid, Uuid::new_v4(), account, action)
+                .is_err()
+        );
+        assert!(check_phone_action_preimage(
+            &good,
+            None,
+            f.w.wid,
+            f.phone.device_id,
+            Uuid::new_v4(),
+            action
+        )
+        .is_err());
         assert!(check(&f, &good[..good.len() - 1], None, action).is_err());
         let mut longer = good.clone();
         longer.push(0);
@@ -236,22 +390,47 @@ fn a_preimage_for_anything_else_is_refused() {
                 _ => s.actor.kind = ActorKind::Agent,
             }
             e.clear_raw();
-            assert!(check(&f, &envelope_preimage(&e), None, action).is_err(), "tweak {tweak}");
+            assert!(
+                check(&f, &envelope_preimage(&e), None, action).is_err(),
+                "tweak {tweak}"
+            );
         }
         // An unknown field in the payload or the stamp.
         for field in [2, 3] {
-            assert!(check(&f, &with_extra_field(&good, field), None, action).is_err(), "field {field}");
+            assert!(
+                check(&f, &with_extra_field(&good, field), None, action).is_err(),
+                "field {field}"
+            );
         }
     }
     // The person's own choices: other text, other vote, other host, other
     // chat, another proposal.
-    let a = PhoneAction::Post { chat_id: f.chat, text: "a".into() };
+    let a = PhoneAction::Post {
+        chat_id: f.chat,
+        text: "a".into(),
+    };
     let __a0 = Some(f.chat);
-    let __a1 = payload(&f, &PhoneAction::Post { chat_id: f.chat, text: "b".into() });
+    let __a1 = payload(
+        &f,
+        &PhoneAction::Post {
+            chat_id: f.chat,
+            text: "b".into(),
+        },
+    );
     let env = draft(&mut f, __a0, __a1);
     assert!(check(&f, &envelope_preimage(&env), None, &a).is_err());
-    let yes = PhoneAction::Vote { chat_id: f.chat, proposal_id: f.pid, diff_digest: f.digest.clone(), approved: true };
-    let no = PhoneAction::Vote { chat_id: f.chat, proposal_id: f.pid, diff_digest: f.digest.clone(), approved: false };
+    let yes = PhoneAction::Vote {
+        chat_id: f.chat,
+        proposal_id: f.pid,
+        diff_digest: f.digest.clone(),
+        approved: true,
+    };
+    let no = PhoneAction::Vote {
+        chat_id: f.chat,
+        proposal_id: f.pid,
+        diff_digest: f.digest.clone(),
+        approved: false,
+    };
     let __a0 = Some(f.chat);
     let __a1 = payload(&f, &no);
     let env = draft(&mut f, __a0, __a1);
@@ -330,7 +509,9 @@ fn normalized(e: &SessionEvent) -> SessionEvent {
             approval.created_at = Timestamp::epoch();
             approval.role = WorkspaceRole::Viewer;
         }
-        SessionEvent::FlowRecorded { record: FlowRecord::HumanAnswered(a) } => a.at_ms = 0,
+        SessionEvent::FlowRecorded {
+            record: FlowRecord::HumanAnswered(a),
+        } => a.at_ms = 0,
         SessionEvent::ProposalApplyRequested { request } => request.id = Uuid::nil(),
         _ => {}
     }
@@ -338,7 +519,9 @@ fn normalized(e: &SessionEvent) -> SessionEvent {
 }
 
 fn parse_payload(preimage: &[u8], f: &Fixture) -> Option<SessionEvent> {
-    ligus_core::phone_action::parse_phone_preimage(preimage, f.w.wid, f.phone.device_id, None, None).ok().map(|p| p.event)
+    ligus_core::phone_action::parse_phone_preimage(preimage, f.w.wid, f.phone.device_id, None, None)
+        .ok()
+        .map(|p| p.event)
 }
 
 proptest! {
@@ -383,7 +566,17 @@ fn every_kind() -> Vec<SessionEvent> {
     for line in GOLDEN.lines().filter(|l| !l.trim().is_empty()) {
         let start = line.find("\"envelope\":").unwrap() + "\"envelope\":".len();
         let env: SessionEventEnvelope = serde_json::from_str(&line[start..line.len() - 1]).unwrap();
-        let k = format!("{}{}", env.payload.kind_str(), matches!(&env.payload, SessionEvent::JoinApproved { admission: Some(_), .. }));
+        let k = format!(
+            "{}{}",
+            env.payload.kind_str(),
+            matches!(
+                &env.payload,
+                SessionEvent::JoinApproved {
+                    admission: Some(_),
+                    ..
+                }
+            )
+        );
         if seen.insert(k) {
             out.push(env.payload);
         }
@@ -412,14 +605,19 @@ const PHONE_TIER: &[&str] = &[
 fn the_phone_tier_is_exactly_the_allow_list() {
     let me = Uuid::new_v4();
     let kinds = every_kind();
-    assert!(kinds.len() >= 70, "every kind is covered ({} kinds)", kinds.len());
+    assert!(
+        kinds.len() >= 70,
+        "every kind is covered ({} kinds)",
+        kinds.len()
+    );
     for e in &kinds {
         let k = e.kind_str();
         let allowed = phone_tier_allows(e, me).is_ok();
         let expected = match e {
             SessionEvent::MessageAppended { message } => message.role == MessageRole::User,
             SessionEvent::FlowRecorded { record } => {
-                matches!(record, FlowRecord::HumanAnswered(_)) || matches!(record, FlowRecord::MemoryProposed(p) if p.proposer.is_empty())
+                matches!(record, FlowRecord::HumanAnswered(_))
+                    || matches!(record, FlowRecord::MemoryProposed(p) if p.proposer.is_empty())
             }
             SessionEvent::JoinApproved { admission, .. } => admission.is_some(),
             SessionEvent::DeviceRevoked { device_id, .. } => *device_id == me,
@@ -434,10 +632,29 @@ fn the_phone_tier_is_exactly_the_allow_list() {
     // Governance is never in it: roles, cuts, admissions beyond the box
     // admission, rules, closures, keys, agents, runtimes, hosts, repos.
     for k in [
-        "memberAdded", "memberRemoved", "memberRoleChanged", "admissionClosed", "workspaceRulesSet", "workspaceKeyRotated",
-        "passkeyRegistered", "passkeyRemoved", "agentUpserted", "agentRosterUpdated", "agentRemoved", "agentKeyCertified",
-        "workspaceRuntimeUpserted", "workspaceHostUpserted", "workspaceRepoAdded", "dearthModeChanged", "workflowDefinitionsUpdated",
-        "proposalApplied", "proposalApplyFailed", "proposalSetDecided", "proposalSetTuned", "proposalUpserted", "deviceCertificateAdded",
+        "memberAdded",
+        "memberRemoved",
+        "memberRoleChanged",
+        "admissionClosed",
+        "workspaceRulesSet",
+        "workspaceKeyRotated",
+        "passkeyRegistered",
+        "passkeyRemoved",
+        "agentUpserted",
+        "agentRosterUpdated",
+        "agentRemoved",
+        "agentKeyCertified",
+        "workspaceRuntimeUpserted",
+        "workspaceHostUpserted",
+        "workspaceRepoAdded",
+        "dearthModeChanged",
+        "workflowDefinitionsUpdated",
+        "proposalApplied",
+        "proposalApplyFailed",
+        "proposalSetDecided",
+        "proposalSetTuned",
+        "proposalUpserted",
+        "deviceCertificateAdded",
         "workspaceSandboxSet",
     ] {
         assert!(!PHONE_TIER.contains(&k), "{k}");
@@ -451,27 +668,75 @@ fn the_phone_tier_is_exactly_the_allow_list() {
 fn governance(f: &Fixture, i: usize) -> (Option<Uuid>, SessionEvent) {
     let owner = f.w.people["owner"].clone_ids();
     match i % 8 {
-        0 => (None, SessionEvent::MemberRoleChanged {
-            change: MemberRoleChange { member_id: "box".into(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Viewer },
-            watermark: vec![],
-        }),
-        1 => (None, SessionEvent::MemberRemoved { member_id: "box".into(), watermark: vec![] }),
-        2 => (None, SessionEvent::MemberAdded { member: f.w.member_of("ada", WorkspaceRole::Viewer), invite: None, proof: None }),
-        3 => (None, SessionEvent::DeviceRevoked { device_id: owner.1, watermark: vec![] }),
-        4 => (None, SessionEvent::WorkspaceRulesSet { version: 2, presence: None }),
-        5 => (None, SessionEvent::JoinApproved { subject: format!("invite:{}", Uuid::new_v4()), admission: None, redeem_key: None }),
-        6 => (None, SessionEvent::AdmissionClosed { invite: Uuid::new_v4(), redeemed: None }),
-        _ => (Some(f.chat), SessionEvent::ProposalApplied {
-            proposal_id: f.pid,
-            diff_digest: f.digest.clone(),
-            commit: None,
-            at: Timestamp::epoch(),
-            repo_id: None,
-            applied_on: None,
-            base_commit: None,
-            applied_tree_hash: None,
-            request_id: None,
-        }),
+        0 => (
+            None,
+            SessionEvent::MemberRoleChanged {
+                change: MemberRoleChange {
+                    member_id: "box".into(),
+                    old_role: WorkspaceRole::Contributor,
+                    new_role: WorkspaceRole::Viewer,
+                },
+                watermark: vec![],
+            },
+        ),
+        1 => (
+            None,
+            SessionEvent::MemberRemoved {
+                member_id: "box".into(),
+                watermark: vec![],
+            },
+        ),
+        2 => (
+            None,
+            SessionEvent::MemberAdded {
+                member: f.w.member_of("ada", WorkspaceRole::Viewer),
+                invite: None,
+                proof: None,
+            },
+        ),
+        3 => (
+            None,
+            SessionEvent::DeviceRevoked {
+                device_id: owner.1,
+                watermark: vec![],
+            },
+        ),
+        4 => (
+            None,
+            SessionEvent::WorkspaceRulesSet {
+                version: 2,
+                presence: None,
+            },
+        ),
+        5 => (
+            None,
+            SessionEvent::JoinApproved {
+                subject: format!("invite:{}", Uuid::new_v4()),
+                admission: None,
+                redeem_key: None,
+            },
+        ),
+        6 => (
+            None,
+            SessionEvent::AdmissionClosed {
+                invite: Uuid::new_v4(),
+                redeemed: None,
+            },
+        ),
+        _ => (
+            Some(f.chat),
+            SessionEvent::ProposalApplied {
+                proposal_id: f.pid,
+                diff_digest: f.digest.clone(),
+                commit: None,
+                at: Timestamp::epoch(),
+                repo_id: None,
+                applied_on: None,
+                base_commit: None,
+                applied_tree_hash: None,
+                request_id: None,
+            },
+        ),
     }
 }
 
@@ -522,7 +787,13 @@ proptest! {
 
 // ---- votes count as the person's only from their certified phone ----
 
-fn phone_signed(f: &mut Fixture, by: &str, chat: Option<Uuid>, payload: SessionEvent, present: bool) -> Uuid {
+fn phone_signed(
+    f: &mut Fixture,
+    by: &str,
+    chat: Option<Uuid>,
+    payload: SessionEvent,
+    present: bool,
+) -> Uuid {
     let mut env = f.w.draft(by, chat, payload, None);
     let s = env.actor_stamp.as_mut().unwrap();
     s.actor.device_id = Some(f.phone.device_id);
@@ -542,7 +813,13 @@ fn phone_signed(f: &mut Fixture, by: &str, chat: Option<Uuid>, payload: SessionE
 fn vote(f: &Fixture, by: &str) -> SessionEvent {
     SessionEvent::ProposalVoteCast {
         proposal_id: f.pid,
-        approval: ProposalApproval { actor_id: by.into(), role: WorkspaceRole::Admin, approved: true, created_at: Timestamp::epoch(), diff_digest: Some(f.digest.clone()) },
+        approval: ProposalApproval {
+            actor_id: by.into(),
+            role: WorkspaceRole::Admin,
+            approved: true,
+            created_at: Timestamp::epoch(),
+            diff_digest: Some(f.digest.clone()),
+        },
     }
 }
 
@@ -565,10 +842,21 @@ fn a_phone_vote_counts_as_its_person_only() {
     let v = f.w.verdicts();
     assert_eq!((v[&as_owner], v[&ok]), (Verdict::Denied, Verdict::Allowed));
     let s = f.w.state(chat);
-    let a = s.proposals[0].approvals.iter().find(|a| a.actor_id == "mara").unwrap();
+    let a = s.proposals[0]
+        .approvals
+        .iter()
+        .find(|a| a.actor_id == "mara")
+        .unwrap();
     assert_eq!(a.role, WorkspaceRole::Contributor);
-    assert!(s.guards.verified_approvals.get(&f.pid).is_some_and(|v| v.contains("mara")));
-    assert!(!s.proposals[0].approvals.iter().any(|a| a.actor_id == "owner"));
+    assert!(s
+        .guards
+        .verified_approvals
+        .get(&f.pid)
+        .is_some_and(|v| v.contains("mara")));
+    assert!(!s.proposals[0]
+        .approvals
+        .iter()
+        .any(|a| a.actor_id == "owner"));
 }
 
 #[test]
@@ -587,7 +875,13 @@ fn an_uncertified_or_revoked_phone_votes_for_no_one() {
     assert_eq!(f.w.verdict(uncertified), Verdict::Denied);
     // Mara revokes her phone from her laptop; its later vote is refused.
     let dev = f.phone.device_id;
-    let rev = f.w.push("mara", SessionEvent::DeviceRevoked { device_id: dev, watermark: vec![] });
+    let rev = f.w.push(
+        "mara",
+        SessionEvent::DeviceRevoked {
+            device_id: dev,
+            watermark: vec![],
+        },
+    );
     assert_eq!(f.w.verdict(rev), Verdict::Allowed);
     let __a0 = "mara";
     let __a1 = Some(chat);
@@ -616,10 +910,22 @@ fn a_phone_vote_needs_presence_where_the_rules_do_and_clearing_a_lockdown_always
     wf.created_at = Timestamp::epoch();
     let wid = wf.id;
     f.w.say(chat, "ada", SessionEvent::ProposalUpserted { proposal: wf });
-    let d = diff_digest(f.w.state(chat).proposals.iter().find(|p| p.id == wid).unwrap());
+    let d = diff_digest(
+        f.w.state(chat)
+            .proposals
+            .iter()
+            .find(|p| p.id == wid)
+            .unwrap(),
+    );
     let v = |d: &str| SessionEvent::ProposalVoteCast {
         proposal_id: wid,
-        approval: ProposalApproval { actor_id: "mara".into(), role: WorkspaceRole::Contributor, approved: true, created_at: Timestamp::epoch(), diff_digest: Some(d.into()) },
+        approval: ProposalApproval {
+            actor_id: "mara".into(),
+            role: WorkspaceRole::Contributor,
+            approved: true,
+            created_at: Timestamp::epoch(),
+            diff_digest: Some(d.into()),
+        },
     };
     let __a0 = "mara";
     let __a1 = Some(chat);
@@ -634,18 +940,34 @@ fn a_phone_vote_needs_presence_where_the_rules_do_and_clearing_a_lockdown_always
     // Clearing a lockdown: config log, presence always.
     let __a0 = "mara";
     let __a1 = None;
-    let __a2 = SessionEvent::ChatLockdownCleared { chat_id: chat, raises: vec![Uuid::from_u128(0x77)] };
+    let __a2 = SessionEvent::ChatLockdownCleared {
+        chat_id: chat,
+        raises: vec![Uuid::from_u128(0x77)],
+    };
     let __a3 = false;
     let clear_bare = phone_signed(&mut f, __a0, __a1, __a2, __a3);
     let __a0 = "mara";
     let __a1 = None;
-    let __a2 = SessionEvent::ChatLockdownCleared { chat_id: chat, raises: vec![Uuid::from_u128(0x77)] };
+    let __a2 = SessionEvent::ChatLockdownCleared {
+        chat_id: chat,
+        raises: vec![Uuid::from_u128(0x77)],
+    };
     let __a3 = true;
     let clear = phone_signed(&mut f, __a0, __a1, __a2, __a3);
     let verdicts = f.w.verdicts();
     assert_eq!(
-        [verdicts[&bare], verdicts[&present], verdicts[&clear_bare], verdicts[&clear]],
-        [Verdict::Denied, Verdict::Allowed, Verdict::Denied, Verdict::Allowed]
+        [
+            verdicts[&bare],
+            verdicts[&present],
+            verdicts[&clear_bare],
+            verdicts[&clear]
+        ],
+        [
+            Verdict::Denied,
+            Verdict::Allowed,
+            Verdict::Denied,
+            Verdict::Allowed
+        ]
     );
 }
 
@@ -655,8 +977,18 @@ fn a_phone_request_is_fulfilled_by_the_named_box_only() {
     let chat = f.chat;
     let v = vote(&f, "owner");
     f.w.say(chat, "owner", v);
-    assert_eq!(f.w.state(chat).proposals[0].status, ProposalStatus::Approved);
-    let req = ApplyRequest { id: Uuid::from_u128(1), proposal_id: f.pid, diff_digest: f.digest.clone(), host_device_id: f.host, expected_base_commit: None, repo_id: None };
+    assert_eq!(
+        f.w.state(chat).proposals[0].status,
+        ProposalStatus::Approved
+    );
+    let req = ApplyRequest {
+        id: Uuid::from_u128(1),
+        proposal_id: f.pid,
+        diff_digest: f.digest.clone(),
+        host_device_id: f.host,
+        expected_base_commit: None,
+        repo_id: None,
+    };
     let __a0 = "mara";
     let __a1 = Some(chat);
     let __a2 = SessionEvent::ProposalApplyRequested { request: req };
@@ -664,17 +996,21 @@ fn a_phone_request_is_fulfilled_by_the_named_box_only() {
     let asked = phone_signed(&mut f, __a0, __a1, __a2, __a3);
     assert_eq!(f.w.verdict(asked), Verdict::Allowed);
     let host = f.host;
-    let applied = f.w.say(chat, "box", SessionEvent::ProposalApplied {
-        proposal_id: f.pid,
-        diff_digest: f.digest.clone(),
-        commit: None,
-        at: Timestamp::epoch(),
-        repo_id: None,
-        applied_on: Some(host),
-        base_commit: None,
-        applied_tree_hash: None,
-        request_id: Some(Uuid::from_u128(1)),
-    });
+    let applied = f.w.say(
+        chat,
+        "box",
+        SessionEvent::ProposalApplied {
+            proposal_id: f.pid,
+            diff_digest: f.digest.clone(),
+            commit: None,
+            at: Timestamp::epoch(),
+            repo_id: None,
+            applied_on: Some(host),
+            base_commit: None,
+            applied_tree_hash: None,
+            request_id: Some(Uuid::from_u128(1)),
+        },
+    );
     assert_eq!(f.w.verdict(applied), Verdict::Allowed);
     assert_eq!(f.w.state(chat).proposals[0].status, ProposalStatus::Applied);
     let _ = workspace_config_session_id(f.w.wid);

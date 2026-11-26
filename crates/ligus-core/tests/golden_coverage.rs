@@ -9,8 +9,9 @@ use ligus_core::presence::{PasskeyCredential, PresencePolicy};
 use ligus_core::watermark::Watermark;
 use ligus_core::workspace_repo::{repo_id, ApplyRequest, WorkspaceRepo};
 use ligus_core::{
-    sign_envelope, ActionProposal, ActorIdentity, ActorKind, ActorStamp, CfgFrontier, MemberRoleChange, SessionEvent,
-    SessionEventEnvelope, SigningKeypair, Timestamp, WorkspaceMember, WorkspaceRole,
+    sign_envelope, ActionProposal, ActorIdentity, ActorKind, ActorStamp, CfgFrontier,
+    MemberRoleChange, SessionEvent, SessionEventEnvelope, SigningKeypair, Timestamp,
+    WorkspaceMember, WorkspaceRole,
 };
 use uuid::Uuid;
 
@@ -117,24 +118,95 @@ fn tag(e: &SessionEvent) -> &'static str {
 /// Every tag `tag` can return (kept next to it; the coverage test checks
 /// each has a vector, and `tag` agrees with `kind_str`).
 const ALL: &[&str] = &[
-    "sessionSnapshot", "messageAppended", "messageChunkReceived", "messageCompleted", "messageRemoved", "turnClaimed",
-    "memberAdded", "memberRemoved", "memberRoleChanged", "agentRosterUpdated", "agentUpserted", "agentRemoved",
-    "sessionRuntimeChanged", "sessionTitleChanged", "sessionArchivedChanged", "skillsUpdated", "proposalUpserted",
-    "proposalVoteCast", "proposalDismissed", "proposalRefined", "proposalSetOpened", "proposalSetAlternativeAdded",
-    "scoutAssessmentPosted", "proposalSetRoundAdvanced", "proposalSetQuorumReached", "proposalSetAlternativeStopped",
-    "proposalSetTuned", "proposalSetPreflightRecorded", "proposalSetDecided", "proposalReverted", "vaultSourcesUpdated",
-    "workflowDefinitionsUpdated", "workflowRunUpserted", "messageReactionAdded", "messageReactionRemoved",
-    "accountKeyRegistered", "accountKeyRotated", "deviceCertificateAdded", "deviceRevoked", "channelCreated",
-    "channelRenamed", "channelReordered", "channelArchived", "chatChannelChanged", "workspaceRuntimesUpdated",
-    "workspaceRuntimeUpserted", "workspaceRuntimeRemoved", "workspaceHostsUpdated", "workspaceHostUpserted",
-    "workspaceHostRemoved", "coordinatorLeaseClaimed", "coordinatorLeaseReleased", "dearthModeChanged", "joinApproved", "admissionClosed",
-    "chatLockdownRaised", "chatLockdownCleared", "proposalMarkedStale", "flowRecorded", "workspaceRulesSet",
-    "proposalApplied", "agentKeyCertified", "workspaceKeyRotated", "deviceKeyAgreementPublished", "passkeyRegistered",
-    "passkeyRemoved", "identityLinkPublished", "identityLinkRemoved", "proposalApplyRequested", "workspaceRepoAdded",
-    "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned", "proposalApplyFailed",
-    "profileUpdated", "deviceLabelSet", "memberRetired",
-    "proposalApplyWithdrawn", "workspaceSandboxSet", "workspaceRepoAliasesSet", "workspaceHostAliasSet", "chatBaseRepinned", "attachmentPolicySet", "attachmentHashBlocked", "attachmentHashUnblocked", "attachmentShared",
-    "attachmentDeleted", "proposalArchivePolicySet",
+    "sessionSnapshot",
+    "messageAppended",
+    "messageChunkReceived",
+    "messageCompleted",
+    "messageRemoved",
+    "turnClaimed",
+    "memberAdded",
+    "memberRemoved",
+    "memberRoleChanged",
+    "agentRosterUpdated",
+    "agentUpserted",
+    "agentRemoved",
+    "sessionRuntimeChanged",
+    "sessionTitleChanged",
+    "sessionArchivedChanged",
+    "skillsUpdated",
+    "proposalUpserted",
+    "proposalVoteCast",
+    "proposalDismissed",
+    "proposalRefined",
+    "proposalSetOpened",
+    "proposalSetAlternativeAdded",
+    "scoutAssessmentPosted",
+    "proposalSetRoundAdvanced",
+    "proposalSetQuorumReached",
+    "proposalSetAlternativeStopped",
+    "proposalSetTuned",
+    "proposalSetPreflightRecorded",
+    "proposalSetDecided",
+    "proposalReverted",
+    "vaultSourcesUpdated",
+    "workflowDefinitionsUpdated",
+    "workflowRunUpserted",
+    "messageReactionAdded",
+    "messageReactionRemoved",
+    "accountKeyRegistered",
+    "accountKeyRotated",
+    "deviceCertificateAdded",
+    "deviceRevoked",
+    "channelCreated",
+    "channelRenamed",
+    "channelReordered",
+    "channelArchived",
+    "chatChannelChanged",
+    "workspaceRuntimesUpdated",
+    "workspaceRuntimeUpserted",
+    "workspaceRuntimeRemoved",
+    "workspaceHostsUpdated",
+    "workspaceHostUpserted",
+    "workspaceHostRemoved",
+    "coordinatorLeaseClaimed",
+    "coordinatorLeaseReleased",
+    "dearthModeChanged",
+    "joinApproved",
+    "admissionClosed",
+    "chatLockdownRaised",
+    "chatLockdownCleared",
+    "proposalMarkedStale",
+    "flowRecorded",
+    "workspaceRulesSet",
+    "proposalApplied",
+    "agentKeyCertified",
+    "workspaceKeyRotated",
+    "deviceKeyAgreementPublished",
+    "passkeyRegistered",
+    "passkeyRemoved",
+    "identityLinkPublished",
+    "identityLinkRemoved",
+    "proposalApplyRequested",
+    "workspaceRepoAdded",
+    "workspaceRepoUpdated",
+    "workspaceRepoRemoved",
+    "chatRepoSet",
+    "chatBasePinned",
+    "proposalApplyFailed",
+    "profileUpdated",
+    "deviceLabelSet",
+    "memberRetired",
+    "proposalApplyWithdrawn",
+    "workspaceSandboxSet",
+    "workspaceRepoAliasesSet",
+    "workspaceHostAliasSet",
+    "chatBaseRepinned",
+    "attachmentPolicySet",
+    "attachmentHashBlocked",
+    "attachmentHashUnblocked",
+    "attachmentShared",
+    "attachmentDeleted",
+    "proposalArchivePolicySet",
 ];
 
 #[test]
@@ -142,16 +214,28 @@ fn every_kind_has_a_golden_vector() {
     let mut have = std::collections::BTreeSet::new();
     for line in GOLDEN.lines().filter(|l| !l.trim().is_empty()) {
         let v: serde_json::Value = serde_json::from_str(line).unwrap();
-        have.insert(v["envelope"]["payload"]["kind"].as_str().unwrap().to_string());
+        have.insert(
+            v["envelope"]["payload"]["kind"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
     }
     let missing: Vec<&&str> = ALL.iter().filter(|k| !have.contains(**k)).collect();
-    assert!(missing.is_empty(), "kinds without a golden vector: {missing:?}");
+    assert!(
+        missing.is_empty(),
+        "kinds without a golden vector: {missing:?}"
+    );
     // The list and the decoder agree: each vector decodes to its own kind.
     for line in GOLDEN.lines().filter(|l| !l.trim().is_empty()) {
         let start = line.find("\"envelope\":").unwrap() + "\"envelope\":".len();
         let env: SessionEventEnvelope = serde_json::from_str(&line[start..line.len() - 1]).unwrap();
         assert_eq!(tag(&env.payload), env.payload.kind_str());
-        assert!(ALL.contains(&tag(&env.payload)), "{} isn't listed", tag(&env.payload));
+        assert!(
+            ALL.contains(&tag(&env.payload)),
+            "{} isn't listed",
+            tag(&env.payload)
+        );
     }
 }
 
@@ -170,8 +254,18 @@ fn cases() -> Vec<(&'static str, Uuid, SessionEvent)> {
     let cfg = ligus_core::workspace_config_session_id(ws);
     let chat = u(3);
     let acct_kp = SigningKeypair::from_seed(&[0x6b; 32]).unwrap();
-    let wm = vec![Watermark { signer: u(0x51), log: chat, heads: vec![u(0x61), u(0x62)], gaps: vec![] }];
-    let wm_gaps = vec![Watermark { signer: u(0x51), log: chat, heads: vec![u(0x61)], gaps: vec![u(0x63)] }];
+    let wm = vec![Watermark {
+        signer: u(0x51),
+        log: chat,
+        heads: vec![u(0x61), u(0x62)],
+        gaps: vec![],
+    }];
+    let wm_gaps = vec![Watermark {
+        signer: u(0x51),
+        log: chat,
+        heads: vec![u(0x61)],
+        gaps: vec![u(0x63)],
+    }];
     let repo = WorkspaceRepo {
         id: repo_id("github.com/zazulam/wefit"),
         canonical: "github.com/zazulam/wefit".into(),
@@ -181,7 +275,12 @@ fn cases() -> Vec<(&'static str, Uuid, SessionEvent)> {
         root_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
         scratch: false,
     };
-    let mut prop = ActionProposal::file_diff("Fix", "agent", "diff --git a/f b/f\n+1\n".into(), vec!["f".into()]);
+    let mut prop = ActionProposal::file_diff(
+        "Fix",
+        "agent",
+        "diff --git a/f b/f\n+1\n".into(),
+        vec!["f".into()],
+    );
     prop.id = u(0x71);
     prop.created_at = Timestamp::epoch();
     prop.repo_id = Some(repo.id);
@@ -209,89 +308,257 @@ fn cases() -> Vec<(&'static str, Uuid, SessionEvent)> {
     let agent_kp = SigningKeypair::from_seed(&[0x7c; 32]).unwrap();
     let phone_key = p256::ecdsa::SigningKey::from_slice(&[0x11; 32]).unwrap();
     let mut sealed = std::collections::BTreeMap::new();
-    sealed.insert(u(1).to_string(), ligus_core::SealedBlob { ephemeral_public: vec![7; 32], ciphertext: vec![8; 48] });
+    sealed.insert(
+        u(1).to_string(),
+        ligus_core::SealedBlob {
+            ephemeral_public: vec![7; 32],
+            ciphertext: vec![8; 48],
+        },
+    );
     vec![
-        ("workspaceRulesSet", cfg, SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::ligus()) }),
-        ("workspaceRulesSet/self-hosted", cfg, SessionEvent::WorkspaceRulesSet {
-            version: 2,
-            presence: Some(PresencePolicy { rp_id: "example.org".into(), origins: vec!["https://example.org".into(), "https://id.example.org".into()] }),
-        }),
-        ("workspaceKeyRotated", cfg, SessionEvent::WorkspaceKeyRotated {
-            rotation: ligus_core::keys::SignedRotation { version: 1, prev_version: 0, sealed, key_commitment: "ab".repeat(32) },
-        }),
-        ("deviceKeyAgreementPublished", cfg, SessionEvent::DeviceKeyAgreementPublished { device_id: u(1), ka_public: vec![9; 32] }),
-        ("passkeyRegistered", cfg, SessionEvent::PasskeyRegistered {
-            credential: PasskeyCredential {
+        (
+            "workspaceRulesSet",
+            cfg,
+            SessionEvent::WorkspaceRulesSet {
+                version: 2,
+                presence: Some(PresencePolicy::ligus()),
+            },
+        ),
+        (
+            "workspaceRulesSet/self-hosted",
+            cfg,
+            SessionEvent::WorkspaceRulesSet {
+                version: 2,
+                presence: Some(PresencePolicy {
+                    rp_id: "example.org".into(),
+                    origins: vec![
+                        "https://example.org".into(),
+                        "https://id.example.org".into(),
+                    ],
+                }),
+            },
+        ),
+        (
+            "workspaceKeyRotated",
+            cfg,
+            SessionEvent::WorkspaceKeyRotated {
+                rotation: ligus_core::keys::SignedRotation {
+                    version: 1,
+                    prev_version: 0,
+                    sealed,
+                    key_commitment: "ab".repeat(32),
+                },
+            },
+        ),
+        (
+            "deviceKeyAgreementPublished",
+            cfg,
+            SessionEvent::DeviceKeyAgreementPublished {
+                device_id: u(1),
+                ka_public: vec![9; 32],
+            },
+        ),
+        (
+            "passkeyRegistered",
+            cfg,
+            SessionEvent::PasskeyRegistered {
+                credential: PasskeyCredential {
+                    account_id: u(9),
+                    credential_id: "AAECAwQFBgcICQoLDA0ODw".into(),
+                    alg: -7,
+                    public_key: vec![4; 65],
+                    label: "MacBook Touch ID".into(),
+                    recovery: false,
+                    registered_at: Timestamp::epoch(),
+                },
+            },
+        ),
+        (
+            "passkeyRegistered/recovery",
+            cfg,
+            SessionEvent::PasskeyRegistered {
+                credential: PasskeyCredential {
+                    account_id: u(9),
+                    credential_id: "cmVjb3Zlcnk".into(),
+                    alg: -8,
+                    public_key: vec![5; 32],
+                    label: "Recovery key".into(),
+                    recovery: true,
+                    registered_at: Timestamp::epoch(),
+                },
+            },
+        ),
+        (
+            "passkeyRemoved",
+            cfg,
+            SessionEvent::PasskeyRemoved {
                 account_id: u(9),
                 credential_id: "AAECAwQFBgcICQoLDA0ODw".into(),
-                alg: -7,
-                public_key: vec![4; 65],
-                label: "MacBook Touch ID".into(),
-                recovery: false,
-                registered_at: Timestamp::epoch(),
             },
-        }),
-        ("passkeyRegistered/recovery", cfg, SessionEvent::PasskeyRegistered {
-            credential: PasskeyCredential {
+        ),
+        (
+            "agentKeyCertified",
+            cfg,
+            SessionEvent::AgentKeyCertified {
+                cert: ligus_core::AgentKeyCertificate::issue(
+                    &device(),
+                    u(1),
+                    u(0x81),
+                    &agent_kp.public_key_bytes(),
+                    Timestamp::epoch(),
+                ),
+            },
+        ),
+        (
+            "identityLinkPublished",
+            cfg,
+            SessionEvent::IdentityLinkPublished { link },
+        ),
+        (
+            "identityLinkRemoved",
+            cfg,
+            SessionEvent::IdentityLinkRemoved {
                 account_id: u(9),
-                credential_id: "cmVjb3Zlcnk".into(),
-                alg: -8,
-                public_key: vec![5; 32],
-                label: "Recovery key".into(),
-                recovery: true,
-                registered_at: Timestamp::epoch(),
+                link_id: u(0xa1),
             },
-        }),
-        ("passkeyRemoved", cfg, SessionEvent::PasskeyRemoved { account_id: u(9), credential_id: "AAECAwQFBgcICQoLDA0ODw".into() }),
-        ("agentKeyCertified", cfg, SessionEvent::AgentKeyCertified {
-            cert: ligus_core::AgentKeyCertificate::issue(&device(), u(1), u(0x81), &agent_kp.public_key_bytes(), Timestamp::epoch()),
-        }),
-        ("identityLinkPublished", cfg, SessionEvent::IdentityLinkPublished { link }),
-        ("identityLinkRemoved", cfg, SessionEvent::IdentityLinkRemoved { account_id: u(9), link_id: u(0xa1) }),
-        ("proposalApplied", chat, SessionEvent::ProposalApplied {
-            proposal_id: u(0x71),
-            diff_digest: "cd".repeat(32),
-            commit: Some("89abcdef0123456789abcdef0123456789abcdef".into()),
-            at: Timestamp::epoch(),
-            repo_id: Some(repo.id),
-            applied_on: Some(u(1)),
-            base_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
-            applied_tree_hash: Some("fedcba9876543210fedcba9876543210fedcba98".into()),
-            request_id: Some(u(0xb1)),
-        }),
-        ("proposalApplyRequested", chat, SessionEvent::ProposalApplyRequested {
-            request: ApplyRequest {
-                id: u(0xb1),
+        ),
+        (
+            "proposalApplied",
+            chat,
+            SessionEvent::ProposalApplied {
                 proposal_id: u(0x71),
                 diff_digest: "cd".repeat(32),
-                host_device_id: u(1),
-                expected_base_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+                commit: Some("89abcdef0123456789abcdef0123456789abcdef".into()),
+                at: Timestamp::epoch(),
                 repo_id: Some(repo.id),
+                applied_on: Some(u(1)),
+                base_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+                applied_tree_hash: Some("fedcba9876543210fedcba9876543210fedcba98".into()),
+                request_id: Some(u(0xb1)),
             },
-        }),
-        ("proposalUpserted/repo", chat, SessionEvent::ProposalUpserted { proposal: prop }),
-        ("workspaceRepoAdded", cfg, SessionEvent::WorkspaceRepoAdded { repo: repo.clone() }),
-        ("workspaceRepoUpdated", cfg, SessionEvent::WorkspaceRepoUpdated { repo_id: repo.id, display_name: "WeFit app".into(), default_branch: "main".into(), scratch: None }),
-        ("workspaceRepoRemoved", cfg, SessionEvent::WorkspaceRepoRemoved { repo_id: repo.id }),
-        ("chatRepoSet", chat, SessionEvent::ChatRepoSet { repo_id: Some(repo.id), base_branch: "main".into() }),
-        ("chatBasePinned", chat, SessionEvent::ChatBasePinned { repo_id: repo.id, commit: "0123456789abcdef0123456789abcdef01234567".into() }),
-        ("memberRemoved/watermark", cfg, SessionEvent::MemberRemoved { member_id: u(9).to_string(), watermark: wm.clone() }),
-        ("memberRoleChanged/watermark", cfg, SessionEvent::MemberRoleChanged {
-            change: MemberRoleChange { member_id: u(9).to_string(), old_role: WorkspaceRole::Admin, new_role: WorkspaceRole::Contributor },
-            watermark: wm.clone(),
-        }),
-        ("deviceRevoked/watermark", cfg, SessionEvent::DeviceRevoked { device_id: u(0x51), watermark: wm }),
-        ("memberAdded/service", cfg, SessionEvent::MemberAdded {
-            member: WorkspaceMember { id: svc.id.clone(), actor: svc, role: WorkspaceRole::Contributor, title: String::new(), index: 3, joined_at: Timestamp::epoch() },
-            invite: None,
-            proof: None,
-        }),
-        ("deviceCertificateAdded/phone-p256", cfg, SessionEvent::DeviceCertificateAdded {
-            // The frozen line's synthetic device id (a wire-shape vector; the
-            // id a key derives is pinned by `golden/device_id_v1.jsonl`).
-            certificate: DeviceCertificate::issue_p256_for_id(&acct_kp, u(9), u(0x52), &ligus_core::crypto::p256_public_key(&phone_key), Timestamp::epoch()),
-        }),
-        ("memberRemoved/watermark-gaps", cfg, SessionEvent::MemberRemoved { member_id: u(9).to_string(), watermark: wm_gaps }),
+        ),
+        (
+            "proposalApplyRequested",
+            chat,
+            SessionEvent::ProposalApplyRequested {
+                request: ApplyRequest {
+                    id: u(0xb1),
+                    proposal_id: u(0x71),
+                    diff_digest: "cd".repeat(32),
+                    host_device_id: u(1),
+                    expected_base_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+                    repo_id: Some(repo.id),
+                },
+            },
+        ),
+        (
+            "proposalUpserted/repo",
+            chat,
+            SessionEvent::ProposalUpserted { proposal: prop },
+        ),
+        (
+            "workspaceRepoAdded",
+            cfg,
+            SessionEvent::WorkspaceRepoAdded { repo: repo.clone() },
+        ),
+        (
+            "workspaceRepoUpdated",
+            cfg,
+            SessionEvent::WorkspaceRepoUpdated {
+                repo_id: repo.id,
+                display_name: "WeFit app".into(),
+                default_branch: "main".into(),
+                scratch: None,
+            },
+        ),
+        (
+            "workspaceRepoRemoved",
+            cfg,
+            SessionEvent::WorkspaceRepoRemoved { repo_id: repo.id },
+        ),
+        (
+            "chatRepoSet",
+            chat,
+            SessionEvent::ChatRepoSet {
+                repo_id: Some(repo.id),
+                base_branch: "main".into(),
+            },
+        ),
+        (
+            "chatBasePinned",
+            chat,
+            SessionEvent::ChatBasePinned {
+                repo_id: repo.id,
+                commit: "0123456789abcdef0123456789abcdef01234567".into(),
+            },
+        ),
+        (
+            "memberRemoved/watermark",
+            cfg,
+            SessionEvent::MemberRemoved {
+                member_id: u(9).to_string(),
+                watermark: wm.clone(),
+            },
+        ),
+        (
+            "memberRoleChanged/watermark",
+            cfg,
+            SessionEvent::MemberRoleChanged {
+                change: MemberRoleChange {
+                    member_id: u(9).to_string(),
+                    old_role: WorkspaceRole::Admin,
+                    new_role: WorkspaceRole::Contributor,
+                },
+                watermark: wm.clone(),
+            },
+        ),
+        (
+            "deviceRevoked/watermark",
+            cfg,
+            SessionEvent::DeviceRevoked {
+                device_id: u(0x51),
+                watermark: wm,
+            },
+        ),
+        (
+            "memberAdded/service",
+            cfg,
+            SessionEvent::MemberAdded {
+                member: WorkspaceMember {
+                    id: svc.id.clone(),
+                    actor: svc,
+                    role: WorkspaceRole::Contributor,
+                    title: String::new(),
+                    index: 3,
+                    joined_at: Timestamp::epoch(),
+                },
+                invite: None,
+                proof: None,
+            },
+        ),
+        (
+            "deviceCertificateAdded/phone-p256",
+            cfg,
+            SessionEvent::DeviceCertificateAdded {
+                // The frozen line's synthetic device id (a wire-shape vector; the
+                // id a key derives is pinned by `golden/device_id_v1.jsonl`).
+                certificate: DeviceCertificate::issue_p256_for_id(
+                    &acct_kp,
+                    u(9),
+                    u(0x52),
+                    &ligus_core::crypto::p256_public_key(&phone_key),
+                    Timestamp::epoch(),
+                ),
+            },
+        ),
+        (
+            "memberRemoved/watermark-gaps",
+            cfg,
+            SessionEvent::MemberRemoved {
+                member_id: u(9).to_string(),
+                watermark: wm_gaps,
+            },
+        ),
     ]
 }
 
@@ -300,9 +567,15 @@ fn cases() -> Vec<(&'static str, Uuid, SessionEvent)> {
 #[test]
 #[ignore]
 fn phase_a_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let mut out = String::new();
     for (i, (label, sid, payload)) in cases().into_iter().enumerate() {
         let mut e = SessionEventEnvelope::new(sid, u(2), 100 + i as i64, payload);
@@ -316,14 +589,21 @@ fn phase_a_goldens() {
         e.actor_stamp = Some(ActorStamp {
             actor,
             recorded_at: Timestamp::epoch(),
-            cfg_frontier: Some(CfgFrontier { lamport: 499, event_id: u(0x1fff) }),
+            cfg_frontier: Some(CfgFrontier {
+                lamport: 499,
+                event_id: u(0x1fff),
+            }),
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x2fff)),
-            sig_alg: SigAlg::Ed25519, log_head: None,
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
         });
         sign_envelope(&mut e, u(1), &kp);
-        let line = format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}", serde_json::to_string(&e).unwrap());
+        let line = format!(
+            "{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}",
+            serde_json::to_string(&e).unwrap()
+        );
         out.push_str(&line);
         out.push('\n');
     }
@@ -337,9 +617,15 @@ fn phase_a_goldens() {
 #[test]
 #[ignore]
 fn phase_b_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let ws = u(2);
     let redeem = ligus_core::admission::RedeemKey::from_seed(&[0x5a; 32]).unwrap();
     let svc = {
@@ -348,20 +634,55 @@ fn phase_b_goldens() {
         a
     };
     let cases = [
-        ("joinApprovedAdmission/redeemKey", 0, SessionEvent::JoinApproved {
-            subject: format!("invite:{}", u(0x71)),
-            admission: Some(ligus_core::admission::Admission::service(3_600_000, Some(u(0x72)), redeem.public()).for_device(&[0x33; 32])), redeem_key: None,
-        }),
-        ("memberAdded/redemption", 1, SessionEvent::MemberAdded {
-            member: WorkspaceMember { id: svc.id.clone(), actor: svc.clone(), role: WorkspaceRole::Contributor, title: String::new(), index: 4, joined_at: Timestamp::epoch() },
-            invite: Some(u(0x71)),
-            proof: Some(redeem.prove(ws, u(0x71), &svc.id, u(1))),
-        }),
-        ("admissionClosed", 2, SessionEvent::AdmissionClosed { invite: u(0x71), redeemed: Some(u(0x3011)) }),
+        (
+            "joinApprovedAdmission/redeemKey",
+            0,
+            SessionEvent::JoinApproved {
+                subject: format!("invite:{}", u(0x71)),
+                admission: Some(
+                    ligus_core::admission::Admission::service(
+                        3_600_000,
+                        Some(u(0x72)),
+                        redeem.public(),
+                    )
+                    .for_device(&[0x33; 32]),
+                ),
+                redeem_key: None,
+            },
+        ),
+        (
+            "memberAdded/redemption",
+            1,
+            SessionEvent::MemberAdded {
+                member: WorkspaceMember {
+                    id: svc.id.clone(),
+                    actor: svc.clone(),
+                    role: WorkspaceRole::Contributor,
+                    title: String::new(),
+                    index: 4,
+                    joined_at: Timestamp::epoch(),
+                },
+                invite: Some(u(0x71)),
+                proof: Some(redeem.prove(ws, u(0x71), &svc.id, u(1))),
+            },
+        ),
+        (
+            "admissionClosed",
+            2,
+            SessionEvent::AdmissionClosed {
+                invite: u(0x71),
+                redeemed: Some(u(0x3011)),
+            },
+        ),
     ];
     let mut out = String::new();
     for (label, i, payload) in cases {
-        let mut e = SessionEventEnvelope::new(ligus_core::workspace_config_session_id(ws), ws, 201 + i, payload);
+        let mut e = SessionEventEnvelope::new(
+            ligus_core::workspace_config_session_id(ws),
+            ws,
+            201 + i,
+            payload,
+        );
         e.id = u(0x3010 + 2 * i as u128);
         e.event_id = u(0x3011 + 2 * i as u128);
         e.lamport = 601 + i as u64;
@@ -372,14 +693,21 @@ fn phase_b_goldens() {
         e.actor_stamp = Some(ActorStamp {
             actor,
             recorded_at: Timestamp::epoch(),
-            cfg_frontier: Some(CfgFrontier { lamport: 600 + i as u64, event_id: u(0x3001) }),
+            cfg_frontier: Some(CfgFrontier {
+                lamport: 600 + i as u64,
+                event_id: u(0x3001),
+            }),
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x3001)),
-            sig_alg: SigAlg::Ed25519, log_head: None,
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
         });
         sign_envelope(&mut e, u(1), &kp);
-        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+        out.push_str(&format!(
+            "{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n",
+            serde_json::to_string(&e).unwrap()
+        ));
     }
     std::fs::write(path, out).unwrap();
 }
@@ -391,9 +719,15 @@ fn phase_b_goldens() {
 #[test]
 #[ignore]
 fn person_invite_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let ws = u(2);
     let redeem = ligus_core::admission::RedeemKey::from_seed(&[0x5b; 32]).unwrap();
     let person = {
@@ -402,20 +736,40 @@ fn person_invite_goldens() {
         a
     };
     let cases = [
-        ("joinApproved/redeemKey", 0, SessionEvent::JoinApproved {
-            subject: format!("invite:{}", u(0x74)),
-            admission: None,
-            redeem_key: Some(redeem.public().to_vec()),
-        }),
-        ("memberAdded/personRedemption", 1, SessionEvent::MemberAdded {
-            member: WorkspaceMember { id: person.id.clone(), actor: person.clone(), role: WorkspaceRole::Contributor, title: String::new(), index: 5, joined_at: Timestamp::epoch() },
-            invite: Some(u(0x74)),
-            proof: Some(redeem.prove_person(ws, u(0x74), &person.id, u(1))),
-        }),
+        (
+            "joinApproved/redeemKey",
+            0,
+            SessionEvent::JoinApproved {
+                subject: format!("invite:{}", u(0x74)),
+                admission: None,
+                redeem_key: Some(redeem.public().to_vec()),
+            },
+        ),
+        (
+            "memberAdded/personRedemption",
+            1,
+            SessionEvent::MemberAdded {
+                member: WorkspaceMember {
+                    id: person.id.clone(),
+                    actor: person.clone(),
+                    role: WorkspaceRole::Contributor,
+                    title: String::new(),
+                    index: 5,
+                    joined_at: Timestamp::epoch(),
+                },
+                invite: Some(u(0x74)),
+                proof: Some(redeem.prove_person(ws, u(0x74), &person.id, u(1))),
+            },
+        ),
     ];
     let mut out = String::new();
     for (label, i, payload) in cases {
-        let mut e = SessionEventEnvelope::new(ligus_core::workspace_config_session_id(ws), ws, 301 + i, payload);
+        let mut e = SessionEventEnvelope::new(
+            ligus_core::workspace_config_session_id(ws),
+            ws,
+            301 + i,
+            payload,
+        );
         e.id = u(0x3110 + 2 * i as u128);
         e.event_id = u(0x3111 + 2 * i as u128);
         e.lamport = 701 + i as u64;
@@ -426,14 +780,21 @@ fn person_invite_goldens() {
         e.actor_stamp = Some(ActorStamp {
             actor,
             recorded_at: Timestamp::epoch(),
-            cfg_frontier: Some(CfgFrontier { lamport: 700 + i as u64, event_id: u(0x3101) }),
+            cfg_frontier: Some(CfgFrontier {
+                lamport: 700 + i as u64,
+                event_id: u(0x3101),
+            }),
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x3101)),
-            sig_alg: SigAlg::Ed25519, log_head: None,
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
         });
         sign_envelope(&mut e, u(1), &kp);
-        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+        out.push_str(&format!(
+            "{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n",
+            serde_json::to_string(&e).unwrap()
+        ));
     }
     std::fs::write(path, out).unwrap();
 }
@@ -444,18 +805,36 @@ fn person_invite_goldens() {
 #[test]
 #[ignore]
 fn phase_b_apply_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let ws = u(2);
     let chat = u(3);
     let cases = [
-        ("proposalApplyFailed", 0, SessionEvent::ProposalApplyFailed {
-            request_id: u(0xb1),
-            proposal_id: u(0x71),
-            reason: "the checkout moved since the request (expected 01234567, at 89abcdef)".into(),
-        }),
-        ("proposalApplyWithdrawn", 1, SessionEvent::ProposalApplyWithdrawn { request_id: u(0xb1), proposal_id: u(0x71) }),
+        (
+            "proposalApplyFailed",
+            0,
+            SessionEvent::ProposalApplyFailed {
+                request_id: u(0xb1),
+                proposal_id: u(0x71),
+                reason: "the checkout moved since the request (expected 01234567, at 89abcdef)"
+                    .into(),
+            },
+        ),
+        (
+            "proposalApplyWithdrawn",
+            1,
+            SessionEvent::ProposalApplyWithdrawn {
+                request_id: u(0xb1),
+                proposal_id: u(0x71),
+            },
+        ),
     ];
     let mut out = String::new();
     for (label, i, payload) in cases {
@@ -470,14 +849,21 @@ fn phase_b_apply_goldens() {
         e.actor_stamp = Some(ActorStamp {
             actor,
             recorded_at: Timestamp::epoch(),
-            cfg_frontier: Some(CfgFrontier { lamport: 700, event_id: u(0x4001) }),
+            cfg_frontier: Some(CfgFrontier {
+                lamport: 700,
+                event_id: u(0x4001),
+            }),
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x4002)),
-            sig_alg: SigAlg::Ed25519, log_head: None,
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
         });
         sign_envelope(&mut e, u(1), &kp);
-        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+        out.push_str(&format!(
+            "{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n",
+            serde_json::to_string(&e).unwrap()
+        ));
     }
     std::fs::write(path, out).unwrap();
 }
@@ -489,18 +875,38 @@ fn phase_b_apply_goldens() {
 #[test]
 #[ignore]
 fn lamport_bounds_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let ws = u(2);
     let chat = u(3);
-    let mut m = ligus_core::ChatMessage::new(ligus_core::MessageRole::User, "Mara", "after the head");
+    let mut m =
+        ligus_core::ChatMessage::new(ligus_core::MessageRole::User, "Mara", "after the head");
     m.id = u(0x5004);
     m.created_at = Timestamp::epoch();
     let cfg = ligus_core::workspace_config_session_id(ws);
     let cases = [
-        ("messageAppended/logHead", 0u64, chat, SessionEvent::MessageAppended { message: m }),
-        ("chatLockdownCleared/raises", 1, cfg, SessionEvent::ChatLockdownCleared { chat_id: chat, raises: vec![u(0x5020), u(0x5021)] }),
+        (
+            "messageAppended/logHead",
+            0u64,
+            chat,
+            SessionEvent::MessageAppended { message: m },
+        ),
+        (
+            "chatLockdownCleared/raises",
+            1,
+            cfg,
+            SessionEvent::ChatLockdownCleared {
+                chat_id: chat,
+                raises: vec![u(0x5020), u(0x5021)],
+            },
+        ),
     ];
     let mut out = String::new();
     for (label, i, sid, payload) in cases {
@@ -514,16 +920,28 @@ fn lamport_bounds_goldens() {
         e.actor_stamp = Some(ActorStamp {
             actor,
             recorded_at: Timestamp::epoch(),
-            cfg_frontier: Some(CfgFrontier { lamport: 800, event_id: u(0x5001) }),
+            cfg_frontier: Some(CfgFrontier {
+                lamport: 800,
+                event_id: u(0x5001),
+            }),
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x5002)),
             sig_alg: SigAlg::Ed25519,
             log_head: None,
         });
-        ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 41, event_id: u(0x5003) }));
+        ligus_core::lamport::stamp_next(
+            &mut e,
+            Some(CfgFrontier {
+                lamport: 41,
+                event_id: u(0x5003),
+            }),
+        );
         sign_envelope(&mut e, u(1), &kp);
-        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+        out.push_str(&format!(
+            "{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n",
+            serde_json::to_string(&e).unwrap()
+        ));
     }
     std::fs::write(path, out).unwrap();
 }
@@ -535,18 +953,59 @@ fn lamport_bounds_goldens() {
 #[test]
 #[ignore]
 fn repos_v2_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let ws = u(2);
     let chat = u(3);
     let cfg = ligus_core::workspace_config_session_id(ws);
     let wefit = repo_id("github.com/zazulam/wefit");
     let cases = [
-        ("turnClaimed/dispatch", 0u64, chat, SessionEvent::TurnClaimed { trigger_id: u(0x6001), device_id: u(1), epoch: 2, supersedes: Some(u(0x6002)), repo_id: Some(wefit) }),
-        ("workspaceRepoAliasesSet", 1, cfg, SessionEvent::WorkspaceRepoAliasesSet { repo_id: wefit, aliases: vec!["github.com/old-org/wefit".into()] }),
-        ("workspaceHostAliasSet", 2, cfg, SessionEvent::WorkspaceHostAliasSet { alias: "ssh.git.example.com".into(), host: "git.example.com".into() }),
-        ("workspaceHostAliasSet/clear", 3, cfg, SessionEvent::WorkspaceHostAliasSet { alias: "ssh.git.example.com".into(), host: String::new() }),
+        (
+            "turnClaimed/dispatch",
+            0u64,
+            chat,
+            SessionEvent::TurnClaimed {
+                trigger_id: u(0x6001),
+                device_id: u(1),
+                epoch: 2,
+                supersedes: Some(u(0x6002)),
+                repo_id: Some(wefit),
+            },
+        ),
+        (
+            "workspaceRepoAliasesSet",
+            1,
+            cfg,
+            SessionEvent::WorkspaceRepoAliasesSet {
+                repo_id: wefit,
+                aliases: vec!["github.com/old-org/wefit".into()],
+            },
+        ),
+        (
+            "workspaceHostAliasSet",
+            2,
+            cfg,
+            SessionEvent::WorkspaceHostAliasSet {
+                alias: "ssh.git.example.com".into(),
+                host: "git.example.com".into(),
+            },
+        ),
+        (
+            "workspaceHostAliasSet/clear",
+            3,
+            cfg,
+            SessionEvent::WorkspaceHostAliasSet {
+                alias: "ssh.git.example.com".into(),
+                host: String::new(),
+            },
+        ),
     ];
     let mut out = String::new();
     for (label, i, sid, payload) in cases {
@@ -560,16 +1019,28 @@ fn repos_v2_goldens() {
         e.actor_stamp = Some(ActorStamp {
             actor,
             recorded_at: Timestamp::epoch(),
-            cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6003) }),
+            cfg_frontier: Some(CfgFrontier {
+                lamport: 900,
+                event_id: u(0x6003),
+            }),
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x6004)),
             sig_alg: SigAlg::Ed25519,
             log_head: None,
         });
-        ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 60, event_id: u(0x6005) }));
+        ligus_core::lamport::stamp_next(
+            &mut e,
+            Some(CfgFrontier {
+                lamport: 60,
+                event_id: u(0x6005),
+            }),
+        );
         sign_envelope(&mut e, u(1), &kp);
-        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+        out.push_str(&format!(
+            "{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n",
+            serde_json::to_string(&e).unwrap()
+        ));
     }
     std::fs::write(path, out).unwrap();
 }
@@ -582,30 +1053,88 @@ fn repos_v2_goldens() {
 #[ignore]
 fn identity_v2_goldens() {
     use ligus_core::profile::{Avatar, DeviceLabel, ProfileChange};
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let ws = u(2);
     let cfg = ligus_core::workspace_config_session_id(ws);
     let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
-    let change = |name: Option<&str>, avatar: Option<Avatar>, clear: bool| SessionEvent::ProfileUpdated {
-        profile: ProfileChange { account_id: u(9), display_name: name.map(String::from), avatar, clear_avatar: clear, issued_at_ms: 1_764_000_000_000 },
-    };
+    let change =
+        |name: Option<&str>, avatar: Option<Avatar>, clear: bool| SessionEvent::ProfileUpdated {
+            profile: ProfileChange {
+                account_id: u(9),
+                display_name: name.map(String::from),
+                avatar,
+                clear_avatar: clear,
+                issued_at_ms: 1_764_000_000_000,
+            },
+        };
     let cases = [
-        ("profileUpdated", 0u64, change(Some("Mara Ruiz"), None, false)),
-        ("profileUpdated/avatar", 1, change(None, Some(Avatar::new("image/png", &png).unwrap()), false)),
+        (
+            "profileUpdated",
+            0u64,
+            change(Some("Mara Ruiz"), None, false),
+        ),
+        (
+            "profileUpdated/avatar",
+            1,
+            change(None, Some(Avatar::new("image/png", &png).unwrap()), false),
+        ),
         ("profileUpdated/clearAvatar", 2, change(None, None, true)),
-        ("deviceLabelSet", 3, SessionEvent::DeviceLabelSet { label: DeviceLabel { device_id: u(1), account_id: u(9), label: "Mara's MacBook Air".into() } }),
-        ("deviceLabelSet/clear", 4, SessionEvent::DeviceLabelSet { label: DeviceLabel { device_id: u(1), account_id: u(9), label: String::new() } }),
-        ("memberRetired", 5, SessionEvent::MemberRetired {
-            retirement: ligus_core::retirement::MemberRetirement::sign(&device(), ws, &u(8).to_string(), u(8), u(9), u(1)),
-        }),
+        (
+            "deviceLabelSet",
+            3,
+            SessionEvent::DeviceLabelSet {
+                label: DeviceLabel {
+                    device_id: u(1),
+                    account_id: u(9),
+                    label: "Mara's MacBook Air".into(),
+                },
+            },
+        ),
+        (
+            "deviceLabelSet/clear",
+            4,
+            SessionEvent::DeviceLabelSet {
+                label: DeviceLabel {
+                    device_id: u(1),
+                    account_id: u(9),
+                    label: String::new(),
+                },
+            },
+        ),
+        (
+            "memberRetired",
+            5,
+            SessionEvent::MemberRetired {
+                retirement: ligus_core::retirement::MemberRetirement::sign(
+                    &device(),
+                    ws,
+                    &u(8).to_string(),
+                    u(8),
+                    u(9),
+                    u(1),
+                ),
+            },
+        ),
         ("deviceCertificateAdded/phoneConsent", 6, {
             let phone = p256::ecdsa::SigningKey::from_slice(&[7u8; 32]).unwrap();
             let pk = ligus_core::crypto::p256_public_key(&phone);
-            let mut certificate = DeviceCertificate::issue_p256(&device(), u(9), &pk, Timestamp::epoch());
-            certificate.phone_consent =
-                Some(ligus_core::crypto::sign_p256(&phone, &ligus_core::crypto::phone_consent_preimage(ws, u(9), certificate.device_id)).to_vec());
+            let mut certificate =
+                DeviceCertificate::issue_p256(&device(), u(9), &pk, Timestamp::epoch());
+            certificate.phone_consent = Some(
+                ligus_core::crypto::sign_p256(
+                    &phone,
+                    &ligus_core::crypto::phone_consent_preimage(ws, u(9), certificate.device_id),
+                )
+                .to_vec(),
+            );
             SessionEvent::DeviceCertificateAdded { certificate }
         }),
     ];
@@ -621,16 +1150,28 @@ fn identity_v2_goldens() {
         e.actor_stamp = Some(ActorStamp {
             actor,
             recorded_at: Timestamp::epoch(),
-            cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x7003) }),
+            cfg_frontier: Some(CfgFrontier {
+                lamport: 900,
+                event_id: u(0x7003),
+            }),
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x7004)),
             sig_alg: SigAlg::Ed25519,
             log_head: None,
         });
-        ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 70, event_id: u(0x7005) }));
+        ligus_core::lamport::stamp_next(
+            &mut e,
+            Some(CfgFrontier {
+                lamport: 70,
+                event_id: u(0x7005),
+            }),
+        );
         sign_envelope(&mut e, u(1), &kp);
-        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+        out.push_str(&format!(
+            "{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n",
+            serde_json::to_string(&e).unwrap()
+        ));
     }
     std::fs::write(path, out).unwrap();
 }
@@ -641,9 +1182,15 @@ fn identity_v2_goldens() {
 #[test]
 #[ignore]
 fn repin_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let ws = u(2);
     let chat = u(3);
     let payload = SessionEvent::ChatBaseRepinned {
@@ -662,7 +1209,10 @@ fn repin_goldens() {
     e.actor_stamp = Some(ActorStamp {
         actor,
         recorded_at: Timestamp::epoch(),
-        cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6001) }),
+        cfg_frontier: Some(CfgFrontier {
+            lamport: 900,
+            event_id: u(0x6001),
+        }),
         presence: None,
         runtime_effect: false,
         prev: Some(u(0x6002)),
@@ -670,7 +1220,14 @@ fn repin_goldens() {
         log_head: None,
     });
     sign_envelope(&mut e, u(1), &kp);
-    std::fs::write(path, format!("{{\"label\":\"chatBaseRepinned\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
+    std::fs::write(
+        path,
+        format!(
+            "{{\"label\":\"chatBaseRepinned\",\"pk\":\"{pk}\",\"envelope\":{}}}\n",
+            serde_json::to_string(&e).unwrap()
+        ),
+    )
+    .unwrap();
 }
 
 /// Writes the file-attachment lines (issue #118): the policy, the blocklist,
@@ -680,9 +1237,15 @@ fn repin_goldens() {
 #[ignore]
 fn attachment_goldens() {
     use ligus_core::attachment::{AttachmentPolicy, AttachmentRef};
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let ws = u(2);
     let chat = u(3);
     let cfg = ligus_core::workspace_config_session_id(ws);
@@ -696,15 +1259,72 @@ fn attachment_goldens() {
         message_id: Some(u(0x6002)),
         proposal_id: None,
     };
-    let offered = AttachmentRef { id: u(0x6003), proposal_id: Some(u(0x6004)), message_id: None, name: "report.pdf".into(), content_type: "application/pdf".into(), ..file.clone() };
+    let offered = AttachmentRef {
+        id: u(0x6003),
+        proposal_id: Some(u(0x6004)),
+        message_id: None,
+        name: "report.pdf".into(),
+        content_type: "application/pdf".into(),
+        ..file.clone()
+    };
     let cases = [
-        ("attachmentPolicySet", 0u64, cfg, SessionEvent::AttachmentPolicySet { policy: AttachmentPolicy { agents: true, ..AttachmentPolicy::recommended() } }),
-        ("attachmentPolicySet/off", 1, cfg, SessionEvent::AttachmentPolicySet { policy: AttachmentPolicy::default() }),
-        ("attachmentHashBlocked", 2, cfg, SessionEvent::AttachmentHashBlocked { sha256: "ab".repeat(32) }),
-        ("attachmentHashUnblocked", 3, cfg, SessionEvent::AttachmentHashUnblocked { sha256: "ab".repeat(32) }),
-        ("attachmentShared", 4, chat, SessionEvent::AttachmentShared { attachment: file }),
-        ("attachmentShared/proposal", 5, chat, SessionEvent::AttachmentShared { attachment: offered }),
-        ("attachmentDeleted", 6, chat, SessionEvent::AttachmentDeleted { attachment_id: u(0x6001) }),
+        (
+            "attachmentPolicySet",
+            0u64,
+            cfg,
+            SessionEvent::AttachmentPolicySet {
+                policy: AttachmentPolicy {
+                    agents: true,
+                    ..AttachmentPolicy::recommended()
+                },
+            },
+        ),
+        (
+            "attachmentPolicySet/off",
+            1,
+            cfg,
+            SessionEvent::AttachmentPolicySet {
+                policy: AttachmentPolicy::default(),
+            },
+        ),
+        (
+            "attachmentHashBlocked",
+            2,
+            cfg,
+            SessionEvent::AttachmentHashBlocked {
+                sha256: "ab".repeat(32),
+            },
+        ),
+        (
+            "attachmentHashUnblocked",
+            3,
+            cfg,
+            SessionEvent::AttachmentHashUnblocked {
+                sha256: "ab".repeat(32),
+            },
+        ),
+        (
+            "attachmentShared",
+            4,
+            chat,
+            SessionEvent::AttachmentShared { attachment: file },
+        ),
+        (
+            "attachmentShared/proposal",
+            5,
+            chat,
+            SessionEvent::AttachmentShared {
+                attachment: offered,
+            },
+        ),
+        (
+            "attachmentDeleted",
+            6,
+            chat,
+            SessionEvent::AttachmentDeleted {
+                attachment_id: u(0x6001),
+            },
+        ),
     ];
     let mut out = String::new();
     for (label, i, sid, payload) in cases {
@@ -718,16 +1338,28 @@ fn attachment_goldens() {
         e.actor_stamp = Some(ActorStamp {
             actor,
             recorded_at: Timestamp::epoch(),
-            cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6000) }),
+            cfg_frontier: Some(CfgFrontier {
+                lamport: 900,
+                event_id: u(0x6000),
+            }),
             presence: None,
             runtime_effect: false,
             prev: None,
             sig_alg: SigAlg::Ed25519,
             log_head: None,
         });
-        ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 50 + i, event_id: u(0x6005) }));
+        ligus_core::lamport::stamp_next(
+            &mut e,
+            Some(CfgFrontier {
+                lamport: 50 + i,
+                event_id: u(0x6005),
+            }),
+        );
         sign_envelope(&mut e, u(1), &kp);
-        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+        out.push_str(&format!(
+            "{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n",
+            serde_json::to_string(&e).unwrap()
+        ));
     }
     std::fs::write(path, out).unwrap();
 }
@@ -740,47 +1372,99 @@ fn attachment_goldens() {
 fn memory_goldens() {
     use ligus_core::flow::FlowRecord;
     use ligus_core::memory::*;
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let ws = u(2);
     let chat = u(3);
     let cfg = ligus_core::workspace_config_session_id(ws);
-    let source = MemorySource { chat_id: Some(chat), message_id: Some(u(0x6031)), turn_id: Some(u(0x6032)), egress: None };
+    let source = MemorySource {
+        chat_id: Some(chat),
+        message_id: Some(u(0x6031)),
+        turn_id: Some(u(0x6032)),
+        egress: None,
+    };
     let cases = [
-        ("flowRecorded/memoryWritten", cfg, FlowRecord::MemoryWritten(MemoryWrite {
-            entry_id: u(0x6001),
-            base: Some(u(0x6011)),
-            title: "Relay ports".into(),
-            body: "The team relay listens on 8443.".into(),
-            tags: vec!["infra".into()],
-            source: source.clone(),
-            resolves: vec![u(0x6012)],
-        })),
-        ("flowRecorded/memoryRemoved", cfg, FlowRecord::MemoryRemoved(MemoryRemoval { entry_id: u(0x6001), base: u(0x6013), source: MemorySource::default(), resolves: vec![] })),
-        ("flowRecorded/memoryProposed", cfg, FlowRecord::MemoryProposed(MemoryProposal {
-            proposal_id: u(0x6021),
-            op: MemoryOp::Edit { entry_id: u(0x6001), base: u(0x6011), title: "Relay ports".into(), body: "8443, and 443 behind the proxy.".into(), tags: vec![] },
-            proposer: u(0x81).to_string(),
-            source,
-            rationale: "seen in the deploy chat".into(),
-        })),
-        ("flowRecorded/memoryProposalDecided", cfg, FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: u(0x6021), accepted: true, note: "thanks".into(), resolves: vec![] })),
-        ("flowRecorded/taskState", chat, FlowRecord::TaskState(TaskStateUpdate {
-            task_id: chat,
-            agent_key: u(0x81).to_string(),
-            turn_id: u(0x6032),
-            status: TaskStatus::Blocked,
-            summary: "Waiting on the schema decision".into(),
-            progress: Some(40),
-            open_questions: vec!["Keep the v1 route?".into()],
-            partial_results: vec!["Drafted the migration".into()],
-            ttl_ms: Some(3_600_000),
-        })),
+        (
+            "flowRecorded/memoryWritten",
+            cfg,
+            FlowRecord::MemoryWritten(MemoryWrite {
+                entry_id: u(0x6001),
+                base: Some(u(0x6011)),
+                title: "Relay ports".into(),
+                body: "The team relay listens on 8443.".into(),
+                tags: vec!["infra".into()],
+                source: source.clone(),
+                resolves: vec![u(0x6012)],
+            }),
+        ),
+        (
+            "flowRecorded/memoryRemoved",
+            cfg,
+            FlowRecord::MemoryRemoved(MemoryRemoval {
+                entry_id: u(0x6001),
+                base: u(0x6013),
+                source: MemorySource::default(),
+                resolves: vec![],
+            }),
+        ),
+        (
+            "flowRecorded/memoryProposed",
+            cfg,
+            FlowRecord::MemoryProposed(MemoryProposal {
+                proposal_id: u(0x6021),
+                op: MemoryOp::Edit {
+                    entry_id: u(0x6001),
+                    base: u(0x6011),
+                    title: "Relay ports".into(),
+                    body: "8443, and 443 behind the proxy.".into(),
+                    tags: vec![],
+                },
+                proposer: u(0x81).to_string(),
+                source,
+                rationale: "seen in the deploy chat".into(),
+            }),
+        ),
+        (
+            "flowRecorded/memoryProposalDecided",
+            cfg,
+            FlowRecord::MemoryProposalDecided(MemoryDecision {
+                proposal_id: u(0x6021),
+                accepted: true,
+                note: "thanks".into(),
+                resolves: vec![],
+            }),
+        ),
+        (
+            "flowRecorded/taskState",
+            chat,
+            FlowRecord::TaskState(TaskStateUpdate {
+                task_id: chat,
+                agent_key: u(0x81).to_string(),
+                turn_id: u(0x6032),
+                status: TaskStatus::Blocked,
+                summary: "Waiting on the schema decision".into(),
+                progress: Some(40),
+                open_questions: vec!["Keep the v1 route?".into()],
+                partial_results: vec!["Drafted the migration".into()],
+                ttl_ms: Some(3_600_000),
+            }),
+        ),
     ];
     let mut out = String::new();
     for (i, (label, sid, record)) in cases.into_iter().enumerate() {
-        let mut e = SessionEventEnvelope::new(sid, ws, 501 + i as i64, SessionEvent::FlowRecorded { record });
+        let mut e = SessionEventEnvelope::new(
+            sid,
+            ws,
+            501 + i as i64,
+            SessionEvent::FlowRecorded { record },
+        );
         e.id = u(0x6100 + 2 * i as u128);
         e.event_id = u(0x6101 + 2 * i as u128);
         e.timestamp = Timestamp::epoch();
@@ -790,16 +1474,28 @@ fn memory_goldens() {
         e.actor_stamp = Some(ActorStamp {
             actor,
             recorded_at: Timestamp::epoch(),
-            cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6050) }),
+            cfg_frontier: Some(CfgFrontier {
+                lamport: 900,
+                event_id: u(0x6050),
+            }),
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x6051)),
             sig_alg: SigAlg::Ed25519,
             log_head: None,
         });
-        ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 60, event_id: u(0x6052) }));
+        ligus_core::lamport::stamp_next(
+            &mut e,
+            Some(CfgFrontier {
+                lamport: 60,
+                event_id: u(0x6052),
+            }),
+        );
         sign_envelope(&mut e, u(1), &kp);
-        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+        out.push_str(&format!(
+            "{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n",
+            serde_json::to_string(&e).unwrap()
+        ));
     }
     std::fs::write(path, out).unwrap();
 }
@@ -807,14 +1503,22 @@ fn memory_goldens() {
 /// The memory and task-state vectors are present and decode to their types.
 #[test]
 fn memory_goldens_are_present() {
-    for t in ["memoryWritten", "memoryRemoved", "memoryProposed", "memoryProposalDecided", "taskState"] {
+    for t in [
+        "memoryWritten",
+        "memoryRemoved",
+        "memoryProposed",
+        "memoryProposalDecided",
+        "taskState",
+    ] {
         let line = GOLDEN
             .lines()
             .find(|l| l.contains(&format!("\"label\":\"flowRecorded/{t}\"")))
             .unwrap_or_else(|| panic!("no golden vector for {t}"));
         let start = line.find("\"envelope\":").unwrap() + "\"envelope\":".len();
         let env: SessionEventEnvelope = serde_json::from_str(&line[start..line.len() - 1]).unwrap();
-        let SessionEvent::FlowRecorded { record } = env.payload else { panic!("{t}") };
+        let SessionEvent::FlowRecorded { record } = env.payload else {
+            panic!("{t}")
+        };
         assert_eq!(record.type_str(), t);
     }
 }
@@ -825,18 +1529,29 @@ fn memory_goldens_are_present() {
 #[test]
 #[ignore]
 fn phase_c_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let ws = u(2);
     let mut grants = ligus_core::sandbox::SandboxGrants::default();
     grants.workspace.read_only.push("~/.m2/repository".into());
     grants.agents.insert(
         u(0xa1),
-        ligus_core::sandbox::AgentGrant { read_only: vec!["/opt/datasets".into()], read_write: vec!["~/scratch/agent".into()], shell: true },
+        ligus_core::sandbox::AgentGrant {
+            read_only: vec!["/opt/datasets".into()],
+            read_write: vec!["~/scratch/agent".into()],
+            shell: true,
+        },
     );
     let cfg = ligus_core::workspace_config_session_id(ws);
-    let mut e = SessionEventEnvelope::new(cfg, ws, 501, SessionEvent::WorkspaceSandboxSet { grants });
+    let mut e =
+        SessionEventEnvelope::new(cfg, ws, 501, SessionEvent::WorkspaceSandboxSet { grants });
     e.id = u(0x6010);
     e.event_id = u(0x6011);
     e.timestamp = Timestamp::epoch();
@@ -846,16 +1561,32 @@ fn phase_c_goldens() {
     e.actor_stamp = Some(ActorStamp {
         actor,
         recorded_at: Timestamp::epoch(),
-        cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6001) }),
+        cfg_frontier: Some(CfgFrontier {
+            lamport: 900,
+            event_id: u(0x6001),
+        }),
         presence: None,
         runtime_effect: false,
         prev: Some(u(0x6002)),
         sig_alg: SigAlg::Ed25519,
         log_head: None,
     });
-    ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 900, event_id: u(0x6001) }));
+    ligus_core::lamport::stamp_next(
+        &mut e,
+        Some(CfgFrontier {
+            lamport: 900,
+            event_id: u(0x6001),
+        }),
+    );
     sign_envelope(&mut e, u(1), &kp);
-    std::fs::write(path, format!("{{\"label\":\"workspaceSandboxSet\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
+    std::fs::write(
+        path,
+        format!(
+            "{{\"label\":\"workspaceSandboxSet\",\"pk\":\"{pk}\",\"envelope\":{}}}\n",
+            serde_json::to_string(&e).unwrap()
+        ),
+    )
+    .unwrap();
 }
 
 /// Writes the agent-access line: `agentUpserted` carrying the owner-only
@@ -864,9 +1595,15 @@ fn phase_c_goldens() {
 #[test]
 #[ignore]
 fn agent_access_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let ws = u(2);
     let cfg = ligus_core::workspace_config_session_id(ws);
     let mut agent = ligus_core::WorkspaceAgent::new("scout", "ws-claude");
@@ -874,7 +1611,10 @@ fn agent_access_goldens() {
     agent.owner_actor_id = u(9).to_string();
     agent.created_at = Timestamp::epoch();
     agent.access = ligus_core::agent::ACCESS_EVERYONE.into();
-    agent.limits = ligus_core::AgentLimits { member_turns_per_day: Some(20), usd_cents_per_day: Some(500) };
+    agent.limits = ligus_core::AgentLimits {
+        member_turns_per_day: Some(20),
+        usd_cents_per_day: Some(500),
+    };
     agent.notify_on_use = true;
     let mut e = SessionEventEnvelope::new(cfg, ws, 502, SessionEvent::AgentUpserted { agent });
     e.id = u(0x7010);
@@ -887,7 +1627,10 @@ fn agent_access_goldens() {
     e.actor_stamp = Some(ActorStamp {
         actor,
         recorded_at: Timestamp::epoch(),
-        cfg_frontier: Some(CfgFrontier { lamport: 904, event_id: u(0x7002) }),
+        cfg_frontier: Some(CfgFrontier {
+            lamport: 904,
+            event_id: u(0x7002),
+        }),
         presence: None,
         runtime_effect: false,
         prev: Some(u(0x7003)),
@@ -895,7 +1638,14 @@ fn agent_access_goldens() {
         log_head: None,
     });
     sign_envelope(&mut e, u(1), &kp);
-    std::fs::write(path, format!("{{\"label\":\"agentUpserted/access\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
+    std::fs::write(
+        path,
+        format!(
+            "{{\"label\":\"agentUpserted/access\",\"pk\":\"{pk}\",\"envelope\":{}}}\n",
+            serde_json::to_string(&e).unwrap()
+        ),
+    )
+    .unwrap();
 }
 
 /// Writes the proposal-archive line (0.4): the workspace's auto-archive
@@ -903,12 +1653,25 @@ fn agent_access_goldens() {
 #[test]
 #[ignore]
 fn proposal_archive_goldens() {
-    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else {
+        return;
+    };
     let kp = device();
-    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let pk: String = kp
+        .public_key_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let ws = u(2);
-    let payload = SessionEvent::ProposalArchivePolicySet { policy: ligus_core::proposal_archive::ProposalArchivePolicy { after_days: 14 } };
-    let mut e = SessionEventEnvelope::new(ligus_core::workspace_config_session_id(ws), ws, 401, payload);
+    let payload = SessionEvent::ProposalArchivePolicySet {
+        policy: ligus_core::proposal_archive::ProposalArchivePolicy { after_days: 14 },
+    };
+    let mut e = SessionEventEnvelope::new(
+        ligus_core::workspace_config_session_id(ws),
+        ws,
+        401,
+        payload,
+    );
     e.id = u(0x3210);
     e.event_id = u(0x3211);
     e.lamport = 801;
@@ -919,7 +1682,10 @@ fn proposal_archive_goldens() {
     e.actor_stamp = Some(ActorStamp {
         actor,
         recorded_at: Timestamp::epoch(),
-        cfg_frontier: Some(CfgFrontier { lamport: 800, event_id: u(0x3201) }),
+        cfg_frontier: Some(CfgFrontier {
+            lamport: 800,
+            event_id: u(0x3201),
+        }),
         presence: None,
         runtime_effect: false,
         prev: Some(u(0x3201)),
@@ -927,5 +1693,12 @@ fn proposal_archive_goldens() {
         log_head: None,
     });
     sign_envelope(&mut e, u(1), &kp);
-    std::fs::write(path, format!("{{\"label\":\"proposalArchivePolicySet\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
+    std::fs::write(
+        path,
+        format!(
+            "{{\"label\":\"proposalArchivePolicySet\",\"pk\":\"{pk}\",\"envelope\":{}}}\n",
+            serde_json::to_string(&e).unwrap()
+        ),
+    )
+    .unwrap();
 }

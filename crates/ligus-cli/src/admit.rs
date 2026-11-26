@@ -56,7 +56,13 @@ pub fn mark_box(cfg: &Config) -> Result<ligus_runtime::StoredIdentity> {
 pub fn join_request(cfg: &Config, label: &str) -> Result<JoinRequest> {
     let stored = mark_box(cfg)?;
     let ka = identity(cfg).key_agreement(stored.device.id)?;
-    Ok(JoinRequest::new(stored.account.id, stored.device.id, &stored.device.signing_public_key, &ka.public_key_bytes(), label))
+    Ok(JoinRequest::new(
+        stored.account.id,
+        stored.device.id,
+        &stored.device.signing_public_key,
+        &ka.public_key_bytes(),
+        label,
+    ))
 }
 
 /// Print the join request an Admin approves.
@@ -93,10 +99,15 @@ pub fn redeem(cfg: &mut Config, code: &str) -> Result<Redeemed> {
     let invite = box_admission::open_admission(code, &ka).map_err(|e| anyhow!(e))?;
     let (relay_url, room, key, inv, ek, pin) = crate::decode_ligusws_invite_full(&invite)?;
     if cfg.room != "default" && cfg.room != room {
-        bail!("that admission is for workspace '{room}', but this box serves '{}' (LIGUS_WORKSPACE)", cfg.room);
+        bail!(
+            "that admission is for workspace '{room}', but this box serves '{}' (LIGUS_WORKSPACE)",
+            cfg.room
+        );
     }
     let (Some(inv), Some(redeem_key)) = (inv, box_admission::redeem_key_of(&invite)) else {
-        bail!("that code isn't a box admission: ask an Admin for one (workspace menu > Admit a box)");
+        bail!(
+            "that code isn't a box admission: ask an Admin for one (workspace menu > Admit a box)"
+        );
     };
     let mut f = load_file_config(&cfg.data_dir);
     if cfg.relay_url.is_none() {
@@ -128,13 +139,17 @@ pub fn redeem(cfg: &mut Config, code: &str) -> Result<Redeemed> {
     if let Some((founder, fk)) = pin {
         store.set_workspace_pin(ws, &founder, &fk)?;
     }
-    Ok(Redeemed { room, invite: Some(inv) })
+    Ok(Redeemed {
+        room,
+        invite: Some(inv),
+    })
 }
 
 /// The admission code in `path` (a mounted Secret: trailing whitespace is
 /// fine, nothing else is read).
 pub fn read_code_file(path: &Path) -> Result<String> {
-    let meta = std::fs::metadata(path).with_context(|| format!("reading the admission file {}", path.display()))?;
+    let meta = std::fs::metadata(path)
+        .with_context(|| format!("reading the admission file {}", path.display()))?;
     if meta.len() as usize > box_admission::MAX_CODE_LEN {
         bail!("{} is too large to be an admission code", path.display());
     }
@@ -160,7 +175,9 @@ pub fn admission_from_file(path: Option<String>) -> Result<Option<String>> {
 /// Whether this box is already a member of `ws` in its local copy.
 fn is_member(svc: &ChatService, ws: Uuid) -> Result<bool> {
     let me = svc.author().id.clone();
-    Ok(svc.load_in(ws, workspace_config_session_id(ws))?.is_some_and(|c| c.members.iter().any(|m| m.id == me)))
+    Ok(svc
+        .load_in(ws, workspace_config_session_id(ws))?
+        .is_some_and(|c| c.members.iter().any(|m| m.id == me)))
 }
 
 /// The start-up shared by `ligus serve` and `ligus worker` (Phase B):
@@ -240,16 +257,29 @@ where
                 Ok(_) => "it holds no admission".into(),
             };
             print_request(cfg, label)?;
-            bail!("this box isn't a member of workspace '{}' and couldn't join: {why}", cfg.room);
+            bail!(
+                "this box isn't a member of workspace '{}' and couldn't join: {why}",
+                cfg.room
+            );
         }
-        println!("ligus: joined workspace '{}' as its own service member (Contributor).", cfg.room);
+        println!(
+            "ligus: joined workspace '{}' as its own service member (Contributor).",
+            cfg.room
+        );
     }
     Ok((svc, synced.is_ok()))
 }
 
 /// `ligus admit <request|redeem|issue>`.
-pub fn cmd_admit(cfg: &Config, positional: &[&String], flag: impl Fn(&str) -> Option<String>) -> Result<()> {
-    let label = flag("--label").or_else(|| crate::env_opt("LIGUS_SERVE_LABEL")).or_else(ligus_runtime::machine_hostname).unwrap_or_else(|| "box".into());
+pub fn cmd_admit(
+    cfg: &Config,
+    positional: &[&String],
+    flag: impl Fn(&str) -> Option<String>,
+) -> Result<()> {
+    let label = flag("--label")
+        .or_else(|| crate::env_opt("LIGUS_SERVE_LABEL"))
+        .or_else(ligus_runtime::machine_hostname)
+        .unwrap_or_else(|| "box".into());
     match positional.first().map(|s| s.as_str()) {
         Some("request") => print_request(cfg, &label),
         Some("redeem") => {
@@ -281,7 +311,11 @@ pub fn cmd_admit(cfg: &Config, positional: &[&String], flag: impl Fn(&str) -> Op
 /// command line (only this box opens it), or any code from `--file PATH` or
 /// standard input (`-`). A bearer `hivews1:` code carries the workspace key,
 /// so it is refused on the command line, where `ps` and shell history keep it.
-pub fn redeem_code(arg: Option<&str>, file: Option<String>, stdin: impl FnOnce() -> std::io::Result<String>) -> Result<String> {
+pub fn redeem_code(
+    arg: Option<&str>,
+    file: Option<String>,
+    stdin: impl FnOnce() -> std::io::Result<String>,
+) -> Result<String> {
     let code = match (arg, file) {
         (Some("-"), None) => stdin()?.trim().to_string(),
         (Some(c), None) => {
@@ -306,7 +340,9 @@ pub fn redeem_code(arg: Option<&str>, file: Option<String>, stdin: impl FnOnce()
 pub fn parse_ttl(s: &str) -> Result<i64> {
     let s = s.trim();
     let (n, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
-    let n: i64 = n.parse().map_err(|_| anyhow!("--ttl takes a duration like 1h, 90m or 2d"))?;
+    let n: i64 = n
+        .parse()
+        .map_err(|_| anyhow!("--ttl takes a duration like 1h, 90m or 2d"))?;
     let per = match unit {
         "" | "s" => 1000,
         "m" => 60_000,
@@ -325,7 +361,10 @@ pub fn parse_ttl(s: &str) -> Result<i64> {
 pub(crate) struct RecoveryPresence(pub(crate) ligus_core::presence::RecoveryKey);
 
 impl ligus_runtime::chat_service::PresenceProvider for RecoveryPresence {
-    fn assert(&self, req: &ligus_runtime::chat_service::PresenceRequest) -> std::result::Result<ligus_core::presence::PresenceAssertion, String> {
+    fn assert(
+        &self,
+        req: &ligus_runtime::chat_service::PresenceRequest,
+    ) -> std::result::Result<ligus_core::presence::PresenceAssertion, String> {
         Ok(self.0.assert(&req.challenge))
     }
 }
@@ -337,8 +376,16 @@ fn recovery_from_file(path: &str) -> Result<ligus_core::presence::RecoveryKey> {
 }
 
 /// `ligus admit issue`: the headless Admin path.
-fn cmd_issue(cfg: &Config, ttl: Option<String>, request: Option<String>, words: Option<String>, out: Option<String>) -> Result<()> {
-    let request = request.map(|r| JoinRequest::decode(&r).map_err(|e| anyhow!(e))).transpose()?;
+fn cmd_issue(
+    cfg: &Config,
+    ttl: Option<String>,
+    request: Option<String>,
+    words: Option<String>,
+    out: Option<String>,
+) -> Result<()> {
+    let request = request
+        .map(|r| JoinRequest::decode(&r).map_err(|e| anyhow!(e)))
+        .transpose()?;
     let ttl = match ttl {
         Some(t) => parse_ttl(&t)?,
         None if request.is_some() => box_admission::DEFAULT_TTL_MS,
@@ -352,7 +399,9 @@ fn cmd_issue(cfg: &Config, ttl: Option<String>, request: Option<String>, words: 
         bail!("this data dir is a box (a service member); an Admin issues admissions from their own identity");
     }
     let mut svc = crate::open_service(cfg)?;
-    svc.set_presence_provider(Some(std::sync::Arc::new(RecoveryPresence(recovery_from_file(&words)?))));
+    svc.set_presence_provider(Some(std::sync::Arc::new(RecoveryPresence(
+        recovery_from_file(&words)?,
+    ))));
     let ws = uuid_of_room(&cfg.room);
     let (inv, mut seed) = svc.issue_box_admission(ws, ttl, request.as_ref())?;
     let code = crate::serve::admission_code(cfg, &svc, inv, &seed);
@@ -375,7 +424,8 @@ fn cmd_issue(cfg: &Config, ttl: Option<String>, request: Option<String>, words: 
 
 /// Asks the person at a terminal whether the phone shows this code's
 /// fingerprint ([`confirm_phone_fingerprint_on_tty`]); `Ok(true)` is yes.
-pub type ConfirmFingerprint<'a> = &'a mut dyn FnMut(&ligus_runtime::phone_enroll::PhoneCode) -> Result<bool>;
+pub type ConfirmFingerprint<'a> =
+    &'a mut dyn FnMut(&ligus_runtime::phone_enroll::PhoneCode) -> Result<bool>;
 
 /// `ligus phones certify`: "Add this phone" for a headless identity. Certify
 /// the phone whose code (`ligusphone1:…`, from the app's Settings > This
@@ -424,10 +474,16 @@ pub fn cmd_phones_certify(
         bail!("this data dir is a box (a service member); a phone is certified by its own person's identity");
     }
     let mut svc = crate::open_service(cfg)?;
-    svc.set_presence_provider(Some(std::sync::Arc::new(RecoveryPresence(recovery_from_file(&words)?))));
+    svc.set_presence_provider(Some(std::sync::Arc::new(RecoveryPresence(
+        recovery_from_file(&words)?,
+    ))));
     let ws = uuid_of_room(&cfg.room);
     if svc.phone_standing(ws, &phone)? == PhoneStanding::AlreadyMine {
-        println!("phone {} ({}) is already one of your devices", phone.device_id, phone.fingerprint());
+        println!(
+            "phone {} ({}) is already one of your devices",
+            phone.device_id,
+            phone.fingerprint()
+        );
         return Ok(phone);
     }
     let id = svc.certify_phone_code(ws, &phone)?;
@@ -442,7 +498,9 @@ pub fn cmd_phones_certify(
 /// `ligus phones certify` at a terminal without `--fingerprint`: show the
 /// phone's fingerprint and ask the person to confirm the phone's screen shows
 /// the same one. Anything but yes is no.
-pub fn confirm_phone_fingerprint_on_tty(phone: &ligus_runtime::phone_enroll::PhoneCode) -> Result<bool> {
+pub fn confirm_phone_fingerprint_on_tty(
+    phone: &ligus_runtime::phone_enroll::PhoneCode,
+) -> Result<bool> {
     use std::io::Write;
     let mut err = std::io::stderr();
     write!(
@@ -455,7 +513,10 @@ pub fn confirm_phone_fingerprint_on_tty(phone: &ligus_runtime::phone_enroll::Pho
     err.flush()?;
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
-    Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 /// Write a secret the user asked for (`--out PATH`) owner-only (0600) and
@@ -465,11 +526,15 @@ pub fn confirm_phone_fingerprint_on_tty(phone: &ligus_runtime::phone_enroll::Pho
 /// not ours to do and fails with EPERM when we don't own it.
 pub(crate) fn write_out(path: &str, bytes: &[u8]) -> Result<()> {
     let p = Path::new(path);
-    let parent = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    let parent = p
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     if !parent.is_dir() {
         bail!("{} is not a directory: create it first", parent.display());
     }
-    ligus_runtime::private_file::write_private_atomic(p, bytes).with_context(|| format!("writing {path}"))
+    ligus_runtime::private_file::write_private_atomic(p, bytes)
+        .with_context(|| format!("writing {path}"))
 }
 
 /// `ligus recovery-key create --out PATH`: register a recovery key for this
@@ -489,7 +554,10 @@ pub fn cmd_recovery_key(cfg: &Config, positional: &[&String], out: Option<String
         bail!("this data dir is a box (a service member): it holds no passkey or recovery key");
     }
     let mut svc = crate::open_service(cfg)?;
-    let account = svc.author().account_id.ok_or_else(|| anyhow!("this identity has no account"))?;
+    let account = svc
+        .author()
+        .account_id
+        .ok_or_else(|| anyhow!("this identity has no account"))?;
     let key = ligus_core::presence::RecoveryKey::generate().map_err(|e| anyhow!(e.0))?;
     let ws = uuid_of_room(&cfg.room);
     let mut words = key.words();
@@ -500,7 +568,9 @@ pub fn cmd_recovery_key(cfg: &Config, positional: &[&String], out: Option<String
     zeroize::Zeroize::zeroize(&mut words);
     let k2 = k2?;
     written.unwrap_or(Ok(()))?;
-    if let Err(e) = svc.register_passkey(ws, key.credential(account, "Recovery key"), &move |req| Ok(k2.assert(&req.challenge))) {
+    if let Err(e) = svc.register_passkey(ws, key.credential(account, "Recovery key"), &move |req| {
+        Ok(k2.assert(&req.challenge))
+    }) {
         let _ = std::fs::remove_file(&out);
         return Err(e.into());
     }
@@ -523,7 +593,10 @@ mod tests {
         let f = dir.path().join("words");
         std::fs::write(&f, key.words()).unwrap();
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(recovery_from_file(f.to_str().unwrap()).is_err(), "a 0644 recovery-words file was used");
+        assert!(
+            recovery_from_file(f.to_str().unwrap()).is_err(),
+            "a 0644 recovery-words file was used"
+        );
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(recovery_from_file(f.to_str().unwrap()).is_ok());
         assert!(recovery_from_file(dir.path().to_str().unwrap()).is_err());
@@ -536,12 +609,21 @@ mod tests {
         let no_stdin = || -> std::io::Result<String> { panic!("stdin not read") };
         assert!(redeem_code(Some("hivews1:secret"), None, no_stdin).is_err());
         assert!(redeem_code(Some(" hivews1:secret"), None, no_stdin).is_err());
-        assert_eq!(redeem_code(Some("ligusadmit1:abc"), None, no_stdin).unwrap(), "ligusadmit1:abc");
-        assert_eq!(redeem_code(Some("-"), None, || Ok("hivews1:secret\n".into())).unwrap(), "hivews1:secret");
+        assert_eq!(
+            redeem_code(Some("ligusadmit1:abc"), None, no_stdin).unwrap(),
+            "ligusadmit1:abc"
+        );
+        assert_eq!(
+            redeem_code(Some("-"), None, || Ok("hivews1:secret\n".into())).unwrap(),
+            "hivews1:secret"
+        );
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("code");
         std::fs::write(&f, "hivews1:secret\n").unwrap();
-        assert_eq!(redeem_code(None, Some(f.to_string_lossy().into_owned()), no_stdin).unwrap(), "hivews1:secret");
+        assert_eq!(
+            redeem_code(None, Some(f.to_string_lossy().into_owned()), no_stdin).unwrap(),
+            "hivews1:secret"
+        );
         assert!(redeem_code(None, None, no_stdin).is_err());
     }
 
@@ -553,11 +635,22 @@ mod tests {
         // the workspace key) had to stay.
         let dir = tempfile::tempdir().unwrap();
         let gone = dir.path().join("admission");
-        assert_eq!(admission_from_file(Some(gone.to_string_lossy().into_owned())).unwrap(), None);
+        assert_eq!(
+            admission_from_file(Some(gone.to_string_lossy().into_owned())).unwrap(),
+            None
+        );
         std::fs::write(&gone, "\n").unwrap();
-        assert_eq!(admission_from_file(Some(gone.to_string_lossy().into_owned())).unwrap(), None);
+        assert_eq!(
+            admission_from_file(Some(gone.to_string_lossy().into_owned())).unwrap(),
+            None
+        );
         std::fs::write(&gone, "ligusadmit1:x\n").unwrap();
-        assert_eq!(admission_from_file(Some(gone.to_string_lossy().into_owned())).unwrap().as_deref(), Some("ligusadmit1:x"));
+        assert_eq!(
+            admission_from_file(Some(gone.to_string_lossy().into_owned()))
+                .unwrap()
+                .as_deref(),
+            Some("ligusadmit1:x")
+        );
         assert_eq!(admission_from_file(None).unwrap(), None);
     }
 
@@ -573,15 +666,24 @@ mod tests {
         let out = dir.path().join("words");
         write_out(out.to_str().unwrap(), b"one two").unwrap();
         assert_eq!(std::fs::read(&out).unwrap(), b"one two");
-        assert_eq!(std::fs::metadata(&out).unwrap().permissions().mode() & 0o777, 0o600);
-        assert_eq!(std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777, 0o777);
+        assert_eq!(
+            std::fs::metadata(&out).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777,
+            0o777
+        );
         // Overwrite replaces; no temp files left.
         write_out(out.to_str().unwrap(), b"three").unwrap();
         assert_eq!(std::fs::read(&out).unwrap(), b"three");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
         // A missing parent is an error, never created.
         let missing = dir.path().join("nope").join("words");
-        assert!(write_out(missing.to_str().unwrap(), b"x").unwrap_err().to_string().contains("not a directory"));
+        assert!(write_out(missing.to_str().unwrap(), b"x")
+            .unwrap_err()
+            .to_string()
+            .contains("not a directory"));
     }
 
     #[test]

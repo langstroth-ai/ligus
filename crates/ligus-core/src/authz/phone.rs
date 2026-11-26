@@ -27,7 +27,9 @@ pub fn phone_tier_allows(event: &SessionEvent, device: Uuid) -> Result<(), Strin
         // Phase B: withdrawing its person's own apply request (it narrows),
         // and clearing a lockdown (a person's call, with their passkey
         // presence like on any device).
-        SessionEvent::ProposalApplyWithdrawn { .. } | SessionEvent::ChatLockdownCleared { .. } => true,
+        SessionEvent::ProposalApplyWithdrawn { .. } | SessionEvent::ChatLockdownCleared { .. } => {
+            true
+        }
         // Answering an agent, and proposing a memory change as its person
         // (a proposal grants nothing; a person decides it on a desktop).
         SessionEvent::FlowRecorded { record } => match record {
@@ -40,7 +42,9 @@ pub fn phone_tier_allows(event: &SessionEvent, device: Uuid) -> Result<(), Strin
         // Phase B: a box admission (a service member, at most Contributor),
         // with its person's passkey presence and Admin role like every
         // invite. No other membership change.
-        SessionEvent::JoinApproved { admission: Some(_), .. } => true,
+        SessionEvent::JoinApproved {
+            admission: Some(_), ..
+        } => true,
         _ => false,
     };
     if ok {

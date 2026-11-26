@@ -9,10 +9,13 @@ use ligus_core::{workspace_config_session_id, ModelProviderKind, WorkspaceAgent,
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::{AgentFact, FolderFact, HarnessFact, HostFact, InviteFact, OpsError, OpsResult, ProbeFact, RepoFact};
+use super::{
+    AgentFact, FolderFact, HarnessFact, HostFact, InviteFact, OpsError, OpsResult, ProbeFact,
+    RepoFact,
+};
 use crate::cli_detect::{self, DetectEnv, LoginState};
-use crate::model_catalog::{ModelList, ModelOption, ModelSource};
 use crate::event_store::CheckoutSource;
+use crate::model_catalog::{ModelList, ModelOption, ModelSource};
 use crate::ChatService;
 
 fn failed(e: impl std::fmt::Display) -> OpsError {
@@ -25,10 +28,16 @@ pub fn block_on<F: std::future::Future + Send + 'static>(fut: F) -> Option<F::Ou
 where
     F::Output: Send + 'static,
 {
-    std::thread::spawn(move || tokio::runtime::Builder::new_current_thread().enable_all().build().ok().map(|rt| rt.block_on(fut)))
-        .join()
-        .ok()
-        .flatten()
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()
+            .map(|rt| rt.block_on(fut))
+    })
+    .join()
+    .ok()
+    .flatten()
 }
 
 // ── context ─────────────────────────────────────────────────────────────────
@@ -51,7 +60,16 @@ pub fn agents(svc: &ChatService, ws: Uuid) -> Vec<AgentFact> {
     svc.load_in(ws, workspace_config_session_id(ws))
         .ok()
         .flatten()
-        .map(|s| s.workspace_agents.into_iter().map(|a| AgentFact { id: a.id, name: a.name, runtime_id: a.runtime_id }).collect())
+        .map(|s| {
+            s.workspace_agents
+                .into_iter()
+                .map(|a| AgentFact {
+                    id: a.id,
+                    name: a.name,
+                    runtime_id: a.runtime_id,
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -59,7 +77,13 @@ pub fn member_names(svc: &ChatService, ws: Uuid) -> Vec<String> {
     svc.load_in(ws, workspace_config_session_id(ws))
         .ok()
         .flatten()
-        .map(|s| s.members.into_iter().map(|m| m.actor.display_name).filter(|n| !n.trim().is_empty()).collect())
+        .map(|s| {
+            s.members
+                .into_iter()
+                .map(|m| m.actor.display_name)
+                .filter(|n| !n.trim().is_empty())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -110,28 +134,47 @@ pub fn harness_of(kind: ModelProviderKind, gateway: bool) -> Option<&'static str
 /// `probe`: also confirm agy's sign-in with `agy models` (read-only).
 pub fn harnesses(env: &DetectEnv, probe: bool) -> Vec<HarnessFact> {
     let mut out = Vec::new();
-    let file_cli = |id: &str, label: &str, bin: &str, kind: ModelProviderKind, login: &str, install: &str| {
-        let path = cli_detect::find_on_path(bin, &env.path);
-        let signed = crate::executor::cli_home::expects_file_sign_in(kind, &env.home);
-        HarnessFact {
-            id: id.into(),
-            label: label.into(),
-            installed: path.is_some(),
-            login: if path.is_none() {
-                LoginState::Unknown
-            } else if signed {
-                LoginState::LoggedIn
-            } else {
-                LoginState::NotLoggedIn
-            },
-            login_detail: if signed { "signed in (credentials found)".into() } else { "no sign-in found".into() },
-            login_command: login.into(),
-            install_command: install.into(),
-            version: path.as_deref().and_then(|p| version_of(p)),
-        }
-    };
-    out.push(file_cli("claude-code", "Claude Code", "claude", ModelProviderKind::ClaudeCode, "claude", "npm install -g @anthropic-ai/claude-code"));
-    out.push(file_cli("codex", "Codex", "codex", ModelProviderKind::Codex, "codex login", "npm install -g @openai/codex"));
+    let file_cli =
+        |id: &str, label: &str, bin: &str, kind: ModelProviderKind, login: &str, install: &str| {
+            let path = cli_detect::find_on_path(bin, &env.path);
+            let signed = crate::executor::cli_home::expects_file_sign_in(kind, &env.home);
+            HarnessFact {
+                id: id.into(),
+                label: label.into(),
+                installed: path.is_some(),
+                login: if path.is_none() {
+                    LoginState::Unknown
+                } else if signed {
+                    LoginState::LoggedIn
+                } else {
+                    LoginState::NotLoggedIn
+                },
+                login_detail: if signed {
+                    "signed in (credentials found)".into()
+                } else {
+                    "no sign-in found".into()
+                },
+                login_command: login.into(),
+                install_command: install.into(),
+                version: path.as_deref().and_then(|p| version_of(p)),
+            }
+        };
+    out.push(file_cli(
+        "claude-code",
+        "Claude Code",
+        "claude",
+        ModelProviderKind::ClaudeCode,
+        "claude",
+        "npm install -g @anthropic-ai/claude-code",
+    ));
+    out.push(file_cli(
+        "codex",
+        "Codex",
+        "codex",
+        ModelProviderKind::Codex,
+        "codex login",
+        "npm install -g @openai/codex",
+    ));
     for c in cli_detect::detect_cli_agents(env, probe) {
         if !c.supported {
             continue;
@@ -149,7 +192,15 @@ pub fn harnesses(env: &DetectEnv, probe: bool) -> Vec<HarnessFact> {
     }
     // Aider and Pi take a provider key from their own config: nothing to
     // sign in to here.
-    for (id, label, bin, install) in [("aider", "Aider", "aider", "pipx install aider-chat"), ("pi", "Pi", "pi", "npm install -g @mariozechner/pi-coding-agent")] {
+    for (id, label, bin, install) in [
+        ("aider", "Aider", "aider", "pipx install aider-chat"),
+        (
+            "pi",
+            "Pi",
+            "pi",
+            "npm install -g @mariozechner/pi-coding-agent",
+        ),
+    ] {
         let path = cli_detect::find_on_path(bin, &env.path);
         out.push(HarnessFact {
             id: id.into(),
@@ -166,7 +217,11 @@ pub fn harnesses(env: &DetectEnv, probe: bool) -> Vec<HarnessFact> {
 }
 
 fn version_of(p: &Path) -> Option<String> {
-    let out = std::process::Command::new(p).arg("--version").stdin(std::process::Stdio::null()).output().ok()?;
+    let out = std::process::Command::new(p)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
     cli_detect::parse_version(&String::from_utf8_lossy(&out.stdout))
 }
 
@@ -175,10 +230,15 @@ fn version_of(p: &Path) -> Option<String> {
 pub fn models(harness: &str, endpoint: &str, env: &DetectEnv) -> ModelList {
     match harness {
         "claude-code" => ModelList {
-            models: ["sonnet", "opus", "haiku"].iter().map(|m| ModelOption::new(*m, None)).collect(),
+            models: ["sonnet", "opus", "haiku"]
+                .iter()
+                .map(|m| ModelOption::new(*m, None))
+                .collect(),
             source: ModelSource::Aliases,
             complete: false,
-            note: Some("aliases Claude Code always understands; leave empty for its default".into()),
+            note: Some(
+                "aliases Claude Code always understands; leave empty for its default".into(),
+            ),
             error: None,
         },
         "codex" | "copilot" | "antigravity" => {
@@ -190,10 +250,23 @@ pub fn models(harness: &str, endpoint: &str, env: &DetectEnv) -> ModelList {
             crate::model_catalog::cli_models(kind, bin, env)
         }
         "local" => {
-            let req = crate::model_catalog::HttpListing { provider: ModelProviderKind::Ollama, endpoint: endpoint.to_string(), api_key: None };
-            block_on(async move { tokio::time::timeout(Duration::from_secs(8), crate::model_catalog::http_models(req)).await })
-                .and_then(Result::ok)
-                .unwrap_or_else(|| ModelList { error: Some("didn't answer in 8 s".into()), ..ModelList::none("type a model name") })
+            let req = crate::model_catalog::HttpListing {
+                provider: ModelProviderKind::Ollama,
+                endpoint: endpoint.to_string(),
+                api_key: None,
+            };
+            block_on(async move {
+                tokio::time::timeout(
+                    Duration::from_secs(8),
+                    crate::model_catalog::http_models(req),
+                )
+                .await
+            })
+            .and_then(Result::ok)
+            .unwrap_or_else(|| ModelList {
+                error: Some("didn't answer in 8 s".into()),
+                ..ModelList::none("type a model name")
+            })
         }
         _ => ModelList::none("type a model name"),
     }
@@ -203,7 +276,10 @@ pub fn models(harness: &str, endpoint: &str, env: &DetectEnv) -> ModelList {
 
 /// Start the server under this host's agent sandbox and list its tools
 /// (20 s at most). The spec is used as given (enabled for the handshake).
-pub fn mcp_handshake(spec: &crate::mcp::McpServerSpec, token: Option<&Zeroizing<String>>) -> OpsResult<Vec<String>> {
+pub fn mcp_handshake(
+    spec: &crate::mcp::McpServerSpec,
+    token: Option<&Zeroizing<String>>,
+) -> OpsResult<Vec<String>> {
     let mut spec = spec.clone();
     spec.enabled = true;
     spec.agents.clear();
@@ -212,12 +288,20 @@ pub fn mcp_handshake(spec: &crate::mcp::McpServerSpec, token: Option<&Zeroizing<
     }
     let id = spec.id.clone();
     let reg = crate::mcp::McpRegistry::new(vec![spec]);
-    let out = block_on(async move { tokio::time::timeout(Duration::from_secs(20), reg.list_tools(&id)).await });
+    let out = block_on(async move {
+        tokio::time::timeout(Duration::from_secs(20), reg.list_tools(&id)).await
+    });
     match out {
         Some(Ok(Ok(tools))) => Ok(tools.into_iter().map(|t| t.name).collect()),
         Some(Ok(Err(e))) => {
             let m = crate::secret_redact::redacted(&e.to_string());
-            Err(if m.contains("connect") || m.contains("dns") || m.contains("timed out") { OpsError::Offline(m) } else { OpsError::Failed(m) })
+            Err(
+                if m.contains("connect") || m.contains("dns") || m.contains("timed out") {
+                    OpsError::Offline(m)
+                } else {
+                    OpsError::Failed(m)
+                },
+            )
         }
         Some(Err(_)) => Err(OpsError::Offline("the server didn't answer in 20 s".into())),
         None => Err(OpsError::Failed("couldn't run the handshake".into())),
@@ -227,7 +311,9 @@ pub fn mcp_handshake(spec: &crate::mcp::McpServerSpec, token: Option<&Zeroizing<
 // ── folder ──────────────────────────────────────────────────────────────────
 
 pub fn repos(svc: &ChatService, ws: Uuid) -> Vec<RepoFact> {
-    let Ok(roster) = svc.workspace_roster(ws) else { return Vec::new() };
+    let Ok(roster) = svc.workspace_roster(ws) else {
+        return Vec::new();
+    };
     let maps = svc.store().repo_mappings(ws).unwrap_or_default();
     crate::repos::live_repos(&roster)
         .into_iter()
@@ -236,7 +322,10 @@ pub fn repos(svc: &ChatService, ws: Uuid) -> Vec<RepoFact> {
             canonical: r.canonical.clone(),
             display_name: r.display_name.clone(),
             default_branch: r.default_branch.clone(),
-            bound_here: maps.iter().find(|m| m.repo_id == r.id).map(|m| m.path.display().to_string()),
+            bound_here: maps
+                .iter()
+                .find(|m| m.repo_id == r.id)
+                .map(|m| m.path.display().to_string()),
         })
         .collect()
 }
@@ -256,26 +345,70 @@ pub fn inspect_folder(svc: &ChatService, ws: Uuid, path: &str) -> FolderFact {
         f.canonical = Some(c);
     }
     f.managed_elsewhere = crate::repos::marker::managed_elsewhere(&p, svc.device_id());
-    f.bound_to = svc.store().repo_mappings(ws).unwrap_or_default().into_iter().find(|m| m.path == p).map(|m| m.repo_id.to_string());
+    f.bound_to = svc
+        .store()
+        .repo_mappings(ws)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|m| m.path == p)
+        .map(|m| m.repo_id.to_string());
     f
 }
 
-pub fn add_repo(svc: &mut ChatService, ws: Uuid, f: &FolderFact, display_name: &str, default_branch: &str) -> OpsResult<String> {
-    let input = f.canonical.clone().or_else(|| f.root_commit.as_ref().map(|r| format!("local:{r}"))).ok_or_else(|| failed("that checkout has no remote and no commit"))?;
-    let kind = ligus_forge::conn::known_kind(input.split('/').next().unwrap_or("")).map(|(k, _)| k.as_str().to_string()).unwrap_or_default();
-    svc.add_workspace_repo(ws, &input, display_name, &kind, default_branch, f.root_commit.clone())
-        .map(|r| r.id.to_string())
-        .map_err(|e| match e {
-            crate::chat_service::ChatError::Unauthorized(m) => OpsError::Refused(m),
-            e => failed(e),
-        })
+pub fn add_repo(
+    svc: &mut ChatService,
+    ws: Uuid,
+    f: &FolderFact,
+    display_name: &str,
+    default_branch: &str,
+) -> OpsResult<String> {
+    let input = f
+        .canonical
+        .clone()
+        .or_else(|| f.root_commit.as_ref().map(|r| format!("local:{r}")))
+        .ok_or_else(|| failed("that checkout has no remote and no commit"))?;
+    let kind = ligus_forge::conn::known_kind(input.split('/').next().unwrap_or(""))
+        .map(|(k, _)| k.as_str().to_string())
+        .unwrap_or_default();
+    svc.add_workspace_repo(
+        ws,
+        &input,
+        display_name,
+        &kind,
+        default_branch,
+        f.root_commit.clone(),
+    )
+    .map(|r| r.id.to_string())
+    .map_err(|e| match e {
+        crate::chat_service::ChatError::Unauthorized(m) => OpsError::Refused(m),
+        e => failed(e),
+    })
 }
 
-pub fn bind_folder(svc: &ChatService, ws: Uuid, host_label: &str, repo_id: &str, path: &str) -> OpsResult<()> {
+pub fn bind_folder(
+    svc: &ChatService,
+    ws: Uuid,
+    host_label: &str,
+    repo_id: &str,
+    path: &str,
+) -> OpsResult<()> {
     let id = Uuid::parse_str(repo_id).map_err(failed)?;
     let roster = svc.workspace_roster(ws).map_err(failed)?;
-    let repo = crate::repos::live_repos(&roster).into_iter().find(|r| r.id == id).ok_or_else(|| failed("that repository isn't in the workspace"))?;
-    crate::repos::bind(svc.store(), svc.device_id(), host_label, ws, &repo, Path::new(path.trim()), CheckoutSource::Bound).map(|_| ()).map_err(failed)
+    let repo = crate::repos::live_repos(&roster)
+        .into_iter()
+        .find(|r| r.id == id)
+        .ok_or_else(|| failed("that repository isn't in the workspace"))?;
+    crate::repos::bind(
+        svc.store(),
+        svc.device_id(),
+        host_label,
+        ws,
+        &repo,
+        Path::new(path.trim()),
+        CheckoutSource::Bound,
+    )
+    .map(|_| ())
+    .map_err(failed)
 }
 
 /// "Start with a scratch repo" for a person's own device: see
@@ -322,12 +455,24 @@ pub fn hosts(svc: &ChatService, ws: Uuid) -> Vec<HostFact> {
 
 /// The person invites this workspace issued and whether each was used.
 pub fn invites(svc: &ChatService, ws: Uuid) -> Vec<InviteFact> {
-    let Some(config) = svc.load_in(ws, workspace_config_session_id(ws)).ok().flatten() else { return Vec::new() };
+    let Some(config) = svc
+        .load_in(ws, workspace_config_session_id(ws))
+        .ok()
+        .flatten()
+    else {
+        return Vec::new();
+    };
     config
         .guards
         .invite_keys
         .keys()
-        .map(|id| InviteFact { id: *id, role: "contributor".into(), created_ms: 0, used: config.guards.used_invites.contains(id), closed: false })
+        .map(|id| InviteFact {
+            id: *id,
+            role: "contributor".into(),
+            created_ms: 0,
+            used: config.guards.used_invites.contains(id),
+            closed: false,
+        })
         .collect()
 }
 
@@ -335,14 +480,19 @@ pub fn invites(svc: &ChatService, ws: Uuid) -> Vec<InviteFact> {
 
 /// One probe of `url` for workspace `room` (10 s at most).
 pub fn probe_relay(url: &str, token: Option<&Zeroizing<String>>, room: &str) -> ProbeFact {
-    let client = crate::relay_client::RelayClient::new(url.trim()).with_auth(token.map(|t| t.to_string()));
+    let client =
+        crate::relay_client::RelayClient::new(url.trim()).with_auth(token.map(|t| t.to_string()));
     let room = room.to_string();
-    let out = block_on(async move { tokio::time::timeout(Duration::from_secs(10), client.probe(&room)).await });
+    let out = block_on(async move {
+        tokio::time::timeout(Duration::from_secs(10), client.probe(&room)).await
+    });
     match out {
         Some(Ok(crate::relay_client::RelayProbe::Ok)) => ProbeFact::Ok,
         Some(Ok(crate::relay_client::RelayProbe::Unauthorized)) => ProbeFact::Unauthorized,
         Some(Ok(crate::relay_client::RelayProbe::HttpStatus(s))) => ProbeFact::HttpStatus(s),
-        Some(Ok(crate::relay_client::RelayProbe::Unreachable(why))) => ProbeFact::Unreachable(crate::secret_redact::redacted(&why)),
+        Some(Ok(crate::relay_client::RelayProbe::Unreachable(why))) => {
+            ProbeFact::Unreachable(crate::secret_redact::redacted(&why))
+        }
         Some(Err(_)) => ProbeFact::Unreachable("no answer in 10 s".into()),
         None => ProbeFact::Unreachable("couldn't probe".into()),
     }
@@ -353,21 +503,52 @@ pub fn probe_relay(url: &str, token: Option<&Zeroizing<String>>, room: &str) -> 
 /// One short turn through the real dispatch path ("Reply with exactly
 /// PINGOK"), 45 s at most (`LIGUS_RUNTIME_TEST_TIMEOUT_SECS`). The desktop's
 /// runtime Test and the agent flow's test turn.
-pub async fn ping(runtime: &crate::provider::ResolvedRuntime, workspace_root: Option<&str>) -> super::TestTurn {
-    let turns = vec![crate::provider::ChatTurn::user("Reply with exactly the token: PINGOK")];
+pub async fn ping(
+    runtime: &crate::provider::ResolvedRuntime,
+    workspace_root: Option<&str>,
+) -> super::TestTurn {
+    let turns = vec![crate::provider::ChatTurn::user(
+        "Reply with exactly the token: PINGOK",
+    )];
     let system = "You are a connectivity probe. Reply with exactly PINGOK and nothing else.";
-    let timeout = Duration::from_secs(ligus_core::names::var("LIGUS_RUNTIME_TEST_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(45));
+    let timeout = Duration::from_secs(
+        ligus_core::names::var("LIGUS_RUNTIME_TEST_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(45),
+    );
     let start = std::time::Instant::now();
-    let fut = crate::provider::dispatch::stream(runtime, Some(system), &turns, workspace_root, &[], 32, |_| {}, |_| {});
+    let fut = crate::provider::dispatch::stream(
+        runtime,
+        Some(system),
+        &turns,
+        workspace_root,
+        &[],
+        32,
+        |_| {},
+        |_| {},
+    );
     let out = tokio::time::timeout(timeout, fut).await;
     let latency_ms = start.elapsed().as_millis() as u64;
     let (ok, detail) = match out {
-        Ok(Ok(reply)) if !reply.trim().is_empty() => (true, reply.trim().chars().take(80).collect()),
+        Ok(Ok(reply)) if !reply.trim().is_empty() => {
+            (true, reply.trim().chars().take(80).collect())
+        }
         Ok(Ok(_)) => (false, "the reply was empty".to_string()),
-        Ok(Err(e)) => (false, crate::secret_redact::redacted(&format!("{e:#}")).chars().take(200).collect()),
+        Ok(Err(e)) => (
+            false,
+            crate::secret_redact::redacted(&format!("{e:#}"))
+                .chars()
+                .take(200)
+                .collect(),
+        ),
         Err(_) => (false, format!("no reply in {} s", timeout.as_secs())),
     };
-    super::TestTurn { ok, latency_ms, detail }
+    super::TestTurn {
+        ok,
+        latency_ms,
+        detail,
+    }
 }
 
 /// This person's paired phones in the workspace (not revoked), by
@@ -376,7 +557,14 @@ pub fn phones(svc: &ChatService, ws: Uuid) -> Vec<String> {
     let phone_ids: std::collections::HashSet<Uuid> = svc
         .store()
         .load_config(ws, None, None)
-        .map(|(_, t)| t.current().devices.iter().filter(|(_, d)| d.phone).map(|(id, _)| *id).collect())
+        .map(|(_, t)| {
+            t.current()
+                .devices
+                .iter()
+                .filter(|(_, d)| d.phone)
+                .map(|(id, _)| *id)
+                .collect()
+        })
         .unwrap_or_default();
     let mut out: Vec<String> = svc
         .own_devices(ws)

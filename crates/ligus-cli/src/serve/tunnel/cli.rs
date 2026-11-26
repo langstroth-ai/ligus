@@ -6,19 +6,31 @@ use std::path::Path;
 use anyhow::{bail, Result};
 
 use super::{
-    ensure_private_dir, pending_dir, push_test_request_file, push_test_result_file, random_id, read_json, tunnel_dir, write_json,
-    HostKeys, LiveStatus, PhoneHop, PushTestReport, PushTestRequest, Registry, RelaySettings, RevokeFile,
+    ensure_private_dir, pending_dir, push_test_request_file, push_test_result_file, random_id,
+    read_json, tunnel_dir, write_json, HostKeys, LiveStatus, PhoneHop, PushTestReport,
+    PushTestRequest, Registry, RelaySettings, RevokeFile,
 };
 
 /// `ligus remote enable --relay <url> [--reg-token - | @FILE] [--insecure-relay]`.
-pub fn remote_enable(data_dir: &Path, relay: Option<String>, reg_token: Option<String>, insecure: bool) -> Result<()> {
-    let Some(relay) = relay else { bail!("usage: ligus remote enable --relay <https://relay.example.com> [--reg-token - | @FILE]") };
+pub fn remote_enable(
+    data_dir: &Path,
+    relay: Option<String>,
+    reg_token: Option<String>,
+    insecure: bool,
+) -> Result<()> {
+    let Some(relay) = relay else {
+        bail!("usage: ligus remote enable --relay <https://relay.example.com> [--reg-token - | @FILE]")
+    };
     let settings = RelaySettings::new(&relay, reg_token, insecure)?;
     let dir = tunnel_dir(data_dir);
     ensure_private_dir(&dir)?;
     let keys = HostKeys::load_or_create(&dir)?;
     write_json(&RelaySettings::file(&dir), &settings)?;
-    println!("Remote access enabled through {} (host id {}).", settings.relay, keys.host_id());
+    println!(
+        "Remote access enabled through {} (host id {}).",
+        settings.relay,
+        keys.host_id()
+    );
     println!("Restart `ligus serve` to connect, then run `ligus pair` to pair a phone.");
     Ok(())
 }
@@ -78,7 +90,11 @@ pub fn remote_status(data_dir: &Path, json: bool) -> Result<()> {
     }
     let dir = tunnel_dir(data_dir);
     match read_json::<RelaySettings>(&RelaySettings::file(&dir))? {
-        Some(s) => println!("relay:     {} ({})", s.relay, if s.enabled { "enabled" } else { "disabled" }),
+        Some(s) => println!(
+            "relay:     {} ({})",
+            s.relay,
+            if s.enabled { "enabled" } else { "disabled" }
+        ),
         None => println!("relay:     not configured (ligus remote enable --relay <url>)"),
     }
     match HostKeys::load(&dir)? {
@@ -89,7 +105,11 @@ pub fn remote_status(data_dir: &Path, json: bool) -> Result<()> {
         println!("serve:     {}", describe_status(&st, super::now()));
     }
     let phones = Registry::load(&dir)?.list();
-    println!("phones:    {} active, {} revoked", phones.iter().filter(|p| p.is_active()).count(), phones.iter().filter(|p| !p.is_active()).count());
+    println!(
+        "phones:    {} active, {} revoked",
+        phones.iter().filter(|p| p.is_active()).count(),
+        phones.iter().filter(|p| !p.is_active()).count()
+    );
     let now = super::now();
     for p in phones.iter().filter(|p| p.is_active()) {
         let push = match (p.push_enabled, p.push_previews) {
@@ -97,7 +117,10 @@ pub fn remote_status(data_dir: &Path, json: bool) -> Result<()> {
             (true, false) => "notifications on (previews off)",
             (false, _) => "notifications OFF (the app hasn't turned them on for this host)",
         };
-        let seen = p.last_seen.map(|t| format!(", last seen {} ago", short_age(now.saturating_sub(t)))).unwrap_or_default();
+        let seen = p
+            .last_seen
+            .map(|t| format!(", last seen {} ago", short_age(now.saturating_sub(t))))
+            .unwrap_or_default();
         println!("  {}: {push}{seen}", p.name);
     }
     Ok(())
@@ -109,10 +132,15 @@ pub fn remote_status(data_dir: &Path, json: bool) -> Result<()> {
 pub fn remote_push_test(data_dir: &Path, phone: Option<&str>) -> Result<()> {
     let dir = tunnel_dir(data_dir);
     // relay.json (`ligus remote enable`) or LIGUS_REMOTE_RELAY, as serve reads it.
-    let relay = RelaySettings::resolve(data_dir, None, None, false).ok().flatten().map(|s| s.relay);
+    let relay = RelaySettings::resolve(data_dir, None, None, false)
+        .ok()
+        .flatten()
+        .map(|s| s.relay);
     let now = super::now();
     let st = read_json::<LiveStatus>(&dir.join("status.json"))?;
-    let running = st.as_ref().is_some_and(|s| s.heartbeat > 0 && now.saturating_sub(s.heartbeat) <= 3 * super::STATUS_HEARTBEAT.as_secs());
+    let running = st.as_ref().is_some_and(|s| {
+        s.heartbeat > 0 && now.saturating_sub(s.heartbeat) <= 3 * super::STATUS_HEARTBEAT.as_secs()
+    });
     if !running {
         match relay {
             None => bail!("remote access isn't enabled here (ligus remote enable --relay <url>), so there is no push path to test"),
@@ -122,10 +150,22 @@ pub fn remote_push_test(data_dir: &Path, phone: Option<&str>) -> Result<()> {
         }
     }
     let id = random_id();
-    write_json(&push_test_request_file(&dir, &id), &PushTestRequest { phone: phone.map(str::to_string), exp: now + 60 })?;
-    println!("Sending a test notification through {} …", relay.as_deref().unwrap_or("the relay"));
+    write_json(
+        &push_test_request_file(&dir, &id),
+        &PushTestRequest {
+            phone: phone.map(str::to_string),
+            exp: now + 60,
+        },
+    )?;
+    println!(
+        "Sending a test notification through {} …",
+        relay.as_deref().unwrap_or("the relay")
+    );
     let result = push_test_result_file(&dir, &id);
-    let deadline = std::time::Instant::now() + super::PUSH_TEST_WAIT + super::PENDING_POLL + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now()
+        + super::PUSH_TEST_WAIT
+        + super::PENDING_POLL
+        + std::time::Duration::from_secs(5);
     let report = loop {
         if let Some(r) = read_json::<PushTestReport>(&result).ok().flatten() {
             let _ = std::fs::remove_file(&result);
@@ -160,8 +200,16 @@ pub(crate) fn describe_push_test(r: &PushTestReport) -> (String, bool) {
         out,
         "2. relay:     {} ({}, push {})",
         r.relay,
-        if r.connected { "connected" } else { "NOT connected" },
-        if r.push_available { "available" } else { "UNAVAILABLE" }
+        if r.connected {
+            "connected"
+        } else {
+            "NOT connected"
+        },
+        if r.push_available {
+            "available"
+        } else {
+            "UNAVAILABLE"
+        }
     );
     if !r.connected {
         let _ = writeln!(out, "   => ligus serve isn't connected to the relay: see `ligus remote status` and its log.");
@@ -195,8 +243,20 @@ fn describe_hop(p: &PhoneHop) -> (String, bool) {
         out,
         "   on this box: notifications {}{}; app open right now: {}",
         if p.push_enabled { "on" } else { "OFF" },
-        if p.push_enabled { if p.previews { " (previews on)" } else { " (previews off)" } } else { "" },
-        if p.app_open { "yes (a real push would be skipped while it is)" } else { "no" },
+        if p.push_enabled {
+            if p.previews {
+                " (previews on)"
+            } else {
+                " (previews off)"
+            }
+        } else {
+            ""
+        },
+        if p.app_open {
+            "yes (a real push would be skipped while it is)"
+        } else {
+            "no"
+        },
     );
     if !p.push_enabled {
         let _ = writeln!(
@@ -206,12 +266,19 @@ fn describe_hop(p: &PhoneHop) -> (String, bool) {
         return (out, false);
     }
     if !p.sent {
-        let _ = writeln!(out, "   box → relay: NOT sent (the relay connection dropped)");
+        let _ = writeln!(
+            out,
+            "   box → relay: NOT sent (the relay connection dropped)"
+        );
         return (out, false);
     }
     let _ = writeln!(out, "   box → relay: sent (encrypted for this phone)");
     let Some(a) = &p.relay else {
-        let _ = writeln!(out, "   relay → APNs: no answer from the relay within {} s", super::PUSH_TEST_WAIT.as_secs());
+        let _ = writeln!(
+            out,
+            "   relay → APNs: no answer from the relay within {} s",
+            super::PUSH_TEST_WAIT.as_secs()
+        );
         return (out, false);
     };
     let detail = a.detail.as_deref().unwrap_or("");
@@ -228,7 +295,15 @@ fn describe_hop(p: &PhoneHop) -> (String, bool) {
         return (out, true);
     }
     let code = a.code.as_deref().unwrap_or("?");
-    let _ = writeln!(out, "   relay → APNs: refused: {code}{}", if detail.is_empty() { String::new() } else { format!(" — {detail}") });
+    let _ = writeln!(
+        out,
+        "   relay → APNs: refused: {code}{}",
+        if detail.is_empty() {
+            String::new()
+        } else {
+            format!(" — {detail}")
+        }
+    );
     let _ = writeln!(out, "   => {}", push_failure_advice(code, detail));
     (out, false)
 }
@@ -269,25 +344,50 @@ fn short_age(secs: u64) -> String {
 pub(crate) fn describe_status(st: &LiveStatus, now: u64) -> String {
     let detail = format!(
         "status {}, push {}",
-        if st.status.is_empty() { "-" } else { st.status.as_str() },
+        if st.status.is_empty() {
+            "-"
+        } else {
+            st.status.as_str()
+        },
         if st.push { "available" } else { "unavailable" }
     );
-    let error = st.last_error.as_ref().map(|e| format!(", last error: {e}")).unwrap_or_default();
+    let error = st
+        .last_error
+        .as_ref()
+        .map(|e| format!(", last error: {e}"))
+        .unwrap_or_default();
     let beat = (st.heartbeat > 0).then(|| now.saturating_sub(st.heartbeat));
     if let Some(b) = beat.filter(|b| *b > 3 * super::STATUS_HEARTBEAT.as_secs()) {
-        let was = if st.connected { "connected" } else { "not connected" };
-        return format!("unknown: ligus serve last reported {} ago ({was}, {detail}) — is it running?{error}", short_age(b));
+        let was = if st.connected {
+            "connected"
+        } else {
+            "not connected"
+        };
+        return format!(
+            "unknown: ligus serve last reported {} ago ({was}, {detail}) — is it running?{error}",
+            short_age(b)
+        );
     }
     if st.connected {
         match (st.connected_since, beat) {
             (Some(since), Some(b)) => {
-                format!("connected for {} ({detail}, checked {} ago){error}", short_age(now.saturating_sub(since)), short_age(b))
+                format!(
+                    "connected for {} ({detail}, checked {} ago){error}",
+                    short_age(now.saturating_sub(since)),
+                    short_age(b)
+                )
             }
             // A status file from before connection age was recorded.
-            _ => format!("connected ({detail}, last change {} ago){error}", short_age(now.saturating_sub(st.at))),
+            _ => format!(
+                "connected ({detail}, last change {} ago){error}",
+                short_age(now.saturating_sub(st.at))
+            ),
         }
     } else {
-        format!("not connected ({detail}, since {} ago){error}", short_age(now.saturating_sub(st.at)))
+        format!(
+            "not connected ({detail}, since {} ago){error}",
+            short_age(now.saturating_sub(st.at))
+        )
     }
 }
 
@@ -301,7 +401,10 @@ pub fn remote_reset(data_dir: &Path) -> Result<()> {
         let _ = std::fs::remove_file(f);
     }
     let _ = std::fs::remove_dir_all(pending_dir(&dir));
-    println!("New host keys: host id {}. Every phone must pair again; restart `ligus serve`.", keys.host_id());
+    println!(
+        "New host keys: host id {}. Every phone must pair again; restart `ligus serve`.",
+        keys.host_id()
+    );
     Ok(())
 }
 
@@ -332,10 +435,15 @@ pub fn phones_list(data_dir: &Path, json: bool) -> Result<()> {
         println!("No paired phones. Run `ligus pair` with remote access enabled.");
         return Ok(());
     }
-    println!("{:<24} {:<24} {:<10} {:<12} last seen", "PID", "NAME", "STATE", "PAIRED");
+    println!(
+        "{:<24} {:<24} {:<10} {:<12} last seen",
+        "PID", "NAME", "STATE", "PAIRED"
+    );
     for p in phones {
         let fmt_day = |t: u64| {
-            time::OffsetDateTime::from_unix_timestamp(t as i64).map(|d| d.date().to_string()).unwrap_or_default()
+            time::OffsetDateTime::from_unix_timestamp(t as i64)
+                .map(|d| d.date().to_string())
+                .unwrap_or_default()
         };
         println!(
             "{:<24} {:<24} {:<10} {:<12} {}",
@@ -348,11 +456,25 @@ pub fn phones_list(data_dir: &Path, json: bool) -> Result<()> {
     }
     let revocations = super::revocation::Ledger::load(&tunnel_dir(data_dir)).list();
     if !revocations.is_empty() {
-        println!("\nRevoked phone devices (each step; unfinished steps retry while `ligus serve` runs):");
+        println!(
+            "\nRevoked phone devices (each step; unfinished steps retry while `ligus serve` runs):"
+        );
         for e in revocations {
-            let name = if e.status.name.is_empty() { "phone".to_string() } else { e.status.name.clone() };
-            println!("  {name} (device {}): {}", e.status.device_id, e.status.summary());
-            for (what, step) in [("tunnel", &e.status.tunnel), ("push", &e.status.push), ("session", &e.status.session)] {
+            let name = if e.status.name.is_empty() {
+                "phone".to_string()
+            } else {
+                e.status.name.clone()
+            };
+            println!(
+                "  {name} (device {}): {}",
+                e.status.device_id,
+                e.status.summary()
+            );
+            for (what, step) in [
+                ("tunnel", &e.status.tunnel),
+                ("push", &e.status.push),
+                ("session", &e.status.session),
+            ] {
                 if !step.detail.is_empty() {
                     println!("    {what:<8} {}", step.detail);
                 }
@@ -366,13 +488,28 @@ pub fn phones_list(data_dir: &Path, json: bool) -> Result<()> {
 /// revoked in `phones.json` and leaves `pending/revoke-<pid>.json` for
 /// `ligus serve` (end live sessions, tell the relay until it acks). Unless
 /// `--keep-token`, it also rotates the direct-path bearer token.
-pub fn phones_revoke(data_dir: &Path, who: Option<&str>, token_file: &Path, keep_token: bool) -> Result<()> {
-    let Some(who) = who else { bail!("usage: ligus phones revoke <pid|name> [--keep-token]") };
+pub fn phones_revoke(
+    data_dir: &Path,
+    who: Option<&str>,
+    token_file: &Path,
+    keep_token: bool,
+) -> Result<()> {
+    let Some(who) = who else {
+        bail!("usage: ligus phones revoke <pid|name> [--keep-token]")
+    };
     let dir = tunnel_dir(data_dir);
     let reg = Registry::load(&dir)?;
-    let Some(rec) = reg.resolve(who) else { bail!("no phone '{who}' (see `ligus phones list`; names must be unique)") };
+    let Some(rec) = reg.resolve(who) else {
+        bail!("no phone '{who}' (see `ligus phones list`; names must be unique)")
+    };
     let exp = reg.revoke(&rec.pid)?.unwrap_or(rec.cred_exp);
-    write_json(&pending_dir(&dir).join(format!("revoke-{}.json", rec.pid)), &RevokeFile { pid: rec.pid.clone(), exp })?;
+    write_json(
+        &pending_dir(&dir).join(format!("revoke-{}.json", rec.pid)),
+        &RevokeFile {
+            pid: rec.pid.clone(),
+            exp,
+        },
+    )?;
     println!("Revoked {} ({}). A running `ligus serve` ends its sessions and tells the relay within seconds.", rec.name, rec.pid);
     if keep_token {
         println!("The direct-path bearer token was kept (--keep-token).");
@@ -392,19 +529,45 @@ mod push_test_tests {
     use super::*;
 
     fn report(phones: Vec<PhoneHop>) -> PushTestReport {
-        PushTestReport { relay: "https://relay.example".into(), host_id: "hid".into(), connected: true, push_available: true, phones, error: None }
+        PushTestReport {
+            relay: "https://relay.example".into(),
+            host_id: "hid".into(),
+            connected: true,
+            push_available: true,
+            phones,
+            error: None,
+        }
     }
 
     fn hop(enabled: bool, relay: Option<RelayAck>) -> PhoneHop {
-        PhoneHop { pid: "pid1".into(), name: "iPhone".into(), active: true, push_enabled: enabled, previews: true, sent: relay.is_some(), relay, ..Default::default() }
+        PhoneHop {
+            pid: "pid1".into(),
+            name: "iPhone".into(),
+            active: true,
+            push_enabled: enabled,
+            previews: true,
+            sent: relay.is_some(),
+            relay,
+            ..Default::default()
+        }
     }
 
     #[test]
     fn delivered_reads_as_each_hop_and_succeeds() {
         let detail = "apns sandbox topic com.zazulam.ligus.lab: 200 (apns-id X)";
-        let (text, ok) = describe_push_test(&report(vec![hop(true, Some(RelayAck { ok: true, code: None, detail: Some(detail.into()) }))]));
+        let (text, ok) = describe_push_test(&report(vec![hop(
+            true,
+            Some(RelayAck {
+                ok: true,
+                code: None,
+                detail: Some(detail.into()),
+            }),
+        )]));
         assert!(ok, "{text}");
-        assert!(text.contains("relay:     https://relay.example (connected, push available)"), "{text}");
+        assert!(
+            text.contains("relay:     https://relay.example (connected, push available)"),
+            "{text}"
+        );
         assert!(text.contains("notifications on (previews on)"), "{text}");
         assert!(text.contains("box → relay: sent"), "{text}");
         assert!(text.contains(detail), "{text}");
@@ -413,17 +576,39 @@ mod push_test_tests {
     #[test]
     fn each_failure_names_its_hop_and_the_fix() {
         let (text, ok) = describe_push_test(&report(vec![hop(false, None)]));
-        assert!(!ok && text.contains("notifications OFF") && text.contains("Settings → Notifications"), "{text}");
+        assert!(
+            !ok && text.contains("notifications OFF") && text.contains("Settings → Notifications"),
+            "{text}"
+        );
         let refused = |code: &str, detail: &str| {
-            describe_push_test(&report(vec![hop(true, Some(RelayAck { ok: false, code: Some(code.into()), detail: Some(detail.into()) }))]))
+            describe_push_test(&report(vec![hop(
+                true,
+                Some(RelayAck {
+                    ok: false,
+                    code: Some(code.into()),
+                    detail: Some(detail.into()),
+                }),
+            )]))
         };
         let (text, ok) = refused("no_push_token", "no push token");
-        assert!(!ok && text.contains("refused: no_push_token") && text.contains("Open the app"), "{text}");
-        let (text, _) = refused("push_failed", "apns production topic com.zazulam.ligus: 400 BadDeviceToken");
+        assert!(
+            !ok && text.contains("refused: no_push_token") && text.contains("Open the app"),
+            "{text}"
+        );
+        let (text, _) = refused(
+            "push_failed",
+            "apns production topic com.zazulam.ligus: 400 BadDeviceToken",
+        );
         assert!(text.contains("sandbox (development) token"), "{text}");
-        let (text, _) = refused("push_failed", "apns sandbox topic com.x: topic not allowed on this relay");
+        let (text, _) = refused(
+            "push_failed",
+            "apns sandbox topic com.x: topic not allowed on this relay",
+        );
         assert!(text.contains("LANGSTROTH_RELAY_APNS_TOPICS"), "{text}");
-        let (text, _) = refused("push_failed", "apns sandbox topic com.x: 403 InvalidProviderToken");
+        let (text, _) = refused(
+            "push_failed",
+            "apns sandbox topic com.x: 403 InvalidProviderToken",
+        );
         assert!(text.contains("LANGSTROTH_RELAY_APNS_KEY_ID"), "{text}");
         // No answer at all.
         let mut h = hop(true, None);
@@ -434,7 +619,14 @@ mod push_test_tests {
         let mut r = report(vec![]);
         r.connected = false;
         assert!(describe_push_test(&r).0.contains("NOT connected"));
-        let mut r = report(vec![hop(true, Some(RelayAck { ok: false, code: Some("push_unavailable".into()), detail: None }))]);
+        let mut r = report(vec![hop(
+            true,
+            Some(RelayAck {
+                ok: false,
+                code: Some("push_unavailable".into()),
+                detail: None,
+            }),
+        )]);
         r.push_available = false;
         let (text, ok) = describe_push_test(&r);
         assert!(!ok && text.contains("UNAVAILABLE"), "{text}");
@@ -446,7 +638,12 @@ mod status_tests {
     use super::*;
 
     fn st(connected: bool) -> LiveStatus {
-        LiveStatus { connected, status: "active".into(), push: true, ..Default::default() }
+        LiveStatus {
+            connected,
+            status: "active".into(),
+            push: true,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -456,7 +653,10 @@ mod status_tests {
         s.at = now - 23_589;
         s.connected_since = Some(now - 23_589);
         s.heartbeat = now - 12;
-        assert_eq!(describe_status(&s, now), "connected for 6h 33m (status active, push available, checked 12s ago)");
+        assert_eq!(
+            describe_status(&s, now),
+            "connected for 6h 33m (status active, push available, checked 12s ago)"
+        );
     }
 
     #[test]
@@ -467,7 +667,10 @@ mod status_tests {
         s.connected_since = Some(now - 7200);
         s.heartbeat = now - 300;
         let line = describe_status(&s, now);
-        assert!(line.starts_with("unknown: ligus serve last reported 5m ago (connected,"), "{line}");
+        assert!(
+            line.starts_with("unknown: ligus serve last reported 5m ago (connected,"),
+            "{line}"
+        );
         assert!(line.contains("is it running?"));
     }
 
@@ -486,7 +689,10 @@ mod status_tests {
         // Written by an older ligus serve: no heartbeat, no connection time.
         let mut legacy = st(true);
         legacy.at = now - 90_000;
-        assert_eq!(describe_status(&legacy, now), "connected (status active, push available, last change 1d 1h ago)");
+        assert_eq!(
+            describe_status(&legacy, now),
+            "connected (status active, push available, last change 1d 1h ago)"
+        );
         assert_eq!(short_age(59), "59s");
         assert_eq!(short_age(3599), "59m");
     }

@@ -43,7 +43,9 @@ pub fn real_hosts_denied() -> bool {
     if cfg!(test) || std::env::var_os("LIGUS_FORGE_DENY_REAL").is_some_and(|v| v == "1") {
         return true;
     }
-    std::env::current_exe().ok().is_some_and(|p| is_cargo_test_binary(&p))
+    std::env::current_exe()
+        .ok()
+        .is_some_and(|p| is_cargo_test_binary(&p))
 }
 
 /// A binary cargo built for a test run: it lives in `target/<profile>/deps/`
@@ -53,12 +55,22 @@ pub fn real_hosts_denied() -> bool {
 /// binaries cargo uplifts for people to run (`target/<profile>/ligus`) have
 /// neither.
 pub fn is_cargo_test_binary(exe: &std::path::Path) -> bool {
-    if exe.parent().and_then(|d| d.file_name()).is_some_and(|n| n == "deps") {
+    if exe
+        .parent()
+        .and_then(|d| d.file_name())
+        .is_some_and(|n| n == "deps")
+    {
         return true;
     }
-    let Some(stem) = exe.file_stem().and_then(|s| s.to_str()) else { return false };
+    let Some(stem) = exe.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
     stem.rsplit_once('-').is_some_and(|(name, hash)| {
-        !name.is_empty() && hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        !name.is_empty()
+            && hash.len() == 16
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     })
 }
 
@@ -105,7 +117,9 @@ pub fn uses_platform_roots() -> bool {
 /// A verifying rustls config over the bundled Mozilla roots (what reqwest
 /// 0.12 used before the OS trust store), for hosts without a CA store.
 fn bundled_roots_tls() -> rustls::ClientConfig {
-    let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+    let roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
     rustls::ClientConfig::builder_with_provider(tls_provider())
         .with_safe_default_protocol_versions()
         .expect("ring supports the default TLS versions")
@@ -158,7 +172,9 @@ pub fn client_builder_with_roots(platform_roots: bool) -> reqwest::ClientBuilder
 /// `reqwest::Client::new()` with the TLS provider installed. Use this (not
 /// `reqwest::Client::new()`) everywhere in Ligus.
 pub fn new_client() -> reqwest::Client {
-    client_builder().build().expect("an HTTP client with default settings builds")
+    client_builder()
+        .build()
+        .expect("an HTTP client with default settings builds")
 }
 
 /// Refuse a request to a non-loopback host from a test build.
@@ -166,7 +182,10 @@ pub(crate) fn guard_url(raw: &str) -> Result<()> {
     if !real_hosts_denied() {
         return Ok(());
     }
-    let loopback = match url::Url::parse(raw).ok().and_then(|u| u.host().map(|h| h.to_owned())) {
+    let loopback = match url::Url::parse(raw)
+        .ok()
+        .and_then(|u| u.host().map(|h| h.to_owned()))
+    {
         Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
         Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
         Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
@@ -175,7 +194,9 @@ pub(crate) fn guard_url(raw: &str) -> Result<()> {
     if loopback {
         Ok(())
     } else {
-        Err(ForgeError::Transport("test builds never reach a real code host".into()))
+        Err(ForgeError::Transport(
+            "test builds never reach a real code host".into(),
+        ))
     }
 }
 
@@ -209,7 +230,12 @@ pub fn is_public_ip(ip: std::net::IpAddr) -> bool {
             }
             let s = a.segments();
             if s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0] {
-                return v4(Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8));
+                return v4(Ipv4Addr::new(
+                    (s[6] >> 8) as u8,
+                    s[6] as u8,
+                    (s[7] >> 8) as u8,
+                    s[7] as u8,
+                ));
             }
             !(s[0..6] == [0, 0, 0, 0, 0, 0]
                 || a.is_multicast()
@@ -243,13 +269,18 @@ fn check_url_address_with(raw: &str, internal: bool, proxies: &Matcher) -> Resul
     if internal {
         return Ok(());
     }
-    let Ok(u) = url::Url::parse(raw) else { return Ok(()) };
+    let Ok(u) = url::Url::parse(raw) else {
+        return Ok(());
+    };
     let ip = match u.host().map(|h| h.to_owned()) {
         Some(url::Host::Ipv4(ip)) => std::net::IpAddr::V4(ip),
         Some(url::Host::Ipv6(ip)) => std::net::IpAddr::V6(ip),
         Some(url::Host::Domain(d)) => {
             let d = d.to_ascii_lowercase();
-            let direct = raw.parse::<http::Uri>().map(|uri| proxies.intercept(&uri).is_none()).unwrap_or(true);
+            let direct = raw
+                .parse::<http::Uri>()
+                .map(|uri| proxies.intercept(&uri).is_none())
+                .unwrap_or(true);
             if direct && proxy_hosts_of(proxies).contains(&d) {
                 return Err(internal_refused(&d));
             }
@@ -283,9 +314,18 @@ fn proxy_hosts() -> Vec<String> {
 /// The proxy hosts `m` sends http and https requests to.
 fn proxy_hosts_of(m: &Matcher) -> Vec<String> {
     let mut hosts: Vec<String> = Vec::new();
-    for probe in ["http://ligus-proxy-probe.invalid/", "https://ligus-proxy-probe.invalid/"] {
-        let Ok(uri) = probe.parse::<http::Uri>() else { continue };
-        if let Some(h) = m.intercept(&uri).and_then(|i| i.uri().host().map(|h| h.trim_matches(['[', ']']).to_ascii_lowercase())) {
+    for probe in [
+        "http://ligus-proxy-probe.invalid/",
+        "https://ligus-proxy-probe.invalid/",
+    ] {
+        let Ok(uri) = probe.parse::<http::Uri>() else {
+            continue;
+        };
+        if let Some(h) = m.intercept(&uri).and_then(|i| {
+            i.uri()
+                .host()
+                .map(|h| h.trim_matches(['[', ']']).to_ascii_lowercase())
+        }) {
             if !hosts.contains(&h) {
                 hosts.push(h);
             }
@@ -311,14 +351,30 @@ pub async fn check_proxied_target(raw: &str) -> Result<()> {
 }
 
 async fn check_proxied_target_with(raw: &str, proxies: &Matcher) -> Result<()> {
-    let Ok(uri) = raw.parse::<http::Uri>() else { return Ok(()) };
+    let Ok(uri) = raw.parse::<http::Uri>() else {
+        return Ok(());
+    };
     if proxies.intercept(&uri).is_none() {
         return Ok(());
     }
-    let Ok(u) = url::Url::parse(raw) else { return Ok(()) };
+    let Ok(u) = url::Url::parse(raw) else {
+        return Ok(());
+    };
     let host = match u.host().map(|h| h.to_owned()) {
-        Some(url::Host::Ipv4(ip)) => return if is_public_ip(ip.into()) { Ok(()) } else { Err(internal_refused(&ip.to_string())) },
-        Some(url::Host::Ipv6(ip)) => return if is_public_ip(ip.into()) { Ok(()) } else { Err(internal_refused(&ip.to_string())) },
+        Some(url::Host::Ipv4(ip)) => {
+            return if is_public_ip(ip.into()) {
+                Ok(())
+            } else {
+                Err(internal_refused(&ip.to_string()))
+            }
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            return if is_public_ip(ip.into()) {
+                Ok(())
+            } else {
+                Err(internal_refused(&ip.to_string()))
+            }
+        }
         Some(url::Host::Domain(d)) => d.trim_end_matches('.').to_ascii_lowercase(),
         None => return Ok(()),
     };
@@ -326,7 +382,11 @@ async fn check_proxied_target_with(raw: &str, proxies: &Matcher) -> Result<()> {
         return Ok(());
     }
     let port = u.port_or_known_default().unwrap_or(443);
-    let lookup = tokio::time::timeout(Duration::from_secs(5), tokio::net::lookup_host((host.as_str(), port))).await;
+    let lookup = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::net::lookup_host((host.as_str(), port)),
+    )
+    .await;
     if let Ok(Ok(addrs)) = lookup {
         if addrs.into_iter().any(|a| !is_public_ip(a.ip())) {
             return Err(internal_refused(&host));
@@ -346,10 +406,16 @@ impl reqwest::dns::Resolve for PublicOnly {
         let host = name.as_str().to_ascii_lowercase();
         let proxy = self.proxies.contains(&host);
         Box::pin(async move {
-            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
-            let ok: Vec<std::net::SocketAddr> = addrs.into_iter().filter(|a| proxy || is_public_ip(a.ip())).collect();
+            let addrs: Vec<std::net::SocketAddr> =
+                tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
+            let ok: Vec<std::net::SocketAddr> = addrs
+                .into_iter()
+                .filter(|a| proxy || is_public_ip(a.ip()))
+                .collect();
             if ok.is_empty() {
-                return Err(Box::new(internal_refused(&host)) as Box<dyn std::error::Error + Send + Sync>);
+                return Err(
+                    Box::new(internal_refused(&host)) as Box<dyn std::error::Error + Send + Sync>
+                );
             }
             Ok(Box::new(ok.into_iter()) as reqwest::dns::Addrs)
         })
@@ -364,7 +430,9 @@ impl reqwest::dns::Resolve for PublicOnly {
 /// caller still refuses internal IP literals in the URL itself.
 pub fn public_only_client_builder() -> reqwest::ClientBuilder {
     client_builder()
-        .dns_resolver(std::sync::Arc::new(PublicOnly { proxies: proxy_hosts() }))
+        .dns_resolver(std::sync::Arc::new(PublicOnly {
+            proxies: proxy_hosts(),
+        }))
         .redirect(reqwest::redirect::Policy::none())
 }
 
@@ -372,7 +440,13 @@ pub fn public_only_client_builder() -> reqwest::ClientBuilder {
 /// only unless the connection is marked internal on this device.
 pub(crate) fn client_for(internal: bool) -> reqwest::Client {
     let b = builder();
-    let b = if internal { b } else { b.dns_resolver(std::sync::Arc::new(PublicOnly { proxies: proxy_hosts() })) };
+    let b = if internal {
+        b
+    } else {
+        b.dns_resolver(std::sync::Arc::new(PublicOnly {
+            proxies: proxy_hosts(),
+        }))
+    };
     b.build().unwrap_or_default()
 }
 
@@ -386,7 +460,14 @@ fn builder() -> reqwest::ClientBuilder {
         .redirect(reqwest::redirect::Policy::custom(|a| {
             let first = a.previous().first().cloned();
             match first {
-                Some(f) if a.previous().len() < 5 && f.scheme() == a.url().scheme() && f.host_str() == a.url().host_str() && f.port() == a.url().port() => a.follow(),
+                Some(f)
+                    if a.previous().len() < 5
+                        && f.scheme() == a.url().scheme()
+                        && f.host_str() == a.url().host_str()
+                        && f.port() == a.url().port() =>
+                {
+                    a.follow()
+                }
                 _ => a.stop(),
             }
         }))
@@ -400,8 +481,17 @@ fn forge_message(body: &str) -> String {
     for k in ["message", "error", "error_description"] {
         match &v[k] {
             Value::String(s) if !s.is_empty() => parts.push(s.clone()),
-            Value::Array(a) => parts.extend(a.iter().filter_map(|x| x.as_str().map(str::to_string))),
-            Value::Object(o) => parts.extend(o.iter().map(|(k, v)| format!("{k}: {}", v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())))),
+            Value::Array(a) => {
+                parts.extend(a.iter().filter_map(|x| x.as_str().map(str::to_string)))
+            }
+            Value::Object(o) => parts.extend(o.iter().map(|(k, v)| {
+                format!(
+                    "{k}: {}",
+                    v.as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| v.to_string())
+                )
+            })),
             _ => {}
         }
     }
@@ -412,8 +502,17 @@ fn forge_message(body: &str) -> String {
             }
         }
     }
-    let s = if parts.is_empty() { body.chars().take(200).collect::<String>() } else { parts.join("; ") };
-    s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(300).collect()
+    let s = if parts.is_empty() {
+        body.chars().take(200).collect::<String>()
+    } else {
+        parts.join("; ")
+    };
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(300)
+        .collect()
 }
 
 impl Api {
@@ -422,15 +521,29 @@ impl Api {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}/{}", self.base.trim_end_matches('/'), path.trim_start_matches('/'))
+        format!(
+            "{}/{}",
+            self.base.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
     }
 
     /// Send a request; `Ok((status, body))` for any 2xx, 409 or 422, else
     /// the mapped error. Writes require a write token.
-    pub async fn send(&self, method: Method, path: &str, query: &[(&str, String)], body: Option<&Value>, purpose: Purpose, accept: Option<&str>) -> Result<(StatusCode, String)> {
+    pub async fn send(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<&Value>,
+        purpose: Purpose,
+        accept: Option<&str>,
+    ) -> Result<(StatusCode, String)> {
         let token = self.token(purpose).await?;
         if purpose == Purpose::Write && token.is_none() {
-            return Err(ForgeError::NotSignedIn("this needs a write token for the code host on this device".into()));
+            return Err(ForgeError::NotSignedIn(
+                "this needs a write token for the code host on this device".into(),
+            ));
         }
         guard_url(&self.url(path))?;
         check_url_address(&self.url(path), self.internal)?;
@@ -455,12 +568,20 @@ impl Api {
             req = req.json(b);
         }
         // Errors from reqwest can include the URL, never headers.
-        let mut resp = req.send().await.map_err(|e| ForgeError::Transport(format!("couldn't reach the code host: {}", e.without_url())))?;
+        let mut resp = req.send().await.map_err(|e| {
+            ForgeError::Transport(format!("couldn't reach the code host: {}", e.without_url()))
+        })?;
         let status = resp.status();
         let mut buf: Vec<u8> = Vec::new();
-        while let Some(chunk) = resp.chunk().await.map_err(|e| ForgeError::Transport(e.without_url().to_string()))? {
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|e| ForgeError::Transport(e.without_url().to_string()))?
+        {
             if buf.len() + chunk.len() > MAX_BODY {
-                return Err(ForgeError::Transport("the code host's answer was too large".into()));
+                return Err(ForgeError::Transport(
+                    "the code host's answer was too large".into(),
+                ));
             }
             buf.extend_from_slice(&chunk);
         }
@@ -468,27 +589,45 @@ impl Api {
         // Some forges echo the presented token in their error bodies
         // (Gitea/Forgejo: "access token does not exist [sha: …]"): never
         // carry it into a message.
-        if let Some(t) = token.as_ref().filter(|t| !status.is_success() && !t.is_empty()) {
+        if let Some(t) = token
+            .as_ref()
+            .filter(|t| !status.is_success() && !t.is_empty())
+        {
             if text.contains(t.expose()) {
                 text = text.replace(t.expose(), "***");
             }
         }
-        if status.is_success() || status == StatusCode::CONFLICT || status == StatusCode::UNPROCESSABLE_ENTITY {
+        if status.is_success()
+            || status == StatusCode::CONFLICT
+            || status == StatusCode::UNPROCESSABLE_ENTITY
+        {
             return Ok((status, text));
         }
         let msg = forge_message(&text);
         Err(match status {
-            StatusCode::UNAUTHORIZED => ForgeError::Unauthorized(format!("the code host refused the credentials ({msg})")),
-            StatusCode::FORBIDDEN => ForgeError::Unauthorized(format!("forbidden by the code host ({msg})")),
+            StatusCode::UNAUTHORIZED => {
+                ForgeError::Unauthorized(format!("the code host refused the credentials ({msg})"))
+            }
+            StatusCode::FORBIDDEN => {
+                ForgeError::Unauthorized(format!("forbidden by the code host ({msg})"))
+            }
             StatusCode::NOT_FOUND => ForgeError::NotFound(path.to_string()),
-            s if s.is_server_error() => ForgeError::Transport(format!("the code host failed ({s}): {msg}")),
+            s if s.is_server_error() => {
+                ForgeError::Transport(format!("the code host failed ({s}): {msg}"))
+            }
             s => ForgeError::Rejected(format!("{s}: {msg}")),
         })
     }
 
     pub async fn get(&self, path: &str, query: &[(&str, String)]) -> Result<Value> {
-        let (_, body) = self.send(Method::GET, path, query, None, Purpose::Read, None).await?;
-        serde_json::from_str(&body).map_err(|e| ForgeError::Transport(format!("the code host answered with something that isn't JSON: {e}")))
+        let (_, body) = self
+            .send(Method::GET, path, query, None, Purpose::Read, None)
+            .await?;
+        serde_json::from_str(&body).map_err(|e| {
+            ForgeError::Transport(format!(
+                "the code host answered with something that isn't JSON: {e}"
+            ))
+        })
     }
 
     /// `Ok(None)` on 404.
@@ -500,13 +639,28 @@ impl Api {
         }
     }
 
-    pub async fn get_text(&self, path: &str, query: &[(&str, String)], accept: Option<&str>) -> Result<String> {
-        Ok(self.send(Method::GET, path, query, None, Purpose::Read, accept).await?.1)
+    pub async fn get_text(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        accept: Option<&str>,
+    ) -> Result<String> {
+        Ok(self
+            .send(Method::GET, path, query, None, Purpose::Read, accept)
+            .await?
+            .1)
     }
 
     /// A write: `(status, json)` for 2xx, 409 and 422.
-    pub async fn write(&self, method: Method, path: &str, body: &Value) -> Result<(StatusCode, Value)> {
-        let (status, text) = self.send(method, path, &[], Some(body), Purpose::Write, None).await?;
+    pub async fn write(
+        &self,
+        method: Method,
+        path: &str,
+        body: &Value,
+    ) -> Result<(StatusCode, Value)> {
+        let (status, text) = self
+            .send(method, path, &[], Some(body), Purpose::Write, None)
+            .await?;
         let v = serde_json::from_str(&text).unwrap_or(Value::Null);
         if status == StatusCode::CONFLICT || status == StatusCode::UNPROCESSABLE_ENTITY {
             return Ok((status, Value::String(forge_message(&text))));
@@ -534,13 +688,27 @@ mod tests {
     #[test]
     fn cargo_test_binaries_are_recognised_in_both_layouts() {
         use std::path::Path;
-        assert!(super::is_cargo_test_binary(Path::new("/w/target/debug/deps/no_real_hosts-8e27a82306d4d313")));
-        assert!(super::is_cargo_test_binary(Path::new("/w/target/debug/build/ligus-forge/8e27a82306d4d313/out/no_real_hosts-8e27a82306d4d313")));
-        assert!(super::is_cargo_test_binary(Path::new("C:/t/debug/build/ligus-forge/8e27a82306d4d313/out/contract-8e27a82306d4d313.exe")));
-        assert!(!super::is_cargo_test_binary(Path::new("/w/target/debug/ligus")));
-        assert!(!super::is_cargo_test_binary(Path::new("C:/t/release/ligus.exe")));
-        assert!(!super::is_cargo_test_binary(Path::new("/usr/local/bin/ligus-serve")));
-        assert!(!super::is_cargo_test_binary(Path::new("/opt/x/tool-0123456789ABCDEF")));
+        assert!(super::is_cargo_test_binary(Path::new(
+            "/w/target/debug/deps/no_real_hosts-8e27a82306d4d313"
+        )));
+        assert!(super::is_cargo_test_binary(Path::new(
+            "/w/target/debug/build/ligus-forge/8e27a82306d4d313/out/no_real_hosts-8e27a82306d4d313"
+        )));
+        assert!(super::is_cargo_test_binary(Path::new(
+            "C:/t/debug/build/ligus-forge/8e27a82306d4d313/out/contract-8e27a82306d4d313.exe"
+        )));
+        assert!(!super::is_cargo_test_binary(Path::new(
+            "/w/target/debug/ligus"
+        )));
+        assert!(!super::is_cargo_test_binary(Path::new(
+            "C:/t/release/ligus.exe"
+        )));
+        assert!(!super::is_cargo_test_binary(Path::new(
+            "/usr/local/bin/ligus-serve"
+        )));
+        assert!(!super::is_cargo_test_binary(Path::new(
+            "/opt/x/tool-0123456789ABCDEF"
+        )));
     }
 
     /// Non-reqwest TLS trusts the same roots as reqwest: the OS store's
@@ -568,7 +736,11 @@ mod tests {
     #[tokio::test]
     async fn a_system_proxy_on_localhost_is_trusted_like_an_env_one() {
         use reqwest::dns::Resolve;
-        for p in ["localhost:3128", "http://localhost:3128", "http://user:pw@LocalHost:3128"] {
+        for p in [
+            "localhost:3128",
+            "http://localhost:3128",
+            "http://user:pw@LocalHost:3128",
+        ] {
             let hosts = super::proxy_hosts_of(&proxied(p, ""));
             assert_eq!(hosts, vec!["localhost".to_string()], "{p}");
             let r = super::PublicOnly { proxies: hosts };
@@ -600,20 +772,50 @@ mod tests {
     #[tokio::test]
     async fn a_proxied_target_is_resolved_here_first() {
         let m = proxied("proxy.example:3128", "");
-        assert!(super::check_proxied_target_with("https://localhost:8443/", &m).await.is_err());
-        assert!(super::check_proxied_target_with("https://127.0.0.1/", &m).await.is_err());
-        assert!(super::check_proxied_target_with("https://[::1]/", &m).await.is_err());
-        assert!(super::check_proxied_target_with("https://relay.example.com/", &m).await.is_ok());
+        assert!(
+            super::check_proxied_target_with("https://localhost:8443/", &m)
+                .await
+                .is_err()
+        );
+        assert!(super::check_proxied_target_with("https://127.0.0.1/", &m)
+            .await
+            .is_err());
+        assert!(super::check_proxied_target_with("https://[::1]/", &m)
+            .await
+            .is_err());
+        assert!(
+            super::check_proxied_target_with("https://relay.example.com/", &m)
+                .await
+                .is_ok()
+        );
         let direct = super::Matcher::builder().build();
-        assert!(super::check_proxied_target_with("https://localhost:8443/", &direct).await.is_ok());
+        assert!(
+            super::check_proxied_target_with("https://localhost:8443/", &direct)
+                .await
+                .is_ok()
+        );
         let excluded = proxied("proxy.example:3128", "localhost");
-        assert!(super::check_proxied_target_with("https://localhost:8443/", &excluded).await.is_ok());
+        assert!(
+            super::check_proxied_target_with("https://localhost:8443/", &excluded)
+                .await
+                .is_ok()
+        );
     }
 
     #[test]
     fn forge_messages_are_one_bounded_line() {
-        assert_eq!(super::forge_message(r#"{"message":"Validation Failed","errors":[{"message":"A pull request already exists for a:b."}]}"#), "Validation Failed; A pull request already exists for a:b.");
-        assert_eq!(super::forge_message(r#"{"message":["Another open merge request already exists for this source branch: !7"]}"#), "Another open merge request already exists for this source branch: !7");
+        assert_eq!(
+            super::forge_message(
+                r#"{"message":"Validation Failed","errors":[{"message":"A pull request already exists for a:b."}]}"#
+            ),
+            "Validation Failed; A pull request already exists for a:b."
+        );
+        assert_eq!(
+            super::forge_message(
+                r#"{"message":["Another open merge request already exists for this source branch: !7"]}"#
+            ),
+            "Another open merge request already exists for this source branch: !7"
+        );
         assert!(super::forge_message(&"x\n".repeat(500)).len() <= 300);
     }
 }

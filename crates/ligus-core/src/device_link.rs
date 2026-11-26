@@ -70,8 +70,12 @@ impl DeviceLinks {
             if owner.is_empty() || !humans.contains_key(owner) {
                 continue;
             }
-            let Ok(device) = Uuid::parse_str(&host.id) else { continue };
-            let Some(owner_account) = humans.get(owner).and_then(|o| o.actor.account_id) else { continue };
+            let Ok(device) = Uuid::parse_str(&host.id) else {
+                continue;
+            };
+            let Some(owner_account) = humans.get(owner).and_then(|o| o.actor.account_id) else {
+                continue;
+            };
             if !certified(device, owner_account) {
                 continue;
             }
@@ -79,7 +83,9 @@ impl DeviceLinks {
                 if m.actor.id == owner || m.role.rank() < WorkspaceRole::Admin.rank() {
                     continue;
                 }
-                let Some(account) = m.actor.account_id else { continue };
+                let Some(account) = m.actor.account_id else {
+                    continue;
+                };
                 if acts_for(device, account) {
                     out.insert(m.actor.id.clone(), owner.to_string());
                 }
@@ -97,22 +103,36 @@ impl DeviceLinks {
     /// never silently merged into another), when `owner` isn't a human member, or
     /// when they're the same actor. Returns whether it linked.
     pub fn link_retired(&mut self, config: &ChatSession, alias: &str, owner: &str) -> bool {
-        if alias == owner || config.members.iter().any(|m| m.actor.id == alias || m.id == alias) {
+        if alias == owner
+            || config
+                .members
+                .iter()
+                .any(|m| m.actor.id == alias || m.id == alias)
+        {
             return false;
         }
-        let owner_is_human =
-            config.members.iter().any(|m| m.actor.id == owner && m.actor.kind == ActorKind::Human);
+        let owner_is_human = config
+            .members
+            .iter()
+            .any(|m| m.actor.id == owner && m.actor.kind == ActorKind::Human);
         if !owner_is_human {
             return false;
         }
-        self.0.entry(alias.to_string()).or_insert_with(|| owner.to_string());
+        self.0
+            .entry(alias.to_string())
+            .or_insert_with(|| owner.to_string());
         true
     }
 
     /// Every actor id that is `person` or acts for them (their linked devices
     /// and retired aliases).
     pub fn ids_of<'a>(&'a self, person: &'a str) -> impl Iterator<Item = &'a str> + 'a {
-        std::iter::once(person).chain(self.0.iter().filter(move |(_, p)| p.as_str() == person).map(|(a, _)| a.as_str()))
+        std::iter::once(person).chain(
+            self.0
+                .iter()
+                .filter(move |(_, p)| p.as_str() == person)
+                .map(|(a, _)| a.as_str()),
+        )
     }
 
     /// The person `actor_id` acts for: its owner if it's a linked device, else itself.
@@ -133,7 +153,11 @@ impl DeviceLinks {
     /// devices count once.
     pub fn human_count(&self, session: &ChatSession) -> usize {
         let mut seen: Vec<&str> = Vec::new();
-        for m in session.members.iter().filter(|m| m.actor.kind == ActorKind::Human) {
+        for m in session
+            .members
+            .iter()
+            .filter(|m| m.actor.kind == ActorKind::Human)
+        {
             let p = self.person(&m.actor.id);
             if !seen.contains(&p) {
                 seen.push(p);
@@ -191,7 +215,12 @@ mod tests {
             member(boxed, box_role, ActorKind::Human),
         ];
         config.workspace_hosts = vec![host(box_device, owner)];
-        World { config, owner, boxed, box_device }
+        World {
+            config,
+            owner,
+            boxed,
+            box_device,
+        }
     }
 
     /// The box's device signed as the box's member.
@@ -208,7 +237,10 @@ mod tests {
     fn admin_box_owned_by_its_owner_is_their_device() {
         let w = world(WorkspaceRole::Admin);
         let links = DeviceLinks::from_config(&w.config, certs(&w), both(&w));
-        assert_eq!(links.owner_of(&w.boxed.to_string()), Some(w.owner.to_string().as_str()));
+        assert_eq!(
+            links.owner_of(&w.boxed.to_string()),
+            Some(w.owner.to_string().as_str())
+        );
         assert_eq!(links.person(&w.boxed.to_string()), w.owner.to_string());
         // The owner and the box are one person: a solo room.
         assert_eq!(links.human_count(&w.config), 1);
@@ -255,7 +287,10 @@ mod tests {
         assert_eq!(links.person(&w.boxed.to_string()), w.owner.to_string());
         let owner = w.owner.to_string();
         let ids: Vec<&str> = links.ids_of(&owner).collect();
-        assert!(ids.contains(&w.boxed.to_string().as_str()) && ids.contains(&w.owner.to_string().as_str()));
+        assert!(
+            ids.contains(&w.boxed.to_string().as_str())
+                && ids.contains(&w.owner.to_string().as_str())
+        );
         // An owner that isn't a human member links nothing.
         let mut other = DeviceLinks::default();
         assert!(!other.link_retired(&config, &w.boxed.to_string(), &Uuid::new_v4().to_string()));
@@ -266,9 +301,17 @@ mod tests {
     #[test]
     fn a_second_person_still_counts() {
         let mut w = world(WorkspaceRole::Admin);
-        w.config.members.push(member(Uuid::new_v4(), WorkspaceRole::Contributor, ActorKind::Human));
+        w.config.members.push(member(
+            Uuid::new_v4(),
+            WorkspaceRole::Contributor,
+            ActorKind::Human,
+        ));
         // Agents never count.
-        w.config.members.push(member(Uuid::new_v4(), WorkspaceRole::Contributor, ActorKind::Agent));
+        w.config.members.push(member(
+            Uuid::new_v4(),
+            WorkspaceRole::Contributor,
+            ActorKind::Agent,
+        ));
         let links = DeviceLinks::from_config(&w.config, certs(&w), both(&w));
         assert_eq!(links.human_count(&w.config), 2);
     }

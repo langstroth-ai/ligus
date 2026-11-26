@@ -84,11 +84,25 @@ pub fn decide(
     if revoked {
         return Binding::Revoked;
     }
-    let linked = |a: Uuid| if members.contains(&a) { Binding::Linked { account: a } } else { Binding::PersonRemoved { account: a } };
+    let linked = |a: Uuid| {
+        if members.contains(&a) {
+            Binding::Linked { account: a }
+        } else {
+            Binding::PersonRemoved { account: a }
+        }
+    };
     if let Some(a) = cache {
-        return if certified.contains(&a) { linked(a) } else { Binding::Pending { account: a } };
+        return if certified.contains(&a) {
+            linked(a)
+        } else {
+            Binding::Pending { account: a }
+        };
     }
-    let both: Vec<Uuid> = chosen.iter().filter(|a| certified.contains(a)).copied().collect();
+    let both: Vec<Uuid> = chosen
+        .iter()
+        .filter(|a| certified.contains(a))
+        .copied()
+        .collect();
     match person {
         // Only the install's one person is ever adopted.
         Some(p) if both.contains(&p) => linked(p),
@@ -119,19 +133,110 @@ mod tests {
     fn the_binding_follows_the_devices_own_choice() {
         let (ana, ben) = (Uuid::new_v4(), Uuid::new_v4());
         let members = set(&[ana, ben]);
-        assert_eq!(decide(false, &set(&[ana]), &set(&[ana]), &members, Some(ana), Some(ana), true), Binding::Linked { account: ana });
-        assert_eq!(decide(false, &set(&[]), &set(&[]), &members, Some(ana), Some(ana), true), Binding::Pending { account: ana });
+        assert_eq!(
+            decide(
+                false,
+                &set(&[ana]),
+                &set(&[ana]),
+                &members,
+                Some(ana),
+                Some(ana),
+                true
+            ),
+            Binding::Linked { account: ana }
+        );
+        assert_eq!(
+            decide(
+                false,
+                &set(&[]),
+                &set(&[]),
+                &members,
+                Some(ana),
+                Some(ana),
+                true
+            ),
+            Binding::Pending { account: ana }
+        );
         // Lost cache entry: heals from the device's own signatures.
-        assert_eq!(decide(false, &set(&[ana]), &set(&[ana]), &members, None, Some(ana), true), Binding::Linked { account: ana });
+        assert_eq!(
+            decide(
+                false,
+                &set(&[ana]),
+                &set(&[ana]),
+                &members,
+                None,
+                Some(ana),
+                true
+            ),
+            Binding::Linked { account: ana }
+        );
         // A foreign certificate (Ben) the device never chose: not adopted.
-        assert_eq!(decide(false, &set(&[ben]), &set(&[]), &members, None, Some(ana), true), Binding::NotLinkedHere);
-        assert_eq!(decide(false, &set(&[ben]), &set(&[]), &members, None, None, false), Binding::Own);
+        assert_eq!(
+            decide(
+                false,
+                &set(&[ben]),
+                &set(&[]),
+                &members,
+                None,
+                Some(ana),
+                true
+            ),
+            Binding::NotLinkedHere
+        );
+        assert_eq!(
+            decide(false, &set(&[ben]), &set(&[]), &members, None, None, false),
+            Binding::Own
+        );
         // Even chosen, Ben isn't the install's person.
-        assert_eq!(decide(false, &set(&[ana, ben]), &set(&[ben]), &members, None, Some(ana), true), Binding::NotLinkedHere);
+        assert_eq!(
+            decide(
+                false,
+                &set(&[ana, ben]),
+                &set(&[ben]),
+                &members,
+                None,
+                Some(ana),
+                true
+            ),
+            Binding::NotLinkedHere
+        );
         // The whole file lost, two chosen: a person picks.
-        assert!(matches!(decide(false, &set(&[ana, ben]), &set(&[ana, ben]), &members, None, None, false), Binding::Ambiguous(_)));
+        assert!(matches!(
+            decide(
+                false,
+                &set(&[ana, ben]),
+                &set(&[ana, ben]),
+                &members,
+                None,
+                None,
+                false
+            ),
+            Binding::Ambiguous(_)
+        ));
         // Removed person; revoked device.
-        assert_eq!(decide(false, &set(&[ana]), &set(&[ana]), &set(&[ben]), Some(ana), Some(ana), true), Binding::PersonRemoved { account: ana });
-        assert_eq!(decide(true, &set(&[ana]), &set(&[ana]), &members, Some(ana), Some(ana), true), Binding::Revoked);
+        assert_eq!(
+            decide(
+                false,
+                &set(&[ana]),
+                &set(&[ana]),
+                &set(&[ben]),
+                Some(ana),
+                Some(ana),
+                true
+            ),
+            Binding::PersonRemoved { account: ana }
+        );
+        assert_eq!(
+            decide(
+                true,
+                &set(&[ana]),
+                &set(&[ana]),
+                &members,
+                Some(ana),
+                Some(ana),
+                true
+            ),
+            Binding::Revoked
+        );
     }
 }

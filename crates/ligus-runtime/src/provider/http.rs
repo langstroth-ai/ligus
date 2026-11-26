@@ -33,7 +33,11 @@ impl Peer<'_> {
     }
 
     pub fn idle_error(&self, idle: Duration) -> ProviderError {
-        ProviderError::Idle { provider: self.provider, host: self.host(), secs: idle.as_secs() }
+        ProviderError::Idle {
+            provider: self.provider,
+            host: self.host(),
+            secs: idle.as_secs(),
+        }
     }
 }
 

@@ -80,32 +80,50 @@ pub fn seal_human_beat(ring: &KeyringEngine, beat: &HumanBeat) -> Option<Value> 
 /// host/lease beats, plaintext blobs, blobs under another key or an epoch
 /// older than the authorized head, beats in another device's slot, stale beats
 /// and beats from too far in the future. Names come back cleaned.
-pub fn open_human_beats(blobs: &HashMap<String, Value>, ring: &KeyringEngine, now_ms: i64) -> Vec<HumanBeat> {
+pub fn open_human_beats(
+    blobs: &HashMap<String, Value>,
+    ring: &KeyringEngine,
+    now_ms: i64,
+) -> Vec<HumanBeat> {
     let mut out = Vec::new();
     let floor = ring.authorized_head();
     for (slot, blob) in blobs {
-        let Some(sealed) = blob.get("human") else { continue };
-        let Ok(sealed) = serde_json::from_value::<SealedEnvelope>(sealed.clone()) else { continue };
+        let Some(sealed) = blob.get("human") else {
+            continue;
+        };
+        let Ok(sealed) = serde_json::from_value::<SealedEnvelope>(sealed.clone()) else {
+            continue;
+        };
         if sealed.version < floor {
             continue;
         }
-        let Some(plain) =
-            ring.keys_for(sealed.version, sealed.kid.as_deref()).into_iter().find_map(|k| open_symmetric(k, &sealed).ok())
+        let Some(plain) = ring
+            .keys_for(sealed.version, sealed.kid.as_deref())
+            .into_iter()
+            .find_map(|k| open_symmetric(k, &sealed).ok())
         else {
             continue;
         };
-        let Ok(mut beat) = serde_json::from_slice::<HumanBeat>(&plain) else { continue };
+        let Ok(mut beat) = serde_json::from_slice::<HumanBeat>(&plain) else {
+            continue;
+        };
         if beat.actor_id.is_empty() || *slot != human_presence_slot(&beat.device_id) {
             continue;
         }
-        if beat.ts > now_ms.saturating_add(MAX_SKEW_MS) || now_ms.saturating_sub(beat.ts) > PRESENCE_TTL_MS {
+        if beat.ts > now_ms.saturating_add(MAX_SKEW_MS)
+            || now_ms.saturating_sub(beat.ts) > PRESENCE_TTL_MS
+        {
             continue;
         }
         beat.ts = beat.ts.min(now_ms);
         beat.name = clean_display_name(&beat.name);
         out.push(beat);
     }
-    out.sort_by(|a, b| a.actor_id.cmp(&b.actor_id).then(a.device_id.cmp(&b.device_id)));
+    out.sort_by(|a, b| {
+        a.actor_id
+            .cmp(&b.actor_id)
+            .then(a.device_id.cmp(&b.device_id))
+    });
     out
 }
 
@@ -118,8 +136,15 @@ pub fn typing_in(beats: &[HumanBeat], session_id: &str, me: &str) -> Vec<(String
             seen.entry(&b.actor_id).or_insert(&b.name);
         }
     }
-    let mut out: Vec<(String, String)> = seen.into_iter().map(|(a, n)| (a.to_string(), n.to_string())).collect();
-    out.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then(a.0.cmp(&b.0)));
+    let mut out: Vec<(String, String)> = seen
+        .into_iter()
+        .map(|(a, n)| (a.to_string(), n.to_string()))
+        .collect();
+    out.sort_by(|a, b| {
+        a.1.to_lowercase()
+            .cmp(&b.1.to_lowercase())
+            .then(a.0.cmp(&b.0))
+    });
     out
 }
 
@@ -133,7 +158,12 @@ pub fn clean_display_name(raw: &str) -> String {
         .filter(|c| !c.is_control() && !is_format_char(*c))
         .collect();
     let collapsed = filtered.split_whitespace().collect::<Vec<_>>().join(" ");
-    collapsed.chars().take(MAX_NAME_CHARS).collect::<String>().trim_end().to_string()
+    collapsed
+        .chars()
+        .take(MAX_NAME_CHARS)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
 }
 
 /// Unicode "format" characters a name has no business carrying: bidi
@@ -145,13 +175,27 @@ fn is_format_char(c: char) -> bool {
 }
 
 /// Publish a beat to `room`'s presence channel (a no-op without a seal key).
-pub async fn publish_human_beat(relay: &RelayClient, room: &str, ring: &KeyringEngine, beat: &HumanBeat) -> Result<(), RelayError> {
-    let Some(blob) = seal_human_beat(ring, beat) else { return Ok(()) };
-    relay.publish_presence(room, &human_presence_slot(&beat.device_id), &blob).await
+pub async fn publish_human_beat(
+    relay: &RelayClient,
+    room: &str,
+    ring: &KeyringEngine,
+    beat: &HumanBeat,
+) -> Result<(), RelayError> {
+    let Some(blob) = seal_human_beat(ring, beat) else {
+        return Ok(());
+    };
+    relay
+        .publish_presence(room, &human_presence_slot(&beat.device_id), &blob)
+        .await
 }
 
 /// Read every live human beat in `room`.
-pub async fn fetch_human_beats(relay: &RelayClient, room: &str, ring: &KeyringEngine, now_ms: i64) -> Result<Vec<HumanBeat>, RelayError> {
+pub async fn fetch_human_beats(
+    relay: &RelayClient,
+    room: &str,
+    ring: &KeyringEngine,
+    now_ms: i64,
+) -> Result<Vec<HumanBeat>, RelayError> {
     let blobs = relay.list_presence(room).await?;
     Ok(open_human_beats(&blobs, ring, now_ms))
 }
@@ -170,7 +214,14 @@ mod tests {
     }
 
     fn beat(actor: &str, device: &str, session: &str, typing: bool, ts: i64) -> HumanBeat {
-        HumanBeat { actor_id: actor.into(), name: format!("Name {actor}"), device_id: device.into(), session_id: session.into(), typing, ts }
+        HumanBeat {
+            actor_id: actor.into(),
+            name: format!("Name {actor}"),
+            device_id: device.into(),
+            session_id: session.into(),
+            typing,
+            ts,
+        }
     }
 
     #[test]
@@ -179,8 +230,19 @@ mod tests {
         let b = beat("actor-q7", "dev-1", "chat-secret-id", true, 10_000);
         let blob = seal_human_beat(&k, &b).unwrap();
         let raw = serde_json::to_string(&blob).unwrap();
-        for leak in ["actor-q7", "Name", "chat-secret-id", "typing", "actorId", "sessionId", "dev-1"] {
-            assert!(!raw.contains(leak), "the relay could read {leak:?} in {raw}");
+        for leak in [
+            "actor-q7",
+            "Name",
+            "chat-secret-id",
+            "typing",
+            "actorId",
+            "sessionId",
+            "dev-1",
+        ] {
+            assert!(
+                !raw.contains(leak),
+                "the relay could read {leak:?} in {raw}"
+            );
         }
         let mut blobs = HashMap::new();
         blobs.insert(human_presence_slot("dev-1"), blob);
@@ -195,16 +257,38 @@ mod tests {
         // An older desktop's plaintext blob (or a relay forging one).
         blobs.insert("ada".into(), serde_json::json!({ "actorId": "ada", "name": "Ada", "sessionId": "s", "typing": true, "ts": now }));
         // Another workspace's key.
-        blobs.insert(human_presence_slot("x"), seal_human_beat(&key("other"), &beat("x", "x", "s", true, now)).unwrap());
+        blobs.insert(
+            human_presence_slot("x"),
+            seal_human_beat(&key("other"), &beat("x", "x", "s", true, now)).unwrap(),
+        );
         // A beat claiming another device's slot.
-        blobs.insert(human_presence_slot("victim"), seal_human_beat(&k, &beat("eve", "eve-dev", "s", true, now)).unwrap());
+        blobs.insert(
+            human_presence_slot("victim"),
+            seal_human_beat(&k, &beat("eve", "eve-dev", "s", true, now)).unwrap(),
+        );
         // Stale and far-future.
-        blobs.insert(human_presence_slot("old"), seal_human_beat(&k, &beat("old", "old", "s", true, now - PRESENCE_TTL_MS - 1)).unwrap());
-        blobs.insert(human_presence_slot("fut"), seal_human_beat(&k, &beat("fut", "fut", "s", true, now + MAX_SKEW_MS + 1)).unwrap());
+        blobs.insert(
+            human_presence_slot("old"),
+            seal_human_beat(
+                &k,
+                &beat("old", "old", "s", true, now - PRESENCE_TTL_MS - 1),
+            )
+            .unwrap(),
+        );
+        blobs.insert(
+            human_presence_slot("fut"),
+            seal_human_beat(&k, &beat("fut", "fut", "s", true, now + MAX_SKEW_MS + 1)).unwrap(),
+        );
         // A host beat is not a human beat.
-        blobs.insert("host:box".into(), crate::host_presence::seal_host_beat(&k, "box", 1).unwrap());
+        blobs.insert(
+            "host:box".into(),
+            crate::host_presence::seal_host_beat(&k, "box", 1).unwrap(),
+        );
         // The one good beat (slightly in the future: clamped).
-        blobs.insert(human_presence_slot("bob-dev"), seal_human_beat(&k, &beat("bob", "bob-dev", "s", true, now + 500)).unwrap());
+        blobs.insert(
+            human_presence_slot("bob-dev"),
+            seal_human_beat(&k, &beat("bob", "bob-dev", "s", true, now + 500)).unwrap(),
+        );
         let got = open_human_beats(&blobs, &k, now);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].actor_id, "bob");
@@ -220,13 +304,22 @@ mod tests {
             beat("cy", "c1", "s", false, 1),
             beat("me", "m1", "s", true, 1),
         ];
-        assert_eq!(typing_in(&beats, "s", "me"), vec![("ada".to_string(), "Name ada".to_string())]);
+        assert_eq!(
+            typing_in(&beats, "s", "me"),
+            vec![("ada".to_string(), "Name ada".to_string())]
+        );
     }
 
     #[test]
     fn names_are_cleaned() {
-        assert_eq!(clean_display_name("  Ada\u{202E}evil\n\tLove\u{200B}lace  "), "Adaevil Lovelace");
-        assert_eq!(clean_display_name(&"x".repeat(200)).chars().count(), MAX_NAME_CHARS);
+        assert_eq!(
+            clean_display_name("  Ada\u{202E}evil\n\tLove\u{200B}lace  "),
+            "Adaevil Lovelace"
+        );
+        assert_eq!(
+            clean_display_name(&"x".repeat(200)).chars().count(),
+            MAX_NAME_CHARS
+        );
         assert_eq!(clean_display_name("\u{0007}"), "");
     }
 
@@ -240,7 +333,11 @@ mod tests {
     async fn publish_and_fetch_through_the_relay() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, crate::test_relay::router()).await.unwrap() });
+        tokio::spawn(async move {
+            axum::serve(listener, crate::test_relay::router())
+                .await
+                .unwrap()
+        });
         let relay = RelayClient::new(format!("http://{addr}"));
         let k = key("room secret");
         let b = beat("ada", "d1", "s", true, now_ms());
@@ -248,8 +345,13 @@ mod tests {
         // What the relay stores is opaque.
         let raw = serde_json::to_string(&relay.list_presence("room-a").await.unwrap()).unwrap();
         assert!(!raw.contains("ada") && !raw.contains("\"s\""));
-        let got = fetch_human_beats(&relay, "room-a", &k, now_ms()).await.unwrap();
+        let got = fetch_human_beats(&relay, "room-a", &k, now_ms())
+            .await
+            .unwrap();
         assert_eq!(got, vec![b]);
-        assert!(fetch_human_beats(&relay, "room-b", &k, now_ms()).await.unwrap().is_empty());
+        assert!(fetch_human_beats(&relay, "room-b", &k, now_ms())
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

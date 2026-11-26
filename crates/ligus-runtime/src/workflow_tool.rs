@@ -30,12 +30,17 @@ pub struct WorkflowTool {
 /// this turn. Mirrors the prompt's rule: author one only on explicit request.
 pub fn wanted(last_user_message: &str) -> bool {
     let m = last_user_message.to_ascii_lowercase();
-    ["workflow", "pipeline", "loop until"].iter().any(|k| m.contains(k))
+    ["workflow", "pipeline", "loop until"]
+        .iter()
+        .any(|k| m.contains(k))
 }
 
 impl WorkflowTool {
     pub fn new(validate: Validator) -> Self {
-        Self { validate, accepted: Mutex::new(Vec::new()) }
+        Self {
+            validate,
+            accepted: Mutex::new(Vec::new()),
+        }
     }
 
     /// The tool definition (Anthropic-style `input_schema`; the OpenAI wire
@@ -44,11 +49,11 @@ impl WorkflowTool {
         json!({
             "name": PROPOSE_WORKFLOW,
             "description": "Propose a multi-stage workflow (a DAG of agent stages and human approval gates) \
-for this chat. Call this ONLY when the user explicitly asked for a workflow, pipeline or loop. \
-The definition is checked now: an error comes back so you can fix it and call again. When accepted \
-it is filed for the team to review when your reply ends; it becomes runnable only once a human \
-approves it. To change an existing workflow, pass its id (or name) as \"revises\". \
-Do not also write a [[workflow:]] directive for the same workflow.",
+        for this chat. Call this ONLY when the user explicitly asked for a workflow, pipeline or loop. \
+        The definition is checked now: an error comes back so you can fix it and call again. When accepted \
+        it is filed for the team to review when your reply ends; it becomes runnable only once a human \
+        approves it. To change an existing workflow, pass its id (or name) as \"revises\". \
+        Do not also write a [[workflow:]] directive for the same workflow.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -86,7 +91,10 @@ Do not also write a [[workflow:]] directive for the same workflow.",
         let json = input.to_string();
         match (self.validate)(&json) {
             Ok(name) => {
-                self.accepted.lock().unwrap_or_else(|e| e.into_inner()).push(json);
+                self.accepted
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(json);
                 (
                     format!(
                         "Accepted: the workflow \"{name}\" will be filed for review when your reply ends. \
@@ -95,13 +103,19 @@ A human approves it before it can run. Tell the user it is waiting in the Review
                     false,
                 )
             }
-            Err(e) => (format!("Not filed: {e}. Fix the definition and call {PROPOSE_WORKFLOW} again."), true),
+            Err(e) => (
+                format!("Not filed: {e}. Fix the definition and call {PROPOSE_WORKFLOW} again."),
+                true,
+            ),
         }
     }
 
     /// The payloads accepted so far, in call order.
     pub fn accepted(&self) -> Vec<String> {
-        self.accepted.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.accepted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -119,7 +133,9 @@ pub fn append_as_directives(body: &str, accepted: &[String]) -> String {
         .collect();
     let mut out = body.to_string();
     for json in accepted {
-        let Ok(v) = serde_json::from_str::<Value>(json) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(json) else {
+            continue;
+        };
         if present.contains(&v) {
             continue;
         }
@@ -163,12 +179,20 @@ mod tests {
         let body = append_as_directives("Done.", &t.accepted());
         let parsed = crate::directives::parse_reply_directives(&body);
         assert_eq!(parsed.workflows.len(), 1);
-        assert_eq!(serde_json::from_str::<Value>(&parsed.workflows[0]).unwrap(), input);
+        assert_eq!(
+            serde_json::from_str::<Value>(&parsed.workflows[0]).unwrap(),
+            input
+        );
 
         // The model also wrote the directive itself: not filed twice.
         let both = format!("Done. [[workflow: {input}]]");
         let again = append_as_directives(&both, &t.accepted());
-        assert_eq!(crate::directives::parse_reply_directives(&again).workflows.len(), 1);
+        assert_eq!(
+            crate::directives::parse_reply_directives(&again)
+                .workflows
+                .len(),
+            1
+        );
     }
 
     #[test]

@@ -212,13 +212,21 @@ impl HostPaths {
     pub fn from_env() -> Self {
         let mut h = HostPaths::default();
         if let Some(home) = home_dir() {
-            h.data_dirs.push(home.join(ligus_core::names::HOME_DATA_DIR));
+            h.data_dirs
+                .push(home.join(ligus_core::names::HOME_DATA_DIR));
             #[cfg(target_os = "macos")]
-            h.data_dirs.push(home.join("Library/Application Support").join(ligus_core::names::DESKTOP_APP_ID));
+            h.data_dirs.push(
+                home.join("Library/Application Support")
+                    .join(ligus_core::names::DESKTOP_APP_ID),
+            );
             #[cfg(target_os = "linux")]
             {
-                h.data_dirs.push(home.join(".local/share").join(ligus_core::names::DESKTOP_APP_ID));
-                h.data_dirs.push(home.join(".config").join(ligus_core::names::DESKTOP_APP_ID));
+                h.data_dirs.push(
+                    home.join(".local/share")
+                        .join(ligus_core::names::DESKTOP_APP_ID),
+                );
+                h.data_dirs
+                    .push(home.join(".config").join(ligus_core::names::DESKTOP_APP_ID));
             }
         }
         if let Ok(d) = ligus_core::names::var("LIGUS_DATA_DIR") {
@@ -228,19 +236,48 @@ impl HostPaths {
         }
         let list = |name: &str| -> Vec<String> {
             ligus_core::names::var(name)
-                .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+                .map(|v| {
+                    v.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
                 .unwrap_or_default()
         };
-        h.extra_egress = list("LIGUS_SANDBOX_EGRESS_ALLOW").iter().filter_map(|s| HostPort::parse(s)).collect();
-        h.egress_presets = EgressPreset::parse_list(list("LIGUS_SANDBOX_EGRESS_PRESETS").iter().map(String::as_str));
-        h.extra_write = list("LIGUS_SANDBOX_WRITE_ALLOW").into_iter().map(|p| expand_home(&p)).collect();
-        h.home_read_allow = list("LIGUS_SANDBOX_READ_ALLOW").into_iter().map(|p| expand_home(&p)).collect();
+        h.extra_egress = list("LIGUS_SANDBOX_EGRESS_ALLOW")
+            .iter()
+            .filter_map(|s| HostPort::parse(s))
+            .collect();
+        h.egress_presets = EgressPreset::parse_list(
+            list("LIGUS_SANDBOX_EGRESS_PRESETS")
+                .iter()
+                .map(String::as_str),
+        );
+        h.extra_write = list("LIGUS_SANDBOX_WRITE_ALLOW")
+            .into_iter()
+            .map(|p| expand_home(&p))
+            .collect();
+        h.home_read_allow = list("LIGUS_SANDBOX_READ_ALLOW")
+            .into_iter()
+            .map(|p| expand_home(&p))
+            .collect();
         if let Some(home) = home_dir() {
-            let t = toolchain_allow(&home, std::env::var_os("PATH").as_deref(), &|k| std::env::var_os(k), &|p| p.exists());
+            let t = toolchain_allow(
+                &home,
+                std::env::var_os("PATH").as_deref(),
+                &|k| std::env::var_os(k),
+                &|p| p.exists(),
+            );
             h.toolchain_read = t.read.into_iter().map(|(p, _)| p).collect();
             h.toolchain_env = t.env;
         }
-        h.path_dirs = std::env::var_os("PATH").map(|v| std::env::split_paths(&v).filter(|d| d.is_absolute()).collect()).unwrap_or_default();
+        h.path_dirs = std::env::var_os("PATH")
+            .map(|v| {
+                std::env::split_paths(&v)
+                    .filter(|d| d.is_absolute())
+                    .collect()
+            })
+            .unwrap_or_default();
         h.other_homes = other_homes(home_dir().as_deref(), passwd_home().as_deref());
         if let Some(home) = home_dir() {
             h.exec_dirs = cli_home::git_exec_dirs(&home);
@@ -301,17 +338,33 @@ pub const TOOLCHAIN_VARS: &[(&str, &str)] = &[
     ("MISE_DATA_DIR", ".local/share/mise"),
     ("UV_PYTHON_INSTALL_DIR", ".local/share/uv/python"),
     ("SDKMAN_DIR", ".sdkman"),
-    ("PNPM_HOME", if cfg!(target_os = "macos") { "Library/pnpm" } else { ".local/share/pnpm" }),
+    (
+        "PNPM_HOME",
+        if cfg!(target_os = "macos") {
+            "Library/pnpm"
+        } else {
+            ".local/share/pnpm"
+        },
+    ),
 ];
 
 /// This host's toolchain allow-list: [`TOOLCHAIN_DIRS`] that exist, every
 /// `PATH` entry under the home (the user put its binaries on `PATH`), and
 /// the dirs [`TOOLCHAIN_VARS`] name. Never the home itself or anything in a
 /// credential dir ([`home_secret_dirs`]). A pure function of its inputs.
-pub fn toolchain_allow(home: &Path, path_var: Option<&OsStr>, env: &dyn Fn(&str) -> Option<OsString>, exists: &dyn Fn(&Path) -> bool) -> ToolchainAllow {
+pub fn toolchain_allow(
+    home: &Path,
+    path_var: Option<&OsStr>,
+    env: &dyn Fn(&str) -> Option<OsString>,
+    exists: &dyn Fn(&Path) -> bool,
+) -> ToolchainAllow {
     let mut t = ToolchainAllow::default();
     let secrets = home_secret_dirs(home, Purpose::Tool);
-    let ok = |p: &Path| p.starts_with(home) && p != home && !secrets.iter().any(|s| p.starts_with(s) || s.starts_with(p));
+    let ok = |p: &Path| {
+        p.starts_with(home)
+            && p != home
+            && !secrets.iter().any(|s| p.starts_with(s) || s.starts_with(p))
+    };
     let push = |t: &mut ToolchainAllow, p: PathBuf, why: String| {
         if ok(&p) && exists(&p) && !t.read.iter().any(|(x, _)| *x == p) {
             t.read.push((p, why));
@@ -328,7 +381,10 @@ pub fn toolchain_allow(home: &Path, path_var: Option<&OsStr>, env: &dyn Fn(&str)
         }
     }
     for (var, rel) in TOOLCHAIN_VARS {
-        let set = env(var).filter(|v| !v.is_empty()).map(PathBuf::from).filter(|p| p.is_absolute());
+        let set = env(var)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute());
         let dir = set.clone().unwrap_or_else(|| home.join(rel));
         if exists(&dir) && (set.is_some() || ok(&dir)) {
             if dir.starts_with(home) {
@@ -484,7 +540,11 @@ pub fn path_under(p: &Path, base: &Path) -> bool {
     if !cfg!(any(target_os = "macos", target_os = "windows")) {
         return p.starts_with(base);
     }
-    let fold = |x: &Path| x.components().map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect::<Vec<_>>();
+    let fold = |x: &Path| {
+        x.components()
+            .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+            .collect::<Vec<_>>()
+    };
     let (p, b) = (fold(p), fold(base));
     p.len() >= b.len() && p[..b.len()] == b[..]
 }
@@ -494,20 +554,42 @@ pub fn path_under(p: &Path, base: &Path) -> bool {
 /// this is only what can't be copied: its install dir, its keychain sign-in
 /// (macOS), and with the workspace's opt-in the user's own Claude Code
 /// plugins, skills, agents and commands.
-pub fn runtime_home_read(purpose: Purpose, home: &Path, user_config: bool) -> Vec<(PathBuf, &'static str)> {
+pub fn runtime_home_read(
+    purpose: Purpose,
+    home: &Path,
+    user_config: bool,
+) -> Vec<(PathBuf, &'static str)> {
     let mut v: Vec<(PathBuf, &'static str)> = Vec::new();
     let Purpose::Agent(k) = purpose else { return v };
     #[cfg(target_os = "macos")]
-    if matches!(k, ModelProviderKind::ClaudeCode | ModelProviderKind::Codex | ModelProviderKind::Copilot | ModelProviderKind::Antigravity) {
+    if matches!(
+        k,
+        ModelProviderKind::ClaudeCode
+            | ModelProviderKind::Codex
+            | ModelProviderKind::Copilot
+            | ModelProviderKind::Antigravity
+    ) {
         // The login keychain (denied again for a turn signed in by file or
         // by a hosted key: `EnvelopeEnforcer::plan`).
-        v.push((home.join("Library/Keychains"), "the login keychain, where this CLI keeps its sign-in"));
-        v.push((home.join("Library/Preferences/com.apple.security.plist"), "the keychain search list"));
-        v.push((home.join("Library/Preferences/com.apple.security.KCN.plist"), "the keychain search list"));
+        v.push((
+            home.join("Library/Keychains"),
+            "the login keychain, where this CLI keeps its sign-in",
+        ));
+        v.push((
+            home.join("Library/Preferences/com.apple.security.plist"),
+            "the keychain search list",
+        ));
+        v.push((
+            home.join("Library/Preferences/com.apple.security.KCN.plist"),
+            "the keychain search list",
+        ));
     }
     if k == ModelProviderKind::ClaudeCode && user_config {
         for d in cli_home::CLAUDE_USER_DIRS {
-            v.push((home.join(".claude").join(d), "your own Claude Code setup (the workspace opted in)"));
+            v.push((
+                home.join(".claude").join(d),
+                "your own Claude Code setup (the workspace opted in)",
+            ));
         }
     }
     let _ = (k, home);
@@ -555,7 +637,11 @@ pub fn configure_host(data_dir: &Path, secret_files: &[PathBuf], allow_read: &[P
 /// goes through a symlink) is ignored.
 pub fn allow_agent_dir(dir: &Path) {
     let c = canonical(dir);
-    if c != dir || std::fs::symlink_metadata(dir).map(|m| !m.is_dir()).unwrap_or(true) {
+    if c != dir
+        || std::fs::symlink_metadata(dir)
+            .map(|m| !m.is_dir())
+            .unwrap_or(true)
+    {
         return;
     }
     let mut h = host_slot().write().unwrap_or_else(|e| e.into_inner());
@@ -578,11 +664,17 @@ pub fn configure_secret_files(paths: &[PathBuf]) {
 /// Use `exe` as the Linux pre-exec helper (tests; a host whose own binary
 /// doesn't carry it).
 pub fn set_helper_exe(exe: PathBuf) {
-    host_slot().write().unwrap_or_else(|e| e.into_inner()).helper_exe = Some(exe);
+    host_slot()
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .helper_exe = Some(exe);
 }
 
 pub fn host_paths() -> HostPaths {
-    host_slot().read().unwrap_or_else(|e| e.into_inner()).clone()
+    host_slot()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 /// The home dir: `HOME` (`USERPROFILE` on Windows), else the user's entry
@@ -592,7 +684,10 @@ pub fn home_dir() -> Option<PathBuf> {
 }
 
 fn env_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 /// This user's home from the password database (`getpwuid_r`), whatever
@@ -620,7 +715,8 @@ pub fn passwd_home() -> Option<PathBuf> {
                 return None;
             }
             let dir = CStr::from_ptr(pwd.pw_dir).to_bytes();
-            return (!dir.is_empty() && dir != b"/").then(|| PathBuf::from(std::ffi::OsStr::from_bytes(dir)));
+            return (!dir.is_empty() && dir != b"/")
+                .then(|| PathBuf::from(std::ffi::OsStr::from_bytes(dir)));
         }
     }
 }
@@ -715,9 +811,19 @@ pub struct PlanInputs<'a> {
 /// refresh).
 pub fn provider_endpoints(kind: ModelProviderKind) -> Vec<HostPort> {
     let hosts: &[&str] = match kind {
-        ModelProviderKind::ClaudeCode => &["api.anthropic.com", "console.anthropic.com", "claude.ai", "statsig.anthropic.com"],
+        ModelProviderKind::ClaudeCode => &[
+            "api.anthropic.com",
+            "console.anthropic.com",
+            "claude.ai",
+            "statsig.anthropic.com",
+        ],
         ModelProviderKind::Codex => &["api.openai.com", "chatgpt.com", "auth.openai.com"],
-        ModelProviderKind::Copilot => &["api.githubcopilot.com", "api.individual.githubcopilot.com", "github.com", "api.github.com"],
+        ModelProviderKind::Copilot => &[
+            "api.githubcopilot.com",
+            "api.individual.githubcopilot.com",
+            "github.com",
+            "api.github.com",
+        ],
         ModelProviderKind::Antigravity => &[
             "generativelanguage.googleapis.com",
             "cloudcode-pa.googleapis.com",
@@ -736,9 +842,19 @@ pub fn provider_endpoints(kind: ModelProviderKind) -> Vec<HostPort> {
 /// State dirs a runtime writes (its login, session cache, config).
 pub fn runtime_state_dirs(kind: ModelProviderKind, home: &Path) -> Vec<PathBuf> {
     let rel: &[&str] = match kind {
-        ModelProviderKind::ClaudeCode => &[".claude", ".claude.json", ".claude.json.backup", ".cache/claude-cli-nodejs", "Library/Caches/claude-cli-nodejs"],
+        ModelProviderKind::ClaudeCode => &[
+            ".claude",
+            ".claude.json",
+            ".claude.json.backup",
+            ".cache/claude-cli-nodejs",
+            "Library/Caches/claude-cli-nodejs",
+        ],
         ModelProviderKind::Codex => &[".codex"],
-        ModelProviderKind::Copilot => &[".copilot", ".config/github-copilot", ".cache/github-copilot"],
+        ModelProviderKind::Copilot => &[
+            ".copilot",
+            ".config/github-copilot",
+            ".cache/github-copilot",
+        ],
         ModelProviderKind::Antigravity => &[".gemini", ".antigravity", ".config/agy"],
         ModelProviderKind::Aider => &[".aider", ".aider.chat.history.md", ".cache/aider"],
         ModelProviderKind::Pi => &[".pi"],
@@ -802,11 +918,16 @@ pub fn home_secret_dirs(home: &Path, purpose: Purpose) -> Vec<PathBuf> {
         ".config/sops",
     ]
     .iter()
-        .map(|r| home.join(r))
-        .collect();
+    .map(|r| home.join(r))
+    .collect();
     let keychain_login = matches!(
         purpose,
-        Purpose::Agent(ModelProviderKind::ClaudeCode | ModelProviderKind::Codex | ModelProviderKind::Copilot | ModelProviderKind::Antigravity)
+        Purpose::Agent(
+            ModelProviderKind::ClaudeCode
+                | ModelProviderKind::Codex
+                | ModelProviderKind::Copilot
+                | ModelProviderKind::Antigravity
+        )
     );
     // Forge CLI logins: gh keeps a write-capable token in hosts.yml on a box
     // with no secret service, glab, tea and hub likewise. The forge tools
@@ -815,7 +936,11 @@ pub fn home_secret_dirs(home: &Path, purpose: Purpose) -> Vec<PathBuf> {
     if !matches!(purpose, Purpose::Agent(ModelProviderKind::Copilot)) {
         v.push(home.join(".config/gh"));
     }
-    v.extend([".config/glab-cli", ".config/tea", ".config/hub"].iter().map(|r| home.join(r)));
+    v.extend(
+        [".config/glab-cli", ".config/tea", ".config/hub"]
+            .iter()
+            .map(|r| home.join(r)),
+    );
     #[cfg(target_os = "macos")]
     if !keychain_login {
         v.push(home.join("Library/Keychains"));
@@ -828,17 +953,20 @@ pub fn home_secret_dirs(home: &Path, purpose: Purpose) -> Vec<PathBuf> {
 }
 
 /// The env var a CLI runtime reads its configured key from.
-pub fn provider_key_var(kind: ModelProviderKind, model_provider_id: Option<&str>) -> Option<&'static str> {
+pub fn provider_key_var(
+    kind: ModelProviderKind,
+    model_provider_id: Option<&str>,
+) -> Option<&'static str> {
     match kind {
         ModelProviderKind::ClaudeCode => Some("ANTHROPIC_API_KEY"),
         ModelProviderKind::Codex => Some("OPENAI_API_KEY"),
-        ModelProviderKind::Aider | ModelProviderKind::Pi | ModelProviderKind::Hermes => {
-            Some(match model_provider_id.map(str::to_ascii_lowercase).as_deref() {
+        ModelProviderKind::Aider | ModelProviderKind::Pi | ModelProviderKind::Hermes => Some(
+            match model_provider_id.map(str::to_ascii_lowercase).as_deref() {
                 Some("anthropic") => "ANTHROPIC_API_KEY",
                 Some("openrouter") => "OPENROUTER_API_KEY",
                 _ => "OPENAI_API_KEY",
-            })
-        }
+            },
+        ),
         _ => None,
     }
 }
@@ -850,7 +978,14 @@ pub struct EnvelopeEnforcer;
 
 impl EnvelopeEnforcer {
     pub fn plan(i: &PlanInputs<'_>) -> EnforcementPlan {
-        let SandboxEnvelope { isolate_writes, protected_dirs, egress, redact_secrets: _, human_gate: _, tightened_by: _ } = i.envelope;
+        let SandboxEnvelope {
+            isolate_writes,
+            protected_dirs,
+            egress,
+            redact_secrets: _,
+            human_gate: _,
+            tightened_by: _,
+        } = i.envelope;
         // `redact_secrets` and `human_gate` act on the turn's output and its
         // proposals (chat_service), not on the process; `tightened_by` only
         // explains the rest. They are named here so a new field can't slip
@@ -865,7 +1000,8 @@ impl EnvelopeEnforcer {
             && i.write_capable
             && !matches!(i.purpose, Purpose::McpServer)
             && (i.worktree_is_isolated || !*isolate_writes);
-        let mut read_only: Vec<PathBuf> = protected_dirs.iter().map(|d| i.worktree.join(d)).collect();
+        let mut read_only: Vec<PathBuf> =
+            protected_dirs.iter().map(|d| i.worktree.join(d)).collect();
         for f in ["ligus.config.toml", ".envrc"] {
             read_only.push(i.worktree.join(f));
         }
@@ -886,10 +1022,18 @@ impl EnvelopeEnforcer {
         // user's credential dirs (unless allowed device-locally).
         let mut deny_read: Vec<PathBuf> = host_paths.data_dirs.clone();
         deny_read.extend(host_paths.secret_files.iter().cloned());
-        deny_read.extend(home_secret_dirs(i.home, i.purpose).into_iter().filter(|p| !host_paths.home_read_allow.contains(p)));
+        deny_read.extend(
+            home_secret_dirs(i.home, i.purpose)
+                .into_iter()
+                .filter(|p| !host_paths.home_read_allow.contains(p)),
+        );
         // `HOME` isn't the password database's home: that one is denied as a
         // whole (a worktree inside it stays reachable, as inside a data dir).
-        for other in host_paths.other_homes.iter().filter(|o| o.as_path() != i.home) {
+        for other in host_paths
+            .other_homes
+            .iter()
+            .filter(|o| o.as_path() != i.home)
+        {
             deny_read.push(other.clone());
             deny_read.extend(home_secret_dirs(other, i.purpose));
         }
@@ -903,9 +1047,15 @@ impl EnvelopeEnforcer {
         #[cfg(target_os = "macos")]
         if let Purpose::Agent(k) = i.purpose {
             let kc = i.home.join("Library/Keychains");
-            let by_file = i.cli_home.is_some_and(|h| cli_home::signed_in_by_file(k, h));
-            let hosted_key = i.provider_key.is_some_and(|x| !x.is_empty()) && provider_key_var(k, i.model_provider_id).is_some();
-            if (by_file || hosted_key) && !deny_read.contains(&kc) && !host_paths.home_read_allow.contains(&kc) {
+            let by_file = i
+                .cli_home
+                .is_some_and(|h| cli_home::signed_in_by_file(k, h));
+            let hosted_key = i.provider_key.is_some_and(|x| !x.is_empty())
+                && provider_key_var(k, i.model_provider_id).is_some();
+            if (by_file || hosted_key)
+                && !deny_read.contains(&kc)
+                && !host_paths.home_read_allow.contains(&kc)
+            {
                 deny_read.push(kc);
             }
         }
@@ -935,12 +1085,24 @@ impl EnvelopeEnforcer {
         // drop an entry that resolves elsewhere by the time they bind it (a
         // grant swapped for a symlink after the plan).
         let on_disk = i.home.is_dir();
-        let resolve = |p: &Path| if on_disk { canonical(p) } else { p.to_path_buf() };
+        let resolve = |p: &Path| {
+            if on_disk {
+                canonical(p)
+            } else {
+                p.to_path_buf()
+            }
+        };
         let real_home = resolve(i.home);
-        let denied_real: Vec<PathBuf> = if on_disk { deny_read.iter().map(|d| resolve(d)).collect() } else { Vec::new() };
+        let denied_real: Vec<PathBuf> = if on_disk {
+            deny_read.iter().map(|d| resolve(d)).collect()
+        } else {
+            Vec::new()
+        };
         let resolves_ok = |p: &Path| {
             let c = resolve(p);
-            !path_under(i.home, p) && !path_under(&real_home, &c) && !denied_real.iter().any(|d| path_under(&c, d))
+            !path_under(i.home, p)
+                && !path_under(&real_home, &c)
+                && !denied_real.iter().any(|d| path_under(&c, d))
         };
         let mut home_read: Vec<PathBuf> = Vec::new();
         for (p, _) in runtime_home_read(i.purpose, i.home, i.user_config) {
@@ -949,7 +1111,10 @@ impl EnvelopeEnforcer {
         home_read.extend(host_paths.toolchain_read.iter().cloned());
         home_read.extend(i.extra_home_read.iter().cloned());
         let granted = |l: &[String]| -> Vec<PathBuf> {
-            l.iter().filter_map(|g| expand_grant(g, i.home)).filter(|p| !in_denied(p) && !path_under(i.home, p)).collect()
+            l.iter()
+                .filter_map(|g| expand_grant(g, i.home))
+                .filter(|p| !in_denied(p) && !path_under(i.home, p))
+                .collect()
         };
         home_read.extend(granted(&i.grants.read_only));
         let rw_granted = granted(&i.grants.read_write);
@@ -957,7 +1122,14 @@ impl EnvelopeEnforcer {
         if !rw_granted.is_empty() {
             exec.extend(home_exec_paths(i.home));
             exec.extend(EXEC_PREFIXES.iter().map(PathBuf::from));
-            exec.extend(host_paths.toolchain_read.iter().chain(host_paths.path_dirs.iter()).chain(host_paths.exec_dirs.iter()).cloned());
+            exec.extend(
+                host_paths
+                    .toolchain_read
+                    .iter()
+                    .chain(host_paths.path_dirs.iter())
+                    .chain(host_paths.exec_dirs.iter())
+                    .cloned(),
+            );
             if on_disk {
                 let real: Vec<PathBuf> = exec.iter().map(|x| resolve(x)).collect();
                 exec.extend(real);
@@ -965,9 +1137,12 @@ impl EnvelopeEnforcer {
         }
         let runs_outside = |p: &Path| {
             let c = resolve(p);
-            exec.iter().any(|x| path_under(p, x) || path_under(x, p) || path_under(&c, x) || path_under(x, &c))
+            exec.iter().any(|x| {
+                path_under(p, x) || path_under(x, p) || path_under(&c, x) || path_under(x, &c)
+            })
         };
-        let (rw_code, rw_ok): (Vec<PathBuf>, Vec<PathBuf>) = rw_granted.into_iter().partition(|p| runs_outside(p));
+        let (rw_code, rw_ok): (Vec<PathBuf>, Vec<PathBuf>) =
+            rw_granted.into_iter().partition(|p| runs_outside(p));
         home_read.extend(rw_code);
         home_read.retain(|p| !in_denied(p) && resolves_ok(p));
         // The device-local list is the user's own: it may open a credential dir.
@@ -975,7 +1150,12 @@ impl EnvelopeEnforcer {
         let mut home_read: Vec<PathBuf> = home_read.iter().map(|p| resolve(p)).collect();
         home_read.sort();
         home_read.dedup();
-        write_extra.extend(rw_ok.into_iter().filter(|p| resolves_ok(p)).map(|p| resolve(&p)));
+        write_extra.extend(
+            rw_ok
+                .into_iter()
+                .filter(|p| resolves_ok(p))
+                .map(|p| resolve(&p)),
+        );
         // Never write where reading is denied; what is left, as resolved.
         write_extra.retain(|w| !deny_read.iter().any(|d| path_under(w, d)));
         let mut write_extra: Vec<PathBuf> = write_extra.iter().map(|w| resolve(w)).collect();
@@ -986,7 +1166,11 @@ impl EnvelopeEnforcer {
         // keeps only the provider (the model must be reachable for the turn
         // to run at all; MCP and everything else are cut).
         let gateway = match (i.purpose, i.gateway) {
-            (Purpose::Agent(k), Some((name, api))) => Some(GatewayRoute { name: name.to_string(), api, kind: k }),
+            (Purpose::Agent(k), Some((name, api))) => Some(GatewayRoute {
+                name: name.to_string(),
+                api,
+                kind: k,
+            }),
             _ => None,
         };
         let model_hosts: Vec<HostPort> = match i.purpose {
@@ -1024,7 +1208,9 @@ impl EnvelopeEnforcer {
         let egress_plan = match (i.purpose, egress) {
             (Purpose::McpServer, EgressPolicy::Closed) => EgressPlan::Closed,
             (Purpose::McpServer, _) => EgressPlan::Open,
-            (Purpose::Tool | Purpose::Preflight, EgressPolicy::Open) if !widen.is_empty() => EgressPlan::Proxy { allow: widen },
+            (Purpose::Tool | Purpose::Preflight, EgressPolicy::Open) if !widen.is_empty() => {
+                EgressPlan::Proxy { allow: widen }
+            }
             (Purpose::Tool | Purpose::Preflight, _) => EgressPlan::Closed,
             (Purpose::Agent(_), policy) => {
                 let mut allow = model_hosts;
@@ -1050,7 +1236,8 @@ impl EnvelopeEnforcer {
             // A gateway turn never carries a provider key.
             Purpose::Agent(_) if gateway.is_some() => None,
             Purpose::Agent(k) => i.provider_key.filter(|k| !k.is_empty()).and_then(|key| {
-                provider_key_var(k, i.model_provider_id).map(|var| (var.to_string(), key.to_string()))
+                provider_key_var(k, i.model_provider_id)
+                    .map(|var| (var.to_string(), key.to_string()))
             }),
             _ => None,
         };
@@ -1059,17 +1246,24 @@ impl EnvelopeEnforcer {
         let extra: Vec<(String, String)> = i
             .extra_env
             .iter()
-            .filter(|(k, _)| gateway.is_none() || !crate::model_gateway::CLI_ENV_KEYS.contains(&k.as_str()))
+            .filter(|(k, _)| {
+                gateway.is_none() || !crate::model_gateway::CLI_ENV_KEYS.contains(&k.as_str())
+            })
             .cloned()
             .collect();
-        let mut env = ligus_core::process_util::child_env(&ligus_core::process_util::ChildEnvSpec {
-            tmpdir: Some(i.tmp.to_path_buf()),
-            proxy: Vec::new(),
-            extra,
-            provider_key,
-        });
+        let mut env =
+            ligus_core::process_util::child_env(&ligus_core::process_util::ChildEnvSpec {
+                tmpdir: Some(i.tmp.to_path_buf()),
+                proxy: Vec::new(),
+                extra,
+                provider_key,
+            });
         if gateway.is_some() {
-            env.retain(|(k, _)| !crate::model_gateway::CLI_ENV_KEYS.iter().any(|g| k.as_os_str() == *g));
+            env.retain(|(k, _)| {
+                !crate::model_gateway::CLI_ENV_KEYS
+                    .iter()
+                    .any(|g| k.as_os_str() == *g)
+            });
         }
         if let (Purpose::Agent(k), Some(home)) = (i.purpose, i.cli_home) {
             for (key, val) in cli_home::env(k, home) {
@@ -1099,7 +1293,10 @@ impl EnvelopeEnforcer {
         // the sandbox doesn't let it write; point it at the turn's scratch dir.
         if let Purpose::Agent(ModelProviderKind::ClaudeCode) = i.purpose {
             env.retain(|(k, _)| k != "CLAUDE_CODE_TMPDIR");
-            env.push(("CLAUDE_CODE_TMPDIR".into(), i.tmp.as_os_str().to_os_string()));
+            env.push((
+                "CLAUDE_CODE_TMPDIR".into(),
+                i.tmp.as_os_str().to_os_string(),
+            ));
             env.sort();
         }
         let mut mcp = match egress {
@@ -1151,7 +1348,14 @@ pub trait TurnExecutor: Send + Sync {
     fn kind(&self) -> ExecutorKind;
     /// `proxy` is the running egress proxy (port, token, unix socket) when
     /// the plan's egress is `Proxy`.
-    fn confine(&self, program: &OsStr, args: &[OsString], cwd: &Path, plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> io::Result<std::process::Command>;
+    fn confine(
+        &self,
+        program: &OsStr,
+        args: &[OsString],
+        cwd: &Path,
+        plan: &EnforcementPlan,
+        proxy: Option<&EgressProxy>,
+    ) -> io::Result<std::process::Command>;
 }
 
 /// No OS confinement: env allow-list and cwd checks only. Nothing a model
@@ -1163,9 +1367,19 @@ impl TurnExecutor for Unconfined {
     fn kind(&self) -> ExecutorKind {
         ExecutorKind::Unconfined
     }
-    fn confine(&self, program: &OsStr, args: &[OsString], cwd: &Path, plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> io::Result<std::process::Command> {
+    fn confine(
+        &self,
+        program: &OsStr,
+        args: &[OsString],
+        cwd: &Path,
+        plan: &EnforcementPlan,
+        proxy: Option<&EgressProxy>,
+    ) -> io::Result<std::process::Command> {
         let mut c = ligus_core::process_util::command(program);
-        c.args(args).current_dir(cwd).env_clear().envs(plan_env(plan, proxy));
+        c.args(args)
+            .current_dir(cwd)
+            .env_clear()
+            .envs(plan_env(plan, proxy));
         new_session(&mut c);
         Ok(c)
     }
@@ -1226,18 +1440,30 @@ pub fn default_executor() -> Arc<dyn TurnExecutor> {
 
 fn select_executor() -> (Arc<dyn TurnExecutor>, SandboxStatus) {
     if ligus_core::names::var("LIGUS_SANDBOX").is_ok_and(|v| v.trim().eq_ignore_ascii_case("off")) {
-        return (Arc::new(Unconfined), SandboxStatus::unconfined("LIGUS_SANDBOX=off".into(), Vec::new()));
+        return (
+            Arc::new(Unconfined),
+            SandboxStatus::unconfined("LIGUS_SANDBOX=off".into(), Vec::new()),
+        );
     }
     #[cfg(target_os = "macos")]
     if seatbelt::available() {
-        let s = SandboxStatus { kind: ExecutorKind::Seatbelt, summary: "Seatbelt (sandbox-exec)".into(), notes: Vec::new() };
+        let s = SandboxStatus {
+            kind: ExecutorKind::Seatbelt,
+            summary: "Seatbelt (sandbox-exec)".into(),
+            notes: Vec::new(),
+        };
         return (Arc::new(seatbelt::Seatbelt), s);
     }
     #[cfg(target_os = "linux")]
     let chosen = linux::select_executor();
     #[cfg(not(target_os = "linux"))]
-    let chosen: (Arc<dyn TurnExecutor>, SandboxStatus) =
-        (Arc::new(Unconfined), SandboxStatus::unconfined("this platform has no agent sandbox Ligus can use".into(), Vec::new()));
+    let chosen: (Arc<dyn TurnExecutor>, SandboxStatus) = (
+        Arc::new(Unconfined),
+        SandboxStatus::unconfined(
+            "this platform has no agent sandbox Ligus can use".into(),
+            Vec::new(),
+        ),
+    );
     chosen
 }
 
@@ -1251,7 +1477,15 @@ pub fn refuses_writes() -> bool {
 
 /// This platform's name, as the no-sandbox refusal says it.
 pub fn no_sandbox_platform() -> &'static str {
-    if cfg!(target_os = "macos") { "macOS" } else if cfg!(target_os = "linux") { "Linux" } else if cfg!(windows) { "Windows" } else { "this platform" }
+    if cfg!(target_os = "macos") {
+        "macOS"
+    } else if cfg!(target_os = "linux") {
+        "Linux"
+    } else if cfg!(windows) {
+        "Windows"
+    } else {
+        "this platform"
+    }
 }
 
 /// How to get an agent sandbox on this platform (or why there is none).
@@ -1285,7 +1519,11 @@ pub fn no_sandbox_refusal(what: &str) -> String {
 /// own file and shell tools) and an HTTP model offered local tools
 /// (built-in file tools, `run_command`, a stdio MCP server) need an OS
 /// sandbox; a tool-less HTTP model turn spawns nothing and always may.
-pub fn turn_allowed_on(kind: ExecutorKind, provider: ModelProviderKind, local_tools: bool) -> Result<(), String> {
+pub fn turn_allowed_on(
+    kind: ExecutorKind,
+    provider: ModelProviderKind,
+    local_tools: bool,
+) -> Result<(), String> {
     if kind != ExecutorKind::Unconfined {
         return Ok(());
     }
@@ -1293,7 +1531,9 @@ pub fn turn_allowed_on(kind: ExecutorKind, provider: ModelProviderKind, local_to
         return Err(no_sandbox_refusal(&format!("a {provider:?} agent turn")));
     }
     if local_tools {
-        return Err(no_sandbox_refusal("an agent turn with local file or shell tools"));
+        return Err(no_sandbox_refusal(
+            "an agent turn with local file or shell tools",
+        ));
     }
     Ok(())
 }
@@ -1366,7 +1606,12 @@ impl TurnPolicy {
     /// A turn's policy. The shell starts off (fail closed): the host turns it
     /// on with [`crate::author_gate::shell_allowed`].
     pub fn new(host: HostKind, envelope: SandboxEnvelope, gate: GatePlan) -> Self {
-        Self { envelope, gate, shell_allowed: false, ..Self::baseline(host) }
+        Self {
+            envelope,
+            gate,
+            shell_allowed: false,
+            ..Self::baseline(host)
+        }
     }
 
     /// An agent CLI started outside any turn (the chat summarizer and
@@ -1377,7 +1622,11 @@ impl TurnPolicy {
     pub fn outside_turn(host: HostKind) -> Self {
         let mut envelope = SandboxEnvelope::workspace_default();
         envelope.egress = ligus_core::sandbox::EgressPolicy::Closed;
-        Self { envelope, gate: GatePlan::ReadOnly, ..Self::baseline(host) }
+        Self {
+            envelope,
+            gate: GatePlan::ReadOnly,
+            ..Self::baseline(host)
+        }
     }
 
     /// Endpoints refused so far in this turn.
@@ -1430,7 +1679,10 @@ tokio::task_local! {
 
 /// Run `fut` with `executor` confining every child spawned in it (the turn
 /// engine's input; [`default_executor`] outside such a scope).
-pub async fn with_executor<F: std::future::Future>(executor: Arc<dyn TurnExecutor>, fut: F) -> F::Output {
+pub async fn with_executor<F: std::future::Future>(
+    executor: Arc<dyn TurnExecutor>,
+    fut: F,
+) -> F::Output {
     EXECUTOR.scope(executor, fut).await
 }
 
@@ -1442,7 +1694,9 @@ pub fn with_executor_sync<R>(executor: Arc<dyn TurnExecutor>, f: impl FnOnce() -
 /// The executor children spawned here run under: the scoped one
 /// ([`with_executor`]), else this host's [`default_executor`].
 pub fn turn_executor() -> Arc<dyn TurnExecutor> {
-    EXECUTOR.try_with(Arc::clone).unwrap_or_else(|_| default_executor())
+    EXECUTOR
+        .try_with(Arc::clone)
+        .unwrap_or_else(|_| default_executor())
 }
 
 /// Run `fut` with `rt` as the runtime scope for CLI children spawned in it.
@@ -1505,7 +1759,11 @@ pub struct SpawnSpec<'a> {
 }
 
 impl<'a> SpawnSpec<'a> {
-    pub fn new(purpose: Purpose, program: &'a (impl AsRef<OsStr> + ?Sized), args: impl IntoIterator<Item = impl Into<OsString>>) -> Self {
+    pub fn new(
+        purpose: Purpose,
+        program: &'a (impl AsRef<OsStr> + ?Sized),
+        args: impl IntoIterator<Item = impl Into<OsString>>,
+    ) -> Self {
         Self {
             purpose,
             program: program.as_ref(),
@@ -1549,7 +1807,10 @@ impl TurnGuard {
     }
     /// Endpoints the proxy refused so far (host and port; no content).
     pub fn egress_denials(&self) -> Vec<HostPort> {
-        self.proxy.as_ref().map(EgressProxy::denials).unwrap_or_default()
+        self.proxy
+            .as_ref()
+            .map(EgressProxy::denials)
+            .unwrap_or_default()
     }
 }
 
@@ -1616,7 +1877,10 @@ pub fn canonical(p: &Path) -> PathBuf {
 pub fn check_cwd(cwd: &Path, host: &HostPaths) -> io::Result<()> {
     let c = canonical(cwd);
     if c.parent().is_none() {
-        return Err(refuse(format!("refusing to run an agent process with cwd {}", c.display())));
+        return Err(refuse(format!(
+            "refusing to run an agent process with cwd {}",
+            c.display()
+        )));
     }
     for h in home_dir().into_iter().chain(passwd_home()) {
         refuse_home_or_above(&c, &h)?;
@@ -1624,7 +1888,10 @@ pub fn check_cwd(cwd: &Path, host: &HostPaths) -> io::Result<()> {
     for d in &host.data_dirs {
         let d = canonical(d);
         if c.starts_with(&d) && !host.allow_read.iter().any(|a| c.starts_with(canonical(a))) {
-            return Err(refuse(format!("refusing to run an agent process inside Ligus's data dir ({})", d.display())));
+            return Err(refuse(format!(
+                "refusing to run an agent process inside Ligus's data dir ({})",
+                d.display()
+            )));
         }
     }
     Ok(())
@@ -1636,7 +1903,9 @@ pub fn check_cwd(cwd: &Path, host: &HostPaths) -> io::Result<()> {
 fn refuse_home_or_above(cwd: &Path, home: &Path) -> io::Result<()> {
     let h = canonical(home);
     if cwd == h {
-        return Err(refuse("refusing to run an agent process in your home directory; bind a repository or folder"));
+        return Err(refuse(
+            "refusing to run an agent process in your home directory; bind a repository or folder",
+        ));
     }
     if h.starts_with(cwd) {
         return Err(refuse(format!("refusing to run an agent process in {}, which holds your home directory; bind a repository or folder", cwd.display())));
@@ -1717,7 +1986,10 @@ pub fn turn_root() -> io::Result<PathBuf> {
     {
         use std::os::unix::fs::MetadataExt;
         if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
-            return Err(refuse(format!("{} isn't a private dir of this user: refusing to make turn dirs in it", root.display())));
+            return Err(refuse(format!(
+                "{} isn't a private dir of this user: refusing to make turn dirs in it",
+                root.display()
+            )));
         }
     }
     #[cfg(not(unix))]
@@ -1731,7 +2003,10 @@ pub fn turn_root() -> io::Result<PathBuf> {
 /// executors deny besides `tmp` itself.
 pub fn sibling_turns_root(tmp: &Path) -> Option<PathBuf> {
     let parent = canonical(tmp).parent()?.to_path_buf();
-    parent.file_name().is_some_and(|n| n.to_string_lossy().starts_with(TURN_ROOT_PREFIX)).then_some(parent)
+    parent
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with(TURN_ROOT_PREFIX))
+        .then_some(parent)
 }
 
 fn make_turn_tmp_in(parent: &Path) -> io::Result<TurnTmp> {
@@ -1750,7 +2025,10 @@ fn make_turn_tmp_in(parent: &Path) -> io::Result<TurnTmp> {
         l.insert(dir.clone());
     }
     let tmp = TurnTmp { path: dir };
-    std::fs::write(tmp.path.join(TURN_DIR_OWNER), std::process::id().to_string())?;
+    std::fs::write(
+        tmp.path.join(TURN_DIR_OWNER),
+        std::process::id().to_string(),
+    )?;
     Ok(tmp)
 }
 
@@ -1758,7 +2036,9 @@ fn make_turn_tmp_in(parent: &Path) -> io::Result<TurnTmp> {
 fn pid_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        let Ok(p) = libc::pid_t::try_from(pid) else { return false };
+        let Ok(p) = libc::pid_t::try_from(pid) else {
+            return false;
+        };
         if p <= 0 {
             return false;
         }
@@ -1768,8 +2048,12 @@ fn pid_alive(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ACCESS_DENIED, STILL_ACTIVE};
-        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, GetLastError, ERROR_ACCESS_DENIED, STILL_ACTIVE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
         if pid == 0 {
             return false;
         }
@@ -1811,9 +2095,14 @@ pub fn sweep_stale_turn_dirs(older_than: std::time::Duration) -> usize {
 
 /// [`sweep_stale_turn_dirs`] under `parent` (tests).
 pub fn sweep_stale_turn_dirs_in(parent: &Path, older_than: std::time::Duration) -> usize {
-    let Ok(rd) = std::fs::read_dir(parent) else { return 0 };
+    let Ok(rd) = std::fs::read_dir(parent) else {
+        return 0;
+    };
     let parent = canonical(parent);
-    let live = live_turn_dirs().lock().map(|l| l.clone()).unwrap_or_default();
+    let live = live_turn_dirs()
+        .lock()
+        .map(|l| l.clone())
+        .unwrap_or_default();
     let me = std::process::id();
     let mut removed = 0;
     for entry in rd.flatten() {
@@ -1822,7 +2111,9 @@ pub fn sweep_stale_turn_dirs_in(parent: &Path, older_than: std::time::Duration) 
             continue;
         }
         // Never follow a link someone planted under the temp dir.
-        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else { continue };
+        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
         if !meta.is_dir() {
             continue;
         }
@@ -1831,13 +2122,17 @@ pub fn sweep_stale_turn_dirs_in(parent: &Path, older_than: std::time::Duration) 
             continue;
         }
         let owner_file = dir.join(TURN_DIR_OWNER);
-        let owner: Option<u32> = std::fs::read_to_string(&owner_file).ok().and_then(|s| s.trim().parse().ok());
+        let owner: Option<u32> = std::fs::read_to_string(&owner_file)
+            .ok()
+            .and_then(|s| s.trim().parse().ok());
         // Another running process's turn: not ours to judge. Our own pid
         // but not live here: a leaked dir of this process.
         if owner.is_some_and(|pid| pid != me && pid_alive(pid)) {
             continue;
         }
-        let made = std::fs::symlink_metadata(&owner_file).or(Ok::<_, io::Error>(meta)).and_then(|m| m.modified());
+        let made = std::fs::symlink_metadata(&owner_file)
+            .or(Ok::<_, io::Error>(meta))
+            .and_then(|m| m.modified());
         let age = made.ok().and_then(|t| t.elapsed().ok()).unwrap_or_default();
         if age < older_than {
             continue;
@@ -1858,13 +2153,15 @@ pub fn start_turn_dir_sweeper(max_turn: std::time::Duration) {
         return;
     }
     let older_than = max_turn + std::time::Duration::from_secs(600);
-    let _ = std::thread::Builder::new().name("ligus-turn-sweep".into()).spawn(move || loop {
-        let n = sweep_stale_turn_dirs(older_than);
-        if n > 0 {
-            tracing::info!(target: "sandbox", "removed {n} stale turn scratch dir(s)");
-        }
-        std::thread::sleep(std::time::Duration::from_secs(600));
-    });
+    let _ = std::thread::Builder::new()
+        .name("ligus-turn-sweep".into())
+        .spawn(move || loop {
+            let n = sweep_stale_turn_dirs(older_than);
+            if n > 0 {
+                tracing::info!(target: "sandbox", "removed {n} stale turn scratch dir(s)");
+            }
+            std::thread::sleep(std::time::Duration::from_secs(600));
+        });
 }
 
 /// Confine one child for the current turn: plan it, start its proxy, make
@@ -1882,7 +2179,12 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
 /// [`prepare_with`] for a given home dir and host paths: tests run against a
 /// decoy home, never the user's own files.
 #[doc(hidden)]
-pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path, host: HostPaths) -> io::Result<Prepared> {
+pub fn prepare_in(
+    executor: &dyn TurnExecutor,
+    spec: SpawnSpec<'_>,
+    home: &Path,
+    host: HostPaths,
+) -> io::Result<Prepared> {
     // No OS sandbox: nothing a model drives is spawned here, at any tier. A
     // read-only CLI turn's read tools would reach everything the user can
     // read (ligus.db has no at-rest encryption, keys and tokens too), and a
@@ -1914,13 +2216,21 @@ pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path,
     };
     let rt = current_runtime().unwrap_or_default();
     let agent = matches!(spec.purpose, Purpose::Agent(_));
-    let provider_key = spec.provider_key.or(rt.provider_key.as_deref().filter(|_| agent));
-    let model_provider_id = spec.model_provider_id.or(rt.model_provider_id.as_deref().filter(|_| agent));
-    let model_base_url = spec.model_base_url.or(rt.model_base_url.as_deref().filter(|_| agent));
+    let provider_key = spec
+        .provider_key
+        .or(rt.provider_key.as_deref().filter(|_| agent));
+    let model_provider_id = spec
+        .model_provider_id
+        .or(rt.model_provider_id.as_deref().filter(|_| agent));
+    let model_base_url = spec
+        .model_base_url
+        .or(rt.model_base_url.as_deref().filter(|_| agent));
     // A CLI agent's model route: a gateway this host lists, or (on a
     // gateway-exclusive host) nothing at all.
     let gateway: Option<crate::model_gateway::ResolvedGateway> = match spec.purpose {
-        Purpose::Agent(k) => crate::model_gateway::host().route(k, "", rt.gateway.as_ref()).map_err(refuse)?,
+        Purpose::Agent(k) => crate::model_gateway::host()
+            .route(k, "", rt.gateway.as_ref())
+            .map_err(refuse)?,
         _ => None,
     };
     let home = home.to_path_buf();
@@ -1960,9 +2270,15 @@ pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path,
     };
     // The program's own install dir, when it lives under the home (a binary
     // the user configured by path, or a PATH launcher that links into one).
-    let extra_home_read: Vec<PathBuf> = program_install_dir(spec.program, &home).into_iter().collect();
+    let extra_home_read: Vec<PathBuf> = program_install_dir(spec.program, &home)
+        .into_iter()
+        .collect();
     let envelope_args: Vec<String> = Vec::new();
-    let arg_strings: Vec<String> = spec.args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    let arg_strings: Vec<String> = spec
+        .args
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     let write_capable = match spec.purpose {
         Purpose::Agent(_) if spec.writes.is_some() => spec.writes.unwrap_or(false),
         Purpose::Agent(k) => crate::author_gate::turn_writes(k, &arg_strings),
@@ -1991,7 +2307,9 @@ pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path,
         ligus_mcp_socket: policy.ligus_mcp_socket.as_deref(),
         egress_presets: &policy.egress_presets,
         cli_home: cli_home_dir.as_ref().map(|(_, h)| h.as_path()),
-        gateway: gateway.as_ref().map(|g| (g.gateway.name(), g.gateway.api())),
+        gateway: gateway
+            .as_ref()
+            .map(|g| (g.gateway.name(), g.gateway.api())),
         turn_home: turn_home.as_deref(),
         grants: &policy.grants,
         extra_home_read: &extra_home_read,
@@ -2003,13 +2321,27 @@ pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path,
     let proxy = match &plan.egress {
         EgressPlan::Proxy { allow } => {
             let sock = (kind == ExecutorKind::Bwrap).then(|| tmp.join(".ligus-egress.sock"));
-            Some(EgressProxy::start_with(allow.clone(), sock.as_deref(), gateway.into_iter().collect())?)
+            Some(EgressProxy::start_with(
+                allow.clone(),
+                sock.as_deref(),
+                gateway.into_iter().collect(),
+            )?)
         }
         _ => None,
     };
     let command = executor.confine(spec.program, &spec.args, &cwd, &plan, proxy.as_ref())?;
     let cli_home = cli_home_dir.map(|(k, h)| (k, home.clone(), h));
-    Ok(Prepared { command, guard: TurnGuard { cli_home, proxy, denials: Some(policy.denials.clone()), tmp: Some(turn_tmp), kind, plan } })
+    Ok(Prepared {
+        command,
+        guard: TurnGuard {
+            cli_home,
+            proxy,
+            denials: Some(policy.denials.clone()),
+            tmp: Some(turn_tmp),
+            kind,
+            plan,
+        },
+    })
 }
 
 /// Whether `p` still resolves to itself (the plan holds resolved paths;
@@ -2056,7 +2388,11 @@ pub fn program_install_dir(program: &OsStr, home: &Path) -> Option<PathBuf> {
     let found = if p.components().count() > 1 {
         Some(p.to_path_buf())
     } else {
-        std::env::var_os("PATH").and_then(|pv| std::env::split_paths(&pv).map(|d| d.join(p)).find(|c| c.is_file()))
+        std::env::var_os("PATH").and_then(|pv| {
+            std::env::split_paths(&pv)
+                .map(|d| d.join(p))
+                .find(|c| c.is_file())
+        })
     }?;
     let real = std::fs::canonicalize(&found).ok()?;
     let home = canonical(home);
@@ -2119,7 +2455,9 @@ impl SandboxStatus {
                     tracing::warn!(target: "sandbox", tier = self.tier(), "agent sandbox: {n}");
                 }
             }
-            _ => tracing::info!(target: "sandbox", tier = self.tier(), "agent sandbox: {}", self.summary),
+            _ => {
+                tracing::info!(target: "sandbox", tier = self.tier(), "agent sandbox: {}", self.summary)
+            }
         }
     }
 }
@@ -2127,7 +2465,10 @@ impl SandboxStatus {
 /// This host's sandbox tier (probing it on first use).
 pub fn sandbox_status() -> SandboxStatus {
     let _ = default_executor();
-    STATUS.get().cloned().unwrap_or_else(|| SandboxStatus::unconfined("not probed".into(), Vec::new()))
+    STATUS
+        .get()
+        .cloned()
+        .unwrap_or_else(|| SandboxStatus::unconfined("not probed".into(), Vec::new()))
 }
 
 /// One line of a turn's effective filesystem policy (`ligus doctor
@@ -2157,10 +2498,22 @@ pub struct EffectivePolicy {
 /// with Ligus's tools, `None` = a command/pre-flight), with this agent's
 /// signed `grants` and shell grant, on this host. Built from the same plan
 /// the executors enforce.
-pub fn effective_policy(kind: Option<ModelProviderKind>, grants: &ligus_core::sandbox::PathGrants, shell_granted: bool) -> EffectivePolicy {
+pub fn effective_policy(
+    kind: Option<ModelProviderKind>,
+    grants: &ligus_core::sandbox::PathGrants,
+    shell_granted: bool,
+) -> EffectivePolicy {
     let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
     let host = host_paths();
-    effective_policy_in(kind, grants, shell_granted, &home, &host, std::env::var_os("PATH").as_deref(), &|k| std::env::var_os(k))
+    effective_policy_in(
+        kind,
+        grants,
+        shell_granted,
+        &home,
+        &host,
+        std::env::var_os("PATH").as_deref(),
+        &|k| std::env::var_os(k),
+    )
 }
 
 /// [`effective_policy`] for a given home and host (tests).
@@ -2183,16 +2536,22 @@ pub fn effective_policy_in(
     // login keychain (`EnvelopeEnforcer::plan`): a scratch stand-in holding
     // just that file's name shows it so. No keychain item is read.
     let stand_in = match purpose {
-        Purpose::Agent(k) if cli_home::expects_file_sign_in(k, home) => cli_home::sign_in_file(k).and_then(|f| {
-            let d = make_turn_tmp().ok()?;
-            let p = d.path().join(f);
-            std::fs::create_dir_all(p.parent()?).ok()?;
-            std::fs::write(&p, b"").ok()?;
-            Some(d)
-        }),
+        Purpose::Agent(k) if cli_home::expects_file_sign_in(k, home) => cli_home::sign_in_file(k)
+            .and_then(|f| {
+                let d = make_turn_tmp().ok()?;
+                let p = d.path().join(f);
+                std::fs::create_dir_all(p.parent()?).ok()?;
+                std::fs::write(&p, b"").ok()?;
+                Some(d)
+            }),
         _ => None,
     };
-    let cli_home = matches!(purpose, Purpose::Agent(_)).then(|| stand_in.as_ref().map(|d| d.path().to_path_buf()).unwrap_or_else(|| tmp.join("home")));
+    let cli_home = matches!(purpose, Purpose::Agent(_)).then(|| {
+        stand_in
+            .as_ref()
+            .map(|d| d.path().to_path_buf())
+            .unwrap_or_else(|| tmp.join("home"))
+    });
     let plan = EnvelopeEnforcer::plan(&PlanInputs {
         host: HostKind::Desktop,
         envelope: &SandboxEnvelope::workspace_default(),
@@ -2222,7 +2581,11 @@ pub fn effective_policy_in(
     });
     let runtime_reasons = runtime_home_read(purpose, home, false);
     let toolchain = toolchain_allow(home, path_var, env, &|p| p.exists());
-    let granted = |l: &[String], p: &Path| l.iter().filter_map(|g| expand_grant(g, home)).any(|x| x == p);
+    let granted = |l: &[String], p: &Path| {
+        l.iter()
+            .filter_map(|g| expand_grant(g, home))
+            .any(|x| x == p)
+    };
     let why_read = |p: &Path| -> String {
         if let Some((_, w)) = runtime_reasons.iter().find(|(x, _)| x == p) {
             return format!("runtime: {w}");
@@ -2239,40 +2602,81 @@ pub fn effective_policy_in(
         "toolchain".into()
     };
     let mut entries = Vec::new();
-    entries.push(PolicyEntry { path: "<the turn's worktree>".into(), access: "read-write", why: "the turn's own checkout (.git and the protected config read-only)".into() });
-    entries.push(PolicyEntry { path: "<the turn's scratch dir and home>".into(), access: "read-write", why: "TMPDIR and HOME for this turn; removed when it ends".into() });
+    entries.push(PolicyEntry {
+        path: "<the turn's worktree>".into(),
+        access: "read-write",
+        why: "the turn's own checkout (.git and the protected config read-only)".into(),
+    });
+    entries.push(PolicyEntry {
+        path: "<the turn's scratch dir and home>".into(),
+        access: "read-write",
+        why: "TMPDIR and HOME for this turn; removed when it ends".into(),
+    });
     for w in plan.write_extra.iter().filter(|w| **w != tmp) {
-        let why = if granted(&grants.read_write, w) { "signed grant (read-write)" } else { "this device's LIGUS_SANDBOX_WRITE_ALLOW, or the runtime's own state (LIGUS_CLI_HOME=shared)" };
-        entries.push(PolicyEntry { path: w.display().to_string(), access: "read-write", why: why.into() });
+        let why = if granted(&grants.read_write, w) {
+            "signed grant (read-write)"
+        } else {
+            "this device's LIGUS_SANDBOX_WRITE_ALLOW, or the runtime's own state (LIGUS_CLI_HOME=shared)"
+        };
+        entries.push(PolicyEntry {
+            path: w.display().to_string(),
+            access: "read-write",
+            why: why.into(),
+        });
     }
     for r in &plan.home_read {
-        entries.push(PolicyEntry { path: r.display().to_string(), access: "read", why: why_read(r) });
+        entries.push(PolicyEntry {
+            path: r.display().to_string(),
+            access: "read",
+            why: why_read(r),
+        });
     }
     if let Some(h) = &plan.home {
-        entries.push(PolicyEntry { path: h.display().to_string(), access: "denied", why: "your home dir: everything not listed above".into() });
+        entries.push(PolicyEntry {
+            path: h.display().to_string(),
+            access: "denied",
+            why: "your home dir: everything not listed above".into(),
+        });
     }
     for d in &plan.deny_read {
         let why = if host.data_dirs.contains(d) {
             "Ligus's data (keys, settings, the event log)"
-        } else if d.ends_with("Library/Keychains") && kind.is_some_and(|k| runtime_home_read(Purpose::Agent(k), home, false).iter().any(|(p, _)| p == d)) {
+        } else if d.ends_with("Library/Keychains")
+            && kind.is_some_and(|k| {
+                runtime_home_read(Purpose::Agent(k), home, false)
+                    .iter()
+                    .any(|(p, _)| p == d)
+            })
+        {
             "the login keychain: this CLI is signed in by a file in its turn home, so its turns run without it"
         } else if host.secret_files.contains(d) {
             "a Ligus secret file"
         } else {
             "credentials (never opened by a signed grant)"
         };
-        entries.push(PolicyEntry { path: d.display().to_string(), access: "denied", why: why.into() });
+        entries.push(PolicyEntry {
+            path: d.display().to_string(),
+            access: "denied",
+            why: why.into(),
+        });
     }
     let shell = if shell_granted {
         "on: an Owner granted this agent the shell, for every member's turns".to_string()
-    } else if kind.is_some_and(|k| matches!(k, ModelProviderKind::Codex | ModelProviderKind::Aider | ModelProviderKind::Hermes)) {
+    } else if kind.is_some_and(|k| {
+        matches!(
+            k,
+            ModelProviderKind::Codex | ModelProviderKind::Aider | ModelProviderKind::Hermes
+        )
+    }) {
         "the workspace Owner's turns only (the device owner's in the local workspace); this runtime can't run without one, so other members' turns are refused".to_string()
     } else {
         "the workspace Owner's turns only (the device owner's in the local workspace); other members' turns run without it".to_string()
     };
     let status = sandbox_status();
     EffectivePolicy {
-        runtime: kind.map(|k| format!("{k:?}")).unwrap_or_else(|| "commands and pre-flight tests".into()),
+        runtime: kind
+            .map(|k| format!("{k:?}"))
+            .unwrap_or_else(|| "commands and pre-flight tests".into()),
         tier: status.tier().into(),
         home: plan.home.as_ref().map(|h| h.display().to_string()),
         entries,
@@ -2299,8 +2703,8 @@ pub fn skip_without_sandbox(test: &str) -> bool {
 }
 
 #[cfg(test)]
-pub(crate) mod tests;
-#[cfg(test)]
 mod home_tests;
 #[cfg(test)]
 mod review2_tests;
+#[cfg(test)]
+pub(crate) mod tests;

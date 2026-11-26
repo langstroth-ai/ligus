@@ -20,7 +20,10 @@ pub mod tools;
 #[cfg(test)]
 mod tests;
 
-pub use server::{Budgets, CascadeBudgets, HostAsker, InProcessTools, LigusHost, LigusMcp, Outcome, SelfReport, ToolResult, TurnHandle, TurnSpec, WithLigus};
+pub use server::{
+    Budgets, CascadeBudgets, HostAsker, InProcessTools, LigusHost, LigusMcp, Outcome, SelfReport,
+    ToolResult, TurnHandle, TurnSpec, WithLigus,
+};
 
 impl TurnHandle {
     /// Serve this turn on its own unix socket (for CLI agents). Must run
@@ -42,9 +45,13 @@ pub fn offered_for(rt: &crate::ResolvedRuntime, restricted: bool) -> bool {
     use ligus_core::ModelProviderKind as K;
     match rt.provider {
         K::ClaudeCode | K::Codex | K::Antigravity | K::Copilot => {
-            crate::provider::acp::resolve(rt, restricted).is_ok() || attach::legacy_attaches(rt.provider)
+            crate::provider::acp::resolve(rt, restricted).is_ok()
+                || attach::legacy_attaches(rt.provider)
         }
         K::Anthropic => true,
-        _ => crate::provider::dispatch::openai_tools_allowed(rt) || (rt.provider == K::Ollama && rt.tools),
+        _ => {
+            crate::provider::dispatch::openai_tools_allowed(rt)
+                || (rt.provider == K::Ollama && rt.tools)
+        }
     }
 }

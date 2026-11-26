@@ -7,12 +7,15 @@
 //! check, and the fold's independence from arrival order with all of them
 //! interleaved (a property run at `PROPTEST_CASES=4096` in release).
 
-use ligus_core::admission::{check_phone_admission_preimage, redemption_message, Admission, RedeemKey, REDEEM_CONTEXT};
+use ligus_core::admission::{
+    check_phone_admission_preimage, redemption_message, Admission, RedeemKey, REDEEM_CONTEXT,
+};
 use ligus_core::authorization::invite_subject;
 use ligus_core::events::{fold_decisions, WorkspaceAuthz};
 use ligus_core::testkit::{Phone, SignedWorld};
 use ligus_core::{
-    ActorKind, MemberRoleChange, SessionEvent, SessionEventEnvelope, Timestamp, Verdict, WorkspaceRole,
+    ActorKind, MemberRoleChange, SessionEvent, SessionEventEnvelope, Timestamp, Verdict,
+    WorkspaceRole,
 };
 use proptest::prelude::*;
 use std::collections::BTreeMap;
@@ -40,7 +43,14 @@ fn world() -> SignedWorld {
 }
 
 fn issue(w: &mut SignedWorld, id: Uuid, a: Admission) -> Uuid {
-    w.push("adm", SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(a), redeem_key: None })
+    w.push(
+        "adm",
+        SessionEvent::JoinApproved {
+            subject: invite_subject(id),
+            admission: Some(a),
+            redeem_key: None,
+        },
+    )
 }
 
 /// `name` redeems `id` with `proof`, its member record edited by `edit`.
@@ -54,7 +64,16 @@ fn redeem_raw(
 ) -> Uuid {
     let mut m = w.member_of(name, WorkspaceRole::Contributor);
     edit(&mut m);
-    let mut env = w.draft(name, None, SessionEvent::MemberAdded { member: m, invite: Some(id), proof: Some(proof) }, None);
+    let mut env = w.draft(
+        name,
+        None,
+        SessionEvent::MemberAdded {
+            member: m,
+            invite: Some(id),
+            proof: Some(proof),
+        },
+        None,
+    );
     if let Some(l) = lamport {
         env.lamport = l;
         w.finish(&mut env, name, None);
@@ -76,13 +95,25 @@ fn a_proof_is_bound_to_its_workspace_invite_member_and_device() {
     let mut w = world();
     let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
     // Two admissions under one redeem key (an issuer reusing a code's key).
-    issue(&mut w, a, Admission::service(now_ms() + HOUR_MS, None, key().public()));
-    issue(&mut w, b, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    issue(
+        &mut w,
+        a,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
+    issue(
+        &mut w,
+        b,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     let dev = w.people["box"].device_id;
     // Transplanted from another workspace.
     let other_ws = key().prove(Uuid::new_v4(), a, "box", dev);
     let t1 = redeem_raw(&mut w, "box", a, other_ws, |_| {}, None);
-    assert_eq!(w.verdict(t1), Verdict::Denied, "a proof for another workspace");
+    assert_eq!(
+        w.verdict(t1),
+        Verdict::Denied,
+        "a proof for another workspace"
+    );
     // Transplanted from another invite.
     let for_b = key().prove(w.wid, b, "box", dev);
     let t2 = redeem_raw(&mut w, "box", a, for_b.clone(), |_| {}, None);
@@ -96,7 +127,11 @@ fn a_proof_is_bound_to_its_workspace_invite_member_and_device() {
     assert_eq!(w.verdict(ok), Verdict::Allowed);
     // Replayed by the same box on the other invite: it is a member now.
     let again = redeem_raw(&mut w, "box", b, for_b, |_| {}, None);
-    assert_eq!(w.verdict(again), Verdict::Denied, "a member never spends a second admission");
+    assert_eq!(
+        w.verdict(again),
+        Verdict::Denied,
+        "a member never spends a second admission"
+    );
 }
 
 #[test]
@@ -105,11 +140,24 @@ fn a_signer_device_claim_without_its_key_redeems_nothing() {
     // signing with another key must not borrow the box's proof.
     let mut w = world();
     let id = Uuid::new_v4();
-    issue(&mut w, id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    issue(
+        &mut w,
+        id,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     let box_dev = w.people["box"].device_id;
     let stolen = key().prove(w.wid, id, "box", box_dev);
     let m = w.member_of("box", WorkspaceRole::Contributor);
-    let mut env = w.draft("box2", None, SessionEvent::MemberAdded { member: m, invite: Some(id), proof: Some(stolen) }, None);
+    let mut env = w.draft(
+        "box2",
+        None,
+        SessionEvent::MemberAdded {
+            member: m,
+            invite: Some(id),
+            proof: Some(stolen),
+        },
+        None,
+    );
     {
         let s = env.actor_stamp.as_mut().unwrap();
         s.actor.id = "box".into();
@@ -119,7 +167,11 @@ fn a_signer_device_claim_without_its_key_redeems_nothing() {
     w.finish(&mut env, "box2", None);
     env.signer_device_id = Some(box_dev);
     let forged = w.push_env(None, env);
-    assert_ne!(w.verdict(forged), Verdict::Allowed, "signed by box2's key under box's device id");
+    assert_ne!(
+        w.verdict(forged),
+        Verdict::Allowed,
+        "signed by box2's key under box's device id"
+    );
     assert!(!w.roster().members.contains_key("box"));
 }
 
@@ -131,14 +183,40 @@ fn a_bearer_redemption_names_the_redeeming_account() {
     // one in later by re-adding itself).
     let mut w = world();
     let id = Uuid::new_v4();
-    issue(&mut w, id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    issue(
+        &mut w,
+        id,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     let owner_account = w.people["owner"].account_id;
     let dev = w.people["box"].device_id;
     let p = key().prove(w.wid, id, "box", dev);
-    let other = redeem_raw(&mut w, "box", id, p.clone(), |m| m.actor.account_id = Some(owner_account), None);
-    assert_eq!(w.verdict(other), Verdict::Denied, "a member record naming another account");
-    let none = redeem_raw(&mut w, "box", id, p.clone(), |m| m.actor.account_id = None, None);
-    assert_eq!(w.verdict(none), Verdict::Denied, "a member record naming no account");
+    let other = redeem_raw(
+        &mut w,
+        "box",
+        id,
+        p.clone(),
+        |m| m.actor.account_id = Some(owner_account),
+        None,
+    );
+    assert_eq!(
+        w.verdict(other),
+        Verdict::Denied,
+        "a member record naming another account"
+    );
+    let none = redeem_raw(
+        &mut w,
+        "box",
+        id,
+        p.clone(),
+        |m| m.actor.account_id = None,
+        None,
+    );
+    assert_eq!(
+        w.verdict(none),
+        Verdict::Denied,
+        "a member record naming no account"
+    );
     let ok = redeem_raw(&mut w, "box", id, p, |_| {}, None);
     assert_eq!(w.verdict(ok), Verdict::Allowed);
 }
@@ -148,7 +226,11 @@ fn a_service_member_re_adding_itself_changes_neither_kind_account_nor_identity()
     // R1, every member-record field that carries authority.
     let mut w = world();
     let id = Uuid::new_v4();
-    issue(&mut w, id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    issue(
+        &mut w,
+        id,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     let r = redeem(&mut w, "box", id);
     assert_eq!(w.verdict(r), Verdict::Allowed);
     let owner_account = w.people["owner"].account_id;
@@ -156,7 +238,10 @@ fn a_service_member_re_adding_itself_changes_neither_kind_account_nor_identity()
     let cases: Vec<(&str, Edit)> = vec![
         ("kind", Box::new(|m| m.actor.kind = ActorKind::Human)),
         ("kind agent", Box::new(|m| m.actor.kind = ActorKind::Agent)),
-        ("account", Box::new(move |m| m.actor.account_id = Some(owner_account))),
+        (
+            "account",
+            Box::new(move |m| m.actor.account_id = Some(owner_account)),
+        ),
         ("no account", Box::new(|m| m.actor.account_id = None)),
         ("actor id", Box::new(|m| m.actor.id = "owner".into())),
         ("role up", Box::new(|m| m.role = WorkspaceRole::Admin)),
@@ -164,15 +249,41 @@ fn a_service_member_re_adding_itself_changes_neither_kind_account_nor_identity()
     for (what, edit) in cases {
         let mut m = w.member_of("box", WorkspaceRole::Contributor);
         edit(&mut m);
-        let e = w.push_bare("box", SessionEvent::MemberAdded { member: m, invite: None, proof: None });
+        let e = w.push_bare(
+            "box",
+            SessionEvent::MemberAdded {
+                member: m,
+                invite: None,
+                proof: None,
+            },
+        );
         assert_eq!(w.verdict(e), Verdict::Denied, "{what}");
         let r = w.roster();
-        assert_eq!((r.members["box"].kind, r.members["box"].role, r.members["box"].account_id), (ActorKind::Service, WorkspaceRole::Contributor, Some(w.people["box"].account_id)), "{what}");
+        assert_eq!(
+            (
+                r.members["box"].kind,
+                r.members["box"].role,
+                r.members["box"].account_id
+            ),
+            (
+                ActorKind::Service,
+                WorkspaceRole::Contributor,
+                Some(w.people["box"].account_id)
+            ),
+            "{what}"
+        );
     }
     // A cosmetic re-add (a new display name) stays fine; demoting itself too.
     let mut m = w.member_of("box", WorkspaceRole::Contributor);
     m.actor.display_name = "build box".into();
-    let ok = w.push_bare("box", SessionEvent::MemberAdded { member: m, invite: None, proof: None });
+    let ok = w.push_bare(
+        "box",
+        SessionEvent::MemberAdded {
+            member: m,
+            invite: None,
+            proof: None,
+        },
+    );
     assert_eq!(w.verdict(ok), Verdict::Allowed);
 }
 
@@ -184,23 +295,60 @@ fn a_closure_naming_nothing_real_denies_only_that_invites_redemptions() {
     // the entrance policy's, like refusing to issue (documented).
     let mut w = world();
     let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
-    issue(&mut w, a, Admission::service(now_ms() + HOUR_MS, None, key().public()));
-    issue(&mut w, b, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    issue(
+        &mut w,
+        a,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
+    issue(
+        &mut w,
+        b,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     let ra = redeem(&mut w, "box", a);
     let rb = redeem(&mut w, "box2", b);
-    assert_eq!((w.verdict(ra), w.verdict(rb)), (Verdict::Allowed, Verdict::Allowed));
+    assert_eq!(
+        (w.verdict(ra), w.verdict(rb)),
+        (Verdict::Allowed, Verdict::Allowed)
+    );
     // Names b's redemption while closing a: a's is denied, b's stands.
-    let c = w.push_bare("adm", SessionEvent::AdmissionClosed { invite: a, redeemed: Some(rb) });
+    let c = w.push_bare(
+        "adm",
+        SessionEvent::AdmissionClosed {
+            invite: a,
+            redeemed: Some(rb),
+        },
+    );
     assert_eq!(w.verdict(c), Verdict::Allowed);
-    assert_eq!((w.verdict(ra), w.verdict(rb)), (Verdict::Denied, Verdict::Allowed));
+    assert_eq!(
+        (w.verdict(ra), w.verdict(rb)),
+        (Verdict::Denied, Verdict::Allowed)
+    );
     // Names an id nobody wrote: still only a's.
     let mut w2 = world();
-    issue(&mut w2, a, Admission::service(now_ms() + HOUR_MS, None, key().public()));
-    issue(&mut w2, b, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    issue(
+        &mut w2,
+        a,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
+    issue(
+        &mut w2,
+        b,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     let ra = redeem(&mut w2, "box", a);
     let rb = redeem(&mut w2, "box2", b);
-    w2.push_bare("adm", SessionEvent::AdmissionClosed { invite: a, redeemed: Some(Uuid::new_v4()) });
-    assert_eq!((w2.verdict(ra), w2.verdict(rb)), (Verdict::Denied, Verdict::Allowed));
+    w2.push_bare(
+        "adm",
+        SessionEvent::AdmissionClosed {
+            invite: a,
+            redeemed: Some(Uuid::new_v4()),
+        },
+    );
+    assert_eq!(
+        (w2.verdict(ra), w2.verdict(rb)),
+        (Verdict::Denied, Verdict::Allowed)
+    );
     assert!(!w2.roster().members.contains_key("box") && w2.roster().members.contains_key("box2"));
     // People are untouched.
     assert!(w2.roster().members.contains_key("mara"));
@@ -210,12 +358,32 @@ fn a_closure_naming_nothing_real_denies_only_that_invites_redemptions() {
 fn closures_that_disagree_admit_no_one() {
     let mut w = world();
     let id = Uuid::new_v4();
-    issue(&mut w, id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    issue(
+        &mut w,
+        id,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     let ok = redeem(&mut w, "box", id);
-    w.push_bare("adm", SessionEvent::AdmissionClosed { invite: id, redeemed: Some(ok) });
+    w.push_bare(
+        "adm",
+        SessionEvent::AdmissionClosed {
+            invite: id,
+            redeemed: Some(ok),
+        },
+    );
     assert_eq!(w.verdict(ok), Verdict::Allowed);
-    w.push_bare("owner", SessionEvent::AdmissionClosed { invite: id, redeemed: None });
-    assert_eq!(w.verdict(ok), Verdict::Denied, "fail closed: any closure that doesn't name it");
+    w.push_bare(
+        "owner",
+        SessionEvent::AdmissionClosed {
+            invite: id,
+            redeemed: None,
+        },
+    );
+    assert_eq!(
+        w.verdict(ok),
+        Verdict::Denied,
+        "fail closed: any closure that doesn't name it"
+    );
 }
 
 #[test]
@@ -225,13 +393,33 @@ fn a_cut_admins_uncovered_closure_never_counts() {
     // redemption it would have denied stands, on every device.
     let mut w = world();
     let id = Uuid::new_v4();
-    let issued = issue(&mut w, id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    let issued = issue(
+        &mut w,
+        id,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     let ok = redeem(&mut w, "box", id);
-    let close = w.push_bare("adm", SessionEvent::AdmissionClosed { invite: id, redeemed: None });
+    let close = w.push_bare(
+        "adm",
+        SessionEvent::AdmissionClosed {
+            invite: id,
+            redeemed: None,
+        },
+    );
     assert_eq!(w.verdict(ok), Verdict::Denied);
-    let cut = w.push("owner", SessionEvent::MemberRemoved { member_id: "adm".into(), watermark: vec![] });
+    let cut = w.push(
+        "owner",
+        SessionEvent::MemberRemoved {
+            member_id: "adm".into(),
+            watermark: vec![],
+        },
+    );
     assert_eq!(w.verdict(cut), Verdict::Allowed);
-    assert_eq!(w.verdict(close), Verdict::Denied, "an uncovered act of the cut Admin");
+    assert_eq!(
+        w.verdict(close),
+        Verdict::Denied,
+        "an uncovered act of the cut Admin"
+    );
     // The issue itself was the cut Admin's too, so nothing is admitted.
     assert_eq!(w.verdict(issued), Verdict::Denied);
     assert_eq!(w.verdict(ok), Verdict::Denied);
@@ -242,14 +430,32 @@ fn a_cut_admins_uncovered_closure_never_counts() {
 fn an_equivocated_redemption_or_closure_never_counts() {
     let mut w = world();
     let id = Uuid::new_v4();
-    issue(&mut w, id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    issue(
+        &mut w,
+        id,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     let ok = redeem(&mut w, "box", id);
-    let close = w.push_bare("adm", SessionEvent::AdmissionClosed { invite: id, redeemed: Some(ok) });
+    let close = w.push_bare(
+        "adm",
+        SessionEvent::AdmissionClosed {
+            invite: id,
+            redeemed: Some(ok),
+        },
+    );
     // The Admin equivocates its closure: neither copy counts, so the
     // redemption stands on its own (the residual before any close).
     let mut w1 = w.clone();
     let orig = w1.cfg.iter().find(|e| e.event_id == close).unwrap().clone();
-    let mut twin = w1.draft("adm", None, SessionEvent::AdmissionClosed { invite: id, redeemed: None }, None);
+    let mut twin = w1.draft(
+        "adm",
+        None,
+        SessionEvent::AdmissionClosed {
+            invite: id,
+            redeemed: None,
+        },
+        None,
+    );
     twin.event_id = close;
     twin.lamport = orig.lamport;
     twin.actor_stamp.as_mut().unwrap().prev = orig.actor_stamp.as_ref().and_then(|s| s.prev);
@@ -265,7 +471,16 @@ fn an_equivocated_redemption_or_closure_never_counts() {
     let proof = key().prove(w2.wid, id, "box", w2.people["box"].device_id);
     let mut m = w2.member_of("box", WorkspaceRole::Contributor);
     m.actor.display_name = "other".into();
-    let mut twin = w2.draft("box", None, SessionEvent::MemberAdded { member: m, invite: Some(id), proof: Some(proof) }, None);
+    let mut twin = w2.draft(
+        "box",
+        None,
+        SessionEvent::MemberAdded {
+            member: m,
+            invite: Some(id),
+            proof: Some(proof),
+        },
+        None,
+    );
     twin.event_id = ok;
     twin.lamport = orig.lamport;
     twin.actor_stamp.as_mut().unwrap().prev = orig.actor_stamp.as_ref().and_then(|s| s.prev);
@@ -283,15 +498,37 @@ fn a_closure_sorting_before_the_redemption_it_names_admits_no_one() {
     // redemption folds, so the in-fold check denies it: fail closed.
     let mut w = world();
     let id = Uuid::new_v4();
-    let issued = issue(&mut w, id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    let issued = issue(
+        &mut w,
+        id,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     // Something in between, so the closure can sort strictly between the
     // issue and the redemption.
-    issue(&mut w, Uuid::new_v4(), Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    issue(
+        &mut w,
+        Uuid::new_v4(),
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     let ok = redeem(&mut w, "box", id);
-    let mut env = w.draft("adm", None, SessionEvent::AdmissionClosed { invite: id, redeemed: Some(ok) }, None);
+    let mut env = w.draft(
+        "adm",
+        None,
+        SessionEvent::AdmissionClosed {
+            invite: id,
+            redeemed: Some(ok),
+        },
+        None,
+    );
     // Backdated as far as the lamport rule allows: naming the issue as its
     // head (and no chain link newer than that).
-    ligus_core::lamport::stamp_next(&mut env, Some(ligus_core::CfgFrontier { lamport: lamport_of(&w, issued), event_id: issued }));
+    ligus_core::lamport::stamp_next(
+        &mut env,
+        Some(ligus_core::CfgFrontier {
+            lamport: lamport_of(&w, issued),
+            event_id: issued,
+        }),
+    );
     env.actor_stamp.as_mut().unwrap().prev = None;
     w.finish(&mut env, "adm", None);
     w.push_env(None, env);
@@ -304,7 +541,10 @@ fn a_phone_checks_strictly_what_it_signs() {
     let mut w = world();
     let phone = Phone::new();
     let cert = w.phone_certificate("adm", &phone);
-    w.push("adm", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    w.push(
+        "adm",
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
     let soon = now_ms() + HOUR_MS;
     let id = Uuid::new_v4();
     let draft = |w: &mut SignedWorld, chat: Option<Uuid>, payload: SessionEvent| {
@@ -318,10 +558,16 @@ fn a_phone_checks_strictly_what_it_signs() {
         env.clear_raw();
         (env, challenge)
     };
-    let admission = SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None, key().public())), redeem_key: None };
+    let admission = SessionEvent::JoinApproved {
+        subject: invite_subject(id),
+        admission: Some(Admission::service(soon, None, key().public())),
+        redeem_key: None,
+    };
     let (env, challenge) = draft(&mut w, None, admission.clone());
     let good = ligus_core::crypto::envelope_preimage(&env);
-    assert!(check_phone_admission_preimage(&good, &challenge, w.wid, phone.device_id, None).is_ok());
+    assert!(
+        check_phone_admission_preimage(&good, &challenge, w.wid, phone.device_id, None).is_ok()
+    );
     // Another version prefix.
     let mut v2 = good.clone();
     v2[15] = b'2';
@@ -330,13 +576,24 @@ fn a_phone_checks_strictly_what_it_signs() {
     let chat = w.chat("owner", "c");
     let (in_chat, c2) = draft(&mut w, Some(chat), admission);
     let bytes = ligus_core::crypto::envelope_preimage(&in_chat);
-    assert_eq!(check_phone_admission_preimage(&bytes, &c2, w.wid, phone.device_id, None).unwrap_err(), "not on this workspace's config log");
+    assert_eq!(
+        check_phone_admission_preimage(&bytes, &c2, w.wid, phone.device_id, None).unwrap_err(),
+        "not on this workspace's config log"
+    );
     // A payload carrying a field this build doesn't know (a newer build
     // might read it): refused, the phone signs only what it understood.
-    let (env, _) = draft(&mut w, None, SessionEvent::AdmissionClosed { invite: id, redeemed: None });
+    let (env, _) = draft(
+        &mut w,
+        None,
+        SessionEvent::AdmissionClosed {
+            invite: id,
+            redeemed: None,
+        },
+    );
     let mut json: serde_json::Value = serde_json::to_value(&SessionEvent::JoinApproved {
         subject: invite_subject(id),
-        admission: Some(Admission::service(soon, None, key().public())), redeem_key: None,
+        admission: Some(Admission::service(soon, None, key().public())),
+        redeem_key: None,
     })
     .unwrap();
     json["admission"]["role"] = serde_json::json!("owner");
@@ -349,14 +606,22 @@ fn a_phone_checks_strictly_what_it_signs() {
     bytes.extend_from_slice(&env.lamport.to_le_bytes());
     bytes.extend_from_slice(env.event_id.as_bytes());
     let stamp = serde_json::to_vec(&env.actor_stamp).unwrap();
-    for f in [serde_json::to_vec(&env.scope).unwrap(), serde_json::to_vec(&env.timestamp).unwrap(), stamp, payload.clone()] {
+    for f in [
+        serde_json::to_vec(&env.scope).unwrap(),
+        serde_json::to_vec(&env.timestamp).unwrap(),
+        stamp,
+        payload.clone(),
+    ] {
         bytes.extend_from_slice(&(f.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&f);
     }
     let digest = {
         use sha2::{Digest, Sha256};
         let s = env.actor_stamp.as_ref().unwrap();
-        let frontier = s.cfg_frontier.map(|f| serde_json::to_vec(&f).unwrap()).unwrap_or_default();
+        let frontier = s
+            .cfg_frontier
+            .map(|f| serde_json::to_vec(&f).unwrap())
+            .unwrap_or_default();
         let mut h = Sha256::new();
         h.update(ligus_core::presence::PRESENCE_CONTEXT);
         h.update(env.workspace_id.as_bytes());
@@ -379,7 +644,9 @@ fn a_phone_checks_strictly_what_it_signs() {
     let mut long = good.clone();
     let at = 17 + 16 + 16 + 8 + 8 + 16;
     long[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
-    assert!(check_phone_admission_preimage(&long, &challenge, w.wid, phone.device_id, None).is_err());
+    assert!(
+        check_phone_admission_preimage(&long, &challenge, w.wid, phone.device_id, None).is_err()
+    );
     assert!(check_phone_admission_preimage(&[], &challenge, w.wid, phone.device_id, None).is_err());
 }
 
@@ -392,7 +659,10 @@ fn redemption_proof_golden_vector() {
         b.iter().map(|x| format!("{x:02x}")).collect()
     }
     let u = |n: u128| Uuid::from_u128(n);
-    assert_eq!(hex(REDEEM_CONTEXT), "6c696775732d626f782d61646d697373696f6e2d72656465656d2d763100");
+    assert_eq!(
+        hex(REDEEM_CONTEXT),
+        "6c696775732d626f782d61646d697373696f6e2d72656465656d2d763100"
+    );
     let m = redemption_message(u(2), u(0x71), "box-1", u(1));
     assert_eq!(
         hex(&m),
@@ -412,7 +682,8 @@ fn redemption_proof_golden_vector() {
     assert_eq!(hex(&sig), GOLDEN_REDEEM_SIG);
 }
 
-const GOLDEN_REDEEM_PUBLIC: &str = "0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0";
+const GOLDEN_REDEEM_PUBLIC: &str =
+    "0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0";
 const GOLDEN_REDEEM_SIG: &str = "44971b77a518223837bc29acc59858404371b5348b7bfb9a9525409e0455770e73148f4c7b32f57db578308c27f2fc12d26c50744fc5bc34c75eed331a19a005";
 
 // ---------------------------------------------------------------------------
@@ -426,7 +697,14 @@ fn verdicts_of(log: &[SessionEventEnvelope]) -> BTreeMap<Uuid, Verdict> {
 
 fn members_of(log: &[SessionEventEnvelope]) -> Vec<(String, ActorKind, WorkspaceRole)> {
     let (s, _) = ligus_core::events::project_config(log, None, None);
-    let mut v: Vec<_> = s.map(|s| s.members.into_iter().map(|m| (m.id, m.actor.kind, m.role)).collect()).unwrap_or_default();
+    let mut v: Vec<_> = s
+        .map(|s| {
+            s.members
+                .into_iter()
+                .map(|m| (m.id, m.actor.kind, m.role))
+                .collect()
+        })
+        .unwrap_or_default();
     v.sort_by(|a, b| a.0.cmp(&b.0));
     v
 }
@@ -442,19 +720,48 @@ fn assert_order_independent(w: &SignedWorld) {
 
 #[derive(Debug, Clone)]
 enum Op {
-    Issue { slot: u8, bind_device: bool },
-    Redeem { who: u8, slot: u8, holds: bool, back: bool },
-    Close { by: u8, slot: u8, name: u8 },
-    Cut { target: u8, kind: u8, honest: bool },
-    Equivocate { pick: u8 },
+    Issue {
+        slot: u8,
+        bind_device: bool,
+    },
+    Redeem {
+        who: u8,
+        slot: u8,
+        holds: bool,
+        back: bool,
+    },
+    Close {
+        by: u8,
+        slot: u8,
+        name: u8,
+    },
+    Cut {
+        target: u8,
+        kind: u8,
+        honest: bool,
+    },
+    Equivocate {
+        pick: u8,
+    },
 }
 
 fn arb_op() -> impl Strategy<Value = Op> {
     prop_oneof![
         (0u8..3, any::<bool>()).prop_map(|(slot, bind_device)| Op::Issue { slot, bind_device }),
-        (0u8..4, 0u8..3, any::<bool>(), any::<bool>()).prop_map(|(who, slot, holds, back)| Op::Redeem { who, slot, holds, back }),
+        (0u8..4, 0u8..3, any::<bool>(), any::<bool>()).prop_map(|(who, slot, holds, back)| {
+            Op::Redeem {
+                who,
+                slot,
+                holds,
+                back,
+            }
+        }),
         (0u8..3, 0u8..3, 0u8..3).prop_map(|(by, slot, name)| Op::Close { by, slot, name }),
-        (0u8..4, 0u8..3, any::<bool>()).prop_map(|(target, kind, honest)| Op::Cut { target, kind, honest }),
+        (0u8..4, 0u8..3, any::<bool>()).prop_map(|(target, kind, honest)| Op::Cut {
+            target,
+            kind,
+            honest
+        }),
         any::<u8>().prop_map(|pick| Op::Equivocate { pick }),
     ]
 }
@@ -465,7 +772,11 @@ const CUTTABLE: [&str; 4] = ["adm", "mara", "box", "box2"];
 
 fn honest_watermark(w: &SignedWorld, who: &str) -> Vec<ligus_core::watermark::Watermark> {
     let signers: std::collections::BTreeSet<Uuid> = [w.people[who].device_id].into_iter().collect();
-    ligus_core::watermark::heads_of(&w.cfg, ligus_core::workspace_config_session_id(w.wid), &signers)
+    ligus_core::watermark::heads_of(
+        &w.cfg,
+        ligus_core::workspace_config_session_id(w.wid),
+        &signers,
+    )
 }
 
 fn play(w: &mut SignedWorld, slots: &[Uuid; 3], ops: &[Op]) {
@@ -477,12 +788,28 @@ fn play(w: &mut SignedWorld, slots: &[Uuid; 3], ops: &[Op]) {
                 if bind_device {
                     a = a.for_device(&w.people["box"].device.public_key_bytes());
                 }
-                w.push("adm", SessionEvent::JoinApproved { subject: invite_subject(slots[slot as usize % 3]), admission: Some(a), redeem_key: None });
+                w.push(
+                    "adm",
+                    SessionEvent::JoinApproved {
+                        subject: invite_subject(slots[slot as usize % 3]),
+                        admission: Some(a),
+                        redeem_key: None,
+                    },
+                );
             }
-            Op::Redeem { who, slot, holds, back } => {
+            Op::Redeem {
+                who,
+                slot,
+                holds,
+                back,
+            } => {
                 let who = REDEEMERS[who as usize % 4];
                 let id = slots[slot as usize % 3];
-                let k = if holds { key() } else { RedeemKey::from_seed(&[9; 32]).unwrap() };
+                let k = if holds {
+                    key()
+                } else {
+                    RedeemKey::from_seed(&[9; 32]).unwrap()
+                };
                 let proof = k.prove(w.wid, id, who, w.people[who].device_id);
                 let lamport = back
                     .then(|| {
@@ -509,18 +836,42 @@ fn play(w: &mut SignedWorld, slots: &[Uuid; 3], ops: &[Op]) {
                     1 => redemptions.first().copied(),
                     _ => redemptions.last().copied(),
                 };
-                w.push_bare(by, SessionEvent::AdmissionClosed { invite: id, redeemed });
+                w.push_bare(
+                    by,
+                    SessionEvent::AdmissionClosed {
+                        invite: id,
+                        redeemed,
+                    },
+                );
             }
-            Op::Cut { target, kind, honest } => {
+            Op::Cut {
+                target,
+                kind,
+                honest,
+            } => {
                 let t = CUTTABLE[target as usize % 4];
-                let wm = if honest { honest_watermark(w, t) } else { vec![] };
+                let wm = if honest {
+                    honest_watermark(w, t)
+                } else {
+                    vec![]
+                };
                 let e = match kind % 3 {
-                    0 => SessionEvent::MemberRemoved { member_id: t.into(), watermark: wm },
-                    1 => SessionEvent::MemberRoleChanged {
-                        change: MemberRoleChange { member_id: t.into(), old_role: WorkspaceRole::Admin, new_role: WorkspaceRole::Viewer },
+                    0 => SessionEvent::MemberRemoved {
+                        member_id: t.into(),
                         watermark: wm,
                     },
-                    _ => SessionEvent::DeviceRevoked { device_id: w.people[t].device_id, watermark: wm },
+                    1 => SessionEvent::MemberRoleChanged {
+                        change: MemberRoleChange {
+                            member_id: t.into(),
+                            old_role: WorkspaceRole::Admin,
+                            new_role: WorkspaceRole::Viewer,
+                        },
+                        watermark: wm,
+                    },
+                    _ => SessionEvent::DeviceRevoked {
+                        device_id: w.people[t].device_id,
+                        watermark: wm,
+                    },
                 };
                 w.push("owner", e);
             }
@@ -530,7 +881,15 @@ fn play(w: &mut SignedWorld, slots: &[Uuid; 3], ops: &[Op]) {
                 let targets: Vec<SessionEventEnvelope> = w
                     .cfg
                     .iter()
-                    .filter(|e| matches!(e.payload, SessionEvent::MemberAdded { invite: Some(_), .. } | SessionEvent::AdmissionClosed { .. }))
+                    .filter(|e| {
+                        matches!(
+                            e.payload,
+                            SessionEvent::MemberAdded {
+                                invite: Some(_),
+                                ..
+                            } | SessionEvent::AdmissionClosed { .. }
+                        )
+                    })
                     .cloned()
                     .collect();
                 if targets.is_empty() {
@@ -545,19 +904,35 @@ fn play(w: &mut SignedWorld, slots: &[Uuid; 3], ops: &[Op]) {
                     .unwrap();
                 let payload = match &orig.payload {
                     SessionEvent::AdmissionClosed { invite, redeemed } => {
-                        SessionEvent::AdmissionClosed { invite: *invite, redeemed: if redeemed.is_some() { None } else { Some(Uuid::new_v4()) } }
+                        SessionEvent::AdmissionClosed {
+                            invite: *invite,
+                            redeemed: if redeemed.is_some() {
+                                None
+                            } else {
+                                Some(Uuid::new_v4())
+                            },
+                        }
                     }
-                    SessionEvent::MemberAdded { member, invite, proof } => {
+                    SessionEvent::MemberAdded {
+                        member,
+                        invite,
+                        proof,
+                    } => {
                         let mut m = member.clone();
                         m.actor.display_name.push('!');
-                        SessionEvent::MemberAdded { member: m, invite: *invite, proof: proof.clone() }
+                        SessionEvent::MemberAdded {
+                            member: m,
+                            invite: *invite,
+                            proof: proof.clone(),
+                        }
                     }
                     _ => unreachable!(),
                 };
                 let mut twin = w.draft(who, None, payload, None);
                 twin.event_id = orig.event_id;
                 twin.lamport = orig.lamport;
-                twin.actor_stamp.as_mut().unwrap().prev = orig.actor_stamp.as_ref().and_then(|s| s.prev);
+                twin.actor_stamp.as_mut().unwrap().prev =
+                    orig.actor_stamp.as_ref().and_then(|s| s.prev);
                 w.finish(&mut twin, who, None);
                 w.push_env(None, twin);
             }
@@ -634,17 +1009,53 @@ fn a_closure_a_cut_lets_stand_denies_what_it_doesnt_name() {
         &mut w,
         &slots,
         &[
-            Op::Redeem { who: 2, slot: 1, holds: false, back: false },
-            Op::Issue { slot: 1, bind_device: false },
-            Op::Redeem { who: 0, slot: 1, holds: true, back: false },
-            Op::Redeem { who: 0, slot: 1, holds: false, back: false },
-            Op::Close { by: 0, slot: 1, name: 0 },
-            Op::Cut { target: 1, kind: 0, honest: false },
+            Op::Redeem {
+                who: 2,
+                slot: 1,
+                holds: false,
+                back: false,
+            },
+            Op::Issue {
+                slot: 1,
+                bind_device: false,
+            },
+            Op::Redeem {
+                who: 0,
+                slot: 1,
+                holds: true,
+                back: false,
+            },
+            Op::Redeem {
+                who: 0,
+                slot: 1,
+                holds: false,
+                back: false,
+            },
+            Op::Close {
+                by: 0,
+                slot: 1,
+                name: 0,
+            },
+            Op::Cut {
+                target: 1,
+                kind: 0,
+                honest: false,
+            },
         ],
     );
     let v = verdicts_of(&w.cfg);
-    let of = |f: &dyn Fn(&SessionEvent) -> bool| w.cfg.iter().filter(|e| f(&e.payload)).map(|e| v[&e.event_id]).collect::<Vec<_>>();
-    assert_eq!(of(&|p| matches!(p, SessionEvent::AdmissionClosed { .. })), vec![Verdict::Allowed], "the closure stands once the re-add is cut");
+    let of = |f: &dyn Fn(&SessionEvent) -> bool| {
+        w.cfg
+            .iter()
+            .filter(|e| f(&e.payload))
+            .map(|e| v[&e.event_id])
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        of(&|p| matches!(p, SessionEvent::AdmissionClosed { .. })),
+        vec![Verdict::Allowed],
+        "the closure stands once the re-add is cut"
+    );
     assert!(
         of(&|p| matches!(p, SessionEvent::MemberAdded { member, invite: Some(i), .. } if *i == slots[1] && member.id.starts_with("box")))
             .iter()
@@ -668,20 +1079,56 @@ fn the_generator_reaches_redemptions_closures_and_cuts() {
         &mut w,
         &slots,
         &[
-            Op::Issue { slot: 0, bind_device: false },
-            Op::Redeem { who: 0, slot: 0, holds: true, back: false },
-            Op::Close { by: 0, slot: 0, name: 1 },
-            Op::Issue { slot: 1, bind_device: true },
-            Op::Redeem { who: 1, slot: 1, holds: true, back: true },
-            Op::Cut { target: 1, kind: 0, honest: true },
+            Op::Issue {
+                slot: 0,
+                bind_device: false,
+            },
+            Op::Redeem {
+                who: 0,
+                slot: 0,
+                holds: true,
+                back: false,
+            },
+            Op::Close {
+                by: 0,
+                slot: 0,
+                name: 1,
+            },
+            Op::Issue {
+                slot: 1,
+                bind_device: true,
+            },
+            Op::Redeem {
+                who: 1,
+                slot: 1,
+                holds: true,
+                back: true,
+            },
+            Op::Cut {
+                target: 1,
+                kind: 0,
+                honest: true,
+            },
             Op::Equivocate { pick: 2 },
         ],
     );
     let v = verdicts_of(&w.cfg);
-    let allowed = |f: &dyn Fn(&SessionEvent) -> bool| w.cfg.iter().any(|e| f(&e.payload) && v.get(&e.event_id) == Some(&Verdict::Allowed));
-    assert!(allowed(&|p| matches!(p, SessionEvent::MemberAdded { invite: Some(i), .. } if *i == slots[0])));
-    assert!(allowed(&|p| matches!(p, SessionEvent::AdmissionClosed { .. })));
-    assert!(allowed(&|p| matches!(p, SessionEvent::MemberRemoved { .. })));
+    let allowed = |f: &dyn Fn(&SessionEvent) -> bool| {
+        w.cfg
+            .iter()
+            .any(|e| f(&e.payload) && v.get(&e.event_id) == Some(&Verdict::Allowed))
+    };
+    assert!(allowed(
+        &|p| matches!(p, SessionEvent::MemberAdded { invite: Some(i), .. } if *i == slots[0])
+    ));
+    assert!(allowed(&|p| matches!(
+        p,
+        SessionEvent::AdmissionClosed { .. }
+    )));
+    assert!(allowed(&|p| matches!(
+        p,
+        SessionEvent::MemberRemoved { .. }
+    )));
     assert!(w.roster().members.contains_key("box") && !w.roster().members.contains_key("box2"));
     assert_order_independent(&w);
 }
@@ -694,15 +1141,26 @@ fn the_generator_reaches_redemptions_closures_and_cuts() {
 fn who_may_revoke_a_boxs_device() {
     let mut w = world();
     let id = Uuid::new_v4();
-    issue(&mut w, id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    issue(
+        &mut w,
+        id,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     let r = redeem(&mut w, "box", id);
     assert_eq!(w.verdict(r), Verdict::Allowed);
     let id2 = Uuid::new_v4();
-    issue(&mut w, id2, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    issue(
+        &mut w,
+        id2,
+        Admission::service(now_ms() + HOUR_MS, None, key().public()),
+    );
     let r2 = redeem(&mut w, "box2", id2);
     assert_eq!(w.verdict(r2), Verdict::Allowed);
     let dev = w.people["box"].device_id;
-    let revoke = |w: &SignedWorld, d: Uuid| SessionEvent::DeviceRevoked { device_id: d, watermark: honest_watermark(w, "box") };
+    let revoke = |w: &SignedWorld, d: Uuid| SessionEvent::DeviceRevoked {
+        device_id: d,
+        watermark: honest_watermark(w, "box"),
+    };
     let e = revoke(&w, dev);
     let by_mara = w.push("mara", e);
     assert_eq!(w.verdict(by_mara), Verdict::Denied, "a Contributor");
@@ -711,15 +1169,29 @@ fn who_may_revoke_a_boxs_device() {
     assert_eq!(w.verdict(by_peer), Verdict::Denied, "a peer box");
     let e = revoke(&w, dev);
     let by_itself = w.push_bare("box", e);
-    assert_eq!(w.verdict(by_itself), Verdict::Denied, "the box itself carries no presence");
+    assert_eq!(
+        w.verdict(by_itself),
+        Verdict::Denied,
+        "the box itself carries no presence"
+    );
     let phone = Phone::new();
     let cert = w.phone_certificate("adm", &phone);
-    w.push("adm", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    w.push(
+        "adm",
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
     let e = revoke(&w, dev);
     let by_phone = w.phone_write("adm", &phone, None, e);
-    assert_eq!(w.verdict(by_phone), Verdict::Denied, "an Admin's phone revokes only itself");
+    assert_eq!(
+        w.verdict(by_phone),
+        Verdict::Denied,
+        "an Admin's phone revokes only itself"
+    );
     // A box never revokes a person's phone.
-    let e = SessionEvent::DeviceRevoked { device_id: phone.device_id, watermark: vec![] };
+    let e = SessionEvent::DeviceRevoked {
+        device_id: phone.device_id,
+        watermark: vec![],
+    };
     let box_on_phone = w.push_bare("box", e);
     assert_eq!(w.verdict(box_on_phone), Verdict::Denied);
     assert!(!w.roster().devices[&phone.device_id].revoked);

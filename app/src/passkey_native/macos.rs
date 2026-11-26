@@ -21,16 +21,24 @@ use ligus_core::presence::native::{RawAssertion, RawRegistration};
 use ligus_core::presence::PresencePolicy;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{available, define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::{
+    available, define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMarker,
+    MainThreadOnly,
+};
 use objc2_authentication_services::{
     ASAuthorization, ASAuthorizationController, ASAuthorizationControllerDelegate,
-    ASAuthorizationControllerPresentationContextProviding, ASAuthorizationError, ASAuthorizationErrorDomain,
-    ASAuthorizationPlatformPublicKeyCredentialAssertion, ASAuthorizationPlatformPublicKeyCredentialDescriptor,
-    ASAuthorizationPlatformPublicKeyCredentialProvider, ASAuthorizationPlatformPublicKeyCredentialRegistration,
-    ASAuthorizationPublicKeyCredentialAssertion, ASAuthorizationPublicKeyCredentialAssertionRequest,
-    ASAuthorizationPublicKeyCredentialAttestationKindNone, ASAuthorizationPublicKeyCredentialRegistration,
-    ASAuthorizationPublicKeyCredentialRegistrationRequest, ASAuthorizationPublicKeyCredentialUserVerificationPreferenceRequired,
-    ASAuthorizationRequest, ASPublicKeyCredential,
+    ASAuthorizationControllerPresentationContextProviding, ASAuthorizationError,
+    ASAuthorizationErrorDomain, ASAuthorizationPlatformPublicKeyCredentialAssertion,
+    ASAuthorizationPlatformPublicKeyCredentialDescriptor,
+    ASAuthorizationPlatformPublicKeyCredentialProvider,
+    ASAuthorizationPlatformPublicKeyCredentialRegistration,
+    ASAuthorizationPublicKeyCredentialAssertion,
+    ASAuthorizationPublicKeyCredentialAssertionRequest,
+    ASAuthorizationPublicKeyCredentialAttestationKindNone,
+    ASAuthorizationPublicKeyCredentialRegistration,
+    ASAuthorizationPublicKeyCredentialRegistrationRequest,
+    ASAuthorizationPublicKeyCredentialUserVerificationPreferenceRequired, ASAuthorizationRequest,
+    ASPublicKeyCredential,
 };
 use objc2_foundation::{NSArray, NSData, NSError, NSObject, NSObjectProtocol, NSString};
 use tauri::Manager;
@@ -74,7 +82,11 @@ define_class!(
 
     unsafe impl ASAuthorizationControllerDelegate for Delegate {
         #[unsafe(method(authorizationController:didCompleteWithAuthorization:))]
-        fn did_complete(&self, _controller: &ASAuthorizationController, authorization: &ASAuthorization) {
+        fn did_complete(
+            &self,
+            _controller: &ASAuthorizationController,
+            authorization: &ASAuthorization,
+        ) {
             self.send(read_credential(authorization));
         }
 
@@ -93,8 +105,15 @@ define_class!(
 );
 
 impl Delegate {
-    fn new(mtm: MainThreadMarker, reply: mpsc::Sender<Reply>, anchor: Retained<NSObject>) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(Ivars { reply: RefCell::new(Some(reply)), anchor });
+    fn new(
+        mtm: MainThreadMarker,
+        reply: mpsc::Sender<Reply>,
+        anchor: Retained<NSObject>,
+    ) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(Ivars {
+            reply: RefCell::new(Some(reply)),
+            anchor,
+        });
         // SAFETY: NSObject's init.
         unsafe { msg_send![super(this), init] }
     }
@@ -126,9 +145,13 @@ fn read_credential(authorization: &ASAuthorization) -> Reply {
                 signature: a.signature().to_vec(),
             }));
         }
-        if let Some(r) = any.downcast_ref::<ASAuthorizationPlatformPublicKeyCredentialRegistration>() {
+        if let Some(r) =
+            any.downcast_ref::<ASAuthorizationPlatformPublicKeyCredentialRegistration>()
+        {
             let Some(att) = r.rawAttestationObject() else {
-                return Err(NativeError::Failed("the passkey came back without an attestation object".into()));
+                return Err(NativeError::Failed(
+                    "the passkey came back without an attestation object".into(),
+                ));
             };
             return Ok(Credential::Create(RawRegistration {
                 credential_id: r.credentialID().to_vec(),
@@ -150,7 +173,9 @@ fn map_error(error: &NSError) -> NativeError {
     match ASAuthorizationError(error.code()) {
         ASAuthorizationError::Canceled => NativeError::Cancelled,
         // This authenticator already holds one of the account's passkeys.
-        ASAuthorizationError::MatchedExcludedCredential => NativeError::Refused("this device already has one of your Ligus passkeys".into()),
+        ASAuthorizationError::MatchedExcludedCredential => {
+            NativeError::Refused("this device already has one of your Ligus passkeys".into())
+        }
         // Failed covers "not associated with the domain" (an unsigned or
         // unentitled build, a missing AASA entry), NotHandled no provider,
         // DeviceNotConfigured no iCloud Keychain: all go to the browser.
@@ -168,23 +193,29 @@ fn start(mtm: MainThreadMarker, op: Op, anchor: Retained<NSObject>, tx: mpsc::Se
     // SAFETY: AuthenticationServices calls on the main thread with live
     // arguments; the extern statics are Apple's constant strings.
     unsafe {
-        let (Some(uv_required), Some(attestation_none)) =
-            (ASAuthorizationPublicKeyCredentialUserVerificationPreferenceRequired, ASAuthorizationPublicKeyCredentialAttestationKindNone)
-        else {
-            let _ = tx.send(Err(NativeError::Unavailable("AuthenticationServices constants missing".into())));
+        let (Some(uv_required), Some(attestation_none)) = (
+            ASAuthorizationPublicKeyCredentialUserVerificationPreferenceRequired,
+            ASAuthorizationPublicKeyCredentialAttestationKindNone,
+        ) else {
+            let _ = tx.send(Err(NativeError::Unavailable(
+                "AuthenticationServices constants missing".into(),
+            )));
             return;
         };
         let rp = match &op {
             Op::Get(g) => g.rp_id.clone(),
             Op::Create(c) => c.rp_id.clone(),
         };
-        let provider = ASAuthorizationPlatformPublicKeyCredentialProvider::initWithRelyingPartyIdentifier(
-            ASAuthorizationPlatformPublicKeyCredentialProvider::alloc(),
-            &NSString::from_str(&rp),
-        );
+        let provider =
+            ASAuthorizationPlatformPublicKeyCredentialProvider::initWithRelyingPartyIdentifier(
+                ASAuthorizationPlatformPublicKeyCredentialProvider::alloc(),
+                &NSString::from_str(&rp),
+            );
         let request: Retained<ASAuthorizationRequest> = match &op {
             Op::Get(g) => {
-                let r = provider.createCredentialAssertionRequestWithChallenge(&NSData::with_bytes(&g.challenge));
+                let r = provider.createCredentialAssertionRequestWithChallenge(
+                    &NSData::with_bytes(&g.challenge),
+                );
                 if !g.allow.is_empty() {
                     let descs: Vec<_> = g.allow.iter().map(|id| descriptor(id)).collect();
                     r.setAllowedCredentials(&NSArray::from_retained_slice(&descs));
@@ -205,9 +236,12 @@ fn start(mtm: MainThreadMarker, op: Op, anchor: Retained<NSObject>, tx: mpsc::Se
                     // system would silently replace an existing passkey of
                     // the account (same user handle): use the browser, which
                     // honours excludeCredentials.
-                    let can: bool = msg_send![&*r, respondsToSelector: sel!(setExcludedCredentials:)];
+                    let can: bool =
+                        msg_send![&*r, respondsToSelector: sel!(setExcludedCredentials:)];
                     if !can {
-                        let _ = tx.send(Err(NativeError::Unavailable("this macOS can't exclude existing passkeys".into())));
+                        let _ = tx.send(Err(NativeError::Unavailable(
+                            "this macOS can't exclude existing passkeys".into(),
+                        )));
                         return;
                     }
                     let descs: Vec<_> = c.exclude.iter().map(|id| descriptor(id)).collect();
@@ -218,7 +252,10 @@ fn start(mtm: MainThreadMarker, op: Op, anchor: Retained<NSObject>, tx: mpsc::Se
             }
         };
         let requests = NSArray::from_retained_slice(&[request]);
-        let controller = ASAuthorizationController::initWithAuthorizationRequests(ASAuthorizationController::alloc(), &requests);
+        let controller = ASAuthorizationController::initWithAuthorizationRequests(
+            ASAuthorizationController::alloc(),
+            &requests,
+        );
         let delegate = Delegate::new(mtm, tx, anchor);
         controller.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         controller.setPresentationContextProvider(Some(ProtocolObject::from_ref(&*delegate)));
@@ -248,7 +285,10 @@ impl MacAuthenticator {
         if !available!(macos = 13.0) {
             return None;
         }
-        Some(Self { app, domains: super::webcredential_domains(ENTITLEMENTS) })
+        Some(Self {
+            app,
+            domains: super::webcredential_domains(ENTITLEMENTS),
+        })
     }
 
     fn run(&self, op: Op) -> Reply {
@@ -260,18 +300,32 @@ impl MacAuthenticator {
         let queued = self.app.run_on_main_thread(move || {
             // The waiter may have given up (the main thread was busy): then
             // nothing is presented.
-            if st.compare_exchange(super::QUEUED, super::STARTED, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            if st
+                .compare_exchange(
+                    super::QUEUED,
+                    super::STARTED,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_err()
+            {
                 return;
             }
             let Some(mtm) = MainThreadMarker::new() else {
-                let _ = reply.send(Err(NativeError::Unavailable("not on the main thread".into())));
+                let _ = reply.send(Err(NativeError::Unavailable(
+                    "not on the main thread".into(),
+                )));
                 return;
             };
-            let window = app.get_webview_window("main").and_then(|w| w.ns_window().ok());
+            let window = app
+                .get_webview_window("main")
+                .and_then(|w| w.ns_window().ok());
             // SAFETY: Tauri's NSWindow pointer for a live window, retained here.
             let anchor = window.and_then(|p| unsafe { Retained::retain(p.cast::<NSObject>()) });
             let Some(anchor) = anchor else {
-                let _ = reply.send(Err(NativeError::Unavailable("no window to present the passkey dialog on".into())));
+                let _ = reply.send(Err(NativeError::Unavailable(
+                    "no window to present the passkey dialog on".into(),
+                )));
                 return;
             };
             // A ceremony left over (its waiter gave up) ends now.
@@ -304,14 +358,18 @@ impl NativeAuthenticator for MacAuthenticator {
     fn get(&self, req: &GetRequest) -> Result<RawAssertion, NativeError> {
         match self.run(Op::Get(req.clone()))? {
             Credential::Get(a) => Ok(a),
-            Credential::Create(_) => Err(NativeError::Failed("a registration answered a sign-in".into())),
+            Credential::Create(_) => Err(NativeError::Failed(
+                "a registration answered a sign-in".into(),
+            )),
         }
     }
 
     fn create(&self, req: &CreateRequest) -> Result<RawRegistration, NativeError> {
         match self.run(Op::Create(req.clone()))? {
             Credential::Create(r) => Ok(r),
-            Credential::Get(_) => Err(NativeError::Failed("a sign-in answered a registration".into())),
+            Credential::Get(_) => Err(NativeError::Failed(
+                "a sign-in answered a registration".into(),
+            )),
         }
     }
 

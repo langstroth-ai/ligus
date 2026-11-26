@@ -65,7 +65,11 @@ pub struct CareerPolicy {
 
 impl Default for CareerPolicy {
     fn default() -> Self {
-        Self { min_proposals: 5, min_approval_rate: 0.6, review_pressure: 4.0 }
+        Self {
+            min_proposals: 5,
+            min_approval_rate: 0.6,
+            review_pressure: 4.0,
+        }
     }
 }
 
@@ -120,11 +124,16 @@ pub fn careers(
         .iter()
         .map(|i| match i.profile.and_then(|p| p.career) {
             Some(c) => (i.agent.clone(), c, "pinned"),
-            None if i.grandfathered || graduated(samples, &i.agent, policy) => (i.agent.clone(), Career::Proposer, "track record"),
+            None if i.grandfathered || graduated(samples, &i.agent, policy) => {
+                (i.agent.clone(), Career::Proposer, "track record")
+            }
             None => (i.agent.clone(), Career::Probation, "new"),
         })
         .collect();
-    let reviewers = out.iter().filter(|(_, c, _)| *c != Career::Proposer).count();
+    let reviewers = out
+        .iter()
+        .filter(|(_, c, _)| *c != Career::Proposer)
+        .count();
     let pressure = review_queue as f64 / (reviewers.max(1) as f64);
     let proposers: Vec<usize> = out
         .iter()
@@ -137,7 +146,12 @@ pub fn careers(
         let best = proposers
             .iter()
             .copied()
-            .max_by_key(|&i| (track_record(samples, &out[i].0).1, std::cmp::Reverse(out[i].0.clone())))
+            .max_by_key(|&i| {
+                (
+                    track_record(samples, &out[i].0).1,
+                    std::cmp::Reverse(out[i].0.clone()),
+                )
+            })
             .expect("non-empty");
         out[best].1 = Career::Reviewer;
         out[best].2 = "review queue is long";
@@ -176,7 +190,13 @@ pub fn diversity(pairs: &[(String, String)]) -> Diversity {
     } else {
         "The roster mixes runtimes and providers.".to_string()
     };
-    Diversity { agents: pairs.len(), runtimes: runtimes.len(), providers: providers.len(), monoculture, advice }
+    Diversity {
+        agents: pairs.len(),
+        runtimes: runtimes.len(),
+        providers: providers.len(),
+        monoculture,
+        advice,
+    }
 }
 
 #[cfg(test)]
@@ -184,13 +204,22 @@ mod tests {
     use super::*;
 
     fn s(agent: &str, source: OutcomeSource, success: bool) -> OutcomeSample {
-        OutcomeSample { agent: agent.into(), task_class: "x".into(), at_ms: 0, quality: if success { 1.0 } else { 0.0 }, success, source }
+        OutcomeSample {
+            agent: agent.into(),
+            task_class: "x".into(),
+            at_ms: 0,
+            quality: if success { 1.0 } else { 0.0 },
+            success,
+            source,
+        }
     }
 
     #[test]
     fn graduates_after_a_good_record() {
         let p = CareerPolicy::default();
-        let mut samples: Vec<_> = (0..4).map(|_| s("a", OutcomeSource::Proposal, true)).collect();
+        let mut samples: Vec<_> = (0..4)
+            .map(|_| s("a", OutcomeSource::Proposal, true))
+            .collect();
         assert!(!graduated(&samples, "a", &p));
         samples.push(s("a", OutcomeSource::Revision, false));
         assert!(graduated(&samples, "a", &p), "4 of 5 approved");
@@ -200,11 +229,29 @@ mod tests {
 
     #[test]
     fn pins_win_and_new_agents_start_on_probation() {
-        let prof = AgentFlowProfile { agent_id: Uuid::nil(), career: Some(Career::Proposer), threshold_bias: 0.0, board_opt_out: false, at_ms: 0 };
+        let prof = AgentFlowProfile {
+            agent_id: Uuid::nil(),
+            career: Some(Career::Proposer),
+            threshold_bias: 0.0,
+            board_opt_out: false,
+            at_ms: 0,
+        };
         let inputs = [
-            CareerInput { agent: "new".into(), profile: None, grandfathered: false },
-            CareerInput { agent: "pinned".into(), profile: Some(&prof), grandfathered: false },
-            CareerInput { agent: "old".into(), profile: None, grandfathered: true },
+            CareerInput {
+                agent: "new".into(),
+                profile: None,
+                grandfathered: false,
+            },
+            CareerInput {
+                agent: "pinned".into(),
+                profile: Some(&prof),
+                grandfathered: false,
+            },
+            CareerInput {
+                agent: "old".into(),
+                profile: None,
+                grandfathered: true,
+            },
         ];
         let c = careers(&inputs, &[], 0, &CareerPolicy::default());
         assert_eq!(c[0].1, Career::Probation);
@@ -216,13 +263,27 @@ mod tests {
     #[test]
     fn review_pressure_pulls_back_the_best_proposer_and_releases_it() {
         let inputs = [
-            CareerInput { agent: "a".into(), profile: None, grandfathered: true },
-            CareerInput { agent: "b".into(), profile: None, grandfathered: true },
+            CareerInput {
+                agent: "a".into(),
+                profile: None,
+                grandfathered: true,
+            },
+            CareerInput {
+                agent: "b".into(),
+                profile: None,
+                grandfathered: true,
+            },
         ];
         let samples = vec![s("b", OutcomeSource::Proposal, true)];
         let busy = careers(&inputs, &samples, 10, &CareerPolicy::default());
-        assert_eq!(busy.iter().find(|x| x.0 == "b").unwrap().1, Career::Reviewer);
-        assert_eq!(busy.iter().find(|x| x.0 == "a").unwrap().1, Career::Proposer);
+        assert_eq!(
+            busy.iter().find(|x| x.0 == "b").unwrap().1,
+            Career::Reviewer
+        );
+        assert_eq!(
+            busy.iter().find(|x| x.0 == "a").unwrap().1,
+            Career::Proposer
+        );
         let calm = careers(&inputs, &samples, 1, &CareerPolicy::default());
         assert!(calm.iter().all(|x| x.1 == Career::Proposer));
         // A lone proposer is never pulled back.
@@ -232,9 +293,15 @@ mod tests {
 
     #[test]
     fn diversity_flags_a_monoculture() {
-        let mono = diversity(&[("cc".into(), "claudeCode".into()), ("cc".into(), "claudeCode".into())]);
+        let mono = diversity(&[
+            ("cc".into(), "claudeCode".into()),
+            ("cc".into(), "claudeCode".into()),
+        ]);
         assert!(mono.monoculture);
-        let mixed = diversity(&[("cc".into(), "claudeCode".into()), ("llama".into(), "openAI".into())]);
+        let mixed = diversity(&[
+            ("cc".into(), "claudeCode".into()),
+            ("llama".into(), "openAI".into()),
+        ]);
         assert!(!mixed.monoculture);
         assert_eq!(mixed.providers, 2);
         assert!(!diversity(&[("cc".into(), "x".into())]).monoculture);

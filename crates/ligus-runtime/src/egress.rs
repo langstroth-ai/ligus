@@ -44,7 +44,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::model_gateway::ResolvedGateway;
 
 /// One allowed endpoint.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct HostPort {
     pub host: String,
     pub port: u16,
@@ -52,7 +54,14 @@ pub struct HostPort {
 
 impl HostPort {
     pub fn new(host: impl Into<String>, port: u16) -> Self {
-        Self { host: host.into().trim().trim_end_matches('.').to_ascii_lowercase(), port }
+        Self {
+            host: host
+                .into()
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase(),
+            port,
+        }
     }
 
     /// `host`, `host:port` (443 by default) or `[v6]:port`.
@@ -79,7 +88,11 @@ impl HostPort {
     /// `api.example.com:443`).
     pub fn from_url(url: &str) -> Option<Self> {
         let u = url::Url::parse(url.trim()).ok()?;
-        let host = u.host_str()?.trim_start_matches('[').trim_end_matches(']').to_string();
+        let host = u
+            .host_str()?
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string();
         let port = u.port_or_known_default()?;
         Some(Self::new(host, port))
     }
@@ -121,7 +134,10 @@ pub enum EgressPreset {
 
 impl EgressPreset {
     /// Every preset, in display order.
-    pub const ALL: &'static [EgressPreset] = &[EgressPreset::PackageRegistries, EgressPreset::ClaudeConnectors];
+    pub const ALL: &'static [EgressPreset] = &[
+        EgressPreset::PackageRegistries,
+        EgressPreset::ClaudeConnectors,
+    ];
 
     /// The preset's name in settings and `LIGUS_SANDBOX_EGRESS_PRESETS`.
     pub fn name(self) -> &'static str {
@@ -189,7 +205,10 @@ impl EgressPreset {
 
     /// The endpoints the preset adds (each host on 443).
     pub fn hosts(self) -> Vec<HostPort> {
-        self.host_names().iter().map(|h| HostPort::new(*h, 443)).collect()
+        self.host_names()
+            .iter()
+            .map(|h| HostPort::new(*h, 443))
+            .collect()
     }
 }
 
@@ -218,7 +237,11 @@ impl EgressProxy {
     }
 
     /// [`Self::start`] with gateway routes (one per gateway the turn may use).
-    pub fn start_with(allow: Vec<HostPort>, unix_socket: Option<&Path>, routes: Vec<ResolvedGateway>) -> std::io::Result<Self> {
+    pub fn start_with(
+        allow: Vec<HostPort>,
+        unix_socket: Option<&Path>,
+        routes: Vec<ResolvedGateway>,
+    ) -> std::io::Result<Self> {
         let std_listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
         std_listener.set_nonblocking(true)?;
         let port = std_listener.local_addr()?.port();
@@ -237,42 +260,64 @@ impl EgressProxy {
         let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
         let denials = Arc::new(Mutex::new(Vec::new()));
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-        let shared = Arc::new(Shared { allow, token: token.clone(), denials: denials.clone(), routes });
-        let thread = std::thread::Builder::new().name("ligus-egress".into()).spawn(move || {
-            let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
-            rt.block_on(async move {
-                let Ok(tcp) = tokio::net::TcpListener::from_std(std_listener) else { return };
-                #[cfg(unix)]
-                let unix = unix_listener.and_then(|l| tokio::net::UnixListener::from_std(l).ok());
-                let mut stop_rx = stop_rx;
-                loop {
-                    #[cfg(unix)]
-                    let next_unix = async {
-                        match &unix {
-                            Some(u) => u.accept().await.ok().map(|(s, _)| s),
-                            None => std::future::pending().await,
-                        }
+        let shared = Arc::new(Shared {
+            allow,
+            token: token.clone(),
+            denials: denials.clone(),
+            routes,
+        });
+        let thread = std::thread::Builder::new()
+            .name("ligus-egress".into())
+            .spawn(move || {
+                let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                else {
+                    return;
+                };
+                rt.block_on(async move {
+                    let Ok(tcp) = tokio::net::TcpListener::from_std(std_listener) else {
+                        return;
                     };
-                    #[cfg(not(unix))]
-                    let next_unix = std::future::pending::<Option<()>>();
-                    tokio::select! {
-                        _ = &mut stop_rx => break,
-                        Ok((s, _)) = tcp.accept() => {
-                            let sh = shared.clone();
-                            tokio::spawn(async move { let _ = handle(s, &sh).await; });
-                        }
-                        Some(s) = next_unix => {
-                            let sh = shared.clone();
-                            #[cfg(unix)]
-                            tokio::spawn(async move { let _ = handle(s, &sh).await; });
-                            #[cfg(not(unix))]
-                            let _ = (s, sh);
+                    #[cfg(unix)]
+                    let unix =
+                        unix_listener.and_then(|l| tokio::net::UnixListener::from_std(l).ok());
+                    let mut stop_rx = stop_rx;
+                    loop {
+                        #[cfg(unix)]
+                        let next_unix = async {
+                            match &unix {
+                                Some(u) => u.accept().await.ok().map(|(s, _)| s),
+                                None => std::future::pending().await,
+                            }
+                        };
+                        #[cfg(not(unix))]
+                        let next_unix = std::future::pending::<Option<()>>();
+                        tokio::select! {
+                            _ = &mut stop_rx => break,
+                            Ok((s, _)) = tcp.accept() => {
+                                let sh = shared.clone();
+                                tokio::spawn(async move { let _ = handle(s, &sh).await; });
+                            }
+                            Some(s) = next_unix => {
+                                let sh = shared.clone();
+                                #[cfg(unix)]
+                                tokio::spawn(async move { let _ = handle(s, &sh).await; });
+                                #[cfg(not(unix))]
+                                let _ = (s, sh);
+                            }
                         }
                     }
-                }
-            });
-        })?;
-        Ok(Self { port, token, unix_socket: unix_socket.map(Path::to_path_buf), denials, stop: Some(stop_tx), thread: Some(thread) })
+                });
+            })?;
+        Ok(Self {
+            port,
+            token,
+            unix_socket: unix_socket.map(Path::to_path_buf),
+            denials,
+            stop: Some(stop_tx),
+            thread: Some(thread),
+        })
     }
 
     pub fn port(&self) -> u16 {
@@ -311,14 +356,24 @@ pub fn proxy_url(port: u16, token: &str) -> String {
 
 /// `http://127.0.0.1:<port>/ligus-gw/<token>/<name>`.
 pub fn gateway_route_url(port: u16, token: &str, name: &str) -> String {
-    format!("http://127.0.0.1:{port}{}{token}/{name}", crate::model_gateway::ROUTE_PREFIX)
+    format!(
+        "http://127.0.0.1:{port}{}{token}/{name}",
+        crate::model_gateway::ROUTE_PREFIX
+    )
 }
 
 /// The proxy env a child gets: both spellings of `HTTPS_PROXY`/`HTTP_PROXY`,
 /// and `NO_PROXY` for loopback only.
 pub fn proxy_env(url: &str) -> Vec<(String, String)> {
     let mut v = Vec::new();
-    for k in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
+    for k in [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
         v.push((k.to_string(), url.to_string()));
     }
     for k in ["NO_PROXY", "no_proxy"] {
@@ -361,9 +416,14 @@ async fn connect_upstream(hp: &HostPort) -> std::io::Result<tokio::net::TcpStrea
     if hp.is_loopback() {
         return tokio::net::TcpStream::connect((hp.host.as_str(), hp.port)).await;
     }
-    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((hp.host.as_str(), hp.port)).await?.collect();
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((hp.host.as_str(), hp.port))
+        .await?
+        .collect();
     if addrs.is_empty() || addrs.iter().any(|a| ip_forbidden(a.ip())) {
-        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "endpoint resolves to a local address"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "endpoint resolves to a local address",
+        ));
     }
     tokio::net::TcpStream::connect(&addrs[..]).await
 }
@@ -377,7 +437,9 @@ struct Shared {
 
 impl Shared {
     fn allowed(&self, hp: &HostPort) -> bool {
-        self.allow.iter().any(|a| a == hp || (a.is_loopback() && hp.is_loopback() && a.port == hp.port))
+        self.allow
+            .iter()
+            .any(|a| a == hp || (a.is_loopback() && hp.is_loopback() && a.port == hp.port))
     }
     fn deny(&self, hp: HostPort) {
         if let Ok(mut d) = self.denials.lock() {
@@ -412,18 +474,25 @@ async fn read_head<S: AsyncRead + Unpin>(s: &mut S) -> std::io::Result<(Vec<u8>,
 fn authorized(head: &str, token: &str) -> bool {
     use base64::Engine;
     head.lines().skip(1).any(|l| {
-        let Some((name, value)) = l.split_once(':') else { return false };
+        let Some((name, value)) = l.split_once(':') else {
+            return false;
+        };
         if !name.trim().eq_ignore_ascii_case("proxy-authorization") {
             return false;
         }
         let value = value.trim();
-        let Some((scheme, cred)) = value.split_once(' ') else { return false };
+        let Some((scheme, cred)) = value.split_once(' ') else {
+            return false;
+        };
         match scheme.to_ascii_lowercase().as_str() {
             "basic" => base64::engine::general_purpose::STANDARD
                 .decode(cred.trim())
                 .ok()
                 .and_then(|b| String::from_utf8(b).ok())
-                .and_then(|s| s.split_once(':').map(|(_, p)| constant_eq(p.as_bytes(), token.as_bytes())))
+                .and_then(|s| {
+                    s.split_once(':')
+                        .map(|(_, p)| constant_eq(p.as_bytes(), token.as_bytes()))
+                })
                 .unwrap_or(false),
             "bearer" => constant_eq(cred.trim().as_bytes(), token.as_bytes()),
             _ => false,
@@ -436,11 +505,19 @@ fn constant_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 async fn respond<S: AsyncWrite + Unpin>(s: &mut S, status: &str) {
-    let _ = s.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await;
+    let _ = s
+        .write_all(
+            format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .await;
     let _ = s.flush().await;
 }
 
-async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut client: S, sh: &Shared) -> std::io::Result<()> {
+async fn handle<S: AsyncRead + AsyncWrite + Unpin>(
+    mut client: S,
+    sh: &Shared,
+) -> std::io::Result<()> {
     let (head, rest) = read_head(&mut client).await?;
     let head_str = String::from_utf8_lossy(&head).into_owned();
     let first = head_str.lines().next().unwrap_or_default().to_string();
@@ -466,7 +543,9 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut client: S, sh: &Shared) -
             respond(&mut client, "403 Forbidden").await;
             return Ok(());
         }
-        client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
+        client
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await?;
         client.flush().await?;
         let mut first_bytes = rest;
         if !hp.is_loopback() {
@@ -494,7 +573,11 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut client: S, sh: &Shared) -
         return Ok(());
     }
     // Absolute-form plain HTTP (`GET http://host:port/path`).
-    let Some(hp) = url::Url::parse(&target).ok().filter(|u| u.scheme() == "http").and_then(|_| HostPort::from_url(&target)) else {
+    let Some(hp) = url::Url::parse(&target)
+        .ok()
+        .filter(|u| u.scheme() == "http")
+        .and_then(|_| HostPort::from_url(&target))
+    else {
         respond(&mut client, "400 Bad Request").await;
         return Ok(());
     };
@@ -514,7 +597,10 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut client: S, sh: &Shared) -
     // Forward the head without the proxy credential.
     let mut out = String::new();
     for (i, l) in head_str.split("\r\n").enumerate() {
-        if i > 0 && l.split_once(':').is_some_and(|(n, _)| n.trim().eq_ignore_ascii_case("proxy-authorization")) {
+        if i > 0
+            && l.split_once(':')
+                .is_some_and(|(n, _)| n.trim().eq_ignore_ascii_case("proxy-authorization"))
+        {
             continue;
         }
         out.push_str(l);
@@ -538,12 +624,24 @@ const MAX_ROUTE_BODY: usize = 32 * 1024 * 1024;
 fn hop_by_hop(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "connection" | "keep-alive" | "proxy-connection" | "te" | "trailer" | "transfer-encoding" | "upgrade" | "host" | "content-length" | "expect"
+        "connection"
+            | "keep-alive"
+            | "proxy-connection"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "host"
+            | "content-length"
+            | "expect"
     )
 }
 
 async fn respond_text<S: AsyncWrite + Unpin>(s: &mut S, status: &str, msg: &str) {
-    let body = format!("{{\"error\":{{\"message\":{}}}}}", serde_json::Value::String(msg.to_string()));
+    let body = format!(
+        "{{\"error\":{{\"message\":{}}}}}",
+        serde_json::Value::String(msg.to_string())
+    );
     let _ = s
         .write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes())
         .await;
@@ -552,13 +650,25 @@ async fn respond_text<S: AsyncWrite + Unpin>(s: &mut S, status: &str, msg: &str)
 
 /// Read a request body: `Content-Length`, or chunked; `buf` holds what was
 /// read past the head.
-async fn read_body<S: AsyncRead + Unpin>(s: &mut S, headers: &[(String, String)], mut buf: Vec<u8>) -> std::io::Result<Vec<u8>> {
-    let get = |n: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(n)).map(|(_, v)| v.trim().to_string());
-    let chunked = get("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked"));
+async fn read_body<S: AsyncRead + Unpin>(
+    s: &mut S,
+    headers: &[(String, String)],
+    mut buf: Vec<u8>,
+) -> std::io::Result<Vec<u8>> {
+    let get = |n: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(n))
+            .map(|(_, v)| v.trim().to_string())
+    };
+    let chunked =
+        get("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked"));
     let mut chunk = [0u8; 16 * 1024];
     if !chunked {
         let len: usize = match get("content-length") {
-            Some(v) => v.parse().map_err(|_| std::io::Error::other("bad content-length"))?,
+            Some(v) => v
+                .parse()
+                .map_err(|_| std::io::Error::other("bad content-length"))?,
             None => 0,
         };
         if len > MAX_ROUTE_BODY {
@@ -593,7 +703,8 @@ async fn read_body<S: AsyncRead + Unpin>(s: &mut S, headers: &[(String, String)]
             buf.extend_from_slice(&chunk[..n]);
         };
         let size_str = String::from_utf8_lossy(&buf[pos..line_end]).to_string();
-        let size = usize::from_str_radix(size_str.split(';').next().unwrap_or("").trim(), 16).map_err(|_| std::io::Error::other("bad chunk size"))?;
+        let size = usize::from_str_radix(size_str.split(';').next().unwrap_or("").trim(), 16)
+            .map_err(|_| std::io::Error::other("bad chunk size"))?;
         pos = line_end + 2;
         if size == 0 {
             // Trailers end with an empty line; don't wait for them.
@@ -630,14 +741,27 @@ async fn gateway_route<S: AsyncRead + AsyncWrite + Unpin>(
         respond_text(&mut client, "403 Forbidden", "bad route token").await;
         return Ok(());
     }
-    let (name, path) = tail.split_once('/').map(|(n, p)| (n, format!("/{p}"))).unwrap_or((tail, "/".to_string()));
+    let (name, path) = tail
+        .split_once('/')
+        .map(|(n, p)| (n, format!("/{p}")))
+        .unwrap_or((tail, "/".to_string()));
     let name = name.split('?').next().unwrap_or_default();
     let Some(route) = sh.routes.iter().find(|r| r.gateway.name() == name) else {
-        respond_text(&mut client, "404 Not Found", "no such model gateway for this turn").await;
+        respond_text(
+            &mut client,
+            "404 Not Found",
+            "no such model gateway for this turn",
+        )
+        .await;
         return Ok(());
     };
     if !crate::model_gateway::route_path_allowed(route.gateway.api(), method, &path) {
-        respond_text(&mut client, "403 Forbidden", "only the model API is reachable through a gateway route").await;
+        respond_text(
+            &mut client,
+            "403 Forbidden",
+            "only the model API is reachable through a gateway route",
+        )
+        .await;
         return Ok(());
     }
     let Ok(m) = reqwest::Method::from_bytes(method.as_bytes()) else {
@@ -647,10 +771,16 @@ async fn gateway_route<S: AsyncRead + AsyncWrite + Unpin>(
     let headers: Vec<(String, String)> = head_str
         .split("\r\n")
         .skip(1)
-        .filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
+        .filter_map(|l| {
+            l.split_once(':')
+                .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        })
         .filter(|(k, _)| !k.is_empty())
         .collect();
-    if headers.iter().any(|(k, v)| k.eq_ignore_ascii_case("expect") && v.eq_ignore_ascii_case("100-continue")) {
+    if headers
+        .iter()
+        .any(|(k, v)| k.eq_ignore_ascii_case("expect") && v.eq_ignore_ascii_case("100-continue"))
+    {
         client.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
     }
     let body = match read_body(&mut client, &headers, rest).await {
@@ -690,12 +820,25 @@ async fn gateway_route<S: AsyncRead + AsyncWrite + Unpin>(
     let resp = match req.body(body).send().await {
         Ok(r) => r,
         Err(e) => {
-            respond_text(&mut client, "502 Bad Gateway", &format!("model gateway '{}' unreachable: {}", gw.name(), crate::provider::http::root_cause(&e))).await;
+            respond_text(
+                &mut client,
+                "502 Bad Gateway",
+                &format!(
+                    "model gateway '{}' unreachable: {}",
+                    gw.name(),
+                    crate::provider::http::root_cause(&e)
+                ),
+            )
+            .await;
             return Ok(());
         }
     };
     let status = resp.status();
-    let mut out = format!("HTTP/1.1 {} {}\r\n", status.as_u16(), status.canonical_reason().unwrap_or(""));
+    let mut out = format!(
+        "HTTP/1.1 {} {}\r\n",
+        status.as_u16(),
+        status.canonical_reason().unwrap_or("")
+    );
     for (k, v) in resp.headers() {
         if hop_by_hop(k.as_str()) {
             continue;
@@ -713,7 +856,9 @@ async fn gateway_route<S: AsyncRead + AsyncWrite + Unpin>(
         if bytes.is_empty() {
             continue;
         }
-        client.write_all(format!("{:x}\r\n", bytes.len()).as_bytes()).await?;
+        client
+            .write_all(format!("{:x}\r\n", bytes.len()).as_bytes())
+            .await?;
         client.write_all(&bytes).await?;
         client.write_all(b"\r\n").await?;
         client.flush().await?;
@@ -725,7 +870,10 @@ async fn gateway_route<S: AsyncRead + AsyncWrite + Unpin>(
 
 /// Read the client's TLS ClientHello (appending every byte read to `buf`).
 /// `None` = not TLS or malformed; `Some(None)` = a ClientHello without SNI.
-async fn read_client_hello<S: AsyncRead + Unpin>(s: &mut S, buf: &mut Vec<u8>) -> Option<Option<String>> {
+async fn read_client_hello<S: AsyncRead + Unpin>(
+    s: &mut S,
+    buf: &mut Vec<u8>,
+) -> Option<Option<String>> {
     let mut chunk = [0u8; 4096];
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -737,7 +885,10 @@ async fn read_client_hello<S: AsyncRead + Unpin>(s: &mut S, buf: &mut Vec<u8>) -
         if buf.len() > 64 * 1024 {
             return None;
         }
-        let n = tokio::time::timeout_at(deadline, s.read(&mut chunk)).await.ok()?.ok()?;
+        let n = tokio::time::timeout_at(deadline, s.read(&mut chunk))
+            .await
+            .ok()?
+            .ok()?;
         if n == 0 {
             return None;
         }
@@ -816,7 +967,12 @@ fn sni_from_hello(b: &[u8]) -> Option<Option<String>> {
                 let nlen = u16::from_be_bytes([data[q + 1], data[q + 2]]) as usize;
                 let name = data.get(q + 3..q + 3 + nlen)?;
                 if name_type == 0 {
-                    return Some(Some(String::from_utf8(name.to_vec()).ok()?.trim_end_matches('.').to_string()));
+                    return Some(Some(
+                        String::from_utf8(name.to_vec())
+                            .ok()?
+                            .trim_end_matches('.')
+                            .to_string(),
+                    ));
                 }
                 q += 3 + nlen;
             }
@@ -845,10 +1001,22 @@ pub enum RefusedKind {
 pub fn classify_refused(hp: &HostPort) -> RefusedKind {
     let h = hp.host.trim_end_matches('.').to_ascii_lowercase();
     let under = |d: &str| h == d || h.ends_with(&format!(".{d}"));
-    if EgressPreset::ClaudeConnectors.host_names().iter().any(|c| h == *c) {
+    if EgressPreset::ClaudeConnectors
+        .host_names()
+        .iter()
+        .any(|c| h == *c)
+    {
         return RefusedKind::ClaudeConnectors;
     }
-    const TELEMETRY: &[&str] = &["datadoghq.com", "datadoghq.eu", "sentry.io", "statsigapi.net", "featuregates.org", "featureassets.org", "prodregistryv2.org"];
+    const TELEMETRY: &[&str] = &[
+        "datadoghq.com",
+        "datadoghq.eu",
+        "sentry.io",
+        "statsigapi.net",
+        "featuregates.org",
+        "featureassets.org",
+        "prodregistryv2.org",
+    ];
     if TELEMETRY.iter().any(|d| under(d)) {
         return RefusedKind::Telemetry;
     }
@@ -862,7 +1030,11 @@ pub fn classify_refused(hp: &HostPort) -> RefusedKind {
 pub fn refused_notice(denied: &[HostPort]) -> Option<String> {
     let mut by: std::collections::BTreeMap<RefusedKind, Vec<String>> = Default::default();
     for hp in denied {
-        let name = if hp.port == 443 { hp.host.clone() } else { hp.to_string() };
+        let name = if hp.port == 443 {
+            hp.host.clone()
+        } else {
+            hp.to_string()
+        };
         let v = by.entry(classify_refused(hp)).or_default();
         if !v.contains(&name) {
             v.push(name);
@@ -879,10 +1051,16 @@ pub fn refused_notice(denied: &[HostPort]) -> Option<String> {
         optional.push(format!("telemetry ({})", t.join(", ")));
     }
     if let Some(c) = by.get(&RefusedKind::ClaudeConnectors) {
-        optional.push(format!("your claude.ai connectors ({}; the Claude connectors preset allows it)", c.join(", ")));
+        optional.push(format!(
+            "your claude.ai connectors ({}; the Claude connectors preset allows it)",
+            c.join(", ")
+        ));
     }
     if !optional.is_empty() {
-        s.push_str(&format!(" Also blocked, which doesn't affect the turn: {}.", optional.join("; ")));
+        s.push_str(&format!(
+            " Also blocked, which doesn't affect the turn: {}.",
+            optional.join("; ")
+        ));
     }
     Some(s)
 }
@@ -896,7 +1074,14 @@ pub(crate) mod tests {
     /// rebound to Alibaba's or AWS's IPv6 metadata service).
     #[test]
     fn final_review_proxy_refuses_every_metadata_address() {
-        for ip in ["169.254.169.254", "100.100.100.200", "fd00:ec2::254", "::ffff:100.100.100.200", "127.0.0.1", "::1"] {
+        for ip in [
+            "169.254.169.254",
+            "100.100.100.200",
+            "fd00:ec2::254",
+            "::ffff:100.100.100.200",
+            "127.0.0.1",
+            "::1",
+        ] {
             assert!(ip_forbidden(ip.parse().unwrap()), "{ip}");
         }
         for ip in ["10.0.0.5", "192.168.1.2", "140.82.112.3"] {
@@ -939,22 +1124,46 @@ pub(crate) mod tests {
 
     #[test]
     fn host_port_parsing() {
-        assert_eq!(HostPort::parse("API.Anthropic.com"), Some(HostPort::new("api.anthropic.com", 443)));
-        assert_eq!(HostPort::parse("example.com:8443"), Some(HostPort::new("example.com", 8443)));
-        assert_eq!(HostPort::parse("[::1]:11434"), Some(HostPort::new("::1", 11434)));
-        assert_eq!(HostPort::from_url("http://localhost:11434/v1/chat"), Some(HostPort::new("localhost", 11434)));
-        assert_eq!(HostPort::from_url("https://openrouter.ai/api/v1"), Some(HostPort::new("openrouter.ai", 443)));
-        assert!(HostPort::new("127.0.0.1", 1).is_loopback() && HostPort::new("localhost", 1).is_loopback());
+        assert_eq!(
+            HostPort::parse("API.Anthropic.com"),
+            Some(HostPort::new("api.anthropic.com", 443))
+        );
+        assert_eq!(
+            HostPort::parse("example.com:8443"),
+            Some(HostPort::new("example.com", 8443))
+        );
+        assert_eq!(
+            HostPort::parse("[::1]:11434"),
+            Some(HostPort::new("::1", 11434))
+        );
+        assert_eq!(
+            HostPort::from_url("http://localhost:11434/v1/chat"),
+            Some(HostPort::new("localhost", 11434))
+        );
+        assert_eq!(
+            HostPort::from_url("https://openrouter.ai/api/v1"),
+            Some(HostPort::new("openrouter.ai", 443))
+        );
+        assert!(
+            HostPort::new("127.0.0.1", 1).is_loopback()
+                && HostPort::new("localhost", 1).is_loopback()
+        );
         assert!(!HostPort::new("example.com", 443).is_loopback());
     }
 
     #[test]
     fn sni_is_parsed_across_records() {
         let rec = client_hello(Some("api.anthropic.com"));
-        assert_eq!(parse_client_hello(&rec), Parse::Done(Some("api.anthropic.com".into())));
+        assert_eq!(
+            parse_client_hello(&rec),
+            Parse::Done(Some("api.anthropic.com".into()))
+        );
         assert_eq!(parse_client_hello(&rec[..10]), Parse::NeedMore);
         assert_eq!(parse_client_hello(&client_hello(None)), Parse::Done(None));
-        assert_eq!(parse_client_hello(b"GET / HTTP/1.1\r\n\r\n"), Parse::Invalid);
+        assert_eq!(
+            parse_client_hello(b"GET / HTTP/1.1\r\n\r\n"),
+            Parse::Invalid
+        );
         // The same handshake split over two records.
         let hs = &rec[5..];
         let (a, b) = hs.split_at(20);
@@ -964,15 +1173,32 @@ pub(crate) mod tests {
         two.extend([0x16, 0x03, 0x01]);
         two.extend((b.len() as u16).to_be_bytes());
         two.extend(b);
-        assert_eq!(parse_client_hello(&two), Parse::Done(Some("api.anthropic.com".into())));
+        assert_eq!(
+            parse_client_hello(&two),
+            Parse::Done(Some("api.anthropic.com".into()))
+        );
     }
 
-    async fn connect_through(p: &EgressProxy, target: &str, auth: bool) -> (tokio::net::TcpStream, String) {
+    async fn connect_through(
+        p: &EgressProxy,
+        target: &str,
+        auth: bool,
+    ) -> (tokio::net::TcpStream, String) {
         use base64::Engine;
-        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", p.port())).await.unwrap();
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", p.port()))
+            .await
+            .unwrap();
         let cred = base64::engine::general_purpose::STANDARD.encode(format!("ligus:{}", p.token()));
-        let auth = if auth { format!("Proxy-Authorization: Basic {cred}\r\n") } else { String::new() };
-        s.write_all(format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n{auth}\r\n").as_bytes()).await.unwrap();
+        let auth = if auth {
+            format!("Proxy-Authorization: Basic {cred}\r\n")
+        } else {
+            String::new()
+        };
+        s.write_all(
+            format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n{auth}\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
         let mut buf = vec![0u8; 256];
         let n = s.read(&mut buf).await.unwrap();
         (s, String::from_utf8_lossy(&buf[..n]).into_owned())
@@ -981,7 +1207,9 @@ pub(crate) mod tests {
     /// An "upstream" that echoes what it receives, standing in for a TLS
     /// server (the proxy never terminates TLS, so bytes are all it sees).
     async fn echo_server() -> u16 {
-        let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let l = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let port = l.local_addr().unwrap().port();
         tokio::spawn(async move {
             while let Ok((mut s, _)) = l.accept().await {
@@ -1026,19 +1254,40 @@ pub(crate) mod tests {
             let hello = client_hello(Some(name));
             s.write_all(&hello).await.unwrap();
             let mut b = vec![0u8; hello.len()];
-            let got = tokio::time::timeout(std::time::Duration::from_secs(5), s.read_exact(&mut b)).await;
-            assert!(!matches!(got, Ok(Ok(_))), "the proxy spliced an allow-listed name through to a loopback service");
+            let got =
+                tokio::time::timeout(std::time::Duration::from_secs(5), s.read_exact(&mut b)).await;
+            assert!(
+                !matches!(got, Ok(Ok(_))),
+                "the proxy spliced an allow-listed name through to a loopback service"
+            );
         }
         // Plain HTTP (absolute form) the same.
-        let mut c = tokio::net::TcpStream::connect(("127.0.0.1", p.port())).await.unwrap();
-        let cred = { use base64::Engine; base64::engine::general_purpose::STANDARD.encode(format!("ligus:{}", p.token())) };
+        let mut c = tokio::net::TcpStream::connect(("127.0.0.1", p.port()))
+            .await
+            .unwrap();
+        let cred = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(format!("ligus:{}", p.token()))
+        };
         c.write_all(format!("GET http://{name}:{up}/ HTTP/1.1\r\nHost: {name}:{up}\r\nProxy-Authorization: Basic {cred}\r\n\r\n").as_bytes()).await.unwrap();
         let mut b = vec![0u8; 64];
-        let n = tokio::time::timeout(std::time::Duration::from_secs(5), c.read(&mut b)).await.unwrap().unwrap_or(0);
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), c.read(&mut b))
+            .await
+            .unwrap()
+            .unwrap_or(0);
         let text = String::from_utf8_lossy(&b[..n]);
-        assert!(!text.starts_with("GET "), "plain HTTP reached the loopback service: {text}");
-        assert!(ip_forbidden("169.254.169.254".parse().unwrap()) && ip_forbidden("::ffff:127.0.0.1".parse().unwrap()));
-        assert!(!ip_forbidden("192.168.1.10".parse().unwrap()) && !ip_forbidden("1.1.1.1".parse().unwrap()));
+        assert!(
+            !text.starts_with("GET "),
+            "plain HTTP reached the loopback service: {text}"
+        );
+        assert!(
+            ip_forbidden("169.254.169.254".parse().unwrap())
+                && ip_forbidden("::ffff:127.0.0.1".parse().unwrap())
+        );
+        assert!(
+            !ip_forbidden("192.168.1.10".parse().unwrap())
+                && !ip_forbidden("1.1.1.1".parse().unwrap())
+        );
     }
 
     /// C.4.6 `proxy_rejects_sni_mismatch`: an allow-listed CONNECT host with
@@ -1049,19 +1298,29 @@ pub(crate) mod tests {
         // A non-loopback name that resolves to this machine, so the matching
         // case can reach the echo server.
         let name = "ligus-sni-test.localhost";
-        let resolves = tokio::net::lookup_host((name, up)).await.is_ok_and(|mut a| a.next().is_some());
+        let resolves = tokio::net::lookup_host((name, up))
+            .await
+            .is_ok_and(|mut a| a.next().is_some());
         let p = EgressProxy::start(vec![HostPort::new(name, up)], None).unwrap();
         let (mut s, resp) = connect_through(&p, &format!("{name}:{up}"), true).await;
         assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
-        s.write_all(&client_hello(Some("evil.example"))).await.unwrap();
+        s.write_all(&client_hello(Some("evil.example")))
+            .await
+            .unwrap();
         let mut b = [0u8; 16];
-        let n = tokio::time::timeout(std::time::Duration::from_secs(5), s.read(&mut b)).await.unwrap().unwrap_or(0);
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), s.read(&mut b))
+            .await
+            .unwrap()
+            .unwrap_or(0);
         assert_eq!(n, 0, "a mismatched SNI is cut");
         assert_eq!(p.denials(), vec![HostPort::new(name, up)]);
         // Plain bytes (not TLS) through CONNECT to a non-loopback host: cut too.
         let (mut s, _) = connect_through(&p, &format!("{name}:{up}"), true).await;
         s.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
-        let n = tokio::time::timeout(std::time::Duration::from_secs(5), s.read(&mut b)).await.unwrap().unwrap_or(0);
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), s.read(&mut b))
+            .await
+            .unwrap()
+            .unwrap_or(0);
         assert_eq!(n, 0);
         if resolves {
             // A matching SNI passes the pin, but this name resolves to this
@@ -1071,8 +1330,13 @@ pub(crate) mod tests {
             let hello = client_hello(Some(name));
             s.write_all(&hello).await.unwrap();
             let mut echoed = vec![0u8; hello.len()];
-            let got = tokio::time::timeout(std::time::Duration::from_secs(5), s.read_exact(&mut echoed)).await;
-            assert!(!matches!(got, Ok(Ok(_))), "a name resolving to loopback is not spliced");
+            let got =
+                tokio::time::timeout(std::time::Duration::from_secs(5), s.read_exact(&mut echoed))
+                    .await;
+            assert!(
+                !matches!(got, Ok(Ok(_))),
+                "a name resolving to loopback is not spliced"
+            );
         }
     }
 
@@ -1084,12 +1348,27 @@ pub(crate) mod tests {
         let mcp = HostPort::new("mcp-proxy.anthropic.com", 443);
         assert_eq!(classify_refused(&dd), RefusedKind::Telemetry);
         assert_eq!(classify_refused(&mcp), RefusedKind::ClaudeConnectors);
-        assert_eq!(classify_refused(&HostPort::new("evil-datadoghq.com", 443)), RefusedKind::Other);
+        assert_eq!(
+            classify_refused(&HostPort::new("evil-datadoghq.com", 443)),
+            RefusedKind::Other
+        );
         assert_eq!(refused_notice(&[dd.clone(), mcp.clone()]), None);
-        let n = refused_notice(&[dd, mcp, HostPort::new("example.com", 443), HostPort::new("example.com", 443)]).unwrap();
+        let n = refused_notice(&[
+            dd,
+            mcp,
+            HostPort::new("example.com", 443),
+            HostPort::new("example.com", 443),
+        ])
+        .unwrap();
         assert!(n.contains("blocked example.com —"), "{n}");
         assert!(!n.contains("example.com, example.com"), "{n}");
-        assert!(n.contains("telemetry (http-intake.logs.us5.datadoghq.com)"), "{n}");
-        assert!(n.contains("claude.ai connectors (mcp-proxy.anthropic.com"), "{n}");
+        assert!(
+            n.contains("telemetry (http-intake.logs.us5.datadoghq.com)"),
+            "{n}"
+        );
+        assert!(
+            n.contains("claude.ai connectors (mcp-proxy.anthropic.com"),
+            "{n}"
+        );
     }
 }

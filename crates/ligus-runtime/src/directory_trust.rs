@@ -34,7 +34,10 @@ pub const UNVERIFIED_RECIPIENT: &str = "unverified recipient";
 /// account, on a log whose key for the account is the one this device
 /// trusts for it ([`account_keys`]).
 pub fn signed_ka_keys(store: &EventStore, account: Uuid) -> BTreeSet<[u8; 32]> {
-    verified_recipients(store, account).into_iter().map(|r| r.ka_public).collect()
+    verified_recipients(store, account)
+        .into_iter()
+        .map(|r| r.ka_public)
+        .collect()
 }
 
 /// [`signed_ka_keys`] with each key's device id.
@@ -48,13 +51,21 @@ pub fn verified_recipients(store: &EventStore, account: Uuid) -> Vec<Recipient> 
         }
         let head = log.timeline.current();
         for (device, key) in &head.ka_keys {
-            let vouched = head.devices.get(device).is_some_and(|d| !d.revoked && d.accounts.contains(&account));
+            let vouched = head
+                .devices
+                .get(device)
+                .is_some_and(|d| !d.revoked && d.accounts.contains(&account));
             if let (true, Ok(k)) = (vouched, <[u8; 32]>::try_from(key.as_slice())) {
                 out.entry(k).or_insert_with(|| device.to_string());
             }
         }
     }
-    out.into_iter().map(|(ka_public, device_id)| Recipient { device_id, ka_public }).collect()
+    out.into_iter()
+        .map(|(ka_public, device_id)| Recipient {
+            device_id,
+            ka_public,
+        })
+        .collect()
 }
 
 /// One pinned config log this device holds, folded with its pin.
@@ -73,7 +84,10 @@ impl PinnedLog {
         if self.roster.is_disputed(account) {
             return Err(());
         }
-        Ok(self.roster.account_signing_key(account).map(FounderPin::fingerprint_hex))
+        Ok(self
+            .roster
+            .account_signing_key(account)
+            .map(FounderPin::fingerprint_hex))
     }
 }
 
@@ -82,12 +96,23 @@ impl PinnedLog {
 pub fn pinned_logs(store: &EventStore) -> Vec<PinnedLog> {
     let mut out = Vec::new();
     for ws in store.pinned_workspaces().unwrap_or_default() {
-        let Ok(Some(pin)) = store.workspace_pin(ws) else { continue };
-        let Ok((Some(config), timeline)) = store.load_config(ws, Some(&pin.founder_account.to_string()), None) else {
+        let Ok(Some(pin)) = store.workspace_pin(ws) else {
             continue;
         };
-        let roster = build_roster_pinned(&store.trust_envelopes(ws).unwrap_or_default(), Some(&pin));
-        out.push(PinnedLog { ws, pin, config, timeline, roster });
+        let Ok((Some(config), timeline)) =
+            store.load_config(ws, Some(&pin.founder_account.to_string()), None)
+        else {
+            continue;
+        };
+        let roster =
+            build_roster_pinned(&store.trust_envelopes(ws).unwrap_or_default(), Some(&pin));
+        out.push(PinnedLog {
+            ws,
+            pin,
+            config,
+            timeline,
+            roster,
+        });
     }
     out
 }
@@ -129,11 +154,14 @@ pub fn account_keys(logs: &[PinnedLog]) -> BTreeMap<Uuid, AccountKey> {
     let mut out: BTreeMap<Uuid, AccountKey> = BTreeMap::new();
     for log in logs {
         let fk: String = log.pin.fk.iter().map(|b| format!("{b:02x}")).collect();
-        out.entry(log.pin.founder_account).or_insert(AccountKey::Trusted(fk));
+        out.entry(log.pin.founder_account)
+            .or_insert(AccountKey::Trusted(fk));
     }
     for log in logs {
         for m in log.timeline.current().members.values() {
-            let Some(account) = m.account_id else { continue };
+            let Some(account) = m.account_id else {
+                continue;
+            };
             match (out.get(&account), log.fingerprint_of(account)) {
                 (Some(AccountKey::Trusted(_)), _) | (_, Ok(None)) => {}
                 (_, Ok(Some(fk))) => {
@@ -169,13 +197,27 @@ pub struct SealPlan {
 /// can't check by itself): only the verified ones when any candidate is in
 /// `signed`; otherwise every candidate, but only when the inviter
 /// `confirmed` (else `Err` starting with [`UNVERIFIED_RECIPIENT`]).
-pub fn plan(candidates: &[Recipient], signed: &BTreeSet<[u8; 32]>, confirmed: bool) -> Result<SealPlan, String> {
-    let verified: Vec<Recipient> = candidates.iter().filter(|r| signed.contains(&r.ka_public)).cloned().collect();
+pub fn plan(
+    candidates: &[Recipient],
+    signed: &BTreeSet<[u8; 32]>,
+    confirmed: bool,
+) -> Result<SealPlan, String> {
+    let verified: Vec<Recipient> = candidates
+        .iter()
+        .filter(|r| signed.contains(&r.ka_public))
+        .cloned()
+        .collect();
     if !verified.is_empty() {
-        return Ok(SealPlan { recipients: verified, verified: true });
+        return Ok(SealPlan {
+            recipients: verified,
+            verified: true,
+        });
     }
     if candidates.is_empty() || confirmed {
-        return Ok(SealPlan { recipients: candidates.to_vec(), verified: false });
+        return Ok(SealPlan {
+            recipients: candidates.to_vec(),
+            verified: false,
+        });
     }
     Err(format!(
         "{UNVERIFIED_RECIPIENT}: nothing this device holds confirms {} device key{} belong{} to them",
@@ -246,7 +288,10 @@ impl CoMember {
                 self.display_name
             ));
         }
-        Ok(SealPlan { recipients: self.devices.clone(), verified: true })
+        Ok(SealPlan {
+            recipients: self.devices.clone(),
+            verified: true,
+        })
     }
 }
 
@@ -267,7 +312,9 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
     for log in &logs {
         let (ws, config, head) = (log.ws, &log.config, log.timeline.current());
         for m in head.members.values() {
-            let (Some(account), ActorKind::Human) = (m.account_id, m.kind) else { continue };
+            let (Some(account), ActorKind::Human) = (m.account_id, m.kind) else {
+                continue;
+            };
             if account == me {
                 continue;
             }
@@ -290,7 +337,9 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
                     if !k.agrees(log, account) {
                         // This log registers another key under their id (or
                         // none, or disputes it): nothing from it is theirs.
-                        if log.fingerprint_of(account) != Ok(None) && !entry.key_disputed_in.contains(&ws) {
+                        if log.fingerprint_of(account) != Ok(None)
+                            && !entry.key_disputed_in.contains(&ws)
+                        {
                             entry.key_disputed_in.push(ws);
                         }
                         continue;
@@ -314,11 +363,16 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
                     }
                 }
             }
-            if let Some(member) = config.members.iter().find(|x| x.actor.account_id == Some(account)) {
+            if let Some(member) = config
+                .members
+                .iter()
+                .find(|x| x.actor.account_id == Some(account))
+            {
                 if entry.display_name.is_empty() {
                     // Shown as cleaned: no bidi overrides, invisible or
                     // control characters (S3).
-                    entry.display_name = ligus_proto::names::clean_display_name(&member.actor.display_name);
+                    entry.display_name =
+                        ligus_proto::names::clean_display_name(&member.actor.display_name);
                 }
                 if entry.avatar_url.is_none() {
                     entry.avatar_url = member.actor.avatar_url.clone();
@@ -339,7 +393,11 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
                     .ok()
                     .flatten()
                     .or_else(|| {
-                        config.members.iter().find(|x| x.actor.account_id == Some(account)).and_then(|x| x.actor.contact.clone())
+                        config
+                            .members
+                            .iter()
+                            .find(|x| x.actor.account_id == Some(account))
+                            .and_then(|x| x.actor.contact.clone())
                     })
                     .filter(|c| crate::contacts::valid_cid(c));
                 entry.contact = cid.map(|c| (c, ws));
@@ -350,21 +408,34 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
                 }
             }
             for (device, key) in &head.ka_keys {
-                let vouched = head.devices.get(device).is_some_and(|d| !d.revoked && d.accounts.contains(&account));
-                let Ok(k) = <[u8; 32]>::try_from(key.as_slice()) else { continue };
+                let vouched = head
+                    .devices
+                    .get(device)
+                    .is_some_and(|d| !d.revoked && d.accounts.contains(&account));
+                let Ok(k) = <[u8; 32]>::try_from(key.as_slice()) else {
+                    continue;
+                };
                 if vouched && !entry.devices.iter().any(|r| r.ka_public == k) {
-                    entry.devices.push(Recipient { device_id: device.to_string(), ka_public: k });
+                    entry.devices.push(Recipient {
+                        device_id: device.to_string(),
+                        ka_public: k,
+                    });
                 }
             }
         }
     }
-    let mut out: Vec<CoMember> = by_account.into_values().filter(|c| !c.workspaces.is_empty() || c.key_conflict).collect();
+    let mut out: Vec<CoMember> = by_account
+        .into_values()
+        .filter(|c| !c.workspaces.is_empty() || c.key_conflict)
+        .collect();
     // Two different accounts whose names look alike (same skeleton: case,
     // look-alike letters from other scripts, invisible characters) are both
     // flagged: their safety codes tell them apart.
     let mut by_skeleton: BTreeMap<String, usize> = BTreeMap::new();
     for c in &out {
-        *by_skeleton.entry(ligus_proto::names::name_skeleton(&c.display_name)).or_default() += 1;
+        *by_skeleton
+            .entry(ligus_proto::names::name_skeleton(&c.display_name))
+            .or_default() += 1;
     }
     for c in &mut out {
         let sk = ligus_proto::names::name_skeleton(&c.display_name);
@@ -381,7 +452,13 @@ pub fn safety_code(fingerprint_hex: &str) -> Option<String> {
     if f.len() != 32 || !f.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
-    Some(f.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap_or_default()).collect::<Vec<_>>().join(" "))
+    Some(
+        f.as_bytes()
+            .chunks(4)
+            .map(|c| std::str::from_utf8(c).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 #[cfg(test)]
@@ -400,7 +477,10 @@ mod tests {
 
     #[test]
     fn plan_without_verified_keys_needs_confirmation() {
-        let r = Recipient { device_id: "d".into(), ka_public: [7; 32] };
+        let r = Recipient {
+            device_id: "d".into(),
+            ka_public: [7; 32],
+        };
         let err = plan(std::slice::from_ref(&r), &BTreeSet::new(), false).unwrap_err();
         assert!(err.starts_with(UNVERIFIED_RECIPIENT), "{err}");
         assert!(!plan(&[r], &BTreeSet::new(), true).unwrap().verified);

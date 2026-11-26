@@ -2,7 +2,10 @@
 //! (`ligus_core::authz::attachments`); these only build the payloads.
 
 use ligus_core::attachment::{AttachmentPolicy, AttachmentRef, AttachmentRules, SharedAttachment};
-use ligus_core::{workspace_config_session_id, ActionProposal, ActorKind, ProposalKind, SessionEvent, WorkspaceRole};
+use ligus_core::{
+    workspace_config_session_id, ActionProposal, ActorKind, ProposalKind, SessionEvent,
+    WorkspaceRole,
+};
 use uuid::Uuid;
 
 use super::{ChatError, ChatService, Result};
@@ -10,21 +13,37 @@ use super::{ChatError, ChatService, Result};
 impl ChatService {
     /// The attachment policy and blocklist at the workspace config head.
     pub fn attachment_rules(&self, workspace_id: Uuid) -> Result<AttachmentRules> {
-        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let (_, timeline) = self.store.load_config(
+            workspace_id,
+            self.trusted_founder.as_deref(),
+            self.local_workspace_id,
+        )?;
         Ok(timeline.current().attachments.clone())
     }
 
     /// This device's author's kind and role on the workspace roster at the
     /// head (a non-member: Viewer).
     pub fn attachment_standing(&self, workspace_id: Uuid) -> Result<(ActorKind, WorkspaceRole)> {
-        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let (_, timeline) = self.store.load_config(
+            workspace_id,
+            self.trusted_founder.as_deref(),
+            self.local_workspace_id,
+        )?;
         let m = timeline.current().members.get(&self.author.id).cloned();
-        Ok(m.map(|m| (m.kind, m.role)).unwrap_or((self.author.kind, WorkspaceRole::Viewer)))
+        Ok(m.map(|m| (m.kind, m.role))
+            .unwrap_or((self.author.kind, WorkspaceRole::Viewer)))
     }
 
     /// The files shared in a chat (tombstones included).
-    pub fn chat_attachments(&self, workspace_id: Uuid, session_id: Uuid) -> Result<std::collections::BTreeMap<Uuid, SharedAttachment>> {
-        Ok(self.load_in(workspace_id, session_id)?.map(|s| s.attachments).unwrap_or_default())
+    pub fn chat_attachments(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<std::collections::BTreeMap<Uuid, SharedAttachment>> {
+        Ok(self
+            .load_in(workspace_id, session_id)?
+            .map(|s| s.attachments)
+            .unwrap_or_default())
     }
 
     /// Every attachment shared in the workspace's chats (tombstones
@@ -47,22 +66,42 @@ impl ChatService {
     /// when `desktop` and this person is an Admin, past a third of their
     /// life ([`crate::attachment_blob::plan_renewals`]). Nothing for the
     /// device-local workspace.
-    pub fn blob_renewals_due(&self, workspace_id: Uuid, desktop: bool, now: i64) -> Result<Vec<String>> {
+    pub fn blob_renewals_due(
+        &self,
+        workspace_id: Uuid,
+        desktop: bool,
+        now: i64,
+    ) -> Result<Vec<String>> {
         if self.local_workspace_id == Some(workspace_id) {
             return Ok(Vec::new());
         }
         let (_, role) = self.attachment_standing(workspace_id)?;
         let state = self.store.blob_renewals(workspace_id)?;
         let live = self.workspace_attachments(workspace_id)?;
-        Ok(crate::attachment_blob::plan_renewals(&live, &self.author.id, role, desktop, &state, self.device_id, now))
+        Ok(crate::attachment_blob::plan_renewals(
+            &live,
+            &self.author.id,
+            role,
+            desktop,
+            &state,
+            self.device_id,
+            now,
+        ))
     }
 
     /// Keep what a renewal pass found ([`crate::attachment_blob::renew_blobs`]).
-    pub fn record_blob_renewals(&self, workspace_id: Uuid, outcomes: &[(String, crate::attachment_blob::RenewalOutcome)], now: i64) -> Result<()> {
+    pub fn record_blob_renewals(
+        &self,
+        workspace_id: Uuid,
+        outcomes: &[(String, crate::attachment_blob::RenewalOutcome)],
+        now: i64,
+    ) -> Result<()> {
         use crate::attachment_blob::RenewalOutcome;
         for (blob, r) in outcomes {
             match r {
-                RenewalOutcome::Answered => self.store.record_blob_renewed(workspace_id, blob, now)?,
+                RenewalOutcome::Answered => {
+                    self.store.record_blob_renewed(workspace_id, blob, now)?
+                }
                 RenewalOutcome::Gone => self.store.mark_blob_gone(workspace_id, blob, now)?,
                 RenewalOutcome::Failed(_) => {}
             }
@@ -77,37 +116,76 @@ impl ChatService {
 
     /// The blobs of the workspace this device saw gone from the relay.
     pub fn gone_blobs(&self, workspace_id: Uuid) -> Result<std::collections::HashSet<String>> {
-        Ok(self.store.blob_renewals(workspace_id)?.into_iter().filter(|(_, r)| r.gone_at.is_some()).map(|(b, _)| b).collect())
+        Ok(self
+            .store
+            .blob_renewals(workspace_id)?
+            .into_iter()
+            .filter(|(_, r)| r.gone_at.is_some())
+            .map(|(b, _)| b)
+            .collect())
     }
 
     /// Sign a share of an uploaded file in a chat.
-    pub fn share_attachment(&mut self, session_id: Uuid, workspace_id: Uuid, attachment: AttachmentRef) -> Result<()> {
+    pub fn share_attachment(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        attachment: AttachmentRef,
+    ) -> Result<()> {
         if self.local_workspace_id == Some(workspace_id) {
-            return Err(ChatError::Unauthorized("files in your own workspace stay on this device".into()));
+            return Err(ChatError::Unauthorized(
+                "files in your own workspace stay on this device".into(),
+            ));
         }
-        self.append_signed(session_id, workspace_id, SessionEvent::AttachmentShared { attachment })?;
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::AttachmentShared { attachment },
+        )?;
         Ok(())
     }
 
     /// Delete a shared file (its sharer or an Admin). The caller then deletes
     /// the blob from the relay.
-    pub fn delete_attachment(&mut self, session_id: Uuid, workspace_id: Uuid, attachment_id: Uuid) -> Result<()> {
-        self.append_signed(session_id, workspace_id, SessionEvent::AttachmentDeleted { attachment_id })?;
+    pub fn delete_attachment(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        attachment_id: Uuid,
+    ) -> Result<()> {
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::AttachmentDeleted { attachment_id },
+        )?;
         Ok(())
     }
 
     /// Delete every live file `member_id` shared in the workspace's chats
     /// (an Admin removing a member, or a member cleaning up their own).
     /// Returns the deleted references, for the relay deletes.
-    pub fn delete_member_attachments(&mut self, workspace_id: Uuid, member_id: &str) -> Result<Vec<AttachmentRef>> {
+    pub fn delete_member_attachments(
+        &mut self,
+        workspace_id: Uuid,
+        member_id: &str,
+    ) -> Result<Vec<AttachmentRef>> {
         let mut out = Vec::new();
         for session_id in self.store.sessions_of_workspace(workspace_id)? {
             if session_id == workspace_config_session_id(workspace_id) {
                 continue;
             }
-            let Some(session) = self.load_in(workspace_id, session_id)? else { continue };
-            for s in session.attachments.values().filter(|s| s.author == member_id && !s.deleted) {
-                if self.delete_attachment(session_id, workspace_id, s.attachment.id).is_ok() {
+            let Some(session) = self.load_in(workspace_id, session_id)? else {
+                continue;
+            };
+            for s in session
+                .attachments
+                .values()
+                .filter(|s| s.author == member_id && !s.deleted)
+            {
+                if self
+                    .delete_attachment(session_id, workspace_id, s.attachment.id)
+                    .is_ok()
+                {
                     out.push(s.attachment.clone());
                 }
             }
@@ -116,23 +194,39 @@ impl ChatService {
     }
 
     /// Set the workspace attachment policy (Admin; passkey presence).
-    pub fn set_attachment_policy(&mut self, workspace_id: Uuid, policy: AttachmentPolicy) -> Result<()> {
+    pub fn set_attachment_policy(
+        &mut self,
+        workspace_id: Uuid,
+        policy: AttachmentPolicy,
+    ) -> Result<()> {
         policy.well_formed().map_err(ChatError::Unauthorized)?;
-        self.append_signed(workspace_config_session_id(workspace_id), workspace_id, SessionEvent::AttachmentPolicySet { policy })?;
+        self.append_signed(
+            workspace_config_session_id(workspace_id),
+            workspace_id,
+            SessionEvent::AttachmentPolicySet { policy },
+        )?;
         Ok(())
     }
 
     /// Block a file by its content hash (Admin).
     pub fn block_attachment_hash(&mut self, workspace_id: Uuid, sha256: &str) -> Result<()> {
         let sha256 = sha256.trim().to_ascii_lowercase();
-        self.append_signed(workspace_config_session_id(workspace_id), workspace_id, SessionEvent::AttachmentHashBlocked { sha256 })?;
+        self.append_signed(
+            workspace_config_session_id(workspace_id),
+            workspace_id,
+            SessionEvent::AttachmentHashBlocked { sha256 },
+        )?;
         Ok(())
     }
 
     /// Lift a block (Admin; passkey presence).
     pub fn unblock_attachment_hash(&mut self, workspace_id: Uuid, sha256: &str) -> Result<()> {
         let sha256 = sha256.trim().to_ascii_lowercase();
-        self.append_signed(workspace_config_session_id(workspace_id), workspace_id, SessionEvent::AttachmentHashUnblocked { sha256 })?;
+        self.append_signed(
+            workspace_config_session_id(workspace_id),
+            workspace_id,
+            SessionEvent::AttachmentHashUnblocked { sha256 },
+        )?;
         Ok(())
     }
 
@@ -175,10 +269,23 @@ impl ChatService {
             if session_id == workspace_config_session_id(workspace_id) {
                 continue;
             }
-            let Some(s) = self.load_in(workspace_id, session_id)? else { continue };
-            for p in s.proposals.iter().filter(|p| p.attachment.is_some() && p.produced_on == Some(self.device_id)) {
-                let shared = s.attachments.values().any(|x| x.attachment.proposal_id == Some(p.id));
-                if shared || p.dismissed || p.superseded_by.is_some() || p.status == ligus_core::ProposalStatus::Rejected {
+            let Some(s) = self.load_in(workspace_id, session_id)? else {
+                continue;
+            };
+            for p in s
+                .proposals
+                .iter()
+                .filter(|p| p.attachment.is_some() && p.produced_on == Some(self.device_id))
+            {
+                let shared = s
+                    .attachments
+                    .values()
+                    .any(|x| x.attachment.proposal_id == Some(p.id));
+                if shared
+                    || p.dismissed
+                    || p.superseded_by.is_some()
+                    || p.status == ligus_core::ProposalStatus::Rejected
+                {
                     out.push(p.id);
                 }
             }
@@ -202,13 +309,20 @@ impl ChatService {
             if session_id == workspace_config_session_id(workspace_id) {
                 continue;
             }
-            let Some(s) = self.load_in(workspace_id, session_id)? else { continue };
+            let Some(s) = self.load_in(workspace_id, session_id)? else {
+                continue;
+            };
             for p in &s.proposals {
-                let Some(a) = p.attachment.as_deref() else { continue };
+                let Some(a) = p.attachment.as_deref() else {
+                    continue;
+                };
                 if p.produced_on != Some(self.device_id) || !p.ready_to_apply() {
                     continue;
                 }
-                if s.attachments.values().any(|x| x.attachment.proposal_id == Some(p.id)) {
+                if s.attachments
+                    .values()
+                    .any(|x| x.attachment.proposal_id == Some(p.id))
+                {
                     continue;
                 }
                 out.push((session_id, p.id, a.clone()));

@@ -37,11 +37,19 @@ pub struct MeQuery {
 }
 
 fn refuse(status: StatusCode, error: &str, message: impl Into<String>) -> Response {
-    (status, Json(json!({ "error": error, "message": message.into() }))).into_response()
+    (
+        status,
+        Json(json!({ "error": error, "message": message.into() })),
+    )
+        .into_response()
 }
 
 /// `GET /v1/me`.
-pub async fn me(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Query(q): Query<MeQuery>) -> Response {
+pub async fn me(
+    State(s): State<std::sync::Arc<Shared>>,
+    peer: Option<Extension<TunnelPeer>>,
+    Query(q): Query<MeQuery>,
+) -> Response {
     if !super::forges_api::secure_channel(&s, peer.as_deref()) {
         return refuse(
             StatusCode::FORBIDDEN,
@@ -50,13 +58,30 @@ pub async fn me(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<
         );
     }
     let device = match peer.as_deref() {
-        Some(p) => match s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)).and_then(|r| r.device_id) {
+        Some(p) => match s
+            .tunnel
+            .as_ref()
+            .and_then(|t| t.registry.get(&p.pid))
+            .and_then(|r| r.device_id)
+        {
             Some(d) => d,
-            None => return refuse(StatusCode::FORBIDDEN, DEVICE_NOT_CERTIFIED, "this pairing isn't bound to a workspace device"),
+            None => {
+                return refuse(
+                    StatusCode::FORBIDDEN,
+                    DEVICE_NOT_CERTIFIED,
+                    "this pairing isn't bound to a workspace device",
+                )
+            }
         },
         None => match q.device_id {
             Some(d) => d,
-            None => return refuse(StatusCode::BAD_REQUEST, "device_id_required", "on loopback, name the phone with ?deviceId="),
+            None => {
+                return refuse(
+                    StatusCode::BAD_REQUEST,
+                    "device_id_required",
+                    "on loopback, name the phone with ?deviceId=",
+                )
+            }
         },
     };
     let svc = s.lock();
@@ -85,7 +110,9 @@ pub async fn me(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<
         .unwrap_or_default();
     let account = person.account_id.unwrap_or_default();
     let consented = svc.phone_consented(s.ws, device, account).unwrap_or(false);
-    let label = svc.device_label_of(s.ws, device, account).unwrap_or_default();
+    let label = svc
+        .device_label_of(s.ws, device, account)
+        .unwrap_or_default();
     let policy = match svc.workspace_presence_policy(s.ws) {
         Ok(p) => p,
         Err(e) => return refuse(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()),
@@ -124,16 +151,38 @@ pub struct ConsentBody {
 /// Through the tunnel only: the phone is the pairing's device. The box
 /// checks it against the phone's certified key and publishes it with the
 /// phone's certificate.
-pub async fn phone_consent(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Json(body): Json<ConsentBody>) -> Response {
+pub async fn phone_consent(
+    State(s): State<std::sync::Arc<Shared>>,
+    peer: Option<Extension<TunnelPeer>>,
+    Json(body): Json<ConsentBody>,
+) -> Response {
     use base64::Engine as _;
     let Some(p) = peer.as_deref() else {
-        return refuse(StatusCode::FORBIDDEN, "secure_channel_required", "a phone's statement comes through the end-to-end encrypted tunnel only");
+        return refuse(
+            StatusCode::FORBIDDEN,
+            "secure_channel_required",
+            "a phone's statement comes through the end-to-end encrypted tunnel only",
+        );
     };
-    let Some(device) = s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)).and_then(|r| r.device_id) else {
-        return refuse(StatusCode::FORBIDDEN, DEVICE_NOT_CERTIFIED, "this pairing isn't bound to a workspace device");
+    let Some(device) = s
+        .tunnel
+        .as_ref()
+        .and_then(|t| t.registry.get(&p.pid))
+        .and_then(|r| r.device_id)
+    else {
+        return refuse(
+            StatusCode::FORBIDDEN,
+            DEVICE_NOT_CERTIFIED,
+            "this pairing isn't bound to a workspace device",
+        );
     };
-    let Ok(sig) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(body.signature.trim()) else {
-        return refuse(StatusCode::BAD_REQUEST, "bad_signature", "the signature isn't base64url");
+    let Ok(sig) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(body.signature.trim())
+    else {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "bad_signature",
+            "the signature isn't base64url",
+        );
     };
     let mut svc = s.lock();
     let person = match svc.phone_person(s.ws, device) {
@@ -141,7 +190,11 @@ pub async fn phone_consent(State(s): State<std::sync::Arc<Shared>>, peer: Option
         Err(e) => return refuse(StatusCode::FORBIDDEN, DEVICE_NOT_CERTIFIED, e.to_string()),
     };
     let Some(account) = person.account_id else {
-        return refuse(StatusCode::CONFLICT, "not_this_account", "this phone's person has no account here");
+        return refuse(
+            StatusCode::CONFLICT,
+            "not_this_account",
+            "this phone's person has no account here",
+        );
     };
     match svc.publish_phone_consent(s.ws, device, account, &sig) {
         Ok(true) => {
@@ -149,8 +202,13 @@ pub async fn phone_consent(State(s): State<std::sync::Arc<Shared>>, peer: Option
             s.after_write();
             Json(json!({ "published": true })).into_response()
         }
-        Ok(false) => Json(json!({ "published": false, "reason": "already published" })).into_response(),
-        Err(e) if e.to_string().contains(ligus_runtime::chat_service::BAD_CONSENT) => {
+        Ok(false) => {
+            Json(json!({ "published": false, "reason": "already published" })).into_response()
+        }
+        Err(e)
+            if e.to_string()
+                .contains(ligus_runtime::chat_service::BAD_CONSENT) =>
+        {
             refuse(StatusCode::BAD_REQUEST, "bad_signature", e.to_string())
         }
         Err(e) => refuse(StatusCode::CONFLICT, "not_this_account", e.to_string()),

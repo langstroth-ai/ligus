@@ -309,7 +309,10 @@ where
 /// token needed (public endpoint). Parses each listed key to a raw ed25519
 /// pubkey; non-ed25519 keys are ignored (Ligus account keys are ed25519).
 pub async fn fetch_ssh_signing_keys(login: String) -> FetchOutcome {
-    let client = match ligus_forge::http_client_builder().user_agent(USER_AGENT).build() {
+    let client = match ligus_forge::http_client_builder()
+        .user_agent(USER_AGENT)
+        .build()
+    {
         Ok(c) => c,
         Err(e) => return FetchOutcome::Unreachable(e.to_string()),
     };
@@ -371,8 +374,8 @@ fn parse_ed25519_wire(blob: &[u8]) -> Option<[u8; 32]> {
         if *pos + 4 > blob.len() {
             return None;
         }
-        let len =
-            u32::from_be_bytes([blob[*pos], blob[*pos + 1], blob[*pos + 2], blob[*pos + 3]]) as usize;
+        let len = u32::from_be_bytes([blob[*pos], blob[*pos + 1], blob[*pos + 2], blob[*pos + 3]])
+            as usize;
         *pos += 4;
         if *pos + len > blob.len() {
             return None;
@@ -416,7 +419,10 @@ mod tests {
         assert!(line.starts_with("ssh-ed25519 "));
         assert_eq!(parse_openssh_ed25519(&line), Some(k));
         // With a trailing comment (GitHub sometimes includes a title).
-        assert_eq!(parse_openssh_ed25519(&format!("{line} mona@example")), Some(k));
+        assert_eq!(
+            parse_openssh_ed25519(&format!("{line} mona@example")),
+            Some(k)
+        );
         // An RSA line parses to None (not ed25519).
         let rsa = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB comment";
         assert_eq!(parse_openssh_ed25519(rsa), None);
@@ -436,10 +442,19 @@ mod tests {
             IdentityVerdict::NotListed
         );
         // Empty listing is a definitive "not listed".
-        assert_eq!(classify(&mine, &FetchOutcome::Keys(vec![])), IdentityVerdict::NotListed);
+        assert_eq!(
+            classify(&mine, &FetchOutcome::Keys(vec![])),
+            IdentityVerdict::NotListed
+        );
         // Inconclusive fetches → Unknown (hold).
-        assert_eq!(classify(&mine, &FetchOutcome::NotFound), IdentityVerdict::Unknown);
-        assert_eq!(classify(&mine, &FetchOutcome::RateLimited), IdentityVerdict::Unknown);
+        assert_eq!(
+            classify(&mine, &FetchOutcome::NotFound),
+            IdentityVerdict::Unknown
+        );
+        assert_eq!(
+            classify(&mine, &FetchOutcome::RateLimited),
+            IdentityVerdict::Unknown
+        );
         assert_eq!(
             classify(&mine, &FetchOutcome::Unreachable("dns".into())),
             IdentityVerdict::Unknown
@@ -454,7 +469,13 @@ mod tests {
         let now = Instant::now();
         // Miss before any entry.
         assert_eq!(c.verdict_at(acct, &k, now), IdentityVerdict::Unknown);
-        c.put_at(acct, k.clone(), IdentityVerdict::Verified, Duration::from_secs(60), now);
+        c.put_at(
+            acct,
+            k.clone(),
+            IdentityVerdict::Verified,
+            Duration::from_secs(60),
+            now,
+        );
         // Fresh hit.
         assert_eq!(c.verdict_at(acct, &k, now), IdentityVerdict::Verified);
         // Expired → miss.
@@ -480,7 +501,13 @@ mod tests {
         // Relay mode: accept valid + unverifiable, drop only provably-bad —
         // identical to the pre-Option-C policy, cache irrelevant.
         assert_eq!(
-            gate_ingest(IdentityMode::Relay, Verdict::Valid, Some(acct), Some(&k), &cache),
+            gate_ingest(
+                IdentityMode::Relay,
+                Verdict::Valid,
+                Some(acct),
+                Some(&k),
+                &cache
+            ),
             IngestAction::Accept
         );
         assert_eq!(
@@ -525,7 +552,12 @@ mod tests {
 
         // Verified → accept.
         let mut verified = IdentityCache::new();
-        verified.put(acct, k.to_vec(), IdentityVerdict::Verified, Duration::from_secs(60));
+        verified.put(
+            acct,
+            k.to_vec(),
+            IdentityVerdict::Verified,
+            Duration::from_secs(60),
+        );
         assert_eq!(
             gate_ingest(
                 IdentityMode::GithubSigningKeys,
@@ -539,7 +571,12 @@ mod tests {
 
         // NotListed (GitHub fetched, key absent) → quarantine (provably bad).
         let mut notlisted = IdentityCache::new();
-        notlisted.put(acct, k.to_vec(), IdentityVerdict::NotListed, Duration::from_secs(60));
+        notlisted.put(
+            acct,
+            k.to_vec(),
+            IdentityVerdict::NotListed,
+            Duration::from_secs(60),
+        );
         assert_eq!(
             gate_ingest(
                 IdentityMode::GithubSigningKeys,
@@ -588,15 +625,26 @@ mod tests {
         })
         .await;
         assert_eq!(v, IdentityVerdict::Unknown);
-        assert_eq!(cache.lock().unwrap().verdict(acct, &k), IdentityVerdict::Unknown);
+        assert_eq!(
+            cache.lock().unwrap().verdict(acct, &k),
+            IdentityVerdict::Unknown
+        );
 
         // A definitive Verified is cached.
         let listed = FetchOutcome::Keys(vec![k]);
-        let v = refresh_account("mona", acct, &k, &cache, DEFAULT_TTL, move |_login| async move {
-            listed
-        })
+        let v = refresh_account(
+            "mona",
+            acct,
+            &k,
+            &cache,
+            DEFAULT_TTL,
+            move |_login| async move { listed },
+        )
         .await;
         assert_eq!(v, IdentityVerdict::Verified);
-        assert_eq!(cache.lock().unwrap().verdict(acct, &k), IdentityVerdict::Verified);
+        assert_eq!(
+            cache.lock().unwrap().verdict(acct, &k),
+            IdentityVerdict::Verified
+        );
     }
 }

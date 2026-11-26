@@ -2,7 +2,6 @@
 //! runs before every turn, the migration of `repo-bindings.toml`, and the
 //! `ligus repos …` commands.
 
-
 use ligus_runtime::display::shown;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -40,18 +39,35 @@ fn lock(svc: &Mutex<ChatService>) -> std::sync::MutexGuard<'_, ChatService> {
 /// brought up to date with the chat's ledger; while this box clones it the
 /// (already claimed) turn waits, at most [`CLONE_WAIT`]. `Err` is the
 /// refusal to post in the chat.
-pub async fn repo_for_turn(data_dir: &Path, svc: &Mutex<ChatService>, s: &ChatSession, host_label: &str) -> std::result::Result<RepoTurn, String> {
+pub async fn repo_for_turn(
+    data_dir: &Path,
+    svc: &Mutex<ChatService>,
+    s: &ChatSession,
+    host_label: &str,
+) -> std::result::Result<RepoTurn, String> {
     let start = std::time::Instant::now();
     loop {
         let gate = {
             let svc = lock(svc);
-            let roster = svc.workspace_roster(s.workspace_id).map_err(|e| e.to_string())?;
-            rr::turn_checkout(svc.store(), svc.device_id(), host_label, s, &roster, &rr::cloning())
+            let roster = svc
+                .workspace_roster(s.workspace_id)
+                .map_err(|e| e.to_string())?;
+            rr::turn_checkout(
+                svc.store(),
+                svc.device_id(),
+                host_label,
+                s,
+                &roster,
+                &rr::cloning(),
+            )
         };
         match gate {
             TurnCheckout::NoRepo => {
                 let repo_root = RepoBindings::load(data_dir).resolve(&repos_dir(data_dir), s.id);
-                if let Some(r) = repo_root.as_deref().filter(|r| ligus_runtime::git_worktree::is_git_repo(r)) {
+                if let Some(r) = repo_root
+                    .as_deref()
+                    .filter(|r| ligus_runtime::git_worktree::is_git_repo(r))
+                {
                     // A legacy binding to a checkout another host on this
                     // machine manages (the desktop) never runs here: its
                     // chat worktrees and branches are that host's.
@@ -61,13 +77,23 @@ pub async fn repo_for_turn(data_dir: &Path, svc: &Mutex<ChatService>, s: &ChatSe
                     }
                     crate::repos::ensure_chat_base(r);
                     // A turn in a scratch repository is activity.
-                    ligus_runtime::repos::scratch::turn_in(lock(svc).store(), r, ligus_runtime::repos::scratch::now());
+                    ligus_runtime::repos::scratch::turn_in(
+                        lock(svc).store(),
+                        r,
+                        ligus_runtime::repos::scratch::now(),
+                    );
                 }
-                return Ok(RepoTurn { repo_root, context: crate::repos::turn_context(data_dir, s.id), base: None });
+                return Ok(RepoTurn {
+                    repo_root,
+                    context: crate::repos::turn_context(data_dir, s.id),
+                    base: None,
+                });
             }
             TurnCheckout::Cloning { repo_name } => {
                 if start.elapsed() > CLONE_WAIT {
-                    return Err(format!("{repo_name} is still cloning on {host_label}; ask again when it finishes"));
+                    return Err(format!(
+                        "{repo_name} is still cloning on {host_label}; ask again when it finishes"
+                    ));
                 }
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
@@ -77,17 +103,34 @@ pub async fn repo_for_turn(data_dir: &Path, svc: &Mutex<ChatService>, s: &ChatSe
                     let ready = ready.clone();
                     let s = s.clone();
                     let label = host_label.to_string();
-                    tokio::task::spawn_blocking(move || rr::prepare_chat(&ready, &s, &label)).await.map_err(|e| e.to_string())??
+                    tokio::task::spawn_blocking(move || rr::prepare_chat(&ready, &s, &label))
+                        .await
+                        .map_err(|e| e.to_string())??
                 };
-                ligus_runtime::repos::scratch::turn_in(lock(svc).store(), &ready.path, ligus_runtime::repos::scratch::now());
+                ligus_runtime::repos::scratch::turn_in(
+                    lock(svc).store(),
+                    &ready.path,
+                    ligus_runtime::repos::scratch::now(),
+                );
                 if let Some(pin) = &prepared.pin {
-                    if let Err(e) = lock(svc).pin_chat_base(s.id, s.workspace_id, ready.repo.id, pin) {
+                    if let Err(e) =
+                        lock(svc).pin_chat_base(s.id, s.workspace_id, ready.repo.id, pin)
+                    {
                         eprintln!("repos: couldn't pin the chat's base: {e}");
                     }
                 }
-                let base_branch = s.repo.as_ref().map(|r| r.base_branch.clone()).unwrap_or_default();
-                let context = rr::turn_context(&TurnCheckout::Ready(ready.clone()), s.id, &base_branch);
-                return Ok(RepoTurn { repo_root: Some(ready.path.clone()), context, base: Some((ready.repo.id, prepared.tip, base_branch)) });
+                let base_branch = s
+                    .repo
+                    .as_ref()
+                    .map(|r| r.base_branch.clone())
+                    .unwrap_or_default();
+                let context =
+                    rr::turn_context(&TurnCheckout::Ready(ready.clone()), s.id, &base_branch);
+                return Ok(RepoTurn {
+                    repo_root: Some(ready.path.clone()),
+                    context,
+                    base: Some((ready.repo.id, prepared.tip, base_branch)),
+                });
             }
         }
     }
@@ -98,7 +141,12 @@ pub async fn repo_for_turn(data_dir: &Path, svc: &Mutex<ChatService>, s: &ChatSe
 /// downgrade). The workspace binding becomes a migrated mapping of the repo
 /// its remote is, when that repo is in the workspace; a chat binding to
 /// another checkout becomes that chat's override. Idempotent.
-pub fn migrate_bindings(data_dir: &Path, svc: &ChatService, workspace_id: Uuid, host_label: &str) -> Result<usize> {
+pub fn migrate_bindings(
+    data_dir: &Path,
+    svc: &ChatService,
+    workspace_id: Uuid,
+    host_label: &str,
+) -> Result<usize> {
     let b = RepoBindings::load(data_dir);
     let roster = svc.workspace_roster(workspace_id)?;
     let repos = rr::live_repos(&roster);
@@ -116,8 +164,19 @@ pub fn migrate_bindings(data_dir: &Path, svc: &ChatService, workspace_id: Uuid, 
         if let Some(m) = known.iter().find(|m| m.path == canon && m.confirmed) {
             return Some((m.repo_id, m.path.clone()));
         }
-        let repo = repos.iter().find(|r| rr::checkout_matches(&path, r, &aliases).is_some())?;
-        rr::bind(svc.store(), svc.device_id(), host_label, workspace_id, repo, &path, CheckoutSource::Migrated).ok()?;
+        let repo = repos
+            .iter()
+            .find(|r| rr::checkout_matches(&path, r, &aliases).is_some())?;
+        rr::bind(
+            svc.store(),
+            svc.device_id(),
+            host_label,
+            workspace_id,
+            repo,
+            &path,
+            CheckoutSource::Migrated,
+        )
+        .ok()?;
         n += 1;
         Some((repo.id, path))
     };
@@ -125,7 +184,9 @@ pub fn migrate_bindings(data_dir: &Path, svc: &ChatService, workspace_id: Uuid, 
         map(w);
     }
     for (chat, raw) in &b.chats {
-        let Ok(chat) = Uuid::parse_str(chat) else { continue };
+        let Ok(chat) = Uuid::parse_str(chat) else {
+            continue;
+        };
         if raw.trim().is_empty() {
             continue;
         }
@@ -172,7 +233,11 @@ pub fn find_repo(entries: &[RepoEntry], sel: &str) -> Result<WorkspaceRepo> {
 
 pub(crate) fn abs(p: &str) -> Result<PathBuf> {
     let p = PathBuf::from(p);
-    let p = if p.is_absolute() { p } else { std::env::current_dir()?.join(p) };
+    let p = if p.is_absolute() {
+        p
+    } else {
+        std::env::current_dir()?.join(p)
+    };
     Ok(rr::git::canonical(&p))
 }
 
@@ -184,7 +249,14 @@ pub(crate) fn abs(p: &str) -> Result<PathBuf> {
 /// and `host-alias` are the workspace-synced ones (design
 /// repos-and-checkouts 12: Admin with a passkey, names only), which this
 /// host uses only after `accept`.
-pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, pos: &[&str], flag: &dyn Fn(&str) -> Option<String>) -> Result<()> {
+pub fn cmd(
+    data_dir: &Path,
+    svc: &mut ChatService,
+    ws: Uuid,
+    host_label: &str,
+    pos: &[&str],
+    flag: &dyn Fn(&str) -> Option<String>,
+) -> Result<()> {
     let entries = || -> Result<Vec<RepoEntry>> { svc_entries(svc, ws) };
     match pos.first().copied() {
         None | Some("list") => {
@@ -422,25 +494,47 @@ pub fn guess_kind(input: &str) -> String {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn e(c: &str, name: &str, removed: bool) -> RepoEntry {
         RepoEntry {
-            repo: WorkspaceRepo { id: ligus_core::workspace_repo::repo_id(c), canonical: c.into(), display_name: name.into(), forge_kind: String::new(), default_branch: String::new(), root_commit: None, scratch: false },
+            repo: WorkspaceRepo {
+                id: ligus_core::workspace_repo::repo_id(c),
+                canonical: c.into(),
+                display_name: name.into(),
+                forge_kind: String::new(),
+                default_branch: String::new(),
+                root_commit: None,
+                scratch: false,
+            },
             removed,
         }
     }
 
     #[test]
     fn repos_are_found_by_name_canonical_or_id_prefix() {
-        let es = [e("github.com/a/wefit", "WeFit", false), e("github.com/a/infra", "Infra", false), e("github.com/a/old", "Old", true)];
+        let es = [
+            e("github.com/a/wefit", "WeFit", false),
+            e("github.com/a/infra", "Infra", false),
+            e("github.com/a/old", "Old", true),
+        ];
         assert_eq!(find_repo(&es, "wefit").unwrap().display_name, "WeFit");
-        assert_eq!(find_repo(&es, "github.com/a/infra").unwrap().display_name, "Infra");
-        assert_eq!(find_repo(&es, &es[0].repo.id.to_string()[..6]).unwrap().display_name, "WeFit");
-        assert!(find_repo(&es, "old").is_err(), "removed repos aren't chosen");
+        assert_eq!(
+            find_repo(&es, "github.com/a/infra").unwrap().display_name,
+            "Infra"
+        );
+        assert_eq!(
+            find_repo(&es, &es[0].repo.id.to_string()[..6])
+                .unwrap()
+                .display_name,
+            "WeFit"
+        );
+        assert!(
+            find_repo(&es, "old").is_err(),
+            "removed repos aren't chosen"
+        );
         assert_eq!(guess_kind("git@github.com:a/b.git"), "github");
         assert_eq!(guess_kind("git.example.com/a/b"), "");
     }

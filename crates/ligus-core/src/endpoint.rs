@@ -140,13 +140,34 @@ mod tests {
 
     #[test]
     fn extracts_the_host() {
-        assert_eq!(endpoint_host("http://100.100.10.20:8080/v1/chat/completions").as_deref(), Some("100.100.10.20"));
-        assert_eq!(endpoint_host("https://API.OpenAI.com/v1").as_deref(), Some("api.openai.com"));
-        assert_eq!(endpoint_host("localhost:11434").as_deref(), Some("localhost"));
-        assert_eq!(endpoint_host("http://[::1]:8080/v1").as_deref(), Some("::1"));
-        assert_eq!(endpoint_host("http://user:pw@gpu.local:8080").as_deref(), Some("gpu.local"));
-        assert_eq!(endpoint_host("http://box.tail1234.ts.net./v1").as_deref(), Some("box.tail1234.ts.net"));
-        assert_eq!(endpoint_host("fd7a:115c:a1e0::1").as_deref(), Some("fd7a:115c:a1e0::1"));
+        assert_eq!(
+            endpoint_host("http://100.100.10.20:8080/v1/chat/completions").as_deref(),
+            Some("100.100.10.20")
+        );
+        assert_eq!(
+            endpoint_host("https://API.OpenAI.com/v1").as_deref(),
+            Some("api.openai.com")
+        );
+        assert_eq!(
+            endpoint_host("localhost:11434").as_deref(),
+            Some("localhost")
+        );
+        assert_eq!(
+            endpoint_host("http://[::1]:8080/v1").as_deref(),
+            Some("::1")
+        );
+        assert_eq!(
+            endpoint_host("http://user:pw@gpu.local:8080").as_deref(),
+            Some("gpu.local")
+        );
+        assert_eq!(
+            endpoint_host("http://box.tail1234.ts.net./v1").as_deref(),
+            Some("box.tail1234.ts.net")
+        );
+        assert_eq!(
+            endpoint_host("fd7a:115c:a1e0::1").as_deref(),
+            Some("fd7a:115c:a1e0::1")
+        );
         assert_eq!(endpoint_host(""), None);
         // WHATWG skips the extra slashes: the client connects to host "v1".
         assert_eq!(endpoint_host("http:///v1").as_deref(), Some("v1"));
@@ -158,7 +179,10 @@ mod tests {
     #[test]
     fn host_matches_the_http_client() {
         for (endpoint, client_host) in [
-            ("http://evil.example\\@127.0.0.1:8080/v1/chat/completions", "evil.example"),
+            (
+                "http://evil.example\\@127.0.0.1:8080/v1/chat/completions",
+                "evil.example",
+            ),
             ("http://api.openai.com\\@gpu-box/v1", "api.openai.com"),
             ("http://evil.example#@localhost/v1", "evil.example"),
             ("http://evil.example?@localhost/v1", "evil.example"),
@@ -170,15 +194,24 @@ mod tests {
             ("http://2130706433/v1", "127.0.0.1"),
         ] {
             let parsed = reqwest_like_host(endpoint);
-            assert_eq!(parsed.as_deref(), Some(client_host), "{endpoint:?}: reference parse");
-            assert_eq!(endpoint_host(endpoint).as_deref(), Some(client_host), "{endpoint:?}");
+            assert_eq!(
+                parsed.as_deref(),
+                Some(client_host),
+                "{endpoint:?}: reference parse"
+            );
+            assert_eq!(
+                endpoint_host(endpoint).as_deref(),
+                Some(client_host),
+                "{endpoint:?}"
+            );
         }
     }
 
     /// What the HTTP client (reqwest, over the `url` crate) sees as the host.
     fn reqwest_like_host(endpoint: &str) -> Option<String> {
         let url = url::Url::parse(endpoint).ok()?;
-        url.host_str().map(|h| h.trim_start_matches('[').trim_end_matches(']').to_string())
+        url.host_str()
+            .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_string())
     }
 
     #[test]
@@ -244,7 +277,10 @@ mod tests {
             "   ",
         ] {
             assert!(!endpoint_is_private(e), "{e:?} should be public");
-            assert!(!endpoint_is_local_server(e), "{e:?} should not be a local server");
+            assert!(
+                !endpoint_is_local_server(e),
+                "{e:?} should not be a local server"
+            );
         }
     }
 
@@ -261,8 +297,14 @@ mod tests {
             "http://ai",
             "http://nas.lan:11434",
         ] {
-            assert!(!endpoint_is_private(e), "{e} must not open the file-tools gate");
-            assert!(endpoint_is_local_server(e), "{e} should still be a keyless local server");
+            assert!(
+                !endpoint_is_private(e),
+                "{e} must not open the file-tools gate"
+            );
+            assert!(
+                endpoint_is_local_server(e),
+                "{e} should still be a keyless local server"
+            );
         }
     }
 }

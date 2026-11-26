@@ -30,17 +30,33 @@ fn world() -> SignedWorld {
     w.admit("owner", "ada", WorkspaceRole::Admin);
     w.admit("owner", "bo", WorkspaceRole::Admin);
     w.admit("owner", "mara", WorkspaceRole::Contributor);
-    w.push("ada", SessionEvent::WorkspaceRepoAdded { repo: repo(WEFIT, "github") });
-    w.push("ada", SessionEvent::WorkspaceRepoAdded { repo: repo(INFRA, "") });
+    w.push(
+        "ada",
+        SessionEvent::WorkspaceRepoAdded {
+            repo: repo(WEFIT, "github"),
+        },
+    );
+    w.push(
+        "ada",
+        SessionEvent::WorkspaceRepoAdded {
+            repo: repo(INFRA, ""),
+        },
+    );
     w
 }
 
 fn aliases(id: &str, list: &[&str]) -> SessionEvent {
-    SessionEvent::WorkspaceRepoAliasesSet { repo_id: repo_id(id), aliases: list.iter().map(|s| s.to_string()).collect() }
+    SessionEvent::WorkspaceRepoAliasesSet {
+        repo_id: repo_id(id),
+        aliases: list.iter().map(|s| s.to_string()).collect(),
+    }
 }
 
 fn host(alias: &str, host: &str) -> SessionEvent {
-    SessionEvent::WorkspaceHostAliasSet { alias: alias.into(), host: host.into() }
+    SessionEvent::WorkspaceHostAliasSet {
+        alias: alias.into(),
+        host: host.into(),
+    }
 }
 
 #[test]
@@ -50,26 +66,56 @@ fn alias_change_requires_presence_v2_and_an_admin() {
     let bare = w.push_bare("ada", e.clone());
     let by_contributor = w.push("mara", e.clone());
     let ok = w.push("ada", e);
-    assert_eq!([w.verdict(bare), w.verdict(by_contributor), w.verdict(ok)], [Verdict::Denied, Verdict::Denied, Verdict::Allowed]);
-    assert_eq!(w.roster().repo_aliases[&repo_id(WEFIT)], vec!["github.com/old-org/wefit".to_string()]);
+    assert_eq!(
+        [w.verdict(bare), w.verdict(by_contributor), w.verdict(ok)],
+        [Verdict::Denied, Verdict::Denied, Verdict::Allowed]
+    );
+    assert_eq!(
+        w.roster().repo_aliases[&repo_id(WEFIT)],
+        vec!["github.com/old-org/wefit".to_string()]
+    );
     let h = host("ssh.git.example.com", "git.example.com");
-    let (hb, hc, hok) = (w.push_bare("ada", h.clone()), w.push("mara", h.clone()), w.push("ada", h));
-    assert_eq!([w.verdict(hb), w.verdict(hc), w.verdict(hok)], [Verdict::Denied, Verdict::Denied, Verdict::Allowed]);
-    assert_eq!(w.roster().host_aliases["ssh.git.example.com"], "git.example.com");
+    let (hb, hc, hok) = (
+        w.push_bare("ada", h.clone()),
+        w.push("mara", h.clone()),
+        w.push("ada", h),
+    );
+    assert_eq!(
+        [w.verdict(hb), w.verdict(hc), w.verdict(hok)],
+        [Verdict::Denied, Verdict::Denied, Verdict::Allowed]
+    );
+    assert_eq!(
+        w.roster().host_aliases["ssh.git.example.com"],
+        "git.example.com"
+    );
     // Clearing needs the same.
     let clear = host("ssh.git.example.com", "");
     let (cb, cok) = (w.push_bare("ada", clear.clone()), w.push("ada", clear));
-    assert_eq!([w.verdict(cb), w.verdict(cok)], [Verdict::Denied, Verdict::Allowed]);
+    assert_eq!(
+        [w.verdict(cb), w.verdict(cok)],
+        [Verdict::Denied, Verdict::Allowed]
+    );
     assert!(w.roster().host_aliases.is_empty());
 }
 
 #[test]
 fn agents_and_phones_cannot_set_aliases() {
     let fold = ChatSession::new("", Uuid::nil(), "");
-    for e in [aliases(WEFIT, &["github.com/old/wefit"]), host("a.example.com", "github.com")] {
-        assert!(ligus_core::authz::agent::tier_allows(&e, Uuid::new_v4(), Uuid::new_v4(), &fold).is_err());
+    for e in [
+        aliases(WEFIT, &["github.com/old/wefit"]),
+        host("a.example.com", "github.com"),
+    ] {
+        assert!(
+            ligus_core::authz::agent::tier_allows(&e, Uuid::new_v4(), Uuid::new_v4(), &fold)
+                .is_err()
+        );
         assert!(ligus_core::authz::phone::phone_tier_allows(&e, Uuid::new_v4()).is_err());
-        assert!(ligus_core::authz::rules::requires_presence(&e, "ada", &Default::default(), &fold));
+        assert!(ligus_core::authz::rules::requires_presence(
+            &e,
+            "ada",
+            &Default::default(),
+            &fold
+        ));
     }
 }
 
@@ -77,7 +123,13 @@ fn agents_and_phones_cannot_set_aliases() {
 fn aliases_are_disjoint_from_live_names() {
     let mut w = world();
     // Another repo's canonical, the repo's own canonical, a local root.
-    for bad in [&[INFRA][..], &[WEFIT], &["local:0123456789abcdef0123456789abcdef01234567"], &["github.com/Old/WeFit"], &["not a name"]] {
+    for bad in [
+        &[INFRA][..],
+        &[WEFIT],
+        &["local:0123456789abcdef0123456789abcdef01234567"],
+        &["github.com/Old/WeFit"],
+        &["not a name"],
+    ] {
         let id = w.push("ada", aliases(WEFIT, bad));
         assert_eq!(w.verdict(id), Verdict::Denied, "{bad:?}");
     }
@@ -86,11 +138,23 @@ fn aliases_are_disjoint_from_live_names() {
     // Infra can't take WeFit's alias, nor a look-alike of it.
     let taken = w.push("ada", aliases(INFRA, &["github.com/old-org/wefit"]));
     let alike = w.push("ada", aliases(INFRA, &["github.com/old_org/wefit"]));
-    let dup = w.push("ada", aliases(INFRA, &["git.example.com/a/b", "git.example.com/a/b"]));
-    assert_eq!([w.verdict(taken), w.verdict(alike), w.verdict(dup)], [Verdict::Denied; 3]);
+    let dup = w.push(
+        "ada",
+        aliases(INFRA, &["git.example.com/a/b", "git.example.com/a/b"]),
+    );
+    assert_eq!(
+        [w.verdict(taken), w.verdict(alike), w.verdict(dup)],
+        [Verdict::Denied; 3]
+    );
     // Too many.
     let many: Vec<String> = (0..9).map(|i| format!("git.example.com/x/r{i}")).collect();
-    let many = w.push("ada", SessionEvent::WorkspaceRepoAliasesSet { repo_id: repo_id(INFRA), aliases: many });
+    let many = w.push(
+        "ada",
+        SessionEvent::WorkspaceRepoAliasesSet {
+            repo_id: repo_id(INFRA),
+            aliases: many,
+        },
+    );
     assert_eq!(w.verdict(many), Verdict::Denied);
 }
 
@@ -123,7 +187,11 @@ fn alias_skeleton_folds_every_confusable_the_repo_flags_fold() {
     }
     let mut w = world();
     let split_rn = w.push("ada", aliases(INFRA, &["github.com/zazu-lam/wef-it"]));
-    assert_eq!(w.verdict(split_rn), Verdict::Denied, "a separator doesn't hide a look-alike");
+    assert_eq!(
+        w.verdict(split_rn),
+        Verdict::Denied,
+        "a separator doesn't hide a look-alike"
+    );
     // A `local:` name compares exactly.
     assert_ne!(skeleton("local:0a"), skeleton("local:oa"));
 }
@@ -138,7 +206,13 @@ fn host_alias_must_target_a_live_repo_host_and_never_shadow_one() {
     let ported = w.push("ada", host("ssh.git.example.com:2222", "git.example.com"));
     let selfie = w.push("ada", host("git.example.com", "git.example.com"));
     assert_eq!(
-        [w.verdict(unknown), w.verdict(shadow), w.verdict(alike2), w.verdict(ported), w.verdict(selfie)],
+        [
+            w.verdict(unknown),
+            w.verdict(shadow),
+            w.verdict(alike2),
+            w.verdict(ported),
+            w.verdict(selfie)
+        ],
         [Verdict::Denied; 5]
     );
     // An unrelated SSH host for github.com: allowed.
@@ -146,21 +220,52 @@ fn host_alias_must_target_a_live_repo_host_and_never_shadow_one() {
     let ok = w.push("ada", host("ssh.git.example.com", "git.example.com"));
     assert_eq!(w.verdict(ok), Verdict::Allowed);
     // An alias's host can't then be a repo's, and a repo alias can't sit on it.
-    let on_aliased = w.push("ada", aliases(INFRA, &["ssh.git.example.com/ops/infra-old"]));
-    let add = w.push("ada", SessionEvent::WorkspaceRepoAdded { repo: repo("ssh.git.example.com/a/b", "") });
-    assert_eq!([w.verdict(on_aliased), w.verdict(add)], [Verdict::Denied; 2]);
+    let on_aliased = w.push(
+        "ada",
+        aliases(INFRA, &["ssh.git.example.com/ops/infra-old"]),
+    );
+    let add = w.push(
+        "ada",
+        SessionEvent::WorkspaceRepoAdded {
+            repo: repo("ssh.git.example.com/a/b", ""),
+        },
+    );
+    assert_eq!(
+        [w.verdict(on_aliased), w.verdict(add)],
+        [Verdict::Denied; 2]
+    );
 }
 
 #[test]
 fn repo_add_shadowed_by_alias_refused_and_removal_drops_aliases() {
     let mut w = world();
     w.push("ada", aliases(WEFIT, &["github.com/old-org/wefit"]));
-    let same = w.push("ada", SessionEvent::WorkspaceRepoAdded { repo: repo("github.com/old-org/wefit", "github") });
-    let alike = w.push("ada", SessionEvent::WorkspaceRepoAdded { repo: repo("github.com/o1d-org/wefit", "github") });
+    let same = w.push(
+        "ada",
+        SessionEvent::WorkspaceRepoAdded {
+            repo: repo("github.com/old-org/wefit", "github"),
+        },
+    );
+    let alike = w.push(
+        "ada",
+        SessionEvent::WorkspaceRepoAdded {
+            repo: repo("github.com/o1d-org/wefit", "github"),
+        },
+    );
     assert_eq!([w.verdict(same), w.verdict(alike)], [Verdict::Denied; 2]);
-    w.push("ada", SessionEvent::WorkspaceRepoRemoved { repo_id: repo_id(WEFIT) });
+    w.push(
+        "ada",
+        SessionEvent::WorkspaceRepoRemoved {
+            repo_id: repo_id(WEFIT),
+        },
+    );
     assert!(!w.roster().repo_aliases.contains_key(&repo_id(WEFIT)));
-    let now_free = w.push("ada", SessionEvent::WorkspaceRepoAdded { repo: repo("github.com/old-org/wefit", "github") });
+    let now_free = w.push(
+        "ada",
+        SessionEvent::WorkspaceRepoAdded {
+            repo: repo("github.com/old-org/wefit", "github"),
+        },
+    );
     assert_eq!(w.verdict(now_free), Verdict::Allowed);
 }
 
@@ -169,8 +274,18 @@ fn repo_add_shadowed_by_alias_refused_and_removal_drops_aliases() {
 #[test]
 fn alias_collision_noop_order_independent() {
     let mut w = world();
-    let mut a = w.draft("ada", None, aliases(WEFIT, &["github.com/old-org/thing"]), None);
-    let mut b = w.draft("bo", None, aliases(INFRA, &["github.com/old-org/thing"]), None);
+    let mut a = w.draft(
+        "ada",
+        None,
+        aliases(WEFIT, &["github.com/old-org/thing"]),
+        None,
+    );
+    let mut b = w.draft(
+        "bo",
+        None,
+        aliases(INFRA, &["github.com/old-org/thing"]),
+        None,
+    );
     let pa = w.recovery_presence("ada", &a);
     w.finish(&mut a, "ada", Some(pa));
     let pb = w.recovery_presence("bo", &b);
@@ -179,12 +294,24 @@ fn alias_collision_noop_order_independent() {
     w.push_env(None, a);
     w.push_env(None, b);
     let v = w.verdicts();
-    assert_eq!([v[&ia], v[&ib]].iter().filter(|x| **x == Verdict::Allowed).count(), 1);
+    assert_eq!(
+        [v[&ia], v[&ib]]
+            .iter()
+            .filter(|x| **x == Verdict::Allowed)
+            .count(),
+        1
+    );
     let want = w.roster();
     let mut rev = w.cfg.clone();
     rev.reverse();
     let (_, t) = ligus_core::events::project_config(&rev, None, None);
-    assert_eq!((t.current().repo_aliases.clone(), t.current().host_aliases.clone()), (want.repo_aliases, want.host_aliases));
+    assert_eq!(
+        (
+            t.current().repo_aliases.clone(),
+            t.current().host_aliases.clone()
+        ),
+        (want.repo_aliases, want.host_aliases)
+    );
 }
 
 const POOL: [&str; 6] = [
@@ -195,7 +322,12 @@ const POOL: [&str; 6] = [
     "github.com/zazulam/wefit",
     "github.com/zazulam/other",
 ];
-const HOSTS: [&str; 4] = ["ssh.git.example.com", "github.com", "g1thub.com", "ssh.github.com"];
+const HOSTS: [&str; 4] = [
+    "ssh.git.example.com",
+    "github.com",
+    "g1thub.com",
+    "ssh.github.com",
+];
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(std::env::var("PROPTEST_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(256)))]

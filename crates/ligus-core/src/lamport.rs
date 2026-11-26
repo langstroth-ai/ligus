@@ -137,7 +137,10 @@ impl Bounds {
                 out.judge(e, claimed, &mut missing)
             };
             if v == Plausibility::Plausible {
-                let k = CfgFrontier { lamport: e.lamport, event_id: e.event_id };
+                let k = CfgFrontier {
+                    lamport: e.lamport,
+                    event_id: e.event_id,
+                };
                 if out.newest.is_none_or(|n| k > n) {
                     out.newest = Some(k);
                 }
@@ -165,19 +168,30 @@ impl Bounds {
         let stamp = e.actor_stamp.as_ref();
         // The signer's previous event, when held, is older.
         if let Some(p) = stamp.and_then(|s| s.prev) {
-            if claimed.get(&p).is_some_and(|ls| ls.iter().all(|l| *l >= e.lamport)) {
+            if claimed
+                .get(&p)
+                .is_some_and(|ls| ls.iter().all(|l| *l >= e.lamport))
+            {
                 return Plausibility::Implausible;
             }
         }
         let Some(h) = stamp.and_then(|s| s.log_head) else {
-            return if e.lamport == 1 { Plausibility::Plausible } else { Plausibility::Implausible };
+            return if e.lamport == 1 {
+                Plausibility::Plausible
+            } else {
+                Plausibility::Implausible
+            };
         };
         if h.lamport.checked_add(1) != Some(e.lamport) || h.event_id == e.event_id {
             return Plausibility::Implausible;
         }
         match self.by_id.get(&h.event_id) {
             Some(copies) => {
-                let at: Vec<Plausibility> = copies.iter().filter(|c| c.lamport == h.lamport).map(|c| c.verdict).collect();
+                let at: Vec<Plausibility> = copies
+                    .iter()
+                    .filter(|c| c.lamport == h.lamport)
+                    .map(|c| c.verdict)
+                    .collect();
                 if at.contains(&Plausibility::Plausible) {
                     Plausibility::Plausible
                 } else if at.contains(&Plausibility::Unresolved) {
@@ -216,7 +230,12 @@ impl Bounds {
         let (log_head, prev) = (s.and_then(|s| s.log_head), s.and_then(|s| s.prev));
         self.by_id
             .get(&e.event_id)
-            .and_then(|copies| copies.iter().find(|c| c.lamport == e.lamport && c.log_head == log_head && c.prev == prev).map(|c| c.verdict))
+            .and_then(|copies| {
+                copies
+                    .iter()
+                    .find(|c| c.lamport == e.lamport && c.log_head == log_head && c.prev == prev)
+                    .map(|c| c.verdict)
+            })
             .unwrap_or(Plausibility::Unresolved)
     }
 
@@ -237,7 +256,12 @@ impl Bounds {
 /// the events after it still count from it, and it can change nothing else.
 pub fn inert_witness(env: &SessionEventEnvelope) -> SessionEventEnvelope {
     let stamp = env.actor_stamp.as_ref();
-    let mut w = SessionEventEnvelope::new(env.session_id, env.workspace_id, 0, crate::events::SessionEvent::Unknown);
+    let mut w = SessionEventEnvelope::new(
+        env.session_id,
+        env.workspace_id,
+        0,
+        crate::events::SessionEvent::Unknown,
+    );
     w.event_id = env.event_id;
     w.id = env.id;
     w.lamport = env.lamport;
@@ -265,7 +289,9 @@ pub fn is_witness(env: &SessionEventEnvelope) -> bool {
     matches!(env.payload, crate::events::SessionEvent::Unknown)
         && env.signature.is_none()
         && env.signer_device_id.is_none()
-        && env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == crate::identity::ActorKind::System && s.actor.id.is_empty())
+        && env.actor_stamp.as_ref().is_some_and(|s| {
+            s.actor.kind == crate::identity::ActorKind::System && s.actor.id.is_empty()
+        })
 }
 
 /// The `log_head` an honest author stamps on its next event on this log.
@@ -301,7 +327,10 @@ pub fn plausible_keys(log: &[SessionEventEnvelope]) -> Vec<CfgFrontier> {
     let mut keys: Vec<CfgFrontier> = log
         .iter()
         .filter(|e| !is_witness(e) && bounds.of_env(e) == Plausibility::Plausible)
-        .map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id })
+        .map(|e| CfgFrontier {
+            lamport: e.lamport,
+            event_id: e.event_id,
+        })
         .collect();
     keys.sort();
     keys.dedup();
@@ -314,7 +343,11 @@ pub fn plausible_keys(log: &[SessionEventEnvelope]) -> Vec<CfgFrontier> {
 /// Its `prev`, if any, must still be older (the caller's to keep so).
 pub fn stamp_back(env: &mut SessionEventEnvelope, log: &[SessionEventEnvelope], back: usize) {
     let keys = plausible_keys(log);
-    let head = keys.len().checked_sub(1 + back).map(|i| keys[i]).or_else(|| keys.first().copied());
+    let head = keys
+        .len()
+        .checked_sub(1 + back)
+        .map(|i| keys[i])
+        .or_else(|| keys.first().copied());
     stamp_next(env, head);
 }
 
@@ -326,7 +359,12 @@ mod tests {
     use crate::time_util::Timestamp;
 
     fn ev(head: Option<&SessionEventEnvelope>, lamport: Option<u64>) -> SessionEventEnvelope {
-        let mut e = SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), 1, SessionEvent::SessionTitleChanged { title: "t".into() });
+        let mut e = SessionEventEnvelope::new(
+            Uuid::nil(),
+            Uuid::nil(),
+            1,
+            SessionEvent::SessionTitleChanged { title: "t".into() },
+        );
         e.actor_stamp = Some(ActorStamp {
             actor: ActorIdentity::new("a", "a", ActorKind::Human),
             recorded_at: Timestamp::epoch(),
@@ -337,7 +375,13 @@ mod tests {
             sig_alg: Default::default(),
             log_head: None,
         });
-        stamp_next(&mut e, head.map(|h| CfgFrontier { lamport: h.lamport, event_id: h.event_id }));
+        stamp_next(
+            &mut e,
+            head.map(|h| CfgFrontier {
+                lamport: h.lamport,
+                event_id: h.event_id,
+            }),
+        );
         if let Some(l) = lamport {
             e.lamport = l;
         }
@@ -351,17 +395,38 @@ mod tests {
         let c = ev(Some(&b), None);
         let mut big = ev(Some(&b), Some(u64::MAX));
         if let Some(s) = big.actor_stamp.as_mut() {
-            s.log_head = Some(CfgFrontier { lamport: u64::MAX - 1, event_id: b.event_id });
+            s.log_head = Some(CfgFrontier {
+                lamport: u64::MAX - 1,
+                event_id: b.event_id,
+            });
         }
         let after_big = ev(Some(&big), None);
-        let all = vec![a.clone(), b.clone(), c.clone(), big.clone(), after_big.clone()];
+        let all = vec![
+            a.clone(),
+            b.clone(),
+            c.clone(),
+            big.clone(),
+            after_big.clone(),
+        ];
         let bounds = Bounds::of(&all);
         for e in [&a, &b, &c] {
             assert_eq!(bounds.of_env(e), Plausibility::Plausible);
         }
-        assert_eq!(bounds.of_env(&big), Plausibility::Implausible, "a head named under the wrong lamport");
-        assert_eq!(bounds.of_env(&after_big), Plausibility::Implausible, "built on an implausible head");
-        assert_eq!(bounds.head().map(|h| h.event_id), Some(c.event_id), "the newest plausible event");
+        assert_eq!(
+            bounds.of_env(&big),
+            Plausibility::Implausible,
+            "a head named under the wrong lamport"
+        );
+        assert_eq!(
+            bounds.of_env(&after_big),
+            Plausibility::Implausible,
+            "built on an implausible head"
+        );
+        assert_eq!(
+            bounds.head().map(|h| h.event_id),
+            Some(c.event_id),
+            "the newest plausible event"
+        );
     }
 
     #[test]
@@ -371,6 +436,10 @@ mod tests {
         let bounds = Bounds::of(std::slice::from_ref(&b));
         assert_eq!(bounds.of_env(&b), Plausibility::Unresolved);
         let five = ev(None, Some(5));
-        assert_eq!(Bounds::of(std::slice::from_ref(&five)).of_env(&five), Plausibility::Implausible, "a first event is lamport 1");
+        assert_eq!(
+            Bounds::of(std::slice::from_ref(&five)).of_env(&five),
+            Plausibility::Implausible,
+            "a first event is lamport 1"
+        );
     }
 }

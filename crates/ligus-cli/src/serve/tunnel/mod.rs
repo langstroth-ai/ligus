@@ -80,13 +80,16 @@ pub fn b64u_decode(s: &str) -> Result<Vec<u8>> {
     if s.contains('=') {
         bail!("base64url must not be padded");
     }
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).map_err(|e| anyhow!("bad base64url: {e}"))
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .map_err(|e| anyhow!("bad base64url: {e}"))
 }
 
 /// Decode a base64url value that must be exactly `N` bytes.
 pub fn b64u_fixed<const N: usize>(s: &str) -> Result<[u8; N]> {
     let v = b64u_decode(s)?;
-    v.try_into().map_err(|v: Vec<u8>| anyhow!("expected {N} bytes, got {}", v.len()))
+    v.try_into()
+        .map_err(|v: Vec<u8>| anyhow!("expected {N} bytes, got {}", v.len()))
 }
 
 /// `ctx(label, p1, p2, …)` = `"hive-tunnel/1 " + label ‖ 0x00 ‖ p1 ‖ p2 ‖ …`.
@@ -124,7 +127,10 @@ pub fn random_bytes<const N: usize>() -> [u8; N] {
 }
 
 pub fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 // ── Files ────────────────────────────────────────────────────────────────────
@@ -142,16 +148,23 @@ pub fn pending_dir(dir: &Path) -> PathBuf {
 /// root) is never chmodded: it is checked instead
 /// ([`ligus_runtime::private_file::ensure_private_dir`]).
 pub fn ensure_private_dir(dir: &Path) -> Result<()> {
-    ligus_runtime::private_file::ensure_private_dir(dir).with_context(|| format!("securing {}", dir.display()))
+    ligus_runtime::private_file::ensure_private_dir(dir)
+        .with_context(|| format!("securing {}", dir.display()))
 }
 
 /// Atomically write `bytes` to `path` with mode 0600 (temp file + rename, so a
 /// reader in another process never sees a torn file).
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let parent = path.parent().ok_or_else(|| anyhow!("{} has no parent", path.display()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no parent", path.display()))?;
     ensure_private_dir(parent)?;
-    let tmp = parent.join(format!(".{}.{}.tmp", path.file_name().and_then(|n| n.to_str()).unwrap_or("f"), random_id()));
+    let tmp = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("f"),
+        random_id()
+    ));
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -159,7 +172,9 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut f = opts.open(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+    let mut f = opts
+        .open(&tmp)
+        .with_context(|| format!("creating {}", tmp.display()))?;
     f.write_all(bytes)?;
     f.sync_all()?;
     drop(f);
@@ -173,7 +188,9 @@ pub fn write_json(path: &Path, v: &impl Serialize) -> Result<()> {
 
 pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
     match std::fs::read(path) {
-        Ok(b) => Ok(Some(serde_json::from_slice(&b).with_context(|| format!("parsing {}", path.display()))?)),
+        Ok(b) => Ok(Some(
+            serde_json::from_slice(&b).with_context(|| format!("parsing {}", path.display()))?,
+        )),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
     }
@@ -203,7 +220,12 @@ fn yes() -> bool {
 
 impl RelaySettings {
     pub fn new(relay: &str, reg_token: Option<String>, insecure_relay: bool) -> Result<Self> {
-        let s = Self { relay: relay.trim().trim_end_matches('/').to_string(), reg_token, insecure_relay, enabled: true };
+        let s = Self {
+            relay: relay.trim().trim_end_matches('/').to_string(),
+            reg_token,
+            insecure_relay,
+            enabled: true,
+        };
         s.validate()?;
         Ok(s)
     }
@@ -249,7 +271,12 @@ impl RelaySettings {
     /// `--reg-token` / `LIGUS_REMOTE_REG_TOKEN`, `--insecure-relay` /
     /// `LIGUS_REMOTE_INSECURE_RELAY`), then `relay.json`. `LIGUS_REMOTE_RELAY=off`
     /// turns remote access off even when `relay.json` enables it.
-    pub fn resolve(data_dir: &Path, relay: Option<String>, reg_token: Option<String>, insecure: bool) -> Result<Option<Self>> {
+    pub fn resolve(
+        data_dir: &Path,
+        relay: Option<String>,
+        reg_token: Option<String>,
+        insecure: bool,
+    ) -> Result<Option<Self>> {
         let insecure = insecure || crate::reply::env_flag("LIGUS_REMOTE_INSECURE_RELAY", false);
         let reg_token = reg_token.or_else(|| crate::env_opt("LIGUS_REMOTE_REG_TOKEN"));
         match relay.or_else(|| crate::env_opt("LIGUS_REMOTE_RELAY")) {
@@ -358,13 +385,25 @@ pub const MAX_WINDOW_ATTEMPTS: u32 = 5;
 pub fn create_window(dir: &Path, lifetime: u64) -> Result<(PairingSecret, u64)> {
     let secret = PairingSecret::generate();
     let exp = now() + lifetime.min(900);
-    write_json(&pending_dir(dir).join(format!("enroll-{}.json", secret.eid)), &WindowFile { ps: b64u(secret.ps), exp })?;
+    write_json(
+        &pending_dir(dir).join(format!("enroll-{}.json", secret.eid)),
+        &WindowFile {
+            ps: b64u(secret.ps),
+            exp,
+        },
+    )?;
     Ok((secret, exp))
 }
 
 /// The v2 pairing link (§4). `direct` = `(server URL, bearer token)` when a
 /// direct path exists; `None` for a relay-only link.
-pub fn pairing_link_v2(direct: Option<(&str, &str)>, keys: &HostKeys, relay: &str, ps: &[u8; 32], exp: u64) -> String {
+pub fn pairing_link_v2(
+    direct: Option<(&str, &str)>,
+    keys: &HostKeys,
+    relay: &str,
+    ps: &[u8; 32],
+    exp: u64,
+) -> String {
     let mut link = match direct {
         Some((url, token)) => format!("{}&", super::pair::pairing_url(url, token)),
         None => ligus_core::names::deep_link("pair?"),
@@ -410,7 +449,11 @@ enum Pending {
     Revoke(String),
     /// A push: the phone, the notification kind, and (for `ligus remote
     /// push-test`) where the relay's answer goes.
-    Push { pid: String, kind: String, report: Option<tokio::sync::oneshot::Sender<RelayAck>> },
+    Push {
+        pid: String,
+        kind: String,
+        report: Option<tokio::sync::oneshot::Sender<RelayAck>>,
+    },
     Other,
 }
 
@@ -502,7 +545,9 @@ impl TunnelHost {
             status: Mutex::new(LiveStatus::default()),
             ledger,
             revocation_kick: tokio::sync::Notify::new(),
-            http: ligus_forge::http_client_builder().connect_timeout(Duration::from_secs(3)).build()?,
+            http: ligus_forge::http_client_builder()
+                .connect_timeout(Duration::from_secs(3))
+                .build()?,
             auth_admin: Mutex::new(revocation::AuthAdmin::from_env()),
             device_lookup: Mutex::new(None),
             relay_clock_offset: Default::default(),
@@ -526,7 +571,9 @@ impl TunnelHost {
         // and the control loop take the ack, before this thread is scheduled
         // again, and an ack nobody waits for is dropped.
         Self::lock(&self.acks).insert(id.clone(), pending);
-        let sent = Self::lock(&self.control).as_ref().is_some_and(|tx| tx.send(msg.to_string()).is_ok());
+        let sent = Self::lock(&self.control)
+            .as_ref()
+            .is_some_and(|tx| tx.send(msg.to_string()).is_ok());
         if !sent {
             Self::lock(&self.acks).remove(&id);
         }
@@ -534,7 +581,9 @@ impl TunnelHost {
     }
 
     fn send_plain(&self, msg: Value) -> bool {
-        Self::lock(&self.control).as_ref().is_some_and(|tx| tx.send(msg.to_string()).is_ok())
+        Self::lock(&self.control)
+            .as_ref()
+            .is_some_and(|tx| tx.send(msg.to_string()).is_ok())
     }
 
     pub(crate) fn set_control(&self, tx: Option<mpsc::UnboundedSender<String>>) {
@@ -587,37 +636,57 @@ impl TunnelHost {
 
     /// The relay answered a host request (`detail`: a `diag` push's ack).
     pub(crate) fn on_ack(&self, id: &str, ok: bool, code: Option<&str>, detail: Option<&str>) {
-        let Some(mut p) = Self::lock(&self.acks).remove(id) else { return };
+        let Some(mut p) = Self::lock(&self.acks).remove(id) else {
+            return;
+        };
         if let Pending::Push { pid, kind, report } = &mut p {
             // Every push's fate, at info (never its content or a token).
-            let who = self.registry.get(pid).map(|r| phone_label(&r)).unwrap_or_else(|| pid.clone());
+            let who = self
+                .registry
+                .get(pid)
+                .map(|r| phone_label(&r))
+                .unwrap_or_else(|| pid.clone());
             let extra = detail.map(|d| format!(" [{d}]")).unwrap_or_default();
             if ok {
                 println!("push: {kind} to {who}: relay accepted it{extra}");
             } else {
                 let c = code.unwrap_or("?");
-                println!("push: {kind} to {who}: relay refused it: {c}{extra}{}", refusal_hint(c));
+                println!(
+                    "push: {kind} to {who}: relay refused it: {c}{extra}{}",
+                    refusal_hint(c)
+                );
             }
             if let Some(tx) = report.take() {
-                let _ = tx.send(RelayAck { ok, code: code.map(str::to_string), detail: detail.map(str::to_string) });
+                let _ = tx.send(RelayAck {
+                    ok,
+                    code: code.map(str::to_string),
+                    detail: detail.map(str::to_string),
+                });
             }
         }
         match p {
             Pending::Revoke(pid) if ok => {
                 Self::lock(&self.revocations).remove(&pid);
-                let _ = std::fs::remove_file(pending_dir(&self.dir).join(format!("revoke-{pid}.json")));
+                let _ =
+                    std::fs::remove_file(pending_dir(&self.dir).join(format!("revoke-{pid}.json")));
                 // The relay's control `revoke` drops the push token and
                 // closes the sessions too: it confirms both steps.
                 self.ledger.relay_confirmed(&pid, None, None);
             }
             Pending::Revoke(pid) => {
-                eprintln!("remote: relay refused revoking {pid} ({}); retrying", code.unwrap_or("?"));
+                eprintln!(
+                    "remote: relay refused revoking {pid} ({}); retrying",
+                    code.unwrap_or("?")
+                );
                 if let Some(r) = Self::lock(&self.revocations).get_mut(&pid) {
                     r.1 = None;
                 }
             }
             Pending::Enroll(eid) if !ok => {
-                eprintln!("remote: relay refused enrollment window {eid} ({})", code.unwrap_or("?"));
+                eprintln!(
+                    "remote: relay refused enrollment window {eid} ({})",
+                    code.unwrap_or("?")
+                );
             }
             Pending::Push { pid, .. } if !ok => {
                 let code = code.unwrap_or("?");
@@ -640,9 +709,13 @@ impl TunnelHost {
     /// Open an in-memory window (normally loaded from `pending/`).
     pub fn add_window(&self, secret: PairingSecret, exp: u64) {
         let eid = secret.eid.clone();
-        Self::lock(&self.windows)
-            .entry(eid)
-            .or_insert(Window { secret, exp, attempts: 0, bound_static: None, announced: false });
+        Self::lock(&self.windows).entry(eid).or_insert(Window {
+            secret,
+            exp,
+            attempts: 0,
+            bound_static: None,
+            announced: false,
+        });
         self.announce_windows();
     }
 
@@ -677,7 +750,9 @@ impl TunnelHost {
     /// The psk for an open, unexpired window.
     pub(crate) fn window_psk(&self, eid: &str) -> Option<[u8; 32]> {
         let w = Self::lock(&self.windows);
-        w.get(eid).filter(|w| w.exp > now() && w.attempts < MAX_WINDOW_ATTEMPTS).map(|w| w.secret.psk)
+        w.get(eid)
+            .filter(|w| w.exp > now() && w.attempts < MAX_WINDOW_ATTEMPTS)
+            .map(|w| w.secret.psk)
     }
 
     /// Count a failed attempt; closes the window after the fifth.
@@ -702,7 +777,9 @@ impl TunnelHost {
     /// different static later is refused.
     pub(crate) fn window_bind(&self, eid: &str, static_pub: [u8; 32]) -> bool {
         let mut ws = Self::lock(&self.windows);
-        let Some(w) = ws.get_mut(eid) else { return false };
+        let Some(w) = ws.get_mut(eid) else {
+            return false;
+        };
         match w.bound_static {
             Some(s) => s == static_pub,
             None => {
@@ -725,9 +802,18 @@ impl TunnelHost {
             (None, None) => return Ok(false),
             (a, b) => a.unwrap_or(0).max(b.unwrap_or(0)),
         };
-        write_json(&file, &RevokeFile { pid: pid.to_string(), exp })?;
+        write_json(
+            &file,
+            &RevokeFile {
+                pid: pid.to_string(),
+                exp,
+            },
+        )?;
         let _ = self.revoked.send(pid.to_string());
-        Self::lock(&self.revocations).entry(pid.to_string()).or_insert((exp, None)).0 = exp;
+        Self::lock(&self.revocations)
+            .entry(pid.to_string())
+            .or_insert((exp, None))
+            .0 = exp;
         self.send_revocations();
         Ok(true)
     }
@@ -740,7 +826,10 @@ impl TunnelHost {
             .map(|(p, (e, _))| (p.clone(), *e))
             .collect();
         for (pid, exp) in due {
-            if self.send_request(json!({ "t": "revoke", "pid": pid, "exp": exp }), Pending::Revoke(pid.clone())) {
+            if self.send_request(
+                json!({ "t": "revoke", "pid": pid, "exp": exp }),
+                Pending::Revoke(pid.clone()),
+            ) {
                 if let Some(r) = Self::lock(&self.revocations).get_mut(&pid) {
                     r.1 = Some(Instant::now());
                 }
@@ -753,11 +842,18 @@ impl TunnelHost {
     /// new sessions are refused, pushes stop); the relay and langstroth-auth
     /// steps run in the background with per-step status ([`revocation`]).
     pub fn revoke_device(&self, device: uuid::Uuid, pids: &[String]) -> Result<()> {
-        let name = pids.iter().find_map(|p| self.registry.get(p)).map(|r| r.name).unwrap_or_default();
+        let name = pids
+            .iter()
+            .find_map(|p| self.registry.get(p))
+            .map(|r| r.name)
+            .unwrap_or_default();
         for pid in pids {
             self.revoke(pid)?;
         }
-        let session = self.auth_admin().is_none().then_some((ligus_runtime::revocation_status::StepState::NotApplicable, revocation::NO_AUTH_ADMIN));
+        let session = self.auth_admin().is_none().then_some((
+            ligus_runtime::revocation_status::StepState::NotApplicable,
+            revocation::NO_AUTH_ADMIN,
+        ));
         self.ledger.begin(device, &name, pids, session);
         println!("remote: phone {name:?} revoked (device {device}); cutting its relay pairing and push registration");
         self.revocation_kick.notify_one();
@@ -767,7 +863,10 @@ impl TunnelHost {
     /// The expiry a revocation of `pid` must last until (its latest credential).
     pub fn revocation_exp(&self, pid: &str) -> u64 {
         let rec = self.registry.get(pid).map(|r| r.cred_exp).unwrap_or(0);
-        let pending = Self::lock(&self.revocations).get(pid).map(|r| r.0).unwrap_or(0);
+        let pending = Self::lock(&self.revocations)
+            .get(pid)
+            .map(|r| r.0)
+            .unwrap_or(0);
         rec.max(pending).max(now() + CRED_LIFETIME_SECS)
     }
 
@@ -802,7 +901,8 @@ impl TunnelHost {
 
     pub fn lookup_device(&self, id: uuid::Uuid) -> device_bind::DeviceLookup {
         let f = Self::lock(&self.device_lookup).clone();
-        f.map(|f| f(id)).unwrap_or(device_bind::DeviceLookup::Unknown)
+        f.map(|f| f(id))
+            .unwrap_or(device_bind::DeviceLookup::Unknown)
     }
 
     /// Why a new enrollment from this Noise static / auth key must be refused:
@@ -836,11 +936,16 @@ impl TunnelHost {
         for eid in expired {
             self.close_window(&eid);
         }
-        let Ok(entries) = std::fs::read_dir(pending_dir(&self.dir)) else { return };
+        let Ok(entries) = std::fs::read_dir(pending_dir(&self.dir)) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
-            if let Some(eid) = name.strip_prefix("enroll-").and_then(|n| n.strip_suffix(".json")) {
+            if let Some(eid) = name
+                .strip_prefix("enroll-")
+                .and_then(|n| n.strip_suffix(".json"))
+            {
                 if Self::lock(&self.windows).contains_key(eid) {
                     continue;
                 }
@@ -863,7 +968,10 @@ impl TunnelHost {
                     }
                     Err(e) => eprintln!("remote: {e:#}"),
                 }
-            } else if let Some(pid) = name.strip_prefix("revoke-").and_then(|n| n.strip_suffix(".json")) {
+            } else if let Some(pid) = name
+                .strip_prefix("revoke-")
+                .and_then(|n| n.strip_suffix(".json"))
+            {
                 let known = Self::lock(&self.revocations).contains_key(pid);
                 if !known {
                     if let Err(e) = self.revoke(pid) {
@@ -927,7 +1035,10 @@ impl TunnelHost {
             if self.send_push(&rec, content, false, None) {
                 sent += 1;
             } else {
-                println!("push: {} to {who} not sent: not connected to the relay", content.kind);
+                println!(
+                    "push: {} to {who} not sent: not connected to the relay",
+                    content.kind
+                );
             }
         }
         sent
@@ -935,9 +1046,25 @@ impl TunnelHost {
 
     /// Seal and queue one push to `rec`; `diag` asks the relay for the push
     /// service's answer, delivered to `report`.
-    fn send_push(&self, rec: &PhoneRecord, content: &PushContent, diag: bool, report: Option<tokio::sync::oneshot::Sender<RelayAck>>) -> bool {
-        let Some((seq, key)) = self.registry.next_push_seq(&rec.pid) else { return false };
-        let ct = seal_push(&key, self.host_id(), &rec.pid, content, rec.push_previews, seq, now());
+    fn send_push(
+        &self,
+        rec: &PhoneRecord,
+        content: &PushContent,
+        diag: bool,
+        report: Option<tokio::sync::oneshot::Sender<RelayAck>>,
+    ) -> bool {
+        let Some((seq, key)) = self.registry.next_push_seq(&rec.pid) else {
+            return false;
+        };
+        let ct = seal_push(
+            &key,
+            self.host_id(),
+            &rec.pid,
+            content,
+            rec.push_previews,
+            seq,
+            now(),
+        );
         let mut msg = json!({ "t": "push", "pid": rec.pid, "ct": b64u(ct), "prio": "high" });
         if let Some(c) = content.chat_id.as_ref().or(content.collapse.as_ref()) {
             msg["collapse"] = json!(push_collapse(&key, c));
@@ -945,7 +1072,14 @@ impl TunnelHost {
         if diag {
             msg["diag"] = json!(true);
         }
-        self.send_request(msg, Pending::Push { pid: rec.pid.clone(), kind: content.kind.clone(), report })
+        self.send_request(
+            msg,
+            Pending::Push {
+                pid: rec.pid.clone(),
+                kind: content.kind.clone(),
+                report,
+            },
+        )
     }
 
     /// `ligus remote push-test`: a `test` push to each active phone (or the
@@ -970,7 +1104,12 @@ impl TunnelHost {
                     return report;
                 }
             },
-            None => self.registry.list().into_iter().filter(|r| r.is_active()).collect(),
+            None => self
+                .registry
+                .list()
+                .into_iter()
+                .filter(|r| r.is_active())
+                .collect(),
         };
         let mut waits = Vec::new();
         for rec in phones {
@@ -997,14 +1136,20 @@ impl TunnelHost {
             let (tx, rx) = tokio::sync::oneshot::channel();
             hop.sent = self.send_push(&rec, &content, true, Some(tx));
             if hop.sent {
-                println!("push: test to {} sent to the relay (push-test)", phone_label(&rec));
+                println!(
+                    "push: test to {} sent to the relay (push-test)",
+                    phone_label(&rec)
+                );
                 waits.push((report.phones.len(), rx));
             }
             report.phones.push(hop);
         }
         let deadline = tokio::time::Instant::now() + wait;
         for (i, rx) in waits {
-            report.phones[i].relay = tokio::time::timeout_at(deadline, rx).await.ok().and_then(Result::ok);
+            report.phones[i].relay = tokio::time::timeout_at(deadline, rx)
+                .await
+                .ok()
+                .and_then(Result::ok);
         }
         report
     }
@@ -1018,7 +1163,10 @@ impl TunnelHost {
     /// foreground there) until the guard drops.
     pub fn foreground(self: &Arc<Self>, pid: &str) -> ForegroundGuard {
         Self::lock(&self.push_gate).foreground_open(pid);
-        ForegroundGuard { host: self.clone(), pid: pid.to_string() }
+        ForegroundGuard {
+            host: self.clone(),
+            pid: pid.to_string(),
+        }
     }
 
     /// Open `/v1/events` streams from `pid` right now.
@@ -1165,7 +1313,15 @@ pub fn preview_text(s: &str) -> String {
 
 /// The push plaintext for one phone (§14).
 pub fn push_plaintext(content: &PushContent, previews: bool, seq: u64, ts: u64) -> Value {
-    let preview = if previews { content.preview.as_deref().map(preview_text).filter(|p| !p.is_empty()) } else { None };
+    let preview = if previews {
+        content
+            .preview
+            .as_deref()
+            .map(preview_text)
+            .filter(|p| !p.is_empty())
+    } else {
+        None
+    };
     let body = match &preview {
         Some(p) => p.clone(),
         None if content.preview.is_some() => String::new(), // sender only
@@ -1175,7 +1331,11 @@ pub fn push_plaintext(content: &PushContent, previews: bool, seq: u64, ts: u64) 
     if let Some(c) = &content.chat_id {
         pt["chatId"] = json!(c);
     }
-    for (key, value) in [("proposalId", &content.proposal_id), ("workflowRunId", &content.workflow_run_id), ("workflowId", &content.workflow_id)] {
+    for (key, value) in [
+        ("proposalId", &content.proposal_id),
+        ("workflowRunId", &content.workflow_run_id),
+        ("workflowId", &content.workflow_id),
+    ] {
         if let Some(v) = value {
             pt[key] = json!(clip(v, 64));
         }
@@ -1196,14 +1356,34 @@ pub fn push_plaintext(content: &PushContent, previews: bool, seq: u64, ts: u64) 
 
 /// Encrypt the push for one phone; drops the preview if the result would
 /// exceed [`PUSH_CT_MAX`].
-pub fn seal_push(key: &[u8; 32], host_id: &str, pid: &str, content: &PushContent, previews: bool, seq: u64, ts: u64) -> Vec<u8> {
+pub fn seal_push(
+    key: &[u8; 32],
+    host_id: &str,
+    pid: &str,
+    content: &PushContent,
+    previews: bool,
+    seq: u64,
+    ts: u64,
+) -> Vec<u8> {
     let pt = push_plaintext(content, previews, seq, ts);
-    let ct = push_encrypt(key, host_id, pid, &random_bytes::<12>(), pt.to_string().as_bytes());
+    let ct = push_encrypt(
+        key,
+        host_id,
+        pid,
+        &random_bytes::<12>(),
+        pt.to_string().as_bytes(),
+    );
     if ct.len() <= PUSH_CT_MAX || !previews {
         return ct;
     }
     let pt = push_plaintext(content, false, seq, ts);
-    push_encrypt(key, host_id, pid, &random_bytes::<12>(), pt.to_string().as_bytes())
+    push_encrypt(
+        key,
+        host_id,
+        pid,
+        &random_bytes::<12>(),
+        pt.to_string().as_bytes(),
+    )
 }
 
 fn clip(s: &str, max_bytes: usize) -> String {
@@ -1218,11 +1398,25 @@ fn clip(s: &str, max_bytes: usize) -> String {
 }
 
 /// `nonce ‖ ChaCha20-Poly1305(push_key, nonce, plaintext, ctx("push", hid, pid))`.
-pub fn push_encrypt(key: &[u8; 32], host_id: &str, pid: &str, nonce: &[u8; 12], plaintext: &[u8]) -> Vec<u8> {
+pub fn push_encrypt(
+    key: &[u8; 32],
+    host_id: &str,
+    pid: &str,
+    nonce: &[u8; 12],
+    plaintext: &[u8],
+) -> Vec<u8> {
     use chacha20poly1305::aead::{Aead, KeyInit, Payload};
     let ad = ctx("push", &[host_id.as_bytes(), pid.as_bytes()]);
     let cipher = chacha20poly1305::ChaCha20Poly1305::new(key.into());
-    let ct = cipher.encrypt(nonce.into(), Payload { msg: plaintext, aad: &ad }).expect("encrypt");
+    let ct = cipher
+        .encrypt(
+            nonce.into(),
+            Payload {
+                msg: plaintext,
+                aad: &ad,
+            },
+        )
+        .expect("encrypt");
     let mut out = nonce.to_vec();
     out.extend_from_slice(&ct);
     out
@@ -1265,15 +1459,28 @@ pub const PUSH_TEST_WAIT: Duration = Duration::from_secs(15);
 impl TunnelHost {
     /// Push-test requests left in `pending/` (each taken once).
     fn take_push_tests(&self) -> Vec<(String, PushTestRequest)> {
-        let Ok(entries) = std::fs::read_dir(pending_dir(&self.dir)) else { return Vec::new() };
+        let Ok(entries) = std::fs::read_dir(pending_dir(&self.dir)) else {
+            return Vec::new();
+        };
         let mut out = Vec::new();
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            let Some(id) = name.strip_prefix("pushtest-").and_then(|n| n.strip_suffix(".req.json")) else { continue };
+            let Some(id) = name
+                .strip_prefix("pushtest-")
+                .and_then(|n| n.strip_suffix(".req.json"))
+            else {
+                continue;
+            };
             let req = read_json::<PushTestRequest>(&entry.path()).ok().flatten();
             let _ = std::fs::remove_file(entry.path());
             match req {
-                Some(r) if r.exp > now() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') => {
+                Some(r)
+                    if r.exp > now()
+                        && id.len() <= 64
+                        && id
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') =>
+                {
                     out.push((id.to_string(), r))
                 }
                 _ => {}

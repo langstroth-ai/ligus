@@ -41,7 +41,12 @@ impl HostKeys {
     pub fn from_parts(sign_seed: [u8; 32], static_priv: [u8; 32]) -> Self {
         let sign = SigningKey::from_bytes(&sign_seed);
         let host_id = host_id_for(sign.verifying_key().as_bytes());
-        Self { sign, static_priv, static_pub: x25519_pub(&static_priv), host_id }
+        Self {
+            sign,
+            static_priv,
+            static_pub: x25519_pub(&static_priv),
+            host_id,
+        }
     }
 
     pub fn generate() -> Self {
@@ -54,7 +59,9 @@ impl HostKeys {
 
     pub fn load(dir: &Path) -> Result<Option<Self>> {
         let path = Self::file(dir);
-        let Some(f) = read_json::<KeysFile>(&path)? else { return Ok(None) };
+        let Some(f) = read_json::<KeysFile>(&path)? else {
+            return Ok(None);
+        };
         if f.v != 1 {
             bail!("{}: unsupported keys version {}", path.display(), f.v);
         }
@@ -63,11 +70,17 @@ impl HostKeys {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&path)?.permissions().mode() & 0o777;
             if mode & 0o077 != 0 {
-                eprintln!("remote: {} was mode {mode:o}; tightening to 0600", path.display());
+                eprintln!(
+                    "remote: {} was mode {mode:o}; tightening to 0600",
+                    path.display()
+                );
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
             }
         }
-        Ok(Some(Self::from_parts(b64u_fixed(&f.sign_seed)?, b64u_fixed(&f.static_priv)?)))
+        Ok(Some(Self::from_parts(
+            b64u_fixed(&f.sign_seed)?,
+            b64u_fixed(&f.static_priv)?,
+        )))
     }
 
     pub fn save(&self, dir: &Path) -> Result<()> {

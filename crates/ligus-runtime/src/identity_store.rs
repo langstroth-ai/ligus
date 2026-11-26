@@ -14,7 +14,10 @@
 
 use std::path::{Path, PathBuf};
 
-use ligus_core::crypto::{device_id_for, DeviceCertificate, DeviceIdentity, HumanAccount, Platform, SigAlg, SigningKeypair};
+use ligus_core::crypto::{
+    device_id_for, DeviceCertificate, DeviceIdentity, HumanAccount, Platform, SigAlg,
+    SigningKeypair,
+};
 use ligus_core::Timestamp;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -69,7 +72,12 @@ impl KeyVault for FileKeyVault {
             // Owner-only, whatever the umask: these are private signing keys.
             use std::io::Write;
             use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-            let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)?;
             // `mode` applies only on create: tighten a file left by an older build.
             f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
             f.write_all(seed)?;
@@ -87,7 +95,10 @@ impl KeyVault for FileKeyVault {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(self.path_for(key_id), std::fs::Permissions::from_mode(0o600));
+                    let _ = std::fs::set_permissions(
+                        self.path_for(key_id),
+                        std::fs::Permissions::from_mode(0o600),
+                    );
                 }
                 let seed: [u8; 32] = bytes
                     .as_slice()
@@ -169,7 +180,9 @@ impl<V: KeyVault> IdentityStore<V> {
         if let Some(existing) = self.load()? {
             // A device whose id isn't the one its key derives (made before
             // ids were derived) is never certified anywhere: replace it.
-            if existing.device.id != device_id_for(SigAlg::Ed25519, &existing.device.signing_public_key) {
+            if existing.device.id
+                != device_id_for(SigAlg::Ed25519, &existing.device.signing_public_key)
+            {
                 return self.rotate_device();
             }
             return Ok(existing);
@@ -197,7 +210,8 @@ impl<V: KeyVault> IdentityStore<V> {
         let device_id = device_id_for(SigAlg::Ed25519, &device_kp.public_key_bytes());
         self.vault
             .store_seed(&device_key_id(device_id), &device_kp.seed_bytes())?;
-        let certificate = DeviceCertificate::issue(&account_kp, account_id, &device_kp.public_key_bytes(), now);
+        let certificate =
+            DeviceCertificate::issue(&account_kp, account_id, &device_kp.public_key_bytes(), now);
         let device = DeviceIdentity {
             id: device_id,
             account_id,
@@ -209,7 +223,11 @@ impl<V: KeyVault> IdentityStore<V> {
             revoked_at: None,
         };
 
-        let stored = StoredIdentity { account, device, service: false };
+        let stored = StoredIdentity {
+            account,
+            device,
+            service: false,
+        };
         self.save(&stored)?;
         Ok(stored)
     }
@@ -239,7 +257,10 @@ impl<V: KeyVault> IdentityStore<V> {
 
     /// Set (or clear, with `None`) the account avatar and persist. Keys
     /// unchanged. The avatar rides the actor identity into the synced roster.
-    pub fn update_avatar(&self, avatar_url: Option<String>) -> Result<StoredIdentity, IdentityError> {
+    pub fn update_avatar(
+        &self,
+        avatar_url: Option<String>,
+    ) -> Result<StoredIdentity, IdentityError> {
         let mut stored = self
             .load()?
             .ok_or_else(|| IdentityError::Vault("no identity to update".into()))?;
@@ -261,8 +282,14 @@ impl<V: KeyVault> IdentityStore<V> {
         // A new key is a new device: its id is the one the new key derives.
         let device_kp = SigningKeypair::generate()?;
         let device_id = device_id_for(SigAlg::Ed25519, &device_kp.public_key_bytes());
-        self.vault.store_seed(&device_key_id(device_id), &device_kp.seed_bytes())?;
-        let certificate = DeviceCertificate::issue(&account_kp, stored.account.id, &device_kp.public_key_bytes(), now);
+        self.vault
+            .store_seed(&device_key_id(device_id), &device_kp.seed_bytes())?;
+        let certificate = DeviceCertificate::issue(
+            &account_kp,
+            stored.account.id,
+            &device_kp.public_key_bytes(),
+            now,
+        );
         stored.device = DeviceIdentity {
             id: device_id,
             account_id: stored.account.id,
@@ -284,7 +311,8 @@ impl<V: KeyVault> IdentityStore<V> {
     pub fn prepare_device(&self) -> Result<(Uuid, SigningKeypair), IdentityError> {
         let device_kp = SigningKeypair::generate()?;
         let device_id = device_id_for(SigAlg::Ed25519, &device_kp.public_key_bytes());
-        self.vault.store_seed(&device_key_id(device_id), &device_kp.seed_bytes())?;
+        self.vault
+            .store_seed(&device_key_id(device_id), &device_kp.seed_bytes())?;
         Ok((device_id, device_kp))
     }
 
@@ -301,11 +329,18 @@ impl<V: KeyVault> IdentityStore<V> {
         }
         let device_kp = self.device_keypair(device_id)?;
         if device_id_for(SigAlg::Ed25519, &device_kp.public_key_bytes()) != device_id {
-            return Err(IdentityError::Vault("that device key doesn't derive its id".into()));
+            return Err(IdentityError::Vault(
+                "that device key doesn't derive its id".into(),
+            ));
         }
         let account_kp = self.account_keypair(stored.account.id)?;
         let now = Timestamp::now();
-        let certificate = DeviceCertificate::issue(&account_kp, stored.account.id, &device_kp.public_key_bytes(), now);
+        let certificate = DeviceCertificate::issue(
+            &account_kp,
+            stored.account.id,
+            &device_kp.public_key_bytes(),
+            now,
+        );
         stored.device = DeviceIdentity {
             id: device_id,
             account_id: stored.account.id,
@@ -350,7 +385,10 @@ impl<V: KeyVault> IdentityStore<V> {
     /// This device's X25519 key-agreement keypair (B1), generated and kept in
     /// the vault on first use. Rotations seal the workspace key to its public
     /// half once the device publishes it on the config log.
-    pub fn key_agreement(&self, device_id: Uuid) -> Result<ligus_core::KeyAgreementKeypair, IdentityError> {
+    pub fn key_agreement(
+        &self,
+        device_id: Uuid,
+    ) -> Result<ligus_core::KeyAgreementKeypair, IdentityError> {
         let id = format!("ka:{device_id}");
         if let Some(seed) = self.vault.load_seed(&id)? {
             return Ok(ligus_core::KeyAgreementKeypair::from_seed(&seed)?);
@@ -380,20 +418,43 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = FileKeyVault::new(dir.path());
         vault.store_seed("device:x", &[1u8; 32]).unwrap();
-        let mode = std::fs::metadata(vault.path_for("device:x")).unwrap().permissions().mode() & 0o777;
+        let mode = std::fs::metadata(vault.path_for("device:x"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(mode, 0o600, "seed file mode {mode:o}");
         let dmode = std::fs::metadata(&vault.dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(dmode & 0o077, 0, "key dir mode {dmode:o}");
         // Re-storing over an existing, too-open file tightens it.
-        std::fs::set_permissions(vault.path_for("device:x"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(
+            vault.path_for("device:x"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
         vault.store_seed("device:x", &[2u8; 32]).unwrap();
-        let mode = std::fs::metadata(vault.path_for("device:x")).unwrap().permissions().mode() & 0o777;
+        let mode = std::fs::metadata(vault.path_for("device:x"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(mode, 0o600);
         assert_eq!(vault.load_seed("device:x").unwrap(), Some([2u8; 32]));
         // Loading a seed an older build left at 0644 tightens it too.
-        std::fs::set_permissions(vault.path_for("device:x"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(
+            vault.path_for("device:x"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
         vault.load_seed("device:x").unwrap();
-        assert_eq!(std::fs::metadata(vault.path_for("device:x")).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(vault.path_for("device:x"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
     }
 
     #[test]
@@ -420,12 +481,22 @@ mod tests {
         let rotated = s.rotate_device().unwrap();
         assert_eq!(rotated.account, first.account);
         assert_ne!(rotated.device.id, first.device.id);
-        assert_ne!(rotated.device.signing_public_key, first.device.signing_public_key);
-        assert!(rotated.device.certificate.verify(&first.account.signing_public_key).is_ok());
+        assert_ne!(
+            rotated.device.signing_public_key,
+            first.device.signing_public_key
+        );
+        assert!(rotated
+            .device
+            .certificate
+            .verify(&first.account.signing_public_key)
+            .is_ok());
         assert_eq!(s.load().unwrap().unwrap(), rotated);
         // The new device's key is in the vault.
         let kp = s.device_keypair(rotated.device.id).unwrap();
-        assert_eq!(kp.public_key_bytes().to_vec(), rotated.device.signing_public_key);
+        assert_eq!(
+            kp.public_key_bytes().to_vec(),
+            rotated.device.signing_public_key
+        );
     }
 
     #[test]

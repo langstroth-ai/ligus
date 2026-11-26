@@ -125,7 +125,10 @@ impl CliStreamParser for AgyParser {
                         push_segment(&mut self.assembled, new_segment, &text, &mut out);
                     }
                     "tool" => {
-                        let conv = s.get("conversation_id").and_then(Value::as_str).unwrap_or("");
+                        let conv = s
+                            .get("conversation_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
                         let id = format!("agy-{conv}-{idx}");
                         let info = s.get("tool_info").cloned().unwrap_or(Value::Null);
                         let name = info
@@ -138,7 +141,10 @@ impl CliStreamParser for AgyParser {
                             out.push(CliOut::Activity(StreamActivity::Tool {
                                 id: id.clone(),
                                 name,
-                                input_json: info.get("parameters").map(Value::to_string).unwrap_or_default(),
+                                input_json: info
+                                    .get("parameters")
+                                    .map(Value::to_string)
+                                    .unwrap_or_default(),
                             }));
                         }
                         if done && self.tools_done.insert(id.clone()) {
@@ -169,7 +175,11 @@ impl CliStreamParser for AgyParser {
         out
     }
 
-    fn finish(&mut self, exit_ok: bool, stderr: &str) -> Result<(String, Option<String>), ProviderError> {
+    fn finish(
+        &mut self,
+        exit_ok: bool,
+        stderr: &str,
+    ) -> Result<(String, Option<String>), ProviderError> {
         let failed_status = self.status.as_deref().is_some_and(|s| s != "SUCCESS");
         if failed_status || !exit_ok {
             let mut detail = self.error.clone().unwrap_or_default();
@@ -177,7 +187,12 @@ impl CliStreamParser for AgyParser {
                 detail = stderr.trim().to_string();
             }
             if detail.trim().is_empty() {
-                detail = format!("status {}", self.status.as_deref().unwrap_or("unknown (no result event)"));
+                detail = format!(
+                    "status {}",
+                    self.status
+                        .as_deref()
+                        .unwrap_or("unknown (no result event)")
+                );
             }
             // A turn that streamed text and was then cut off still fails: the
             // user should see why, not a silently truncated reply.
@@ -208,12 +223,25 @@ pub async fn stream_reply(
     on_delta: impl FnMut(String),
     on_activity: impl FnMut(StreamActivity),
 ) -> Result<String, ProviderError> {
-    let program = if program.trim().is_empty() { CliKind::Antigravity.default_program() } else { program };
+    let program = if program.trim().is_empty() {
+        CliKind::Antigravity.default_program()
+    } else {
+        program
+    };
     let prompt = super::claude_code::render_prompt(system, turns);
     let args = build_args(model, extra_args, prompt);
     let mut parser = AgyParser::default();
-    cli_agent::run_cli(CliKind::Antigravity, program, &args, working_dir, extra_env, &mut parser, on_delta, on_activity)
-        .await
+    cli_agent::run_cli(
+        CliKind::Antigravity,
+        program,
+        &args,
+        working_dir,
+        extra_env,
+        &mut parser,
+        on_delta,
+        on_activity,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -260,8 +288,16 @@ mod tests {
         assert_eq!(acts.len(), 2, "{acts:?}");
         match (&acts[0], &acts[1]) {
             (
-                StreamActivity::Tool { id, name, input_json },
-                StreamActivity::ToolResult { call_id, is_error, content },
+                StreamActivity::Tool {
+                    id,
+                    name,
+                    input_json,
+                },
+                StreamActivity::ToolResult {
+                    call_id,
+                    is_error,
+                    content,
+                },
             ) => {
                 assert_eq!(name, "read_file");
                 assert!(input_json.contains("a.txt"));
@@ -281,21 +317,30 @@ mod tests {
         let (outs, mut p) = run(FIXTURE_MULTI);
         assert_eq!(text(&outs), "Looking at the file.\nThe answer is 42.");
         assert!(outs.iter().any(|o| matches!(o, CliOut::Activity(StreamActivity::ToolResult { is_error: true, content, .. }) if content.contains("permission"))));
-        assert_eq!(p.finish(true, "").unwrap().0, "Looking at the file.\nThe answer is 42.");
+        assert_eq!(
+            p.finish(true, "").unwrap().0,
+            "Looking at the file.\nThe answer is 42."
+        );
     }
 
     #[test]
     fn error_result_surfaces_the_sign_in_fix() {
         let (_, mut p) = run(FIXTURE_ERROR);
         let e = p.finish(false, "").unwrap_err().to_string();
-        assert!(e.contains("not signed in") && e.contains("Run `agy` once"), "{e}");
+        assert!(
+            e.contains("not signed in") && e.contains("Run `agy` once"),
+            "{e}"
+        );
     }
 
     #[test]
     fn non_streamed_reply_falls_back_to_result_response() {
         let mut p = AgyParser::default();
         p.feed(r#"{"event":"result","result":{"status":"SUCCESS","response":"ok"}}"#);
-        assert_eq!(p.finish(true, "").unwrap(), ("ok".to_string(), Some("ok".to_string())));
+        assert_eq!(
+            p.finish(true, "").unwrap(),
+            ("ok".to_string(), Some("ok".to_string()))
+        );
     }
 
     #[test]
@@ -309,7 +354,10 @@ mod tests {
     #[test]
     fn exit_failure_without_result_uses_stderr() {
         let mut p = AgyParser::default();
-        let e = p.finish(false, "Error: quota exceeded for this account").unwrap_err().to_string();
+        let e = p
+            .finish(false, "Error: quota exceeded for this account")
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("usage limit"), "{e}");
     }
 
@@ -317,16 +365,28 @@ mod tests {
     fn permission_tiers_never_widen_by_default() {
         assert!(permission_args("default").is_empty());
         assert!(permission_args("").is_empty());
-        assert_eq!(permission_args("acceptEdits"), vec!["--mode", "accept-edits"]);
+        assert_eq!(
+            permission_args("acceptEdits"),
+            vec!["--mode", "accept-edits"]
+        );
         assert_eq!(permission_args("runCommands"), vec!["--mode", "auto"]);
-        assert_eq!(permission_args("bypassPermissions"), vec!["--dangerously-skip-permissions"]);
+        assert_eq!(
+            permission_args("bypassPermissions"),
+            vec!["--dangerously-skip-permissions"]
+        );
     }
 
     #[test]
     fn args_put_the_prompt_last() {
-        let a = build_args("gemini-3.8-flash-low", &permission_args("acceptEdits"), "/hi".into());
+        let a = build_args(
+            "gemini-3.8-flash-low",
+            &permission_args("acceptEdits"),
+            "/hi".into(),
+        );
         assert_eq!(&a[a.len() - 2..], ["--print", "/hi"]);
-        assert!(a.windows(2).any(|w| w == ["--model", "gemini-3.8-flash-low"]));
+        assert!(a
+            .windows(2)
+            .any(|w| w == ["--model", "gemini-3.8-flash-low"]));
         assert!(a.contains(&"--disable-slash-commands".to_string()));
         assert!(!build_args("", &[], "x".into()).contains(&"--model".to_string()));
     }

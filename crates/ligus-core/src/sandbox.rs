@@ -23,7 +23,11 @@ use serde::{Deserialize, Serialize};
 
 /// Where a turn may reach over the network.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "mode",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum EgressPolicy {
     /// No restriction beyond the runtime's own (the default).
     Open,
@@ -148,7 +152,9 @@ pub fn envelope_for_session(session: &crate::ChatSession) -> SandboxEnvelope {
         // Dearth mode: agents keep only the allow-listed MCP servers.
         env = env.tighten(
             TightenedBy::Dearth,
-            EgressPolicy::AllowList { mcp_servers: d.allowed_mcp_servers.clone() },
+            EgressPolicy::AllowList {
+                mcp_servers: d.allowed_mcp_servers.clone(),
+            },
             false,
         );
     }
@@ -245,7 +251,10 @@ pub fn grant_path_ok(p: &str) -> Result<(), GrantError> {
     if rest.is_empty() {
         return bad("the home dir or the root itself can't be granted");
     }
-    if rest.split('/').any(|c| c.is_empty() || c == "." || c == "..") {
+    if rest
+        .split('/')
+        .any(|c| c.is_empty() || c == "." || c == "..")
+    {
         return bad("not normalized (empty, . or .. components, or a trailing slash)");
     }
     Ok(())
@@ -266,7 +275,9 @@ impl SandboxGrants {
         for (ro, rw) in lists {
             for l in [ro, rw] {
                 if l.len() > MAX_GRANT_PATHS {
-                    return Err(GrantError(format!("more than {MAX_GRANT_PATHS} paths in one list")));
+                    return Err(GrantError(format!(
+                        "more than {MAX_GRANT_PATHS} paths in one list"
+                    )));
                 }
                 for p in l {
                     grant_path_ok(p)?;
@@ -279,10 +290,17 @@ impl SandboxGrants {
     /// The agents whose shell grant differs between `self` and `other`.
     pub fn shell_changes(&self, other: &SandboxGrants) -> Vec<uuid::Uuid> {
         let shell = |g: &SandboxGrants, id: &uuid::Uuid| g.agents.get(id).is_some_and(|a| a.shell);
-        let mut ids: Vec<uuid::Uuid> = self.agents.keys().chain(other.agents.keys()).copied().collect();
+        let mut ids: Vec<uuid::Uuid> = self
+            .agents
+            .keys()
+            .chain(other.agents.keys())
+            .copied()
+            .collect();
         ids.sort();
         ids.dedup();
-        ids.into_iter().filter(|id| shell(self, id) != shell(other, id)).collect()
+        ids.into_iter()
+            .filter(|id| shell(self, id) != shell(other, id))
+            .collect()
     }
 
     /// Whether agent `id` keeps its shell in a turn a non-Owner starts.
@@ -315,7 +333,10 @@ mod tests {
         for ok in ["~/.cargo/registry", "/opt/tools", "~/work/data", "~/a b"] {
             assert!(grant_path_ok(ok).is_ok(), "{ok}");
         }
-        for bad in ["", "~", "~/", "/", "rel/path", "~/../etc", "/a/./b", "/a//b", "/a/", "~user/x", "/a\nb", "~/.."] {
+        for bad in [
+            "", "~", "~/", "/", "rel/path", "~/../etc", "/a/./b", "/a//b", "/a/", "~user/x",
+            "/a\nb", "~/..",
+        ] {
             assert!(grant_path_ok(bad).is_err(), "{bad:?}");
         }
         assert!(grant_path_ok(&format!("/{}", "a".repeat(MAX_GRANT_PATH_BYTES))).is_err());
@@ -326,7 +347,13 @@ mod tests {
         let id = uuid::Uuid::from_u128(7);
         let mut g = SandboxGrants::default();
         assert!(g.well_formed().is_ok() && g.is_empty());
-        g.agents.insert(id, AgentGrant { shell: true, ..Default::default() });
+        g.agents.insert(
+            id,
+            AgentGrant {
+                shell: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(g.shell_changes(&SandboxGrants::default()), vec![id]);
         assert!(g.shell_granted(id) && !g.shell_granted(uuid::Uuid::from_u128(8)));
         // A path-only change is not a shell change.
@@ -339,24 +366,39 @@ mod tests {
         assert!(h.well_formed().is_err());
         let mut many = SandboxGrants::default();
         for i in 0..=MAX_GRANT_AGENTS as u128 {
-            many.agents.insert(uuid::Uuid::from_u128(i), AgentGrant::default());
+            many.agents
+                .insert(uuid::Uuid::from_u128(i), AgentGrant::default());
         }
         assert!(many.well_formed().is_err());
         // Empty lists and an off shell stay off the wire.
         assert_eq!(serde_json::to_string(&AgentGrant::default()).unwrap(), "{}");
-        assert_eq!(serde_json::to_string(&SandboxGrants::default()).unwrap(), "{}");
+        assert_eq!(
+            serde_json::to_string(&SandboxGrants::default()).unwrap(),
+            "{}"
+        );
     }
 
     fn allow(xs: &[&str]) -> EgressPolicy {
-        EgressPolicy::AllowList { mcp_servers: xs.iter().map(|s| s.to_string()).collect() }
+        EgressPolicy::AllowList {
+            mcp_servers: xs.iter().map(|s| s.to_string()).collect(),
+        }
     }
 
     #[test]
     fn egress_only_ever_narrows() {
         assert_eq!(EgressPolicy::Open.stricter(&allow(&["a"])), allow(&["a"]));
-        assert_eq!(allow(&["a", "b"]).stricter(&allow(&["b", "c"])), allow(&["b"]));
-        assert_eq!(allow(&["a"]).stricter(&EgressPolicy::Closed), EgressPolicy::Closed);
-        assert_eq!(EgressPolicy::Closed.stricter(&EgressPolicy::Open), EgressPolicy::Closed);
+        assert_eq!(
+            allow(&["a", "b"]).stricter(&allow(&["b", "c"])),
+            allow(&["b"])
+        );
+        assert_eq!(
+            allow(&["a"]).stricter(&EgressPolicy::Closed),
+            EgressPolicy::Closed
+        );
+        assert_eq!(
+            EgressPolicy::Closed.stricter(&EgressPolicy::Open),
+            EgressPolicy::Closed
+        );
         assert!(allow(&["a"]).allows_mcp("a"));
         assert!(!allow(&["a"]).allows_mcp("b"));
         assert!(!EgressPolicy::Closed.allows_mcp("a"));
@@ -372,7 +414,10 @@ mod tests {
         // A later, looser egress can't reopen what dearth closed.
         assert_eq!(e.egress, allow(&["docs"]));
         assert!(e.human_gate);
-        assert_eq!(e.tightened_by, vec![TightenedBy::Dearth, TightenedBy::Lockdown]);
+        assert_eq!(
+            e.tightened_by,
+            vec![TightenedBy::Dearth, TightenedBy::Lockdown]
+        );
         let v = serde_json::to_value(&e.egress).unwrap();
         assert_eq!(v["mode"], "allowList");
         assert_eq!(v["mcpServers"][0], "docs");

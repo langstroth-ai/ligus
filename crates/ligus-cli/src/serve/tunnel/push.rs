@@ -38,7 +38,13 @@ pub struct PushLimits {
 
 impl Default for PushLimits {
     fn default() -> Self {
-        Self { coalesce: Duration::from_secs(10), per_minute: 20, per_day: 500, host_rate: 1.0, host_burst: 5.0 }
+        Self {
+            coalesce: Duration::from_secs(10),
+            per_minute: 20,
+            per_day: 500,
+            host_rate: 1.0,
+            host_burst: 5.0,
+        }
     }
 }
 
@@ -84,12 +90,20 @@ impl Default for PushLimiter {
 
 impl PushLimiter {
     pub fn new(limits: PushLimits) -> Self {
-        Self { limits, last: HashMap::new(), sent: HashMap::new(), tokens: limits.host_burst, tokens_at: None }
+        Self {
+            limits,
+            last: HashMap::new(),
+            sent: HashMap::new(),
+            tokens: limits.host_burst,
+            tokens_at: None,
+        }
     }
 
     fn refill(&self, now: Instant) -> f64 {
         match self.tokens_at {
-            Some(at) => (self.tokens + now.saturating_duration_since(at).as_secs_f64() * self.limits.host_rate).min(self.limits.host_burst),
+            Some(at) => (self.tokens
+                + now.saturating_duration_since(at).as_secs_f64() * self.limits.host_rate)
+                .min(self.limits.host_burst),
             None => self.tokens,
         }
     }
@@ -98,17 +112,30 @@ impl PushLimiter {
     pub fn check(&mut self, pid: &str, kind: &str, chat: Option<&str>, now: Instant) -> Verdict {
         let l = self.limits;
         let key = (pid.to_string(), kind.to_string(), chat.map(str::to_string));
-        if self.last.get(&key).is_some_and(|t| now.saturating_duration_since(*t) < l.coalesce) {
+        if self
+            .last
+            .get(&key)
+            .is_some_and(|t| now.saturating_duration_since(*t) < l.coalesce)
+        {
             return Verdict::Coalesced;
         }
         let sent = self.sent.entry(pid.to_string()).or_default();
-        while sent.front().is_some_and(|t| now.saturating_duration_since(*t) >= DAY) {
+        while sent
+            .front()
+            .is_some_and(|t| now.saturating_duration_since(*t) >= DAY)
+        {
             sent.pop_front();
         }
         if sent.len() >= l.per_day {
             return Verdict::PerDay;
         }
-        if sent.iter().rev().take_while(|t| now.saturating_duration_since(**t) < MINUTE).count() >= l.per_minute {
+        if sent
+            .iter()
+            .rev()
+            .take_while(|t| now.saturating_duration_since(**t) < MINUTE)
+            .count()
+            >= l.per_minute
+        {
             return Verdict::PerMinute;
         }
         let tokens = self.refill(now);
@@ -120,7 +147,8 @@ impl PushLimiter {
         self.tokens_at = Some(now);
         self.sent.entry(pid.to_string()).or_default().push_back(now);
         if self.last.len() >= 1024 {
-            self.last.retain(|_, t| now.saturating_duration_since(*t) < l.coalesce);
+            self.last
+                .retain(|_, t| now.saturating_duration_since(*t) < l.coalesce);
         }
         self.last.insert(key, now);
         Verdict::Send
@@ -155,9 +183,13 @@ impl Verdict {
         match self {
             Verdict::Send => "sent",
             Verdict::Foreground => "not sent: the app is open on the phone",
-            Verdict::PhoneBackoff => "not sent: the relay recently said it can't deliver to this phone (holding)",
+            Verdict::PhoneBackoff => {
+                "not sent: the relay recently said it can't deliver to this phone (holding)"
+            }
             Verdict::RelayBackoff => "not sent: the relay asked to slow down (holding)",
-            Verdict::Coalesced => "not sent: coalesced with the same notification less than 10 s ago",
+            Verdict::Coalesced => {
+                "not sent: coalesced with the same notification less than 10 s ago"
+            }
             Verdict::PerMinute => "not sent: rate-limited (20 per minute per phone)",
             Verdict::PerDay => "not sent: rate-limited (500 per day per phone)",
             Verdict::HostRate => "not sent: rate-limited (this host's 1 per second)",
@@ -196,7 +228,10 @@ impl PushGate {
     /// is open and the phone was heard from within [`FOREGROUND_QUIET`].
     pub fn is_foreground(&self, pid: &str, now: Instant) -> bool {
         self.foreground.get(pid).is_some_and(|n| *n > 0)
-            && self.heard.get(pid).is_some_and(|t| now.saturating_duration_since(*t) < FOREGROUND_QUIET)
+            && self
+                .heard
+                .get(pid)
+                .is_some_and(|t| now.saturating_duration_since(*t) < FOREGROUND_QUIET)
     }
 
     /// The phone sent a frame (any frame: a request, a PING, a WINDOW).
@@ -258,14 +293,32 @@ mod tests {
         let t0 = Instant::now();
         let mut l = PushLimiter::default();
         assert_eq!(l.check("p", "message.done", Some("c"), t0), Verdict::Send);
-        assert_eq!(l.check("p", "message.done", Some("c"), secs(t0, 2.0)), Verdict::Coalesced);
-        assert_eq!(l.check("p", "message.done", Some("c"), secs(t0, 9.9)), Verdict::Coalesced);
+        assert_eq!(
+            l.check("p", "message.done", Some("c"), secs(t0, 2.0)),
+            Verdict::Coalesced
+        );
+        assert_eq!(
+            l.check("p", "message.done", Some("c"), secs(t0, 9.9)),
+            Verdict::Coalesced
+        );
         // Another chat, another kind or another phone isn't coalesced.
-        assert_eq!(l.check("p", "message.done", Some("d"), secs(t0, 3.0)), Verdict::Send);
-        assert_eq!(l.check("p", "mention", Some("c"), secs(t0, 4.0)), Verdict::Send);
-        assert_eq!(l.check("q", "message.done", Some("c"), secs(t0, 5.0)), Verdict::Send);
+        assert_eq!(
+            l.check("p", "message.done", Some("d"), secs(t0, 3.0)),
+            Verdict::Send
+        );
+        assert_eq!(
+            l.check("p", "mention", Some("c"), secs(t0, 4.0)),
+            Verdict::Send
+        );
+        assert_eq!(
+            l.check("q", "message.done", Some("c"), secs(t0, 5.0)),
+            Verdict::Send
+        );
         // After the window it goes again.
-        assert_eq!(l.check("p", "message.done", Some("c"), secs(t0, 10.0)), Verdict::Send);
+        assert_eq!(
+            l.check("p", "message.done", Some("c"), secs(t0, 10.0)),
+            Verdict::Send
+        );
     }
 
     #[test]
@@ -273,12 +326,22 @@ mod tests {
         let t0 = Instant::now();
         let mut l = PushLimiter::default();
         for i in 0..5 {
-            assert_eq!(l.check("p", "k", Some(&i.to_string()), t0), Verdict::Send, "burst {i}");
+            assert_eq!(
+                l.check("p", "k", Some(&i.to_string()), t0),
+                Verdict::Send,
+                "burst {i}"
+            );
         }
         assert_eq!(l.check("p", "k", Some("x"), t0), Verdict::HostRate);
-        assert_eq!(l.check("p", "k", Some("x"), secs(t0, 0.5)), Verdict::HostRate);
+        assert_eq!(
+            l.check("p", "k", Some("x"), secs(t0, 0.5)),
+            Verdict::HostRate
+        );
         assert_eq!(l.check("p", "k", Some("x"), secs(t0, 1.0)), Verdict::Send);
-        assert_eq!(l.check("p", "k", Some("y"), secs(t0, 1.2)), Verdict::HostRate);
+        assert_eq!(
+            l.check("p", "k", Some("y"), secs(t0, 1.2)),
+            Verdict::HostRate
+        );
         // A dropped push used no budget: the coalesce key "x" was recorded
         // only once it was sent.
         assert_eq!(l.check("p", "k", Some("y"), secs(t0, 2.0)), Verdict::Send);
@@ -287,21 +350,49 @@ mod tests {
     #[test]
     fn per_phone_minute_and_day_caps() {
         let t0 = Instant::now();
-        let limits = PushLimits { host_rate: 1000.0, host_burst: 1000.0, ..Default::default() };
+        let limits = PushLimits {
+            host_rate: 1000.0,
+            host_burst: 1000.0,
+            ..Default::default()
+        };
         let mut l = PushLimiter::new(limits);
         for i in 0..20 {
-            assert_eq!(l.check("p", "k", Some(&i.to_string()), secs(t0, i as f64)), Verdict::Send);
+            assert_eq!(
+                l.check("p", "k", Some(&i.to_string()), secs(t0, i as f64)),
+                Verdict::Send
+            );
         }
-        assert_eq!(l.check("p", "k", Some("21"), secs(t0, 30.0)), Verdict::PerMinute);
-        assert_eq!(l.check("q", "k", Some("21"), secs(t0, 30.0)), Verdict::Send, "per phone");
-        assert_eq!(l.check("p", "k", Some("21"), secs(t0, 60.0)), Verdict::Send, "the first one aged out");
+        assert_eq!(
+            l.check("p", "k", Some("21"), secs(t0, 30.0)),
+            Verdict::PerMinute
+        );
+        assert_eq!(
+            l.check("q", "k", Some("21"), secs(t0, 30.0)),
+            Verdict::Send,
+            "per phone"
+        );
+        assert_eq!(
+            l.check("p", "k", Some("21"), secs(t0, 60.0)),
+            Verdict::Send,
+            "the first one aged out"
+        );
         // 500 a day: spread them so the minute cap never bites.
         let mut l = PushLimiter::new(limits);
         for i in 0..500 {
-            assert_eq!(l.check("p", "k", Some(&i.to_string()), secs(t0, i as f64 * 10.0)), Verdict::Send);
+            assert_eq!(
+                l.check("p", "k", Some(&i.to_string()), secs(t0, i as f64 * 10.0)),
+                Verdict::Send
+            );
         }
-        assert_eq!(l.check("p", "k", Some("x"), secs(t0, 5_001.0)), Verdict::PerDay);
-        assert_eq!(l.check("p", "k", Some("x"), secs(t0, 86_400.0)), Verdict::Send, "a day later");
+        assert_eq!(
+            l.check("p", "k", Some("x"), secs(t0, 5_001.0)),
+            Verdict::PerDay
+        );
+        assert_eq!(
+            l.check("p", "k", Some("x"), secs(t0, 86_400.0)),
+            Verdict::Send,
+            "a day later"
+        );
     }
 
     #[test]
@@ -312,24 +403,42 @@ mod tests {
         g.foreground_open("p");
         assert_eq!(g.check("p", "k", None, t0), Verdict::Foreground);
         g.foreground_close("p");
-        assert_eq!(g.check("p", "k", None, t0), Verdict::Foreground, "one stream still open");
+        assert_eq!(
+            g.check("p", "k", None, t0),
+            Verdict::Foreground,
+            "one stream still open"
+        );
         g.foreground_close("p");
         g.foreground_close("p"); // never underflows
         assert_eq!(g.foreground_streams("p"), 0);
         assert_eq!(g.check("p", "k", None, t0), Verdict::Send);
 
         g.refused("p", "no_push_token", t0);
-        assert_eq!(g.check("p", "k2", None, secs(t0, 1.0)), Verdict::PhoneBackoff);
-        assert_eq!(g.check("q", "k2", None, secs(t0, 1.0)), Verdict::Send, "other phones unaffected");
+        assert_eq!(
+            g.check("p", "k2", None, secs(t0, 1.0)),
+            Verdict::PhoneBackoff
+        );
+        assert_eq!(
+            g.check("q", "k2", None, secs(t0, 1.0)),
+            Verdict::Send,
+            "other phones unaffected"
+        );
         g.foreground_open("p"); // the phone reconnected (token registered)
         g.foreground_close("p");
         assert_eq!(g.check("p", "k2", None, secs(t0, 2.0)), Verdict::Send);
 
         g.refused("p", "rate_limited", secs(t0, 3.0));
-        assert_eq!(g.check("q", "k3", None, secs(t0, 4.0)), Verdict::RelayBackoff);
+        assert_eq!(
+            g.check("q", "k3", None, secs(t0, 4.0)),
+            Verdict::RelayBackoff
+        );
         assert_eq!(g.check("q", "k3", None, secs(t0, 63.0)), Verdict::Send);
         g.refused("p", "push_failed", secs(t0, 64.0));
-        assert_eq!(g.check("p", "k4", None, secs(t0, 65.0)), Verdict::Send, "a one-off failure holds nothing");
+        assert_eq!(
+            g.check("p", "k4", None, secs(t0, 65.0)),
+            Verdict::Send,
+            "a one-off failure holds nothing"
+        );
     }
 
     /// iOS suspended the app before its RESET left, and the relay still holds
@@ -353,6 +462,9 @@ mod tests {
         assert!(!g.is_foreground("p", quiet + Duration::from_secs(1)));
         // The phone speaks again: foreground again.
         g.heard("p", quiet + Duration::from_secs(2));
-        assert_eq!(g.check("p", "k2", None, quiet + Duration::from_secs(3)), Verdict::Foreground);
+        assert_eq!(
+            g.check("p", "k2", None, quiet + Duration::from_secs(3)),
+            Verdict::Foreground
+        );
     }
 }

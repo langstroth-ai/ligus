@@ -7,7 +7,10 @@
 
 use ligus_core::crypto::{sign_envelope, SigningKeypair};
 use ligus_core::testkit::SignedWorld;
-use ligus_core::{ChatMessage, ChatSession, MessageRole, SessionEvent, SessionEventEnvelope, WorkspaceAuthz, WorkspaceRole};
+use ligus_core::{
+    ChatMessage, ChatSession, MessageRole, SessionEvent, SessionEventEnvelope, WorkspaceAuthz,
+    WorkspaceRole,
+};
 use ligus_runtime::event_store::EventStore;
 use ligus_runtime::relay_client::RelayClient;
 use ligus_runtime::sync_engine::SyncEngine;
@@ -23,13 +26,23 @@ enum Forgery {
     Stranger,
 }
 
-const FORGERIES: [Forgery; 4] = [Forgery::UnsignedStampless, Forgery::UnsignedStamped, Forgery::WrongKey, Forgery::Stranger];
+const FORGERIES: [Forgery; 4] = [
+    Forgery::UnsignedStampless,
+    Forgery::UnsignedStamped,
+    Forgery::WrongKey,
+    Forgery::Stranger,
+];
 
 fn title(t: &str) -> SessionEvent {
     SessionEvent::SessionTitleChanged { title: t.into() }
 }
 
-fn forge(w: &mut SignedWorld, chat: Uuid, orig: &SessionEventEnvelope, how: Forgery) -> SessionEventEnvelope {
+fn forge(
+    w: &mut SignedWorld,
+    chat: Uuid,
+    orig: &SessionEventEnvelope,
+    how: Forgery,
+) -> SessionEventEnvelope {
     let mut f = orig.clone();
     f.payload = title("forged");
     f.clear_raw();
@@ -43,7 +56,11 @@ fn forge(w: &mut SignedWorld, chat: Uuid, orig: &SessionEventEnvelope, how: Forg
             f.signature = None;
             f.signer_device_id = None;
         }
-        Forgery::WrongKey => sign_envelope(&mut f, orig.signer_device_id.unwrap(), &SigningKeypair::generate().unwrap()),
+        Forgery::WrongKey => sign_envelope(
+            &mut f,
+            orig.signer_device_id.unwrap(),
+            &SigningKeypair::generate().unwrap(),
+        ),
         Forgery::Stranger => {
             f = w.draft("eve", Some(chat), title("forged"), None);
             f.event_id = orig.event_id;
@@ -65,7 +82,13 @@ fn world() -> (SignedWorld, Uuid, Uuid) {
     let chat = w.chat("owner", "c");
     w.say(chat, "con", title("before"));
     let id = w.say(chat, "con", title("honest"));
-    w.say(chat, "con", SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "con", "after") });
+    w.say(
+        chat,
+        "con",
+        SessionEvent::MessageAppended {
+            message: ChatMessage::new(MessageRole::User, "con", "after"),
+        },
+    );
     (w, chat, id)
 }
 
@@ -86,10 +109,17 @@ struct Device {
 
 impl Device {
     fn new(w: &SignedWorld) -> Self {
-        let engine = SyncEngine::new(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string())
-            .with_room_workspace(w.wid)
-            .with_key(key());
-        Self { store: EventStore::open_in_memory().unwrap(), engine, relay: Vec::new() }
+        let engine = SyncEngine::new(
+            RelayClient::new("http://127.0.0.1:0"),
+            Uuid::new_v4().to_string(),
+        )
+        .with_room_workspace(w.wid)
+        .with_key(key());
+        Self {
+            store: EventStore::open_in_memory().unwrap(),
+            engine,
+            relay: Vec::new(),
+        }
     }
 
     /// The relay takes these bodies, and the device fetches from its cursor:
@@ -98,8 +128,10 @@ impl Device {
     fn deliver(&mut self, envs: &[SessionEventEnvelope]) {
         let start = self.relay.len() as u64;
         for (e, seq) in envs.iter().zip(start + 1..) {
-            let sealed = ligus_core::seal_symmetric(&key(), 0, &serde_json::to_vec(e).unwrap()).unwrap();
-            self.relay.push((seq, serde_json::to_value(sealed).unwrap()));
+            let sealed =
+                ligus_core::seal_symmetric(&key(), 0, &serde_json::to_vec(e).unwrap()).unwrap();
+            self.relay
+                .push((seq, serde_json::to_value(sealed).unwrap()));
         }
         self.fetch();
     }
@@ -108,7 +140,12 @@ impl Device {
     /// nothing lies above the cursor.
     fn fetch(&mut self) -> bool {
         let cursor = self.engine.cursor();
-        let page: Vec<(u64, Value)> = self.relay.iter().filter(|(s, _)| *s > cursor).cloned().collect();
+        let page: Vec<(u64, Value)> = self
+            .relay
+            .iter()
+            .filter(|(s, _)| *s > cursor)
+            .cloned()
+            .collect();
         if page.is_empty() {
             return false;
         }
@@ -118,7 +155,10 @@ impl Device {
 
     fn chat(&self, w: &SignedWorld, chat: Uuid) -> ChatSession {
         let (_, t) = self.store.load_config(w.wid, None, None).unwrap();
-        self.store.load_session_authorized(w.wid, chat, None, None, WorkspaceAuthz::Timeline(&t)).unwrap().unwrap()
+        self.store
+            .load_session_authorized(w.wid, chat, None, None, WorkspaceAuthz::Timeline(&t))
+            .unwrap()
+            .unwrap()
     }
 }
 
@@ -126,11 +166,23 @@ impl Device {
 fn the_reviewers_probe_an_honest_title_change_survives_a_forged_copy_in_either_order() {
     for how in FORGERIES {
         let (mut w, chat, id) = world();
-        let orig = w.chats[&chat].iter().find(|e| e.event_id == id).unwrap().clone();
+        let orig = w.chats[&chat]
+            .iter()
+            .find(|e| e.event_id == id)
+            .unwrap()
+            .clone();
         let forged = forge(&mut w, chat, &orig, how);
         let honest: Vec<SessionEventEnvelope> = w.chats[&chat].clone();
-        let before_it: Vec<SessionEventEnvelope> = honest.iter().take_while(|e| e.event_id != id).cloned().collect();
-        let from_it: Vec<SessionEventEnvelope> = honest.iter().skip_while(|e| e.event_id != id).cloned().collect();
+        let before_it: Vec<SessionEventEnvelope> = honest
+            .iter()
+            .take_while(|e| e.event_id != id)
+            .cloned()
+            .collect();
+        let from_it: Vec<SessionEventEnvelope> = honest
+            .iter()
+            .skip_while(|e| e.event_id != id)
+            .cloned()
+            .collect();
 
         // Honest copy first.
         let mut a = Device::new(&w);
@@ -151,7 +203,16 @@ fn the_reviewers_probe_an_honest_title_change_survives_a_forged_copy_in_either_o
         // An unsigned copy is refused at ingest (a lamport witness only).
         if matches!(how, Forgery::UnsignedStampless | Forgery::UnsignedStamped) {
             for d in [&a, &b] {
-                assert_eq!(d.store.list_copies(chat).unwrap().iter().filter(|e| e.event_id == id).count(), 1, "{how:?}: stored");
+                assert_eq!(
+                    d.store
+                        .list_copies(chat)
+                        .unwrap()
+                        .iter()
+                        .filter(|e| e.event_id == id)
+                        .count(),
+                    1,
+                    "{how:?}: stored"
+                );
             }
         }
     }
@@ -168,14 +229,26 @@ fn a_forged_seed_copy_delivered_first_does_not_take_the_workspace_down() {
         session.title = "taken".into();
     }
     forged.clear_raw();
-    sign_envelope(&mut forged, seed.signer_device_id.unwrap(), &SigningKeypair::generate().unwrap());
+    sign_envelope(
+        &mut forged,
+        seed.signer_device_id.unwrap(),
+        &SigningKeypair::generate().unwrap(),
+    );
     let mut d = Device::new(&w);
     d.deliver(std::slice::from_ref(&forged));
     d.deliver(&w.cfg);
     d.deliver(&w.chats[&chat]);
     let (config, _) = d.store.load_config(w.wid, None, None).unwrap();
-    let members: Vec<String> = config.expect("the workspace folds").members.into_iter().map(|m| m.id).collect();
-    assert!(members.contains(&"owner".to_string()) && members.contains(&"con".to_string()), "{members:?}");
+    let members: Vec<String> = config
+        .expect("the workspace folds")
+        .members
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert!(
+        members.contains(&"owner".to_string()) && members.contains(&"con".to_string()),
+        "{members:?}"
+    );
     assert_eq!(d.chat(&w, chat).title, "honest");
 }
 
@@ -195,11 +268,22 @@ fn a_members_events_that_arrive_before_their_admission_are_not_refused() {
     d.deliver(&w.chats[&chat]);
     d.deliver(&admission);
     while d.fetch() {}
-    assert_eq!(d.engine.cursor(), d.relay.len() as u64, "the cursor reached the head");
-    assert!(d.store.held_events(w.wid).unwrap().is_empty(), "nothing is held");
+    assert_eq!(
+        d.engine.cursor(),
+        d.relay.len() as u64,
+        "the cursor reached the head"
+    );
+    assert!(
+        d.store.held_events(w.wid).unwrap().is_empty(),
+        "nothing is held"
+    );
     let got = d.chat(&w, chat);
     assert_eq!(got.title, "honest");
-    assert_eq!(got.messages.len(), 1, "the message sent before the admission arrived is kept");
+    assert_eq!(
+        got.messages.len(),
+        1,
+        "the message sent before the admission arrived is kept"
+    );
 }
 
 /// The key is derived once per run: argon2 per sealed body made the property
@@ -212,12 +296,18 @@ fn the_workspace_key_is_derived_once() {
     for _ in 0..1000 {
         key();
     }
-    assert!(t.elapsed() < std::time::Duration::from_secs(1), "{:?}", t.elapsed());
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(1),
+        "{:?}",
+        t.elapsed()
+    );
 }
 
 fn shuffle<T>(v: &mut [T], mut s: u64) {
     for i in (1..v.len()).rev() {
-        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         v.swap(i, (s >> 33) as usize % (i + 1));
     }
 }

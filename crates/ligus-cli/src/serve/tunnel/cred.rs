@@ -50,7 +50,13 @@ pub fn sign(keys: &HostKeys, claims: &Claims) -> String {
 /// Issue a credential for `(pid, pk)` at `iat` with the default lifetime.
 /// Returns the token and its `exp`.
 pub fn issue(keys: &HostKeys, pid: &str, pk: &[u8; 32], iat: u64) -> (String, u64) {
-    let claims = Claims { hid: keys.host_id().to_string(), pid: pid.to_string(), pk: *pk, iat, exp: iat + CRED_LIFETIME_SECS };
+    let claims = Claims {
+        hid: keys.host_id().to_string(),
+        pid: pid.to_string(),
+        pk: *pk,
+        iat,
+        exp: iat + CRED_LIFETIME_SECS,
+    };
     (sign(keys, &claims), claims.exp)
 }
 
@@ -108,7 +114,12 @@ impl<'de> Deserialize<'de> for NoDupObject {
 
 /// Verify `token` for `host` (the `host` query parameter) against the host
 /// signing key, in the order of §5. `None` = host not registered.
-pub fn verify(token: &str, host: &str, host_key: Option<(&str, &VerifyingKey)>, now: u64) -> Result<Claims, CredError> {
+pub fn verify(
+    token: &str,
+    host: &str,
+    host_key: Option<(&str, &VerifyingKey)>,
+    now: u64,
+) -> Result<Claims, CredError> {
     use CredError::*;
     // 1. Shape.
     let parts: Vec<&str> = token.split('.').collect();
@@ -121,19 +132,32 @@ pub fn verify(token: &str, host: &str, host_key: Option<(&str, &VerifyingKey)>, 
     // 2. hid == host, and the host is registered. The hid is read before the
     //    signature check only to route the lookup; nothing else is trusted yet.
     let obj: NoDupObject = serde_json::from_slice(&claims_raw).map_err(|_| Unauthorized)?;
-    let hid = obj.0.get("hid").and_then(Value::as_str).ok_or(Unauthorized)?;
+    let hid = obj
+        .0
+        .get("hid")
+        .and_then(Value::as_str)
+        .ok_or(Unauthorized)?;
     if hid != host {
         return Err(Unauthorized);
     }
-    let Some((registered_hid, key)) = host_key else { return Err(HostUnknown) };
+    let Some((registered_hid, key)) = host_key else {
+        return Err(HostUnknown);
+    };
     if registered_hid != host {
         return Err(HostUnknown);
     }
     // 3. Signature over the exact transmitted bytes.
     let signed = format!("hpc1.{}", parts[1]);
-    key.verify_strict(signed.as_bytes(), &sig).map_err(|_| Unauthorized)?;
+    key.verify_strict(signed.as_bytes(), &sig)
+        .map_err(|_| Unauthorized)?;
     // 4. Claims well-formed.
-    let s = |k: &str| obj.0.get(k).and_then(Value::as_str).map(str::to_string).ok_or(Unauthorized);
+    let s = |k: &str| {
+        obj.0
+            .get(k)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or(Unauthorized)
+    };
     let n = |k: &str| obj.0.get(k).and_then(Value::as_u64).ok_or(Unauthorized);
     let pid = s("pid")?;
     if pid.len() != 22 || b64u_decode(&pid).map(|b| b.len()).ok() != Some(16) {
@@ -151,5 +175,11 @@ pub fn verify(token: &str, host: &str, host_key: Option<(&str, &VerifyingKey)>, 
     if exp.saturating_sub(iat) > MAX_LIFETIME_SECS {
         return Err(Unauthorized);
     }
-    Ok(Claims { hid: hid.to_string(), pid, pk, iat, exp })
+    Ok(Claims {
+        hid: hid.to_string(),
+        pid,
+        pk,
+        iat,
+        exp,
+    })
 }

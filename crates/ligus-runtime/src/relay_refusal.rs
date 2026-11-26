@@ -71,7 +71,11 @@ impl RefusalClass {
     pub fn pauses_writes(self) -> bool {
         matches!(
             self,
-            RefusalClass::RoomFull | RefusalClass::OrgQuota | RefusalClass::RelayFull | RefusalClass::ClientQuota | RefusalClass::RateLimited
+            RefusalClass::RoomFull
+                | RefusalClass::OrgQuota
+                | RefusalClass::RelayFull
+                | RefusalClass::ClientQuota
+                | RefusalClass::RateLimited
         )
     }
 }
@@ -103,14 +107,30 @@ impl RelayRefusal {
             return None;
         }
         let v: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
-        let text = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().chars().take(200).collect::<String>();
-        let code: String = text("error").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(64).collect();
+        let text = |k: &str| {
+            v.get(k)
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .chars()
+                .take(200)
+                .collect::<String>()
+        };
+        let code: String = text("error")
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .take(64)
+            .collect();
         let header = retry_after_header.and_then(|h| h.trim().parse::<u64>().ok());
         let body_secs = v.get("retryAfter").and_then(|x| x.as_u64());
         let default = if status == 429 { 1 } else { 60 };
         let secs = header.or(body_secs).unwrap_or(default).max(1);
         let retry_after = Duration::from_secs(secs).min(MAX_RETRY_AFTER);
-        Some(Self { status, code, message: text("message"), retry_after })
+        Some(Self {
+            status,
+            code,
+            message: text("message"),
+            retry_after,
+        })
     }
 
     /// Read a refusal off a response (consumes the body). `Err(resp)` hands
@@ -120,7 +140,11 @@ impl RelayRefusal {
         if !Self::is_refusal_status(status) {
             return Err(resp);
         }
-        let header = resp.headers().get(reqwest::header::RETRY_AFTER).and_then(|h| h.to_str().ok()).map(str::to_owned);
+        let header = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|h| h.to_str().ok())
+            .map(str::to_owned);
         // A refusal body is small; never read more than 16 KiB of it.
         let mut resp = resp;
         let mut body = Vec::new();
@@ -233,7 +257,8 @@ mod tests {
     use super::*;
 
     fn r(status: u16, code: &str) -> RelayRefusal {
-        let body = serde_json::json!({ "error": code, "message": "m", "retryAfter": 7 }).to_string();
+        let body =
+            serde_json::json!({ "error": code, "message": "m", "retryAfter": 7 }).to_string();
         RelayRefusal::parse(status, Some("5"), body.as_bytes()).unwrap()
     }
 
@@ -278,30 +303,67 @@ mod tests {
     fn retry_after_prefers_the_header_then_the_body_and_is_bounded() {
         assert_eq!(r(429, "ip_rate").retry_after, Duration::from_secs(5));
         let body = br#"{"error":"room_bytes","retryAfter":3600}"#;
-        assert_eq!(RelayRefusal::parse(507, None, body).unwrap().retry_after, Duration::from_secs(3600));
+        assert_eq!(
+            RelayRefusal::parse(507, None, body).unwrap().retry_after,
+            Duration::from_secs(3600)
+        );
         // Garbage header, no body: the status's default, never zero.
-        assert_eq!(RelayRefusal::parse(429, Some("soon"), b"").unwrap().retry_after, Duration::from_secs(1));
-        assert_eq!(RelayRefusal::parse(507, Some("0"), b"not json").unwrap().retry_after, Duration::from_secs(1));
-        assert_eq!(RelayRefusal::parse(507, None, b"").unwrap().retry_after, Duration::from_secs(60));
-        assert_eq!(RelayRefusal::parse(429, Some("99999999"), b"").unwrap().retry_after, MAX_RETRY_AFTER);
+        assert_eq!(
+            RelayRefusal::parse(429, Some("soon"), b"")
+                .unwrap()
+                .retry_after,
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            RelayRefusal::parse(507, Some("0"), b"not json")
+                .unwrap()
+                .retry_after,
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            RelayRefusal::parse(507, None, b"").unwrap().retry_after,
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            RelayRefusal::parse(429, Some("99999999"), b"")
+                .unwrap()
+                .retry_after,
+            MAX_RETRY_AFTER
+        );
         assert!(RelayRefusal::parse(500, Some("5"), b"").is_none());
     }
 
     #[test]
     fn a_hostile_body_is_bounded_and_cleaned() {
         let long = "x".repeat(5000);
-        let body = serde_json::json!({ "error": format!("room_bytes\u{202e}{long}"), "message": long }).to_string();
+        let body =
+            serde_json::json!({ "error": format!("room_bytes\u{202e}{long}"), "message": long })
+                .to_string();
         let r = RelayRefusal::parse(507, None, body.as_bytes()).unwrap();
-        assert!(r.code.len() <= 64 && r.code.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        assert!(
+            r.code.len() <= 64
+                && r.code
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        );
         assert!(r.message.chars().count() <= 200);
     }
 
     #[test]
     fn user_messages_name_the_situation() {
-        assert!(r(507, "room_bytes").user_message().starts_with("workspace full"));
-        assert!(r(507, "tenant_rooms").user_message().starts_with("organisation quota reached"));
-        assert!(r(429, "client_rooms").user_message().contains("Not retried right away"));
-        assert!(RelayRefusal::parse(507, None, b"").unwrap().user_message().contains("HTTP 507"));
+        assert!(r(507, "room_bytes")
+            .user_message()
+            .starts_with("workspace full"));
+        assert!(r(507, "tenant_rooms")
+            .user_message()
+            .starts_with("organisation quota reached"));
+        assert!(r(429, "client_rooms")
+            .user_message()
+            .contains("Not retried right away"));
+        assert!(RelayRefusal::parse(507, None, b"")
+            .unwrap()
+            .user_message()
+            .contains("HTTP 507"));
     }
 
     #[test]

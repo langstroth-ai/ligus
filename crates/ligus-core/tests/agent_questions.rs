@@ -6,8 +6,8 @@
 
 use ligus_core::flow::asks::{ask_digest, signed_payload};
 use ligus_core::flow::{
-    AskAudience, AskEffect, AskOrigin, FlowRecord, HumanAnswered, HumanAsk, ASK_V2, EFFECT_PERMISSION, ORIGIN_OUTSIDE,
-    PRESENCE_REQUIRED, PRIMARY,
+    AskAudience, AskEffect, AskOrigin, FlowRecord, HumanAnswered, HumanAsk, ASK_V2,
+    EFFECT_PERMISSION, ORIGIN_OUTSIDE, PRESENCE_REQUIRED, PRIMARY,
 };
 use ligus_core::testkit::{Proof, SignedWorld};
 use ligus_core::{ChatMessage, MessageRole, SessionEvent, Verdict, WorkspaceRole};
@@ -36,7 +36,11 @@ fn room() -> Room {
     reply.origin_device_id = Some(w.people["ana"].device_id);
     reply.is_streaming = true;
     let turn = reply.id;
-    w.say(chat, "ana", SessionEvent::MessageAppended { message: reply });
+    w.say(
+        chat,
+        "ana",
+        SessionEvent::MessageAppended { message: reply },
+    );
     Room { w, chat, turn }
 }
 
@@ -58,15 +62,24 @@ fn question(turn: Uuid, audience: AskAudience, quorum: u8) -> HumanAsk {
 impl Room {
     /// Record `rec` by `by`; every record is accepted.
     fn record(&mut self, by: &str, rec: FlowRecord) -> Uuid {
-        let id = self.w.say(self.chat, by, SessionEvent::FlowRecorded { record: rec });
-        assert_eq!(self.w.verdict(id), Verdict::Allowed, "every record is accepted, as before");
+        let id = self
+            .w
+            .say(self.chat, by, SessionEvent::FlowRecorded { record: rec });
+        assert_eq!(
+            self.w.verdict(id),
+            Verdict::Allowed,
+            "every record is accepted, as before"
+        );
         id
     }
 
     /// Post `a` by `by`; returns its digest.
     fn post(&mut self, by: &str, a: &HumanAsk) -> String {
         let id = self.record(by, FlowRecord::HumanAsk(a.clone()));
-        let env = self.w.chats[&self.chat].iter().find(|e| e.event_id == id).unwrap();
+        let env = self.w.chats[&self.chat]
+            .iter()
+            .find(|e| e.event_id == id)
+            .unwrap();
         ask_digest(a.ask_id, &signed_payload(env))
     }
 
@@ -83,7 +96,9 @@ impl Room {
 fn answer_rec(ask: &HumanAsk, by: &str, option: Option<u32>, digest: &str) -> FlowRecord {
     FlowRecord::HumanAnswered(HumanAnswered {
         ask_id: ask.ask_id,
-        answer: option.map(|i| ask.options[i as usize].clone()).unwrap_or_default(),
+        answer: option
+            .map(|i| ask.options[i as usize].clone())
+            .unwrap_or_default(),
         option_index: option,
         by: by.into(),
         at_ms: 2,
@@ -109,7 +124,14 @@ fn a_person_audience_takes_only_that_persons_answer_over_the_asks_digest() {
     let st = r.st(&q);
     assert!(st.is_open(), "none of those counts");
     let whys: Vec<&str> = st.uncounted.iter().map(|v| v.why.as_str()).collect();
-    assert_eq!(whys, vec!["not asked", "answered on an older version", "answers another question"]);
+    assert_eq!(
+        whys,
+        vec![
+            "not asked",
+            "answered on an older version",
+            "answers another question"
+        ]
+    );
     r.answer("bo", &q, Some(1), &d);
     let st = r.st(&q);
     assert_eq!(st.answer.as_ref().and_then(|a| a.option_index), Some(1));
@@ -150,7 +172,10 @@ fn a_viewer_never_answers_and_the_room_floor_is_never_below_contributor() {
     // A Viewer's FlowRecorded is refused by the role floor as before; the
     // fold would not count it anyway. Bo (Contributor) settles it.
     r.answer("bo", &q, Some(1), &d);
-    assert!(r.st(&q).uncounted.iter().any(|v| v.why == "not asked"), "a floor this build can't read asks nobody");
+    assert!(
+        r.st(&q).uncounted.iter().any(|v| v.why == "not asked"),
+        "a floor this build can't read asks nobody"
+    );
     let q2 = question(r.turn, AskAudience::room(WorkspaceRole::Contributor), 1);
     let d2 = r.post("ana", &q2);
     r.answer("bo", &q2, Some(1), &d2);
@@ -170,7 +195,11 @@ fn role_is_judged_at_the_answers_frontier_never_older_than_the_asks() {
         "ana",
         None,
         SessionEvent::MemberRoleChanged {
-            change: ligus_core::events::MemberRoleChange { member_id: "dee".into(), old_role: WorkspaceRole::Admin, new_role: WorkspaceRole::Contributor },
+            change: ligus_core::events::MemberRoleChange {
+                member_id: "dee".into(),
+                old_role: WorkspaceRole::Admin,
+                new_role: WorkspaceRole::Contributor,
+            },
             watermark: Vec::new(),
         },
         None,
@@ -183,7 +212,15 @@ fn role_is_judged_at_the_answers_frontier_never_older_than_the_asks() {
     assert_eq!(r.st(&q).uncounted[0].why, "below the role it asks");
     // Nor does one back-dated to a frontier older than the ask's own.
     let chat = r.chat;
-    let id = r.w.write("dee", Some(chat), SessionEvent::FlowRecorded { record: answer_rec(&q, "dee", Some(0), &d) }, before_ask, Proof::None);
+    let id = r.w.write(
+        "dee",
+        Some(chat),
+        SessionEvent::FlowRecorded {
+            record: answer_rec(&q, "dee", Some(0), &d),
+        },
+        before_ask,
+        Proof::None,
+    );
     assert_eq!(r.w.verdict(id), Verdict::Allowed);
     let st = r.st(&q);
     assert!(st.is_open());
@@ -196,7 +233,15 @@ fn not_now_closes_a_personal_ask_and_abstains_in_a_room() {
     let mine = question(r.turn, AskAudience::people(vec!["bo".into()]), 1);
     let d = r.post("ana", &mine);
     let decline = |a: &HumanAsk, by: &str, d: &str| {
-        FlowRecord::HumanAnswered(HumanAnswered { ask_id: a.ask_id, answer: "Not now".into(), by: by.into(), at_ms: 3, ask_digest: d.into(), decline: true, ..Default::default() })
+        FlowRecord::HumanAnswered(HumanAnswered {
+            ask_id: a.ask_id,
+            answer: "Not now".into(),
+            by: by.into(),
+            at_ms: 3,
+            ask_digest: d.into(),
+            decline: true,
+            ..Default::default()
+        })
     };
     r.record("bo", decline(&mine, "bo", &d));
     let st = r.st(&mine);
@@ -206,7 +251,10 @@ fn not_now_closes_a_personal_ask_and_abstains_in_a_room() {
     let d = r.post("ana", &room_q);
     r.record("bo", decline(&room_q, "bo", &d));
     let st = r.st(&room_q);
-    assert!(st.is_open() && !st.declined, "\"Not now\" doesn't close a room ask for everyone");
+    assert!(
+        st.is_open() && !st.declined,
+        "\"Not now\" doesn't close a room ask for everyone"
+    );
     r.answer("dee", &room_q, Some(0), &d);
     assert_eq!(who(&r.st(&room_q)), vec!["dee"]);
 }
@@ -214,25 +262,47 @@ fn not_now_closes_a_personal_ask_and_abstains_in_a_room() {
 #[test]
 fn the_askers_settled_by_has_the_last_word() {
     let mut r = room();
-    let q = question(r.turn, AskAudience::people(vec!["bo".into(), "dee".into()]), 1);
+    let q = question(
+        r.turn,
+        AskAudience::people(vec!["bo".into(), "dee".into()]),
+        1,
+    );
     let d = r.post("ana", &q);
     let bo_first = r.answer("bo", &q, Some(1), &d);
     r.answer("dee", &q, Some(0), &d);
     assert_eq!(who(&r.st(&q)), vec!["bo"]);
     // The host acted on Dee's answer (it had seen hers first): it says so.
     let dee_event = r.w.chats[&r.chat].last().unwrap().event_id;
-    r.record("ana", FlowRecord::HumanAsk(HumanAsk { closed: true, settled_by: Some(dee_event), ..q.clone() }));
+    r.record(
+        "ana",
+        FlowRecord::HumanAsk(HumanAsk {
+            closed: true,
+            settled_by: Some(dee_event),
+            ..q.clone()
+        }),
+    );
     let st = r.st(&q);
     assert_eq!(who(&st), vec!["dee"]);
     assert_eq!(st.answer.as_ref().and_then(|a| a.option_index), Some(0));
     assert!(st.ask.closed);
     // Someone else's settledBy changes nothing.
-    let q2 = question(r.turn, AskAudience::people(vec!["bo".into(), "dee".into()]), 1);
+    let q2 = question(
+        r.turn,
+        AskAudience::people(vec!["bo".into(), "dee".into()]),
+        1,
+    );
     let d2 = r.post("ana", &q2);
     let first = r.answer("bo", &q2, Some(1), &d2);
     r.answer("dee", &q2, Some(0), &d2);
     let dee2 = r.w.chats[&r.chat].last().unwrap().event_id;
-    r.record("bo", FlowRecord::HumanAsk(HumanAsk { closed: true, settled_by: Some(dee2), ..q2.clone() }));
+    r.record(
+        "bo",
+        FlowRecord::HumanAsk(HumanAsk {
+            closed: true,
+            settled_by: Some(dee2),
+            ..q2.clone()
+        }),
+    );
     let st = r.st(&q2);
     assert_eq!(who(&st), vec!["bo"]);
     assert!(!st.ask.closed);
@@ -263,23 +333,39 @@ fn an_effect_counts_only_from_the_turns_host_naming_itself() {
     let mut r = room();
     let real = grant(&r, "none");
     r.post("ana", &real);
-    assert!(r.st(&real).grant().is_some_and(|e| e.detail == "cargo publish --dry-run"));
+    assert!(r
+        .st(&real)
+        .grant()
+        .is_some_and(|e| e.detail == "cargo publish --dry-run"));
     // Bo signs the same shape: kept, a plain question, his.
-    let forged = HumanAsk { ask_id: Uuid::new_v4(), ..real.clone() };
+    let forged = HumanAsk {
+        ask_id: Uuid::new_v4(),
+        ..real.clone()
+    };
     r.post("bo", &forged);
     let st = r.st(&forged);
     assert!(st.grant().is_none() && st.posted_by.as_ref().is_some_and(|p| p.id == "bo"));
     // Ana's device naming another host is inert too.
-    let mut other = HumanAsk { ask_id: Uuid::new_v4(), ..real.clone() };
+    let mut other = HumanAsk {
+        ask_id: Uuid::new_v4(),
+        ..real.clone()
+    };
     other.effect.as_mut().unwrap().host_device_id = Some(r.w.people["bo"].device_id);
     r.post("ana", &other);
     assert!(r.st(&other).grant().is_none());
     // And on a turn it doesn't run.
-    let stray = HumanAsk { ask_id: Uuid::new_v4(), turn_id: Uuid::new_v4(), ..real.clone() };
+    let stray = HumanAsk {
+        ask_id: Uuid::new_v4(),
+        turn_id: Uuid::new_v4(),
+        ..real.clone()
+    };
     r.post("ana", &stray);
     assert!(r.st(&stray).grant().is_none());
     // An effect this build can't show (an unknown kind) is inert.
-    let mut odd = HumanAsk { ask_id: Uuid::new_v4(), ..real.clone() };
+    let mut odd = HumanAsk {
+        ask_id: Uuid::new_v4(),
+        ..real.clone()
+    };
     odd.effect.as_mut().unwrap().kind = "apply".into();
     r.post("ana", &odd);
     assert!(r.st(&odd).ask.effect.is_none());
@@ -295,7 +381,15 @@ fn a_grant_needing_presence_counts_only_with_the_persons_passkey() {
     assert!(st.is_open());
     assert_eq!(st.uncounted[0].why, "no passkey");
     let chat = r.chat;
-    let id = r.w.write("ana", Some(chat), SessionEvent::FlowRecorded { record: answer_rec(&g, "ana", Some(0), &d) }, None, Proof::Recovery);
+    let id = r.w.write(
+        "ana",
+        Some(chat),
+        SessionEvent::FlowRecorded {
+            record: answer_rec(&g, "ana", Some(0), &d),
+        },
+        None,
+        Proof::Recovery,
+    );
     assert_eq!(r.w.verdict(id), Verdict::Allowed);
     let st = r.st(&g);
     assert_eq!(who(&st), vec!["ana"]);
@@ -311,7 +405,10 @@ fn a_teammates_allow_on_your_grant_counts_for_nothing() {
     r.answer("bo", &g, Some(0), &d);
     let st = r.st(&g);
     assert!(st.is_open());
-    assert_eq!(st.uncounted[0].why, "not the host's person or the agent's owner");
+    assert_eq!(
+        st.uncounted[0].why,
+        "not the host's person or the agent's owner"
+    );
 }
 
 fn outside(r: &Room, by: &str, audience: Vec<&str>) -> HumanAsk {
@@ -324,7 +421,9 @@ fn outside(r: &Room, by: &str, audience: Vec<&str>) -> HumanAsk {
         options: vec!["Allow once".into(), "Deny".into()],
         at_ms: 1,
         v: ASK_V2,
-        audience: Some(AskAudience::people(audience.into_iter().map(String::from).collect())),
+        audience: Some(AskAudience::people(
+            audience.into_iter().map(String::from).collect(),
+        )),
         effect: Some(AskEffect {
             kind: EFFECT_PERMISSION.into(),
             tool: "Bash".into(),
@@ -333,7 +432,12 @@ fn outside(r: &Room, by: &str, audience: Vec<&str>) -> HumanAsk {
             presence: PRESENCE_REQUIRED.into(),
             ..Default::default()
         }),
-        origin: Some(AskOrigin { via: ORIGIN_OUTSIDE.into(), runtime: "claude-code".into(), label: "shop".into(), ..Default::default() }),
+        origin: Some(AskOrigin {
+            via: ORIGIN_OUTSIDE.into(),
+            runtime: "claude-code".into(),
+            label: "shop".into(),
+            ..Default::default()
+        }),
         ..Default::default()
     }
 }
@@ -343,7 +447,10 @@ fn an_outside_prompt_counts_only_from_a_person_to_themselves() {
     let mut r = room();
     let mine = outside(&r, "bo", vec!["bo"]);
     let d = r.post("bo", &mine);
-    assert!(r.st(&mine).grant().is_some(), "a person may raise a grant card to themselves");
+    assert!(
+        r.st(&mine).grant().is_some(),
+        "a person may raise a grant card to themselves"
+    );
     // To someone else, or to more than themselves: a plain question.
     let theirs = outside(&r, "bo", vec!["ana"]);
     r.post("bo", &theirs);
@@ -356,7 +463,15 @@ fn an_outside_prompt_counts_only_from_a_person_to_themselves() {
     r.answer("bo", &mine, Some(0), &d);
     assert!(r.st(&mine).is_open());
     let chat = r.chat;
-    r.w.write("bo", Some(chat), SessionEvent::FlowRecorded { record: answer_rec(&mine, "bo", Some(0), &d) }, None, Proof::Recovery);
+    r.w.write(
+        "bo",
+        Some(chat),
+        SessionEvent::FlowRecorded {
+            record: answer_rec(&mine, "bo", Some(0), &d),
+        },
+        None,
+        Proof::Recovery,
+    );
     assert_eq!(who(&r.st(&mine)), vec!["bo"]);
     // An outside prompt needs the passkey whatever its effect says.
     let mut lax = outside(&r, "bo", vec!["bo"]);
@@ -367,9 +482,21 @@ fn an_outside_prompt_counts_only_from_a_person_to_themselves() {
     // His device closes it.
     let q = outside(&r, "bo", vec!["bo"]);
     r.post("bo", &q);
-    r.record("ana", FlowRecord::HumanAsk(HumanAsk { closed: true, ..q.clone() }));
+    r.record(
+        "ana",
+        FlowRecord::HumanAsk(HumanAsk {
+            closed: true,
+            ..q.clone()
+        }),
+    );
     assert!(r.st(&q).is_open());
-    r.record("bo", FlowRecord::HumanAsk(HumanAsk { closed: true, ..q.clone() }));
+    r.record(
+        "bo",
+        FlowRecord::HumanAsk(HumanAsk {
+            closed: true,
+            ..q.clone()
+        }),
+    );
     assert!(!r.st(&q).is_open());
 }
 
@@ -380,16 +507,51 @@ fn older_peers_answers_and_older_asks() {
     let mut r = room();
     let q = question(r.turn, AskAudience::room(WorkspaceRole::Contributor), 1);
     r.post("ana", &q);
-    r.record("bo", FlowRecord::HumanAnswered(HumanAnswered { ask_id: q.ask_id, answer: "Postgres".into(), option_index: Some(0), by: "Bo".into(), at_ms: 2, ..Default::default() }));
+    r.record(
+        "bo",
+        FlowRecord::HumanAnswered(HumanAnswered {
+            ask_id: q.ask_id,
+            answer: "Postgres".into(),
+            option_index: Some(0),
+            by: "Bo".into(),
+            at_ms: 2,
+            ..Default::default()
+        }),
+    );
     let st = r.st(&q);
     assert!(st.is_open());
     assert_eq!(st.uncounted[0].why, "answered on an older version");
     assert!(st.legacy_settled, "the v1 shadow sees it, as 0.3 does");
     // A v1 ask: the first answer wins, from anyone at Contributor or above.
-    let old = HumanAsk { v: 0, audience: None, ask_id: Uuid::new_v4(), ..q.clone() };
+    let old = HumanAsk {
+        v: 0,
+        audience: None,
+        ask_id: Uuid::new_v4(),
+        ..q.clone()
+    };
     r.post("ana", &old);
-    r.record("bo", FlowRecord::HumanAnswered(HumanAnswered { ask_id: old.ask_id, answer: "Postgres".into(), option_index: Some(0), by: "Bo".into(), at_ms: 2, ..Default::default() }));
-    r.record("dee", FlowRecord::HumanAnswered(HumanAnswered { ask_id: old.ask_id, answer: "SQLite".into(), option_index: Some(1), by: "Dee".into(), at_ms: 3, ..Default::default() }));
+    r.record(
+        "bo",
+        FlowRecord::HumanAnswered(HumanAnswered {
+            ask_id: old.ask_id,
+            answer: "Postgres".into(),
+            option_index: Some(0),
+            by: "Bo".into(),
+            at_ms: 2,
+            ..Default::default()
+        }),
+    );
+    r.record(
+        "dee",
+        FlowRecord::HumanAnswered(HumanAnswered {
+            ask_id: old.ask_id,
+            answer: "SQLite".into(),
+            option_index: Some(1),
+            by: "Dee".into(),
+            at_ms: 3,
+            ..Default::default()
+        }),
+    );
     let st = r.st(&old);
     assert_eq!(st.answer.as_ref().map(|a| a.by.as_str()), Some("Bo"));
 }
@@ -403,10 +565,25 @@ fn unreadable_new_fields_decode_as_absent() {
         "question": "q", "atMs": 1, "v": "two", "quorum": 900, "audience": 5, "effect": [1], "origin": {"via": 3}, "settledBy": "nope", "allowText": "yes"
     });
     let rec: FlowRecord = serde_json::from_value(raw).unwrap();
-    let FlowRecord::HumanAsk(a) = rec else { panic!("decodes as an ask") };
-    assert_eq!((a.v, a.quorum, a.audience, a.effect, a.origin, a.settled_by, a.allow_text), (0, None, None, None, None, None, false));
+    let FlowRecord::HumanAsk(a) = rec else {
+        panic!("decodes as an ask")
+    };
+    assert_eq!(
+        (
+            a.v,
+            a.quorum,
+            a.audience,
+            a.effect,
+            a.origin,
+            a.settled_by,
+            a.allow_text
+        ),
+        (0, None, None, None, None, None, false)
+    );
     let raw = serde_json::json!({"type": "humanAnswered", "askId": Uuid::new_v4(), "answer": "x", "atMs": 1, "text": 7, "askDigest": [], "decline": "y"});
-    let FlowRecord::HumanAnswered(a) = serde_json::from_value(raw).unwrap() else { panic!() };
+    let FlowRecord::HumanAnswered(a) = serde_json::from_value(raw).unwrap() else {
+        panic!()
+    };
     assert!(a.text.is_empty() && a.ask_digest.is_empty() && !a.decline);
 }
 
@@ -414,11 +591,17 @@ fn unreadable_new_fields_decode_as_absent() {
 /// `crates/ligus-core/tests/golden/ask_digest_v1.json`.
 #[test]
 fn ask_digest_golden_vector() {
-    let v: serde_json::Value = serde_json::from_str(include_str!("golden/ask_digest_v1.json")).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(include_str!("golden/ask_digest_v1.json")).unwrap();
     for case in v["cases"].as_array().unwrap() {
         let id = Uuid::parse_str(case["askId"].as_str().unwrap()).unwrap();
         let payload = case["payload"].as_str().unwrap();
-        assert_eq!(ask_digest(id, payload.as_bytes()), case["digest"].as_str().unwrap(), "{}", case["name"]);
+        assert_eq!(
+            ask_digest(id, payload.as_bytes()),
+            case["digest"].as_str().unwrap(),
+            "{}",
+            case["name"]
+        );
     }
 }
 
@@ -427,7 +610,14 @@ fn ask_digest_golden_vector() {
 /// duplicated 0.3 field is refused by both.
 #[test]
 fn duplicated_new_fields_decode_as_older_builds_do() {
-    fn forge(w: &mut SignedWorld, chat: Uuid, by: &str, payload: SessionEvent, from: &str, to: &str) -> Uuid {
+    fn forge(
+        w: &mut SignedWorld,
+        chat: Uuid,
+        by: &str,
+        payload: SessionEvent,
+        from: &str,
+        to: &str,
+    ) -> Uuid {
         let env = w.draft(by, Some(chat), payload, None);
         let text = serde_json::to_string(&env).unwrap().replacen(from, to, 1);
         let mut env: ligus_core::SessionEventEnvelope = serde_json::from_str(&text).unwrap();
@@ -440,25 +630,81 @@ fn duplicated_new_fields_decode_as_older_builds_do() {
         w.admit("ana", "bo", WorkspaceRole::Contributor);
         let chat = w.chat("ana", "c");
         let ask_id = Uuid::new_v4();
-        let ask = HumanAsk { ask_id, question: "q".into(), options: vec!["a".into(), "b".into()], at_ms: 1, ..Default::default() };
+        let ask = HumanAsk {
+            ask_id,
+            question: "q".into(),
+            options: vec!["a".into(), "b".into()],
+            at_ms: 1,
+            ..Default::default()
+        };
         let key = format!("\"askId\":\"{ask_id}\"");
-        let forged = forge(&mut w, chat, "bo", SessionEvent::FlowRecorded { record: FlowRecord::HumanAsk(ask) }, &key, &format!("{key},\"{dup}\":2,\"{dup}\":3"));
-        let ans = HumanAnswered { ask_id, answer: "a".into(), option_index: Some(0), by: "Bo".into(), at_ms: 2, ..Default::default() };
-        let answer = w.say(chat, "ana", SessionEvent::FlowRecorded { record: FlowRecord::HumanAnswered(ans) });
-        let folded = w.state(chat).flow.asks.get(&ask_id).map(|a| (a.ask.v, a.ask.quorum));
-        (w.verdict(forged), folded.is_some(), w.verdict(answer), folded)
+        let forged = forge(
+            &mut w,
+            chat,
+            "bo",
+            SessionEvent::FlowRecorded {
+                record: FlowRecord::HumanAsk(ask),
+            },
+            &key,
+            &format!("{key},\"{dup}\":2,\"{dup}\":3"),
+        );
+        let ans = HumanAnswered {
+            ask_id,
+            answer: "a".into(),
+            option_index: Some(0),
+            by: "Bo".into(),
+            at_ms: 2,
+            ..Default::default()
+        };
+        let answer = w.say(
+            chat,
+            "ana",
+            SessionEvent::FlowRecorded {
+                record: FlowRecord::HumanAnswered(ans),
+            },
+        );
+        let folded = w
+            .state(chat)
+            .flow
+            .asks
+            .get(&ask_id)
+            .map(|a| (a.ask.v, a.ask.quorum));
+        (
+            w.verdict(forged),
+            folded.is_some(),
+            w.verdict(answer),
+            folded,
+        )
     };
     let control = run("zz");
-    for dup in ["v", "quorum", "audience", "effect", "origin", "settledBy", "allowText"] {
+    for dup in [
+        "v",
+        "quorum",
+        "audience",
+        "effect",
+        "origin",
+        "settledBy",
+        "allowText",
+    ] {
         let got = run(dup);
-        assert_eq!((got.0, got.1, got.2), (control.0, control.1, control.2), "duplicated {dup}");
+        assert_eq!(
+            (got.0, got.1, got.2),
+            (control.0, control.1, control.2),
+            "duplicated {dup}"
+        );
     }
-    assert_eq!(run("v").3, Some((2, None)), "the first value of a duplicated new field");
+    assert_eq!(
+        run("v").3,
+        Some((2, None)),
+        "the first value of a duplicated new field"
+    );
     // A duplicated 0.3 field is refused (as 0.3's own decoder refuses it).
     let raw = r#"{"type":"humanAsk","askId":"00000000-0000-0000-0000-000000000001","turnId":"00000000-0000-0000-0000-000000000002","agentKey":"a","question":"q","question":"r","atMs":1}"#;
     assert!(serde_json::from_str::<FlowRecord>(raw).is_err());
     let raw = r#"{"type":"humanAnswered","askId":"00000000-0000-0000-0000-000000000001","answer":"x","atMs":1,"askDigest":"a","askDigest":"b","decline":true,"decline":7}"#;
-    let FlowRecord::HumanAnswered(a) = serde_json::from_str(raw).unwrap() else { panic!() };
+    let FlowRecord::HumanAnswered(a) = serde_json::from_str(raw).unwrap() else {
+        panic!()
+    };
     assert_eq!((a.ask_digest.as_str(), a.decline), ("a", true));
 }
 
@@ -470,13 +716,23 @@ fn a_re_encoded_copy_has_the_same_digest() {
     let mut r = room();
     let q = question(r.turn, AskAudience::people(vec!["bo".into()]), 1);
     let chat = r.chat;
-    let env = r.w.draft("ana", Some(chat), SessionEvent::FlowRecorded { record: FlowRecord::HumanAsk(q.clone()) }, None);
+    let env = r.w.draft(
+        "ana",
+        Some(chat),
+        SessionEvent::FlowRecorded {
+            record: FlowRecord::HumanAsk(q.clone()),
+        },
+        None,
+    );
     let text = serde_json::to_string(&env).unwrap();
     let original: ligus_core::SessionEventEnvelope = serde_json::from_str(&text).unwrap();
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let reordered = serde_json::to_string(&v).unwrap().replace("\"payload\":{", "\"payload\": {");
+    let reordered = serde_json::to_string(&v)
+        .unwrap()
+        .replace("\"payload\":{", "\"payload\": {");
     let copy: ligus_core::SessionEventEnvelope = serde_json::from_str(&reordered).unwrap();
-    ligus_core::crypto::verify_envelope(&copy, &r.w.people["ana"].device.public_key_bytes()).unwrap();
+    ligus_core::crypto::verify_envelope(&copy, &r.w.people["ana"].device.public_key_bytes())
+        .unwrap();
     use ligus_core::flow::asks::envelope_ask_digest;
     assert_eq!(envelope_ask_digest(&original), envelope_ask_digest(&copy));
 }

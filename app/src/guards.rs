@@ -64,7 +64,8 @@ pub(crate) struct GuardRuntime {
     /// The last hygiene sweep's results (in memory; a restart sweeps again).
     pub hygiene: Mutex<ligus_proto::HygieneReportDto>,
     /// Last plan-window observation per runtime kind.
-    pub plan_windows: Mutex<HashMap<ligus_core::ModelProviderKind, ligus_core::throttle::PlanWindow>>,
+    pub plan_windows:
+        Mutex<HashMap<ligus_core::ModelProviderKind, ligus_core::throttle::PlanWindow>>,
     /// Work the throttles hold back right now, by key (for the UI).
     pub deferred: Mutex<HashMap<String, ligus_proto::DeferredWorkDto>>,
     /// When the lease loop next runs the hygiene sweep.
@@ -72,7 +73,10 @@ pub(crate) struct GuardRuntime {
 }
 
 fn now_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn device_id(state: &AppState) -> Uuid {
@@ -98,7 +102,8 @@ pub(crate) fn takeover_reason(
     if lease.handover_to.is_some() {
         // Reserved for someone else; only a second lapse (handled below via the
         // later epoch) lets anyone else in.
-        return (beats_fetched && lapsed_for(lease, last_beat, now_ms, 2)).then_some(LeaseClaimReason::Lapsed);
+        return (beats_fetched && lapsed_for(lease, last_beat, now_ms, 2))
+            .then_some(LeaseClaimReason::Lapsed);
     }
     match lease_health(lease, last_beat, now_ms) {
         LeaseHealth::Released => Some(LeaseClaimReason::Released),
@@ -111,10 +116,17 @@ pub(crate) fn takeover_reason(
 }
 
 /// No beat for `leases` whole lease lengths.
-fn lapsed_for(lease: &LeaseState, last_beat: Option<(Uuid, u64, i64)>, now_ms: i64, leases: i64) -> bool {
+fn lapsed_for(
+    lease: &LeaseState,
+    last_beat: Option<(Uuid, u64, i64)>,
+    now_ms: i64,
+    leases: i64,
+) -> bool {
     let claimed = lease.current.claimed_at.inner().unix_timestamp() * 1000;
     let beat = match last_beat {
-        Some((h, e, at)) if h == lease.current.holder && e == lease.current.epoch => at.max(claimed),
+        Some((h, e, at)) if h == lease.current.holder && e == lease.current.epoch => {
+            at.max(claimed)
+        }
         _ => claimed,
     };
     now_ms - beat > lease.current.lease_ms as i64 * leases
@@ -133,7 +145,10 @@ pub(crate) fn acquire_run_lease(
     let scope_id = run_id.to_string();
     let (lease, initiator_here) = {
         let svc = state.service.lock().unwrap();
-        let session = svc.load_in(workspace_id, session_id).map_err(map_err)?.ok_or("unknown session")?;
+        let session = svc
+            .load_in(workspace_id, session_id)
+            .map_err(map_err)?
+            .ok_or("unknown session")?;
         let initiator = session
             .workflow_runs
             .iter()
@@ -143,7 +158,10 @@ pub(crate) fn acquire_run_lease(
         let lease = session
             .guards
             .leases
-            .get(&ligus_core::lease::lease_key(LeaseScope::WorkflowRun, &scope_id))
+            .get(&ligus_core::lease::lease_key(
+                LeaseScope::WorkflowRun,
+                &scope_id,
+            ))
             .cloned();
         (lease, initiator == svc.author().id)
     };
@@ -154,13 +172,21 @@ pub(crate) fn acquire_run_lease(
             return Ok((l.current.epoch, false));
         }
         Some(l) => {
-            let last = state.guards.lease_beats.last(LeaseScope::WorkflowRun, &scope_id);
-            let fetched = state.guards.beats_fetched.load(Ordering::Relaxed) || !relay_configured(state);
+            let last = state
+                .guards
+                .lease_beats
+                .last(LeaseScope::WorkflowRun, &scope_id);
+            let fetched =
+                state.guards.beats_fetched.load(Ordering::Relaxed) || !relay_configured(state);
             match takeover_reason(l, me, last, now_ms(), fetched, initiator_here) {
                 // A pending handover reserved the next epoch for its successor;
                 // anyone else (after the successor failed to show) skips it.
                 Some(reason) => {
-                    let skip = if l.handover_to.is_some_and(|s| s != me) { 2 } else { 1 };
+                    let skip = if l.handover_to.is_some_and(|s| s != me) {
+                        2
+                    } else {
+                        1
+                    };
                     (l.current.epoch + skip, reason)
                 }
                 None => {
@@ -174,8 +200,16 @@ pub(crate) fn acquire_run_lease(
     };
     let after = {
         let mut svc = state.service.lock().unwrap();
-        svc.claim_lease(session_id, workspace_id, LeaseScope::WorkflowRun, &scope_id, epoch, DEFAULT_LEASE_MS, reason)
-            .map_err(map_err)?
+        svc.claim_lease(
+            session_id,
+            workspace_id,
+            LeaseScope::WorkflowRun,
+            &scope_id,
+            epoch,
+            DEFAULT_LEASE_MS,
+            reason,
+        )
+        .map_err(map_err)?
     };
     match after {
         Some(l) if l.current.holder == me && l.current.epoch == epoch => {
@@ -202,15 +236,33 @@ pub(crate) fn acquire_run_lease(
 
 fn remember(state: &AppState, run_id: Uuid, session_id: Uuid, workspace_id: Uuid, epoch: u64) {
     let mut held = state.guards.held_runs.lock().unwrap();
-    let entry = held.entry(run_id).or_insert(HeldLease { session_id, workspace_id, epoch, beat: 0, last_beat: None });
+    let entry = held.entry(run_id).or_insert(HeldLease {
+        session_id,
+        workspace_id,
+        epoch,
+        beat: 0,
+        last_beat: None,
+    });
     if entry.epoch != epoch {
-        *entry = HeldLease { session_id, workspace_id, epoch, beat: 0, last_beat: None };
+        *entry = HeldLease {
+            session_id,
+            workspace_id,
+            epoch,
+            beat: 0,
+            last_beat: None,
+        };
     }
 }
 
 /// The epoch this device drives `run_id` under, if it holds it.
 pub(crate) fn epoch_for(state: &AppState, run_id: Uuid) -> Option<u64> {
-    state.guards.held_runs.lock().unwrap().get(&run_id).map(|h| h.epoch)
+    state
+        .guards
+        .held_runs
+        .lock()
+        .unwrap()
+        .get(&run_id)
+        .map(|h| h.epoch)
 }
 
 /// Forget a held run lease (its driver ended). The durable lease stays; a
@@ -225,23 +277,41 @@ pub(crate) fn forget_run(state: &AppState, run_id: Uuid) {
 /// fenced) or after this device released it (handover). Records a
 /// `leaseFenced` signal the first time it turns false.
 pub(crate) fn still_holds(state: &AppState, session_id: Uuid, run_id: Uuid) -> bool {
-    let Some(mine) = epoch_for(state, run_id) else { return true };
+    let Some(mine) = epoch_for(state, run_id) else {
+        return true;
+    };
     let me = device_id(state);
     // The run's own workspace (recorded when it was claimed), else the
     // chat's as this window resolves it.
-    let run_ws = state.guards.held_runs.lock().unwrap().get(&run_id).map(|h| h.workspace_id);
+    let run_ws = state
+        .guards
+        .held_runs
+        .lock()
+        .unwrap()
+        .get(&run_id)
+        .map(|h| h.workspace_id);
     let lease = {
         let svc = state.service.lock().unwrap();
         run_ws
             .or_else(|| svc.workspace_of(session_id).ok().flatten())
-            .and_then(|w| svc.lease(w, session_id, LeaseScope::WorkflowRun, &run_id.to_string()).ok().flatten())
+            .and_then(|w| {
+                svc.lease(w, session_id, LeaseScope::WorkflowRun, &run_id.to_string())
+                    .ok()
+                    .flatten()
+            })
     };
     let holds = lease
         .as_ref()
         .is_some_and(|l| l.current.holder == me && l.current.epoch == mine && !l.released);
     if !holds {
         if let Some(l) = lease {
-            let ws = state.guards.held_runs.lock().unwrap().get(&run_id).map(|h| h.workspace_id);
+            let ws = state
+                .guards
+                .held_runs
+                .lock()
+                .unwrap()
+                .get(&run_id)
+                .map(|h| h.workspace_id);
             if let Some(ws) = ws {
                 if l.current.epoch != mine {
                     let _ = state.service.lock().unwrap().record_signal(
@@ -265,7 +335,12 @@ pub(crate) fn still_holds(state: &AppState, session_id: Uuid, run_id: Uuid) -> b
 
 /// Called by the driver before it starts: claim (or confirm) the lease and,
 /// after a succession, wait for competing claims to sync and re-check.
-pub(crate) async fn lease_before_driving(app: &AppHandle, session_id: Uuid, workspace_id: Uuid, run_id: Uuid) -> bool {
+pub(crate) async fn lease_before_driving(
+    app: &AppHandle,
+    session_id: Uuid,
+    workspace_id: Uuid,
+    run_id: Uuid,
+) -> bool {
     let state = app.state::<AppState>();
     match acquire_run_lease(&state, session_id, workspace_id, run_id) {
         Ok((_, false)) => true,
@@ -281,7 +356,13 @@ pub(crate) async fn lease_before_driving(app: &AppHandle, session_id: Uuid, work
 }
 
 fn relay_configured(state: &AppState) -> bool {
-    state.settings.lock().unwrap().relay_url.as_deref().is_some_and(|u| !u.trim().is_empty())
+    state
+        .settings
+        .lock()
+        .unwrap()
+        .relay_url
+        .as_deref()
+        .is_some_and(|u| !u.trim().is_empty())
 }
 
 /// Whether startup/periodic recovery may (try to) drive `run` here: it has no
@@ -296,7 +377,10 @@ pub(crate) fn recovery_allowed(
     beats_fetched: bool,
 ) -> bool {
     let scope_id = run_id.to_string();
-    let Some(lease) = session.guards.leases.get(&ligus_core::lease::lease_key(LeaseScope::WorkflowRun, &scope_id)) else {
+    let Some(lease) = session.guards.leases.get(&ligus_core::lease::lease_key(
+        LeaseScope::WorkflowRun,
+        &scope_id,
+    )) else {
         return true;
     };
     if lease.current.holder == me && !lease.released {
@@ -307,7 +391,10 @@ pub(crate) fn recovery_allowed(
         .iter()
         .find(|r| r.id == run_id)
         .is_some_and(|r| r.initiator_actor_id == my_actor);
-    let last = state.guards.lease_beats.last(LeaseScope::WorkflowRun, &scope_id);
+    let last = state
+        .guards
+        .lease_beats
+        .last(LeaseScope::WorkflowRun, &scope_id);
     takeover_reason(lease, me, last, now_ms(), beats_fetched, initiator_here).is_some()
 }
 
@@ -319,14 +406,27 @@ pub(crate) fn beats_known(state: &AppState) -> bool {
 
 /// The lease card for a run, as this device sees it.
 /// `me` is this device's id (passed in: callers hold the service lock).
-pub(crate) fn run_lease_dto(state: &AppState, session: &ligus_core::ChatSession, run_id: Uuid, me: Uuid) -> Option<RunLeaseDto> {
+pub(crate) fn run_lease_dto(
+    state: &AppState,
+    session: &ligus_core::ChatSession,
+    run_id: Uuid,
+    me: Uuid,
+) -> Option<RunLeaseDto> {
     let scope_id = run_id.to_string();
-    let lease = session.guards.leases.get(&ligus_core::lease::lease_key(LeaseScope::WorkflowRun, &scope_id))?;
+    let lease = session.guards.leases.get(&ligus_core::lease::lease_key(
+        LeaseScope::WorkflowRun,
+        &scope_id,
+    ))?;
     let now = now_ms();
-    let beat = state.guards.lease_beats.get(LeaseScope::WorkflowRun, &scope_id);
+    let beat = state
+        .guards
+        .lease_beats
+        .get(LeaseScope::WorkflowRun, &scope_id);
     let mut last = beat.as_ref().map(|(b, _)| (b.holder, b.epoch, b.at_ms));
     let mut verified = beat.as_ref().is_some_and(|(b, t)| {
-        *t == BeatTrust::Verified && b.holder == lease.current.holder && b.epoch == lease.current.epoch
+        *t == BeatTrust::Verified
+            && b.holder == lease.current.holder
+            && b.epoch == lease.current.epoch
     });
     if lease.current.holder == me {
         // Our own lease: we know we're alive while the driver runs.
@@ -339,7 +439,9 @@ pub(crate) fn run_lease_dto(state: &AppState, session: &ligus_core::ChatSession,
     }
     let claimed = lease.current.claimed_at.inner().unix_timestamp() * 1000;
     let beat_at = match last {
-        Some((h, e, at)) if h == lease.current.holder && e == lease.current.epoch => at.max(claimed),
+        Some((h, e, at)) if h == lease.current.holder && e == lease.current.epoch => {
+            at.max(claimed)
+        }
         _ => claimed,
     };
     let health = match lease_health(lease, last, now) {
@@ -373,8 +475,21 @@ pub(crate) fn run_lease_dto(state: &AppState, session: &ligus_core::ChatSession,
 /// successor; the local driver stops at its next transition, and the
 /// successor's lease loop picks the run up straight away.
 #[tauri::command]
-pub(crate) async fn hand_over_workflow_run(ligus_app: tauri::AppHandle, session_id: String, run_id: String, successor: Option<String>) -> Result<String, String> {
-    crate::off_main(ligus_app, move |ligus_app| hand_over_workflow_run_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, run_id, successor)).await
+pub(crate) async fn hand_over_workflow_run(
+    ligus_app: tauri::AppHandle,
+    session_id: String,
+    run_id: String,
+    successor: Option<String>,
+) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        hand_over_workflow_run_sync(
+            tauri::Manager::state::<AppState>(ligus_app),
+            session_id,
+            run_id,
+            successor,
+        )
+    })
+    .await
 }
 
 pub(crate) fn hand_over_workflow_run_sync(
@@ -385,18 +500,33 @@ pub(crate) fn hand_over_workflow_run_sync(
 ) -> Result<String, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let rid = Uuid::parse_str(&run_id).map_err(map_err)?;
-    let held = state.guards.held_runs.lock().unwrap().get(&rid).cloned().ok_or("this device isn't driving that run")?;
+    let held = state
+        .guards
+        .held_runs
+        .lock()
+        .unwrap()
+        .get(&rid)
+        .cloned()
+        .ok_or("this device isn't driving that run")?;
     let me = device_id(&state);
     let successor = match successor {
         Some(s) => Uuid::parse_str(&s).map_err(map_err)?,
-        None => elect_successor(&state, held.workspace_id, sid, rid, me).ok_or("no other device of this workspace is online to take it")?,
+        None => elect_successor(&state, held.workspace_id, sid, rid, me)
+            .ok_or("no other device of this workspace is online to take it")?,
     };
     if successor == me {
         return Err("pick another device".into());
     }
     let mut svc = state.service.lock().unwrap();
-    svc.release_lease(sid, held.workspace_id, LeaseScope::WorkflowRun, &rid.to_string(), held.epoch, Some(successor))
-        .map_err(map_err)?;
+    svc.release_lease(
+        sid,
+        held.workspace_id,
+        LeaseScope::WorkflowRun,
+        &rid.to_string(),
+        held.epoch,
+        Some(successor),
+    )
+    .map_err(map_err)?;
     drop(svc);
     // Wake the driver so it notices it no longer holds the lease.
     if let Some(w) = state.run_wakers.lock().unwrap().get(&rid) {
@@ -407,21 +537,39 @@ pub(crate) fn hand_over_workflow_run_sync(
 
 /// Pick a successor: an online device host other than this one, preferring a
 /// device of the person who started the run.
-fn elect_successor(state: &AppState, workspace_id: Uuid, session_id: Uuid, run_id: Uuid, me: Uuid) -> Option<Uuid> {
+fn elect_successor(
+    state: &AppState,
+    workspace_id: Uuid,
+    session_id: Uuid,
+    run_id: Uuid,
+    me: Uuid,
+) -> Option<Uuid> {
     let svc = state.service.lock().unwrap();
     let hosts = svc.list_hosts(workspace_id).ok()?;
     let initiator = svc
         .load_in(workspace_id, session_id)
         .ok()
         .flatten()
-        .and_then(|s| s.workflow_runs.iter().find(|r| r.id == run_id).map(|r| r.initiator_actor_id.clone()))
+        .and_then(|s| {
+            s.workflow_runs
+                .iter()
+                .find(|r| r.id == run_id)
+                .map(|r| r.initiator_actor_id.clone())
+        })
         .unwrap_or_default();
     drop(svc);
     let now = ligus_core::Timestamp::now();
     let mut candidates: Vec<_> = hosts
         .iter()
-        .filter(|h| h.kind == ligus_core::HostKind::Device && state.host_presence.is_online(h, &now))
-        .filter_map(|h| Uuid::parse_str(&h.id).ok().filter(|id| *id != me).map(|id| (h.owner_actor_id != initiator, id)))
+        .filter(|h| {
+            h.kind == ligus_core::HostKind::Device && state.host_presence.is_online(h, &now)
+        })
+        .filter_map(|h| {
+            Uuid::parse_str(&h.id)
+                .ok()
+                .filter(|id| *id != me)
+                .map(|id| (h.owner_actor_id != initiator, id))
+        })
         .collect();
     candidates.sort();
     candidates.first().map(|(_, id)| *id)
@@ -438,15 +586,20 @@ pub(crate) async fn run_lease_loop(app: AppHandle) {
         let state = app.state::<AppState>();
         let conn = {
             let s = state.settings.lock().unwrap();
-            s.relay_url.clone().filter(|u| !u.trim().is_empty()).map(|u| {
-                let ws_conn = s.workspaces.iter().find(|w| w.room == s.sync_room).cloned();
-                (u, s.sync_room.clone(), s.workspace_key(), ws_conn)
-            })
+            s.relay_url
+                .clone()
+                .filter(|u| !u.trim().is_empty())
+                .map(|u| {
+                    let ws_conn = s.workspaces.iter().find(|w| w.room == s.sync_room).cloned();
+                    (u, s.sync_room.clone(), s.workspace_key(), ws_conn)
+                })
         };
         // The one keyring (B1): lease beats seal at the authorized head, and
         // only beats sealed there are read.
         let conn = conn.map(|(u, room, key, ws_conn)| {
-            let ring = key.is_some().then(|| crate::workspace_ring(&state, &room, ws_conn.as_ref()));
+            let ring = key
+                .is_some()
+                .then(|| crate::workspace_ring(&state, &room, ws_conn.as_ref()));
             (u, room, ring)
         });
         let me = device_id(&state);
@@ -475,7 +628,10 @@ pub(crate) async fn run_lease_loop(app: AppHandle) {
                 signature: Vec::new(),
             };
             let signed = state.service.lock().unwrap().sign_lease_beat(beat);
-            state.guards.lease_beats.record(signed.clone(), BeatTrust::Verified);
+            state
+                .guards
+                .lease_beats
+                .record(signed.clone(), BeatTrust::Verified);
             let _ = state.service.lock().unwrap().record_signal(
                 h.workspace_id,
                 Some(h.session_id),
@@ -491,7 +647,11 @@ pub(crate) async fn run_lease_loop(app: AppHandle) {
             if let Some((url, room, Some(ring))) = &conn {
                 if ligus_core::room_workspace_id(room) == h.workspace_id {
                     let relay = state.relay_client(url);
-                    if let Err(e) = ligus_runtime::lease_presence::publish_lease_beat(&relay, room, ring, &signed).await {
+                    if let Err(e) = ligus_runtime::lease_presence::publish_lease_beat(
+                        &relay, room, ring, &signed,
+                    )
+                    .await
+                    {
                         tracing::debug!(target: "leases", "lease beat publish failed: {e}");
                     }
                 }
@@ -508,25 +668,38 @@ pub(crate) async fn run_lease_loop(app: AppHandle) {
                     ligus_runtime::envelope_verifier::build_roster(&trust)
                 };
                 use ligus_runtime::envelope_verifier::DeviceKeyResolver;
-                let beats = ligus_runtime::lease_presence::open_lease_beats(&blobs, ring, now_ms(), |d| {
-                    if resolver.is_revoked(d) {
-                        // A revoked device's beat can't renew anything: treat as
-                        // certified with an impossible key so it fails.
-                        return Some(vec![0u8; 32]);
-                    }
-                    resolver.public_key(d).map(<[u8]>::to_vec)
-                });
+                let beats =
+                    ligus_runtime::lease_presence::open_lease_beats(&blobs, ring, now_ms(), |d| {
+                        if resolver.is_revoked(d) {
+                            // A revoked device's beat can't renew anything: treat as
+                            // certified with an impossible key so it fails.
+                            return Some(vec![0u8; 32]);
+                        }
+                        resolver.public_key(d).map(<[u8]>::to_vec)
+                    });
                 for (beat, trust) in beats {
                     if beat.holder == me {
                         continue;
                     }
-                    let (scope, scope_id, holder, epoch, n) =
-                        (beat.scope, beat.scope_id.clone(), beat.holder, beat.epoch, beat.beat);
+                    let (scope, scope_id, holder, epoch, n) = (
+                        beat.scope,
+                        beat.scope_id.clone(),
+                        beat.holder,
+                        beat.epoch,
+                        beat.beat,
+                    );
                     if state.guards.lease_beats.record(beat, trust) {
                         let _ = state.service.lock().unwrap().record_signal(
                             ws,
                             None,
-                            &GuardSignal::CoordinatorReceived { scope, scope_id, beat: n, holder, epoch, member: me },
+                            &GuardSignal::CoordinatorReceived {
+                                scope,
+                                scope_id,
+                                beat: n,
+                                holder,
+                                epoch,
+                                member: me,
+                            },
                         );
                     }
                 }
@@ -534,7 +707,14 @@ pub(crate) async fn run_lease_loop(app: AppHandle) {
             }
         }
         // Wake drivers whose lease may have been fenced by a synced claim.
-        let held_ids: Vec<Uuid> = state.guards.held_runs.lock().unwrap().keys().copied().collect();
+        let held_ids: Vec<Uuid> = state
+            .guards
+            .held_runs
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect();
         for rid in held_ids {
             if let Some(w) = state.run_wakers.lock().unwrap().get(&rid) {
                 w.notify_waiters();
@@ -584,7 +764,11 @@ type OpenDiff = (Uuid, Uuid, String, String, Option<Uuid>);
 pub(crate) fn sweep_inputs(
     svc: &ligus_runtime::ChatService,
     ws: Uuid,
-) -> (std::collections::HashMap<String, ligus_runtime::hygiene::ChatStatus>, std::collections::HashSet<String>, Vec<OpenDiff>) {
+) -> (
+    std::collections::HashMap<String, ligus_runtime::hygiene::ChatStatus>,
+    std::collections::HashSet<String>,
+    Vec<OpenDiff>,
+) {
     use ligus_runtime::hygiene::{self, ChatStatus};
     let mut chats = std::collections::HashMap::new();
     let mut live_turns = std::collections::HashSet::new();
@@ -596,10 +780,18 @@ pub(crate) fn sweep_inputs(
         .list_session_ids()
         .unwrap_or_default()
         .into_iter()
-        .flat_map(|id| svc.store().workspaces_claiming(id).unwrap_or_default().into_iter().map(move |w| (w, id)))
+        .flat_map(|id| {
+            svc.store()
+                .workspaces_claiming(id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(move |w| (w, id))
+        })
         .collect();
     for (w, id) in logs {
-        let Ok(Some(s)) = svc.load_in(w, id) else { continue };
+        let Ok(Some(s)) = svc.load_in(w, id) else {
+            continue;
+        };
         if id == ligus_core::workspace_config_session_id(s.workspace_id) {
             continue;
         }
@@ -610,13 +802,23 @@ pub(crate) fn sweep_inputs(
             chats.insert(hygiene::slug(&id.to_string()), ChatStatus::Live);
             continue;
         }
-        let status = if s.archived { ChatStatus::Archived } else { ChatStatus::Live };
-        chats.entry(hygiene::slug(&id.to_string())).or_insert(status);
+        let status = if s.archived {
+            ChatStatus::Archived
+        } else {
+            ChatStatus::Live
+        };
+        chats
+            .entry(hygiene::slug(&id.to_string()))
+            .or_insert(status);
         if s.archived {
             continue;
         }
         for p in &s.proposals {
-            if p.status == ligus_core::ProposalStatus::Open && !p.dismissed && p.superseded_by.is_none() && !s.guards.stale_proposals.contains(&p.id) {
+            if p.status == ligus_core::ProposalStatus::Open
+                && !p.dismissed
+                && p.superseded_by.is_none()
+                && !s.guards.stale_proposals.contains(&p.id)
+            {
                 if let Some(d) = &p.diff {
                     open_diffs.push((id, p.id, p.title.clone(), d.clone(), p.repo_id));
                 }
@@ -635,22 +837,36 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> ligus_proto::HygieneReportD
     use ligus_runtime::hygiene::{self, SweepAction};
     let ws = state.active_workspace_id();
     let repo = state.workspace_repo_root();
-    let mut report = ligus_proto::HygieneReportDto { ran_at: crate::rfc3339(ligus_core::Timestamp::now()), ..Default::default() };
+    let mut report = ligus_proto::HygieneReportDto {
+        ran_at: crate::rfc3339(ligus_core::Timestamp::now()),
+        ..Default::default()
+    };
     // Every checkout this device manages for the workspace (5.7): the bound
     // folder, and each confirmed checkout of a workspace repo, with the repo
     // it holds (a proposal is judged only against its own repo's checkout).
     let mut roots: Vec<(std::path::PathBuf, Option<Uuid>)> = Vec::new();
     {
         let svc = state.service.lock().unwrap();
-        for m in svc.store().repo_mappings(ws).unwrap_or_default().into_iter().filter(|m| m.confirmed) {
-            if ligus_runtime::git_worktree::is_git_repo(&m.path) && !roots.iter().any(|(p, _)| *p == m.path) {
+        for m in svc
+            .store()
+            .repo_mappings(ws)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| m.confirmed)
+        {
+            if ligus_runtime::git_worktree::is_git_repo(&m.path)
+                && !roots.iter().any(|(p, _)| *p == m.path)
+            {
                 roots.push((m.path, Some(m.repo_id)));
             }
         }
     }
     let bound = std::path::PathBuf::from(&repo);
     let bound_canon = ligus_runtime::repos::git::canonical(&bound);
-    if !repo.trim().is_empty() && ligus_runtime::git_worktree::is_git_repo(&bound) && !roots.iter().any(|(p, _)| *p == bound_canon) {
+    if !repo.trim().is_empty()
+        && ligus_runtime::git_worktree::is_git_repo(&bound)
+        && !roots.iter().any(|(p, _)| *p == bound_canon)
+    {
         roots.push((bound, None));
     }
     // Never a checkout another host on this machine manages (its marker,
@@ -678,13 +894,23 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> ligus_proto::HygieneReportD
     };
     let secret = device.as_bytes().to_vec();
     let mut signals = Vec::new();
-    let legacy_root = roots.iter().find(|(_, r)| r.is_none()).map(|(p, _)| p.clone()).or_else(|| roots.first().map(|(p, _)| p.clone()));
+    let legacy_root = roots
+        .iter()
+        .find(|(_, r)| r.is_none())
+        .map(|(p, _)| p.clone())
+        .or_else(|| roots.first().map(|(p, _)| p.clone()));
     for (root, root_repo) in &roots {
         let root = root.clone();
         let entries = hygiene::list_worktrees(&root);
         // Only worktrees under this workspace's `.ligus/worktrees` are ours.
         let plan = match ligus_core::names::workspace_state_path(&root, "worktrees") {
-            Ok(owned) => hygiene::plan_sweep(&owned, &entries, &live_turns, &chats, &ligus_runtime::git_worktree::is_in_use),
+            Ok(owned) => hygiene::plan_sweep(
+                &owned,
+                &entries,
+                &live_turns,
+                &chats,
+                &ligus_runtime::git_worktree::is_in_use,
+            ),
             Err(e) => {
                 tracing::warn!(target: "worktree", "hygiene sweep skipped: {e}");
                 Vec::new()
@@ -697,7 +923,10 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> ligus_proto::HygieneReportD
             match &action {
                 SweepAction::RemoveTurnWorktree { .. } => {
                     report.turn_worktrees_removed += 1;
-                    signals.push(GuardSignal::WorktreeState { state: WorktreeState::Abandoned, repo_key: None });
+                    signals.push(GuardSignal::WorktreeState {
+                        state: WorktreeState::Abandoned,
+                        repo_key: None,
+                    });
                 }
                 SweepAction::RemoveChatCheckout { chat_slug, .. } => {
                     report.chat_checkouts_removed += 1;
@@ -742,7 +971,10 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> ligus_proto::HygieneReportD
             }
             let mut svc = state.service.lock().unwrap();
             if svc.mark_proposal_stale(sid, ws, pid).is_ok() {
-                signals.push(GuardSignal::Hygiene { hygiene_kind: HygieneKind::ProposalStale, count: 1 });
+                signals.push(GuardSignal::Hygiene {
+                    hygiene_kind: HygieneKind::ProposalStale,
+                    count: 1,
+                });
                 report.stale_proposals.push(ligus_proto::StaleProposalDto {
                     session_id: sid.to_string(),
                     proposal_id: pid.to_string(),
@@ -763,7 +995,9 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> ligus_proto::HygieneReportD
 
 /// Run the hygiene sweep now (Settings → Guards).
 #[tauri::command]
-pub(crate) async fn run_hygiene_now(app: AppHandle) -> Result<ligus_proto::HygieneReportDto, String> {
+pub(crate) async fn run_hygiene_now(
+    app: AppHandle,
+) -> Result<ligus_proto::HygieneReportDto, String> {
     let report = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         run_hygiene_sweep(&state)
@@ -783,8 +1017,21 @@ pub(crate) fn get_hygiene_report(state: State<AppState>) -> ligus_proto::Hygiene
 /// heartbeats and receipts, boundary decisions, hygiene catches, throttles),
 /// oldest first after `after_row`. Never synced.
 #[tauri::command]
-pub(crate) async fn list_guard_signals(ligus_app: tauri::AppHandle, after_row: Option<i64>, kind: Option<String>, limit: Option<u32>) -> Result<Vec<ligus_proto::GuardSignalDto>, String> {
-    crate::off_main(ligus_app, move |ligus_app| list_guard_signals_sync(tauri::Manager::state::<AppState>(ligus_app), after_row, kind, limit)).await
+pub(crate) async fn list_guard_signals(
+    ligus_app: tauri::AppHandle,
+    after_row: Option<i64>,
+    kind: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<ligus_proto::GuardSignalDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        list_guard_signals_sync(
+            tauri::Manager::state::<AppState>(ligus_app),
+            after_row,
+            kind,
+            limit,
+        )
+    })
+    .await
 }
 
 pub(crate) fn list_guard_signals_sync(
@@ -796,7 +1043,12 @@ pub(crate) fn list_guard_signals_sync(
     let ws = state.active_workspace_id();
     let svc = state.service.lock().unwrap();
     let rows = svc
-        .list_signals(ws, after_row.unwrap_or(0), kind.as_deref(), limit.unwrap_or(500).min(5_000) as usize)
+        .list_signals(
+            ws,
+            after_row.unwrap_or(0),
+            kind.as_deref(),
+            limit.unwrap_or(500).min(5_000) as usize,
+        )
         .map_err(map_err)?;
     Ok(rows
         .into_iter()
@@ -816,7 +1068,9 @@ pub(crate) fn list_guard_signals_sync(
 
 /// The envelope a turn in `session` runs in. The session carries the
 /// workspace's guard state (overlaid from the config log by `ChatService::load`).
-pub(crate) fn turn_envelope(session: &ligus_core::ChatSession) -> ligus_core::sandbox::SandboxEnvelope {
+pub(crate) fn turn_envelope(
+    session: &ligus_core::ChatSession,
+) -> ligus_core::sandbox::SandboxEnvelope {
     ligus_core::sandbox::envelope_for_session(session)
 }
 
@@ -858,7 +1112,12 @@ fn egress_decision(source: &str, reason: &str) -> GuardSignal {
 /// Claude Code `mcpServers` entries for the servers the envelope allows.
 /// Authenticated HTTP servers are left out: their token would have to ride
 /// the command line, where any local process can read it.
-fn claude_mcp_entries(state: &AppState, servers: &[ligus_runtime::McpServerSpec], egress: &ligus_core::sandbox::EgressPolicy, shell: bool) -> Vec<(String, serde_json::Value)> {
+fn claude_mcp_entries(
+    state: &AppState,
+    servers: &[ligus_runtime::McpServerSpec],
+    egress: &ligus_core::sandbox::EgressPolicy,
+    shell: bool,
+) -> Vec<(String, serde_json::Value)> {
     // Every turn runs Claude Code with a strict MCP config (open egress
     // too), so the chat's servers ride it; none while egress is closed.
     if matches!(egress, ligus_core::sandbox::EgressPolicy::Closed) {
@@ -870,8 +1129,12 @@ fn claude_mcp_entries(state: &AppState, servers: &[ligus_runtime::McpServerSpec]
         .filter(|s| shell || mcp_known_shell_free(state, &s.id))
         .map(|s| {
             let v = match &s.transport {
-                ligus_runtime::McpTransport::Stdio { command, args } => serde_json::json!({ "command": command, "args": args }),
-                ligus_runtime::McpTransport::Http { url } => serde_json::json!({ "type": "http", "url": url }),
+                ligus_runtime::McpTransport::Stdio { command, args } => {
+                    serde_json::json!({ "command": command, "args": args })
+                }
+                ligus_runtime::McpTransport::Http { url } => {
+                    serde_json::json!({ "type": "http", "url": url })
+                }
             };
             (s.id.clone(), v)
         })
@@ -904,7 +1167,8 @@ pub(crate) fn enforcement_for_servers(
 /// Remember which tools each server listed run shell commands
 /// (`ligus_runtime::is_shell_tool`).
 pub(crate) fn record_mcp_tools(state: &AppState, tagged: &[(String, ligus_runtime::McpTool)]) {
-    let mut by_server: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut by_server: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
     for (server, tool) in tagged {
         let e = by_server.entry(server.clone()).or_default();
         if ligus_runtime::is_shell_tool(&tool.name) {
@@ -921,13 +1185,23 @@ pub(crate) fn record_mcp_tools(state: &AppState, tagged: &[(String, ligus_runtim
 /// A turn without the shell gets only such servers (fail closed: one that
 /// never listed is left out).
 pub(crate) fn mcp_known_shell_free(state: &AppState, id: &str) -> bool {
-    id == ligus_runtime::executor::LIGUS_MCP_ID || state.mcp_shell_tools.lock().unwrap().get(id).is_some_and(|t| t.is_empty())
+    id == ligus_runtime::executor::LIGUS_MCP_ID
+        || state
+            .mcp_shell_tools
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|t| t.is_empty())
 }
 
 /// List the tools of the enabled servers this turn may reach that this
 /// device hasn't listed yet (each bounded), so `mcp_known_shell_free` can
 /// judge them.
-pub(crate) async fn probe_mcp_shells(state: &AppState, servers: &[ligus_runtime::McpServerSpec], egress: &ligus_core::sandbox::EgressPolicy) {
+pub(crate) async fn probe_mcp_shells(
+    state: &AppState,
+    servers: &[ligus_runtime::McpServerSpec],
+    egress: &ligus_core::sandbox::EgressPolicy,
+) {
     state.ensure_fresh_mcp_tokens().await;
     const RETRY: std::time::Duration = std::time::Duration::from_secs(600);
     // The turn's own catalog (review F14), tokens re-read after the refresh.
@@ -936,22 +1210,40 @@ pub(crate) async fn probe_mcp_shells(state: &AppState, servers: &[ligus_runtime:
     let unknown: Vec<ligus_runtime::McpServerSpec> = filter_mcp_servers(state, servers, egress)
         .into_iter()
         .filter(|s| s.enabled && !state.mcp_shell_tools.lock().unwrap().contains_key(&s.id))
-        .filter(|s| state.mcp_probe_failed.lock().unwrap().get(&s.id).is_none_or(|t| t.elapsed() > RETRY))
+        .filter(|s| {
+            state
+                .mcp_probe_failed
+                .lock()
+                .unwrap()
+                .get(&s.id)
+                .is_none_or(|t| t.elapsed() > RETRY)
+        })
         .collect();
     for s in unknown {
         let id = s.id.clone();
         let registry = ligus_runtime::McpRegistry::new(vec![s]);
-        match tokio::time::timeout(std::time::Duration::from_secs(15), registry.list_tools(&id)).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(15), registry.list_tools(&id))
+            .await
+        {
             Ok(Ok(tools)) => {
-                let tagged: Vec<(String, ligus_runtime::McpTool)> = tools.into_iter().map(|t| (id.clone(), t)).collect();
+                let tagged: Vec<(String, ligus_runtime::McpTool)> =
+                    tools.into_iter().map(|t| (id.clone(), t)).collect();
                 if tagged.is_empty() {
-                    state.mcp_shell_tools.lock().unwrap().insert(id.clone(), Vec::new());
+                    state
+                        .mcp_shell_tools
+                        .lock()
+                        .unwrap()
+                        .insert(id.clone(), Vec::new());
                 }
                 record_mcp_tools(state, &tagged);
                 state.mcp_probe_failed.lock().unwrap().remove(&id);
             }
             _ => {
-                state.mcp_probe_failed.lock().unwrap().insert(id, std::time::Instant::now());
+                state
+                    .mcp_probe_failed
+                    .lock()
+                    .unwrap()
+                    .insert(id, std::time::Instant::now());
             }
         }
     }
@@ -969,15 +1261,24 @@ pub(crate) fn turn_sandbox_policy_with(
     isolated: bool,
     servers: &[ligus_runtime::McpServerSpec],
 ) -> ligus_runtime::executor::TurnPolicy {
-    let mut policy = ligus_runtime::executor::TurnPolicy::new(ligus_runtime::executor::HostKind::Desktop, envelope.clone(), gate.clone());
+    let mut policy = ligus_runtime::executor::TurnPolicy::new(
+        ligus_runtime::executor::HostKind::Desktop,
+        envelope.clone(),
+        gate.clone(),
+    );
     policy.worktree_is_isolated = isolated;
     // Opt-in egress presets (device-local). The plan applies them only under
     // an open envelope, so dearth mode and a lockdown override them.
     policy.egress_presets = chat_egress_presets(state, session.workspace_id, session.id);
     policy.cli_user_config = workspace_cli_user_config(state, session.workspace_id);
-    for s in servers.iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
+    for s in servers
+        .iter()
+        .filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id))
+    {
         if let ligus_runtime::McpTransport::Http { url } = &s.transport {
-            policy.mcp_hosts.extend(ligus_runtime::egress::HostPort::from_url(url));
+            policy
+                .mcp_hosts
+                .extend(ligus_runtime::egress::HostPort::from_url(url));
         }
         policy.mcp_ids.push(s.id.clone());
     }
@@ -1017,9 +1318,18 @@ pub(crate) fn turn_child_policy(
 
 /// The egress presets a chat opted into on this device: the chat's own
 /// setting when it has one, else its workspace's. Off by default.
-pub(crate) fn chat_egress_presets(state: &AppState, workspace_id: Uuid, session_id: Uuid) -> Vec<ligus_runtime::egress::EgressPreset> {
+pub(crate) fn chat_egress_presets(
+    state: &AppState,
+    workspace_id: Uuid,
+    session_id: Uuid,
+) -> Vec<ligus_runtime::egress::EgressPreset> {
     let s = state.settings.lock().unwrap();
-    effective_egress_presets(&s.egress_presets_by_workspace, &s.egress_presets_by_chat, workspace_id, session_id)
+    effective_egress_presets(
+        &s.egress_presets_by_workspace,
+        &s.egress_presets_by_chat,
+        workspace_id,
+        session_id,
+    )
 }
 
 pub(crate) fn effective_egress_presets(
@@ -1028,8 +1338,12 @@ pub(crate) fn effective_egress_presets(
     workspace_id: Uuid,
     session_id: Uuid,
 ) -> Vec<ligus_runtime::egress::EgressPreset> {
-    let names = by_chat.get(&session_id.to_string()).or_else(|| by_workspace.get(&workspace_id.to_string()));
-    names.map(|n| ligus_runtime::egress::EgressPreset::parse_list(n.iter().map(String::as_str))).unwrap_or_default()
+    let names = by_chat
+        .get(&session_id.to_string())
+        .or_else(|| by_workspace.get(&workspace_id.to_string()));
+    names
+        .map(|n| ligus_runtime::egress::EgressPreset::parse_list(n.iter().map(String::as_str)))
+        .unwrap_or_default()
 }
 
 fn preset_names(presets: &[ligus_runtime::egress::EgressPreset]) -> Vec<String> {
@@ -1040,22 +1354,51 @@ fn preset_names(presets: &[ligus_runtime::egress::EgressPreset]) -> Vec<String> 
 /// workspace and (optionally) one chat have on, and whether a guard is
 /// overriding them right now.
 #[tauri::command]
-pub(crate) async fn get_egress_presets(ligus_app: tauri::AppHandle, session_id: Option<String>) -> Result<ligus_proto::EgressPresetsDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| get_egress_presets_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+pub(crate) async fn get_egress_presets(
+    ligus_app: tauri::AppHandle,
+    session_id: Option<String>,
+) -> Result<ligus_proto::EgressPresetsDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        get_egress_presets_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)
+    })
+    .await
 }
 
-pub(crate) fn get_egress_presets_sync(state: State<AppState>, session_id: Option<String>) -> Result<ligus_proto::EgressPresetsDto, String> {
+pub(crate) fn get_egress_presets_sync(
+    state: State<AppState>,
+    session_id: Option<String>,
+) -> Result<ligus_proto::EgressPresetsDto, String> {
     let ws = state.active_workspace_id();
-    let sid = session_id.as_deref().filter(|s| !s.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
+    let sid = session_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(map_err)?;
     let session = match sid {
-        Some(id) => state.service.lock().unwrap().load_in(ws, id).map_err(map_err)?,
+        Some(id) => state
+            .service
+            .lock()
+            .unwrap()
+            .load_in(ws, id)
+            .map_err(map_err)?,
         None => None,
     };
     let (workspace, chat) = {
         let s = state.settings.lock().unwrap();
-        let known = |n: &Vec<String>| preset_names(&ligus_runtime::egress::EgressPreset::parse_list(n.iter().map(String::as_str)));
-        let workspace = s.egress_presets_by_workspace.get(&ws.to_string()).map(known).unwrap_or_default();
-        let chat = sid.and_then(|id| s.egress_presets_by_chat.get(&id.to_string())).map(known);
+        let known = |n: &Vec<String>| {
+            preset_names(&ligus_runtime::egress::EgressPreset::parse_list(
+                n.iter().map(String::as_str),
+            ))
+        };
+        let workspace = s
+            .egress_presets_by_workspace
+            .get(&ws.to_string())
+            .map(known)
+            .unwrap_or_default();
+        let chat = sid
+            .and_then(|id| s.egress_presets_by_chat.get(&id.to_string()))
+            .map(known);
         (workspace, chat)
     };
     let host = preset_names(&ligus_runtime::executor::host_paths().egress_presets);
@@ -1065,7 +1408,10 @@ pub(crate) fn get_egress_presets_sync(state: State<AppState>, session_id: Option
             let env = ligus_core::sandbox::envelope_for_session(s);
             if env.egress.is_open() {
                 String::new()
-            } else if env.tightened_by.contains(&ligus_core::sandbox::TightenedBy::Lockdown) {
+            } else if env
+                .tightened_by
+                .contains(&ligus_core::sandbox::TightenedBy::Lockdown)
+            {
                 "lockdown".to_string()
             } else {
                 "dearth".to_string()
@@ -1090,7 +1436,12 @@ pub(crate) fn get_egress_presets_sync(state: State<AppState>, session_id: Option
 
 /// Whether `workspace_id`'s CLI agents run with the user's own CLI setup.
 pub(crate) fn workspace_cli_user_config(state: &AppState, workspace_id: Uuid) -> bool {
-    state.settings.lock().unwrap().cli_user_config_workspaces.contains(&workspace_id.to_string())
+    state
+        .settings
+        .lock()
+        .unwrap()
+        .cli_user_config_workspaces
+        .contains(&workspace_id.to_string())
 }
 
 /// Whether the active workspace's CLI agents use the user's own CLI setup
@@ -1104,7 +1455,11 @@ pub(crate) fn get_workspace_cli_user_config(state: State<AppState>) -> bool {
 /// CLI setup on this device. The tools that run work outside the turn stay
 /// off either way, and the opt-in is ignored while egress is restricted.
 #[tauri::command]
-pub(crate) fn set_workspace_cli_user_config(state: State<AppState>, workspace_id: String, enabled: bool) -> Result<(), String> {
+pub(crate) fn set_workspace_cli_user_config(
+    state: State<AppState>,
+    workspace_id: String,
+    enabled: bool,
+) -> Result<(), String> {
     let ws = crate::shown_workspace(&state, &workspace_id)?.to_string();
     let mut s = state.settings.lock().unwrap();
     if enabled {
@@ -1118,14 +1473,19 @@ pub(crate) fn set_workspace_cli_user_config(state: State<AppState>, workspace_id
 
 /// Turn presets on or off for the active workspace (device-local).
 #[tauri::command]
-pub(crate) fn set_workspace_egress_presets(state: State<AppState>, workspace_id: String, presets: Vec<String>) -> Result<(), String> {
+pub(crate) fn set_workspace_egress_presets(
+    state: State<AppState>,
+    workspace_id: String,
+    presets: Vec<String>,
+) -> Result<(), String> {
     let parsed = parse_preset_names(&presets)?;
     let ws = crate::shown_workspace(&state, &workspace_id)?.to_string();
     let mut s = state.settings.lock().unwrap();
     if parsed.is_empty() {
         s.egress_presets_by_workspace.remove(&ws);
     } else {
-        s.egress_presets_by_workspace.insert(ws, preset_names(&parsed));
+        s.egress_presets_by_workspace
+            .insert(ws, preset_names(&parsed));
     }
     crate::save_settings(&state.data_dir, &s);
     Ok(())
@@ -1134,7 +1494,11 @@ pub(crate) fn set_workspace_egress_presets(state: State<AppState>, workspace_id:
 /// Override the workspace's presets for one chat (`None` = follow the
 /// workspace again; an empty list = off for this chat).
 #[tauri::command]
-pub(crate) fn set_chat_egress_presets(state: State<AppState>, session_id: String, presets: Option<Vec<String>>) -> Result<(), String> {
+pub(crate) fn set_chat_egress_presets(
+    state: State<AppState>,
+    session_id: String,
+    presets: Option<Vec<String>>,
+) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?.to_string();
     let parsed = presets.as_deref().map(parse_preset_names).transpose()?;
     let mut s = state.settings.lock().unwrap();
@@ -1151,26 +1515,39 @@ pub(crate) fn set_chat_egress_presets(state: State<AppState>, session_id: String
 }
 
 /// Known preset names, or an error naming the unknown one.
-fn parse_preset_names(names: &[String]) -> Result<Vec<ligus_runtime::egress::EgressPreset>, String> {
+fn parse_preset_names(
+    names: &[String],
+) -> Result<Vec<ligus_runtime::egress::EgressPreset>, String> {
     for n in names {
         if ligus_runtime::egress::EgressPreset::parse(n).is_none() {
             return Err(format!("unknown egress preset '{n}'"));
         }
     }
-    Ok(ligus_runtime::egress::EgressPreset::parse_list(names.iter().map(String::as_str)))
+    Ok(ligus_runtime::egress::EgressPreset::parse_list(
+        names.iter().map(String::as_str),
+    ))
 }
 
 /// Endpoints the turn's egress proxy refused: one content-free decision per
 /// endpoint count (no host names: a name can itself carry data) and a note
 /// in the chat so members see why a tool call failed.
-pub(crate) fn record_sandbox_egress_denials(state: &AppState, workspace_id: Uuid, session_id: Uuid, denied: &[ligus_runtime::egress::HostPort]) {
+pub(crate) fn record_sandbox_egress_denials(
+    state: &AppState,
+    workspace_id: Uuid,
+    session_id: Uuid,
+    denied: &[ligus_runtime::egress::HostPort],
+) {
     if denied.is_empty() {
         return;
     }
     let hosts: Vec<String> = denied.iter().map(ToString::to_string).collect();
     tracing::info!(target: "sandbox", refused = %hosts.join(", "), "egress proxy refused endpoints");
     let mut svc = state.service.lock().unwrap();
-    let _ = svc.record_signal(workspace_id, Some(session_id), &egress_decision("sandbox_proxy", "endpoint_not_allowed"));
+    let _ = svc.record_signal(
+        workspace_id,
+        Some(session_id),
+        &egress_decision("sandbox_proxy", "endpoint_not_allowed"),
+    );
     // Known optional hosts (a CLI's telemetry, the claude.ai connectors
     // proxy) are blocked on purpose and don't affect the turn: no notice.
     if let Some(note) = ligus_runtime::egress::refused_notice(denied) {
@@ -1180,9 +1557,18 @@ pub(crate) fn record_sandbox_egress_denials(state: &AppState, workspace_id: Uuid
 
 /// A turn refused because its runtime can't be confined: tell the chat (so
 /// every member sees why nobody answered) and record the decision.
-pub(crate) fn record_egress_refusal(state: &AppState, workspace_id: Uuid, session_id: Uuid, provider: ligus_core::ModelProviderKind) {
+pub(crate) fn record_egress_refusal(
+    state: &AppState,
+    workspace_id: Uuid,
+    session_id: Uuid,
+    provider: ligus_core::ModelProviderKind,
+) {
     let mut svc = state.service.lock().unwrap();
-    let _ = svc.record_signal(workspace_id, Some(session_id), &egress_decision(&format!("{provider:?}"), "runtime_unconfinable"));
+    let _ = svc.record_signal(
+        workspace_id,
+        Some(session_id),
+        &egress_decision(&format!("{provider:?}"), "runtime_unconfinable"),
+    );
     let _ = svc.post_system_note(
         session_id,
         workspace_id,
@@ -1233,13 +1619,23 @@ pub(crate) struct SandboxPolicyDto {
 /// This device's choice for `workspace_id`'s signed grants (`None`: the
 /// default, `ligus_runtime::sandbox::grants_here`).
 pub(crate) fn grants_setting(state: &AppState, workspace_id: Uuid) -> Option<bool> {
-    state.settings.lock().unwrap().sandbox_grants_here.get(&workspace_id.to_string()).copied()
+    state
+        .settings
+        .lock()
+        .unwrap()
+        .sandbox_grants_here
+        .get(&workspace_id.to_string())
+        .copied()
 }
 
 /// Apply (or not, or back to the default with `None`) the active
 /// workspace's signed sandbox grants on this device.
 #[tauri::command]
-pub(crate) fn set_sandbox_grants_here(state: State<AppState>, workspace_id: String, apply: Option<bool>) -> Result<(), String> {
+pub(crate) fn set_sandbox_grants_here(
+    state: State<AppState>,
+    workspace_id: String,
+    apply: Option<bool>,
+) -> Result<(), String> {
     let ws = crate::shown_workspace(&state, &workspace_id)?.to_string();
     let mut s = state.settings.lock().unwrap();
     match apply {
@@ -1253,13 +1649,24 @@ pub(crate) fn set_sandbox_grants_here(state: State<AppState>, workspace_id: Stri
 /// The user has seen the active workspace's signed grants as they are now
 /// (the change notice goes away until they change again).
 #[tauri::command]
-pub(crate) async fn ack_sandbox_grants(ligus_app: tauri::AppHandle, workspace_id: String) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| ack_sandbox_grants_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id)).await
+pub(crate) async fn ack_sandbox_grants(
+    ligus_app: tauri::AppHandle,
+    workspace_id: String,
+) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        ack_sandbox_grants_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id)
+    })
+    .await
 }
 
-pub(crate) fn ack_sandbox_grants_sync(state: State<AppState>, workspace_id: String) -> Result<(), String> {
+pub(crate) fn ack_sandbox_grants_sync(
+    state: State<AppState>,
+    workspace_id: String,
+) -> Result<(), String> {
     let ws = crate::shown_workspace(&state, &workspace_id)?;
-    let fp = ligus_runtime::sandbox::grants_fingerprint(&state.service.lock().unwrap().sandbox_grants(ws));
+    let fp = ligus_runtime::sandbox::grants_fingerprint(
+        &state.service.lock().unwrap().sandbox_grants(ws),
+    );
     let mut s = state.settings.lock().unwrap();
     s.sandbox_grants_seen.insert(ws.to_string(), fp);
     crate::save_settings(&state.data_dir, &s);
@@ -1269,44 +1676,102 @@ pub(crate) fn ack_sandbox_grants_sync(state: State<AppState>, workspace_id: Stri
 /// The effective sandbox policy and the signed grants for the active
 /// workspace; `agent_id` narrows it to one agent (its runtime, its grants).
 #[tauri::command]
-pub(crate) async fn get_sandbox_policy(ligus_app: tauri::AppHandle, agent_id: Option<String>) -> Result<SandboxPolicyDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| get_sandbox_policy_sync(tauri::Manager::state::<AppState>(ligus_app), agent_id)).await
+pub(crate) async fn get_sandbox_policy(
+    ligus_app: tauri::AppHandle,
+    agent_id: Option<String>,
+) -> Result<SandboxPolicyDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        get_sandbox_policy_sync(tauri::Manager::state::<AppState>(ligus_app), agent_id)
+    })
+    .await
 }
 
-pub(crate) fn get_sandbox_policy_sync(state: State<AppState>, agent_id: Option<String>) -> Result<SandboxPolicyDto, String> {
+pub(crate) fn get_sandbox_policy_sync(
+    state: State<AppState>,
+    agent_id: Option<String>,
+) -> Result<SandboxPolicyDto, String> {
     let ws = state.active_workspace_id();
     let setting = grants_setting(&state, ws);
     let (grants, here, agents_cfg, my_role, local) = {
         let svc = state.service.lock().unwrap();
         let me = svc.author().id.clone();
-        let config = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).map_err(map_err)?;
-        let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(ligus_core::WorkspaceRole::Owner);
-        let agents = config.as_ref().map(|c| c.workspace_agents.clone()).unwrap_or_default();
-        (svc.sandbox_grants(ws), svc.sandbox_grants_here(ws, setting).1, agents, my_role, svc.is_local_workspace(ws))
+        let config = svc
+            .load_in(ws, ligus_core::workspace_config_session_id(ws))
+            .map_err(map_err)?;
+        let my_role = config
+            .as_ref()
+            .map(|c| c.role_of(&me))
+            .unwrap_or(ligus_core::WorkspaceRole::Owner);
+        let agents = config
+            .as_ref()
+            .map(|c| c.workspace_agents.clone())
+            .unwrap_or_default();
+        (
+            svc.sandbox_grants(ws),
+            svc.sandbox_grants_here(ws, setting).1,
+            agents,
+            my_role,
+            svc.is_local_workspace(ws),
+        )
     };
     let fp = ligus_runtime::sandbox::grants_fingerprint(&grants);
-    let seen = state.settings.lock().unwrap().sandbox_grants_seen.get(&ws.to_string()).cloned().unwrap_or_default();
+    let seen = state
+        .settings
+        .lock()
+        .unwrap()
+        .sandbox_grants_seen
+        .get(&ws.to_string())
+        .cloned()
+        .unwrap_or_default();
     // The policies show what applies on this device.
-    let applied = if here.apply { grants.clone() } else { ligus_core::sandbox::SandboxGrants::default() };
+    let applied = if here.apply {
+        grants.clone()
+    } else {
+        ligus_core::sandbox::SandboxGrants::default()
+    };
     let agents: Vec<SandboxAgentDto> = agents_cfg
         .iter()
-        .map(|a| SandboxAgentDto { id: a.id.to_string(), name: crate::shown(&a.name), runtime: format!("{:?}", state.resolve_runtime(&a.runtime_id).provider) })
+        .map(|a| SandboxAgentDto {
+            id: a.id.to_string(),
+            name: crate::shown(&a.name),
+            runtime: format!("{:?}", state.resolve_runtime(&a.runtime_id).provider),
+        })
         .collect();
-    let chosen = agent_id.as_deref().filter(|s| !s.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
+    let chosen = agent_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(map_err)?;
     let mut policies = Vec::new();
     match chosen.and_then(|id| agents_cfg.iter().find(|a| a.id == id)) {
         Some(a) => {
             let kind = state.resolve_runtime(&a.runtime_id).provider;
-            policies.push(ligus_runtime::executor::effective_policy(Some(kind), &applied.paths_for(Some(a.id)), applied.shell_granted(a.id)));
+            policies.push(ligus_runtime::executor::effective_policy(
+                Some(kind),
+                &applied.paths_for(Some(a.id)),
+                applied.shell_granted(a.id),
+            ));
         }
         None => {
-            let mut kinds: Vec<ligus_core::ModelProviderKind> = agents_cfg.iter().map(|a| state.resolve_runtime(&a.runtime_id).provider).collect();
+            let mut kinds: Vec<ligus_core::ModelProviderKind> = agents_cfg
+                .iter()
+                .map(|a| state.resolve_runtime(&a.runtime_id).provider)
+                .collect();
             kinds.sort_by_key(|k| format!("{k:?}"));
             kinds.dedup();
             for k in kinds {
-                policies.push(ligus_runtime::executor::effective_policy(Some(k), &applied.paths_for(None), false));
+                policies.push(ligus_runtime::executor::effective_policy(
+                    Some(k),
+                    &applied.paths_for(None),
+                    false,
+                ));
             }
-            policies.push(ligus_runtime::executor::effective_policy(None, &applied.paths_for(None), false));
+            policies.push(ligus_runtime::executor::effective_policy(
+                None,
+                &applied.paths_for(None),
+                false,
+            ));
         }
     }
     Ok(SandboxPolicyDto {
@@ -1328,14 +1793,35 @@ pub(crate) fn get_sandbox_policy_sync(state: State<AppState>, agent_id: Option<S
 /// the passkey sheet confirms it). Admin + presence; changing an agent's
 /// shell grant is the Owner's.
 #[tauri::command(async)]
-pub(crate) async fn set_sandbox_grants(ligus_app: tauri::AppHandle, workspace_id: String, grants: ligus_core::sandbox::SandboxGrants) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| set_sandbox_grants_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), workspace_id, grants)).await
+pub(crate) async fn set_sandbox_grants(
+    ligus_app: tauri::AppHandle,
+    workspace_id: String,
+    grants: ligus_core::sandbox::SandboxGrants,
+) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        set_sandbox_grants_sync(
+            ligus_app.clone(),
+            tauri::Manager::state::<AppState>(ligus_app),
+            workspace_id,
+            grants,
+        )
+    })
+    .await
 }
 
-pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, workspace_id: String, grants: ligus_core::sandbox::SandboxGrants) -> Result<(), String> {
+pub(crate) fn set_sandbox_grants_sync(
+    app: AppHandle,
+    state: State<AppState>,
+    workspace_id: String,
+    grants: ligus_core::sandbox::SandboxGrants,
+) -> Result<(), String> {
     let ws = crate::shown_workspace(&state, &workspace_id)?;
     let clean = |v: Vec<String>| -> Vec<String> {
-        let mut v: Vec<String> = v.into_iter().map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()).collect();
+        let mut v: Vec<String> = v
+            .into_iter()
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         v.sort();
         v.dedup();
         v
@@ -1344,13 +1830,22 @@ pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, wo
     g.workspace.read_only = clean(grants.workspace.read_only);
     g.workspace.read_write = clean(grants.workspace.read_write);
     for (id, a) in grants.agents {
-        let a = ligus_core::sandbox::AgentGrant { read_only: clean(a.read_only), read_write: clean(a.read_write), shell: a.shell };
+        let a = ligus_core::sandbox::AgentGrant {
+            read_only: clean(a.read_only),
+            read_write: clean(a.read_write),
+            shell: a.shell,
+        };
         if a != ligus_core::sandbox::AgentGrant::default() {
             g.agents.insert(id, a);
         }
     }
     let fp = ligus_runtime::sandbox::grants_fingerprint(&g);
-    state.service.lock().unwrap().set_sandbox_grants(ws, g).map_err(map_err)?;
+    state
+        .service
+        .lock()
+        .unwrap()
+        .set_sandbox_grants(ws, g)
+        .map_err(map_err)?;
     // Your own change needs no notice.
     {
         let mut s = state.settings.lock().unwrap();
@@ -1368,22 +1863,46 @@ pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, wo
 /// Dearth mode for the active workspace, with pending joins and what it does
 /// to each entrance.
 #[tauri::command]
-pub(crate) async fn get_dearth_state(ligus_app: tauri::AppHandle) -> Result<ligus_proto::DearthStateDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| get_dearth_state_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+pub(crate) async fn get_dearth_state(
+    ligus_app: tauri::AppHandle,
+) -> Result<ligus_proto::DearthStateDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        get_dearth_state_sync(tauri::Manager::state::<AppState>(ligus_app))
+    })
+    .await
 }
 
-pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<ligus_proto::DearthStateDto, String> {
+pub(crate) fn get_dearth_state_sync(
+    state: State<AppState>,
+) -> Result<ligus_proto::DearthStateDto, String> {
     let ws = state.active_workspace_id();
     let servers = state.combined_mcp_servers();
     let runtimes = state.combined_runtimes();
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
-    let config = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).map_err(map_err)?;
-    let guards = config.as_ref().map(|c| c.guards.clone()).unwrap_or_default();
-    let members = config.as_ref().map(|c| c.members.clone()).unwrap_or_default();
-    let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(ligus_core::WorkspaceRole::Owner);
+    let config = svc
+        .load_in(ws, ligus_core::workspace_config_session_id(ws))
+        .map_err(map_err)?;
+    let guards = config
+        .as_ref()
+        .map(|c| c.guards.clone())
+        .unwrap_or_default();
+    let members = config
+        .as_ref()
+        .map(|c| c.members.clone())
+        .unwrap_or_default();
+    let my_role = config
+        .as_ref()
+        .map(|c| c.role_of(&me))
+        .unwrap_or(ligus_core::WorkspaceRole::Owner);
     let can_manage = my_role.rank() >= ligus_core::WorkspaceRole::Admin.rank() || config.is_none();
-    let name_of = |id: &str| members.iter().find(|m| m.id == id).map(|m| ligus_proto::names::clean_display_name(&m.actor.display_name)).unwrap_or_else(|| id.to_string());
+    let name_of = |id: &str| {
+        members
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| ligus_proto::names::clean_display_name(&m.actor.display_name))
+            .unwrap_or_else(|| id.to_string())
+    };
     let mut pending: Vec<ligus_proto::PendingJoinDto> = guards
         .pending_members
         .iter()
@@ -1402,7 +1921,9 @@ pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<ligus_prot
             subject: device.to_string(),
             kind: "device".into(),
             name: format!("Device {}", &device.to_string()[..8]),
-            added_by: owner.map(|m| ligus_proto::names::clean_display_name(&m.actor.display_name)).unwrap_or_default(),
+            added_by: owner
+                .map(|m| ligus_proto::names::clean_display_name(&m.actor.display_name))
+                .unwrap_or_default(),
             can_approve: can_manage && my_account != Some(account),
         });
     }
@@ -1411,7 +1932,9 @@ pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<ligus_prot
     let egress = d
         .as_ref()
         .filter(|d| d.enabled)
-        .map(|d| ligus_core::sandbox::EgressPolicy::AllowList { mcp_servers: d.allowed_mcp_servers.clone() })
+        .map(|d| ligus_core::sandbox::EgressPolicy::AllowList {
+            mcp_servers: d.allowed_mcp_servers.clone(),
+        })
         .unwrap_or(ligus_core::sandbox::EgressPolicy::Open);
     let mut entrances: Vec<ligus_proto::EntranceDto> = servers
         .iter()
@@ -1419,12 +1942,27 @@ pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<ligus_prot
         .map(|s| ligus_proto::EntranceDto {
             name: s.id.clone(),
             kind: "mcp".into(),
-            state: if !on { "open" } else if egress.allows_mcp(&s.id) { "allowed" } else { "closed" }.into(),
+            state: if !on {
+                "open"
+            } else if egress.allows_mcp(&s.id) {
+                "allowed"
+            } else {
+                "closed"
+            }
+            .into(),
         })
         .collect();
     let closed = if on { "closed" } else { "open" };
-    entrances.push(ligus_proto::EntranceDto { name: "Web fetch and search (Claude Code)".into(), kind: "web".into(), state: closed.into() });
-    entrances.push(ligus_proto::EntranceDto { name: "Shell (Bash, run_command)".into(), kind: "shell".into(), state: closed.into() });
+    entrances.push(ligus_proto::EntranceDto {
+        name: "Web fetch and search (Claude Code)".into(),
+        kind: "web".into(),
+        state: closed.into(),
+    });
+    entrances.push(ligus_proto::EntranceDto {
+        name: "Shell (Bash, run_command)".into(),
+        kind: "shell".into(),
+        state: closed.into(),
+    });
     let mut seen = std::collections::HashSet::new();
     for rt in runtimes.iter() {
         if ligus_runtime::sandbox::confinable(rt.provider_kind) || !seen.insert(rt.provider_kind) {
@@ -1442,12 +1980,26 @@ pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<ligus_prot
         brood_paths: d
             .as_ref()
             .map(|d| d.brood_paths.clone())
-            .unwrap_or_else(|| ligus_core::guard::DEFAULT_BROOD_PATHS.iter().map(|s| s.to_string()).collect()),
-        allowed_mcp_servers: d.as_ref().map(|d| d.allowed_mcp_servers.clone()).unwrap_or_default(),
+            .unwrap_or_else(|| {
+                ligus_core::guard::DEFAULT_BROOD_PATHS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            }),
+        allowed_mcp_servers: d
+            .as_ref()
+            .map(|d| d.allowed_mcp_servers.clone())
+            .unwrap_or_default(),
         set_by: d.as_ref().map(|d| name_of(&d.set_by)).unwrap_or_default(),
-        set_at: d.as_ref().map(|d| crate::rfc3339(d.set_at)).unwrap_or_default(),
+        set_at: d
+            .as_ref()
+            .map(|d| crate::rfc3339(d.set_at))
+            .unwrap_or_default(),
         can_manage,
-        default_brood_paths: ligus_core::guard::DEFAULT_BROOD_PATHS.iter().map(|s| s.to_string()).collect(),
+        default_brood_paths: ligus_core::guard::DEFAULT_BROOD_PATHS
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         pending,
         entrances,
     })
@@ -1455,8 +2007,26 @@ pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<ligus_prot
 
 /// Switch dearth mode on or off for the active workspace (Admin+).
 #[tauri::command(async)]
-pub(crate) async fn set_dearth_mode(ligus_app: tauri::AppHandle, workspace_id: String, enabled: bool, reason: String, brood_paths: Vec<String>, allowed_mcp_servers: Vec<String>) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| set_dearth_mode_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), workspace_id, enabled, reason, brood_paths, allowed_mcp_servers)).await
+pub(crate) async fn set_dearth_mode(
+    ligus_app: tauri::AppHandle,
+    workspace_id: String,
+    enabled: bool,
+    reason: String,
+    brood_paths: Vec<String>,
+    allowed_mcp_servers: Vec<String>,
+) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        set_dearth_mode_sync(
+            ligus_app.clone(),
+            tauri::Manager::state::<AppState>(ligus_app),
+            workspace_id,
+            enabled,
+            reason,
+            brood_paths,
+            allowed_mcp_servers,
+        )
+    })
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1471,7 +2041,10 @@ pub(crate) fn set_dearth_mode_sync(
 ) -> Result<(), String> {
     let ws = crate::shown_workspace(&state, &workspace_id)?;
     let clean = |v: Vec<String>| -> Vec<String> {
-        v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+        v.into_iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
     };
     let dearth = ligus_core::guard::DearthMode {
         enabled,
@@ -1482,18 +2055,40 @@ pub(crate) fn set_dearth_mode_sync(
         set_by: String::new(),
         set_at: ligus_core::Timestamp::now(),
     };
-    state.service.lock().unwrap().set_dearth_mode(ws, dearth).map_err(map_err)?;
+    state
+        .service
+        .lock()
+        .unwrap()
+        .set_dearth_mode(ws, dearth)
+        .map_err(map_err)?;
     let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
     Ok(())
 }
 
 /// Approve a member or device waiting on dearth mode's second approval.
 #[tauri::command(async)]
-pub(crate) async fn approve_join(ligus_app: tauri::AppHandle, workspace_id: String, subject: String) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| approve_join_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), workspace_id, subject)).await
+pub(crate) async fn approve_join(
+    ligus_app: tauri::AppHandle,
+    workspace_id: String,
+    subject: String,
+) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        approve_join_sync(
+            ligus_app.clone(),
+            tauri::Manager::state::<AppState>(ligus_app),
+            workspace_id,
+            subject,
+        )
+    })
+    .await
 }
 
-pub(crate) fn approve_join_sync(app: AppHandle, state: State<AppState>, workspace_id: String, subject: String) -> Result<(), String> {
+pub(crate) fn approve_join_sync(
+    app: AppHandle,
+    state: State<AppState>,
+    workspace_id: String,
+    subject: String,
+) -> Result<(), String> {
     let ws = crate::shown_workspace(&state, &workspace_id)?;
     let mut svc = state.service.lock().unwrap();
     svc.approve_join(ws, subject.trim()).map_err(map_err)?;
@@ -1519,21 +2114,36 @@ pub(crate) fn approve_join_sync(app: AppHandle, state: State<AppState>, workspac
 
 /// A chat's lockdown as the chat header shows it.
 #[tauri::command]
-pub(crate) async fn get_chat_lockdown(ligus_app: tauri::AppHandle, session_id: String) -> Result<ligus_proto::ChatLockdownDto, String> {
-    crate::off_main(ligus_app, move |ligus_app| get_chat_lockdown_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+pub(crate) async fn get_chat_lockdown(
+    ligus_app: tauri::AppHandle,
+    session_id: String,
+) -> Result<ligus_proto::ChatLockdownDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        get_chat_lockdown_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)
+    })
+    .await
 }
 
-pub(crate) fn get_chat_lockdown_sync(state: State<AppState>, session_id: String) -> Result<ligus_proto::ChatLockdownDto, String> {
+pub(crate) fn get_chat_lockdown_sync(
+    state: State<AppState>,
+    session_id: String,
+) -> Result<ligus_proto::ChatLockdownDto, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
-    let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown chat")?;
+    let session = svc
+        .load_resolving(sid)
+        .map_err(map_err)?
+        .ok_or("unknown chat")?;
     let view = ligus_runtime::lockdown_view::chat_lockdown(&session, sid, &me);
     let signals = view
         .signals
         .iter()
         .map(|l| ligus_proto::LockdownSignalDto {
-            signal: serde_json::to_value(l.signal).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
+            signal: serde_json::to_value(l.signal)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default(),
             detail: l.detail.clone(),
             raised_at: crate::rfc3339(l.raised_at),
             message_id: l.message_id.map(|m| m.to_string()),
@@ -1551,15 +2161,39 @@ pub(crate) fn get_chat_lockdown_sync(state: State<AppState>, session_id: String)
 /// by its `raiseEventId` (a human member, Contributor+; re-checked on every
 /// device's ingest). A signal raised since, which they weren't shown, stays.
 #[tauri::command(async)]
-pub(crate) async fn clear_chat_lockdown(ligus_app: tauri::AppHandle, session_id: String, raise_ids: Vec<String>) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| clear_chat_lockdown_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id, raise_ids)).await
+pub(crate) async fn clear_chat_lockdown(
+    ligus_app: tauri::AppHandle,
+    session_id: String,
+    raise_ids: Vec<String>,
+) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        clear_chat_lockdown_sync(
+            ligus_app.clone(),
+            tauri::Manager::state::<AppState>(ligus_app),
+            session_id,
+            raise_ids,
+        )
+    })
+    .await
 }
 
-pub(crate) fn clear_chat_lockdown_sync(app: AppHandle, state: State<AppState>, session_id: String, raise_ids: Vec<String>) -> Result<(), String> {
+pub(crate) fn clear_chat_lockdown_sync(
+    app: AppHandle,
+    state: State<AppState>,
+    session_id: String,
+    raise_ids: Vec<String>,
+) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
-    let raises = raise_ids.iter().map(|r| Uuid::parse_str(r)).collect::<Result<Vec<_>, _>>().map_err(map_err)?;
+    let raises = raise_ids
+        .iter()
+        .map(|r| Uuid::parse_str(r))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let ws = svc.workspace_of(sid).map_err(map_err)?.ok_or("unknown chat")?;
+    let ws = svc
+        .workspace_of(sid)
+        .map_err(map_err)?
+        .ok_or("unknown chat")?;
     svc.clear_lockdown(ws, sid, raises).map_err(map_err)?;
     drop(svc);
     let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
@@ -1568,15 +2202,38 @@ pub(crate) fn clear_chat_lockdown_sync(app: AppHandle, state: State<AppState>, s
 
 /// Lock this chat down by hand (anyone may tighten).
 #[tauri::command]
-pub(crate) async fn lock_chat(ligus_app: tauri::AppHandle, session_id: String) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| lock_chat_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+pub(crate) async fn lock_chat(
+    ligus_app: tauri::AppHandle,
+    session_id: String,
+) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        lock_chat_sync(
+            ligus_app.clone(),
+            tauri::Manager::state::<AppState>(ligus_app),
+            session_id,
+        )
+    })
+    .await
 }
 
-pub(crate) fn lock_chat_sync(app: AppHandle, state: State<AppState>, session_id: String) -> Result<(), String> {
+pub(crate) fn lock_chat_sync(
+    app: AppHandle,
+    state: State<AppState>,
+    session_id: String,
+) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let ws = svc.workspace_of(sid).map_err(map_err)?.ok_or("unknown chat")?;
-    svc.self_medicate(ws, sid, None, &[(ligus_core::guard::LockdownSignal::Manual, "manual".into())]).map_err(map_err)?;
+    let ws = svc
+        .workspace_of(sid)
+        .map_err(map_err)?
+        .ok_or("unknown chat")?;
+    svc.self_medicate(
+        ws,
+        sid,
+        None,
+        &[(ligus_core::guard::LockdownSignal::Manual, "manual".into())],
+    )
+    .map_err(map_err)?;
     drop(svc);
     let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
     Ok(())
@@ -1594,16 +2251,29 @@ fn now_secs() -> i64 {
 const UNKNOWN_RESET_SECS: i64 = 3600;
 
 /// Record a runtime's plan-window report (Claude Code rate-limit events).
-pub(crate) fn record_plan_window(state: &AppState, provider: ligus_core::ModelProviderKind, mut window: ligus_core::throttle::PlanWindow) {
+pub(crate) fn record_plan_window(
+    state: &AppState,
+    provider: ligus_core::ModelProviderKind,
+    mut window: ligus_core::throttle::PlanWindow,
+) {
     if window.observed_at == 0 {
         window.observed_at = now_secs();
     }
-    state.guards.plan_windows.lock().unwrap().insert(provider, window);
+    state
+        .guards
+        .plan_windows
+        .lock()
+        .unwrap()
+        .insert(provider, window);
 }
 
 /// A failed turn whose error says the subscription limit was hit counts as a
 /// rejected window (for the CLIs that only report it as an error).
-pub(crate) fn record_usage_error(state: &AppState, provider: ligus_core::ModelProviderKind, message: &str) {
+pub(crate) fn record_usage_error(
+    state: &AppState,
+    provider: ligus_core::ModelProviderKind,
+    message: &str,
+) {
     use ligus_runtime::provider::cli_agent::{classify_failure, CliFailure};
     if !provider.is_cli_agent() || classify_failure(message) != CliFailure::UsageLimit {
         return;
@@ -1628,8 +2298,19 @@ fn decide(
     priority: ligus_core::throttle::TurnPriority,
     agent_key: &str,
 ) -> ligus_core::throttle::ThrottleDecision {
-    let window = state.guards.plan_windows.lock().unwrap().get(&provider).cloned();
-    ligus_core::throttle::ThrottlePolicy::default().decide(priority, agent_key, window.as_ref(), now_secs())
+    let window = state
+        .guards
+        .plan_windows
+        .lock()
+        .unwrap()
+        .get(&provider)
+        .cloned();
+    ligus_core::throttle::ThrottlePolicy::default().decide(
+        priority,
+        agent_key,
+        window.as_ref(),
+        now_secs(),
+    )
 }
 
 /// Note (or clear) a deferral for the UI, recording a throttle signal when it
@@ -1648,7 +2329,11 @@ fn note_deferral(
         ligus_core::throttle::ThrottleDecision::Run => {
             deferred.remove(&key);
         }
-        ligus_core::throttle::ThrottleDecision::Defer { utilization_pct, threshold_pct, .. } => {
+        ligus_core::throttle::ThrottleDecision::Defer {
+            utilization_pct,
+            threshold_pct,
+            ..
+        } => {
             let fresh = !deferred.contains_key(&key);
             deferred.insert(
                 key,
@@ -1691,11 +2376,24 @@ pub(crate) async fn wait_for_capacity(
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let ws = state.active_workspace_id();
-    let key = format!("{}:{agent_key}", run_id.map(|r| r.to_string()).unwrap_or_default());
+    let key = format!(
+        "{}:{agent_key}",
+        run_id.map(|r| r.to_string()).unwrap_or_default()
+    );
     loop {
         let d = decide(&state, provider, priority, agent_key);
-        note_deferral(&state, ws, key.clone(), format!("workflow stage ({agent_key})"), provider, priority, d);
-        let ligus_core::throttle::ThrottleDecision::Defer { resets_at, .. } = d else { return Ok(()) };
+        note_deferral(
+            &state,
+            ws,
+            key.clone(),
+            format!("workflow stage ({agent_key})"),
+            provider,
+            priority,
+            d,
+        );
+        let ligus_core::throttle::ThrottleDecision::Defer { resets_at, .. } = d else {
+            return Ok(());
+        };
         if let Some(rid) = run_id {
             if state.canceled_runs.lock().unwrap().contains(&rid) {
                 state.guards.deferred.lock().unwrap().remove(&key);
@@ -1703,7 +2401,9 @@ pub(crate) async fn wait_for_capacity(
             }
         }
         // Re-check every minute, or at the reset if that's sooner.
-        let wait = resets_at.map(|r| (r - now_secs()).clamp(5, 60)).unwrap_or(60) as u64;
+        let wait = resets_at
+            .map(|r| (r - now_secs()).clamp(5, 60))
+            .unwrap_or(60) as u64;
         tokio::time::sleep(Duration::from_secs(wait)).await;
     }
 }
@@ -1711,9 +2411,18 @@ pub(crate) async fn wait_for_capacity(
 /// Whether a due schedule should wait (background tier).
 pub(crate) fn defer_background(app: &AppHandle, runtime_id: &str, schedule_id: &str) -> bool {
     let state = app.state::<AppState>();
-    let rid = if runtime_id.is_empty() { state.current_default_runtime_id() } else { runtime_id.to_string() };
+    let rid = if runtime_id.is_empty() {
+        state.current_default_runtime_id()
+    } else {
+        runtime_id.to_string()
+    };
     let provider = state.resolve_runtime(&rid).provider;
-    let d = decide(&state, provider, ligus_core::throttle::TurnPriority::Background, schedule_id);
+    let d = decide(
+        &state,
+        provider,
+        ligus_core::throttle::TurnPriority::Background,
+        schedule_id,
+    );
     note_deferral(
         &state,
         state.active_workspace_id(),
@@ -1735,8 +2444,18 @@ pub(crate) fn cascade_paused(
     agent_key: &str,
     agent_name: &str,
 ) -> Option<String> {
-    let d = decide(state, provider, ligus_core::throttle::TurnPriority::Workflow, agent_key);
-    if let ligus_core::throttle::ThrottleDecision::Defer { utilization_pct, threshold_pct, .. } = d {
+    let d = decide(
+        state,
+        provider,
+        ligus_core::throttle::TurnPriority::Workflow,
+        agent_key,
+    );
+    if let ligus_core::throttle::ThrottleDecision::Defer {
+        utilization_pct,
+        threshold_pct,
+        ..
+    } = d
+    {
         note_deferral(
             state,
             workspace_id,
@@ -1747,7 +2466,12 @@ pub(crate) fn cascade_paused(
             d,
         );
         // A hand-off isn't retried on its own; it's recorded and then cleared.
-        state.guards.deferred.lock().unwrap().remove(&format!("cascade:{agent_key}"));
+        state
+            .guards
+            .deferred
+            .lock()
+            .unwrap()
+            .remove(&format!("cascade:{agent_key}"));
         return Some(format!(
             "Paused the hand-off to {agent_name}: its runtime's plan window is at {utilization_pct}% (agent hand-offs pause at {threshold_pct}% to keep room for your own requests). Mention it again to continue."
         ));
@@ -1768,9 +2492,19 @@ pub(crate) fn agent_turn_throttled(
     agent_name: &str,
 ) -> Option<String> {
     let d = decide(state, provider, priority, agent_key);
-    let ligus_core::throttle::ThrottleDecision::Defer { .. } = d else { return None };
+    let ligus_core::throttle::ThrottleDecision::Defer { .. } = d else {
+        return None;
+    };
     let key = format!("teammate:{agent_key}");
-    note_deferral(state, workspace_id, key.clone(), format!("another member's turn on {agent_name}"), provider, priority, d);
+    note_deferral(
+        state,
+        workspace_id,
+        key.clone(),
+        format!("another member's turn on {agent_name}"),
+        provider,
+        priority,
+        d,
+    );
     // Not retried on its own: recorded, then cleared.
     state.guards.deferred.lock().unwrap().remove(&key);
     Some(teammate_pause_note(agent_name))
@@ -1812,7 +2546,14 @@ pub(crate) fn get_throttle_state(state: State<AppState>) -> ligus_proto::Throttl
         })
         .collect();
     windows.sort_by(|a, b| a.runtime.cmp(&b.runtime));
-    let mut deferred: Vec<_> = state.guards.deferred.lock().unwrap().values().cloned().collect();
+    let mut deferred: Vec<_> = state
+        .guards
+        .deferred
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect();
     deferred.sort_by(|a, b| a.what.cmp(&b.what));
     ligus_proto::ThrottleStateDto {
         background_pct: p.background_pct,
@@ -1825,7 +2566,12 @@ pub(crate) fn get_throttle_state(state: State<AppState>) -> ligus_proto::Throttl
 
 /// Record which MCP tools a turn was offered, per server, and how many the
 /// cap or a name collision dropped (content-free).
-pub(crate) fn record_tools_selected(state: &AppState, workspace_id: Uuid, session_id: Uuid, per_server: &[(String, u32, u32)]) {
+pub(crate) fn record_tools_selected(
+    state: &AppState,
+    workspace_id: Uuid,
+    session_id: Uuid,
+    per_server: &[(String, u32, u32)],
+) {
     let svc = state.service.lock().unwrap();
     for (server, offered, dropped) in per_server {
         let _ = svc.record_signal(
@@ -1857,9 +2603,19 @@ pub(crate) fn record_progress(
     use ligus_core::signal::ProgressKind;
     let (tests, writes) = progress.units();
     let svc = state.service.lock().unwrap();
-    for (units, kind) in [(tests, ProgressKind::TestsPassing), (writes, ProgressKind::FilesWritten)] {
+    for (units, kind) in [
+        (tests, ProgressKind::TestsPassing),
+        (writes, ProgressKind::FilesWritten),
+    ] {
         if units > 0.0 {
-            let _ = svc.record_signal(workspace_id, Some(session_id), &GuardSignal::Progress { units, progress_kind: Some(kind) });
+            let _ = svc.record_signal(
+                workspace_id,
+                Some(session_id),
+                &GuardSignal::Progress {
+                    units,
+                    progress_kind: Some(kind),
+                },
+            );
         }
     }
     if progress.checked_in() {
@@ -1956,7 +2712,10 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
     let hosts = svc.list_hosts(ws).unwrap_or_default();
     let ts_now = ligus_core::Timestamp::now();
     let mut o = Occupancy {
-        worker_hosts: hosts.iter().filter(|h| h.kind == ligus_core::HostKind::Worker).count(),
+        worker_hosts: hosts
+            .iter()
+            .filter(|h| h.kind == ligus_core::HostKind::Worker)
+            .count(),
         deferred,
         hot_window,
         ..Default::default()
@@ -1968,19 +2727,31 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
         if id == config_id {
             continue;
         }
-        let Ok(Some(s)) = crate::workspace_chat(&svc, id, ws, &me, &known) else { continue };
+        let Ok(Some(s)) = crate::workspace_chat(&svc, id, ws, &me, &known) else {
+            continue;
+        };
         o.agents = o.agents.max(s.workspace_agents.len());
         for pm in ligus_runtime::chat_service::pending_mentions(&s) {
-            let host = s.workspace_agents.iter().find(|a| a.id == pm.agent_id).map(|a| a.host_id.clone()).unwrap_or_default();
+            let host = s
+                .workspace_agents
+                .iter()
+                .find(|a| a.id == pm.agent_id)
+                .map(|a| a.host_id.clone())
+                .unwrap_or_default();
             if host.is_empty() {
                 o.queued_on_devices += 1;
-            } else if !hosts.iter().any(|h| h.id == host && state.host_presence.is_online(h, &ts_now)) {
+            } else if !hosts
+                .iter()
+                .any(|h| h.id == host && state.host_presence.is_online(h, &ts_now))
+            {
                 o.queued_on_offline_hosts += 1;
             }
         }
         for m in &s.messages {
-            if matches!(m.role, ligus_core::MessageRole::Assistant | ligus_core::MessageRole::Agent)
-                && !m.superseded
+            if matches!(
+                m.role,
+                ligus_core::MessageRole::Assistant | ligus_core::MessageRole::Agent
+            ) && !m.superseded
                 && m.created_at.inner().unix_timestamp() >= week_ago
             {
                 *by_agent.entry(m.author.clone()).or_default() += 1;
@@ -1996,17 +2767,27 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
 
 /// Growth suggestions for the active workspace (nuc workspaces start small).
 #[tauri::command]
-pub(crate) async fn growth_suggestions(ligus_app: tauri::AppHandle) -> Vec<ligus_proto::GrowthSuggestionDto> {
-    crate::off_main(ligus_app, move |ligus_app| growth_suggestions_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+pub(crate) async fn growth_suggestions(
+    ligus_app: tauri::AppHandle,
+) -> Vec<ligus_proto::GrowthSuggestionDto> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        growth_suggestions_sync(tauri::Manager::state::<AppState>(ligus_app))
+    })
+    .await
 }
 
-pub(crate) fn growth_suggestions_sync(state: State<AppState>) -> Vec<ligus_proto::GrowthSuggestionDto> {
+pub(crate) fn growth_suggestions_sync(
+    state: State<AppState>,
+) -> Vec<ligus_proto::GrowthSuggestionDto> {
     suggest_growth(&gather_occupancy(&state))
 }
 
 /// Whether a run is in a state a coordinator drives.
 pub(crate) fn is_live_status(status: WorkflowRunStatus) -> bool {
-    matches!(status, WorkflowRunStatus::Running | WorkflowRunStatus::AwaitingGate)
+    matches!(
+        status,
+        WorkflowRunStatus::Running | WorkflowRunStatus::AwaitingGate
+    )
 }
 
 #[cfg(test)]
@@ -2041,15 +2822,25 @@ mod tests {
     #[test]
     fn every_spawn_in_a_desktop_turn_is_in_the_turns_policy() {
         let src = include_str!("lib.rs");
-        let start = src.find("async fn run_prepared_turn_inner(").expect("run_prepared_turn_inner");
+        let start = src
+            .find("async fn run_prepared_turn_inner(")
+            .expect("run_prepared_turn_inner");
         let end = start + src[start..].find("\n}\n").expect("its end");
         let body = &src[start..end];
         let lines: Vec<&str> = body.lines().collect();
         let mut seen = 0;
-        for call in ["probe_mcp_shells(", "mcp_tool_set(", "try_tool_loop(", "stream_with_tools("] {
+        for call in [
+            "probe_mcp_shells(",
+            "mcp_tool_set(",
+            "try_tool_loop(",
+            "stream_with_tools(",
+        ] {
             for (i, line) in lines.iter().enumerate().filter(|(_, l)| l.contains(call)) {
                 let window = lines[i.saturating_sub(2)..=i].join("\n");
-                assert!(window.contains("executor::with_turn("), "{call} outside a turn scope: {line}");
+                assert!(
+                    window.contains("executor::with_turn("),
+                    "{call} outside a turn scope: {line}"
+                );
                 seen += 1;
             }
         }
@@ -2057,8 +2848,14 @@ mod tests {
         // Both policies come from the one builder, so the shell gate and the
         // grants are applied to each, and the engine runs under the second.
         assert_eq!(body.matches("crate::guards::turn_child_policy(").count(), 2);
-        assert!(!body.contains("turn_sandbox_policy_with(") && !body.contains("turn_sandbox_policy("), "a policy built without the shell gate");
-        assert!(body.contains("policy: sandbox_policy,"), "the engine runs under the turn's policy");
+        assert!(
+            !body.contains("turn_sandbox_policy_with(") && !body.contains("turn_sandbox_policy("),
+            "a policy built without the shell gate"
+        );
+        assert!(
+            body.contains("policy: sandbox_policy,"),
+            "the engine runs under the turn's policy"
+        );
     }
 
     /// Runtime review: a checkout bound by two workspaces holds both
@@ -2091,7 +2888,12 @@ mod tests {
             path: owned.join(format!("chat-{id}")),
             branch: Some(format!("ligus/chat/{}", slug(&id.to_string()))),
         };
-        let entries = [entry(mine), entry(archived), entry(theirs), entry(theirs_archived)];
+        let entries = [
+            entry(mine),
+            entry(archived),
+            entry(theirs),
+            entry(theirs_archived),
+        ];
         let plan = plan_sweep(&owned, &entries, &Default::default(), &chats, &|_| false);
         let removed: Vec<String> = plan
             .iter()
@@ -2100,7 +2902,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(removed, vec![slug(&archived.to_string())], "only the swept workspace's archived chat");
+        assert_eq!(
+            removed,
+            vec![slug(&archived.to_string())],
+            "only the swept workspace's archived chat"
+        );
     }
 
     #[test]
@@ -2109,30 +2915,89 @@ mod tests {
         let l = lease(holder, 1_000);
         let t0 = 1_000_000;
         // Live: never.
-        assert_eq!(takeover_reason(&l, me, Some((holder, 1, t0 + 50_000)), t0 + 60_000, true, true), None);
+        assert_eq!(
+            takeover_reason(
+                &l,
+                me,
+                Some((holder, 1, t0 + 50_000)),
+                t0 + 60_000,
+                true,
+                true
+            ),
+            None
+        );
         // Lapsed, but we haven't read the relay's beats yet: wait.
-        assert_eq!(takeover_reason(&l, me, None, t0 + 70_000, false, true), None);
+        assert_eq!(
+            takeover_reason(&l, me, None, t0 + 70_000, false, true),
+            None
+        );
         // Lapsed once: the initiator's device succeeds, others wait another lease.
-        assert_eq!(takeover_reason(&l, me, None, t0 + 70_000, true, true), Some(LeaseClaimReason::Lapsed));
-        assert_eq!(takeover_reason(&l, me, None, t0 + 70_000, true, false), None);
-        assert_eq!(takeover_reason(&l, me, None, t0 + 130_000, true, false), Some(LeaseClaimReason::Lapsed));
+        assert_eq!(
+            takeover_reason(&l, me, None, t0 + 70_000, true, true),
+            Some(LeaseClaimReason::Lapsed)
+        );
+        assert_eq!(
+            takeover_reason(&l, me, None, t0 + 70_000, true, false),
+            None
+        );
+        assert_eq!(
+            takeover_reason(&l, me, None, t0 + 130_000, true, false),
+            Some(LeaseClaimReason::Lapsed)
+        );
         // A beat from a stale epoch or another holder doesn't keep it alive.
-        assert_eq!(takeover_reason(&l, me, Some((holder, 0, t0 + 69_000)), t0 + 70_000, true, true), Some(LeaseClaimReason::Lapsed));
+        assert_eq!(
+            takeover_reason(
+                &l,
+                me,
+                Some((holder, 0, t0 + 69_000)),
+                t0 + 70_000,
+                true,
+                true
+            ),
+            Some(LeaseClaimReason::Lapsed)
+        );
     }
 
     #[test]
     fn growth_is_suggested_from_occupancy_only() {
         // A quiet nuc: nothing to suggest.
-        assert!(suggest_growth(&Occupancy { agents: 1, ..Default::default() }).is_empty());
-        let host = suggest_growth(&Occupancy { queued_on_offline_hosts: 2, worker_hosts: 1, ..Default::default() });
+        assert!(suggest_growth(&Occupancy {
+            agents: 1,
+            ..Default::default()
+        })
+        .is_empty());
+        let host = suggest_growth(&Occupancy {
+            queued_on_offline_hosts: 2,
+            worker_hosts: 1,
+            ..Default::default()
+        });
         assert_eq!(host[0].id, "always-on-host");
-        let worker = suggest_growth(&Occupancy { hot_window: true, deferred: 3, ..Default::default() });
+        let worker = suggest_growth(&Occupancy {
+            hot_window: true,
+            deferred: 3,
+            ..Default::default()
+        });
         assert_eq!(worker[0].kind, "worker");
         // A hot window with nothing held back isn't a reason yet.
-        assert!(suggest_growth(&Occupancy { hot_window: true, ..Default::default() }).is_empty());
-        let agent = suggest_growth(&Occupancy { agents: 1, agent_replies_7d: 50, busiest_share: 0.9, ..Default::default() });
+        assert!(suggest_growth(&Occupancy {
+            hot_window: true,
+            ..Default::default()
+        })
+        .is_empty());
+        let agent = suggest_growth(&Occupancy {
+            agents: 1,
+            agent_replies_7d: 50,
+            busiest_share: 0.9,
+            ..Default::default()
+        });
         assert_eq!(agent[0].id, "second-agent");
-        assert!(suggest_growth(&Occupancy { agents: 1, agent_replies_7d: 10, busiest_share: 1.0, ..Default::default() }).is_empty());
+        assert!(suggest_growth(&Occupancy {
+            agents: 1,
+            agent_replies_7d: 10,
+            busiest_share: 1.0,
+            ..Default::default()
+        })
+        .is_empty());
     }
 
     #[test]
@@ -2141,13 +3006,25 @@ mod tests {
         let mut l = lease(holder, 1_000);
         l.released = true;
         l.handover_to = Some(me);
-        assert_eq!(takeover_reason(&l, me, None, 1_000_001, false, false), Some(LeaseClaimReason::Handover));
+        assert_eq!(
+            takeover_reason(&l, me, None, 1_000_001, false, false),
+            Some(LeaseClaimReason::Handover)
+        );
         // Someone else waits until two leases pass with no claim by the successor.
-        assert_eq!(takeover_reason(&l, other, None, 1_000_001, true, true), None);
-        assert_eq!(takeover_reason(&l, other, None, 1_000_000 + 121_000, true, true), Some(LeaseClaimReason::Lapsed));
+        assert_eq!(
+            takeover_reason(&l, other, None, 1_000_001, true, true),
+            None
+        );
+        assert_eq!(
+            takeover_reason(&l, other, None, 1_000_000 + 121_000, true, true),
+            Some(LeaseClaimReason::Lapsed)
+        );
         // A plain release (no successor) is open to anyone at once.
         l.handover_to = None;
-        assert_eq!(takeover_reason(&l, other, None, 1_000_001, false, false), Some(LeaseClaimReason::Released));
+        assert_eq!(
+            takeover_reason(&l, other, None, 1_000_001, false, false),
+            Some(LeaseClaimReason::Released)
+        );
     }
 }
 
@@ -2165,13 +3042,25 @@ mod egress_preset_settings_tests {
         let mut by_chat = std::collections::HashMap::new();
         assert!(effective_egress_presets(&by_ws, &by_chat, ws, chat).is_empty());
         by_ws.insert(ws.to_string(), vec!["package-registries".to_string()]);
-        assert_eq!(effective_egress_presets(&by_ws, &by_chat, ws, chat), vec![EgressPreset::PackageRegistries]);
+        assert_eq!(
+            effective_egress_presets(&by_ws, &by_chat, ws, chat),
+            vec![EgressPreset::PackageRegistries]
+        );
         by_chat.insert(chat.to_string(), Vec::new());
         assert!(effective_egress_presets(&by_ws, &by_chat, ws, chat).is_empty());
-        assert_eq!(effective_egress_presets(&by_ws, &by_chat, ws, other), vec![EgressPreset::PackageRegistries]);
+        assert_eq!(
+            effective_egress_presets(&by_ws, &by_chat, ws, other),
+            vec![EgressPreset::PackageRegistries]
+        );
         by_ws.clear();
-        by_chat.insert(chat.to_string(), vec!["package-registries".into(), "bogus".into()]);
-        assert_eq!(effective_egress_presets(&by_ws, &by_chat, ws, chat), vec![EgressPreset::PackageRegistries]);
+        by_chat.insert(
+            chat.to_string(),
+            vec!["package-registries".into(), "bogus".into()],
+        );
+        assert_eq!(
+            effective_egress_presets(&by_ws, &by_chat, ws, chat),
+            vec![EgressPreset::PackageRegistries]
+        );
         assert!(parse_preset_names(&["bogus".to_string()]).is_err());
     }
 }

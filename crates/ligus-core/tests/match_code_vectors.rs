@@ -70,8 +70,16 @@ fn match_code_vectors_hold() {
                 let k = MailboxKeys::derive(&ek);
                 assert_eq!(match_code::hex(&k.auth_seed), s("authSeed"), "{label}");
                 assert_eq!(match_code::hex(&k.seal_seed), s("sealSeed"), "{label}");
-                assert_eq!(match_code::hex(&match_code::put_cap(&ek, 0)), s("putCap0"), "{label}");
-                assert_eq!(match_code::hex(&match_code::put_cap(&ek, 1)), s("putCap1"), "{label}");
+                assert_eq!(
+                    match_code::hex(&match_code::put_cap(&ek, 0)),
+                    s("putCap0"),
+                    "{label}"
+                );
+                assert_eq!(
+                    match_code::hex(&match_code::put_cap(&ek, 1)),
+                    s("putCap1"),
+                    "{label}"
+                );
             }
             "preimage" => {
                 let p = match_code::message_preimage(&s("type"), &s("body")).unwrap();
@@ -86,14 +94,27 @@ fn match_code_vectors_hold() {
                 assert_eq!(match_code::hex(&p), s("preimage"), "{label}");
             }
             "member" => {
-                let p = match_code::member_preimage(&s("method"), &s("path"), v["ts"].as_i64().unwrap(), s("body").as_bytes());
+                let p = match_code::member_preimage(
+                    &s("method"),
+                    &s("path"),
+                    v["ts"].as_i64().unwrap(),
+                    s("body").as_bytes(),
+                );
                 assert_eq!(match_code::hex(&p), s("preimage"), "{label}");
             }
             other => panic!("{label}: unknown t {other}"),
         }
         *seen.entry(t).or_default() += 1;
     }
-    for t in ["code", "crockford", "crockford-invalid", "mailbox", "preimage", "register", "member"] {
+    for t in [
+        "code",
+        "crockford",
+        "crockford-invalid",
+        "mailbox",
+        "preimage",
+        "register",
+        "member",
+    ] {
         assert!(seen.get(t).copied().unwrap_or(0) > 0, "no {t} vector");
     }
 }

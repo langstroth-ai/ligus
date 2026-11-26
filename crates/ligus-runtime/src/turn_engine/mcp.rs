@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 
 use crate::mcp::{McpRegistry, McpServerSpec, McpTool};
-use crate::provider::anthropic::{content_value, AnthropicClient, AnthropicResponse, ChatTurn, ProviderError};
+use crate::provider::anthropic::{
+    content_value, AnthropicClient, AnthropicResponse, ChatTurn, ProviderError,
+};
 use crate::tool_loop::{MessagesApi, ToolExecutor};
 
 /// Prompt-injection markers seen in a turn's tool results. Cheap to clone
@@ -20,7 +22,10 @@ impl InjectionHits {
     pub fn scan(&self, text: &str) {
         let found = crate::guard_scan::injection_markers(text);
         if !found.is_empty() {
-            self.0.lock().unwrap_or_else(|e| e.into_inner()).extend(found);
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend(found);
         }
     }
 
@@ -60,7 +65,13 @@ impl ToolExecutor for McpToolExecutor {
 pub fn sanitize_tool_name(s: &str) -> String {
     let cleaned: String = s
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     cleaned.chars().take(64).collect()
 }
@@ -68,7 +79,10 @@ pub fn sanitize_tool_name(s: &str) -> String {
 /// Provider turns as the Anthropic message array the tool loop seeds
 /// (`[Attached: <image>]` markers become vision blocks).
 pub fn turns_to_messages(turns: &[ChatTurn]) -> Vec<Value> {
-    turns.iter().map(|t| json!({ "role": t.role, "content": content_value(&t.content) })).collect()
+    turns
+        .iter()
+        .map(|t| json!({ "role": t.role, "content": content_value(&t.content) }))
+        .collect()
 }
 
 /// The servers' tools as neutral provider definitions plus the executor that
@@ -91,7 +105,10 @@ pub async fn tool_set(
     registry.enabled().next()?;
     let tagged = registry.list_all_tools().await;
     listed(&tagged);
-    let tagged: Vec<_> = tagged.into_iter().filter(|(_, t)| shell || !crate::is_shell_tool(&t.name)).collect();
+    let tagged: Vec<_> = tagged
+        .into_iter()
+        .filter(|(_, t)| shell || !crate::is_shell_tool(&t.name))
+        .collect();
     if tagged.is_empty() {
         return None;
     }
@@ -102,7 +119,14 @@ pub async fn tool_set(
         defs.push(json!({ "name": tname, "description": tool.description, "input_schema": tool.input_schema }));
         names.insert(tname, (server.clone(), tool.name.clone()));
     }
-    Some((defs, McpToolExecutor { injection_hits, registry, names }))
+    Some((
+        defs,
+        McpToolExecutor {
+            injection_hits,
+            registry,
+            names,
+        },
+    ))
 }
 
 /// One non-streaming Anthropic turn for the tool loop.
@@ -115,8 +139,21 @@ pub struct AnthropicMessages {
 }
 
 impl MessagesApi for AnthropicMessages {
-    async fn run(&self, messages: &[Value], tools: &[Value]) -> Result<AnthropicResponse, ProviderError> {
-        self.client.run_messages(&self.api_key, &self.model, self.system.as_deref(), messages, tools, self.max_tokens).await
+    async fn run(
+        &self,
+        messages: &[Value],
+        tools: &[Value],
+    ) -> Result<AnthropicResponse, ProviderError> {
+        self.client
+            .run_messages(
+                &self.api_key,
+                &self.model,
+                self.system.as_deref(),
+                messages,
+                tools,
+                self.max_tokens,
+            )
+            .await
     }
 }
 
@@ -129,12 +166,22 @@ mod reach_tests {
     #[tokio::test]
     async fn tool_set_drops_servers_the_agent_may_not_reach() {
         let a = uuid::Uuid::new_v4();
-        let mut s = McpServerSpec::new("limited", crate::mcp::McpTransport::Stdio { command: "/nonexistent/ligus-test-server".into(), args: vec![] });
+        let mut s = McpServerSpec::new(
+            "limited",
+            crate::mcp::McpTransport::Stdio {
+                command: "/nonexistent/ligus-test-server".into(),
+                args: vec![],
+            },
+        );
         s.enabled = true;
         s.agents = vec![a];
         for agent in [None, Some(uuid::Uuid::new_v4())] {
             let mut listed = false;
-            assert!(tool_set(vec![s.clone()], agent, false, None, |_| listed = true).await.is_none());
+            assert!(
+                tool_set(vec![s.clone()], agent, false, None, |_| listed = true)
+                    .await
+                    .is_none()
+            );
             assert!(!listed, "{agent:?}: never started");
         }
         let mut listed = false;

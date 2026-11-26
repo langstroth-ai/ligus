@@ -132,7 +132,15 @@ pub const BUSY_MIN_WAIT: Duration = Duration::from_secs(5);
 /// together don't all come back together.
 fn jittered(d: Duration) -> Duration {
     let mut b = [0u8; 2];
-    let r = if getrandom::fill(&mut b).is_ok() { u16::from_le_bytes(b) } else { (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos() & 0xffff) as u16 };
+    let r = if getrandom::fill(&mut b).is_ok() {
+        u16::from_le_bytes(b)
+    } else {
+        (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+            & 0xffff) as u16
+    };
     d.mul_f64(1.0 + f64::from(r) / f64::from(u16::MAX))
 }
 
@@ -143,7 +151,9 @@ impl SseConnectError {
             SseConnectError::Refused(r) => Some(r.retry_after),
             // Never sooner than a few seconds, never in step with every other
             // client the relay turned away.
-            SseConnectError::Busy(after) => Some(jittered(after.unwrap_or_default().max(BUSY_MIN_WAIT))),
+            SseConnectError::Busy(after) => {
+                Some(jittered(after.unwrap_or_default().max(BUSY_MIN_WAIT)))
+            }
             _ => None,
         }
     }
@@ -157,7 +167,10 @@ impl std::fmt::Display for SseConnectError {
             SseConnectError::Status(c) => write!(f, "relay returned HTTP {c}"),
             SseConnectError::Transport(e) => write!(f, "could not reach the relay: {e}"),
             SseConnectError::Refused(r) => write!(f, "{r}"),
-            SseConnectError::Busy(_) => write!(f, "the relay has as many live streams open as it takes (HTTP 503)"),
+            SseConnectError::Busy(_) => write!(
+                f,
+                "the relay has as many live streams open as it takes (HTTP 503)"
+            ),
         }
     }
 }

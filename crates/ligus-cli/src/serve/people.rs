@@ -38,7 +38,10 @@ fn clip(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         s.to_string()
     } else {
-        format!("{}…", s.chars().take(n.saturating_sub(1)).collect::<String>())
+        format!(
+            "{}…",
+            s.chars().take(n.saturating_sub(1)).collect::<String>()
+        )
     }
 }
 
@@ -50,7 +53,11 @@ fn non_empty(s: Option<&String>) -> Option<&String> {
 /// is synced, so anything else came from another member's client and would
 /// make the phone fetch a remote URL on render.
 fn inline_avatar(s: Option<&String>) -> Option<&String> {
-    s.filter(|v| v.trim_start().get(..11).is_some_and(|p| p.eq_ignore_ascii_case("data:image/")))
+    s.filter(|v| {
+        v.trim_start()
+            .get(..11)
+            .is_some_and(|p| p.eq_ignore_ascii_case("data:image/"))
+    })
 }
 
 // ── Agents: avatar + where it runs ─────────────────────────────────────────
@@ -58,7 +65,11 @@ fn inline_avatar(s: Option<&String>) -> Option<&String> {
 /// Where an agent runs, as the desktop's host badge says it: `ownerDevice`
 /// (no host: its owner's own machine), `thisHost` (this `ligus serve` box),
 /// `worker` or `device` (another registered host).
-fn host_kind(s: &Shared, a: &WorkspaceAgent, hosts: &[WorkspaceHost]) -> (&'static str, Option<bool>) {
+fn host_kind(
+    s: &Shared,
+    a: &WorkspaceAgent,
+    hosts: &[WorkspaceHost],
+) -> (&'static str, Option<bool>) {
     if a.host_id.is_empty() {
         return ("ownerDevice", None);
     }
@@ -68,7 +79,11 @@ fn host_kind(s: &Shared, a: &WorkspaceAgent, hosts: &[WorkspaceHost]) -> (&'stat
     let now = Timestamp::now();
     match hosts.iter().find(|h| h.id == a.host_id) {
         Some(h) => (
-            if h.kind == HostKind::Worker { "worker" } else { "device" },
+            if h.kind == HostKind::Worker {
+                "worker"
+            } else {
+                "device"
+            },
             Some(s.presence.is_online(h, &now)),
         ),
         None => ("worker", Some(false)),
@@ -115,7 +130,10 @@ fn person_dto(m: &WorkspaceMember, me: &str) -> Value {
 
 /// The workspace roster, people only (agents are `GET /v1/agents`).
 fn roster(config: &ChatSession) -> impl Iterator<Item = &WorkspaceMember> {
-    config.members.iter().filter(|m| m.actor.kind == ligus_core::ActorKind::Human)
+    config
+        .members
+        .iter()
+        .filter(|m| m.actor.kind == ligus_core::ActorKind::Human)
 }
 
 /// `GET /v1/people` → `{people: [...]}`.
@@ -129,7 +147,10 @@ pub async fn list_people(State(s): S) -> ApiResult<Json<Value>> {
     let me = s.my_actor_id();
     let extras = super::identity_api::person_extras(&s);
     let my_account = s.my_account();
-    let my_code = s.my_fingerprint().as_deref().and_then(ligus_runtime::directory_trust::safety_code);
+    let my_code = s
+        .my_fingerprint()
+        .as_deref()
+        .and_then(ligus_runtime::directory_trust::safety_code);
     let list: Vec<Value> = roster(&config)
         .map(|m| {
             let mut v = person_dto(m, &me);
@@ -178,7 +199,9 @@ fn channel_dto(c: &ligus_core::Channel) -> Value {
 /// `GET /v1/channels` → `{channels: [...]}`, in sidebar order.
 pub async fn list_channels(State(s): S) -> ApiResult<Json<Value>> {
     let channels = s.lock().list_channels(s.ws)?;
-    Ok(Json(json!({ "channels": channels.iter().map(channel_dto).collect::<Vec<_>>() })))
+    Ok(Json(
+        json!({ "channels": channels.iter().map(channel_dto).collect::<Vec<_>>() }),
+    ))
 }
 
 // ── Chat participants (chat rows) ──────────────────────────────────────────
@@ -204,10 +227,20 @@ pub fn participants(s: &ChatSession, cap: usize) -> Vec<Value> {
             },
             _ => match m.responder_id {
                 Some(id) => {
-                    let name = s.workspace_agents.iter().find(|a| a.id == id).map(|a| a.name.clone());
-                    ("agent", id.to_string(), name.unwrap_or_else(|| m.author.clone()))
+                    let name = s
+                        .workspace_agents
+                        .iter()
+                        .find(|a| a.id == id)
+                        .map(|a| a.name.clone());
+                    (
+                        "agent",
+                        id.to_string(),
+                        name.unwrap_or_else(|| m.author.clone()),
+                    )
                 }
-                None if m.role == MessageRole::Assistant => ("primary", "ligus".to_string(), "ligus".to_string()),
+                None if m.role == MessageRole::Assistant => {
+                    ("primary", "ligus".to_string(), "ligus".to_string())
+                }
                 None => ("agent", m.author.clone(), m.author.clone()),
             },
         };
@@ -223,7 +256,10 @@ pub fn participants(s: &ChatSession, cap: usize) -> Vec<Value> {
 
 /// What runs the chat's primary (`@ligus`) turns: a workspace runtime, else
 /// this box's own (`worker::local_runtimes`).
-fn primary_runtime<'a>(chat: &ChatSession, known: &'a [WorkspaceRuntime]) -> Option<&'a WorkspaceRuntime> {
+fn primary_runtime<'a>(
+    chat: &ChatSession,
+    known: &'a [WorkspaceRuntime],
+) -> Option<&'a WorkspaceRuntime> {
     known.iter().find(|r| r.id == chat.runtime_id)
 }
 
@@ -247,7 +283,11 @@ pub(super) enum Availability {
     NoDesktop,
 }
 
-pub(super) fn primary_availability(s: &Shared, chat: &ChatSession, hosts: &[WorkspaceHost]) -> Availability {
+pub(super) fn primary_availability(
+    s: &Shared,
+    chat: &ChatSession,
+    hosts: &[WorkspaceHost],
+) -> Availability {
     let links = s.lock().device_links(s.ws).unwrap_or_default();
     let owner = links.person(&chat.creator_actor_id).to_string();
     let me = s.my_actor_id();
@@ -255,14 +295,24 @@ pub(super) fn primary_availability(s: &Shared, chat: &ChatSession, hosts: &[Work
         return Availability::Unknown;
     }
     let now = Timestamp::now();
-    let mut desktops: Vec<&WorkspaceHost> =
-        hosts.iter().filter(|h| h.kind == HostKind::Device && h.owner_actor_id == owner).collect();
+    let mut desktops: Vec<&WorkspaceHost> = hosts
+        .iter()
+        .filter(|h| h.kind == HostKind::Device && h.owner_actor_id == owner)
+        .collect();
     if desktops.is_empty() {
         // This box's own identity never has a desktop; but once it's enrolled as
         // its owner's device, "me" is the owner, whose desktop may just predate
         // Device heartbeats.
-        let box_only = owner == me && !matches!(s.standing(), ligus_runtime::device_enroll::Standing::OwnerDevice(_));
-        return if box_only { Availability::NoDesktop } else { Availability::Unknown };
+        let box_only = owner == me
+            && !matches!(
+                s.standing(),
+                ligus_runtime::device_enroll::Standing::OwnerDevice(_)
+            );
+        return if box_only {
+            Availability::NoDesktop
+        } else {
+            Availability::Unknown
+        };
     }
     // Liveness comes from the relay's presence channel (a desktop's beat), or
     // the durable record of a desktop still on an older build.
@@ -283,7 +333,11 @@ fn default_responder(
     // `ligus serve --default-agent` routes an un-addressed phone message to that
     // agent; otherwise the chat's `@ligus` answers it, as on the desktop.
     if let Some(name) = &s.opts.default_agent {
-        if let Some(a) = agents.iter().find(|a| a["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(name))) {
+        if let Some(a) = agents.iter().find(|a| {
+            a["name"]
+                .as_str()
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        }) {
             let mut v = json!({ "kind": "agent", "name": a["name"], "agentId": a["id"], "via": "serveDefault" });
             for k in ["runtimeLabel", "model", "hostLabel", "hostKind"] {
                 if !a[k].is_null() {
@@ -327,8 +381,14 @@ fn default_responder(
 /// prompt; this box only knows the transcript, skills and the model name).
 fn context_estimate(chat: &ChatSession, model: Option<&str>) -> Value {
     let visible = || chat.messages.iter().filter(|m| !m.superseded);
-    let history: u64 = visible().map(|m| token_estimator::estimate_message(m) as u64).sum();
-    let skills: u64 = chat.loaded_skills.iter().map(|k| token_estimator::estimate_text(&k.instructions) as u64).sum();
+    let history: u64 = visible()
+        .map(|m| token_estimator::estimate_message(m) as u64)
+        .sum();
+    let skills: u64 = chat
+        .loaded_skills
+        .iter()
+        .map(|k| token_estimator::estimate_text(&k.instructions) as u64)
+        .sum();
     let window = model
         .filter(|m| !m.trim().is_empty())
         .map(model_context_window::tokens_for_model)
@@ -353,9 +413,18 @@ fn context_estimate(chat: &ChatSession, model: Option<&str>) -> Value {
 /// The device driving a workflow run (its coordinator lease on the chat log),
 /// for the phone's coordinator line: who holds it, at which epoch, whether it
 /// was released, and whether that host is online by its presence beacon.
-fn run_coordinator(s: &Shared, chat: &ChatSession, r: &ligus_core::WorkflowRun, hosts: &[ligus_core::WorkspaceHost]) -> Value {
+fn run_coordinator(
+    s: &Shared,
+    chat: &ChatSession,
+    r: &ligus_core::WorkflowRun,
+    hosts: &[ligus_core::WorkspaceHost],
+) -> Value {
     use ligus_core::lease::{lease_key, LeaseScope};
-    let Some(l) = chat.guards.leases.get(&lease_key(LeaseScope::WorkflowRun, &r.id.to_string())) else {
+    let Some(l) = chat
+        .guards
+        .leases
+        .get(&lease_key(LeaseScope::WorkflowRun, &r.id.to_string()))
+    else {
         return Value::Null;
     };
     let holder = l.current.holder.to_string();
@@ -379,7 +448,11 @@ fn run_coordinator(s: &Shared, chat: &ChatSession, r: &ligus_core::WorkflowRun, 
 
 fn workflow_run_dto(chat: &ChatSession, r: &ligus_core::WorkflowRun) -> Value {
     use ligus_core::workflow::NodeRunStatus;
-    let done = r.nodes.iter().filter(|n| n.status == NodeRunStatus::Succeeded || n.status == NodeRunStatus::Skipped).count();
+    let done = r
+        .nodes
+        .iter()
+        .filter(|n| n.status == NodeRunStatus::Succeeded || n.status == NodeRunStatus::Skipped)
+        .count();
     let initiator = chat
         .members
         .iter()
@@ -408,15 +481,19 @@ pub async fn chat_details(State(s): S, Path(id): Path<String>) -> ApiResult<Json
     let me = s.my_actor_id();
     let unread = s.unread(&chat, &me);
 
-    let spoke: HashSet<String> =
-        participants(&chat, usize::MAX).iter().filter_map(|p| p["id"].as_str().map(str::to_string)).collect();
+    let spoke: HashSet<String> = participants(&chat, usize::MAX)
+        .iter()
+        .filter_map(|p| p["id"].as_str().map(str::to_string))
+        .collect();
 
     let agents: Vec<Value> = config
         .workspace_agents
         .iter()
         .map(|a| {
             let mut v = agent_dto(&s, a, &config, &hosts);
-            v["inChat"] = json!(spoke.contains(&a.id.to_string()) || chat.participant_agent_ids.contains(&a.id));
+            v["inChat"] = json!(
+                spoke.contains(&a.id.to_string()) || chat.participant_agent_ids.contains(&a.id)
+            );
             v
         })
         .collect();
@@ -433,7 +510,11 @@ pub async fn chat_details(State(s): S, Path(id): Path<String>) -> ApiResult<Json
     let responder = default_responder(&s, &chat, &agents, &known, &hosts);
     let model = responder["model"].as_str().map(str::to_string);
 
-    let channel = s.lock().list_channels(s.ws)?.into_iter().find(|c| c.id == chat.channel_id);
+    let channel = s
+        .lock()
+        .list_channels(s.ws)?
+        .into_iter()
+        .find(|c| c.id == chat.channel_id);
 
     let mut runs: Vec<&ligus_core::WorkflowRun> = chat.workflow_runs.iter().collect();
     runs.sort_by_key(|r| std::cmp::Reverse(r.started_at));
@@ -509,8 +590,14 @@ mod tests {
         }))
         .unwrap();
         m.actor.avatar_url = Some("https://evil.example/p.png?who=owner".into());
-        assert!(person_dto(&m, "me").get("avatarUrl").is_none(), "a remote avatar URL reached the phone");
+        assert!(
+            person_dto(&m, "me").get("avatarUrl").is_none(),
+            "a remote avatar URL reached the phone"
+        );
         m.actor.avatar_url = Some("data:image/png;base64,iVBORw0KGgo=".into());
-        assert_eq!(person_dto(&m, "me")["avatarUrl"], "data:image/png;base64,iVBORw0KGgo=");
+        assert_eq!(
+            person_dto(&m, "me")["avatarUrl"],
+            "data:image/png;base64,iVBORw0KGgo="
+        );
     }
 }

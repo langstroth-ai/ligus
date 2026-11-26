@@ -92,7 +92,10 @@ fn no_hashmap_in_signed_types() {
             }
         }
     }
-    assert!(offenders.is_empty(), "HashMap/HashSet in serialized types: {offenders:?}");
+    assert!(
+        offenders.is_empty(),
+        "HashMap/HashSet in serialized types: {offenders:?}"
+    );
 }
 
 #[test]

@@ -42,7 +42,13 @@ fn role_name(r: WorkspaceRole) -> &'static str {
 /// The refusal of `payload` for the actor `author_id` (shown as `name`)
 /// against `members`, explained. `summary` is returned unchanged when it
 /// isn't the role gate's.
-pub fn explain(summary: String, payload: &SessionEvent, author_id: &str, name: &str, members: &[WorkspaceMember]) -> String {
+pub fn explain(
+    summary: String,
+    payload: &SessionEvent,
+    author_id: &str,
+    name: &str,
+    members: &[WorkspaceMember],
+) -> String {
     if !is_role_refusal(&summary) {
         return summary;
     }
@@ -74,16 +80,35 @@ mod tests {
 
     fn member(id: &str, role: WorkspaceRole) -> WorkspaceMember {
         let actor = ActorIdentity::new(id, id, ActorKind::Human);
-        WorkspaceMember { id: id.into(), actor, role, title: String::new(), index: 1, joined_at: ligus_core::Timestamp::now() }
+        WorkspaceMember {
+            id: id.into(),
+            actor,
+            role,
+            title: String::new(),
+            index: 1,
+            joined_at: ligus_core::Timestamp::now(),
+        }
     }
 
     fn post() -> SessionEvent {
-        SessionEvent::MessageAppended { message: ligus_core::chat::ChatMessage::new(ligus_core::chat::MessageRole::User, "x", "hi") }
+        SessionEvent::MessageAppended {
+            message: ligus_core::chat::ChatMessage::new(
+                ligus_core::chat::MessageRole::User,
+                "x",
+                "hi",
+            ),
+        }
     }
 
     #[test]
     fn a_non_member_is_told_to_link_again() {
-        let s = explain("role Viewer cannot perform messageAppended".into(), &post(), "zaz", "zaz", &[member("ana", WorkspaceRole::Owner)]);
+        let s = explain(
+            "role Viewer cannot perform messageAppended".into(),
+            &post(),
+            "zaz",
+            "zaz",
+            &[member("ana", WorkspaceRole::Owner)],
+        );
         assert!(s.contains("zaz, who isn't a member"), "{s}");
         assert!(s.contains("Link this computer to my devices"), "{s}");
         assert!(!s.contains("cannot perform"), "{s}");
@@ -91,13 +116,28 @@ mod tests {
 
     #[test]
     fn a_low_role_is_told_which_role_it_needs() {
-        let s = explain("role Viewer cannot perform messageAppended".into(), &post(), "v", "v", &[member("v", WorkspaceRole::Viewer)]);
-        assert!(s.contains("your role here is Viewer, and posting a message needs Contributor"), "{s}");
+        let s = explain(
+            "role Viewer cannot perform messageAppended".into(),
+            &post(),
+            "v",
+            "v",
+            &[member("v", WorkspaceRole::Viewer)],
+        );
+        assert!(
+            s.contains("your role here is Viewer, and posting a message needs Contributor"),
+            "{s}"
+        );
     }
 
     #[test]
     fn other_refusals_pass_through() {
-        let s = explain("cannot remove the last owner".into(), &post(), "v", "v", &[]);
+        let s = explain(
+            "cannot remove the last owner".into(),
+            &post(),
+            "v",
+            "v",
+            &[],
+        );
         assert_eq!(s, "cannot remove the last owner");
     }
 }

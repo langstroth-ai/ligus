@@ -163,7 +163,9 @@ impl LinkRequest {
         let device_id = device_id_for(SigAlg::Ed25519, &key);
         let previous = previous.map(|(account_id, account)| PreviousMember {
             account_id,
-            signature: account.sign(&previous_preimage(device_id, &key, ka_public, created_at)).to_vec(),
+            signature: account
+                .sign(&previous_preimage(device_id, &key, ka_public, created_at))
+                .to_vec(),
         });
         let mut r = Self {
             v: VERSION,
@@ -215,8 +217,12 @@ impl LinkRequest {
         if compact.len() > MAX_CODE_LEN {
             return Err(LinkError::Malformed);
         }
-        let body = compact.strip_prefix(REQUEST_PREFIX).ok_or(LinkError::NotARequest)?;
-        let bytes = URL_SAFE_NO_PAD.decode(body.as_bytes()).map_err(|_| LinkError::Malformed)?;
+        let body = compact
+            .strip_prefix(REQUEST_PREFIX)
+            .ok_or(LinkError::NotARequest)?;
+        let bytes = URL_SAFE_NO_PAD
+            .decode(body.as_bytes())
+            .map_err(|_| LinkError::Malformed)?;
         let r: Self = serde_json::from_slice(&bytes).map_err(|_| LinkError::Malformed)?;
         if r.v != VERSION {
             return Err(LinkError::Version(r.v));
@@ -230,7 +236,8 @@ impl LinkRequest {
         if r.previous.as_ref().is_some_and(|p| p.signature.len() != 64) {
             return Err(LinkError::Malformed);
         }
-        verify(&r.device_public_key, &r.preimage(), &r.signature).map_err(|_| LinkError::BadSignature)?;
+        verify(&r.device_public_key, &r.preimage(), &r.signature)
+            .map_err(|_| LinkError::BadSignature)?;
         if r.device_id != device_id_for(SigAlg::Ed25519, &r.device_public_key) {
             return Err(LinkError::WrongDeviceId);
         }
@@ -268,8 +275,17 @@ impl LinkRequest {
     /// `account_key` (that account's registered signing key).
     pub fn previous_verifies(&self, account_key: &[u8]) -> bool {
         self.previous.as_ref().is_some_and(|p| {
-            verify(account_key, &previous_preimage(self.device_id, &self.device_public_key, &self.ka_public, self.created_at), &p.signature)
-                .is_ok()
+            verify(
+                account_key,
+                &previous_preimage(
+                    self.device_id,
+                    &self.device_public_key,
+                    &self.ka_public,
+                    self.created_at,
+                ),
+                &p.signature,
+            )
+            .is_ok()
         })
     }
 }
@@ -298,7 +314,8 @@ struct GrantBody {
 
 impl GrantBody {
     fn preimage(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(GRANT_TAG.len() + self.conn.len() + self.person.len() + 256);
+        let mut out =
+            Vec::with_capacity(GRANT_TAG.len() + self.conn.len() + self.person.len() + 256);
         out.extend_from_slice(GRANT_TAG);
         out.extend_from_slice(&self.v.to_le_bytes());
         put(&mut out, self.request.as_bytes());
@@ -342,8 +359,10 @@ impl Grant {
             signature: Vec::new(),
         };
         body.signature = approver.sign(&body.preimage()).to_vec();
-        let plain = zeroize::Zeroizing::new(serde_json::to_vec(&body).map_err(|_| LinkError::Malformed)?);
-        let blob = ligus_core::e2ee::seal(&request.ka_public, &plain).map_err(|_| LinkError::Malformed)?;
+        let plain =
+            zeroize::Zeroizing::new(serde_json::to_vec(&body).map_err(|_| LinkError::Malformed)?);
+        let blob =
+            ligus_core::e2ee::seal(&request.ka_public, &plain).map_err(|_| LinkError::Malformed)?;
         let json = serde_json::to_vec(&blob).map_err(|_| LinkError::Malformed)?;
         Ok(format!("{GRANT_PREFIX}{}", URL_SAFE_NO_PAD.encode(json)))
     }
@@ -351,15 +370,25 @@ impl Grant {
     /// Open a grant with this computer's key-agreement key and check its
     /// approver signature and version. Nothing else (see
     /// [`OpenedGrant::check`]).
-    pub fn open(code: &str, ka: &ligus_core::KeyAgreementKeypair) -> Result<OpenedGrant, LinkError> {
+    pub fn open(
+        code: &str,
+        ka: &ligus_core::KeyAgreementKeypair,
+    ) -> Result<OpenedGrant, LinkError> {
         let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
         if compact.len() > MAX_CODE_LEN {
             return Err(LinkError::Malformed);
         }
-        let body = compact.strip_prefix(GRANT_PREFIX).ok_or(LinkError::NotAGrant)?;
-        let bytes = URL_SAFE_NO_PAD.decode(body.as_bytes()).map_err(|_| LinkError::Malformed)?;
-        let blob: ligus_core::SealedBlob = serde_json::from_slice(&bytes).map_err(|_| LinkError::Malformed)?;
-        let plain = zeroize::Zeroizing::new(ligus_core::e2ee::open(ka, &blob).map_err(|_| LinkError::NotForThisDevice)?);
+        let body = compact
+            .strip_prefix(GRANT_PREFIX)
+            .ok_or(LinkError::NotAGrant)?;
+        let bytes = URL_SAFE_NO_PAD
+            .decode(body.as_bytes())
+            .map_err(|_| LinkError::Malformed)?;
+        let blob: ligus_core::SealedBlob =
+            serde_json::from_slice(&bytes).map_err(|_| LinkError::Malformed)?;
+        let plain = zeroize::Zeroizing::new(
+            ligus_core::e2ee::open(ka, &blob).map_err(|_| LinkError::NotForThisDevice)?,
+        );
         let g: GrantBody = serde_json::from_slice(&plain).map_err(|_| LinkError::Malformed)?;
         if g.v != VERSION {
             return Err(LinkError::Version(g.v));
@@ -367,12 +396,15 @@ impl Grant {
         if g.approver_key.len() != 32 {
             return Err(LinkError::Malformed);
         }
-        verify(&g.approver_key, &g.preimage(), &g.signature).map_err(|_| LinkError::BadGrantSignature)?;
+        verify(&g.approver_key, &g.preimage(), &g.signature)
+            .map_err(|_| LinkError::BadGrantSignature)?;
         if g.approver_device_id != device_id_for(SigAlg::Ed25519, &g.approver_key) {
             return Err(LinkError::BadGrantSignature);
         }
-        let person: ActorIdentity = serde_json::from_str(&g.person).map_err(|_| LinkError::Malformed)?;
-        let conn = crate::workspace_invite::decode_workspace_invite(&g.conn).map_err(|_| LinkError::Malformed)?;
+        let person: ActorIdentity =
+            serde_json::from_str(&g.person).map_err(|_| LinkError::Malformed)?;
+        let conn = crate::workspace_invite::decode_workspace_invite(&g.conn)
+            .map_err(|_| LinkError::Malformed)?;
         Ok(OpenedGrant {
             request: g.request,
             workspace_id: g.workspace_id,
@@ -541,7 +573,8 @@ impl LinkState {
     /// Remember `request` as pending (requests past [`LinkState::PENDING_TTL_MS`] are
     /// dropped as they go).
     pub fn add_pending(&mut self, request: &LinkRequest, now_ms: i64) {
-        self.pending.retain(|p| now_ms.saturating_sub(p.created_at) <= Self::PENDING_TTL_MS);
+        self.pending
+            .retain(|p| now_ms.saturating_sub(p.created_at) <= Self::PENDING_TTL_MS);
         let digest = request.digest();
         if !self.pending.iter().any(|p| p.digest == digest) {
             self.pending.push(Pending {
@@ -557,26 +590,36 @@ impl LinkState {
     /// The pending request `digest` names, while a grant for it can still be
     /// valid ([`LinkState::PENDING_TTL_MS`]).
     pub fn pending_for(&self, digest: &str, now_ms: i64) -> Option<&Pending> {
-        self.pending.iter().find(|p| p.digest == digest && now_ms.saturating_sub(p.created_at) <= Self::PENDING_TTL_MS)
+        self.pending.iter().find(|p| {
+            p.digest == digest && now_ms.saturating_sub(p.created_at) <= Self::PENDING_TTL_MS
+        })
     }
 
     /// The newest pending request that is still fresh.
     pub fn latest_pending(&self, now_ms: i64) -> Option<&Pending> {
-        self.pending.iter().filter(|p| now_ms.saturating_sub(p.created_at) <= REQUEST_TTL_MS).max_by_key(|p| p.created_at)
+        self.pending
+            .iter()
+            .filter(|p| now_ms.saturating_sub(p.created_at) <= REQUEST_TTL_MS)
+            .max_by_key(|p| p.created_at)
     }
 
     /// Drop pending requests no grant can answer any more (past
     /// [`LinkState::PENDING_TTL_MS`]); `true` when any was dropped (save it).
     pub fn prune_expired(&mut self, now_ms: i64) -> bool {
         let before = self.pending.len();
-        self.pending.retain(|p| now_ms.saturating_sub(p.created_at) <= Self::PENDING_TTL_MS);
+        self.pending
+            .retain(|p| now_ms.saturating_sub(p.created_at) <= Self::PENDING_TTL_MS);
         self.pending.len() != before
     }
 
     /// A half-done link: the newest request still waiting for the desktop's
     /// code, when there is one.
     pub fn pending_status(&self, now_ms: i64) -> Option<PendingStatus> {
-        let live: Vec<&Pending> = self.pending.iter().filter(|p| now_ms.saturating_sub(p.created_at) <= Self::PENDING_TTL_MS).collect();
+        let live: Vec<&Pending> = self
+            .pending
+            .iter()
+            .filter(|p| now_ms.saturating_sub(p.created_at) <= Self::PENDING_TTL_MS)
+            .collect();
         let newest = live.iter().max_by_key(|p| p.created_at)?;
         Some(PendingStatus {
             created_at: newest.created_at,
@@ -589,7 +632,9 @@ impl LinkState {
     /// The person this install acts for in `workspace_id`, if it was linked
     /// there.
     pub fn linked_in(&self, workspace_id: Uuid) -> Option<&ActorIdentity> {
-        self.person.as_ref().filter(|_| self.workspaces.contains(&workspace_id))
+        self.person
+            .as_ref()
+            .filter(|_| self.workspaces.contains(&workspace_id))
     }
 
     /// Migration M7 (identity model v2, 11): `links` from `person` and
@@ -616,7 +661,11 @@ impl LinkState {
     /// `workspace_id`, and every pending request is used up (the device they
     /// named is either the one now linked, or unused). Refused when the
     /// install is already someone else's device.
-    pub fn record_link(&mut self, person: &ActorIdentity, workspace_id: Uuid) -> Result<(), LinkError> {
+    pub fn record_link(
+        &mut self,
+        person: &ActorIdentity,
+        workspace_id: Uuid,
+    ) -> Result<(), LinkError> {
         if let Some(p) = &self.person {
             if p.account_id != person.account_id {
                 return Err(LinkError::Refused(format!(
@@ -649,16 +698,25 @@ pub mod setup {
     /// The palette label.
     pub const TITLE: &str = "Add a computer";
     /// One line.
-    pub const SUMMARY: &str = "Link this computer to your devices, so it acts as you (not a separate member).";
+    pub const SUMMARY: &str =
+        "Link this computer to your devices, so it acts as you (not a separate member).";
     /// The (i).
     pub const WHY: &str = "Joining with an invite makes a new member. Linking makes this computer one of your devices: \
         your desktop signs it with your passkey, and the workspace key is sealed to this computer.";
     /// The steps, in order: (id, title, a person's step).
     pub const STEPS: &[(&str, &str, bool)] = &[
         ("request", "Show this computer's link request", false),
-        ("approve", "On your desktop: My devices > Add a computer, compare, confirm with your passkey", true),
+        (
+            "approve",
+            "On your desktop: My devices > Add a computer, compare, confirm with your passkey",
+            true,
+        ),
         ("redeem", "Paste the code your desktop shows", false),
-        ("confirm", "Check who approved it: the person, the workspace, the desktop's fingerprint", true),
+        (
+            "confirm",
+            "Check who approved it: the person, the workspace, the desktop's fingerprint",
+            true,
+        ),
         ("verify", "This computer acts as you", false),
     ];
 }
@@ -675,7 +733,9 @@ mod b64 {
     }
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
         let s = String::deserialize(d)?;
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s.as_bytes()).map_err(serde::de::Error::custom)
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(s.as_bytes())
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -684,7 +744,10 @@ mod tests {
     use super::*;
 
     fn keys() -> (SigningKeypair, ligus_core::KeyAgreementKeypair) {
-        (SigningKeypair::generate().unwrap(), ligus_core::KeyAgreementKeypair::generate().unwrap())
+        (
+            SigningKeypair::generate().unwrap(),
+            ligus_core::KeyAgreementKeypair::generate().unwrap(),
+        )
     }
 
     /// The prefixes and signature contexts are wire ids: pinned as hex so a
@@ -692,8 +755,14 @@ mod tests {
     #[test]
     fn link_constants_are_frozen() {
         let h = |b: &[u8]| hex(b);
-        assert_eq!(h(REQUEST_TAG), "6c696775732d6c696e6b2d726571756573742d763100");
-        assert_eq!(h(PREVIOUS_TAG), "6c696775732d6c696e6b2d70726576696f75732d763100");
+        assert_eq!(
+            h(REQUEST_TAG),
+            "6c696775732d6c696e6b2d726571756573742d763100"
+        );
+        assert_eq!(
+            h(PREVIOUS_TAG),
+            "6c696775732d6c696e6b2d70726576696f75732d763100"
+        );
         assert_eq!(h(GRANT_TAG), "6c696775732d6c696e6b2d6772616e742d763100");
         assert_eq!(REQUEST_PREFIX, "liguslink1:");
         assert_eq!(GRANT_PREFIX, "ligusgrant1:");
@@ -702,13 +771,25 @@ mod tests {
     #[test]
     fn a_request_round_trips_and_shows_the_device_fingerprint() {
         let (d, ka) = keys();
-        let r = LinkRequest::new(&d, &ka.public_key_bytes(), "  lt on \u{202E}mbp\n ", 1_000, None);
-        assert_eq!(r.label, "lt on mbp", "hidden and reordering characters are dropped");
+        let r = LinkRequest::new(
+            &d,
+            &ka.public_key_bytes(),
+            "  lt on \u{202E}mbp\n ",
+            1_000,
+            None,
+        );
+        assert_eq!(
+            r.label, "lt on mbp",
+            "hidden and reordering characters are dropped"
+        );
         let code = r.encode();
         let wrapped = format!("{}\n   {}", &code[..30], &code[30..]);
         let back = LinkRequest::decode(&wrapped).unwrap();
         assert_eq!(back, r);
-        assert_eq!(back.fingerprint(), crate::device_enroll::fingerprint(&d.public_key_bytes()));
+        assert_eq!(
+            back.fingerprint(),
+            crate::device_enroll::fingerprint(&d.public_key_bytes())
+        );
         assert_eq!(back.digest(), r.digest());
     }
 
@@ -718,31 +799,67 @@ mod tests {
         let (d, ka) = keys();
         let (_, other_ka) = keys();
         let r = LinkRequest::new(&d, &ka.public_key_bytes(), "lt", 1_000, None);
-        let reencode = |m: &LinkRequest| format!("{REQUEST_PREFIX}{}", URL_SAFE_NO_PAD.encode(serde_json::to_vec(m).unwrap()));
+        let reencode = |m: &LinkRequest| {
+            format!(
+                "{REQUEST_PREFIX}{}",
+                URL_SAFE_NO_PAD.encode(serde_json::to_vec(m).unwrap())
+            )
+        };
         let mut m = r.clone();
         m.ka_public = other_ka.public_key_bytes().to_vec();
-        assert_eq!(LinkRequest::decode(&reencode(&m)), Err(LinkError::BadSignature), "a swapped key-agreement key");
+        assert_eq!(
+            LinkRequest::decode(&reencode(&m)),
+            Err(LinkError::BadSignature),
+            "a swapped key-agreement key"
+        );
         let mut m = r.clone();
         m.label = "Alex's MacBook".into();
-        assert_eq!(LinkRequest::decode(&reencode(&m)), Err(LinkError::BadSignature), "a relabel");
+        assert_eq!(
+            LinkRequest::decode(&reencode(&m)),
+            Err(LinkError::BadSignature),
+            "a relabel"
+        );
         let mut m = r.clone();
         m.created_at += 1;
-        assert_eq!(LinkRequest::decode(&reencode(&m)), Err(LinkError::BadSignature), "another time");
+        assert_eq!(
+            LinkRequest::decode(&reencode(&m)),
+            Err(LinkError::BadSignature),
+            "another time"
+        );
         let mut m = r.clone();
-        m.device_public_key = SigningKeypair::generate().unwrap().public_key_bytes().to_vec();
-        assert_eq!(LinkRequest::decode(&reencode(&m)), Err(LinkError::BadSignature), "someone else's key");
+        m.device_public_key = SigningKeypair::generate()
+            .unwrap()
+            .public_key_bytes()
+            .to_vec();
+        assert_eq!(
+            LinkRequest::decode(&reencode(&m)),
+            Err(LinkError::BadSignature),
+            "someone else's key"
+        );
         // Another id, signed by the key all the same: not the id it derives.
         let mut m = r.clone();
         m.device_id = Uuid::new_v4();
         m.signature = d.sign(&m.preimage()).to_vec();
-        assert_eq!(LinkRequest::decode(&reencode(&m)), Err(LinkError::WrongDeviceId));
+        assert_eq!(
+            LinkRequest::decode(&reencode(&m)),
+            Err(LinkError::WrongDeviceId)
+        );
         // A version this build doesn't know.
         let mut m = r.clone();
         m.v = 2;
         m.signature = d.sign(&m.preimage()).to_vec();
-        assert_eq!(LinkRequest::decode(&reencode(&m)), Err(LinkError::Version(2)));
-        assert_eq!(LinkRequest::decode("hivews1:abc"), Err(LinkError::NotARequest));
-        assert_eq!(LinkRequest::decode("liguslink1:abc"), Err(LinkError::Malformed));
+        assert_eq!(
+            LinkRequest::decode(&reencode(&m)),
+            Err(LinkError::Version(2))
+        );
+        assert_eq!(
+            LinkRequest::decode("hivews1:abc"),
+            Err(LinkError::NotARequest)
+        );
+        assert_eq!(
+            LinkRequest::decode("liguslink1:abc"),
+            Err(LinkError::Malformed)
+        );
     }
 
     #[test]
@@ -750,8 +867,14 @@ mod tests {
         let (d, ka) = keys();
         let r = LinkRequest::new(&d, &ka.public_key_bytes(), "lt", 10_000_000, None);
         assert!(r.check_fresh(10_000_000 + REQUEST_TTL_MS).is_ok());
-        assert_eq!(r.check_fresh(10_000_000 + REQUEST_TTL_MS + 1), Err(LinkError::RequestExpired));
-        assert_eq!(r.check_fresh(10_000_000 - CLOCK_SKEW_MS - 1), Err(LinkError::RequestFromTheFuture));
+        assert_eq!(
+            r.check_fresh(10_000_000 + REQUEST_TTL_MS + 1),
+            Err(LinkError::RequestExpired)
+        );
+        assert_eq!(
+            r.check_fresh(10_000_000 - CLOCK_SKEW_MS - 1),
+            Err(LinkError::RequestFromTheFuture)
+        );
     }
 
     #[test]
@@ -807,27 +930,71 @@ mod tests {
         let acct = Uuid::new_v4();
         let approver = SigningKeypair::generate().unwrap();
         let approver_id = device_id_for(SigAlg::Ed25519, &approver.public_key_bytes());
-        let code = Grant::seal(&r, ws, &conn("acme"), &person(acct), approver_id, &approver, 1_000).unwrap();
+        let code = Grant::seal(
+            &r,
+            ws,
+            &conn("acme"),
+            &person(acct),
+            approver_id,
+            &approver,
+            1_000,
+        )
+        .unwrap();
         assert!(!code.contains("relay.example"), "sealed");
-        assert_eq!(Grant::open(&code, &other_ka).unwrap_err(), LinkError::NotForThisDevice);
+        assert_eq!(
+            Grant::open(&code, &other_ka).unwrap_err(),
+            LinkError::NotForThisDevice
+        );
         let g = Grant::open(&code, &ka).unwrap();
         assert_eq!(g.request, r.digest());
-        assert_eq!(g.approver_fingerprint(), crate::device_enroll::fingerprint(&approver.public_key_bytes()));
+        assert_eq!(
+            g.approver_fingerprint(),
+            crate::device_enroll::fingerprint(&approver.public_key_bytes())
+        );
         let p = g.check(&d.public_key_bytes(), 999).unwrap();
         assert_eq!(p.account_id, Some(acct));
-        assert!(p.key_agreement_public.is_none() && p.contact.is_none() && p.device_id.is_none(), "the desktop's own fields aren't copied");
-        assert_eq!(g.check(&d.public_key_bytes(), 1_001).unwrap_err(), LinkError::GrantExpired);
+        assert!(
+            p.key_agreement_public.is_none() && p.contact.is_none() && p.device_id.is_none(),
+            "the desktop's own fields aren't copied"
+        );
+        assert_eq!(
+            g.check(&d.public_key_bytes(), 1_001).unwrap_err(),
+            LinkError::GrantExpired
+        );
         // T4: another computer's key, refused.
         let (d2, _) = keys();
-        assert!(matches!(g.check(&d2.public_key_bytes(), 999), Err(LinkError::Refused(_))));
+        assert!(matches!(
+            g.check(&d2.public_key_bytes(), 999),
+            Err(LinkError::Refused(_))
+        ));
         // Not a person.
         let mut agent = person(acct);
         agent.kind = ActorKind::Agent;
-        let code2 = Grant::seal(&r, ws, &conn("acme"), &agent, approver_id, &approver, 1_000).unwrap();
-        assert!(matches!(Grant::open(&code2, &ka).unwrap().check(&d.public_key_bytes(), 1), Err(LinkError::Refused(_))));
+        let code2 =
+            Grant::seal(&r, ws, &conn("acme"), &agent, approver_id, &approver, 1_000).unwrap();
+        assert!(matches!(
+            Grant::open(&code2, &ka)
+                .unwrap()
+                .check(&d.public_key_bytes(), 1),
+            Err(LinkError::Refused(_))
+        ));
         // A connection for another workspace than the grant's.
-        let code4 = Grant::seal(&r, ws, &conn("other"), &person(acct), approver_id, &approver, 1_000).unwrap();
-        assert!(matches!(Grant::open(&code4, &ka).unwrap().check(&d.public_key_bytes(), 1), Err(LinkError::Refused(_))));
+        let code4 = Grant::seal(
+            &r,
+            ws,
+            &conn("other"),
+            &person(acct),
+            approver_id,
+            &approver,
+            1_000,
+        )
+        .unwrap();
+        assert!(matches!(
+            Grant::open(&code4, &ka)
+                .unwrap()
+                .check(&d.public_key_bytes(), 1),
+            Err(LinkError::Refused(_))
+        ));
     }
 
     #[test]
@@ -851,9 +1018,18 @@ mod tests {
         };
         body.signature = approver.sign(&body.preimage()).to_vec();
         body.person = serde_json::to_string(&person(Uuid::new_v4())).unwrap();
-        let blob = ligus_core::e2ee::seal(&ka.public_key_bytes(), &serde_json::to_vec(&body).unwrap()).unwrap();
-        let code = format!("{GRANT_PREFIX}{}", URL_SAFE_NO_PAD.encode(serde_json::to_vec(&blob).unwrap()));
-        assert_eq!(Grant::open(&code, &ka).unwrap_err(), LinkError::BadGrantSignature, "another person");
+        let blob =
+            ligus_core::e2ee::seal(&ka.public_key_bytes(), &serde_json::to_vec(&body).unwrap())
+                .unwrap();
+        let code = format!(
+            "{GRANT_PREFIX}{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&blob).unwrap())
+        );
+        assert_eq!(
+            Grant::open(&code, &ka).unwrap_err(),
+            LinkError::BadGrantSignature,
+            "another person"
+        );
     }
 
     #[test]
@@ -866,14 +1042,35 @@ mod tests {
         s.add_pending(&r1, 1_000);
         s.add_pending(&r2, 2_000);
         let st = s.pending_status(2_000).unwrap();
-        assert_eq!((st.created_at, st.approve_by, st.expires_at, st.count), (2_000, 2_000 + REQUEST_TTL_MS, 2_000 + LinkState::PENDING_TTL_MS, 2));
-        assert!(st.approvable(2_000 + REQUEST_TTL_MS) && !st.approvable(2_000 + REQUEST_TTL_MS + 1));
-        assert!(!s.prune_expired(1_000 + LinkState::PENDING_TTL_MS), "nothing past its life yet");
+        assert_eq!(
+            (st.created_at, st.approve_by, st.expires_at, st.count),
+            (
+                2_000,
+                2_000 + REQUEST_TTL_MS,
+                2_000 + LinkState::PENDING_TTL_MS,
+                2
+            )
+        );
+        assert!(
+            st.approvable(2_000 + REQUEST_TTL_MS) && !st.approvable(2_000 + REQUEST_TTL_MS + 1)
+        );
+        assert!(
+            !s.prune_expired(1_000 + LinkState::PENDING_TTL_MS),
+            "nothing past its life yet"
+        );
         assert!(s.prune_expired(1_000 + LinkState::PENDING_TTL_MS + 1));
         assert_eq!(s.pending.len(), 1);
-        assert_eq!(s.pending_status(1_000 + LinkState::PENDING_TTL_MS + 1).unwrap().count, 1);
+        assert_eq!(
+            s.pending_status(1_000 + LinkState::PENDING_TTL_MS + 1)
+                .unwrap()
+                .count,
+            1
+        );
         assert!(s.prune_expired(2_000 + LinkState::PENDING_TTL_MS + 1));
-        assert_eq!(s.pending_status(2_000 + LinkState::PENDING_TTL_MS + 1), None);
+        assert_eq!(
+            s.pending_status(2_000 + LinkState::PENDING_TTL_MS + 1),
+            None
+        );
     }
 
     #[test]
@@ -888,19 +1085,36 @@ mod tests {
         s.save(dir.path()).unwrap();
         let mut s = LinkState::load(dir.path()).unwrap();
         assert!(s.pending_for(&r.digest(), 1_000).is_some());
-        assert!(s.pending_for(&r.digest(), 1_000 + REQUEST_TTL_MS + 1).is_some(), "approved late, the grant still has its life");
-        assert!(s.pending_for(&r.digest(), 1_000 + LinkState::PENDING_TTL_MS + 1).is_none(), "stale");
+        assert!(
+            s.pending_for(&r.digest(), 1_000 + REQUEST_TTL_MS + 1)
+                .is_some(),
+            "approved late, the grant still has its life"
+        );
+        assert!(
+            s.pending_for(&r.digest(), 1_000 + LinkState::PENDING_TTL_MS + 1)
+                .is_none(),
+            "stale"
+        );
         let mut alex = ActorIdentity::new("a", "Alex", ActorKind::Human);
         alex.account_id = Some(Uuid::new_v4());
         let ws = Uuid::new_v4();
         s.record_link(&alex, ws).unwrap();
         assert!(s.pending.is_empty(), "used up");
-        assert_eq!(s.linked_in(ws).map(|p| p.display_name.as_str()), Some("Alex"));
+        assert_eq!(
+            s.linked_in(ws).map(|p| p.display_name.as_str()),
+            Some("Alex")
+        );
         assert!(s.linked_in(Uuid::new_v4()).is_none());
         let mut sam = ActorIdentity::new("s", "Sam", ActorKind::Human);
         sam.account_id = Some(Uuid::new_v4());
-        assert!(s.record_link(&sam, Uuid::new_v4()).is_err(), "one person per install");
+        assert!(
+            s.record_link(&sam, Uuid::new_v4()).is_err(),
+            "one person per install"
+        );
         std::fs::write(LinkState::path(dir.path()), b"{not json").unwrap();
-        assert!(LinkState::load(dir.path()).is_err(), "a damaged file is an error, never 'no one'");
+        assert!(
+            LinkState::load(dir.path()).is_err(),
+            "a damaged file is an error, never 'no one'"
+        );
     }
 }

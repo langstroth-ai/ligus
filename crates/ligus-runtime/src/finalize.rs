@@ -40,7 +40,10 @@ impl McpEffectsLog {
 }
 
 pub fn kind_key(kind: ProposalKind) -> String {
-    serde_json::to_value(kind).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default()
+    serde_json::to_value(kind)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 /// The finalize inputs.
@@ -83,13 +86,20 @@ pub fn redact_workspace_path(body: &str, workspace_root: &str) -> String {
     if root.is_empty() || !body.contains(root) {
         return body.to_string();
     }
-    let base = std::path::Path::new(root).file_name().and_then(|s| s.to_str()).filter(|s| !s.is_empty()).unwrap_or(root);
+    let base = std::path::Path::new(root)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(root);
     body.replace(root, base)
 }
 
 /// Strip and apply a finished reply's directives, then complete the message
 /// with the visible text. See the module docs.
-pub fn finalize_reply(svc: &mut ChatService, input: FinalizeInput<'_>) -> Result<Finalized, String> {
+pub fn finalize_reply(
+    svc: &mut ChatService,
+    input: FinalizeInput<'_>,
+) -> Result<Finalized, String> {
     let ctx = &input.ctx;
     let mcp = input.mcp.cloned().unwrap_or_default();
     let mut flow = flow_directives::parse(input.full);
@@ -99,7 +109,11 @@ pub fn finalize_reply(svc: &mut ChatService, input: FinalizeInput<'_>) -> Result
 
     // Assessments (a scout's reply text is replaced so later scouts assess blind).
     let mut recorded: Vec<String> = Vec::new();
-    for a in parsed.assessments.iter().filter(|a| !mcp.assessed.contains(a.alternative.trim())) {
+    for a in parsed
+        .assessments
+        .iter()
+        .filter(|a| !mcp.assessed.contains(a.alternative.trim()))
+    {
         match effects::assess(svc, ctx, None, a) {
             Ok((set, pid)) => {
                 out.assessed.push((set, pid));
@@ -113,7 +127,12 @@ pub fn finalize_reply(svc: &mut ChatService, input: FinalizeInput<'_>) -> Result
         let what: Vec<String> = out
             .assessed
             .iter()
-            .map(|(set, pid)| session.as_ref().map(|s| alternative_label(s, *set, *pid)).unwrap_or_default())
+            .map(|(set, pid)| {
+                session
+                    .as_ref()
+                    .map(|s| alternative_label(s, *set, *pid))
+                    .unwrap_or_default()
+            })
             .collect();
         cleaned = format!(
             "\u{1f41d} Posted a scout assessment of {}. Scores stay in the proposal set so other scouts assess blind.",
@@ -131,15 +150,24 @@ pub fn finalize_reply(svc: &mut ChatService, input: FinalizeInput<'_>) -> Result
         cleaned = crate::empty_reply_notice(&ctx.author);
     }
     if let Some(mid) = ctx.message_id {
-        svc.complete_assistant_message(ctx.session_id, ctx.workspace_id, mid, &cleaned).map_err(|e| e.to_string())?;
-        for emoji in parsed.emojis.iter().filter(|e| !mcp.reactions.contains(e.as_str())) {
+        svc.complete_assistant_message(ctx.session_id, ctx.workspace_id, mid, &cleaned)
+            .map_err(|e| e.to_string())?;
+        for emoji in parsed
+            .emojis
+            .iter()
+            .filter(|e| !mcp.reactions.contains(e.as_str()))
+        {
             let _ = effects::react(svc, ctx, mid, emoji);
         }
     }
     for json in &parsed.workflows {
         let name = serde_json::from_str::<serde_json::Value>(json)
             .ok()
-            .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(|s| s.trim().to_lowercase()))
+            .and_then(|v| {
+                v.get("name")
+                    .and_then(|n| n.as_str())
+                    .map(|s| s.trim().to_lowercase())
+            })
             .unwrap_or_default();
         if !name.is_empty() && mcp.workflows.contains(&name) {
             continue;
@@ -156,7 +184,10 @@ pub fn finalize_reply(svc: &mut ChatService, input: FinalizeInput<'_>) -> Result
         if input.edits_in_review && p.kind == ProposalKind::FileDiff {
             continue;
         }
-        if mcp.proposals.contains(&(kind_key(p.kind), p.title.trim().to_lowercase())) {
+        if mcp
+            .proposals
+            .contains(&(kind_key(p.kind), p.title.trim().to_lowercase()))
+        {
             continue;
         }
         let np = NewProposal {
@@ -172,8 +203,15 @@ pub fn finalize_reply(svc: &mut ChatService, input: FinalizeInput<'_>) -> Result
         }
     }
     if !parsed.alternatives.is_empty() {
-        let trigger = svc.load_in(ctx.workspace_id, ctx.session_id).ok().flatten().and_then(|s| effects::trigger_of(&s, ctx.message_id));
-        for alts in parsed.alternatives.iter().filter(|a| !mcp.set_questions.contains(&a.question.trim().to_lowercase())) {
+        let trigger = svc
+            .load_in(ctx.workspace_id, ctx.session_id)
+            .ok()
+            .flatten()
+            .and_then(|s| effects::trigger_of(&s, ctx.message_id));
+        for alts in parsed.alternatives.iter().filter(|a| {
+            !mcp.set_questions
+                .contains(&a.question.trim().to_lowercase())
+        }) {
             match effects::open_alternatives(svc, ctx, alts, trigger, input.base_commit.clone()) {
                 Ok(id) => out.opened_sets.push(id),
                 Err(e) => tracing::warn!(target: "finalize", "proposal set not opened: {e}"),
@@ -182,8 +220,14 @@ pub fn finalize_reply(svc: &mut ChatService, input: FinalizeInput<'_>) -> Result
     }
 
     // Flow directives: MCP marks and hand-offs win.
-    flow.marks.retain(|m| !mcp.mark_paths.contains(m.path.trim()));
-    flow.parcels.retain(|p| p.to.as_deref().is_none_or(|t| !mcp.handoffs_to.contains(&t.trim().trim_start_matches('@').to_lowercase())));
+    flow.marks
+        .retain(|m| !mcp.mark_paths.contains(m.path.trim()));
+    flow.parcels.retain(|p| {
+        p.to.as_deref().is_none_or(|t| {
+            !mcp.handoffs_to
+                .contains(&t.trim().trim_start_matches('@').to_lowercase())
+        })
+    });
     if input.apply_flow {
         for m in &flow.marks {
             let _ = effects::mark(svc, ctx, m);
@@ -205,7 +249,12 @@ pub fn finalize_reply(svc: &mut ChatService, input: FinalizeInput<'_>) -> Result
     sets.sort();
     sets.dedup();
     for set_id in sets {
-        if let Ok(Some(q)) = svc.settle_proposal_set(ctx.session_id, ctx.workspace_id, set_id, ligus_core::Timestamp::now()) {
+        if let Ok(Some(q)) = svc.settle_proposal_set(
+            ctx.session_id,
+            ctx.workspace_id,
+            set_id,
+            ligus_core::Timestamp::now(),
+        ) {
             announce_quorum(svc, ctx.session_id, ctx.workspace_id, set_id, &q);
         }
     }
@@ -227,15 +276,30 @@ pub fn alternative_label(session: &ligus_core::ChatSession, set_id: Uuid, pid: U
         .and_then(|s| s.alternatives.iter().position(|a| *a == pid))
         .map(letter)
         .unwrap_or_else(|| "?".into());
-    let title = session.proposals.iter().find(|p| p.id == pid).map(|p| p.title.clone()).unwrap_or_default();
+    let title = session
+        .proposals
+        .iter()
+        .find(|p| p.id == pid)
+        .map(|p| p.title.clone())
+        .unwrap_or_default();
     format!("{label} \u{201c}{title}\u{201d}")
 }
 
 /// Post the chat notes for a settled quorum: the front-runner, the frozen
 /// rivals, and a stop signal naming each rival's scouts.
-pub fn announce_quorum(svc: &mut ChatService, sid: Uuid, wid: Uuid, set_id: Uuid, out: &crate::chat_service::QuorumOutcome) {
-    let Ok(Some(session)) = svc.load_in(wid, sid) else { return };
-    let Some(set) = session.proposal_sets.iter().find(|s| s.id == set_id) else { return };
+pub fn announce_quorum(
+    svc: &mut ChatService,
+    sid: Uuid,
+    wid: Uuid,
+    set_id: Uuid,
+    out: &crate::chat_service::QuorumOutcome,
+) {
+    let Ok(Some(session)) = svc.load_in(wid, sid) else {
+        return;
+    };
+    let Some(set) = session.proposal_sets.iter().find(|s| s.id == set_id) else {
+        return;
+    };
     let lead = alternative_label(&session, set_id, out.front_runner);
     let how = if out.tie_break {
         "nothing reached quorum by the deadline, and it has the most support".to_string()
@@ -251,7 +315,13 @@ A person makes the final call: approve it, run the pre-flight, then apply.",
             set.question
         ),
     );
-    let label_of = |id: Uuid| set.alternatives.iter().position(|a| *a == id).map(letter).unwrap_or_else(|| "?".into());
+    let label_of = |id: Uuid| {
+        set.alternatives
+            .iter()
+            .position(|a| *a == id)
+            .map(letter)
+            .unwrap_or_else(|| "?".into())
+    };
     for (rival, scouts) in &out.stopped {
         if scouts.is_empty() {
             continue;

@@ -18,11 +18,19 @@ use crate::session::ChatSession;
 use super::RosterState;
 
 /// `IdentityLinkPublished`.
-pub fn publish_ok(env: &SessionEventEnvelope, link: &IdentityLink, on_config: bool, roster: &RosterState) -> Result<(), String> {
+pub fn publish_ok(
+    env: &SessionEventEnvelope,
+    link: &IdentityLink,
+    on_config: bool,
+    roster: &RosterState,
+) -> Result<(), String> {
     if !on_config {
         return Err("an identity link is published on the workspace config log".into());
     }
-    let stamp = env.actor_stamp.as_ref().ok_or("an identity link names its author")?;
+    let stamp = env
+        .actor_stamp
+        .as_ref()
+        .ok_or("an identity link names its author")?;
     if stamp.actor.kind != ActorKind::Human || stamp.runtime_effect {
         return Err("only a person publishes an identity link".into());
     }
@@ -34,17 +42,39 @@ pub fn publish_ok(env: &SessionEventEnvelope, link: &IdentityLink, on_config: bo
         return Err("a delegated host can't publish its owner's identity links".into());
     }
     identity_link::check_shape(link)?;
-    identity_link::check_statement(link, env.workspace_id, roster.account_keys.get(&link.account_id).map(|k| k.as_slice()))?;
+    identity_link::check_statement(
+        link,
+        env.workspace_id,
+        roster
+            .account_keys
+            .get(&link.account_id)
+            .map(|k| k.as_slice()),
+    )?;
     let live = roster.links.get(&link.account_id);
-    if live.is_some_and(|m| m.values().any(|l| l.link_id == link.link_id && l.subject_key() != link.subject_key())) {
+    if live.is_some_and(|m| {
+        m.values()
+            .any(|l| l.link_id == link.link_id && l.subject_key() != link.subject_key())
+    }) {
         return Err("that link id names another identity".into());
     }
-    if roster.links.iter().any(|(a, m)| *a != link.account_id && m.contains_key(&link.link_id)) {
+    if roster
+        .links
+        .iter()
+        .any(|(a, m)| *a != link.account_id && m.contains_key(&link.link_id))
+    {
         return Err("that link id belongs to another account".into());
     }
-    let others = live.map(|m| m.values().filter(|l| l.subject_key() != link.subject_key()).count()).unwrap_or(0);
+    let others = live
+        .map(|m| {
+            m.values()
+                .filter(|l| l.subject_key() != link.subject_key())
+                .count()
+        })
+        .unwrap_or(0);
     if others >= MAX_LIVE_LINKS {
-        return Err(format!("at most {MAX_LIVE_LINKS} identity links per account"));
+        return Err(format!(
+            "at most {MAX_LIVE_LINKS} identity links per account"
+        ));
     }
     Ok(())
 }
@@ -63,7 +93,11 @@ pub fn removal_ok(
     if !on_config {
         return Err("an identity link is removed on the workspace config log".into());
     }
-    if !roster.links.get(&account_id).is_some_and(|m| m.contains_key(&link_id)) {
+    if !roster
+        .links
+        .get(&account_id)
+        .is_some_and(|m| m.contains_key(&link_id))
+    {
         return Err("no such identity link".into());
     }
     let stamp = env.actor_stamp.as_ref().ok_or("unsigned")?;

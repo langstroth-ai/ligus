@@ -86,7 +86,8 @@ pub fn verify_sshsig(armored: &str, namespace: &str, message: &[u8]) -> Result<S
     if armored.len() > 16 * 1024 {
         return Err("signature too large".into());
     }
-    let sig = SshSig::from_pem(armored.trim().as_bytes()).map_err(|e| format!("not an SSH signature: {e}"))?;
+    let sig = SshSig::from_pem(armored.trim().as_bytes())
+        .map_err(|e| format!("not an SSH signature: {e}"))?;
     // ssh-key's decoder ignores over-long length prefixes and the version
     // isn't signed: require exact framing and version 1, the only one
     // OpenSSH writes, so a proof has one binary form.
@@ -94,10 +95,16 @@ pub fn verify_sshsig(armored: &str, namespace: &str, message: &[u8]) -> Result<S
         return Err("not an SSH signature: non-canonical encoding".into());
     }
     if sig.version() != SshSig::VERSION {
-        return Err(format!("unsupported SSH signature version {}", sig.version()));
+        return Err(format!(
+            "unsupported SSH signature version {}",
+            sig.version()
+        ));
     }
     if namespace.is_empty() || sig.namespace() != namespace {
-        return Err(format!("signed for namespace {:?}, not {namespace:?}", sig.namespace()));
+        return Err(format!(
+            "signed for namespace {:?}, not {namespace:?}",
+            sig.namespace()
+        ));
     }
     if sig.hash_alg() != HashAlg::Sha512 {
         return Err("the signature must use sha512".into());
@@ -105,8 +112,15 @@ pub fn verify_sshsig(armored: &str, namespace: &str, message: &[u8]) -> Result<S
     let key = PublicKey::from(sig.public_key().clone());
     let algorithm = key.algorithm();
     match (&algorithm, sig.public_key()) {
-        (Algorithm::Ed25519, _) | (Algorithm::SkEd25519, _) | (Algorithm::SkEcdsaSha2NistP256, _) => {}
-        (Algorithm::Ecdsa { curve: EcdsaCurve::NistP256 }, _) => {}
+        (Algorithm::Ed25519, _)
+        | (Algorithm::SkEd25519, _)
+        | (Algorithm::SkEcdsaSha2NistP256, _) => {}
+        (
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP256,
+            },
+            _,
+        ) => {}
         (Algorithm::Rsa { .. }, ssh_key::public::KeyData::Rsa(rsa)) => {
             verify_rsa_sshsig(rsa, &sig, namespace, message)?;
             return Ok(SigOk {
@@ -115,18 +129,32 @@ pub fn verify_sshsig(armored: &str, namespace: &str, message: &[u8]) -> Result<S
                 public_key: key,
             });
         }
-        _ => return Err(format!("{} keys aren't accepted for identity links", algorithm.as_str())),
+        _ => {
+            return Err(format!(
+                "{} keys aren't accepted for identity links",
+                algorithm.as_str()
+            ))
+        }
     }
-    if matches!(algorithm, Algorithm::SkEd25519 | Algorithm::SkEcdsaSha2NistP256) {
+    if matches!(
+        algorithm,
+        Algorithm::SkEd25519 | Algorithm::SkEcdsaSha2NistP256
+    ) {
         // PROTOCOL.u2f: the signature ends with flags (1 byte) and a counter
         // (4 bytes); bit 0 is user presence.
         let b = sig.signature().as_bytes();
-        let flags = b.len().checked_sub(5).and_then(|i| b.get(i)).copied().unwrap_or(0);
+        let flags = b
+            .len()
+            .checked_sub(5)
+            .and_then(|i| b.get(i))
+            .copied()
+            .unwrap_or(0);
         if flags & 0x01 == 0 {
             return Err("the security key signed without user presence".into());
         }
     }
-    key.verify(namespace, message, &sig).map_err(|e| format!("signature doesn't verify: {e}"))?;
+    key.verify(namespace, message, &sig)
+        .map_err(|e| format!("signature doesn't verify: {e}"))?;
     Ok(SigOk {
         fingerprint: key.fingerprint(HashAlg::Sha256).to_string(),
         algorithm: algorithm.as_str().to_string(),
@@ -147,7 +175,9 @@ fn sshsig_framing_is_exact(armored: &str, key: &PublicKey) -> bool {
         .map(str::trim)
         .filter(|l| !l.starts_with("-----"))
         .collect();
-    let Ok(blob) = base64::engine::general_purpose::STANDARD.decode(body) else { return false };
+    let Ok(blob) = base64::engine::general_purpose::STANDARD.decode(body) else {
+        return false;
+    };
     fn take<'a>(b: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
         if b.len() < n {
             return None;
@@ -197,19 +227,35 @@ fn verify_rsa_sshsig(
 ) -> Result<(), String> {
     // Canonical mpints: after the sign byte is stripped the first byte is
     // non-zero, so the byte length is the modulus size.
-    let n = rsa.n.as_positive_bytes().filter(|n| !n.is_empty()).ok_or("the RSA modulus isn't a positive integer")?;
-    let e = rsa.e.as_positive_bytes().filter(|e| !e.is_empty()).ok_or("the RSA exponent isn't a positive integer")?;
+    let n = rsa
+        .n
+        .as_positive_bytes()
+        .filter(|n| !n.is_empty())
+        .ok_or("the RSA modulus isn't a positive integer")?;
+    let e = rsa
+        .e
+        .as_positive_bytes()
+        .filter(|e| !e.is_empty())
+        .ok_or("the RSA exponent isn't a positive integer")?;
     let bits = (n.len() - 1) * 8 + (8 - n[0].leading_zeros() as usize);
     if bits < MIN_RSA_BITS {
-        return Err(format!("RSA keys need at least {MIN_RSA_BITS} bits (this one has {bits})"));
+        return Err(format!(
+            "RSA keys need at least {MIN_RSA_BITS} bits (this one has {bits})"
+        ));
     }
     if bits > MAX_RSA_BITS {
-        return Err(format!("RSA keys of more than {MAX_RSA_BITS} bits aren't accepted (this one has {bits})"));
+        return Err(format!(
+            "RSA keys of more than {MAX_RSA_BITS} bits aren't accepted (this one has {bits})"
+        ));
     }
     if e.len() > MAX_RSA_EXPONENT_BYTES || e.last().is_some_and(|b| b & 1 == 0) || e == [1] {
         return Err("the RSA public exponent isn't acceptable".into());
     }
-    if sig.signature().algorithm() != (Algorithm::Rsa { hash: Some(HashAlg::Sha512) }) {
+    if sig.signature().algorithm()
+        != (Algorithm::Rsa {
+            hash: Some(HashAlg::Sha512),
+        })
+    {
         return Err("RSA signatures must be rsa-sha2-512".into());
     }
     if !sig.reserved().is_empty() {
@@ -221,12 +267,16 @@ fn verify_rsa_sshsig(
     }
     // Both lengths are bounded above (16 KiB armor, MAX_RSA_BITS), so the
     // precisions fit a u32.
-    let n = rsa::BoxedUint::from_be_slice(n, (n.len() * 8) as u32).map_err(|_| "bad RSA modulus")?;
-    let e = rsa::BoxedUint::from_be_slice(e, (e.len() * 8) as u32).map_err(|_| "bad RSA exponent")?;
+    let n =
+        rsa::BoxedUint::from_be_slice(n, (n.len() * 8) as u32).map_err(|_| "bad RSA modulus")?;
+    let e =
+        rsa::BoxedUint::from_be_slice(e, (e.len() * 8) as u32).map_err(|_| "bad RSA exponent")?;
     let key = rsa::PublicKey::new_with_size_limits(n, e, MIN_RSA_BITS..=MAX_RSA_BITS)
         .map_err(|e| format!("not a usable RSA key: {e}"))?;
-    let signed = SshSig::signed_data(namespace, HashAlg::Sha512, message).map_err(|e| e.to_string())?;
-    key.pkcs1v15_verify::<rsa::sha2::Sha512>(&signed, s).map_err(|e| format!("signature doesn't verify: {e}"))
+    let signed =
+        SshSig::signed_data(namespace, HashAlg::Sha512, message).map_err(|e| e.to_string())?;
+    key.pkcs1v15_verify::<rsa::sha2::Sha512>(&signed, s)
+        .map_err(|e| format!("signature doesn't verify: {e}"))
 }
 
 /// Parse one OpenSSH public key line (`<algo> <base64> [comment]`).
@@ -242,9 +292,11 @@ pub fn parse_openssh(line: &str) -> Option<PublicKey> {
 /// fallback: what the user pastes into the forge's signing keys).
 pub fn account_key_openssh(account_key: &[u8]) -> Option<String> {
     let k: [u8; 32] = account_key.try_into().ok()?;
-    PublicKey::from(ssh_key::public::KeyData::Ed25519(ssh_key::public::Ed25519PublicKey(k)))
-        .to_openssh()
-        .ok()
+    PublicKey::from(ssh_key::public::KeyData::Ed25519(
+        ssh_key::public::Ed25519PublicKey(k),
+    ))
+    .to_openssh()
+    .ok()
 }
 
 /// The `ssh-keygen` command that signs `statement_path` for a link.
@@ -261,25 +313,38 @@ pub fn sign_command(key_path: &str, statement_path: &str) -> String {
 pub enum LinkStatus {
     /// The forge lists the key now (or did at `checked_at`, within 24 h).
     #[serde(rename_all = "camelCase")]
-    Verified { checked_at: Timestamp, handle: Option<String> },
+    Verified {
+        checked_at: Timestamp,
+        handle: Option<String>,
+    },
     /// The signature is valid; forge checks are turned off on this device.
     SignatureOnly,
     /// The forge no longer lists the key (removed, rotated, account gone), or
     /// the account key the statement names was rotated.
     #[serde(rename_all = "camelCase")]
-    Stale { checked_at: Timestamp, reason: String },
+    Stale {
+        checked_at: Timestamp,
+        reason: String,
+    },
     /// The forge couldn't be asked (or answered inconsistently).
     #[serde(rename_all = "camelCase")]
-    Unreachable { last_verified_at: Option<Timestamp>, reason: String },
+    Unreachable {
+        last_verified_at: Option<Timestamp>,
+        reason: String,
+    },
     Expired,
     /// The offline checks failed: never shown as linked.
-    Invalid { reason: String },
+    Invalid {
+        reason: String,
+    },
     /// No public key list exists for this provider, or this build no longer
     /// checks it (SourceHut, Tangled): a claim only.
     SelfAsserted,
     /// This device can't check it (a host not configured here, a method this
     /// build doesn't verify).
-    NotChecked { reason: String },
+    NotChecked {
+        reason: String,
+    },
 }
 
 impl LinkStatus {
@@ -304,7 +369,11 @@ pub struct LinkContext<'a> {
 /// The offline half: expiry, the account key, the statement and the SSHSIG.
 /// `Ok(Some(sig))` for a valid SSH-signed link, `Ok(None)` for a
 /// `KeyPublished` link, `Err(status)` when nothing more is to be checked.
-pub fn offline_check(link: &IdentityLink, ctx: LinkContext<'_>, now: Timestamp) -> Result<Option<SigOk>, LinkStatus> {
+pub fn offline_check(
+    link: &IdentityLink,
+    ctx: LinkContext<'_>,
+    now: Timestamp,
+) -> Result<Option<SigOk>, LinkStatus> {
     if let Err(why) = ligus_core::identity_link::check_shape(link) {
         return Err(LinkStatus::Invalid { reason: why });
     }
@@ -316,29 +385,46 @@ pub fn offline_check(link: &IdentityLink, ctx: LinkContext<'_>, now: Timestamp) 
         LinkMethod::KeyPublished => {
             return match ctx.account_key {
                 Some(_) => Ok(None),
-                None => Err(LinkStatus::Invalid { reason: "the account's key isn't known here".into() }),
+                None => Err(LinkStatus::Invalid {
+                    reason: "the account's key isn't known here".into(),
+                }),
             };
         }
         LinkMethod::SelfAsserted => return Err(LinkStatus::SelfAsserted),
-        _ => return Err(LinkStatus::NotChecked { reason: "this version of Ligus can't check this kind of link".into() }),
+        _ => {
+            return Err(LinkStatus::NotChecked {
+                reason: "this version of Ligus can't check this kind of link".into(),
+            })
+        }
     }
     let Some(key) = ctx.account_key else {
-        return Err(LinkStatus::Invalid { reason: "the account's key isn't known here".into() });
+        return Err(LinkStatus::Invalid {
+            reason: "the account's key isn't known here".into(),
+        });
     };
     if link.statement != render_statement(link, ctx.workspace_id, key) {
         // The fold checked it at its position; a mismatch now means the
         // account key was rotated since (§2.6): re-sign.
-        let at_other_key = link.statement.contains(&format!("\nworkspace: {}\n", ctx.workspace_id.hyphenated()));
+        let at_other_key = link
+            .statement
+            .contains(&format!("\nworkspace: {}\n", ctx.workspace_id.hyphenated()));
         return Err(if at_other_key {
-            LinkStatus::Stale { checked_at: now, reason: "the account key changed since this link was signed".into() }
+            LinkStatus::Stale {
+                checked_at: now,
+                reason: "the account key changed since this link was signed".into(),
+            }
         } else {
-            LinkStatus::Invalid { reason: "the statement doesn't match this workspace".into() }
+            LinkStatus::Invalid {
+                reason: "the statement doesn't match this workspace".into(),
+            }
         });
     }
     let sig = verify_sshsig(&link.proof, LINK_NAMESPACE, link.statement.as_bytes())
         .map_err(|reason| LinkStatus::Invalid { reason })?;
     if sig.fingerprint != link.key_fingerprint {
-        return Err(LinkStatus::Invalid { reason: "the signing key isn't the one the link names".into() });
+        return Err(LinkStatus::Invalid {
+            reason: "the signing key isn't the one the link names".into(),
+        });
     }
     // A forge whose verifier was dropped: the signature is well formed, but
     // no device checks the forge any more, so it is a claim only.
@@ -395,7 +481,10 @@ impl ForgeConfig {
         if let Some(b) = builtin_api(provider, host) {
             return Some(b.to_string());
         }
-        let s = self.self_hosted.iter().find(|s| s.provider == provider && s.host == host)?;
+        let s = self
+            .self_hosted
+            .iter()
+            .find(|s| s.provider == provider && s.host == host)?;
         let base = url::Url::parse(&s.base_url).ok()?;
         if base.scheme() != "https" || base.host_str().is_none() {
             return None;
@@ -450,7 +539,11 @@ fn client() -> reqwest::Client {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(REQUEST_TIMEOUT)
         .connect_timeout(Duration::from_secs(5))
-        .user_agent(concat!("Ligus/", env!("CARGO_PKG_VERSION"), " identity-links"))
+        .user_agent(concat!(
+            "Ligus/",
+            env!("CARGO_PKG_VERSION"),
+            " identity-links"
+        ))
         .no_proxy()
         .build()
         .unwrap_or_default()
@@ -462,7 +555,8 @@ fn safe_segment(s: &str) -> bool {
         && s.len() <= 100
         && s != "."
         && s != ".."
-        && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
 fn numeric(s: &str) -> bool {
@@ -471,7 +565,10 @@ fn numeric(s: &str) -> bool {
 
 impl LinkFetcher {
     pub fn new(cfg: ForgeConfig) -> Self {
-        Self { cfg, client: client() }
+        Self {
+            cfg,
+            client: client(),
+        }
     }
 
     pub fn config(&self) -> &ForgeConfig {
@@ -489,17 +586,26 @@ impl LinkFetcher {
             .map_err(|e| FetchError::Transport(e.without_url().to_string()))?;
         let status = resp.status().as_u16();
         if (300..400).contains(&status) {
-            return Err(FetchError::Transport(format!("the forge redirected (HTTP {status}); redirects aren't followed")));
+            return Err(FetchError::Transport(format!(
+                "the forge redirected (HTTP {status}); redirects aren't followed"
+            )));
         }
-        if resp.content_length().is_some_and(|n| n as usize > MAX_RESPONSE_BYTES) {
-            return Err(FetchError::Transport("the forge's answer is too large".into()));
+        if resp
+            .content_length()
+            .is_some_and(|n| n as usize > MAX_RESPONSE_BYTES)
+        {
+            return Err(FetchError::Transport(
+                "the forge's answer is too large".into(),
+            ));
         }
         let mut body = Vec::new();
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| FetchError::Transport(e.without_url().to_string()))?;
             if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
-                return Err(FetchError::Transport("the forge's answer is too large".into()));
+                return Err(FetchError::Transport(
+                    "the forge's answer is too large".into(),
+                ));
             }
             body.extend_from_slice(&chunk);
         }
@@ -516,18 +622,26 @@ impl LinkFetcher {
 
     async fn get_json(&self, url: &str) -> Result<serde_json::Value, FetchError> {
         let b = self.get_ok(url).await?;
-        serde_json::from_slice(&b).map_err(|e| FetchError::Transport(format!("malformed forge answer: {e}")))
+        serde_json::from_slice(&b)
+            .map_err(|e| FetchError::Transport(format!("malformed forge answer: {e}")))
     }
 
     fn root(&self, provider: &str, host: &str) -> Result<String, FetchError> {
-        self.cfg
-            .api_root(provider, host)
-            .ok_or_else(|| FetchError::NotConfigured(format!("{host} isn't a forge this device checks (add it under Linked accounts)")))
+        self.cfg.api_root(provider, host).ok_or_else(|| {
+            FetchError::NotConfigured(format!(
+                "{host} isn't a forge this device checks (add it under Linked accounts)"
+            ))
+        })
     }
 
     /// Linking time: the stable id and canonical handle for a handle the user
     /// typed.
-    pub async fn resolve_handle(&self, provider: &str, host: &str, handle: &str) -> Result<(String, String), FetchError> {
+    pub async fn resolve_handle(
+        &self,
+        provider: &str,
+        host: &str,
+        handle: &str,
+    ) -> Result<(String, String), FetchError> {
         let handle = handle.trim().trim_start_matches('@');
         match provider {
             "github" => {
@@ -537,32 +651,65 @@ impl LinkFetcher {
                 let root = self.root(provider, host)?;
                 let v = self.get_json(&format!("{root}/users/{handle}")).await?;
                 let id = v["id"].as_u64().ok_or(FetchError::Gone)?;
-                Ok((id.to_string(), v["login"].as_str().and_then(clean_handle).unwrap_or_else(|| handle.to_string())))
+                Ok((
+                    id.to_string(),
+                    v["login"]
+                        .as_str()
+                        .and_then(clean_handle)
+                        .unwrap_or_else(|| handle.to_string()),
+                ))
             }
             "gitlab" => {
                 if !safe_segment(handle) {
                     return Err(FetchError::Gone);
                 }
                 let root = self.root(provider, host)?;
-                let v = self.get_json(&format!("{root}/users?username={handle}")).await?;
-                let u = v.as_array().and_then(|a| a.first()).ok_or(FetchError::Gone)?;
+                let v = self
+                    .get_json(&format!("{root}/users?username={handle}"))
+                    .await?;
+                let u = v
+                    .as_array()
+                    .and_then(|a| a.first())
+                    .ok_or(FetchError::Gone)?;
                 let id = u["id"].as_u64().ok_or(FetchError::Gone)?;
-                Ok((id.to_string(), u["username"].as_str().and_then(clean_handle).unwrap_or_else(|| handle.to_string())))
+                Ok((
+                    id.to_string(),
+                    u["username"]
+                        .as_str()
+                        .and_then(clean_handle)
+                        .unwrap_or_else(|| handle.to_string()),
+                ))
             }
             "forgejo" | "gitea" => {
                 if !safe_segment(handle) {
                     return Err(FetchError::Gone);
                 }
                 let root = self.root(provider, host)?;
-                let v = self.get_json(&format!("{root}/api/v1/users/search?q={handle}&limit=50")).await?;
+                let v = self
+                    .get_json(&format!("{root}/api/v1/users/search?q={handle}&limit=50"))
+                    .await?;
                 let u = v["data"]
                     .as_array()
-                    .and_then(|a| a.iter().find(|u| u["login"].as_str().is_some_and(|l| l.eq_ignore_ascii_case(handle))))
+                    .and_then(|a| {
+                        a.iter().find(|u| {
+                            u["login"]
+                                .as_str()
+                                .is_some_and(|l| l.eq_ignore_ascii_case(handle))
+                        })
+                    })
                     .ok_or(FetchError::Gone)?;
                 let id = u["id"].as_u64().ok_or(FetchError::Gone)?;
-                Ok((id.to_string(), u["login"].as_str().and_then(clean_handle).unwrap_or_else(|| handle.to_string())))
+                Ok((
+                    id.to_string(),
+                    u["login"]
+                        .as_str()
+                        .and_then(clean_handle)
+                        .unwrap_or_else(|| handle.to_string()),
+                ))
             }
-            _ => Err(FetchError::NotConfigured(format!("{provider} links can't be checked against a forge"))),
+            _ => Err(FetchError::NotConfigured(format!(
+                "{provider} links can't be checked against a forge"
+            ))),
         }
     }
 
@@ -570,23 +717,43 @@ impl LinkFetcher {
     async fn github_login(&self, root: &str, id: &str) -> Result<String, FetchError> {
         let v = self.get_json(&format!("{root}/user/{id}")).await?;
         if v["id"].as_u64().map(|n| n.to_string()).as_deref() != Some(id) {
-            return Err(FetchError::Inconsistent("the forge answered for another id".into()));
+            return Err(FetchError::Inconsistent(
+                "the forge answered for another id".into(),
+            ));
         }
-        v["login"].as_str().filter(|l| safe_segment(l)).map(str::to_string).ok_or(FetchError::Gone)
+        v["login"]
+            .as_str()
+            .filter(|l| safe_segment(l))
+            .map(str::to_string)
+            .ok_or(FetchError::Gone)
     }
 
     /// Forgejo/Gitea: id → login (`GET /api/v1/users/search?uid=`).
     async fn gitea_login(&self, root: &str, id: &str) -> Result<String, FetchError> {
-        let v = self.get_json(&format!("{root}/api/v1/users/search?uid={id}")).await?;
+        let v = self
+            .get_json(&format!("{root}/api/v1/users/search?uid={id}"))
+            .await?;
         let u = v["data"]
             .as_array()
-            .and_then(|a| a.iter().find(|u| u["id"].as_u64().map(|n| n.to_string()).as_deref() == Some(id)))
+            .and_then(|a| {
+                a.iter()
+                    .find(|u| u["id"].as_u64().map(|n| n.to_string()).as_deref() == Some(id))
+            })
             .ok_or(FetchError::Gone)?;
-        u["login"].as_str().filter(|l| safe_segment(l)).map(str::to_string).ok_or(FetchError::Gone)
+        u["login"]
+            .as_str()
+            .filter(|l| safe_segment(l))
+            .map(str::to_string)
+            .ok_or(FetchError::Gone)
     }
 
     /// The keys a forge lists for the stable subject id now (§2.5 step 3).
-    pub async fn key_list(&self, provider: &str, host: &str, subject_id: &str) -> Result<KeyList, FetchError> {
+    pub async fn key_list(
+        &self,
+        provider: &str,
+        host: &str,
+        subject_id: &str,
+    ) -> Result<KeyList, FetchError> {
         match provider {
             "github" => {
                 if !numeric(subject_id) {
@@ -595,15 +762,22 @@ impl LinkFetcher {
                 let root = self.root(provider, host)?;
                 let login = self.github_login(&root, subject_id).await?;
                 let auth = self.get_json(&format!("{root}/users/{login}/keys")).await?;
-                let signing = self.get_json(&format!("{root}/users/{login}/ssh_signing_keys")).await?;
+                let signing = self
+                    .get_json(&format!("{root}/users/{login}/ssh_signing_keys"))
+                    .await?;
                 // A rename (and re-registration of the old name) between the
                 // calls would hand us someone else's keys.
                 if self.github_login(&root, subject_id).await? != login {
-                    return Err(FetchError::Inconsistent("the account was renamed during the check".into()));
+                    return Err(FetchError::Inconsistent(
+                        "the account was renamed during the check".into(),
+                    ));
                 }
                 let mut keys = json_keys(&auth, "key", |_| false);
                 keys.extend(json_keys(&signing, "key", |_| true));
-                Ok(KeyList { handle: Some(login), keys })
+                Ok(KeyList {
+                    handle: Some(login),
+                    keys,
+                })
             }
             "gitlab" => {
                 if !numeric(subject_id) {
@@ -611,7 +785,9 @@ impl LinkFetcher {
                 }
                 let root = self.root(provider, host)?;
                 // By id: no rename window.
-                let v = self.get_json(&format!("{root}/users/{subject_id}/keys")).await?;
+                let v = self
+                    .get_json(&format!("{root}/users/{subject_id}/keys"))
+                    .await?;
                 // `signing` marks a key that grants no push access (D15):
                 // "auth_and_signing", GitLab's default, grants push.
                 let keys = json_keys(&v, "key", |k| k["usage_type"].as_str() == Some("signing"));
@@ -633,21 +809,37 @@ impl LinkFetcher {
                 // `.keys` listing is anonymous.
                 let text = self.get_ok(&format!("{root}/{login}.keys")).await?;
                 if self.gitea_login(&root, subject_id).await? != login {
-                    return Err(FetchError::Inconsistent("the account was renamed during the check".into()));
+                    return Err(FetchError::Inconsistent(
+                        "the account was renamed during the check".into(),
+                    ));
                 }
-                Ok(KeyList { handle: Some(login), keys: text_keys(&text) })
+                Ok(KeyList {
+                    handle: Some(login),
+                    keys: text_keys(&text),
+                })
             }
-            _ => Err(FetchError::NotConfigured(format!("{provider} has no public key list"))),
+            _ => Err(FetchError::NotConfigured(format!(
+                "{provider} has no public key list"
+            ))),
         }
     }
 }
 
-fn json_keys(v: &serde_json::Value, field: &str, signing: impl Fn(&serde_json::Value) -> bool) -> Vec<ForgeKey> {
+fn json_keys(
+    v: &serde_json::Value,
+    field: &str,
+    signing: impl Fn(&serde_json::Value) -> bool,
+) -> Vec<ForgeKey> {
     v.as_array()
         .map(|a| {
             a.iter()
                 .take(500)
-                .filter_map(|k| Some(ForgeKey { key: parse_openssh(k[field].as_str()?)?, signing: signing(k) }))
+                .filter_map(|k| {
+                    Some(ForgeKey {
+                        key: parse_openssh(k[field].as_str()?)?,
+                        signing: signing(k),
+                    })
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -658,7 +850,10 @@ fn text_keys(body: &[u8]) -> Vec<ForgeKey> {
         .lines()
         .take(500)
         .filter_map(parse_openssh)
-        .map(|key| ForgeKey { key, signing: false })
+        .map(|key| ForgeKey {
+            key,
+            signing: false,
+        })
         .collect()
 }
 
@@ -686,26 +881,48 @@ pub async fn check_link(
     if !fetcher.cfg.check_forges {
         return LinkStatus::SignatureOnly;
     }
-    let list = match fetcher.key_list(&link.provider, &link.host, &link.subject_id).await {
+    let list = match fetcher
+        .key_list(&link.provider, &link.host, &link.subject_id)
+        .await
+    {
         Ok(l) => l,
         Err(FetchError::Gone) => {
-            return LinkStatus::Stale { checked_at: now, reason: "the forge has no such account any more".into() }
+            return LinkStatus::Stale {
+                checked_at: now,
+                reason: "the forge has no such account any more".into(),
+            }
         }
         Err(FetchError::NotConfigured(reason)) => return LinkStatus::NotChecked { reason },
         Err(FetchError::Inconsistent(reason)) | Err(FetchError::Transport(reason)) => {
-            return LinkStatus::Unreachable { last_verified_at, reason }
+            return LinkStatus::Unreachable {
+                last_verified_at,
+                reason,
+            }
         }
     };
     let listed = match &sig {
-        Some(sig) => list.keys.iter().any(|k| k.key.key_data() == sig.public_key.key_data()),
+        Some(sig) => list
+            .keys
+            .iter()
+            .any(|k| k.key.key_data() == sig.public_key.key_data()),
         None => {
             // KeyPublished: the account key on the *signing* list.
-            let mine = ctx.account_key.and_then(account_key_openssh).and_then(|l| parse_openssh(&l));
-            mine.is_some_and(|m| list.keys.iter().any(|k| k.signing && k.key.key_data() == m.key_data()))
+            let mine = ctx
+                .account_key
+                .and_then(account_key_openssh)
+                .and_then(|l| parse_openssh(&l));
+            mine.is_some_and(|m| {
+                list.keys
+                    .iter()
+                    .any(|k| k.signing && k.key.key_data() == m.key_data())
+            })
         }
     };
     if listed {
-        LinkStatus::Verified { checked_at: now, handle: list.handle }
+        LinkStatus::Verified {
+            checked_at: now,
+            handle: list.handle,
+        }
     } else {
         LinkStatus::Stale {
             checked_at: now,
@@ -752,7 +969,9 @@ pub fn cache_key(link: &IdentityLink, workspace_id: Uuid, account_key: &[u8]) ->
 /// A cached result still within [`CHECK_TTL`] (a definitive one only: an
 /// unreachable forge is asked again next time).
 pub fn fresh(c: &CachedCheck, now: Timestamp) -> bool {
-    c.status.definitive() && now.0 - c.checked_at.0 < time::Duration::try_from(CHECK_TTL).unwrap_or(time::Duration::DAY)
+    c.status.definitive()
+        && now.0 - c.checked_at.0
+            < time::Duration::try_from(CHECK_TTL).unwrap_or(time::Duration::DAY)
 }
 
 /// What a chip may show from the cache alone, without asking the forge: the
@@ -803,8 +1022,19 @@ pub async fn check_cached(
     });
     let status = check_link(link, ctx, fetcher, now, last).await;
     if status.definitive() || matches!(status, LinkStatus::Unreachable { .. }) {
-        let last_verified_at = if status.is_verified() { Some(now) } else { last };
-        cache.put_check(&key, &CachedCheck { status: status.clone(), checked_at: now, last_verified_at });
+        let last_verified_at = if status.is_verified() {
+            Some(now)
+        } else {
+            last
+        };
+        cache.put_check(
+            &key,
+            &CachedCheck {
+                status: status.clone(),
+                checked_at: now,
+                last_verified_at,
+            },
+        );
     }
     status
 }
@@ -822,7 +1052,10 @@ impl LinkCheckCache for MemoryCache {
         self.0.lock().unwrap().get(key).cloned()
     }
     fn put_check(&self, key: &str, check: &CachedCheck) {
-        self.0.lock().unwrap().insert(key.to_string(), check.clone());
+        self.0
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), check.clone());
     }
 }
 

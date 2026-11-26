@@ -33,7 +33,12 @@ impl Default for StopSignal {
 
 impl StopSignal {
     pub fn new() -> Self {
-        Self { inner: Arc::new(Inner { tx: watch::channel(false).0, message: OnceLock::new() }) }
+        Self {
+            inner: Arc::new(Inner {
+                tx: watch::channel(false).0,
+                message: OnceLock::new(),
+            }),
+        }
     }
 
     /// Stop the turn. Idempotent, and seen by a turn that hasn't started
@@ -91,7 +96,11 @@ impl TurnStops {
         }
         chats.entry(chat).or_default().push(signal.clone());
         drop(chats);
-        TurnStopGuard { stops: self.clone(), chat, signal }
+        TurnStopGuard {
+            stops: self.clone(),
+            chat,
+            signal,
+        }
     }
 
     /// Stop `chat`'s turns: only the one whose reply is `message` when it is
@@ -99,7 +108,9 @@ impl TurnStops {
     /// were stopped.
     pub fn stop(&self, chat: Uuid, message: Option<Uuid>) -> usize {
         let chats = self.lock();
-        let Some(list) = chats.get(&chat) else { return 0 };
+        let Some(list) = chats.get(&chat) else {
+            return 0;
+        };
         let mut n = 0;
         for s in list {
             if message.is_none() || s.message_id() == message {
@@ -166,7 +177,9 @@ mod tests {
     async fn a_stop_before_anyone_waits_is_not_lost() {
         let s = StopSignal::new();
         s.stop();
-        tokio::time::timeout(Duration::from_secs(1), s.stopped()).await.expect("sticky");
+        tokio::time::timeout(Duration::from_secs(1), s.stopped())
+            .await
+            .expect("sticky");
         assert!(s.is_stopped());
     }
 

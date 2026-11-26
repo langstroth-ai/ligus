@@ -101,9 +101,21 @@ pub fn carve(root: &Path, exclude: &[PathBuf]) -> Vec<PathBuf> {
 pub fn cli_config_paths(home: &Path) -> Vec<PathBuf> {
     use ligus_core::ModelProviderKind as K;
     let mut v = Vec::new();
-    for k in [K::ClaudeCode, K::Codex, K::Copilot, K::Antigravity, K::Aider, K::Pi, K::Hermes] {
+    for k in [
+        K::ClaudeCode,
+        K::Codex,
+        K::Copilot,
+        K::Antigravity,
+        K::Aider,
+        K::Pi,
+        K::Hermes,
+    ] {
         v.extend(super::runtime_state_dirs(k, home));
-        v.extend(super::cli_home::config_files(k).iter().map(|f| home.join(f)));
+        v.extend(
+            super::cli_home::config_files(k)
+                .iter()
+                .map(|f| home.join(f)),
+        );
     }
     v
 }
@@ -117,12 +129,19 @@ fn cli_install_dirs(home: &Path) -> Vec<PathBuf> {
 /// Whether the plan's `HOME` is a per-turn home (inside the turn's scratch
 /// dir), so the real CLI config isn't needed.
 pub fn has_turn_home(plan: &EnforcementPlan) -> bool {
-    plan.env.iter().any(|(k, v)| k == "HOME" && Path::new(v).starts_with(&plan.tmp))
+    plan.env
+        .iter()
+        .any(|(k, v)| k == "HOME" && Path::new(v).starts_with(&plan.tmp))
 }
 
 /// The Landlock tier's rules for `plan`. `home` is the real home dir;
 /// `proxy_port` the turn's egress proxy, `mcp_port` the Ligus MCP listener.
-pub fn rules(plan: &EnforcementPlan, home: Option<&Path>, proxy_port: Option<u16>, mcp_port: Option<u16>) -> LandlockRules {
+pub fn rules(
+    plan: &EnforcementPlan,
+    home: Option<&Path>,
+    proxy_port: Option<u16>,
+    mcp_port: Option<u16>,
+) -> LandlockRules {
     let mut deny: Vec<PathBuf> = plan.deny_read.iter().map(|p| canonical(p)).collect();
     if let Some(run) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
         deny.push(canonical(Path::new(&run)));
@@ -144,11 +163,26 @@ pub fn rules(plan: &EnforcementPlan, home: Option<&Path>, proxy_port: Option<u16
     allow.push(canonical(&plan.tmp));
     // The plan judged these where they resolved; one that resolves
     // elsewhere now (swapped for a symlink since) opens nothing.
-    allow.extend(plan.write_extra.iter().filter(|p| super::unmoved(p)).map(|p| canonical(p)));
-    allow.extend(plan.home_read.iter().filter(|p| super::unmoved(p)).map(|p| canonical(p)));
+    allow.extend(
+        plan.write_extra
+            .iter()
+            .filter(|p| super::unmoved(p))
+            .map(|p| canonical(p)),
+    );
+    allow.extend(
+        plan.home_read
+            .iter()
+            .filter(|p| super::unmoved(p))
+            .map(|p| canonical(p)),
+    );
     if let Some(h) = home.filter(|_| has_turn_home(plan)) {
         let turn_home = canonical(&plan.tmp);
-        deny.extend(cli_config_paths(h).iter().map(|p| canonical(p)).filter(|p| !turn_home.starts_with(p) && !p.starts_with(&turn_home)));
+        deny.extend(
+            cli_config_paths(h)
+                .iter()
+                .map(|p| canonical(p))
+                .filter(|p| !turn_home.starts_with(p) && !p.starts_with(&turn_home)),
+        );
         allow.extend(cli_install_dirs(h).iter().map(|p| canonical(p)));
     }
     deny.sort();
@@ -157,16 +191,33 @@ pub fn rules(plan: &EnforcementPlan, home: Option<&Path>, proxy_port: Option<u16
     let mut read = carve(Path::new("/"), &deny);
     for a in allow {
         if a.exists() && !read.iter().any(|r| a.starts_with(r)) {
-            read.extend(carve(&a, &deny.iter().filter(|d| !a.starts_with(d)).cloned().collect::<Vec<_>>()));
+            read.extend(carve(
+                &a,
+                &deny
+                    .iter()
+                    .filter(|d| !a.starts_with(d))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ));
         }
     }
 
     let mut write = Vec::new();
     let wt = canonical(&plan.worktree);
-    let extra: Vec<PathBuf> = plan.write_extra.iter().filter(|p| super::unmoved(p)).map(|p| canonical(p)).collect();
+    let extra: Vec<PathBuf> = plan
+        .write_extra
+        .iter()
+        .filter(|p| super::unmoved(p))
+        .map(|p| canonical(p))
+        .collect();
     // Denies below a writable path are carved out of it; one above it (the
     // home, a data dir holding a worker's checkout) is the plan's to lift.
-    let below = |root: &Path| -> Vec<PathBuf> { deny.iter().filter(|d| !root.starts_with(d)).cloned().collect() };
+    let below = |root: &Path| -> Vec<PathBuf> {
+        deny.iter()
+            .filter(|d| !root.starts_with(d))
+            .cloned()
+            .collect()
+    };
     if plan.worktree_writable && !extra.iter().any(|w| wt.starts_with(w)) {
         let mut protected: Vec<PathBuf> = plan.read_only.iter().map(|p| canonical(p)).collect();
         protected.push(wt.join(".git"));
@@ -181,7 +232,17 @@ pub fn rules(plan: &EnforcementPlan, home: Option<&Path>, proxy_port: Option<u16
     write.sort();
     write.dedup();
 
-    let dev = ["/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom"].iter().map(PathBuf::from).filter(|p| p.exists()).collect();
+    let dev = [
+        "/dev/null",
+        "/dev/zero",
+        "/dev/full",
+        "/dev/random",
+        "/dev/urandom",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .filter(|p| p.exists())
+    .collect();
 
     let restrict_net = !matches!(plan.egress, EgressPlan::Open);
     let mut connect = Vec::new();
@@ -196,7 +257,13 @@ pub fn rules(plan: &EnforcementPlan, home: Option<&Path>, proxy_port: Option<u16
         connect.sort();
         connect.dedup();
     }
-    LandlockRules { read, write, dev, restrict_net, connect }
+    LandlockRules {
+        read,
+        write,
+        dev,
+        restrict_net,
+        connect,
+    }
 }
 
 impl LandlockRules {
@@ -230,7 +297,8 @@ impl LandlockRules {
 
     pub fn decode(b: &[u8]) -> io::Result<Self> {
         use std::os::unix::ffi::OsStrExt;
-        let bad = |m: &str| io::Error::new(io::ErrorKind::InvalidData, format!("landlock rules: {m}"));
+        let bad =
+            |m: &str| io::Error::new(io::ErrorKind::InvalidData, format!("landlock rules: {m}"));
         let mut r = LandlockRules::default();
         let mut parts = b.split(|c| *c == 0);
         while let Some(k) = parts.next() {
@@ -244,7 +312,12 @@ impl LandlockRules {
                 K_WRITE => r.write.push(path()),
                 K_DEV => r.dev.push(path()),
                 K_NET => r.restrict_net = true,
-                K_PORT => r.connect.push(std::str::from_utf8(v).ok().and_then(|s| s.parse().ok()).ok_or_else(|| bad("port"))?),
+                K_PORT => r.connect.push(
+                    std::str::from_utf8(v)
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .ok_or_else(|| bad("port"))?,
+                ),
                 other => return Err(bad(&format!("unknown kind {other:?}"))),
             }
         }
@@ -274,10 +347,24 @@ mod tests {
     fn tree() -> (tempfile::TempDir, PathBuf) {
         let t = tempfile::tempdir().unwrap();
         let root = canonical(t.path());
-        for d in ["a/secret/inner", "a/pub", "b", "wt/.git/hooks", "wt/src", "wt/.ligus"] {
+        for d in [
+            "a/secret/inner",
+            "a/pub",
+            "b",
+            "wt/.git/hooks",
+            "wt/src",
+            "wt/.ligus",
+        ] {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
-        for f in ["a/file", "a/secret/key", "wt/README.md", "wt/ligus.config.toml", "wt/src/main.rs", "wt/.git/config"] {
+        for f in [
+            "a/file",
+            "a/secret/key",
+            "wt/README.md",
+            "wt/ligus.config.toml",
+            "wt/src/main.rs",
+            "wt/.git/config",
+        ] {
             std::fs::write(root.join(f), "x").unwrap();
         }
         (t, root)
@@ -287,13 +374,24 @@ mod tests {
     fn carve_leaves_out_the_denied_path_and_its_parents() {
         let (_t, root) = tree();
         let got = carve(&root, &[root.join("a/secret")]);
-        assert_eq!(got, vec![root.join("a/file"), root.join("a/pub"), root.join("b"), root.join("wt")]);
+        assert_eq!(
+            got,
+            vec![
+                root.join("a/file"),
+                root.join("a/pub"),
+                root.join("b"),
+                root.join("wt")
+            ]
+        );
         // Nothing denied: the root itself.
         assert_eq!(carve(&root, &[]), vec![root.clone()]);
         // A denied path that doesn't exist yet still keeps its parent
         // unruled, so it can't be read once it appears.
         let got = carve(&root, &[root.join("b/later")]);
-        assert!(!got.contains(&root.join("b")) && got.contains(&root.join("a")), "{got:?}");
+        assert!(
+            !got.contains(&root.join("b")) && got.contains(&root.join("a")),
+            "{got:?}"
+        );
         // The root itself denied: nothing.
         assert!(carve(&root, std::slice::from_ref(&root)).is_empty());
     }
@@ -304,7 +402,11 @@ mod tests {
         std::os::unix::fs::symlink(root.join("a/secret"), root.join("a/alias")).unwrap();
         std::os::unix::fs::symlink(&root, root.join("a/loop")).unwrap();
         let got = carve(&root, &[root.join("a/secret")]);
-        assert!(!got.iter().any(|p| p.ends_with("alias") || p.ends_with("loop")), "{got:?}");
+        assert!(
+            !got.iter()
+                .any(|p| p.ends_with("alias") || p.ends_with("loop")),
+            "{got:?}"
+        );
         // A symlinked carve root is its target, carved the same way.
         assert!(carve(&root.join("a/alias"), &[root.join("a/secret")]).is_empty());
     }
@@ -316,14 +418,24 @@ mod tests {
         EnforcementPlan {
             worktree: wt.clone(),
             worktree_writable: true,
-            read_only: vec![wt.join(".git"), wt.join(".ligus"), wt.join("ligus.config.toml"), wt.join(".envrc")],
+            read_only: vec![
+                wt.join(".git"),
+                wt.join(".ligus"),
+                wt.join("ligus.config.toml"),
+                wt.join(".envrc"),
+            ],
             deny_read: vec![root.join("a/secret")],
             allow_read: vec![wt.clone()],
             home: None,
             home_read: vec![],
             write_extra: vec![tmp.clone()],
             tmp: tmp.clone(),
-            egress: EgressPlan::Proxy { allow: vec![HostPort::new("api.anthropic.com", 443), HostPort::new("127.0.0.1", 11434)] },
+            egress: EgressPlan::Proxy {
+                allow: vec![
+                    HostPort::new("api.anthropic.com", 443),
+                    HostPort::new("127.0.0.1", 11434),
+                ],
+            },
             env: vec![("HOME".into(), tmp.join("home").into_os_string())],
             args: vec![],
             mcp: vec![],
@@ -337,21 +449,44 @@ mod tests {
         let (_t, root) = tree();
         let r = rules(&plan(&root), None, Some(4000), Some(5000));
         let wt = root.join("wt");
-        assert!(r.write.contains(&wt.join("src")) && r.write.contains(&wt.join("README.md")), "{:?}", r.write);
+        assert!(
+            r.write.contains(&wt.join("src")) && r.write.contains(&wt.join("README.md")),
+            "{:?}",
+            r.write
+        );
         assert!(r.write.contains(&root.join("tmp")), "{:?}", r.write);
-        for p in [wt.clone(), wt.join(".git"), wt.join(".ligus"), wt.join("ligus.config.toml")] {
-            assert!(!r.write.iter().any(|w| p.starts_with(w)), "{} is writable: {:?}", p.display(), r.write);
+        for p in [
+            wt.clone(),
+            wt.join(".git"),
+            wt.join(".ligus"),
+            wt.join("ligus.config.toml"),
+        ] {
+            assert!(
+                !r.write.iter().any(|w| p.starts_with(w)),
+                "{} is writable: {:?}",
+                p.display(),
+                r.write
+            );
         }
         // Reads: never the denied dir, or a dir above it (which would grant
         // it); the worktree is readable.
-        assert!(!r.read.iter().any(|p| root.join("a/secret/key").starts_with(p)), "{:?}", r.read);
+        assert!(
+            !r.read
+                .iter()
+                .any(|p| root.join("a/secret/key").starts_with(p)),
+            "{:?}",
+            r.read
+        );
         assert!(r.read.iter().any(|p| wt.join(".git/config").starts_with(p)));
         assert_eq!(r.connect, vec![4000, 5000, 11434]);
         assert!(r.restrict_net);
         // A read-only turn writes only its scratch dir.
         let mut p = plan(&root);
         p.worktree_writable = false;
-        assert!(!rules(&p, None, None, None).write.iter().any(|w| w.starts_with(&wt)));
+        assert!(!rules(&p, None, None, None)
+            .write
+            .iter()
+            .any(|w| w.starts_with(&wt)));
         // An open-egress MCP server: TCP isn't restricted.
         p.egress = EgressPlan::Open;
         let r = rules(&p, None, None, Some(5000));
@@ -371,17 +506,34 @@ mod tests {
         std::fs::write(home.join(".claude/.credentials.json"), "{}").unwrap();
         std::fs::write(home.join(".claude.json"), "{}").unwrap();
         let r = rules(&plan(&root), Some(&home), None, None);
-        for p in [home.join(".claude/.credentials.json"), home.join(".claude.json"), home.join(".codex")] {
-            assert!(!r.read.iter().any(|x| p.starts_with(x)), "{} readable: {:?}", p.display(), r.read);
+        for p in [
+            home.join(".claude/.credentials.json"),
+            home.join(".claude.json"),
+            home.join(".codex"),
+        ] {
+            assert!(
+                !r.read.iter().any(|x| p.starts_with(x)),
+                "{} readable: {:?}",
+                p.display(),
+                r.read
+            );
         }
         assert!(r.read.iter().any(|x| home.join("projects").starts_with(x)));
-        assert!(r.read.iter().any(|x| home.join(".claude/local").starts_with(x)), "the local install stays readable");
+        assert!(
+            r.read
+                .iter()
+                .any(|x| home.join(".claude/local").starts_with(x)),
+            "the local install stays readable"
+        );
         // Without a turn home (`LIGUS_CLI_HOME=shared`), the real config is
         // the CLI's own and stays readable.
         let mut p = plan(&root);
         p.env = vec![("HOME".into(), home.clone().into_os_string())];
         let r = rules(&p, Some(&home), None, None);
-        assert!(r.read.iter().any(|x| home.join(".claude.json").starts_with(x)));
+        assert!(r
+            .read
+            .iter()
+            .any(|x| home.join(".claude.json").starts_with(x)));
     }
 
     #[test]
@@ -391,8 +543,14 @@ mod tests {
         assert_eq!(LandlockRules::decode(&r.encode()).unwrap(), r);
         let f = r.write_file(&root).unwrap();
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
-        assert!(r.write_file(&root).is_err(), "never overwrites (create_new)");
+        assert_eq!(
+            std::fs::metadata(&f).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(
+            r.write_file(&root).is_err(),
+            "never overwrites (create_new)"
+        );
         assert!(LandlockRules::decode(b"x\0y\0").is_err());
     }
 }

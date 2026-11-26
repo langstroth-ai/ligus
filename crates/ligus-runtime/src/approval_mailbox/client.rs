@@ -89,7 +89,11 @@ impl MailboxError {
 }
 
 fn transport(e: reqwest::Error) -> MailboxError {
-    MailboxError::Unreachable(if e.is_timeout() { "timed out".into() } else { e.without_url().to_string() })
+    MailboxError::Unreachable(if e.is_timeout() {
+        "timed out".into()
+    } else {
+        e.without_url().to_string()
+    })
 }
 
 /// How a call authenticates.
@@ -152,7 +156,10 @@ pub struct MailboxClient {
 
 impl std::fmt::Debug for MailboxClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MailboxClient").field("base", &self.base).field("token", &self.token.as_ref().map(|_| "..")).finish()
+        f.debug_struct("MailboxClient")
+            .field("base", &self.base)
+            .field("token", &self.token.as_ref().map(|_| ".."))
+            .finish()
     }
 }
 
@@ -165,12 +172,19 @@ impl MailboxClient {
             .pool_idle_timeout(Duration::from_secs(30))
             .build()
             .unwrap_or_else(|_| ligus_forge::new_http_client());
-        Self { http, base: relay_url.trim().trim_end_matches('/').to_string(), token: None, clock: system_clock() }
+        Self {
+            http,
+            base: relay_url.trim().trim_end_matches('/').to_string(),
+            token: None,
+            clock: system_clock(),
+        }
     }
 
     /// The relay access token members and puts send on a gated relay. Empty = none.
     pub fn with_auth(mut self, token: Option<String>) -> Self {
-        self.token = token.map(|t| crate::relay_client::normalize_access_token(&t)).filter(|t| !t.is_empty());
+        self.token = token
+            .map(|t| crate::relay_client::normalize_access_token(&t))
+            .filter(|t| !t.is_empty());
         self
     }
 
@@ -195,7 +209,9 @@ impl MailboxClient {
 
     /// The path the relay sees (the base URL's path prefix included).
     fn signed_path(&self, path: &str) -> String {
-        let prefix = url::Url::parse(&self.base).map(|u| u.path().trim_end_matches('/').to_string()).unwrap_or_default();
+        let prefix = url::Url::parse(&self.base)
+            .map(|u| u.path().trim_end_matches('/').to_string())
+            .unwrap_or_default();
         format!("{prefix}{path}")
     }
 
@@ -206,12 +222,25 @@ impl MailboxClient {
         }
     }
 
-    fn authed(&self, rb: reqwest::RequestBuilder, auth: MailboxAuth<'_>, method: &str, path: &str, body: &[u8]) -> reqwest::RequestBuilder {
+    fn authed(
+        &self,
+        rb: reqwest::RequestBuilder,
+        auth: MailboxAuth<'_>,
+        method: &str,
+        path: &str,
+        body: &[u8],
+    ) -> reqwest::RequestBuilder {
         match auth {
             MailboxAuth::Member(keys) => {
                 let ts = self.now();
-                let sig = keys.auth().sign(&mc::member_preimage(method, &self.signed_path(path), ts, body));
-                self.bearer(rb).header("X-Ligus-Mailbox-Auth", format!("{ts}.{}", b64::enc(&sig)))
+                let sig = keys.auth().sign(&mc::member_preimage(
+                    method,
+                    &self.signed_path(path),
+                    ts,
+                    body,
+                ));
+                self.bearer(rb)
+                    .header("X-Ligus-Mailbox-Auth", format!("{ts}.{}", b64::enc(&sig)))
             }
             MailboxAuth::Requester(read_key) => rb.header("X-Ligus-Read-Key", b64::enc(read_key)),
         }
@@ -225,14 +254,19 @@ impl MailboxClient {
         Err(problem(resp).await)
     }
 
-    async fn json<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T, MailboxError> {
+    async fn json<T: serde::de::DeserializeOwned>(
+        resp: reqwest::Response,
+    ) -> Result<T, MailboxError> {
         let bytes = resp.bytes().await.map_err(transport)?;
         serde_json::from_slice(&bytes).map_err(|_| MailboxError::Malformed)
     }
 
     /// The mailbox's reset counter, or `None` when it isn't registered.
     pub async fn counter(&self, mailbox: &[u8; 16]) -> Result<Option<u32>, MailboxError> {
-        let rb = self.http.get(self.url(&format!("/v1/mailboxes/{}", hex(mailbox)))).timeout(REQUEST_TIMEOUT);
+        let rb = self
+            .http
+            .get(self.url(&format!("/v1/mailboxes/{}", hex(mailbox))))
+            .timeout(REQUEST_TIMEOUT);
         match self.send(rb).await {
             Ok(resp) => Ok(Some(Self::json::<Counter>(resp).await?.counter)),
             Err(MailboxError::MailboxUnknown) => Ok(None),
@@ -261,7 +295,12 @@ impl MailboxClient {
             counter,
             sig: b64::enc(&auth.sign(&mc::register_preimage(&mailbox, &cap_hash, counter))),
         };
-        let rb = self.bearer(self.http.put(self.url(&format!("/v1/mailboxes/{}", hex(&mailbox)))).json(&body).timeout(REQUEST_TIMEOUT));
+        let rb = self.bearer(
+            self.http
+                .put(self.url(&format!("/v1/mailboxes/{}", hex(&mailbox))))
+                .json(&body)
+                .timeout(REQUEST_TIMEOUT),
+        );
         match self.send(rb).await {
             Ok(resp) => Ok(Self::json::<Counter>(resp).await?.counter),
             // A 404 from register is always "no routes" (wire note 4).
@@ -278,7 +317,9 @@ impl MailboxClient {
             Some(n) => Ok(n),
             None => match self.register(epoch_key, 0).await {
                 // Registered by another member meanwhile.
-                Err(MailboxError::StaleCounter) => self.counter(&mailbox).await?.ok_or(MailboxError::Malformed),
+                Err(MailboxError::StaleCounter) => {
+                    self.counter(&mailbox).await?.ok_or(MailboxError::Malformed)
+                }
                 r => r,
             },
         }
@@ -307,9 +348,14 @@ impl MailboxClient {
         if blob.len() > MAX_REQUEST_BLOB {
             return Err(MailboxError::TooLarge);
         }
-        let body = serde_json::json!({ "blob": blob, "readKeyHash": b64::enc(&Sha256::digest(read_key)) });
+        let body =
+            serde_json::json!({ "blob": blob, "readKeyHash": b64::enc(&Sha256::digest(read_key)) });
         let rb = self
-            .bearer(self.http.put(self.url(&format!("/v1/mailboxes/{}/requests/{}", hex(mailbox), hex(rid)))))
+            .bearer(self.http.put(self.url(&format!(
+                "/v1/mailboxes/{}/requests/{}",
+                hex(mailbox),
+                hex(rid)
+            ))))
             .header("X-Ligus-Put-Cap", b64::enc(put_cap))
             .json(&body)
             .timeout(REQUEST_TIMEOUT);
@@ -317,9 +363,18 @@ impl MailboxClient {
     }
 
     /// The live requests (members only), oldest first.
-    pub async fn list_requests(&self, keys: &MailboxKeys) -> Result<Vec<ListedRequest>, MailboxError> {
+    pub async fn list_requests(
+        &self,
+        keys: &MailboxKeys,
+    ) -> Result<Vec<ListedRequest>, MailboxError> {
         let path = format!("/v1/mailboxes/{}/requests", hex(&keys.mailbox()));
-        let rb = self.authed(self.http.get(self.url(&path)).timeout(REQUEST_TIMEOUT), MailboxAuth::Member(keys), "GET", &path, b"");
+        let rb = self.authed(
+            self.http.get(self.url(&path)).timeout(REQUEST_TIMEOUT),
+            MailboxAuth::Member(keys),
+            "GET",
+            &path,
+            b"",
+        );
         #[derive(Deserialize)]
         struct List {
             requests: Vec<ListedRequest>,
@@ -328,13 +383,26 @@ impl MailboxClient {
     }
 
     /// Post a message on `rid`. `to` is the routing hint.
-    pub async fn post_msg(&self, auth: MailboxAuth<'_>, mailbox: &[u8; 16], rid: &[u8; 16], blob: &str, to: &str) -> Result<u64, MailboxError> {
+    pub async fn post_msg(
+        &self,
+        auth: MailboxAuth<'_>,
+        mailbox: &[u8; 16],
+        rid: &[u8; 16],
+        blob: &str,
+        to: &str,
+    ) -> Result<u64, MailboxError> {
         if blob.len() > MAX_MSG_BLOB {
             return Err(MailboxError::TooLarge);
         }
         let path = format!("/v1/mailboxes/{}/requests/{}/msgs", hex(mailbox), hex(rid));
-        let body = serde_json::to_vec(&serde_json::json!({ "blob": blob, "to": to })).expect("serialize");
-        let rb = self.http.post(self.url(&path)).header("content-type", "application/json").body(body.clone()).timeout(REQUEST_TIMEOUT);
+        let body =
+            serde_json::to_vec(&serde_json::json!({ "blob": blob, "to": to })).expect("serialize");
+        let rb = self
+            .http
+            .post(self.url(&path))
+            .header("content-type", "application/json")
+            .body(body.clone())
+            .timeout(REQUEST_TIMEOUT);
         let rb = self.authed(rb, auth, "POST", &path, &body);
         #[derive(Deserialize)]
         struct Seq {
@@ -355,7 +423,10 @@ impl MailboxClient {
     ) -> Result<Vec<MailboxMsg>, MailboxError> {
         let wait = wait_secs.min(MAX_WAIT_SECS);
         let path = format!("/v1/mailboxes/{}/requests/{}/msgs", hex(mailbox), hex(rid));
-        let rb = self.http.get(self.url(&format!("{path}?after={after}&wait={wait}"))).timeout(REQUEST_TIMEOUT + Duration::from_secs(wait));
+        let rb = self
+            .http
+            .get(self.url(&format!("{path}?after={after}&wait={wait}")))
+            .timeout(REQUEST_TIMEOUT + Duration::from_secs(wait));
         let rb = self.authed(rb, auth, "GET", &path, b"");
         #[derive(Deserialize)]
         struct Msgs {
@@ -366,9 +437,20 @@ impl MailboxClient {
 
     /// Delete `rid` and its messages (the requester, with its read key). A
     /// request already gone counts as deleted.
-    pub async fn delete_request(&self, mailbox: &[u8; 16], rid: &[u8; 16], read_key: &[u8; 16]) -> Result<(), MailboxError> {
+    pub async fn delete_request(
+        &self,
+        mailbox: &[u8; 16],
+        rid: &[u8; 16],
+        read_key: &[u8; 16],
+    ) -> Result<(), MailboxError> {
         let path = format!("/v1/mailboxes/{}/requests/{}", hex(mailbox), hex(rid));
-        let rb = self.authed(self.http.delete(self.url(&path)).timeout(REQUEST_TIMEOUT), MailboxAuth::Requester(read_key), "DELETE", &path, b"");
+        let rb = self.authed(
+            self.http.delete(self.url(&path)).timeout(REQUEST_TIMEOUT),
+            MailboxAuth::Requester(read_key),
+            "DELETE",
+            &path,
+            b"",
+        );
         match self.send(rb).await {
             Ok(_) | Err(MailboxError::RequestUnknown) => Ok(()),
             Err(e) => Err(e),
@@ -379,11 +461,20 @@ impl MailboxClient {
 /// Map a non-2xx answer (a problem document `{"error": code, ...}`).
 async fn problem(resp: reqwest::Response) -> MailboxError {
     let status = resp.status().as_u16();
-    let retry = resp.headers().get(reqwest::header::RETRY_AFTER).and_then(|h| h.to_str().ok()).and_then(|s| s.trim().parse::<u64>().ok());
+    let retry = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok());
     let text = resp.text().await.unwrap_or_default();
     let code = serde_json::from_str::<serde_json::Value>(&text)
         .ok()
-        .and_then(|v| v.get("error").or_else(|| v.get("code")).and_then(|c| c.as_str()).map(str::to_string))
+        .and_then(|v| {
+            v.get("error")
+                .or_else(|| v.get("code"))
+                .and_then(|c| c.as_str())
+                .map(str::to_string)
+        })
         .unwrap_or_default();
     match (status, code.as_str()) {
         (404, "mailbox_unknown") => MailboxError::MailboxUnknown,
@@ -396,14 +487,21 @@ async fn problem(resp: reqwest::Response) -> MailboxError {
         (409, "duplicate_message") => MailboxError::DuplicateMessage,
         (409, _) => MailboxError::RidExists,
         (413, _) => MailboxError::TooLarge,
-        (429, "mailbox_full") | (507, "mailbox_full" | "mailboxes_full" | "mailbox_storage") => MailboxError::MailboxFull,
+        (429, "mailbox_full") | (507, "mailbox_full" | "mailboxes_full" | "mailbox_storage") => {
+            MailboxError::MailboxFull
+        }
         (429, "too_many_messages") => MailboxError::TooManyMessages,
         (429, _) => MailboxError::RateLimited(retry.unwrap_or(60).min(3600)),
         (502..=504, _) => MailboxError::Unreachable(format!("HTTP {status}")),
-        _ => MailboxError::Status(status, code.chars().filter(|c| c.is_ascii_graphic()).take(64).collect()),
+        _ => MailboxError::Status(
+            status,
+            code.chars()
+                .filter(|c| c.is_ascii_graphic())
+                .take(64)
+                .collect(),
+        ),
     }
 }
-
 
 /// The workspace's current approval address on `client`'s relay: the newest
 /// of `epochs`, its mailbox registered (idempotent). Not a secret.
@@ -413,7 +511,17 @@ pub async fn current_address(
     founder_pin_hex: &str,
     epochs: &[super::EpochKey],
 ) -> Result<super::ApprovalAddress, MailboxError> {
-    let e = epochs.iter().max_by_key(|e| e.epoch).ok_or(MailboxError::Malformed)?;
+    let e = epochs
+        .iter()
+        .max_by_key(|e| e.epoch)
+        .ok_or(MailboxError::Malformed)?;
     let counter = client.ensure_registered(&e.key).await?;
-    Ok(super::ApprovalAddress::derive(client.relay(), workspace_id, founder_pin_hex, e.epoch, &e.key, counter))
+    Ok(super::ApprovalAddress::derive(
+        client.relay(),
+        workspace_id,
+        founder_pin_hex,
+        e.epoch,
+        &e.key,
+        counter,
+    ))
 }

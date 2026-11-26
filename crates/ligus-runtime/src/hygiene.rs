@@ -35,7 +35,12 @@ pub struct WorktreeEntry {
 
 /// List a repository's worktrees (`git worktree list --porcelain`).
 pub fn list_worktrees(repo_root: &Path) -> Vec<WorktreeEntry> {
-    let Ok(out) = ligus_core::process_util::git().arg("-C").arg(repo_root).args(["worktree", "list", "--porcelain"]).output() else {
+    let Ok(out) = ligus_core::process_util::git()
+        .arg("-C")
+        .arg(repo_root)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+    else {
         return Vec::new();
     };
     parse_porcelain(&String::from_utf8_lossy(&out.stdout))
@@ -49,7 +54,10 @@ fn parse_porcelain(text: &str) -> Vec<WorktreeEntry> {
             if let Some(e) = cur.take() {
                 out.push(e);
             }
-            cur = Some(WorktreeEntry { path: PathBuf::from(p), branch: None });
+            cur = Some(WorktreeEntry {
+                path: PathBuf::from(p),
+                branch: None,
+            });
         } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
             if let Some(e) = cur.as_mut() {
                 e.branch = Some(b.to_string());
@@ -108,20 +116,29 @@ pub fn plan_sweep(
             // archived is removed; a live chat keeps its pool.
             if let Some(chat) = crate::git_worktree::parked_chat_slug(&e.path) {
                 if chats.get(&chat) != Some(&ChatStatus::Live) {
-                    out.push(SweepAction::RemoveParkedWorktree { path: e.path.clone(), chat_slug: chat });
+                    out.push(SweepAction::RemoveParkedWorktree {
+                        path: e.path.clone(),
+                        chat_slug: chat,
+                    });
                 }
             }
             continue;
         };
         if let Some(turn) = branch.strip_prefix("ligus/turn-") {
             if !live_turn_slugs.contains(turn) {
-                out.push(SweepAction::RemoveTurnWorktree { path: e.path.clone(), branch: branch.clone() });
+                out.push(SweepAction::RemoveTurnWorktree {
+                    path: e.path.clone(),
+                    branch: branch.clone(),
+                });
             }
         } else if let Some(chat) = branch.strip_prefix("ligus/chat/") {
             match chats.get(chat) {
                 Some(ChatStatus::Live) => {}
                 // Archived, or a chat this workspace no longer has.
-                _ => out.push(SweepAction::RemoveChatCheckout { path: e.path.clone(), chat_slug: chat.to_string() }),
+                _ => out.push(SweepAction::RemoveChatCheckout {
+                    path: e.path.clone(),
+                    chat_slug: chat.to_string(),
+                }),
             }
         }
     }
@@ -130,7 +147,15 @@ pub fn plan_sweep(
 
 /// The slug git branch names use for an id (matches `git_worktree`).
 pub fn slug(id: &str) -> String {
-    id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect()
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 /// Carry out one step. Returns whether something was removed. Never deletes a
@@ -139,7 +164,12 @@ pub fn apply(repo_root: &Path, action: &SweepAction) -> bool {
     // Worktree and branch mutations take the repo-wide lock, like a turn's cut.
     let git = |dir: &Path, args: &[&str]| {
         let _lock = crate::git_worktree::lock_if_mutating(dir, args);
-        ligus_core::process_util::git().arg("-C").arg(dir).args(args).output().map(|o| (o.status.success(), o.stdout))
+        ligus_core::process_util::git()
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .map(|o| (o.status.success(), o.stdout))
     };
     match action {
         SweepAction::RemoveTurnWorktree { path, branch } => {
@@ -148,7 +178,11 @@ pub fn apply(repo_root: &Path, action: &SweepAction) -> bool {
                 if let Ok((true, diff)) = git(path, &["diff", "--cached", "HEAD"]) {
                     if !diff.is_empty() {
                         let turn = branch.trim_start_matches("ligus/turn-");
-                        let Ok(dest) = crate::git_worktree::LazyTurnWorktree::stopped_patch_path(repo_root, turn) else { return false };
+                        let Ok(dest) = crate::git_worktree::LazyTurnWorktree::stopped_patch_path(
+                            repo_root, turn,
+                        ) else {
+                            return false;
+                        };
                         if let Some(parent) = dest.parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }
@@ -160,13 +194,18 @@ pub fn apply(repo_root: &Path, action: &SweepAction) -> bool {
                 }
             }
             let p = path.to_string_lossy().into_owned();
-            let removed = git(repo_root, &["worktree", "remove", "--force", &p]).map(|r| r.0).unwrap_or(false);
+            let removed = git(repo_root, &["worktree", "remove", "--force", &p])
+                .map(|r| r.0)
+                .unwrap_or(false);
             let _ = git(repo_root, &["branch", "-D", branch]);
             removed || !path.exists()
         }
-        SweepAction::RemoveChatCheckout { path, .. } | SweepAction::RemoveParkedWorktree { path, .. } => {
+        SweepAction::RemoveChatCheckout { path, .. }
+        | SweepAction::RemoveParkedWorktree { path, .. } => {
             let p = path.to_string_lossy().into_owned();
-            git(repo_root, &["worktree", "remove", "--force", &p]).map(|r| r.0).unwrap_or(false)
+            git(repo_root, &["worktree", "remove", "--force", &p])
+                .map(|r| r.0)
+                .unwrap_or(false)
         }
     }
 }
@@ -174,7 +213,11 @@ pub fn apply(repo_root: &Path, action: &SweepAction) -> bool {
 /// Prune worktree records whose directory is gone.
 pub fn prune(repo_root: &Path) {
     let _lock = crate::git_worktree::repo_lock(repo_root);
-    let _ = ligus_core::process_util::git().arg("-C").arg(repo_root).args(["worktree", "prune"]).output();
+    let _ = ligus_core::process_util::git()
+        .arg("-C")
+        .arg(repo_root)
+        .args(["worktree", "prune"])
+        .output();
 }
 
 /// Whether `diff` still applies cleanly in `dir` (`git apply --check`).
@@ -206,7 +249,11 @@ pub fn opaque_key(device_secret: &[u8], chat_slug: &str) -> String {
     h.update(b"ligus-worktree-key\0");
     h.update(device_secret);
     h.update(chat_slug.as_bytes());
-    h.finalize().iter().take(12).map(|b| format!("{b:02x}")).collect()
+    h.finalize()
+        .iter()
+        .take(12)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -224,17 +271,40 @@ mod tests {
 
     #[test]
     fn plan_removes_leftovers_and_keeps_live_work() {
-        let wt = |b: &str| WorktreeEntry { path: PathBuf::from(format!("/r/{b}")), branch: Some(b.into()) };
-        let entries = vec![wt("main"), wt("ligus/turn-live"), wt("ligus/turn-dead"), wt("ligus/chat/a"), wt("ligus/chat/b"), wt("ligus/chat/gone")];
+        let wt = |b: &str| WorktreeEntry {
+            path: PathBuf::from(format!("/r/{b}")),
+            branch: Some(b.into()),
+        };
+        let entries = vec![
+            wt("main"),
+            wt("ligus/turn-live"),
+            wt("ligus/turn-dead"),
+            wt("ligus/chat/a"),
+            wt("ligus/chat/b"),
+            wt("ligus/chat/gone"),
+        ];
         let live: HashSet<String> = ["live".to_string()].into();
-        let chats: HashMap<String, ChatStatus> = [("a".to_string(), ChatStatus::Live), ("b".to_string(), ChatStatus::Archived)].into();
+        let chats: HashMap<String, ChatStatus> = [
+            ("a".to_string(), ChatStatus::Live),
+            ("b".to_string(), ChatStatus::Archived),
+        ]
+        .into();
         let plan = plan_sweep(Path::new("/r"), &entries, &live, &chats, &|_| false);
         assert_eq!(
             plan,
             vec![
-                SweepAction::RemoveTurnWorktree { path: "/r/ligus/turn-dead".into(), branch: "ligus/turn-dead".into() },
-                SweepAction::RemoveChatCheckout { path: "/r/ligus/chat/b".into(), chat_slug: "b".into() },
-                SweepAction::RemoveChatCheckout { path: "/r/ligus/chat/gone".into(), chat_slug: "gone".into() },
+                SweepAction::RemoveTurnWorktree {
+                    path: "/r/ligus/turn-dead".into(),
+                    branch: "ligus/turn-dead".into()
+                },
+                SweepAction::RemoveChatCheckout {
+                    path: "/r/ligus/chat/b".into(),
+                    chat_slug: "b".into()
+                },
+                SweepAction::RemoveChatCheckout {
+                    path: "/r/ligus/chat/gone".into(),
+                    chat_slug: "gone".into()
+                },
             ]
         );
     }
@@ -243,60 +313,131 @@ mod tests {
     fn parked_and_in_use_trees_are_kept_and_a_dead_chats_pool_is_cleared() {
         let live = uuid::Uuid::new_v4().to_string();
         let gone = uuid::Uuid::new_v4().to_string();
-        let parked = |chat: &str, turn: &str| WorktreeEntry { path: PathBuf::from(format!("/r/.ligus/worktrees/pool-{chat}-{turn}")), branch: None };
+        let parked = |chat: &str, turn: &str| WorktreeEntry {
+            path: PathBuf::from(format!("/r/.ligus/worktrees/pool-{chat}-{turn}")),
+            branch: None,
+        };
         let entries = vec![
             parked(&live, "t1"),
             parked(&gone, "t2"),
             // A turn that stopped streaming but hasn't parked yet.
-            WorktreeEntry { path: "/r/.ligus/worktrees/t3".into(), branch: Some("ligus/turn-t3".into()) },
+            WorktreeEntry {
+                path: "/r/.ligus/worktrees/t3".into(),
+                branch: Some("ligus/turn-t3".into()),
+            },
             // Something detached that isn't ours.
-            WorktreeEntry { path: "/r/elsewhere".into(), branch: None },
+            WorktreeEntry {
+                path: "/r/elsewhere".into(),
+                branch: None,
+            },
         ];
         let chats: HashMap<String, ChatStatus> = [(live.clone(), ChatStatus::Live)].into();
         let in_use = |p: &Path| p.ends_with("t3");
         let plan = plan_sweep(Path::new("/r"), &entries, &HashSet::new(), &chats, &in_use);
         assert_eq!(
             plan,
-            vec![SweepAction::RemoveParkedWorktree { path: entries[1].path.clone(), chat_slug: gone.clone() }],
+            vec![SweepAction::RemoveParkedWorktree {
+                path: entries[1].path.clone(),
+                chat_slug: gone.clone()
+            }],
             "the live chat's pool and the in-use turn tree are kept"
         );
         // Archived: its pool goes too.
         let archived: HashMap<String, ChatStatus> = [(live.clone(), ChatStatus::Archived)].into();
-        assert_eq!(plan_sweep(Path::new("/r"), &entries[..1], &HashSet::new(), &archived, &|_| false).len(), 1);
+        assert_eq!(
+            plan_sweep(
+                Path::new("/r"),
+                &entries[..1],
+                &HashSet::new(),
+                &archived,
+                &|_| false
+            )
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn a_reused_tree_survives_a_sweep_and_parking_never_counts_as_abandoned() {
-        let dir = std::env::temp_dir().join(format!("ligus-hygiene-reuse-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("ligus-hygiene-reuse-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let run = |args: &[&str]| {
-            let o = command("git").arg("-C").arg(&dir).args(args).output().unwrap();
-            assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+            let o = command("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
         };
         run(&["init", "-q", "-b", "main"]);
-        run(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        run(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ]);
         let chat = uuid::Uuid::new_v4().to_string();
         let chats: HashMap<String, ChatStatus> = [(slug(&chat), ChatStatus::Live)].into();
-        let sweep = || plan_sweep(&dir.join(".ligus/worktrees"), &list_worktrees(&dir), &HashSet::new(), &chats, &crate::git_worktree::is_in_use);
+        let sweep = || {
+            plan_sweep(
+                &dir.join(".ligus/worktrees"),
+                &list_worktrees(&dir),
+                &HashSet::new(),
+                &chats,
+                &crate::git_worktree::is_in_use,
+            )
+        };
         // A turn tree, not streaming (the turn just finished) but not parked yet.
         let wt = crate::git_worktree::cut_turn_worktree_reusing(&dir, &chat, "turn-1").unwrap();
         std::fs::write(wt.path.join("work.txt"), "in progress").unwrap();
         assert!(sweep().is_empty(), "an in-use turn tree is never swept");
         wt.park(&chat).unwrap();
-        assert!(sweep().is_empty(), "a live chat's parked tree is kept for reuse");
+        assert!(
+            sweep().is_empty(),
+            "a live chat's parked tree is kept for reuse"
+        );
         // The next turn claims it: still nothing to sweep, and it's the same tree.
         let wt2 = crate::git_worktree::cut_turn_worktree_reusing(&dir, &chat, "turn-2").unwrap();
         assert!(sweep().is_empty());
         wt2.park(&chat).unwrap();
         // The chat goes away: its parked tree is a hygienic removal, not an abandoned turn.
-        let plan = plan_sweep(&dir.join(".ligus/worktrees"), &list_worktrees(&dir), &HashSet::new(), &HashMap::new(), &crate::git_worktree::is_in_use);
-        assert_eq!(plan.iter().filter(|a| matches!(a, SweepAction::RemoveParkedWorktree { .. })).count(), 1, "{plan:?}");
-        assert!(plan.iter().all(|a| !matches!(a, SweepAction::RemoveTurnWorktree { .. })), "nothing counts as abandoned: {plan:?}");
+        let plan = plan_sweep(
+            &dir.join(".ligus/worktrees"),
+            &list_worktrees(&dir),
+            &HashSet::new(),
+            &HashMap::new(),
+            &crate::git_worktree::is_in_use,
+        );
+        assert_eq!(
+            plan.iter()
+                .filter(|a| matches!(a, SweepAction::RemoveParkedWorktree { .. }))
+                .count(),
+            1,
+            "{plan:?}"
+        );
+        assert!(
+            plan.iter()
+                .all(|a| !matches!(a, SweepAction::RemoveTurnWorktree { .. })),
+            "nothing counts as abandoned: {plan:?}"
+        );
         for a in &plan {
             assert!(apply(&dir, a), "{a:?}");
         }
         prune(&dir);
-        assert!(list_worktrees(&dir).iter().all(|e| crate::git_worktree::parked_chat_slug(&e.path).is_none()));
+        assert!(list_worktrees(&dir)
+            .iter()
+            .all(|e| crate::git_worktree::parked_chat_slug(&e.path).is_none()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -306,17 +447,51 @@ mod tests {
     /// they are.
     #[test]
     fn foreign_worktrees_are_never_swept() {
-        let dir = std::env::temp_dir().join(format!("ligus-hygiene-foreign-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("ligus-hygiene-foreign-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let run = |args: &[&str]| {
-            let o = command("git").arg("-C").arg(&dir).args(args).output().unwrap();
-            assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+            let o = command("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
             String::from_utf8_lossy(&o.stdout).into_owned()
         };
         run(&["init", "-q", "-b", "main"]);
-        run(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
-        run(&["worktree", "add", "-q", "-b", "ligus/chat/old", "elsewhere/chat-old"]);
-        run(&["worktree", "add", "-q", "-b", "ligus/turn-old", "elsewhere/old"]);
+        run(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ]);
+        run(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "ligus/chat/old",
+            "elsewhere/chat-old",
+        ]);
+        run(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "ligus/turn-old",
+            "elsewhere/old",
+        ]);
         let pool = format!("elsewhere/pool-{}-x", uuid::Uuid::new_v4());
         run(&["worktree", "add", "-q", "--detach", &pool]);
         std::fs::write(dir.join("elsewhere/chat-old/work.txt"), "work").unwrap();
@@ -343,12 +518,29 @@ mod tests {
         // Unfiltered (everything under the repo) the
         // sweep would remove all three. (Not `/`: on Windows that is the
         // current drive's root, and the temp dir may be on another drive.)
-        assert_eq!(plan_sweep(&dir, &entries, &HashSet::new(), &HashMap::new(), &|_| false).len(), 3);
-        let plan = plan_sweep(&dir.join(".ligus/worktrees"), &entries, &HashSet::new(), &HashMap::new(), &|_| false);
+        assert_eq!(
+            plan_sweep(&dir, &entries, &HashSet::new(), &HashMap::new(), &|_| false).len(),
+            3
+        );
+        let plan = plan_sweep(
+            &dir.join(".ligus/worktrees"),
+            &entries,
+            &HashSet::new(),
+            &HashMap::new(),
+            &|_| false,
+        );
         assert!(plan.is_empty(), "{plan:?}");
         prune(&dir);
-        assert_eq!(snap(&dir.join("elsewhere")), before, "foreign worktrees byte-identical");
-        assert_eq!(run(&["branch", "--list", "ligus/*"]), branches, "their branches kept");
+        assert_eq!(
+            snap(&dir.join("elsewhere")),
+            before,
+            "foreign worktrees byte-identical"
+        );
+        assert_eq!(
+            run(&["branch", "--list", "ligus/*"]),
+            branches,
+            "their branches kept"
+        );
         assert!(!dir.join(".ligus").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -366,17 +558,42 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ligus-hygiene-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let run = |args: &[&str]| {
-            let o = command("git").arg("-C").arg(&dir).args(args).output().unwrap();
-            assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+            let o = command("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
         };
         run(&["init", "-q", "-b", "main"]);
-        run(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        run(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ]);
         let chat = crate::git_worktree::chat_worktree(&dir, "gone-chat").unwrap();
         let turn = crate::git_worktree::Worktree::create(&dir, "dead-turn").unwrap();
         std::fs::write(turn.path.join("work.txt"), "unsaved").unwrap();
 
         // A crash leftover: the process that cut it is gone, so nothing holds it.
-        let plan = plan_sweep(&dir.join(".ligus/worktrees"), &list_worktrees(&dir), &HashSet::new(), &HashMap::new(), &|_| false);
+        let plan = plan_sweep(
+            &dir.join(".ligus/worktrees"),
+            &list_worktrees(&dir),
+            &HashSet::new(),
+            &HashMap::new(),
+            &|_| false,
+        );
         assert_eq!(plan.len(), 2);
         for a in &plan {
             assert!(apply(&dir, a), "{a:?}");
@@ -384,9 +601,15 @@ mod tests {
         prune(&dir);
         assert!(!turn.path.exists() && !chat.exists());
         // The turn's edits were saved, the chat branch kept.
-        let saved = crate::git_worktree::LazyTurnWorktree::stopped_patch_path(&dir, "dead-turn").unwrap();
+        let saved =
+            crate::git_worktree::LazyTurnWorktree::stopped_patch_path(&dir, "dead-turn").unwrap();
         assert!(std::fs::read_to_string(saved).unwrap().contains("unsaved"));
-        let o = command("git").arg("-C").arg(&dir).args(["branch", "--list", "ligus/chat/gone-chat"]).output().unwrap();
+        let o = command("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["branch", "--list", "ligus/chat/gone-chat"])
+            .output()
+            .unwrap();
         assert!(String::from_utf8_lossy(&o.stdout).contains("ligus/chat/gone-chat"));
         let _ = std::fs::remove_dir_all(&dir);
     }

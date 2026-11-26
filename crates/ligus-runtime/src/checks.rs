@@ -50,7 +50,14 @@ pub struct Check {
 
 impl Check {
     pub fn new(id: &str, title: &str, status: Status, detail: impl Into<String>) -> Self {
-        Check { id: id.into(), title: title.into(), status, detail: one_line(&detail.into()), fix: None, notes: Vec::new() }
+        Check {
+            id: id.into(),
+            title: title.into(),
+            status,
+            detail: one_line(&detail.into()),
+            fix: None,
+            notes: Vec::new(),
+        }
     }
     pub fn ok(id: &str, title: &str, detail: impl Into<String>) -> Self {
         Self::new(id, title, Status::Ok, detail)
@@ -102,7 +109,10 @@ pub struct Report {
 
 impl Report {
     pub fn new(command: &str) -> Self {
-        Report { command: command.into(), ..Default::default() }
+        Report {
+            command: command.into(),
+            ..Default::default()
+        }
     }
     pub fn add(&mut self, c: Check) {
         self.checks.push(c);
@@ -164,14 +174,23 @@ impl Report {
     /// The summary line: `2 warnings · next: nothing to do`.
     pub fn summary(&self) -> String {
         let (f, w) = (self.count(Status::Fail), self.count(Status::Warn));
-        let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let plural =
+            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
         let head = match (f, w) {
             (0, 0) => "all checks passed".to_string(),
             (0, w) => plural(w, "warning", "warnings"),
             (f, 0) => plural(f, "failure", "failures"),
-            (f, w) => format!("{}, {}", plural(f, "failure", "failures"), plural(w, "warning", "warnings")),
+            (f, w) => format!(
+                "{}, {}",
+                plural(f, "failure", "failures"),
+                plural(w, "warning", "warnings")
+            ),
         };
-        let next = if self.next.is_empty() { "nothing to do".to_string() } else { self.next.join(" ; ") };
+        let next = if self.next.is_empty() {
+            "nothing to do".to_string()
+        } else {
+            self.next.join(" ; ")
+        };
         format!("{head} · next: {next}")
     }
 }
@@ -183,8 +202,14 @@ mod tests {
     fn sample() -> Report {
         let mut r = Report::new("doctor");
         r.add(Check::ok("sandbox.tier", "agent sandbox", "landlock"));
-        r.add(Check::warn("workspace.joined", "workspace", "not joined").fix("ligus enroll --file ./invite"));
-        r.add(Check::fail("relay.reachable", "relay", "connection\nrefused").fix("langstroth-relay check --url https://r.example"));
+        r.add(
+            Check::warn("workspace.joined", "workspace", "not joined")
+                .fix("ligus enroll --file ./invite"),
+        );
+        r.add(
+            Check::fail("relay.reachable", "relay", "connection\nrefused")
+                .fix("langstroth-relay check --url https://r.example"),
+        );
         r.next("langstroth-relay check --url https://r.example");
         r.next("langstroth-relay check --url https://r.example");
         r
@@ -199,10 +224,18 @@ mod tests {
         assert_eq!(d["ok"], false);
         assert_eq!(d["exitCode"], 1);
         assert!(d["version"].is_string());
-        assert_eq!(d["next"].as_array().unwrap().len(), 1, "a next step is listed once");
+        assert_eq!(
+            d["next"].as_array().unwrap().len(),
+            1,
+            "a next step is listed once"
+        );
         for c in d["checks"].as_array().unwrap() {
             let keys: Vec<&str> = c.as_object().unwrap().keys().map(String::as_str).collect();
-            assert!(keys.iter().all(|k| ["id", "title", "status", "detail", "fix", "notes"].contains(k)), "{c}");
+            assert!(
+                keys.iter()
+                    .all(|k| ["id", "title", "status", "detail", "fix", "notes"].contains(k)),
+                "{c}"
+            );
             assert!(["ok", "warn", "fail", "skip"].contains(&c["status"].as_str().unwrap()));
             if c["status"] == "fail" {
                 assert!(c["fix"].is_string(), "a failed check says what to do: {c}");
@@ -218,7 +251,10 @@ mod tests {
         r.add(Check::skip("b", "b", "y"));
         assert!(r.ok());
         assert_eq!(r.summary(), "1 warning · next: nothing to do");
-        assert_eq!(sample().summary(), "1 failure, 1 warning · next: langstroth-relay check --url https://r.example");
+        assert_eq!(
+            sample().summary(),
+            "1 failure, 1 warning · next: langstroth-relay check --url https://r.example"
+        );
     }
 
     #[test]
@@ -226,9 +262,14 @@ mod tests {
         let r = sample();
         let t = Report::check_text(&r.checks[2]);
         assert_eq!(t, "fail  relay           connection refused\n      fix: langstroth-relay check --url https://r.example\n");
-        assert!(!Report::check_text(&Check::ok("x", "x", "fine").fix("never shown")).contains("fix:"));
+        assert!(
+            !Report::check_text(&Check::ok("x", "x", "fine").fix("never shown")).contains("fix:")
+        );
         let red = Report::check_text_styled(&r.checks[2], true);
         assert!(red.starts_with("\x1b[1;31mfail \x1b[0m relay"), "{red:?}");
-        assert!(!Report::check_text_styled(&r.checks[0], true).contains('\x1b'), "ok is never coloured");
+        assert!(
+            !Report::check_text_styled(&r.checks[0], true).contains('\x1b'),
+            "ok is never coloured"
+        );
     }
 }

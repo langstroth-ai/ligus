@@ -10,9 +10,10 @@ use ligus_core::authz::{votes::diff_digest, ConfigTimeline, HoldReason};
 use ligus_core::flow::FlowRecord;
 use ligus_core::proposal_sets::ProposalSet;
 use ligus_core::{
-    fold_decisions, project_authorized, project_config, workspace_config_session_id, ActionProposal, ActorIdentity,
-    ActorKind, ActorStamp, CfgFrontier, ChatSession, MemberRoleChange, ProposalApproval, ProposalStatus,
-    SessionEvent, SessionEventEnvelope, Timestamp, Verdict, WorkspaceAuthz, WorkspaceMember, WorkspaceRole,
+    fold_decisions, project_authorized, project_config, workspace_config_session_id,
+    ActionProposal, ActorIdentity, ActorKind, ActorStamp, CfgFrontier, ChatSession,
+    MemberRoleChange, ProposalApproval, ProposalStatus, SessionEvent, SessionEventEnvelope,
+    Timestamp, Verdict, WorkspaceAuthz, WorkspaceMember, WorkspaceRole,
 };
 use proptest::prelude::*;
 use uuid::Uuid;
@@ -22,7 +23,14 @@ const PEOPLE: [&str; 5] = ["owner", "ada", "mara", "val", "eve"];
 fn member(id: &str, role: WorkspaceRole) -> WorkspaceMember {
     let mut actor = ActorIdentity::new(id, id, ActorKind::Human);
     actor.account_id = Some(account(id));
-    WorkspaceMember { id: id.into(), actor, role, title: String::new(), index: 0, joined_at: Timestamp::epoch() }
+    WorkspaceMember {
+        id: id.into(),
+        actor,
+        role,
+        title: String::new(),
+        index: 0,
+        joined_at: Timestamp::epoch(),
+    }
 }
 
 fn account(id: &str) -> Uuid {
@@ -30,7 +38,12 @@ fn account(id: &str) -> Uuid {
 }
 
 fn role_from(n: u8) -> WorkspaceRole {
-    [WorkspaceRole::Owner, WorkspaceRole::Admin, WorkspaceRole::Contributor, WorkspaceRole::Viewer][n as usize % 4]
+    [
+        WorkspaceRole::Owner,
+        WorkspaceRole::Admin,
+        WorkspaceRole::Contributor,
+        WorkspaceRole::Viewer,
+    ][n as usize % 4]
 }
 
 /// One workspace: its config log and one chat log. Every person signs with
@@ -61,7 +74,13 @@ fn device_of(who: &str) -> (Uuid, ligus_core::SigningKeypair) {
     }
     seed[31] = 0x5a;
     let key = ligus_core::SigningKeypair::from_seed(&seed).unwrap();
-    (ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &key.public_key_bytes()), key)
+    (
+        ligus_core::crypto::device_id_for(
+            ligus_core::crypto::SigAlg::Ed25519,
+            &key.public_key_bytes(),
+        ),
+        key,
+    )
 }
 
 /// Chat kinds a test author confirms with presence (the gated ones).
@@ -87,12 +106,40 @@ impl World {
         chat.creator_actor_id = "owner".into();
         chat.members = vec![member("owner", WorkspaceRole::Owner)];
         let sid = chat.id;
-        let mut w = Self { wid, sid, clock: 0, cfg: Vec::new(), chat: Vec::new(), present: Default::default() };
-        w.cfg_push("owner", SessionEvent::SessionSnapshot { session: Box::new(seed) });
+        let mut w = Self {
+            wid,
+            sid,
+            clock: 0,
+            cfg: Vec::new(),
+            chat: Vec::new(),
+            present: Default::default(),
+        };
+        w.cfg_push(
+            "owner",
+            SessionEvent::SessionSnapshot {
+                session: Box::new(seed),
+            },
+        );
         w.identity("owner");
-        w.chat_push("owner", SessionEvent::SessionSnapshot { session: Box::new(chat) });
-        for (id, role) in [("ada", WorkspaceRole::Admin), ("mara", WorkspaceRole::Contributor), ("val", WorkspaceRole::Viewer)] {
-            w.cfg_push("owner", SessionEvent::MemberAdded { invite: None, proof: None, member: member(id, role) });
+        w.chat_push(
+            "owner",
+            SessionEvent::SessionSnapshot {
+                session: Box::new(chat),
+            },
+        );
+        for (id, role) in [
+            ("ada", WorkspaceRole::Admin),
+            ("mara", WorkspaceRole::Contributor),
+            ("val", WorkspaceRole::Viewer),
+        ] {
+            w.cfg_push(
+                "owner",
+                SessionEvent::MemberAdded {
+                    invite: None,
+                    proof: None,
+                    member: member(id, role),
+                },
+            );
             w.identity(id);
         }
         w
@@ -103,11 +150,28 @@ impl World {
     fn identity(&mut self, who: &str) {
         let (device, dk) = device_of(who);
         let acct = account_key(who);
-        self.cfg_push(who, SessionEvent::AccountKeyRegistered { account_id: account(who), signing_public_key: acct.public_key_bytes().to_vec() });
-        let cert = ligus_core::DeviceCertificate::issue(&acct, account(who), &dk.public_key_bytes(), Timestamp::epoch());
+        self.cfg_push(
+            who,
+            SessionEvent::AccountKeyRegistered {
+                account_id: account(who),
+                signing_public_key: acct.public_key_bytes().to_vec(),
+            },
+        );
+        let cert = ligus_core::DeviceCertificate::issue(
+            &acct,
+            account(who),
+            &dk.public_key_bytes(),
+            Timestamp::epoch(),
+        );
         assert_eq!(cert.device_id, device);
-        self.cfg_push(who, SessionEvent::DeviceCertificateAdded { certificate: cert });
-        let id = self.cfg_push(who, ligus_core::testkit::recovery_registration(account(who)));
+        self.cfg_push(
+            who,
+            SessionEvent::DeviceCertificateAdded { certificate: cert },
+        );
+        let id = self.cfg_push(
+            who,
+            ligus_core::testkit::recovery_registration(account(who)),
+        );
         let env = self.cfg.iter_mut().find(|e| e.event_id == id).unwrap();
         ligus_core::testkit::prove_recovery(env, account(who), device, &dk);
         self.present.insert(who.to_string());
@@ -130,8 +194,16 @@ impl World {
     /// Name `by`'s device's previous event on `env`'s log (its chain).
     fn chain(&self, env: &mut SessionEventEnvelope, by: &str) {
         let device = device_of(by).0;
-        let log = if env.session_id == self.sid { &self.chat } else { &self.cfg };
-        let prev = log.iter().rev().find(|e| e.signer_device_id == Some(device)).map(|e| e.event_id);
+        let log = if env.session_id == self.sid {
+            &self.chat
+        } else {
+            &self.cfg
+        };
+        let prev = log
+            .iter()
+            .rev()
+            .find(|e| e.signer_device_id == Some(device))
+            .map(|e| e.event_id);
         if let Some(s) = env.actor_stamp.as_mut() {
             s.prev = prev;
         }
@@ -144,11 +216,22 @@ impl World {
     fn reseal(&mut self, id: Uuid) {
         let (on_cfg, idx) = match self.cfg.iter().position(|e| e.event_id == id) {
             Some(i) => (true, i),
-            None => (false, self.chat.iter().position(|e| e.event_id == id).unwrap()),
+            None => (
+                false,
+                self.chat.iter().position(|e| e.event_id == id).unwrap(),
+            ),
         };
-        let mut env = if on_cfg { self.cfg[idx].clone() } else { self.chat[idx].clone() };
+        let mut env = if on_cfg {
+            self.cfg[idx].clone()
+        } else {
+            self.chat[idx].clone()
+        };
         env.clear_raw();
-        let by = env.actor_stamp.as_ref().map(|s| s.actor.id.clone()).unwrap_or_default();
+        let by = env
+            .actor_stamp
+            .as_ref()
+            .map(|s| s.actor.id.clone())
+            .unwrap_or_default();
         let gated = on_cfg || gated_on_chat(&env.payload);
         if let Some(s) = env.actor_stamp.as_mut() {
             s.presence = None;
@@ -164,12 +247,23 @@ impl World {
     fn stamp(by: &str, frontier: Option<CfgFrontier>) -> Option<ActorStamp> {
         let mut actor = ActorIdentity::new(by, by, ActorKind::Human);
         actor.account_id = Some(account(by));
-        Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None })
+        Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: frontier,
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head: None,
+        })
     }
 
     /// The newest config position an honest author can name.
     fn head(&self) -> Option<CfgFrontier> {
-        ligus_core::lamport::plausible_keys(&self.cfg).last().copied()
+        ligus_core::lamport::plausible_keys(&self.cfg)
+            .last()
+            .copied()
     }
 
     /// A chat event by `by` at the head, without presence.
@@ -194,7 +288,11 @@ impl World {
 
     /// The watermark an honest author of a cut of `member` (or `device`)
     /// writes: the heads of every signer that signed as them, on both logs.
-    fn watermark(&self, member: Option<&str>, device: Option<Uuid>) -> Vec<ligus_core::watermark::Watermark> {
+    fn watermark(
+        &self,
+        member: Option<&str>,
+        device: Option<Uuid>,
+    ) -> Vec<ligus_core::watermark::Watermark> {
         let mut signers: std::collections::BTreeSet<Uuid> = device.into_iter().collect();
         if let Some(m) = member {
             for e in self.cfg.iter().chain(&self.chat) {
@@ -203,8 +301,14 @@ impl World {
                 }
             }
         }
-        let mut out = ligus_core::watermark::heads_of(&self.cfg, workspace_config_session_id(self.wid), &signers);
-        out.extend(ligus_core::watermark::heads_of(&self.chat, self.sid, &signers));
+        let mut out = ligus_core::watermark::heads_of(
+            &self.cfg,
+            workspace_config_session_id(self.wid),
+            &signers,
+        );
+        out.extend(ligus_core::watermark::heads_of(
+            &self.chat, self.sid, &signers,
+        ));
         out
     }
 
@@ -212,17 +316,29 @@ impl World {
     /// written with an empty one.
     fn honest(&self, e: SessionEvent) -> SessionEvent {
         match e {
-            SessionEvent::MemberRemoved { member_id, watermark } if watermark.is_empty() => {
+            SessionEvent::MemberRemoved {
+                member_id,
+                watermark,
+            } if watermark.is_empty() => {
                 let watermark = self.watermark(Some(&member_id), None);
-                SessionEvent::MemberRemoved { member_id, watermark }
+                SessionEvent::MemberRemoved {
+                    member_id,
+                    watermark,
+                }
             }
             SessionEvent::MemberRoleChanged { change, watermark } if watermark.is_empty() => {
                 let watermark = self.watermark(Some(&change.member_id), None);
                 SessionEvent::MemberRoleChanged { change, watermark }
             }
-            SessionEvent::DeviceRevoked { device_id, watermark } if watermark.is_empty() => {
+            SessionEvent::DeviceRevoked {
+                device_id,
+                watermark,
+            } if watermark.is_empty() => {
                 let watermark = self.watermark(None, Some(device_id));
-                SessionEvent::DeviceRevoked { device_id, watermark }
+                SessionEvent::DeviceRevoked {
+                    device_id,
+                    watermark,
+                }
             }
             other => other,
         }
@@ -232,7 +348,12 @@ impl World {
     /// (a backdated write; at least just after the seed).
     fn cfg_at(&mut self, by: &str, e: SessionEvent, back: u64) -> Uuid {
         self.clock += 1;
-        let mut env = SessionEventEnvelope::new(workspace_config_session_id(self.wid), self.wid, self.clock as i64, e);
+        let mut env = SessionEventEnvelope::new(
+            workspace_config_session_id(self.wid),
+            self.wid,
+            self.clock as i64,
+            e,
+        );
         env.actor_stamp = Self::stamp(by, self.head());
         self.chain(&mut env, by);
         // Drafted `back` events ago (but after the seed).
@@ -240,7 +361,12 @@ impl World {
         ligus_core::lamport::stamp_back(&mut env, &self.cfg, back);
         // Its chain link is an event older than the head it names.
         let device = device_of(by).0;
-        let prev = self.cfg.iter().filter(|e| e.signer_device_id == Some(device) && e.lamport < env.lamport).max_by_key(|e| e.canonical_key()).map(|e| e.event_id);
+        let prev = self
+            .cfg
+            .iter()
+            .filter(|e| e.signer_device_id == Some(device) && e.lamport < env.lamport)
+            .max_by_key(|e| e.canonical_key())
+            .map(|e| e.event_id);
         if let Some(s) = env.actor_stamp.as_mut() {
             s.prev = prev;
         }
@@ -253,7 +379,12 @@ impl World {
     /// A config event exactly as given (no honest watermark filled in).
     fn cfg_push_raw(&mut self, by: &str, e: SessionEvent) -> Uuid {
         self.clock += 1;
-        let mut env = SessionEventEnvelope::new(workspace_config_session_id(self.wid), self.wid, self.clock as i64, e);
+        let mut env = SessionEventEnvelope::new(
+            workspace_config_session_id(self.wid),
+            self.wid,
+            self.clock as i64,
+            e,
+        );
         env.lamport = self.clock;
         env.actor_stamp = Self::stamp(by, self.head());
         self.chain(&mut env, by);
@@ -266,7 +397,12 @@ impl World {
     fn cfg_push(&mut self, by: &str, e: SessionEvent) -> Uuid {
         let e = self.honest(e);
         self.clock += 1;
-        let mut env = SessionEventEnvelope::new(workspace_config_session_id(self.wid), self.wid, self.clock as i64, e);
+        let mut env = SessionEventEnvelope::new(
+            workspace_config_session_id(self.wid),
+            self.wid,
+            self.clock as i64,
+            e,
+        );
         env.lamport = self.clock;
         env.actor_stamp = Self::stamp(by, self.head());
         self.chain(&mut env, by);
@@ -311,20 +447,42 @@ impl World {
     fn verdicts(&self) -> BTreeMap<Uuid, Verdict> {
         let t = self.timeline();
         let mut v = fold_decisions(&self.chat, None, None, WorkspaceAuthz::Timeline(&t));
-        v.extend(fold_decisions(&self.cfg, None, None, WorkspaceAuthz::Unchecked));
+        v.extend(fold_decisions(
+            &self.cfg,
+            None,
+            None,
+            WorkspaceAuthz::Unchecked,
+        ));
         v
     }
 }
 
-fn vote(by: &str, pid: Uuid, role: WorkspaceRole, approved: bool, digest: Option<String>) -> SessionEvent {
+fn vote(
+    by: &str,
+    pid: Uuid,
+    role: WorkspaceRole,
+    approved: bool,
+    digest: Option<String>,
+) -> SessionEvent {
     SessionEvent::ProposalVoteCast {
         proposal_id: pid,
-        approval: ProposalApproval { actor_id: by.into(), role, approved, created_at: Timestamp::epoch(), diff_digest: digest },
+        approval: ProposalApproval {
+            actor_id: by.into(),
+            role,
+            approved,
+            created_at: Timestamp::epoch(),
+            diff_digest: digest,
+        },
     }
 }
 
 fn proposal(id: Uuid, content: u8, status: ProposalStatus) -> ActionProposal {
-    let mut p = ActionProposal::file_diff("p", "planner", format!("diff --git a/f b/f\n+{content}\n"), vec!["f".into()]);
+    let mut p = ActionProposal::file_diff(
+        "p",
+        "planner",
+        format!("diff --git a/f b/f\n+{content}\n"),
+        vec!["f".into()],
+    );
     p.id = id;
     p.created_at = Timestamp::epoch();
     p.status = status;
@@ -335,63 +493,145 @@ fn proposal(id: Uuid, content: u8, status: ProposalStatus) -> ActionProposal {
 /// votes on the chat, from members and a stranger.
 #[derive(Debug, Clone)]
 enum Op {
-    SetRole { who: u8, role: u8 },
-    Upsert { by: u8, prop: u8, content: u8, status: u8 },
-    Vote { by: u8, prop: u8, declared: u8, approved: bool, digest: u8 },
-    Stale { by: u8, prop: u8, back: u8 },
-    Applied { by: u8, prop: u8 },
+    SetRole {
+        who: u8,
+        role: u8,
+    },
+    Upsert {
+        by: u8,
+        prop: u8,
+        content: u8,
+        status: u8,
+    },
+    Vote {
+        by: u8,
+        prop: u8,
+        declared: u8,
+        approved: bool,
+        digest: u8,
+    },
+    Stale {
+        by: u8,
+        prop: u8,
+        back: u8,
+    },
+    Applied {
+        by: u8,
+        prop: u8,
+    },
     /// The owner removes a member (an honest watermark).
-    Remove { who: u8 },
+    Remove {
+        who: u8,
+    },
     /// A message stamped with a frontier `back` config events old (a lagging
     /// author, or a removed one backdating).
-    Backdate { by: u8, back: u8 },
+    Backdate {
+        by: u8,
+        back: u8,
+    },
     /// Anyone cuts anyone (`kind`: remove, demote to Viewer, revoke their
     /// device), `back` lamports below the head; backdated cuts name an empty
     /// watermark (the counter-cut of review P-A2b).
-    Cut { by: u8, who: u8, kind: u8, back: u8 },
+    Cut {
+        by: u8,
+        who: u8,
+        kind: u8,
+        back: u8,
+    },
 }
 
 fn arb_op() -> impl Strategy<Value = Op> {
     prop_oneof![
         (1u8..4, 0u8..4).prop_map(|(who, role)| Op::SetRole { who, role }),
-        (0u8..5, 0u8..3, 0u8..3, 0u8..4).prop_map(|(by, prop, content, status)| Op::Upsert { by, prop, content, status }),
-        (0u8..5, 0u8..3, 0u8..4, any::<bool>(), 0u8..3)
-            .prop_map(|(by, prop, declared, approved, digest)| Op::Vote { by, prop, declared, approved, digest }),
+        (0u8..5, 0u8..3, 0u8..3, 0u8..4).prop_map(|(by, prop, content, status)| Op::Upsert {
+            by,
+            prop,
+            content,
+            status
+        }),
+        (0u8..5, 0u8..3, 0u8..4, any::<bool>(), 0u8..3).prop_map(
+            |(by, prop, declared, approved, digest)| Op::Vote {
+                by,
+                prop,
+                declared,
+                approved,
+                digest
+            }
+        ),
         (0u8..5, 0u8..3, 0u8..6).prop_map(|(by, prop, back)| Op::Stale { by, prop, back }),
         (0u8..5, 0u8..3).prop_map(|(by, prop)| Op::Applied { by, prop }),
         (1u8..4).prop_map(|who| Op::Remove { who }),
         (0u8..5, 0u8..8).prop_map(|(by, back)| Op::Backdate { by, back }),
-        (0u8..4, 0u8..4, 0u8..3, 0u8..4).prop_map(|(by, who, kind, back)| Op::Cut { by, who, kind, back }),
+        (0u8..4, 0u8..4, 0u8..3, 0u8..4).prop_map(|(by, who, kind, back)| Op::Cut {
+            by,
+            who,
+            kind,
+            back
+        }),
     ]
 }
 
 const PROPS: [u128; 3] = [0xA1, 0xA2, 0xA3];
 
 fn status_from(n: u8) -> ProposalStatus {
-    [ProposalStatus::Open, ProposalStatus::Approved, ProposalStatus::Rejected, ProposalStatus::Applied][n as usize % 4]
+    [
+        ProposalStatus::Open,
+        ProposalStatus::Approved,
+        ProposalStatus::Rejected,
+        ProposalStatus::Applied,
+    ][n as usize % 4]
 }
 
 /// Play `ops` into `w`. `declared` and `status` let a property rewrite what
 /// the payload claims.
-fn play(w: &mut World, ops: &[Op], declared: &dyn Fn(u8) -> WorkspaceRole, status: &dyn Fn(u8) -> ProposalStatus) {
+fn play(
+    w: &mut World,
+    ops: &[Op],
+    declared: &dyn Fn(u8) -> WorkspaceRole,
+    status: &dyn Fn(u8) -> ProposalStatus,
+) {
     let mut content: BTreeMap<u8, u8> = BTreeMap::new();
     for op in ops {
         match op.clone() {
             Op::SetRole { who, role } => {
                 let id = PEOPLE[who as usize];
                 let old = w.config().role_of(id);
-                w.cfg_push("owner", SessionEvent::MemberRoleChanged {
-                    change: MemberRoleChange { member_id: id.into(), old_role: old, new_role: role_from(role) }, watermark: Vec::new(),
-                });
+                w.cfg_push(
+                    "owner",
+                    SessionEvent::MemberRoleChanged {
+                        change: MemberRoleChange {
+                            member_id: id.into(),
+                            old_role: old,
+                            new_role: role_from(role),
+                        },
+                        watermark: Vec::new(),
+                    },
+                );
             }
-            Op::Upsert { by, prop, content: c, status: st } => {
+            Op::Upsert {
+                by,
+                prop,
+                content: c,
+                status: st,
+            } => {
                 content.insert(prop, c);
                 let p = proposal(Uuid::from_u128(PROPS[prop as usize]), c, status(st));
-                w.chat_push(PEOPLE[by as usize], SessionEvent::ProposalUpserted { proposal: p });
+                w.chat_push(
+                    PEOPLE[by as usize],
+                    SessionEvent::ProposalUpserted { proposal: p },
+                );
             }
-            Op::Vote { by, prop, declared: d, approved, digest } => {
+            Op::Vote {
+                by,
+                prop,
+                declared: d,
+                approved,
+                digest,
+            } => {
                 let pid = Uuid::from_u128(PROPS[prop as usize]);
-                let current = content.get(&prop).map(|c| diff_digest(&proposal(pid, *c, ProposalStatus::Open)));
+                let current = content
+                    .get(&prop)
+                    .map(|c| diff_digest(&proposal(pid, *c, ProposalStatus::Open)));
                 let digest = match digest {
                     0 => None,
                     1 => current,
@@ -411,27 +651,63 @@ fn play(w: &mut World, ops: &[Op], declared: &dyn Fn(u8) -> WorkspaceRole, statu
             }
             Op::Applied { by, prop } => {
                 let pid = Uuid::from_u128(PROPS[prop as usize]);
-                let Some(c) = content.get(&prop) else { continue };
+                let Some(c) = content.get(&prop) else {
+                    continue;
+                };
                 let d = diff_digest(&proposal(pid, *c, ProposalStatus::Open));
-                w.chat_push(PEOPLE[by as usize], SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d, commit: None, at: Timestamp::epoch(), repo_id: None, applied_on: None, base_commit: None, applied_tree_hash: None, request_id: None });
+                w.chat_push(
+                    PEOPLE[by as usize],
+                    SessionEvent::ProposalApplied {
+                        proposal_id: pid,
+                        diff_digest: d,
+                        commit: None,
+                        at: Timestamp::epoch(),
+                        repo_id: None,
+                        applied_on: None,
+                        base_commit: None,
+                        applied_tree_hash: None,
+                        request_id: None,
+                    },
+                );
             }
             Op::Remove { who } => {
-                w.cfg_push("owner", SessionEvent::MemberRemoved { member_id: PEOPLE[who as usize].into(), watermark: Vec::new() });
+                w.cfg_push(
+                    "owner",
+                    SessionEvent::MemberRemoved {
+                        member_id: PEOPLE[who as usize].into(),
+                        watermark: Vec::new(),
+                    },
+                );
             }
             Op::Backdate { by, back } => {
                 let f = w.back(back);
                 let by = PEOPLE[by as usize];
                 w.chat_at(by, message(by, "backdated"), Some(f));
             }
-            Op::Cut { by, who, kind, back } => {
+            Op::Cut {
+                by,
+                who,
+                kind,
+                back,
+            } => {
                 let (by, who) = (PEOPLE[by as usize], PEOPLE[who as usize]);
                 let e = match kind {
-                    0 => SessionEvent::MemberRemoved { member_id: who.into(), watermark: Vec::new() },
-                    1 => SessionEvent::MemberRoleChanged {
-                        change: MemberRoleChange { member_id: who.into(), old_role: w.config().role_of(who), new_role: WorkspaceRole::Viewer },
+                    0 => SessionEvent::MemberRemoved {
+                        member_id: who.into(),
                         watermark: Vec::new(),
                     },
-                    _ => SessionEvent::DeviceRevoked { device_id: device_of(who).0, watermark: Vec::new() },
+                    1 => SessionEvent::MemberRoleChanged {
+                        change: MemberRoleChange {
+                            member_id: who.into(),
+                            old_role: w.config().role_of(who),
+                            new_role: WorkspaceRole::Viewer,
+                        },
+                        watermark: Vec::new(),
+                    },
+                    _ => SessionEvent::DeviceRevoked {
+                        device_id: device_of(who).0,
+                        watermark: Vec::new(),
+                    },
                 };
                 if back == 0 {
                     w.cfg_push(by, e);
@@ -608,17 +884,37 @@ proptest! {
 fn held_until_config_frontier_arrives() {
     let mut w = World::new();
     let pid = Uuid::from_u128(0xC0);
-    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
+    w.chat_push(
+        "mara",
+        SessionEvent::ProposalUpserted {
+            proposal: proposal(pid, 1, ProposalStatus::Open),
+        },
+    );
     // val is promoted on a device we haven't synced yet; her vote names that
     // config event as its frontier.
     let mut ahead = w.clone();
-    ahead.cfg_push("owner", SessionEvent::MemberRoleChanged {
-        change: MemberRoleChange { member_id: "val".into(), old_role: WorkspaceRole::Viewer, new_role: WorkspaceRole::Admin }, watermark: Vec::new(),
-    });
+    ahead.cfg_push(
+        "owner",
+        SessionEvent::MemberRoleChanged {
+            change: MemberRoleChange {
+                member_id: "val".into(),
+                old_role: WorkspaceRole::Viewer,
+                new_role: WorkspaceRole::Admin,
+            },
+            watermark: Vec::new(),
+        },
+    );
     let promotion = ahead.cfg.last().unwrap().clone();
-    let f = CfgFrontier { lamport: promotion.lamport, event_id: promotion.event_id };
+    let f = CfgFrontier {
+        lamport: promotion.lamport,
+        event_id: promotion.event_id,
+    };
     w.clock = ahead.clock;
-    let vid = w.chat_at("val", vote("val", pid, WorkspaceRole::Viewer, true, None), Some(f));
+    let vid = w.chat_at(
+        "val",
+        vote("val", pid, WorkspaceRole::Viewer, true, None),
+        Some(f),
+    );
 
     let s = w.state();
     let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
@@ -626,7 +922,10 @@ fn held_until_config_frontier_arrives() {
     assert_eq!(s.authz.held.len(), 1);
     assert_eq!(s.authz.held[0].event_id, vid);
     assert_eq!(s.authz.held[0].reason, HoldReason::ConfigFrontierAhead);
-    assert!(s.authz.blocks(pid, None), "no side effect while a vote on it is held");
+    assert!(
+        s.authz.blocks(pid, None),
+        "no side effect while a vote on it is held"
+    );
     assert_eq!(w.verdicts()[&vid], Verdict::Held);
 
     // The promotion arrives: the vote is decided, at Admin.
@@ -647,23 +946,55 @@ fn held_until_config_frontier_arrives() {
 fn forged_frontier_hold_cannot_block_side_effects_indefinitely() {
     let mut w = World::new();
     let pid = Uuid::from_u128(0xC7);
-    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
+    w.chat_push(
+        "mara",
+        SessionEvent::ProposalUpserted {
+            proposal: proposal(pid, 1, ProposalStatus::Open),
+        },
+    );
     let head = w.head().unwrap();
     // Just ahead of the head: a plausible lagging config event, held.
-    let near = CfgFrontier { lamport: head.lamport + 1, event_id: Uuid::new_v4() };
+    let near = CfgFrontier {
+        lamport: head.lamport + 1,
+        event_id: Uuid::new_v4(),
+    };
     w.clock += 5;
-    let vid = w.chat_at("val", vote("val", pid, WorkspaceRole::Viewer, false, None), Some(near));
-    assert!(w.state().authz.blocks(pid, None), "held while it could still arrive");
+    let vid = w.chat_at(
+        "val",
+        vote("val", pid, WorkspaceRole::Viewer, false, None),
+        Some(near),
+    );
+    assert!(
+        w.state().authz.blocks(pid, None),
+        "held while it could still arrive"
+    );
     // The config log moves past the claimed lamport: the hold is dropped.
     for _ in 0..3 {
-        w.cfg_push("owner", SessionEvent::JoinApproved { subject: "noop".into(), admission: None, redeem_key: None });
+        w.cfg_push(
+            "owner",
+            SessionEvent::JoinApproved {
+                subject: "noop".into(),
+                admission: None,
+                redeem_key: None,
+            },
+        );
     }
     let s = w.state();
-    assert!(!s.authz.blocks(pid, None), "a frontier the log has passed can't block side effects");
+    assert!(
+        !s.authz.blocks(pid, None),
+        "a frontier the log has passed can't block side effects"
+    );
     assert_eq!(w.verdicts()[&vid], Verdict::Denied);
     // Absurdly far ahead: never waited for.
-    let far = CfgFrontier { lamport: u64::MAX - 1, event_id: Uuid::new_v4() };
-    let fid = w.chat_at("val", vote("val", pid, WorkspaceRole::Viewer, false, None), Some(far));
+    let far = CfgFrontier {
+        lamport: u64::MAX - 1,
+        event_id: Uuid::new_v4(),
+    };
+    let fid = w.chat_at(
+        "val",
+        vote("val", pid, WorkspaceRole::Viewer, false, None),
+        Some(far),
+    );
     assert!(!w.state().authz.blocks(pid, None));
     assert_eq!(w.verdicts()[&fid], Verdict::Denied);
 }
@@ -674,14 +1005,32 @@ fn held_when_no_config_log() {
     let pid = Uuid::from_u128(0xC1);
     let set = ProposalSet::new("Q", "planner", vec![pid]);
     let set_id = set.id;
-    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
-    w.chat_push("mara", SessionEvent::ProposalSetOpened { set: Box::new(set) });
-    w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, None));
+    w.chat_push(
+        "mara",
+        SessionEvent::ProposalUpserted {
+            proposal: proposal(pid, 1, ProposalStatus::Open),
+        },
+    );
+    w.chat_push(
+        "mara",
+        SessionEvent::ProposalSetOpened { set: Box::new(set) },
+    );
+    w.chat_push(
+        "owner",
+        vote("owner", pid, WorkspaceRole::Owner, true, None),
+    );
     let s = project_authorized(&w.chat, None, None, WorkspaceAuthz::NoConfigLog).unwrap();
     assert!(s.proposal_sets.is_empty(), "the set waits for the roster");
-    assert!(s.proposals.is_empty(), "every chat event waits for the roster");
+    assert!(
+        s.proposals.is_empty(),
+        "every chat event waits for the roster"
+    );
     assert_eq!(s.authz.held.len(), 3);
-    assert!(s.authz.held.iter().all(|h| h.reason == HoldReason::NoConfigLog));
+    assert!(s
+        .authz
+        .held
+        .iter()
+        .all(|h| h.reason == HoldReason::NoConfigLog));
     assert!(s.authz.blocks(pid, None) && s.authz.blocks_set(set_id, &[pid]));
     // With the config log they fold.
     let s = w.state();
@@ -693,13 +1042,25 @@ fn held_when_no_config_log() {
 fn a_vote_without_a_frontier_or_with_a_forged_one_is_refused() {
     let mut w = World::new();
     let pid = Uuid::from_u128(0xC2);
-    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
-    let none = w.chat_at("owner", vote("owner", pid, WorkspaceRole::Owner, true, None), None);
+    w.chat_push(
+        "mara",
+        SessionEvent::ProposalUpserted {
+            proposal: proposal(pid, 1, ProposalStatus::Open),
+        },
+    );
+    let none = w.chat_at(
+        "owner",
+        vote("owner", pid, WorkspaceRole::Owner, true, None),
+        None,
+    );
     let head = w.head().unwrap();
     let wrong = w.chat_at(
         "owner",
         vote("owner", pid, WorkspaceRole::Owner, true, None),
-        Some(CfgFrontier { lamport: head.lamport + 7, event_id: head.event_id }),
+        Some(CfgFrontier {
+            lamport: head.lamport + 7,
+            event_id: head.event_id,
+        }),
     );
     let v = w.verdicts();
     assert_eq!((v[&none], v[&wrong]), (Verdict::Denied, Verdict::Denied));
@@ -710,7 +1071,12 @@ fn a_vote_without_a_frontier_or_with_a_forged_one_is_refused() {
 fn a_vote_counts_only_from_the_voter_it_names() {
     let mut w = World::new();
     let pid = Uuid::from_u128(0xC3);
-    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
+    w.chat_push(
+        "mara",
+        SessionEvent::ProposalUpserted {
+            proposal: proposal(pid, 1, ProposalStatus::Open),
+        },
+    );
     // val signs a vote that names the owner.
     let forged = w.chat_push("val", vote("owner", pid, WorkspaceRole::Owner, true, None));
     assert_eq!(w.verdicts()[&forged], Verdict::Denied);
@@ -724,10 +1090,23 @@ fn applied_only_from_a_human_member_for_the_approved_content() {
     let p = proposal(pid, 1, ProposalStatus::Open);
     let d = diff_digest(&p);
     w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p });
-    let applied = |d: &str| SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d.into(), commit: None, at: Timestamp::epoch(), repo_id: None, applied_on: None, base_commit: None, applied_tree_hash: None, request_id: None };
+    let applied = |d: &str| SessionEvent::ProposalApplied {
+        proposal_id: pid,
+        diff_digest: d.into(),
+        commit: None,
+        at: Timestamp::epoch(),
+        repo_id: None,
+        applied_on: None,
+        base_commit: None,
+        applied_tree_hash: None,
+        request_id: None,
+    };
     // Not approved yet: refused.
     let early = w.chat_push("ada", applied(&d));
-    w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, Some(d.clone())));
+    w.chat_push(
+        "owner",
+        vote("owner", pid, WorkspaceRole::Owner, true, Some(d.clone())),
+    );
     // A Viewer, a stranger and a wrong digest: refused.
     let viewer = w.chat_push("val", applied(&d));
     let stranger = w.chat_push("eve", applied(&d));
@@ -749,10 +1128,24 @@ fn trust_events(w: &mut World, who: &str) -> Uuid {
     use ligus_core::crypto::{DeviceCertificate, SigningKeypair};
     let acct = SigningKeypair::from_seed(&[who.len() as u8 + 1; 32]).unwrap();
     let dev = SigningKeypair::generate().unwrap();
-    w.cfg_push(who, SessionEvent::AccountKeyRegistered { account_id: account(who), signing_public_key: acct.public_key_bytes().to_vec() });
-    let cert = DeviceCertificate::issue(&acct, account(who), &dev.public_key_bytes(), Timestamp::epoch());
+    w.cfg_push(
+        who,
+        SessionEvent::AccountKeyRegistered {
+            account_id: account(who),
+            signing_public_key: acct.public_key_bytes().to_vec(),
+        },
+    );
+    let cert = DeviceCertificate::issue(
+        &acct,
+        account(who),
+        &dev.public_key_bytes(),
+        Timestamp::epoch(),
+    );
     let device = cert.device_id;
-    w.cfg_push(who, SessionEvent::DeviceCertificateAdded { certificate: cert });
+    w.cfg_push(
+        who,
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
     device
 }
 
@@ -762,15 +1155,39 @@ fn self_revoke_allowed_other_revoke_needs_admin() {
     let maras_laptop = trust_events(&mut w, "mara");
     let vals_phone = trust_events(&mut w, "val");
     // mara (Contributor) can't revoke val's device...
-    let other = w.cfg_push("mara", SessionEvent::DeviceRevoked { device_id: vals_phone, watermark: Vec::new() });
+    let other = w.cfg_push(
+        "mara",
+        SessionEvent::DeviceRevoked {
+            device_id: vals_phone,
+            watermark: Vec::new(),
+        },
+    );
     // ...but can revoke her own.
-    let own = w.cfg_push("mara", SessionEvent::DeviceRevoked { device_id: maras_laptop, watermark: Vec::new() });
+    let own = w.cfg_push(
+        "mara",
+        SessionEvent::DeviceRevoked {
+            device_id: maras_laptop,
+            watermark: Vec::new(),
+        },
+    );
     // An Admin can revoke anyone's.
-    let admin = w.cfg_push("ada", SessionEvent::DeviceRevoked { device_id: vals_phone, watermark: Vec::new() });
+    let admin = w.cfg_push(
+        "ada",
+        SessionEvent::DeviceRevoked {
+            device_id: vals_phone,
+            watermark: Vec::new(),
+        },
+    );
     let v = w.verdicts();
-    assert_eq!((v[&other], v[&own], v[&admin]), (Verdict::Denied, Verdict::Allowed, Verdict::Allowed));
+    assert_eq!(
+        (v[&other], v[&own], v[&admin]),
+        (Verdict::Denied, Verdict::Allowed, Verdict::Allowed)
+    );
     let cfg = w.config();
-    assert!(cfg.guards.revoked_devices.contains(&maras_laptop) && cfg.guards.revoked_devices.contains(&vals_phone));
+    assert!(
+        cfg.guards.revoked_devices.contains(&maras_laptop)
+            && cfg.guards.revoked_devices.contains(&vals_phone)
+    );
 }
 
 #[test]
@@ -778,7 +1195,13 @@ fn self_revoke_needs_the_certificate_not_a_claim() {
     let mut w = World::new();
     let d = trust_events(&mut w, "val");
     // mara claims a device her account never certified.
-    let claim = w.cfg_push("mara", SessionEvent::DeviceRevoked { device_id: d, watermark: Vec::new() });
+    let claim = w.cfg_push(
+        "mara",
+        SessionEvent::DeviceRevoked {
+            device_id: d,
+            watermark: Vec::new(),
+        },
+    );
     assert_eq!(w.verdicts()[&claim], Verdict::Denied);
 }
 
@@ -789,16 +1212,34 @@ fn contributor_cannot_rebind_agent_host_or_runtime() {
     let mut w = World::new();
     let mut agent = ligus_core::WorkspaceAgent::new("coder", "gw");
     agent.owner_actor_id = "mara".into();
-    let created = w.cfg_push("mara", SessionEvent::AgentUpserted { agent: agent.clone() });
+    let created = w.cfg_push(
+        "mara",
+        SessionEvent::AgentUpserted {
+            agent: agent.clone(),
+        },
+    );
     let mut moved = agent.clone();
     moved.host_id = "worker-1".into();
-    let host = w.cfg_push("mara", SessionEvent::AgentUpserted { agent: moved.clone() });
+    let host = w.cfg_push(
+        "mara",
+        SessionEvent::AgentUpserted {
+            agent: moved.clone(),
+        },
+    );
     let mut rt = agent.clone();
     rt.runtime_id = "other".into();
-    let runtime = w.cfg_push("mara", SessionEvent::AgentRosterUpdated { agents: vec![rt] });
+    let runtime = w.cfg_push(
+        "mara",
+        SessionEvent::AgentRosterUpdated { agents: vec![rt] },
+    );
     let mut renamed = agent.clone();
     renamed.name = "coder2".into();
-    let rename = w.cfg_push("mara", SessionEvent::AgentUpserted { agent: renamed.clone() });
+    let rename = w.cfg_push(
+        "mara",
+        SessionEvent::AgentUpserted {
+            agent: renamed.clone(),
+        },
+    );
     // Someone else's agent: a Contributor can't even rename it.
     let mut theirs = renamed.clone();
     theirs.role = "Reviewer".into();
@@ -806,8 +1247,22 @@ fn contributor_cannot_rebind_agent_host_or_runtime() {
     // A new agent born bound to a host needs Admin too.
     let mut bound = ligus_core::WorkspaceAgent::new("box", "gw");
     bound.host_id = "worker-1".into();
-    let born_bound = w.cfg_push("mara", SessionEvent::AgentUpserted { agent: bound.clone() });
-    let admin = w.cfg_push("ada", SessionEvent::AgentUpserted { agent: { let mut m = renamed.clone(); m.host_id = "worker-1".into(); m } });
+    let born_bound = w.cfg_push(
+        "mara",
+        SessionEvent::AgentUpserted {
+            agent: bound.clone(),
+        },
+    );
+    let admin = w.cfg_push(
+        "ada",
+        SessionEvent::AgentUpserted {
+            agent: {
+                let mut m = renamed.clone();
+                m.host_id = "worker-1".into();
+                m
+            },
+        },
+    );
     let v = w.verdicts();
     assert_eq!(v[&created], Verdict::Allowed);
     assert_eq!(v[&host], Verdict::Denied);
@@ -817,8 +1272,15 @@ fn contributor_cannot_rebind_agent_host_or_runtime() {
     assert_eq!(v[&born_bound], Verdict::Denied);
     assert_eq!(v[&admin], Verdict::Allowed);
     let cfg = w.config();
-    let a = cfg.workspace_agents.iter().find(|a| a.id == agent.id).unwrap();
-    assert_eq!((a.host_id.as_str(), a.runtime_id.as_str(), a.name.as_str()), ("worker-1", "gw", "coder2"));
+    let a = cfg
+        .workspace_agents
+        .iter()
+        .find(|a| a.id == agent.id)
+        .unwrap();
+    assert_eq!(
+        (a.host_id.as_str(), a.runtime_id.as_str(), a.name.as_str()),
+        ("worker-1", "gw", "coder2")
+    );
 }
 
 // ---- S4 run writes ----
@@ -830,24 +1292,51 @@ fn workflow_run_without_epoch_only_from_creator_device() {
     let def = ligus_core::workflow::preset_review_gate();
     let mut run = ligus_core::workflow::new_run(&def, "go", "mara");
     run.creator_device_id = Some(creator);
-    let sign = |w: &mut World, id: Uuid, dev: Uuid| w.chat.iter_mut().find(|e| e.event_id == id).unwrap().signer_device_id = Some(dev);
-    let first = w.chat_push("mara", SessionEvent::WorkflowRunUpserted { run: Box::new(run.clone()) });
+    let sign = |w: &mut World, id: Uuid, dev: Uuid| {
+        w.chat
+            .iter_mut()
+            .find(|e| e.event_id == id)
+            .unwrap()
+            .signer_device_id = Some(dev)
+    };
+    let first = w.chat_push(
+        "mara",
+        SessionEvent::WorkflowRunUpserted {
+            run: Box::new(run.clone()),
+        },
+    );
     sign(&mut w, first, creator);
     let mut hijack = run.clone();
     hijack.input = "rm -rf".into();
     hijack.creator_device_id = Some(other);
-    let foreign = w.chat_push("mara", SessionEvent::WorkflowRunUpserted { run: Box::new(hijack) });
+    let foreign = w.chat_push(
+        "mara",
+        SessionEvent::WorkflowRunUpserted {
+            run: Box::new(hijack),
+        },
+    );
     sign(&mut w, foreign, other);
     let mut update = run.clone();
     update.status = ligus_core::workflow::WorkflowRunStatus::Completed;
-    let own = w.chat_push("mara", SessionEvent::WorkflowRunUpserted { run: Box::new(update) });
+    let own = w.chat_push(
+        "mara",
+        SessionEvent::WorkflowRunUpserted {
+            run: Box::new(update),
+        },
+    );
     sign(&mut w, own, creator);
     let v = w.verdicts();
-    assert_eq!((v[&first], v[&foreign], v[&own]), (Verdict::Allowed, Verdict::Denied, Verdict::Allowed));
+    assert_eq!(
+        (v[&first], v[&foreign], v[&own]),
+        (Verdict::Allowed, Verdict::Denied, Verdict::Allowed)
+    );
     let s = w.state();
     assert_eq!(s.workflow_runs[0].input, "go");
     assert_eq!(s.workflow_runs[0].creator_device_id, Some(creator));
-    assert_eq!(s.workflow_runs[0].status, ligus_core::workflow::WorkflowRunStatus::Completed);
+    assert_eq!(
+        s.workflow_runs[0].status,
+        ligus_core::workflow::WorkflowRunStatus::Completed
+    );
 }
 
 // ---- S5 lockdown bounds ----
@@ -866,7 +1355,11 @@ fn lockdown(id: u128, by: &str) -> ligus_core::guard::ChatLockdown {
 
 /// The raise event ids of `chat`'s active lockdowns (what a clear names).
 fn raises_of(c: &ChatSession, chat: Uuid) -> Vec<Uuid> {
-    c.guards.lockdowns_of(chat).iter().filter_map(|l| l.raise_event_id).collect()
+    c.guards
+        .lockdowns_of(chat)
+        .iter()
+        .filter_map(|l| l.raise_event_id)
+        .collect()
 }
 
 #[test]
@@ -875,30 +1368,69 @@ fn lockdown_bounds_s5() {
     let chat = w.sid;
     // One raiser: at most 3 active, whatever name the payload claims.
     for i in 0..6 {
-        w.cfg_push("val", SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(i, &format!("alias{i}")) });
+        w.cfg_push(
+            "val",
+            SessionEvent::ChatLockdownRaised {
+                chat_id: chat,
+                lockdown: lockdown(i, &format!("alias{i}")),
+            },
+        );
     }
     assert_eq!(w.config().guards.lockdowns_of(chat).len(), 3);
     // Many raisers (all members): at most 16 active per chat.
     for i in 0..10u128 {
-        w.cfg_push("owner", SessionEvent::MemberAdded { member: member(&format!("worker{i}"), WorkspaceRole::Viewer), invite: None, proof: None });
+        w.cfg_push(
+            "owner",
+            SessionEvent::MemberAdded {
+                member: member(&format!("worker{i}"), WorkspaceRole::Viewer),
+                invite: None,
+                proof: None,
+            },
+        );
     }
     for i in 0..40u128 {
         let by = format!("worker{}", i % 10);
-        w.cfg_push(&by, SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(100 + i, &by) });
+        w.cfg_push(
+            &by,
+            SessionEvent::ChatLockdownRaised {
+                chat_id: chat,
+                lockdown: lockdown(100 + i, &by),
+            },
+        );
     }
     assert_eq!(w.config().guards.lockdowns_of(chat).len(), 16);
     // A clear of all of them frees the slots.
     let raises = raises_of(&w.config(), chat);
-    w.cfg_push("mara", SessionEvent::ChatLockdownCleared { chat_id: chat, raises });
-    w.cfg_push("val", SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(999, "val") });
+    w.cfg_push(
+        "mara",
+        SessionEvent::ChatLockdownCleared {
+            chat_id: chat,
+            raises,
+        },
+    );
+    w.cfg_push(
+        "val",
+        SessionEvent::ChatLockdownRaised {
+            chat_id: chat,
+            lockdown: lockdown(999, "val"),
+        },
+    );
     assert_eq!(w.config().guards.lockdowns_of(chat).len(), 1);
 }
 
 // ---- A demotion never lifts a lockdown ----
 
 /// The lockdowns active on `chat` in `w`'s config fold.
-fn active_lockdowns(w: &ligus_core::testkit::SignedWorld, chat: Uuid) -> std::collections::BTreeSet<Uuid> {
-    w.config().guards.lockdowns_of(chat).iter().map(|l| l.id).collect()
+fn active_lockdowns(
+    w: &ligus_core::testkit::SignedWorld,
+    chat: Uuid,
+) -> std::collections::BTreeSet<Uuid> {
+    w.config()
+        .guards
+        .lockdowns_of(chat)
+        .iter()
+        .map(|l| l.id)
+        .collect()
 }
 
 proptest! {
@@ -988,17 +1520,36 @@ fn flow_bounds_s6() {
     use ligus_core::authz::bounds::*;
     let mut w = World::new();
     for i in 0..(MAX_ZONES as u128 + 10) {
-        w.cfg_push("ada", SessionEvent::FlowRecorded { record: zone(i, &format!("src/z{i}/")) });
+        w.cfg_push(
+            "ada",
+            SessionEvent::FlowRecorded {
+                record: zone(i, &format!("src/z{i}/")),
+            },
+        );
     }
     assert_eq!(w.config().flow.zones.len(), MAX_ZONES);
     let mut w = World::new();
     let long = "a/".repeat(200);
-    let deep = (0..20).map(|i| format!("d{i}")).collect::<Vec<_>>().join("/");
+    let deep = (0..20)
+        .map(|i| format!("d{i}"))
+        .collect::<Vec<_>>()
+        .join("/");
     let stars = "**/a/**/b/**/c/**/d/**/e";
-    for (i, p) in [long.as_str(), deep.as_str(), stars].into_iter().enumerate() {
-        w.cfg_push("ada", SessionEvent::FlowRecorded { record: zone(i as u128, p) });
+    for (i, p) in [long.as_str(), deep.as_str(), stars]
+        .into_iter()
+        .enumerate()
+    {
+        w.cfg_push(
+            "ada",
+            SessionEvent::FlowRecorded {
+                record: zone(i as u128, p),
+            },
+        );
     }
-    assert!(w.config().flow.zones.is_empty(), "oversized patterns are refused");
+    assert!(
+        w.config().flow.zones.is_empty(),
+        "oversized patterns are refused"
+    );
     // Marks per chat, profiles, recruits per proposal.
     let mut w = World::new();
     for i in 0..(MAX_MARKS_PER_CHAT as u128 + 5) {
@@ -1010,7 +1561,10 @@ fn flow_bounds_s6() {
     }
     assert_eq!(w.config().flow.marks.len(), MAX_MARKS_PER_CHAT);
     for i in 0..(MAX_AGENT_PROFILES as u128 + 5) {
-        let p: FlowRecord = serde_json::from_value(serde_json::json!({"type": "agentProfile", "agentId": Uuid::from_u128(i)})).unwrap();
+        let p: FlowRecord = serde_json::from_value(
+            serde_json::json!({"type": "agentProfile", "agentId": Uuid::from_u128(i)}),
+        )
+        .unwrap();
         w.cfg_push("mara", SessionEvent::FlowRecorded { record: p });
     }
     assert_eq!(w.config().flow.profiles.len(), MAX_AGENT_PROFILES);
@@ -1079,22 +1633,54 @@ fn unknown_rules_version_needs_presence_to_make_workspace_read_only() {
     assert_eq!(w.config().authz.rules, 2, "workspaces start at rules v2");
     assert!(!w.config().authz.read_only());
     // Only the Owner sets rules.
-    let by_admin = w.cfg_push("ada", SessionEvent::WorkspaceRulesSet { version: 9, presence: None });
+    let by_admin = w.cfg_push(
+        "ada",
+        SessionEvent::WorkspaceRulesSet {
+            version: 9,
+            presence: None,
+        },
+    );
     assert_eq!(w.verdicts()[&by_admin], Verdict::Denied);
     assert!(!w.config().authz.read_only());
     // The Owner's device key alone can't switch to an unknown version.
-    let by_owner = w.cfg_push_bare("owner", SessionEvent::WorkspaceRulesSet { version: ligus_core::authz::RULES_SUPPORTED + 1, presence: None });
+    let by_owner = w.cfg_push_bare(
+        "owner",
+        SessionEvent::WorkspaceRulesSet {
+            version: ligus_core::authz::RULES_SUPPORTED + 1,
+            presence: None,
+        },
+    );
     assert_eq!(w.verdicts()[&by_owner], Verdict::Denied);
-    assert!(!w.config().authz.read_only(), "a switch without presence froze the workspace");
-    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(Uuid::from_u128(0xF1), 1, ProposalStatus::Open) });
+    assert!(
+        !w.config().authz.read_only(),
+        "a switch without presence froze the workspace"
+    );
+    w.chat_push(
+        "mara",
+        SessionEvent::ProposalUpserted {
+            proposal: proposal(Uuid::from_u128(0xF1), 1, ProposalStatus::Open),
+        },
+    );
     let s = w.state();
     assert_eq!(s.proposals.len(), 1);
     assert!(!s.authz.read_only());
     // Version 1 doesn't exist, even with the Owner's presence.
-    let v1 = w.cfg_push("owner", SessionEvent::WorkspaceRulesSet { version: 1, presence: None });
+    let v1 = w.cfg_push(
+        "owner",
+        SessionEvent::WorkspaceRulesSet {
+            version: 1,
+            presence: None,
+        },
+    );
     assert_eq!(w.verdicts()[&v1], Verdict::Denied);
     // With presence, an unknown version makes this build read-only.
-    let ok = w.cfg_push("owner", SessionEvent::WorkspaceRulesSet { version: ligus_core::authz::RULES_SUPPORTED + 1, presence: None });
+    let ok = w.cfg_push(
+        "owner",
+        SessionEvent::WorkspaceRulesSet {
+            version: ligus_core::authz::RULES_SUPPORTED + 1,
+            presence: None,
+        },
+    );
     assert_eq!(w.verdicts()[&ok], Verdict::Allowed);
     assert!(w.config().authz.read_only());
 }
@@ -1111,9 +1697,26 @@ fn upgrade_refold_recovers_unknown_events() {
     let p = proposal(pid, 1, ProposalStatus::Open);
     let d = diff_digest(&p);
     w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p });
-    w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, Some(d.clone())));
-    let applied = w.chat_push("ada", SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d, commit: Some("abc".into()), at: Timestamp::epoch(), repo_id: None, applied_on: None, base_commit: None, applied_tree_hash: None, request_id: None });
-    let wire = serde_json::to_string(w.chat.iter().find(|e| e.event_id == applied).unwrap()).unwrap();
+    w.chat_push(
+        "owner",
+        vote("owner", pid, WorkspaceRole::Owner, true, Some(d.clone())),
+    );
+    let applied = w.chat_push(
+        "ada",
+        SessionEvent::ProposalApplied {
+            proposal_id: pid,
+            diff_digest: d,
+            commit: Some("abc".into()),
+            at: Timestamp::epoch(),
+            repo_id: None,
+            applied_on: None,
+            base_commit: None,
+            applied_tree_hash: None,
+            request_id: None,
+        },
+    );
+    let wire =
+        serde_json::to_string(w.chat.iter().find(|e| e.event_id == applied).unwrap()).unwrap();
 
     // An older build: the kind is unknown, and the event folds as a no-op.
     #[derive(serde::Deserialize)]
@@ -1133,8 +1736,14 @@ fn upgrade_refold_recovers_unknown_events() {
     // This build re-parses the same stored bytes and applies it.
     let mut upgraded = as_old.clone();
     upgraded.chat.push(serde_json::from_str(&wire).unwrap());
-    assert_eq!(serde_json::to_string(upgraded.chat.last().unwrap()).unwrap(), wire);
-    assert_eq!(upgraded.state().proposals[0].status, ProposalStatus::Applied);
+    assert_eq!(
+        serde_json::to_string(upgraded.chat.last().unwrap()).unwrap(),
+        wire
+    );
+    assert_eq!(
+        upgraded.state().proposals[0].status,
+        ProposalStatus::Applied
+    );
 }
 
 // ---- membership: every author is a member at the event's position ----
@@ -1146,11 +1755,19 @@ fn message(by: &str, body: &str) -> SessionEvent {
 }
 
 fn enroll(id: &str, invite: Option<Uuid>) -> SessionEvent {
-    SessionEvent::MemberAdded { member: member(id, WorkspaceRole::Contributor), invite, proof: None }
+    SessionEvent::MemberAdded {
+        member: member(id, WorkspaceRole::Contributor),
+        invite,
+        proof: None,
+    }
 }
 
 fn issue(invite: Uuid) -> SessionEvent {
-    SessionEvent::JoinApproved { subject: ligus_core::authorization::invite_subject(invite), admission: None, redeem_key: None }
+    SessionEvent::JoinApproved {
+        subject: ligus_core::authorization::invite_subject(invite),
+        admission: None,
+        redeem_key: None,
+    }
 }
 
 proptest! {
@@ -1236,7 +1853,14 @@ fn an_invited_member_enrolls_once_and_the_invite_is_spent() {
     w.cfg_push("owner", issue(id2));
     let mut admin = member("kim", WorkspaceRole::Admin);
     admin.role = WorkspaceRole::Admin;
-    let greedy = w.cfg_push("kim", SessionEvent::MemberAdded { member: admin, invite: Some(id2), proof: None });
+    let greedy = w.cfg_push(
+        "kim",
+        SessionEvent::MemberAdded {
+            member: admin,
+            invite: Some(id2),
+            proof: None,
+        },
+    );
     let v = w.verdicts();
     assert_eq!(v[&early], Verdict::Denied);
     assert_eq!(v[&by_mara], Verdict::Denied);
@@ -1246,7 +1870,14 @@ fn an_invited_member_enrolls_once_and_the_invite_is_spent() {
     assert_eq!(v[&reuse], Verdict::Denied);
     assert_eq!(v[&greedy], Verdict::Denied);
     assert_eq!(w.config().role_of("joe"), WorkspaceRole::Contributor);
-    assert_eq!(w.state().messages.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(), vec!["hello"]);
+    assert_eq!(
+        w.state()
+            .messages
+            .iter()
+            .map(|m| m.body.as_str())
+            .collect::<Vec<_>>(),
+        vec!["hello"]
+    );
 }
 
 #[test]
@@ -1255,8 +1886,17 @@ fn a_chat_founded_by_a_non_member_does_not_exist() {
     let mut seed = ChatSession::new("eve's", w.wid, "anthropic");
     seed.creator_actor_id = "eve".into();
     seed.members = vec![member("eve", WorkspaceRole::Owner)];
-    let mut forged = World { chat: Vec::new(), sid: seed.id, ..w.clone() };
-    forged.chat_push("eve", SessionEvent::SessionSnapshot { session: Box::new(seed) });
+    let mut forged = World {
+        chat: Vec::new(),
+        sid: seed.id,
+        ..w.clone()
+    };
+    forged.chat_push(
+        "eve",
+        SessionEvent::SessionSnapshot {
+            session: Box::new(seed),
+        },
+    );
     forged.chat_push("eve", message("eve", "hi"));
     let t = forged.timeline();
     assert!(project_authorized(&forged.chat, None, None, WorkspaceAuthz::Timeline(&t)).is_none());
@@ -1281,20 +1921,60 @@ fn agent_world(owner_name: &str) -> (World, AgentSetup) {
     let mut w = World::new();
     let acct = account_key(owner_name);
     let dev = SigningKeypair::from_seed(&[owner_name.len() as u8 + 80; 32]).unwrap();
-    w.cfg_push(owner_name, SessionEvent::AccountKeyRegistered { account_id: account(owner_name), signing_public_key: acct.public_key_bytes().to_vec() });
-    let cert = DeviceCertificate::issue(&acct, account(owner_name), &dev.public_key_bytes(), Timestamp::epoch());
+    w.cfg_push(
+        owner_name,
+        SessionEvent::AccountKeyRegistered {
+            account_id: account(owner_name),
+            signing_public_key: acct.public_key_bytes().to_vec(),
+        },
+    );
+    let cert = DeviceCertificate::issue(
+        &acct,
+        account(owner_name),
+        &dev.public_key_bytes(),
+        Timestamp::epoch(),
+    );
     let host = cert.device_id;
-    w.cfg_push(owner_name, SessionEvent::DeviceCertificateAdded { certificate: cert });
+    w.cfg_push(
+        owner_name,
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
     let mut agent = ligus_core::WorkspaceAgent::new("coder", "gw");
     agent.owner_actor_id = owner_name.into();
     let agent_id = agent.id;
-    w.cfg_push("owner", SessionEvent::AgentUpserted { agent: { let mut a = agent.clone(); a.host_id = host.to_string(); a } });
+    w.cfg_push(
+        "owner",
+        SessionEvent::AgentUpserted {
+            agent: {
+                let mut a = agent.clone();
+                a.host_id = host.to_string();
+                a
+            },
+        },
+    );
     let akp = SigningKeypair::from_seed(&[7; 32]).unwrap();
-    let acert = ligus_core::AgentKeyCertificate::issue(&dev, host, agent_id, &akp.public_key_bytes(), Timestamp::epoch());
+    let acert = ligus_core::AgentKeyCertificate::issue(
+        &dev,
+        host,
+        agent_id,
+        &akp.public_key_bytes(),
+        Timestamp::epoch(),
+    );
     let key_id = acert.key_id;
     let id = w.cfg_push(owner_name, SessionEvent::AgentKeyCertified { cert: acert });
-    w.cfg.iter_mut().find(|e| e.event_id == id).unwrap().signer_device_id = Some(host);
-    (w, AgentSetup { agent_id, key_id, host })
+    w.cfg
+        .iter_mut()
+        .find(|e| e.event_id == id)
+        .unwrap()
+        .signer_device_id = Some(host);
+    (
+        w,
+        AgentSetup {
+            agent_id,
+            key_id,
+            host,
+        },
+    )
 }
 
 impl World {
@@ -1304,8 +1984,21 @@ impl World {
         let env = self.chat.iter_mut().find(|x| x.event_id == id).unwrap();
         let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
         actor.device_id = Some(a.key_id);
-        let (f, h) = env.actor_stamp.as_ref().map(|s| (s.cfg_frontier, s.log_head)).unwrap();
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: h });
+        let (f, h) = env
+            .actor_stamp
+            .as_ref()
+            .map(|s| (s.cfg_frontier, s.log_head))
+            .unwrap();
+        env.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: f,
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head: h,
+        });
         env.signer_device_id = Some(a.key_id);
         id
     }
@@ -1327,11 +2020,26 @@ fn agent_key_certification_is_checked() {
     let akp = ligus_core::crypto::SigningKeypair::generate().unwrap();
     let other = ligus_core::crypto::SigningKeypair::generate().unwrap();
     let stranger = Uuid::new_v4();
-    let c = ligus_core::AgentKeyCertificate::issue(&other, stranger, a.agent_id, &akp.public_key_bytes(), Timestamp::epoch());
+    let c = ligus_core::AgentKeyCertificate::issue(
+        &other,
+        stranger,
+        a.agent_id,
+        &akp.public_key_bytes(),
+        Timestamp::epoch(),
+    );
     let id = forged.cfg_push("mara", SessionEvent::AgentKeyCertified { cert: c.clone() });
-    forged.cfg.iter_mut().find(|e| e.event_id == id).unwrap().signer_device_id = Some(stranger);
+    forged
+        .cfg
+        .iter_mut()
+        .find(|e| e.event_id == id)
+        .unwrap()
+        .signer_device_id = Some(stranger);
     assert_eq!(forged.verdicts()[&id], Verdict::Denied);
-    assert!(forged.timeline().current().valid_agent_key(c.key_id).is_none());
+    assert!(forged
+        .timeline()
+        .current()
+        .valid_agent_key(c.key_id)
+        .is_none());
 }
 
 #[test]
@@ -1339,7 +2047,13 @@ fn an_agent_signs_its_own_reply() {
     let (mut w, a) = agent_world("mara");
     let (mid, reply) = agent_reply(&a, 0x51);
     let ok = w.agent_push(&a, reply);
-    let chunk = w.agent_push(&a, SessionEvent::MessageCompleted { message_id: mid, body: "done".into() });
+    let chunk = w.agent_push(
+        &a,
+        SessionEvent::MessageCompleted {
+            message_id: mid,
+            body: "done".into(),
+        },
+    );
     // Not someone else's message.
     let (_, theirs) = {
         let mut m = ligus_core::ChatMessage::new(ligus_core::MessageRole::Assistant, "ligus", "x");
@@ -1348,15 +2062,31 @@ fn an_agent_signs_its_own_reply() {
     };
     let other = w.agent_push(&a, theirs);
     let v = w.verdicts();
-    assert_eq!((v[&ok], v[&chunk], v[&other]), (Verdict::Allowed, Verdict::Allowed, Verdict::Denied));
-    assert_eq!(w.state().messages.iter().find(|m| m.id == mid).unwrap().body, "done");
+    assert_eq!(
+        (v[&ok], v[&chunk], v[&other]),
+        (Verdict::Allowed, Verdict::Allowed, Verdict::Denied)
+    );
+    assert_eq!(
+        w.state()
+            .messages
+            .iter()
+            .find(|m| m.id == mid)
+            .unwrap()
+            .body,
+        "done"
+    );
 }
 
 #[test]
 fn agent_tier_never_votes_on_human_gate() {
     let (mut w, a) = agent_world("owner");
     let pid = Uuid::from_u128(0x61);
-    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
+    w.chat_push(
+        "mara",
+        SessionEvent::ProposalUpserted {
+            proposal: proposal(pid, 1, ProposalStatus::Open),
+        },
+    );
     let me = a.agent_id.to_string();
     let v = w.agent_push(&a, vote(&me, pid, WorkspaceRole::Owner, true, None));
     assert_eq!(w.verdicts()[&v], Verdict::Denied);
@@ -1370,8 +2100,24 @@ fn agent_tier_never_applies() {
     let p = proposal(pid, 1, ProposalStatus::Open);
     let d = diff_digest(&p);
     w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p });
-    w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, Some(d.clone())));
-    let applied = w.agent_push(&a, SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d, commit: None, at: Timestamp::epoch(), repo_id: None, applied_on: None, base_commit: None, applied_tree_hash: None, request_id: None });
+    w.chat_push(
+        "owner",
+        vote("owner", pid, WorkspaceRole::Owner, true, Some(d.clone())),
+    );
+    let applied = w.agent_push(
+        &a,
+        SessionEvent::ProposalApplied {
+            proposal_id: pid,
+            diff_digest: d,
+            commit: None,
+            at: Timestamp::epoch(),
+            repo_id: None,
+            applied_on: None,
+            base_commit: None,
+            applied_tree_hash: None,
+            request_id: None,
+        },
+    );
     assert_eq!(w.verdicts()[&applied], Verdict::Denied);
     assert_eq!(w.state().proposals[0].status, ProposalStatus::Approved);
 }
@@ -1381,11 +2127,25 @@ fn agent_tier_cannot_emit_admin_events() {
     let (mut w, a) = agent_world("owner");
     let set = ProposalSet::new("Q", "planner", vec![]);
     let set_id = set.id;
-    w.chat_push("owner", SessionEvent::ProposalSetOpened { set: Box::new(set) });
+    w.chat_push(
+        "owner",
+        SessionEvent::ProposalSetOpened { set: Box::new(set) },
+    );
     let chat_events = [
-        SessionEvent::ProposalSetDecided { set_id, winner: None, at: Timestamp::epoch() },
-        SessionEvent::ProposalSetTuned { set_id, agent_quorum: 1, required_approvals: 0, quality_bar: 0 },
-        SessionEvent::WorkflowDefinitionsUpdated { definitions: vec![] },
+        SessionEvent::ProposalSetDecided {
+            set_id,
+            winner: None,
+            at: Timestamp::epoch(),
+        },
+        SessionEvent::ProposalSetTuned {
+            set_id,
+            agent_quorum: 1,
+            required_approvals: 0,
+            quality_bar: 0,
+        },
+        SessionEvent::WorkflowDefinitionsUpdated {
+            definitions: vec![],
+        },
         SessionEvent::SessionArchivedChanged { archived: true },
     ];
     for e in chat_events {
@@ -1394,26 +2154,60 @@ fn agent_tier_cannot_emit_admin_events() {
     }
     // Config-log governance signed by the agent key: refused too.
     for e in [
-        SessionEvent::MemberAdded { member: member("ghost", WorkspaceRole::Admin), invite: None, proof: None },
-        SessionEvent::WorkspaceRulesSet { version: 1, presence: None },
-        SessionEvent::ChatLockdownCleared { chat_id: w.sid, raises: vec![Uuid::new_v4()] },
+        SessionEvent::MemberAdded {
+            member: member("ghost", WorkspaceRole::Admin),
+            invite: None,
+            proof: None,
+        },
+        SessionEvent::WorkspaceRulesSet {
+            version: 1,
+            presence: None,
+        },
+        SessionEvent::ChatLockdownCleared {
+            chat_id: w.sid,
+            raises: vec![Uuid::new_v4()],
+        },
     ] {
         let id = w.cfg_push("x", e);
         let env = w.cfg.iter_mut().find(|x| x.event_id == id).unwrap();
         let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
         actor.device_id = Some(a.key_id);
         let h = env.actor_stamp.as_ref().and_then(|s| s.log_head);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: h });
+        env.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: None,
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head: h,
+        });
         env.signer_device_id = Some(a.key_id);
         assert_eq!(w.verdicts()[&id], Verdict::Denied);
     }
     // What the tier allows on the config log does fold (a lockdown only tightens).
-    let id = w.cfg_push("x", SessionEvent::ChatLockdownRaised { chat_id: w.sid, lockdown: lockdown(0x77, "coder") });
+    let id = w.cfg_push(
+        "x",
+        SessionEvent::ChatLockdownRaised {
+            chat_id: w.sid,
+            lockdown: lockdown(0x77, "coder"),
+        },
+    );
     let env = w.cfg.iter_mut().find(|x| x.event_id == id).unwrap();
     let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
     actor.device_id = Some(a.key_id);
     let h = env.actor_stamp.as_ref().and_then(|s| s.log_head);
-    env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: h });
+    env.actor_stamp = Some(ActorStamp {
+        actor,
+        recorded_at: Timestamp::epoch(),
+        cfg_frontier: None,
+        presence: None,
+        runtime_effect: false,
+        prev: None,
+        sig_alg: Default::default(),
+        log_head: h,
+    });
     env.signer_device_id = Some(a.key_id);
     assert_eq!(w.verdicts()[&id], Verdict::Allowed);
 }
@@ -1425,7 +2219,13 @@ fn agent_cert_invalid_after_rebind() {
     let ok = w.agent_push(&a, before);
     // An Admin rebinds the agent to another host: the old key stops counting
     // from that position on.
-    let mut agent = w.config().workspace_agents.iter().find(|x| x.id == a.agent_id).unwrap().clone();
+    let mut agent = w
+        .config()
+        .workspace_agents
+        .iter()
+        .find(|x| x.id == a.agent_id)
+        .unwrap()
+        .clone();
     agent.host_id = "worker-2".into();
     w.cfg_push("ada", SessionEvent::AgentUpserted { agent });
     let (_, after) = agent_reply(&a, 0x72);
@@ -1443,14 +2243,25 @@ fn agent_of_viewer_capped_at_viewer() {
     let mut p = proposal(Uuid::from_u128(0x81), 1, ProposalStatus::Open);
     p.author_actor_id = String::new(); // agent output is filed authorless
     p.producing_agent_id = Some(a.agent_id);
-    let filed = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: p.clone() });
+    let filed = w.agent_push(
+        &a,
+        SessionEvent::ProposalUpserted {
+            proposal: p.clone(),
+        },
+    );
     assert_eq!(w.verdicts()[&filed], Verdict::Denied);
     let (mut w2, a2) = agent_world("mara");
     p.producing_agent_id = Some(a2.agent_id);
     let filed2 = w2.agent_push(&a2, SessionEvent::ProposalUpserted { proposal: p });
     assert_eq!(w2.verdicts()[&filed2], Verdict::Allowed);
     // Once its owner leaves, the agent's events stop counting.
-    w2.cfg_push("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: Vec::new() });
+    w2.cfg_push(
+        "owner",
+        SessionEvent::MemberRemoved {
+            member_id: "mara".into(),
+            watermark: Vec::new(),
+        },
+    );
     let (_, r) = agent_reply(&a2, 0x82);
     let after = w2.agent_push(&a2, r);
     assert_eq!(w2.verdicts()[&after], Verdict::Denied);
@@ -1466,12 +2277,29 @@ fn rules_v2_tier_applies_to_host_signed_agent_output() {
     let mut p = proposal(Uuid::from_u128(0x91), 1, ProposalStatus::Open);
     p.author_actor_id = String::new(); // agent output is filed authorless
     p.producing_agent_id = Some(agent);
-    let upsert = SessionEvent::ProposalUpserted { proposal: p.clone() };
+    let upsert = SessionEvent::ProposalUpserted {
+        proposal: p.clone(),
+    };
     assert_eq!(agent_authored(&upsert), Some(agent));
     let fold = ChatSession::new("c", Uuid::nil(), "x");
     assert!(tier_allows(&upsert, agent, Uuid::nil(), &fold).is_ok());
-    p.approvals.push(ProposalApproval { actor_id: "owner".into(), role: WorkspaceRole::Owner, approved: true, created_at: Timestamp::epoch(), diff_digest: None });
-    assert!(tier_allows(&SessionEvent::ProposalUpserted { proposal: p }, agent, Uuid::nil(), &fold).is_err(), "an agent never asserts approvals");
+    p.approvals.push(ProposalApproval {
+        actor_id: "owner".into(),
+        role: WorkspaceRole::Owner,
+        approved: true,
+        created_at: Timestamp::epoch(),
+        diff_digest: None,
+    });
+    assert!(
+        tier_allows(
+            &SessionEvent::ProposalUpserted { proposal: p },
+            agent,
+            Uuid::nil(),
+            &fold
+        )
+        .is_err(),
+        "an agent never asserts approvals"
+    );
 }
 
 /// P0.6 (A2 fold rule): a `ligus serve` box enrolled as its owner's device
@@ -1486,13 +2314,27 @@ fn delegated_host_vote_not_counted_for_human_gate() {
     let mut w = World::new();
     let owner_acct = account("owner");
     let owner_key = account_key("owner");
-    let (desk_key, box_key, box_acct_key) =
-        (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
-    let id_of = |k: &SigningKeypair| ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &k.public_key_bytes());
-    let (desk, bx, box_acct) = (id_of(&desk_key), id_of(&box_key), Uuid::new_v4());
-    let cert = |k: &SigningKeypair, acct, dk: &SigningKeypair| SessionEvent::DeviceCertificateAdded {
-        certificate: DeviceCertificate::issue(k, acct, &dk.public_key_bytes(), Timestamp::epoch()),
+    let (desk_key, box_key, box_acct_key) = (
+        SigningKeypair::generate().unwrap(),
+        SigningKeypair::generate().unwrap(),
+        SigningKeypair::generate().unwrap(),
+    );
+    let id_of = |k: &SigningKeypair| {
+        ligus_core::crypto::device_id_for(
+            ligus_core::crypto::SigAlg::Ed25519,
+            &k.public_key_bytes(),
+        )
     };
+    let (desk, bx, box_acct) = (id_of(&desk_key), id_of(&box_key), Uuid::new_v4());
+    let cert =
+        |k: &SigningKeypair, acct, dk: &SigningKeypair| SessionEvent::DeviceCertificateAdded {
+            certificate: DeviceCertificate::issue(
+                k,
+                acct,
+                &dk.public_key_bytes(),
+                Timestamp::epoch(),
+            ),
+        };
     // Published by `signer` (signed with its key, as ingest requires).
     let signed = |w: &mut World, by: &str, e: SessionEvent, signer: Uuid| {
         w.cfg_push(by, e);
@@ -1502,40 +2344,88 @@ fn delegated_host_vote_not_counted_for_human_gate() {
         ligus_core::crypto::sign_envelope(env, signer, key);
     };
     // The owner's desktop publishes its own identity.
-    signed(&mut w, "owner", SessionEvent::AccountKeyRegistered {
-        account_id: owner_acct,
-        signing_public_key: owner_key.public_key_bytes().to_vec(),
-    }, desk);
-    signed(&mut w, "owner", cert(&owner_key, owner_acct, &desk_key), desk);
+    signed(
+        &mut w,
+        "owner",
+        SessionEvent::AccountKeyRegistered {
+            account_id: owner_acct,
+            signing_public_key: owner_key.public_key_bytes().to_vec(),
+        },
+        desk,
+    );
+    signed(
+        &mut w,
+        "owner",
+        cert(&owner_key, owner_acct, &desk_key),
+        desk,
+    );
     // The box first published an identity of its own...
-    signed(&mut w, "sff", SessionEvent::AccountKeyRegistered {
-        account_id: box_acct,
-        signing_public_key: box_acct_key.public_key_bytes().to_vec(),
-    }, bx);
+    signed(
+        &mut w,
+        "sff",
+        SessionEvent::AccountKeyRegistered {
+            account_id: box_acct,
+            signing_public_key: box_acct_key.public_key_bytes().to_vec(),
+        },
+        bx,
+    );
     signed(&mut w, "sff", cert(&box_acct_key, box_acct, &box_key), bx);
     // ...then the owner's desktop enrolled it as one of the owner's devices.
-    signed(&mut w, "owner", cert(&owner_key, owner_acct, &box_key), desk);
+    signed(
+        &mut w,
+        "owner",
+        cert(&owner_key, owner_acct, &box_key),
+        desk,
+    );
 
     let roster = w.timeline().current().clone();
     assert!(roster.devices[&bx].delegated_for(owner_acct));
-    assert!(!roster.devices[&bx].delegated_for(box_acct), "the box holds its own account key");
+    assert!(
+        !roster.devices[&bx].delegated_for(box_acct),
+        "the box holds its own account key"
+    );
     assert!(!roster.devices[&desk].delegated_for(owner_acct));
 
     let pid = Uuid::from_u128(0xD1);
-    w.chat_push("owner", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
+    w.chat_push(
+        "owner",
+        SessionEvent::ProposalUpserted {
+            proposal: proposal(pid, 1, ProposalStatus::Open),
+        },
+    );
     let digest = Some(diff_digest(&proposal(pid, 1, ProposalStatus::Open)));
     // (No presence: the owner isn't there; the box signs alone.)
-    let from_box = w.chat_push_bare("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest.clone()));
+    let from_box = w.chat_push_bare(
+        "owner",
+        vote("owner", pid, WorkspaceRole::Owner, true, digest.clone()),
+    );
     w.chat.last_mut().unwrap().signer_device_id = Some(bx);
-    let p = w.state().proposals.into_iter().find(|p| p.id == pid).unwrap();
-    assert!(p.approvals.is_empty(), "the delegated host's vote counted: {:?}", p.approvals);
+    let p = w
+        .state()
+        .proposals
+        .into_iter()
+        .find(|p| p.id == pid)
+        .unwrap();
+    assert!(
+        p.approvals.is_empty(),
+        "the delegated host's vote counted: {:?}",
+        p.approvals
+    );
     assert_eq!(p.status, ProposalStatus::Open);
     assert_eq!(w.verdicts()[&from_box], Verdict::Denied);
 
     // The owner, at their desktop.
-    let from_desk = w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest));
+    let from_desk = w.chat_push(
+        "owner",
+        vote("owner", pid, WorkspaceRole::Owner, true, digest),
+    );
     w.chat.last_mut().unwrap().signer_device_id = Some(desk);
-    let p = w.state().proposals.into_iter().find(|p| p.id == pid).unwrap();
+    let p = w
+        .state()
+        .proposals
+        .into_iter()
+        .find(|p| p.id == pid)
+        .unwrap();
     assert_eq!(p.approvals.len(), 1);
     assert_eq!(p.status, ProposalStatus::Approved);
     assert_eq!(w.verdicts()[&from_desk], Verdict::Allowed);
@@ -1551,10 +2441,23 @@ fn delegated_host_republishing_its_cert_stays_delegated() {
     let mut w = World::new();
     let owner_acct = account("owner");
     let owner_key = account_key("owner");
-    let (desk_key, box_key) = (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
-    let id_of = |k: &SigningKeypair| ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &k.public_key_bytes());
+    let (desk_key, box_key) = (
+        SigningKeypair::generate().unwrap(),
+        SigningKeypair::generate().unwrap(),
+    );
+    let id_of = |k: &SigningKeypair| {
+        ligus_core::crypto::device_id_for(
+            ligus_core::crypto::SigAlg::Ed25519,
+            &k.public_key_bytes(),
+        )
+    };
     let (desk, bx) = (id_of(&desk_key), id_of(&box_key));
-    let box_cert = DeviceCertificate::issue(&owner_key, owner_acct, &box_key.public_key_bytes(), Timestamp::epoch());
+    let box_cert = DeviceCertificate::issue(
+        &owner_key,
+        owner_acct,
+        &box_key.public_key_bytes(),
+        Timestamp::epoch(),
+    );
     // Published by `signer` (signed with its key, as ingest requires).
     let signed = |w: &mut World, e: SessionEvent, signer: Uuid| {
         w.cfg_push("owner", e);
@@ -1563,32 +2466,88 @@ fn delegated_host_republishing_its_cert_stays_delegated() {
         env.clear_raw();
         ligus_core::crypto::sign_envelope(env, signer, key);
     };
-    signed(&mut w, SessionEvent::AccountKeyRegistered {
-        account_id: owner_acct,
-        signing_public_key: owner_key.public_key_bytes().to_vec(),
-    }, desk);
-    signed(&mut w, SessionEvent::DeviceCertificateAdded {
-        certificate: DeviceCertificate::issue(&owner_key, owner_acct, &desk_key.public_key_bytes(), Timestamp::epoch()),
-    }, desk);
+    signed(
+        &mut w,
+        SessionEvent::AccountKeyRegistered {
+            account_id: owner_acct,
+            signing_public_key: owner_key.public_key_bytes().to_vec(),
+        },
+        desk,
+    );
+    signed(
+        &mut w,
+        SessionEvent::DeviceCertificateAdded {
+            certificate: DeviceCertificate::issue(
+                &owner_key,
+                owner_acct,
+                &desk_key.public_key_bytes(),
+                Timestamp::epoch(),
+            ),
+        },
+        desk,
+    );
     // The desktop enrolls the box...
-    signed(&mut w, SessionEvent::DeviceCertificateAdded { certificate: box_cert.clone() }, desk);
+    signed(
+        &mut w,
+        SessionEvent::DeviceCertificateAdded {
+            certificate: box_cert.clone(),
+        },
+        desk,
+    );
     assert!(w.timeline().current().devices[&bx].delegated_for(owner_acct));
     // ...and the box re-publishes the very certificate it was handed.
-    signed(&mut w, SessionEvent::DeviceCertificateAdded { certificate: box_cert }, bx);
-    assert!(w.timeline().current().devices[&bx].delegated_for(owner_acct), "the box shed its delegation");
+    signed(
+        &mut w,
+        SessionEvent::DeviceCertificateAdded {
+            certificate: box_cert,
+        },
+        bx,
+    );
+    assert!(
+        w.timeline().current().devices[&bx].delegated_for(owner_acct),
+        "the box shed its delegation"
+    );
 
     let pid = Uuid::from_u128(0xD7);
-    w.chat_push("owner", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
+    w.chat_push(
+        "owner",
+        SessionEvent::ProposalUpserted {
+            proposal: proposal(pid, 1, ProposalStatus::Open),
+        },
+    );
     let digest = Some(diff_digest(&proposal(pid, 1, ProposalStatus::Open)));
-    w.chat_push_bare("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest));
+    w.chat_push_bare(
+        "owner",
+        vote("owner", pid, WorkspaceRole::Owner, true, digest),
+    );
     w.chat.last_mut().unwrap().signer_device_id = Some(bx);
-    let p = w.state().proposals.into_iter().find(|p| p.id == pid).unwrap();
-    assert!(p.approvals.is_empty(), "the delegated host's vote counted: {:?}", p.approvals);
+    let p = w
+        .state()
+        .proposals
+        .into_iter()
+        .find(|p| p.id == pid)
+        .unwrap();
+    assert!(
+        p.approvals.is_empty(),
+        "the delegated host's vote counted: {:?}",
+        p.approvals
+    );
 
     // And nobody can make the desktop delegated by re-publishing its cert
     // from another device (the desktop's own publication came first).
-    let desk_cert = DeviceCertificate::issue(&owner_key, owner_acct, &desk_key.public_key_bytes(), Timestamp::epoch());
-    signed(&mut w, SessionEvent::DeviceCertificateAdded { certificate: desk_cert }, bx);
+    let desk_cert = DeviceCertificate::issue(
+        &owner_key,
+        owner_acct,
+        &desk_key.public_key_bytes(),
+        Timestamp::epoch(),
+    );
+    signed(
+        &mut w,
+        SessionEvent::DeviceCertificateAdded {
+            certificate: desk_cert,
+        },
+        bx,
+    );
     assert!(!w.timeline().current().devices[&desk].delegated_for(owner_acct));
 }
 
@@ -1600,10 +2559,18 @@ fn contributor_cannot_create_an_agent_owned_by_someone_else() {
     let mut w = World::new();
     let mut theirs = ligus_core::WorkspaceAgent::new("helper", "claude-code");
     theirs.owner_actor_id = "owner".into();
-    let one = w.cfg_push("mara", SessionEvent::AgentUpserted { agent: theirs.clone() });
+    let one = w.cfg_push(
+        "mara",
+        SessionEvent::AgentUpserted {
+            agent: theirs.clone(),
+        },
+    );
     let mut also = ligus_core::WorkspaceAgent::new("helper2", "claude-code");
     also.owner_actor_id = "ada".into();
-    let list = w.cfg_push("mara", SessionEvent::AgentRosterUpdated { agents: vec![also] });
+    let list = w.cfg_push(
+        "mara",
+        SessionEvent::AgentRosterUpdated { agents: vec![also] },
+    );
     // Her own agent: fine. An Admin may create one for someone else.
     let mut mine = ligus_core::WorkspaceAgent::new("mine", "claude-code");
     mine.owner_actor_id = "mara".into();
@@ -1626,23 +2593,53 @@ fn chat_creator_cannot_rebind_a_workspace_agent_in_their_chat() {
     let mut agent = ligus_core::WorkspaceAgent::new("coder", "gw");
     agent.owner_actor_id = "owner".into();
     agent.host_id = "sff".into();
-    w.cfg_push("owner", SessionEvent::AgentUpserted { agent: agent.clone() });
+    w.cfg_push(
+        "owner",
+        SessionEvent::AgentUpserted {
+            agent: agent.clone(),
+        },
+    );
     // mara (Contributor) founds a chat of her own.
     let mut seed = ChatSession::new("mara's", w.wid, "anthropic");
     seed.creator_actor_id = "mara".into();
     seed.members = vec![member("mara", WorkspaceRole::Owner)];
-    let mut m = World { chat: Vec::new(), sid: seed.id, ..w.clone() };
-    m.chat_push("mara", SessionEvent::SessionSnapshot { session: Box::new(seed) });
+    let mut m = World {
+        chat: Vec::new(),
+        sid: seed.id,
+        ..w.clone()
+    };
+    m.chat_push(
+        "mara",
+        SessionEvent::SessionSnapshot {
+            session: Box::new(seed),
+        },
+    );
     let mut moved = agent.clone();
     moved.host_id = String::new();
     moved.owner_actor_id = "mara".into();
     moved.runtime_id = "other".into();
     let rebind = m.chat_push("mara", SessionEvent::AgentUpserted { agent: moved });
-    let rt = ligus_core::WorkspaceRuntime::new("gw", "gw", ligus_core::ModelProviderKind::Anthropic, "m");
-    let runtime = m.chat_push("mara", SessionEvent::WorkspaceRuntimeUpserted { runtime: rt });
+    let rt = ligus_core::WorkspaceRuntime::new(
+        "gw",
+        "gw",
+        ligus_core::ModelProviderKind::Anthropic,
+        "m",
+    );
+    let runtime = m.chat_push(
+        "mara",
+        SessionEvent::WorkspaceRuntimeUpserted { runtime: rt },
+    );
     let v = m.verdicts();
-    assert_eq!(v[&rebind], Verdict::Denied, "a chat-level rebind of a workspace agent folded");
-    assert_eq!(v[&runtime], Verdict::Denied, "a Contributor defined a runtime in her chat");
+    assert_eq!(
+        v[&rebind],
+        Verdict::Denied,
+        "a chat-level rebind of a workspace agent folded"
+    );
+    assert_eq!(
+        v[&runtime],
+        Verdict::Denied,
+        "a Contributor defined a runtime in her chat"
+    );
     let s = m.state();
     assert!(s.workspace_agents.is_empty() && s.workspace_runtimes.is_empty());
 }
@@ -1656,29 +2653,79 @@ fn chat_creator_cannot_rebind_a_workspace_agent_in_their_chat() {
 fn a_backdated_vote_cannot_predate_the_content_it_judges() {
     let mut w = World::new();
     let before = w.head();
-    w.cfg_push("owner", SessionEvent::MemberRoleChanged {
-        change: MemberRoleChange { member_id: "ada".into(), old_role: WorkspaceRole::Admin, new_role: WorkspaceRole::Viewer }, watermark: Vec::new(),
-    });
+    w.cfg_push(
+        "owner",
+        SessionEvent::MemberRoleChanged {
+            change: MemberRoleChange {
+                member_id: "ada".into(),
+                old_role: WorkspaceRole::Admin,
+                new_role: WorkspaceRole::Viewer,
+            },
+            watermark: Vec::new(),
+        },
+    );
     let pid = Uuid::from_u128(0xA4);
     let mut p = proposal(pid, 1, ProposalStatus::Open);
     p.approval_role_floor = WorkspaceRole::Admin;
-    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p.clone() });
+    w.chat_push(
+        "mara",
+        SessionEvent::ProposalUpserted {
+            proposal: p.clone(),
+        },
+    );
     let digest = Some(diff_digest(&p));
-    let stale = w.chat_at("ada", vote("ada", pid, WorkspaceRole::Admin, true, digest.clone()), before);
+    let stale = w.chat_at(
+        "ada",
+        vote("ada", pid, WorkspaceRole::Admin, true, digest.clone()),
+        before,
+    );
     let v = w.verdicts();
-    assert_eq!(v[&stale], Verdict::Denied, "a vote backdated before its proposal counted");
-    let got = w.state().proposals.into_iter().find(|x| x.id == pid).unwrap();
-    assert_eq!(got.status, ProposalStatus::Open, "approved by a demoted Admin: {:?}", got.approvals);
+    assert_eq!(
+        v[&stale],
+        Verdict::Denied,
+        "a vote backdated before its proposal counted"
+    );
+    let got = w
+        .state()
+        .proposals
+        .into_iter()
+        .find(|x| x.id == pid)
+        .unwrap();
+    assert_eq!(
+        got.status,
+        ProposalStatus::Open,
+        "approved by a demoted Admin: {:?}",
+        got.approvals
+    );
     // At the current head she is judged at her real role (a Viewer can't vote).
-    let honest = w.chat_push("ada", vote("ada", pid, WorkspaceRole::Admin, true, digest.clone()));
+    let honest = w.chat_push(
+        "ada",
+        vote("ada", pid, WorkspaceRole::Admin, true, digest.clone()),
+    );
     assert_eq!(w.verdicts()[&honest], Verdict::Denied);
     // A real Admin's vote at the head counts.
-    w.cfg_push("owner", SessionEvent::MemberRoleChanged {
-        change: MemberRoleChange { member_id: "val".into(), old_role: WorkspaceRole::Viewer, new_role: WorkspaceRole::Admin }, watermark: Vec::new(),
-    });
+    w.cfg_push(
+        "owner",
+        SessionEvent::MemberRoleChanged {
+            change: MemberRoleChange {
+                member_id: "val".into(),
+                old_role: WorkspaceRole::Viewer,
+                new_role: WorkspaceRole::Admin,
+            },
+            watermark: Vec::new(),
+        },
+    );
     let admin = w.chat_push("val", vote("val", pid, WorkspaceRole::Admin, true, digest));
     assert_eq!(w.verdicts()[&admin], Verdict::Allowed);
-    assert_ne!(w.state().proposals.into_iter().find(|x| x.id == pid).unwrap().status, ProposalStatus::Open);
+    assert_ne!(
+        w.state()
+            .proposals
+            .into_iter()
+            .find(|x| x.id == pid)
+            .unwrap()
+            .status,
+        ProposalStatus::Open
+    );
 }
 
 /// Hardening A-5 (containment of "a Contributor lowers required_approvals"):
@@ -1689,22 +2736,63 @@ fn a_backdated_vote_cannot_predate_the_content_it_judges() {
 #[test]
 fn core_zone_bar_holds_in_the_fold() {
     let mut w = World::new();
-    w.cfg_push("owner", SessionEvent::FlowRecorded { record: zone(0x20, "src/") });
+    w.cfg_push(
+        "owner",
+        SessionEvent::FlowRecorded {
+            record: zone(0x20, "src/"),
+        },
+    );
     let pid = Uuid::from_u128(0xA5);
-    let mut p = ActionProposal::file_diff("p", "mara", "diff --git a/src/core.rs b/src/core.rs\n+x\n".into(), vec!["docs/a.md".into()]);
+    let mut p = ActionProposal::file_diff(
+        "p",
+        "mara",
+        "diff --git a/src/core.rs b/src/core.rs\n+x\n".into(),
+        vec!["docs/a.md".into()],
+    );
     p.id = pid;
     p.created_at = Timestamp::epoch();
     p.required_approvals = 1;
     p.approval_role_floor = WorkspaceRole::Viewer;
-    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p.clone() });
+    w.chat_push(
+        "mara",
+        SessionEvent::ProposalUpserted {
+            proposal: p.clone(),
+        },
+    );
     let digest = Some(diff_digest(&p));
-    w.chat_push("val", vote("val", pid, WorkspaceRole::Viewer, true, digest.clone()));
-    w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest.clone()));
-    let got = w.state().proposals.into_iter().find(|x| x.id == pid).unwrap();
-    assert_eq!((got.required_approvals, got.approval_role_floor), (2, WorkspaceRole::Admin));
-    assert_eq!(got.status, ProposalStatus::Open, "a core change passed on a lowered bar");
+    w.chat_push(
+        "val",
+        vote("val", pid, WorkspaceRole::Viewer, true, digest.clone()),
+    );
+    w.chat_push(
+        "owner",
+        vote("owner", pid, WorkspaceRole::Owner, true, digest.clone()),
+    );
+    let got = w
+        .state()
+        .proposals
+        .into_iter()
+        .find(|x| x.id == pid)
+        .unwrap();
+    assert_eq!(
+        (got.required_approvals, got.approval_role_floor),
+        (2, WorkspaceRole::Admin)
+    );
+    assert_eq!(
+        got.status,
+        ProposalStatus::Open,
+        "a core change passed on a lowered bar"
+    );
     w.chat_push("ada", vote("ada", pid, WorkspaceRole::Admin, true, digest));
-    assert_eq!(w.state().proposals.into_iter().find(|x| x.id == pid).unwrap().status, ProposalStatus::Approved);
+    assert_eq!(
+        w.state()
+            .proposals
+            .into_iter()
+            .find(|x| x.id == pid)
+            .unwrap()
+            .status,
+        ProposalStatus::Approved
+    );
 }
 
 /// Hardening A-6: an agent files proposals as itself (or authorless, naming
@@ -1713,17 +2801,27 @@ fn core_zone_bar_holds_in_the_fold() {
 #[test]
 fn agent_cannot_file_a_proposal_under_a_humans_name() {
     let (mut w, a) = agent_world("mara");
-    let mut forged = ActionProposal::file_diff("p", "ada", "diff --git a/f b/f\n+1\n".into(), vec!["f".into()]);
+    let mut forged = ActionProposal::file_diff(
+        "p",
+        "ada",
+        "diff --git a/f b/f\n+1\n".into(),
+        vec!["f".into()],
+    );
     forged.producing_agent_id = Some(a.agent_id);
     let as_ada = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: forged });
-    let mut other = ActionProposal::file_diff("p", "", "diff --git a/f b/f\n+2\n".into(), vec!["f".into()]);
+    let mut other =
+        ActionProposal::file_diff("p", "", "diff --git a/f b/f\n+2\n".into(), vec!["f".into()]);
     other.producing_agent_id = Some(Uuid::new_v4());
     let as_other_agent = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: other });
-    let mut honest = ActionProposal::file_diff("p", "", "diff --git a/f b/f\n+3\n".into(), vec!["f".into()]);
+    let mut honest =
+        ActionProposal::file_diff("p", "", "diff --git a/f b/f\n+3\n".into(), vec!["f".into()]);
     honest.producing_agent_id = Some(a.agent_id);
     let ok = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: honest });
     let v = w.verdicts();
-    assert_eq!((v[&as_ada], v[&as_other_agent], v[&ok]), (Verdict::Denied, Verdict::Denied, Verdict::Allowed));
+    assert_eq!(
+        (v[&as_ada], v[&as_other_agent], v[&ok]),
+        (Verdict::Denied, Verdict::Denied, Verdict::Allowed)
+    );
 }
 
 /// Hardening A-11: a message is its author's. Any member could rewrite
@@ -1735,23 +2833,66 @@ fn agent_cannot_file_a_proposal_under_a_humans_name() {
 fn only_its_author_rewrites_a_message() {
     let mut w = World::new();
     let (ada_msg, mid) = {
-        let SessionEvent::MessageAppended { message } = message("ada", "ship it") else { unreachable!() };
+        let SessionEvent::MessageAppended { message } = message("ada", "ship it") else {
+            unreachable!()
+        };
         (message.clone(), message.id)
     };
-    w.chat_push("ada", SessionEvent::MessageAppended { message: ada_msg.clone() });
+    w.chat_push(
+        "ada",
+        SessionEvent::MessageAppended {
+            message: ada_msg.clone(),
+        },
+    );
     let mut forged = ada_msg.clone();
     forged.body = "rm -rf everything".into();
     let reappend = w.chat_push("mara", SessionEvent::MessageAppended { message: forged });
-    let chunk = w.chat_push("mara", SessionEvent::MessageChunkReceived { message_id: mid, chunk: " and more".into() });
-    let complete = w.chat_push("mara", SessionEvent::MessageCompleted { message_id: mid, body: "rewritten".into() });
+    let chunk = w.chat_push(
+        "mara",
+        SessionEvent::MessageChunkReceived {
+            message_id: mid,
+            chunk: " and more".into(),
+        },
+    );
+    let complete = w.chat_push(
+        "mara",
+        SessionEvent::MessageCompleted {
+            message_id: mid,
+            body: "rewritten".into(),
+        },
+    );
     let remove = w.chat_push("mara", SessionEvent::MessageRemoved { message_id: mid });
-    let own = w.chat_push("ada", SessionEvent::MessageCompleted { message_id: mid, body: "ship it now".into() });
+    let own = w.chat_push(
+        "ada",
+        SessionEvent::MessageCompleted {
+            message_id: mid,
+            body: "ship it now".into(),
+        },
+    );
     let v = w.verdicts();
-    assert_eq!((v[&reappend], v[&chunk], v[&complete], v[&remove]), (Verdict::Denied, Verdict::Denied, Verdict::Denied, Verdict::Denied));
+    assert_eq!(
+        (v[&reappend], v[&chunk], v[&complete], v[&remove]),
+        (
+            Verdict::Denied,
+            Verdict::Denied,
+            Verdict::Denied,
+            Verdict::Denied
+        )
+    );
     assert_eq!(v[&own], Verdict::Allowed);
-    assert_eq!(w.state().messages.iter().find(|m| m.id == mid).unwrap().body, "ship it now");
+    assert_eq!(
+        w.state()
+            .messages
+            .iter()
+            .find(|m| m.id == mid)
+            .unwrap()
+            .body,
+        "ship it now"
+    );
     // An Admin may remove a member's message (moderation).
-    let SessionEvent::MessageAppended { message: m2 } = message("mara", "oops") else { unreachable!() };
+    let SessionEvent::MessageAppended { message: m2 } = message("mara", "oops") else {
+        unreachable!()
+    };
     let m2id = m2.id;
     w.chat_push("mara", SessionEvent::MessageAppended { message: m2 });
     let moderated = w.chat_push("ada", SessionEvent::MessageRemoved { message_id: m2id });
@@ -1786,14 +2927,23 @@ fn outcome_summaries_are_bounded_and_bound_to_their_host() {
     let cfg = w.config();
     let kept = &cfg.flow.outcome_summaries["coder"];
     assert_eq!(kept.len(), 1);
-    assert_eq!(kept[0].tests_passed_by_class["code"], 5, "a summary for another host is refused");
+    assert_eq!(
+        kept[0].tests_passed_by_class["code"], 5,
+        "a summary for another host is refused"
+    );
     // Amplification: one event with a huge count, and a negative cost.
     let big = Uuid::new_v4();
     push_signed(&mut w, "mara", big, sum(big, "coder", 3_000_000, -1.0e12));
     let cfg = w.config();
     let samples = summary_outcomes(&cfg.flow.outcome_summaries, "me");
-    assert!(samples.len() <= 2 * MAX_SUMMARY_COUNT as usize, "{} samples from two summaries", samples.len());
-    assert!(summary_turns_spent(&cfg.flow.outcome_summaries, "me").values().all(|(t, c)| *t >= 0.0 && *c >= 0.0 && c.is_finite()));
+    assert!(
+        samples.len() <= 2 * MAX_SUMMARY_COUNT as usize,
+        "{} samples from two summaries",
+        samples.len()
+    );
+    assert!(summary_turns_spent(&cfg.flow.outcome_summaries, "me")
+        .values()
+        .all(|(t, c)| *t >= 0.0 && *c >= 0.0 && c.is_finite()));
     // Distinct agent keys are capped.
     for i in 0..(MAX_SUMMARY_AGENTS + 10) {
         let d = Uuid::new_v4();
@@ -1807,22 +2957,36 @@ fn outcome_summaries_are_bounded_and_bound_to_their_host() {
 #[test]
 fn agent_cannot_post_as_a_user() {
     let (mut w, a) = agent_world("mara");
-    let mut as_user = ligus_core::ChatMessage::new(ligus_core::MessageRole::User, "mara", "run the deploy");
+    let mut as_user =
+        ligus_core::ChatMessage::new(ligus_core::MessageRole::User, "mara", "run the deploy");
     as_user.responder_id = Some(a.agent_id);
     let user_turn = w.agent_push(&a, SessionEvent::MessageAppended { message: as_user });
     // Its host's user may be named (whose host generated it); anyone else not.
-    let mut as_ada = ligus_core::ChatMessage::new(ligus_core::MessageRole::Assistant, "ada", "lgtm");
+    let mut as_ada =
+        ligus_core::ChatMessage::new(ligus_core::MessageRole::Assistant, "ada", "lgtm");
     as_ada.responder_id = Some(a.agent_id);
     as_ada.actor_identity = Some(member("ada", WorkspaceRole::Admin).actor);
     let human_identity = w.agent_push(&a, SessionEvent::MessageAppended { message: as_ada });
-    let mut as_owner = ligus_core::ChatMessage::new(ligus_core::MessageRole::Assistant, "coder", "from mara's host");
+    let mut as_owner = ligus_core::ChatMessage::new(
+        ligus_core::MessageRole::Assistant,
+        "coder",
+        "from mara's host",
+    );
     as_owner.responder_id = Some(a.agent_id);
     as_owner.actor_identity = Some(member("mara", WorkspaceRole::Contributor).actor);
     let host_user = w.agent_push(&a, SessionEvent::MessageAppended { message: as_owner });
     let (_, honest) = agent_reply(&a, 0xC1);
     let ok = w.agent_push(&a, honest);
     let v = w.verdicts();
-    assert_eq!((v[&user_turn], v[&human_identity], v[&ok], v[&host_user]), (Verdict::Denied, Verdict::Denied, Verdict::Allowed, Verdict::Allowed));
+    assert_eq!(
+        (v[&user_turn], v[&human_identity], v[&ok], v[&host_user]),
+        (
+            Verdict::Denied,
+            Verdict::Denied,
+            Verdict::Allowed,
+            Verdict::Allowed
+        )
+    );
 }
 
 /// A turn claim speaks only for the device that signed it: a claim naming
@@ -1833,10 +2997,36 @@ fn a_turn_claim_counts_only_from_the_device_it_names() {
     let mut w = World::new();
     let (a, b) = (Uuid::from_u128(0xDA), Uuid::from_u128(0xDB));
     let trigger = Uuid::from_u128(0x77);
-    let forged = w.chat_push("mara", SessionEvent::TurnClaimed { trigger_id: trigger, device_id: a, epoch: 0, supersedes: None, repo_id: None });
-    w.chat.iter_mut().find(|e| e.event_id == forged).unwrap().signer_device_id = Some(b);
-    let honest = w.chat_push("owner", SessionEvent::TurnClaimed { trigger_id: trigger, device_id: b, epoch: 0, supersedes: None, repo_id: None });
-    w.chat.iter_mut().find(|e| e.event_id == honest).unwrap().signer_device_id = Some(b);
+    let forged = w.chat_push(
+        "mara",
+        SessionEvent::TurnClaimed {
+            trigger_id: trigger,
+            device_id: a,
+            epoch: 0,
+            supersedes: None,
+            repo_id: None,
+        },
+    );
+    w.chat
+        .iter_mut()
+        .find(|e| e.event_id == forged)
+        .unwrap()
+        .signer_device_id = Some(b);
+    let honest = w.chat_push(
+        "owner",
+        SessionEvent::TurnClaimed {
+            trigger_id: trigger,
+            device_id: b,
+            epoch: 0,
+            supersedes: None,
+            repo_id: None,
+        },
+    );
+    w.chat
+        .iter_mut()
+        .find(|e| e.event_id == honest)
+        .unwrap()
+        .signer_device_id = Some(b);
     let v = w.verdicts();
     assert_eq!(v[&forged], Verdict::Denied);
     assert_eq!(v[&honest], Verdict::Allowed);
@@ -1916,12 +3106,21 @@ fn a_revoked_devices_later_events_never_fold() {
     let mut w = World::new();
     let before = w.chat_push("mara", message("mara", "before"));
     let maras = device_of("mara").0;
-    w.cfg_push("owner", SessionEvent::DeviceRevoked { device_id: maras, watermark: Vec::new() });
+    w.cfg_push(
+        "owner",
+        SessionEvent::DeviceRevoked {
+            device_id: maras,
+            watermark: Vec::new(),
+        },
+    );
     let after = w.chat_push("mara", message("mara", "after"));
     let old = w.back(5);
     let backdated = w.chat_at("mara", message("mara", "backdated"), Some(old));
     let v = w.verdicts();
-    assert_eq!((v[&before], v[&after], v[&backdated]), (Verdict::Allowed, Verdict::Denied, Verdict::Denied));
+    assert_eq!(
+        (v[&before], v[&after], v[&backdated]),
+        (Verdict::Allowed, Verdict::Denied, Verdict::Denied)
+    );
 }
 
 /// A removal written with an empty watermark cuts every event of the member
@@ -1933,8 +3132,19 @@ fn a_watermark_covers_only_the_chain_it_names() {
     let first = w.chat_push("mara", message("mara", "one"));
     let second = w.chat_push("mara", message("mara", "two"));
     // The remover held only `first`.
-    let wm = vec![ligus_core::watermark::Watermark { signer: device_of("mara").0, log: w.sid, heads: vec![first], gaps: vec![] }];
-    w.cfg_push_raw("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: wm });
+    let wm = vec![ligus_core::watermark::Watermark {
+        signer: device_of("mara").0,
+        log: w.sid,
+        heads: vec![first],
+        gaps: vec![],
+    }];
+    w.cfg_push_raw(
+        "owner",
+        SessionEvent::MemberRemoved {
+            member_id: "mara".into(),
+            watermark: wm,
+        },
+    );
     // A forged event that names `first` as its prev: a fork, not an ancestor.
     let old = w.back(6);
     let forged = w.chat_at("mara", message("mara", "forged"), Some(old));
@@ -1944,7 +3154,10 @@ fn a_watermark_covers_only_the_chain_it_names() {
     }
     w.reseal(forged);
     let v = w.verdicts();
-    assert_eq!((v[&first], v[&second], v[&forged]), (Verdict::Allowed, Verdict::Denied, Verdict::Denied));
+    assert_eq!(
+        (v[&first], v[&second], v[&forged]),
+        (Verdict::Allowed, Verdict::Denied, Verdict::Denied)
+    );
 }
 
 /// On the config log too: a removed Admin's config event backdated before
@@ -1952,12 +3165,26 @@ fn a_watermark_covers_only_the_chain_it_names() {
 #[test]
 fn a_removed_admins_backdated_config_event_is_denied() {
     let mut w = World::new();
-    w.cfg_push("owner", SessionEvent::MemberRemoved { member_id: "ada".into(), watermark: Vec::new() });
+    w.cfg_push(
+        "owner",
+        SessionEvent::MemberRemoved {
+            member_id: "ada".into(),
+            watermark: Vec::new(),
+        },
+    );
     // Ada adds a confederate with a lamport before her removal (naming the
     // config head before it: a plausible backdate).
-    let id = w.cfg_push("ada", SessionEvent::MemberAdded { invite: None, proof: None, member: member("eve", WorkspaceRole::Admin) });
+    let id = w.cfg_push(
+        "ada",
+        SessionEvent::MemberAdded {
+            invite: None,
+            proof: None,
+            member: member("eve", WorkspaceRole::Admin),
+        },
+    );
     {
-        let log: Vec<SessionEventEnvelope> = w.cfg.iter().filter(|e| e.event_id != id).cloned().collect();
+        let log: Vec<SessionEventEnvelope> =
+            w.cfg.iter().filter(|e| e.event_id != id).cloned().collect();
         let env = w.cfg.iter_mut().find(|e| e.event_id == id).unwrap();
         ligus_core::lamport::stamp_back(env, &log, 1);
     }
@@ -1969,7 +3196,12 @@ fn a_removed_admins_backdated_config_event_is_denied() {
 // ---- Model gateways (docs/design/v2/model-gateways.md §9) ----
 
 fn gw_runtime() -> ligus_core::WorkspaceRuntime {
-    let mut rt = ligus_core::WorkspaceRuntime::new("team-gw", "Team gateway", ligus_core::ModelProviderKind::Custom, "m");
+    let mut rt = ligus_core::WorkspaceRuntime::new(
+        "team-gw",
+        "Team gateway",
+        ligus_core::ModelProviderKind::Custom,
+        "m",
+    );
     rt.endpoint = "https://models.example.com/v1/chat/completions".into();
     rt
 }
@@ -1981,18 +3213,53 @@ fn gw_runtime() -> ligus_core::WorkspaceRuntime {
 #[test]
 fn authz_gateway_change_needs_admin_and_presence() {
     let mut w = World::new();
-    let base = w.cfg_push("ada", SessionEvent::WorkspaceRuntimeUpserted { runtime: gw_runtime() });
+    let base = w.cfg_push(
+        "ada",
+        SessionEvent::WorkspaceRuntimeUpserted {
+            runtime: gw_runtime(),
+        },
+    );
     let mut via_gw = gw_runtime();
     via_gw.gateway = "litellm".into();
     let mut redirected = gw_runtime();
     redirected.endpoint = "https://attacker.example/v1/chat/completions".into();
-    let by_contributor = w.cfg_push("mara", SessionEvent::WorkspaceRuntimeUpserted { runtime: via_gw.clone() });
-    let admin_no_presence = w.cfg_push_bare("ada", SessionEvent::WorkspaceRuntimeUpserted { runtime: via_gw.clone() });
-    let endpoint_no_presence = w.cfg_push_bare("ada", SessionEvent::WorkspaceRuntimeUpserted { runtime: redirected.clone() });
-    let endpoint_by_contributor = w.cfg_push("mara", SessionEvent::WorkspaceRuntimesUpdated { runtimes: vec![redirected] });
-    let admin = w.cfg_push("ada", SessionEvent::WorkspaceRuntimeUpserted { runtime: via_gw.clone() });
+    let by_contributor = w.cfg_push(
+        "mara",
+        SessionEvent::WorkspaceRuntimeUpserted {
+            runtime: via_gw.clone(),
+        },
+    );
+    let admin_no_presence = w.cfg_push_bare(
+        "ada",
+        SessionEvent::WorkspaceRuntimeUpserted {
+            runtime: via_gw.clone(),
+        },
+    );
+    let endpoint_no_presence = w.cfg_push_bare(
+        "ada",
+        SessionEvent::WorkspaceRuntimeUpserted {
+            runtime: redirected.clone(),
+        },
+    );
+    let endpoint_by_contributor = w.cfg_push(
+        "mara",
+        SessionEvent::WorkspaceRuntimesUpdated {
+            runtimes: vec![redirected],
+        },
+    );
+    let admin = w.cfg_push(
+        "ada",
+        SessionEvent::WorkspaceRuntimeUpserted {
+            runtime: via_gw.clone(),
+        },
+    );
     // Dropping the gateway (back to the raw endpoint) is a change too.
-    let cleared = w.cfg_push("mara", SessionEvent::WorkspaceRuntimeUpserted { runtime: gw_runtime() });
+    let cleared = w.cfg_push(
+        "mara",
+        SessionEvent::WorkspaceRuntimeUpserted {
+            runtime: gw_runtime(),
+        },
+    );
     let v = w.verdicts();
     assert_eq!(v[&base], Verdict::Allowed);
     assert_eq!(v[&by_contributor], Verdict::Denied);
@@ -2002,8 +3269,15 @@ fn authz_gateway_change_needs_admin_and_presence() {
     assert_eq!(v[&admin], Verdict::Allowed);
     assert_eq!(v[&cleared], Verdict::Denied);
     let cfg = w.config();
-    let rt = cfg.workspace_runtimes.iter().find(|r| r.id == "team-gw").unwrap();
-    assert_eq!((rt.gateway.as_str(), rt.endpoint.as_str()), ("litellm", "https://models.example.com/v1/chat/completions"));
+    let rt = cfg
+        .workspace_runtimes
+        .iter()
+        .find(|r| r.id == "team-gw")
+        .unwrap();
+    assert_eq!(
+        (rt.gateway.as_str(), rt.endpoint.as_str()),
+        ("litellm", "https://models.example.com/v1/chat/completions")
+    );
 }
 
 /// The new fields are left out when empty, so every existing event and
@@ -2016,13 +3290,23 @@ fn gateway_fields_skip_when_empty() {
     assert!(!json.contains("\"gateway\""), "{json}");
     let mut with = rt.clone();
     with.gateway = "litellm".into();
-    assert!(serde_json::to_string(&with).unwrap().contains("\"gateway\":\"litellm\""));
+    assert!(serde_json::to_string(&with)
+        .unwrap()
+        .contains("\"gateway\":\"litellm\""));
     let host = ligus_core::WorkspaceHost::new("h", ligus_core::HostKind::Worker, "box");
-    assert!(!serde_json::to_string(&host).unwrap().contains("modelGateways"));
+    assert!(!serde_json::to_string(&host)
+        .unwrap()
+        .contains("modelGateways"));
     let mut offering = host.clone();
-    offering.model_gateways = vec![ligus_core::HostModelGateway { name: "litellm".into(), api: "openai".into() }];
+    offering.model_gateways = vec![ligus_core::HostModelGateway {
+        name: "litellm".into(),
+        api: "openai".into(),
+    }];
     let j = serde_json::to_string(&offering).unwrap();
-    assert!(j.contains("\"modelGateways\":[{\"name\":\"litellm\",\"api\":\"openai\"}]"), "{j}");
+    assert!(
+        j.contains("\"modelGateways\":[{\"name\":\"litellm\",\"api\":\"openai\"}]"),
+        "{j}"
+    );
     assert!(offering.offers_gateway("litellm") && !offering.offers_gateway("other"));
     let back: ligus_core::WorkspaceHost = serde_json::from_str(&j).unwrap();
     assert_eq!(back, offering);
@@ -2066,32 +3350,73 @@ proptest! {
 
 /// `gw_runtime()` with `rt`'s timestamp (the projection keeps each event's).
 fn gw_runtime_at(rt: &ligus_core::WorkspaceRuntime) -> ligus_core::WorkspaceRuntime {
-    ligus_core::WorkspaceRuntime { created_at: rt.created_at, ..gw_runtime() }
+    ligus_core::WorkspaceRuntime {
+        created_at: rt.created_at,
+        ..gw_runtime()
+    }
 }
 
 /// The roster just before the config position `key` (after the newest
 /// config event sorting before it).
-fn roster_before(w: &World, t: &ConfigTimeline, key: (u64, Uuid)) -> ligus_core::authz::RosterState {
-    let prev = w.cfg.iter().filter(|e| t.holds(e.event_id)).map(|e| e.canonical_key()).filter(|k| *k < key).max().expect("a cut follows the seed");
-    t.at(CfgFrontier { lamport: prev.0, event_id: prev.1 }).expect("the cut's predecessor is held").clone()
+fn roster_before(
+    w: &World,
+    t: &ConfigTimeline,
+    key: (u64, Uuid),
+) -> ligus_core::authz::RosterState {
+    let prev = w
+        .cfg
+        .iter()
+        .filter(|e| t.holds(e.event_id))
+        .map(|e| e.canonical_key())
+        .filter(|k| *k < key)
+        .max()
+        .expect("a cut follows the seed");
+    t.at(CfgFrontier {
+        lamport: prev.0,
+        event_id: prev.1,
+    })
+    .expect("the cut's predecessor is held")
+    .clone()
 }
 
 /// Decision 1a, checked on the fold's own timeline: every allowed cut of
 /// another member goes strictly down the ranks of the roster just before
 /// it, and two members who cut each other did so on different rosters.
 fn cuts_go_down_the_ranks(w: &World, t: &ConfigTimeline) -> Result<(), String> {
-    let author: BTreeMap<(u64, Uuid), String> =
-        w.cfg.iter().map(|e| (e.canonical_key(), e.actor_stamp.as_ref().map(|s| s.actor.id.clone()).unwrap_or_default())).collect();
+    let author: BTreeMap<(u64, Uuid), String> = w
+        .cfg
+        .iter()
+        .map(|e| {
+            (
+                e.canonical_key(),
+                e.actor_stamp
+                    .as_ref()
+                    .map(|s| s.actor.id.clone())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
     let subject = |c: &ligus_core::authz::Cut| match &c.kind {
-        ligus_core::authz::CutKind::Removed(m) | ligus_core::authz::CutKind::Demoted(m) => Some(m.clone()),
-        ligus_core::authz::CutKind::Revoked(d) => PEOPLE.iter().find(|p| device_of(p).0 == *d).map(|p| p.to_string()),
+        ligus_core::authz::CutKind::Removed(m) | ligus_core::authz::CutKind::Demoted(m) => {
+            Some(m.clone())
+        }
+        ligus_core::authz::CutKind::Revoked(d) => PEOPLE
+            .iter()
+            .find(|p| device_of(p).0 == *d)
+            .map(|p| p.to_string()),
     };
-    let cuts: Vec<(&ligus_core::authz::Cut, String, String)> =
-        t.cuts().iter().filter_map(|c| Some((c, author[&c.key].clone(), subject(c)?))).filter(|(_, a, s)| a != s).collect();
+    let cuts: Vec<(&ligus_core::authz::Cut, String, String)> = t
+        .cuts()
+        .iter()
+        .filter_map(|c| Some((c, author[&c.key].clone(), subject(c)?)))
+        .filter(|(_, a, s)| a != s)
+        .collect();
     for (c, a, s) in &cuts {
         let at = roster_before(w, t, c.key);
         let Some(sr) = at.role_of(s) else { continue };
-        let ar = at.role_of(a).ok_or_else(|| format!("{c:?}: author {a} is no member"))?;
+        let ar = at
+            .role_of(a)
+            .ok_or_else(|| format!("{c:?}: author {a} is no member"))?;
         let ok = if *s == at.founder {
             false
         } else if sr == WorkspaceRole::Owner {
@@ -2100,7 +3425,9 @@ fn cuts_go_down_the_ranks(w: &World, t: &ConfigTimeline) -> Result<(), String> {
             ar.rank() > sr.rank()
         };
         if !ok {
-            return Err(format!("{a} ({ar:?}) cut {s} ({sr:?}) against the ranks: {c:?}"));
+            return Err(format!(
+                "{a} ({ar:?}) cut {s} ({sr:?}) against the ranks: {c:?}"
+            ));
         }
     }
     for (x, xa, xs) in &cuts {
@@ -2126,35 +3453,81 @@ fn cuts_go_down_the_ranks(w: &World, t: &ConfigTimeline) -> Result<(), String> {
 #[test]
 fn a_counter_cut_after_a_founders_promotion_is_not_mutual() {
     let ops = vec![
-        Op::Cut { by: 1, who: 2, kind: 1, back: 0 },
+        Op::Cut {
+            by: 1,
+            who: 2,
+            kind: 1,
+            back: 0,
+        },
         Op::SetRole { who: 2, role: 0 },
-        Op::Cut { by: 2, who: 1, kind: 0, back: 0 },
+        Op::Cut {
+            by: 2,
+            who: 1,
+            kind: 0,
+            back: 0,
+        },
     ];
     let w = world(&ops);
     let t = w.timeline();
     let kinds: Vec<_> = t.cuts().iter().map(|c| c.kind.clone()).collect();
-    assert_eq!(kinds, vec![ligus_core::authz::CutKind::Demoted("mara".into()), ligus_core::authz::CutKind::Removed("ada".into())]);
+    assert_eq!(
+        kinds,
+        vec![
+            ligus_core::authz::CutKind::Demoted("mara".into()),
+            ligus_core::authz::CutKind::Removed("ada".into())
+        ]
+    );
     assert_eq!(cuts_go_down_the_ranks(&w, &t), Ok(()));
 
     // Without the founder's promotion, mara (a Viewer) can't cut ada.
-    let w = world(&[Op::Cut { by: 1, who: 2, kind: 1, back: 0 }, Op::Cut { by: 2, who: 1, kind: 0, back: 0 }]);
+    let w = world(&[
+        Op::Cut {
+            by: 1,
+            who: 2,
+            kind: 1,
+            back: 0,
+        },
+        Op::Cut {
+            by: 2,
+            who: 1,
+            kind: 0,
+            back: 0,
+        },
+    ]);
     let t = w.timeline();
-    assert_eq!(t.cuts().iter().map(|c| c.kind.clone()).collect::<Vec<_>>(), vec![ligus_core::authz::CutKind::Demoted("mara".into())]);
+    assert_eq!(
+        t.cuts().iter().map(|c| c.kind.clone()).collect::<Vec<_>>(),
+        vec![ligus_core::authz::CutKind::Demoted("mara".into())]
+    );
 
     // Backdated before the promotion (and before her demotion), mara is a
     // Contributor there and ada an Admin: denied, and ada's demotion stands.
     for back in 2..=3 {
         let w = world(&[
-            Op::Cut { by: 1, who: 2, kind: 1, back: 0 },
+            Op::Cut {
+                by: 1,
+                who: 2,
+                kind: 1,
+                back: 0,
+            },
             Op::SetRole { who: 2, role: 0 },
-            Op::Cut { by: 2, who: 1, kind: 0, back },
+            Op::Cut {
+                by: 2,
+                who: 1,
+                kind: 0,
+                back,
+            },
         ]);
         let t = w.timeline();
-        assert!(!t.cuts().iter().any(|c| c.kind == ligus_core::authz::CutKind::Removed("ada".into())), "back {back}");
+        assert!(
+            !t.cuts()
+                .iter()
+                .any(|c| c.kind == ligus_core::authz::CutKind::Removed("ada".into())),
+            "back {back}"
+        );
         assert_eq!(cuts_go_down_the_ranks(&w, &t), Ok(()));
     }
 }
-
 
 /// The dispatcher (review, prove-then-fix): an answer signed by an agent key
 /// commits for the host device that certified the key. The key lives on the
@@ -2167,7 +3540,16 @@ fn an_agent_key_answer_commits_for_its_certifying_host() {
     let trigger = ligus_core::ChatMessage::new(ligus_core::MessageRole::User, "mara", "@coder go");
     let t = trigger.id;
     w.chat_push("mara", SessionEvent::MessageAppended { message: trigger });
-    w.agent_push(&a, SessionEvent::TurnClaimed { trigger_id: t, device_id: host, epoch: 0, supersedes: None, repo_id: None });
+    w.agent_push(
+        &a,
+        SessionEvent::TurnClaimed {
+            trigger_id: t,
+            device_id: host,
+            epoch: 0,
+            supersedes: None,
+            repo_id: None,
+        },
+    );
     let (id, mut reply) = agent_reply(&a, 0xA11);
     if let SessionEvent::MessageAppended { message } = &mut reply {
         message.reply_to_message_id = Some(t);
@@ -2176,7 +3558,11 @@ fn an_agent_key_answer_commits_for_its_certifying_host() {
     w.agent_push(&a, reply);
     let s = w.state();
     assert_eq!(s.turn_claims.get(&t), Some(&host));
-    assert_eq!(s.turn_dispatch[&t].answer, Some(id), "the agent's answer commits");
+    assert_eq!(
+        s.turn_dispatch[&t].answer,
+        Some(id),
+        "the agent's answer commits"
+    );
     // A second agent-signed answer to the same turn is fenced.
     let (dup, mut again) = agent_reply(&a, 0xA12);
     if let SessionEvent::MessageAppended { message } = &mut again {
@@ -2184,5 +3570,12 @@ fn an_agent_key_answer_commits_for_its_certifying_host() {
         message.origin_device_id = Some(host);
     }
     w.agent_push(&a, again);
-    assert!(w.state().messages.iter().find(|m| m.id == dup).unwrap().superseded);
+    assert!(
+        w.state()
+            .messages
+            .iter()
+            .find(|m| m.id == dup)
+            .unwrap()
+            .superseded
+    );
 }

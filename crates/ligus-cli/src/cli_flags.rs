@@ -60,7 +60,9 @@ fn parse(args: Vec<String>) -> anyhow::Result<(Vec<String>, Globals)> {
                 other => {
                     return Err(crate::help::usage_error(format!(
                         "{a} takes json, jsonl (streaming commands) or text, not {}",
-                        other.map(|o| format!("{o:?}")).unwrap_or_else(|| "nothing".into())
+                        other
+                            .map(|o| format!("{o:?}"))
+                            .unwrap_or_else(|| "nothing".into())
                     )))
                 }
             },
@@ -69,7 +71,11 @@ fn parse(args: Vec<String>) -> anyhow::Result<(Vec<String>, Globals)> {
                     Some("auto") => Color::Auto,
                     Some("always") => Color::Always,
                     Some("never") => Color::Never,
-                    _ => return Err(crate::help::usage_error("--color takes auto, always or never")),
+                    _ => {
+                        return Err(crate::help::usage_error(
+                            "--color takes auto, always or never",
+                        ))
+                    }
                 }
             }
             _ => out.push(a),
@@ -79,7 +85,12 @@ fn parse(args: Vec<String>) -> anyhow::Result<(Vec<String>, Globals)> {
 }
 
 /// Whether to colour text for a stream (`stdout_tty`: it is a terminal).
-pub fn color_on(color: Color, stdout_tty: bool, no_color: Option<&str>, force: Option<&str>) -> bool {
+pub fn color_on(
+    color: Color,
+    stdout_tty: bool,
+    no_color: Option<&str>,
+    force: Option<&str>,
+) -> bool {
     match color {
         Color::Always => true,
         Color::Never => false,
@@ -112,17 +123,25 @@ pub const MAX_DURATION_SECS: u64 = 30 * 24 * 3600;
 pub fn parse_duration(s: &str) -> anyhow::Result<Duration> {
     let s = s.trim();
     let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
-    let n: u64 = num.parse().map_err(|_| crate::help::usage_error(format!("not a duration: {s:?} (try 90s, 5m or 1h)")))?;
+    let n: u64 = num.parse().map_err(|_| {
+        crate::help::usage_error(format!("not a duration: {s:?} (try 90s, 5m or 1h)"))
+    })?;
     let secs = match unit {
         "" | "s" => Some(n),
         "m" => n.checked_mul(60),
         "h" => n.checked_mul(3600),
-        _ => return Err(crate::help::usage_error(format!("not a duration: {s:?} (try 90s, 5m or 1h)"))),
+        _ => {
+            return Err(crate::help::usage_error(format!(
+                "not a duration: {s:?} (try 90s, 5m or 1h)"
+            )))
+        }
     };
     // Capped (an overflowing or absurd value is a usage error, not a panic).
     match secs {
         Some(secs) if secs <= MAX_DURATION_SECS => Ok(Duration::from_secs(secs)),
-        _ => Err(crate::help::usage_error(format!("duration too long: {s:?} (at most 30 days)"))),
+        _ => Err(crate::help::usage_error(format!(
+            "duration too long: {s:?} (at most 30 days)"
+        ))),
     }
 }
 
@@ -138,8 +157,18 @@ mod tests {
     fn durations_overflow_and_cap_are_usage_errors() {
         assert_eq!(parse_duration("90").unwrap(), Duration::from_secs(90));
         assert_eq!(parse_duration("5m").unwrap(), Duration::from_secs(300));
-        assert_eq!(parse_duration("720h").unwrap(), Duration::from_secs(MAX_DURATION_SECS));
-        for bad in ["9999999999999999h", "18446744073709551615m", "721h", "99999999999999999999", "5d", "x"] {
+        assert_eq!(
+            parse_duration("720h").unwrap(),
+            Duration::from_secs(MAX_DURATION_SECS)
+        );
+        for bad in [
+            "9999999999999999h",
+            "18446744073709551615m",
+            "721h",
+            "99999999999999999999",
+            "5d",
+            "x",
+        ] {
             let e = parse_duration(bad).unwrap_err();
             assert!(crate::help::is_usage(&e), "{bad}: {e:#}");
         }
@@ -149,7 +178,13 @@ mod tests {
     fn global_flags_are_taken_out() {
         let (a, g) = parse(v("doctor -o json -q --color never")).unwrap();
         assert_eq!(a, v("doctor --json"));
-        assert_eq!(g, Globals { quiet: true, color: Color::Never });
+        assert_eq!(
+            g,
+            Globals {
+                quiet: true,
+                color: Color::Never
+            }
+        );
         let (a, _) = parse(v("facts export --output jsonl")).unwrap();
         assert_eq!(a, v("facts export --jsonl"));
         let (a, _) = parse(v("status -o text")).unwrap();

@@ -30,7 +30,9 @@ fn proposal(v: &serde_json::Value) -> ActionProposal {
     p.base_commit = v["baseCommit"].as_str().map(str::to_owned);
     p.workflow = None;
     p.command = None;
-    p.attachment = v.get("attachment").map(|a| Box::new(serde_json::from_value::<AttachmentRef>(a.clone()).unwrap()));
+    p.attachment = v
+        .get("attachment")
+        .map(|a| Box::new(serde_json::from_value::<AttachmentRef>(a.clone()).unwrap()));
     p
 }
 
@@ -44,10 +46,18 @@ fn proposal_digest_vectors_hold() {
         let p = proposal(&v);
         if let Some(a) = &p.attachment {
             // The ninth part is exactly this JSON.
-            assert_eq!(serde_json::to_string(a).unwrap(), v["attachmentJson"].as_str().unwrap(), "{label}");
+            assert_eq!(
+                serde_json::to_string(a).unwrap(),
+                v["attachmentJson"].as_str().unwrap(),
+                "{label}"
+            );
             offers += 1;
         }
-        assert_eq!(diff_digest(&p), v["diffDigest"].as_str().unwrap(), "{label}");
+        assert_eq!(
+            diff_digest(&p),
+            v["diffDigest"].as_str().unwrap(),
+            "{label}"
+        );
         n += 1;
     }
     assert!(n >= 6 && offers >= 4, "{n} vectors, {offers} with a file");
@@ -57,8 +67,12 @@ fn proposal_digest_vectors_hold() {
 /// another file, has another digest.
 #[test]
 fn the_offered_file_is_bound() {
-    let lines: Vec<serde_json::Value> = GOLDEN.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-    let by = |label: &str| lines.iter().find(|v| v["label"] == label).unwrap()["diffDigest"].clone();
+    let lines: Vec<serde_json::Value> = GOLDEN
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let by =
+        |label: &str| lines.iter().find(|v| v["label"] == label).unwrap()["diffDigest"].clone();
     let plain = by("decision/plain");
     let offer = by("decision/offer");
     let other = by("decision/offer-other-file");

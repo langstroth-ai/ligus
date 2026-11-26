@@ -160,7 +160,11 @@ pub fn lease_key(scope: LeaseScope, scope_id: &str) -> String {
 pub type LeaseTable = BTreeMap<String, LeaseState>;
 
 fn record_fenced(state: &mut LeaseState, claim: &CoordinatorLease, verdict: LeaseVerdict) {
-    state.fenced.push(FencedClaim { holder: claim.holder, epoch: claim.epoch, verdict });
+    state.fenced.push(FencedClaim {
+        holder: claim.holder,
+        epoch: claim.epoch,
+        verdict,
+    });
     if state.fenced.len() > MAX_FENCED_HISTORY {
         let drop = state.fenced.len() - MAX_FENCED_HISTORY;
         state.fenced.drain(..drop);
@@ -180,7 +184,12 @@ pub fn fold_claim(table: &mut LeaseTable, claim: &CoordinatorLease) -> LeaseVerd
         }
         table.insert(
             key,
-            LeaseState { current: claim.clone(), released: false, handover_to: None, fenced: Vec::new() },
+            LeaseState {
+                current: claim.clone(),
+                released: false,
+                handover_to: None,
+                fenced: Vec::new(),
+            },
         );
         return LeaseVerdict::Accepted;
     };
@@ -199,14 +208,21 @@ pub fn fold_claim(table: &mut LeaseTable, claim: &CoordinatorLease) -> LeaseVerd
         }
     }
     let fenced = std::mem::take(&mut state.fenced);
-    *state = LeaseState { current: claim.clone(), released: false, handover_to: None, fenced };
+    *state = LeaseState {
+        current: claim.clone(),
+        released: false,
+        handover_to: None,
+        fenced,
+    };
     LeaseVerdict::Accepted
 }
 
 /// Fold a release. Only the current holder may release its current epoch.
 pub fn fold_release(table: &mut LeaseTable, release: &LeaseRelease) -> LeaseVerdict {
     let key = lease_key(release.scope, &release.scope_id);
-    let Some(state) = table.get_mut(&key) else { return LeaseVerdict::NotHolder };
+    let Some(state) = table.get_mut(&key) else {
+        return LeaseVerdict::NotHolder;
+    };
     if state.current.holder != release.holder || state.current.epoch != release.epoch {
         return LeaseVerdict::NotHolder;
     }
@@ -217,7 +233,12 @@ pub fn fold_release(table: &mut LeaseTable, release: &LeaseRelease) -> LeaseVerd
 
 /// Whether a write stamped with `epoch` by a coordinator of `scope`/`scope_id`
 /// is still current. `None` (an unstamped or pre-lease write) is not fenced.
-pub fn write_is_current(table: &LeaseTable, scope: LeaseScope, scope_id: &str, epoch: Option<u64>) -> bool {
+pub fn write_is_current(
+    table: &LeaseTable,
+    scope: LeaseScope,
+    scope_id: &str,
+    epoch: Option<u64>,
+) -> bool {
     match (epoch, table.get(&lease_key(scope, scope_id))) {
         (Some(e), Some(state)) => e >= state.current.epoch,
         _ => true,
@@ -244,7 +265,11 @@ const DEGRADED_SHARE: f64 = 0.5;
 
 /// Classify a lease's health from its last verified beat. A beat for an older
 /// epoch or another holder does not renew the current lease.
-pub fn lease_health(state: &LeaseState, last_beat: Option<(Uuid, u64, i64)>, now_ms: i64) -> LeaseHealth {
+pub fn lease_health(
+    state: &LeaseState,
+    last_beat: Option<(Uuid, u64, i64)>,
+    now_ms: i64,
+) -> LeaseHealth {
     if state.released {
         return LeaseHealth::Released;
     }
@@ -252,7 +277,9 @@ pub fn lease_health(state: &LeaseState, last_beat: Option<(Uuid, u64, i64)>, now
     // The claim itself counts as the first beat.
     let claimed_ms = state.current.claimed_at.inner().unix_timestamp() * 1000;
     let beat_ms = match last_beat {
-        Some((holder, epoch, at)) if holder == state.current.holder && epoch == state.current.epoch => {
+        Some((holder, epoch, at))
+            if holder == state.current.holder && epoch == state.current.epoch =>
+        {
             at.max(claimed_ms)
         }
         _ => claimed_ms,
@@ -290,7 +317,12 @@ mod tests {
         assert_eq!(fold_claim(&mut t, &claim(a, 1)), LeaseVerdict::Accepted);
         // Split brain: b also claims epoch 1 — fenced.
         assert_eq!(fold_claim(&mut t, &claim(b, 1)), LeaseVerdict::StaleEpoch);
-        assert_eq!(t[&lease_key(LeaseScope::WorkflowRun, "run-1")].current.holder, a);
+        assert_eq!(
+            t[&lease_key(LeaseScope::WorkflowRun, "run-1")]
+                .current
+                .holder,
+            a
+        );
         // Succession at epoch 2.
         assert_eq!(fold_claim(&mut t, &claim(b, 2)), LeaseVerdict::Accepted);
         // The old holder renewing its old epoch is fenced.
@@ -330,7 +362,10 @@ mod tests {
         assert_eq!(fold_release(&mut t, &forged), LeaseVerdict::NotHolder);
         assert_eq!(fold_release(&mut t, &rel), LeaseVerdict::Accepted);
         // A third device racing for epoch 2 loses to the reserved successor.
-        assert_eq!(fold_claim(&mut t, &claim(c, 2)), LeaseVerdict::ReservedForSuccessor);
+        assert_eq!(
+            fold_claim(&mut t, &claim(c, 2)),
+            LeaseVerdict::ReservedForSuccessor
+        );
         assert_eq!(fold_claim(&mut t, &claim(b, 2)), LeaseVerdict::Accepted);
         // If the successor had died, epoch 3 would be open to anyone.
         assert_eq!(fold_claim(&mut t, &claim(c, 3)), LeaseVerdict::Accepted);
@@ -341,13 +376,33 @@ mod tests {
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
         let mut t = LeaseTable::new();
         fold_claim(&mut t, &claim(a, 1));
-        assert!(write_is_current(&t, LeaseScope::WorkflowRun, "run-1", Some(1)));
+        assert!(write_is_current(
+            &t,
+            LeaseScope::WorkflowRun,
+            "run-1",
+            Some(1)
+        ));
         fold_claim(&mut t, &claim(b, 2));
-        assert!(!write_is_current(&t, LeaseScope::WorkflowRun, "run-1", Some(1)));
-        assert!(write_is_current(&t, LeaseScope::WorkflowRun, "run-1", Some(2)));
+        assert!(!write_is_current(
+            &t,
+            LeaseScope::WorkflowRun,
+            "run-1",
+            Some(1)
+        ));
+        assert!(write_is_current(
+            &t,
+            LeaseScope::WorkflowRun,
+            "run-1",
+            Some(2)
+        ));
         // Unstamped (legacy) writes and unknown scopes are never fenced.
         assert!(write_is_current(&t, LeaseScope::WorkflowRun, "run-1", None));
-        assert!(write_is_current(&t, LeaseScope::WorkflowRun, "other", Some(1)));
+        assert!(write_is_current(
+            &t,
+            LeaseScope::WorkflowRun,
+            "other",
+            Some(1)
+        ));
     }
 
     #[test]
@@ -360,12 +415,24 @@ mod tests {
         let st = t.values().next().unwrap().clone();
         let base = 1_000_000;
         assert_eq!(lease_health(&st, None, base + 10_000), LeaseHealth::Live);
-        assert_eq!(lease_health(&st, None, base + 40_000), LeaseHealth::Degraded);
+        assert_eq!(
+            lease_health(&st, None, base + 40_000),
+            LeaseHealth::Degraded
+        );
         assert_eq!(lease_health(&st, None, base + 61_000), LeaseHealth::Lapsed);
         // A fresh beat for the current epoch renews it.
-        assert_eq!(lease_health(&st, Some((a, 3, base + 60_000)), base + 61_000), LeaseHealth::Live);
+        assert_eq!(
+            lease_health(&st, Some((a, 3, base + 60_000)), base + 61_000),
+            LeaseHealth::Live
+        );
         // A beat for an old epoch or from someone else does not.
-        assert_eq!(lease_health(&st, Some((a, 2, base + 60_000)), base + 61_000), LeaseHealth::Lapsed);
-        assert_eq!(lease_health(&st, Some((Uuid::new_v4(), 3, base + 60_000)), base + 61_000), LeaseHealth::Lapsed);
+        assert_eq!(
+            lease_health(&st, Some((a, 2, base + 60_000)), base + 61_000),
+            LeaseHealth::Lapsed
+        );
+        assert_eq!(
+            lease_health(&st, Some((Uuid::new_v4(), 3, base + 60_000)), base + 61_000),
+            LeaseHealth::Lapsed
+        );
     }
 }

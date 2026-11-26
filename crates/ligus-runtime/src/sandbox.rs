@@ -42,7 +42,11 @@ pub struct GrantsHere {
 
 /// The decision for a device whose user holds `my_role` in the workspace
 /// (`local`: the device-local workspace), with this device's `setting`.
-pub fn grants_here(setting: Option<bool>, my_role: Option<ligus_core::WorkspaceRole>, local: bool) -> GrantsHere {
+pub fn grants_here(
+    setting: Option<bool>,
+    my_role: Option<ligus_core::WorkspaceRole>,
+    local: bool,
+) -> GrantsHere {
     let owner = local || my_role == Some(ligus_core::WorkspaceRole::Owner);
     let default = owner;
     let apply = setting.unwrap_or(default);
@@ -52,7 +56,12 @@ pub fn grants_here(setting: Option<bool>, my_role: Option<ligus_core::WorkspaceR
         (None, true) => "applied: this device is the workspace Owner's (the default)".to_string(),
         (None, false) => "not applied: this device isn't the workspace Owner's, so grants apply only once it opts in (the default)".to_string(),
     };
-    GrantsHere { apply, default, setting, why }
+    GrantsHere {
+        apply,
+        default,
+        setting,
+        why,
+    }
 }
 
 /// The env var a headless host (`ligus worker`, `serve`, `agent`) sets to
@@ -77,7 +86,11 @@ pub fn grants_fingerprint(g: &ligus_core::sandbox::SandboxGrants) -> String {
         return String::new();
     }
     let bytes = serde_json::to_vec(g).unwrap_or_default();
-    Sha256::digest(&bytes).iter().take(16).map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(&bytes)
+        .iter()
+        .take(16)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// What a runtime needs to honor an envelope.
@@ -98,9 +111,16 @@ pub type McpConfigEntries = Vec<(String, Value)>;
 /// Map `envelope` onto `provider`. `allowed_mcp` is the Ligus MCP catalog
 /// already filtered by the envelope's egress policy, as Claude Code
 /// `mcpServers` entries.
-pub fn enforce(provider: ModelProviderKind, envelope: &SandboxEnvelope, allowed_mcp: &McpConfigEntries) -> Enforcement {
+pub fn enforce(
+    provider: ModelProviderKind,
+    envelope: &SandboxEnvelope,
+    allowed_mcp: &McpConfigEntries,
+) -> Enforcement {
     let open = envelope.egress.is_open();
-    let mut out = Enforcement { allow_run_command: open, ..Default::default() };
+    let mut out = Enforcement {
+        allow_run_command: open,
+        ..Default::default()
+    };
     if provider == ModelProviderKind::ClaudeCode {
         // Every turn, open or not: only the MCP servers this chat may use
         // (the Ligus server joins at dispatch). The rest of Claude Code's
@@ -108,7 +128,12 @@ pub fn enforce(provider: ModelProviderKind, envelope: &SandboxEnvelope, allowed_
         // allow-list, out-of-turn tools) is applied at launch for every
         // caller: `provider::claude_code::confine`.
         if !open {
-            out.extra_args.extend(["--disallowedTools".into(), "WebFetch".into(), "WebSearch".into(), "Bash".into()]);
+            out.extra_args.extend([
+                "--disallowedTools".into(),
+                "WebFetch".into(),
+                "WebSearch".into(),
+                "Bash".into(),
+            ]);
         }
         let servers: serde_json::Map<String, Value> = match &envelope.egress {
             EgressPolicy::Closed => Default::default(),
@@ -116,7 +141,8 @@ pub fn enforce(provider: ModelProviderKind, envelope: &SandboxEnvelope, allowed_
         };
         out.extra_args.push("--strict-mcp-config".into());
         out.extra_args.push("--mcp-config".into());
-        out.extra_args.push(json!({ "mcpServers": servers }).to_string());
+        out.extra_args
+            .push(json!({ "mcpServers": servers }).to_string());
         return out;
     }
     if open {
@@ -154,7 +180,10 @@ pub fn enforce(provider: ModelProviderKind, envelope: &SandboxEnvelope, allowed_
 
 /// Whether `provider` can be confined to a non-open egress policy.
 pub fn confinable(provider: ModelProviderKind) -> bool {
-    let closed = SandboxEnvelope { egress: EgressPolicy::Closed, ..SandboxEnvelope::workspace_default() };
+    let closed = SandboxEnvelope {
+        egress: EgressPolicy::Closed,
+        ..SandboxEnvelope::workspace_default()
+    };
     enforce(provider, &closed, &Vec::new()).refuse.is_none()
 }
 
@@ -180,8 +209,15 @@ mod tests {
     /// connectors).
     #[test]
     fn claude_code_open_envelope_is_strict_mcp() {
-        let allowed = vec![("docs".to_string(), json!({"type": "http", "url": "https://docs.example"}))];
-        let e = enforce(ModelProviderKind::ClaudeCode, &SandboxEnvelope::workspace_default(), &allowed);
+        let allowed = vec![(
+            "docs".to_string(),
+            json!({"type": "http", "url": "https://docs.example"}),
+        )];
+        let e = enforce(
+            ModelProviderKind::ClaudeCode,
+            &SandboxEnvelope::workspace_default(),
+            &allowed,
+        );
         assert!(e.refuse.is_none() && e.allow_run_command);
         assert!(e.extra_args.contains(&"--strict-mcp-config".to_string()));
         assert!(e.extra_args.last().unwrap().contains("docs.example"));
@@ -190,15 +226,31 @@ mod tests {
 
     #[test]
     fn claude_code_loses_web_shell_and_foreign_mcp() {
-        let allowed = vec![("docs".to_string(), json!({"type": "http", "url": "https://docs.example"}))];
-        let e = enforce(ModelProviderKind::ClaudeCode, &tight(EgressPolicy::AllowList { mcp_servers: vec!["docs".into()] }), &allowed);
-        assert!(e.extra_args.windows(4).any(|w| w == ["--disallowedTools", "WebFetch", "WebSearch", "Bash"]));
+        let allowed = vec![(
+            "docs".to_string(),
+            json!({"type": "http", "url": "https://docs.example"}),
+        )];
+        let e = enforce(
+            ModelProviderKind::ClaudeCode,
+            &tight(EgressPolicy::AllowList {
+                mcp_servers: vec!["docs".into()],
+            }),
+            &allowed,
+        );
+        assert!(e
+            .extra_args
+            .windows(4)
+            .any(|w| w == ["--disallowedTools", "WebFetch", "WebSearch", "Bash"]));
         assert!(e.extra_args.contains(&"--strict-mcp-config".to_string()));
         let cfg = e.extra_args.last().unwrap();
         assert!(cfg.contains("docs.example"));
         assert!(!e.allow_run_command);
         // Closed: an empty server set even if the caller passed some.
-        let e = enforce(ModelProviderKind::ClaudeCode, &tight(EgressPolicy::Closed), &allowed);
+        let e = enforce(
+            ModelProviderKind::ClaudeCode,
+            &tight(EgressPolicy::Closed),
+            &allowed,
+        );
         assert_eq!(e.extra_args.last().unwrap(), r#"{"mcpServers":{}}"#);
     }
 
@@ -209,11 +261,36 @@ mod tests {
     #[test]
     fn claude_code_ignores_repo_settings_and_hooks_under_restriction() {
         use crate::provider::claude_code::{confine, Confine};
-        for egress in [EgressPolicy::Closed, EgressPolicy::AllowList { mcp_servers: vec![] }] {
-            let e = enforce(ModelProviderKind::ClaudeCode, &tight(egress.clone()), &Vec::new());
-            let (args, _) = confine(&e.extra_args, Confine { egress_open: egress.is_open(), user_config: true, writes_allowed: true, connectors: true, shell: true });
-            assert!(args.windows(2).any(|w| w[0] == "--setting-sources" && w[1].is_empty()), "{args:?}");
-            let i = args.iter().position(|a| a == "--settings").expect("--settings");
+        for egress in [
+            EgressPolicy::Closed,
+            EgressPolicy::AllowList {
+                mcp_servers: vec![],
+            },
+        ] {
+            let e = enforce(
+                ModelProviderKind::ClaudeCode,
+                &tight(egress.clone()),
+                &Vec::new(),
+            );
+            let (args, _) = confine(
+                &e.extra_args,
+                Confine {
+                    egress_open: egress.is_open(),
+                    user_config: true,
+                    writes_allowed: true,
+                    connectors: true,
+                    shell: true,
+                },
+            );
+            assert!(
+                args.windows(2)
+                    .any(|w| w[0] == "--setting-sources" && w[1].is_empty()),
+                "{args:?}"
+            );
+            let i = args
+                .iter()
+                .position(|a| a == "--settings")
+                .expect("--settings");
             let v: Value = serde_json::from_str(&args[i + 1]).unwrap();
             assert_eq!(v["disableAllHooks"], json!(true));
         }
@@ -221,13 +298,34 @@ mod tests {
 
     #[test]
     fn codex_network_off_and_unconfinable_runtimes_refused() {
-        let e = enforce(ModelProviderKind::Codex, &tight(EgressPolicy::Closed), &Vec::new());
-        assert!(e.extra_args.contains(&"sandbox_workspace_write.network_access=false".to_string()));
-        for p in [ModelProviderKind::Aider, ModelProviderKind::Pi, ModelProviderKind::Hermes, ModelProviderKind::Antigravity, ModelProviderKind::Copilot] {
-            assert!(enforce(p, &tight(EgressPolicy::Closed), &Vec::new()).refuse.is_some(), "{p:?} must be refused");
+        let e = enforce(
+            ModelProviderKind::Codex,
+            &tight(EgressPolicy::Closed),
+            &Vec::new(),
+        );
+        assert!(e
+            .extra_args
+            .contains(&"sandbox_workspace_write.network_access=false".to_string()));
+        for p in [
+            ModelProviderKind::Aider,
+            ModelProviderKind::Pi,
+            ModelProviderKind::Hermes,
+            ModelProviderKind::Antigravity,
+            ModelProviderKind::Copilot,
+        ] {
+            assert!(
+                enforce(p, &tight(EgressPolicy::Closed), &Vec::new())
+                    .refuse
+                    .is_some(),
+                "{p:?} must be refused"
+            );
             assert!(!confinable(p));
         }
-        for p in [ModelProviderKind::Anthropic, ModelProviderKind::Ollama, ModelProviderKind::Custom] {
+        for p in [
+            ModelProviderKind::Anthropic,
+            ModelProviderKind::Ollama,
+            ModelProviderKind::Custom,
+        ] {
             let e = enforce(p, &tight(EgressPolicy::Closed), &Vec::new());
             assert!(e.refuse.is_none() && !e.allow_run_command);
         }
@@ -253,7 +351,9 @@ mod grants_here_tests {
         }
         assert!(!grants_here(None, None, false).apply);
         assert!(!grants_here(Some(false), Some(Owner), false).apply);
-        assert!(grants_here(None, Some(Admin), false).why.contains("opts in"));
+        assert!(grants_here(None, Some(Admin), false)
+            .why
+            .contains("opts in"));
     }
 
     #[test]

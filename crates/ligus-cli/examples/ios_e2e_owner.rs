@@ -20,11 +20,18 @@ use ligus_core::workspace_config_session_id;
 use ligus_runtime::secret_store::StoreKeyVault;
 use ligus_runtime::{ChatService, EventStore, IdentityStore, RelayClient, SyncEngine};
 
-async fn sync(dir: &std::path::Path, relay: &str, room: &str, key: &str, device: uuid::Uuid) -> Result<()> {
+async fn sync(
+    dir: &std::path::Path,
+    relay: &str,
+    room: &str,
+    key: &str,
+    device: uuid::Uuid,
+) -> Result<()> {
     let identity = IdentityStore::new(dir, StoreKeyVault::for_data_dir(dir));
     let ka = identity.key_agreement(device)?;
     let src = ligus_runtime::keyring::KeySource::for_device(device, ka, Some(key), &[]);
-    let mut engine = SyncEngine::new(RelayClient::new(relay), room.to_string()).with_key_source(src);
+    let mut engine =
+        SyncEngine::new(RelayClient::new(relay), room.to_string()).with_key_source(src);
     let mut store = EventStore::open(dir.join("ligus.db"))?;
     for _ in 0..20 {
         let up = engine.take_unpushed(&store)?;
@@ -47,13 +54,22 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&dir)?;
     ligus_runtime::secret_store::init_for_data_dir(&dir, Some("file"));
     let ids = IdentityStore::new(&dir, StoreKeyVault::for_data_dir(&dir));
-    let name = if cmd == "found" { arg.as_str() } else { "Owner" };
+    let name = if cmd == "found" {
+        arg.as_str()
+    } else {
+        "Owner"
+    };
     let stored = ids.bootstrap(name, name, "e2e-desktop")?;
     let open = || -> Result<ChatService> {
         let store = EventStore::open(dir.join("ligus.db"))?;
         let device_kp = ids.device_keypair(stored.device.id)?;
         let account_kp = ids.account_keypair(stored.account.id)?;
-        Ok(ChatService::new(store, device_kp, account_kp, stored.account.actor()))
+        Ok(ChatService::new(
+            store,
+            device_kp,
+            account_kp,
+            stored.account.actor(),
+        ))
     };
     let ws = ligus_core::room_workspace_id(room);
     sync(&dir, relay, room, key, stored.device.id).await?;
@@ -62,14 +78,20 @@ async fn main() -> Result<()> {
             let mut svc = open()?;
             svc.set_author_display_name(arg.clone());
             let account = svc.author().account_id.context("no account")?;
-            let fk = ligus_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key());
-            svc.store().set_workspace_pin(ws, &account.to_string(), &fk)?;
+            let fk = ligus_runtime::envelope_verifier::FounderPin::fingerprint_hex(
+                &svc.account_public_key(),
+            );
+            svc.store()
+                .set_workspace_pin(ws, &account.to_string(), &fk)?;
             svc.ensure_self_member(workspace_config_session_id(ws), ws)?;
             let _ = svc.ensure_default_channel(ws, "");
             let ka = ids.key_agreement(stored.device.id)?;
             let _ = svc.publish_key_agreement(ws, ka.public_key_bytes());
             let inv = svc.issue_invite(ws)?;
-            let ak: String = svc.take_invite_redeem_seed(ws, inv)?.map(|s| s.iter().map(|b| format!("{b:02x}")).collect()).unwrap_or_default();
+            let ak: String = svc
+                .take_invite_redeem_seed(ws, inv)?
+                .map(|s| s.iter().map(|b| format!("{b:02x}")).collect())
+                .unwrap_or_default();
             drop(svc);
             sync(&dir, relay, room, key, stored.device.id).await?;
             let conn = serde_json::json!({
@@ -77,11 +99,13 @@ async fn main() -> Result<()> {
                 "icon": null, "dm_account": null, "founder_actor_id": account.to_string(), "fk": fk, "inv": inv.to_string(),
                 "ak": ak,
             });
-            let code = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&conn)?);
+            let code =
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&conn)?);
             println!("hivews1:{code}");
         }
         "approve" => {
-            let req = ligus_runtime::device_enroll::DeviceEnrollment::decode(arg).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let req = ligus_runtime::device_enroll::DeviceEnrollment::decode(arg)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
             let mut svc = open()?;
             svc.certify_device(&req)?;
             drop(svc);

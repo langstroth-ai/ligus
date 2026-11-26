@@ -19,7 +19,10 @@ use std::sync::Mutex;
 use std::sync::Arc;
 
 use ligus_core::authz::ConfigTimeline;
-use ligus_core::{project_authorized, project_config, ChatSession, SessionEvent, SessionEventEnvelope, WorkspaceAuthz};
+use ligus_core::{
+    project_authorized, project_config, ChatSession, SessionEvent, SessionEventEnvelope,
+    WorkspaceAuthz,
+};
 use rusqlite::{Connection, OptionalExtension};
 use thiserror::Error;
 use uuid::Uuid;
@@ -77,7 +80,10 @@ pub const MAX_ENVELOPE_BYTES: usize = 1024 * 1024 - 16 * 1024;
 pub fn syncable(env: &SessionEventEnvelope) -> Result<()> {
     let bytes = serde_json::to_vec(env)?.len();
     if bytes > MAX_ENVELOPE_BYTES {
-        return Err(EventStoreError::TooLarge { bytes, max: MAX_ENVELOPE_BYTES });
+        return Err(EventStoreError::TooLarge {
+            bytes,
+            max: MAX_ENVELOPE_BYTES,
+        });
     }
     Ok(())
 }
@@ -88,12 +94,17 @@ mod held;
 mod hidden_proposals;
 mod repo_tables;
 mod storage_v2;
-pub use held::{claimed_account, HeldEvent, HeldStats, HoldItem, RefetchRow, HELD_PER_SIGNER, HELD_PER_WORKSPACE, HELD_REFETCH_PER_WORKSPACE, HELD_REFETCH_TRIES, HELD_RETRY_EVERY, HELD_TOTAL, HELD_TTL_MS};
 pub use agent_usage::{parse_day, utc_day, AgentUsageRow};
 pub use blob_renewals::BlobRenewal;
+pub use held::{
+    claimed_account, HeldEvent, HeldStats, HoldItem, RefetchRow, HELD_PER_SIGNER,
+    HELD_PER_WORKSPACE, HELD_REFETCH_PER_WORKSPACE, HELD_REFETCH_TRIES, HELD_RETRY_EVERY,
+    HELD_TOTAL, HELD_TTL_MS,
+};
 pub use repo_tables::{CheckoutSource, RepoMapping};
 pub use storage_v2::{
-    invite_secret, redeem_secret, relay_origin, seed_backups, SyncKey, SyncMigration, NEWER_DATA_MESSAGE, PERSON_SEED_KEEP_MS, SCHEMA_VERSION,
+    invite_secret, redeem_secret, relay_origin, seed_backups, SyncKey, SyncMigration,
+    NEWER_DATA_MESSAGE, PERSON_SEED_KEEP_MS, SCHEMA_VERSION,
 };
 
 /// A chat responder's compaction state as kept on this device: the first
@@ -173,7 +184,8 @@ const PROJECTION_CACHE_MAX: usize = 256;
 /// workspace is checked on the rows it finds (`+workspace_id`: not an index
 /// term, so the planner never trades the signer index for the workspace
 /// one).
-const FORKS_CHAIN_SQL: &str = "SELECT 1 FROM events WHERE session_id = ?1 AND +workspace_id = ?5 AND event_id != ?2 \
+const FORKS_CHAIN_SQL: &str =
+    "SELECT 1 FROM events WHERE session_id = ?1 AND +workspace_id = ?5 AND event_id != ?2 \
      AND json_extract(envelope_json, '$.signerDeviceId') = ?3 \
      AND json_extract(envelope_json, '$.actorStamp') IS NOT NULL \
      AND json_extract(envelope_json, '$.actorStamp.prev') IS ?4 LIMIT 1";
@@ -188,8 +200,15 @@ const LAST_SIGNED_BY_SQL: &str = "SELECT event_id FROM events WHERE session_id =
 /// database in `data_dir`: unique per call (time to the nanosecond and the
 /// process id), so two runs never pick the same file.
 pub fn purge_backup_path(data_dir: &Path) -> std::path::PathBuf {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    data_dir.join(format!("ligus.db.bak-foreign-purge-{}-{:09}-{}", now.as_secs(), now.subsec_nanos(), std::process::id()))
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    data_dir.join(format!(
+        "ligus.db.bak-foreign-purge-{}-{:09}-{}",
+        now.as_secs(),
+        now.subsec_nanos(),
+        std::process::id()
+    ))
 }
 
 /// How long a connection waits for another connection's lock on the file
@@ -209,7 +228,10 @@ fn enable_wal(conn: &Connection) -> Result<()> {
     loop {
         match conn.pragma_update(None, "journal_mode", "WAL") {
             Ok(()) => return Ok(()),
-            Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::DatabaseBusy && std::time::Instant::now() < deadline => {
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::DatabaseBusy
+                    && std::time::Instant::now() < deadline =>
+            {
                 std::thread::sleep(pause);
                 pause = (pause * 2).min(std::time::Duration::from_millis(50));
             }
@@ -235,7 +257,9 @@ const MIGRATION_BACKUP_MARK: &str = ".bak-ws-event-ids-";
 
 /// The database file a connection has open (none: in memory).
 fn db_path(conn: &Connection) -> Option<std::path::PathBuf> {
-    conn.path().filter(|p| !p.is_empty()).map(std::path::PathBuf::from)
+    conn.path()
+        .filter(|p| !p.is_empty())
+        .map(std::path::PathBuf::from)
 }
 
 /// Remove a backup file and SQLite's side files for it.
@@ -254,9 +278,13 @@ fn remove_backup(path: &Path) {
 /// migration that succeeded, which this open of the migrated database
 /// retires. Either way, no full copy of the store piles up.
 fn remove_migration_backups(db: &Path) {
-    let (Some(dir), Some(name)) = (db.parent(), db.file_name().and_then(|n| n.to_str())) else { return };
+    let (Some(dir), Some(name)) = (db.parent(), db.file_name().and_then(|n| n.to_str())) else {
+        return;
+    };
     let prefix = format!("{name}{MIGRATION_BACKUP_MARK}");
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let file = e.file_name();
         let Some(file) = file.to_str() else { continue };
@@ -289,11 +317,22 @@ fn free_bytes(dir: &Path) -> Option<u64> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
-        let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let wide: Vec<u16> = dir
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
         let mut free: u64 = 0;
         // SAFETY: `wide` is a NUL-terminated UTF-16 path; the out pointer is
         // valid for one u64, the other two may be null.
-        let ok = unsafe { windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut()) };
+        let ok = unsafe {
+            windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
         return (ok != 0).then_some(free);
     }
     #[allow(unreachable_code)]
@@ -304,7 +343,11 @@ fn free_bytes(dir: &Path) -> Option<u64> {
 fn db_bytes(db: &Path) -> u64 {
     let mut wal = db.as_os_str().to_os_string();
     wal.push("-wal");
-    [db.to_path_buf(), std::path::PathBuf::from(wal)].iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum()
+    [db.to_path_buf(), std::path::PathBuf::from(wal)]
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum()
 }
 
 /// Refuse the upgrade, with nothing changed, when the disk can't hold its
@@ -312,7 +355,9 @@ fn db_bytes(db: &Path) -> u64 {
 /// database).
 fn check_upgrade_space(db: &Path) -> Result<()> {
     let need = db_bytes(db).saturating_mul(5) / 2;
-    let Some(free) = db.parent().and_then(free_bytes) else { return Ok(()) };
+    let Some(free) = db.parent().and_then(free_bytes) else {
+        return Ok(());
+    };
     if free < need {
         return Err(EventStoreError::NeedsSpaceToUpgrade { need, free });
     }
@@ -337,18 +382,36 @@ pub(crate) mod test_hooks {
 /// table (`<db>.bak-ws-event-ids-<time>-<pid>`); none for an in-memory or
 /// empty store. A copy that fails part way is removed again.
 fn migration_backup(conn: &Connection) -> Result<Option<std::path::PathBuf>> {
-    let Some(db) = db_path(conn) else { return Ok(None) };
+    let Some(db) = db_path(conn) else {
+        return Ok(None);
+    };
     let rows: i64 = conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))?;
     if rows == 0 {
         return Ok(None);
     }
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
     let mut name = db.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    name.push(format!("{MIGRATION_BACKUP_MARK}{}-{:09}-{}", now.as_secs(), now.subsec_nanos(), std::process::id()));
+    name.push(format!(
+        "{MIGRATION_BACKUP_MARK}{}-{:09}-{}",
+        now.as_secs(),
+        now.subsec_nanos(),
+        std::process::id()
+    ));
     let path = db.with_file_name(name);
-    let copied = conn.execute("VACUUM INTO ?1", [path.to_string_lossy()]).map(|_| ());
+    let copied = conn
+        .execute("VACUUM INTO ?1", [path.to_string_lossy()])
+        .map(|_| ());
     #[cfg(test)]
-    let copied = if test_hooks::fails("backup") { Err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL), None)) } else { copied };
+    let copied = if test_hooks::fails("backup") {
+        Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+            None,
+        ))
+    } else {
+        copied
+    };
     if let Err(e) = copied {
         remove_backup(&path);
         return Err(e.into());
@@ -360,7 +423,10 @@ fn migration_backup(conn: &Connection) -> Result<Option<std::path::PathBuf>> {
 /// (`VACUUM`, when there is room for it), so the file doesn't stay twice
 /// its size. Best effort: a failure leaves a larger file, nothing else.
 fn reclaim_after_migration(conn: &Connection, db: &Path) {
-    let room = db.parent().and_then(free_bytes).is_none_or(|free| free > db_bytes(db).saturating_mul(2));
+    let room = db
+        .parent()
+        .and_then(free_bytes)
+        .is_none_or(|free| free > db_bytes(db).saturating_mul(2));
     if !room {
         tracing::info!(target: "event_store", "not enough free disk to compact the upgraded database now");
         return;
@@ -388,7 +454,13 @@ fn upgrade_lock() -> &'static Mutex<()> {
 /// workspace and id, at the next place of its session); copies within one
 /// workspace stay where they are.
 fn migrate_event_ids_per_workspace(tx: &Connection) -> Result<()> {
-    let seq: Option<i64> = tx.query_row("SELECT seq FROM sqlite_sequence WHERE name = 'events'", [], |r| r.get(0)).optional()?;
+    let seq: Option<i64> = tx
+        .query_row(
+            "SELECT seq FROM sqlite_sequence WHERE name = 'events'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
     tx.execute_batch(
         r#"
         CREATE TABLE events_ws_ids (
@@ -411,10 +483,19 @@ fn migrate_event_ids_per_workspace(tx: &Connection) -> Result<()> {
         ALTER TABLE events_ws_ids RENAME TO events;
         "#,
     )?;
-    let max: i64 = tx.query_row("SELECT COALESCE(MAX(row_id), 0) FROM events", [], |r| r.get(0))?;
+    let max: i64 = tx.query_row("SELECT COALESCE(MAX(row_id), 0) FROM events", [], |r| {
+        r.get(0)
+    })?;
     let keep = seq.unwrap_or(0).max(max);
-    if tx.execute("UPDATE sqlite_sequence SET seq = ?1 WHERE name = 'events'", [keep])? == 0 {
-        tx.execute("INSERT INTO sqlite_sequence (name, seq) VALUES ('events', ?1)", [keep])?;
+    if tx.execute(
+        "UPDATE sqlite_sequence SET seq = ?1 WHERE name = 'events'",
+        [keep],
+    )? == 0
+    {
+        tx.execute(
+            "INSERT INTO sqlite_sequence (name, seq) VALUES ('events', ?1)",
+            [keep],
+        )?;
     }
     // Copies kept aside only because another workspace held the id.
     let stranded: Vec<(i64, String, String, String, String, String, Option<i64>)> = {
@@ -422,7 +503,17 @@ fn migrate_event_ids_per_workspace(tx: &Connection) -> Result<()> {
             "SELECT q.row_id, q.event_id, q.session_id, q.workspace_id, q.kind, q.envelope_json, q.sealed_epoch FROM equivocations q \
              WHERE NOT EXISTS (SELECT 1 FROM events e WHERE e.workspace_id = q.workspace_id AND e.event_id = q.event_id) ORDER BY q.row_id",
         )?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+            ))
+        })?;
         rows.collect::<rusqlite::Result<_>>()?
     };
     for (row_id, event_id, session_id, workspace_id, kind, json, sealed_epoch) in stranded {
@@ -432,10 +523,22 @@ fn migrate_event_ids_per_workspace(tx: &Connection) -> Result<()> {
         if taken {
             continue;
         }
-        let Ok(env) = serde_json::from_str::<SessionEventEnvelope>(&json) else { continue };
-        let timestamp = serde_json::to_value(env.timestamp)?.as_str().unwrap_or_default().to_string();
-        let scope = serde_json::to_value(env.scope)?.as_str().unwrap_or_default().to_string();
-        let next: i64 = tx.query_row("SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE session_id = ?1", [&session_id], |r| r.get(0))?;
+        let Ok(env) = serde_json::from_str::<SessionEventEnvelope>(&json) else {
+            continue;
+        };
+        let timestamp = serde_json::to_value(env.timestamp)?
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let scope = serde_json::to_value(env.scope)?
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let next: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE session_id = ?1",
+            [&session_id],
+            |r| r.get(0),
+        )?;
         tx.execute(
             "INSERT INTO events (event_id, session_id, workspace_id, sequence, kind, scope, timestamp, envelope_json, sealed_epoch) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -459,8 +562,16 @@ fn migrate_event_ids_per_workspace(tx: &Connection) -> Result<()> {
 /// or roll back together. Dropped without [`WriteTx::commit`], it rolls back.
 pub(crate) fn write_tx(conn: &Connection) -> rusqlite::Result<WriteTx<'_>> {
     let nested = !conn.is_autocommit();
-    conn.execute_batch(if nested { "SAVEPOINT ligus_write" } else { "BEGIN IMMEDIATE" })?;
-    Ok(WriteTx { conn, nested, done: false })
+    conn.execute_batch(if nested {
+        "SAVEPOINT ligus_write"
+    } else {
+        "BEGIN IMMEDIATE"
+    })?;
+    Ok(WriteTx {
+        conn,
+        nested,
+        done: false,
+    })
 }
 
 pub(crate) struct WriteTx<'a> {
@@ -473,7 +584,11 @@ impl WriteTx<'_> {
     /// Commit (release, nested). One that fails is rolled back on drop, so
     /// the connection never stays inside the transaction.
     pub(crate) fn commit(mut self) -> rusqlite::Result<()> {
-        self.conn.execute_batch(if self.nested { "RELEASE ligus_write" } else { "COMMIT" })?;
+        self.conn.execute_batch(if self.nested {
+            "RELEASE ligus_write"
+        } else {
+            "COMMIT"
+        })?;
         self.done = true;
         Ok(())
     }
@@ -490,7 +605,11 @@ impl Drop for WriteTx<'_> {
     fn drop(&mut self) {
         // (Nothing to undo when SQLite already rolled the transaction back.)
         if !self.done && !self.conn.is_autocommit() {
-            let _ = self.conn.execute_batch(if self.nested { "ROLLBACK TO ligus_write; RELEASE ligus_write" } else { "ROLLBACK" });
+            let _ = self.conn.execute_batch(if self.nested {
+                "ROLLBACK TO ligus_write; RELEASE ligus_write"
+            } else {
+                "ROLLBACK"
+            });
         }
     }
 }
@@ -519,7 +638,12 @@ impl EventStore {
     /// A database a newer Ligus wrote, read-only: nothing here changes it.
     fn open_read_only(path: &Path, version: i64) -> Result<Self> {
         use rusqlite::OpenFlags;
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+                | OpenFlags::SQLITE_OPEN_URI
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
         tracing::error!(target: "event_store", version, known = SCHEMA_VERSION, "{NEWER_DATA_MESSAGE}");
         Ok(Self {
@@ -569,7 +693,9 @@ impl EventStore {
         // are copied to the secret store the host chose, and read back,
         // before any backup below is taken. Its deletions wait for the log
         // (below).
-        let secrets = path.and_then(Path::parent).and_then(crate::secret_store::registered);
+        let secrets = path
+            .and_then(Path::parent)
+            .and_then(crate::secret_store::registered);
         let move_seeds = secrets.is_some() && path.is_some_and(storage_v2::first_open);
         if let (true, Some(store)) = (move_seeds, &secrets) {
             if let Err(e) = storage_v2::copy_seeds(&conn, store.as_ref(), storage_v2::now_ms()) {
@@ -598,7 +724,11 @@ impl EventStore {
                 Self::init_schema(&tx)?;
                 #[cfg(test)]
                 if test_hooks::fails("migrate") {
-                    return Err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL), None).into());
+                    return Err(rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+                        None,
+                    )
+                    .into());
                 }
             }
             tx.commit()?;
@@ -636,7 +766,9 @@ impl EventStore {
         };
         if move_seeds {
             match store.move_seeds() {
-                Ok((_, deleted)) if deleted > 0 => tracing::info!(target: "event_store", deleted, "deleted redeem key seeds of closed invites"),
+                Ok((_, deleted)) if deleted > 0 => {
+                    tracing::info!(target: "event_store", deleted, "deleted redeem key seeds of closed invites")
+                }
                 Ok(_) => {}
                 Err(e) => tracing::warn!(target: "event_store", "retiring redeem key seeds: {e}"),
             }
@@ -904,7 +1036,9 @@ impl EventStore {
             .prepare("SELECT 1 FROM pragma_table_info('parked_bodies') WHERE name = 'priority'")?
             .exists([])?;
         if !has_priority {
-            conn.execute_batch("ALTER TABLE parked_bodies ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")?;
+            conn.execute_batch(
+                "ALTER TABLE parked_bodies ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+            )?;
         }
         Ok(())
     }
@@ -913,14 +1047,20 @@ impl EventStore {
     pub fn link_check(&self, key: &str) -> Option<crate::identity_links::CachedCheck> {
         let json: Option<String> = self
             .conn
-            .query_row("SELECT check_json FROM identity_link_checks WHERE link_key = ?1", [key], |r| r.get(0))
+            .query_row(
+                "SELECT check_json FROM identity_link_checks WHERE link_key = ?1",
+                [key],
+                |r| r.get(0),
+            )
             .ok();
         json.and_then(|j| serde_json::from_str(&j).ok())
     }
 
     /// Record an identity-link check, keeping at most 4096 (the oldest go).
     pub fn put_link_check(&self, key: &str, check: &crate::identity_links::CachedCheck) {
-        let Ok(json) = serde_json::to_string(check) else { return };
+        let Ok(json) = serde_json::to_string(check) else {
+            return;
+        };
         let ms = (check.checked_at.0.unix_timestamp_nanos() / 1_000_000) as i64;
         let _ = self.conn.execute(
             "INSERT INTO identity_link_checks (link_key, checked_ms, check_json) VALUES (?1, ?2, ?3) \
@@ -966,7 +1106,11 @@ impl EventStore {
     /// the log reads. A log is (`workspace_id`, `session_id`): rows another
     /// workspace stamped under the same session id are another log, never
     /// merged into this one.
-    fn log_with_witnesses(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
+    fn log_with_witnesses(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Vec<SessionEventEnvelope>> {
         let mut envelopes = self.query_envelopes_sealed(
             "SELECT envelope_json, sealed_epoch FROM (SELECT 0 AS t, sequence AS o, envelope_json, sealed_epoch FROM events WHERE session_id = ?1 AND workspace_id = ?2 \
              UNION ALL SELECT 1, row_id, envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1 AND workspace_id = ?2) ORDER BY t, o",
@@ -982,17 +1126,29 @@ impl EventStore {
     /// chain link. All of them, whether or not the id is stored: the lamport
     /// rule counts every copy alike on every device, and the fold leaves
     /// witnesses out (`ligus_core::lamport::is_witness`).
-    fn witnesses_of(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
+    fn witnesses_of(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Vec<SessionEventEnvelope>> {
         let mut stmt = self.conn.prepare(
             "SELECT event_id, workspace_id, lamport, log_head, prev FROM lamport_witnesses WHERE session_id = ?1 AND workspace_id = ?2 ORDER BY row_id ASC",
         )?;
         let rows = stmt.query_map([session_id.to_string(), workspace_id.to_string()], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+            ))
         })?;
         let mut out = Vec::new();
         for row in rows {
             let (id, ws, lamport, head, prev) = row?;
-            let (Ok(id), Ok(ws)) = (Uuid::parse_str(&id), Uuid::parse_str(&ws)) else { continue };
+            let (Ok(id), Ok(ws)) = (Uuid::parse_str(&id), Uuid::parse_str(&ws)) else {
+                continue;
+            };
             let mut env = SessionEventEnvelope::new(session_id, ws, 0, SessionEvent::Unknown);
             env.event_id = id;
             env.lamport = lamport as u64;
@@ -1015,9 +1171,13 @@ impl EventStore {
     /// The ids of a log's lamport witnesses (tests).
     #[cfg(test)]
     pub(crate) fn witness_ids(&self, session_id: Uuid) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare("SELECT event_id FROM lamport_witnesses WHERE session_id = ?1 ORDER BY row_id ASC")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT event_id FROM lamport_witnesses WHERE session_id = ?1 ORDER BY row_id ASC",
+        )?;
         let rows = stmt.query_map([session_id.to_string()], |r| r.get::<_, String>(0))?;
-        Ok(rows.filter_map(|r| r.ok().and_then(|s| Uuid::parse_str(&s).ok())).collect())
+        Ok(rows
+            .filter_map(|r| r.ok().and_then(|s| Uuid::parse_str(&s).ok()))
+            .collect())
     }
 
     /// Keep `env`, which this device refused at ingest (for whatever reason:
@@ -1027,8 +1187,15 @@ impl EventStore {
     /// itself.
     pub fn note_lamport_witness(&self, env: &SessionEventEnvelope) -> Result<()> {
         let stamp = env.actor_stamp.as_ref();
-        let head = stamp.and_then(|s| s.log_head).map(|h| serde_json::to_string(&h)).transpose()?.unwrap_or_default();
-        let prev = stamp.and_then(|s| s.prev).map(|p| p.to_string()).unwrap_or_default();
+        let head = stamp
+            .and_then(|s| s.log_head)
+            .map(|h| serde_json::to_string(&h))
+            .transpose()?
+            .unwrap_or_default();
+        let prev = stamp
+            .and_then(|s| s.prev)
+            .map(|p| p.to_string())
+            .unwrap_or_default();
         self.conn.execute(
             "INSERT OR IGNORE INTO lamport_witnesses (event_id, session_id, workspace_id, lamport, log_head, prev) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
@@ -1054,10 +1221,19 @@ impl EventStore {
     ///
     /// The log is (`workspace_id`, `session_id`): an event another workspace
     /// stamped under the same session id is never this log's head.
-    pub fn lamport_head(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<ligus_core::CfgFrontier>> {
+    pub fn lamport_head(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Option<ligus_core::CfgFrontier>> {
         let key = (workspace_id, session_id);
         let sig = self.rows_sig(workspace_id, session_id)?;
-        if let Some((cached, head)) = self.heads.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        if let Some((cached, head)) = self
+            .heads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+        {
             if *cached == sig {
                 return Ok(*head);
             }
@@ -1106,8 +1282,14 @@ impl EventStore {
         if !self.conn.is_autocommit() {
             let _ = self.conn.execute_batch("ROLLBACK");
         }
-        self.projections.lock().unwrap_or_else(|p| p.into_inner()).clear();
-        self.configs.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        self.projections
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        self.configs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
         self.heads.lock().unwrap_or_else(|p| p.into_inner()).clear();
     }
 
@@ -1124,14 +1306,16 @@ impl EventStore {
     /// of the same signer through another connection); a peer's event is
     /// never judged here, its fork is for the fold to see.
     fn forks_chain(&self, env: &SessionEventEnvelope) -> Result<bool> {
-        let (Some(signer), Some(stamp), Some(_)) = (env.signer_device_id, env.actor_stamp.as_ref(), env.signature.as_ref()) else {
+        let (Some(signer), Some(stamp), Some(_)) = (
+            env.signer_device_id,
+            env.actor_stamp.as_ref(),
+            env.signature.as_ref(),
+        ) else {
             return Ok(false);
         };
         Ok(self
             .conn
-            .prepare_cached(
-                FORKS_CHAIN_SQL,
-            )?
+            .prepare_cached(FORKS_CHAIN_SQL)?
             .exists(rusqlite::params![
                 env.session_id.to_string(),
                 env.event_id.to_string(),
@@ -1173,7 +1357,12 @@ impl EventStore {
         // between this and the insert.
         let log = (env.workspace_id, env.session_id);
         let before = self.rows_sig(env.workspace_id, env.session_id)?;
-        let cached = self.heads.lock().unwrap_or_else(|e| e.into_inner()).get(&log).copied();
+        let cached = self
+            .heads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&log)
+            .copied();
         let next = self.next_row_sequence(env.session_id)?;
         tx.execute(
             r#"
@@ -1199,7 +1388,10 @@ impl EventStore {
                 && env.lamport == ligus_core::lamport::next(head);
             let mut cache = self.heads.lock().unwrap_or_else(|e| e.into_inner());
             if sig == before && names_head {
-                let key = ligus_core::CfgFrontier { lamport: env.lamport, event_id: env.event_id };
+                let key = ligus_core::CfgFrontier {
+                    lamport: env.lamport,
+                    event_id: env.event_id,
+                };
                 cache.insert(log, (after, Some(key)));
             } else {
                 cache.remove(&log);
@@ -1215,7 +1407,11 @@ impl EventStore {
     fn next_row_sequence(&self, session_id: Uuid) -> Result<i64> {
         let max: Option<i64> = self
             .conn
-            .query_row("SELECT MAX(sequence) FROM events WHERE session_id = ?1", [session_id.to_string()], |row| row.get(0))
+            .query_row(
+                "SELECT MAX(sequence) FROM events WHERE session_id = ?1",
+                [session_id.to_string()],
+                |row| row.get(0),
+            )
             .optional()?
             .flatten();
         Ok(max.unwrap_or(0) + 1)
@@ -1246,7 +1442,10 @@ impl EventStore {
             .map(|s| s + 1)
             .unwrap_or(1);
 
-        let env = fixture_next(&SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload), log_head);
+        let env = fixture_next(
+            &SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload),
+            log_head,
+        );
         let json = serde_json::to_string(&env)?;
         let timestamp = serde_json::to_value(env.timestamp)?
             .as_str()
@@ -1313,7 +1512,10 @@ impl EventStore {
              ORDER BY row_id ASC",
             [workspace_id.to_string(), ligus_core::workspace_config_session_id(workspace_id).to_string()],
         )?;
-        out.extend(self.witnesses_of(workspace_id, ligus_core::workspace_config_session_id(workspace_id))?);
+        out.extend(self.witnesses_of(
+            workspace_id,
+            ligus_core::workspace_config_session_id(workspace_id),
+        )?);
         Ok(out)
     }
 
@@ -1333,18 +1535,29 @@ impl EventStore {
     pub fn max_row_id(&self) -> Result<i64> {
         Ok(self
             .conn
-            .query_row("SELECT COALESCE(MAX(row_id), 0) FROM events", [], |row| row.get(0))?)
+            .query_row("SELECT COALESCE(MAX(row_id), 0) FROM events", [], |row| {
+                row.get(0)
+            })?)
     }
 
     /// The newest `equivocations` row id (0 when none).
     pub fn max_equivocation_row_id(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COALESCE(MAX(row_id), 0) FROM equivocations", [], |row| row.get(0))?)
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(MAX(row_id), 0) FROM equivocations",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     /// Whether `session_id` gained an event after events row `after_event` or
     /// an equivocation after equivocations row `after_equiv`. Reads only the
     /// newer rows (a row-id range), so it stays cheap on a busy store.
-    pub fn session_rows_after(&self, session_id: Uuid, after_event: i64, after_equiv: i64) -> Result<bool> {
+    pub fn session_rows_after(
+        &self,
+        session_id: Uuid,
+        after_event: i64,
+        after_equiv: i64,
+    ) -> Result<bool> {
         let sid = session_id.to_string();
         let ev: bool = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM events WHERE row_id > ?1 AND session_id = ?2)",
@@ -1401,7 +1614,13 @@ impl EventStore {
 
     /// Whether the log (`workspace_id`, `session_id`) itself carries a
     /// certificate for (device, account).
-    pub fn has_device_certificate_in(&self, workspace_id: Uuid, session_id: Uuid, device_id: Uuid, account_id: Uuid) -> Result<bool> {
+    pub fn has_device_certificate_in(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        device_id: Uuid,
+        account_id: Uuid,
+    ) -> Result<bool> {
         let envs = self.query_envelopes(
             "SELECT envelope_json FROM events WHERE session_id = ?1 AND workspace_id = ?2 AND kind = 'deviceCertificateAdded' ORDER BY row_id",
             [session_id.to_string(), workspace_id.to_string()],
@@ -1436,7 +1655,11 @@ impl EventStore {
     /// P-A2c). An unsigned copy of a signed event can never count, so it is
     /// refused here and kept only as a lamport witness (ingest refuses
     /// unsigned envelopes anyway; this covers every other path in).
-    fn note_equivocation(&self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<()> {
+    fn note_equivocation(
+        &self,
+        env: &SessionEventEnvelope,
+        sealed_epoch: Option<u32>,
+    ) -> Result<()> {
         let stored: Option<String> = self
             .conn
             .query_row(
@@ -1445,7 +1668,11 @@ impl EventStore {
                 |r| r.get(0),
             )
             .optional()?;
-        let Some(stored) = stored.and_then(|j| serde_json::from_str::<SessionEventEnvelope>(&j).ok()) else { return Ok(()) };
+        let Some(stored) =
+            stored.and_then(|j| serde_json::from_str::<SessionEventEnvelope>(&j).ok())
+        else {
+            return Ok(());
+        };
         if !ligus_core::events::equivocates(&stored, env) {
             return Ok(());
         }
@@ -1471,7 +1698,10 @@ impl EventStore {
     /// Claim apply request `request_id` for this host: `true` the first
     /// time, `false` ever after (a restart included).
     pub fn claim_apply_attempt(&self, request_id: Uuid) -> Result<bool> {
-        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
         let n = self.conn.execute(
             "INSERT OR IGNORE INTO apply_attempts (request_id, started_ms) VALUES (?1, ?2)",
             rusqlite::params![request_id.to_string(), ms],
@@ -1481,7 +1711,10 @@ impl EventStore {
 
     /// Record that this host wrote its outcome for `request_id` (or gave up).
     pub fn finish_apply_attempt(&self, request_id: Uuid) -> Result<()> {
-        self.conn.execute("UPDATE apply_attempts SET finished = 1 WHERE request_id = ?1", [request_id.to_string()])?;
+        self.conn.execute(
+            "UPDATE apply_attempts SET finished = 1 WHERE request_id = ?1",
+            [request_id.to_string()],
+        )?;
         Ok(())
     }
 
@@ -1489,7 +1722,11 @@ impl EventStore {
     pub fn apply_attempt_finished(&self, request_id: Uuid) -> Result<bool> {
         let n: Option<i64> = self
             .conn
-            .query_row("SELECT finished FROM apply_attempts WHERE request_id = ?1", [request_id.to_string()], |r| r.get(0))
+            .query_row(
+                "SELECT finished FROM apply_attempts WHERE request_id = ?1",
+                [request_id.to_string()],
+                |r| r.get(0),
+            )
             .optional()?;
         Ok(n == Some(1))
     }
@@ -1543,7 +1780,11 @@ impl EventStore {
     /// Another copy under an id this store holds is kept beside it (the
     /// `equivocations` table), whichever arrived first: the fold decides
     /// which copies count (`ligus_core::copies`), so arrival order never does.
-    pub fn ingest_sealed(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<bool> {
+    pub fn ingest_sealed(
+        &mut self,
+        env: &SessionEventEnvelope,
+        sealed_epoch: Option<u32>,
+    ) -> Result<bool> {
         self.ingest_inner(env, sealed_epoch, false)
     }
 
@@ -1556,7 +1797,12 @@ impl EventStore {
         self.ingest_inner(env, env.sealed_epoch(), true)
     }
 
-    fn ingest_inner(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>, authored: bool) -> Result<bool> {
+    fn ingest_inner(
+        &mut self,
+        env: &SessionEventEnvelope,
+        sealed_epoch: Option<u32>,
+        authored: bool,
+    ) -> Result<bool> {
         // Under the write lock from the start (see [`write_tx`]): whether the
         // id is stored and the next sequence are read and the row written
         // with no other connection's write in between, so two connections
@@ -1620,7 +1866,11 @@ impl EventStore {
     ///
     /// The log is (`workspace_id`, `session_id`): rows another workspace
     /// stamped under the same session id are never among them.
-    pub fn list_copies_in(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
+    pub fn list_copies_in(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Vec<SessionEventEnvelope>> {
         self.query_envelopes(
             "SELECT envelope_json FROM (SELECT 0 AS t, sequence AS o, envelope_json FROM events WHERE session_id = ?1 AND workspace_id = ?2 \
              UNION ALL SELECT 1, row_id, envelope_json FROM equivocations WHERE session_id = ?1 AND workspace_id = ?2) ORDER BY t, o",
@@ -1639,7 +1889,11 @@ impl EventStore {
     }
 
     /// A log's envelopes (`workspace_id`, `session_id`) in sequence order.
-    pub fn list_in(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
+    pub fn list_in(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Vec<SessionEventEnvelope>> {
         self.query_envelopes(
             "SELECT envelope_json FROM events WHERE session_id = ?1 AND workspace_id = ?2 ORDER BY sequence ASC",
             [session_id.to_string(), workspace_id.to_string()],
@@ -1660,10 +1914,12 @@ impl EventStore {
     /// Row ids only grow (AUTOINCREMENT, one writer at a time), so a later call
     /// from the returned row id never misses a row committed since.
     pub fn envelopes_after_row(&self, after: i64) -> Result<(i64, Vec<SessionEventEnvelope>)> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT row_id, envelope_json FROM events WHERE row_id > ?1 ORDER BY row_id ASC")?;
-        let rows = stmt.query_map([after], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
+        let mut stmt = self.conn.prepare(
+            "SELECT row_id, envelope_json FROM events WHERE row_id > ?1 ORDER BY row_id ASC",
+        )?;
+        let rows = stmt.query_map([after], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
         let mut last = after;
         let mut out = Vec::new();
         for row in rows {
@@ -1671,7 +1927,9 @@ impl EventStore {
             last = last.max(row_id);
             match serde_json::from_str::<SessionEventEnvelope>(&json) {
                 Ok(env) => out.push(env),
-                Err(e) => tracing::warn!(error = %e, "skipping unparseable event row during push scan"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "skipping unparseable event row during push scan")
+                }
             }
         }
         Ok((last, out))
@@ -1679,7 +1937,12 @@ impl EventStore {
 
     /// A log's envelopes with `sequence > after`, in order — the sync fetch
     /// path.
-    pub fn list_after(&self, workspace_id: Uuid, session_id: Uuid, after: i64) -> Result<Vec<SessionEventEnvelope>> {
+    pub fn list_after(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        after: i64,
+    ) -> Result<Vec<SessionEventEnvelope>> {
         self.query_envelopes(
             "SELECT envelope_json FROM events WHERE session_id = ?1 AND workspace_id = ?3 AND sequence > ?2 ORDER BY sequence ASC",
             rusqlite::params![session_id.to_string(), after, workspace_id.to_string()],
@@ -1689,9 +1952,15 @@ impl EventStore {
     /// Like [`EventStore::query_envelopes`] for `SELECT envelope_json,
     /// sealed_epoch …`: each envelope carries the epoch it arrived sealed
     /// under, which the fold's old-epoch rule reads (B1).
-    fn query_envelopes_sealed(&self, sql: &str, params: impl rusqlite::Params) -> Result<Vec<SessionEventEnvelope>> {
+    fn query_envelopes_sealed(
+        &self,
+        sql: &str,
+        params: impl rusqlite::Params,
+    ) -> Result<Vec<SessionEventEnvelope>> {
         let mut stmt = self.conn.prepare(sql)?;
-        let rows = stmt.query_map(params, |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)))?;
+        let rows = stmt.query_map(params, |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+        })?;
         let mut out = Vec::new();
         for row in rows {
             let (json, epoch) = row?;
@@ -1710,7 +1979,11 @@ impl EventStore {
     pub fn sealed_epoch_of(&self, event_id: Uuid) -> Result<Option<u32>> {
         let v: Option<Option<i64>> = self
             .conn
-            .query_row("SELECT sealed_epoch FROM events WHERE event_id = ?1", [event_id.to_string()], |r| r.get(0))
+            .query_row(
+                "SELECT sealed_epoch FROM events WHERE event_id = ?1",
+                [event_id.to_string()],
+                |r| r.get(0),
+            )
             .optional()?;
         Ok(v.flatten().and_then(|e| u32::try_from(e).ok()))
     }
@@ -1747,9 +2020,19 @@ impl EventStore {
     pub fn delete_session_in(&self, workspace_id: Uuid, session_id: Uuid) -> Result<usize> {
         let (sid, ws) = (session_id.to_string(), workspace_id.to_string());
         let tx = write_tx(&self.conn)?;
-        let n = tx.execute("DELETE FROM events WHERE session_id = ?1 AND workspace_id = ?2", [&sid, &ws])?;
-        tx.execute("DELETE FROM equivocations WHERE session_id = ?1 AND workspace_id = ?2", [&sid, &ws])?;
-        let left: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE session_id = ?1)", [&sid], |r| r.get(0))?;
+        let n = tx.execute(
+            "DELETE FROM events WHERE session_id = ?1 AND workspace_id = ?2",
+            [&sid, &ws],
+        )?;
+        tx.execute(
+            "DELETE FROM equivocations WHERE session_id = ?1 AND workspace_id = ?2",
+            [&sid, &ws],
+        )?;
+        let left: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE session_id = ?1)",
+            [&sid],
+            |r| r.get(0),
+        )?;
         tx.commit()?;
         if !left {
             self.delete_compaction(session_id, None)?;
@@ -1765,7 +2048,10 @@ impl EventStore {
             "DELETE FROM events WHERE session_id = ?1",
             [session_id.to_string()],
         )?;
-        self.conn.execute("DELETE FROM equivocations WHERE session_id = ?1", [session_id.to_string()])?;
+        self.conn.execute(
+            "DELETE FROM equivocations WHERE session_id = ?1",
+            [session_id.to_string()],
+        )?;
         self.delete_compaction(session_id, None)?;
         Ok(n)
     }
@@ -1775,7 +2061,11 @@ impl EventStore {
 
     /// The stored compaction state for a chat's responder runtime, if any. A
     /// row that no longer parses is treated as absent.
-    pub fn compaction(&self, session_id: Uuid, runtime_id: &str) -> Result<Option<StoredCompaction>> {
+    pub fn compaction(
+        &self,
+        session_id: Uuid,
+        runtime_id: &str,
+    ) -> Result<Option<StoredCompaction>> {
         let row = self
             .conn
             .query_row(
@@ -1803,11 +2093,21 @@ impl EventStore {
         let Ok(covered) = serde_json::from_str::<Vec<Uuid>>(&covered_json) else {
             return Ok(None);
         };
-        Ok(Some(StoredCompaction { boundary, covered, fingerprint, summary }))
+        Ok(Some(StoredCompaction {
+            boundary,
+            covered,
+            fingerprint,
+            summary,
+        }))
     }
 
     /// Save (replace) a chat responder's compaction state.
-    pub fn save_compaction(&self, session_id: Uuid, runtime_id: &str, state: &StoredCompaction) -> Result<()> {
+    pub fn save_compaction(
+        &self,
+        session_id: Uuid,
+        runtime_id: &str,
+        state: &StoredCompaction,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO compaction_state (session_id, runtime_id, boundary, covered_json, fingerprint, summary) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
@@ -1833,9 +2133,10 @@ impl EventStore {
                 "DELETE FROM compaction_state WHERE session_id = ?1 AND runtime_id = ?2",
                 rusqlite::params![session_id.to_string(), rt],
             )?,
-            None => self
-                .conn
-                .execute("DELETE FROM compaction_state WHERE session_id = ?1", [session_id.to_string()])?,
+            None => self.conn.execute(
+                "DELETE FROM compaction_state WHERE session_id = ?1",
+                [session_id.to_string()],
+            )?,
         };
         Ok(())
     }
@@ -1900,7 +2201,9 @@ impl EventStore {
         let mut out = Vec::new();
         for row in rows {
             let (row_id, ws, sid, at_ms, json) = row?;
-            let Ok(signal) = serde_json::from_str(&json) else { continue };
+            let Ok(signal) = serde_json::from_str(&json) else {
+                continue;
+            };
             out.push(ligus_core::signal::GuardSignalRecord {
                 row_id,
                 workspace_id: Uuid::parse_str(&ws).unwrap_or_default(),
@@ -1916,14 +2219,22 @@ impl EventStore {
     // [`FACTS_KEEP`] rows. ---
 
     /// Record one fact (a measurement flow record).
-    pub fn record_fact(&self, workspace_id: Uuid, session_id: Uuid, at_ms: i64, kind: &str, record_json: &str) -> Result<i64> {
+    pub fn record_fact(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        at_ms: i64,
+        kind: &str,
+        record_json: &str,
+    ) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO facts (workspace_id, session_id, at_ms, kind, record_json) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![workspace_id.to_string(), session_id.to_string(), at_ms, kind, record_json],
         )?;
         let row = self.conn.last_insert_rowid();
         if row % 256 == 0 {
-            self.conn.execute("DELETE FROM facts WHERE row_id <= ?1", [row - FACTS_KEEP])?;
+            self.conn
+                .execute("DELETE FROM facts WHERE row_id <= ?1", [row - FACTS_KEEP])?;
         }
         Ok(row)
     }
@@ -1931,24 +2242,46 @@ impl EventStore {
     /// Highest fact row (0 when none): with [`Self::max_row_id`], what a
     /// cached view of folded state plus facts is keyed on.
     pub fn max_fact_row(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COALESCE(MAX(row_id), 0) FROM facts", [], |row| row.get(0))?)
+        Ok(self
+            .conn
+            .query_row("SELECT COALESCE(MAX(row_id), 0) FROM facts", [], |row| {
+                row.get(0)
+            })?)
     }
 
     /// A session's facts, oldest first: (row, at_ms, kind, record_json).
-    pub fn session_facts(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Vec<(i64, i64, String, String)>> {
+    pub fn session_facts(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Vec<(i64, i64, String, String)>> {
         let mut stmt = self.conn.prepare("SELECT row_id, at_ms, kind, record_json FROM facts WHERE session_id = ?1 AND workspace_id = ?2 ORDER BY row_id ASC")?;
-        let rows = stmt.query_map([session_id.to_string(), workspace_id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        let rows = stmt.query_map([session_id.to_string(), workspace_id.to_string()], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// Every fact at or after `since_ms` (all workspaces), oldest first:
     /// (row, workspace, session, at_ms, kind, record_json).
     #[allow(clippy::type_complexity)]
-    pub fn facts_since(&self, since_ms: i64) -> Result<Vec<(i64, String, String, i64, String, String)>> {
+    pub fn facts_since(
+        &self,
+        since_ms: i64,
+    ) -> Result<Vec<(i64, String, String, i64, String, String)>> {
         let mut stmt = self.conn.prepare(
             "SELECT row_id, workspace_id, session_id, at_ms, kind, record_json FROM facts WHERE at_ms >= ?1 ORDER BY row_id ASC",
         )?;
-        let rows = stmt.query_map([since_ms], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?;
+        let rows = stmt.query_map([since_ms], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
@@ -1970,10 +2303,15 @@ impl EventStore {
                 "SELECT envelope_json FROM {table} WHERE json_extract(envelope_json, '$.signerDeviceId') = ?1 \
                  AND +workspace_id = ?2 ORDER BY row_id ASC"
             ))?;
-            let mut rows = stmt.query(rusqlite::params![device.to_string(), workspace_id.to_string()])?;
+            let mut rows = stmt.query(rusqlite::params![
+                device.to_string(),
+                workspace_id.to_string()
+            ])?;
             while let Some(row) = rows.next()? {
                 let json: String = row.get(0)?;
-                let Ok(env) = serde_json::from_str::<SessionEventEnvelope>(&json) else { continue };
+                let Ok(env) = serde_json::from_str::<SessionEventEnvelope>(&json) else {
+                    continue;
+                };
                 if !visit(env) {
                     return Ok(());
                 }
@@ -1986,12 +2324,23 @@ impl EventStore {
     /// order) with a lamport below `below`: what a new event of that signer at
     /// lamport `below` names as `ActorStamp::prev` (a chain link is always
     /// older than the event, `ligus_core::lamport`).
-    pub fn last_signed_by(&self, workspace_id: Uuid, session_id: Uuid, signer: Uuid, below: u64) -> Result<Option<Uuid>> {
+    pub fn last_signed_by(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        signer: Uuid,
+        below: u64,
+    ) -> Result<Option<Uuid>> {
         let id: Option<String> = self
             .conn
             .query_row(
                 LAST_SIGNED_BY_SQL,
-                rusqlite::params![session_id.to_string(), signer.to_string(), below.min(i64::MAX as u64) as i64, workspace_id.to_string()],
+                rusqlite::params![
+                    session_id.to_string(),
+                    signer.to_string(),
+                    below.min(i64::MAX as u64) as i64,
+                    workspace_id.to_string()
+                ],
                 |r| r.get(0),
             )
             .optional()?;
@@ -2000,7 +2349,9 @@ impl EventStore {
 
     /// The session ids of one workspace.
     pub fn sessions_of_workspace(&self, workspace_id: Uuid) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT session_id FROM events WHERE workspace_id = ?1 ORDER BY session_id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT session_id FROM events WHERE workspace_id = ?1 ORDER BY session_id",
+        )?;
         let rows = stmt.query_map([workspace_id.to_string()], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
         for s in rows {
@@ -2014,30 +2365,53 @@ impl EventStore {
     /// Facts after row `after_row` and at or after `since_ms` (all
     /// workspaces), oldest first: the facts export's incremental read.
     #[allow(clippy::type_complexity)]
-    pub fn facts_after(&self, after_row: i64, since_ms: i64) -> Result<Vec<(i64, String, String, i64, String, String)>> {
+    pub fn facts_after(
+        &self,
+        after_row: i64,
+        since_ms: i64,
+    ) -> Result<Vec<(i64, String, String, i64, String, String)>> {
         let mut stmt = self.conn.prepare(
             "SELECT row_id, workspace_id, session_id, at_ms, kind, record_json FROM facts \
              WHERE row_id > ?1 AND at_ms >= ?2 ORDER BY row_id ASC",
         )?;
-        let rows = stmt.query_map([after_row, since_ms], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?;
+        let rows = stmt.query_map([after_row, since_ms], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// Guard signals after row `after_row` and at or after `since_ms` (all
     /// workspaces), oldest first: (row, workspace, session, at_ms, signal_json).
     #[allow(clippy::type_complexity)]
-    pub fn signals_after(&self, after_row: i64, since_ms: i64) -> Result<Vec<(i64, String, Option<String>, i64, String)>> {
+    pub fn signals_after(
+        &self,
+        after_row: i64,
+        since_ms: i64,
+    ) -> Result<Vec<(i64, String, Option<String>, i64, String)>> {
         let mut stmt = self.conn.prepare(
             "SELECT row_id, workspace_id, session_id, at_ms, signal_json FROM guard_signals \
              WHERE row_id > ?1 AND at_ms >= ?2 ORDER BY row_id ASC",
         )?;
-        let rows = stmt.query_map([after_row, since_ms], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+        let rows = stmt.query_map([after_row, since_ms], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// Highest guard-signal row (0 when none).
     pub fn max_signal_row(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COALESCE(MAX(row_id), 0) FROM guard_signals", [], |row| row.get(0))?)
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(MAX(row_id), 0) FROM guard_signals",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     /// Logs (workspace, session) with an event after row `after`, in
@@ -2047,7 +2421,9 @@ impl EventStore {
         let mut stmt = self.conn.prepare(
             "SELECT workspace_id, session_id FROM events WHERE row_id > ?1 GROUP BY workspace_id, session_id ORDER BY MIN(row_id)",
         )?;
-        let rows = stmt.query_map([after], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let rows = stmt.query_map([after], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
         let mut out = Vec::new();
         for row in rows {
             let (ws, sid) = row?;
@@ -2060,7 +2436,11 @@ impl EventStore {
 
     /// Highest equivocation-evidence row (0 when none).
     pub fn max_equivocation_row(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COALESCE(MAX(row_id), 0) FROM equivocations", [], |row| row.get(0))?)
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(MAX(row_id), 0) FROM equivocations",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     /// Logs (workspace, session) that gained equivocation evidence after
@@ -2069,7 +2449,9 @@ impl EventStore {
         let mut stmt = self.conn.prepare(
             "SELECT workspace_id, session_id FROM equivocations WHERE row_id > ?1 GROUP BY workspace_id, session_id ORDER BY MIN(row_id)",
         )?;
-        let rows = stmt.query_map([after], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let rows = stmt.query_map([after], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
         let mut out = Vec::new();
         for row in rows {
             let (ws, sid) = row?;
@@ -2084,7 +2466,11 @@ impl EventStore {
     /// [`Self::trust_envelopes`]) after event row `after_event` or
     /// equivocation row `after_equivocation`: every chat of those
     /// workspaces is judged against a changed roster.
-    pub fn trust_changed_workspaces_after(&self, after_event: i64, after_equivocation: i64) -> Result<Vec<Uuid>> {
+    pub fn trust_changed_workspaces_after(
+        &self,
+        after_event: i64,
+        after_equivocation: i64,
+    ) -> Result<Vec<Uuid>> {
         let mut stmt = self.conn.prepare(
             "SELECT workspace_id, session_id FROM events WHERE row_id > ?1 AND kind IN (\
              'accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
@@ -2093,11 +2479,15 @@ impl EventStore {
              'workspaceRulesSet','passkeyRegistered','passkeyRemoved') \
              UNION SELECT workspace_id, session_id FROM equivocations WHERE row_id > ?2 ORDER BY 1, 2",
         )?;
-        let rows = stmt.query_map([after_event, after_equivocation], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let rows = stmt.query_map([after_event, after_equivocation], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
         let mut out: Vec<Uuid> = Vec::new();
         for row in rows {
             let (ws, sid) = row?;
-            let (Ok(ws), Ok(sid)) = (Uuid::parse_str(&ws), Uuid::parse_str(&sid)) else { continue };
+            let (Ok(ws), Ok(sid)) = (Uuid::parse_str(&ws), Uuid::parse_str(&sid)) else {
+                continue;
+            };
             if sid == ligus_core::workspace_config_session_id(ws) && !out.contains(&ws) {
                 out.push(ws);
             }
@@ -2107,9 +2497,9 @@ impl EventStore {
 
     /// Distinct session ids known to the store, in first-seen order.
     pub fn list_session_ids(&self) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT session_id FROM events GROUP BY session_id ORDER BY MIN(row_id)",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT session_id FROM events GROUP BY session_id ORDER BY MIN(row_id)")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
         for s in rows {
@@ -2130,8 +2520,18 @@ impl EventStore {
     }
 
     /// [`Self::load_session`] of the log (`workspace_id`, `session_id`).
-    pub fn load_session_in(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<ChatSession>> {
-        self.load_session_authorized(workspace_id, session_id, None, None, WorkspaceAuthz::Unchecked)
+    pub fn load_session_in(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Option<ChatSession>> {
+        self.load_session_authorized(
+            workspace_id,
+            session_id,
+            None,
+            None,
+            WorkspaceAuthz::Unchecked,
+        )
     }
 
     /// [`load_session`], but pinned to a `trusted_founder` — the out-of-band
@@ -2148,8 +2548,16 @@ impl EventStore {
         // skip ingest-time authz (private, single-device; see project_with_options).
         trusted_workspace: Option<Uuid>,
     ) -> Result<Option<ChatSession>> {
-        let Some(workspace_id) = self.workspace_of(session_id)? else { return Ok(None) };
-        self.load_session_authorized(workspace_id, session_id, trusted_founder, trusted_workspace, WorkspaceAuthz::Unchecked)
+        let Some(workspace_id) = self.workspace_of(session_id)? else {
+            return Ok(None);
+        };
+        self.load_session_authorized(
+            workspace_id,
+            session_id,
+            trusted_founder,
+            trusted_workspace,
+            WorkspaceAuthz::Unchecked,
+        )
     }
 
     /// [`load_session_with_founder`] for a chat log, folded against its
@@ -2178,8 +2586,19 @@ impl EventStore {
             WorkspaceAuthz::NoConfigLog => (1, 0),
             WorkspaceAuthz::Timeline(t) => (t.fingerprint(), t.events_held()),
         };
-        let key: ProjectionKey = (workspace_id, session_id, trusted_founder.map(str::to_string), trusted_workspace, fingerprint);
-        if let Some((cached, cfg_seen, session)) = self.projections.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        let key: ProjectionKey = (
+            workspace_id,
+            session_id,
+            trusted_founder.map(str::to_string),
+            trusted_workspace,
+            fingerprint,
+        );
+        if let Some((cached, cfg_seen, session)) = self
+            .projections
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+        {
             let still_held = session.as_ref().is_some_and(|s| !s.authz.held.is_empty());
             if *cached == sig && (!still_held || *cfg_seen == config_events) {
                 return Ok(session.clone());
@@ -2205,8 +2624,17 @@ impl EventStore {
     ) -> Result<(Option<ChatSession>, Arc<ConfigTimeline>)> {
         let config_id = ligus_core::workspace_config_session_id(workspace_id);
         let sig: RowsSig = self.rows_sig(workspace_id, config_id)?;
-        let key = (config_id, trusted_founder.map(str::to_string), trusted_workspace);
-        if let Some((cached, session, timeline)) = self.configs.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        let key = (
+            config_id,
+            trusted_founder.map(str::to_string),
+            trusted_workspace,
+        );
+        if let Some((cached, session, timeline)) = self
+            .configs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+        {
             if *cached == sig {
                 return Ok((session.clone(), Arc::clone(timeline)));
             }
@@ -2232,7 +2660,10 @@ impl EventStore {
     }
 
     /// The founder pin of a workspace, if this device recorded one.
-    pub fn workspace_pin(&self, workspace_id: Uuid) -> Result<Option<crate::envelope_verifier::FounderPin>> {
+    pub fn workspace_pin(
+        &self,
+        workspace_id: Uuid,
+    ) -> Result<Option<crate::envelope_verifier::FounderPin>> {
         let row: Option<(String, String)> = self
             .conn
             .query_row(
@@ -2250,8 +2681,10 @@ impl EventStore {
     /// pins again from the new invite.
     pub fn forget_workspace(&self, workspace_id: Uuid) -> Result<()> {
         let id = workspace_id.to_string();
-        self.conn.execute("DELETE FROM workspace_pins WHERE workspace_id = ?1", [&id])?;
-        self.conn.execute("DELETE FROM join_invites WHERE workspace_id = ?1", [&id])?;
+        self.conn
+            .execute("DELETE FROM workspace_pins WHERE workspace_id = ?1", [&id])?;
+        self.conn
+            .execute("DELETE FROM join_invites WHERE workspace_id = ?1", [&id])?;
         Ok(())
     }
 
@@ -2259,7 +2692,9 @@ impl EventStore {
     /// pinned them (first joined first: the co-member directory trusts the
     /// earliest-pinned registration of an account's key).
     pub fn pinned_workspaces(&self) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare("SELECT workspace_id FROM workspace_pins ORDER BY rowid ASC")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT workspace_id FROM workspace_pins ORDER BY rowid ASC")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for row in rows {
@@ -2277,8 +2712,13 @@ impl EventStore {
     /// dated earlier by a skewed or hostile clock) can move it, and a forged
     /// DM never has one.
     pub fn config_founded_at(&self, workspace_id: Uuid) -> Result<Option<ligus_core::Timestamp>> {
-        let Some(pin) = self.workspace_pin(workspace_id)? else { return Ok(None) };
-        let envs = self.list_copies_in(workspace_id, ligus_core::workspace_config_session_id(workspace_id))?;
+        let Some(pin) = self.workspace_pin(workspace_id)? else {
+            return Ok(None);
+        };
+        let envs = self.list_copies_in(
+            workspace_id,
+            ligus_core::workspace_config_session_id(workspace_id),
+        )?;
         Ok(crate::envelope_verifier::founder_seed(&envs, &pin).map(|e| e.timestamp))
     }
 
@@ -2305,7 +2745,9 @@ impl EventStore {
             let key = e.signer_device_id.and_then(signer_key)?;
             ligus_core::crypto::verify_envelope(&e, &key).ok()?;
             let a = e.actor_stamp?.actor;
-            (a.account_id == Some(account)).then_some(a.contact).flatten()
+            (a.account_id == Some(account))
+                .then_some(a.contact)
+                .flatten()
         }))
     }
 
@@ -2313,9 +2755,17 @@ impl EventStore {
     pub fn contact_newest_seen(&self, cid: &str) -> Result<Option<ligus_core::Timestamp>> {
         let ms: Option<i64> = self
             .conn
-            .query_row("SELECT issued_ms FROM contact_seen WHERE cid = ?1", [cid], |r| r.get(0))
+            .query_row(
+                "SELECT issued_ms FROM contact_seen WHERE cid = ?1",
+                [cid],
+                |r| r.get(0),
+            )
             .optional()?;
-        Ok(ms.and_then(|ms| time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000).ok()).map(ligus_core::Timestamp))
+        Ok(ms
+            .and_then(|ms| {
+                time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000).ok()
+            })
+            .map(ligus_core::Timestamp))
     }
 
     /// Record that a record issued at `issued` was seen for `cid` (only ever
@@ -2366,7 +2816,12 @@ impl EventStore {
 
     /// Link box relay subject `subject` (minted by this Admin's device) to
     /// the box admission `invite_id` issued with it.
-    pub fn set_box_relay_admission(&self, workspace_id: Uuid, subject: &str, invite_id: Uuid) -> Result<()> {
+    pub fn set_box_relay_admission(
+        &self,
+        workspace_id: Uuid,
+        subject: &str,
+        invite_id: Uuid,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO box_relay_subjects (workspace_id, subject, invite_id) VALUES (?1, ?2, ?3)",
             rusqlite::params![workspace_id.to_string(), subject, invite_id.to_string()],
@@ -2403,9 +2858,11 @@ impl EventStore {
     pub fn join_invite(&self, workspace_id: Uuid) -> Result<Option<Uuid>> {
         let v: Option<String> = self
             .conn
-            .query_row("SELECT invite_id FROM join_invites WHERE workspace_id = ?1", [workspace_id.to_string()], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT invite_id FROM join_invites WHERE workspace_id = ?1",
+                [workspace_id.to_string()],
+                |r| r.get(0),
+            )
             .optional()?;
         Ok(v.and_then(|s| Uuid::parse_str(&s).ok()))
     }
@@ -2415,7 +2872,9 @@ impl EventStore {
     /// an event with it in another workspace, which is another log
     /// (workspace, session), never the chat's.
     pub fn workspaces_claiming(&self, session_id: Uuid) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare_cached("SELECT DISTINCT workspace_id FROM events WHERE session_id = ?1 ORDER BY workspace_id")?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT DISTINCT workspace_id FROM events WHERE session_id = ?1 ORDER BY workspace_id",
+        )?;
         let rows = stmt.query_map([session_id.to_string()], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for w in rows {
@@ -2428,7 +2887,12 @@ impl EventStore {
 
     /// Whether `device` signed a stored event on the log (`workspace_id`,
     /// `session_id`).
-    pub fn has_rows_signed_by(&self, workspace_id: Uuid, session_id: Uuid, device: Uuid) -> Result<bool> {
+    pub fn has_rows_signed_by(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        device: Uuid,
+    ) -> Result<bool> {
         Ok(self
             .conn
             .prepare_cached(
@@ -2449,7 +2913,10 @@ impl EventStore {
     ///   prefers the one this device is a member of and wrote in).
     pub fn workspace_of(&self, session_id: Uuid) -> Result<Option<Uuid>> {
         let claims = self.workspaces_claiming(session_id)?;
-        if let Some(ws) = claims.iter().find(|w| ligus_core::workspace_config_session_id(**w) == session_id) {
+        if let Some(ws) = claims
+            .iter()
+            .find(|w| ligus_core::workspace_config_session_id(**w) == session_id)
+        {
             return Ok(Some(*ws));
         }
         match claims.as_slice() {
@@ -2497,9 +2964,15 @@ impl EventStore {
     /// never signed an event in, with their event counts — what
     /// [`purge_foreign_workspaces`](Self::purge_foreign_workspaces) would drop.
     /// The nil workspace (legacy local events) is never foreign.
-    pub fn foreign_workspaces(&self, keep: &HashSet<Uuid>, own_device: Uuid) -> Result<Vec<(Uuid, usize)>> {
+    pub fn foreign_workspaces(
+        &self,
+        keep: &HashSet<Uuid>,
+        own_device: Uuid,
+    ) -> Result<Vec<(Uuid, usize)>> {
         let counts: Vec<(String, i64)> = {
-            let mut stmt = self.conn.prepare("SELECT workspace_id, COUNT(*) FROM events GROUP BY workspace_id")?;
+            let mut stmt = self
+                .conn
+                .prepare("SELECT workspace_id, COUNT(*) FROM events GROUP BY workspace_id")?;
             let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
             rows.collect::<std::result::Result<_, _>>()?
         };
@@ -2507,7 +2980,9 @@ impl EventStore {
         let signed_here = format!("\"signerDeviceId\":\"{own_device}\"");
         let mut out = Vec::new();
         for (raw, n) in counts {
-            let Ok(ws) = Uuid::parse_str(&raw) else { continue };
+            let Ok(ws) = Uuid::parse_str(&raw) else {
+                continue;
+            };
             if ws.is_nil() || keep.contains(&ws) {
                 continue;
             }
@@ -2577,7 +3052,10 @@ impl EventStore {
             if path.exists() {
                 return Err(EventStoreError::BackupExists(path.to_path_buf()));
             }
-            if let Err(e) = self.conn.execute("VACUUM INTO ?1", [path.to_string_lossy()]) {
+            if let Err(e) = self
+                .conn
+                .execute("VACUUM INTO ?1", [path.to_string_lossy()])
+            {
                 // (VACUUM INTO refuses a path that exists; one that appeared
                 // meanwhile isn't this call's to remove.)
                 if !e.to_string().contains("already exists") {
@@ -2646,18 +3124,30 @@ impl EventStore {
             )?;
             tx.execute("DELETE FROM events WHERE workspace_id = ?1", [&ws_s])?;
             tx.execute("DELETE FROM equivocations WHERE workspace_id = ?1", [&ws_s])?;
-            for room in rooms.iter().filter(|r| ligus_core::room_workspace_id(r) == *ws) {
+            for room in rooms
+                .iter()
+                .filter(|r| ligus_core::room_workspace_id(r) == *ws)
+            {
                 tx.execute("DELETE FROM sync_cursor WHERE workspace = ?1", [room])?;
                 tx.execute("DELETE FROM pushed WHERE workspace = ?1", [room])?;
             }
             // The same workspace's state on every relay.
             for table in ["sync_cursor_v2", "pushed_v2", "parked_bodies_v2"] {
-                tx.execute(&format!("DELETE FROM {table} WHERE workspace_id = ?1"), [&ws_s])?;
+                tx.execute(
+                    &format!("DELETE FROM {table} WHERE workspace_id = ?1"),
+                    [&ws_s],
+                )?;
             }
         }
         tx.commit()?;
-        self.projections.lock().unwrap_or_else(|p| p.into_inner()).clear();
-        self.configs.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        self.projections
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        self.configs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
         Ok(doomed)
     }
 
@@ -2685,12 +3175,19 @@ impl EventStore {
         let tx = write_tx(&self.conn)?;
         // A completion counts for its own log's chunks only: another
         // workspace's completion under the same message id prunes nothing.
-        let mut completed: std::collections::HashSet<(String, String, String)> = std::collections::HashSet::new();
+        let mut completed: std::collections::HashSet<(String, String, String)> =
+            std::collections::HashSet::new();
         {
             let mut stmt = self
                 .conn
                 .prepare("SELECT workspace_id, session_id, envelope_json FROM events WHERE kind = 'messageCompleted' ORDER BY row_id")?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?;
             for row in rows {
                 let (ws, sid, j) = row?;
                 if let Some(id) = message_id_of(&j) {
@@ -2708,7 +3205,14 @@ impl EventStore {
             let mut stmt = self.conn.prepare(
                 "SELECT workspace_id, session_id, event_id, envelope_json FROM events WHERE kind = 'messageChunkReceived' ORDER BY row_id",
             )?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })?;
             for row in rows {
                 let (ws, sid, event_id, json) = row?;
                 if message_id_of(&json).is_some_and(|m| completed.contains(&(ws.clone(), sid, m))) {
@@ -2732,8 +3236,14 @@ impl EventStore {
         }
         let mut removed = 0;
         for (ws, event_id) in &doomed {
-            removed += tx.execute("DELETE FROM events WHERE workspace_id = ?1 AND event_id = ?2", [ws, event_id])?;
-            tx.execute("DELETE FROM equivocations WHERE workspace_id = ?1 AND event_id = ?2", [ws, event_id])?;
+            removed += tx.execute(
+                "DELETE FROM events WHERE workspace_id = ?1 AND event_id = ?2",
+                [ws, event_id],
+            )?;
+            tx.execute(
+                "DELETE FROM equivocations WHERE workspace_id = ?1 AND event_id = ?2",
+                [ws, event_id],
+            )?;
         }
         tx.commit()?;
         Ok(removed)
@@ -2750,7 +3260,10 @@ pub(crate) const FIXTURE_DEVICE: Uuid = Uuid::from_u128(0x6669_7874_7572_6500_00
 /// fixture device (a genuine event is always signed, and an unsigned one
 /// can't carry a stamp past ingest).
 #[cfg(test)]
-pub(crate) fn fixture_next(env: &SessionEventEnvelope, log_head: Option<ligus_core::CfgFrontier>) -> SessionEventEnvelope {
+pub(crate) fn fixture_next(
+    env: &SessionEventEnvelope,
+    log_head: Option<ligus_core::CfgFrontier>,
+) -> SessionEventEnvelope {
     let mut env = env.clone();
     env.clear_raw();
     if env.actor_stamp.is_none() {
@@ -2794,7 +3307,8 @@ mod tests {
     fn final_review_parked_bodies_are_capped_by_bytes() {
         let store = EventStore::open_in_memory().unwrap();
         let r = SyncKey::new("https://relay.example", ligus_core::room_workspace_id("r"));
-        let keep = serde_json::json!({"version": 2, "kid": "aaaaaaaaaaaaaaaa", "ciphertext": "pending"});
+        let keep =
+            serde_json::json!({"version": 2, "kid": "aaaaaaaaaaaaaaaa", "ciphertext": "pending"});
         store.park_bodies(&r, &[(1, &keep, 9)]).unwrap();
         let big = serde_json::json!({"version": 77, "kid": "deadbeefdeadbeef", "ciphertext": "A".repeat(4 << 20)});
         for s in 2..=40u64 {
@@ -2803,7 +3317,10 @@ mod tests {
         let parked = store.parked_bodies(&r).unwrap();
         let bytes: usize = parked.iter().map(|(_, b)| b.to_string().len()).sum();
         assert!(bytes as i64 <= PARKED_BYTES_KEEP, "{bytes} bytes parked");
-        assert!(parked.iter().any(|(s, _)| *s == 1), "the high-priority body was evicted");
+        assert!(
+            parked.iter().any(|(s, _)| *s == 1),
+            "the high-priority body was evicted"
+        );
         assert!(parked.len() > 1, "some junk still fits");
     }
     use ligus_core::{ChatMessage, MessageRole};
@@ -2819,9 +3336,39 @@ mod tests {
         let (a, w2, sid) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
         let mut session = ChatSession::new("c", a, "rt");
         session.id = sid;
-        let seed = fixture_next(&SessionEventEnvelope::new(sid, a, 1, SessionEvent::SessionSnapshot { session: Box::new(session) }), None);
-        let genuine = fixture_next(&SessionEventEnvelope::new(sid, a, 2, SessionEvent::SessionTitleChanged { title: "genuine".into() }), Some(ligus_core::CfgFrontier { lamport: seed.lamport, event_id: seed.event_id }));
-        let mut planted = SessionEventEnvelope::new(sid, w2, 1, SessionEvent::SessionTitleChanged { title: "planted".into() });
+        let seed = fixture_next(
+            &SessionEventEnvelope::new(
+                sid,
+                a,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(session),
+                },
+            ),
+            None,
+        );
+        let genuine = fixture_next(
+            &SessionEventEnvelope::new(
+                sid,
+                a,
+                2,
+                SessionEvent::SessionTitleChanged {
+                    title: "genuine".into(),
+                },
+            ),
+            Some(ligus_core::CfgFrontier {
+                lamport: seed.lamport,
+                event_id: seed.event_id,
+            }),
+        );
+        let mut planted = SessionEventEnvelope::new(
+            sid,
+            w2,
+            1,
+            SessionEvent::SessionTitleChanged {
+                title: "planted".into(),
+            },
+        );
         planted.event_id = genuine.event_id;
         let planted = fixture_next(&planted, None);
         {
@@ -2851,20 +3398,66 @@ mod tests {
             )
             .unwrap();
             // A pruned row: the counter is past every row left.
-            put(9, &fixture_next(&SessionEventEnvelope::new(Uuid::new_v4(), a, 1, SessionEvent::SessionTitleChanged { title: "gone".into() }), None), 1);
-            conn.execute("DELETE FROM events WHERE row_id = 9", []).unwrap();
+            put(
+                9,
+                &fixture_next(
+                    &SessionEventEnvelope::new(
+                        Uuid::new_v4(),
+                        a,
+                        1,
+                        SessionEvent::SessionTitleChanged {
+                            title: "gone".into(),
+                        },
+                    ),
+                    None,
+                ),
+                1,
+            );
+            conn.execute("DELETE FROM events WHERE row_id = 9", [])
+                .unwrap();
         }
         let store = EventStore::open(&path).unwrap();
         assert!(!needs_event_id_migration(&store.conn).unwrap());
-        let backups: Vec<_> = std::fs::read_dir(dir.path()).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().contains(".bak-ws-event-ids-")).collect();
+        let backups: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .contains(".bak-ws-event-ids-")
+            })
+            .collect();
         assert_eq!(backups.len(), 1, "a backup before the rewrite");
-        let a_log: Vec<Uuid> = store.list_in(a, sid).unwrap().iter().map(|e| e.event_id).collect();
-        assert_eq!(a_log, vec![seed.event_id, genuine.event_id], "the genuine copy is in its own log now");
+        let a_log: Vec<Uuid> = store
+            .list_in(a, sid)
+            .unwrap()
+            .iter()
+            .map(|e| e.event_id)
+            .collect();
+        assert_eq!(
+            a_log,
+            vec![seed.event_id, genuine.event_id],
+            "the genuine copy is in its own log now"
+        );
         assert_eq!(store.list_in(w2, sid).unwrap().len(), 1);
-        assert!(store.list_copies_in(a, sid).unwrap().iter().all(|e| e.workspace_id == a));
-        let left: i64 = store.conn.query_row("SELECT COUNT(*) FROM equivocations", [], |r| r.get(0)).unwrap();
+        assert!(store
+            .list_copies_in(a, sid)
+            .unwrap()
+            .iter()
+            .all(|e| e.workspace_id == a));
+        let left: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM equivocations", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(left, 0);
-        let rows: Vec<i64> = store.conn.prepare("SELECT row_id FROM events ORDER BY row_id").unwrap().query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        let rows: Vec<i64> = store
+            .conn
+            .prepare("SELECT row_id FROM events ORDER BY row_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
         assert_eq!(&rows[..2], &[1, 2], "row ids kept");
         assert!(rows[2] > 9, "the row-id counter never goes back: {rows:?}");
         // The next open of the upgraded database retires the backup and
@@ -2900,7 +3493,14 @@ mod tests {
         let body = "x".repeat(pad);
         let tx = conn.unchecked_transaction().unwrap();
         for i in 0..n {
-            let e = SessionEventEnvelope::new(sid, ws, i as i64 + 1, SessionEvent::SessionTitleChanged { title: body.clone() });
+            let e = SessionEventEnvelope::new(
+                sid,
+                ws,
+                i as i64 + 1,
+                SessionEvent::SessionTitleChanged {
+                    title: body.clone(),
+                },
+            );
             tx.execute(
                 "INSERT INTO events (event_id, session_id, workspace_id, sequence, kind, scope, timestamp, envelope_json) VALUES (?1, ?2, ?3, ?4, ?5, 'session', 't', ?6)",
                 rusqlite::params![e.event_id.to_string(), sid.to_string(), ws.to_string(), i as i64 + 1, e.payload.kind_str(), serde_json::to_string(&e).unwrap()],
@@ -2925,9 +3525,17 @@ mod tests {
         test_hooks::FREE_BYTES.with(|f| f.set(Some(1000)));
         let err = EventStore::open(&path).err().expect("refused");
         test_hooks::FREE_BYTES.with(|f| f.set(None));
-        assert!(matches!(err, EventStoreError::NeedsSpaceToUpgrade { free: 1000, .. }), "{err}");
+        assert!(
+            matches!(err, EventStoreError::NeedsSpaceToUpgrade { free: 1000, .. }),
+            "{err}"
+        );
         let msg = err.to_string();
-        assert!(msg.starts_with("free ") && msg.contains("to upgrade the Ligus database") && msg.contains("nothing was changed"), "{msg}");
+        assert!(
+            msg.starts_with("free ")
+                && msg.contains("to upgrade the Ligus database")
+                && msg.contains("nothing was changed"),
+            "{msg}"
+        );
         assert!(upgrade_leftovers(dir.path()).is_empty());
         assert!(still_old(&path));
         // With room, the next open upgrades.
@@ -2948,7 +3556,11 @@ mod tests {
             let r = EventStore::open(&path);
             test_hooks::FAIL_STEP.with(|f| f.set(None));
             assert!(r.is_err(), "{step}");
-            assert!(upgrade_leftovers(dir.path()).is_empty(), "{step}: {:?}", upgrade_leftovers(dir.path()));
+            assert!(
+                upgrade_leftovers(dir.path()).is_empty(),
+                "{step}: {:?}",
+                upgrade_leftovers(dir.path())
+            );
             assert!(still_old(&path), "{step}: the database is untouched");
             EventStore::open(&path).unwrap();
             assert!(!still_old(&path));
@@ -2966,7 +3578,11 @@ mod tests {
             if upgraded {
                 drop(EventStore::open(&path).unwrap());
             }
-            for f in ["ligus.db.bak-ws-event-ids-1-000000001-42", "ligus.db.bak-ws-event-ids-1-000000001-42-journal", "ligus.db.bak-ws-event-ids-2-000000002-43"] {
+            for f in [
+                "ligus.db.bak-ws-event-ids-1-000000001-42",
+                "ligus.db.bak-ws-event-ids-1-000000001-42-journal",
+                "ligus.db.bak-ws-event-ids-2-000000002-43",
+            ] {
                 std::fs::write(dir.path().join(f), b"partial").unwrap();
             }
             std::fs::write(dir.path().join("unrelated.db.bak"), b"keep").unwrap();
@@ -3003,23 +3619,71 @@ mod tests {
     fn an_event_id_is_unique_per_workspace_only() {
         let (mut store, sid, wid) = seeded_store();
         let w2 = Uuid::new_v4();
-        let genuine = fixture_next(&SessionEventEnvelope::new(sid, wid, 2, SessionEvent::SessionTitleChanged { title: "genuine".into() }), store.lamport_head(wid, sid).unwrap());
-        let mut planted = SessionEventEnvelope::new(sid, w2, 1, SessionEvent::SessionTitleChanged { title: "planted".into() });
+        let genuine = fixture_next(
+            &SessionEventEnvelope::new(
+                sid,
+                wid,
+                2,
+                SessionEvent::SessionTitleChanged {
+                    title: "genuine".into(),
+                },
+            ),
+            store.lamport_head(wid, sid).unwrap(),
+        );
+        let mut planted = SessionEventEnvelope::new(
+            sid,
+            w2,
+            1,
+            SessionEvent::SessionTitleChanged {
+                title: "planted".into(),
+            },
+        );
         planted.event_id = genuine.event_id;
         let planted = fixture_next(&planted, None);
         let before = store.max_row_id().unwrap();
         assert!(store.ingest(&planted).unwrap());
-        assert!(store.ingest(&genuine).unwrap(), "the genuine copy is new in its own workspace");
-        assert!(store.has_event_in(wid, genuine.event_id).unwrap() && store.has_event_in(w2, genuine.event_id).unwrap());
-        assert!(store.list_in(wid, sid).unwrap().iter().any(|e| e.event_id == genuine.event_id && e.workspace_id == wid));
-        assert!(store.logs_changed_after(before).unwrap().contains(&(wid, sid)));
+        assert!(
+            store.ingest(&genuine).unwrap(),
+            "the genuine copy is new in its own workspace"
+        );
+        assert!(
+            store.has_event_in(wid, genuine.event_id).unwrap()
+                && store.has_event_in(w2, genuine.event_id).unwrap()
+        );
+        assert!(store
+            .list_in(wid, sid)
+            .unwrap()
+            .iter()
+            .any(|e| e.event_id == genuine.event_id && e.workspace_id == wid));
+        assert!(store
+            .logs_changed_after(before)
+            .unwrap()
+            .contains(&(wid, sid)));
         // Same workspace, other content: kept aside, not stored again.
         let mut twin = genuine.clone();
-        twin.payload = SessionEvent::SessionTitleChanged { title: "twin".into() };
+        twin.payload = SessionEvent::SessionTitleChanged {
+            title: "twin".into(),
+        };
         let twin = fixture_signed(&twin);
         assert!(!store.ingest(&twin).unwrap());
-        assert_eq!(store.list_copies_in(wid, sid).unwrap().iter().filter(|e| e.event_id == genuine.event_id).count(), 2);
-        assert_eq!(store.list_in(wid, sid).unwrap().iter().filter(|e| e.event_id == genuine.event_id).count(), 1);
+        assert_eq!(
+            store
+                .list_copies_in(wid, sid)
+                .unwrap()
+                .iter()
+                .filter(|e| e.event_id == genuine.event_id)
+                .count(),
+            2
+        );
+        assert_eq!(
+            store
+                .list_in(wid, sid)
+                .unwrap()
+                .iter()
+                .filter(|e| e.event_id == genuine.event_id)
+                .count(),
+            1
+        );
     }
 
     fn seeded_store() -> (EventStore, Uuid, Uuid) {
@@ -3072,12 +3736,28 @@ mod tests {
         let a = ChatMessage::new(MessageRole::User, "Alex", "@ligus status?");
         let b = ChatMessage::new(MessageRole::User, "Alex", "@coder run the tests");
         let (a_id, b_id) = (a.id, b.id);
-        store.append(sid, wid, SessionEvent::MessageAppended { message: a }).unwrap();
-        store.append(sid, wid, SessionEvent::SessionTitleChanged { title: "x".into() }).unwrap();
-        store.append(sid, wid, SessionEvent::MessageAppended { message: b }).unwrap();
+        store
+            .append(sid, wid, SessionEvent::MessageAppended { message: a })
+            .unwrap();
+        store
+            .append(
+                sid,
+                wid,
+                SessionEvent::SessionTitleChanged { title: "x".into() },
+            )
+            .unwrap();
+        store
+            .append(sid, wid, SessionEvent::MessageAppended { message: b })
+            .unwrap();
         let fixture = Some(FIXTURE_DEVICE);
-        assert_eq!(store.messages_after(before).unwrap(), vec![(wid, sid, a_id, fixture), (wid, sid, b_id, fixture)]);
-        assert!(store.messages_after(store.max_row_id().unwrap()).unwrap().is_empty());
+        assert_eq!(
+            store.messages_after(before).unwrap(),
+            vec![(wid, sid, a_id, fixture), (wid, sid, b_id, fixture)]
+        );
+        assert!(store
+            .messages_after(store.max_row_id().unwrap())
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -3087,27 +3767,74 @@ mod tests {
         let stamped = |payload: SessionEvent, head: Option<&SessionEventEnvelope>| {
             let mut e = SessionEventEnvelope::new(sid, wid, 1, payload);
             e.actor_stamp = seed.actor_stamp.clone();
-            ligus_core::lamport::stamp_next(&mut e, head.map(|h| ligus_core::CfgFrontier { lamport: h.lamport, event_id: h.event_id }));
+            ligus_core::lamport::stamp_next(
+                &mut e,
+                head.map(|h| ligus_core::CfgFrontier {
+                    lamport: h.lamport,
+                    event_id: h.event_id,
+                }),
+            );
             e
         };
-        let a = stamped(SessionEvent::SessionTitleChanged { title: "a".into() }, Some(&seed));
-        let b = stamped(SessionEvent::SessionTitleChanged { title: "b".into() }, Some(&a));
+        let a = stamped(
+            SessionEvent::SessionTitleChanged { title: "a".into() },
+            Some(&seed),
+        );
+        let b = stamped(
+            SessionEvent::SessionTitleChanged { title: "b".into() },
+            Some(&a),
+        );
         store.ingest(&b).unwrap();
-        assert_eq!(store.lamport_head(wid, sid).unwrap().map(|h| h.event_id), Some(seed.event_id), "b's head isn't here yet");
+        assert_eq!(
+            store.lamport_head(wid, sid).unwrap().map(|h| h.event_id),
+            Some(seed.event_id),
+            "b's head isn't here yet"
+        );
         store.ingest(&a).unwrap();
-        assert_eq!(store.lamport_head(wid, sid).unwrap().map(|h| h.event_id), Some(b.event_id), "ingested in any order");
+        assert_eq!(
+            store.lamport_head(wid, sid).unwrap().map(|h| h.event_id),
+            Some(b.event_id),
+            "ingested in any order"
+        );
         // Inflated: a lamport no head accounts for never moves the head.
-        let mut big = stamped(SessionEvent::SessionTitleChanged { title: "big".into() }, Some(&b));
+        let mut big = stamped(
+            SessionEvent::SessionTitleChanged {
+                title: "big".into(),
+            },
+            Some(&b),
+        );
         big.lamport = u64::MAX;
         store.ingest(&big).unwrap();
-        let mut headless = SessionEventEnvelope::new(sid, wid, 7, SessionEvent::SessionTitleChanged { title: "x".into() });
+        let mut headless = SessionEventEnvelope::new(
+            sid,
+            wid,
+            7,
+            SessionEvent::SessionTitleChanged { title: "x".into() },
+        );
         headless.lamport = 1_000;
         store.ingest(&headless).unwrap();
-        assert_eq!(store.lamport_head(wid, sid).unwrap().map(|h| (h.lamport, h.event_id)), Some((3, b.event_id)));
+        assert_eq!(
+            store
+                .lamport_head(wid, sid)
+                .unwrap()
+                .map(|h| (h.lamport, h.event_id)),
+            Some((3, b.event_id))
+        );
         // An event appended here moves it.
-        let mine = store.append(sid, wid, SessionEvent::SessionTitleChanged { title: "mine".into() }).unwrap();
+        let mine = store
+            .append(
+                sid,
+                wid,
+                SessionEvent::SessionTitleChanged {
+                    title: "mine".into(),
+                },
+            )
+            .unwrap();
         assert_eq!(mine.lamport, 4);
-        assert_eq!(store.lamport_head(wid, sid).unwrap().map(|h| h.event_id), Some(mine.event_id));
+        assert_eq!(
+            store.lamport_head(wid, sid).unwrap().map(|h| h.event_id),
+            Some(mine.event_id)
+        );
     }
 
     /// A device never counts its own next event from a witness: a refused
@@ -3123,11 +3850,22 @@ mod tests {
             Uuid::new_v4(),
             Uuid::new_v4(),
             1,
-            SessionEvent::MessageAppended { message: ligus_core::ChatMessage::new(ligus_core::MessageRole::User, "Alex", "z".repeat(MAX_ENVELOPE_BYTES)) },
+            SessionEvent::MessageAppended {
+                message: ligus_core::ChatMessage::new(
+                    ligus_core::MessageRole::User,
+                    "Alex",
+                    "z".repeat(MAX_ENVELOPE_BYTES),
+                ),
+            },
         );
         let err = syncable(&big).unwrap_err().to_string();
         assert!(err.contains("too large"), "{err}");
-        let small = SessionEventEnvelope::new(Uuid::new_v4(), Uuid::new_v4(), 1, SessionEvent::SessionTitleChanged { title: "t".into() });
+        let small = SessionEventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            SessionEvent::SessionTitleChanged { title: "t".into() },
+        );
         assert!(syncable(&small).is_ok());
         let _ = store;
     }
@@ -3138,13 +3876,38 @@ mod tests {
         let seed = a.list(sid).unwrap()[0].clone();
         let mut b = EventStore::open_in_memory().unwrap();
         b.ingest(&seed).unwrap();
-        let mut junk = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionTitleChanged { title: "junk".into() });
+        let mut junk = SessionEventEnvelope::new(
+            sid,
+            wid,
+            1,
+            SessionEvent::SessionTitleChanged {
+                title: "junk".into(),
+            },
+        );
         junk.actor_stamp = seed.actor_stamp.clone();
-        ligus_core::lamport::stamp_next(&mut junk, Some(ligus_core::CfgFrontier { lamport: seed.lamport, event_id: seed.event_id }));
+        ligus_core::lamport::stamp_next(
+            &mut junk,
+            Some(ligus_core::CfgFrontier {
+                lamport: seed.lamport,
+                event_id: seed.event_id,
+            }),
+        );
         a.note_lamport_witness(&junk).unwrap();
-        let mine = a.append(sid, wid, SessionEvent::SessionTitleChanged { title: "mine".into() }).unwrap();
+        let mine = a
+            .append(
+                sid,
+                wid,
+                SessionEvent::SessionTitleChanged {
+                    title: "mine".into(),
+                },
+            )
+            .unwrap();
         b.ingest(&mine).unwrap();
-        assert_eq!(b.lamport_head(wid, sid).unwrap().map(|h| h.event_id), Some(mine.event_id), "not held where the junk never went");
+        assert_eq!(
+            b.lamport_head(wid, sid).unwrap().map(|h| h.event_id),
+            Some(mine.event_id),
+            "not held where the junk never went"
+        );
         assert_eq!(b.load_session(sid).unwrap().unwrap().title, "mine");
     }
 
@@ -3159,20 +3922,44 @@ mod tests {
     fn devices_that_refused_different_copies_of_an_id_judge_the_log_alike() {
         let (a0, sid, wid) = seeded_store();
         let seed = a0.list(sid).unwrap()[0].clone();
-        let at = |e: &SessionEventEnvelope| Some(ligus_core::CfgFrontier { lamport: e.lamport, event_id: e.event_id });
+        let at = |e: &SessionEventEnvelope| {
+            Some(ligus_core::CfgFrontier {
+                lamport: e.lamport,
+                event_id: e.event_id,
+            })
+        };
         let stamped = |title: &str, head: Option<ligus_core::CfgFrontier>| {
-            let mut e = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionTitleChanged { title: title.into() });
+            let mut e = SessionEventEnvelope::new(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionTitleChanged {
+                    title: title.into(),
+                },
+            );
             e.actor_stamp = seed.actor_stamp.clone();
             ligus_core::lamport::stamp_next(&mut e, head);
             e
         };
         let x = stamped("x", at(&seed));
         let y = stamped("y", at(&seed));
-        let mut early = stamped("forged", Some(ligus_core::CfgFrontier { lamport: 1, event_id: Uuid::new_v4() }));
+        let mut early = stamped(
+            "forged",
+            Some(ligus_core::CfgFrontier {
+                lamport: 1,
+                event_id: Uuid::new_v4(),
+            }),
+        );
         early.event_id = x.event_id;
         let mut late = stamped("forged", at(&y));
         late.event_id = x.event_id;
-        let g = stamped("g", Some(ligus_core::CfgFrontier { lamport: late.lamport, event_id: x.event_id }));
+        let g = stamped(
+            "g",
+            Some(ligus_core::CfgFrontier {
+                lamport: late.lamport,
+                event_id: x.event_id,
+            }),
+        );
         let h = stamped("h", at(&g));
         let after_x = stamped("after x", at(&x));
 
@@ -3180,7 +3967,11 @@ mod tests {
         let mut a = a0;
         a.ingest(&x).unwrap();
         a.note_lamport_witness(&late).unwrap();
-        assert_eq!(a.load_session(sid).unwrap().unwrap().title, "x", "a witness never folds against the stored event");
+        assert_eq!(
+            a.load_session(sid).unwrap().unwrap().title,
+            "x",
+            "a witness never folds against the stored event"
+        );
         a.ingest(&y).unwrap();
         a.note_lamport_witness(&early).unwrap();
         // B refused x (its roster said so), after meeting the early copy.
@@ -3195,9 +3986,19 @@ mod tests {
                 s.ingest(e).unwrap();
             }
         }
-        assert_eq!(a.lamport_head(wid, sid).unwrap(), b.lamport_head(wid, sid).unwrap(), "one head");
-        assert_eq!(a.lamport_head(wid, sid).unwrap().map(|k| k.event_id), Some(h.event_id));
-        let (sa, sb) = (a.load_session(sid).unwrap().unwrap(), b.load_session(sid).unwrap().unwrap());
+        assert_eq!(
+            a.lamport_head(wid, sid).unwrap(),
+            b.lamport_head(wid, sid).unwrap(),
+            "one head"
+        );
+        assert_eq!(
+            a.lamport_head(wid, sid).unwrap().map(|k| k.event_id),
+            Some(h.event_id)
+        );
+        let (sa, sb) = (
+            a.load_session(sid).unwrap().unwrap(),
+            b.load_session(sid).unwrap().unwrap(),
+        );
         assert_eq!(sa.title, sb.title, "one fold");
         assert_eq!(sa.authz.held, sb.authz.held, "one set of holds");
     }
@@ -3209,13 +4010,39 @@ mod tests {
     fn an_equivocated_event_id_is_denied_whichever_copy_arrives_first() {
         let base = ChatSession::new("Demo", Uuid::nil(), "anthropic");
         let (sid, wid) = (base.id, base.workspace_id);
-        let seed = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) });
-        let first = SessionEventEnvelope::new(sid, wid, 2, SessionEvent::SessionTitleChanged { title: "First".into() });
-        let mut a_side = SessionEventEnvelope::new(sid, wid, 3, SessionEvent::SessionTitleChanged { title: "Told to A".into() });
+        let seed = SessionEventEnvelope::new(
+            sid,
+            wid,
+            1,
+            SessionEvent::SessionSnapshot {
+                session: Box::new(base),
+            },
+        );
+        let first = SessionEventEnvelope::new(
+            sid,
+            wid,
+            2,
+            SessionEvent::SessionTitleChanged {
+                title: "First".into(),
+            },
+        );
+        let mut a_side = SessionEventEnvelope::new(
+            sid,
+            wid,
+            3,
+            SessionEvent::SessionTitleChanged {
+                title: "Told to A".into(),
+            },
+        );
         a_side.lamport = 3;
-        let [seed, first, a_side]: [SessionEventEnvelope; 3] = ligus_core::testkit::honest_chain(&[seed, first, a_side]).try_into().unwrap();
+        let [seed, first, a_side]: [SessionEventEnvelope; 3] =
+            ligus_core::testkit::honest_chain(&[seed, first, a_side])
+                .try_into()
+                .unwrap();
         let mut b_side = a_side.clone();
-        b_side.payload = SessionEvent::SessionTitleChanged { title: "Told to B".into() };
+        b_side.payload = SessionEvent::SessionTitleChanged {
+            title: "Told to B".into(),
+        };
         b_side.clear_raw();
         let load = |order: &[&SessionEventEnvelope]| {
             let mut st = EventStore::open_in_memory().unwrap();
@@ -3252,11 +4079,49 @@ mod tests {
             joined_at: Timestamp::epoch(),
         };
         let events = vec![
-            SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
-            SessionEventEnvelope::new(sid, wid, 2, SessionEvent::SessionTitleChanged { title: "First".into() }),
-            SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MemberAdded { member, invite: None, proof: None }),
-            SessionEventEnvelope::new(sid, wid, 4, SessionEvent::SessionTitleChanged { title: "Second".into() }),
-            SessionEventEnvelope::new(sid, wid, 5, SessionEvent::MemberRemoved { member_id: "m1".into(), watermark: Vec::new() }),
+            SessionEventEnvelope::new(
+                sid,
+                wid,
+                1,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(base),
+                },
+            ),
+            SessionEventEnvelope::new(
+                sid,
+                wid,
+                2,
+                SessionEvent::SessionTitleChanged {
+                    title: "First".into(),
+                },
+            ),
+            SessionEventEnvelope::new(
+                sid,
+                wid,
+                3,
+                SessionEvent::MemberAdded {
+                    member,
+                    invite: None,
+                    proof: None,
+                },
+            ),
+            SessionEventEnvelope::new(
+                sid,
+                wid,
+                4,
+                SessionEvent::SessionTitleChanged {
+                    title: "Second".into(),
+                },
+            ),
+            SessionEventEnvelope::new(
+                sid,
+                wid,
+                5,
+                SessionEvent::MemberRemoved {
+                    member_id: "m1".into(),
+                    watermark: Vec::new(),
+                },
+            ),
         ];
         let events = ligus_core::testkit::honest_chain(&events);
 
@@ -3288,19 +4153,47 @@ mod tests {
         let mut store = EventStore::open(&path).unwrap();
         let session = ChatSession::new("Demo", Uuid::nil(), "anthropic");
         let (sid, wid) = (session.id, session.workspace_id);
-        store.append(sid, wid, SessionEvent::SessionSnapshot { session: Box::new(session) }).unwrap();
-        let msg = |body: &str| SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Mara", body) };
+        store
+            .append(
+                sid,
+                wid,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(session),
+                },
+            )
+            .unwrap();
+        let msg = |body: &str| SessionEvent::MessageAppended {
+            message: ChatMessage::new(MessageRole::User, "Mara", body),
+        };
         store.append(sid, wid, msg("one")).unwrap();
         assert_eq!(store.load_session(sid).unwrap().unwrap().messages.len(), 1);
-        assert_eq!(store.load_session(sid).unwrap().unwrap().messages.len(), 1, "cache hit");
+        assert_eq!(
+            store.load_session(sid).unwrap().unwrap().messages.len(),
+            1,
+            "cache hit"
+        );
 
         let mut other = EventStore::open(&path).unwrap();
         other.append(sid, wid, msg("two")).unwrap();
-        let bodies: Vec<_> = store.load_session(sid).unwrap().unwrap().messages.into_iter().map(|m| m.body).collect();
-        assert_eq!(bodies, ["one", "two"], "a write through another connection is seen");
+        let bodies: Vec<_> = store
+            .load_session(sid)
+            .unwrap()
+            .unwrap()
+            .messages
+            .into_iter()
+            .map(|m| m.body)
+            .collect();
+        assert_eq!(
+            bodies,
+            ["one", "two"],
+            "a write through another connection is seen"
+        );
 
         store.delete_session(sid).unwrap();
-        assert!(store.load_session(sid).unwrap().is_none(), "a delete is seen");
+        assert!(
+            store.load_session(sid).unwrap().is_none(),
+            "a delete is seen"
+        );
     }
 
     #[test]
@@ -3309,11 +4202,18 @@ mod tests {
         let mark = store.max_row_id().unwrap();
         assert_eq!(store.envelopes_after_row(mark).unwrap(), (mark, vec![]));
         let e = store
-            .append(sid, wid, SessionEvent::SessionTitleChanged { title: "t".into() })
+            .append(
+                sid,
+                wid,
+                SessionEvent::SessionTitleChanged { title: "t".into() },
+            )
             .unwrap();
         let (last, envs) = store.envelopes_after_row(mark).unwrap();
         assert_eq!(last, mark + 1);
-        assert_eq!(envs.iter().map(|e| e.event_id).collect::<Vec<_>>(), [e.event_id]);
+        assert_eq!(
+            envs.iter().map(|e| e.event_id).collect::<Vec<_>>(),
+            [e.event_id]
+        );
     }
 
     #[test]
@@ -3377,8 +4277,15 @@ mod tests {
         assert_eq!(stored[0].event_id, first[0].event_id, "the row at 1 stays");
         assert_eq!(stored[1].event_id, late.event_id);
         assert_eq!(stored[1].sequence, 1, "stored as written");
-        assert_eq!(store.max_sequence(wid, sid).unwrap(), Some(2), "at the next place");
-        assert!(store.append_envelope(&late).is_err(), "an event id is stored once");
+        assert_eq!(
+            store.max_sequence(wid, sid).unwrap(),
+            Some(2),
+            "at the next place"
+        );
+        assert!(
+            store.append_envelope(&late).is_err(),
+            "an event id is stored once"
+        );
         assert_eq!(store.list(sid).unwrap().len(), 2);
     }
 
@@ -3389,9 +4296,17 @@ mod tests {
     fn ingest_stores_the_received_bytes() {
         let mut store = EventStore::open_in_memory().unwrap();
         let sid = Uuid::new_v4();
-        let base = SessionEventEnvelope::new(sid, Uuid::nil(), 1, SessionEvent::MessageRemoved { message_id: Uuid::nil() });
+        let base = SessionEventEnvelope::new(
+            sid,
+            Uuid::nil(),
+            1,
+            SessionEvent::MessageRemoved {
+                message_id: Uuid::nil(),
+            },
+        );
         let mut v = serde_json::to_value(&base).unwrap();
-        v["payload"] = serde_json::json!({"kind": "zzNewKind", "deep": {"x": [1.5, "✓"]}, "order": "kept"});
+        v["payload"] =
+            serde_json::json!({"kind": "zzNewKind", "deep": {"x": [1.5, "✓"]}, "order": "kept"});
         v["zzTop"] = serde_json::json!({"b": 1, "a": 2});
         let wire = v.to_string().replace("\"zzTop\"", " \"zzTop\" ");
         let env: SessionEventEnvelope = serde_json::from_str(&wire).unwrap();
@@ -3399,7 +4314,11 @@ mod tests {
         assert!(store.ingest(&env).unwrap());
         let stored: String = store
             .conn
-            .query_row("SELECT envelope_json FROM events WHERE event_id = ?1", [env.event_id.to_string()], |r| r.get(0))
+            .query_row(
+                "SELECT envelope_json FROM events WHERE event_id = ?1",
+                [env.event_id.to_string()],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(stored, wire);
         let listed = store.list(sid).unwrap();
@@ -3418,11 +4337,20 @@ mod tests {
             assert!(store.workspace_pin(ws).unwrap().is_none());
             store.set_workspace_pin(ws, &founder, &fk).unwrap();
             // A later invite can't move the pin.
-            store.set_workspace_pin(ws, &Uuid::new_v4().to_string(), &"ab".repeat(16)).unwrap();
+            store
+                .set_workspace_pin(ws, &Uuid::new_v4().to_string(), &"ab".repeat(16))
+                .unwrap();
         }
-        let pin = EventStore::open(&path).unwrap().workspace_pin(ws).unwrap().unwrap();
+        let pin = EventStore::open(&path)
+            .unwrap()
+            .workspace_pin(ws)
+            .unwrap()
+            .unwrap();
         assert_eq!(pin.founder_account.to_string(), founder);
-        assert_eq!(pin.fk, crate::envelope_verifier::FounderPin::fingerprint(&[7u8; 32]));
+        assert_eq!(
+            pin.fk,
+            crate::envelope_verifier::FounderPin::fingerprint(&[7u8; 32])
+        );
     }
 
     #[test]
@@ -3478,7 +4406,13 @@ mod tests {
         // Re-snapshot current state, then add one more message.
         let snap = store.load_session(sid).unwrap().unwrap();
         store
-            .append(sid, wid, SessionEvent::SessionSnapshot { session: Box::new(snap) })
+            .append(
+                sid,
+                wid,
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(snap),
+                },
+            )
             .unwrap();
         store
             .append(
@@ -3503,14 +4437,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("events.db");
         let (wa, wb) = (Uuid::new_v4(), Uuid::new_v4());
-        let (a, b) = (&SyncKey::new("https://relay.example/", wa), &SyncKey::new("https://relay.example", wb));
+        let (a, b) = (
+            &SyncKey::new("https://relay.example/", wa),
+            &SyncKey::new("https://relay.example", wb),
+        );
         // The same workspace on another relay is another cursor.
         let elsewhere = &SyncKey::new("https://other.example", wa);
         let e1 = Uuid::new_v4();
         let e2 = Uuid::new_v4();
         {
             let store = EventStore::open(&path).unwrap();
-            assert_eq!(store.sync_cursor(a).unwrap(), 0, "unknown workspace starts at 0");
+            assert_eq!(
+                store.sync_cursor(a).unwrap(),
+                0,
+                "unknown workspace starts at 0"
+            );
             store.set_sync_cursor(a, 42).unwrap();
             store.set_sync_cursor(a, 99).unwrap(); // upsert
             store.set_sync_cursor(b, 7).unwrap();
@@ -3520,17 +4461,31 @@ mod tests {
         }
         // Reopen: state survived the process boundary.
         let store = EventStore::open(&path).unwrap();
-        assert_eq!(store.sync_cursor(a).unwrap(), 99, "cursor persisted + upserted");
+        assert_eq!(
+            store.sync_cursor(a).unwrap(),
+            99,
+            "cursor persisted + upserted"
+        );
         assert_eq!(store.sync_cursor(b).unwrap(), 7, "keyed per workspace");
         let mut ids = store.pushed_ids(a).unwrap();
         ids.sort();
         let mut want = vec![e1, e2];
         want.sort();
         assert_eq!(ids, want, "pushed set persisted, deduped");
-        assert!(store.pushed_ids(b).unwrap().is_empty(), "pushed set is per workspace");
+        assert!(
+            store.pushed_ids(b).unwrap().is_empty(),
+            "pushed set is per workspace"
+        );
         assert_eq!(store.sync_cursor(elsewhere).unwrap(), 0, "keyed per relay");
-        assert!(store.pushed_ids(elsewhere).unwrap().is_empty(), "pushed set is per relay");
-        assert_eq!(*a, SyncKey::new("HTTPS://Relay.Example:443", wa), "one form of the relay URL");
+        assert!(
+            store.pushed_ids(elsewhere).unwrap().is_empty(),
+            "pushed set is per relay"
+        );
+        assert_eq!(
+            *a,
+            SyncKey::new("HTTPS://Relay.Example:443", wa),
+            "one form of the relay URL"
+        );
     }
 
     #[test]
@@ -3554,11 +4509,27 @@ mod tests {
             store.save_compaction(sid, "hosted", &first).unwrap();
             store.save_compaction(other, "gateway", &first).unwrap();
             // Upsert.
-            store.save_compaction(sid, "hosted", &StoredCompaction { boundary: None, ..state.clone() }).unwrap();
+            store
+                .save_compaction(
+                    sid,
+                    "hosted",
+                    &StoredCompaction {
+                        boundary: None,
+                        ..state.clone()
+                    },
+                )
+                .unwrap();
         }
         let store = EventStore::open(&path).unwrap();
-        assert_eq!(store.compaction(sid, "gateway").unwrap().as_ref(), Some(&state), "survived a restart");
-        assert_eq!(store.compaction(sid, "hosted").unwrap().unwrap().boundary, None);
+        assert_eq!(
+            store.compaction(sid, "gateway").unwrap().as_ref(),
+            Some(&state),
+            "survived a restart"
+        );
+        assert_eq!(
+            store.compaction(sid, "hosted").unwrap().unwrap().boundary,
+            None
+        );
         // Device-local: nothing reached the event log.
         assert!(store.list(sid).unwrap().is_empty());
         assert!(store.list_session_ids().unwrap().is_empty());
@@ -3579,29 +4550,58 @@ mod tests {
         placeholder.is_streaming = true;
         let mid = placeholder.id;
         let placeholder = store
-            .append(sid, wid, SessionEvent::MessageAppended { message: placeholder })
+            .append(
+                sid,
+                wid,
+                SessionEvent::MessageAppended {
+                    message: placeholder,
+                },
+            )
             .unwrap();
         // Two chunks streamed concurrently (both after the placeholder): the
         // completion counts from one of them, which stays a witness.
-        let at = Some(ligus_core::CfgFrontier { lamport: placeholder.lamport, event_id: placeholder.event_id });
+        let at = Some(ligus_core::CfgFrontier {
+            lamport: placeholder.lamport,
+            event_id: placeholder.event_id,
+        });
         for piece in ["He", "llo"] {
-            let chunk = SessionEventEnvelope::new(sid, wid, 9, SessionEvent::MessageChunkReceived { message_id: mid, chunk: piece.into() });
+            let chunk = SessionEventEnvelope::new(
+                sid,
+                wid,
+                9,
+                SessionEvent::MessageChunkReceived {
+                    message_id: mid,
+                    chunk: piece.into(),
+                },
+            );
             store.ingest(&fixture_next(&chunk, at)).unwrap();
         }
         store
             .append(
                 sid,
                 wid,
-                SessionEvent::MessageCompleted { message_id: mid, body: "Hello".into() },
+                SessionEvent::MessageCompleted {
+                    message_id: mid,
+                    body: "Hello".into(),
+                },
             )
             .unwrap();
 
         let removed = store.prune_superseded_chunks().unwrap();
         assert_eq!(removed, 2, "both chunks are superseded by completed");
-        assert!(store.lamport_head(wid, sid).unwrap().is_some_and(|h| h.lamport == 4), "the completion still counts from its chunk");
+        assert!(
+            store
+                .lamport_head(wid, sid)
+                .unwrap()
+                .is_some_and(|h| h.lamport == 4),
+            "the completion still counts from its chunk"
+        );
         // projection unchanged
         let s = store.load_session(sid).unwrap().unwrap();
-        assert_eq!(s.messages.iter().find(|m| m.id == mid).unwrap().body, "Hello");
+        assert_eq!(
+            s.messages.iter().find(|m| m.id == mid).unwrap().body,
+            "Hello"
+        );
         // idempotent
         assert_eq!(store.prune_superseded_chunks().unwrap(), 0);
     }
@@ -3614,21 +4614,68 @@ mod tests {
         let mut placeholder = ChatMessage::new(MessageRole::Assistant, "Ligus", "");
         placeholder.is_streaming = true;
         let mid = placeholder.id;
-        store.append(sid, wid, SessionEvent::MessageAppended { message: placeholder }).unwrap();
-        let chunk = store.append(sid, wid, SessionEvent::MessageChunkReceived { message_id: mid, chunk: "Hel".into() }).unwrap();
+        store
+            .append(
+                sid,
+                wid,
+                SessionEvent::MessageAppended {
+                    message: placeholder,
+                },
+            )
+            .unwrap();
+        let chunk = store
+            .append(
+                sid,
+                wid,
+                SessionEvent::MessageChunkReceived {
+                    message_id: mid,
+                    chunk: "Hel".into(),
+                },
+            )
+            .unwrap();
         // Another signer's copy under the chunk's id, kept beside it.
         let mut other = chunk.clone();
-        other.payload = SessionEvent::MessageChunkReceived { message_id: mid, chunk: "lo, forged".into() };
+        other.payload = SessionEvent::MessageChunkReceived {
+            message_id: mid,
+            chunk: "lo, forged".into(),
+        };
         other.clear_raw();
         let kp = ligus_core::SigningKeypair::generate().unwrap();
         ligus_core::sign_envelope(&mut other, Uuid::new_v4(), &kp);
         store.ingest(&other).unwrap();
-        assert_eq!(store.list_copies(sid).unwrap().iter().filter(|e| e.event_id == chunk.event_id).count(), 2);
-        store.append(sid, wid, SessionEvent::MessageCompleted { message_id: mid, body: "Hello".into() }).unwrap();
+        assert_eq!(
+            store
+                .list_copies(sid)
+                .unwrap()
+                .iter()
+                .filter(|e| e.event_id == chunk.event_id)
+                .count(),
+            2
+        );
+        store
+            .append(
+                sid,
+                wid,
+                SessionEvent::MessageCompleted {
+                    message_id: mid,
+                    body: "Hello".into(),
+                },
+            )
+            .unwrap();
         assert!(store.prune_superseded_chunks().unwrap() >= 1);
-        assert!(store.list_copies(sid).unwrap().iter().all(|e| e.event_id != chunk.event_id), "a copy outlived its pruned chunk");
+        assert!(
+            store
+                .list_copies(sid)
+                .unwrap()
+                .iter()
+                .all(|e| e.event_id != chunk.event_id),
+            "a copy outlived its pruned chunk"
+        );
         let s = store.load_session(sid).unwrap().unwrap();
-        assert_eq!(s.messages.iter().find(|m| m.id == mid).unwrap().body, "Hello");
+        assert_eq!(
+            s.messages.iter().find(|m| m.id == mid).unwrap().body,
+            "Hello"
+        );
 
         // A copy of the seed outliving a deleted session would fold as it.
         let seed = store.list(sid).unwrap().remove(0);
@@ -3638,7 +4685,10 @@ mod tests {
         store.ingest(&copy).unwrap();
         store.delete_session(sid).unwrap();
         assert!(store.list_copies(sid).unwrap().is_empty());
-        assert!(store.load_session(sid).unwrap().is_none(), "the deleted session came back");
+        assert!(
+            store.load_session(sid).unwrap().is_none(),
+            "the deleted session came back"
+        );
     }
 
     /// A pruned chunk stays a lamport witness: another device may have held
@@ -3649,26 +4699,86 @@ mod tests {
         let mut placeholder = ChatMessage::new(MessageRole::Assistant, "Ligus", "");
         placeholder.is_streaming = true;
         let mid = placeholder.id;
-        let placeholder = store.append(sid, wid, SessionEvent::MessageAppended { message: placeholder }).unwrap();
-        let chunk = store.append(sid, wid, SessionEvent::MessageChunkReceived { message_id: mid, chunk: "Hel".into() }).unwrap();
-        let key = |e: &SessionEventEnvelope| Some(ligus_core::CfgFrontier { lamport: e.lamport, event_id: e.event_id });
+        let placeholder = store
+            .append(
+                sid,
+                wid,
+                SessionEvent::MessageAppended {
+                    message: placeholder,
+                },
+            )
+            .unwrap();
+        let chunk = store
+            .append(
+                sid,
+                wid,
+                SessionEvent::MessageChunkReceived {
+                    message_id: mid,
+                    chunk: "Hel".into(),
+                },
+            )
+            .unwrap();
+        let key = |e: &SessionEventEnvelope| {
+            Some(ligus_core::CfgFrontier {
+                lamport: e.lamport,
+                event_id: e.event_id,
+            })
+        };
         let at_chunk = key(&chunk);
         // This device completes the message counting from something newer it
         // held (two concurrent title changes), so nothing here names the chunk.
-        let t1 = fixture_next(&SessionEventEnvelope::new(sid, wid, 9, SessionEvent::SessionTitleChanged { title: "t1".into() }), key(&placeholder));
-        let t2 = fixture_next(&SessionEventEnvelope::new(sid, wid, 9, SessionEvent::SessionTitleChanged { title: "t2".into() }), key(&t1));
+        let t1 = fixture_next(
+            &SessionEventEnvelope::new(
+                sid,
+                wid,
+                9,
+                SessionEvent::SessionTitleChanged { title: "t1".into() },
+            ),
+            key(&placeholder),
+        );
+        let t2 = fixture_next(
+            &SessionEventEnvelope::new(
+                sid,
+                wid,
+                9,
+                SessionEvent::SessionTitleChanged { title: "t2".into() },
+            ),
+            key(&t1),
+        );
         store.ingest(&t1).unwrap();
         store.ingest(&t2).unwrap();
-        store.append(sid, wid, SessionEvent::MessageCompleted { message_id: mid, body: "Hello".into() }).unwrap();
+        store
+            .append(
+                sid,
+                wid,
+                SessionEvent::MessageCompleted {
+                    message_id: mid,
+                    body: "Hello".into(),
+                },
+            )
+            .unwrap();
         // Meanwhile another device held the chunk as its newest event.
-        let theirs = SessionEventEnvelope::new(sid, wid, 9, SessionEvent::SessionTitleChanged { title: "theirs".into() });
+        let theirs = SessionEventEnvelope::new(
+            sid,
+            wid,
+            9,
+            SessionEvent::SessionTitleChanged {
+                title: "theirs".into(),
+            },
+        );
         let theirs = fixture_next(&theirs, at_chunk);
         assert!(store.prune_superseded_chunks().unwrap() >= 1);
-        assert!(!store.has_event(chunk.event_id).unwrap(), "the chunk is pruned");
+        assert!(
+            !store.has_event(chunk.event_id).unwrap(),
+            "the chunk is pruned"
+        );
         store.ingest(&theirs).unwrap();
         let head = store.lamport_head(wid, sid).unwrap().unwrap();
         let s = store.load_session(sid).unwrap().unwrap();
-        assert!(s.authz.held.iter().all(|h| h.event_id != theirs.event_id), "not held for the pruned chunk");
+        assert!(
+            s.authz.held.iter().all(|h| h.event_id != theirs.event_id),
+            "not held for the pruned chunk"
+        );
         assert!(head.lamport >= theirs.lamport);
     }
 
@@ -3691,7 +4801,9 @@ mod tests {
                 Uuid::new_v4(),
                 ws,
                 1,
-                SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", "hi") },
+                SessionEvent::MessageAppended {
+                    message: ChatMessage::new(MessageRole::User, "Alex", "hi"),
+                },
             );
             e.signer_device_id = signer;
             e
@@ -3707,8 +4819,12 @@ mod tests {
             store.ingest(&e).unwrap();
         }
         let relay = "https://relay.example";
-        store.set_sync_cursor(&SyncKey::new(relay, leaked_ws), 7).unwrap();
-        store.set_sync_cursor(&SyncKey::new(relay, room_ws), 9).unwrap();
+        store
+            .set_sync_cursor(&SyncKey::new(relay, leaked_ws), 7)
+            .unwrap();
+        store
+            .set_sync_cursor(&SyncKey::new(relay, room_ws), 9)
+            .unwrap();
 
         let keep = HashSet::from([room_ws]);
         let mut found = store.foreign_workspaces(&keep, me).unwrap();
@@ -3718,20 +4834,38 @@ mod tests {
         assert_eq!(found, want);
 
         let backup = dir.path().join("ligus.db.bak");
-        let mut dropped = store.purge_foreign_workspaces(&keep, me, Some(&backup)).unwrap();
+        let mut dropped = store
+            .purge_foreign_workspaces(&keep, me, Some(&backup))
+            .unwrap();
         dropped.sort();
         assert_eq!(dropped, want);
         assert_eq!(store.max_row_id().unwrap(), 6);
-        let left: i64 = store.conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0)).unwrap();
-        assert_eq!(left, 3, "the room's event, the legacy nil one, and this device's own");
-        assert_eq!(store.sync_cursor(&SyncKey::new(relay, leaked_ws)).unwrap(), 0, "a dropped room re-pulls from the start");
+        let left: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            left, 3,
+            "the room's event, the legacy nil one, and this device's own"
+        );
+        assert_eq!(
+            store.sync_cursor(&SyncKey::new(relay, leaked_ws)).unwrap(),
+            0,
+            "a dropped room re-pulls from the start"
+        );
         assert_eq!(store.sync_cursor(&SyncKey::new(relay, room_ws)).unwrap(), 9);
 
         // The backup holds everything, and a second run is a no-op.
         let copy = EventStore::open(&backup).unwrap();
-        let all: i64 = copy.conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0)).unwrap();
+        let all: i64 = copy
+            .conn
+            .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(all, 6);
-        assert!(store.purge_foreign_workspaces(&keep, me, Some(&dir.path().join("again"))).unwrap().is_empty());
+        assert!(store
+            .purge_foreign_workspaces(&keep, me, Some(&dir.path().join("again")))
+            .unwrap()
+            .is_empty());
         assert!(!dir.path().join("again").exists());
     }
 
@@ -3741,13 +4875,25 @@ mod tests {
     fn chain_checks_use_the_signer_chain_index() {
         let store = EventStore::open_in_memory().unwrap();
         let plan = |sql: &str, params: &[&dyn rusqlite::ToSql]| -> Vec<String> {
-            let mut stmt = store.conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
-            stmt.query_map(params, |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+            let mut stmt = store
+                .conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap();
+            stmt.query_map(params, |r| r.get::<_, String>(3))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
         };
         let forks = plan(FORKS_CHAIN_SQL, &[&"s", &"e", &"d", &"p", &"w"]);
-        assert!(forks.iter().any(|p| p.contains("idx_events_by_signer")), "{forks:?}");
+        assert!(
+            forks.iter().any(|p| p.contains("idx_events_by_signer")),
+            "{forks:?}"
+        );
         let last = plan(LAST_SIGNED_BY_SQL, &[&"s", &"d", &5i64, &"w"]);
-        assert!(last.iter().any(|p| p.contains("idx_events_by_signer")), "{last:?}");
+        assert!(
+            last.iter().any(|p| p.contains("idx_events_by_signer")),
+            "{last:?}"
+        );
     }
 
     /// A log is read by (session, workspace) through an index on both, not
@@ -3756,22 +4902,45 @@ mod tests {
     fn log_reads_use_the_log_indexes() {
         let store = EventStore::open_in_memory().unwrap();
         let plan = |sql: &str| -> String {
-            let mut stmt = store.conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
-            let rows: Vec<String> = stmt.query_map(["s", "w"], |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+            let mut stmt = store
+                .conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap();
+            let rows: Vec<String> = stmt
+                .query_map(["s", "w"], |r| r.get::<_, String>(3))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
             rows.join(" | ")
         };
         let list = plan("SELECT envelope_json FROM events WHERE session_id = ?1 AND workspace_id = ?2 ORDER BY sequence ASC");
-        assert!(list.contains("idx_events_log_seq") && !list.contains("TEMP B-TREE"), "{list}");
-        let copies = plan("SELECT envelope_json FROM equivocations WHERE session_id = ?1 AND workspace_id = ?2");
+        assert!(
+            list.contains("idx_events_log_seq") && !list.contains("TEMP B-TREE"),
+            "{list}"
+        );
+        let copies = plan(
+            "SELECT envelope_json FROM equivocations WHERE session_id = ?1 AND workspace_id = ?2",
+        );
         assert!(copies.contains("idx_equivocations_log"), "{copies}");
         let witnesses = plan("SELECT event_id FROM lamport_witnesses WHERE session_id = ?1 AND workspace_id = ?2 ORDER BY row_id ASC");
-        assert!(witnesses.contains("idx_lamport_witnesses_log"), "{witnesses}");
-        let max = plan("SELECT MAX(sequence) FROM events WHERE session_id = ?1 AND workspace_id = ?2");
+        assert!(
+            witnesses.contains("idx_lamport_witnesses_log"),
+            "{witnesses}"
+        );
+        let max =
+            plan("SELECT MAX(sequence) FROM events WHERE session_id = ?1 AND workspace_id = ?2");
         assert!(max.contains("idx_events_log_seq"), "{max}");
     }
 
     /// A foreign-looking workspace and an unrelated one, for the purge races.
-    fn purge_fixture() -> (tempfile::TempDir, std::path::PathBuf, EventStore, Uuid, Uuid, Uuid) {
+    fn purge_fixture() -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        EventStore,
+        Uuid,
+        Uuid,
+        Uuid,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ligus.db");
         let mut store = EventStore::open(&path).unwrap();
@@ -3786,14 +4955,23 @@ mod tests {
             Uuid::new_v4(),
             ws,
             1,
-            SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", "hi") },
+            SessionEvent::MessageAppended {
+                message: ChatMessage::new(MessageRole::User, "Alex", "hi"),
+            },
         );
         e.signer_device_id = Some(signer);
         e
     }
 
     fn count_in(store: &EventStore, ws: Uuid) -> i64 {
-        store.conn.query_row("SELECT COUNT(*) FROM events WHERE workspace_id = ?1", [ws.to_string()], |r| r.get(0)).unwrap()
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE workspace_id = ?1",
+                [ws.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap()
     }
 
     /// A backup path that already holds a file (an earlier run's backup, the
@@ -3806,9 +4984,13 @@ mod tests {
         std::fs::write(&bak, b"the only copy of what an earlier run deleted").unwrap();
         let r = store.purge_foreign_workspaces(&HashSet::from([mine]), me, Some(&bak));
         assert!(matches!(r, Err(EventStoreError::BackupExists(_))), "{r:?}");
-        assert_eq!(std::fs::read(&bak).unwrap(), b"the only copy of what an earlier run deleted");
+        assert_eq!(
+            std::fs::read(&bak).unwrap(),
+            b"the only copy of what an earlier run deleted"
+        );
         assert_eq!(count_in(&store, foreign), 1, "nothing deleted");
-        let names: HashSet<std::path::PathBuf> = (0..100).map(|_| purge_backup_path(dir.path())).collect();
+        let names: HashSet<std::path::PathBuf> =
+            (0..100).map(|_| purge_backup_path(dir.path())).collect();
         assert_eq!(names.len(), 100);
     }
 
@@ -3823,11 +5005,21 @@ mod tests {
         let own = purge_msg(foreign, me);
         let other = EventStore::open(&path).unwrap();
         let bak = dir.path().join("bak");
-        let dropped = store.purge_foreign_workspaces_with(&keep, me, Some(&bak), &mut || other.append_envelope(&own).unwrap()).unwrap();
+        let dropped = store
+            .purge_foreign_workspaces_with(&keep, me, Some(&bak), &mut || {
+                other.append_envelope(&own).unwrap()
+            })
+            .unwrap();
         assert!(dropped.is_empty());
         assert_eq!(count_in(&store, foreign), 2, "nothing deleted");
         assert!(!bak.exists(), "no backup left behind");
-        assert!(store.purge_foreign_workspaces(&keep, me, Some(&dir.path().join("bak2"))).unwrap().is_empty(), "now this device's");
+        assert!(
+            store
+                .purge_foreign_workspaces(&keep, me, Some(&dir.path().join("bak2")))
+                .unwrap()
+                .is_empty(),
+            "now this device's"
+        );
     }
 
     /// Another member's late event in the doomed workspace, after the
@@ -3839,7 +5031,11 @@ mod tests {
         let late = purge_msg(foreign, Uuid::new_v4());
         let mut other = EventStore::open(&path).unwrap();
         let bak = dir.path().join("bak");
-        let dropped = store.purge_foreign_workspaces_with(&keep, me, Some(&bak), &mut || assert!(other.ingest(&late).unwrap())).unwrap();
+        let dropped = store
+            .purge_foreign_workspaces_with(&keep, me, Some(&bak), &mut || {
+                assert!(other.ingest(&late).unwrap())
+            })
+            .unwrap();
         assert!(dropped.is_empty());
         assert_eq!(count_in(&store, foreign), 2);
         assert!(!bak.exists());
@@ -3854,7 +5050,11 @@ mod tests {
         let elsewhere = purge_msg(mine, Uuid::new_v4());
         let mut other = EventStore::open(&path).unwrap();
         let bak = dir.path().join("bak");
-        let dropped = store.purge_foreign_workspaces_with(&keep, me, Some(&bak), &mut || assert!(other.ingest(&elsewhere).unwrap())).unwrap();
+        let dropped = store
+            .purge_foreign_workspaces_with(&keep, me, Some(&bak), &mut || {
+                assert!(other.ingest(&elsewhere).unwrap())
+            })
+            .unwrap();
         assert_eq!(dropped, vec![(foreign, 1)]);
         assert_eq!(count_in(&store, foreign), 0);
         assert_eq!(count_in(&store, mine), 2);

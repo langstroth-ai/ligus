@@ -84,13 +84,19 @@ pub enum SecretError {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("{backend}: {message}")]
-    Backend { backend: &'static str, message: String },
+    Backend {
+        backend: &'static str,
+        message: String,
+    },
     #[error("{0} is read-only here")]
     ReadOnly(&'static str),
 }
 
 fn backend_err(backend: &'static str, message: impl Into<String>) -> SecretError {
-    SecretError::Backend { backend, message: message.into() }
+    SecretError::Backend {
+        backend,
+        message: message.into(),
+    }
 }
 
 /// One secret: a scope (`seed`, `settings`, `cli`) and a name within it.
@@ -102,7 +108,10 @@ pub struct SecretId {
 
 impl SecretId {
     pub fn new(scope: &'static str, name: impl Into<String>) -> Self {
-        Self { scope, name: name.into() }
+        Self {
+            scope,
+            name: name.into(),
+        }
     }
     /// `<scope>:<name>` (the keychain account / Secret Service attribute).
     pub fn account(&self) -> String {
@@ -112,7 +121,13 @@ impl SecretId {
     fn file_name(&self) -> String {
         self.name
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect()
     }
 }
@@ -156,7 +171,9 @@ pub trait SecretStore: Send + Sync {
 
     /// A UTF-8 secret.
     fn get_string(&self, id: &SecretId) -> Result<Option<Zeroizing<String>>, SecretError> {
-        Ok(self.get(id)?.and_then(|b| String::from_utf8(b.to_vec()).ok().map(Zeroizing::new)))
+        Ok(self
+            .get(id)?
+            .and_then(|b| String::from_utf8(b.to_vec()).ok().map(Zeroizing::new)))
     }
 }
 
@@ -173,14 +190,21 @@ pub struct File0600 {
 
 impl File0600 {
     pub fn new(data_dir: impl AsRef<Path>) -> Self {
-        Self { data_dir: data_dir.as_ref().to_path_buf() }
+        Self {
+            data_dir: data_dir.as_ref().to_path_buf(),
+        }
     }
 
     fn path(&self, id: &SecretId) -> PathBuf {
         if id.scope == "seed" {
-            self.data_dir.join("keys").join(format!("{}.seed", id.file_name()))
+            self.data_dir
+                .join("keys")
+                .join(format!("{}.seed", id.file_name()))
         } else {
-            self.data_dir.join("secrets").join(id.scope).join(id.file_name())
+            self.data_dir
+                .join("secrets")
+                .join(id.scope)
+                .join(id.file_name())
         }
     }
 }
@@ -222,7 +246,11 @@ impl SecretStore for File0600 {
         // between the data dir and the file is owner-only.
         // The data dir itself is left alone here: it may be a volume's mount
         // root that isn't ours to chmod.
-        if let Some(top) = path.strip_prefix(&self.data_dir).ok().and_then(|r| r.components().next()) {
+        if let Some(top) = path
+            .strip_prefix(&self.data_dir)
+            .ok()
+            .and_then(|r| r.components().next())
+        {
             let top = self.data_dir.join(top);
             if top != path {
                 crate::private_file::ensure_private_dir(&top)?;
@@ -270,7 +298,10 @@ pub struct K8sSecretFile {
 
 impl K8sSecretFile {
     pub fn new(mount: impl AsRef<Path>, data_dir: impl AsRef<Path>) -> Self {
-        Self { mount: mount.as_ref().to_path_buf(), fallback: File0600::new(data_dir) }
+        Self {
+            mount: mount.as_ref().to_path_buf(),
+            fallback: File0600::new(data_dir),
+        }
     }
     fn mounted(&self, id: &SecretId) -> PathBuf {
         self.mount.join(format!("{}.{}", id.scope, id.file_name()))
@@ -318,7 +349,11 @@ fn run(bin: &Path, args: &[&str], stdin: Option<&[u8]>) -> std::io::Result<std::
     use std::process::Stdio;
     let mut cmd = ligus_core::process_util::command(bin);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
-    cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() });
+    cmd.stdin(if stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
     let mut child = cmd.spawn()?;
     if let (Some(input), Some(mut pipe)) = (stdin, child.stdin.take()) {
         pipe.write_all(input)?;
@@ -334,7 +369,10 @@ fn b64(bytes: &[u8]) -> Zeroizing<String> {
 fn unb64(text: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
     use base64::Engine;
     let s = std::str::from_utf8(text).ok()?.trim();
-    base64::engine::general_purpose::STANDARD.decode(s).ok().map(Zeroizing::new)
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .ok()
+        .map(Zeroizing::new)
 }
 
 /// The session's Secret Service (GNOME Keyring, KWallet's bridge, KeePassXC)
@@ -348,7 +386,10 @@ pub struct SecretService {
 
 impl SecretService {
     pub fn new(bin: impl AsRef<Path>) -> Self {
-        Self { bin: bin.as_ref().to_path_buf(), service: SERVICE.into() }
+        Self {
+            bin: bin.as_ref().to_path_buf(),
+            service: SERVICE.into(),
+        }
     }
     pub fn with_service(mut self, service: impl Into<String>) -> Self {
         self.service = service.into();
@@ -361,28 +402,49 @@ impl SecretStore for SecretService {
         Backend::SecretService
     }
     fn get(&self, id: &SecretId) -> Result<Option<Zeroizing<Vec<u8>>>, SecretError> {
-        let out = run(&self.bin, &["lookup", "service", &self.service, "account", &id.account()], None)?;
+        let out = run(
+            &self.bin,
+            &["lookup", "service", &self.service, "account", &id.account()],
+            None,
+        )?;
         if !out.status.success() || out.stdout.is_empty() {
             // secret-tool exits 1 for "not found".
             return Ok(None);
         }
-        unb64(&out.stdout).map(Some).ok_or_else(|| backend_err("secret-service", "stored value isn't base64"))
+        unb64(&out.stdout)
+            .map(Some)
+            .ok_or_else(|| backend_err("secret-service", "stored value isn't base64"))
     }
     fn put(&self, id: &SecretId, value: &[u8]) -> Result<(), SecretError> {
         let label = format!("Ligus {}", id.account());
         let encoded = b64(value);
         let out = run(
             &self.bin,
-            &["store", "--label", &label, "service", &self.service, "account", &id.account()],
+            &[
+                "store",
+                "--label",
+                &label,
+                "service",
+                &self.service,
+                "account",
+                &id.account(),
+            ],
             Some(encoded.as_bytes()),
         )?;
         if !out.status.success() {
-            return Err(backend_err("secret-service", String::from_utf8_lossy(&out.stderr).trim().to_string()));
+            return Err(backend_err(
+                "secret-service",
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
         }
         Ok(())
     }
     fn delete(&self, id: &SecretId) -> Result<(), SecretError> {
-        let _ = run(&self.bin, &["clear", "service", &self.service, "account", &id.account()], None)?;
+        let _ = run(
+            &self.bin,
+            &["clear", "service", &self.service, "account", &id.account()],
+            None,
+        )?;
         Ok(())
     }
 }
@@ -415,7 +477,11 @@ impl SystemdCreds {
         self.dir.join(format!("{}.cred", Self::name(id)))
     }
     fn args<'a>(&self, rest: &[&'a str]) -> Vec<&'a str> {
-        let mut v: Vec<&str> = if self.user { vec!["--user"] } else { Vec::new() };
+        let mut v: Vec<&str> = if self.user {
+            vec!["--user"]
+        } else {
+            Vec::new()
+        };
         v.extend_from_slice(rest);
         v
     }
@@ -437,9 +503,16 @@ impl SecretStore for SystemdCreds {
         }
         let name = format!("--name={}", Self::name(id));
         let file_s = file.to_string_lossy().into_owned();
-        let out = run(&self.bin, &self.args(&["decrypt", &name, &file_s, "-"]), None)?;
+        let out = run(
+            &self.bin,
+            &self.args(&["decrypt", &name, &file_s, "-"]),
+            None,
+        )?;
         if !out.status.success() {
-            return Err(backend_err("systemd-creds", String::from_utf8_lossy(&out.stderr).trim().to_string()));
+            return Err(backend_err(
+                "systemd-creds",
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
         }
         Ok(Some(Zeroizing::new(out.stdout)))
     }
@@ -449,10 +522,17 @@ impl SecretStore for SystemdCreds {
         let tmp = file.with_extension("cred.tmp");
         let name = format!("--name={}", Self::name(id));
         let tmp_s = tmp.to_string_lossy().into_owned();
-        let out = run(&self.bin, &self.args(&["encrypt", "--with-key=auto", &name, "-", &tmp_s]), Some(value))?;
+        let out = run(
+            &self.bin,
+            &self.args(&["encrypt", "--with-key=auto", &name, "-", &tmp_s]),
+            Some(value),
+        )?;
         if !out.status.success() {
             let _ = std::fs::remove_file(&tmp);
-            return Err(backend_err("systemd-creds", String::from_utf8_lossy(&out.stderr).trim().to_string()));
+            return Err(backend_err(
+                "systemd-creds",
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
         }
         #[cfg(unix)]
         {
@@ -585,7 +665,10 @@ mod mac {
         use sha2::{Digest, Sha256};
         let req = requirement?;
         check(&req).ok()?;
-        let mark = format!("ligus-trust:{}", ligus_core::keys::hex(&Sha256::digest(req.as_bytes())[..8]));
+        let mark = format!(
+            "ligus-trust:{}",
+            ligus_core::keys::hex(&Sha256::digest(req.as_bytes())[..8])
+        );
         Some(Trust { binary, mark })
     }
 
@@ -652,13 +735,28 @@ mod mac {
     }
 
     impl MacKeychain {
-        fn handle(path: PathBuf, service: &str, unlock_in: Option<PathBuf>, repair: Repair) -> Self {
-            Self { path, service: service.to_string(), unlock_in, state: Mutex::new(Unlocked::default()), repair, lookups: AtomicUsize::new(0) }
+        fn handle(
+            path: PathBuf,
+            service: &str,
+            unlock_in: Option<PathBuf>,
+            repair: Repair,
+        ) -> Self {
+            Self {
+                path,
+                service: service.to_string(),
+                unlock_in,
+                state: Mutex::new(Unlocked::default()),
+                repair,
+                lookups: AtomicUsize::new(0),
+            }
         }
 
         /// The keychain for `data_dir` (created on first use).
         pub fn open(data_dir: impl AsRef<Path>) -> Result<Self, SecretError> {
-            Self::open_with(data_dir.as_ref().join("secrets").join("ligus.keychain-db"), SERVICE)
+            Self::open_with(
+                data_dir.as_ref().join("secrets").join("ligus.keychain-db"),
+                SERVICE,
+            )
         }
 
         /// A keychain at `path` with its own service name.
@@ -672,14 +770,23 @@ mod mac {
         /// file `unlock_in` instead of the login keychain (tests: a
         /// throwaway pair, so no test ever writes to the login keychain).
         #[cfg(test)]
-        pub(crate) fn open_with_unlock_in(path: PathBuf, service: &str, unlock_in: PathBuf) -> Result<Self, SecretError> {
+        pub(crate) fn open_with_unlock_in(
+            path: PathBuf,
+            service: &str,
+            unlock_in: PathBuf,
+        ) -> Result<Self, SecretError> {
             Self::open_as(path, service, unlock_in, None)
         }
 
         /// [`Self::open_with_unlock_in`], acting as a release whose binary
         /// is `release` (`Some`) or as a development build (`None`).
         #[cfg(test)]
-        pub(crate) fn open_as(path: PathBuf, service: &str, unlock_in: PathBuf, release: Option<PathBuf>) -> Result<Self, SecretError> {
+        pub(crate) fn open_as(
+            path: PathBuf,
+            service: &str,
+            unlock_in: PathBuf,
+            release: Option<PathBuf>,
+        ) -> Result<Self, SecretError> {
             let me = Self::handle(path, service, Some(unlock_in), Repair::As(release));
             me.keychain()?;
             Ok(me)
@@ -708,10 +815,17 @@ mod mac {
             match &self.repair {
                 Repair::Detect => {
                     let binary = acl::ligus_binary().ok()?;
-                    repair_binary(acl::requirement_for(&binary), acl::check_self_against, binary)
+                    repair_binary(
+                        acl::requirement_for(&binary),
+                        acl::check_self_against,
+                        binary,
+                    )
                 }
                 #[cfg(test)]
-                Repair::As(b) => b.clone().map(|binary| Trust { binary, mark: "ligus-trust:test".into() }),
+                Repair::As(b) => b.clone().map(|binary| Trust {
+                    binary,
+                    mark: "ligus-trust:test".into(),
+                }),
             }
         }
 
@@ -728,8 +842,9 @@ mod mac {
             self.lookups.fetch_add(1, Ordering::Relaxed);
             let service = self.unlock_service();
             let read = |account: &str| {
-                acl::find(self.unlock_in.as_deref(), &service, account, true)
-                    .map(|(pw, _)| Zeroizing::new(String::from_utf8_lossy(&pw.unwrap_or_default()).into_owned()))
+                acl::find(self.unlock_in.as_deref(), &service, account, true).map(|(pw, _)| {
+                    Zeroizing::new(String::from_utf8_lossy(&pw.unwrap_or_default()).into_owned())
+                })
             };
             match read(&self.unlock_account()) {
                 Ok(pw) => Ok((pw, false)),
@@ -795,8 +910,16 @@ mod mac {
                         tracing::warn!(target: "secrets", "kept the keychain unlock item as it was: its password couldn't be checked against the Ligus keychain");
                     }
                     if replace && verified {
-                        let items = LoginItems { me: self, binary: &trust.binary };
-                        match replace_item(&items, &self.unlock_account(), &self.spare_account(), pw.as_bytes()) {
+                        let items = LoginItems {
+                            me: self,
+                            binary: &trust.binary,
+                        };
+                        match replace_item(
+                            &items,
+                            &self.unlock_account(),
+                            &self.spare_account(),
+                            pw.as_bytes(),
+                        ) {
                             Ok(()) => {
                                 tracing::info!(target: "secrets", "the keychain unlock item now trusts this Ligus release")
                             }
@@ -833,7 +956,12 @@ mod mac {
             let trusted = release.map(|t| t.binary).unwrap_or(binary);
             // (only reached when the keychain file is certainly absent)
             for account in [self.unlock_account(), self.spare_account()] {
-                if let Ok((_, stale)) = acl::find(self.unlock_in.as_deref(), &self.unlock_service(), &account, false) {
+                if let Ok((_, stale)) = acl::find(
+                    self.unlock_in.as_deref(),
+                    &self.unlock_service(),
+                    &account,
+                    false,
+                ) {
                     let _ = stale.delete(); // a password for a keychain file that is gone
                 }
             }
@@ -846,7 +974,11 @@ mod mac {
                 &trusted,
             )
             .map_err(|e| backend_err("keychain", e))?;
-            let mut kc = CreateOptions::new().password(&pw).prompt_user(false).create(&self.path).map_err(err)?;
+            let mut kc = CreateOptions::new()
+                .password(&pw)
+                .prompt_user(false)
+                .create(&self.path)
+                .map_err(err)?;
             // Stay unlocked while the user's session is (no idle or sleep lock):
             // the file itself is what agents can't reach.
             let mut settings = KeychainSettings::new();
@@ -862,7 +994,12 @@ mod mac {
         /// `ligus doctor` resets).
         pub fn destroy(self) -> Result<(), SecretError> {
             for account in [self.unlock_account(), self.spare_account()] {
-                if let Ok((_, item)) = acl::find(self.unlock_in.as_deref(), &self.unlock_service(), &account, false) {
+                if let Ok((_, item)) = acl::find(
+                    self.unlock_in.as_deref(),
+                    &self.unlock_service(),
+                    &account,
+                    false,
+                ) {
                     let _ = item.delete();
                 }
             }
@@ -888,14 +1025,22 @@ mod mac {
         pub fn unlock_item_exists(&self) -> bool {
             [self.unlock_account(), self.spare_account()]
                 .iter()
-                .any(|a| acl::find(self.unlock_in.as_deref(), &self.unlock_service(), a, false).is_ok())
+                .any(|a| {
+                    acl::find(self.unlock_in.as_deref(), &self.unlock_service(), a, false).is_ok()
+                })
         }
 
         /// Whether this build can use the Ligus keychain for `data_dir`
         /// without macOS asking (`ligus doctor`). Never prompts: every read
         /// runs with keychain prompts turned off, and nothing is written.
         pub fn access(data_dir: &Path) -> KeychainAccess {
-            Self::handle(data_dir.join("secrets").join("ligus.keychain-db"), SERVICE, None, Repair::Detect).probe()
+            Self::handle(
+                data_dir.join("secrets").join("ligus.keychain-db"),
+                SERVICE,
+                None,
+                Repair::Detect,
+            )
+            .probe()
         }
 
         /// [`Self::access`] for this handle.
@@ -925,7 +1070,8 @@ mod mac {
                     .into_iter()
                     .map(|(a, _)| a)
                     .filter(|a| {
-                        acl::find(Some(&self.path), &self.service, a, true).is_err_and(|c| matches!(classify(c), Denial::Refused | Denial::NoUi))
+                        acl::find(Some(&self.path), &self.service, a, true)
+                            .is_err_and(|c| matches!(classify(c), Denial::Refused | Denial::NoUi))
                     })
                     .collect();
                 KeychainAccess::Trusted { untrusted }
@@ -965,7 +1111,9 @@ mod mac {
         let mut accounts: Vec<_> = found
             .iter()
             .filter_map(|r| match r {
-                SearchResult::Dict(_) => r.simplify_dict().and_then(|d| Some((d.get("acct")?.clone(), d.get("icmt").cloned()))),
+                SearchResult::Dict(_) => r
+                    .simplify_dict()
+                    .and_then(|d| Some((d.get("acct")?.clone(), d.get("icmt").cloned()))),
                 _ => None,
             })
             .collect();
@@ -1016,7 +1164,13 @@ mod mac {
     /// before the old one goes). Also finishes a repair that was interrupted
     /// (a spare copy left behind). Returns how many items were repaired;
     /// failures are logged and keep the item as it was.
-    fn repair_items(kc: &SecKeychain, path: &Path, service: &str, password: &str, trust: &Trust) -> usize {
+    fn repair_items(
+        kc: &SecKeychain,
+        path: &Path,
+        service: &str,
+        password: &str,
+        trust: &Trust,
+    ) -> usize {
         let mut fixed = 0;
         let spares = spare_service(service);
         let mains = item_accounts(kc, service);
@@ -1024,7 +1178,12 @@ mod mac {
             if mains.iter().any(|(a, _)| *a == account) {
                 continue; // repaired below, or already marked: its spare goes then
             }
-            let items = InnerItems { path, service, account: &account, trust };
+            let items = InnerItems {
+                path,
+                service,
+                account: &account,
+                trust,
+            };
             match items.read("spare") {
                 Some(value) => match replace_item(&items, "main", "spare", &value) {
                     Ok(()) => fixed += 1,
@@ -1038,7 +1197,12 @@ mod mac {
             }
         }
         for (account, mark) in mains {
-            let items = InnerItems { path, service, account: &account, trust };
+            let items = InnerItems {
+                path,
+                service,
+                account: &account,
+                trust,
+            };
             if mark.as_deref() == Some(trust.mark.as_str()) {
                 if items.exists("spare") {
                     let _ = items.delete("spare");
@@ -1048,7 +1212,11 @@ mod mac {
             let repaired = acl::find(Some(path), service, &account, false)
                 .map_err(|c| format!("OSStatus {c}"))
                 .and_then(|(_, item)| item.trust_also(&trust.binary, password.as_bytes()))
-                .and_then(|()| items.read("main").ok_or_else(|| "still unreadable".to_string()))
+                .and_then(|()| {
+                    items
+                        .read("main")
+                        .ok_or_else(|| "still unreadable".to_string())
+                })
                 .and_then(|value| replace_item(&items, "main", "spare", &value));
             match repaired {
                 Ok(()) => fixed += 1,
@@ -1081,17 +1249,39 @@ mod mac {
 
     impl ItemCopies for InnerItems<'_> {
         fn exists(&self, which: &str) -> bool {
-            acl::find(Some(self.path), &self.service_of(which), self.account, false).is_ok()
+            acl::find(
+                Some(self.path),
+                &self.service_of(which),
+                self.account,
+                false,
+            )
+            .is_ok()
         }
         fn read(&self, which: &str) -> Option<Zeroizing<Vec<u8>>> {
-            silently(|| acl::find(Some(self.path), &self.service_of(which), self.account, true)).ok().and_then(|(v, _)| v)
+            silently(|| acl::find(Some(self.path), &self.service_of(which), self.account, true))
+                .ok()
+                .and_then(|(v, _)| v)
         }
         fn create(&self, which: &str, secret: &[u8]) -> Result<(), String> {
             let service = self.service_of(which);
-            acl::add_generic_password_marked(Some(self.path), &service, self.account, &service, secret, &self.trust.binary, Some(&self.trust.mark))
+            acl::add_generic_password_marked(
+                Some(self.path),
+                &service,
+                self.account,
+                &service,
+                secret,
+                &self.trust.binary,
+                Some(&self.trust.mark),
+            )
         }
         fn delete(&self, which: &str) -> Result<(), String> {
-            let (_, item) = acl::find(Some(self.path), &self.service_of(which), self.account, false).map_err(|c| format!("OSStatus {c}"))?;
+            let (_, item) = acl::find(
+                Some(self.path),
+                &self.service_of(which),
+                self.account,
+                false,
+            )
+            .map_err(|c| format!("OSStatus {c}"))?;
             item.delete().map_err(|c| format!("OSStatus {c}"))
         }
     }
@@ -1115,8 +1305,17 @@ mod mac {
     /// main item reads back. A step that fails stops the repair with every
     /// copy written so far kept (a start that finds only the spare reads
     /// it, and repairs again).
-    pub(crate) fn replace_item(items: &dyn ItemCopies, main: &str, spare: &str, password: &[u8]) -> Result<(), String> {
-        let holds = |account: &str| items.read(account).is_some_and(|v| v.as_slice() == password);
+    pub(crate) fn replace_item(
+        items: &dyn ItemCopies,
+        main: &str,
+        spare: &str,
+        password: &[u8],
+    ) -> Result<(), String> {
+        let holds = |account: &str| {
+            items
+                .read(account)
+                .is_some_and(|v| v.as_slice() == password)
+        };
         if items.exists(main) {
             if !holds(spare) {
                 if items.exists(spare) {
@@ -1130,7 +1329,9 @@ mod mac {
             }
             // The spare stays if the old item can't be removed: another
             // process may be mid-repair, and the next start reuses it.
-            items.delete(main).map_err(|e| format!("couldn't remove the old item: {e}"))?;
+            items
+                .delete(main)
+                .map_err(|e| format!("couldn't remove the old item: {e}"))?;
         } else if !holds(spare) {
             return Err("no copy of the unlock password to repair from".into());
         }
@@ -1138,7 +1339,9 @@ mod mac {
         if !holds(main) {
             return Err("the new unlock item didn't read back".into());
         }
-        items.delete(spare).map_err(|e| format!("the repair worked, but its spare copy stayed: {e}"))
+        items
+            .delete(spare)
+            .map_err(|e| format!("the repair worked, but its spare copy stayed: {e}"))
     }
 
     /// The real unlock items, in the login keychain (or the test stand-in).
@@ -1149,17 +1352,44 @@ mod mac {
 
     impl ItemCopies for LoginItems<'_> {
         fn exists(&self, account: &str) -> bool {
-            acl::find(self.me.unlock_in.as_deref(), &self.me.unlock_service(), account, false).is_ok()
+            acl::find(
+                self.me.unlock_in.as_deref(),
+                &self.me.unlock_service(),
+                account,
+                false,
+            )
+            .is_ok()
         }
         fn read(&self, account: &str) -> Option<Zeroizing<Vec<u8>>> {
-            silently(|| acl::find(self.me.unlock_in.as_deref(), &self.me.unlock_service(), account, true)).ok().and_then(|(pw, _)| pw)
+            silently(|| {
+                acl::find(
+                    self.me.unlock_in.as_deref(),
+                    &self.me.unlock_service(),
+                    account,
+                    true,
+                )
+            })
+            .ok()
+            .and_then(|(pw, _)| pw)
         }
         fn create(&self, account: &str, secret: &[u8]) -> Result<(), String> {
-            acl::add_generic_password(self.me.unlock_in.as_deref(), &self.me.unlock_service(), account, "Ligus keychain unlock", secret, self.binary)
+            acl::add_generic_password(
+                self.me.unlock_in.as_deref(),
+                &self.me.unlock_service(),
+                account,
+                "Ligus keychain unlock",
+                secret,
+                self.binary,
+            )
         }
         fn delete(&self, account: &str) -> Result<(), String> {
-            let (_, item) =
-                acl::find(self.me.unlock_in.as_deref(), &self.me.unlock_service(), account, false).map_err(|c| format!("OSStatus {c}"))?;
+            let (_, item) = acl::find(
+                self.me.unlock_in.as_deref(),
+                &self.me.unlock_service(),
+                account,
+                false,
+            )
+            .map_err(|c| format!("OSStatus {c}"))?;
             item.delete().map_err(|c| format!("OSStatus {c}"))
         }
     }
@@ -1170,10 +1400,18 @@ mod mac {
         }
         fn get(&self, id: &SecretId) -> Result<Option<Zeroizing<Vec<u8>>>, SecretError> {
             let kc = self.keychain()?;
-            match find_generic_password(Some(std::slice::from_ref(&kc)), &self.service, &id.account()) {
+            match find_generic_password(
+                Some(std::slice::from_ref(&kc)),
+                &self.service,
+                &id.account(),
+            ) {
                 Ok((pw, _)) => Ok(Some(Zeroizing::new(pw.to_vec()))),
                 // A repair that was interrupted left the value in its spare.
-                Err(e) if e.code() == NOT_FOUND => match find_generic_password(Some(&[kc]), &spare_service(&self.service), &id.account()) {
+                Err(e) if e.code() == NOT_FOUND => match find_generic_password(
+                    Some(&[kc]),
+                    &spare_service(&self.service),
+                    &id.account(),
+                ) {
                     Ok((pw, _)) => Ok(Some(Zeroizing::new(pw.to_vec()))),
                     Err(_) => Ok(None),
                 },
@@ -1192,10 +1430,20 @@ mod mac {
                         Some(t) => (t.binary, Some(t.mark)),
                         None => (acl::ligus_binary()?, None),
                     };
-                    acl::add_generic_password_marked(Some(&self.path), &self.service, &account, &self.service, value, &binary, mark.as_deref())
-                        .map_err(|e| backend_err("keychain", e))
+                    acl::add_generic_password_marked(
+                        Some(&self.path),
+                        &self.service,
+                        &account,
+                        &self.service,
+                        value,
+                        &binary,
+                        mark.as_deref(),
+                    )
+                    .map_err(|e| backend_err("keychain", e))
                 }
-                _ => kc.set_generic_password(&self.service, &account, value).map_err(|e| item_error(e.code(), &self.service, &account)),
+                _ => kc
+                    .set_generic_password(&self.service, &account, value)
+                    .map_err(|e| item_error(e.code(), &self.service, &account)),
             }
         }
         fn delete(&self, id: &SecretId) -> Result<(), SecretError> {
@@ -1203,7 +1451,8 @@ mod mac {
             // The spare first, so a deleted secret can't come back from it.
             for service in [spare_service(&self.service), self.service.clone()] {
                 if let Ok((_, item)) = acl::find(Some(&self.path), &service, &id.account(), false) {
-                    item.delete().map_err(|c| item_error(c, &self.service, &id.account()))?;
+                    item.delete()
+                        .map_err(|c| item_error(c, &self.service, &id.account()))?;
                 }
             }
             Ok(())
@@ -1261,8 +1510,19 @@ mod mac {
         #[link(name = "CoreFoundation", kind = "framework")]
         extern "C" {
             static kCFTypeArrayCallBacks: [usize; 5];
-            fn CFArrayCreate(alloc: CFTypeRef, values: *const CFTypeRef, count: isize, callbacks: *const c_void) -> CFTypeRef;
-            fn CFStringCreateWithBytes(alloc: CFTypeRef, bytes: *const u8, len: isize, encoding: u32, external: u8) -> CFTypeRef;
+            fn CFArrayCreate(
+                alloc: CFTypeRef,
+                values: *const CFTypeRef,
+                count: isize,
+                callbacks: *const c_void,
+            ) -> CFTypeRef;
+            fn CFStringCreateWithBytes(
+                alloc: CFTypeRef,
+                bytes: *const u8,
+                len: isize,
+                encoding: u32,
+                external: u8,
+            ) -> CFTypeRef;
             fn CFRelease(cf: CFTypeRef);
             fn CFArrayGetCount(array: CFTypeRef) -> isize;
             fn CFArrayGetValueAtIndex(array: CFTypeRef, index: isize) -> CFTypeRef;
@@ -1275,8 +1535,15 @@ mod mac {
 
         #[link(name = "Security", kind = "framework")]
         extern "C" {
-            fn SecTrustedApplicationCreateFromPath(path: *const c_char, app: *mut CFTypeRef) -> OSStatus;
-            fn SecAccessCreate(descriptor: CFTypeRef, trusted: CFTypeRef, access: *mut CFTypeRef) -> OSStatus;
+            fn SecTrustedApplicationCreateFromPath(
+                path: *const c_char,
+                app: *mut CFTypeRef,
+            ) -> OSStatus;
+            fn SecAccessCreate(
+                descriptor: CFTypeRef,
+                trusted: CFTypeRef,
+                access: *mut CFTypeRef,
+            ) -> OSStatus;
             fn SecKeychainOpen(path: *const c_char, keychain: *mut CFTypeRef) -> OSStatus;
             fn SecKeychainCopyDefault(keychain: *mut CFTypeRef) -> OSStatus;
             fn SecKeychainItemCreateFromContent(
@@ -1298,14 +1565,39 @@ mod mac {
                 password: *mut *mut c_void,
                 item: *mut CFTypeRef,
             ) -> OSStatus;
-            fn SecKeychainItemFreeContent(attrs: *mut AttributeList, data: *mut c_void) -> OSStatus;
+            fn SecKeychainItemFreeContent(attrs: *mut AttributeList, data: *mut c_void)
+                -> OSStatus;
             fn SecKeychainItemDelete(item: CFTypeRef) -> OSStatus;
-            fn SecKeychainItemSetAccessWithPassword(item: CFTypeRef, access: CFTypeRef, password_len: u32, password: *const c_void) -> OSStatus;
+            fn SecKeychainItemSetAccessWithPassword(
+                item: CFTypeRef,
+                access: CFTypeRef,
+                password_len: u32,
+                password: *const c_void,
+            ) -> OSStatus;
             fn SecKeychainItemCopyAccess(item: CFTypeRef, access: *mut CFTypeRef) -> OSStatus;
-            fn SecKeychainChangePassword(keychain: CFTypeRef, old_len: u32, old: *const c_void, new_len: u32, new: *const c_void) -> OSStatus;
-            fn SecAccessCopyMatchingACLList(access: CFTypeRef, authorization: CFTypeRef) -> CFTypeRef;
-            fn SecACLCopyContents(acl: CFTypeRef, apps: *mut CFTypeRef, description: *mut CFTypeRef, prompt: *mut u16) -> OSStatus;
-            fn SecACLSetContents(acl: CFTypeRef, apps: CFTypeRef, description: CFTypeRef, prompt: u16) -> OSStatus;
+            fn SecKeychainChangePassword(
+                keychain: CFTypeRef,
+                old_len: u32,
+                old: *const c_void,
+                new_len: u32,
+                new: *const c_void,
+            ) -> OSStatus;
+            fn SecAccessCopyMatchingACLList(
+                access: CFTypeRef,
+                authorization: CFTypeRef,
+            ) -> CFTypeRef;
+            fn SecACLCopyContents(
+                acl: CFTypeRef,
+                apps: *mut CFTypeRef,
+                description: *mut CFTypeRef,
+                prompt: *mut u16,
+            ) -> OSStatus;
+            fn SecACLSetContents(
+                acl: CFTypeRef,
+                apps: CFTypeRef,
+                description: CFTypeRef,
+                prompt: u16,
+            ) -> OSStatus;
             static kSecACLAuthorizationDecrypt: CFTypeRef;
             #[cfg(test)]
             static kSecACLAuthorizationPartitionID: CFTypeRef;
@@ -1338,7 +1630,10 @@ mod mac {
             let mut kc: CFTypeRef = std::ptr::null();
             unsafe {
                 match keychain {
-                    Some(p) => status("SecKeychainOpen", SecKeychainOpen(c_path(p)?.as_ptr(), &mut kc))?,
+                    Some(p) => status(
+                        "SecKeychainOpen",
+                        SecKeychainOpen(c_path(p)?.as_ptr(), &mut kc),
+                    )?,
                     None => status("SecKeychainCopyDefault", SecKeychainCopyDefault(&mut kc))?,
                 }
             }
@@ -1349,16 +1644,33 @@ mod mac {
         fn access_for(trusted: &Path, label: &str) -> Result<Owned, String> {
             unsafe {
                 let mut app: CFTypeRef = std::ptr::null();
-                status("SecTrustedApplicationCreateFromPath", SecTrustedApplicationCreateFromPath(c_path(trusted)?.as_ptr(), &mut app))?;
+                status(
+                    "SecTrustedApplicationCreateFromPath",
+                    SecTrustedApplicationCreateFromPath(c_path(trusted)?.as_ptr(), &mut app),
+                )?;
                 let app = Owned(app);
                 let apps = [app.0];
-                let list = Owned(CFArrayCreate(std::ptr::null(), apps.as_ptr(), 1, kCFTypeArrayCallBacks.as_ptr() as *const c_void));
-                let desc = Owned(CFStringCreateWithBytes(std::ptr::null(), label.as_ptr(), label.len() as isize, UTF8, 0));
+                let list = Owned(CFArrayCreate(
+                    std::ptr::null(),
+                    apps.as_ptr(),
+                    1,
+                    kCFTypeArrayCallBacks.as_ptr() as *const c_void,
+                ));
+                let desc = Owned(CFStringCreateWithBytes(
+                    std::ptr::null(),
+                    label.as_ptr(),
+                    label.len() as isize,
+                    UTF8,
+                    0,
+                ));
                 if list.0.is_null() || desc.0.is_null() {
                     return Err("out of memory".into());
                 }
                 let mut access: CFTypeRef = std::ptr::null();
-                status("SecAccessCreate", SecAccessCreate(desc.0, list.0, &mut access))?;
+                status(
+                    "SecAccessCreate",
+                    SecAccessCreate(desc.0, list.0, &mut access),
+                )?;
                 Ok(Owned(access))
             }
         }
@@ -1387,34 +1699,58 @@ mod mac {
             /// of its own carry no partition list (the test
             /// `the_keychain_password_is_checked_and_partition_lists_are_absent`
             /// checks), so the access list is all that decides.
-            pub fn trust_also(&self, trusted: &Path, keychain_password: &[u8]) -> Result<(), String> {
+            pub fn trust_also(
+                &self,
+                trusted: &Path,
+                keychain_password: &[u8],
+            ) -> Result<(), String> {
                 unsafe {
                     let access = self.access()?;
                     let mut app: CFTypeRef = std::ptr::null();
-                    status("SecTrustedApplicationCreateFromPath", SecTrustedApplicationCreateFromPath(c_path(trusted)?.as_ptr(), &mut app))?;
+                    status(
+                        "SecTrustedApplicationCreateFromPath",
+                        SecTrustedApplicationCreateFromPath(c_path(trusted)?.as_ptr(), &mut app),
+                    )?;
                     let app = Owned(app);
-                    let acls = Owned(SecAccessCopyMatchingACLList(access.0, kSecACLAuthorizationDecrypt));
+                    let acls = Owned(SecAccessCopyMatchingACLList(
+                        access.0,
+                        kSecACLAuthorizationDecrypt,
+                    ));
                     if acls.0.is_null() || CFArrayGetCount(acls.0) == 0 {
                         return Err("the item has no decrypt entry".into());
                     }
                     for i in 0..CFArrayGetCount(acls.0) {
                         let acl = CFArrayGetValueAtIndex(acls.0, i);
-                        let (mut apps, mut desc, mut prompt): (CFTypeRef, CFTypeRef, u16) = (std::ptr::null(), std::ptr::null(), 0);
-                        status("SecACLCopyContents", SecACLCopyContents(acl, &mut apps, &mut desc, &mut prompt))?;
+                        let (mut apps, mut desc, mut prompt): (CFTypeRef, CFTypeRef, u16) =
+                            (std::ptr::null(), std::ptr::null(), 0);
+                        status(
+                            "SecACLCopyContents",
+                            SecACLCopyContents(acl, &mut apps, &mut desc, &mut prompt),
+                        )?;
                         let (apps, desc) = (Owned(apps), Owned(desc));
                         if apps.0.is_null() {
                             continue; // already open to any application
                         }
-                        let mut list: Vec<CFTypeRef> = (0..CFArrayGetCount(apps.0)).map(|k| CFArrayGetValueAtIndex(apps.0, k)).collect();
+                        let mut list: Vec<CFTypeRef> = (0..CFArrayGetCount(apps.0))
+                            .map(|k| CFArrayGetValueAtIndex(apps.0, k))
+                            .collect();
                         if list.iter().any(|a| CFEqual(*a, app.0) != 0) {
                             continue;
                         }
                         list.push(app.0);
-                        let new = Owned(CFArrayCreate(std::ptr::null(), list.as_ptr(), list.len() as isize, kCFTypeArrayCallBacks.as_ptr() as *const c_void));
+                        let new = Owned(CFArrayCreate(
+                            std::ptr::null(),
+                            list.as_ptr(),
+                            list.len() as isize,
+                            kCFTypeArrayCallBacks.as_ptr() as *const c_void,
+                        ));
                         if new.0.is_null() {
                             return Err("out of memory".into());
                         }
-                        status("SecACLSetContents", SecACLSetContents(acl, new.0, desc.0, prompt))?;
+                        status(
+                            "SecACLSetContents",
+                            SecACLSetContents(acl, new.0, desc.0, prompt),
+                        )?;
                     }
                     self.set_access_with(&access, keychain_password)
                 }
@@ -1425,11 +1761,27 @@ mod mac {
             pub fn partitions(&self) -> Result<Vec<String>, String> {
                 unsafe {
                     let access = self.access()?;
-                    let parts = Owned(SecAccessCopyMatchingACLList(access.0, kSecACLAuthorizationPartitionID));
+                    let parts = Owned(SecAccessCopyMatchingACLList(
+                        access.0,
+                        kSecACLAuthorizationPartitionID,
+                    ));
                     let mut out = Vec::new();
-                    for i in 0..if parts.0.is_null() { 0 } else { CFArrayGetCount(parts.0) } {
-                        let (mut apps, mut desc, mut prompt): (CFTypeRef, CFTypeRef, u16) = (std::ptr::null(), std::ptr::null(), 0);
-                        status("SecACLCopyContents", SecACLCopyContents(CFArrayGetValueAtIndex(parts.0, i), &mut apps, &mut desc, &mut prompt))?;
+                    for i in 0..if parts.0.is_null() {
+                        0
+                    } else {
+                        CFArrayGetCount(parts.0)
+                    } {
+                        let (mut apps, mut desc, mut prompt): (CFTypeRef, CFTypeRef, u16) =
+                            (std::ptr::null(), std::ptr::null(), 0);
+                        status(
+                            "SecACLCopyContents",
+                            SecACLCopyContents(
+                                CFArrayGetValueAtIndex(parts.0, i),
+                                &mut apps,
+                                &mut desc,
+                                &mut prompt,
+                            ),
+                        )?;
                         let (_apps, desc) = (Owned(apps), Owned(desc));
                         if let Some(xml) = cf_string(desc.0).and_then(|h| unhex(&h)) {
                             out.push(xml);
@@ -1441,13 +1793,24 @@ mod mac {
 
             fn access(&self) -> Result<Owned, String> {
                 let mut access: CFTypeRef = std::ptr::null();
-                status("SecKeychainItemCopyAccess", unsafe { SecKeychainItemCopyAccess(self.0 .0, &mut access) })?;
+                status("SecKeychainItemCopyAccess", unsafe {
+                    SecKeychainItemCopyAccess(self.0 .0, &mut access)
+                })?;
                 Ok(Owned(access))
             }
 
-            fn set_access_with(&self, access: &Owned, keychain_password: &[u8]) -> Result<(), String> {
+            fn set_access_with(
+                &self,
+                access: &Owned,
+                keychain_password: &[u8],
+            ) -> Result<(), String> {
                 let st = unsafe {
-                    SecKeychainItemSetAccessWithPassword(self.0 .0, access.0, keychain_password.len() as u32, keychain_password.as_ptr() as *const c_void)
+                    SecKeychainItemSetAccessWithPassword(
+                        self.0 .0,
+                        access.0,
+                        keychain_password.len() as u32,
+                        keychain_password.as_ptr() as *const c_void,
+                    )
                 };
                 status("SecKeychainItemSetAccessWithPassword", st)
             }
@@ -1459,7 +1822,9 @@ mod mac {
         /// password, which macOS authorises only with the right one. The
         /// password stays what it was.
         pub fn password_opens(keychain: &Path, password: &[u8]) -> bool {
-            let Ok(kc) = keychain_ref(Some(keychain)) else { return false };
+            let Ok(kc) = keychain_ref(Some(keychain)) else {
+                return false;
+            };
             let len = password.len() as u32;
             let p = password.as_ptr() as *const c_void;
             unsafe { SecKeychainChangePassword(kc.0, len, p, len, p) == 0 }
@@ -1474,10 +1839,12 @@ mod mac {
             unsafe {
                 let len = CFStringGetLength(s);
                 let mut buf = vec![0u8; (len as usize) * 4 + 1];
-                (CFStringGetCString(s, buf.as_mut_ptr() as *mut c_char, buf.len() as isize, UTF8) != 0).then(|| {
-                    let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
-                    String::from_utf8_lossy(&buf[..end]).into_owned()
-                })
+                (CFStringGetCString(s, buf.as_mut_ptr() as *mut c_char, buf.len() as isize, UTF8)
+                    != 0)
+                    .then(|| {
+                        let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+                        String::from_utf8_lossy(&buf[..end]).into_owned()
+                    })
             }
         }
 
@@ -1487,7 +1854,10 @@ mod mac {
             if !b.len().is_multiple_of(2) {
                 return None;
             }
-            let v: Option<Vec<u8>> = b.chunks(2).map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok()).collect();
+            let v: Option<Vec<u8>> = b
+                .chunks(2)
+                .map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
+                .collect();
             String::from_utf8(v?).ok()
         }
 
@@ -1495,13 +1865,25 @@ mod mac {
         /// user's search list when `None`), with its data when `data` (a
         /// read the item's access list governs, so possibly a prompt) or
         /// without (never a prompt). `Err` is the OSStatus.
-        pub fn find(keychain: Option<&Path>, service: &str, account: &str, data: bool) -> Result<Found, OSStatus> {
+        pub fn find(
+            keychain: Option<&Path>,
+            service: &str,
+            account: &str,
+            data: bool,
+        ) -> Result<Found, OSStatus> {
             let search = match keychain {
                 None => None,
                 Some(p) => {
                     let kc = keychain_ref(Some(p)).map_err(|_| -25294)?; // errSecNoSuchKeychain
                     let kcs = [kc.0];
-                    let list = Owned(unsafe { CFArrayCreate(std::ptr::null(), kcs.as_ptr(), 1, kCFTypeArrayCallBacks.as_ptr() as *const c_void) });
+                    let list = Owned(unsafe {
+                        CFArrayCreate(
+                            std::ptr::null(),
+                            kcs.as_ptr(),
+                            1,
+                            kCFTypeArrayCallBacks.as_ptr() as *const c_void,
+                        )
+                    });
                     Some((kc, list))
                 }
             };
@@ -1517,7 +1899,11 @@ mod mac {
                     account.len() as u32,
                     account.as_ptr() as *const c_char,
                     if data { &mut len } else { std::ptr::null_mut() },
-                    if data { &mut bytes } else { std::ptr::null_mut() },
+                    if data {
+                        &mut bytes
+                    } else {
+                        std::ptr::null_mut()
+                    },
                     &mut item,
                 )
             };
@@ -1526,7 +1912,9 @@ mod mac {
                 return Err(st);
             }
             let secret = (data && !bytes.is_null()).then(|| unsafe {
-                let v = Zeroizing::new(std::slice::from_raw_parts(bytes as *const u8, len as usize).to_vec());
+                let v = Zeroizing::new(
+                    std::slice::from_raw_parts(bytes as *const u8, len as usize).to_vec(),
+                );
                 std::ptr::write_bytes(bytes as *mut u8, 0, len as usize);
                 SecKeychainItemFreeContent(std::ptr::null_mut(), bytes);
                 v
@@ -1540,7 +1928,10 @@ mod mac {
             let exe = std::env::current_exe()?.canonicalize()?;
             Ok(exe
                 .ancestors()
-                .find(|p| p.extension().is_some_and(|e| e == "app") && exe.starts_with(p.join("Contents").join("MacOS")))
+                .find(|p| {
+                    p.extension().is_some_and(|e| e == "app")
+                        && exe.starts_with(p.join("Contents").join("MacOS"))
+                })
                 .map(Path::to_path_buf)
                 .unwrap_or(exe))
         }
@@ -1550,7 +1941,11 @@ mod mac {
         /// (`LIGUS_APPLE_TEAM_ID` at build time) and runs from an app bundle.
         /// `None` for development builds and the CLI.
         pub fn requirement_for(binary: &Path) -> Option<String> {
-            requirement_as(option_env!("LIGUS_APPLE_TEAM_ID"), binary, super::super::binary_identifier())
+            requirement_as(
+                option_env!("LIGUS_APPLE_TEAM_ID"),
+                binary,
+                super::super::binary_identifier(),
+            )
         }
 
         /// Ligus's designated requirement for team `team`, when `binary` is
@@ -1564,7 +1959,11 @@ mod mac {
         /// signing identifier (`identifier`, see
         /// [`super::super::set_binary_identifier`]), the requirement for
         /// that identifier whether or not it runs from an app bundle.
-        pub fn requirement_as(team: Option<&str>, binary: &Path, identifier: Option<&str>) -> Option<String> {
+        pub fn requirement_as(
+            team: Option<&str>,
+            binary: &Path,
+            identifier: Option<&str>,
+        ) -> Option<String> {
             let team = team.map(str::trim).filter(|t| !t.is_empty())?;
             let id = match identifier.map(str::trim).filter(|i| !i.is_empty()) {
                 Some(id) => id,
@@ -1586,7 +1985,10 @@ mod mac {
 
         /// Whether the running code satisfies `req`.
         pub fn check_self_against(req: &str) -> Result<(), SecretError> {
-            let req: SecRequirement = req.parse().map_err(|e: security_framework::base::Error| backend_err("keychain", e.to_string()))?;
+            let req: SecRequirement =
+                req.parse().map_err(|e: security_framework::base::Error| {
+                    backend_err("keychain", e.to_string())
+                })?;
             SecCode::for_self(Flags::NONE).and_then(|c| c.check_validity(Flags::NONE, &req)).map_err(|e| {
                 backend_err("keychain", format!("this app isn't signed as Ligus ({e}), so it won't hold the keychain's unlock password"))
             })
@@ -1618,14 +2020,33 @@ mod mac {
             let kc = keychain_ref(keychain)?;
             let access = access_for(trusted, label)?;
             let mut attrs = vec![
-                Attribute { tag: SERVICE, length: service.len() as u32, data: service.as_ptr() as *mut c_void },
-                Attribute { tag: ACCOUNT, length: account.len() as u32, data: account.as_ptr() as *mut c_void },
-                Attribute { tag: LABEL, length: label.len() as u32, data: label.as_ptr() as *mut c_void },
+                Attribute {
+                    tag: SERVICE,
+                    length: service.len() as u32,
+                    data: service.as_ptr() as *mut c_void,
+                },
+                Attribute {
+                    tag: ACCOUNT,
+                    length: account.len() as u32,
+                    data: account.as_ptr() as *mut c_void,
+                },
+                Attribute {
+                    tag: LABEL,
+                    length: label.len() as u32,
+                    data: label.as_ptr() as *mut c_void,
+                },
             ];
             if let Some(c) = comment {
-                attrs.push(Attribute { tag: COMMENT, length: c.len() as u32, data: c.as_ptr() as *mut c_void });
+                attrs.push(Attribute {
+                    tag: COMMENT,
+                    length: c.len() as u32,
+                    data: c.as_ptr() as *mut c_void,
+                });
             }
-            let mut attr_list = AttributeList { count: attrs.len() as u32, attr: attrs.as_mut_ptr() };
+            let mut attr_list = AttributeList {
+                count: attrs.len() as u32,
+                attr: attrs.as_mut_ptr(),
+            };
             let mut item: CFTypeRef = std::ptr::null();
             let st = unsafe {
                 SecKeychainItemCreateFromContent(
@@ -1674,7 +2095,9 @@ impl SecretStore for Unavailable {
 /// The keychain, or, when it can't be used, a store that refuses with a
 /// clear error (macOS never degrades to plain files unless asked).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn keychain_or_refuse<S: SecretStore + 'static>(keychain: Result<S, SecretError>) -> Arc<dyn SecretStore> {
+fn keychain_or_refuse<S: SecretStore + 'static>(
+    keychain: Result<S, SecretError>,
+) -> Arc<dyn SecretStore> {
     match keychain {
         Ok(k) => Arc::new(k),
         Err(e) => {
@@ -1694,7 +2117,9 @@ fn keychain_or_refuse<S: SecretStore + 'static>(keychain: Result<S, SecretError>
 
 fn on_path(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).map(|d| d.join(bin)).find(|p| p.is_file())
+    std::env::split_paths(&path)
+        .map(|d| d.join(bin))
+        .find(|p| p.is_file())
 }
 
 /// Open the store for `data_dir`: `choice` (`keychain`, `secret-service`,
@@ -1703,7 +2128,9 @@ fn on_path(bin: &str) -> Option<PathBuf> {
 /// macOS keychain: that one refuses ([`Unavailable`]) unless `file` was
 /// chosen.
 pub fn open(data_dir: &Path, choice: Option<&str>) -> Arc<dyn SecretStore> {
-    let choice = choice.map(|c| c.trim().to_ascii_lowercase()).filter(|c| !c.is_empty());
+    let choice = choice
+        .map(|c| c.trim().to_ascii_lowercase())
+        .filter(|c| !c.is_empty());
     let fallback = |why: String| -> Arc<dyn SecretStore> {
         tracing::warn!(target: "secrets", "{why}; keeping Ligus's secrets in owner-only files under the data dir (run `ligus doctor`)");
         Arc::new(File0600::new(data_dir))
@@ -1711,13 +2138,18 @@ pub fn open(data_dir: &Path, choice: Option<&str>) -> Arc<dyn SecretStore> {
     // A test never reaches an OS secret store on its own: on macOS the Ligus
     // keychain's unlock password goes in the login keychain. Only
     // `LIGUS_TEST_KEYCHAIN=1` lets one through (the k8s mount is a file).
-    if crate::executor::cli_home::in_test_binary() && !crate::executor::cli_home::test_keychain_opt_in() && choice.as_deref() != Some("k8s") {
+    if crate::executor::cli_home::in_test_binary()
+        && !crate::executor::cli_home::test_keychain_opt_in()
+        && choice.as_deref() != Some("k8s")
+    {
         return Arc::new(File0600::new(data_dir));
     }
     match choice.as_deref() {
         Some("file") => return Arc::new(File0600::new(data_dir)),
         Some("k8s") => {
-            let mount = ligus_core::names::var_os("LIGUS_SECRETS_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(K8S_SECRETS_DIR_DEFAULT));
+            let mount = ligus_core::names::var_os("LIGUS_SECRETS_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(K8S_SECRETS_DIR_DEFAULT));
             return Arc::new(K8sSecretFile::new(mount, data_dir));
         }
         Some("secret-service") => {
@@ -1747,7 +2179,13 @@ pub fn open(data_dir: &Path, choice: Option<&str>) -> Arc<dyn SecretStore> {
             if let Some(bin) = on_path("secret-tool") {
                 let s = SecretService::new(bin);
                 // A probe lookup: exit 0 or 1 means the service answered.
-                if run(&s.bin, &["lookup", "service", SERVICE, "account", "probe:probe"], None).is_ok_and(|o| o.status.code().is_some_and(|c| c <= 1)) {
+                if run(
+                    &s.bin,
+                    &["lookup", "service", SERVICE, "account", "probe:probe"],
+                    None,
+                )
+                .is_ok_and(|o| o.status.code().is_some_and(|c| c <= 1))
+                {
                     return Arc::new(s);
                 }
             }
@@ -1770,7 +2208,12 @@ fn systemd_creds(data_dir: &Path) -> Option<SystemdCreds> {
     let probe = SecretId::new("probe", "probe");
     for user in [!is_root(), false] {
         let s = SystemdCreds::new(&bin, data_dir, user);
-        if s.put(&probe, b"ok").is_ok() && s.get(&probe).ok().flatten().is_some_and(|v| v.as_slice() == b"ok") {
+        if s.put(&probe, b"ok").is_ok()
+            && s.get(&probe)
+                .ok()
+                .flatten()
+                .is_some_and(|v| v.as_slice() == b"ok")
+        {
             let _ = s.delete(&probe);
             return Some(s);
         }
@@ -1827,7 +2270,9 @@ pub fn without_prompts<T>(f: impl FnOnce() -> T) -> T {
 /// [`File0600`].
 pub fn for_data_dir(data_dir: &Path) -> Arc<dyn SecretStore> {
     let mut map = stores().lock().unwrap_or_else(|e| e.into_inner());
-    map.entry(data_dir.to_path_buf()).or_insert_with(|| Arc::new(File0600::new(data_dir))).clone()
+    map.entry(data_dir.to_path_buf())
+        .or_insert_with(|| Arc::new(File0600::new(data_dir)))
+        .clone()
 }
 
 /// The store [`init_for_data_dir`] or [`set_for_data_dir`] chose for
@@ -1835,13 +2280,20 @@ pub fn for_data_dir(data_dir: &Path) -> Arc<dyn SecretStore> {
 /// falls back to plain files: the event store moves its seeds only into a
 /// store the host picked (identity model v2, 10.3).
 pub fn registered(data_dir: &Path) -> Option<Arc<dyn SecretStore>> {
-    stores().lock().unwrap_or_else(|e| e.into_inner()).get(data_dir).cloned()
+    stores()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(data_dir)
+        .cloned()
 }
 
 /// Use `store` for `data_dir` from now on in this process (tests, and hosts
 /// that choose a backend from their own config).
 pub fn set_for_data_dir(data_dir: &Path, store: Arc<dyn SecretStore>) {
-    stores().lock().unwrap_or_else(|e| e.into_inner()).insert(data_dir.to_path_buf(), store);
+    stores()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(data_dir.to_path_buf(), store);
 }
 
 // ---------------------------------------------------------------------------
@@ -1864,13 +2316,20 @@ impl StoreKeyVault {
 }
 
 impl crate::identity_store::KeyVault for StoreKeyVault {
-    fn store_seed(&self, key_id: &str, seed: &[u8; 32]) -> Result<(), crate::identity_store::IdentityError> {
+    fn store_seed(
+        &self,
+        key_id: &str,
+        seed: &[u8; 32],
+    ) -> Result<(), crate::identity_store::IdentityError> {
         crate::secret_redact::register_bytes(seed);
         self.store
             .put(&SecretId::new("seed", key_id), seed)
             .map_err(|e| crate::identity_store::IdentityError::Vault(e.to_string()))
     }
-    fn load_seed(&self, key_id: &str) -> Result<Option<[u8; 32]>, crate::identity_store::IdentityError> {
+    fn load_seed(
+        &self,
+        key_id: &str,
+    ) -> Result<Option<[u8; 32]>, crate::identity_store::IdentityError> {
         let v = self
             .store
             .get(&SecretId::new("seed", key_id))
@@ -1878,10 +2337,9 @@ impl crate::identity_store::KeyVault for StoreKeyVault {
         match v {
             None => Ok(None),
             Some(b) => {
-                let seed: [u8; 32] = b
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| crate::identity_store::IdentityError::MissingSeed(key_id.to_string()))?;
+                let seed: [u8; 32] = b.as_slice().try_into().map_err(|_| {
+                    crate::identity_store::IdentityError::MissingSeed(key_id.to_string())
+                })?;
                 crate::secret_redact::register_bytes(&seed);
                 Ok(Some(seed))
             }
@@ -1904,7 +2362,8 @@ pub fn placeholder() -> serde_json::Value {
 }
 
 fn is_placeholder(v: &serde_json::Value) -> bool {
-    v.as_object().is_some_and(|o| o.len() == 1 && o.get("set") == Some(&serde_json::Value::Bool(true)))
+    v.as_object()
+        .is_some_and(|o| o.len() == 1 && o.get("set") == Some(&serde_json::Value::Bool(true)))
 }
 
 /// A visitor of one secret slot: `(name, the object holding it, its key)`.
@@ -1920,23 +2379,35 @@ fn visit(root: &mut serde_json::Value, paths: SecretPaths, f: &mut SlotFn<'_>) {
     }
 }
 
-fn walk(
-    node: &mut serde_json::Value,
-    parts: &[&str],
-    prefix: String,
-    f: &mut SlotFn<'_>,
-) {
-    let Some((head, rest)) = parts.split_first() else { return };
-    let join = |p: &str, k: &str| if p.is_empty() { k.to_string() } else { format!("{p}/{k}") };
-    if let Some((field, key)) = head.split_once('[').and_then(|(k, r)| r.strip_suffix(']').map(|n| (k, n))) {
-        let Some(arr) = node.get_mut(field).and_then(|v| v.as_array_mut()) else { return };
+fn walk(node: &mut serde_json::Value, parts: &[&str], prefix: String, f: &mut SlotFn<'_>) {
+    let Some((head, rest)) = parts.split_first() else {
+        return;
+    };
+    let join = |p: &str, k: &str| {
+        if p.is_empty() {
+            k.to_string()
+        } else {
+            format!("{p}/{k}")
+        }
+    };
+    if let Some((field, key)) = head
+        .split_once('[')
+        .and_then(|(k, r)| r.strip_suffix(']').map(|n| (k, n)))
+    {
+        let Some(arr) = node.get_mut(field).and_then(|v| v.as_array_mut()) else {
+            return;
+        };
         for el in arr.iter_mut() {
-            let Some(id) = el.get(key).and_then(|v| v.as_str()).map(str::to_string) else { continue };
+            let Some(id) = el.get(key).and_then(|v| v.as_str()).map(str::to_string) else {
+                continue;
+            };
             walk(el, rest, join(&join(&prefix, field), &id), f);
         }
         return;
     }
-    let Some(obj) = node.as_object_mut() else { return };
+    let Some(obj) = node.as_object_mut() else {
+        return;
+    };
     if rest.is_empty() {
         if *head == "*" {
             let keys: Vec<String> = obj.keys().cloned().collect();
@@ -1962,11 +2433,15 @@ fn walk(
 
 /// Take every secret out of `root`, leaving `{"set": true}` (null and empty
 /// values are just dropped). Returns name → the secret's JSON.
-pub fn split(root: &mut serde_json::Value, paths: SecretPaths) -> BTreeMap<String, serde_json::Value> {
+pub fn split(
+    root: &mut serde_json::Value,
+    paths: SecretPaths,
+) -> BTreeMap<String, serde_json::Value> {
     let mut out = BTreeMap::new();
     visit(root, paths, &mut |name, obj, key| {
         let Some(v) = obj.get(key) else { return };
-        let empty = v.is_null() || v.as_str() == Some("") || v.as_array().is_some_and(Vec::is_empty);
+        let empty =
+            v.is_null() || v.as_str() == Some("") || v.as_array().is_some_and(Vec::is_empty);
         if is_placeholder(v) {
             return;
         }
@@ -1984,7 +2459,11 @@ pub fn split(root: &mut serde_json::Value, paths: SecretPaths) -> BTreeMap<Strin
 /// secret is missing, and any plaintext value left in the file (a file from
 /// before secrets moved to the store, or edited by hand), is dropped.
 /// Returns whether the file held plaintext that must be rewritten.
-pub fn merge(root: &mut serde_json::Value, paths: SecretPaths, get: &dyn Fn(&str) -> Option<serde_json::Value>) -> bool {
+pub fn merge(
+    root: &mut serde_json::Value,
+    paths: SecretPaths,
+    get: &dyn Fn(&str) -> Option<serde_json::Value>,
+) -> bool {
     let mut scrubbed = false;
     visit(root, paths, &mut |name, obj, key| {
         let Some(v) = obj.get(key) else { return };
@@ -2008,10 +2487,17 @@ pub fn merge(root: &mut serde_json::Value, paths: SecretPaths, get: &dyn Fn(&str
 /// Persist `secrets` (from [`split`]) under scope `scope`, deleting names a
 /// previous save stored that are gone now. Writes only what changed since
 /// this process last saved.
-pub fn persist(store: &dyn SecretStore, scope: &'static str, secrets: &BTreeMap<String, serde_json::Value>) -> Result<(), SecretError> {
+pub fn persist(
+    store: &dyn SecretStore,
+    scope: &'static str,
+    secrets: &BTreeMap<String, serde_json::Value>,
+) -> Result<(), SecretError> {
     static LAST: OnceLock<Written> = OnceLock::new();
     use sha2::{Digest, Sha256};
-    let mut last = LAST.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let mut last = LAST
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let index_id = SecretId::new(scope, "__index");
     let previous: Vec<String> = store
         .get(&index_id)?
@@ -2040,7 +2526,11 @@ pub fn persist(store: &dyn SecretStore, scope: &'static str, secrets: &BTreeMap<
 }
 
 /// Read a secret saved by [`persist`].
-pub fn load_json(store: &dyn SecretStore, scope: &'static str, name: &str) -> Option<serde_json::Value> {
+pub fn load_json(
+    store: &dyn SecretStore,
+    scope: &'static str,
+    name: &str,
+) -> Option<serde_json::Value> {
     let b = store.get(&SecretId::new(scope, name)).ok()??;
     let v: serde_json::Value = serde_json::from_slice(&b).ok()?;
     register_strings(&v);
@@ -2058,7 +2548,8 @@ pub fn save_settings_json(
 ) -> Result<(), SecretError> {
     let secrets = split(&mut value, paths);
     persist(store, scope, &secrets)?;
-    let text = serde_json::to_vec_pretty(&value).map_err(|e| backend_err("settings", e.to_string()))?;
+    let text =
+        serde_json::to_vec_pretty(&value).map_err(|e| backend_err("settings", e.to_string()))?;
     write_private_atomic(path, &text)?;
     Ok(())
 }
@@ -2098,7 +2589,10 @@ mod tests {
         assert_eq!(store.get(&id).unwrap().unwrap().as_slice(), b"sk-test-2");
         let seed = SecretId::new("seed", "device:0b4c");
         store.put(&seed, &[0u8, 1, 2, 255, 10, 13]).unwrap();
-        assert_eq!(store.get(&seed).unwrap().unwrap().as_slice(), &[0u8, 1, 2, 255, 10, 13]);
+        assert_eq!(
+            store.get(&seed).unwrap().unwrap().as_slice(),
+            &[0u8, 1, 2, 255, 10, 13]
+        );
         store.delete(&id).unwrap();
         assert!(store.get(&id).unwrap().is_none());
         store.delete(&id).unwrap();
@@ -2124,8 +2618,13 @@ mod tests {
             assert_eq!(mode(&dir.path().join("secrets")), 0o700);
         }
         // Seeds keep the historical keys/<id>.seed layout (FileKeyVault).
-        store.put(&SecretId::new("seed", "account:abc"), &[7; 32]).unwrap();
-        assert_eq!(std::fs::read(dir.path().join("keys/account_abc.seed")).unwrap(), vec![7; 32]);
+        store
+            .put(&SecretId::new("seed", "account:abc"), &[7; 32])
+            .unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join("keys/account_abc.seed")).unwrap(),
+            vec![7; 32]
+        );
     }
 
     #[test]
@@ -2136,14 +2635,29 @@ mod tests {
         std::fs::write(mount.join("cli.token"), "hrt1-from-operator").unwrap();
         let store = K8sSecretFile::new(&mount, dir.path().join("data"));
         let token = SecretId::new("cli", "token");
-        assert_eq!(store.get(&token).unwrap().unwrap().as_slice(), b"hrt1-from-operator");
-        assert!(matches!(store.put(&token, b"x"), Err(SecretError::ReadOnly(_))), "a mounted Secret is read-only");
-        assert!(matches!(store.delete(&token), Err(SecretError::ReadOnly(_))), "and can't be deleted");
+        assert_eq!(
+            store.get(&token).unwrap().unwrap().as_slice(),
+            b"hrt1-from-operator"
+        );
+        assert!(
+            matches!(store.put(&token, b"x"), Err(SecretError::ReadOnly(_))),
+            "a mounted Secret is read-only"
+        );
+        assert!(
+            matches!(store.delete(&token), Err(SecretError::ReadOnly(_))),
+            "and can't be deleted"
+        );
         // Re-saving the value the Secret holds is a no-op, not an error (a
         // box re-saving its connection after redeeming an admission).
         store.put(&token, b"hrt1-from-operator").unwrap();
-        assert!(!dir.path().join("data/secrets/cli/token").exists(), "never copied into the data dir");
-        assert_eq!(store.get(&token).unwrap().unwrap().as_slice(), b"hrt1-from-operator");
+        assert!(
+            !dir.path().join("data/secrets/cli/token").exists(),
+            "never copied into the data dir"
+        );
+        assert_eq!(
+            store.get(&token).unwrap().unwrap().as_slice(),
+            b"hrt1-from-operator"
+        );
         roundtrip(&store);
     }
 
@@ -2157,13 +2671,19 @@ mod tests {
         let mount = dir.path().join("mount");
         std::fs::create_dir_all(&mount).unwrap();
         std::fs::write(mount.join("cli.key"), "ws-key").unwrap();
-        std::fs::set_permissions(mount.join("cli.key"), std::fs::Permissions::from_mode(0o400)).unwrap();
+        std::fs::set_permissions(
+            mount.join("cli.key"),
+            std::fs::Permissions::from_mode(0o400),
+        )
+        .unwrap();
         std::fs::set_permissions(&mount, std::fs::Permissions::from_mode(0o500)).unwrap();
         let data = dir.path().join("data");
         let store = K8sSecretFile::new(&mount, &data);
         store.put(&SecretId::new("cli", "key"), b"ws-key").unwrap();
         store.put(&SecretId::new("cli", "ek"), b"[]").unwrap();
-        store.put(&SecretId::new("seed", "device:1"), &[9; 32]).unwrap();
+        store
+            .put(&SecretId::new("seed", "device:1"), &[9; 32])
+            .unwrap();
         assert_eq!(mode(&data.join("secrets/cli/ek")), 0o600);
         assert_eq!(mode(&data.join("secrets/cli")), 0o700);
         assert_eq!(mode(&data.join("secrets")), 0o700);
@@ -2188,9 +2708,16 @@ mod tests {
         let before = std::fs::metadata(&data).unwrap().permissions().mode() & 0o7777;
         let store = K8sSecretFile::new(&mount, &data);
         store.put(&SecretId::new("cli", "ek"), b"[]").unwrap();
-        store.put(&SecretId::new("seed", "device:1"), &[9; 32]).unwrap();
-        File0600::new(&data).put(&SecretId::new("cli", "token"), b"t").unwrap();
-        assert_eq!(std::fs::metadata(&data).unwrap().permissions().mode() & 0o7777, before);
+        store
+            .put(&SecretId::new("seed", "device:1"), &[9; 32])
+            .unwrap();
+        File0600::new(&data)
+            .put(&SecretId::new("cli", "token"), b"t")
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&data).unwrap().permissions().mode() & 0o7777,
+            before
+        );
         assert_eq!(mode(&data.join("secrets")), 0o700);
         assert_eq!(mode(&data.join("secrets/cli")), 0o700);
         assert_eq!(mode(&data.join("keys")), 0o700);
@@ -2202,7 +2729,11 @@ mod tests {
     fn fake_tool(dir: &Path, name: &str, body: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let p = dir.join(name);
-        std::fs::write(&p, format!("#!/bin/sh\nDB='{}'\n{body}\n", dir.join("db").display())).unwrap();
+        std::fs::write(
+            &p,
+            format!("#!/bin/sh\nDB='{}'\n{body}\n", dir.join("db").display()),
+        )
+        .unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::create_dir_all(dir.join("db")).unwrap();
         p
@@ -2227,7 +2758,9 @@ esac"#,
         let store = SecretService::new(&bin).with_service("ai.ligus.secrets.test");
         roundtrip(&store);
         // Values reach the service base64-encoded, never raw.
-        store.put(&SecretId::new("settings", "t"), b"plain-secret").unwrap();
+        store
+            .put(&SecretId::new("settings", "t"), b"plain-secret")
+            .unwrap();
         let stored: Vec<String> = std::fs::read_dir(dir.path().join("db"))
             .unwrap()
             .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
@@ -2251,11 +2784,18 @@ case "$1" in
 esac"#,
         );
         let data = dir.path().join("data");
-        let store = SystemdCreds { credentials_directory: None, ..SystemdCreds::new(&bin, &data, true) };
+        let store = SystemdCreds {
+            credentials_directory: None,
+            ..SystemdCreds::new(&bin, &data, true)
+        };
         roundtrip(&store);
-        store.put(&SecretId::new("cli", "token"), b"hrt1-secret").unwrap();
+        store
+            .put(&SecretId::new("cli", "token"), b"hrt1-secret")
+            .unwrap();
         let cred = data.join("credentials/ligus.cli.token.cred");
-        assert!(!std::fs::read_to_string(&cred).unwrap().contains("hrt1-secret"));
+        assert!(!std::fs::read_to_string(&cred)
+            .unwrap()
+            .contains("hrt1-secret"));
         #[cfg(unix)]
         {
             assert_eq!(mode(&cred), 0o600);
@@ -2265,8 +2805,18 @@ esac"#,
         let creds_dir = dir.path().join("run-creds");
         std::fs::create_dir_all(&creds_dir).unwrap();
         std::fs::write(creds_dir.join("ligus.cli.token"), "from-unit").unwrap();
-        let store = SystemdCreds { credentials_directory: Some(creds_dir), ..SystemdCreds::new(&bin, &data, true) };
-        assert_eq!(store.get(&SecretId::new("cli", "token")).unwrap().unwrap().as_slice(), b"from-unit");
+        let store = SystemdCreds {
+            credentials_directory: Some(creds_dir),
+            ..SystemdCreds::new(&bin, &data, true)
+        };
+        assert_eq!(
+            store
+                .get(&SecretId::new("cli", "token"))
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            b"from-unit"
+        );
     }
 
     /// A throwaway stand-in for the login keychain (tests never write to
@@ -2276,7 +2826,11 @@ esac"#,
         use security_framework::os::macos::keychain::CreateOptions;
         let path = dir.join("unlock-standin.keychain-db");
         let pw = uuid::Uuid::new_v4().simple().to_string();
-        CreateOptions::new().password(&pw).prompt_user(false).create(&path).unwrap();
+        CreateOptions::new()
+            .password(&pw)
+            .prompt_user(false)
+            .create(&path)
+            .unwrap();
         path
     }
 
@@ -2303,9 +2857,12 @@ esac"#,
         let unlock = throwaway_unlock_keychain(dir.path());
         let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
         let path = dir.path().join("secrets/ligus-test.keychain-db");
-        let store = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
+        let store =
+            MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
         roundtrip(&store);
-        store.put(&SecretId::new("settings", "probe"), b"keychain-secret").unwrap();
+        store
+            .put(&SecretId::new("settings", "probe"), b"keychain-secret")
+            .unwrap();
         // The secret isn't in the file in the clear, and the keychain file
         // lives under the data dir (which the agent sandbox denies).
         assert!(path.exists());
@@ -2313,18 +2870,35 @@ esac"#,
         assert!(!raw.windows(15).any(|w| w == b"keychain-secret"));
         // Reopening (a restart) finds the unlock password and the item.
         drop(store);
-        let again = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
-        assert_eq!(again.get(&SecretId::new("settings", "probe")).unwrap().unwrap().as_slice(), b"keychain-secret");
+        let again =
+            MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
+        assert_eq!(
+            again
+                .get(&SecretId::new("settings", "probe"))
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            b"keychain-secret"
+        );
         // The Ligus keychain is not in the user's search list, so a lookup
         // by service alone (what any process with keychain access does)
         // doesn't find Ligus's items.
-        let out = std::process::Command::new("/usr/bin/security").args(["find-generic-password", "-s", &service]).output().unwrap();
-        assert!(!out.status.success(), "found Ligus's item through the default search list");
+        let out = std::process::Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-s", &service])
+            .output()
+            .unwrap();
+        assert!(
+            !out.status.success(),
+            "found Ligus's item through the default search list"
+        );
         assert!(again.unlock_item_exists());
         let probe = MacKeychain::unopened(path.clone(), &service, Some(unlock.clone()));
         again.destroy().unwrap();
         assert!(!path.exists());
-        assert!(!probe.unlock_item_exists(), "the unlock password stayed behind");
+        assert!(
+            !probe.unlock_item_exists(),
+            "the unlock password stayed behind"
+        );
     }
 
     /// Track B residual 6: the unlock password's access list trusts only the
@@ -2341,20 +2915,36 @@ esac"#,
         let unlock = throwaway_unlock_keychain(dir.path());
         let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
         let path = dir.path().join("secrets/ligus-test.keychain-db");
-        let store = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
-        let out = std::process::Command::new("/usr/bin/security").arg("dump-keychain").arg("-a").arg(&unlock).output().unwrap();
+        let store =
+            MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
+        let out = std::process::Command::new("/usr/bin/security")
+            .arg("dump-keychain")
+            .arg("-a")
+            .arg(&unlock)
+            .output()
+            .unwrap();
         let dump = String::from_utf8_lossy(&out.stdout);
         let me = mac::acl::ligus_binary().unwrap();
         // `0: /path/to/binary (OK)` under each entry's applications.
         let apps: Vec<&str> = dump
             .lines()
             .map(str::trim)
-            .filter_map(|l| l.split_once(": /").filter(|(n, _)| n.chars().all(|c| c.is_ascii_digit())).map(|(_, rest)| rest))
+            .filter_map(|l| {
+                l.split_once(": /")
+                    .filter(|(n, _)| n.chars().all(|c| c.is_ascii_digit()))
+                    .map(|(_, rest)| rest)
+            })
             .collect();
         assert!(!apps.is_empty(), "no trusted applications listed:\n{dump}");
         let me = me.to_string_lossy();
-        assert!(apps.iter().all(|a| format!("/{a}").starts_with(&*me)), "trusts something other than the Ligus binary {me}:\n{dump}");
-        assert!(dump.contains("description: Ligus keychain unlock"), "not the explicit access list:\n{dump}");
+        assert!(
+            apps.iter().all(|a| format!("/{a}").starts_with(&*me)),
+            "trusts something other than the Ligus binary {me}:\n{dump}"
+        );
+        assert!(
+            dump.contains("description: Ligus keychain unlock"),
+            "not the explicit access list:\n{dump}"
+        );
         store.destroy().unwrap();
     }
 
@@ -2376,7 +2966,9 @@ esac"#,
         // No team id (a development build), or not an app bundle (the CLI):
         // no requirement, and the access list pins the binary's code hash.
         assert!(mac::acl::requirement(None, app).is_none());
-        assert!(mac::acl::requirement(Some("ABCDE12345"), Path::new("/usr/local/bin/ligus")).is_none());
+        assert!(
+            mac::acl::requirement(Some("ABCDE12345"), Path::new("/usr/local/bin/ligus")).is_none()
+        );
     }
 
     /// A standalone binary that names its identifier (the terminal app) gets
@@ -2392,7 +2984,10 @@ esac"#,
         assert!(mac::acl::check_self_against(&req).is_err());
         assert!(mac::acl::requirement_as(None, bin, Some("ai.ligus.term")).is_none());
         assert_eq!(mac::acl::requirement_as(Some("T"), bin, Some(" ")), None);
-        assert_eq!(mac::acl::requirement_as(Some("T"), Path::new("/A/Ligus.app"), None), mac::acl::requirement(Some("T"), Path::new("/A/Ligus.app")));
+        assert_eq!(
+            mac::acl::requirement_as(Some("T"), Path::new("/A/Ligus.app"), None),
+            mac::acl::requirement(Some("T"), Path::new("/A/Ligus.app"))
+        );
     }
 
     /// Keychain read failures are told apart by their OSStatus: only a real
@@ -2414,19 +3009,42 @@ esac"#,
         assert_eq!(classify(-34018), Denial::Other);
         let svc = "ai.ligus.secrets.unlock";
         let missing = unlock_error(-25300, svc).to_string();
-        assert!(missing.contains("missing from the login keychain"), "{missing}");
+        assert!(
+            missing.contains("missing from the login keychain"),
+            "{missing}"
+        );
         for code in [-128, -25293, -25308] {
             let e = unlock_error(code, svc).to_string();
             assert!(!e.contains("missing"), "{code}: {e}");
-            assert!(e.contains("didn't let Ligus read its keychain unlock password") && e.contains(svc) && e.contains("Always Allow"), "{code}: {e}");
+            assert!(
+                e.contains("didn't let Ligus read its keychain unlock password")
+                    && e.contains(svc)
+                    && e.contains("Always Allow"),
+                "{code}: {e}"
+            );
         }
-        assert!(unlock_error(-128, svc).to_string().contains("saved by a different Ligus build, or the prompt was denied"));
-        assert!(unlock_error(-128, svc).to_string().contains("same data dir"));
+        assert!(unlock_error(-128, svc)
+            .to_string()
+            .contains("saved by a different Ligus build, or the prompt was denied"));
+        assert!(unlock_error(-128, svc)
+            .to_string()
+            .contains("same data dir"));
         assert!(unlock_error(-25308, svc).to_string().contains("SSH"));
         assert!(unlock_error(-1, svc).to_string().contains("OSStatus -1"));
         let inner = item_error(-25308, "ai.ligus.secrets", "seed:device").to_string();
-        assert!(inner.contains("seed:device") && inner.contains("choose Cancel") && inner.contains("repairs") && inner.contains("CLI"), "{inner}");
-        for e in [missing, inner, unlock_error(-128, svc).to_string(), unlock_error(-25308, svc).to_string()] {
+        assert!(
+            inner.contains("seed:device")
+                && inner.contains("choose Cancel")
+                && inner.contains("repairs")
+                && inner.contains("CLI"),
+            "{inner}"
+        );
+        for e in [
+            missing,
+            inner,
+            unlock_error(-128, svc).to_string(),
+            unlock_error(-25308, svc).to_string(),
+        ] {
             assert!(!e.to_ascii_lowercase().contains("delete"), "{e}");
         }
     }
@@ -2442,10 +3060,26 @@ esac"#,
         let req = Some("anchor apple generic".to_string());
         let trust = repair_binary(req.clone(), |_| Ok(()), bin.clone()).unwrap();
         assert_eq!(trust.binary, bin);
-        assert!(trust.mark.starts_with("ligus-trust:") && trust.mark.len() == "ligus-trust:".len() + 16, "{}", trust.mark);
-        let other = repair_binary(Some("anchor apple generic and identifier x".into()), |_| Ok(()), bin.clone()).unwrap();
+        assert!(
+            trust.mark.starts_with("ligus-trust:") && trust.mark.len() == "ligus-trust:".len() + 16,
+            "{}",
+            trust.mark
+        );
+        let other = repair_binary(
+            Some("anchor apple generic and identifier x".into()),
+            |_| Ok(()),
+            bin.clone(),
+        )
+        .unwrap();
         assert_ne!(trust.mark, other.mark, "the mark follows the requirement");
-        assert_eq!(repair_binary(req, |_| Err(backend_err("keychain", "isn't signed as Ligus")), bin.clone()), None);
+        assert_eq!(
+            repair_binary(
+                req,
+                |_| Err(backend_err("keychain", "isn't signed as Ligus")),
+                bin.clone()
+            ),
+            None
+        );
         let mut checked = false;
         assert_eq!(
             repair_binary(
@@ -2476,9 +3110,18 @@ esac"#,
 
     #[cfg(target_os = "macos")]
     impl FakeItems {
-        fn new(items: &[(&str, &[u8])], password: &[u8], fail: Option<(&'static str, &'static str)>) -> Self {
+        fn new(
+            items: &[(&str, &[u8])],
+            password: &[u8],
+            fail: Option<(&'static str, &'static str)>,
+        ) -> Self {
             Self {
-                items: Mutex::new(items.iter().map(|(a, v)| (a.to_string(), v.to_vec())).collect()),
+                items: Mutex::new(
+                    items
+                        .iter()
+                        .map(|(a, v)| (a.to_string(), v.to_vec()))
+                        .collect(),
+                ),
                 password: password.to_vec(),
                 fail,
                 log: Mutex::default(),
@@ -2486,13 +3129,26 @@ esac"#,
         }
         fn step(&self, op: &'static str, account: &str) -> Result<(), String> {
             self.log.lock().unwrap().push(format!("{op} {account}"));
-            if self.fail == Some((op, if account.ends_with(".spare") { "spare" } else { "main" })) {
+            if self.fail
+                == Some((
+                    op,
+                    if account.ends_with(".spare") {
+                        "spare"
+                    } else {
+                        "main"
+                    },
+                ))
+            {
                 return Err(format!("injected {op} failure"));
             }
             Ok(())
         }
         fn holds(&self) -> bool {
-            self.items.lock().unwrap().values().any(|v| *v == self.password)
+            self.items
+                .lock()
+                .unwrap()
+                .values()
+                .any(|v| *v == self.password)
         }
         fn get(&self, account: &str) -> Option<Vec<u8>> {
             self.items.lock().unwrap().get(account).cloned()
@@ -2519,7 +3175,10 @@ esac"#,
         fn delete(&self, account: &str) -> Result<(), String> {
             self.step("delete", account)?;
             self.items.lock().unwrap().remove(account);
-            assert!(self.holds(), "no item held the unlock password after deleting {account}");
+            assert!(
+                self.holds(),
+                "no item held the unlock password after deleting {account}"
+            );
             Ok(())
         }
     }
@@ -2538,19 +3197,40 @@ esac"#,
         assert_eq!(f.get(main).as_deref(), Some(pw));
         assert_eq!(f.get(spare), None);
         let log = f.log.lock().unwrap().clone();
-        assert_eq!(log, ["create keychain:ab.spare", "delete keychain:ab", "create keychain:ab", "delete keychain:ab.spare"]);
+        assert_eq!(
+            log,
+            [
+                "create keychain:ab.spare",
+                "delete keychain:ab",
+                "create keychain:ab",
+                "delete keychain:ab.spare"
+            ]
+        );
         // Every failure keeps a copy, and the old item stays when the old
         // one can't be removed.
-        for fail in [("create", "spare"), ("delete", "main"), ("create", "main"), ("delete", "spare")] {
+        for fail in [
+            ("create", "spare"),
+            ("delete", "main"),
+            ("create", "main"),
+            ("delete", "spare"),
+        ] {
             let f = FakeItems::new(&[(main, pw)], pw, Some(fail));
             let r = replace_item(&f, main, spare, pw);
             assert!(r.is_err(), "{fail:?}");
             assert!(f.holds(), "{fail:?}: the password has no item");
             if fail == ("delete", "main") || fail == ("create", "spare") {
-                assert_eq!(f.get(main).as_deref(), Some(pw), "{fail:?}: the old item went");
+                assert_eq!(
+                    f.get(main).as_deref(),
+                    Some(pw),
+                    "{fail:?}: the old item went"
+                );
             }
             if fail == ("delete", "main") {
-                assert_eq!(f.get(spare).as_deref(), Some(pw), "the spare stays for a repair in progress elsewhere");
+                assert_eq!(
+                    f.get(spare).as_deref(),
+                    Some(pw),
+                    "the spare stays for a repair in progress elsewhere"
+                );
             }
         }
         // A stale spare with another value is replaced, not trusted.
@@ -2583,20 +3263,35 @@ esac"#,
         let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
         let path = dir.path().join("secrets/ligus-test.keychain-db");
         drop(MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap());
-        let store = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
+        let store =
+            MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
         assert_eq!(store.unlock_lookups(), 1);
         for i in 0..20 {
             let id = SecretId::new("settings", format!("k{i}"));
             store.put(&id, format!("v{i}").as_bytes()).unwrap();
-            assert_eq!(store.get(&id).unwrap().unwrap().as_slice(), format!("v{i}").as_bytes());
+            assert_eq!(
+                store.get(&id).unwrap().unwrap().as_slice(),
+                format!("v{i}").as_bytes()
+            );
             store.put(&id, b"again").unwrap();
             if i % 2 == 0 {
                 store.delete(&id).unwrap();
             }
         }
-        let st = std::process::Command::new("/usr/bin/security").arg("lock-keychain").arg(&path).status().unwrap();
+        let st = std::process::Command::new("/usr/bin/security")
+            .arg("lock-keychain")
+            .arg(&path)
+            .status()
+            .unwrap();
         assert!(st.success());
-        assert_eq!(store.get(&SecretId::new("settings", "k1")).unwrap().unwrap().as_slice(), b"again");
+        assert_eq!(
+            store
+                .get(&SecretId::new("settings", "k1"))
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            b"again"
+        );
         assert_eq!(store.unlock_lookups(), 1, "went back to the login keychain");
         store.destroy().unwrap();
     }
@@ -2618,39 +3313,92 @@ esac"#,
         let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
         let path = dir.path().join("secrets/ligus-test.keychain-db");
         let me = mac::acl::ligus_binary().unwrap();
-        let first = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
-        first.put(&SecretId::new("settings", "mine"), b"mine").unwrap();
+        let first =
+            MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
+        first
+            .put(&SecretId::new("settings", "mine"), b"mine")
+            .unwrap();
         for name in ["a", "b"] {
-            mac::acl::add_generic_password(Some(&path), &service, &format!("seed:{name}"), "other build", b"theirs", Path::new("/usr/bin/true"))
-                .unwrap();
+            mac::acl::add_generic_password(
+                Some(&path),
+                &service,
+                &format!("seed:{name}"),
+                "other build",
+                b"theirs",
+                Path::new("/usr/bin/true"),
+            )
+            .unwrap();
         }
-        let silent_read = |account: &str| mac::silently(|| mac::acl::find(Some(&path), &service, account, true)).map(|(v, _)| v.unwrap().to_vec());
+        let silent_read = |account: &str| {
+            mac::silently(|| mac::acl::find(Some(&path), &service, account, true))
+                .map(|(v, _)| v.unwrap().to_vec())
+        };
         let refused = silent_read("seed:a").unwrap_err();
-        assert!(matches!(mac::classify(refused), mac::Denial::Refused | mac::Denial::NoUi), "this build shouldn't be trusted yet: {refused}");
-        assert_eq!(first.probe(), mac::KeychainAccess::Trusted { untrusted: vec!["seed:a".into(), "seed:b".into()] });
+        assert!(
+            matches!(
+                mac::classify(refused),
+                mac::Denial::Refused | mac::Denial::NoUi
+            ),
+            "this build shouldn't be trusted yet: {refused}"
+        );
+        assert_eq!(
+            first.probe(),
+            mac::KeychainAccess::Trusted {
+                untrusted: vec!["seed:a".into(), "seed:b".into()]
+            }
+        );
         drop(first);
         // A development build doesn't touch them.
         drop(MacKeychain::open_as(path.clone(), &service, unlock.clone(), None).unwrap());
         assert!(silent_read("seed:a").is_err());
         // A release repairs them, keeping their values.
-        let release = MacKeychain::open_as(path.clone(), &service, unlock.clone(), Some(me.clone())).unwrap();
+        let release =
+            MacKeychain::open_as(path.clone(), &service, unlock.clone(), Some(me.clone())).unwrap();
         assert_eq!(silent_read("seed:a").unwrap(), b"theirs");
         assert_eq!(silent_read("seed:b").unwrap(), b"theirs");
         assert_eq!(silent_read("settings:mine").unwrap(), b"mine");
-        assert_eq!(release.probe(), mac::KeychainAccess::Trusted { untrusted: vec![] });
+        assert_eq!(
+            release.probe(),
+            mac::KeychainAccess::Trusted { untrusted: vec![] }
+        );
         // The other build's entries are gone (checked before any read that
         // could prompt), and no spare copy is left.
-        let dump = std::process::Command::new("/usr/bin/security").arg("dump-keychain").arg("-a").arg(&path).output().unwrap();
+        let dump = std::process::Command::new("/usr/bin/security")
+            .arg("dump-keychain")
+            .arg("-a")
+            .arg(&path)
+            .output()
+            .unwrap();
         let dump = String::from_utf8_lossy(&dump.stdout);
-        assert!(!dump.contains("/usr/bin/true") && !dump.contains("other build"), "{dump}");
+        assert!(
+            !dump.contains("/usr/bin/true") && !dump.contains("other build"),
+            "{dump}"
+        );
         assert!(!dump.contains(".spare"), "{dump}");
         assert!(dump.contains("ligus-trust:test"), "{dump}");
-        assert_eq!(release.get(&SecretId::new("seed", "a")).unwrap().unwrap().as_slice(), b"theirs");
+        assert_eq!(
+            release
+                .get(&SecretId::new("seed", "a"))
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            b"theirs"
+        );
         drop(release);
         // Marked now: the next start repairs nothing.
-        let again = MacKeychain::open_as(path.clone(), &service, unlock.clone(), Some(me.clone())).unwrap();
-        let dump2 = std::process::Command::new("/usr/bin/security").arg("dump-keychain").arg(&path).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&dump2.stdout).matches("\"acct\"").count(), 3);
+        let again =
+            MacKeychain::open_as(path.clone(), &service, unlock.clone(), Some(me.clone())).unwrap();
+        let dump2 = std::process::Command::new("/usr/bin/security")
+            .arg("dump-keychain")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&dump2.stdout)
+                .matches("\"acct\"")
+                .count(),
+            3
+        );
         let release = again;
         release.destroy().unwrap();
     }
@@ -2658,10 +3406,18 @@ esac"#,
     /// The unlock item's account and password in a throwaway unlock keychain.
     #[cfg(target_os = "macos")]
     fn throwaway_unlock_item(unlock: &Path, unlock_service: &str) -> (String, Vec<u8>) {
-        let out = std::process::Command::new("/usr/bin/security").args(["find-generic-password", "-s", unlock_service]).arg(unlock).output().unwrap();
+        let out = std::process::Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-s", unlock_service])
+            .arg(unlock)
+            .output()
+            .unwrap();
         let account = String::from_utf8_lossy(&out.stdout)
             .lines()
-            .find_map(|l| l.trim().strip_prefix("\"acct\"<blob>=\"").map(|a| a.trim_end_matches('"').to_string()))
+            .find_map(|l| {
+                l.trim()
+                    .strip_prefix("\"acct\"<blob>=\"")
+                    .map(|a| a.trim_end_matches('"').to_string())
+            })
             .unwrap();
         let (pw, _) = mac::acl::find(Some(unlock), unlock_service, &account, true).unwrap();
         (account, pw.unwrap().to_vec())
@@ -2682,23 +3438,48 @@ esac"#,
         let unlock = throwaway_unlock_keychain(dir.path());
         let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
         let path = dir.path().join("secrets/ligus-test.keychain-db");
-        let store = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
+        let store =
+            MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
         store.put(&SecretId::new("settings", "a"), b"kept").unwrap();
         let (_, pw) = throwaway_unlock_item(&unlock, &format!("{service}.unlock"));
         assert!(mac::acl::password_opens(&path, &pw));
-        assert!(!mac::acl::password_opens(&path, b"not-the-password"), "an unlocked keychain accepted a wrong password");
-        assert!(mac::acl::password_opens(&path, &pw), "the password stayed what it was");
-        assert_eq!(store.get(&SecretId::new("settings", "a")).unwrap().unwrap().as_slice(), b"kept");
+        assert!(
+            !mac::acl::password_opens(&path, b"not-the-password"),
+            "an unlocked keychain accepted a wrong password"
+        );
+        assert!(
+            mac::acl::password_opens(&path, &pw),
+            "the password stayed what it was"
+        );
+        assert_eq!(
+            store
+                .get(&SecretId::new("settings", "a"))
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            b"kept"
+        );
         let (_, item) = mac::acl::find(Some(&path), &service, "settings:a", false).unwrap();
         drop(store);
         // Another build's partition list (as `security` sets one).
         let st = std::process::Command::new("/usr/bin/security")
-            .args(["set-generic-password-partition-list", "-S", "teamid:ABCDE12345", "-s", &service, "-k"])
+            .args([
+                "set-generic-password-partition-list",
+                "-S",
+                "teamid:ABCDE12345",
+                "-s",
+                &service,
+                "-k",
+            ])
             .arg(String::from_utf8(pw.clone()).unwrap())
             .arg(&path)
             .output()
             .unwrap();
-        assert!(st.status.success(), "{}", String::from_utf8_lossy(&st.stderr));
+        assert!(
+            st.status.success(),
+            "{}",
+            String::from_utf8_lossy(&st.stderr)
+        );
         // A keychain file of its own keeps no partition list, even when
         // `security` is asked to set one: only the access list decides.
         assert_eq!(item.partitions().unwrap(), Vec::<String>::new());
@@ -2721,8 +3502,11 @@ esac"#,
         let unlock_service = format!("{service}.unlock");
         let path = dir.path().join("secrets/ligus-test.keychain-db");
         let me = mac::acl::ligus_binary().unwrap();
-        let store = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
-        store.put(&SecretId::new("settings", "probe"), b"kept").unwrap();
+        let store =
+            MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
+        store
+            .put(&SecretId::new("settings", "probe"), b"kept")
+            .unwrap();
         let account = String::from_utf8(
             std::process::Command::new("/usr/bin/security")
                 .args(["find-generic-password", "-s", &unlock_service])
@@ -2733,30 +3517,77 @@ esac"#,
         )
         .unwrap()
         .lines()
-        .find_map(|l| l.trim().strip_prefix("\"acct\"<blob>=\"").map(|a| a.trim_end_matches('"').to_string()))
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("\"acct\"<blob>=\"")
+                .map(|a| a.trim_end_matches('"').to_string())
+        })
         .unwrap();
         let spare = format!("{account}.spare");
         let (pw, main) = mac::acl::find(Some(&unlock), &unlock_service, &account, true).unwrap();
         let pw = pw.unwrap();
         drop(store);
         // Interrupted repair: only the spare is left.
-        mac::acl::add_generic_password(Some(&unlock), &unlock_service, &spare, "Ligus keychain unlock", &pw, &me).unwrap();
+        mac::acl::add_generic_password(
+            Some(&unlock),
+            &unlock_service,
+            &spare,
+            "Ligus keychain unlock",
+            &pw,
+            &me,
+        )
+        .unwrap();
         main.delete().unwrap();
         let dev = MacKeychain::open_as(path.clone(), &service, unlock.clone(), None).unwrap();
-        assert_eq!(dev.get(&SecretId::new("settings", "probe")).unwrap().unwrap().as_slice(), b"kept");
-        assert!(mac::acl::find(Some(&unlock), &unlock_service, &account, false).is_err(), "a development build rewrote the unlock item");
+        assert_eq!(
+            dev.get(&SecretId::new("settings", "probe"))
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            b"kept"
+        );
+        assert!(
+            mac::acl::find(Some(&unlock), &unlock_service, &account, false).is_err(),
+            "a development build rewrote the unlock item"
+        );
         drop(dev);
-        let release = MacKeychain::open_as(path.clone(), &service, unlock.clone(), Some(me.clone())).unwrap();
-        assert_eq!(release.get(&SecretId::new("settings", "probe")).unwrap().unwrap().as_slice(), b"kept");
-        let (again, _) = mac::silently(|| mac::acl::find(Some(&unlock), &unlock_service, &account, true)).unwrap();
-        assert_eq!(again.unwrap().as_slice(), pw.as_slice(), "the same password");
-        assert!(mac::acl::find(Some(&unlock), &unlock_service, &spare, false).is_err(), "the spare stayed");
+        let release =
+            MacKeychain::open_as(path.clone(), &service, unlock.clone(), Some(me.clone())).unwrap();
+        assert_eq!(
+            release
+                .get(&SecretId::new("settings", "probe"))
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            b"kept"
+        );
+        let (again, _) =
+            mac::silently(|| mac::acl::find(Some(&unlock), &unlock_service, &account, true))
+                .unwrap();
+        assert_eq!(
+            again.unwrap().as_slice(),
+            pw.as_slice(),
+            "the same password"
+        );
+        assert!(
+            mac::acl::find(Some(&unlock), &unlock_service, &spare, false).is_err(),
+            "the spare stayed"
+        );
         drop(release);
         // Saved by another build: the probe says so without asking.
         let (_, item) = mac::acl::find(Some(&unlock), &unlock_service, &account, false).unwrap();
-        mac::acl::add_generic_password(Some(&unlock), &unlock_service, &spare, "x", &pw, &me).unwrap();
+        mac::acl::add_generic_password(Some(&unlock), &unlock_service, &spare, "x", &pw, &me)
+            .unwrap();
         item.delete().unwrap();
-        mac::acl::add_generic_password(Some(&unlock), &unlock_service, &account, "Ligus keychain unlock", &pw, Path::new("/usr/bin/true")).unwrap();
+        mac::acl::add_generic_password(
+            Some(&unlock),
+            &unlock_service,
+            &account,
+            "Ligus keychain unlock",
+            &pw,
+            Path::new("/usr/bin/true"),
+        )
+        .unwrap();
         let (_, s) = mac::acl::find(Some(&unlock), &unlock_service, &spare, false).unwrap();
         s.delete().unwrap();
         let probe = MacKeychain::unopened(path.clone(), &service, Some(unlock.clone()));
@@ -2772,7 +3603,10 @@ esac"#,
         assert!(!set_binary_identifier("  "));
         let first = binary_identifier().is_none();
         assert!(set_binary_identifier("ai.ligus.test-binary") || !first);
-        assert!(!set_binary_identifier("ai.ligus.other") || binary_identifier() == Some("ai.ligus.other"));
+        assert!(
+            !set_binary_identifier("ai.ligus.other")
+                || binary_identifier() == Some("ai.ligus.other")
+        );
         assert!(binary_identifier().is_some());
     }
 
@@ -2783,16 +3617,29 @@ esac"#,
     #[test]
     fn an_unavailable_keychain_refuses_instead_of_degrading_to_files() {
         let dir = tempfile::tempdir().unwrap();
-        let store = keychain_or_refuse(Err::<File0600, _>(backend_err("keychain", "no keychain here")));
+        let store = keychain_or_refuse(Err::<File0600, _>(backend_err(
+            "keychain",
+            "no keychain here",
+        )));
         assert_eq!(store.backend(), Backend::Unavailable);
         assert!(!store.backend().is_plain_file());
         let id = SecretId::new("settings", "api_key");
         let err = store.put(&id, b"secret-value").unwrap_err().to_string();
-        assert!(err.contains("LIGUS_SECRET_BACKEND=file") && err.contains("no keychain here"), "{err}");
+        assert!(
+            err.contains("LIGUS_SECRET_BACKEND=file") && err.contains("no keychain here"),
+            "{err}"
+        );
         assert!(store.get(&id).is_err(), "a read doesn't pass for 'not set'");
         assert!(store.delete(&id).is_err());
-        assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none(), "something was written under the data dir");
-        assert_eq!(open(dir.path(), Some("file")).backend(), Backend::File0600, "the explicit opt-in");
+        assert!(
+            std::fs::read_dir(dir.path()).unwrap().next().is_none(),
+            "something was written under the data dir"
+        );
+        assert_eq!(
+            open(dir.path(), Some("file")).backend(),
+            Backend::File0600,
+            "the explicit opt-in"
+        );
     }
 
     /// Tests never open an OS secret store on their own (on macOS the Ligus
@@ -2805,10 +3652,26 @@ esac"#,
             eprintln!("skipped: LIGUS_TEST_KEYCHAIN=1 lets tests reach the keychain");
             return;
         }
-        for choice in [None, Some("keychain"), Some("secret-service"), Some("systemd-creds"), Some("")] {
+        for choice in [
+            None,
+            Some("keychain"),
+            Some("secret-service"),
+            Some("systemd-creds"),
+            Some(""),
+        ] {
             let dir = tempfile::tempdir().unwrap();
-            assert_eq!(open(dir.path(), choice).backend(), Backend::File0600, "{choice:?}");
-            assert!(!dir.path().join("secrets").join("ligus.keychain-db").exists(), "{choice:?}");
+            assert_eq!(
+                open(dir.path(), choice).backend(),
+                Backend::File0600,
+                "{choice:?}"
+            );
+            assert!(
+                !dir.path()
+                    .join("secrets")
+                    .join("ligus.keychain-db")
+                    .exists(),
+                "{choice:?}"
+            );
         }
     }
 
@@ -2889,7 +3752,14 @@ esac"#,
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         }
         let store = File0600::new(dir.path());
-        save_settings_json(&path, &store, "settings", serde_json::json!({ "api_key": "k" }), PATHS).unwrap();
+        save_settings_json(
+            &path,
+            &store,
+            "settings",
+            serde_json::json!({ "api_key": "k" }),
+            PATHS,
+        )
+        .unwrap();
         assert_eq!(mode(&path), 0o600);
     }
 
@@ -2898,15 +3768,31 @@ esac"#,
         let dir = tempfile::tempdir().unwrap();
         let store = File0600::new(dir.path().join("store"));
         let path = dir.path().join("settings.json");
-        let mut v = settings_with(&(0..8).map(|i| format!("secret-number-{i}")).collect::<Vec<_>>());
+        let mut v = settings_with(
+            &(0..8)
+                .map(|i| format!("secret-number-{i}"))
+                .collect::<Vec<_>>(),
+        );
         save_settings_json(&path, &store, "settings-del", v.clone(), PATHS).unwrap();
         v["provider_keys"].as_object_mut().unwrap().remove("openAI");
         v["workspaces"].as_array_mut().unwrap().remove(0);
         save_settings_json(&path, &store, "settings-del", v.clone(), PATHS).unwrap();
-        assert!(store.get(&SecretId::new("settings-del", "provider_keys/openAI")).unwrap().is_none());
-        assert!(store.get(&SecretId::new("settings-del", "workspaces/home/key")).unwrap().is_none());
-        assert!(store.get(&SecretId::new("settings-del", "provider_keys/anthropic")).unwrap().is_some());
-        assert_eq!(load_settings_json(&path, &store, "settings-del", PATHS).unwrap(), v);
+        assert!(store
+            .get(&SecretId::new("settings-del", "provider_keys/openAI"))
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get(&SecretId::new("settings-del", "workspaces/home/key"))
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get(&SecretId::new("settings-del", "provider_keys/anthropic"))
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            load_settings_json(&path, &store, "settings-del", PATHS).unwrap(),
+            v
+        );
     }
 
     #[test]
@@ -2917,7 +3803,11 @@ esac"#,
         let dir = tempfile::tempdir().unwrap();
         let store = File0600::new(dir.path().join("store"));
         let path = dir.path().join("settings.json");
-        let old = settings_with(&(0..8).map(|i| format!("old-plaintext-{i}")).collect::<Vec<_>>());
+        let old = settings_with(
+            &(0..8)
+                .map(|i| format!("old-plaintext-{i}"))
+                .collect::<Vec<_>>(),
+        );
         std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
         let loaded = load_settings_json(&path, &store, "settings-scrub", PATHS).unwrap();
         assert!(loaded.get("relay_access_token").is_none());
@@ -2925,7 +3815,13 @@ esac"#,
         assert_eq!(loaded["relay_url"], "https://relay.example");
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("old-plaintext"), "{text}");
-        assert!(store.get(&SecretId::new("settings-scrub", "relay_access_token")).unwrap().is_none(), "nothing was imported");
+        assert!(
+            store
+                .get(&SecretId::new("settings-scrub", "relay_access_token"))
+                .unwrap()
+                .is_none(),
+            "nothing was imported"
+        );
     }
 
     #[test]
@@ -2941,6 +3837,12 @@ esac"#,
         let stored = ids.bootstrap("Ana", "ana", "Mac").unwrap();
         assert!(ids.device_keypair(stored.device.id).is_ok());
         let ka = ids.key_agreement(stored.device.id).unwrap();
-        assert_eq!(ids.key_agreement(stored.device.id).unwrap().public_key_bytes(), ka.public_key_bytes(), "kept in the vault");
+        assert_eq!(
+            ids.key_agreement(stored.device.id)
+                .unwrap()
+                .public_key_bytes(),
+            ka.public_key_bytes(),
+            "kept in the vault"
+        );
     }
 }

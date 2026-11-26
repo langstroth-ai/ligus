@@ -539,10 +539,16 @@ kind = "local"
 endpoint = ""
 "#;
         let cfg = load_from_str(toml).unwrap();
-        assert_eq!(cfg.runtimes[0].provider_kind, ModelProviderKind::Antigravity);
+        assert_eq!(
+            cfg.runtimes[0].provider_kind,
+            ModelProviderKind::Antigravity
+        );
         assert_eq!(cfg.runtimes[0].endpoint, "agy");
         assert_eq!(cfg.runtimes[1].provider_kind, ModelProviderKind::Copilot);
-        assert!(load_from_str("[[runtimes]]\nid = \"x\"\nprovider = \"agy\"\nkind = \"local\"\nendpoint = \"\"\n").is_ok());
+        assert!(load_from_str(
+            "[[runtimes]]\nid = \"x\"\nprovider = \"agy\"\nkind = \"local\"\nendpoint = \"\"\n"
+        )
+        .is_ok());
     }
 
     #[test]
@@ -610,7 +616,10 @@ endpoint = "https://llm.example.com/v1/chat/completions"
         let mut rt = cfg.runtimes[0].clone();
         rt.allow_remote_file_tools = true;
         let out = serde_json::to_string(&rt).unwrap();
-        assert!(!out.to_lowercase().contains("remotefiletools") && !out.contains("allow_remote"), "{out}")
+        assert!(
+            !out.to_lowercase().contains("remotefiletools") && !out.contains("allow_remote"),
+            "{out}"
+        )
     }
 
     #[test]

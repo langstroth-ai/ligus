@@ -62,7 +62,8 @@ pub fn valid_rel_path(p: &str) -> bool {
         && !p.contains('\\')
         && !p.contains('\0')
         && !p.chars().any(char::is_control)
-        && p.split('/').all(|c| !c.is_empty() && c != "." && c != ".." && !c.eq_ignore_ascii_case(".git"))
+        && p.split('/')
+            .all(|c| !c.is_empty() && c != "." && c != ".." && !c.eq_ignore_ascii_case(".git"))
 }
 
 fn header_path(rest: &str) -> Option<String> {
@@ -70,16 +71,28 @@ fn header_path(rest: &str) -> Option<String> {
     if p == "/dev/null" {
         return None;
     }
-    let p = p.strip_prefix("a/").or_else(|| p.strip_prefix("b/")).unwrap_or(p);
+    let p = p
+        .strip_prefix("a/")
+        .or_else(|| p.strip_prefix("b/"))
+        .unwrap_or(p);
     Some(p.to_string())
 }
 
 /// `@@ -a,b +c,d @@` → (b, d); a missing count is 1.
 fn hunk_counts(line: &str) -> (usize, usize) {
     let mut out = (1, 1);
-    let ranges = line.trim_start_matches('@').split("@@").next().unwrap_or("");
+    let ranges = line
+        .trim_start_matches('@')
+        .split("@@")
+        .next()
+        .unwrap_or("");
     for tok in ranges.split_whitespace() {
-        let count = |rest: &str| rest.split(',').nth(1).and_then(|n| n.parse().ok()).unwrap_or(1);
+        let count = |rest: &str| {
+            rest.split(',')
+                .nth(1)
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(1)
+        };
         if let Some(rest) = tok.strip_prefix('-') {
             out.0 = count(rest);
         } else if let Some(rest) = tok.strip_prefix('+') {
@@ -132,7 +145,11 @@ pub fn split_patch(diff: &str) -> Vec<FilePatch> {
                     new = header_path(&rest[i + 1..]);
                 }
             }
-            cur = Some(FilePatch { old, new, text: String::new() });
+            cur = Some(FilePatch {
+                old,
+                new,
+                text: String::new(),
+            });
         }
         let Some(c) = cur.as_mut() else { continue };
         c.text.push_str(line);
@@ -194,7 +211,9 @@ fn git_bytes(dir: &FsPath, args: &[&str]) -> Option<Vec<u8>> {
 /// The file at `rev:path`, `Ok(None)` when it doesn't exist there.
 fn blob_at(repo: &FsPath, rev: &str, path: &str) -> Result<Option<Vec<u8>>, ApiError> {
     let spec = format!("{rev}:{path}");
-    let Some(size) = repos::git_out(repo, &["cat-file", "-s", &spec]).and_then(|s| s.parse::<u64>().ok()) else {
+    let Some(size) =
+        repos::git_out(repo, &["cat-file", "-s", &spec]).and_then(|s| s.parse::<u64>().ok())
+    else {
         return Ok(None);
     };
     if size > MAX_FILE_BYTES {
@@ -202,11 +221,19 @@ fn blob_at(repo: &FsPath, rev: &str, path: &str) -> Result<Option<Vec<u8>>, ApiE
     }
     git_bytes(repo, &["cat-file", "blob", &spec])
         .map(Some)
-        .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "couldn't read the file from the checkout"))
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "couldn't read the file from the checkout",
+            )
+        })
 }
 
 fn too_big() -> ApiError {
-    ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, format!("the file is larger than {} KB", MAX_FILE_BYTES / 1024))
+    ApiError::new(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        format!("the file is larger than {} KB", MAX_FILE_BYTES / 1024),
+    )
 }
 
 /// Apply `patch` (one file's section) in a scratch dir holding `content` at
@@ -219,7 +246,12 @@ fn apply_in_scratch(
     content: Option<&[u8]>,
     want: Option<&str>,
 ) -> Result<Option<Option<Vec<u8>>>, ApiError> {
-    let io = |e: std::io::Error| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("scratch dir: {e}"));
+    let io = |e: std::io::Error| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("scratch dir: {e}"),
+        )
+    };
     let scratch = Scratch::new().map_err(io)?;
     let work = scratch.work();
     if let (Some(at), Some(content)) = (at, content) {
@@ -238,7 +270,14 @@ fn apply_in_scratch(
         // Bytes in, bytes out: no line-ending conversion from the host's git
         // config (Git for Windows sets core.autocrlf=true system-wide, which
         // would hand back the new side with CRLF and the old side without).
-        .args(["-c", "core.autocrlf=false", "-c", "core.eol=lf", "apply", "--whitespace=nowarn"]);
+        .args([
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.eol=lf",
+            "apply",
+            "--whitespace=nowarn",
+        ]);
     if reverse {
         cmd.arg("--reverse");
     }
@@ -252,18 +291,26 @@ fn apply_in_scratch(
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(patch.as_bytes());
     }
-    let status = child.wait().map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("git apply: {e}")))?;
+    let status = child
+        .wait()
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("git apply: {e}")))?;
     if !status.success() {
         return Ok(None);
     }
-    let Some(want) = want else { return Ok(Some(None)) };
+    let Some(want) = want else {
+        return Ok(Some(None));
+    };
     let f = work.join(want);
     // Never follow a link: a patch can create one pointing anywhere on the
     // host. Show a symlink the way git stores it, as its target path.
-    let Ok(meta) = std::fs::symlink_metadata(&f) else { return Ok(Some(None)) };
+    let Ok(meta) = std::fs::symlink_metadata(&f) else {
+        return Ok(Some(None));
+    };
     if meta.file_type().is_symlink() {
         let target = std::fs::read_link(&f).map_err(io)?;
-        return Ok(Some(Some(target.to_string_lossy().into_owned().into_bytes())));
+        return Ok(Some(Some(
+            target.to_string_lossy().into_owned().into_bytes(),
+        )));
     }
     if !meta.is_file() {
         return Ok(Some(None));
@@ -286,12 +333,27 @@ pub struct Sides {
 pub fn resolve_sides(repo: &FsPath, chat: Uuid, fp: &FilePatch) -> Result<Sides, ApiError> {
     let branch = repos::chat_branch(chat);
     let mut bases: Vec<(String, String)> = Vec::new();
-    if repos::git_out(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_some() {
+    if repos::git_out(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .is_some()
+    {
         bases.push((format!("refs/heads/{branch}"), branch));
     }
     if let Some(sha) = repos::git_out(repo, &["rev-parse", "--verify", "--quiet", "HEAD"]) {
-        let label = repos::inspect(repo).branch.unwrap_or_else(|| sha.chars().take(12).collect());
-        if !bases.iter().any(|(r, _)| repos::git_out(repo, &["rev-parse", r]).as_deref() == Some(sha.as_str())) {
+        let label = repos::inspect(repo)
+            .branch
+            .unwrap_or_else(|| sha.chars().take(12).collect());
+        if !bases
+            .iter()
+            .any(|(r, _)| repos::git_out(repo, &["rev-parse", r]).as_deref() == Some(sha.as_str()))
+        {
             bases.push((sha, label));
         }
     }
@@ -302,8 +364,19 @@ pub fn resolve_sides(repo: &FsPath, chat: Uuid, fp: &FilePatch) -> Result<Sides,
             None => None,
         };
         if fp.old.is_none() || old.is_some() {
-            if let Some(new) = apply_in_scratch(&fp.text, false, fp.old.as_deref(), old.as_deref(), fp.new.as_deref())? {
-                return Ok(Sides { old, new, base: label, applied: false });
+            if let Some(new) = apply_in_scratch(
+                &fp.text,
+                false,
+                fp.old.as_deref(),
+                old.as_deref(),
+                fp.new.as_deref(),
+            )? {
+                return Ok(Sides {
+                    old,
+                    new,
+                    base: label,
+                    applied: false,
+                });
             }
         }
         // Reverse: the base already has the change (an applied proposal).
@@ -312,8 +385,19 @@ pub fn resolve_sides(repo: &FsPath, chat: Uuid, fp: &FilePatch) -> Result<Sides,
             None => None,
         };
         if fp.new.is_none() || new.is_some() {
-            if let Some(old) = apply_in_scratch(&fp.text, true, fp.new.as_deref(), new.as_deref(), fp.old.as_deref())? {
-                return Ok(Sides { old, new, base: label, applied: true });
+            if let Some(old) = apply_in_scratch(
+                &fp.text,
+                true,
+                fp.new.as_deref(),
+                new.as_deref(),
+                fp.old.as_deref(),
+            )? {
+                return Ok(Sides {
+                    old,
+                    new,
+                    base: label,
+                    applied: true,
+                });
             }
         }
     }
@@ -336,42 +420,79 @@ pub async fn proposal_file(
     let path = q.path.unwrap_or_default();
     let path = path.trim().trim_start_matches("./").to_string();
     if !valid_rel_path(&path) {
-        return Err(ApiError::bad_request("path must be a relative path inside the repository"));
+        return Err(ApiError::bad_request(
+            "path must be a relative path inside the repository",
+        ));
     }
     let (chat, p) = find_proposal(&s, &id)?;
     let diff = match (p.kind, p.diff.as_deref()) {
         (ProposalKind::FileDiff, Some(d)) if !d.trim().is_empty() => d.to_string(),
-        _ => return Err(ApiError::new(StatusCode::NOT_FOUND, "this proposal has no file changes")),
+        _ => {
+            return Err(ApiError::new(
+                StatusCode::NOT_FOUND,
+                "this proposal has no file changes",
+            ))
+        }
     };
     let fp = split_patch(&diff)
         .into_iter()
-        .find(|f| f.new.as_deref() == Some(path.as_str()) || f.old.as_deref() == Some(path.as_str()))
+        .find(|f| {
+            f.new.as_deref() == Some(path.as_str()) || f.old.as_deref() == Some(path.as_str())
+        })
         .ok_or_else(|| ApiError::bad_request("that file isn't part of this proposal's diff"))?;
-    if [fp.old.as_deref(), fp.new.as_deref()].into_iter().flatten().any(|p| !valid_rel_path(p)) {
-        return Err(ApiError::bad_request("the diff names a path outside the repository"));
+    if [fp.old.as_deref(), fp.new.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|p| !valid_rel_path(p))
+    {
+        return Err(ApiError::bad_request(
+            "the diff names a path outside the repository",
+        ));
     }
     let repo = RepoBindings::load(&s.cfg.data_dir)
         .resolve(&repos::repos_dir(&s.cfg.data_dir), chat.id)
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "this chat has no repository on this host"))?;
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "this chat has no repository on this host",
+            )
+        })?;
     let chat_id = chat.id;
     let sides = tokio::task::spawn_blocking(move || {
         if !ligus_runtime::git_worktree::is_git_repo(&repo) {
-            return Err(ApiError::new(StatusCode::NOT_FOUND, "this chat's checkout is missing on this host"));
+            return Err(ApiError::new(
+                StatusCode::NOT_FOUND,
+                "this chat's checkout is missing on this host",
+            ));
         }
         resolve_sides(&repo, chat_id, &fp)
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     let bytes = match side {
-        "old" => sides.old.ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "the file is new in this proposal: it has no old side"))?,
-        _ => sides.new.ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "the proposal deletes this file: it has no new side"))?,
+        "old" => sides.old.ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "the file is new in this proposal: it has no old side",
+            )
+        })?,
+        _ => sides.new.ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "the proposal deletes this file: it has no new side",
+            )
+        })?,
     };
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(too_big());
     }
     let size = bytes.len();
-    let content = String::from_utf8(bytes)
-        .map_err(|_| ApiError::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "the file isn't UTF-8 text"))?;
+    let content = String::from_utf8(bytes).map_err(|_| {
+        ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "the file isn't UTF-8 text",
+        )
+    })?;
     Ok(Json(json!({
         "path": path,
         "side": side,
@@ -388,10 +509,27 @@ mod unit {
 
     #[test]
     fn paths_must_be_plain_and_relative() {
-        for ok in ["README.md", "docs/a b.md", "a/.github/x.md", ".ligus/notes.md"] {
+        for ok in [
+            "README.md",
+            "docs/a b.md",
+            "a/.github/x.md",
+            ".ligus/notes.md",
+        ] {
             assert!(valid_rel_path(ok), "{ok}");
         }
-        for bad in ["", "/etc/passwd", "../x", "a/../../x", "a//b", "./a", "a/.", ".git/config", "a\\b", "a\0b", "a\nb"] {
+        for bad in [
+            "",
+            "/etc/passwd",
+            "../x",
+            "a/../../x",
+            "a//b",
+            "./a",
+            "a/.",
+            ".git/config",
+            "a\\b",
+            "a\0b",
+            "a\nb",
+        ] {
             assert!(!valid_rel_path(bad), "{bad:?}");
         }
     }
@@ -403,10 +541,19 @@ diff --git a/new.md b/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/new.md\
 diff --git a/gone.md b/gone.md\ndeleted file mode 100644\n--- a/gone.md\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n";
         let files = split_patch(diff);
         assert_eq!(files.len(), 3);
-        assert_eq!((files[0].old.as_deref(), files[0].new.as_deref()), (Some("README.md"), Some("README.md")));
+        assert_eq!(
+            (files[0].old.as_deref(), files[0].new.as_deref()),
+            (Some("README.md"), Some("README.md"))
+        );
         assert!(files[0].text.contains("--- not a header"));
-        assert_eq!((files[1].old.as_deref(), files[1].new.as_deref()), (None, Some("new.md")));
-        assert_eq!((files[2].old.as_deref(), files[2].new.as_deref()), (Some("gone.md"), None));
+        assert_eq!(
+            (files[1].old.as_deref(), files[1].new.as_deref()),
+            (None, Some("new.md"))
+        );
+        assert_eq!(
+            (files[2].old.as_deref(), files[2].new.as_deref()),
+            (Some("gone.md"), None)
+        );
         assert!(files[2].text.ends_with("-bye\n"));
     }
 
@@ -428,7 +575,9 @@ diff --git a/gone.md b/gone.md\ndeleted file mode 100644\n--- a/gone.md\n+++ /de
         let patch = format!(
             "diff --git a/leak b/leak\nnew file mode 120000\nindex 0000000..1111111\n--- /dev/null\n+++ b/leak\n@@ -0,0 +1 @@\n+{target}\n\\ No newline at end of file\n"
         );
-        let got = apply_in_scratch(&patch, false, None, None, Some("leak")).ok().flatten();
+        let got = apply_in_scratch(&patch, false, None, None, Some("leak"))
+            .ok()
+            .flatten();
         let bytes = got.flatten().unwrap_or_default();
         assert!(
             !String::from_utf8_lossy(&bytes).contains("HOST-SECRET"),

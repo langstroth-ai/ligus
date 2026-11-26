@@ -42,10 +42,18 @@ struct Contacts {
 type C = Arc<Mutex<Contacts>>;
 
 fn key_of(h: &HeaderMap) -> String {
-    h.get(ligus_runtime::contacts::CONTACT_KEY_HEADER).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string()
+    h.get(ligus_runtime::contacts::CONTACT_KEY_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string()
 }
 
-async fn put_rec(State(c): State<C>, Path(cid): Path<String>, h: HeaderMap, Json(b): Json<Value>) -> (StatusCode, Json<Value>) {
+async fn put_rec(
+    State(c): State<C>,
+    Path(cid): Path<String>,
+    h: HeaderMap,
+    Json(b): Json<Value>,
+) -> (StatusCode, Json<Value>) {
     let mut c = c.lock().unwrap();
     if let Some(a) = h.get("authorization").and_then(|v| v.to_str().ok()) {
         c.auth_seen.push(a.to_string());
@@ -65,7 +73,10 @@ async fn put_rec(State(c): State<C>, Path(cid): Path<String>, h: HeaderMap, Json
         }
     };
     c.records.insert(cid, (key, b["record"].clone()));
-    (StatusCode::OK, Json(json!({ "created": created, "updatedAt": 1 })))
+    (
+        StatusCode::OK,
+        Json(json!({ "created": created, "updatedAt": 1 })),
+    )
 }
 
 async fn get_rec(State(c): State<C>, Path(cid): Path<String>) -> (StatusCode, Json<Value>) {
@@ -75,7 +86,11 @@ async fn get_rec(State(c): State<C>, Path(cid): Path<String>) -> (StatusCode, Js
     }
 }
 
-async fn post_drop(State(c): State<C>, Path(cid): Path<String>, Json(b): Json<Value>) -> StatusCode {
+async fn post_drop(
+    State(c): State<C>,
+    Path(cid): Path<String>,
+    Json(b): Json<Value>,
+) -> StatusCode {
     let mut c = c.lock().unwrap();
     if !c.records.contains_key(&cid) {
         return StatusCode::NOT_FOUND;
@@ -83,11 +98,19 @@ async fn post_drop(State(c): State<C>, Path(cid): Path<String>, Json(b): Json<Va
     c.seq += 1;
     let seq = c.seq;
     *c.posted.entry(cid.clone()).or_default() += 1;
-    c.drops.entry(cid).or_default().push((seq, b["blob"].clone()));
+    c.drops
+        .entry(cid)
+        .or_default()
+        .push((seq, b["blob"].clone()));
     StatusCode::OK
 }
 
-async fn list_drops(State(c): State<C>, Path(cid): Path<String>, h: HeaderMap, Query(q): Query<HashMap<String, String>>) -> (StatusCode, Json<Value>) {
+async fn list_drops(
+    State(c): State<C>,
+    Path(cid): Path<String>,
+    h: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> (StatusCode, Json<Value>) {
     let c = c.lock().unwrap();
     if c.records.get(&cid).map(|(k, _)| k.as_str()) != Some(key_of(&h).as_str()) {
         return (StatusCode::FORBIDDEN, Json(json!({})));
@@ -101,10 +124,18 @@ async fn list_drops(State(c): State<C>, Path(cid): Path<String>, h: HeaderMap, Q
         .filter(|(s, _)| *s > after)
         .map(|(s, b)| json!({ "seq": s, "blob": b, "createdAt": 1 }))
         .collect();
-    (StatusCode::OK, Json(json!({ "items": items, "more": false })))
+    (
+        StatusCode::OK,
+        Json(json!({ "items": items, "more": false })),
+    )
 }
 
-async fn ack_drops(State(c): State<C>, Path(cid): Path<String>, h: HeaderMap, Query(q): Query<HashMap<String, String>>) -> StatusCode {
+async fn ack_drops(
+    State(c): State<C>,
+    Path(cid): Path<String>,
+    h: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> StatusCode {
     let mut c = c.lock().unwrap();
     if c.records.get(&cid).map(|(k, _)| k.as_str()) != Some(key_of(&h).as_str()) {
         return StatusCode::FORBIDDEN;
@@ -120,7 +151,10 @@ async fn spawn_relay() -> (String, C) {
     let c: C = Arc::default();
     let contacts = Router::new()
         .route("/v1/contacts/{cid}", put(put_rec).get(get_rec))
-        .route("/v1/contacts/{cid}/drop", get(list_drops).post(post_drop).delete(ack_drops))
+        .route(
+            "/v1/contacts/{cid}/drop",
+            get(list_drops).post(post_drop).delete(ack_drops),
+        )
         .with_state(c.clone());
     let router = test_relay::router().merge(contacts);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -168,11 +202,19 @@ impl Box_ {
         // The person at the box: the operator's token (invites and admission
         // codes travel only to the operator on loopback, or the tunnel).
         let token = handle.shared.operator_token();
-        Self { handle, base, token, client: ligus_forge::new_http_client() }
+        Self {
+            handle,
+            base,
+            token,
+            client: ligus_forge::new_http_client(),
+        }
     }
 
     async fn call(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> (u16, Value) {
-        let mut req = self.client.request(method, format!("{}{path}", self.base)).bearer_auth(&self.token);
+        let mut req = self
+            .client
+            .request(method, format!("{}{path}", self.base))
+            .bearer_auth(&self.token);
         if let Some(b) = body {
             req = req.json(&b);
         }
@@ -204,7 +246,14 @@ impl Box_ {
 }
 
 fn cfg_for(dir: &std::path::Path, relay: &str, room: &str, key: Option<String>) -> Config {
-    Config { data_dir: dir.to_path_buf(), relay_url: Some(relay.into()), token: None, room: room.into(), key, epoch_keys: Vec::new() }
+    Config {
+        data_dir: dir.to_path_buf(),
+        relay_url: Some(relay.into()),
+        token: None,
+        room: room.into(),
+        key,
+        epoch_keys: Vec::new(),
+    }
 }
 
 /// Poll `f` until it returns `Some` (kicking both boxes' sync) or time runs out.
@@ -232,7 +281,10 @@ async fn two_boxes_with(b_ntfy: Option<ntfy::Ntfy>) -> (Box_, Box_, C, tempfile:
     two_boxes_opts(b_ntfy, |_| {}).await
 }
 
-async fn two_boxes_opts(b_ntfy: Option<ntfy::Ntfy>, b_opts: impl FnOnce(&mut ServeOptions)) -> (Box_, Box_, C, tempfile::TempDir) {
+async fn two_boxes_opts(
+    b_ntfy: Option<ntfy::Ntfy>,
+    b_opts: impl FnOnce(&mut ServeOptions),
+) -> (Box_, Box_, C, tempfile::TempDir) {
     two_boxes_on(spawn_relay().await, b_ntfy, b_opts).await
 }
 
@@ -240,7 +292,10 @@ async fn two_boxes_opts(b_ntfy: Option<ntfy::Ntfy>, b_opts: impl FnOnce(&mut Ser
 /// dir with B's keys. B's first sync must find it: A pushes on its own sync
 /// loop, and a round that fails (a busy database) retries seconds later.
 async fn relay_holds_invite(a: &Box_, b_cfg: &Config, probe: &std::path::Path, inv: &str) {
-    let cfg = Config { data_dir: probe.to_path_buf(), ..b_cfg.clone() };
+    let cfg = Config {
+        data_dir: probe.to_path_buf(),
+        ..b_cfg.clone()
+    };
     std::fs::create_dir_all(probe).unwrap();
     let config_id = ligus_core::workspace_config_session_id(uuid_of_room(&cfg.room));
     let subject = format!("invite:{inv}");
@@ -263,31 +318,71 @@ async fn two_boxes_on(
 ) -> (Box_, Box_, C, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let room = format!("id-test-{}", Uuid::new_v4());
-    let a = Box_::start(cfg_for(&tmp.path().join("a"), &relay, &room, Some("ws-passphrase".into())), "Ada").await;
+    let a = Box_::start(
+        cfg_for(
+            &tmp.path().join("a"),
+            &relay,
+            &room,
+            Some("ws-passphrase".into()),
+        ),
+        "Ada",
+    )
+    .await;
     let inv = a.post("/v1/invites", json!({})).await;
-    assert_eq!(inv["signed"], json!(true), "the founder's own box signs: {inv}");
+    assert_eq!(
+        inv["signed"],
+        json!(true),
+        "the founder's own box signs: {inv}"
+    );
     let code = inv["code"].as_str().unwrap().to_string();
     let conn = InviteConn::decode(&code).unwrap();
-    assert_eq!(conn.founder_actor_id.as_deref(), Some(a.account().to_string().as_str()));
+    assert_eq!(
+        conn.founder_actor_id.as_deref(),
+        Some(a.account().to_string().as_str())
+    );
     let b_dir = tmp.path().join("b");
     std::fs::create_dir_all(&b_dir).unwrap();
     {
         let store = ligus_runtime::EventStore::open(b_dir.join("ligus.db")).unwrap();
         let ws = conn.workspace_id();
-        store.set_join_invite(ws, Uuid::parse_str(conn.inv.as_deref().unwrap()).unwrap()).unwrap();
-        store.set_join_redeem(ws, ligus_runtime::box_admission::redeem_key_of(&code).as_ref()).unwrap();
-        store.set_workspace_pin(ws, conn.founder_actor_id.as_deref().unwrap(), conn.fk.as_deref().unwrap()).unwrap();
+        store
+            .set_join_invite(ws, Uuid::parse_str(conn.inv.as_deref().unwrap()).unwrap())
+            .unwrap();
+        store
+            .set_join_redeem(
+                ws,
+                ligus_runtime::box_admission::redeem_key_of(&code).as_ref(),
+            )
+            .unwrap();
+        store
+            .set_workspace_pin(
+                ws,
+                conn.founder_actor_id.as_deref().unwrap(),
+                conn.fk.as_deref().unwrap(),
+            )
+            .unwrap();
     }
     let mut b_cfg = cfg_for(&b_dir, &conn.relay_url, &conn.room, conn.key.clone());
     b_cfg.epoch_keys = conn.ek.clone();
-    relay_holds_invite(&a, &b_cfg, &tmp.path().join("probe"), conn.inv.as_deref().unwrap()).await;
+    relay_holds_invite(
+        &a,
+        &b_cfg,
+        &tmp.path().join("probe"),
+        conn.inv.as_deref().unwrap(),
+    )
+    .await;
     let mut o = opts(&b_cfg.data_dir, "Bea");
     o.ntfy = b_ntfy;
     b_opts(&mut o);
     let handle = start(b_cfg, o).await.unwrap();
     let base = format!("http://127.0.0.1:{}", handle.addr.port());
     let token = handle.shared.operator_token();
-    let b = Box_ { handle, base, token, client: ligus_forge::new_http_client() };
+    let b = Box_ {
+        handle,
+        base,
+        token,
+        client: ligus_forge::new_http_client(),
+    };
     (a, b, contacts, tmp)
 }
 
@@ -296,8 +391,18 @@ async fn two_boxes_on(
 async fn know_each_other(a: &Box_, b: &Box_) {
     let (a_acc, b_acc) = (a.account(), b.account());
     until(&[a, b], 30, async || {
-        let ab = a.handle.shared.co_members().iter().any(|c| c.account_id == b_acc && !c.devices.is_empty());
-        let ba = b.handle.shared.co_members().iter().any(|c| c.account_id == a_acc && !c.devices.is_empty());
+        let ab = a
+            .handle
+            .shared
+            .co_members()
+            .iter()
+            .any(|c| c.account_id == b_acc && !c.devices.is_empty());
+        let ba = b
+            .handle
+            .shared
+            .co_members()
+            .iter()
+            .any(|c| c.account_id == a_acc && !c.devices.is_empty());
         (ab && ba).then_some(())
     })
     .await;
@@ -309,7 +414,12 @@ async fn know_each_other(a: &Box_, b: &Box_) {
 async fn knows_contact(a: &Box_, b: &Box_) {
     let b_acc = b.account();
     until(&[a, b], 30, async || {
-        a.handle.shared.co_members().iter().any(|c| c.account_id == b_acc && !c.devices.is_empty() && c.contact.is_some()).then_some(())
+        a.handle
+            .shared
+            .co_members()
+            .iter()
+            .any(|c| c.account_id == b_acc && !c.devices.is_empty() && c.contact.is_some())
+            .then_some(())
     })
     .await;
 }
@@ -329,12 +439,24 @@ async fn dm_through_the_drop_box_end_to_end() {
     assert_eq!(pa["canFoundDm"], json!(true));
 
     // A sees B with B's safety code, a verified device and B's drop box.
-    let b_code = b.get("/v1/profile").await["safetyCode"].as_str().unwrap().to_string();
+    let b_code = b.get("/v1/profile").await["safetyCode"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let a2 = &a;
     let person = until(&[&a, &b], 30, async || {
         let people = a2.get("/v1/people").await;
-        let p = people["people"].as_array()?.iter().find(|p| p["accountId"] == json!(b_acc.to_string()))?.clone();
-        let contact_known = a2.handle.shared.co_members().iter().any(|c| c.account_id == b_acc && c.contact.is_some());
+        let p = people["people"]
+            .as_array()?
+            .iter()
+            .find(|p| p["accountId"] == json!(b_acc.to_string()))?
+            .clone();
+        let contact_known = a2
+            .handle
+            .shared
+            .co_members()
+            .iter()
+            .any(|c| c.account_id == b_acc && c.contact.is_some());
         (p["devices"].as_u64() >= Some(1) && contact_known).then_some(p)
     })
     .await;
@@ -343,28 +465,54 @@ async fn dm_through_the_drop_box_end_to_end() {
     assert_eq!(person["lookAlike"], json!(false));
     // A's own entry carries A's code; B sees A with the same code.
     let people = a.get("/v1/people").await;
-    let me = people["people"].as_array().unwrap().iter().find(|p| p["isSelf"] == json!(true)).unwrap();
+    let me = people["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["isSelf"] == json!(true))
+        .unwrap();
     assert_eq!(me["safetyCode"], json!(a_code));
     let b2 = &b;
     let seen_by_b = until(&[&a, &b], 20, async || {
         let people = b2.get("/v1/people").await;
-        people["people"].as_array()?.iter().find(|p| p["accountId"] == json!(a_acc.to_string()))?["safetyCode"].as_str().map(str::to_string)
+        people["people"]
+            .as_array()?
+            .iter()
+            .find(|p| p["accountId"] == json!(a_acc.to_string()))?["safetyCode"]
+            .as_str()
+            .map(str::to_string)
     })
     .await;
     assert_eq!(seen_by_b, a_code, "both sides compute the same code for A");
 
     // A opens a DM with B: a random room, a signed invite, delivered.
-    let opened = a.post("/v1/dms", json!({ "accountId": b_acc.to_string() })).await;
+    let opened = a
+        .post("/v1/dms", json!({ "accountId": b_acc.to_string() }))
+        .await;
     assert_eq!(opened["delivered"], json!(true), "{opened}");
     let invite = InviteConn::decode(opened["invite"].as_str().unwrap()).unwrap();
-    assert!(invite.room.starts_with("dm-") && invite.room.len() == 35, "random room: {}", invite.room);
-    assert_eq!(invite.dm_account.as_deref(), Some(b_acc.to_string().as_str()));
+    assert!(
+        invite.room.starts_with("dm-") && invite.room.len() == 35,
+        "random room: {}",
+        invite.room
+    );
+    assert_eq!(
+        invite.dm_account.as_deref(),
+        Some(b_acc.to_string().as_str())
+    );
     assert!(invite.sig.is_some());
     // The workspace token never went to the relay with the contact calls
     // (none is configured here); nothing else did either.
-    assert!(contacts.lock().unwrap().auth_seen.iter().all(|a| !a.to_ascii_lowercase().contains("github")));
+    assert!(contacts
+        .lock()
+        .unwrap()
+        .auth_seen
+        .iter()
+        .all(|a| !a.to_ascii_lowercase().contains("github")));
     // Opening again lands in the same DM.
-    let again = a.post("/v1/dms", json!({ "accountId": b_acc.to_string() })).await;
+    let again = a
+        .post("/v1/dms", json!({ "accountId": b_acc.to_string() }))
+        .await;
     assert_eq!(again["workspaceId"], opened["workspaceId"]);
     assert!(again.get("invite").is_none_or(Value::is_null));
 
@@ -383,7 +531,12 @@ async fn dm_through_the_drop_box_end_to_end() {
     assert_eq!(inv["safetyCode"], json!(a_code));
     assert_eq!(inv["acceptable"], json!(true));
     assert!(inv.get("code").is_none(), "the code stays on the box");
-    let accepted = b.post("/v1/invites/pending/accept", json!({ "relay": inv["relay"], "seq": inv["seq"] })).await;
+    let accepted = b
+        .post(
+            "/v1/invites/pending/accept",
+            json!({ "relay": inv["relay"], "seq": inv["seq"] }),
+        )
+        .await;
     assert_eq!(accepted["workspaceId"], opened["workspaceId"]);
     // The drop was handled: it is gone at the next read.
     let p2 = b.get("/v1/invites/pending").await;
@@ -405,7 +558,13 @@ async fn dm_through_the_drop_box_end_to_end() {
     // The DM's chat is in the phone's chat list, marked as a DM and named
     // for the other person, and nowhere the workspace's chats are.
     let chats = b.get("/v1/chats").await;
-    let row = chats["chats"].as_array().unwrap().iter().find(|c| c["id"] == json!(chat_id)).expect("DM chat listed").clone();
+    let row = chats["chats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == json!(chat_id))
+        .expect("DM chat listed")
+        .clone();
     assert_eq!(row["dm"]["account"], json!(a_acc.to_string()));
     assert_eq!(row["title"], json!("Ada"));
     let proposals = b.get("/v1/proposals").await;
@@ -413,26 +572,49 @@ async fn dm_through_the_drop_box_end_to_end() {
 
     // B writes once it's a member; A reads it.
     let b_sent = until(&[&a, &b], 30, async || {
-        let (code, v) = b2.call(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "hi Ada" }))).await;
+        let (code, v) = b2
+            .call(
+                reqwest::Method::POST,
+                &format!("/v1/chats/{chat_id}/messages"),
+                Some(json!({ "body": "hi Ada" })),
+            )
+            .await;
         (code == 200).then_some(v)
     })
     .await;
     assert_eq!(b_sent["message"]["body"], json!("hi Ada"));
     let got = until(&[&a, &b], 30, async || {
         let m = a2.get(&format!("/v1/chats/{chat_id}/messages")).await;
-        m["messages"].as_array()?.iter().find(|x| x["body"] == json!("hi Ada")).map(|x| x["author"].clone())
+        m["messages"]
+            .as_array()?
+            .iter()
+            .find(|x| x["body"] == json!("hi Ada"))
+            .map(|x| x["author"].clone())
     })
     .await;
     assert_eq!(got, json!("Bea"));
-    a.post(&format!("/v1/chats/{chat_id}/messages"), json!({ "body": "hello Bea" })).await;
+    a.post(
+        &format!("/v1/chats/{chat_id}/messages"),
+        json!({ "body": "hello Bea" }),
+    )
+    .await;
     until(&[&a, &b], 30, async || {
         let m = b2.get(&format!("/v1/chats/{chat_id}/messages")).await;
-        m["messages"].as_array()?.iter().any(|x| x["body"] == json!("hello Bea")).then_some(())
+        m["messages"]
+            .as_array()?
+            .iter()
+            .any(|x| x["body"] == json!("hello Bea"))
+            .then_some(())
     })
     .await;
     // The person row links the DM.
     let people = b.get("/v1/people").await;
-    let ada = people["people"].as_array().unwrap().iter().find(|p| p["accountId"] == json!(a_acc.to_string())).unwrap();
+    let ada = people["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["accountId"] == json!(a_acc.to_string()))
+        .unwrap();
     assert_eq!(ada["dmChatId"], json!(chat_id));
 }
 
@@ -460,17 +642,28 @@ async fn forged_and_unsigned_invites_are_refused() {
         sig: None,
     };
     // Unsigned: "claimed", refused.
-    let info = b.post("/v1/invites/inspect", json!({ "code": base.encode() })).await;
+    let info = b
+        .post("/v1/invites/inspect", json!({ "code": base.encode() }))
+        .await;
     assert_eq!(info["trust"], json!("claimed"));
     assert_eq!(info["founderName"], json!("Ada"));
     assert_eq!(info["acceptable"], json!(false));
-    let (code, v) = b.call(reqwest::Method::POST, "/v1/invites/join", Some(json!({ "code": base.encode(), "confirmSafetyCode": true }))).await;
+    let (code, v) = b
+        .call(
+            reqwest::Method::POST,
+            "/v1/invites/join",
+            Some(json!({ "code": base.encode(), "confirmSafetyCode": true })),
+        )
+        .await;
     assert_eq!(code, 403, "{v}");
     assert!(b.handle.shared.dms.list().is_empty());
 
     // Signed by B's own device but naming A: not A's signature.
     let mut forged = base.clone();
-    let identity = ligus_runtime::IdentityStore::new(&b.handle.shared.cfg.data_dir, ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&b.handle.shared.cfg.data_dir));
+    let identity = ligus_runtime::IdentityStore::new(
+        &b.handle.shared.cfg.data_dir,
+        ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&b.handle.shared.cfg.data_dir),
+    );
     let cert = identity.load().unwrap().unwrap().device.certificate;
     let sig = {
         let svc = b.handle.shared.lock();
@@ -479,21 +672,42 @@ async fn forged_and_unsigned_invites_are_refused() {
         // ...so forge one with B's device key directly.
         let device = identity.device_keypair(svc.device_id()).unwrap();
         let account = identity.account_keypair(b_acc).unwrap();
-        forged.with_claims(|c| ligus_runtime::invite_sig::sign(c, 1, &device, &cert, &account.public_key_bytes()))
+        forged.with_claims(|c| {
+            ligus_runtime::invite_sig::sign(c, 1, &device, &cert, &account.public_key_bytes())
+        })
     };
     forged.sig = Some(sig);
-    let info = b.post("/v1/invites/inspect", json!({ "code": forged.encode() })).await;
-    assert_eq!(info["trust"], json!("claimed"), "another account's signature isn't A's: {info}");
-    let (code, _) = b.call(reqwest::Method::POST, "/v1/invites/join", Some(json!({ "code": forged.encode() }))).await;
+    let info = b
+        .post("/v1/invites/inspect", json!({ "code": forged.encode() }))
+        .await;
+    assert_eq!(
+        info["trust"],
+        json!("claimed"),
+        "another account's signature isn't A's: {info}"
+    );
+    let (code, _) = b
+        .call(
+            reqwest::Method::POST,
+            "/v1/invites/join",
+            Some(json!({ "code": forged.encode() })),
+        )
+        .await;
     assert_eq!(code, 403);
 
     // A co-member's id with another key: mismatch.
-    let mismatch = InviteConn { fk: Some("ff".repeat(16)), ..base.clone() };
-    let info = b.post("/v1/invites/inspect", json!({ "code": mismatch.encode() })).await;
+    let mismatch = InviteConn {
+        fk: Some("ff".repeat(16)),
+        ..base.clone()
+    };
+    let info = b
+        .post("/v1/invites/inspect", json!({ "code": mismatch.encode() }))
+        .await;
     assert_eq!(info["trust"], json!("mismatch"));
 
     // Addressed to someone else (A's real, signed DM invite to B, read by A).
-    let opened = a.post("/v1/dms", json!({ "accountId": b_acc.to_string() })).await;
+    let opened = a
+        .post("/v1/dms", json!({ "accountId": b_acc.to_string() }))
+        .await;
     let real = opened["invite"].as_str().unwrap();
     let info = a.post("/v1/invites/inspect", json!({ "code": real })).await;
     assert_eq!(info["addressedToMe"], json!(false));
@@ -502,17 +716,37 @@ async fn forged_and_unsigned_invites_are_refused() {
     let info = b.post("/v1/invites/inspect", json!({ "code": real })).await;
     assert_eq!(info["trust"], json!("known"));
     b.post("/v1/invites/join", json!({ "code": real })).await;
-    let (code, _) = b.call(reqwest::Method::POST, "/v1/invites/join", Some(json!({ "code": real }))).await;
+    let (code, _) = b
+        .call(
+            reqwest::Method::POST,
+            "/v1/invites/join",
+            Some(json!({ "code": real })),
+        )
+        .await;
     assert_eq!(code, 403, "a DM invite for a room already held is refused");
 
     // A workspace invite: inspected, never joined on a box.
     let ws_inv = a.post("/v1/invites", json!({})).await;
-    let (code, v) = b.call(reqwest::Method::POST, "/v1/invites/join", Some(json!({ "code": ws_inv["code"] }))).await;
+    let (code, v) = b
+        .call(
+            reqwest::Method::POST,
+            "/v1/invites/join",
+            Some(json!({ "code": ws_inv["code"] })),
+        )
+        .await;
     assert_eq!(code, 409, "{v}");
-    let info = b.post("/v1/invites/inspect", json!({ "code": ws_inv["code"] })).await;
+    let info = b
+        .post("/v1/invites/inspect", json!({ "code": ws_inv["code"] }))
+        .await;
     assert_eq!(info["alreadyJoined"], json!(true));
     // Junk.
-    let (code, _) = b.call(reqwest::Method::POST, "/v1/invites/inspect", Some(json!({ "code": "hivews1:%%%" }))).await;
+    let (code, _) = b
+        .call(
+            reqwest::Method::POST,
+            "/v1/invites/inspect",
+            Some(json!({ "code": "hivews1:%%%" })),
+        )
+        .await;
     assert_eq!(code, 400);
 }
 
@@ -527,30 +761,45 @@ async fn writes_wait_for_the_founder() {
     let b2 = &b;
     know_each_other(&a, &b).await;
     // A opens a DM.
-    let opened = a.post("/v1/dms", json!({ "accountId": b_acc.to_string() })).await;
+    let opened = a
+        .post("/v1/dms", json!({ "accountId": b_acc.to_string() }))
+        .await;
     let code = opened["invite"].as_str().unwrap().to_string();
     let ws: Uuid = serde_json::from_value(opened["workspaceId"].clone()).unwrap();
     // B joins at once: until A's signed founding reaches B, B's writes
     // there wait (and the row says so); then it clears on its own. B's DM
     // sync is held while we look, or the founding can land between the
     // reads.
-    b.handle.shared.dm_sync_held.store(true, std::sync::atomic::Ordering::SeqCst);
+    b.handle
+        .shared
+        .dm_sync_held
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     b.post("/v1/invites/join", json!({ "code": code })).await;
     let waiting = b.handle.shared.lock().waiting_for_founder(ws).unwrap();
-    assert_eq!(waiting, Some(a_acc), "nothing of the DM has synced to B yet");
+    assert_eq!(
+        waiting,
+        Some(a_acc),
+        "nothing of the DM has synced to B yet"
+    );
     let rows = b.get("/v1/dms").await;
     assert_eq!(rows["dms"][0]["waitingForFounder"], json!(true));
     // Once synced it clears on its own.
-    b.handle.shared.dm_sync_held.store(false, std::sync::atomic::Ordering::SeqCst);
+    b.handle
+        .shared
+        .dm_sync_held
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     until(&[&a, &b], 30, async || {
         let d = b2.get("/v1/dms").await;
-        (d["dms"][0]["waitingForFounder"] == json!(false) && d["dms"][0]["chatId"].is_string()).then_some(())
+        (d["dms"][0]["waitingForFounder"] == json!(false) && d["dms"][0]["chatId"].is_string())
+            .then_some(())
     })
     .await;
-    let chat_id = b.get("/v1/dms").await["dms"][0]["chatId"].as_str().unwrap().to_string();
+    let chat_id = b.get("/v1/dms").await["dms"][0]["chatId"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let f = b.get(&format!("/v1/chats/{chat_id}/founder")).await;
     assert_eq!(f["waiting"], json!(false));
-
 }
 
 /// The waiting state's wire form: 409 `waiting_for_founder` with the
@@ -579,34 +828,76 @@ async fn names_are_cleaned_and_look_alikes_flagged() {
     let tmp = tempfile::tempdir().unwrap();
     let (relay, _c) = spawn_relay().await;
     let room = format!("names-{}", Uuid::new_v4());
-    let a = Box_::start(cfg_for(&tmp.path().join("a"), &relay, &room, Some("p".into())), "Ada").await;
-    let code = a.post("/v1/invites", json!({})).await["code"].as_str().unwrap().to_string();
+    let a = Box_::start(
+        cfg_for(&tmp.path().join("a"), &relay, &room, Some("p".into())),
+        "Ada",
+    )
+    .await;
+    let code = a.post("/v1/invites", json!({})).await["code"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let inv = InviteConn::decode(&code).unwrap();
     let b_dir = tmp.path().join("b");
     std::fs::create_dir_all(&b_dir).unwrap();
     {
         let store = ligus_runtime::EventStore::open(b_dir.join("ligus.db")).unwrap();
-        store.set_join_invite(inv.workspace_id(), Uuid::parse_str(inv.inv.as_deref().unwrap()).unwrap()).unwrap();
-        store.set_join_redeem(inv.workspace_id(), ligus_runtime::box_admission::redeem_key_of(&code).as_ref()).unwrap();
-        store.set_workspace_pin(inv.workspace_id(), inv.founder_actor_id.as_deref().unwrap(), inv.fk.as_deref().unwrap()).unwrap();
+        store
+            .set_join_invite(
+                inv.workspace_id(),
+                Uuid::parse_str(inv.inv.as_deref().unwrap()).unwrap(),
+            )
+            .unwrap();
+        store
+            .set_join_redeem(
+                inv.workspace_id(),
+                ligus_runtime::box_admission::redeem_key_of(&code).as_ref(),
+            )
+            .unwrap();
+        store
+            .set_workspace_pin(
+                inv.workspace_id(),
+                inv.founder_actor_id.as_deref().unwrap(),
+                inv.fk.as_deref().unwrap(),
+            )
+            .unwrap();
     }
     // B's first sync must find A's invite, or B starts as no member.
     let b_cfg = cfg_for(&b_dir, &relay, &room, Some("p".into()));
-    relay_holds_invite(&a, &b_cfg, &tmp.path().join("probe"), inv.inv.as_deref().unwrap()).await;
+    relay_holds_invite(
+        &a,
+        &b_cfg,
+        &tmp.path().join("probe"),
+        inv.inv.as_deref().unwrap(),
+    )
+    .await;
     // B calls itself "Ada" with a Cyrillic a and a right-to-left override.
     let b = Box_::start(b_cfg, "\u{202E}\u{0430}da\u{200B}").await;
     let b_acc = b.account();
     let a2 = &a;
     let row = until(&[&a, &b], 30, async || {
         let people = a2.get("/v1/people").await;
-        people["people"].as_array()?.iter().find(|p| p["accountId"] == json!(b_acc.to_string())).cloned()
+        people["people"]
+            .as_array()?
+            .iter()
+            .find(|p| p["accountId"] == json!(b_acc.to_string()))
+            .cloned()
     })
     .await;
     // Cleaned (bidi and zero-width removed), and told apart from the Ada it
     // looks like (identity model v2, 5.6: Name#abcd).
     let shown = row["displayName"].as_str().unwrap();
-    assert!(shown.starts_with("\u{0430}da#") && !shown.contains('\u{202E}') && !shown.contains('\u{200B}'), "{shown}");
-    assert_eq!(row["lookAlike"], json!(true), "looks like the box's own name");
+    assert!(
+        shown.starts_with("\u{0430}da#")
+            && !shown.contains('\u{202E}')
+            && !shown.contains('\u{200B}'),
+        "{shown}"
+    );
+    assert_eq!(
+        row["lookAlike"],
+        json!(true),
+        "looks like the box's own name"
+    );
     let health = b.get("/v1/health").await;
     assert_eq!(health["identity"]["displayName"], json!("\u{0430}da"));
     let profile = b.get("/v1/profile").await;
@@ -620,21 +911,59 @@ async fn link_chips_are_read_only_and_scoped() {
     let (a, b, _contacts, _tmp) = two_boxes().await;
     let (a_acc, b_acc) = (a.account(), b.account());
     let a2 = &a;
-    until(&[&a, &b], 30, async || a2.handle.shared.co_members().iter().any(|c| c.account_id == b_acc).then_some(())).await;
-    assert_eq!(a.get(&format!("/v1/people/{b_acc}/links")).await, json!({ "links": [] }));
-    assert_eq!(a.get(&format!("/v1/people/{a_acc}/links")).await, json!({ "links": [] }));
-    let (code, _) = a.call(reqwest::Method::GET, &format!("/v1/people/{}/links", Uuid::new_v4()), None).await;
+    until(&[&a, &b], 30, async || {
+        a2.handle
+            .shared
+            .co_members()
+            .iter()
+            .any(|c| c.account_id == b_acc)
+            .then_some(())
+    })
+    .await;
+    assert_eq!(
+        a.get(&format!("/v1/people/{b_acc}/links")).await,
+        json!({ "links": [] })
+    );
+    assert_eq!(
+        a.get(&format!("/v1/people/{a_acc}/links")).await,
+        json!({ "links": [] })
+    );
+    let (code, _) = a
+        .call(
+            reqwest::Method::GET,
+            &format!("/v1/people/{}/links", Uuid::new_v4()),
+            None,
+        )
+        .await;
     assert_eq!(code, 404, "a stranger's links aren't served");
-    let (code, _) = a.call(reqwest::Method::GET, "/v1/people/not-a-uuid/links", None).await;
+    let (code, _) = a
+        .call(reqwest::Method::GET, "/v1/people/not-a-uuid/links", None)
+        .await;
     assert_eq!(code, 404);
     // Without the bearer token: nothing.
-    let r = a.client.get(format!("{}/v1/people/{b_acc}/links", a.base)).send().await.unwrap();
+    let r = a
+        .client
+        .get(format!("{}/v1/people/{b_acc}/links", a.base))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status().as_u16(), 401);
     for path in ["/v1/profile", "/v1/dms", "/v1/invites/pending"] {
-        let r = a.client.get(format!("{}{path}", a.base)).send().await.unwrap();
+        let r = a
+            .client
+            .get(format!("{}{path}", a.base))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status().as_u16(), 401, "{path}");
     }
-    let r = a.client.post(format!("{}/v1/invites", a.base)).json(&json!({})).send().await.unwrap();
+    let r = a
+        .client
+        .post(format!("{}/v1/invites", a.base))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status().as_u16(), 401);
 }
 
@@ -646,20 +975,46 @@ async fn invites_need_presence_on_a_delegated_box() {
     let (a, _b, _contacts, _tmp) = two_boxes().await;
     let me = a.handle.shared.lock().author().clone();
     a.handle.shared.lock().act_as_owner_device(me);
-    let (code, v) = a.call(reqwest::Method::POST, "/v1/invites", Some(json!({}))).await;
-    assert_eq!((code, v["error"].clone()), (403, json!("presence_required")), "{v}");
-    let prepared = a.post("/v1/presence/prepare", json!({ "action": "invite", "target": "workspace" })).await;
-    assert_eq!(prepared["preview"]["kind"], json!("joinApproved"), "{prepared}");
-    assert_eq!(prepared["preview"]["summary"], json!("Let someone join with a single-use invite"));
-    assert!(prepared["challenge"].as_str().is_some_and(|c| c.len() == 43));
+    let (code, v) = a
+        .call(reqwest::Method::POST, "/v1/invites", Some(json!({})))
+        .await;
+    assert_eq!(
+        (code, v["error"].clone()),
+        (403, json!("presence_required")),
+        "{v}"
+    );
+    let prepared = a
+        .post(
+            "/v1/presence/prepare",
+            json!({ "action": "invite", "target": "workspace" }),
+        )
+        .await;
+    assert_eq!(
+        prepared["preview"]["kind"],
+        json!("joinApproved"),
+        "{prepared}"
+    );
+    assert_eq!(
+        prepared["preview"]["summary"],
+        json!("Let someone join with a single-use invite")
+    );
+    assert!(prepared["challenge"]
+        .as_str()
+        .is_some_and(|c| c.len() == 43));
     // A made-up assertion is refused: a stamped assertion must verify, so a
     // bearer can't commit the invite without the owner's passkey.
     // Only invites count: the box's own background writes (its profile,
     // device names) may land on the config log meanwhile.
     let invites = || {
         let shared = &a.handle.shared;
-        let list = shared.lock().store().list(ligus_core::workspace_config_session_id(shared.ws)).unwrap();
-        list.iter().filter(|e| matches!(e.payload, ligus_core::SessionEvent::JoinApproved { .. })).count()
+        let list = shared
+            .lock()
+            .store()
+            .list(ligus_core::workspace_config_session_id(shared.ws))
+            .unwrap();
+        list.iter()
+            .filter(|e| matches!(e.payload, ligus_core::SessionEvent::JoinApproved { .. }))
+            .count()
     };
     let before = invites();
     let (code, v) = a
@@ -674,7 +1029,13 @@ async fn invites_need_presence_on_a_delegated_box() {
     assert!(v.get("invite").is_none());
     assert_eq!(before, invites(), "no invite was appended");
     // A delegated box can't found a DM.
-    let (code, v) = a.call(reqwest::Method::POST, "/v1/dms", Some(json!({ "accountId": Uuid::new_v4().to_string() }))).await;
+    let (code, v) = a
+        .call(
+            reqwest::Method::POST,
+            "/v1/dms",
+            Some(json!({ "accountId": Uuid::new_v4().to_string() })),
+        )
+        .await;
     assert!(code == 404 || code == 409, "{code} {v}");
     let p = a.get("/v1/profile").await;
     assert_eq!(p["canFoundDm"], json!(false));
@@ -735,7 +1096,12 @@ async fn dm_messages_never_push() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let ntfy = ntfy::Ntfy { url: format!("http://{addr}"), topic: "bea".into(), token: None, titles: true };
+    let ntfy = ntfy::Ntfy {
+        url: format!("http://{addr}"),
+        topic: "bea".into(),
+        token: None,
+        titles: true,
+    };
     let (a, b, _contacts, _tmp) = two_boxes_with(Some(ntfy)).await;
     know_each_other(&a, &b).await;
     // The invite goes to B's drop box, so A must have seen B's contact id
@@ -743,7 +1109,9 @@ async fn dm_messages_never_push() {
     // keys on a loaded machine).
     knows_contact(&a, &b).await;
     let b_acc = b.account();
-    let opened = a.post("/v1/dms", json!({ "accountId": b_acc.to_string() })).await;
+    let opened = a
+        .post("/v1/dms", json!({ "accountId": b_acc.to_string() }))
+        .await;
     assert_eq!(opened["delivered"], json!(true), "{opened}");
     let b2 = &b;
     let pending = until(&[&a, &b], 30, async || {
@@ -751,17 +1119,38 @@ async fn dm_messages_never_push() {
         p["invites"].as_array().and_then(|l| l.first().cloned())
     })
     .await;
-    b.post("/v1/invites/pending/accept", json!({ "relay": pending["relay"], "seq": pending["seq"] })).await;
+    b.post(
+        "/v1/invites/pending/accept",
+        json!({ "relay": pending["relay"], "seq": pending["seq"] }),
+    )
+    .await;
     let chat = opened["chatId"].as_str().unwrap().to_string();
-    a.post(&format!("/v1/chats/{chat}/messages"), json!({ "body": "@Bea secret DM text" })).await;
+    a.post(
+        &format!("/v1/chats/{chat}/messages"),
+        json!({ "body": "@Bea secret DM text" }),
+    )
+    .await;
     until(&[&a, &b], 30, async || {
-        let (code, m) = b2.call(reqwest::Method::GET, &format!("/v1/chats/{chat}/messages"), None).await;
+        let (code, m) = b2
+            .call(
+                reqwest::Method::GET,
+                &format!("/v1/chats/{chat}/messages"),
+                None,
+            )
+            .await;
         (code == 200 && m.to_string().contains("secret DM text")).then_some(())
     })
     .await;
     // The same mention in a workspace chat.
-    let ws_chat = a.post("/v1/chats", json!({ "title": "plans" })).await["chat"]["id"].as_str().unwrap().to_string();
-    a.post(&format!("/v1/chats/{ws_chat}/messages"), json!({ "body": "@Bea workspace ping" })).await;
+    let ws_chat = a.post("/v1/chats", json!({ "title": "plans" })).await["chat"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    a.post(
+        &format!("/v1/chats/{ws_chat}/messages"),
+        json!({ "body": "@Bea workspace ping" }),
+    )
+    .await;
     let pushed = until(&[&a, &b], 30, async || {
         let all = pushes.lock().unwrap().join("\n");
         all.contains("plans").then_some(all)
@@ -771,7 +1160,10 @@ async fn dm_messages_never_push() {
     // The DM's chat is its #general: nothing was pushed for it.
     tokio::time::sleep(Duration::from_secs(2)).await;
     let all = pushes.lock().unwrap().clone();
-    assert!(all.iter().all(|x| x.contains("plans")), "only the workspace chat pushed: {all:?}");
+    assert!(
+        all.iter().all(|x| x.contains("plans")),
+        "only the workspace chat pushed: {all:?}"
+    );
 }
 
 /// Invite codes carry the workspace passphrase and epoch keys (a DM's too):
@@ -780,33 +1172,68 @@ async fn dm_messages_never_push() {
 /// loopback, still works).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn invite_secrets_never_over_plain_http() {
-    let (a, b, _contacts, _tmp) = two_boxes_opts(None, |o| o.listen = "0.0.0.0:0".parse().unwrap()).await;
+    let (a, b, _contacts, _tmp) =
+        two_boxes_opts(None, |o| o.listen = "0.0.0.0:0".parse().unwrap()).await;
     know_each_other(&a, &b).await;
     let refused = |what: &str, code: u16, v: &Value| {
         assert_eq!(code, 403, "{what}: {v}");
         let msg = v["error"].as_str().unwrap_or_default();
-        assert!(msg.contains("secure connection"), "{what}: the phone can show why: {v}");
+        assert!(
+            msg.contains("secure connection"),
+            "{what}: the phone can show why: {v}"
+        );
     };
     // A fresh workspace invite: refused before one is issued.
-    let (code, v) = b.call(reqwest::Method::POST, "/v1/invites", Some(json!({}))).await;
+    let (code, v) = b
+        .call(reqwest::Method::POST, "/v1/invites", Some(json!({})))
+        .await;
     refused("POST /v1/invites", code, &v);
-    let (code, v) = b.call(reqwest::Method::POST, "/v1/presence/prepare", Some(json!({ "action": "invite", "target": "workspace" }))).await;
+    let (code, v) = b
+        .call(
+            reqwest::Method::POST,
+            "/v1/presence/prepare",
+            Some(json!({ "action": "invite", "target": "workspace" })),
+        )
+        .await;
     refused("presence prepare invite", code, &v);
     // A code sent in (inspect, join) is refused too: it carries the key.
     let inv = a.post("/v1/invites", json!({})).await;
     let code_str = inv["code"].as_str().unwrap();
-    let (code, v) = b.call(reqwest::Method::POST, "/v1/invites/inspect", Some(json!({ "code": code_str }))).await;
+    let (code, v) = b
+        .call(
+            reqwest::Method::POST,
+            "/v1/invites/inspect",
+            Some(json!({ "code": code_str })),
+        )
+        .await;
     refused("inspect", code, &v);
-    let (code, v) = b.call(reqwest::Method::POST, "/v1/invites/join", Some(json!({ "code": code_str }))).await;
+    let (code, v) = b
+        .call(
+            reqwest::Method::POST,
+            "/v1/invites/join",
+            Some(json!({ "code": code_str })),
+        )
+        .await;
     refused("join", code, &v);
     // Founding a DM returns its invite: refused, and nothing was founded.
-    let (code, v) = b.call(reqwest::Method::POST, "/v1/dms", Some(json!({ "accountId": a.account().to_string() }))).await;
+    let (code, v) = b
+        .call(
+            reqwest::Method::POST,
+            "/v1/dms",
+            Some(json!({ "accountId": a.account().to_string() })),
+        )
+        .await;
     refused("POST /v1/dms (founding)", code, &v);
-    assert!(b.handle.shared.dms.list().is_empty(), "no DM founded on a refused request");
+    assert!(
+        b.handle.shared.dms.list().is_empty(),
+        "no DM founded on a refused request"
+    );
     // A (loopback) founds it; B's view of the kept DM carries no secret and
     // still opens over plain HTTP.
     knows_contact(&a, &b).await;
-    let opened = a.post("/v1/dms", json!({ "accountId": b.account().to_string() })).await;
+    let opened = a
+        .post("/v1/dms", json!({ "accountId": b.account().to_string() }))
+        .await;
     assert!(opened["invite"].is_string());
     assert_eq!(opened["delivered"], json!(true), "{opened}");
     let b2 = &b;
@@ -818,10 +1245,20 @@ async fn invite_secrets_never_over_plain_http() {
     let inv = &pending["invites"][0];
     assert!(inv.get("code").is_none());
     // Accepting by reference moves no code over the wire.
-    b.post("/v1/invites/pending/accept", json!({ "relay": inv["relay"], "seq": inv["seq"] })).await;
+    b.post(
+        "/v1/invites/pending/accept",
+        json!({ "relay": inv["relay"], "seq": inv["seq"] }),
+    )
+    .await;
     let a_acc = a.account();
     let again = until(&[&a, &b], 30, async || {
-        let (code, v) = b2.call(reqwest::Method::POST, "/v1/dms", Some(json!({ "accountId": a_acc.to_string() }))).await;
+        let (code, v) = b2
+            .call(
+                reqwest::Method::POST,
+                "/v1/dms",
+                Some(json!({ "accountId": a_acc.to_string() })),
+            )
+            .await;
         (code == 200).then_some(v)
     })
     .await;
@@ -839,30 +1276,60 @@ async fn dm_invite_held_until_the_contact_id_arrives_and_delivered_once() {
     let b_acc = b.account();
     know_each_other(&a, &b).await;
     assert!(
-        a.handle.shared.co_members().iter().any(|c| c.account_id == b_acc && c.contact.is_none()),
+        a.handle
+            .shared
+            .co_members()
+            .iter()
+            .any(|c| c.account_id == b_acc && c.contact.is_none()),
         "B has no contact id yet"
     );
 
     // Opened now: not delivered, but held.
-    let opened = a.post("/v1/dms", json!({ "accountId": b_acc.to_string() })).await;
+    let opened = a
+        .post("/v1/dms", json!({ "accountId": b_acc.to_string() }))
+        .await;
     assert_eq!(opened["delivered"], json!(false), "{opened}");
     assert_eq!(opened["pending"], json!(true), "{opened}");
-    assert_eq!(opened["inviteDelivery"]["state"], json!("waiting"), "{opened}");
+    assert_eq!(
+        opened["inviteDelivery"]["state"],
+        json!("waiting"),
+        "{opened}"
+    );
     let invite = opened["invite"].as_str().unwrap().to_string();
     let ws = opened["workspaceId"].as_str().unwrap().to_string();
-    let row = a.get("/v1/dms").await["dms"].as_array().unwrap().iter().find(|d| d["workspaceId"] == json!(ws)).unwrap().clone();
+    let row = a.get("/v1/dms").await["dms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["workspaceId"] == json!(ws))
+        .unwrap()
+        .clone();
     assert_eq!(row["inviteDelivery"]["pending"], json!(true), "{row}");
 
     // At rest: the held list and its secret hold no part of the invite.
     let a_dir = a.handle.shared.cfg.data_dir.clone();
     let mut held_files = vec![a_dir.join("held-dm-invites.json")];
-    held_files.extend(std::fs::read_dir(a_dir.join("secrets").join("dm-invite")).unwrap().flatten().map(|e| e.path()));
+    held_files.extend(
+        std::fs::read_dir(a_dir.join("secrets").join("dm-invite"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.path()),
+    );
     assert_eq!(held_files.len(), 2, "{held_files:?}");
     let conn = InviteConn::decode(&invite).unwrap();
     for f in &held_files {
         let text = String::from_utf8_lossy(&std::fs::read(f).unwrap()).to_string();
-        for needle in [invite.as_str(), "hivews1:", conn.key.as_deref().unwrap(), conn.room.as_str()] {
-            assert!(!text.contains(needle), "{} holds part of the invite", f.display());
+        for needle in [
+            invite.as_str(),
+            "hivews1:",
+            conn.key.as_deref().unwrap(),
+            conn.room.as_str(),
+        ] {
+            assert!(
+                !text.contains(needle),
+                "{} holds part of the invite",
+                f.display()
+            );
         }
     }
 
@@ -876,11 +1343,19 @@ async fn dm_invite_held_until_the_contact_id_arrives_and_delivered_once() {
     })
     .await;
     assert_eq!(pending["invites"][0]["isDm"], json!(true));
-    assert_eq!(pending["invites"][0]["acceptable"], json!(true), "{pending}");
+    assert_eq!(
+        pending["invites"][0]["acceptable"],
+        json!(true),
+        "{pending}"
+    );
     let a2 = &a;
     let delivered = until(&[&a, &b], 30, async || {
         let d = a2.get("/v1/dms").await;
-        let row = d["dms"].as_array()?.iter().find(|r| r["workspaceId"] == json!(ws))?.clone();
+        let row = d["dms"]
+            .as_array()?
+            .iter()
+            .find(|r| r["workspaceId"] == json!(ws))?
+            .clone();
         (row["inviteDelivery"]["state"] == json!("delivered")).then_some(row)
     })
     .await;
@@ -893,7 +1368,12 @@ async fn dm_invite_held_until_the_contact_id_arrives_and_delivered_once() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let inv = &pending["invites"][0];
-    let accepted = b.post("/v1/invites/pending/accept", json!({ "relay": inv["relay"], "seq": inv["seq"] })).await;
+    let accepted = b
+        .post(
+            "/v1/invites/pending/accept",
+            json!({ "relay": inv["relay"], "seq": inv["seq"] }),
+        )
+        .await;
     assert_eq!(accepted["workspaceId"], json!(ws));
     for _ in 0..5 {
         a.kick();
@@ -901,7 +1381,20 @@ async fn dm_invite_held_until_the_contact_id_arrives_and_delivered_once() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let c = contacts.lock().unwrap();
-    assert_eq!(c.posted.values().sum::<usize>(), 1, "one drop in all: {:?}", c.posted);
+    assert_eq!(
+        c.posted.values().sum::<usize>(),
+        1,
+        "one drop in all: {:?}",
+        c.posted
+    );
     drop(c);
-    assert!(!a_dir.join("secrets").join("dm-invite").read_dir().unwrap().any(|_| true), "the sealed invite is forgotten once delivered");
+    assert!(
+        !a_dir
+            .join("secrets")
+            .join("dm-invite")
+            .read_dir()
+            .unwrap()
+            .any(|_| true),
+        "the sealed invite is forgotten once delivered"
+    );
 }

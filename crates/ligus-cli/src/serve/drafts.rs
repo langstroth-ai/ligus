@@ -14,7 +14,9 @@ use ligus_core::presence::b64url;
 
 /// A fresh draft id: 16 random bytes, base64url. No OS randomness, no id (an
 /// all-zero id would be guessable, and the next one would collide with it).
-pub fn draft_id(fill: fn(&mut [u8]) -> Result<(), getrandom::Error>) -> Result<String, getrandom::Error> {
+pub fn draft_id(
+    fill: fn(&mut [u8]) -> Result<(), getrandom::Error>,
+) -> Result<String, getrandom::Error> {
     let mut raw = [0u8; 16];
     fill(&mut raw)?;
     Ok(b64url(&raw))
@@ -45,7 +47,12 @@ pub struct OwnedDrafts<T> {
 
 impl<T> OwnedDrafts<T> {
     pub fn new(ttl: Duration, per_owner: usize, total: usize) -> Self {
-        Self { m: Mutex::new(HashMap::new()), ttl, per_owner, total }
+        Self {
+            m: Mutex::new(HashMap::new()),
+            ttl,
+            per_owner,
+            total,
+        }
     }
 
     /// Keep `draft` for `owner`. At its cap, the owner's oldest draft goes;
@@ -57,13 +64,25 @@ impl<T> OwnedDrafts<T> {
         m.retain(|_, e| e.at.elapsed() < ttl);
         let mine = m.values().filter(|e| e.owner == owner).count();
         if mine >= self.per_owner {
-            if let Some(oldest) = m.iter().filter(|(_, e)| e.owner == owner).min_by_key(|(_, e)| e.at).map(|(k, _)| k.clone()) {
+            if let Some(oldest) = m
+                .iter()
+                .filter(|(_, e)| e.owner == owner)
+                .min_by_key(|(_, e)| e.at)
+                .map(|(k, _)| k.clone())
+            {
                 m.remove(&oldest);
             }
         } else if m.len() >= self.total {
             return Err(PutError::Full);
         }
-        m.insert(id.clone(), Entry { owner: owner.to_string(), at: Instant::now(), draft });
+        m.insert(
+            id.clone(),
+            Entry {
+                owner: owner.to_string(),
+                at: Instant::now(),
+                draft,
+            },
+        );
         Ok(id)
     }
 
@@ -75,12 +94,21 @@ impl<T> OwnedDrafts<T> {
             return None;
         }
         let ttl = self.ttl;
-        m.remove(id).filter(|e| e.at.elapsed() < ttl).map(|e| e.draft)
+        m.remove(id)
+            .filter(|e| e.at.elapsed() < ttl)
+            .map(|e| e.draft)
     }
 
     /// Put a taken draft back under its id, keeping its age.
     pub fn put_back(&self, owner: &str, id: String, draft: T, at: Instant) {
-        self.m.lock().unwrap_or_else(|e| e.into_inner()).insert(id, Entry { owner: owner.to_string(), at, draft });
+        self.m.lock().unwrap_or_else(|e| e.into_inner()).insert(
+            id,
+            Entry {
+                owner: owner.to_string(),
+                at,
+                draft,
+            },
+        );
     }
 
     /// Take `owner`'s draft `id` with its age (for [`Self::put_back`]).
@@ -90,7 +118,9 @@ impl<T> OwnedDrafts<T> {
             return None;
         }
         let ttl = self.ttl;
-        m.remove(id).filter(|e| e.at.elapsed() < ttl).map(|e| (e.draft, e.at))
+        m.remove(id)
+            .filter(|e| e.at.elapsed() < ttl)
+            .map(|e| (e.draft, e.at))
     }
 }
 
@@ -101,7 +131,10 @@ mod tests {
     #[test]
     fn draft_ids_need_randomness() {
         assert!(draft_id(|_| Err(getrandom::Error::UNSUPPORTED)).is_err());
-        let (a, b) = (draft_id(getrandom::fill).unwrap(), draft_id(getrandom::fill).unwrap());
+        let (a, b) = (
+            draft_id(getrandom::fill).unwrap(),
+            draft_id(getrandom::fill).unwrap(),
+        );
         assert_ne!(a, b);
         assert_eq!(a.len(), 22);
     }
@@ -116,7 +149,11 @@ mod tests {
             d.put("tunnel:b", 100 + i).unwrap();
         }
         assert_eq!(d.take("tunnel:b", &a), None, "not b's to take");
-        assert_eq!(d.take("tunnel:a", &a), Some(1), "b's flood left it in place");
+        assert_eq!(
+            d.take("tunnel:a", &a),
+            Some(1),
+            "b's flood left it in place"
+        );
         assert_eq!(d.take("tunnel:a", &a), None, "single use");
         // b holds 4 (its cap), a holds 1, c 1: the box is full for a newcomer.
         d.put("tunnel:a", 2).unwrap();
@@ -126,7 +163,12 @@ mod tests {
         for _ in 0..4 {
             d.put("tunnel:b", 9).unwrap();
         }
-        let mine = d.m.lock().unwrap().values().filter(|e| e.owner == "tunnel:a").count();
+        let mine =
+            d.m.lock()
+                .unwrap()
+                .values()
+                .filter(|e| e.owner == "tunnel:a")
+                .count();
         assert_eq!(mine, 1);
     }
 

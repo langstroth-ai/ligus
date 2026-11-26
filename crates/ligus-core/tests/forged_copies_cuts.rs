@@ -55,7 +55,11 @@ fn bind(w: &mut SignedWorld, device: Uuid) -> SigningKeypair {
         "a certificate under a device id its key doesn't derive was allowed"
     );
     let roster = w.roster();
-    assert_ne!(roster.devices[&device].public_key, key.public_key_bytes().to_vec(), "the device id's key changed");
+    assert_ne!(
+        roster.devices[&device].public_key,
+        key.public_key_bytes().to_vec(),
+        "the device id's key changed"
+    );
     key
 }
 
@@ -263,18 +267,41 @@ fn a_squatters_events_under_the_victims_device_id_do_not_uncover_the_victim() {
     // The production watermark for removing con.
     let roster = w.roster();
     let a = w.people["con"].account_id;
-    let signers: BTreeSet<Uuid> = roster.devices.iter().filter(|(_, d)| d.accounts.contains(&a)).map(|(id, _)| *id).collect();
+    let signers: BTreeSet<Uuid> = roster
+        .devices
+        .iter()
+        .filter(|(_, d)| d.accounts.contains(&a))
+        .map(|(id, _)| *id)
+        .collect();
     // What a device holds: ingest keeps an event only when its device's key
     // (the one its id derives from) verifies it for an account that
     // certified the device.
     let held: Vec<SessionEventEnvelope> = w.chats[&chat]
         .iter()
-        .filter(|e| e.signer_device_id.and_then(|d| roster.devices.get(&d)).is_none_or(|d| d.verifying_key(e).is_some()))
+        .filter(|e| {
+            e.signer_device_id
+                .and_then(|d| roster.devices.get(&d))
+                .is_none_or(|d| d.verifying_key(e).is_some())
+        })
         .cloned()
         .collect();
-    assert_eq!(held.len() + ligus_core::watermark::MAX_HEADS + 1, w.chats[&chat].len(), "a squatter's event under con's device id verifies");
+    assert_eq!(
+        held.len() + ligus_core::watermark::MAX_HEADS + 1,
+        w.chats[&chat].len(),
+        "a squatter's event under con's device id verifies"
+    );
     let mut wm = heads_of(&w.cfg, workspace_config_session_id(w.wid), &signers);
     wm.extend(heads_of(&held, chat, &signers));
-    w.push("owner", SessionEvent::MemberRemoved { member_id: "con".into(), watermark: wm });
-    assert_eq!(w.verdict(early), Verdict::Allowed, "con's post before the removal lost its coverage");
+    w.push(
+        "owner",
+        SessionEvent::MemberRemoved {
+            member_id: "con".into(),
+            watermark: wm,
+        },
+    );
+    assert_eq!(
+        w.verdict(early),
+        Verdict::Allowed,
+        "con's post before the removal lost its coverage"
+    );
 }

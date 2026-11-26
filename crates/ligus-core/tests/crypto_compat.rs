@@ -22,7 +22,10 @@ fn hx(b: &[u8]) -> String {
 }
 
 fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
 }
 
 fn id(s: &str) -> Uuid {
@@ -57,7 +60,10 @@ fn hkdf_sha256_rfc5869_vectors() {
     ];
     for (ikm, salt, info, prk_want, okm_want) in cases {
         let salt = unhex(salt);
-        let (prk, hk) = Hkdf::<Sha256>::extract(if salt.is_empty() { None } else { Some(&salt) }, &unhex(ikm));
+        let (prk, hk) = Hkdf::<Sha256>::extract(
+            if salt.is_empty() { None } else { Some(&salt) },
+            &unhex(ikm),
+        );
         assert_eq!(hx(&prk), prk_want);
         let mut okm = vec![0u8; okm_want.len() / 2];
         hk.expand(&unhex(info), &mut okm).unwrap();
@@ -113,10 +119,16 @@ fn sha2_fips_180_4_vectors() {
 /// Device ids (Ed25519 and P-256) derive exactly as before.
 #[test]
 fn device_ids_are_unchanged() {
-    assert_eq!(device_id_for(SigAlg::Ed25519, &[0x11; 32]), id("100eeb14-b187-811f-ab90-19aaf699bf3d"));
+    assert_eq!(
+        device_id_for(SigAlg::Ed25519, &[0x11; 32]),
+        id("100eeb14-b187-811f-ab90-19aaf699bf3d")
+    );
     let mut p256 = vec![0x04u8];
     p256.extend([0x22u8; 64]);
-    assert_eq!(device_id_for(SigAlg::P256, &p256), id("8e2e5b4b-3fd2-8f40-8d12-5ef0dce60f7d"));
+    assert_eq!(
+        device_id_for(SigAlg::P256, &p256),
+        id("8e2e5b4b-3fd2-8f40-8d12-5ef0dce60f7d")
+    );
 }
 
 /// The workspace-key commitment and the key id cut from it.
@@ -131,7 +143,10 @@ fn workspace_key_commitment_is_unchanged() {
 /// The account-key fingerprint (`fk`).
 #[test]
 fn account_key_fingerprint_is_unchanged() {
-    assert_eq!(hx(&key_fingerprint(&[0x11; 32])), "02d449a31fbb267c8f352e9968a79e3e");
+    assert_eq!(
+        hx(&key_fingerprint(&[0x11; 32])),
+        "02d449a31fbb267c8f352e9968a79e3e"
+    );
 }
 
 /// The proposal digest a vote binds to, with every optional part set and
@@ -149,7 +164,10 @@ fn proposal_digest_is_unchanged() {
         "baseCommit": "0123456789abcdef0123456789abcdef01234567",
     }))
     .unwrap();
-    assert_eq!(diff_digest(&full), "5ffcebefdc1eef76c06762fe31f057b3e658097b18c14bef655a4bb2f3ac81db");
+    assert_eq!(
+        diff_digest(&full),
+        "5ffcebefdc1eef76c06762fe31f057b3e658097b18c14bef655a4bb2f3ac81db"
+    );
 
     let bare: ActionProposal = serde_json::from_value(serde_json::json!({
         "id": "0a0b0c0d-0e0f-4011-8213-141516171819",
@@ -158,7 +176,10 @@ fn proposal_digest_is_unchanged() {
         "status": "open",
     }))
     .unwrap();
-    assert_eq!(diff_digest(&bare), "f6a796bba2f2d7dbd596658ba751da3247ca241fb7643cd3209175b6589546e9");
+    assert_eq!(
+        diff_digest(&bare),
+        "f6a796bba2f2d7dbd596658ba751da3247ca241fb7643cd3209175b6589546e9"
+    );
 }
 
 /// HKDF-SHA256 with a salt and the workspace-key sealing info string, as
@@ -168,5 +189,8 @@ fn sealing_hkdf_is_unchanged() {
     let hk = Hkdf::<Sha256>::new(Some(&[0x33; 64]), &[0x44; 32]);
     let mut okm = [0u8; 32];
     hk.expand(b"hive-workspace-key-seal-v1", &mut okm).unwrap();
-    assert_eq!(hx(&okm), "387f38c116aae59264fbda6ca2e19d59349cd9797f9856bb677f4d61c7f8f7a2");
+    assert_eq!(
+        hx(&okm),
+        "387f38c116aae59264fbda6ca2e19d59349cd9797f9856bb677f4d61c7f8f7a2"
+    );
 }

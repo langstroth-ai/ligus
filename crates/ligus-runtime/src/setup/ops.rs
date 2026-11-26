@@ -92,7 +92,10 @@ impl SandboxFact {
     /// This host's sandbox, as the executor probed it.
     pub fn here() -> Self {
         let s = crate::executor::sandbox_status();
-        SandboxFact { tier: s.tier().to_string(), summary: s.summary }
+        SandboxFact {
+            tier: s.tier().to_string(),
+            summary: s.summary,
+        }
     }
 }
 
@@ -306,7 +309,11 @@ pub trait SetupOps {
     }
     /// Start the unsaved server under this host's agent sandbox and list its
     /// tools (`token`: its bearer token, for a URL server).
-    fn mcp_handshake(&mut self, spec: &crate::mcp::McpServerSpec, token: Option<&Zeroizing<String>>) -> OpsResult<Vec<String>> {
+    fn mcp_handshake(
+        &mut self,
+        spec: &crate::mcp::McpServerSpec,
+        token: Option<&Zeroizing<String>>,
+    ) -> OpsResult<Vec<String>> {
         Err(OpsError::Unsupported)
     }
     /// Save a URL server's bearer token in this device's secret store, bound
@@ -320,7 +327,11 @@ pub trait SetupOps {
     }
     /// Write the server (enabled) and its reach together. `reach` empty:
     /// every agent.
-    fn add_mcp_server(&mut self, spec: &crate::mcp::McpServerSpec, reach: &[Uuid]) -> OpsResult<()> {
+    fn add_mcp_server(
+        &mut self,
+        spec: &crate::mcp::McpServerSpec,
+        reach: &[Uuid],
+    ) -> OpsResult<()> {
         Err(OpsError::Unsupported)
     }
     fn remove_mcp_server(&mut self, id: &str) -> OpsResult<()> {
@@ -335,7 +346,12 @@ pub trait SetupOps {
     fn inspect_folder(&self, path: &str) -> FolderFact {
         crate::setup::validate::inspect_folder(path)
     }
-    fn add_repo(&mut self, folder: &FolderFact, display_name: &str, default_branch: &str) -> OpsResult<String> {
+    fn add_repo(
+        &mut self,
+        folder: &FolderFact,
+        display_name: &str,
+        default_branch: &str,
+    ) -> OpsResult<String> {
         Err(OpsError::Unsupported)
     }
     fn bind_folder(&mut self, repo_id: &str, path: &str) -> OpsResult<()> {

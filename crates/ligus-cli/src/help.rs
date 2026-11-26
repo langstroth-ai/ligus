@@ -26,7 +26,11 @@ pub struct Flag {
 }
 
 const fn f(flag: &'static str, default: &'static str, about: &'static str) -> Flag {
-    Flag { flag, default, about }
+    Flag {
+        flag,
+        default,
+        about,
+    }
 }
 
 /// One command or subcommand's reference.
@@ -88,7 +92,9 @@ impl std::error::Error for UsageError {}
 /// Whether `e` is a usage error (exit 2).
 pub fn is_usage(e: &anyhow::Error) -> bool {
     let msg = e.to_string();
-    e.downcast_ref::<UsageError>().is_some() || msg.starts_with("usage:") || msg.starts_with("unknown `ligus ")
+    e.downcast_ref::<UsageError>().is_some()
+        || msg.starts_with("usage:")
+        || msg.starts_with("unknown `ligus ")
 }
 
 /// The help to read after a usage error on `args`: the deepest command they
@@ -119,10 +125,20 @@ const G_REPOS: &str = "Repositories and code hosts";
 const G_DATA: &str = "Memory, facts and dashboards";
 const G_CHECK: &str = "Checks and diagnostics";
 
-const GROUPS: &[&str] = &[G_START, G_CHAT, G_AGENTS, G_BOX, G_PHONE, G_REPOS, G_DATA, G_CHECK];
+const GROUPS: &[&str] = &[
+    G_START, G_CHAT, G_AGENTS, G_BOX, G_PHONE, G_REPOS, G_DATA, G_CHECK,
+];
 
-const JSON: Flag = f("--json", "off", "print one JSON document on stdout instead of text (also: -o json)");
-const DRY_RUN: Flag = f("--dry-run", "off", "check the arguments and print what would change; sign and write nothing");
+const JSON: Flag = f(
+    "--json",
+    "off",
+    "print one JSON document on stdout instead of text (also: -o json)",
+);
+const DRY_RUN: Flag = f(
+    "--dry-run",
+    "off",
+    "check the arguments and print what would change; sign and write nothing",
+);
 
 pub const COMMANDS: &[Cmd] = &[
     // ── Getting started ────────────────────────────────────────────────
@@ -430,8 +446,12 @@ pub const COMMANDS: &[Cmd] = &[
                   done on this device, from the same engine the desktop's Set up commands use. `ligus setup <flow> \
                   --help` shows a flow's flags. Every flow checks first, writes only when every check passed, is safe \
                   to run again, and stops with exit 4 at a step only a person can do. `ligus help setup` is the guide.",
-        synopsis: &["ligus setup [--json]", "ligus setup <flow> [flags] [--json] [--dry-run]"],
-        flags: &[JSON, f("--apply", "off", "the earlier `ligus setup --apply`: now `ligus setup runtimes --apply`")],
+        synopsis: &["ligus setup [--json]", "ligus setup <flow> [flags] [--recovery-words-file PATH] [--json] [--dry-run]"],
+        flags: &[
+            JSON,
+            f("--apply", "off", "the earlier `ligus setup --apply`: now `ligus setup runtimes --apply`"),
+            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence for a step that needs your passkey"),
+        ],
         examples: &["ligus setup", "ligus setup agent --harness claude-code --name builder", "ligus setup --json | jq '.checks[] | {id, status}'"],
         exit: &[(0, "listed (setup never fails a listing)")],
         see_also: &["ligus help setup", "ligus doctor", "desktop: ⌘K > Set up an agent (and the other Set up commands)"],
@@ -446,7 +466,7 @@ pub const COMMANDS: &[Cmd] = &[
                   member's), pick the model, reuse a keyless workspace runtime with that harness and model or define one \
                   (Admin), create the agent (Contributor), and optionally send one test turn. A failure after the \
                   runtime was defined removes it again.",
-        synopsis: &["ligus setup agent --harness H --name NAME [--model M] [--endpoint URL | --gateway NAME] [--test-turn] [--json] [--dry-run]"],
+        synopsis: &["ligus setup agent --harness H --name NAME [--model M] [--endpoint URL | --gateway NAME] [--test-turn] [--recovery-words-file PATH] [--json] [--dry-run]"],
         flags: &[
             f("--harness H", "required", "claude-code, codex, copilot, antigravity, aider, pi, local (Ollama or OpenAI-compatible) or gateway"),
             f("--name NAME", "required", "the agent's @name"),
@@ -454,6 +474,7 @@ pub const COMMANDS: &[Cmd] = &[
             f("--endpoint URL", "http://localhost:11434", "local only: the model server (https://, or http:// on this machine)"),
             f("--gateway NAME", "none", "gateway only: a model gateway a host offers (ligus hosts)"),
             f("--test-turn", "off", "send one short test message and check the reply"),
+            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence when the workspace's rules need your passkey"),
             JSON,
             DRY_RUN,
         ],
@@ -463,7 +484,13 @@ pub const COMMANDS: &[Cmd] = &[
             "ligus setup agent --harness local --model llama3.2 --name local --dry-run",
             "ligus setup agent --harness codex --name reviewer --json",
         ],
-        exit: &[(2, "a missing or invalid flag (the check names it)"), (3, "the harness isn't installed or signed in, or no agent sandbox"), (6, "your role can't add an agent or a workspace runtime"), (7, "a local model server didn't answer")],
+        exit: &[
+            (2, "a missing or invalid flag (the check names it)"),
+            (3, "the harness isn't installed or signed in, or no agent sandbox"),
+            (4, "the workspace's rules need your passkey: do it in the desktop app, or pass --recovery-words-file"),
+            (6, "your role can't add an agent or a workspace runtime"),
+            (7, "a local model server didn't answer"),
+        ],
         see_also: &["ligus setup", "ligus add-agent", "ligus runtimes", "ligus doctor --sandbox"],
         ..D
     },
@@ -2368,7 +2395,11 @@ pub struct EnvVar {
 }
 
 const fn e(name: &'static str, default: &'static str, about: &'static str) -> EnvVar {
-    EnvVar { name, default, about }
+    EnvVar {
+        name,
+        default,
+        about,
+    }
 }
 
 /// `ligus help env`, by section. Booleans accept 1/true/on/yes and
@@ -2568,6 +2599,10 @@ Exit codes: 0 done; 1 a write or a check failed; 2 a missing or invalid flag; 3 
 tool, a sign-in or the agent sandbox is missing (the fix says how); 4 a person must
 act (a passkey approval, pairing, creating an invite): stop and ask; 6 your role or
 the workspace lockdown refuses it; 7 the relay or the server didn't answer.
+
+A workspace with stricter device rules holds some writes (a workspace runtime, a
+repository) for your passkey. The CLI has none: do that step in the desktop app, or
+pass --recovery-words-file PATH (your recovery key's 24 words, an owner-only file).
 
 Who may run what: adding an agent needs a Contributor (defining a workspace runtime
 for it, an Admin); connecting a tool and binding a folder a Contributor; adding a
@@ -3106,7 +3141,9 @@ fn find_cmd(name: &str) -> Option<&'static Cmd> {
 }
 
 fn find_topic(name: &str) -> Option<&'static Topic> {
-    TOPICS.iter().find(|t| t.name == name || t.aliases.iter().any(|a| a.eq_ignore_ascii_case(name)))
+    TOPICS
+        .iter()
+        .find(|t| t.name == name || t.aliases.iter().any(|a| a.eq_ignore_ascii_case(name)))
 }
 
 /// `ligus help` with no argument, in the shared section order.
@@ -3119,7 +3156,10 @@ pub fn overview() -> String {
     );
     for (i, g) in GROUPS.iter().enumerate() {
         let _ = write!(s, "{}  {}\n", if i == 0 { "" } else { "\n" }, g);
-        for c in COMMANDS.iter().filter(|c| c.group == *g && !c.name.contains(' ')) {
+        for c in COMMANDS
+            .iter()
+            .filter(|c| c.group == *g && !c.name.contains(' '))
+        {
             let _ = writeln!(s, "    {:<16} {}", c.name, c.summary);
         }
     }
@@ -3147,7 +3187,9 @@ pub fn overview() -> String {
 }
 
 fn env_lookup(name: &str) -> Option<&'static EnvVar> {
-    ENV.iter().flat_map(|(_, vs)| vs.iter()).find(|v| v.name == name)
+    ENV.iter()
+        .flat_map(|(_, vs)| vs.iter())
+        .find(|v| v.name == name)
 }
 
 /// Variables a command reads, common ones included.
@@ -3157,7 +3199,12 @@ fn env_of(c: &Cmd) -> Vec<&'static str> {
         v.extend(["LIGUS_DATA_DIR", "LIGUS_SECRET_BACKEND"]);
     }
     if c.conn {
-        v.extend(["LIGUS_RELAY_URL", "LIGUS_RELAY_ACCESS_TOKEN", "LIGUS_WORKSPACE", "LIGUS_WORKSPACE_KEY"]);
+        v.extend([
+            "LIGUS_RELAY_URL",
+            "LIGUS_RELAY_ACCESS_TOKEN",
+            "LIGUS_WORKSPACE",
+            "LIGUS_WORKSPACE_KEY",
+        ]);
     }
     for n in c.env {
         if !v.contains(n) {
@@ -3180,7 +3227,11 @@ pub fn command_help(c: &Cmd) -> String {
     }
     let subs: Vec<&Cmd> = COMMANDS
         .iter()
-        .filter(|x| x.name.strip_prefix(c.name).is_some_and(|r| r.starts_with(' ') && !r[1..].contains(' ')))
+        .filter(|x| {
+            x.name
+                .strip_prefix(c.name)
+                .is_some_and(|r| r.starts_with(' ') && !r[1..].contains(' '))
+        })
         .collect();
     if !subs.is_empty() {
         s.push_str("\nCOMMANDS\n");
@@ -3189,9 +3240,20 @@ pub fn command_help(c: &Cmd) -> String {
         }
     }
     s.push_str("\nFLAGS\n");
-    let common = [f("-h, --help", "", "print this help"), f("-o, -q, --color", "", "every command: -o json|text, quiet, colour (ligus help)")];
+    let common = [
+        f("-h, --help", "", "print this help"),
+        f(
+            "-o, -q, --color",
+            "",
+            "every command: -o json|text, quiet, colour (ligus help)",
+        ),
+    ];
     for fl in c.flags.iter().chain(common.iter()) {
-        let def = if fl.default.is_empty() { String::new() } else { format!(" (default: {})", fl.default) };
+        let def = if fl.default.is_empty() {
+            String::new()
+        } else {
+            format!(" (default: {})", fl.default)
+        };
         let _ = writeln!(s, "  {:<28} {}{def}", fl.flag, fl.about);
     }
     s.push_str("\nEXAMPLES\n");
@@ -3297,12 +3359,18 @@ fn cmd_of(words: &[&str]) -> Option<&'static Cmd> {
         "--version" | "-V" => "version",
         w => w,
     };
-    words.get(1).and_then(|w| find_cmd(&format!("{first} {w}"))).or_else(|| find_cmd(first))
+    words
+        .get(1)
+        .and_then(|w| find_cmd(&format!("{first} {w}")))
+        .or_else(|| find_cmd(first))
 }
 
 /// The words of a command line, without flags (`--help`, `-h`, `--json`, `-`).
 fn words<'a>(args: &[&'a str]) -> Vec<&'a str> {
-    args.iter().copied().filter(|a| !a.starts_with('-')).collect()
+    args.iter()
+        .copied()
+        .filter(|a| !a.starts_with('-'))
+        .collect()
 }
 
 /// `ligus <args> --help`: that command's reference (the overview with no
@@ -3325,7 +3393,12 @@ pub fn lookup(args: &[&str]) -> Option<String> {
     let topic = (words.len() == 1).then(|| find_topic(words[0])).flatten();
     let cmd = cmd_of(&words);
     match (topic, cmd) {
-        (Some(t), Some(c)) => Some(format!("{}\n{}\n{}", topic_text(t), "─".repeat(60), command_help(c))),
+        (Some(t), Some(c)) => Some(format!(
+            "{}\n{}\n{}",
+            topic_text(t),
+            "─".repeat(60),
+            command_help(c)
+        )),
         (Some(t), None) => Some(topic_text(t)),
         (None, Some(c)) => Some(command_help(c)),
         (None, None) => None,
@@ -3346,7 +3419,11 @@ pub fn print_and_exit(args: &[&str], topics: bool) -> ! {
         println!("{}", help_json());
         std::process::exit(EXIT_OK);
     }
-    match if topics { lookup(args) } else { lookup_flag(args) } {
+    match if topics {
+        lookup(args)
+    } else {
+        lookup_flag(args)
+    } {
         Some(text) => {
             print!("{text}");
             std::process::exit(EXIT_OK);
@@ -3354,7 +3431,11 @@ pub fn print_and_exit(args: &[&str], topics: bool) -> ! {
         None => {
             eprintln!(
                 "ligus: no command or topic {:?}. `ligus help` lists the commands and topics.",
-                args.iter().filter(|a| !a.starts_with('-')).copied().collect::<Vec<_>>().join(" ")
+                args.iter()
+                    .filter(|a| !a.starts_with('-'))
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(" ")
             );
             std::process::exit(EXIT_USAGE);
         }
@@ -3368,12 +3449,15 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     fn src(rel: &str) -> String {
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(rel)).unwrap()
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(rel))
+            .unwrap()
     }
 
     /// The text between `start` and the next line equal to `end` after it.
     fn between<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
-        let i = text.find(start).unwrap_or_else(|| panic!("{start:?} not found"));
+        let i = text
+            .find(start)
+            .unwrap_or_else(|| panic!("{start:?} not found"));
         let rest = &text[i..];
         let j = rest.find(end).unwrap_or(rest.len());
         &rest[..j]
@@ -3387,7 +3471,8 @@ mod tests {
                 let t = l.trim_start();
                 let rest = t.strip_prefix('"')?;
                 let (name, after) = rest.split_once('"')?;
-                (after.trim_start().starts_with("=>") || after.trim_start().starts_with("if ")).then(|| name.to_string())
+                (after.trim_start().starts_with("=>") || after.trim_start().starts_with("if "))
+                    .then(|| name.to_string())
             })
             .collect()
     }
@@ -3416,16 +3501,41 @@ mod tests {
         let h = command_help(c);
         // One section order for every Ligus tool.
         let mut at = 0;
-        for sec in ["NAME", "USAGE", "FLAGS", "EXAMPLES", "ENVIRONMENT", "EXIT CODES", "SEE ALSO"] {
-            let i = if sec == "NAME" { h.find("NAME\n") } else { h.find(&format!("\n{sec}\n")) };
+        for sec in [
+            "NAME",
+            "USAGE",
+            "FLAGS",
+            "EXAMPLES",
+            "ENVIRONMENT",
+            "EXIT CODES",
+            "SEE ALSO",
+        ] {
+            let i = if sec == "NAME" {
+                h.find("NAME\n")
+            } else {
+                h.find(&format!("\n{sec}\n"))
+            };
             let i = i.unwrap_or_else(|| panic!("`ligus {name} --help` lacks {sec}:\n{h}"));
-            assert!(i >= at, "`ligus {name} --help`: {sec} is out of order:\n{h}");
+            assert!(
+                i >= at,
+                "`ligus {name} --help`: {sec} is out of order:\n{h}"
+            );
             at = i;
         }
-        assert!(!c.purpose.is_empty() && !c.synopsis.is_empty(), "{name}: empty purpose or synopsis");
-        assert!((1..=3).contains(&c.examples.len()), "{name}: 1-3 examples, has {}", c.examples.len());
+        assert!(
+            !c.purpose.is_empty() && !c.synopsis.is_empty(),
+            "{name}: empty purpose or synopsis"
+        );
+        assert!(
+            (1..=3).contains(&c.examples.len()),
+            "{name}: 1-3 examples, has {}",
+            c.examples.len()
+        );
         assert!(!c.see_also.is_empty(), "{name}: no see also");
-        assert!(c.examples.iter().all(|x| x.contains("ligus")), "{name}: examples must be ligus command lines");
+        assert!(
+            c.examples.iter().all(|x| x.contains("ligus")),
+            "{name}: examples must be ligus command lines"
+        );
         for fl in c.flags {
             assert!(!fl.about.is_empty(), "{name} {}: no description", fl.flag);
         }
@@ -3434,7 +3544,11 @@ mod tests {
         assert!(lookup(&words).unwrap().contains(&h), "ligus help {name}");
         let mut with_flag = words.clone();
         with_flag.push("--help");
-        assert_eq!(lookup_flag(&with_flag).as_deref(), Some(h.as_str()), "ligus {name} --help");
+        assert_eq!(
+            lookup_flag(&with_flag).as_deref(),
+            Some(h.as_str()),
+            "ligus {name} --help"
+        );
     }
 
     /// Every command the dispatcher handles has a complete help entry, and
@@ -3458,29 +3572,116 @@ mod tests {
         let groups: &[(&str, String, &str, &str, &[&str])] = &[
             ("auth", src("auth.rs"), "pub fn cmd_auth", "\n}\n", &[]),
             ("admit", src("admit.rs"), "pub fn cmd_admit", "\n}\n", &[]),
-            ("admit", main.clone(), "\"admit\" => {", "\n        \"approvals\"", &[]),
-            ("approvals", main.clone(), "\"approvals\" => match", "\n        },\n", &[]),
-            ("recovery-key", src("admit.rs"), "pub fn cmd_recovery_key", "\n}\n", &[]),
-            ("config", main.clone(), "\"config\" => match", "\n        },\n", &[]),
-            ("remote", main.clone(), "\"remote\" => {", "\n        }\n", &[]),
-            ("phones", main.clone(), "\"phones\" => {", "\n        \"dashboard\"", &[]),
-            ("devices", main.clone(), "\"devices\" => {", "\n        \"recovery-key\"", &[]),
-            ("profile", main.clone(), "\"profile\" => match", "\n        },\n", &[]),
-            ("dashboard", main.clone(), "\"dashboard\" => match", "\n        },\n", &[]),
-            ("facts", main.clone(), "\"facts\" => {", "\n        }\n", &[]),
+            (
+                "admit",
+                main.clone(),
+                "\"admit\" => {",
+                "\n        \"approvals\"",
+                &[],
+            ),
+            (
+                "approvals",
+                main.clone(),
+                "\"approvals\" => match",
+                "\n        },\n",
+                &[],
+            ),
+            (
+                "recovery-key",
+                src("admit.rs"),
+                "pub fn cmd_recovery_key",
+                "\n}\n",
+                &[],
+            ),
+            (
+                "config",
+                main.clone(),
+                "\"config\" => match",
+                "\n        },\n",
+                &[],
+            ),
+            (
+                "remote",
+                main.clone(),
+                "\"remote\" => {",
+                "\n        }\n",
+                &[],
+            ),
+            (
+                "phones",
+                main.clone(),
+                "\"phones\" => {",
+                "\n        \"dashboard\"",
+                &[],
+            ),
+            (
+                "devices",
+                main.clone(),
+                "\"devices\" => {",
+                "\n        \"recovery-key\"",
+                &[],
+            ),
+            (
+                "profile",
+                main.clone(),
+                "\"profile\" => match",
+                "\n        },\n",
+                &[],
+            ),
+            (
+                "dashboard",
+                main.clone(),
+                "\"dashboard\" => match",
+                "\n        },\n",
+                &[],
+            ),
+            (
+                "facts",
+                main.clone(),
+                "\"facts\" => {",
+                "\n        }\n",
+                &[],
+            ),
             ("trust", main.clone(), "fn cmd_trust", "\n}\n", &[]),
             ("memory", src("memory_cmd.rs"), "pub fn run(", "\n}\n", &[]),
             ("asks", src("asks_cmd.rs"), "pub fn run(", "\n}\n", &[]),
             ("hook", src("hook_cmd.rs"), "pub fn cmd(", "\n}\n", &[]),
-            ("repos", src("repos_cmd.rs"), "pub fn cmd(", "\n}\n", &["on", "off", "default"]),
-            ("repo", src("scratch_cmd.rs"), "pub fn cmd_repo(", "\n}\n", &[]),
-            ("forge", src("forge_cmd.rs"), "pub fn cmd(", "\n}\n", &["oauth", "gh", "none"]),
-            ("setup", src("setup_cmd.rs"), "pub fn cmd(", "\n}\n", &["-", "--json", "--dry-run"]),
+            (
+                "repos",
+                src("repos_cmd.rs"),
+                "pub fn cmd(",
+                "\n}\n",
+                &["on", "off", "default"],
+            ),
+            (
+                "repo",
+                src("scratch_cmd.rs"),
+                "pub fn cmd_repo(",
+                "\n}\n",
+                &[],
+            ),
+            (
+                "forge",
+                src("forge_cmd.rs"),
+                "pub fn cmd(",
+                "\n}\n",
+                &["oauth", "gh", "none"],
+            ),
+            (
+                "setup",
+                src("setup_cmd.rs"),
+                "pub fn cmd(",
+                "\n}\n",
+                &["-", "--json", "--dry-run"],
+            ),
         ];
         let mut seen_subs = BTreeSet::new();
         for (cmd, text, start, end, not_subs) in groups {
             let block = between(text, start, end);
-            let subs: BTreeSet<String> = some_arms(block).into_iter().filter(|s| !not_subs.contains(&s.as_str())).collect();
+            let subs: BTreeSet<String> = some_arms(block)
+                .into_iter()
+                .filter(|s| !not_subs.contains(&s.as_str()))
+                .collect();
             assert!(!subs.is_empty(), "no subcommands parsed for {cmd}");
             for s in subs {
                 // `repos roots add` and `forge add --auth token` reuse names
@@ -3494,9 +3695,17 @@ mod tests {
         // No help entry for something that doesn't exist.
         for c in COMMANDS {
             let top = c.name.split(' ').next().unwrap();
-            assert!(want.contains(top), "help entry `{}` is not a command", c.name);
+            assert!(
+                want.contains(top),
+                "help entry `{}` is not a command",
+                c.name
+            );
             if c.name.contains(' ') {
-                assert!(seen_subs.contains(c.name) || c.name == "forge git-credential", "help entry `{}` is not a dispatched subcommand", c.name);
+                assert!(
+                    seen_subs.contains(c.name) || c.name == "forge git-credential",
+                    "help entry `{}` is not a dispatched subcommand",
+                    c.name
+                );
             }
         }
     }
@@ -3508,10 +3717,22 @@ mod tests {
         let documented: BTreeSet<String> = COMMANDS
             .iter()
             .flat_map(|c| c.flags.iter())
-            .flat_map(|fl| fl.flag.split([' ', ',']).filter(|w| w.starts_with("--")).map(|w| w.to_string()).collect::<Vec<_>>())
+            .flat_map(|fl| {
+                fl.flag
+                    .split([' ', ','])
+                    .filter(|w| w.starts_with("--"))
+                    .map(|w| w.to_string())
+                    .collect::<Vec<_>>()
+            })
             .collect();
         let mut missing = Vec::new();
-        for file in ["main.rs", "admit.rs", "repos_cmd.rs", "scratch_cmd.rs", "hook_cmd.rs"] {
+        for file in [
+            "main.rs",
+            "admit.rs",
+            "repos_cmd.rs",
+            "scratch_cmd.rs",
+            "hook_cmd.rs",
+        ] {
             let text = src(file);
             for pat in ["flag_val(\"", "has(\"", "flag(\""] {
                 for part in text.split(pat).skip(1) {
@@ -3522,7 +3743,10 @@ mod tests {
                 }
             }
         }
-        assert!(missing.is_empty(), "flags read but in no command's help: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "flags read but in no command's help: {missing:?}"
+        );
     }
 
     fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -3541,21 +3765,34 @@ mod tests {
     #[test]
     fn every_env_var_read_is_in_help_env() {
         let mut files = Vec::new();
-        rs_files(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        rs_files(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
         let env = env_help();
         let mut missing = BTreeSet::new();
         for p in files {
             let name = p.file_name().unwrap().to_string_lossy().to_string();
-            if name == "tests.rs" || name.ends_with("_tests.rs") || name == "testkit.rs" || name == "help.rs" {
+            if name == "tests.rs"
+                || name.ends_with("_tests.rs")
+                || name == "testkit.rs"
+                || name == "help.rs"
+            {
                 continue;
             }
             let text = std::fs::read_to_string(&p).unwrap();
             // The unit tests at the end of a file aren't what the CLI reads.
             let code = text.split("#[cfg(test)]\nmod tests").next().unwrap();
             for part in code.split("\"LIGUS_").skip(1) {
-                let var: String = part.chars().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_').collect();
+                let var: String = part
+                    .chars()
+                    .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                    .collect();
                 let var = format!("LIGUS_{var}");
-                if part[var.len() - 6..].starts_with('"') && !INTERNAL_ENV.contains(&var.as_str()) && !env.contains(&format!("  {var} ")) {
+                if part[var.len() - 6..].starts_with('"')
+                    && !INTERNAL_ENV.contains(&var.as_str())
+                    && !env.contains(&format!("  {var} "))
+                {
                     missing.insert(format!("{var} ({name})"));
                 }
             }
@@ -3567,7 +3804,10 @@ mod tests {
                 }
             }
         }
-        assert!(missing.is_empty(), "LIGUS_* variables read but not in `ligus help env`: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "LIGUS_* variables read but not in `ligus help env`: {missing:?}"
+        );
         for c in COMMANDS {
             for n in env_of(c) {
                 if n.starts_with("LIGUS_") {
@@ -3580,7 +3820,11 @@ mod tests {
     /// The docs' CLI reference lists every command and mentions the topics.
     #[test]
     fn docs_cli_reference_lists_every_command() {
-        let md = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs-site/docs/ligus/reference/cli.md")).unwrap();
+        let md = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs-site/docs/ligus/reference/cli.md"),
+        )
+        .unwrap();
         let mut missing = Vec::new();
         for c in COMMANDS {
             let shown = match c.name {
@@ -3596,7 +3840,10 @@ mod tests {
                 missing.push(format!("topic {}", t.name));
             }
         }
-        assert!(missing.is_empty(), "docs-site/docs/ligus/reference/cli.md is missing: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "docs-site/docs/ligus/reference/cli.md is missing: {missing:?}"
+        );
     }
 
     #[test]
@@ -3605,30 +3852,53 @@ mod tests {
             let h = lookup(&[t.name]).unwrap();
             assert!(h.len() > 200, "topic {} is empty", t.name);
             for a in t.aliases {
-                assert!(lookup(&[a]).unwrap().starts_with(&topic_text(t)), "alias {a}");
+                assert!(
+                    lookup(&[a]).unwrap().starts_with(&topic_text(t)),
+                    "alias {a}"
+                );
             }
         }
         // A topic that is also a command prints both.
         let both = lookup(&["agents"]).unwrap();
-        assert!(both.contains("Access controls") && both.contains("ligus agents [--json]"), "{both}");
+        assert!(
+            both.contains("Access controls") && both.contains("ligus agents [--json]"),
+            "{both}"
+        );
         // Unknown.
         assert_eq!(lookup(&["no-such-thing"]), None);
         assert!(lookup(&[]).unwrap().contains("TOPICS"));
         // The overview lists every top-level command and topic.
         let o = overview();
         for c in COMMANDS.iter().filter(|c| !c.name.contains(' ')) {
-            assert!(o.contains(&format!("  {} ", c.name)), "overview lacks {}", c.name);
+            assert!(
+                o.contains(&format!("  {} ", c.name)),
+                "overview lacks {}",
+                c.name
+            );
         }
         // The overview says both flag spellings work and names the one
         // error prefix; no help text names another prefix.
-        assert!(o.contains("--label box, or --label=box") && o.contains("\"ligus: …\" on stderr"), "{o}");
+        assert!(
+            o.contains("--label box, or --label=box") && o.contains("\"ligus: …\" on stderr"),
+            "{o}"
+        );
         for t in TOPICS {
-            assert!(!t.text.contains("\"error: "), "topic {} names the old error prefix", t.name);
+            assert!(
+                !t.text.contains("\"error: "),
+                "topic {} names the old error prefix",
+                t.name
+            );
         }
         // `ligus remote enable --relay x --help`: the subcommand's help.
-        assert!(lookup_flag(&["remote", "enable", "--relay", "https://r.example", "--help"]).unwrap().starts_with("NAME\n  ligus remote enable"));
+        assert!(
+            lookup_flag(&["remote", "enable", "--relay", "https://r.example", "--help"])
+                .unwrap()
+                .starts_with("NAME\n  ligus remote enable")
+        );
         // `ligus agents --help` is the command only; `ligus box --help` is no command.
-        assert!(!lookup_flag(&["agents", "--help"]).unwrap().contains("Access controls"));
+        assert!(!lookup_flag(&["agents", "--help"])
+            .unwrap()
+            .contains("Access controls"));
         assert_eq!(lookup_flag(&["box", "--help"]), None);
         // A guide ends each step with a verify command.
         for name in ["quickstart", "box", "worker", "agents-guide"] {
@@ -3650,19 +3920,43 @@ mod tests {
             let t = find_topic(name).unwrap().text;
             for line in t.lines() {
                 let l = line.trim_start();
-                assert!(!(l.contains("ligus enroll") && !l.contains("never") && !l.contains("is for a person") && !l.contains("person's")), "topic {name} tells a box to enroll: {line}");
+                assert!(
+                    !(l.contains("ligus enroll")
+                        && !l.contains("never")
+                        && !l.contains("is for a person")
+                        && !l.contains("person's")),
+                    "topic {name} tells a box to enroll: {line}"
+                );
             }
-            assert!(t.contains("admission"), "topic {name} doesn't name the admission");
+            assert!(
+                t.contains("admission"),
+                "topic {name} doesn't name the admission"
+            );
         }
         for name in ["box", "worker"] {
             let t = find_topic(name).unwrap().text;
-            assert!(t.contains("ligus admit request") && t.contains("ligus admit redeem"), "{name}");
+            assert!(
+                t.contains("ligus admit request") && t.contains("ligus admit redeem"),
+                "{name}"
+            );
         }
         let guide = find_topic("agents-guide").unwrap().text;
         let setup = guide.split("Add an agent").next().unwrap();
-        assert!(!setup.lines().any(|l| l.contains("ligus enroll") && !l.contains("never")), "agents-guide box setup enrolls");
+        assert!(
+            !setup
+                .lines()
+                .any(|l| l.contains("ligus enroll") && !l.contains("never")),
+            "agents-guide box setup enrolls"
+        );
         for c in ["serve", "worker", "admit", "admit request", "admit redeem"] {
-            assert!(!find_cmd(c).unwrap().examples.iter().any(|x| x.contains("enroll")), "{c} example enrolls");
+            assert!(
+                !find_cmd(c)
+                    .unwrap()
+                    .examples
+                    .iter()
+                    .any(|x| x.contains("enroll")),
+                "{c} example enrolls"
+            );
         }
     }
 
@@ -3680,15 +3974,32 @@ mod tests {
         let t = lookup(&["exit-codes"]).unwrap();
         for (code, meaning, _) in crate::problem::TABLE {
             let first = meaning.split([' ', ':', '(']).next().unwrap();
-            assert!(t.contains(&format!("  {code}     ")), "exit-codes lacks {code}:\n{t}");
-            assert!(t.to_lowercase().contains(&first.to_lowercase()), "exit-codes lacks {meaning:?}");
+            assert!(
+                t.contains(&format!("  {code}     ")),
+                "exit-codes lacks {code}:\n{t}"
+            );
+            assert!(
+                t.to_lowercase().contains(&first.to_lowercase()),
+                "exit-codes lacks {meaning:?}"
+            );
         }
         assert!(t.contains("--legacy-exit-codes"));
         for c in COMMANDS {
-            assert!(command_help(c).contains("ligus help exit-codes"), "ligus {} --help doesn't point to the table", c.name);
+            assert!(
+                command_help(c).contains("ligus help exit-codes"),
+                "ligus {} --help doesn't point to the table",
+                c.name
+            );
         }
         assert!(overview().contains("ligus help exit-codes"));
-        assert_eq!((EXIT_OK, EXIT_ERROR, EXIT_USAGE), (crate::problem::EXIT_OK, crate::problem::EXIT_ERROR, crate::problem::EXIT_USAGE));
+        assert_eq!(
+            (EXIT_OK, EXIT_ERROR, EXIT_USAGE),
+            (
+                crate::problem::EXIT_OK,
+                crate::problem::EXIT_ERROR,
+                crate::problem::EXIT_USAGE
+            )
+        );
     }
 
     /// `ligus help --json` serialises the registry, and the overview keeps
@@ -3700,16 +4011,42 @@ mod tests {
         assert_eq!(d["commands"].as_array().unwrap().len(), COMMANDS.len());
         assert_eq!(d["topics"].as_array().unwrap().len(), TOPICS.len());
         assert_eq!(d["exitCodes"].as_array().unwrap().len(), 8);
-        let doctor = d["commands"].as_array().unwrap().iter().find(|c| c["name"] == "doctor").unwrap();
-        assert!(doctor["flags"].as_array().unwrap().iter().any(|f| f["flag"] == "--json"));
+        let doctor = d["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "doctor")
+            .unwrap();
+        assert!(doctor["flags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["flag"] == "--json"));
         let o = overview();
         let mut at = 0;
-        for sec in ["NAME", "USAGE", "COMMANDS", "TOPICS", "FLAGS", "EXAMPLES", "ENVIRONMENT", "EXIT CODES", "SEE ALSO"] {
-            let i = if sec == "NAME" { o.find("NAME\n") } else { o.find(&format!("\n{sec}")) };
+        for sec in [
+            "NAME",
+            "USAGE",
+            "COMMANDS",
+            "TOPICS",
+            "FLAGS",
+            "EXAMPLES",
+            "ENVIRONMENT",
+            "EXIT CODES",
+            "SEE ALSO",
+        ] {
+            let i = if sec == "NAME" {
+                o.find("NAME\n")
+            } else {
+                o.find(&format!("\n{sec}"))
+            };
             let i = i.unwrap_or_else(|| panic!("overview lacks {sec}"));
             assert!(i >= at, "overview: {sec} out of order");
             at = i;
         }
-        assert!(o.contains("langstroth-relay help") && o.contains("ligus-k8s"), "cross-references to the other tools");
+        assert!(
+            o.contains("langstroth-relay help") && o.contains("ligus-k8s"),
+            "cross-references to the other tools"
+        );
     }
 }

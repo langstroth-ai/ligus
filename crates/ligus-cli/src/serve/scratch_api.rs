@@ -56,14 +56,18 @@ fn parse_id(raw: &str) -> ApiResult<Uuid> {
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> ApiResult<T> {
-    tokio::task::spawn_blocking(f).await.map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 /// The asking person's account id: the paired phone's person, else (the
 /// operator's bearer on loopback) this box's own.
 fn caller_account(s: &Shared, peer: Option<&TunnelPeer>) -> String {
     let svc = s.lock();
-    let device = peer.and_then(|p| s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid))).and_then(|r| r.device_id);
+    let device = peer
+        .and_then(|p| s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)))
+        .and_then(|r| r.device_id);
     let account = match device {
         Some(d) => svc.phone_person(s.ws, d).ok().and_then(|a| a.account_id),
         None => svc.author().account_id,
@@ -98,9 +102,18 @@ pub struct CreateReq {
     name: String,
 }
 
-pub async fn create(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Json<CreateReq>) -> ApiResult<Json<Value>> {
+pub async fn create(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Json(req): Json<CreateReq>,
+) -> ApiResult<Json<Value>> {
     owner_gate(&s, peer.as_deref())?;
-    let chat = match req.chat_id.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+    let chat = match req
+        .chat_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
         Some(c) => Some(load_chat(&s, c)?),
         None => None,
     };
@@ -141,13 +154,29 @@ pub struct KeepReq {
     name: Option<String>,
 }
 
-pub async fn keep(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, body: axum::body::Bytes) -> ApiResult<Json<Value>> {
+pub async fn keep(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> ApiResult<Json<Value>> {
     owner_gate(&s, peer.as_deref())?;
     ensure_can_write(&s, None)?;
     let id = parse_id(&id)?;
-    let req: KeepReq = if body.iter().all(u8::is_ascii_whitespace) { KeepReq::default() } else { serde_json::from_slice(&body).map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))? };
-    let name = req.name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
-    if name.as_deref().is_some_and(|n| !ligus_core::workspace_repo::display_name_ok(n)) {
+    let req: KeepReq = if body.iter().all(u8::is_ascii_whitespace) {
+        KeepReq::default()
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?
+    };
+    let name = req
+        .name
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty());
+    if name
+        .as_deref()
+        .is_some_and(|n| !ligus_core::workspace_repo::display_name_ok(n))
+    {
         return Err(ApiError::bad_request("bad repository name"));
     }
     let sh = s.clone();
@@ -159,13 +188,27 @@ pub async fn keep(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Pa
     .await?
     .map_err(api_err)?;
     for c in &kept.chats {
-        let folder = kept.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let _ = s.lock().post_system_note(*c, s.ws, format!("{} is kept: an ordinary repository on {} now ({folder}).", kept.name, s.opts.label));
+        let folder = kept
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let _ = s.lock().post_system_note(
+            *c,
+            s.ws,
+            format!(
+                "{} is kept: an ordinary repository on {} now ({folder}).",
+                kept.name, s.opts.label
+            ),
+        );
     }
     s.after_write();
     let st = scratch_cmd::settings(&s.lock(), &s.cfg.data_dir);
     let mut v = scratch_cmd::dto(&kept, &st, scratch::now());
-    v["checkout"] = json!(kept.path.file_name().map(|n| n.to_string_lossy().into_owned()));
+    v["checkout"] = json!(kept
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned()));
     Ok(Json(json!({ "scratch": v })))
 }
 
@@ -181,30 +224,60 @@ pub struct PublishReq {
     forge: Option<String>,
 }
 
-pub async fn publish(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Json(req): Json<PublishReq>) -> ApiResult<Json<Value>> {
+pub async fn publish(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+    Json(req): Json<PublishReq>,
+) -> ApiResult<Json<Value>> {
     owner_gate(&s, peer.as_deref())?;
     ensure_can_write(&s, None)?;
     let id = parse_id(&id)?;
     let e = {
         let svc = s.lock();
-        scratch::list(svc.store(), s.ws).into_iter().find(|e| e.id == id).ok_or_else(|| ApiError::not_found("scratch repository"))?
+        scratch::list(svc.store(), s.ws)
+            .into_iter()
+            .find(|e| e.id == id)
+            .ok_or_else(|| ApiError::not_found("scratch repository"))?
     };
     if e.state != scratch::ScratchState::Kept {
-        return Err(ApiError::new(StatusCode::CONFLICT, "keep it as a repo first; only a kept scratch repository is published"));
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "keep it as a repo first; only a kept scratch repository is published",
+        ));
     }
     if !ligus_runtime::git_worktree::is_git_repo(&e.path) {
-        return Err(ApiError::new(StatusCode::CONFLICT, "its checkout is missing on this host"));
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "its checkout is missing on this host",
+        ));
     }
-    let handle = match req.forge.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+    let handle = match req
+        .forge
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+    {
         Some(raw) => {
-            let fid = ligus_forge::ForgeId::parse(raw).map_err(|e| ApiError::bad_request(e.to_string()))?;
-            s.repos.forge(&s.cfg.data_dir, &fid).ok_or_else(|| ApiError::not_found("code host connection"))?
+            let fid = ligus_forge::ForgeId::parse(raw)
+                .map_err(|e| ApiError::bad_request(e.to_string()))?;
+            s.repos
+                .forge(&s.cfg.data_dir, &fid)
+                .ok_or_else(|| ApiError::not_found("code host connection"))?
         }
-        None => s.repos.github(&s.cfg.data_dir).ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "no GitHub connection on this host"))?,
+        None => s.repos.github(&s.cfg.data_dir).ok_or_else(|| {
+            ApiError::new(StatusCode::CONFLICT, "no GitHub connection on this host")
+        })?,
     };
-    let url = ligus_runtime::repos::scratch_host::publish(handle.forge.as_ref(), &e, &req.owner, &req.name, &req.confirm)
-        .await
-        .map_err(|m| ApiError::new(StatusCode::CONFLICT, m))?;
+    let url = ligus_runtime::repos::scratch_host::publish(
+        handle.forge.as_ref(),
+        &e,
+        &req.owner,
+        &req.name,
+        &req.confirm,
+    )
+    .await
+    .map_err(|m| ApiError::new(StatusCode::CONFLICT, m))?;
     {
         let svc = s.lock();
         let _ = scratch::set_published(svc.store(), id, &url);
@@ -213,7 +286,11 @@ pub async fn publish(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id):
     Ok(Json(json!({ "url": url, "private": true })))
 }
 
-pub async fn remove(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+pub async fn remove(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
     owner_gate(&s, peer.as_deref())?;
     ensure_can_write(&s, None)?;
     let id = parse_id(&id)?;
@@ -240,7 +317,11 @@ pub struct SettingsReq {
     cleanup_days: Option<u32>,
 }
 
-pub async fn put_settings(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Json<SettingsReq>) -> ApiResult<Json<Value>> {
+pub async fn put_settings(
+    State(s): S,
+    peer: Option<Extension<TunnelPeer>>,
+    Json(req): Json<SettingsReq>,
+) -> ApiResult<Json<Value>> {
     owner_gate(&s, peer.as_deref())?;
     {
         let svc = s.lock();
@@ -254,7 +335,12 @@ pub async fn put_settings(State(s): S, peer: Option<Extension<TunnelPeer>>, Json
 /// removal of unkept scratch repositories past their quiet spell.
 pub async fn sweep_loop(shared: Arc<Shared>, mut stop: tokio::sync::watch::Receiver<bool>) {
     let first = std::time::Duration::from_secs(60);
-    let every = std::time::Duration::from_secs(crate::env_opt("LIGUS_SCRATCH_SWEEP_SECS").and_then(|v| v.trim().parse().ok()).unwrap_or(3600).max(30));
+    let every = std::time::Duration::from_secs(
+        crate::env_opt("LIGUS_SCRATCH_SWEEP_SECS")
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(3600)
+            .max(30),
+    );
     let mut wait = first;
     loop {
         tokio::select! {

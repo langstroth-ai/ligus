@@ -41,13 +41,23 @@ pub const MAX_POST_CHARS: usize = 16_000;
 /// field `action`). The JSON is `{"kind": "<kind>", …camelCase fields}`;
 /// unknown kinds and unknown fields are refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum PhoneAction {
     /// Post `text` in `chat_id` as the person (`messageAppended`, role user).
     Post { chat_id: Uuid, text: String },
     /// Approve (`approved: true`) or reject a proposal, binding the content
     /// digest the phone showed (`proposalVoteCast`).
-    Vote { chat_id: Uuid, proposal_id: Uuid, diff_digest: String, approved: bool },
+    Vote {
+        chat_id: Uuid,
+        proposal_id: Uuid,
+        diff_digest: String,
+        approved: bool,
+    },
     /// Answer an agent's question (`flowRecorded` / `humanAnswered`). On a
     /// v2 card (`docs/design/agent-questions.md` 6.3) the phone also names
     /// `askDigest`, computed from the signed ask it was given (the payload
@@ -86,11 +96,19 @@ pub enum PhoneAction {
         repo_id: Option<Uuid>,
     },
     /// Withdraw an open apply request (`proposalApplyWithdrawn`).
-    WithdrawApply { chat_id: Uuid, proposal_id: Uuid, request_id: Uuid },
+    WithdrawApply {
+        chat_id: Uuid,
+        proposal_id: Uuid,
+        request_id: Uuid,
+    },
     /// Archive a settled proposal for everyone (`archived: true`), or
     /// restore it to the inbox (`proposalDismissed`, the wire name kept
     /// from Dismiss). Additive (0.4): an older box refuses the kind.
-    Archive { chat_id: Uuid, proposal_id: Uuid, archived: bool },
+    Archive {
+        chat_id: Uuid,
+        proposal_id: Uuid,
+        archived: bool,
+    },
     /// Propose a workspace memory change as the person (`flowRecorded` /
     /// `memoryProposed`, on the workspace config log): a person decides it on
     /// a desktop. `chat_id` is the chat the phone was in (the source).
@@ -160,28 +178,66 @@ impl PhoneAction {
     /// box at prepare and by the phone before it asks).
     pub fn malformed(&self) -> Option<&'static str> {
         match self {
-            PhoneAction::Post { text, .. } if text.trim().is_empty() => Some("a post can't be empty"),
-            PhoneAction::Post { text, .. } if text.chars().count() > MAX_POST_CHARS => Some("a post is too long"),
-            PhoneAction::Vote { diff_digest, .. } | PhoneAction::RequestApply { diff_digest, .. } if !is_digest(diff_digest) => {
+            PhoneAction::Post { text, .. } if text.trim().is_empty() => {
+                Some("a post can't be empty")
+            }
+            PhoneAction::Post { text, .. } if text.chars().count() > MAX_POST_CHARS => {
+                Some("a post is too long")
+            }
+            PhoneAction::Vote { diff_digest, .. }
+            | PhoneAction::RequestApply { diff_digest, .. }
+                if !is_digest(diff_digest) =>
+            {
                 Some("a content digest is 64 lowercase hex digits")
             }
-            PhoneAction::Answer { answer, text, decline, .. } if answer.trim().is_empty() && text.trim().is_empty() && !decline => Some("an answer can't be empty"),
-            PhoneAction::Answer { text, .. } if text.chars().count() > ligus_proto::ask_text::MAX_TEXT_ANSWER_CHARS => Some("the reply is too long"),
-            PhoneAction::Answer { ask_digest, .. } if !ask_digest.is_empty() && (ask_digest.len() != 64 || !ask_digest.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())) => Some("askDigest is 64 lowercase hex characters"),
-            PhoneAction::Answer { answer, .. } if answer.chars().count() > crate::flow::MAX_ANSWER_CHARS => Some("an answer is too long"),
-            PhoneAction::RequestApply { expected_base_commit: Some(c), .. } if !crate::workspace_repo::is_commit_id(c) => {
+            PhoneAction::Answer {
+                answer,
+                text,
+                decline,
+                ..
+            } if answer.trim().is_empty() && text.trim().is_empty() && !decline => {
+                Some("an answer can't be empty")
+            }
+            PhoneAction::Answer { text, .. }
+                if text.chars().count() > ligus_proto::ask_text::MAX_TEXT_ANSWER_CHARS =>
+            {
+                Some("the reply is too long")
+            }
+            PhoneAction::Answer { ask_digest, .. }
+                if !ask_digest.is_empty()
+                    && (ask_digest.len() != 64
+                        || !ask_digest
+                            .bytes()
+                            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())) =>
+            {
+                Some("askDigest is 64 lowercase hex characters")
+            }
+            PhoneAction::Answer { answer, .. }
+                if answer.chars().count() > crate::flow::MAX_ANSWER_CHARS =>
+            {
+                Some("an answer is too long")
+            }
+            PhoneAction::RequestApply {
+                expected_base_commit: Some(c),
+                ..
+            } if !crate::workspace_repo::is_commit_id(c) => {
                 Some("a base commit is 40 or 64 hex digits")
             }
-            PhoneAction::ClearLockdown { raises, .. } => crate::authz::bounds::clear_names_raises(raises).err(),
+            PhoneAction::ClearLockdown { raises, .. } => {
+                crate::authz::bounds::clear_names_raises(raises).err()
+            }
             PhoneAction::ProposeMemory { op, rationale, .. } => {
                 use crate::memory::MemoryOp;
                 if rationale.chars().count() > crate::memory::MAX_NOTE_CHARS {
                     return Some("a rationale is at most 500 characters");
                 }
                 match op {
-                    MemoryOp::Create { title, body, tags, .. } | MemoryOp::Edit { title, body, tags, .. } => {
-                        crate::memory::content_ok(title, body, tags).err()
+                    MemoryOp::Create {
+                        title, body, tags, ..
                     }
+                    | MemoryOp::Edit {
+                        title, body, tags, ..
+                    } => crate::memory::content_ok(title, body, tags).err(),
                     MemoryOp::Remove { .. } => None,
                 }
             }
@@ -191,7 +247,9 @@ impl PhoneAction {
 }
 
 fn is_digest(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// A strictly parsed phone preimage.
@@ -217,8 +275,18 @@ fn exact<T: Serialize + for<'de> Deserialize<'de>>(bytes: &[u8]) -> Option<T> {
 
 /// The presence digest (`presence::challenge`) over a parsed preimage's own
 /// bytes.
-fn presence_digest(workspace: Uuid, session: Uuid, event_id: Uuid, lamport: u64, payload: &[u8], stamp: &ActorStamp) -> [u8; 32] {
-    let frontier = stamp.cfg_frontier.map(|f| serde_json::to_vec(&f).unwrap_or_default()).unwrap_or_default();
+fn presence_digest(
+    workspace: Uuid,
+    session: Uuid,
+    event_id: Uuid,
+    lamport: u64,
+    payload: &[u8],
+    stamp: &ActorStamp,
+) -> [u8; 32] {
+    let frontier = stamp
+        .cfg_frontier
+        .map(|f| serde_json::to_vec(&f).unwrap_or_default())
+        .unwrap_or_default();
     let account = stamp.actor.account_id.unwrap_or_else(Uuid::nil);
     let mut h = Sha256::new();
     h.update(crate::presence::PRESENCE_CONTEXT);
@@ -260,7 +328,9 @@ pub fn parse_phone_preimage(
     account: Option<Uuid>,
     confirmed: Option<Confirmed<'_>>,
 ) -> Result<PhonePreimage, &'static str> {
-    let mut rest = preimage.strip_prefix(PREFIX).ok_or("not an envelope preimage")?;
+    let mut rest = preimage
+        .strip_prefix(PREFIX)
+        .ok_or("not an envelope preimage")?;
     let mut take = |n: usize| -> Result<&[u8], &'static str> {
         if rest.len() < n {
             return Err("a truncated preimage");
@@ -277,7 +347,8 @@ pub fn parse_phone_preimage(
     let event_id = uuid(take(16)?)?;
     let mut fields: Vec<&[u8]> = Vec::with_capacity(4);
     for _ in 0..4 {
-        let len = u32::from_le_bytes(take(4)?.try_into().map_err(|_| "a malformed preimage")?) as usize;
+        let len =
+            u32::from_le_bytes(take(4)?.try_into().map_err(|_| "a malformed preimage")?) as usize;
         fields.push(take(len)?);
     }
     if !rest.is_empty() {
@@ -289,7 +360,8 @@ pub fn parse_phone_preimage(
     }
     let scope: EventScope = exact(scope).ok_or("a malformed scope")?;
     exact::<crate::Timestamp>(timestamp).ok_or("a malformed timestamp")?;
-    let stamp: Option<ActorStamp> = exact(stamp_bytes).ok_or("a stamp with fields this build doesn't read")?;
+    let stamp: Option<ActorStamp> =
+        exact(stamp_bytes).ok_or("a stamp with fields this build doesn't read")?;
     let stamp = stamp.ok_or("an unstamped event")?;
     if stamp.actor.device_id != Some(phone) || stamp.sig_alg != crate::crypto::SigAlg::P256 {
         return Err("not stamped for this phone");
@@ -300,13 +372,16 @@ pub fn parse_phone_preimage(
     // Lamport bounds (`crate::lamport`): one past the log head it names (1
     // with none), so the event sorts no later than one past what the box
     // held when it drafted it. Every fold refuses anything else.
-    if crate::lamport::next(stamp.log_head) != lamport || stamp.log_head.is_some_and(|h| h.lamport == u64::MAX) {
+    if crate::lamport::next(stamp.log_head) != lamport
+        || stamp.log_head.is_some_and(|h| h.lamport == u64::MAX)
+    {
         return Err("a lamport that isn't one past its log head");
     }
     if account.is_some_and(|a| stamp.actor.account_id != Some(a)) {
         return Err("not stamped for this phone's person");
     }
-    let event: SessionEvent = exact(payload).ok_or("a payload with fields this build doesn't read")?;
+    let event: SessionEvent =
+        exact(payload).ok_or("a payload with fields this build doesn't read")?;
     if matches!(event, SessionEvent::Unknown) {
         return Err("a payload this build doesn't read");
     }
@@ -321,7 +396,9 @@ pub fn parse_phone_preimage(
             if c.assertion.is_some_and(|a| a != presence) {
                 return Err("not the presence this phone produced");
             }
-            if &presence_digest(workspace, session, event_id, lamport, payload, &stamp) != c.challenge {
+            if &presence_digest(workspace, session, event_id, lamport, payload, &stamp)
+                != c.challenge
+            {
                 return Err("not the event the passkey confirmed");
             }
         }
@@ -331,7 +408,15 @@ pub fn parse_phone_preimage(
             }
         }
     }
-    Ok(PhonePreimage { workspace_id: workspace, session_id: session, sequence, lamport, event_id, stamp, event })
+    Ok(PhonePreimage {
+        workspace_id: workspace,
+        session_id: session,
+        sequence,
+        lamport,
+        event_id,
+        stamp,
+        event,
+    })
 }
 
 /// What a checked phone action names, for the phone to show and keep.
@@ -403,7 +488,8 @@ pub fn check_phone_action_preimage(
     let mismatch = "not the action this phone asked for";
     match (action, &p.event) {
         (PhoneAction::Post { text, .. }, SessionEvent::MessageAppended { message }) => {
-            let mut expected = ChatMessage::new(MessageRole::User, actor.display_name.clone(), text.clone());
+            let mut expected =
+                ChatMessage::new(MessageRole::User, actor.display_name.clone(), text.clone());
             expected.id = message.id;
             expected.created_at = message.created_at;
             expected.kind = TranscriptEventKind::Message;
@@ -413,7 +499,18 @@ pub fn check_phone_action_preimage(
             }
             out.message_id = Some(message.id);
         }
-        (PhoneAction::Vote { proposal_id, diff_digest, approved, .. }, SessionEvent::ProposalVoteCast { proposal_id: pid, approval }) => {
+        (
+            PhoneAction::Vote {
+                proposal_id,
+                diff_digest,
+                approved,
+                ..
+            },
+            SessionEvent::ProposalVoteCast {
+                proposal_id: pid,
+                approval,
+            },
+        ) => {
             if pid != proposal_id
                 || approval.actor_id != actor.id
                 || approval.approved != *approved
@@ -423,8 +520,18 @@ pub fn check_phone_action_preimage(
             }
         }
         (
-            PhoneAction::Answer { ask_id, answer, option_index, ask_digest, text, decline, .. },
-            SessionEvent::FlowRecorded { record: crate::flow::FlowRecord::HumanAnswered(a) },
+            PhoneAction::Answer {
+                ask_id,
+                answer,
+                option_index,
+                ask_digest,
+                text,
+                decline,
+                ..
+            },
+            SessionEvent::FlowRecorded {
+                record: crate::flow::FlowRecord::HumanAnswered(a),
+            },
         ) => {
             if a.ask_id != *ask_id
                 || a.answer != *answer
@@ -437,13 +544,26 @@ pub fn check_phone_action_preimage(
                 return Err(mismatch);
             }
         }
-        (PhoneAction::ClearLockdown { chat_id, raises }, SessionEvent::ChatLockdownCleared { chat_id: c, raises: r }) => {
+        (
+            PhoneAction::ClearLockdown { chat_id, raises },
+            SessionEvent::ChatLockdownCleared {
+                chat_id: c,
+                raises: r,
+            },
+        ) => {
             if c != chat_id || r != raises {
                 return Err(mismatch);
             }
         }
         (
-            PhoneAction::RequestApply { proposal_id, diff_digest, host_device_id, expected_base_commit, repo_id, .. },
+            PhoneAction::RequestApply {
+                proposal_id,
+                diff_digest,
+                host_device_id,
+                expected_base_commit,
+                repo_id,
+                ..
+            },
             SessionEvent::ProposalApplyRequested { request },
         ) => {
             if request.proposal_id != *proposal_id
@@ -456,19 +576,45 @@ pub fn check_phone_action_preimage(
             }
             out.request_id = Some(request.id);
         }
-        (PhoneAction::WithdrawApply { proposal_id, request_id, .. }, SessionEvent::ProposalApplyWithdrawn { request_id: r, proposal_id: pid }) => {
+        (
+            PhoneAction::WithdrawApply {
+                proposal_id,
+                request_id,
+                ..
+            },
+            SessionEvent::ProposalApplyWithdrawn {
+                request_id: r,
+                proposal_id: pid,
+            },
+        ) => {
             if r != request_id || pid != proposal_id {
                 return Err(mismatch);
             }
         }
-        (PhoneAction::Archive { proposal_id, archived, .. }, SessionEvent::ProposalDismissed { proposal_id: pid, dismissed }) => {
+        (
+            PhoneAction::Archive {
+                proposal_id,
+                archived,
+                ..
+            },
+            SessionEvent::ProposalDismissed {
+                proposal_id: pid,
+                dismissed,
+            },
+        ) => {
             if pid != proposal_id || dismissed != archived {
                 return Err(mismatch);
             }
         }
         (
-            PhoneAction::ProposeMemory { chat_id, op, rationale },
-            SessionEvent::FlowRecorded { record: crate::flow::FlowRecord::MemoryProposed(mp) },
+            PhoneAction::ProposeMemory {
+                chat_id,
+                op,
+                rationale,
+            },
+            SessionEvent::FlowRecorded {
+                record: crate::flow::FlowRecord::MemoryProposed(mp),
+            },
         ) => {
             use crate::memory::MemoryOp;
             // The proposal is known by the event that files it
@@ -480,14 +626,24 @@ pub fn check_phone_action_preimage(
             // A new entry is named by the proposal (the box picks both): the
             // phone's own entry id for a create is not used.
             let same_op = match (op, &p.op) {
-                (MemoryOp::Create { title, body, tags, .. }, MemoryOp::Create { entry_id, title: t, body: b, tags: g }) => {
-                    *entry_id == p.proposal_id && (title, body, tags) == (t, b, g)
-                }
+                (
+                    MemoryOp::Create {
+                        title, body, tags, ..
+                    },
+                    MemoryOp::Create {
+                        entry_id,
+                        title: t,
+                        body: b,
+                        tags: g,
+                    },
+                ) => *entry_id == p.proposal_id && (title, body, tags) == (t, b, g),
                 (asked, drafted) => asked == drafted,
             };
             // The source is the phone's chat. The box may record that chat's
             // egress: it can only narrow which turns read the note.
-            let source_ok = p.source.chat_id == Some(*chat_id) && p.source.message_id.is_none() && p.source.turn_id.is_none();
+            let source_ok = p.source.chat_id == Some(*chat_id)
+                && p.source.message_id.is_none()
+                && p.source.turn_id.is_none();
             if !same_op || p.rationale != *rationale || !p.proposer.is_empty() || !source_ok {
                 return Err(mismatch);
             }

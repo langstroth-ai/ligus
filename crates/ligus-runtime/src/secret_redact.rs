@@ -103,7 +103,10 @@ fn build_matcher(vals: Vec<String>, force_fail: bool) -> Matcher {
     let built = if force_fail {
         None
     } else {
-        match AhoCorasick::builder().match_kind(aho_corasick::MatchKind::LeftmostLongest).build(&vals) {
+        match AhoCorasick::builder()
+            .match_kind(aho_corasick::MatchKind::LeftmostLongest)
+            .build(&vals)
+        {
             Ok(ac) => Some(ac),
             Err(e) => {
                 tracing::error!(target: "secret_redact", values = vals.len(), "building the secret matcher failed, masking value by value: {e}");
@@ -217,7 +220,9 @@ pub fn register_json_secrets(v: &serde_json::Value) {
             serde_json::Value::Object(m) => {
                 for (k, x) in m {
                     let k = k.to_ascii_lowercase();
-                    let named = ["key", "token", "secret", "passphrase", "password"].iter().any(|w| k.contains(w));
+                    let named = ["key", "token", "secret", "passphrase", "password"]
+                        .iter()
+                        .any(|w| k.contains(w));
                     walk(x, secret || named);
                 }
             }
@@ -312,17 +317,31 @@ mod tests {
         );
         let (m, n) = redact_ligus_secrets(&text);
         assert_eq!(n, 4, "{m}");
-        assert!(!m.contains(token) && !m.contains(&hex) && !m.contains("hrt1.") && !m.contains("hpc1."), "{m}");
+        assert!(
+            !m.contains(token) && !m.contains(&hex) && !m.contains("hrt1.") && !m.contains("hpc1."),
+            "{m}"
+        );
         assert!(m.contains("ok short"));
         // Base64 of the seed too.
         use base64::Engine;
         let b64 = base64::engine::general_purpose::STANDARD.encode(seed);
         assert_eq!(redacted(&b64), MARK);
-        register_json_secrets(&serde_json::json!({"providerKeys": {"openai": "sk-ligus-test-provider-key-0001"}, "theme": "dark-mode-default-theme"}));
-        assert_eq!(redacted("k=sk-ligus-test-provider-key-0001"), format!("k={MARK}"));
-        assert_eq!(redacted("dark-mode-default-theme"), "dark-mode-default-theme");
+        register_json_secrets(
+            &serde_json::json!({"providerKeys": {"openai": "sk-ligus-test-provider-key-0001"}, "theme": "dark-mode-default-theme"}),
+        );
+        assert_eq!(
+            redacted("k=sk-ligus-test-provider-key-0001"),
+            format!("k={MARK}")
+        );
+        assert_eq!(
+            redacted("dark-mode-default-theme"),
+            "dark-mode-default-theme"
+        );
         // Ordinary text is untouched.
-        assert_eq!(redact_ligus_secrets("nothing to see"), ("nothing to see".to_string(), 0));
+        assert_eq!(
+            redact_ligus_secrets("nothing to see"),
+            ("nothing to see".to_string(), 0)
+        );
     }
 
     /// Many secrets registered (a test process starts hundreds of devices;
@@ -357,13 +376,27 @@ mod tests {
             let v = format!("starve-test-secret-{i:08}-padding");
             register(&v);
             if i % 500 == 0 {
-                assert_eq!(redacted(&format!("x {v} y")), format!("x {MARK} y"), "masked as soon as registered");
+                assert_eq!(
+                    redacted(&format!("x {v} y")),
+                    format!("x {MARK} y"),
+                    "masked as soon as registered"
+                );
             }
         }
         let registering = t.elapsed();
         done.store(true, Ordering::SeqCst);
-        let worst = readers.into_iter().map(|h| h.join().unwrap()).max().unwrap();
-        assert!(registering < Duration::from_secs(10), "registering {n} secrets took {registering:?}");
-        assert!(worst < Duration::from_secs(5), "a redaction waited {worst:?}");
+        let worst = readers
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .max()
+            .unwrap();
+        assert!(
+            registering < Duration::from_secs(10),
+            "registering {n} secrets took {registering:?}"
+        );
+        assert!(
+            worst < Duration::from_secs(5),
+            "a redaction waited {worst:?}"
+        );
     }
 }

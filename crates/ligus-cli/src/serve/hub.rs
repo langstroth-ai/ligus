@@ -47,13 +47,20 @@ impl Default for Hub {
 impl Hub {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(RING);
-        Self { tx, ring: Mutex::new((0, VecDeque::with_capacity(RING))) }
+        Self {
+            tx,
+            ring: Mutex::new((0, VecDeque::with_capacity(RING))),
+        }
     }
 
     pub fn emit(&self, name: &'static str, data: Value) -> u64 {
         let mut ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
         ring.0 += 1;
-        let ev = SseEvent { id: ring.0, name, data };
+        let ev = SseEvent {
+            id: ring.0,
+            name,
+            data,
+        };
         if ring.1.len() == RING {
             ring.1.pop_front();
         }
@@ -68,7 +75,11 @@ impl Hub {
     pub fn emit_live(&self, name: &'static str, data: Value) -> u64 {
         let mut ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
         ring.0 += 1;
-        let _ = self.tx.send(SseEvent { id: ring.0, name, data });
+        let _ = self.tx.send(SseEvent {
+            id: ring.0,
+            name,
+            data,
+        });
         ring.0
     }
 
@@ -79,7 +90,10 @@ impl Hub {
 
     /// Subscribe, first returning the buffered events after `last_id` (all of
     /// them are dropped if `last_id` is older than the buffer — best effort).
-    pub fn subscribe(&self, last_id: Option<u64>) -> (Vec<SseEvent>, broadcast::Receiver<SseEvent>) {
+    pub fn subscribe(
+        &self,
+        last_id: Option<u64>,
+    ) -> (Vec<SseEvent>, broadcast::Receiver<SseEvent>) {
         let ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
         let backlog = match last_id {
             Some(after) => ring.1.iter().filter(|e| e.id > after).cloned().collect(),
@@ -120,7 +134,11 @@ struct ProposalSnap {
 fn proposal_snap(p: &ActionProposal) -> ProposalSnap {
     ProposalSnap {
         status: p.status,
-        votes: p.approvals.iter().map(|a| (a.actor_id.clone(), a.approved)).collect(),
+        votes: p
+            .approvals
+            .iter()
+            .map(|a| (a.actor_id.clone(), a.approved))
+            .collect(),
         comments: p.refinements.len(),
         superseded: p.superseded_by.is_some(),
         dismissed: p.dismissed,
@@ -130,23 +148,51 @@ fn proposal_snap(p: &ActionProposal) -> ProposalSnap {
 /// Something the phone (or ntfy) should hear about.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
-    MessageCreated { chat: Uuid, message: Uuid },
-    MessageDone { chat: Uuid, message: Uuid },
+    MessageCreated {
+        chat: Uuid,
+        message: Uuid,
+    },
+    MessageDone {
+        chat: Uuid,
+        message: Uuid,
+    },
     /// A still-streaming reply's body grew past byte `from` (its text so far
     /// synced in from the device writing it).
-    MessageDelta { chat: Uuid, message: Uuid, from: usize },
-    ProposalCreated { chat: Uuid, proposal: Uuid },
+    MessageDelta {
+        chat: Uuid,
+        message: Uuid,
+        from: usize,
+    },
+    ProposalCreated {
+        chat: Uuid,
+        proposal: Uuid,
+    },
     /// A known proposal's votes, thread, status or revision link changed.
-    ProposalUpdated { chat: Uuid, proposal: Uuid },
+    ProposalUpdated {
+        chat: Uuid,
+        proposal: Uuid,
+    },
     /// A workflow run's gate started waiting for approval (each attempt of a
     /// rerouted gate counts again).
-    WorkflowApproval { chat: Uuid, run: Uuid, node: String },
+    WorkflowApproval {
+        chat: Uuid,
+        run: Uuid,
+        node: String,
+    },
     /// A backpressure response asked more reviewers to look at the queue
     /// (`flowRecorded` recruit with action `approvers`).
-    RecruitApprovers { chat: Uuid, recruit: Uuid },
+    RecruitApprovers {
+        chat: Uuid,
+        recruit: Uuid,
+    },
     /// An agent asked the chat's humans a question (D.4.2).
-    AskPending { chat: Uuid, ask: Uuid },
-    ChatUpdated { chat: Uuid },
+    AskPending {
+        chat: Uuid,
+        ask: Uuid,
+    },
+    ChatUpdated {
+        chat: Uuid,
+    },
 }
 
 #[derive(Default)]
@@ -159,16 +205,35 @@ fn snap(s: &ChatSession) -> ChatSnap {
     ChatSnap {
         title: s.title.clone(),
         // A superseded (fenced duplicate) answer is hidden from every view.
-        messages: s.messages.iter().filter(|m| !m.superseded).map(|m| (m.id, (m.is_streaming, m.body.len()))).collect(),
-        proposals: s.proposals.iter().map(|p| (p.id, proposal_snap(p))).collect(),
+        messages: s
+            .messages
+            .iter()
+            .filter(|m| !m.superseded)
+            .map(|m| (m.id, (m.is_streaming, m.body.len())))
+            .collect(),
+        proposals: s
+            .proposals
+            .iter()
+            .map(|p| (p.id, proposal_snap(p)))
+            .collect(),
         gates: awaiting_gates(s).collect(),
         recruits: approver_recruits(s).collect(),
-        asks: s.flow.asks.values().filter(|a| a.is_open()).map(|a| a.ask.ask_id).collect(),
+        asks: s
+            .flow
+            .asks
+            .values()
+            .filter(|a| a.is_open())
+            .map(|a| a.ask.ask_id)
+            .collect(),
     }
 }
 
 fn approver_recruits(s: &ChatSession) -> impl Iterator<Item = Uuid> + '_ {
-    s.flow.recruits.iter().filter(|r| r.action == "approvers").map(|r| r.id)
+    s.flow
+        .recruits
+        .iter()
+        .filter(|r| r.action == "approvers")
+        .map(|r| r.id)
 }
 
 fn awaiting_gates(s: &ChatSession) -> impl Iterator<Item = (Uuid, String, u32)> + '_ {
@@ -214,25 +279,42 @@ impl Differ {
                 match before.messages.get(&m.id) {
                     None => {
                         touched = true;
-                        out.push(Change::MessageCreated { chat: s.id, message: m.id });
+                        out.push(Change::MessageCreated {
+                            chat: s.id,
+                            message: m.id,
+                        });
                         if is_reply(m.role) && !m.is_streaming {
-                            out.push(Change::MessageDone { chat: s.id, message: m.id });
+                            out.push(Change::MessageDone {
+                                chat: s.id,
+                                message: m.id,
+                            });
                         }
                     }
                     Some((true, _)) if !m.is_streaming => {
                         touched = true;
-                        out.push(Change::MessageDone { chat: s.id, message: m.id });
+                        out.push(Change::MessageDone {
+                            chat: s.id,
+                            message: m.id,
+                        });
                     }
                     Some(&(true, from)) if m.body.len() > from => {
-                        out.push(Change::MessageDelta { chat: s.id, message: m.id, from });
+                        out.push(Change::MessageDelta {
+                            chat: s.id,
+                            message: m.id,
+                            from,
+                        });
                     }
                     _ => {}
                 }
             }
             // A message was removed, or became superseded (now hidden).
             if !before.messages.is_empty() {
-                let visible: std::collections::HashSet<Uuid> =
-                    s.messages.iter().filter(|m| !m.superseded).map(|m| m.id).collect();
+                let visible: std::collections::HashSet<Uuid> = s
+                    .messages
+                    .iter()
+                    .filter(|m| !m.superseded)
+                    .map(|m| m.id)
+                    .collect();
                 if before.messages.keys().any(|id| !visible.contains(id)) {
                     touched = true;
                 }
@@ -244,7 +326,10 @@ impl Differ {
                     // just updates its chat.
                     None if is_open(p, s) => {
                         touched = true;
-                        out.push(Change::ProposalCreated { chat: s.id, proposal: p.id });
+                        out.push(Change::ProposalCreated {
+                            chat: s.id,
+                            proposal: p.id,
+                        });
                     }
                     None => touched = true,
                     Some(before) => {
@@ -253,24 +338,37 @@ impl Differ {
                             // A status change still touches the chat (as before);
                             // a vote or note alone is a proposal event only.
                             touched |= before.status != now.status;
-                            out.push(Change::ProposalUpdated { chat: s.id, proposal: p.id });
+                            out.push(Change::ProposalUpdated {
+                                chat: s.id,
+                                proposal: p.id,
+                            });
                         }
                     }
                 }
             }
             for (run, node, attempt) in awaiting_gates(s) {
                 if !before.gates.contains(&(run, node.clone(), attempt)) {
-                    out.push(Change::WorkflowApproval { chat: s.id, run, node });
+                    out.push(Change::WorkflowApproval {
+                        chat: s.id,
+                        run,
+                        node,
+                    });
                 }
             }
             for recruit in approver_recruits(s) {
                 if !before.recruits.contains(&recruit) {
-                    out.push(Change::RecruitApprovers { chat: s.id, recruit });
+                    out.push(Change::RecruitApprovers {
+                        chat: s.id,
+                        recruit,
+                    });
                 }
             }
             for a in s.flow.asks.values().filter(|a| a.is_open()) {
                 if !before.asks.contains(&a.ask.ask_id) {
-                    out.push(Change::AskPending { chat: s.id, ask: a.ask.ask_id });
+                    out.push(Change::AskPending {
+                        chat: s.id,
+                        ask: a.ask.ask_id,
+                    });
                 }
             }
             if touched {
@@ -303,7 +401,10 @@ mod tests {
         let second = hub.emit("b", json!(2));
         hub.emit("c", json!(3));
         let (backlog, _rx) = hub.subscribe(Some(second - 1));
-        assert_eq!(backlog.iter().map(|e| e.name).collect::<Vec<_>>(), vec!["b", "c"]);
+        assert_eq!(
+            backlog.iter().map(|e| e.name).collect::<Vec<_>>(),
+            vec!["b", "c"]
+        );
         let (none, _rx) = hub.subscribe(None);
         assert!(none.is_empty());
     }
@@ -318,12 +419,33 @@ mod tests {
         let mid = m.id;
         s.messages.push(m);
         let c = d.diff(std::slice::from_ref(&s));
-        assert_eq!(c, vec![Change::MessageCreated { chat: s.id, message: mid }, Change::ChatUpdated { chat: s.id }]);
-        assert!(d.diff(std::slice::from_ref(&s)).is_empty(), "no change, no events");
+        assert_eq!(
+            c,
+            vec![
+                Change::MessageCreated {
+                    chat: s.id,
+                    message: mid
+                },
+                Change::ChatUpdated { chat: s.id }
+            ]
+        );
+        assert!(
+            d.diff(std::slice::from_ref(&s)).is_empty(),
+            "no change, no events"
+        );
         s.messages[0].is_streaming = false;
         s.messages[0].body = "hi".into();
         let c = d.diff(std::slice::from_ref(&s));
-        assert_eq!(c, vec![Change::MessageDone { chat: s.id, message: mid }, Change::ChatUpdated { chat: s.id }]);
+        assert_eq!(
+            c,
+            vec![
+                Change::MessageDone {
+                    chat: s.id,
+                    message: mid
+                },
+                Change::ChatUpdated { chat: s.id }
+            ]
+        );
     }
 
     /// A reply streaming on another device: each checkpoint that syncs in is
@@ -338,15 +460,35 @@ mod tests {
         s.messages.push(m);
         d.seed(std::slice::from_ref(&s));
         s.messages[0].body = "Hel".into();
-        assert_eq!(d.diff(std::slice::from_ref(&s)), vec![Change::MessageDelta { chat: s.id, message: mid, from: 0 }]);
+        assert_eq!(
+            d.diff(std::slice::from_ref(&s)),
+            vec![Change::MessageDelta {
+                chat: s.id,
+                message: mid,
+                from: 0
+            }]
+        );
         s.messages[0].body = "Hello".into();
-        assert_eq!(d.diff(std::slice::from_ref(&s)), vec![Change::MessageDelta { chat: s.id, message: mid, from: 3 }]);
+        assert_eq!(
+            d.diff(std::slice::from_ref(&s)),
+            vec![Change::MessageDelta {
+                chat: s.id,
+                message: mid,
+                from: 3
+            }]
+        );
         assert!(d.diff(std::slice::from_ref(&s)).is_empty());
         s.messages[0].body = "Hello there".into();
         s.messages[0].is_streaming = false;
         assert_eq!(
             d.diff(std::slice::from_ref(&s)),
-            vec![Change::MessageDone { chat: s.id, message: mid }, Change::ChatUpdated { chat: s.id }]
+            vec![
+                Change::MessageDone {
+                    chat: s.id,
+                    message: mid
+                },
+                Change::ChatUpdated { chat: s.id }
+            ]
         );
     }
 
@@ -359,7 +501,10 @@ mod tests {
         dup.is_streaming = true;
         dup.superseded = true;
         s.messages.push(dup);
-        assert!(d.diff(std::slice::from_ref(&s)).is_empty(), "a superseded message produces no created event");
+        assert!(
+            d.diff(std::slice::from_ref(&s)).is_empty(),
+            "a superseded message produces no created event"
+        );
         s.messages[0].body = "streamed".into();
         assert!(d.diff(std::slice::from_ref(&s)).is_empty(), "nor a delta");
         let keep = ChatMessage::new(MessageRole::Assistant, "coder", "answer");
@@ -368,13 +513,23 @@ mod tests {
         assert_eq!(
             d.diff(std::slice::from_ref(&s)),
             vec![
-                Change::MessageCreated { chat: s.id, message: kid },
-                Change::MessageDone { chat: s.id, message: kid },
+                Change::MessageCreated {
+                    chat: s.id,
+                    message: kid
+                },
+                Change::MessageDone {
+                    chat: s.id,
+                    message: kid
+                },
                 Change::ChatUpdated { chat: s.id },
             ]
         );
         s.messages[1].superseded = true;
-        assert_eq!(d.diff(std::slice::from_ref(&s)), vec![Change::ChatUpdated { chat: s.id }], "now hidden: a removal");
+        assert_eq!(
+            d.diff(std::slice::from_ref(&s)),
+            vec![Change::ChatUpdated { chat: s.id }],
+            "now hidden: a removal"
+        );
         assert!(d.diff(std::slice::from_ref(&s)).is_empty());
     }
 
@@ -393,9 +548,18 @@ mod tests {
         assert_eq!(
             c,
             vec![
-                Change::MessageCreated { chat: s.id, message: mid },
-                Change::MessageDone { chat: s.id, message: mid },
-                Change::MessageCreated { chat: s.id, message: uid },
+                Change::MessageCreated {
+                    chat: s.id,
+                    message: mid
+                },
+                Change::MessageDone {
+                    chat: s.id,
+                    message: mid
+                },
+                Change::MessageCreated {
+                    chat: s.id,
+                    message: uid
+                },
                 Change::ChatUpdated { chat: s.id },
             ]
         );
@@ -416,7 +580,16 @@ mod tests {
         let oid = open.id;
         s.proposals = vec![settled, hidden, open];
         let c = d.diff(std::slice::from_ref(&s));
-        assert_eq!(c, vec![Change::ProposalCreated { chat: s.id, proposal: oid }, Change::ChatUpdated { chat: s.id }]);
+        assert_eq!(
+            c,
+            vec![
+                Change::ProposalCreated {
+                    chat: s.id,
+                    proposal: oid
+                },
+                Change::ChatUpdated { chat: s.id }
+            ]
+        );
     }
 
     /// An archive never hides a proposal that still waits on someone (see
@@ -449,15 +622,29 @@ mod tests {
             request_changes: false,
             created_at: ligus_core::Timestamp::now(),
         });
-        assert_eq!(d.diff(std::slice::from_ref(&s)), vec![Change::ProposalUpdated { chat: s.id, proposal: pid }]);
+        assert_eq!(
+            d.diff(std::slice::from_ref(&s)),
+            vec![Change::ProposalUpdated {
+                chat: s.id,
+                proposal: pid
+            }]
+        );
         s.proposals[0].cast_vote(ligus_core::proposals::ProposalApproval {
             actor_id: "a".into(),
             role: ligus_core::WorkspaceRole::Contributor,
             approved: true,
-            created_at: ligus_core::Timestamp::now(), diff_digest: None });
+            created_at: ligus_core::Timestamp::now(),
+            diff_digest: None,
+        });
         assert_eq!(
             d.diff(std::slice::from_ref(&s)),
-            vec![Change::ProposalUpdated { chat: s.id, proposal: pid }, Change::ChatUpdated { chat: s.id }]
+            vec![
+                Change::ProposalUpdated {
+                    chat: s.id,
+                    proposal: pid
+                },
+                Change::ChatUpdated { chat: s.id }
+            ]
         );
         assert!(d.diff(std::slice::from_ref(&s)).is_empty());
     }
@@ -475,14 +662,31 @@ mod tests {
         gate.status = NodeRunStatus::AwaitingApproval;
         s.workflow_runs[0] = run.clone();
         let c = d.diff(std::slice::from_ref(&s));
-        assert_eq!(c, vec![Change::WorkflowApproval { chat: s.id, run: run.id, node: "approval".into() }]);
-        assert!(d.diff(std::slice::from_ref(&s)).is_empty(), "still waiting: not reported again");
+        assert_eq!(
+            c,
+            vec![Change::WorkflowApproval {
+                chat: s.id,
+                run: run.id,
+                node: "approval".into()
+            }]
+        );
+        assert!(
+            d.diff(std::slice::from_ref(&s)).is_empty(),
+            "still waiting: not reported again"
+        );
         // Rejected and rerouted: the next attempt waits again → reported again.
         let gate = run.node_state_mut("approval").unwrap();
         gate.attempts = 1;
         s.workflow_runs[0] = run.clone();
         let c = d.diff(std::slice::from_ref(&s));
-        assert_eq!(c, vec![Change::WorkflowApproval { chat: s.id, run: run.id, node: "approval".into() }]);
+        assert_eq!(
+            c,
+            vec![Change::WorkflowApproval {
+                chat: s.id,
+                run: run.id,
+                node: "approval".into()
+            }]
+        );
         // Seeding an already-waiting gate reports nothing (restart).
         let mut fresh = Differ::default();
         fresh.seed(std::slice::from_ref(&s));

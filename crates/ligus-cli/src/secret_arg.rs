@@ -45,7 +45,9 @@ pub fn read_owner_only(path: &Path, max: u64) -> Result<String> {
         bail!("{shown} is too big for a secret");
     }
     let mut text = String::new();
-    f.take(max + 1).read_to_string(&mut text).with_context(|| format!("reading {shown}"))?;
+    f.take(max + 1)
+        .read_to_string(&mut text)
+        .with_context(|| format!("reading {shown}"))?;
     if text.len() as u64 > max {
         zeroize::Zeroize::zeroize(&mut text);
         bail!("{shown} is too big for a secret");
@@ -66,7 +68,11 @@ pub enum Source {
 /// `stdin` errors on a second read), `@FILE` reads an owner-only file, and
 /// anything else is the value itself, given on the command line. Trailing
 /// line ends and surrounding whitespace are dropped.
-pub fn secret_flag(flag: &str, value: Option<String>, stdin: &mut dyn FnMut() -> std::io::Result<String>) -> Result<Option<(String, Source)>> {
+pub fn secret_flag(
+    flag: &str,
+    value: Option<String>,
+    stdin: &mut dyn FnMut() -> std::io::Result<String>,
+) -> Result<Option<(String, Source)>> {
     let Some(v) = value else { return Ok(None) };
     let (text, source) = if v == "-" {
         let mut s = stdin().with_context(|| format!("reading {flag} from stdin"))?;
@@ -74,7 +80,8 @@ pub fn secret_flag(flag: &str, value: Option<String>, stdin: &mut dyn FnMut() ->
         zeroize::Zeroize::zeroize(&mut s);
         (t, Source::Stdin)
     } else if let Some(path) = v.strip_prefix('@') {
-        let mut s = read_owner_only(Path::new(path), MAX_SECRET_BYTES).with_context(|| format!("{flag} @{path}"))?;
+        let mut s = read_owner_only(Path::new(path), MAX_SECRET_BYTES)
+            .with_context(|| format!("{flag} @{path}"))?;
         let t = s.trim().to_string();
         zeroize::Zeroize::zeroize(&mut s);
         (t, Source::File)
@@ -97,7 +104,11 @@ pub fn argv_warning(flag: &str) -> String {
 
 /// [`secret_flag`], printing [`argv_warning`] on stderr when the value was
 /// on the command line.
-pub fn secret_flag_warn(flag: &str, value: Option<String>, stdin: &mut dyn FnMut() -> std::io::Result<String>) -> Result<Option<String>> {
+pub fn secret_flag_warn(
+    flag: &str,
+    value: Option<String>,
+    stdin: &mut dyn FnMut() -> std::io::Result<String>,
+) -> Result<Option<String>> {
     Ok(secret_flag(flag, value, stdin)?.map(|(v, source)| {
         if source == Source::Argv {
             eprintln!("{}", argv_warning(flag));
@@ -112,7 +123,9 @@ pub fn stdin_once() -> impl FnMut() -> std::io::Result<String> {
     let mut used = false;
     move || {
         if used {
-            return Err(std::io::Error::other("stdin was already read for another value: use @FILE for this one"));
+            return Err(std::io::Error::other(
+                "stdin was already read for another value: use @FILE for this one",
+            ));
         }
         used = true;
         let mut s = String::new();
@@ -159,7 +172,10 @@ mod tests {
             Some(("sk-123".to_string(), Source::File))
         );
         assert!(secret_flag("--secret", Some("@/nonexistent/x".into()), &mut no_stdin).is_err());
-        assert!(secret_flag("--secret", Some("-".into()), &mut || Ok("  \n".into())).is_err(), "empty");
+        assert!(
+            secret_flag("--secret", Some("-".into()), &mut || Ok("  \n".into())).is_err(),
+            "empty"
+        );
         assert!(argv_warning("--reg-token").contains("--reg-token -"));
     }
 
@@ -195,20 +211,35 @@ mod tests {
         let key = ligus_core::presence::RecoveryKey::generate().unwrap();
         let good = dir.path().join("words");
         ligus_runtime::private_file::write_private_atomic(&good, key.words().as_bytes()).unwrap();
-        assert_eq!(recovery_key_from_file(&good).unwrap().public_key(), key.public_key());
+        assert_eq!(
+            recovery_key_from_file(&good).unwrap().public_key(),
+            key.public_key()
+        );
 
         let open = dir.path().join("open");
         std::fs::write(&open, key.words()).unwrap();
         std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o644)).unwrap();
         let e = refusal(recovery_key_from_file(&open));
         assert!(e.contains("chmod 600"), "{e}");
-        let e = format!("{:#}", secret_flag("--secret", Some(format!("@{}", open.display())), &mut no_stdin).unwrap_err());
+        let e = format!(
+            "{:#}",
+            secret_flag(
+                "--secret",
+                Some(format!("@{}", open.display())),
+                &mut no_stdin
+            )
+            .unwrap_err()
+        );
         assert!(e.contains("chmod 600"), "{e}");
 
         // A directory, and a FIFO (which would block a plain read).
         assert!(refusal(recovery_key_from_file(dir.path())).contains("regular file"));
         let fifo = dir.path().join("fifo");
-        if std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+        if std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .is_ok_and(|s| s.success())
+        {
             assert!(refusal(recovery_key_from_file(&fifo)).contains("regular file"));
         }
 

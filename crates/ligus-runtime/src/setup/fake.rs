@@ -42,6 +42,8 @@ pub struct Fake {
     pub probe: ProbeFact,
     /// Ops whose write fails (by name: "add_agent", "add_mcp_server", ...).
     pub fail: Vec<&'static str>,
+    /// Ops the workspace's rules hold for the author's passkey.
+    pub needs_presence: Vec<&'static str>,
     /// Every write, in order.
     pub writes: Vec<String>,
     pub test_turn: Result<TestTurn, OpsError>,
@@ -54,14 +56,23 @@ impl Default for Fake {
             role: Some(WorkspaceRole::Owner),
             lockdown: false,
             lockdown_allowed: Vec::new(),
-            sandbox: SandboxFact { tier: "seatbelt".into(), summary: "seatbelt".into() },
+            sandbox: SandboxFact {
+                tier: "seatbelt".into(),
+                summary: "seatbelt".into(),
+            },
             relay: Some("https://relay.example.com".into()),
             harnesses: vec![
                 harness("claude-code", true, LoginState::LoggedIn),
                 harness("codex", true, LoginState::NotLoggedIn),
                 harness("copilot", false, LoginState::Unknown),
             ],
-            models: ModelList { models: vec![ModelOption::new("sonnet", None)], source: ModelSource::Aliases, complete: false, note: None, error: None },
+            models: ModelList {
+                models: vec![ModelOption::new("sonnet", None)],
+                source: ModelSource::Aliases,
+                complete: false,
+                note: None,
+                error: None,
+            },
             runtimes: Vec::new(),
             runtimes_need_admin: false,
             agents: Vec::new(),
@@ -80,8 +91,13 @@ impl Default for Fake {
             invites: Vec::new(),
             probe: ProbeFact::Ok,
             fail: Vec::new(),
+            needs_presence: Vec::new(),
             writes: Vec::new(),
-            test_turn: Ok(TestTurn { ok: true, latency_ms: 900, detail: "PINGOK".into() }),
+            test_turn: Ok(TestTurn {
+                ok: true,
+                latency_ms: 900,
+                detail: "PINGOK".into(),
+            }),
         }
     }
 }
@@ -103,6 +119,11 @@ impl Fake {
     fn write(&mut self, op: &'static str, what: String) -> OpsResult<()> {
         if self.fail.contains(&op) {
             return Err(OpsError::Failed(format!("{op} failed")));
+        }
+        if self.needs_presence.contains(&op) {
+            return Err(OpsError::Refused(
+                ligus_core::authz::PRESENCE_REQUIRED.into(),
+            ));
         }
         self.writes.push(format!("{op} {what}"));
         Ok(())
@@ -142,7 +163,12 @@ impl SetupOps for Fake {
     }
     fn add_runtime(&mut self, spec: &RuntimeSpec) -> OpsResult<()> {
         self.write("add_runtime", spec.id.clone())?;
-        self.runtimes.push(RuntimeFact { id: spec.id.clone(), harness: spec.harness.clone(), model: spec.model.clone(), endpoint: spec.endpoint.clone() });
+        self.runtimes.push(RuntimeFact {
+            id: spec.id.clone(),
+            harness: spec.harness.clone(),
+            model: spec.model.clone(),
+            endpoint: spec.endpoint.clone(),
+        });
         Ok(())
     }
     fn remove_runtime(&mut self, id: &str) -> OpsResult<()> {
@@ -159,7 +185,11 @@ impl SetupOps for Fake {
     fn add_agent(&mut self, name: &str, runtime_id: &str) -> OpsResult<Uuid> {
         self.write("add_agent", name.into())?;
         let id = Uuid::new_v4();
-        self.agents.push(AgentFact { id, name: name.into(), runtime_id: runtime_id.into() });
+        self.agents.push(AgentFact {
+            id,
+            name: name.into(),
+            runtime_id: runtime_id.into(),
+        });
         Ok(id)
     }
     fn test_turn(&mut self, _r: &str) -> OpsResult<TestTurn> {
@@ -168,16 +198,28 @@ impl SetupOps for Fake {
     fn mcp_servers(&self) -> Vec<McpFact> {
         self.mcp.clone()
     }
-    fn mcp_handshake(&mut self, spec: &McpServerSpec, token: Option<&Zeroizing<String>>) -> OpsResult<Vec<String>> {
+    fn mcp_handshake(
+        &mut self,
+        spec: &McpServerSpec,
+        token: Option<&Zeroizing<String>>,
+    ) -> OpsResult<Vec<String>> {
         if let Some(t) = token {
             self.secrets_seen.push(t.to_string());
         }
         // The spec is not saved yet when the handshake runs.
-        assert!(!self.mcp.iter().any(|m| m.id == spec.id), "handshake runs on an unsaved spec");
+        assert!(
+            !self.mcp.iter().any(|m| m.id == spec.id),
+            "handshake runs on an unsaved spec"
+        );
         self.writes.push(format!("handshake {}", spec.id));
         self.handshake.clone()
     }
-    fn put_mcp_secret(&mut self, id: &str, _url: &str, secret: &Zeroizing<String>) -> OpsResult<()> {
+    fn put_mcp_secret(
+        &mut self,
+        id: &str,
+        _url: &str,
+        secret: &Zeroizing<String>,
+    ) -> OpsResult<()> {
         self.secrets_seen.push(secret.to_string());
         self.write("put_mcp_secret", id.into())?;
         self.mcp_secrets.insert(id.into(), secret.to_string());
@@ -189,9 +231,18 @@ impl SetupOps for Fake {
         Ok(())
     }
     fn add_mcp_server(&mut self, spec: &McpServerSpec, reach: &[Uuid]) -> OpsResult<()> {
-        self.write("add_mcp_server", format!("{} enabled={} reach={}", spec.id, spec.enabled, reach.len()))?;
+        self.write(
+            "add_mcp_server",
+            format!("{} enabled={} reach={}", spec.id, spec.enabled, reach.len()),
+        )?;
         let (transport, target) = match &spec.transport {
-            McpTransport::Stdio { command, args } => ("stdio", std::iter::once(command.clone()).chain(args.clone()).collect::<Vec<_>>().join(" ")),
+            McpTransport::Stdio { command, args } => (
+                "stdio",
+                std::iter::once(command.clone())
+                    .chain(args.clone())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
             McpTransport::Http { url } => ("http", validate::origin(url)),
         };
         self.mcp.push(McpFact {
@@ -216,7 +267,13 @@ impl SetupOps for Fake {
         self.folder.clone()
     }
     fn add_repo(&mut self, folder: &FolderFact, name: &str, branch: &str) -> OpsResult<String> {
-        self.write("add_repo", format!("{} {name} {branch}", folder.canonical.clone().unwrap_or_default()))?;
+        self.write(
+            "add_repo",
+            format!(
+                "{} {name} {branch}",
+                folder.canonical.clone().unwrap_or_default()
+            ),
+        )?;
         let id = Uuid::new_v4().to_string();
         self.repos.push(RepoFact {
             id: id.clone(),
@@ -237,8 +294,17 @@ impl SetupOps for Fake {
     fn create_scratch(&mut self, name: &str) -> OpsResult<(String, String)> {
         self.write("create_scratch", name.into())?;
         let id = Uuid::new_v4().to_string();
-        let path = format!("/data/scratch/{}", if name.is_empty() { "scratch" } else { name });
-        self.repos.push(RepoFact { id: id.clone(), canonical: "local:0".into(), display_name: name.into(), default_branch: "main".into(), bound_here: Some(path.clone()) });
+        let path = format!(
+            "/data/scratch/{}",
+            if name.is_empty() { "scratch" } else { name }
+        );
+        self.repos.push(RepoFact {
+            id: id.clone(),
+            canonical: "local:0".into(),
+            display_name: name.into(),
+            default_branch: "main".into(),
+            bound_here: Some(path.clone()),
+        });
         Ok((id, path))
     }
     fn box_state(&self) -> OpsResult<BoxFact> {

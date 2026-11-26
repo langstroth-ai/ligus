@@ -162,8 +162,12 @@ pub fn parse_reply_directives(body: &str) -> ReplyDirectives {
             // option. Same balanced-JSON scan; a malformed block is stripped.
             if let Some((json, end)) = json_directive(body, i, "alternatives:") {
                 if let Ok(raw) = serde_json::from_str::<ParsedAlternatives>(json) {
-                    let options: Vec<ParsedAlternative> =
-                        raw.options.iter().filter(|o| !o.title.trim().is_empty()).cloned().collect();
+                    let options: Vec<ParsedAlternative> = raw
+                        .options
+                        .iter()
+                        .filter(|o| !o.title.trim().is_empty())
+                        .cloned()
+                        .collect();
                     if !raw.question.trim().is_empty() && options.len() >= 2 {
                         alternatives.push(ParsedAlternatives { options, ..raw });
                     }
@@ -225,7 +229,9 @@ fn json_directive<'a>(body: &'a str, i: usize, name: &str) -> Option<(&'a str, u
     let obj_len = scan_json_object(&body[json_start..])?;
     let after = json_start + obj_len;
     let close = after + leading_ws(&body[after..]);
-    body[close..].starts_with("]]").then(|| (&body[json_start..after], close + 2))
+    body[close..]
+        .starts_with("]]")
+        .then(|| (&body[json_start..after], close + 2))
 }
 
 fn leading_ws(s: &str) -> usize {
@@ -315,7 +321,8 @@ mod tests {
 
     #[test]
     fn workflow_json_may_contain_double_brackets_in_strings() {
-        let body = r#"[[workflow: {"name": "x", "note": "arrays like [[1]] are fine", "stages": []}]]"#;
+        let body =
+            r#"[[workflow: {"name": "x", "note": "arrays like [[1]] are fine", "stages": []}]]"#;
         let r = parse_reply_directives(body);
         assert_eq!(r.workflows.len(), 1);
         let v: serde_json::Value = serde_json::from_str(&r.workflows[0]).unwrap();
@@ -405,7 +412,9 @@ mod tests {
 
     #[test]
     fn alternatives_need_a_question_and_two_options() {
-        let r = parse_reply_directives(r#"[[alternatives: {"question": "Q", "options": [{"title": "only"}]}]] x"#);
+        let r = parse_reply_directives(
+            r#"[[alternatives: {"question": "Q", "options": [{"title": "only"}]}]] x"#,
+        );
         assert!(r.alternatives.is_empty());
         assert_eq!(r.cleaned, "x");
     }

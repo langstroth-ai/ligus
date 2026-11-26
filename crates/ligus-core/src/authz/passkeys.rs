@@ -18,8 +18,13 @@ pub const REGRANT_REQUIRED: &str =
 /// carries one. A presence that doesn't verify is an error, never ignored:
 /// the credential must be registered to the stamped account at this
 /// position, and the assertion must sign this event's digest.
-pub fn verify_stamped(env: &SessionEventEnvelope, roster: &RosterState) -> Result<Option<Uuid>, String> {
-    let Some(a) = presence::presence_of(env).map_err(|e| e.0)? else { return Ok(None) };
+pub fn verify_stamped(
+    env: &SessionEventEnvelope,
+    roster: &RosterState,
+) -> Result<Option<Uuid>, String> {
+    let Some(a) = presence::presence_of(env).map_err(|e| e.0)? else {
+        return Ok(None);
+    };
     let account = env
         .actor_stamp
         .as_ref()
@@ -30,7 +35,10 @@ pub fn verify_stamped(env: &SessionEventEnvelope, roster: &RosterState) -> Resul
         .get(&account)
         .and_then(|m| m.get(&a.credential_id))
         .ok_or("the presence credential isn't registered to the stamped account here")?;
-    roster.presence_policy.with(|p| presence::verify_get(a, key, &presence::challenge(env), p)).map_err(|e| format!("presence: {}", e.0))?;
+    roster
+        .presence_policy
+        .with(|p| presence::verify_get(a, key, &presence::challenge(env), p))
+        .map_err(|e| format!("presence: {}", e.0))?;
     Ok(Some(account))
 }
 
@@ -72,18 +80,26 @@ pub fn registration_ok(
     if existing.is_none() && !roster.passkey_grants.contains(&c.account_id) {
         return Err(REGRANT_REQUIRED.into());
     }
-    let a = presence::presence_of(env).map_err(|e| e.0)?.ok_or("a passkey registration carries its proof")?;
+    let a = presence::presence_of(env)
+        .map_err(|e| e.0)?
+        .ok_or("a passkey registration carries its proof")?;
     let challenge = presence::challenge(env);
     match existing {
         Some(m) => {
-            let key = m.get(&a.credential_id).ok_or("another passkey needs presence from one the account already has")?;
-            roster.presence_policy.with(|p| presence::verify_get(a, key, &challenge, p)).map_err(|e| format!("presence: {}", e.0))
+            let key = m
+                .get(&a.credential_id)
+                .ok_or("another passkey needs presence from one the account already has")?;
+            roster
+                .presence_policy
+                .with(|p| presence::verify_get(a, key, &challenge, p))
+                .map_err(|e| format!("presence: {}", e.0))
         }
         None if c.recovery => {
             if a.credential_id != c.credential_id {
                 return Err("a recovery key proves itself".into());
             }
-            presence::verify_recovery(a, &PasskeyKey::from(c), &challenge).map_err(|e| format!("recovery proof: {}", e.0))
+            presence::verify_recovery(a, &PasskeyKey::from(c), &challenge)
+                .map_err(|e| format!("recovery proof: {}", e.0))
         }
         // The account's first passkey proves possession: an assertion by the
         // new credential itself over this registration's digest (a
@@ -92,7 +108,10 @@ pub fn registration_ok(
             if a.credential_id != c.credential_id {
                 return Err("the first passkey proves itself".into());
             }
-            roster.presence_policy.with(|p| presence::verify_get(a, &PasskeyKey::from(c), &challenge, p)).map_err(|e| format!("registration proof: {}", e.0))
+            roster
+                .presence_policy
+                .with(|p| presence::verify_get(a, &PasskeyKey::from(c), &challenge, p))
+                .map_err(|e| format!("registration proof: {}", e.0))
         }
     }
 }
@@ -111,7 +130,11 @@ pub fn removal_ok(
     if !on_config {
         return Err("a passkey is removed on the workspace config log".into());
     }
-    if !roster.passkeys.get(&account_id).is_some_and(|m| m.contains_key(credential_id)) {
+    if !roster
+        .passkeys
+        .get(&account_id)
+        .is_some_and(|m| m.contains_key(credential_id))
+    {
         return Err("no such passkey".into());
     }
     let own = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) == Some(account_id);

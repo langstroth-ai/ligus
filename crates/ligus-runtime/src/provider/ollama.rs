@@ -70,7 +70,14 @@ pub fn base_url(endpoint: &str) -> String {
     if e.is_empty() {
         return DEFAULT_BASE.to_string();
     }
-    for suffix in ["/v1/chat/completions", "/chat/completions", "/api/chat", "/api/generate", "/v1", "/api"] {
+    for suffix in [
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/api/chat",
+        "/api/generate",
+        "/v1",
+        "/api",
+    ] {
         if let Some(stripped) = e.strip_suffix(suffix) {
             e = stripped.trim_end_matches('/').to_string();
             break;
@@ -224,7 +231,9 @@ pub fn ollama_tool_defs(tools: &[Value]) -> Vec<Value> {
     tools
         .iter()
         .map(|t| {
-            if t.get("type").and_then(Value::as_str) == Some("function") && t.get("function").is_some() {
+            if t.get("type").and_then(Value::as_str) == Some("function")
+                && t.get("function").is_some()
+            {
                 return t.clone();
             }
             let parameters = t
@@ -254,7 +263,9 @@ pub(crate) fn clip_tool_result(s: String) -> String {
         return s;
     }
     let mut out: String = s.chars().take(TOOL_RESULT_MAX_CHARS).collect();
-    out.push_str("\n…[tool result truncated by Ligus: too long for a local model's context window]");
+    out.push_str(
+        "\n…[tool result truncated by Ligus: too long for a local model's context window]",
+    );
     out
 }
 
@@ -277,9 +288,19 @@ pub struct LocalModel {
 
 impl LocalModel {
     fn from_tag(v: &Value) -> Option<Self> {
-        let name = v.get("name").or_else(|| v.get("model"))?.as_str()?.to_string();
+        let name = v
+            .get("name")
+            .or_else(|| v.get("model"))?
+            .as_str()?
+            .to_string();
         let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        let d = |k: &str| v.get("details").and_then(|d| d.get(k)).and_then(Value::as_str).unwrap_or("").to_string();
+        let d = |k: &str| {
+            v.get("details")
+                .and_then(|d| d.get(k))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
         Some(Self {
             name,
             size_bytes: v.get("size").and_then(Value::as_u64).unwrap_or(0),
@@ -308,12 +329,20 @@ pub struct RunningModel {
 
 impl RunningModel {
     fn from_ps(v: &Value) -> Option<Self> {
-        let name = v.get("name").or_else(|| v.get("model"))?.as_str()?.to_string();
+        let name = v
+            .get("name")
+            .or_else(|| v.get("model"))?
+            .as_str()?
+            .to_string();
         Some(Self {
             name,
             size_bytes: v.get("size").and_then(Value::as_u64).unwrap_or(0),
             size_vram_bytes: v.get("size_vram").and_then(Value::as_u64).unwrap_or(0),
-            expires_at: v.get("expires_at").and_then(Value::as_str).unwrap_or("").to_string(),
+            expires_at: v
+                .get("expires_at")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
             context_length: v.get("context_length").and_then(Value::as_u64),
         })
     }
@@ -334,13 +363,22 @@ impl PullProgress {
     /// Parse a pull stream line. An `{"error": …}` line is the server
     /// aborting the pull (unknown model, disk full, registry unreachable).
     pub fn parse(line: &str) -> Result<Self, ProviderError> {
-        let v: Value = serde_json::from_str(line)
-            .map_err(|e| ProviderError::Decode(format!("ollama pull frame: {e}: {}", truncate(line, 120))))?;
+        let v: Value = serde_json::from_str(line).map_err(|e| {
+            ProviderError::Decode(format!("ollama pull frame: {e}: {}", truncate(line, 120)))
+        })?;
         if let Some(err) = v.get("error").and_then(Value::as_str) {
-            return Err(ProviderError::Api { provider: PROVIDER, status: 0, body: err.to_string() });
+            return Err(ProviderError::Api {
+                provider: PROVIDER,
+                status: 0,
+                body: err.to_string(),
+            });
         }
         Ok(Self {
-            status: v.get("status").and_then(Value::as_str).unwrap_or("").to_string(),
+            status: v
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
             digest: v.get("digest").and_then(Value::as_str).map(str::to_string),
             total: v.get("total").and_then(Value::as_u64),
             completed: v.get("completed").and_then(Value::as_u64),
@@ -416,21 +454,34 @@ impl OllamaClient {
     /// not pulled on that server.
     pub async fn show(&self, model: &str) -> Result<ModelCapabilities, ProviderError> {
         let url = self.show_url();
-        let peer = Peer { provider: PROVIDER, url: &url };
+        let peer = Peer {
+            provider: PROVIDER,
+            url: &url,
+        };
         // A probe should be quick; don't hold the whole turn-idle window for it.
         let idle = self.idle_timeout.min(Duration::from_secs(20));
         let body = serde_json::to_vec(&json!({ "model": model }))
             .map_err(|e| ProviderError::Decode(format!("encode show request: {e}")))?;
         let resp = http::send_with_retry(peer, idle, self.connect_retries, || {
-            self.http.post(&url).header("content-type", "application/json").body(body.clone())
+            self.http
+                .post(&url)
+                .header("content-type", "application/json")
+                .body(body.clone())
         })
         .await?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = error_text(&resp.text().await.unwrap_or_default());
-            return Err(ProviderError::Api { provider: PROVIDER, status, body });
+            return Err(ProviderError::Api {
+                provider: PROVIDER,
+                status,
+                body,
+            });
         }
-        let v: Value = resp.json().await.map_err(|e| ProviderError::Decode(format!("show: {e}")))?;
+        let v: Value = resp
+            .json()
+            .await
+            .map_err(|e| ProviderError::Decode(format!("show: {e}")))?;
         Ok(ModelCapabilities::from_show(&v))
     }
 
@@ -455,7 +506,10 @@ impl OllamaClient {
 
     /// Forget a cached probe (e.g. after the user re-pulls a model).
     pub fn forget_cached(&self, model: &str) {
-        probe_cache().lock().unwrap().remove(&format!("{}|{}", self.base, model));
+        probe_cache()
+            .lock()
+            .unwrap()
+            .remove(&format!("{}|{}", self.base, model));
     }
 
     /// Models installed on the server (`GET /api/tags`).
@@ -483,19 +537,33 @@ impl OllamaClient {
     /// disconnects, which makes the server abandon the pull (partial layers
     /// stay on disk, so a retry resumes). Clears the capability cache for the
     /// model so the next turn re-probes what was just installed.
-    pub async fn pull(&self, model: &str, mut on_progress: impl FnMut(PullProgress)) -> Result<(), ProviderError> {
+    pub async fn pull(
+        &self,
+        model: &str,
+        mut on_progress: impl FnMut(PullProgress),
+    ) -> Result<(), ProviderError> {
         let url = format!("{}/api/pull", self.base);
-        let peer = Peer { provider: PROVIDER, url: &url };
+        let peer = Peer {
+            provider: PROVIDER,
+            url: &url,
+        };
         let body = serde_json::to_vec(&json!({ "model": model, "stream": true }))
             .map_err(|e| ProviderError::Decode(format!("encode pull request: {e}")))?;
         let resp = http::send_with_retry(peer, PULL_IDLE, self.connect_retries, || {
-            self.http.post(&url).header("content-type", "application/json").body(body.clone())
+            self.http
+                .post(&url)
+                .header("content-type", "application/json")
+                .body(body.clone())
         })
         .await?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = error_text(&resp.text().await.unwrap_or_default());
-            return Err(ProviderError::Api { provider: PROVIDER, status, body });
+            return Err(ProviderError::Api {
+                provider: PROVIDER,
+                status,
+                body,
+            });
         }
         let mut buffer = String::new();
         let mut stream = resp.bytes_stream();
@@ -525,7 +593,9 @@ impl OllamaClient {
             on_progress(p);
         }
         if !succeeded {
-            return Err(ProviderError::Decode("ollama pull ended without a success line".into()));
+            return Err(ProviderError::Decode(
+                "ollama pull ended without a success line".into(),
+            ));
         }
         self.forget_cached(model);
         tracing::info!(target: "dispatch", host = %self.host(), model, "ollama pull complete");
@@ -536,18 +606,28 @@ impl OllamaClient {
     /// not installed.
     pub async fn delete(&self, model: &str) -> Result<(), ProviderError> {
         let url = format!("{}/api/delete", self.base);
-        let peer = Peer { provider: PROVIDER, url: &url };
+        let peer = Peer {
+            provider: PROVIDER,
+            url: &url,
+        };
         let idle = self.idle_timeout.min(Duration::from_secs(30));
         let body = serde_json::to_vec(&json!({ "model": model }))
             .map_err(|e| ProviderError::Decode(format!("encode delete request: {e}")))?;
         let resp = http::send_with_retry(peer, idle, self.connect_retries, || {
-            self.http.delete(&url).header("content-type", "application/json").body(body.clone())
+            self.http
+                .delete(&url)
+                .header("content-type", "application/json")
+                .body(body.clone())
         })
         .await?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = error_text(&resp.text().await.unwrap_or_default());
-            return Err(ProviderError::Api { provider: PROVIDER, status, body });
+            return Err(ProviderError::Api {
+                provider: PROVIDER,
+                status,
+                body,
+            });
         }
         self.forget_cached(model);
         Ok(())
@@ -555,15 +635,25 @@ impl OllamaClient {
 
     async fn get_json(&self, path: &str) -> Result<Value, ProviderError> {
         let url = format!("{}{}", self.base, path);
-        let peer = Peer { provider: PROVIDER, url: &url };
+        let peer = Peer {
+            provider: PROVIDER,
+            url: &url,
+        };
         let idle = self.idle_timeout.min(Duration::from_secs(20));
-        let resp = http::send_with_retry(peer, idle, self.connect_retries, || self.http.get(&url)).await?;
+        let resp =
+            http::send_with_retry(peer, idle, self.connect_retries, || self.http.get(&url)).await?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = error_text(&resp.text().await.unwrap_or_default());
-            return Err(ProviderError::Api { provider: PROVIDER, status, body });
+            return Err(ProviderError::Api {
+                provider: PROVIDER,
+                status,
+                body,
+            });
         }
-        resp.json().await.map_err(|e| ProviderError::Decode(format!("{path}: {e}")))
+        resp.json()
+            .await
+            .map_err(|e| ProviderError::Decode(format!("{path}: {e}")))
     }
 
     /// Stream a chat. Reply text goes to `on_delta` (and the returned
@@ -580,8 +670,21 @@ impl OllamaClient {
         on_thinking: impl FnMut(String),
     ) -> Result<ChatOutcome, ProviderError> {
         let messages = seed_messages(system, turns);
-        let mut state = RoundState { think: opts.think, ..Default::default() };
-        let round = self.stream_round(model, &messages, opts, &[], &mut state, on_delta, on_thinking).await?;
+        let mut state = RoundState {
+            think: opts.think,
+            ..Default::default()
+        };
+        let round = self
+            .stream_round(
+                model,
+                &messages,
+                opts,
+                &[],
+                &mut state,
+                on_delta,
+                on_thinking,
+            )
+            .await?;
         Ok(round.outcome)
     }
 
@@ -614,7 +717,10 @@ impl OllamaClient {
     ) -> Result<ChatOutcome, ProviderError> {
         let defs = ollama_tool_defs(tools);
         let mut messages = seed_messages(system, turns);
-        let mut state = RoundState { think: opts.think, ..Default::default() };
+        let mut state = RoundState {
+            think: opts.think,
+            ..Default::default()
+        };
         let mut out = ChatOutcome::default();
         let mut guard = RepeatGuard::default();
         let rounds = max_rounds.max(1);
@@ -622,7 +728,8 @@ impl OllamaClient {
             let last = round + 1 == rounds;
             // Near the allocated window, stop offering tools: this round is
             // the last and must answer from what the earlier rounds gathered.
-            let fits = crate::agent_tools::tools_fit_context(&messages, &defs, opts.num_ctx.unwrap_or(0));
+            let fits =
+                crate::agent_tools::tools_fit_context(&messages, &defs, opts.num_ctx.unwrap_or(0));
             if !fits && !last && !state.tools_rejected {
                 tracing::info!(target: "dispatch", host = %self.host(), model, round, window = ?opts.num_ctx, "context nearly full; final round goes out without tools");
             }
@@ -633,7 +740,11 @@ impl OllamaClient {
             if final_round {
                 nudge_final_round(&mut messages);
             }
-            let offered: &[Value] = if final_round || state.tools_rejected { &[] } else { &defs };
+            let offered: &[Value] = if final_round || state.tools_rejected {
+                &[]
+            } else {
+                &defs
+            };
             // Separate this round's text from the previous round's with a blank
             // line — in the stream and in the body alike, so they match.
             let mut need_sep = !out.text.is_empty();
@@ -680,9 +791,16 @@ impl OllamaClient {
                 calls = r.tool_calls.len(),
                 "ollama tool round"
             );
-            messages.push(assistant_message(&r.outcome.text, &r.thinking, &r.tool_calls));
+            messages.push(assistant_message(
+                &r.outcome.text,
+                &r.thinking,
+                &r.tool_calls,
+            ));
             for (idx, call) in r.tool_calls.iter().enumerate() {
-                let id = call.id.clone().unwrap_or_else(|| format!("call_{round}_{idx}"));
+                let id = call
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| format!("call_{round}_{idx}"));
                 on_activity(StreamActivity::Tool {
                     id: id.clone(),
                     name: call.name.clone(),
@@ -700,7 +818,11 @@ impl OllamaClient {
                     }
                 };
                 let content = clip_tool_result(content);
-                on_activity(StreamActivity::ToolResult { call_id: id, is_error, content: content.clone() });
+                on_activity(StreamActivity::ToolResult {
+                    call_id: id,
+                    is_error,
+                    content: content.clone(),
+                });
                 messages.push(tool_message(call, content));
             }
         }
@@ -723,7 +845,13 @@ impl OllamaClient {
         mut on_thinking: impl FnMut(String),
     ) -> Result<Round, ProviderError> {
         let resp = loop {
-            let body = request_body(model, messages, opts, state.think, if state.tools_rejected { &[] } else { tools });
+            let body = request_body(
+                model,
+                messages,
+                opts,
+                state.think,
+                if state.tools_rejected { &[] } else { tools },
+            );
             let resp = self.post_chat(&body).await?;
             if resp.status().is_success() {
                 break resp;
@@ -733,7 +861,11 @@ impl OllamaClient {
             let lower = text.to_lowercase();
             // "\"qwen2.5\" does not support thinking" — drop the field and retry
             // once, so a non-reasoning model works with the default `think: false`.
-            if status == 400 && state.think.is_some() && !state.retried_without_think && lower.contains("think") {
+            if status == 400
+                && state.think.is_some()
+                && !state.retried_without_think
+                && lower.contains("think")
+            {
                 tracing::info!(target: "dispatch", host = %self.host(), model, "server rejected `think` ({text}); retrying without it");
                 state.think = None;
                 state.retried_without_think = true;
@@ -743,17 +875,25 @@ impl OllamaClient {
             // was re-pulled as a build without tool support). Finish the turn
             // as a plain chat and forget the cached probe so the next turn
             // re-checks.
-            if status == 400 && !tools.is_empty() && !state.tools_rejected && lower.contains("tool") {
+            if status == 400 && !tools.is_empty() && !state.tools_rejected && lower.contains("tool")
+            {
                 tracing::warn!(target: "dispatch", host = %self.host(), model, "server rejected tool definitions ({text}); continuing without tools");
                 self.forget_cached(model);
                 state.tools_rejected = true;
                 continue;
             }
-            return Err(ProviderError::Api { provider: PROVIDER, status, body: text });
+            return Err(ProviderError::Api {
+                provider: PROVIDER,
+                status,
+                body: text,
+            });
         };
 
         let url = self.chat_url();
-        let peer = Peer { provider: PROVIDER, url: &url };
+        let peer = Peer {
+            provider: PROVIDER,
+            url: &url,
+        };
         let mut round = Round {
             outcome: ChatOutcome {
                 think_unsupported: state.retried_without_think,
@@ -779,13 +919,25 @@ impl OllamaClient {
                 if line.is_empty() {
                     continue;
                 }
-                absorb(parse_frame(&line)?, &mut round, &mut filter, &mut on_delta, &mut on_thinking);
+                absorb(
+                    parse_frame(&line)?,
+                    &mut round,
+                    &mut filter,
+                    &mut on_delta,
+                    &mut on_thinking,
+                );
             }
         }
         // A final line without a trailing newline.
         let rest = buffer.trim();
         if !rest.is_empty() {
-            absorb(parse_frame(rest)?, &mut round, &mut filter, &mut on_delta, &mut on_thinking);
+            absorb(
+                parse_frame(rest)?,
+                &mut round,
+                &mut filter,
+                &mut on_delta,
+                &mut on_thinking,
+            );
         }
         let tail = filter.finish();
         if !tail.thinking.is_empty() {
@@ -809,11 +961,17 @@ impl OllamaClient {
 
     async fn post_chat(&self, body: &Value) -> Result<reqwest::Response, ProviderError> {
         let url = self.chat_url();
-        let peer = Peer { provider: PROVIDER, url: &url };
+        let peer = Peer {
+            provider: PROVIDER,
+            url: &url,
+        };
         let bytes = serde_json::to_vec(body)
             .map_err(|e| ProviderError::Decode(format!("encode chat request: {e}")))?;
         http::send_with_retry(peer, self.idle_timeout, self.connect_retries, || {
-            self.http.post(&url).header("content-type", "application/json").body(bytes.clone())
+            self.http
+                .post(&url)
+                .header("content-type", "application/json")
+                .body(bytes.clone())
         })
         .await
     }
@@ -924,7 +1082,13 @@ pub fn build_request(
 
 /// [`build_request`] over an explicit message array, with `tools` (Ollama
 /// shape) attached when non-empty.
-fn request_body(model: &str, messages: &[Value], opts: &ChatOptions, think: Option<bool>, tools: &[Value]) -> Value {
+fn request_body(
+    model: &str,
+    messages: &[Value],
+    opts: &ChatOptions,
+    think: Option<bool>,
+    tools: &[Value],
+) -> Value {
     let mut body = json!({
         "model": model,
         "stream": true,
@@ -960,10 +1124,15 @@ pub struct Frame {
 /// Parse a stream line. An `{"error": …}` line becomes an API error (status 0:
 /// the HTTP response had already succeeded); malformed JSON is a decode error.
 pub fn parse_frame(line: &str) -> Result<Frame, ProviderError> {
-    let v: Value = serde_json::from_str(line)
-        .map_err(|e| ProviderError::Decode(format!("ollama frame: {e}: {}", truncate(line, 120))))?;
+    let v: Value = serde_json::from_str(line).map_err(|e| {
+        ProviderError::Decode(format!("ollama frame: {e}: {}", truncate(line, 120)))
+    })?;
     if let Some(err) = v.get("error").and_then(Value::as_str) {
-        return Err(ProviderError::Api { provider: PROVIDER, status: 0, body: err.to_string() });
+        return Err(ProviderError::Api {
+            provider: PROVIDER,
+            status: 0,
+            body: err.to_string(),
+        });
     }
     let msg = v.get("message");
     let field = |k: &str| {
@@ -972,7 +1141,11 @@ pub fn parse_frame(line: &str) -> Result<Frame, ProviderError> {
             .unwrap_or("")
             .to_string()
     };
-    let count = |k: &str| v.get(k).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
+    let count = |k: &str| {
+        v.get(k)
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+    };
     Ok(Frame {
         content: field("content"),
         thinking: field("thinking"),
@@ -988,7 +1161,10 @@ pub fn parse_frame(line: &str) -> Result<Frame, ProviderError> {
 /// wrapped as `{"input": …}` when it isn't JSON). Entries without a function
 /// name are skipped.
 fn parse_tool_calls(msg: Option<&Value>) -> Vec<ToolCall> {
-    let Some(calls) = msg.and_then(|m| m.get("tool_calls")).and_then(Value::as_array) else {
+    let Some(calls) = msg
+        .and_then(|m| m.get("tool_calls"))
+        .and_then(Value::as_array)
+    else {
         return Vec::new();
     };
     calls
@@ -1000,7 +1176,9 @@ fn parse_tool_calls(msg: Option<&Value>) -> Vec<ToolCall> {
                 return None;
             }
             let arguments = match f.get("arguments") {
-                Some(Value::String(raw)) => serde_json::from_str(raw).unwrap_or_else(|_| json!({ "input": raw })),
+                Some(Value::String(raw)) => {
+                    serde_json::from_str(raw).unwrap_or_else(|_| json!({ "input": raw }))
+                }
                 Some(v) => v.clone(),
                 None => json!({}),
             };
@@ -1010,7 +1188,11 @@ fn parse_tool_calls(msg: Option<&Value>) -> Vec<ToolCall> {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
-            Some(ToolCall { id, name, arguments })
+            Some(ToolCall {
+                id,
+                name,
+                arguments,
+            })
         })
         .collect()
 }
@@ -1049,7 +1231,10 @@ mod tests {
         }
         assert_eq!(base_url("localhost:11434"), "http://localhost:11434");
         assert_eq!(base_url(""), DEFAULT_BASE);
-        assert_eq!(base_url("https://ollama.example.com/v1/chat/completions"), "https://ollama.example.com");
+        assert_eq!(
+            base_url("https://ollama.example.com/v1/chat/completions"),
+            "https://ollama.example.com"
+        );
     }
 
     #[test]
@@ -1073,7 +1258,11 @@ mod tests {
         assert!(body.get("keep_alive").is_none());
         assert!(body.get("options").is_none());
 
-        let opts = ChatOptions { num_ctx: Some(32768), keep_alive: Some("-1".into()), think: Some(true) };
+        let opts = ChatOptions {
+            num_ctx: Some(32768),
+            keep_alive: Some("-1".into()),
+            think: Some(true),
+        };
         let body = build_request("qwen3", None, &turns, &opts, Some(false));
         assert_eq!(body["messages"][0]["role"], "user");
         assert_eq!(body["think"], false, "explicit think arg wins over opts");
@@ -1083,15 +1272,41 @@ mod tests {
 
     #[test]
     fn parses_frames_thinking_done_and_errors() {
-        let f = parse_frame(r#"{"message":{"role":"assistant","content":"Hi","thinking":"hmm"},"done":false}"#).unwrap();
-        assert_eq!(f, Frame { content: "Hi".into(), thinking: "hmm".into(), tool_calls: vec![], done: false, prompt_tokens: None, completion_tokens: None });
+        let f = parse_frame(
+            r#"{"message":{"role":"assistant","content":"Hi","thinking":"hmm"},"done":false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            f,
+            Frame {
+                content: "Hi".into(),
+                thinking: "hmm".into(),
+                tool_calls: vec![],
+                done: false,
+                prompt_tokens: None,
+                completion_tokens: None
+            }
+        );
         let f = parse_frame(r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":26,"eval_count":298}"#).unwrap();
         assert!(f.done);
         assert_eq!(f.prompt_tokens, Some(26));
         assert_eq!(f.completion_tokens, Some(298));
         let e = parse_frame(r#"{"error":"model 'x' not found"}"#).unwrap_err();
-        assert!(matches!(e, ProviderError::Api { provider: "ollama", status: 0, .. }), "{e:?}");
-        assert!(matches!(parse_frame("not json"), Err(ProviderError::Decode(_))));
+        assert!(
+            matches!(
+                e,
+                ProviderError::Api {
+                    provider: "ollama",
+                    status: 0,
+                    ..
+                }
+            ),
+            "{e:?}"
+        );
+        assert!(matches!(
+            parse_frame("not json"),
+            Err(ProviderError::Decode(_))
+        ));
     }
 
     #[test]
@@ -1176,17 +1391,26 @@ mod wire {
             return axum::response::Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .header("content-type", "application/json")
-                .body(Body::from(json!({"error": "\"qwen2.5\" does not support thinking"}).to_string()))
+                .body(Body::from(
+                    json!({"error": "\"qwen2.5\" does not support thinking"}).to_string(),
+                ))
                 .unwrap();
         }
         if f.reject_tools && v.get("tools").is_some() {
             return axum::response::Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .header("content-type", "application/json")
-                .body(Body::from(json!({"error": "registry.ollama.ai/library/gemma:2b does not support tools"}).to_string()))
+                .body(Body::from(
+                    json!({"error": "registry.ollama.ai/library/gemma:2b does not support tools"})
+                        .to_string(),
+                ))
                 .unwrap();
         }
-        let lines = f.rounds.get(n).map(|r| Arc::new(r.clone())).unwrap_or_else(|| f.reply.clone());
+        let lines = f
+            .rounds
+            .get(n)
+            .map(|r| Arc::new(r.clone()))
+            .unwrap_or_else(|| f.reply.clone());
         let stall = f.stall;
         let stream = futures_util::stream::unfold(0usize, move |i| {
             let lines = lines.clone();
@@ -1213,7 +1437,9 @@ mod wire {
         if v["model"] == "missing" {
             return axum::response::Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .body(Body::from(json!({"error": "model 'missing' not found"}).to_string()))
+                .body(Body::from(
+                    json!({"error": "model 'missing' not found"}).to_string(),
+                ))
                 .unwrap();
         }
         axum::response::Response::builder()
@@ -1254,9 +1480,9 @@ mod wire {
         let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
         f.seen.lock().unwrap().pull_bodies.push(v);
         let lines = f.pull_lines.clone();
-        let stream = futures_util::stream::iter((0..lines.len()).map(move |i| {
-            Ok::<_, std::io::Error>(format!("{}\n", lines[i]))
-        }));
+        let stream = futures_util::stream::iter(
+            (0..lines.len()).map(move |i| Ok::<_, std::io::Error>(format!("{}\n", lines[i]))),
+        );
         axum::response::Response::builder()
             .header("content-type", "application/x-ndjson")
             .body(Body::from_stream(stream))
@@ -1269,10 +1495,15 @@ mod wire {
         if v["model"] == "missing" {
             return axum::response::Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .body(Body::from(json!({"error": "model 'missing' not found"}).to_string()))
+                .body(Body::from(
+                    json!({"error": "model 'missing' not found"}).to_string(),
+                ))
                 .unwrap();
         }
-        axum::response::Response::builder().status(StatusCode::OK).body(Body::empty()).unwrap()
+        axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::empty())
+            .unwrap()
     }
 
     async fn serve(fake: Fake) -> (String, Arc<Mutex<Seen>>) {
@@ -1326,10 +1557,21 @@ mod wire {
         let (base, seen) = serve(fake(vec![frame("Hi"), frame(" there"), done()])).await;
         // The historical chat URL must still resolve to the native endpoint.
         let client = OllamaClient::new(&format!("{base}/v1/chat/completions"));
-        let opts = ChatOptions { num_ctx: Some(32768), keep_alive: Some("-1".into()), think: Some(false) };
+        let opts = ChatOptions {
+            num_ctx: Some(32768),
+            keep_alive: Some("-1".into()),
+            think: Some(false),
+        };
         let mut deltas = Vec::new();
         let out = client
-            .stream_chat("qwen3", Some("be brief"), &[ChatTurn::user("hello")], &opts, |d| deltas.push(d), |_| {})
+            .stream_chat(
+                "qwen3",
+                Some("be brief"),
+                &[ChatTurn::user("hello")],
+                &opts,
+                |d| deltas.push(d),
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "Hi there");
@@ -1360,7 +1602,14 @@ mod wire {
         .await;
         let mut thinking = Vec::new();
         let out = OllamaClient::new(&base)
-            .stream_chat("qwen3", None, &[ChatTurn::user("x")], &ChatOptions::default(), |_| {}, |t| thinking.push(t))
+            .stream_chat(
+                "qwen3",
+                None,
+                &[ChatTurn::user("x")],
+                &ChatOptions::default(),
+                |_| {},
+                |t| thinking.push(t),
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "Answer");
@@ -1372,9 +1621,19 @@ mod wire {
         let mut f = fake(vec![frame("ok"), done()]);
         f.reject_think = true;
         let (base, seen) = serve(f).await;
-        let opts = ChatOptions { think: Some(false), ..Default::default() };
+        let opts = ChatOptions {
+            think: Some(false),
+            ..Default::default()
+        };
         let out = OllamaClient::new(&base)
-            .stream_chat("qwen2.5", None, &[ChatTurn::user("x")], &opts, |_| {}, |_| {})
+            .stream_chat(
+                "qwen2.5",
+                None,
+                &[ChatTurn::user("x")],
+                &opts,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "ok");
@@ -1395,7 +1654,11 @@ mod wire {
         // missing-model 404 from /api/show to check the label + text.
         let err = OllamaClient::new(&base).show("missing").await.unwrap_err();
         match err {
-            ProviderError::Api { provider, status, body } => {
+            ProviderError::Api {
+                provider,
+                status,
+                body,
+            } => {
                 assert_eq!(provider, "ollama");
                 assert_eq!(status, 404);
                 assert_eq!(body, "model 'missing' not found");
@@ -1406,12 +1669,26 @@ mod wire {
 
     #[tokio::test]
     async fn mid_stream_error_line_fails_the_turn() {
-        let (base, _) = serve(fake(vec![frame("par"), json!({"error": "out of memory"}).to_string()])).await;
+        let (base, _) = serve(fake(vec![
+            frame("par"),
+            json!({"error": "out of memory"}).to_string(),
+        ]))
+        .await;
         let err = OllamaClient::new(&base)
-            .stream_chat("qwen3", None, &[ChatTurn::user("x")], &ChatOptions::default(), |_| {}, |_| {})
+            .stream_chat(
+                "qwen3",
+                None,
+                &[ChatTurn::user("x")],
+                &ChatOptions::default(),
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap_err();
-        assert!(matches!(&err, ProviderError::Api { provider: "ollama", body, .. } if body == "out of memory"), "{err:?}");
+        assert!(
+            matches!(&err, ProviderError::Api { provider: "ollama", body, .. } if body == "out of memory"),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]
@@ -1421,12 +1698,22 @@ mod wire {
         let (base, _) = serve(f).await;
         let client = OllamaClient::new(&base).with_idle_timeout(Duration::from_millis(300));
         let err = client
-            .stream_chat("qwen3", None, &[ChatTurn::user("x")], &ChatOptions::default(), |_| {}, |_| {})
+            .stream_chat(
+                "qwen3",
+                None,
+                &[ChatTurn::user("x")],
+                &ChatOptions::default(),
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap_err();
         let msg = err.to_string();
         assert!(matches!(err, ProviderError::Idle { .. }), "{msg}");
-        assert!(msg.contains("ollama") && msg.contains(&client.host()), "{msg}");
+        assert!(
+            msg.contains("ollama") && msg.contains(&client.host()),
+            "{msg}"
+        );
     }
 
     #[tokio::test]
@@ -1437,13 +1724,26 @@ mod wire {
         let client = OllamaClient::new(&format!("http://{addr}"));
         let start = std::time::Instant::now();
         let err = client
-            .stream_chat("m", None, &[ChatTurn::user("x")], &ChatOptions::default(), |_| {}, |_| {})
+            .stream_chat(
+                "m",
+                None,
+                &[ChatTurn::user("x")],
+                &ChatOptions::default(),
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap_err();
         let msg = err.to_string();
         assert!(matches!(err, ProviderError::Unreachable { .. }), "{msg}");
-        assert!(msg.contains(&addr.to_string()) && msg.contains("Tailscale"), "{msg}");
-        assert!(start.elapsed() >= http::RETRY_DELAY, "no retry delay observed");
+        assert!(
+            msg.contains(&addr.to_string()) && msg.contains("Tailscale"),
+            "{msg}"
+        );
+        assert!(
+            start.elapsed() >= http::RETRY_DELAY,
+            "no retry delay observed"
+        );
     }
 
     #[tokio::test]
@@ -1500,15 +1800,24 @@ mod wire {
         assert!(probe_cache().lock().unwrap().contains_key(&key));
 
         let mut seen_progress = Vec::new();
-        client.pull("qwen3.5:latest", |p| seen_progress.push(p)).await.unwrap();
+        client
+            .pull("qwen3.5:latest", |p| seen_progress.push(p))
+            .await
+            .unwrap();
 
-        assert_eq!(seen.lock().unwrap().pull_bodies[0], json!({"model": "qwen3.5:latest", "stream": true}));
+        assert_eq!(
+            seen.lock().unwrap().pull_bodies[0],
+            json!({"model": "qwen3.5:latest", "stream": true})
+        );
         assert_eq!(seen_progress.len(), 6);
         assert_eq!(seen_progress[1].completed, Some(250));
         assert_eq!(seen_progress[1].total, Some(1000));
         assert_eq!(seen_progress[1].digest.as_deref(), Some("sha256:abc123"));
         assert!(seen_progress[5].is_success());
-        assert!(!probe_cache().lock().unwrap().contains_key(&key), "pull should evict the cached probe");
+        assert!(
+            !probe_cache().lock().unwrap().contains_key(&key),
+            "pull should evict the cached probe"
+        );
     }
 
     #[tokio::test]
@@ -1519,7 +1828,10 @@ mod wire {
             json!({"error": "pull model manifest: file does not exist"}).to_string(),
         ]);
         let (base, _) = serve(f).await;
-        let err = OllamaClient::new(&base).pull("nope:latest", |_| {}).await.unwrap_err();
+        let err = OllamaClient::new(&base)
+            .pull("nope:latest", |_| {})
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("file does not exist"), "{err}");
     }
 
@@ -1528,7 +1840,10 @@ mod wire {
         let mut f = fake(vec![]);
         f.pull_lines = Arc::new(vec![json!({"status": "pulling manifest"}).to_string()]);
         let (base, _) = serve(f).await;
-        let err = OllamaClient::new(&base).pull("qwen3.5:latest", |_| {}).await.unwrap_err();
+        let err = OllamaClient::new(&base)
+            .pull("qwen3.5:latest", |_| {})
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("without a success line"), "{err}");
     }
 
@@ -1537,9 +1852,15 @@ mod wire {
         let (base, seen) = serve(fake(vec![])).await;
         let client = OllamaClient::new(&base);
         client.delete("qwen3.5:latest").await.unwrap();
-        assert_eq!(seen.lock().unwrap().delete_bodies[0], json!({"model": "qwen3.5:latest"}));
+        assert_eq!(
+            seen.lock().unwrap().delete_bodies[0],
+            json!({"model": "qwen3.5:latest"})
+        );
         let err = client.delete("missing").await.unwrap_err();
-        assert!(matches!(err, ProviderError::Api { status: 404, .. }), "{err}");
+        assert!(
+            matches!(err, ProviderError::Api { status: 404, .. }),
+            "{err}"
+        );
         assert!(err.to_string().contains("not found"));
     }
 
@@ -1553,7 +1874,10 @@ mod wire {
     }
     impl ToolExecutor for Recorder {
         async fn call(&self, name: &str, input: &Value) -> (String, bool) {
-            self.calls.lock().unwrap().push((name.to_string(), input.clone()));
+            self.calls
+                .lock()
+                .unwrap()
+                .push((name.to_string(), input.clone()));
             (format!("result for {name}: 42"), false)
         }
     }
@@ -1570,13 +1894,23 @@ mod wire {
     async fn tool_call_round_trips_through_the_executor_and_back_to_the_model() {
         let mut f = fake(vec![frame("unused"), done()]);
         f.rounds = Arc::new(vec![
-            vec![frame("Let me check."), tool_call_frame("search", json!({"q": "x"})), done()],
+            vec![
+                frame("Let me check."),
+                tool_call_frame("search", json!({"q": "x"})),
+                done(),
+            ],
             vec![frame("final "), frame("answer"), done()],
         ]);
         let (base, seen) = serve(f).await;
-        let exec = Recorder { calls: Mutex::new(vec![]) };
+        let exec = Recorder {
+            calls: Mutex::new(vec![]),
+        };
         let (mut deltas, mut acts) = (Vec::new(), Vec::new());
-        let opts = ChatOptions { num_ctx: Some(8192), think: Some(false), ..Default::default() };
+        let opts = ChatOptions {
+            num_ctx: Some(8192),
+            think: Some(false),
+            ..Default::default()
+        };
         let out = OllamaClient::new(&base)
             .stream_chat_with_tools(
                 "qwen3.5",
@@ -1592,13 +1926,30 @@ mod wire {
             .await
             .unwrap();
         assert_eq!(out.text, "Let me check.\n\nfinal answer");
-        assert_eq!(deltas.concat(), out.text, "the body is exactly what was streamed");
+        assert_eq!(
+            deltas.concat(),
+            out.text,
+            "the body is exactly what was streamed"
+        );
         assert!(!out.tools_unsupported);
-        assert_eq!(out.completion_tokens, Some(14), "completion tokens summed over rounds");
-        assert_eq!(exec.calls.lock().unwrap().as_slice(), &[("search".to_string(), json!({"q": "x"}))]);
+        assert_eq!(
+            out.completion_tokens,
+            Some(14),
+            "completion tokens summed over rounds"
+        );
+        assert_eq!(
+            exec.calls.lock().unwrap().as_slice(),
+            &[("search".to_string(), json!({"q": "x"}))]
+        );
         // Activity: the call, then its result, with a synthesized id.
-        assert!(matches!(&acts[0], StreamActivity::Tool { id, name, input_json } if id == "call_0_0" && name == "search" && input_json == r#"{"q":"x"}"#), "{acts:?}");
-        assert!(matches!(&acts[1], StreamActivity::ToolResult { call_id, is_error: false, content } if call_id == "call_0_0" && content == "result for search: 42"), "{acts:?}");
+        assert!(
+            matches!(&acts[0], StreamActivity::Tool { id, name, input_json } if id == "call_0_0" && name == "search" && input_json == r#"{"q":"x"}"#),
+            "{acts:?}"
+        );
+        assert!(
+            matches!(&acts[1], StreamActivity::ToolResult { call_id, is_error: false, content } if call_id == "call_0_0" && content == "result for search: 42"),
+            "{acts:?}"
+        );
         assert_eq!(acts.len(), 2);
 
         let s = seen.lock().unwrap();
@@ -1606,11 +1957,17 @@ mod wire {
         let first = &s.chat_bodies[0];
         assert_eq!(first["tools"][0]["type"], "function");
         assert_eq!(first["tools"][0]["function"]["name"], "search");
-        assert_eq!(first["tools"][0]["function"]["parameters"]["required"][0], "q");
+        assert_eq!(
+            first["tools"][0]["function"]["parameters"]["required"][0],
+            "q"
+        );
         assert_eq!(first["options"]["num_ctx"], 8192);
         // Round 2 carries the history: the assistant's call and the tool's answer.
         let second = &s.chat_bodies[1];
-        assert!(second.get("tools").is_some(), "tools stay on offer until the last round");
+        assert!(
+            second.get("tools").is_some(),
+            "tools stay on offer until the last round"
+        );
         let msgs = second["messages"].as_array().unwrap();
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[1]["role"], "user");
@@ -1621,13 +1978,19 @@ mod wire {
         assert_eq!(msgs[3]["role"], "tool");
         assert_eq!(msgs[3]["tool_name"], "search");
         assert_eq!(msgs[3]["content"], "result for search: 42");
-        assert!(msgs[3].get("tool_call_id").is_none(), "no id was assigned by the server");
+        assert!(
+            msgs[3].get("tool_call_id").is_none(),
+            "no id was assigned by the server"
+        );
     }
 
     #[tokio::test]
     async fn last_round_goes_out_without_tools_so_a_looping_model_still_answers() {
         // The model calls the tool every time it is offered.
-        let f = fake(vec![tool_call_frame("search", json!({"q": "again"})), done()]);
+        let f = fake(vec![
+            tool_call_frame("search", json!({"q": "again"})),
+            done(),
+        ]);
         let mut f = f;
         f.rounds = Arc::new(vec![
             vec![tool_call_frame("search", json!({"q": "1"})), done()],
@@ -1635,9 +1998,21 @@ mod wire {
             vec![frame("giving up: 42"), done()],
         ]);
         let (base, seen) = serve(f).await;
-        let exec = Recorder { calls: Mutex::new(vec![]) };
+        let exec = Recorder {
+            calls: Mutex::new(vec![]),
+        };
         let out = OllamaClient::new(&base)
-            .stream_chat_with_tools("m", None, &[ChatTurn::user("go")], &ChatOptions::default(), &search_tool(), &exec, 3, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &ChatOptions::default(),
+                &search_tool(),
+                &exec,
+                3,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "giving up: 42");
@@ -1646,11 +2021,17 @@ mod wire {
         assert_eq!(s.chat_bodies.len(), 3);
         assert!(s.chat_bodies[0].get("tools").is_some());
         assert!(s.chat_bodies[1].get("tools").is_some());
-        assert!(s.chat_bodies[2].get("tools").is_none(), "the final round forces a text answer");
+        assert!(
+            s.chat_bodies[2].get("tools").is_none(),
+            "the final round forces a text answer"
+        );
         // Every earlier round's calls and results are in the last request's history.
         let msgs = s.chat_bodies[2]["messages"].as_array().unwrap();
         let roles: Vec<&str> = msgs.iter().map(|m| m["role"].as_str().unwrap()).collect();
-        assert_eq!(roles, ["user", "assistant", "tool", "assistant", "tool", "user"]);
+        assert_eq!(
+            roles,
+            ["user", "assistant", "tool", "assistant", "tool", "user"]
+        );
         // A trailing user message asks for the answer.
         assert!(crate::tool_loop::is_final_round_nudge(&msgs[5]));
     }
@@ -1658,24 +2039,56 @@ mod wire {
     #[tokio::test]
     async fn repeated_calls_are_not_rerun_and_end_the_loop_early() {
         let mut f = fake(vec![frame("unused"), done()]);
-        let same = || vec![think_frame("read it again"), tool_call_frame("search", json!({"q": "stock"})), done()];
-        f.rounds = Arc::new(vec![same(), same(), same(), same(), vec![frame("answer"), done()]]);
+        let same = || {
+            vec![
+                think_frame("read it again"),
+                tool_call_frame("search", json!({"q": "stock"})),
+                done(),
+            ]
+        };
+        f.rounds = Arc::new(vec![
+            same(),
+            same(),
+            same(),
+            same(),
+            vec![frame("answer"), done()],
+        ]);
         let (base, seen) = serve(f).await;
-        let exec = Recorder { calls: Mutex::new(vec![]) };
+        let exec = Recorder {
+            calls: Mutex::new(vec![]),
+        };
         let mut results = Vec::new();
         let out = OllamaClient::new(&base)
-            .stream_chat_with_tools("m", None, &[ChatTurn::user("go")], &ChatOptions::default(), &search_tool(), &exec, 24, |_| {}, |a| {
-                if let StreamActivity::ToolResult { content, .. } = a {
-                    results.push(content)
-                }
-            })
+            .stream_chat_with_tools(
+                "m",
+                None,
+                &[ChatTurn::user("go")],
+                &ChatOptions::default(),
+                &search_tool(),
+                &exec,
+                24,
+                |_| {},
+                |a| {
+                    if let StreamActivity::ToolResult { content, .. } = a {
+                        results.push(content)
+                    }
+                },
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "answer");
-        assert_eq!(exec.calls.lock().unwrap().len(), 1, "the repeats were answered from the first result");
+        assert_eq!(
+            exec.calls.lock().unwrap().len(),
+            1,
+            "the repeats were answered from the first result"
+        );
         assert!(results[1].starts_with("Not run again"), "{}", results[1]);
         let s = seen.lock().unwrap();
-        assert_eq!(s.chat_bodies.len(), 5, "the third repeat made the next round the last");
+        assert_eq!(
+            s.chat_bodies.len(),
+            5,
+            "the third repeat made the next round the last"
+        );
         assert!(s.chat_bodies[3].get("tools").is_some());
         assert!(s.chat_bodies[4].get("tools").is_none());
         // The round's thinking rides back with its calls.
@@ -1690,9 +2103,21 @@ mod wire {
         let client = OllamaClient::new(&base);
         // A cached probe that (wrongly) says tools are fine must be dropped.
         assert!(client.capabilities_cached("gemma:2b").await.is_some());
-        let exec = Recorder { calls: Mutex::new(vec![]) };
+        let exec = Recorder {
+            calls: Mutex::new(vec![]),
+        };
         let out = client
-            .stream_chat_with_tools("gemma:2b", None, &[ChatTurn::user("go")], &ChatOptions::default(), &search_tool(), &exec, 4, |_| {}, |_| {})
+            .stream_chat_with_tools(
+                "gemma:2b",
+                None,
+                &[ChatTurn::user("go")],
+                &ChatOptions::default(),
+                &search_tool(),
+                &exec,
+                4,
+                |_| {},
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(out.text, "plain");
@@ -1704,7 +2129,11 @@ mod wire {
         assert!(s.chat_bodies[1].get("tools").is_none());
         drop(s);
         assert!(
-            probe_cache().lock().unwrap().get(&format!("{}|gemma:2b", client.base())).is_none(),
+            probe_cache()
+                .lock()
+                .unwrap()
+                .get(&format!("{}|gemma:2b", client.base()))
+                .is_none(),
             "stale probe forgotten so the next turn re-checks"
         );
     }
@@ -1721,13 +2150,23 @@ mod wire {
         )
         .unwrap();
         assert_eq!(f.tool_calls.len(), 3, "a call without a name is dropped");
-        assert_eq!(f.tool_calls[0], ToolCall { id: Some("call_9".into()), name: "search".into(), arguments: json!({"q": "x"}) });
+        assert_eq!(
+            f.tool_calls[0],
+            ToolCall {
+                id: Some("call_9".into()),
+                name: "search".into(),
+                arguments: json!({"q": "x"})
+            }
+        );
         assert_eq!(f.tool_calls[1].arguments, json!({"path": "a.rs"}));
         assert_eq!(f.tool_calls[2].arguments, json!({"input": "not json"}));
         // A server-assigned id is echoed on both sides of the exchange.
         let a = assistant_message("", "", &f.tool_calls[..1]);
         assert!(a.get("thinking").is_none());
-        assert_eq!(assistant_message("", "plan", &f.tool_calls[..1])["thinking"], "plan");
+        assert_eq!(
+            assistant_message("", "plan", &f.tool_calls[..1])["thinking"],
+            "plan"
+        );
         assert_eq!(a["tool_calls"][0]["id"], "call_9");
         let t = tool_message(&f.tool_calls[0], "r".into());
         assert_eq!(t["tool_call_id"], "call_9");
@@ -1741,8 +2180,14 @@ mod wire {
             json!({"name": "b"}),
             json!({"type": "function", "function": {"name": "c", "parameters": {}}}),
         ]);
-        assert_eq!(defs[0], json!({"type": "function", "function": {"name": "a", "description": "d", "parameters": {"type": "object"}}}));
-        assert_eq!(defs[1]["function"]["parameters"], json!({"type": "object", "properties": {}}));
+        assert_eq!(
+            defs[0],
+            json!({"type": "function", "function": {"name": "a", "description": "d", "parameters": {"type": "object"}}})
+        );
+        assert_eq!(
+            defs[1]["function"]["parameters"],
+            json!({"type": "object", "properties": {}})
+        );
         assert_eq!(defs[2]["function"]["name"], "c");
         let long: String = "x".repeat(TOOL_RESULT_MAX_CHARS + 5);
         assert!(clip_tool_result(long).ends_with("context window]"));

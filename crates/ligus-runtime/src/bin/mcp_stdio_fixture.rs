@@ -15,7 +15,9 @@ fn main() {
 
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
-        let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
         let id = msg.get("id").cloned();
 

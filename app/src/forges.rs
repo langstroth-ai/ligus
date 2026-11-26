@@ -12,7 +12,9 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use ligus_forge::tokens::{sh_quote, AuthSource, CredentialSource, Purpose, TokenStore};
-use ligus_forge::{Connection, Connections, Forge, ForgeId, ForgeKind, RepoQuery, RepoRef, Transport};
+use ligus_forge::{
+    Connection, Connections, Forge, ForgeId, ForgeKind, RepoQuery, RepoRef, Transport,
+};
 use serde_json::{json, Value};
 use tauri::State;
 
@@ -36,7 +38,11 @@ fn helper_command(id: &ForgeId, data_dir: &Path) -> Option<String> {
 }
 
 fn credentials(c: &Connection, data_dir: &Path) -> Arc<dyn CredentialSource> {
-    c.credentials_with_helper(store(data_dir), helper_command(&c.id, data_dir), Some(data_dir))
+    c.credentials_with_helper(
+        store(data_dir),
+        helper_command(&c.id, data_dir),
+        Some(data_dir),
+    )
 }
 
 fn forge(c: &Connection, data_dir: &Path) -> Arc<dyn Forge> {
@@ -49,7 +55,11 @@ pub(crate) fn forge_for(data_dir: &Path, id: Option<&str>) -> Option<Arc<dyn For
     let all = Connections::load(data_dir);
     let c = match id.map(str::trim).filter(|i| !i.is_empty()) {
         Some(raw) => all.get(&ForgeId::parse(raw).ok()?)?.clone(),
-        None => all.forges.iter().find(|c| c.id == ForgeId::github_com())?.clone(),
+        None => all
+            .forges
+            .iter()
+            .find(|c| c.id == ForgeId::github_com())?
+            .clone(),
     };
     Some(forge(&c, data_dir))
 }
@@ -58,10 +68,18 @@ pub(crate) fn forge_for(data_dir: &Path, id: Option<&str>) -> Option<Arc<dyn For
 /// from the secret store and exit. Run first thing in `main`.
 pub fn maybe_run_git_credential() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.len() < 5 || args[0] != "forge" || args[1] != "git-credential" || args[3] != "--data-dir" {
+    if args.len() < 5
+        || args[0] != "forge"
+        || args[1] != "git-credential"
+        || args[3] != "--data-dir"
+    {
         return;
     }
-    let (id, dir, action) = (args[2].clone(), PathBuf::from(&args[4]), args.get(5).cloned().unwrap_or_else(|| "get".into()));
+    let (id, dir, action) = (
+        args[2].clone(),
+        PathBuf::from(&args[4]),
+        args.get(5).cloned().unwrap_or_else(|| "get".into()),
+    );
     let code = match run_helper(&id, &dir, &action) {
         Ok(()) => 0,
         Err(_) => 1,
@@ -77,18 +95,28 @@ fn run_helper(id: &str, dir: &Path, action: &str) -> Result<(), String> {
     let id = ForgeId::parse(id).map_err(|e| e.to_string())?;
     ligus_runtime::secret_store::init_for_data_dir(dir, None);
     let mut input = String::new();
-    std::io::stdin().take(64 * 1024).read_to_string(&mut input).map_err(|e| e.to_string())?;
+    std::io::stdin()
+        .take(64 * 1024)
+        .read_to_string(&mut input)
+        .map_err(|e| e.to_string())?;
     let all = Connections::load(dir);
     let Some(c) = all.get(&id) else { return Ok(()) };
     if !matches!(c.auth, AuthSource::Token | AuthSource::Oauth) {
         return Ok(());
     }
     let creds = c.credentials(store(dir), None, Some(dir));
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
     let token = rt.block_on(creds.token(Purpose::Write)).ok().flatten();
     let user = ligus_forge::tokens::git_username(c.kind, c.auth, c.login.as_deref());
-    if let Some(a) = ligus_forge::tokens::answer_git_credential(action, &input, &c.host(), &user, token.as_ref()) {
-        std::io::stdout().write_all(a.as_bytes()).map_err(|e| e.to_string())?;
+    if let Some(a) =
+        ligus_forge::tokens::answer_git_credential(action, &input, &c.host(), &user, token.as_ref())
+    {
+        std::io::stdout()
+            .write_all(a.as_bytes())
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -96,9 +124,16 @@ fn run_helper(id: &str, dir: &Path, action: &str) -> Result<(), String> {
 /// The chat's code host for the read-only agent tools: the workspace
 /// folder's `origin` on one of this device's connections (and `upstream`
 /// when it is a fork checkout).
-pub(crate) fn binding_for_dir(data_dir: &Path, dir: &Path) -> Option<ligus_runtime::ligus_mcp::forge_tools::ForgeBinding> {
+pub(crate) fn binding_for_dir(
+    data_dir: &Path,
+    dir: &Path,
+) -> Option<ligus_runtime::ligus_mcp::forge_tools::ForgeBinding> {
     // The configured remote URLs, never git's insteadOf rewrites of them.
-    let forges: Vec<Arc<dyn Forge>> = Connections::load(data_dir).forges.iter().map(|c| forge(c, data_dir)).collect();
+    let forges: Vec<Arc<dyn Forge>> = Connections::load(data_dir)
+        .forges
+        .iter()
+        .map(|c| forge(c, data_dir))
+        .collect();
     ligus_runtime::ligus_mcp::forge_tools::binding_for_checkout(dir, &forges)
 }
 
@@ -151,7 +186,10 @@ async fn dto(c: &Connection, data_dir: &Path, check: bool) -> Value {
 
 /// Connections on this device (never a token). `check` signs in to each.
 #[tauri::command]
-pub async fn forges_list(state: State<'_, AppState>, check: Option<bool>) -> Result<Vec<Value>, String> {
+pub async fn forges_list(
+    state: State<'_, AppState>,
+    check: Option<bool>,
+) -> Result<Vec<Value>, String> {
     let dir = state.data_dir.clone();
     let mut out = Vec::new();
     for c in Connections::load(&dir).forges {
@@ -181,7 +219,9 @@ pub async fn forges_add(
     if c.flavor.is_none() && matches!(lower.as_str(), "forgejo" | "gitea" | "codeberg") {
         c.flavor = Some(lower);
     }
-    c.client_id = client_id.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+    c.client_id = client_id
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty());
     // A loopback, private or link-local address only when marked internal.
     c.internal = internal.unwrap_or(false);
     ligus_forge::conn::check_address(&c).await.map_err(err)?;
@@ -215,7 +255,12 @@ pub async fn forges_remove(state: State<'_, AppState>, id: String) -> Result<(),
 
 /// Store a pasted token (read or write) in this device's secret store.
 #[tauri::command]
-pub async fn forges_set_token(state: State<'_, AppState>, id: String, purpose: String, token: String) -> Result<Value, String> {
+pub async fn forges_set_token(
+    state: State<'_, AppState>,
+    id: String,
+    purpose: String,
+    token: String,
+) -> Result<Value, String> {
     let id = ForgeId::parse(&id).map_err(err)?;
     let purpose = Purpose::parse(&purpose).ok_or("purpose is read or write")?;
     let t = token.trim();
@@ -228,7 +273,9 @@ pub async fn forges_set_token(state: State<'_, AppState>, id: String, purpose: S
     if c.auth == AuthSource::Gh {
         return Err("this connection uses the gh login".into());
     }
-    store(&dir).put(&id, purpose, &ligus_forge::Secret::new(t)).map_err(err)?;
+    store(&dir)
+        .put(&id, purpose, &ligus_forge::Secret::new(t))
+        .map_err(err)?;
     if c.auth == AuthSource::None {
         c.auth = AuthSource::Token;
     }
@@ -278,7 +325,10 @@ static DEVICE: LazyLock<Mutex<Option<DevicePending>>> = LazyLock::new(|| Mutex::
 pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Result<Value, String> {
     let id = ForgeId::parse(&id).map_err(err)?;
     let dir = state.data_dir.clone();
-    let c = Connections::load(&dir).get(&id).ok_or("no such connection")?.clone();
+    let c = Connections::load(&dir)
+        .get(&id)
+        .ok_or("no such connection")?
+        .clone();
     let ep = ligus_forge::device::endpoints(&c).map_err(err)?;
     let start = ligus_forge::device::start(&ep).await.map_err(err)?;
     let nonce = new_nonce();
@@ -294,7 +344,12 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
     let out = json!({ "userCode": start.user_code, "verificationUri": start.verification_uri, "expiresIn": start.expires_in });
     tauri::async_runtime::spawn(async move {
         let set = |st: &'static str, e: Option<String>| {
-            if let Some(p) = DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_mut().filter(|p| p.id == id && p.nonce == nonce) {
+            if let Some(p) = DEVICE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_mut()
+                .filter(|p| p.id == id && p.nonce == nonce)
+            {
                 p.state = st;
                 p.error = e;
             }
@@ -302,7 +357,11 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
         let mut interval = start.interval;
         loop {
             tokio::time::sleep(Duration::from_secs(interval)).await;
-            let expired = DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_none_or(|p| p.id != id || p.nonce != nonce || Instant::now() > p.expires);
+            let expired = DEVICE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .is_none_or(|p| p.id != id || p.nonce != nonce || Instant::now() > p.expires);
             if expired {
                 return set("expired", None);
             }
@@ -316,8 +375,21 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
                     // one and the connection still exists.
                     let (d, pid) = (dir.clone(), id.clone());
                     let r = tokio::task::spawn_blocking(move || {
-                        let current = || DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|p| p.id == pid && p.nonce == nonce);
-                        ligus_forge::conn::save_device_sign_in(&d, store(&d).as_ref(), &pid, &t, current).map_err(err)
+                        let current = || {
+                            DEVICE
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .as_ref()
+                                .is_some_and(|p| p.id == pid && p.nonce == nonce)
+                        };
+                        ligus_forge::conn::save_device_sign_in(
+                            &d,
+                            store(&d).as_ref(),
+                            &pid,
+                            &t,
+                            current,
+                        )
+                        .map_err(err)
                     })
                     .await
                     .map_err(err)
@@ -339,24 +411,44 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
 pub async fn forges_device_status() -> Result<Value, String> {
     let g = DEVICE.lock().unwrap_or_else(|e| e.into_inner());
     let p = g.as_ref().ok_or("no device sign-in in progress")?;
-    Ok(json!({ "id": p.id.as_str(), "state": p.state, "error": p.error, "userCode": p.user_code, "verificationUri": p.verification_uri }))
+    Ok(
+        json!({ "id": p.id.as_str(), "state": p.state, "error": p.error, "userCode": p.user_code, "verificationUri": p.verification_uri }),
+    )
 }
 
 /// One page of a connection's repositories, for the picker.
 #[tauri::command]
-pub async fn forges_repos(state: State<'_, AppState>, id: String, q: Option<String>, owner: Option<String>, page: Option<u32>) -> Result<Value, String> {
+pub async fn forges_repos(
+    state: State<'_, AppState>,
+    id: String,
+    q: Option<String>,
+    owner: Option<String>,
+    page: Option<u32>,
+) -> Result<Value, String> {
     let id = ForgeId::parse(&id).map_err(err)?;
     let dir = state.data_dir.clone();
-    let c = Connections::load(&dir).get(&id).ok_or("no such connection")?.clone();
+    let c = Connections::load(&dir)
+        .get(&id)
+        .ok_or("no such connection")?
+        .clone();
     let f = forge(&c, &dir);
-    let me = f.whoami().await.map_err(err)?.ok_or_else(|| f.signed_out_reason().unwrap_or_else(|| "not signed in".into()))?;
+    let me = f.whoami().await.map_err(err)?.ok_or_else(|| {
+        f.signed_out_reason()
+            .unwrap_or_else(|| "not signed in".into())
+    })?;
     let query = RepoQuery {
-        q: q.map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.len() <= 100),
-        owner: owner.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        q: q.map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s.len() <= 100),
+        owner: owner
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         page: page.unwrap_or(1).clamp(1, 100),
         per_page: 30,
     };
-    let owners = f.owners(&me.login).await.unwrap_or_else(|_| vec![me.login.clone()]);
+    let owners = f
+        .owners(&me.login)
+        .await
+        .unwrap_or_else(|_| vec![me.login.clone()]);
     let repos = f.list_repos(&query, &me.login).await.map_err(err)?;
     Ok(json!({ "login": me.login, "owners": owners, "repos": repos, "hasMore": repos.len() >= 30 }))
 }
@@ -365,12 +457,25 @@ pub async fn forges_repos(state: State<'_, AppState>, id: String, q: Option<Stri
 /// into `parent/<name>`, through this device's credentials. Returns the
 /// checkout path; the window then offers to use it as the workspace folder.
 #[tauri::command]
-pub async fn forges_clone(state: State<'_, AppState>, id: String, repo: String, parent: String) -> Result<String, String> {
+pub async fn forges_clone(
+    state: State<'_, AppState>,
+    id: String,
+    repo: String,
+    parent: String,
+) -> Result<String, String> {
     let id = ForgeId::parse(&id).map_err(err)?;
     let dir = state.data_dir.clone();
-    let c = Connections::load(&dir).get(&id).ok_or("no such connection")?.clone();
-    let spec = ligus_forge::spec::parse_repo_spec(&repo, c.kind == ForgeKind::GitLab).map_err(err)?;
-    if spec.host.as_deref().is_some_and(|h| !ligus_forge::spec::same_host(h, &c.host())) {
+    let c = Connections::load(&dir)
+        .get(&id)
+        .ok_or("no such connection")?
+        .clone();
+    let spec =
+        ligus_forge::spec::parse_repo_spec(&repo, c.kind == ForgeKind::GitLab).map_err(err)?;
+    if spec
+        .host
+        .as_deref()
+        .is_some_and(|h| !ligus_forge::spec::same_host(h, &c.host()))
+    {
         return Err(format!("that URL isn't on {}", c.display()));
     }
     let parent = PathBuf::from(parent.trim());
@@ -382,18 +487,28 @@ pub async fn forges_clone(state: State<'_, AppState>, id: String, repo: String, 
         return Err(format!("{} already exists", dest.display()));
     }
     let f = forge(&c, &dir);
-    let url = f.clone_url(&RepoRef::new(spec.repo.owner.clone(), spec.repo.name.clone()), Transport::Https);
+    let url = f.clone_url(
+        &RepoRef::new(spec.repo.owner.clone(), spec.repo.name.clone()),
+        Transport::Https,
+    );
     let auth = f.git_auth_args();
     let d = dest.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut cmd = ligus_core::process_util::git();
-        cmd.env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null());
-        cmd.args(&auth).args(["clone", "--no-recurse-submodules", "--", &url]).arg(&d);
+        cmd.env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(std::process::Stdio::null());
+        cmd.args(&auth)
+            .args(["clone", "--no-recurse-submodules", "--", &url])
+            .arg(&d);
         let o = cmd.output().map_err(err)?;
         if o.status.success() {
             Ok(d.to_string_lossy().into_owned())
         } else {
-            let msg = String::from_utf8_lossy(&o.stderr).lines().rfind(|l| !l.trim().is_empty()).unwrap_or("").to_string();
+            let msg = String::from_utf8_lossy(&o.stderr)
+                .lines()
+                .rfind(|l| !l.trim().is_empty())
+                .unwrap_or("")
+                .to_string();
             Err(format!("git clone failed: {msg}"))
         }
     })
@@ -406,12 +521,19 @@ pub async fn forges_clone(state: State<'_, AppState>, id: String, repo: String, 
 /// the forge builds from the canonical's re-validated parts (never a URL
 /// from an event), the host's address re-checked and pinned for git, and
 /// the connection's credential-helper args (the token never on argv).
-pub(crate) async fn clone_source_for(data_dir: &Path, repo: &ligus_core::workspace_repo::WorkspaceRepo) -> Result<(String, Option<String>, Vec<String>), String> {
+pub(crate) async fn clone_source_for(
+    data_dir: &Path,
+    repo: &ligus_core::workspace_repo::WorkspaceRepo,
+) -> Result<(String, Option<String>, Vec<String>), String> {
     let (host, rref) = ligus_runtime::repos::clone::clone_target(repo)?;
     let c = Connections::load(data_dir)
         .for_host(&host)
         .cloned()
-        .ok_or_else(|| format!("{host} isn't a code host connected to this device: add it under Code hosts first"))?;
+        .ok_or_else(|| {
+            format!(
+                "{host} isn't a code host connected to this device: add it under Code hosts first"
+            )
+        })?;
     let pin = ligus_forge::conn::git_resolve_pin(&c).await.map_err(err)?;
     let f = forge(&c, data_dir);
     Ok((f.clone_url(&rref, Transport::Https), pin, f.git_auth_args()))
@@ -425,7 +547,10 @@ mod tests {
     /// appears in the helper command or the clone's git args.
     #[test]
     fn desktop_git_auth_never_carries_the_token() {
-        let tmp = std::env::temp_dir().join(format!("ligus-forge-desk-{}", uuid::Uuid::new_v4().simple()));
+        let tmp = std::env::temp_dir().join(format!(
+            "ligus-forge-desk-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
         struct Rm(PathBuf);
         impl Drop for Rm {
@@ -435,12 +560,29 @@ mod tests {
         }
         let dir = Rm(tmp);
         let dir = &dir;
-        ligus_runtime::secret_store::set_for_data_dir(&dir.0, Arc::new(ligus_runtime::secret_store::File0600::new(&dir.0)));
-        let c = Connection::new(ForgeKind::GitLab, "https://gitlab.example.com", AuthSource::Token).unwrap();
-        store(&dir.0).put(&c.id, Purpose::Write, &ligus_forge::Secret::new("glpat-desktop-0123456789")).unwrap();
+        ligus_runtime::secret_store::set_for_data_dir(
+            &dir.0,
+            Arc::new(ligus_runtime::secret_store::File0600::new(&dir.0)),
+        );
+        let c = Connection::new(
+            ForgeKind::GitLab,
+            "https://gitlab.example.com",
+            AuthSource::Token,
+        )
+        .unwrap();
+        store(&dir.0)
+            .put(
+                &c.id,
+                Purpose::Write,
+                &ligus_forge::Secret::new("glpat-desktop-0123456789"),
+            )
+            .unwrap();
         let args = forge(&c, &dir.0).git_auth_args();
         let joined = args.join(" ");
-        assert!(joined.contains("forge git-credential 'gitlab:gitlab.example.com' --data-dir"), "{joined}");
+        assert!(
+            joined.contains("forge git-credential 'gitlab:gitlab.example.com' --data-dir"),
+            "{joined}"
+        );
         assert!(!joined.contains("glpat-desktop"));
     }
 }

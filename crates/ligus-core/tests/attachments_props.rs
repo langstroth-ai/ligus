@@ -26,7 +26,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use ligus_core::attachment::{self, AttachmentPolicy, AttachmentRef};
 use ligus_core::testkit::{Proof, SignedWorld};
 use ligus_core::watermark::heads_of;
-use ligus_core::{workspace_config_session_id, SessionEvent, SessionEventEnvelope, Verdict, WorkspaceRole};
+use ligus_core::{
+    workspace_config_session_id, SessionEvent, SessionEventEnvelope, Verdict, WorkspaceRole,
+};
 use proptest::prelude::*;
 use uuid::Uuid;
 
@@ -39,29 +41,97 @@ const HASHES: [&str; 3] = [
 ];
 
 fn role(n: u8) -> WorkspaceRole {
-    [WorkspaceRole::Viewer, WorkspaceRole::Contributor, WorkspaceRole::Admin][n as usize % 3]
+    [
+        WorkspaceRole::Viewer,
+        WorkspaceRole::Contributor,
+        WorkspaceRole::Admin,
+    ][n as usize % 3]
 }
 
 #[derive(Debug, Clone)]
 enum Op {
-    Policy { by: u8, enabled: bool, min_role: u8, max_kb: u16, block_exe: bool, presence: bool },
-    Block { by: u8, hash: u8 },
-    Unblock { by: u8, hash: u8, presence: bool },
-    Share { by: u8, chat: u8, name: u8, hash: u8, kb: u16, slot: u8 },
+    Policy {
+        by: u8,
+        enabled: bool,
+        min_role: u8,
+        max_kb: u16,
+        block_exe: bool,
+        presence: bool,
+    },
+    Block {
+        by: u8,
+        hash: u8,
+    },
+    Unblock {
+        by: u8,
+        hash: u8,
+        presence: bool,
+    },
+    Share {
+        by: u8,
+        chat: u8,
+        name: u8,
+        hash: u8,
+        kb: u16,
+        slot: u8,
+    },
     /// `by` deletes the file `of` shared in `slot`.
-    Delete { by: u8, chat: u8, slot: u8, of: u8 },
-    Revoke { who: u8 },
-    Remove { who: u8 },
+    Delete {
+        by: u8,
+        chat: u8,
+        slot: u8,
+        of: u8,
+    },
+    Revoke {
+        who: u8,
+    },
+    Remove {
+        who: u8,
+    },
 }
 
 fn op() -> impl Strategy<Value = Op> {
     prop_oneof![
-        (0u8..5, any::<bool>(), 0u8..3, 1u16..2048, any::<bool>(), any::<bool>())
-            .prop_map(|(by, enabled, min_role, max_kb, block_exe, presence)| Op::Policy { by, enabled, min_role, max_kb, block_exe, presence }),
+        (
+            0u8..5,
+            any::<bool>(),
+            0u8..3,
+            1u16..2048,
+            any::<bool>(),
+            any::<bool>()
+        )
+            .prop_map(
+                |(by, enabled, min_role, max_kb, block_exe, presence)| Op::Policy {
+                    by,
+                    enabled,
+                    min_role,
+                    max_kb,
+                    block_exe,
+                    presence
+                }
+            ),
         (0u8..5, 0u8..3).prop_map(|(by, hash)| Op::Block { by, hash }),
-        (0u8..5, 0u8..3, any::<bool>()).prop_map(|(by, hash, presence)| Op::Unblock { by, hash, presence }),
-        (0u8..5, 0u8..2, 0u8..6, 0u8..3, 1u16..2048, 0u8..6).prop_map(|(by, chat, name, hash, kb, slot)| Op::Share { by, chat, name, hash, kb, slot }),
-        (0u8..5, 0u8..2, 0u8..6, 0u8..5).prop_map(|(by, chat, slot, of)| Op::Delete { by, chat, slot, of }),
+        (0u8..5, 0u8..3, any::<bool>()).prop_map(|(by, hash, presence)| Op::Unblock {
+            by,
+            hash,
+            presence
+        }),
+        (0u8..5, 0u8..2, 0u8..6, 0u8..3, 1u16..2048, 0u8..6).prop_map(
+            |(by, chat, name, hash, kb, slot)| Op::Share {
+                by,
+                chat,
+                name,
+                hash,
+                kb,
+                slot
+            }
+        ),
+        (0u8..5, 0u8..2, 0u8..6, 0u8..5).prop_map(|(by, chat, slot, of)| Op::Delete {
+            by,
+            chat,
+            slot,
+            of
+        }),
         (2u8..4).prop_map(|who| Op::Revoke { who }),
         (2u8..4).prop_map(|who| Op::Remove { who }),
     ]
@@ -97,32 +167,85 @@ fn run(ops: &[Op]) -> Run {
     w.admit("owner", "mara", WorkspaceRole::Contributor);
     w.admit("owner", "vic", WorkspaceRole::Viewer);
     let chats = [w.chat("owner", "one"), w.chat("adm", "two")];
-    let mut r = Run { w, chats, shares: vec![], deletes: vec![], governance: vec![], revoked: BTreeMap::new(), cut: BTreeSet::new() };
+    let mut r = Run {
+        w,
+        chats,
+        shares: vec![],
+        deletes: vec![],
+        governance: vec![],
+        revoked: BTreeMap::new(),
+        cut: BTreeSet::new(),
+    };
     for o in ops {
         match *o {
-            Op::Policy { by, enabled, min_role, max_kb, block_exe, presence } => {
+            Op::Policy {
+                by,
+                enabled,
+                min_role,
+                max_kb,
+                block_exe,
+                presence,
+            } => {
                 let policy = AttachmentPolicy {
                     enabled,
                     min_role: role(min_role),
                     max_bytes: max_kb as u64 * 1024,
-                    blocked_types: if block_exe { vec!["@executable".into()] } else { vec![] },
+                    blocked_types: if block_exe {
+                        vec!["@executable".into()]
+                    } else {
+                        vec![]
+                    },
                     ..AttachmentPolicy::default()
                 };
                 let by = WHO[by as usize];
-                let proof = if presence { Proof::Recovery } else { Proof::None };
-                let id = r.w.write(by, None, SessionEvent::AttachmentPolicySet { policy }, None, proof);
+                let proof = if presence {
+                    Proof::Recovery
+                } else {
+                    Proof::None
+                };
+                let id = r.w.write(
+                    by,
+                    None,
+                    SessionEvent::AttachmentPolicySet { policy },
+                    None,
+                    proof,
+                );
                 r.governance.push((id, by.into(), presence));
             }
             Op::Block { by, hash } => {
-                r.w.push_bare(WHO[by as usize], SessionEvent::AttachmentHashBlocked { sha256: HASHES[hash as usize].into() });
+                r.w.push_bare(
+                    WHO[by as usize],
+                    SessionEvent::AttachmentHashBlocked {
+                        sha256: HASHES[hash as usize].into(),
+                    },
+                );
             }
             Op::Unblock { by, hash, presence } => {
                 let by = WHO[by as usize];
-                let proof = if presence { Proof::Recovery } else { Proof::None };
-                let id = r.w.write(by, None, SessionEvent::AttachmentHashUnblocked { sha256: HASHES[hash as usize].into() }, None, proof);
+                let proof = if presence {
+                    Proof::Recovery
+                } else {
+                    Proof::None
+                };
+                let id = r.w.write(
+                    by,
+                    None,
+                    SessionEvent::AttachmentHashUnblocked {
+                        sha256: HASHES[hash as usize].into(),
+                    },
+                    None,
+                    proof,
+                );
                 r.governance.push((id, by.into(), presence));
             }
-            Op::Share { by, chat, name, hash, kb, slot } => {
+            Op::Share {
+                by,
+                chat,
+                name,
+                hash,
+                kb,
+                slot,
+            } => {
                 let by = WHO[by as usize];
                 let blob_id = format!("{:0>43}", slot);
                 let a = AttachmentRef {
@@ -138,14 +261,29 @@ fn run(ops: &[Op]) -> Run {
                     proposal_id: None,
                 };
                 let c = r.chats[chat as usize];
-                let id = r.w.say(c, by, SessionEvent::AttachmentShared { attachment: a.clone() });
+                let id = r.w.say(
+                    c,
+                    by,
+                    SessionEvent::AttachmentShared {
+                        attachment: a.clone(),
+                    },
+                );
                 r.shares.push((id, c, by.into(), a));
             }
             Op::Delete { by, chat, slot, of } => {
                 let by = WHO[by as usize];
                 let c = r.chats[chat as usize];
-                let target = attachment::share_id(r.w.people[WHO[of as usize]].device_id, &format!("{:0>43}", slot));
-                let id = r.w.say(c, by, SessionEvent::AttachmentDeleted { attachment_id: target });
+                let target = attachment::share_id(
+                    r.w.people[WHO[of as usize]].device_id,
+                    &format!("{:0>43}", slot),
+                );
+                let id = r.w.say(
+                    c,
+                    by,
+                    SessionEvent::AttachmentDeleted {
+                        attachment_id: target,
+                    },
+                );
                 r.deletes.push((id, c, by.into(), target));
             }
             Op::Revoke { who } => {
@@ -155,14 +293,26 @@ fn run(ops: &[Op]) -> Run {
                     continue;
                 }
                 let wm = honest_watermark(&r.w, who);
-                r.w.push("owner", SessionEvent::DeviceRevoked { device_id: d, watermark: wm });
+                r.w.push(
+                    "owner",
+                    SessionEvent::DeviceRevoked {
+                        device_id: d,
+                        watermark: wm,
+                    },
+                );
                 r.revoked.insert(d, r.shares.len());
                 r.cut.insert(who.into());
             }
             Op::Remove { who } => {
                 let who = WHO[who as usize];
                 let wm = honest_watermark(&r.w, who);
-                r.w.push("owner", SessionEvent::MemberRemoved { member_id: who.into(), watermark: wm });
+                r.w.push(
+                    "owner",
+                    SessionEvent::MemberRemoved {
+                        member_id: who.into(),
+                        watermark: wm,
+                    },
+                );
                 r.cut.insert(who.into());
             }
         }
@@ -171,11 +321,18 @@ fn run(ops: &[Op]) -> Run {
 }
 
 fn attachments_of(w: &SignedWorld, chat: Uuid) -> BTreeMap<Uuid, (String, String, bool)> {
-    w.state(chat).attachments.into_iter().map(|(id, a)| (id, (a.author, a.attachment.sha256, a.deleted))).collect()
+    w.state(chat)
+        .attachments
+        .into_iter()
+        .map(|(id, a)| (id, (a.author, a.attachment.sha256, a.deleted)))
+        .collect()
 }
 
 fn frontier_of(env: &SessionEventEnvelope) -> ligus_core::CfgFrontier {
-    env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier).unwrap()
+    env.actor_stamp
+        .as_ref()
+        .and_then(|s| s.cfg_frontier)
+        .unwrap()
 }
 
 proptest! {

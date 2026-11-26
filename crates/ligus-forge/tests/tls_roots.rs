@@ -13,6 +13,12 @@ fn clients_build_without_a_system_ca_store() {
     std::fs::write(&empty, "").unwrap();
     std::env::set_var("SSL_CERT_FILE", &empty);
     std::env::set_var("SSL_CERT_DIR", dir.path());
-    assert!(ligus_forge::http_client_builder().build().is_ok(), "the client builder builds");
-    assert!(std::panic::catch_unwind(ligus_forge::new_http_client).is_ok(), "new_http_client doesn't panic");
+    assert!(
+        ligus_forge::http_client_builder().build().is_ok(),
+        "the client builder builds"
+    );
+    assert!(
+        std::panic::catch_unwind(ligus_forge::new_http_client).is_ok(),
+        "new_http_client doesn't panic"
+    );
 }

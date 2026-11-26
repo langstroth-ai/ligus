@@ -17,11 +17,16 @@ const FORBIDDEN: &[&str] = &[
 ];
 
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap()
 }
 
 fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in rd.flatten() {
         let p = e.path();
         let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -29,7 +34,9 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
             if !matches!(name, "target" | "node_modules" | "dist" | "tests") {
                 sources(&p, out);
             }
-        } else if (name.ends_with(".rs") || name.ends_with(".ts") || name.ends_with(".tsx")) && !name.contains(".test.") {
+        } else if (name.ends_with(".rs") || name.ends_with(".ts") || name.ends_with(".tsx"))
+            && !name.contains(".test.")
+        {
             out.push(p);
         }
     }
@@ -39,7 +46,15 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
 fn no_github_social_client_paths() {
     let root = root();
     let mut files = Vec::new();
-    for d in ["app/src", "app/build.rs", "web/src", "crates/ligus-runtime/src", "crates/ligus-cli/src", "crates/ligus-core/src", "crates/ligus-forge/src"] {
+    for d in [
+        "app/src",
+        "app/build.rs",
+        "web/src",
+        "crates/ligus-runtime/src",
+        "crates/ligus-cli/src",
+        "crates/ligus-core/src",
+        "crates/ligus-forge/src",
+    ] {
         let p = root.join(d);
         if p.is_file() {
             files.push(p);
@@ -58,10 +73,18 @@ fn no_github_social_client_paths() {
             }
             for bad in FORBIDDEN {
                 if line.contains(bad) {
-                    hits.push(format!("{}:{}: {bad}", f.strip_prefix(&root).unwrap().display(), i + 1));
+                    hits.push(format!(
+                        "{}:{}: {bad}",
+                        f.strip_prefix(&root).unwrap().display(),
+                        i + 1
+                    ));
                 }
             }
         }
     }
-    assert!(hits.is_empty(), "stale GitHub social client paths:\n{}", hits.join("\n"));
+    assert!(
+        hits.is_empty(),
+        "stale GitHub social client paths:\n{}",
+        hits.join("\n")
+    );
 }

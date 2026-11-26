@@ -49,7 +49,10 @@ pub struct ModelOption {
 
 impl ModelOption {
     pub fn new(id: impl Into<String>, label: Option<String>) -> Self {
-        Self { id: id.into(), label: label.filter(|l| !l.trim().is_empty()) }
+        Self {
+            id: id.into(),
+            label: label.filter(|l| !l.trim().is_empty()),
+        }
     }
 }
 
@@ -86,15 +89,38 @@ pub struct ModelList {
 
 impl ModelList {
     pub fn none(note: impl Into<String>) -> Self {
-        Self { models: Vec::new(), source: ModelSource::None, complete: false, note: Some(note.into()), error: None }
+        Self {
+            models: Vec::new(),
+            source: ModelSource::None,
+            complete: false,
+            note: Some(note.into()),
+            error: None,
+        }
     }
 
     pub fn failed(source: ModelSource, error: impl Into<String>) -> Self {
-        Self { models: Vec::new(), source, complete: false, note: None, error: Some(error.into()) }
+        Self {
+            models: Vec::new(),
+            source,
+            complete: false,
+            note: None,
+            error: Some(error.into()),
+        }
     }
 
-    fn of(models: Vec<ModelOption>, source: ModelSource, complete: bool, note: Option<&str>) -> Self {
-        Self { models: dedup(models), source, complete, note: note.map(str::to_string), error: None }
+    fn of(
+        models: Vec<ModelOption>,
+        source: ModelSource,
+        complete: bool,
+        note: Option<&str>,
+    ) -> Self {
+        Self {
+            models: dedup(models),
+            source,
+            complete,
+            note: note.map(str::to_string),
+            error: None,
+        }
     }
 
     /// Whether `model` is on the list ([`same_model`]).
@@ -133,7 +159,11 @@ pub fn is_model_unavailable(text: &str) -> bool {
     if t.contains("model_not_found") || (t.contains("not_found_error") && t.contains("model:")) {
         return true;
     }
-    if t.contains("temporarily") || t.contains("overloaded") || t.contains("high demand") || t.contains("try again") {
+    if t.contains("temporarily")
+        || t.contains("overloaded")
+        || t.contains("high demand")
+        || t.contains("try again")
+    {
         return false;
     }
     const AFTER_MODEL: &[&str] = &[
@@ -147,7 +177,13 @@ pub fn is_model_unavailable(text: &str) -> bool {
         "isn't available",
         "is unknown",
     ];
-    const BEFORE_MODEL: &[&str] = &["unknown model", "invalid model", "unsupported model", "no such model", "not a valid model"];
+    const BEFORE_MODEL: &[&str] = &[
+        "unknown model",
+        "invalid model",
+        "unsupported model",
+        "no such model",
+        "not a valid model",
+    ];
     if BEFORE_MODEL.iter().any(|p| t.contains(p)) {
         return true;
     }
@@ -173,7 +209,9 @@ pub fn is_model_unavailable(text: &str) -> bool {
 /// argument, where a leading dash would read as a flag).
 pub fn is_model_id(id: &str) -> bool {
     let id = id.trim();
-    !id.is_empty() && !id.starts_with('-') && !id.chars().any(|c| c.is_whitespace() || c.is_control())
+    !id.is_empty()
+        && !id.starts_with('-')
+        && !id.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// `agy models`: `<id>\t<display name>` lines (other lines, like
@@ -215,15 +253,29 @@ pub fn parse_copilot_config_help(out: &str) -> Vec<ModelOption> {
 /// `codex debug models`: `{"models": [{"slug", "display_name",
 /// "visibility"}]}`; entries the CLI hides from its own picker are left out.
 pub fn parse_codex_models(json: &str) -> Vec<ModelOption> {
-    let Some(v) = first_json_object(json) else { return Vec::new() };
+    let Some(v) = first_json_object(json) else {
+        return Vec::new();
+    };
     v.get("models")
         .and_then(Value::as_array)
         .map(|a| {
             a.iter()
-                .filter(|m| m.get("visibility").and_then(Value::as_str).is_none_or(|v| v == "list"))
+                .filter(|m| {
+                    m.get("visibility")
+                        .and_then(Value::as_str)
+                        .is_none_or(|v| v == "list")
+                })
                 .filter_map(|m| {
-                    let id = m.get("slug").and_then(Value::as_str).filter(|id| is_model_id(id))?;
-                    Some(ModelOption::new(id, m.get("display_name").and_then(Value::as_str).map(str::to_string)))
+                    let id = m
+                        .get("slug")
+                        .and_then(Value::as_str)
+                        .filter(|id| is_model_id(id))?;
+                    Some(ModelOption::new(
+                        id,
+                        m.get("display_name")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    ))
                 })
                 .collect()
         })
@@ -247,8 +299,15 @@ pub fn parse_openai_models(json: &Value) -> Vec<ModelOption> {
         .map(|a| {
             a.iter()
                 .filter_map(|m| {
-                    let id = m.get("id").and_then(Value::as_str).filter(|id| is_model_id(id))?;
-                    let label = m.get("display_name").or_else(|| m.get("name")).and_then(Value::as_str).map(str::to_string);
+                    let id = m
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .filter(|id| is_model_id(id))?;
+                    let label = m
+                        .get("display_name")
+                        .or_else(|| m.get("name"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
                     Some(ModelOption::new(id, label.filter(|l| l != id)))
                 })
                 .collect()
@@ -287,7 +346,9 @@ fn resolve_program(program: &str, env: &DetectEnv) -> Option<PathBuf> {
 /// runs the program, and the add-runtime form lists as the endpoint is
 /// typed, so any other file is never run.
 fn is_harness_binary(path: &Path, expected: &str) -> bool {
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return false };
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
     if name == expected {
         return true;
     }
@@ -306,7 +367,10 @@ impl ScratchDir {
     fn new() -> Option<Self> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
         let dir = std::env::temp_dir().join(format!(
             "ligus-model-list-{}-{nanos}-{}",
             std::process::id(),
@@ -329,26 +393,50 @@ impl Drop for ScratchDir {
 pub fn cli_models(provider: ModelProviderKind, program: &str, env: &DetectEnv) -> ModelList {
     let (expected, args, timeout, source): (&str, &[&str], Duration, ModelSource) = match provider {
         ModelProviderKind::Antigravity => ("agy", &["models"], AGY_LIST_TIMEOUT, ModelSource::Live),
-        ModelProviderKind::Copilot => ("copilot", &["help", "config"], CLI_LIST_TIMEOUT, ModelSource::Catalog),
-        ModelProviderKind::Codex => ("codex", &["debug", "models"], CLI_LIST_TIMEOUT, ModelSource::Catalog),
+        ModelProviderKind::Copilot => (
+            "copilot",
+            &["help", "config"],
+            CLI_LIST_TIMEOUT,
+            ModelSource::Catalog,
+        ),
+        ModelProviderKind::Codex => (
+            "codex",
+            &["debug", "models"],
+            CLI_LIST_TIMEOUT,
+            ModelSource::Catalog,
+        ),
         _ => return ModelList::none("This harness has no model list; type a model name."),
     };
     if !is_harness_binary(Path::new(program.trim()), expected) {
-        return ModelList::failed(source, format!("models are listed only from {expected} itself; type a model name"));
+        return ModelList::failed(
+            source,
+            format!("models are listed only from {expected} itself; type a model name"),
+        );
     }
     let Some(path) = resolve_program(program.trim(), env) else {
         return ModelList::failed(source, format!("{program} isn't installed on this device"));
     };
     if !is_harness_binary(&path, expected) {
-        return ModelList::failed(source, format!("models are listed only from {expected} itself; type a model name"));
+        return ModelList::failed(
+            source,
+            format!("models are listed only from {expected} itself; type a model name"),
+        );
     }
     let Some(scratch) = ScratchDir::new() else {
-        return ModelList::failed(source, "couldn't make a temporary directory to list models in");
+        return ModelList::failed(
+            source,
+            "couldn't make a temporary directory to list models in",
+        );
     };
     let run = |args: &[&str]| run_bounded_split_in(&path, args, env, timeout, Some(&scratch.0));
-    let shown = args.iter().fold(program.to_string(), |a, s| format!("{a} {s}"));
+    let shown = args
+        .iter()
+        .fold(program.to_string(), |a, s| format!("{a} {s}"));
     match run(args) {
-        None => ModelList::failed(source, format!("`{shown}` didn't answer within {}s", timeout.as_secs())),
+        None => ModelList::failed(
+            source,
+            format!("`{shown}` didn't answer within {}s", timeout.as_secs()),
+        ),
         Some((false, out, err)) => {
             let detail = if err.trim().is_empty() { out } else { err };
             let detail: String = detail.trim().chars().take(200).collect();
@@ -378,7 +466,9 @@ pub fn cli_models(provider: ModelProviderKind, program: &str, env: &DetectEnv) -
                     // An offline refresh can fail quietly: fall back to the
                     // catalog bundled with the CLI.
                     match run(&["debug", "models", "--bundled"]) {
-                        Some((true, out, _)) => ModelList::of(parse_codex_models(&out), source, false, None),
+                        Some((true, out, _)) => {
+                            ModelList::of(parse_codex_models(&out), source, false, None)
+                        }
                         _ => ModelList::failed(source, "`codex debug models` listed no models"),
                     }
                 } else {
@@ -403,22 +493,45 @@ pub struct HttpListing {
 pub async fn http_models(req: HttpListing) -> ModelList {
     match tokio::time::timeout(HTTP_LIST_TIMEOUT, http_models_inner(&req)).await {
         Ok(list) => list,
-        Err(_) => ModelList::failed(ModelSource::Live, format!("the server didn't answer within {}s", HTTP_LIST_TIMEOUT.as_secs())),
+        Err(_) => ModelList::failed(
+            ModelSource::Live,
+            format!(
+                "the server didn't answer within {}s",
+                HTTP_LIST_TIMEOUT.as_secs()
+            ),
+        ),
     }
 }
 
 async fn http_models_inner(req: &HttpListing) -> ModelList {
-    let key = req.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty());
+    let key = req
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty());
     match req.provider {
         ModelProviderKind::Ollama => {
             let client = crate::provider::OllamaClient::new(&req.endpoint).with_connect_retries(0);
             match client.list_models().await {
-                Ok(models) => ModelList::of(models.into_iter().map(|m| ModelOption::new(m.name, None)).collect(), ModelSource::Live, true, None),
+                Ok(models) => ModelList::of(
+                    models
+                        .into_iter()
+                        .map(|m| ModelOption::new(m.name, None))
+                        .collect(),
+                    ModelSource::Live,
+                    true,
+                    None,
+                ),
                 Err(e) => ModelList::failed(ModelSource::Live, e.to_string()),
             }
         }
         ModelProviderKind::Anthropic => {
-            let Some(key) = key else { return ModelList::failed(ModelSource::Live, "add an Anthropic API key to list its models") };
+            let Some(key) = key else {
+                return ModelList::failed(
+                    ModelSource::Live,
+                    "add an Anthropic API key to list its models",
+                );
+            };
             let http = crate::provider::http::client();
             let r = http
                 .get("https://api.anthropic.com/v1/models?limit=100")
@@ -442,10 +555,16 @@ async fn http_models_inner(req: &HttpListing) -> ModelList {
     }
 }
 
-async fn from_response(r: Result<reqwest::Response, reqwest::Error>, complete: bool, note: Option<&str>) -> ModelList {
+async fn from_response(
+    r: Result<reqwest::Response, reqwest::Error>,
+    complete: bool,
+    note: Option<&str>,
+) -> ModelList {
     let resp = match r {
         Ok(r) => r,
-        Err(e) => return ModelList::failed(ModelSource::Live, format!("couldn't reach the server: {e}")),
+        Err(e) => {
+            return ModelList::failed(ModelSource::Live, format!("couldn't reach the server: {e}"))
+        }
     };
     let status = resp.status();
     if !status.is_success() {
@@ -460,7 +579,10 @@ async fn from_response(r: Result<reqwest::Response, reqwest::Error>, complete: b
                 ModelList::of(models, ModelSource::Live, complete, note)
             }
         }
-        Err(e) => ModelList::failed(ModelSource::Live, format!("couldn't read the model list: {e}")),
+        Err(e) => ModelList::failed(
+            ModelSource::Live,
+            format!("couldn't read the model list: {e}"),
+        ),
     }
 }
 
@@ -496,14 +618,29 @@ mod tests {
     #[test]
     fn parses_agy_models_with_labels() {
         let m = parse_agy_models(AGY);
-        assert_eq!(ids(&m), ["gemini-4-neon-high", "gemini-3.8-flash-low", "claude-opus-5-5-high"]);
+        assert_eq!(
+            ids(&m),
+            [
+                "gemini-4-neon-high",
+                "gemini-3.8-flash-low",
+                "claude-opus-5-5-high"
+            ]
+        );
         assert_eq!(m[0].label.as_deref(), Some("Gemini 4 Neon (High)"));
     }
 
     #[test]
     fn parses_only_the_model_setting_from_copilot_help() {
         let m = parse_copilot_config_help(COPILOT_HELP);
-        assert_eq!(ids(&m), ["claude-sonnet-5.5", "claude-opus-4.8", "gpt-5.3-codex", "gemini-3.8-flash"]);
+        assert_eq!(
+            ids(&m),
+            [
+                "claude-sonnet-5.5",
+                "claude-opus-4.8",
+                "gpt-5.3-codex",
+                "gemini-3.8-flash"
+            ]
+        );
         assert!(parse_copilot_config_help("no settings here").is_empty());
     }
 
@@ -513,7 +650,10 @@ mod tests {
         assert_eq!(ids(&m), ["gpt-5.6-sol", "gpt-5.6-terra"]);
         assert_eq!(m[0].label.as_deref(), Some("GPT-5.6-Sol"));
         // A log line before the JSON is skipped.
-        assert_eq!(parse_codex_models(&format!("refreshing…\n{CODEX}")).len(), 2);
+        assert_eq!(
+            parse_codex_models(&format!("refreshing…\n{CODEX}")).len(),
+            2
+        );
         assert!(parse_codex_models("not json").is_empty());
     }
 
@@ -525,17 +665,32 @@ mod tests {
             {"id": "openai/gpt-6", "name": "OpenAI: GPT-6"}
         ]});
         let m = parse_openai_models(&v);
-        assert_eq!(ids(&m), ["qwen3-coder", "claude-sonnet-5-5", "openai/gpt-6"]);
+        assert_eq!(
+            ids(&m),
+            ["qwen3-coder", "claude-sonnet-5-5", "openai/gpt-6"]
+        );
         assert_eq!(m[0].label, None);
         assert_eq!(m[1].label.as_deref(), Some("Claude Sonnet 5.5"));
     }
 
     #[test]
     fn models_url_sits_next_to_chat_completions() {
-        assert_eq!(models_url("http://box:8080/v1/chat/completions"), "http://box:8080/v1/models");
-        assert_eq!(models_url("https://openrouter.ai/api/v1/chat/completions"), "https://openrouter.ai/api/v1/models");
-        assert_eq!(models_url("http://localhost:1234/v1"), "http://localhost:1234/v1/models");
-        assert_eq!(models_url("http://localhost:1234/"), "http://localhost:1234/v1/models");
+        assert_eq!(
+            models_url("http://box:8080/v1/chat/completions"),
+            "http://box:8080/v1/models"
+        );
+        assert_eq!(
+            models_url("https://openrouter.ai/api/v1/chat/completions"),
+            "https://openrouter.ai/api/v1/models"
+        );
+        assert_eq!(
+            models_url("http://localhost:1234/v1"),
+            "http://localhost:1234/v1/models"
+        );
+        assert_eq!(
+            models_url("http://localhost:1234/"),
+            "http://localhost:1234/v1/models"
+        );
     }
 
     #[test]
@@ -582,7 +737,11 @@ mod tests {
     fn env_for(bin: &Path) -> DetectEnv {
         let mut path = std::ffi::OsString::from(bin);
         path.push(":/usr/bin:/bin");
-        DetectEnv { path, home: bin.to_path_buf(), vars: Default::default() }
+        DetectEnv {
+            path,
+            home: bin.to_path_buf(),
+            vars: Default::default(),
+        }
     }
 
     #[cfg(unix)]
@@ -591,15 +750,38 @@ mod tests {
         let bin = tempfile::tempdir().unwrap();
         // Each fake answers only its listing command; anything else (a
         // prompt) fails the test by exiting non-zero.
-        fake_bin(bin.path(), "agy", &format!("[ \"$1\" = models ] || exit 9\nprintf '{}'", AGY.replace('\n', "\\n").replace('\t', "\\t")));
-        fake_bin(bin.path(), "copilot", &format!("[ \"$1 $2\" = 'help config' ] || exit 9\ncat <<'EOF'\n{COPILOT_HELP}EOF"));
-        fake_bin(bin.path(), "codex", &format!("[ \"$1 $2\" = 'debug models' ] || exit 9\ncat <<'EOF'\n{CODEX}\nEOF"));
+        fake_bin(
+            bin.path(),
+            "agy",
+            &format!(
+                "[ \"$1\" = models ] || exit 9\nprintf '{}'",
+                AGY.replace('\n', "\\n").replace('\t', "\\t")
+            ),
+        );
+        fake_bin(
+            bin.path(),
+            "copilot",
+            &format!("[ \"$1 $2\" = 'help config' ] || exit 9\ncat <<'EOF'\n{COPILOT_HELP}EOF"),
+        );
+        fake_bin(
+            bin.path(),
+            "codex",
+            &format!("[ \"$1 $2\" = 'debug models' ] || exit 9\ncat <<'EOF'\n{CODEX}\nEOF"),
+        );
         let env = env_for(bin.path());
 
         let agy = cli_models(ModelProviderKind::Antigravity, "agy", &env);
-        assert_eq!((agy.source, agy.complete, agy.models.len()), (ModelSource::Live, true, 3), "{agy:?}");
+        assert_eq!(
+            (agy.source, agy.complete, agy.models.len()),
+            (ModelSource::Live, true, 3),
+            "{agy:?}"
+        );
         let cp = cli_models(ModelProviderKind::Copilot, "copilot", &env);
-        assert_eq!((cp.source, cp.complete, cp.models.len()), (ModelSource::Catalog, false, 4), "{cp:?}");
+        assert_eq!(
+            (cp.source, cp.complete, cp.models.len()),
+            (ModelSource::Catalog, false, 4),
+            "{cp:?}"
+        );
         assert!(cp.note.is_some());
         let cx = cli_models(ModelProviderKind::Codex, "codex", &env);
         assert_eq!(ids(&cx.models), ["gpt-5.6-sol", "gpt-5.6-terra"]);
@@ -622,17 +804,32 @@ mod tests {
         fake_bin(bin.path(), "codex", &touch);
         let env = env_for(bin.path());
         for (kind, program) in [
-            (ModelProviderKind::Codex, bin.path().join("evil.sh").display().to_string()),
+            (
+                ModelProviderKind::Codex,
+                bin.path().join("evil.sh").display().to_string(),
+            ),
             (ModelProviderKind::Codex, "evil.sh".to_string()),
-            (ModelProviderKind::Antigravity, bin.path().join("codex").display().to_string()),
+            (
+                ModelProviderKind::Antigravity,
+                bin.path().join("codex").display().to_string(),
+            ),
             (ModelProviderKind::Copilot, "/bin/sh".to_string()),
-            (ModelProviderKind::Copilot, format!("{}/", bin.path().display())),
+            (
+                ModelProviderKind::Copilot,
+                format!("{}/", bin.path().display()),
+            ),
         ] {
             let l = cli_models(kind, &program, &env);
             assert!(l.models.is_empty(), "{program}: {l:?}");
-            assert!(l.error.as_deref().is_some_and(|e| e.contains("only from")), "{program}: {l:?}");
+            assert!(
+                l.error.as_deref().is_some_and(|e| e.contains("only from")),
+                "{program}: {l:?}"
+            );
         }
-        assert!(!marker.exists(), "a program that isn't the harness never runs");
+        assert!(
+            !marker.exists(),
+            "a program that isn't the harness never runs"
+        );
     }
 
     #[cfg(unix)]
@@ -643,14 +840,24 @@ mod tests {
         fake_bin(
             bin.path(),
             "agy",
-            &format!("pwd > '{}'; ls -A >> '{}'; printf 'gemini-x\\tGemini X\\n'", out.display(), out.display()),
+            &format!(
+                "pwd > '{}'; ls -A >> '{}'; printf 'gemini-x\\tGemini X\\n'",
+                out.display(),
+                out.display()
+            ),
         );
         let l = cli_models(ModelProviderKind::Antigravity, "agy", &env_for(bin.path()));
         assert_eq!(ids(&l.models), ["gemini-x"], "{l:?}");
         let seen = std::fs::read_to_string(&out).unwrap();
         let mut lines = seen.lines();
         let cwd = std::path::PathBuf::from(lines.next().unwrap());
-        assert!(cwd.file_name().unwrap().to_string_lossy().starts_with("ligus-model-list-"), "{seen}");
+        assert!(
+            cwd.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("ligus-model-list-"),
+            "{seen}"
+        );
         assert_eq!(lines.next(), None, "the directory is empty");
         assert!(!cwd.exists(), "and removed afterwards");
         assert_ne!(cwd, std::env::current_dir().unwrap());
@@ -658,9 +865,21 @@ mod tests {
 
     #[test]
     fn model_ids_starting_with_a_dash_are_never_listed() {
-        assert!(!is_model_id("--config=/tmp/x") && !is_model_id("-m") && !is_model_id(" ") && !is_model_id("a b"));
-        assert!(is_model_id("gpt-5.6-sol") && is_model_id("openai/gpt-6") && is_model_id("llama3.2:latest"));
-        assert_eq!(ids(&parse_agy_models("--yolo\tYolo\ngemini-x\tGemini X\n")), ["gemini-x"]);
+        assert!(
+            !is_model_id("--config=/tmp/x")
+                && !is_model_id("-m")
+                && !is_model_id(" ")
+                && !is_model_id("a b")
+        );
+        assert!(
+            is_model_id("gpt-5.6-sol")
+                && is_model_id("openai/gpt-6")
+                && is_model_id("llama3.2:latest")
+        );
+        assert_eq!(
+            ids(&parse_agy_models("--yolo\tYolo\ngemini-x\tGemini X\n")),
+            ["gemini-x"]
+        );
         let help = "  `model`: AI model\n    - \"--allow-all-tools\"\n    - \"gpt-5\"\n";
         assert_eq!(ids(&parse_copilot_config_help(help)), ["gpt-5"]);
         let codex = r#"{"models":[{"slug":"--dangerously-bypass","visibility":"list"},{"slug":"gpt-5.6-sol","visibility":"list"}]}"#;

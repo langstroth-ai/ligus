@@ -72,28 +72,44 @@ fn waiting(p: &ActionProposal, s: &ChatSession, hidden: &BTreeSet<Uuid>, now: Ti
 fn needs_me(p: &ActionProposal, me: &str) -> bool {
     match p.status {
         ProposalStatus::Approved => true,
-        ProposalStatus::Open => p.author_actor_id != me && !p.approvals.iter().any(|a| a.actor_id == me),
+        ProposalStatus::Open => {
+            p.author_actor_id != me && !p.approvals.iter().any(|a| a.actor_id == me)
+        }
         _ => false,
     }
 }
 
 /// The chat's attention, or None when it waits on nothing.
-pub(crate) fn chat_attention(s: &ChatSession, me: &str, now_ms: i64, hidden: &BTreeSet<Uuid>) -> Option<ChatAttentionDto> {
+pub(crate) fn chat_attention(
+    s: &ChatSession,
+    me: &str,
+    now_ms: i64,
+    hidden: &BTreeSet<Uuid>,
+) -> Option<ChatAttentionDto> {
     let now = Timestamp::from_unix_seconds(now_ms / 1000);
-    let mut live: Vec<&ligus_core::flow::AskState> = s.flow.asks.values().filter(|a| a.is_live(now_ms)).collect();
+    let mut live: Vec<&ligus_core::flow::AskState> =
+        s.flow.asks.values().filter(|a| a.is_live(now_ms)).collect();
     live.sort_by_key(|a| std::cmp::Reverse(a.ask.at_ms));
     let asks: Vec<AttentionAskDto> = live
         .iter()
         .map(|a| {
             let v = ligus_runtime::ask_view::view(s, a, me, now_ms, &|_| None);
             let audience = match (v.audience.kind, v.audience.min_role) {
-                ("people", _) if v.eligible && v.audience.member_ids.len() == 1 => "you".to_string(),
+                ("people", _) if v.eligible && v.audience.member_ids.len() == 1 => {
+                    "you".to_string()
+                }
                 ("people", _) => v.audience.names.join(", "),
                 (_, Some("admin")) => "Admins".into(),
                 (_, Some("owner")) => "Owners".into(),
                 _ => "the room".into(),
             };
-            AttentionAskDto { ask_id: v.ask_id, agent_name: v.agent_name, kind: v.kind, eligible: v.eligible, audience }
+            AttentionAskDto {
+                ask_id: v.ask_id,
+                agent_name: v.agent_name,
+                kind: v.kind,
+                eligible: v.eligible,
+                audience,
+            }
         })
         .collect();
     let open_asks = asks.iter().filter(|a| a.eligible).count() as u32;
@@ -104,7 +120,12 @@ pub(crate) fn chat_attention(s: &ChatSession, me: &str, now_ms: i64, hidden: &BT
         .map(|p| AttentionProposalDto {
             id: p.id.to_string(),
             title: shown(&p.title),
-            status: if p.status == ProposalStatus::Approved { "approved" } else { "open" }.into(),
+            status: if p.status == ProposalStatus::Approved {
+                "approved"
+            } else {
+                "open"
+            }
+            .into(),
             needs_me: needs_me(p, me),
         })
         .collect();
@@ -112,15 +133,29 @@ pub(crate) fn chat_attention(s: &ChatSession, me: &str, now_ms: i64, hidden: &BT
     if asks.is_empty() && proposals.is_empty() && !paused {
         return None;
     }
-    Some(ChatAttentionDto { session_id: s.id.to_string(), workspace_id: s.workspace_id.to_string(), open_asks, asks, proposals, paused })
+    Some(ChatAttentionDto {
+        session_id: s.id.to_string(),
+        workspace_id: s.workspace_id.to_string(),
+        open_asks,
+        asks,
+        proposals,
+        paused,
+    })
 }
 
 #[tauri::command]
-pub(crate) async fn list_chat_attention(ligus_app: tauri::AppHandle) -> Result<Vec<ChatAttentionDto>, String> {
-    crate::off_main(ligus_app, move |ligus_app| list_chat_attention_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+pub(crate) async fn list_chat_attention(
+    ligus_app: tauri::AppHandle,
+) -> Result<Vec<ChatAttentionDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        list_chat_attention_sync(tauri::Manager::state::<AppState>(ligus_app))
+    })
+    .await
 }
 
-pub(crate) fn list_chat_attention_sync(state: State<AppState>) -> Result<Vec<ChatAttentionDto>, String> {
+pub(crate) fn list_chat_attention_sync(
+    state: State<AppState>,
+) -> Result<Vec<ChatAttentionDto>, String> {
     let active = state.active_workspace_id();
     let me = state.local_actor_id();
     let known_rooms = state.known_room_ids();
@@ -136,7 +171,11 @@ pub(crate) fn list_chat_attention_sync(state: State<AppState>) -> Result<Vec<Cha
         if id == config_id {
             continue;
         }
-        let Some(s) = crate::workspace_chat(&svc, id, active, &me, &known_rooms).map_err(map_err)? else { continue };
+        let Some(s) =
+            crate::workspace_chat(&svc, id, active, &me, &known_rooms).map_err(map_err)?
+        else {
+            continue;
+        };
         if s.archived {
             continue;
         }
@@ -198,21 +237,35 @@ mod tests {
         s.flow.asks.insert(
             id,
             AskState {
-                ask: HumanAsk { ask_id: id, question: "30s or 60s?".into(), expires_at_ms, closed, ..Default::default() },
-                answer: answered.then(|| HumanAnswered { ask_id: id, answer: "30s".into(), ..Default::default() }),
+                ask: HumanAsk {
+                    ask_id: id,
+                    question: "30s or 60s?".into(),
+                    expires_at_ms,
+                    closed,
+                    ..Default::default()
+                },
+                answer: answered.then(|| HumanAnswered {
+                    ask_id: id,
+                    answer: "30s".into(),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
         );
     }
 
     fn proposal(s: &mut ChatSession, title: &str, author: &str) -> usize {
-        s.proposals.push(ActionProposal::new(title, ProposalKind::Decision, author));
+        s.proposals
+            .push(ActionProposal::new(title, ProposalKind::Decision, author));
         s.proposals.len() - 1
     }
 
     #[test]
     fn a_quiet_chat_is_left_out() {
-        assert_eq!(chat_attention(&session(), "me", 1_000, &BTreeSet::new()), None);
+        assert_eq!(
+            chat_attention(&session(), "me", 1_000, &BTreeSet::new()),
+            None
+        );
     }
 
     #[test]
@@ -260,8 +313,11 @@ mod tests {
         let _ = mine;
 
         let a = chat_attention(&s, "me", 0, &hidden_set).unwrap();
-        let got: Vec<(&str, &str, bool)> =
-            a.proposals.iter().map(|p| (p.title.as_str(), p.status.as_str(), p.needs_me)).collect();
+        let got: Vec<(&str, &str, bool)> = a
+            .proposals
+            .iter()
+            .map(|p| (p.title.as_str(), p.status.as_str(), p.needs_me))
+            .collect();
         assert_eq!(
             got,
             vec![
@@ -278,15 +334,19 @@ mod tests {
     fn a_lockdown_pauses_the_chat() {
         let mut s = session();
         let chat = s.id;
-        s.guards.lockdowns.entry(chat).or_default().push(ChatLockdown {
-            id: Uuid::new_v4(),
-            signal: LockdownSignal::Manual,
-            detail: String::new(),
-            raised_by: "ana".into(),
-            raised_at: Default::default(),
-            message_id: None,
-            raise_event_id: None,
-        });
+        s.guards
+            .lockdowns
+            .entry(chat)
+            .or_default()
+            .push(ChatLockdown {
+                id: Uuid::new_v4(),
+                signal: LockdownSignal::Manual,
+                detail: String::new(),
+                raised_by: "ana".into(),
+                raised_at: Default::default(),
+                message_id: None,
+                raise_event_id: None,
+            });
         let a = chat_attention(&s, "me", 0, &BTreeSet::new()).unwrap();
         assert!(a.paused);
         assert_eq!(a.open_asks, 0);

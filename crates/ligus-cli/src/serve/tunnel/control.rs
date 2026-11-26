@@ -23,7 +23,8 @@ const SILENT: Duration = Duration::from_secs(60);
 /// Backoff cap (§10), and the minimum wait after `superseded` (4009).
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
-pub type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+pub type Ws =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// Why a control connection ended.
 #[derive(Debug)]
@@ -42,18 +43,38 @@ enum End {
 /// relay can't make the host buffer tungstenite's defaults (64 MiB / 16 MiB).
 pub async fn dial(url: &str) -> Result<Ws> {
     use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-    let mut req = url.into_client_request().with_context(|| format!("bad relay URL {url}"))?;
-    req.headers_mut().insert("sec-websocket-protocol", HeaderValue::from_static(SUBPROTOCOL));
+    let mut req = url
+        .into_client_request()
+        .with_context(|| format!("bad relay URL {url}"))?;
+    req.headers_mut().insert(
+        "sec-websocket-protocol",
+        HeaderValue::from_static(SUBPROTOCOL),
+    );
     let limit = Some(super::noise::MAX_MSG);
-    let config = WebSocketConfig::default().max_message_size(limit).max_frame_size(limit);
-    let (ws, resp) = tokio::time::timeout(HANDSHAKE, tokio_tungstenite::connect_async_tls_with_config(req, Some(config), false, Some(tls_connector())))
-        .await
-        .map_err(|_| anyhow!("connecting to {url} timed out"))?
-        .map_err(|e| match e {
-            tokio_tungstenite::tungstenite::Error::Http(r) => anyhow!("relay refused the upgrade: HTTP {}", r.status()),
-            e => anyhow!("connecting to the relay: {e}"),
-        })?;
-    let proto = resp.headers().get("sec-websocket-protocol").and_then(|v| v.to_str().ok());
+    let config = WebSocketConfig::default()
+        .max_message_size(limit)
+        .max_frame_size(limit);
+    let (ws, resp) = tokio::time::timeout(
+        HANDSHAKE,
+        tokio_tungstenite::connect_async_tls_with_config(
+            req,
+            Some(config),
+            false,
+            Some(tls_connector()),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow!("connecting to {url} timed out"))?
+    .map_err(|e| match e {
+        tokio_tungstenite::tungstenite::Error::Http(r) => {
+            anyhow!("relay refused the upgrade: HTTP {}", r.status())
+        }
+        e => anyhow!("connecting to the relay: {e}"),
+    })?;
+    let proto = resp
+        .headers()
+        .get("sec-websocket-protocol")
+        .and_then(|v| v.to_str().ok());
     if proto != Some(SUBPROTOCOL) {
         bail!("relay did not select the {SUBPROTOCOL} subprotocol");
     }
@@ -115,7 +136,12 @@ fn after_close(code: u16, why: &str, backoff: Duration) -> After {
 /// Keep the control connection up until `stop`. Reconnects with backoff
 /// 1 … 60 s (±20 %); waits ≥ 60 s after 4009 and ≥ 10 min after 4003 or
 /// 4006; stops on 4001 and 4026 (§12, [`after_close`]).
-pub async fn run(host: Arc<TunnelHost>, router: impl Into<session::Routers>, mut stop: watch::Receiver<bool>, t: Timeouts) {
+pub async fn run(
+    host: Arc<TunnelHost>,
+    router: impl Into<session::Routers>,
+    mut stop: watch::Receiver<bool>,
+    t: Timeouts,
+) {
     let router: session::Routers = router.into();
     let mut backoff = Duration::from_secs(1);
     loop {
@@ -185,7 +211,11 @@ fn close_code(m: &Message) -> Option<(u16, String)> {
 /// `rate_limited: too many attempts`.
 fn relay_error_text(m: &Value) -> String {
     let code = m["code"].as_str().unwrap_or("error");
-    match m["message"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+    match m["message"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(msg) => format!("{code}: {msg}"),
         None => code.to_string(),
     }
@@ -217,7 +247,8 @@ async fn next_json(ws: &mut Ws) -> Result<Value, End> {
     loop {
         match ws.next().await {
             Some(Ok(Message::Text(t))) => {
-                return serde_json::from_str(&t).map_err(|e| End::Other(anyhow!("relay sent bad JSON: {e}")));
+                return serde_json::from_str(&t)
+                    .map_err(|e| End::Other(anyhow!("relay sent bad JSON: {e}")));
             }
             Some(Ok(m)) => {
                 if let Some((c, r)) = close_code(&m) {
@@ -230,7 +261,12 @@ async fn next_json(ws: &mut Ws) -> Result<Value, End> {
     }
 }
 
-async fn connect_once(host: &Arc<TunnelHost>, router: &session::Routers, stop: &mut watch::Receiver<bool>, t: Timeouts) -> (End, bool) {
+async fn connect_once(
+    host: &Arc<TunnelHost>,
+    router: &session::Routers,
+    stop: &mut watch::Receiver<bool>,
+    t: Timeouts,
+) -> (End, bool) {
     let url = host.settings.ws_url("/v1/tunnel/host");
     let mut ws = match dial(&url).await {
         Ok(ws) => ws,
@@ -240,9 +276,13 @@ async fn connect_once(host: &Arc<TunnelHost>, router: &session::Routers, stop: &
     let welcome = async {
         let ch = read_challenge(&mut ws).await?;
         if ch["v"] != 1 {
-            return Err(End::Other(anyhow!("relay speaks tunnel version {}", ch["v"])));
+            return Err(End::Other(anyhow!(
+                "relay speaks tunnel version {}",
+                ch["v"]
+            )));
         }
-        let nonce: [u8; 32] = b64u_fixed(ch["nonce"].as_str().unwrap_or_default()).map_err(End::Other)?;
+        let nonce: [u8; 32] =
+            b64u_fixed(ch["nonce"].as_str().unwrap_or_default()).map_err(End::Other)?;
         let mut hello = json!({
             "t": "hello",
             "v": 1,
@@ -254,7 +294,9 @@ async fn connect_once(host: &Arc<TunnelHost>, router: &session::Routers, stop: &
         if let Some(r) = &host.settings.reg_token {
             hello["reg"] = json!(r);
         }
-        ws.send(Message::Text(hello.to_string().into())).await.map_err(|e| End::Other(e.into()))?;
+        ws.send(Message::Text(hello.to_string().into()))
+            .await
+            .map_err(|e| End::Other(e.into()))?;
         loop {
             let m = next_json(&mut ws).await?;
             match m["t"].as_str() {
@@ -271,11 +313,16 @@ async fn connect_once(host: &Arc<TunnelHost>, router: &session::Routers, stop: &
     };
     let status = welcome["status"].as_str().unwrap_or("active").to_string();
     if let Some(n) = welcome["maxSessions"].as_u64() {
-        host.max_sessions.store(n.clamp(1, 1024) as usize, Ordering::SeqCst);
+        host.max_sessions
+            .store(n.clamp(1, 1024) as usize, Ordering::SeqCst);
     }
     let push = welcome["push"].as_bool().unwrap_or(false);
     host.push_available.store(push, Ordering::SeqCst);
-    println!("remote: connected to {} as host {} (status {status})", host.settings.relay, host.host_id());
+    println!(
+        "remote: connected to {} as host {} (status {status})",
+        host.settings.relay,
+        host.host_id()
+    );
     if status == "pending" {
         println!("remote: the relay registered this host as pending: pairing works, sessions wait until the relay operator admits it.");
     }
@@ -321,13 +368,25 @@ async fn connect_once(host: &Arc<TunnelHost>, router: &session::Routers, stop: &
     (end, true)
 }
 
-fn handle(host: &Arc<TunnelHost>, router: &session::Routers, v: &Value, stop: watch::Receiver<bool>, t: Timeouts) {
+fn handle(
+    host: &Arc<TunnelHost>,
+    router: &session::Routers,
+    v: &Value,
+    stop: watch::Receiver<bool>,
+    t: Timeouts,
+) {
     match v["t"].as_str() {
         Some("open") => {
-            let Some(sid) = v["sid"].as_str().map(str::to_string) else { return };
+            let Some(sid) = v["sid"].as_str().map(str::to_string) else {
+                return;
+            };
             let mode = match (v["mode"].as_str(), v["pid"].as_str(), v["eid"].as_str()) {
-                (Some("session"), Some(pid), _) => Mode::Session { pid: pid.to_string() },
-                (Some("enroll"), _, Some(eid)) => Mode::Enroll { eid: eid.to_string() },
+                (Some("session"), Some(pid), _) => Mode::Session {
+                    pid: pid.to_string(),
+                },
+                (Some("enroll"), _, Some(eid)) => Mode::Enroll {
+                    eid: eid.to_string(),
+                },
                 _ => {
                     reject(host, &sid);
                     return;
@@ -338,7 +397,9 @@ fn handle(host: &Arc<TunnelHost>, router: &session::Routers, v: &Value, stop: wa
                 Mode::Session { pid } => host.registry.is_active(pid),
                 Mode::Enroll { eid } => host.window_psk(eid).is_some(),
             };
-            if !admissible || host.sessions.load(Ordering::SeqCst) >= host.max_sessions.load(Ordering::SeqCst) {
+            if !admissible
+                || host.sessions.load(Ordering::SeqCst) >= host.max_sessions.load(Ordering::SeqCst)
+            {
                 reject(host, &sid);
                 return;
             }
@@ -346,7 +407,9 @@ fn handle(host: &Arc<TunnelHost>, router: &session::Routers, v: &Value, stop: wa
             let host = host.clone();
             let router = router.clone();
             tokio::spawn(async move {
-                let url = host.settings.ws_url(&format!("/v1/tunnel/accept?sid={sid}"));
+                let url = host
+                    .settings
+                    .ws_url(&format!("/v1/tunnel/accept?sid={sid}"));
                 let res = match dial(&url).await {
                     Ok(ws) => session::run(host.clone(), router, ws, mode.clone(), stop, t).await,
                     Err(e) => Err(e.context("dialing accept")),
@@ -363,7 +426,12 @@ fn handle(host: &Arc<TunnelHost>, router: &session::Routers, v: &Value, stop: wa
             host.update_status(|s| s.status = status);
         }
         Some("ack") => {
-            host.on_ack(v["id"].as_str().unwrap_or_default(), v["ok"].as_bool().unwrap_or(false), v["code"].as_str(), v["detail"].as_str());
+            host.on_ack(
+                v["id"].as_str().unwrap_or_default(),
+                v["ok"].as_bool().unwrap_or(false),
+                v["code"].as_str(),
+                v["detail"].as_str(),
+            );
         }
         Some("error") => eprintln!("remote: relay error: {} {}", v["code"], v["message"]),
         _ => {}
@@ -381,14 +449,18 @@ mod tls_tests {
     /// TLS-inspecting proxy and remote access did not).
     #[test]
     fn tunnel_tls_uses_the_http_root_policy() {
-        let tokio_tungstenite::Connector::Rustls(cfg) = super::tls_connector() else { panic!("not rustls") };
-        assert_eq!(format!("{:?}", cfg.as_ref()), format!("{:?}", ligus_forge::tls_client_config()));
+        let tokio_tungstenite::Connector::Rustls(cfg) = super::tls_connector() else {
+            panic!("not rustls")
+        };
+        assert_eq!(
+            format!("{:?}", cfg.as_ref()),
+            format!("{:?}", ligus_forge::tls_client_config())
+        );
         if ligus_forge::uses_platform_roots() {
             assert!(format!("{cfg:?}").contains("verifier: Verifier"));
         }
     }
 }
-
 
 #[cfg(test)]
 mod close_code_tests {
@@ -400,13 +472,21 @@ mod close_code_tests {
     fn close_codes_stop_or_back_off_by_what_they_mean() {
         let b = Duration::from_secs(2);
         for code in [4001, 4026] {
-            assert!(matches!(after_close(code, "x", b), After::Stop(_)), "{code} is retried");
+            assert!(
+                matches!(after_close(code, "x", b), After::Stop(_)),
+                "{code} is retried"
+            );
         }
         for code in [4003, 4006] {
-            assert!(matches!(after_close(code, "x", b), After::Wait(w) if w >= NOT_ENTITLED_WAIT), "{code} retried at the reconnect pace");
+            assert!(
+                matches!(after_close(code, "x", b), After::Wait(w) if w >= NOT_ENTITLED_WAIT),
+                "{code} retried at the reconnect pace"
+            );
         }
         assert!(matches!(after_close(4009, "superseded", b), After::Wait(w) if w >= MAX_BACKOFF));
-        assert!(matches!(after_close(4029, "rate_limited: too many attempts", b), After::Wait(w) if w >= MAX_BACKOFF));
+        assert!(
+            matches!(after_close(4029, "rate_limited: too many attempts", b), After::Wait(w) if w >= MAX_BACKOFF)
+        );
         assert!(matches!(after_close(4011, "shutting_down", b), After::Wait(w) if w <= b * 2));
     }
 }
@@ -429,11 +509,19 @@ mod refusal_tests {
                 ws.send(Message::Text(f.to_string().into())).await.unwrap();
             }
             if let Some((code, reason)) = close {
-                let _ = ws.close(Some(CloseFrame { code: CloseCode::from(code), reason: reason.into() })).await;
+                let _ = ws
+                    .close(Some(CloseFrame {
+                        code: CloseCode::from(code),
+                        reason: reason.into(),
+                    }))
+                    .await;
             }
             while ws.next().await.is_some() {}
         });
-        tokio_tungstenite::connect_async(format!("ws://{addr}")).await.unwrap().0
+        tokio_tungstenite::connect_async(format!("ws://{addr}"))
+            .await
+            .unwrap()
+            .0
     }
 
     /// The relay refusing the control connection (an error frame instead of
@@ -450,16 +538,26 @@ mod refusal_tests {
         // No close frame: the refusal text still reaches the log.
         let mut ws = relay_sending(vec![err], None).await;
         match read_challenge(&mut ws).await {
-            Err(End::Other(e)) => assert!(format!("{e:#}").contains("rate_limited: too many attempts"), "{e:#}"),
+            Err(End::Other(e)) => assert!(
+                format!("{e:#}").contains("rate_limited: too many attempts"),
+                "{e:#}"
+            ),
             other => panic!("{other:?}"),
         }
-        let mut ws = relay_sending(vec![json!({ "t": "challenge", "v": 1, "nonce": "x" })], None).await;
+        let mut ws = relay_sending(
+            vec![json!({ "t": "challenge", "v": 1, "nonce": "x" })],
+            None,
+        )
+        .await;
         assert!(matches!(read_challenge(&mut ws).await, Ok(v) if v["t"] == "challenge"));
     }
 
     #[test]
     fn relay_error_text_reads_code_and_message() {
-        assert_eq!(relay_error_text(&json!({ "t": "error", "code": "not_entitled", "message": " " })), "not_entitled");
+        assert_eq!(
+            relay_error_text(&json!({ "t": "error", "code": "not_entitled", "message": " " })),
+            "not_entitled"
+        );
         assert_eq!(relay_error_text(&json!({ "t": "error" })), "error");
     }
 }

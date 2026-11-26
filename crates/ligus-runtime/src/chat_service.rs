@@ -32,16 +32,16 @@ pub use asks::{answer_record, AskChoice, OutsidePrompt, OUTSIDE_AGENT_KEY};
 mod attachments;
 mod changes;
 mod computer_link;
-pub use computer_link::LinkPreview;
 pub use changes::{ChangeFeed, ChangeOrigin, ChatChange, CHANGE_FEED_CAPACITY};
+pub use computer_link::LinkPreview;
 mod facts;
 mod guards;
 mod identity;
 mod keys;
 mod links;
 mod memory;
-pub use memory::MemoryDraft;
 pub use links::{links_for_account, LinkDraft, ShownLink, WorkspaceLinks};
+pub use memory::MemoryDraft;
 mod phone_enroll_relay;
 pub use phone_enroll_relay::{EnrollDesktop, EnrollPhoneStanding};
 mod phone_sign;
@@ -49,10 +49,12 @@ mod presence;
 mod relay_removal;
 pub use relay_removal::{RelayRemoval, RelayRemovalError, RelaySubject, BOX_SUBJECT_PREFIX};
 mod repos;
-pub use repos::canonical_from_input;
 pub use keys::RotationIssued;
 pub use phone_sign::{PhoneDraft, BAD_CONSENT, STALE_DRAFT};
-pub use presence::{summarize_with, MatchContext, PresenceDraft, PresenceProvider, PresenceRequest};
+pub use presence::{
+    summarize_with, MatchContext, PresenceDraft, PresenceProvider, PresenceRequest,
+};
+pub use repos::canonical_from_input;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChatError {
@@ -66,9 +68,8 @@ pub enum ChatError {
 
 pub type Result<T> = std::result::Result<T, ChatError>;
 
-
-mod proposal_sets;
 mod proposal_archive;
+mod proposal_sets;
 pub use proposal_archive::{in_inbox, shelf, Shelf};
 pub use proposal_sets::QuorumOutcome;
 
@@ -76,7 +77,6 @@ pub use proposal_sets::QuorumOutcome;
 /// holds; the desktop shows it as a waiting state, not a send failure.
 pub const WAITING_FOR_FOUNDER: &str =
     "waiting for the workspace's founder: their signed founding hasn't reached this device, so nothing is sent yet";
-
 
 /// Drives a single workspace's chat sessions over an [`EventStore`], signing
 /// every appended event with this device's key.
@@ -191,8 +191,16 @@ pub use crate::display::MAX_WORKSPACE_NAME_CHARS;
 impl ChatService {
     /// A service signing with `keypair`: its device id is the one that key
     /// derives (`ligus_core::crypto::device_id_for`).
-    pub fn new(store: EventStore, keypair: SigningKeypair, account_keypair: SigningKeypair, author: ActorIdentity) -> Self {
-        let device_id = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &keypair.public_key_bytes());
+    pub fn new(
+        store: EventStore,
+        keypair: SigningKeypair,
+        account_keypair: SigningKeypair,
+        author: ActorIdentity,
+    ) -> Self {
+        let device_id = ligus_core::crypto::device_id_for(
+            ligus_core::crypto::SigAlg::Ed25519,
+            &keypair.public_key_bytes(),
+        );
         // This crate's unit tests: every author holds an account, since rules
         // v2 governance needs an account's presence.
         #[cfg(test)]
@@ -246,23 +254,39 @@ impl ChatService {
     /// This device's signing key for `agent_id`, certified on the config log
     /// (certifying it first if needed), when the agent may run here and an
     /// agent vault is set. `None` otherwise: the host then signs as itself.
-    pub fn ensure_agent_key(&mut self, workspace_id: Uuid, agent_id: Uuid) -> Result<Option<(Uuid, SigningKeypair)>> {
-        let Some(vault) = self.agent_vault.as_ref() else { return Ok(None) };
-        let (config, timeline) =
-            self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+    pub fn ensure_agent_key(
+        &mut self,
+        workspace_id: Uuid,
+        agent_id: Uuid,
+    ) -> Result<Option<(Uuid, SigningKeypair)>> {
+        let Some(vault) = self.agent_vault.as_ref() else {
+            return Ok(None);
+        };
+        let (config, timeline) = self.store.load_config(
+            workspace_id,
+            self.trusted_founder.as_deref(),
+            self.local_workspace_id,
+        )?;
         if config.is_none() || !timeline.current().agent_bound_to(agent_id, self.device_id) {
             return Ok(None);
         }
         let name = format!("agent:{agent_id}:{}", self.device_id);
-        let seed = match vault.load_seed(&name).map_err(|e| ChatError::Unauthorized(e.to_string()))? {
+        let seed = match vault
+            .load_seed(&name)
+            .map_err(|e| ChatError::Unauthorized(e.to_string()))?
+        {
             Some(seed) => seed,
             None => {
-                let kp = SigningKeypair::generate().map_err(|e| ChatError::Unauthorized(e.to_string()))?;
-                vault.store_seed(&name, &kp.seed_bytes()).map_err(|e| ChatError::Unauthorized(e.to_string()))?;
+                let kp = SigningKeypair::generate()
+                    .map_err(|e| ChatError::Unauthorized(e.to_string()))?;
+                vault
+                    .store_seed(&name, &kp.seed_bytes())
+                    .map_err(|e| ChatError::Unauthorized(e.to_string()))?;
                 kp.seed_bytes()
             }
         };
-        let kp = SigningKeypair::from_seed(&seed).map_err(|e| ChatError::Unauthorized(e.to_string()))?;
+        let kp =
+            SigningKeypair::from_seed(&seed).map_err(|e| ChatError::Unauthorized(e.to_string()))?;
         let key_id = ligus_core::AgentKeyCertificate::key_id_for(agent_id, &kp.public_key_bytes());
         if timeline.current().valid_agent_key(key_id).is_none() {
             let cert = ligus_core::AgentKeyCertificate::issue(
@@ -273,7 +297,11 @@ impl ChatService {
                 Timestamp::now(),
             );
             let config_id = workspace_config_session_id(workspace_id);
-            self.append_signed(config_id, workspace_id, SessionEvent::AgentKeyCertified { cert })?;
+            self.append_signed(
+                config_id,
+                workspace_id,
+                SessionEvent::AgentKeyCertified { cert },
+            )?;
         }
         Ok(Some((key_id, kp)))
     }
@@ -304,25 +332,52 @@ impl ChatService {
                 None
             }
         };
-        let Some((key_id, kp)) = key else { return Ok(None) };
+        let Some((key_id, kp)) = key else {
+            return Ok(None);
+        };
         // Drafted again, under the store's write lock, when a write of the
         // same agent key through another connection lands first (see
         // `store_authored_or_redraft`).
         let draft = |svc: &mut Self| -> Result<SessionEventEnvelope> {
-            let (config, timeline) =
-                svc.store.load_config(workspace_id, svc.trusted_founder.as_deref(), svc.local_workspace_id)?;
+            let (config, timeline) = svc.store.load_config(
+                workspace_id,
+                svc.trusted_founder.as_deref(),
+                svc.local_workspace_id,
+            )?;
             let name = config
                 .as_ref()
-                .and_then(|c| c.workspace_agents.iter().find(|a| a.id == agent_id).map(|a| a.name.clone()))
+                .and_then(|c| {
+                    c.workspace_agents
+                        .iter()
+                        .find(|a| a.id == agent_id)
+                        .map(|a| a.name.clone())
+                })
                 .unwrap_or_default();
-            let next_seq = svc.store.max_sequence(workspace_id, session_id)?.unwrap_or(0) + 1;
-            let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload.clone());
+            let next_seq = svc
+                .store
+                .max_sequence(workspace_id, session_id)?
+                .unwrap_or(0)
+                + 1;
+            let mut env =
+                SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload.clone());
             // Lamport bounds: one past the newest event of the log held here.
             let log_head = svc.store.lamport_head(workspace_id, session_id)?;
             env.lamport = ligus_core::lamport::next(log_head);
-            let mut actor = ActorIdentity::new(agent_id.to_string(), name, ligus_core::ActorKind::Agent);
+            let mut actor =
+                ActorIdentity::new(agent_id.to_string(), name, ligus_core::ActorKind::Agent);
             actor.device_id = Some(key_id);
-            env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false, prev: svc.store.last_signed_by(workspace_id, session_id, key_id, env.lamport)?, sig_alg: Default::default(), log_head });
+            env.actor_stamp = Some(ActorStamp {
+                actor,
+                recorded_at: Timestamp::now(),
+                cfg_frontier: timeline.head(),
+                presence: None,
+                runtime_effect: false,
+                prev: svc
+                    .store
+                    .last_signed_by(workspace_id, session_id, key_id, env.lamport)?,
+                sig_alg: Default::default(),
+                log_head,
+            });
             sign_envelope(&mut env, key_id, &kp);
             svc.authorize_as_fold(&env, config.as_ref(), &timeline)?;
             svc.store_authored(&env)?;
@@ -361,12 +416,24 @@ impl ChatService {
     }
 
     /// An agent's effect: Agent tier first, then the agent's key or the host.
-    fn append_agent_effect(&mut self, session_id: Uuid, workspace_id: Uuid, agent: Uuid, payload: SessionEvent) -> Result<SessionEventEnvelope> {
-        let fold = self.load_in(workspace_id, session_id)?.unwrap_or_else(|| ChatSession::new("", workspace_id, ""));
-        if let Err(why) = ligus_core::authz::agent::tier_allows(&payload, agent, self.device_id, &fold) {
+    fn append_agent_effect(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        agent: Uuid,
+        payload: SessionEvent,
+    ) -> Result<SessionEventEnvelope> {
+        let fold = self
+            .load_in(workspace_id, session_id)?
+            .unwrap_or_else(|| ChatSession::new("", workspace_id, ""));
+        if let Err(why) =
+            ligus_core::authz::agent::tier_allows(&payload, agent, self.device_id, &fold)
+        {
             return Err(ChatError::Unauthorized(format!("agent tier: {why}")));
         }
-        if let Some(env) = self.append_signed_as_agent(session_id, workspace_id, agent, payload.clone())? {
+        if let Some(env) =
+            self.append_signed_as_agent(session_id, workspace_id, agent, payload.clone())?
+        {
             return Ok(env);
         }
         self.append_signed(session_id, workspace_id, payload)
@@ -374,22 +441,55 @@ impl ChatService {
 
     /// Record one Ligus MCP tool call as a device-local, content-free fact
     /// (D.3.5). Never synced.
-    pub fn record_tool_audit(&self, workspace_id: Uuid, chat_id: Uuid, at_ms: i64, json: &str) -> Result<()> {
-        self.store.record_fact(workspace_id, chat_id, at_ms, crate::facts::TOOL_CALL_KIND, json)?;
+    pub fn record_tool_audit(
+        &self,
+        workspace_id: Uuid,
+        chat_id: Uuid,
+        at_ms: i64,
+        json: &str,
+    ) -> Result<()> {
+        self.store.record_fact(
+            workspace_id,
+            chat_id,
+            at_ms,
+            crate::facts::TOOL_CALL_KIND,
+            json,
+        )?;
         Ok(())
     }
 
     /// Record a device-local, content-free fact of `kind` (never synced).
-    pub fn record_device_fact(&self, workspace_id: Uuid, chat_id: Uuid, kind: &str, json: &str) -> Result<()> {
-        self.store.record_fact(workspace_id, chat_id, ligus_core::flow::now_ms(), kind, json)?;
+    pub fn record_device_fact(
+        &self,
+        workspace_id: Uuid,
+        chat_id: Uuid,
+        kind: &str,
+        json: &str,
+    ) -> Result<()> {
+        self.store.record_fact(
+            workspace_id,
+            chat_id,
+            ligus_core::flow::now_ms(),
+            kind,
+            json,
+        )?;
         Ok(())
     }
 
     /// Append for an assistant message: as its agent when this host writes
     /// that message with the agent's own key, else as the host.
-    fn append_for_message(&mut self, session_id: Uuid, workspace_id: Uuid, message_id: Uuid, payload: SessionEvent) -> Result<()> {
+    fn append_for_message(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        message_id: Uuid,
+        payload: SessionEvent,
+    ) -> Result<()> {
         if let Some(agent) = self.agent_messages.get(&message_id).copied() {
-            if self.append_signed_as_agent(session_id, workspace_id, agent, payload.clone())?.is_some() {
+            if self
+                .append_signed_as_agent(session_id, workspace_id, agent, payload.clone())?
+                .is_some()
+            {
                 return Ok(());
             }
         }
@@ -437,7 +537,11 @@ impl ChatService {
 
     /// An enrollment request for this device in `workspace_id` (the code the
     /// owner pastes into their desktop), signed by this device's key.
-    pub fn enrollment_request(&self, workspace_id: Uuid, label: &str) -> crate::device_enroll::DeviceEnrollment {
+    pub fn enrollment_request(
+        &self,
+        workspace_id: Uuid,
+        label: &str,
+    ) -> crate::device_enroll::DeviceEnrollment {
         crate::device_enroll::DeviceEnrollment::new(workspace_id, &self.keypair, label)
     }
 
@@ -448,21 +552,42 @@ impl ChatService {
     /// device can sign a trust-bootstrap event stamped as anyone, and ingest
     /// stores it inert: that is never choosing that account (design 7.2,
     /// `chosen ∩ certified`).
-    pub fn device_chosen_accounts(&self, workspace_id: Uuid, device: Uuid, device_key: &[u8]) -> Result<std::collections::BTreeSet<Uuid>> {
-        let certified = crate::device_enroll::certified_accounts(&self.store.trust_envelopes(workspace_id)?, device);
-        Ok(self.device_signed_accounts(workspace_id, device, device_key)?.into_iter().filter(|a| certified.contains(a)).collect())
+    pub fn device_chosen_accounts(
+        &self,
+        workspace_id: Uuid,
+        device: Uuid,
+        device_key: &[u8],
+    ) -> Result<std::collections::BTreeSet<Uuid>> {
+        let certified = crate::device_enroll::certified_accounts(
+            &self.store.trust_envelopes(workspace_id)?,
+            device,
+        );
+        Ok(self
+            .device_signed_accounts(workspace_id, device, device_key)?
+            .into_iter()
+            .filter(|a| certified.contains(a))
+            .collect())
     }
 
     /// The stamped accounts of everything `device` signed here, each
     /// verified under `device_key`, certified or not.
-    fn device_signed_accounts(&self, workspace_id: Uuid, device: Uuid, device_key: &[u8]) -> Result<std::collections::BTreeSet<Uuid>> {
+    fn device_signed_accounts(
+        &self,
+        workspace_id: Uuid,
+        device: Uuid,
+        device_key: &[u8],
+    ) -> Result<std::collections::BTreeSet<Uuid>> {
         // Streamed: an account already proved isn't checked again, and no
         // long history is held in memory.
         let mut proved = std::collections::BTreeSet::new();
         self.store.for_each_signed_by(workspace_id, device, |env| {
             let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
             if account.is_some_and(|a| !proved.contains(&a)) {
-                proved.extend(crate::device_enroll::chosen_accounts([env], device, device_key));
+                proved.extend(crate::device_enroll::chosen_accounts(
+                    [env],
+                    device,
+                    device_key,
+                ));
             }
             true
         })?;
@@ -480,13 +605,27 @@ impl ChatService {
     /// [`Self::device_standing`], and the members whose account certified
     /// **this** device's key without this device ever acting for them
     /// ([`crate::device_enroll::foreign_certifiers`]): shown, never obeyed.
-    pub fn device_standing_and_foreign(&self, workspace_id: Uuid) -> Result<(crate::device_enroll::Standing, Vec<ActorIdentity>)> {
+    pub fn device_standing_and_foreign(
+        &self,
+        workspace_id: Uuid,
+    ) -> Result<(crate::device_enroll::Standing, Vec<ActorIdentity>)> {
         let trust = self.store.trust_envelopes(workspace_id)?;
         let config = self.load_in(workspace_id, workspace_config_session_id(workspace_id))?;
-        let chosen = self.device_chosen_accounts(workspace_id, self.device_id, &self.keypair.public_key_bytes())?;
+        let chosen = self.device_chosen_accounts(
+            workspace_id,
+            self.device_id,
+            &self.keypair.public_key_bytes(),
+        )?;
         let own = self.account_keypair.public_key_bytes();
-        let standing = crate::device_enroll::standing(&trust, config.as_ref(), self.device_id, &own, &chosen);
-        let foreign = crate::device_enroll::foreign_certifiers(&trust, config.as_ref(), self.device_id, &own, &chosen);
+        let standing =
+            crate::device_enroll::standing(&trust, config.as_ref(), self.device_id, &own, &chosen);
+        let foreign = crate::device_enroll::foreign_certifiers(
+            &trust,
+            config.as_ref(),
+            self.device_id,
+            &own,
+            &chosen,
+        );
         Ok((standing, foreign))
     }
 
@@ -512,22 +651,54 @@ impl ChatService {
     /// and a certificate needs only the certifying account's signature).
     /// What the foreign-certificate tests attack with.
     #[cfg(any(test, feature = "test-presence"))]
-    pub fn publish_foreign_certificate(&mut self, workspace_id: Uuid, device_public_key: &[u8]) -> Result<()> {
-        let account_id = self.author.account_id.ok_or_else(|| ChatError::Unauthorized("no account".into()))?;
-        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, device_public_key, Timestamp::now());
+    pub fn publish_foreign_certificate(
+        &mut self,
+        workspace_id: Uuid,
+        device_public_key: &[u8],
+    ) -> Result<()> {
+        let account_id = self
+            .author
+            .account_id
+            .ok_or_else(|| ChatError::Unauthorized("no account".into()))?;
+        let certificate = DeviceCertificate::issue(
+            &self.account_keypair,
+            account_id,
+            device_public_key,
+            Timestamp::now(),
+        );
         let config_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate })?;
+        self.append_signed(
+            config_id,
+            workspace_id,
+            SessionEvent::DeviceCertificateAdded { certificate },
+        )?;
         Ok(())
     }
 
     /// Tests only: certify a phone's P-256 key under this account without
     /// the desktop's checks (a modified client racing a genuine enrollment).
     #[cfg(any(test, feature = "test-presence"))]
-    pub fn publish_foreign_phone_certificate(&mut self, workspace_id: Uuid, phone_public_key: &[u8]) -> Result<()> {
-        let account_id = self.author.account_id.ok_or_else(|| ChatError::Unauthorized("no account".into()))?;
-        let certificate = DeviceCertificate::issue_p256(&self.account_keypair, account_id, phone_public_key, Timestamp::now());
+    pub fn publish_foreign_phone_certificate(
+        &mut self,
+        workspace_id: Uuid,
+        phone_public_key: &[u8],
+    ) -> Result<()> {
+        let account_id = self
+            .author
+            .account_id
+            .ok_or_else(|| ChatError::Unauthorized("no account".into()))?;
+        let certificate = DeviceCertificate::issue_p256(
+            &self.account_keypair,
+            account_id,
+            phone_public_key,
+            Timestamp::now(),
+        );
         let config_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate })?;
+        self.append_signed(
+            config_id,
+            workspace_id,
+            SessionEvent::DeviceCertificateAdded { certificate },
+        )?;
         Ok(())
     }
 
@@ -539,14 +710,18 @@ impl ChatService {
         &mut self,
         request: &crate::device_enroll::DeviceEnrollment,
     ) -> Result<DeviceCertificate> {
-        request.verify().map_err(|e| ChatError::Unauthorized(e.to_string()))?;
+        request
+            .verify()
+            .map_err(|e| ChatError::Unauthorized(e.to_string()))?;
         if self.delegated {
             return Err(ChatError::Unauthorized(
                 "only a device holding your account key can approve a device".into(),
             ));
         }
         let Some(account_id) = self.author.account_id else {
-            return Err(ChatError::Unauthorized("this device has no account identity".into()));
+            return Err(ChatError::Unauthorized(
+                "this device has no account identity".into(),
+            ));
         };
         if request.device_id == self.device_id {
             return Err(ChatError::Unauthorized("that is this device".into()));
@@ -565,11 +740,18 @@ impl ChatService {
             ));
         }
         // `verify` above checked the id is the one the key derives.
-        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &request.device_public_key, Timestamp::now());
+        let certificate = DeviceCertificate::issue(
+            &self.account_keypair,
+            account_id,
+            &request.device_public_key,
+            Timestamp::now(),
+        );
         self.append_signed(
             config_id,
             ws,
-            SessionEvent::DeviceCertificateAdded { certificate: certificate.clone() },
+            SessionEvent::DeviceCertificateAdded {
+                certificate: certificate.clone(),
+            },
         )?;
         Ok(certificate)
     }
@@ -577,15 +759,24 @@ impl ChatService {
     /// The devices the local account has certified in `workspace_id` (this one
     /// included), revoked ones too.
     pub fn own_devices(&self, workspace_id: Uuid) -> Result<Vec<crate::device_enroll::OwnDevice>> {
-        let Some(account) = self.author.account_id else { return Ok(Vec::new()) };
-        Ok(crate::device_enroll::devices_of(&self.store.trust_envelopes(workspace_id)?, account))
+        let Some(account) = self.author.account_id else {
+            return Ok(Vec::new());
+        };
+        Ok(crate::device_enroll::devices_of(
+            &self.store.trust_envelopes(workspace_id)?,
+            account,
+        ))
     }
 
     /// Other accounts holding a valid certificate for `device` in the workspace
     /// (a box's own bootstrap account, before it was enrolled as yours).
     pub fn accounts_certifying(&self, workspace_id: Uuid, device: Uuid) -> Result<Vec<Uuid>> {
         let me = self.author.account_id.unwrap_or_else(Uuid::nil);
-        Ok(crate::device_enroll::accounts_certifying(&self.store.trust_envelopes(workspace_id)?, device, me))
+        Ok(crate::device_enroll::accounts_certifying(
+            &self.store.trust_envelopes(workspace_id)?,
+            device,
+            me,
+        ))
     }
 
     /// Mark which workspace id is this device's private local workspace, so writes
@@ -616,8 +807,12 @@ impl ChatService {
     /// ([`crate::envelope_verifier::founder_seed`]). `true` for a workspace
     /// with no pin (created here, or the device-local one).
     pub fn founder_verified(&self, workspace_id: Uuid) -> Result<bool> {
-        let Some(pin) = self.store.workspace_pin(workspace_id)? else { return Ok(true) };
-        let envs = self.store.list_copies_in(workspace_id, workspace_config_session_id(workspace_id))?;
+        let Some(pin) = self.store.workspace_pin(workspace_id)? else {
+            return Ok(true);
+        };
+        let envs = self
+            .store
+            .list_copies_in(workspace_id, workspace_config_session_id(workspace_id))?;
         Ok(crate::envelope_verifier::founder_seed(&envs, &pin).is_some())
     }
 
@@ -642,8 +837,12 @@ impl ChatService {
         if self.local_workspace_id == Some(workspace_id) {
             return Ok(None);
         }
-        let Some(pin) = self.store.workspace_pin(workspace_id)? else { return Ok(None) };
-        if self.author.account_id == Some(pin.founder_account) || self.founder_verified(workspace_id)? {
+        let Some(pin) = self.store.workspace_pin(workspace_id)? else {
+            return Ok(None);
+        };
+        if self.author.account_id == Some(pin.founder_account)
+            || self.founder_verified(workspace_id)?
+        {
             return Ok(None);
         }
         Ok(Some(pin.founder_account))
@@ -717,12 +916,19 @@ impl ChatService {
     /// A `DeviceKeyAgreementPublished` for this device's key, signed by this
     /// device, outside any log: the key publication a contact record carries
     /// (its workspace is the contact's, `room_workspace_id("contact-" + cid)`).
-    pub fn signed_ka_publication(&self, workspace_id: Uuid, ka_public: Vec<u8>) -> SessionEventEnvelope {
+    pub fn signed_ka_publication(
+        &self,
+        workspace_id: Uuid,
+        ka_public: Vec<u8>,
+    ) -> SessionEventEnvelope {
         let mut env = SessionEventEnvelope::new(
             workspace_id,
             workspace_id,
             1,
-            SessionEvent::DeviceKeyAgreementPublished { device_id: self.device_id, ka_public },
+            SessionEvent::DeviceKeyAgreementPublished {
+                device_id: self.device_id,
+                ka_public,
+            },
         );
         ligus_core::crypto::sign_envelope(&mut env, self.device_id, &self.keypair);
         env
@@ -741,7 +947,9 @@ impl ChatService {
         let account_pk = self.account_public_key();
         let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&account_pk);
         let names_me = claims.founder.and_then(|f| Uuid::parse_str(f.trim()).ok()) == Some(me)
-            && claims.fk.is_some_and(|k| k.trim().eq_ignore_ascii_case(&fk));
+            && claims
+                .fk
+                .is_some_and(|k| k.trim().eq_ignore_ascii_case(&fk));
         let mine = cert.account_id == me
             && cert.device_id == self.device_id
             && cert.device_public_key == self.keypair.public_key_bytes()
@@ -750,13 +958,21 @@ impl ChatService {
             return None;
         }
         let at = time::OffsetDateTime::now_utc().unix_timestamp();
-        Some(crate::invite_sig::sign(claims, at, &self.keypair, cert, &account_pk))
+        Some(crate::invite_sig::sign(
+            claims,
+            at,
+            &self.keypair,
+            cert,
+            &account_pk,
+        ))
     }
 
     /// Set the git email carried on this user's identity (for commit
     /// attribution when a host runs an agent on their behalf). Empty clears it.
     pub fn set_author_git_email(&mut self, email: Option<String>) {
-        self.author.git_email = email.map(|e| e.trim().to_string()).filter(|e| !e.is_empty());
+        self.author.git_email = email
+            .map(|e| e.trim().to_string())
+            .filter(|e| !e.is_empty());
     }
 
     /// Set this device's X25519 key-agreement public key on the local actor, so
@@ -834,8 +1050,12 @@ impl ChatService {
             // the config roster itself. Closes the self-member staleness gap where
             // a role differed per-chat.
             if let Some(session) = self.load_in(workspace_id, session_id)? {
-                let decision =
-                    authorize(&payload, &self.author.id, self.actor_role(&session), &session);
+                let decision = authorize(
+                    &payload,
+                    &self.author.id,
+                    self.actor_role(&session),
+                    &session,
+                );
                 if !decision.allowed {
                     let why = crate::role_refusal::explain(
                         decision.summary,
@@ -852,28 +1072,46 @@ impl ChatService {
         // B3 (serve): the next write waits for its author's passkey.
         if self.capture_presence && !is_local {
             self.capture_draft(&env)?;
-            return Err(ChatError::Unauthorized(ligus_core::authz::PRESENCE_REQUIRED.into()));
+            return Err(ChatError::Unauthorized(
+                ligus_core::authz::PRESENCE_REQUIRED.into(),
+            ));
         }
         if !is_local {
-            let (config, timeline) =
-                self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+            let (config, timeline) = self.store.load_config(
+                workspace_id,
+                self.trusted_founder.as_deref(),
+                self.local_workspace_id,
+            )?;
             match self.authorize_as_fold(&env, config.as_ref(), &timeline) {
                 // B3: the fold wants its author's passkey presence.
-                Err(ChatError::Unauthorized(why)) if why == ligus_core::authz::PRESENCE_REQUIRED => {
+                Err(ChatError::Unauthorized(why))
+                    if why == ligus_core::authz::PRESENCE_REQUIRED =>
+                {
                     self.with_presence(&mut env)?;
                     // (A confirmation may have registered a credential first.)
-                    let (config, timeline) =
-                        self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+                    let (config, timeline) = self.store.load_config(
+                        workspace_id,
+                        self.trusted_founder.as_deref(),
+                        self.local_workspace_id,
+                    )?;
                     self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
                 }
                 r => r?,
             }
             // A grant whose effect needs presence: the fold counts it only
             // with the author's passkey, so ask for it here too.
-            if self.force_presence && env.actor_stamp.as_ref().is_some_and(|s| s.presence.is_none()) {
+            if self.force_presence
+                && env
+                    .actor_stamp
+                    .as_ref()
+                    .is_some_and(|s| s.presence.is_none())
+            {
                 self.with_presence(&mut env)?;
-                let (config, timeline) =
-                    self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+                let (config, timeline) = self.store.load_config(
+                    workspace_id,
+                    self.trusted_founder.as_deref(),
+                    self.local_workspace_id,
+                )?;
                 self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
             }
         }
@@ -894,17 +1132,27 @@ impl ChatService {
     /// the person is asked to confirm once more (not under the lock: that
     /// takes a person). If that one is raced too, the StaleDraft error goes
     /// back to the caller, nothing stored, to try again.
-    fn store_authored_or_redraft(&mut self, env: SessionEventEnvelope, is_local: bool) -> Result<SessionEventEnvelope> {
-        let confirmed = env.actor_stamp.as_ref().is_some_and(|s| s.presence.is_some());
+    fn store_authored_or_redraft(
+        &mut self,
+        env: SessionEventEnvelope,
+        is_local: bool,
+    ) -> Result<SessionEventEnvelope> {
+        let confirmed = env
+            .actor_stamp
+            .as_ref()
+            .is_some_and(|s| s.presence.is_some());
         match self.store_authored(&env) {
-            Err(ChatError::Store(EventStoreError::StaleDraft)) if !confirmed => self.under_write_lock(|svc| {
-                let env = svc.draft_signed(env.session_id, env.workspace_id, env.payload.clone())?;
-                svc.judge_redraft(&env, is_local)?;
-                svc.store_authored(&env)?;
-                Ok(env)
-            }),
+            Err(ChatError::Store(EventStoreError::StaleDraft)) if !confirmed => self
+                .under_write_lock(|svc| {
+                    let env =
+                        svc.draft_signed(env.session_id, env.workspace_id, env.payload.clone())?;
+                    svc.judge_redraft(&env, is_local)?;
+                    svc.store_authored(&env)?;
+                    Ok(env)
+                }),
             Err(ChatError::Store(EventStoreError::StaleDraft)) => {
-                let mut again = self.draft_signed(env.session_id, env.workspace_id, env.payload.clone())?;
+                let mut again =
+                    self.draft_signed(env.session_id, env.workspace_id, env.payload.clone())?;
                 self.with_presence(&mut again)?;
                 self.judge_redraft(&again, is_local)?;
                 self.store_authored(&again)?;
@@ -920,7 +1168,11 @@ impl ChatService {
         if is_local {
             return Ok(());
         }
-        let (config, timeline) = self.store.load_config(env.workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let (config, timeline) = self.store.load_config(
+            env.workspace_id,
+            self.trusted_founder.as_deref(),
+            self.local_workspace_id,
+        )?;
         self.authorize_as_fold(env, config.as_ref(), &timeline)
     }
 
@@ -962,8 +1214,17 @@ impl ChatService {
 
     /// Build and sign an envelope as this device's author would append it
     /// (not appended, not authorized).
-    pub(crate) fn draft_signed(&mut self, session_id: Uuid, workspace_id: Uuid, payload: SessionEvent) -> Result<SessionEventEnvelope> {
-        let next_seq = self.store.max_sequence(workspace_id, session_id)?.unwrap_or(0) + 1;
+    pub(crate) fn draft_signed(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        payload: SessionEvent,
+    ) -> Result<SessionEventEnvelope> {
+        let next_seq = self
+            .store
+            .max_sequence(workspace_id, session_id)?
+            .unwrap_or(0)
+            + 1;
         let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload);
         // Causal Lamport clock: one past the newest event of the log this device
         // holds (locally authored or ingested from a peer), whose lamport is
@@ -975,12 +1236,26 @@ impl ChatService {
         env.lamport = ligus_core::lamport::next(log_head);
         // The config frontier this device has folded: chat events that need the
         // workspace roster are judged at it, on every device (Phase 0 A2).
-        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let (_, timeline) = self.store.load_config(
+            workspace_id,
+            self.trusted_founder.as_deref(),
+            self.local_workspace_id,
+        )?;
         env.actor_stamp = Some(ActorStamp {
             actor: self.stamped_author(),
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
-            presence: None, runtime_effect: self.runtime_effect, prev: self.store.last_signed_by(workspace_id, session_id, self.device_id, env.lamport)?, sig_alg: Default::default(), log_head });
+            presence: None,
+            runtime_effect: self.runtime_effect,
+            prev: self.store.last_signed_by(
+                workspace_id,
+                session_id,
+                self.device_id,
+                env.lamport,
+            )?,
+            sig_alg: Default::default(),
+            log_head,
+        });
         // Signed first, so the fold's own signature checks (key events)
         // judge exactly what peers will receive.
         sign_envelope(&mut env, self.device_id, &self.keypair);
@@ -1011,13 +1286,21 @@ impl ChatService {
                 Some(_) => ligus_core::WorkspaceAuthz::Timeline(timeline),
                 None => ligus_core::WorkspaceAuthz::NoConfigLog,
             };
-            self.store.load_session_authorized(env.workspace_id, env.session_id, self.trusted_founder.as_deref(), self.local_workspace_id, ws)?
+            self.store.load_session_authorized(
+                env.workspace_id,
+                env.session_id,
+                self.trusted_founder.as_deref(),
+                self.local_workspace_id,
+                ws,
+            )?
         };
         // A brand-new log (its seed) has nothing to judge against yet.
         let Some(fold) = fold else { return Ok(()) };
         let is_chat = env.session_id != config_id;
         if is_chat && config.is_none() {
-            return Err(ChatError::Unauthorized("the workspace configuration hasn't synced to this device yet".into()));
+            return Err(ChatError::Unauthorized(
+                "the workspace configuration hasn't synced to this device yet".into(),
+            ));
         }
         let ctx = authz::Ctx {
             fold: &fold,
@@ -1035,7 +1318,9 @@ impl ChatService {
                 &self.author.display_name,
                 config.map_or(&fold.members[..], |c| &c.members[..]),
             ))),
-            Decision::Hold(h) => Err(ChatError::Unauthorized(format!("not yet decidable on this device ({h:?})"))),
+            Decision::Hold(h) => Err(ChatError::Unauthorized(format!(
+                "not yet decidable on this device ({h:?})"
+            ))),
         }
     }
 
@@ -1073,7 +1358,9 @@ impl ChatService {
         )?;
         // Publish this device's identity so peers can verify events it authors.
         self.publish_identity(id, workspace_id)?;
-        Ok(self.load_in(workspace_id, id)?.expect("session exists after snapshot"))
+        Ok(self
+            .load_in(workspace_id, id)?
+            .expect("session exists after snapshot"))
     }
 
     /// Publish this device's trust events into a workspace — an
@@ -1105,7 +1392,11 @@ impl ChatService {
         }
     }
 
-    fn publish_identity_unprompted(&mut self, session_id: Uuid, workspace_id: Uuid) -> Result<bool> {
+    fn publish_identity_unprompted(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+    ) -> Result<bool> {
         // A delegated device's identity is the owner's certificate for it; its own
         // account key must never be registered under the owner's account id (that
         // would contest the owner's key and quarantine all of their events).
@@ -1120,11 +1411,21 @@ impl ChatService {
         // whenever this device holds that log (a certificate only on a chat
         // log is mirrored the next time this runs).
         let config_id = workspace_config_session_id(workspace_id);
-        let session_id = if self.store.max_sequence(workspace_id, config_id)?.is_some() { config_id } else { session_id };
-        let published = if session_id == config_id {
-            self.store.has_device_certificate_in(workspace_id, config_id, self.device_id, account_id)?
+        let session_id = if self.store.max_sequence(workspace_id, config_id)?.is_some() {
+            config_id
         } else {
-            self.store.has_device_certificate(workspace_id, self.device_id, account_id)?
+            session_id
+        };
+        let published = if session_id == config_id {
+            self.store.has_device_certificate_in(
+                workspace_id,
+                config_id,
+                self.device_id,
+                account_id,
+            )?
+        } else {
+            self.store
+                .has_device_certificate(workspace_id, self.device_id, account_id)?
         };
         if published {
             return Ok(false);
@@ -1137,7 +1438,12 @@ impl ChatService {
                 signing_public_key: self.account_keypair.public_key_bytes().to_vec(),
             },
         )?;
-        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &self.keypair.public_key_bytes(), Timestamp::now());
+        let certificate = DeviceCertificate::issue(
+            &self.account_keypair,
+            account_id,
+            &self.keypair.public_key_bytes(),
+            Timestamp::now(),
+        );
         self.append_signed(
             session_id,
             workspace_id,
@@ -1161,7 +1467,9 @@ impl ChatService {
         workspace_id: Uuid,
     ) -> Result<bool> {
         if self.delegated {
-            return Err(ChatError::Unauthorized("a delegated device can't rotate its owner's key".into()));
+            return Err(ChatError::Unauthorized(
+                "a delegated device can't rotate its owner's key".into(),
+            ));
         }
         let Some(account_id) = self.author.account_id else {
             return Ok(false);
@@ -1179,7 +1487,12 @@ impl ChatService {
         )?;
         // Adopt the new account key, then re-certify this device under it.
         self.account_keypair = new_keypair;
-        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &self.keypair.public_key_bytes(), Timestamp::now());
+        let certificate = DeviceCertificate::issue(
+            &self.account_keypair,
+            account_id,
+            &self.keypair.public_key_bytes(),
+            Timestamp::now(),
+        );
         self.append_signed(
             session_id,
             workspace_id,
@@ -1220,7 +1533,11 @@ impl ChatService {
         message.actor_identity = Some(self.stamped_author());
         message.workflow_run_id = Some(run_id);
         let stored = message.clone();
-        self.append_signed(session_id, workspace_id, SessionEvent::MessageAppended { message })?;
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::MessageAppended { message },
+        )?;
         Ok(stored)
     }
 
@@ -1253,7 +1570,15 @@ impl ChatService {
         responder_id: Option<Uuid>,
         reply_to_message_id: Option<Uuid>,
     ) -> Result<Uuid> {
-        self.begin_assistant_message_with_model(session_id, workspace_id, author, runtime_id, None, responder_id, reply_to_message_id)
+        self.begin_assistant_message_with_model(
+            session_id,
+            workspace_id,
+            author,
+            runtime_id,
+            None,
+            responder_id,
+            reply_to_message_id,
+        )
     }
 
     /// [`Self::begin_assistant_message`], recording the model the turn runs
@@ -1273,7 +1598,9 @@ impl ChatService {
         let mut message = ChatMessage::new(MessageRole::Assistant, author, "");
         message.is_streaming = true;
         message.runtime_id = Some(runtime_id.into());
-        message.runtime_label = model.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
+        message.runtime_label = model
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty());
         // Stamp the responder's stable id (for own-turn attribution) and this
         // device (so the stale-stream sweep never truncates a peer's stream).
         message.responder_id = responder_id;
@@ -1289,8 +1616,13 @@ impl ChatService {
         let id = message.id;
         // An agent with its own key on this host signs its own reply (A3).
         if let Some(agent) = responder_id {
-            let payload = SessionEvent::MessageAppended { message: message.clone() };
-            if self.append_signed_as_agent(session_id, workspace_id, agent, payload)?.is_some() {
+            let payload = SessionEvent::MessageAppended {
+                message: message.clone(),
+            };
+            if self
+                .append_signed_as_agent(session_id, workspace_id, agent, payload)?
+                .is_some()
+            {
                 self.agent_messages.insert(id, agent);
                 return Ok(id);
             }
@@ -1342,7 +1674,10 @@ impl ChatService {
         }
         let (head, tail) = pending.split_at(cut);
         let whole = crate::guard_scan::redact_secrets(pending).0;
-        let (h, t) = (crate::guard_scan::redact_secrets(head).0, crate::guard_scan::redact_secrets(tail).0);
+        let (h, t) = (
+            crate::guard_scan::redact_secrets(head).0,
+            crate::guard_scan::redact_secrets(tail).0,
+        );
         if h.len() + t.len() != whole.len() || !whole.starts_with(&h) {
             // A match spans the cut: wait for more text (or the completion).
             return Ok(());
@@ -1350,7 +1685,12 @@ impl ChatService {
         let (head, rest) = (head.to_string(), tail.to_string());
         *pending = rest;
         let chunk = self.redact_for_log(workspace_id, session_id, head);
-        self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageChunkReceived { message_id, chunk })
+        self.append_for_message(
+            session_id,
+            workspace_id,
+            message_id,
+            SessionEvent::MessageChunkReceived { message_id, chunk },
+        )
     }
 
     pub fn complete_assistant_message(
@@ -1362,7 +1702,12 @@ impl ChatService {
     ) -> Result<()> {
         let body = self.redact_for_log(workspace_id, session_id, body.into());
         self.stream_hold.remove(&message_id);
-        self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageCompleted { message_id, body })?;
+        self.append_for_message(
+            session_id,
+            workspace_id,
+            message_id,
+            SessionEvent::MessageCompleted { message_id, body },
+        )?;
         self.agent_messages.remove(&message_id);
         // A completed reply is a natural checkpoint — snapshot periodically so
         // reopening a long chat replays only recent events (#3).
@@ -1426,9 +1771,13 @@ impl ChatService {
                 // higher lamport and win the fold, so completing here is safe.
                 .filter(|m| {
                     m.is_streaming
-                        && (m.origin_device_id.map(|d| d == self.device_id).unwrap_or(true)
+                        && (m
+                            .origin_device_id
+                            .map(|d| d == self.device_id)
+                            .unwrap_or(true)
                             || (my_account.is_some()
-                                && m.actor_identity.as_ref().and_then(|a| a.account_id) == my_account))
+                                && m.actor_identity.as_ref().and_then(|a| a.account_id)
+                                    == my_account))
                 })
                 .map(|m| (m.id, m.body.clone()))
                 .collect();
@@ -1479,7 +1828,11 @@ impl ChatService {
     /// session has accumulated enough events since the last one. Bounds replay
     /// cost on long sessions; the snapshot is signed like any other event.
     pub fn maybe_snapshot(&mut self, session_id: Uuid, workspace_id: Uuid) -> Result<()> {
-        if self.store.rows_since_last_snapshot(workspace_id, session_id)? < Self::SNAPSHOT_EVERY {
+        if self
+            .store
+            .rows_since_last_snapshot(workspace_id, session_id)?
+            < Self::SNAPSHOT_EVERY
+        {
             return Ok(());
         }
         if let Some(session) = self.load_in_unresolved(workspace_id, session_id)? {
@@ -1543,7 +1896,8 @@ impl ChatService {
         }
         slot.avatar_url = avatar_url.filter(|u| !u.is_empty());
         // Only a plain hex color is kept (the fold drops anything else too).
-        slot.avatar_color_hex = avatar_color_hex.filter(|c| ligus_core::agent::is_valid_color_hex(c));
+        slot.avatar_color_hex =
+            avatar_color_hex.filter(|c| ligus_core::agent::is_valid_color_hex(c));
         let agent = slot.clone();
         self.append_signed(
             session_id,
@@ -1598,7 +1952,8 @@ impl ChatService {
         // config session id directly (from `join_workspace`/`set_active_workspace`).
         // Any other session_id must already exist locally; don't invent phantom
         // membership in a workspace this device has no presence in.
-        if session_id != workspace_config_session_id(workspace_id) && self.load_in(workspace_id, session_id)?.is_none()
+        if session_id != workspace_config_session_id(workspace_id)
+            && self.load_in(workspace_id, session_id)?.is_none()
         {
             return Ok(false);
         }
@@ -1609,16 +1964,21 @@ impl ChatService {
         // A joiner (holding an invite) waits for the workspace's own config log
         // instead of founding a competing one; this runs again after a sync.
         let config_id = workspace_config_session_id(workspace_id);
-        if self.load_in(workspace_id, config_id)?.is_none() && self.store.join_invite(workspace_id)?.is_some() {
+        if self.load_in(workspace_id, config_id)?.is_none()
+            && self.store.join_invite(workspace_id)?.is_some()
+        {
             return Ok(false);
         }
         let config_id = self.ensure_workspace_config(workspace_id)?;
-        let config = self.load_in(workspace_id, config_id)?.expect("config log exists after ensure");
+        let config = self
+            .load_in(workspace_id, config_id)?
+            .expect("config log exists after ensure");
         // Already present? Match by actor id, or by the same GitHub account — so
         // signing in (which can change the actor id) doesn't add a second "self".
         let already = config.members.iter().any(|m| {
             m.actor.id == self.author.id
-                || (self.author.account_id.is_some() && m.actor.account_id == self.author.account_id)
+                || (self.author.account_id.is_some()
+                    && m.actor.account_id == self.author.account_id)
         });
         let added = if already {
             false
@@ -1641,8 +2001,10 @@ impl ChatService {
             // device (`ligus_core::admission`).
             let proof = match (invite, self.store.join_redeem_key(workspace_id)?) {
                 (Some(id), Some(seed)) => {
-                    let key = ligus_core::admission::RedeemKey::from_seed(&seed[..])
-                        .map_err(|e| ChatError::Unauthorized(format!("the admission's redeem key: {e}")))?;
+                    let key =
+                        ligus_core::admission::RedeemKey::from_seed(&seed[..]).map_err(|e| {
+                            ChatError::Unauthorized(format!("the admission's redeem key: {e}"))
+                        })?;
                     Some(if config.guards.service_invites.contains_key(&id) {
                         key.prove(workspace_id, id, &member.id, self.device_id)
                     } else {
@@ -1653,7 +2015,15 @@ impl ChatService {
             };
             let config_id = self.ensure_workspace_config(workspace_id)?;
             let proved = proof.is_some();
-            self.append_signed(config_id, workspace_id, SessionEvent::MemberAdded { member, invite, proof })?;
+            self.append_signed(
+                config_id,
+                workspace_id,
+                SessionEvent::MemberAdded {
+                    member,
+                    invite,
+                    proof,
+                },
+            )?;
             if proved {
                 self.store.clear_join_redeem_key(workspace_id)?;
             }
@@ -1688,7 +2058,13 @@ impl ChatService {
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::TurnClaimed { trigger_id, device_id: self.device_id, epoch: 0, supersedes: None, repo_id: None },
+            SessionEvent::TurnClaimed {
+                trigger_id,
+                device_id: self.device_id,
+                epoch: 0,
+                supersedes: None,
+                repo_id: None,
+            },
         )?;
         Ok(self
             .load_in(workspace_id, session_id)?
@@ -1701,7 +2077,11 @@ impl ChatService {
     /// the coverage signed with this device's own key (repos review residual
     /// 1: a beat is sealed with the workspace key every member holds, so
     /// readers use a coverage report only when its host signed it).
-    pub fn signed_beat(&self, workspace_id: Uuid, coverage: Vec<ligus_core::workspace_repo::CoverageEntry>) -> ligus_core::workspace_repo::HostBeat {
+    pub fn signed_beat(
+        &self,
+        workspace_id: Uuid,
+        coverage: Vec<ligus_core::workspace_repo::CoverageEntry>,
+    ) -> ligus_core::workspace_repo::HostBeat {
         let mut beat = crate::host_presence::beat_now(&self.device_id.to_string(), coverage);
         if !beat.coverage.is_empty() {
             beat.sign_coverage(workspace_id, self.device_id, &self.keypair);
@@ -1712,9 +2092,16 @@ impl ChatService {
     /// Whether a fetched beat's coverage is its host's own signed report
     /// that the current roster of `workspace_id` vouches for (certified, not
     /// revoked, acting for a member). Unsigned or wrongly signed: ignored.
-    pub fn beat_verifier(&self, workspace_id: Uuid) -> impl Fn(&ligus_core::workspace_repo::HostBeat) -> bool {
+    pub fn beat_verifier(
+        &self,
+        workspace_id: Uuid,
+    ) -> impl Fn(&ligus_core::workspace_repo::HostBeat) -> bool {
         let roster = self.workspace_roster(workspace_id).ok();
-        move |b| roster.as_ref().is_some_and(|r| b.coverage_verified(workspace_id, r))
+        move |b| {
+            roster
+                .as_ref()
+                .is_some_and(|r| b.coverage_verified(workspace_id, r))
+        }
     }
 
     /// The device-keyed dispatcher's one entry (design repos-and-checkouts
@@ -1729,10 +2116,19 @@ impl ChatService {
     /// chat's repo, how long it has waited and whether the holder is live
     /// on the presence channel. Whether the holder is gone (revoked, or no
     /// longer a member's) is read from the current roster here.
-    pub fn dispatch_turn(&mut self, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, agent: Option<Uuid>, ctx: DispatchCtx) -> Result<ligus_core::dispatch::Step> {
+    pub fn dispatch_turn(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        trigger: Uuid,
+        agent: Option<Uuid>,
+        ctx: DispatchCtx,
+    ) -> Result<ligus_core::dispatch::Step> {
         use ligus_core::dispatch::{self as d, Step};
         let key = ligus_core::turn_claim_key(trigger, agent);
-        let Some(session) = self.load_in(workspace_id, session_id)? else { return Ok(Step::StandDown) };
+        let Some(session) = self.load_in(workspace_id, session_id)? else {
+            return Ok(Step::StandDown);
+        };
         // How long this device has watched the current holder (or, with no
         // holder, the unclaimed turn): the caller's word, or this service's
         // own clock, whichever is longer.
@@ -1741,14 +2137,24 @@ impl ChatService {
         }
         let watched = {
             let now = std::time::Instant::now();
-            let cur = (session.turn_claims.get(&key).copied(), session.turn_dispatch.get(&key).map(|x| x.epoch).unwrap_or(0));
+            let cur = (
+                session.turn_claims.get(&key).copied(),
+                session
+                    .turn_dispatch
+                    .get(&key)
+                    .map(|x| x.epoch)
+                    .unwrap_or(0),
+            );
             let e = self.dispatch_seen.entry(key).or_insert((cur.0, cur.1, now));
             if (e.0, e.1) != cur {
                 *e = (cur.0, cur.1, now);
             }
             now.duration_since(e.2)
         };
-        let ctx = DispatchCtx { waited: ctx.waited.max(watched), ..ctx };
+        let ctx = DispatchCtx {
+            waited: ctx.waited.max(watched),
+            ..ctx
+        };
         let roster = self.workspace_roster(workspace_id).ok();
         let me = self.device_id;
         let view = |s: &ChatSession| {
@@ -1769,7 +2175,8 @@ impl ChatService {
                 waited: ctx.waited,
                 age,
                 holder_live: holder.is_some_and(|h| (ctx.holder_live)(h)),
-                holder_gone: holder.is_some_and(|h| roster.as_ref().is_some_and(|r| d::holder_gone(r, h))),
+                holder_gone: holder
+                    .is_some_and(|h| roster.as_ref().is_some_and(|r| d::holder_gone(r, h))),
             }
         };
         let repo = session.repo.as_ref().and_then(|r| r.repo_id);
@@ -1778,9 +2185,17 @@ impl ChatService {
                 self.append_signed(
                     session_id,
                     workspace_id,
-                    SessionEvent::TurnClaimed { trigger_id: key, device_id: self.device_id, epoch: c.epoch, supersedes: c.supersedes, repo_id: c.repo_id },
+                    SessionEvent::TurnClaimed {
+                        trigger_id: key,
+                        device_id: self.device_id,
+                        epoch: c.epoch,
+                        supersedes: c.supersedes,
+                        repo_id: c.repo_id,
+                    },
                 )?;
-                let Some(after) = self.load_in(workspace_id, session_id)? else { return Ok(Step::StandDown) };
+                let Some(after) = self.load_in(workspace_id, session_id)? else {
+                    return Ok(Step::StandDown);
+                };
                 Ok(match d::decide(&after, key, repo, &view(&after)) {
                     Step::Claim(_) => Step::Wait(std::time::Duration::from_secs(1)),
                     other => other,
@@ -1794,8 +2209,18 @@ impl ChatService {
     /// can start several agents (up to `maxHandoffs`), each possibly on
     /// another device, so the claim is keyed by (trigger, agent)
     /// ([`ligus_core::turn_claim_key`]). `None` is the plain trigger claim.
-    pub fn claim_turn_for(&mut self, session_id: Uuid, workspace_id: Uuid, trigger_id: Uuid, agent_id: Option<Uuid>) -> Result<bool> {
-        self.claim_turn(session_id, workspace_id, ligus_core::turn_claim_key(trigger_id, agent_id))
+    pub fn claim_turn_for(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        trigger_id: Uuid,
+        agent_id: Option<Uuid>,
+    ) -> Result<bool> {
+        self.claim_turn(
+            session_id,
+            workspace_id,
+            ligus_core::turn_claim_key(trigger_id, agent_id),
+        )
     }
 
     /// Rename the session (manual, or auto-generated from the first exchange).
@@ -1829,11 +2254,16 @@ impl ChatService {
             return Ok(false);
         }
         let config_id = workspace_config_session_id(workspace_id);
-        let Some(config) = self.load_in(workspace_id, config_id)? else { return Ok(false) };
+        let Some(config) = self.load_in(workspace_id, config_id)? else {
+            return Ok(false);
+        };
         if !config.title.trim().is_empty() {
             return Ok(false);
         }
-        if !matches!(self.actor_role(&config), WorkspaceRole::Owner | WorkspaceRole::Admin) {
+        if !matches!(
+            self.actor_role(&config),
+            WorkspaceRole::Owner | WorkspaceRole::Admin
+        ) {
             return Ok(false);
         }
         let name: String = name.chars().take(MAX_WORKSPACE_NAME_CHARS).collect();
@@ -1873,13 +2303,23 @@ impl ChatService {
             self.append_signed(
                 config_id,
                 workspace_id,
-                SessionEvent::SessionSnapshot { session: Box::new(session) },
+                SessionEvent::SessionSnapshot {
+                    session: Box::new(session),
+                },
             )?;
             // The founder pins itself (B2 residual): this device's own fold
             // then never takes a forged lower-lamport seed as the base.
-            if !self.delegated && self.author.account_id.is_some_and(|a| a.to_string() == self.author.id) {
-                let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&self.account_keypair.public_key_bytes());
-                self.store.set_workspace_pin(workspace_id, &self.author.id, &fk)?;
+            if !self.delegated
+                && self
+                    .author
+                    .account_id
+                    .is_some_and(|a| a.to_string() == self.author.id)
+            {
+                let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(
+                    &self.account_keypair.public_key_bytes(),
+                );
+                self.store
+                    .set_workspace_pin(workspace_id, &self.author.id, &fk)?;
             }
             self.publish_identity(config_id, workspace_id)?;
             // Genesis rules (Phase A): presence-free rules v2 under
@@ -1957,7 +2397,9 @@ impl ChatService {
         self.append_signed(
             config_id,
             workspace_id,
-            SessionEvent::ChannelCreated { channel: channel.clone() },
+            SessionEvent::ChannelCreated {
+                channel: channel.clone(),
+            },
         )?;
         self.maybe_snapshot(config_id, workspace_id)?;
         Ok((channel, default_chat))
@@ -2012,7 +2454,10 @@ impl ChatService {
         self.append_signed(
             config_id,
             workspace_id,
-            SessionEvent::ChannelArchived { channel_id: channel_id.into(), archived },
+            SessionEvent::ChannelArchived {
+                channel_id: channel_id.into(),
+                archived,
+            },
         )?;
         Ok(())
     }
@@ -2050,7 +2495,9 @@ impl ChatService {
         self.append_signed(
             config_id,
             workspace_id,
-            SessionEvent::WorkspaceRuntimeRemoved { runtime_id: id.to_string() },
+            SessionEvent::WorkspaceRuntimeRemoved {
+                runtime_id: id.to_string(),
+            },
         )?;
         Ok(())
     }
@@ -2067,12 +2514,17 @@ impl ChatService {
     /// of revoked devices (identity model v2, 8.4; under rules 3 the fold
     /// drops them too). [`Self::list_all_hosts`] keeps them, for Clean up.
     pub fn list_hosts(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceHost>> {
-        let Some(s) = self.load_in(workspace_id, workspace_config_session_id(workspace_id))? else { return Ok(Vec::new()) };
-        let members: std::collections::HashSet<&str> = s.members.iter().map(|m| m.id.as_str()).collect();
+        let Some(s) = self.load_in(workspace_id, workspace_config_session_id(workspace_id))? else {
+            return Ok(Vec::new());
+        };
+        let members: std::collections::HashSet<&str> =
+            s.members.iter().map(|m| m.id.as_str()).collect();
         Ok(s.workspace_hosts
             .iter()
             .filter(|h| h.owner_actor_id.is_empty() || members.contains(h.owner_actor_id.as_str()))
-            .filter(|h| Uuid::parse_str(&h.id).map_or(true, |d| !s.guards.revoked_devices.contains(&d)))
+            .filter(|h| {
+                Uuid::parse_str(&h.id).map_or(true, |d| !s.guards.revoked_devices.contains(&d))
+            })
             .cloned()
             .collect())
     }
@@ -2098,7 +2550,8 @@ impl ChatService {
     ///   account registered in this workspace; a certificate someone put on
     ///   another person's device key never maps them to that person.
     pub fn device_links(&self, workspace_id: Uuid) -> Result<ligus_core::DeviceLinks> {
-        let Some(config) = self.load_in(workspace_id, workspace_config_session_id(workspace_id))? else {
+        let Some(config) = self.load_in(workspace_id, workspace_config_session_id(workspace_id))?
+        else {
             return Ok(ligus_core::DeviceLinks::default());
         };
         let trust = self.store.trust_envelopes(workspace_id)?;
@@ -2106,13 +2559,26 @@ impl ChatService {
         let mut certs = Vec::new();
         for env in &trust {
             match &env.payload {
-                SessionEvent::AccountKeyRegistered { account_id, signing_public_key } => {
-                    keys.entry(*account_id).or_default().push(signing_public_key.clone());
+                SessionEvent::AccountKeyRegistered {
+                    account_id,
+                    signing_public_key,
+                } => {
+                    keys.entry(*account_id)
+                        .or_default()
+                        .push(signing_public_key.clone());
                 }
-                SessionEvent::AccountKeyRotated { account_id, new_signing_public_key, .. } => {
-                    keys.entry(*account_id).or_default().push(new_signing_public_key.clone());
+                SessionEvent::AccountKeyRotated {
+                    account_id,
+                    new_signing_public_key,
+                    ..
+                } => {
+                    keys.entry(*account_id)
+                        .or_default()
+                        .push(new_signing_public_key.clone());
                 }
-                SessionEvent::DeviceCertificateAdded { certificate } => certs.push(certificate.clone()),
+                SessionEvent::DeviceCertificateAdded { certificate } => {
+                    certs.push(certificate.clone())
+                }
                 _ => {}
             }
         }
@@ -2125,13 +2591,21 @@ impl ChatService {
                         .is_some_and(|ks| ks.iter().any(|k| c.verify(k).is_ok()))
             })
         };
-        let mut links = if config.workspace_hosts.iter().all(|h| h.owner_actor_id.is_empty()) {
+        let mut links = if config
+            .workspace_hosts
+            .iter()
+            .all(|h| h.owner_actor_id.is_empty())
+        {
             ligus_core::DeviceLinks::default()
         } else {
             // A member maps to a host's owner only when the host device itself
             // signed as that member (verified), never on a certificate alone.
             let acting = crate::device_enroll::acting_pairs(&trust);
-            ligus_core::DeviceLinks::from_config(&config, |d, a| acting.contains(&(d, a)), certified)
+            ligus_core::DeviceLinks::from_config(
+                &config,
+                |d, a| acting.contains(&(d, a)),
+                certified,
+            )
         };
         for (alias, owner) in crate::device_enroll::retired_aliases(&trust, &config) {
             links.link_retired(&config, &alias, &owner);
@@ -2150,10 +2624,18 @@ impl ChatService {
     ) -> Result<()> {
         // P0.5: measurements are device-local facts, never log events.
         if record.is_measurement() {
-            let target = if record.is_config() { workspace_config_session_id(workspace_id) } else { session_id };
+            let target = if record.is_config() {
+                workspace_config_session_id(workspace_id)
+            } else {
+                session_id
+            };
             return self.record_fact(target, workspace_id, &record);
         }
-        let target = if record.is_config() { self.ensure_workspace_config(workspace_id)? } else { session_id };
+        let target = if record.is_config() {
+            self.ensure_workspace_config(workspace_id)?
+        } else {
+            session_id
+        };
         self.append_signed(target, workspace_id, SessionEvent::FlowRecorded { record })?;
         Ok(())
     }
@@ -2195,9 +2677,16 @@ impl ChatService {
         if host.owner_actor_id.is_empty() {
             host.owner_actor_id = self.author.id.clone();
         }
-        let current = self.list_hosts(workspace_id)?.into_iter().find(|h| h.id == host.id);
+        let current = self
+            .list_hosts(workspace_id)?
+            .into_iter()
+            .find(|h| h.id == host.id);
         if let Some(h) = current {
-            if h.kind == host.kind && h.label == host.label && h.owner_actor_id == host.owner_actor_id && h.model_gateways == host.model_gateways {
+            if h.kind == host.kind
+                && h.label == host.label
+                && h.owner_actor_id == host.owner_actor_id
+                && h.model_gateways == host.model_gateways
+            {
                 return Ok(false);
             }
             host.created_at = h.created_at;
@@ -2212,7 +2701,9 @@ impl ChatService {
         self.append_signed(
             config_id,
             workspace_id,
-            SessionEvent::WorkspaceHostRemoved { host_id: id.to_string() },
+            SessionEvent::WorkspaceHostRemoved {
+                host_id: id.to_string(),
+            },
         )?;
         Ok(())
     }
@@ -2220,7 +2711,12 @@ impl ChatService {
     /// Heartbeat this box's host presence (spec §12.5). Throttled: re-emits the
     /// host with a fresh `last_seen` only if the prior heartbeat is older than
     /// `throttle_secs`, so it doesn't bloat the log. Returns whether it emitted.
-    pub fn touch_host(&mut self, workspace_id: Uuid, host_id: &str, throttle_secs: i64) -> Result<bool> {
+    pub fn touch_host(
+        &mut self,
+        workspace_id: Uuid,
+        host_id: &str,
+        throttle_secs: i64,
+    ) -> Result<bool> {
         let config_id = workspace_config_session_id(workspace_id);
         let mut hosts = self
             .load_in(workspace_id, config_id)?
@@ -2245,7 +2741,12 @@ impl ChatService {
 
     /// Bind an agent to a host (empty = the owner's device). A worker host makes
     /// the agent detached (spec §12.4).
-    pub fn set_agent_host(&mut self, workspace_id: Uuid, agent_id: Uuid, host_id: &str) -> Result<()> {
+    pub fn set_agent_host(
+        &mut self,
+        workspace_id: Uuid,
+        agent_id: Uuid,
+        host_id: &str,
+    ) -> Result<()> {
         let config_id = self.ensure_workspace_config(workspace_id)?;
         let mut agents = self
             .load_in(workspace_id, config_id)?
@@ -2274,7 +2775,9 @@ impl ChatService {
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::ChatChannelChanged { channel_id: channel_id.into() },
+            SessionEvent::ChatChannelChanged {
+                channel_id: channel_id.into(),
+            },
         )?;
         Ok(())
     }
@@ -2302,7 +2805,11 @@ impl ChatService {
         } else {
             skills.push(skill);
         }
-        self.append_signed(session_id, workspace_id, SessionEvent::SkillsUpdated { skills })?;
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::SkillsUpdated { skills },
+        )?;
         Ok(())
     }
 
@@ -2323,7 +2830,11 @@ impl ChatService {
             .into_iter()
             .filter(|s| s.id != skill_id)
             .collect();
-        self.append_signed(session_id, workspace_id, SessionEvent::SkillsUpdated { skills })?;
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::SkillsUpdated { skills },
+        )?;
         Ok(())
     }
 
@@ -2469,7 +2980,9 @@ impl ChatService {
             return Ok(None);
         };
         if session.authz.blocks(proposal_id, proposal.set_id) {
-            return Err(ChatError::Unauthorized("a vote or decision on this proposal is still waiting to sync".into()));
+            return Err(ChatError::Unauthorized(
+                "a vote or decision on this proposal is still waiting to sync".into(),
+            ));
         }
         let diff_digest = ligus_core::authz::votes::diff_digest(proposal);
         let repo_id = proposal.repo_id;
@@ -2488,7 +3001,9 @@ impl ChatService {
                 request_id: None,
             },
         )?;
-        Ok(self.load_in(workspace_id, session_id)?.and_then(|s| s.proposals.into_iter().find(|p| p.id == proposal_id)))
+        Ok(self
+            .load_in(workspace_id, session_id)?
+            .and_then(|s| s.proposals.into_iter().find(|p| p.id == proposal_id)))
     }
 
     /// Ask `host_device_id` to apply an approved proposal (the phone's
@@ -2502,8 +3017,14 @@ impl ChatService {
         host_device_id: Uuid,
         expected_base_commit: Option<String>,
     ) -> Result<Uuid> {
-        let session = self.load_in(workspace_id, session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
-        let p = session.proposals.iter().find(|p| p.id == proposal_id).ok_or_else(|| ChatError::Unauthorized("unknown proposal".into()))?;
+        let session = self
+            .load_in(workspace_id, session_id)?
+            .ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let p = session
+            .proposals
+            .iter()
+            .find(|p| p.id == proposal_id)
+            .ok_or_else(|| ChatError::Unauthorized("unknown proposal".into()))?;
         let request = ligus_core::workspace_repo::ApplyRequest {
             id: Uuid::new_v4(),
             proposal_id,
@@ -2513,7 +3034,11 @@ impl ChatService {
             repo_id: p.repo_id,
         };
         let id = request.id;
-        self.append_signed(session_id, workspace_id, SessionEvent::ProposalApplyRequested { request })?;
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::ProposalApplyRequested { request },
+        )?;
         Ok(id)
     }
 
@@ -2529,10 +3054,18 @@ impl ChatService {
         base_commit: Option<String>,
         applied_tree_hash: Option<String>,
     ) -> Result<SessionEventEnvelope> {
-        let session = self.load_in(workspace_id, session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
-        let req = session.apply_requests.get(&request_id).cloned().ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
+        let session = self
+            .load_in(workspace_id, session_id)?
+            .ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let req = session
+            .apply_requests
+            .get(&request_id)
+            .cloned()
+            .ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
         if req.host_device_id != self.device_id {
-            return Err(ChatError::Unauthorized("that apply request is for another host".into()));
+            return Err(ChatError::Unauthorized(
+                "that apply request is for another host".into(),
+            ));
         }
         self.append_signed(
             session_id,
@@ -2553,33 +3086,85 @@ impl ChatService {
 
     /// The host's side of a request it couldn't fulfil: record why, which
     /// closes the request (a person may ask again).
-    pub fn fail_apply_request(&mut self, session_id: Uuid, workspace_id: Uuid, request_id: Uuid, reason: &str) -> Result<SessionEventEnvelope> {
-        let session = self.load_in(workspace_id, session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
-        let req = session.apply_requests.get(&request_id).cloned().ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
+    pub fn fail_apply_request(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        request_id: Uuid,
+        reason: &str,
+    ) -> Result<SessionEventEnvelope> {
+        let session = self
+            .load_in(workspace_id, session_id)?
+            .ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let req = session
+            .apply_requests
+            .get(&request_id)
+            .cloned()
+            .ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
         if req.host_device_id != self.device_id {
-            return Err(ChatError::Unauthorized("that apply request is for another host".into()));
+            return Err(ChatError::Unauthorized(
+                "that apply request is for another host".into(),
+            ));
         }
-        let reason: String = reason.chars().take(ligus_core::workspace_repo::MAX_APPLY_FAILURE_CHARS).collect();
-        self.append_signed(session_id, workspace_id, SessionEvent::ProposalApplyFailed { request_id, proposal_id: req.proposal_id, reason })
+        let reason: String = reason
+            .chars()
+            .take(ligus_core::workspace_repo::MAX_APPLY_FAILURE_CHARS)
+            .collect();
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::ProposalApplyFailed {
+                request_id,
+                proposal_id: req.proposal_id,
+                reason,
+            },
+        )
     }
 
     /// Withdraw an open apply request (its requester, or an Admin).
-    pub fn withdraw_apply_request(&mut self, session_id: Uuid, workspace_id: Uuid, request_id: Uuid) -> Result<SessionEventEnvelope> {
-        let session = self.load_in(workspace_id, session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
-        let req = session.apply_requests.get(&request_id).cloned().ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
-        self.append_signed(session_id, workspace_id, SessionEvent::ProposalApplyWithdrawn { request_id, proposal_id: req.proposal_id })
+    pub fn withdraw_apply_request(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        request_id: Uuid,
+    ) -> Result<SessionEventEnvelope> {
+        let session = self
+            .load_in(workspace_id, session_id)?
+            .ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let req = session
+            .apply_requests
+            .get(&request_id)
+            .cloned()
+            .ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::ProposalApplyWithdrawn {
+                request_id,
+                proposal_id: req.proposal_id,
+            },
+        )
     }
 
     /// Whether this device could append `payload` on `session_id` now, judged
     /// exactly as every fold will (nothing is written, no passkey is asked
     /// for). A side effect that ends in such an event (a host applying a
     /// request) checks first, so it never acts on what the fold would refuse.
-    pub fn would_allow(&mut self, session_id: Uuid, workspace_id: Uuid, payload: SessionEvent) -> Result<()> {
+    pub fn would_allow(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        payload: SessionEvent,
+    ) -> Result<()> {
         if let Some(reason) = &self.write_block {
             return Err(ChatError::Unauthorized(reason.clone()));
         }
         let env = self.draft_signed(session_id, workspace_id, payload)?;
-        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let (config, timeline) = self.store.load_config(
+            workspace_id,
+            self.trusted_founder.as_deref(),
+            self.local_workspace_id,
+        )?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)
     }
 
@@ -2615,7 +3200,15 @@ impl ChatService {
         // chat (closes the self-member staleness gap). The passed-in session is
         // shadowed by the config-log id.
         let session_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(session_id, workspace_id, SessionEvent::MemberAdded { member, invite: None, proof: None })?;
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::MemberAdded {
+                member,
+                invite: None,
+                proof: None,
+            },
+        )?;
         Ok(())
     }
 
@@ -2631,7 +3224,14 @@ impl ChatService {
         let session_id = self.ensure_workspace_config(workspace_id)?;
         let member_id = member_id.into();
         let watermark = self.cut_watermark(workspace_id, Some(&member_id), None)?;
-        self.append_signed(session_id, workspace_id, SessionEvent::MemberRemoved { member_id, watermark })?;
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::MemberRemoved {
+                member_id,
+                watermark,
+            },
+        )?;
         Ok(())
     }
 
@@ -2653,8 +3253,10 @@ impl ChatService {
     /// until the code is built (a passkey confirmation can come between).
     pub fn issue_invite_as(&mut self, workspace_id: Uuid, id: Uuid) -> Result<Uuid> {
         let config_id = self.ensure_workspace_config(workspace_id)?;
-        let key = ligus_core::admission::RedeemKey::generate().map_err(|e| ChatError::Unauthorized(format!("no redeem key: {e}")))?;
-        self.store.set_issued_invite_key(workspace_id, id, &key.seed())?;
+        let key = ligus_core::admission::RedeemKey::generate()
+            .map_err(|e| ChatError::Unauthorized(format!("no redeem key: {e}")))?;
+        self.store
+            .set_issued_invite_key(workspace_id, id, &key.seed())?;
         self.append_signed(
             config_id,
             workspace_id,
@@ -2670,7 +3272,11 @@ impl ChatService {
     /// The redeem key seed of person invite `id` this device issued, for its
     /// code (`box_admission::with_redeem_key`); forgotten here once taken
     /// (the code carries it).
-    pub fn take_invite_redeem_seed(&self, workspace_id: Uuid, id: Uuid) -> Result<Option<[u8; 32]>> {
+    pub fn take_invite_redeem_seed(
+        &self,
+        workspace_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<[u8; 32]>> {
         Ok(self.store.take_issued_invite_key(workspace_id, id)?)
     }
 
@@ -2681,7 +3287,12 @@ impl ChatService {
     /// Returns the invite and the redeem key's seed, which goes into the
     /// admission code only (`box_admission::with_redeem_key`); nothing here
     /// keeps it.
-    pub fn issue_box_admission(&mut self, workspace_id: Uuid, ttl_ms: i64, request: Option<&crate::box_admission::JoinRequest>) -> Result<(Uuid, [u8; 32])> {
+    pub fn issue_box_admission(
+        &mut self,
+        workspace_id: Uuid,
+        ttl_ms: i64,
+        request: Option<&crate::box_admission::JoinRequest>,
+    ) -> Result<(Uuid, [u8; 32])> {
         let (payload, id, seed) = box_admission_payload(ttl_ms, request)?;
         let config_id = self.ensure_workspace_config(workspace_id)?;
         self.append_signed(config_id, workspace_id, payload)?;
@@ -2702,7 +3313,9 @@ impl ChatService {
             return Ok(0);
         }
         let config_id = ligus_core::workspace_config_session_id(workspace_id);
-        let Some(config) = self.load_in(workspace_id, config_id)? else { return Ok(0) };
+        let Some(config) = self.load_in(workspace_id, config_id)? else {
+            return Ok(0);
+        };
         if config.role_of(&self.author.id).rank() < WorkspaceRole::Admin.rank() {
             return Ok(0);
         }
@@ -2711,13 +3324,15 @@ impl ChatService {
         // unredeemed admission waits a grace period more: a box that
         // redeemed in time but whose push lagged isn't closed out by an
         // Admin's device that hadn't seen it yet.
-        let now = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64 - ADMISSION_CLOSE_GRACE_MS;
+        let now = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64
+            - ADMISSION_CLOSE_GRACE_MS;
         let open: Vec<(Uuid, i64)> = config
             .guards
             .service_invites
             .iter()
             .filter(|(id, a)| {
-                !config.guards.closed_admissions.contains_key(*id) && (config.guards.used_invites.contains(*id) || now > a.expires_ms)
+                !config.guards.closed_admissions.contains_key(*id)
+                    && (config.guards.used_invites.contains(*id) || now > a.expires_ms)
             })
             .map(|(id, a)| (*id, a.expires_ms))
             .collect();
@@ -2744,7 +3359,11 @@ impl ChatService {
             if redeemed.is_none() && now <= expires_ms {
                 continue;
             }
-            self.append_signed(config_id, workspace_id, SessionEvent::AdmissionClosed { invite, redeemed })?;
+            self.append_signed(
+                config_id,
+                workspace_id,
+                SessionEvent::AdmissionClosed { invite, redeemed },
+            )?;
             closed += 1;
         }
         Ok(closed)
@@ -2762,7 +3381,14 @@ impl ChatService {
     ) -> Result<()> {
         let session_id = self.ensure_workspace_config(workspace_id)?;
         let watermark = self.cut_watermark(workspace_id, None, Some(device_id))?;
-        self.append_signed(session_id, workspace_id, SessionEvent::DeviceRevoked { device_id, watermark })?;
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::DeviceRevoked {
+                device_id,
+                watermark,
+            },
+        )?;
         Ok(())
     }
 
@@ -2784,12 +3410,22 @@ impl ChatService {
             .unwrap_or(WorkspaceRole::Contributor);
         // A demotion cuts like a removal: the member's later events are
         // judged with the new role (Phase A, item 2).
-        let watermark =
-            if new_role.rank() < old_role.rank() { self.cut_watermark(workspace_id, Some(&member_id), None)? } else { Vec::new() };
+        let watermark = if new_role.rank() < old_role.rank() {
+            self.cut_watermark(workspace_id, Some(&member_id), None)?
+        } else {
+            Vec::new()
+        };
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id, old_role, new_role }, watermark },
+            SessionEvent::MemberRoleChanged {
+                change: MemberRoleChange {
+                    member_id,
+                    old_role,
+                    new_role,
+                },
+                watermark,
+            },
         )?;
         Ok(())
     }
@@ -2799,8 +3435,17 @@ impl ChatService {
     /// device; or the member's devices, agent keys and any device that
     /// signed as them here) and every log of the workspace this device holds,
     /// the newest of that signer's events here.
-    pub fn cut_watermark(&self, workspace_id: Uuid, member: Option<&str>, device: Option<Uuid>) -> Result<Vec<ligus_core::watermark::Watermark>> {
-        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+    pub fn cut_watermark(
+        &self,
+        workspace_id: Uuid,
+        member: Option<&str>,
+        device: Option<Uuid>,
+    ) -> Result<Vec<ligus_core::watermark::Watermark>> {
+        let (config, timeline) = self.store.load_config(
+            workspace_id,
+            self.trusted_founder.as_deref(),
+            self.local_workspace_id,
+        )?;
         let roster = timeline.current();
         let sessions = self.store.sessions_of_workspace(workspace_id)?;
         let mut logs = Vec::new();
@@ -2811,11 +3456,31 @@ impl ChatService {
         }
         let mut signers: std::collections::BTreeSet<Uuid> = device.into_iter().collect();
         if let Some(m) = member {
-            let account = config.as_ref().and_then(|c| c.members.iter().find(|x| x.id == m)).and_then(|x| x.actor.account_id);
+            let account = config
+                .as_ref()
+                .and_then(|c| c.members.iter().find(|x| x.id == m))
+                .and_then(|x| x.actor.account_id);
             if let Some(a) = account {
-                signers.extend(roster.devices.iter().filter(|(_, d)| d.accounts.contains(&a)).map(|(id, _)| *id));
+                signers.extend(
+                    roster
+                        .devices
+                        .iter()
+                        .filter(|(_, d)| d.accounts.contains(&a))
+                        .map(|(id, _)| *id),
+                );
             }
-            signers.extend(roster.agent_keys.iter().filter(|(_, k)| roster.agents.get(&k.agent_id).is_some_and(|ag| ag.owner == m)).map(|(id, _)| *id));
+            signers.extend(
+                roster
+                    .agent_keys
+                    .iter()
+                    .filter(|(_, k)| {
+                        roster
+                            .agents
+                            .get(&k.agent_id)
+                            .is_some_and(|ag| ag.owner == m)
+                    })
+                    .map(|(id, _)| *id),
+            );
             for (_, envs) in &logs {
                 signers.extend(
                     envs.iter()
@@ -2911,7 +3576,11 @@ impl ChatService {
         } else {
             sources.push(vault);
         }
-        self.append_signed(session_id, workspace_id, SessionEvent::VaultSourcesUpdated { sources })?;
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::VaultSourcesUpdated { sources },
+        )?;
         Ok(())
     }
 
@@ -2932,7 +3601,11 @@ impl ChatService {
             .into_iter()
             .filter(|s| s.raw_url() != raw_url)
             .collect();
-        self.append_signed(session_id, workspace_id, SessionEvent::VaultSourcesUpdated { sources })?;
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::VaultSourcesUpdated { sources },
+        )?;
         Ok(())
     }
 
@@ -2955,7 +3628,9 @@ impl ChatService {
     /// [`Self::workspace_of`] names (nothing when it names none). Another
     /// workspace's log under the same id is another chat and stays.
     pub fn delete_chat(&mut self, session_id: Uuid) -> Result<()> {
-        let Some(ws) = self.workspace_of(session_id)? else { return Ok(()) };
+        let Some(ws) = self.workspace_of(session_id)? else {
+            return Ok(());
+        };
         self.store.delete_session_in(ws, session_id)?;
         Ok(())
     }
@@ -3030,7 +3705,9 @@ impl ChatService {
         // An agent-authored workflow is inert until someone runs it, so the
         // vote that approves it also adds it — no separate Implement step.
         if proposal.workflow.is_some() && proposal.ready_to_apply() {
-            if let Some(applied) = self.apply_workflow_proposal(session_id, workspace_id, proposal_id)? {
+            if let Some(applied) =
+                self.apply_workflow_proposal(session_id, workspace_id, proposal_id)?
+            {
                 return Ok(Some(applied));
             }
         }
@@ -3099,7 +3776,10 @@ impl ChatService {
             self.append_signed(
                 session_id,
                 workspace_id,
-                SessionEvent::ProposalDismissed { proposal_id: *proposal_id, dismissed },
+                SessionEvent::ProposalDismissed {
+                    proposal_id: *proposal_id,
+                    dismissed,
+                },
             )?;
         }
         Ok(changed)
@@ -3198,15 +3878,28 @@ impl ChatService {
     ///   who started the run (the signer of the run's first record).
     ///
     /// Anything unresolved fails closed (`None`).
-    pub fn trigger_author_role(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
-        let Some(ws) = self.workspace_of(session_id)? else { return Ok(None) };
+    pub fn trigger_author_role(
+        &self,
+        session_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<Option<WorkspaceRole>> {
+        let Some(ws) = self.workspace_of(session_id)? else {
+            return Ok(None);
+        };
         self.trigger_author_role_in(ws, session_id, message_id)
     }
 
     /// [`Self::trigger_author_role`] on the chat (`workspace_id`,
     /// `session_id`): the dispatching chat's own workspace.
-    pub fn trigger_author_role_in(&self, workspace_id: Uuid, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
-        Ok(self.trigger_chain(workspace_id, session_id, message_id, false)?.map(|c| c.lowest))
+    pub fn trigger_author_role_in(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<Option<WorkspaceRole>> {
+        Ok(self
+            .trigger_chain(workspace_id, session_id, message_id, false)?
+            .map(|c| c.lowest))
     }
 
     /// The role the shell gate (Phase C, `author_gate::shell_allowed`) reads:
@@ -3215,26 +3908,47 @@ impl ChatService {
     /// workspace (the device owner). In a shared workspace their workspace
     /// role at the message's position is used, so the shell is on only when
     /// every person behind the turn is a workspace Owner.
-    pub fn trigger_shell_role(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
-        let Some(ws) = self.workspace_of(session_id)? else { return Ok(None) };
+    pub fn trigger_shell_role(
+        &self,
+        session_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<Option<WorkspaceRole>> {
+        let Some(ws) = self.workspace_of(session_id)? else {
+            return Ok(None);
+        };
         self.trigger_shell_role_in(ws, session_id, message_id)
     }
 
     /// [`Self::trigger_shell_role`] on the chat (`workspace_id`, `session_id`).
-    pub fn trigger_shell_role_in(&self, workspace_id: Uuid, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
-        Ok(self.trigger_chain(workspace_id, session_id, message_id, true)?.map(|c| c.lowest))
+    pub fn trigger_shell_role_in(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<Option<WorkspaceRole>> {
+        Ok(self
+            .trigger_chain(workspace_id, session_id, message_id, true)?
+            .map(|c| c.lowest))
     }
 
     /// The signed sandbox grants in force for `workspace_id`
     /// (`WorkspaceSandboxSet` on its config log; none when it has none).
     pub fn sandbox_grants(&self, workspace_id: Uuid) -> ligus_core::sandbox::SandboxGrants {
-        self.workspace_guards(workspace_id).map(|g| g.sandbox_grants).unwrap_or_default()
+        self.workspace_guards(workspace_id)
+            .map(|g| g.sandbox_grants)
+            .unwrap_or_default()
     }
 
     /// This device's user's role in `workspace_id` (its config roster
     /// today); `None` when the workspace has no config yet.
     pub fn my_workspace_role(&self, workspace_id: Uuid) -> Option<WorkspaceRole> {
-        let cfg = self.load_in(workspace_id, ligus_core::workspace_config_session_id(workspace_id)).ok().flatten()?;
+        let cfg = self
+            .load_in(
+                workspace_id,
+                ligus_core::workspace_config_session_id(workspace_id),
+            )
+            .ok()
+            .flatten()?;
         Some(self.actor_role(&cfg))
     }
 
@@ -3242,9 +3956,24 @@ impl ChatService {
     /// (`sandbox::grants_here`): none when this device doesn't apply them.
     /// `setting` is this device's own choice (Settings, Sandbox on the
     /// desktop; `LIGUS_SANDBOX_GRANTS` on a headless host).
-    pub fn sandbox_grants_here(&self, workspace_id: Uuid, setting: Option<bool>) -> (ligus_core::sandbox::SandboxGrants, crate::sandbox::GrantsHere) {
-        let here = crate::sandbox::grants_here(setting, self.my_workspace_role(workspace_id), self.is_local_workspace(workspace_id));
-        let grants = if here.apply { self.sandbox_grants(workspace_id) } else { Default::default() };
+    pub fn sandbox_grants_here(
+        &self,
+        workspace_id: Uuid,
+        setting: Option<bool>,
+    ) -> (
+        ligus_core::sandbox::SandboxGrants,
+        crate::sandbox::GrantsHere,
+    ) {
+        let here = crate::sandbox::grants_here(
+            setting,
+            self.my_workspace_role(workspace_id),
+            self.is_local_workspace(workspace_id),
+        );
+        let grants = if here.apply {
+            self.sandbox_grants(workspace_id)
+        } else {
+            Default::default()
+        };
         (grants, here)
     }
 
@@ -3258,14 +3987,27 @@ impl ChatService {
     /// `None` when the chain has no human or can't be resolved (fail
     /// closed): agent access refuses it unless the agent is open to
     /// everyone.
-    pub fn trigger_people(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<Vec<String>>> {
-        let Some(ws) = self.workspace_of(session_id)? else { return Ok(None) };
+    pub fn trigger_people(
+        &self,
+        session_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<Option<Vec<String>>> {
+        let Some(ws) = self.workspace_of(session_id)? else {
+            return Ok(None);
+        };
         self.trigger_people_in(ws, session_id, message_id)
     }
 
     /// [`Self::trigger_people`] on the chat (`workspace_id`, `session_id`).
-    pub fn trigger_people_in(&self, workspace_id: Uuid, session_id: Uuid, message_id: Uuid) -> Result<Option<Vec<String>>> {
-        Ok(self.trigger_chain(workspace_id, session_id, message_id, false)?.map(|c| c.people))
+    pub fn trigger_people_in(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<Option<Vec<String>>> {
+        Ok(self
+            .trigger_chain(workspace_id, session_id, message_id, false)?
+            .map(|c| c.people))
     }
 
     /// The people behind the tool and directive hand-off cards that wake
@@ -3275,21 +4017,42 @@ impl ChatService {
     /// this device signed). A card is a request too: a member's card
     /// pointing at someone else's message can't borrow that message's
     /// author. `None` when a signer can't be resolved (fail closed).
-    pub fn handoff_card_people(&self, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<Option<Vec<String>>> {
-        let Some(ws) = self.workspace_of(session_id)? else { return Ok(None) };
+    pub fn handoff_card_people(
+        &self,
+        session_id: Uuid,
+        trigger: Uuid,
+        agent_id: Uuid,
+    ) -> Result<Option<Vec<String>>> {
+        let Some(ws) = self.workspace_of(session_id)? else {
+            return Ok(None);
+        };
         self.handoff_card_people_in(ws, session_id, trigger, agent_id)
     }
 
     /// [`Self::handoff_card_people`] on the chat (`workspace_id`,
     /// `session_id`).
-    pub fn handoff_card_people_in(&self, workspace_id: Uuid, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<Option<Vec<String>>> {
+    pub fn handoff_card_people_in(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        trigger: Uuid,
+        agent_id: Uuid,
+    ) -> Result<Option<Vec<String>>> {
         let to = ligus_core::flow::agent_key(Some(agent_id));
         let envs = self.store.list_copies_in(workspace_id, session_id)?;
         let mut cx = RoleCx::default();
         let mut out: Vec<String> = Vec::new();
         for env in &envs {
-            let SessionEvent::FlowRecorded { record: ligus_core::flow::FlowRecord::Handoff(card) } = &env.payload else { continue };
-            if card.to != to || card.message_id != Some(trigger) || !(card.via == "tool" || card.via == "directive") {
+            let SessionEvent::FlowRecorded {
+                record: ligus_core::flow::FlowRecord::Handoff(card),
+            } = &env.payload
+            else {
+                continue;
+            };
+            if card.to != to
+                || card.message_id != Some(trigger)
+                || !(card.via == "tool" || card.via == "directive")
+            {
                 continue;
             }
             match self.foreign_signer_cap(session_id, env, &mut cx)? {
@@ -3307,7 +4070,13 @@ impl ChatService {
         Ok(Some(out))
     }
 
-    fn trigger_chain(&self, chat_workspace: Uuid, session_id: Uuid, message_id: Uuid, shell: bool) -> Result<Option<Chain>> {
+    fn trigger_chain(
+        &self,
+        chat_workspace: Uuid,
+        session_id: Uuid,
+        message_id: Uuid,
+        shell: bool,
+    ) -> Result<Option<Chain>> {
         /// Longer chains than this fail closed (a loop of forged links).
         const MAX_CHAIN: usize = 256;
         // Every event on the chain is judged against this chat's own
@@ -3354,9 +4123,13 @@ impl ChatService {
             if appended.is_empty() {
                 return Ok(None);
             }
-            let agent_output = appended.iter().any(|m| m.role != MessageRole::User || m.responder_id.is_some())
+            let agent_output = appended
+                .iter()
+                .any(|m| m.role != MessageRole::User || m.responder_id.is_some())
                 || touching.iter().any(|e| {
-                    e.actor_stamp.as_ref().is_none_or(|s| s.actor.kind != ligus_core::ActorKind::Human || s.runtime_effect)
+                    e.actor_stamp.as_ref().is_none_or(|s| {
+                        s.actor.kind != ligus_core::ActorKind::Human || s.runtime_effect
+                    })
                 });
             if agent_output {
                 for env in &touching {
@@ -3371,8 +4144,10 @@ impl ChatService {
                         Cap::Unresolved => return Ok(None),
                     }
                 }
-                let parents: std::collections::BTreeSet<Uuid> =
-                    appended.iter().filter_map(|m| m.reply_to_message_id).collect();
+                let parents: std::collections::BTreeSet<Uuid> = appended
+                    .iter()
+                    .filter_map(|m| m.reply_to_message_id)
+                    .collect();
                 if parents.is_empty() {
                     // No human behind this output.
                     return Ok(None);
@@ -3381,17 +4156,35 @@ impl ChatService {
                 continue;
             }
             humans += 1;
-            let Some(role) = self.human_message_role(session_id, &touching, &mut cx, shell)? else { return Ok(None) };
+            let Some(role) = self.human_message_role(session_id, &touching, &mut cx, shell)? else {
+                return Ok(None);
+            };
             lowest = Some(min_role(lowest, role));
             for e in &touching {
-                match e.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).filter(|id| !id.is_empty()) {
+                match e
+                    .actor_stamp
+                    .as_ref()
+                    .map(|s| s.actor.id.as_str())
+                    .filter(|id| !id.is_empty())
+                {
                     Some(id) => add(&mut people, id),
                     None => return Ok(None),
                 }
             }
-            let runs: std::collections::BTreeSet<Uuid> = appended.iter().filter_map(|m| m.workflow_run_id).collect();
+            let runs: std::collections::BTreeSet<Uuid> =
+                appended.iter().filter_map(|m| m.workflow_run_id).collect();
             for run_id in runs {
-                let Some(role) = self.run_initiator_role(session_id, &envs, chat_workspace, run_id, &mut cx, shell)? else { return Ok(None) };
+                let Some(role) = self.run_initiator_role(
+                    session_id,
+                    &envs,
+                    chat_workspace,
+                    run_id,
+                    &mut cx,
+                    shell,
+                )?
+                else {
+                    return Ok(None);
+                };
                 lowest = Some(min_role(lowest, role));
                 match run_initiator(&envs, run_id) {
                     Some(id) => add(&mut people, &id),
@@ -3410,13 +4203,24 @@ impl ChatService {
 
     /// A human's message: Owner when every event shaping it was signed by
     /// this device as its own user, else the lowest role of its authors.
-    fn human_message_role(&self, session_id: Uuid, touching: &[&SessionEventEnvelope], cx: &mut RoleCx, shell: bool) -> Result<Option<WorkspaceRole>> {
-        if !touching.is_empty() && touching.iter().all(|e| self.signed_by_own_user(e)) && self.own_user_is_owner(touching[0].workspace_id, shell) {
+    fn human_message_role(
+        &self,
+        session_id: Uuid,
+        touching: &[&SessionEventEnvelope],
+        cx: &mut RoleCx,
+        shell: bool,
+    ) -> Result<Option<WorkspaceRole>> {
+        if !touching.is_empty()
+            && touching.iter().all(|e| self.signed_by_own_user(e))
+            && self.own_user_is_owner(touching[0].workspace_id, shell)
+        {
             return Ok(Some(WorkspaceRole::Owner));
         }
         let mut lowest = None;
         for env in touching {
-            let Some(role) = self.envelope_author_role(session_id, env, cx)? else { return Ok(None) };
+            let Some(role) = self.envelope_author_role(session_id, env, cx)? else {
+                return Ok(None);
+            };
             lowest = Some(min_role(lowest, role));
         }
         Ok(lowest)
@@ -3427,25 +4231,36 @@ impl ChatService {
     fn signed_by_own_user(&self, e: &SessionEventEnvelope) -> bool {
         e.signer_device_id == Some(self.device_id)
             && e.actor_stamp.as_ref().is_some_and(|s| {
-                s.actor.id == self.author.id && s.actor.kind == ligus_core::ActorKind::Human && !s.runtime_effect
+                s.actor.id == self.author.id
+                    && s.actor.kind == ligus_core::ActorKind::Human
+                    && !s.runtime_effect
             })
     }
 
     /// The cap an event on an agent's output puts on the chain: none when
     /// this device signed it (its own reply links are honest), else the
     /// signer's role (an agent key: its certified host device's member).
-    fn foreign_signer_cap(&self, session_id: Uuid, env: &SessionEventEnvelope, cx: &mut RoleCx) -> Result<Cap> {
+    fn foreign_signer_cap(
+        &self,
+        session_id: Uuid,
+        env: &SessionEventEnvelope,
+        cx: &mut RoleCx,
+    ) -> Result<Cap> {
         if env.signer_device_id == Some(self.device_id) {
             return Ok(Cap::Own);
         }
-        let Some(stamp) = env.actor_stamp.as_ref() else { return Ok(Cap::Unresolved) };
+        let Some(stamp) = env.actor_stamp.as_ref() else {
+            return Ok(Cap::Unresolved);
+        };
         if stamp.actor.kind != ligus_core::ActorKind::Agent {
             return Ok(match self.envelope_author_role(session_id, env, cx)? {
                 Some(r) => Cap::Role(r, vec![stamp.actor.id.clone()]),
                 None => Cap::Unresolved,
             });
         }
-        let (Some(signer), Some(frontier)) = (env.signer_device_id, stamp.cfg_frontier) else { return Ok(Cap::Unresolved) };
+        let (Some(signer), Some(frontier)) = (env.signer_device_id, stamp.cfg_frontier) else {
+            return Ok(Cap::Unresolved);
+        };
         if self.local_workspace_id == Some(env.workspace_id) {
             return Ok(Cap::Unresolved);
         }
@@ -3453,12 +4268,18 @@ impl ChatService {
         if cfg.is_none() {
             return Ok(Cap::Unresolved);
         }
-        let Ok(roster) = timeline.at(frontier) else { return Ok(Cap::Unresolved) };
-        let Some(key) = roster.agent_keys.get(&signer) else { return Ok(Cap::Unresolved) };
+        let Ok(roster) = timeline.at(frontier) else {
+            return Ok(Cap::Unresolved);
+        };
+        let Some(key) = roster.agent_keys.get(&signer) else {
+            return Ok(Cap::Unresolved);
+        };
         if key.host_device_id == self.device_id {
             return Ok(Cap::Own);
         }
-        let Some(device) = roster.devices.get(&key.host_device_id) else { return Ok(Cap::Unresolved) };
+        let Some(device) = roster.devices.get(&key.host_device_id) else {
+            return Ok(Cap::Unresolved);
+        };
         let mut lowest = None;
         let mut who = Vec::new();
         for (id, m) in &roster.members {
@@ -3490,7 +4311,10 @@ impl ChatService {
             return Ok(None);
         };
         if first.workspace_id != chat_workspace
-            || first.actor_stamp.as_ref().is_none_or(|s| s.actor.kind != ligus_core::ActorKind::Human || s.runtime_effect)
+            || first
+                .actor_stamp
+                .as_ref()
+                .is_none_or(|s| s.actor.kind != ligus_core::ActorKind::Human || s.runtime_effect)
         {
             return Ok(None);
         }
@@ -3510,7 +4334,12 @@ impl ChatService {
 
     /// The role one event's stamped author held at its position (`None` when
     /// unresolved). In the device-local workspace it is the folded role.
-    fn envelope_author_role(&self, session_id: Uuid, env: &SessionEventEnvelope, cx: &mut RoleCx) -> Result<Option<WorkspaceRole>> {
+    fn envelope_author_role(
+        &self,
+        session_id: Uuid,
+        env: &SessionEventEnvelope,
+        cx: &mut RoleCx,
+    ) -> Result<Option<WorkspaceRole>> {
         let Some(stamp) = env.actor_stamp.as_ref().filter(|s| !s.actor.id.is_empty()) else {
             return Ok(None);
         };
@@ -3518,15 +4347,25 @@ impl ChatService {
             if cx.local_session.is_none() {
                 cx.local_session = Some(self.load_in(env.workspace_id, session_id)?);
             }
-            return Ok(cx.local_session.as_ref().and_then(|s| s.as_ref()).map(|s| s.role_of(&stamp.actor.id)));
+            return Ok(cx
+                .local_session
+                .as_ref()
+                .and_then(|s| s.as_ref())
+                .map(|s| s.role_of(&stamp.actor.id)));
         }
-        let Some(frontier) = stamp.cfg_frontier else { return Ok(None) };
+        let Some(frontier) = stamp.cfg_frontier else {
+            return Ok(None);
+        };
         let (cfg, timeline) = cx.config(self, env.workspace_id)?;
         if cfg.is_none() {
             return Ok(None);
         }
-        let Ok(roster) = timeline.at(frontier) else { return Ok(None) };
-        let Some(member) = roster.members.get(&stamp.actor.id) else { return Ok(None) };
+        let Ok(roster) = timeline.at(frontier) else {
+            return Ok(None);
+        };
+        let Some(member) = roster.members.get(&stamp.actor.id) else {
+            return Ok(None);
+        };
         // The stamped member must be the signer's: a member with an account
         // is speaking only when the stamp names that account and the signing
         // device is certified for it (and not revoked) at this position.
@@ -3568,17 +4407,28 @@ impl ChatService {
     ///
     /// This is one message's signers only; a turn's gate is
     /// [`Self::trigger_author_role`], which follows the chain.
-    pub fn author_role_at(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
-        let Some(ws) = self.workspace_of(session_id)? else { return Ok(None) };
+    pub fn author_role_at(
+        &self,
+        session_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<Option<WorkspaceRole>> {
+        let Some(ws) = self.workspace_of(session_id)? else {
+            return Ok(None);
+        };
         let envs = self.store.list_copies_in(ws, session_id)?;
         let touching = touching_message(&envs, message_id);
-        if !touching.iter().any(|e| matches!(&e.payload, SessionEvent::MessageAppended { .. })) {
+        if !touching
+            .iter()
+            .any(|e| matches!(&e.payload, SessionEvent::MessageAppended { .. }))
+        {
             return Ok(None);
         }
         let mut cx = RoleCx::default();
         let mut lowest: Option<WorkspaceRole> = None;
         for env in touching {
-            let Some(role) = self.envelope_author_role(session_id, env, &mut cx)? else { return Ok(None) };
+            let Some(role) = self.envelope_author_role(session_id, env, &mut cx)? else {
+                return Ok(None);
+            };
             lowest = Some(min_role(lowest, role));
         }
         Ok(lowest)
@@ -3612,8 +4462,16 @@ impl ChatService {
         let mut mine = Vec::new();
         for ws in claims.iter().copied() {
             let member = self.local_workspace_id == Some(ws)
-                || self.store.has_rows_signed_by(ws, workspace_config_session_id(ws), self.device_id)?;
-            if member && self.store.has_rows_signed_by(ws, session_id, self.device_id)? {
+                || self.store.has_rows_signed_by(
+                    ws,
+                    workspace_config_session_id(ws),
+                    self.device_id,
+                )?;
+            if member
+                && self
+                    .store
+                    .has_rows_signed_by(ws, session_id, self.device_id)?
+            {
                 mine.push(ws);
             }
         }
@@ -3652,14 +4510,20 @@ impl ChatService {
     /// the same id are another chat and never fold here, whatever their
     /// order or content.
     pub fn load_in(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<ChatSession>> {
-        let Some(mut session) = self.load_in_unresolved(workspace_id, session_id)? else { return Ok(None) };
+        let Some(mut session) = self.load_in_unresolved(workspace_id, session_id)? else {
+            return Ok(None);
+        };
         // Names and pictures are resolved at render time from the profiles
         // on the config log (identity model v2, 4.3), never frozen copies.
         let config_id = workspace_config_session_id(workspace_id);
         if session_id == config_id {
             let profiles = session.profiles.clone();
             crate::profiles::resolve(&mut session, &profiles);
-        } else if let Ok((Some(cfg), _)) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id) {
+        } else if let Ok((Some(cfg), _)) = self.store.load_config(
+            workspace_id,
+            self.trusted_founder.as_deref(),
+            self.local_workspace_id,
+        ) {
             crate::profiles::resolve(&mut session, &cfg.profiles);
             session.device_labels = cfg.device_labels;
             session.retired = cfg.retired;
@@ -3670,7 +4534,11 @@ impl ChatService {
 
     /// [`Self::load_in`] without the render-time names: what a snapshot is
     /// written from, so no resolved name or picture is ever baked into the log.
-    fn load_in_unresolved(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<ChatSession>> {
+    fn load_in_unresolved(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Option<ChatSession>> {
         // Pin the base seed to the out-of-band founder (B2 residual fix). This is
         // load-bearing for the workspace-config log — where the roster/ownership
         // lives — so a forged low-lamport config seed can't displace the founder's.
@@ -3701,7 +4569,10 @@ impl ChatService {
             Some(_) => ligus_core::WorkspaceAuthz::Timeline(&timeline),
             None => ligus_core::WorkspaceAuthz::NoConfigLog,
         };
-        let Some(mut session) = self.store.load_session_authorized(workspace_id, session_id, founder, local, ws)? else {
+        let Some(mut session) =
+            self.store
+                .load_session_authorized(workspace_id, session_id, founder, local, ws)?
+        else {
             return Ok(None);
         };
         {
@@ -3729,7 +4600,9 @@ impl ChatService {
                     .unwrap_or_default();
                 if session.guards.dearth_on().is_some() {
                     let creator = session.creator_actor_id.clone();
-                    session.members.retain(|m| m.id == creator || cfg.members.iter().any(|c| c.id == m.id));
+                    session
+                        .members
+                        .retain(|m| m.id == creator || cfg.members.iter().any(|c| c.id == m.id));
                 }
                 for m in cfg.members {
                     if let Some(slot) = session.members.iter_mut().find(|x| x.id == m.id) {
@@ -3751,7 +4624,11 @@ impl ChatService {
                     }
                 }
                 for v in cfg.vault_sources {
-                    if !session.vault_sources.iter().any(|x| x.raw_url() == v.raw_url()) {
+                    if !session
+                        .vault_sources
+                        .iter()
+                        .any(|x| x.raw_url() == v.raw_url())
+                    {
                         session.vault_sources.push(v);
                     }
                 }
@@ -3829,7 +4706,12 @@ pub fn pending_mentions(session: &ChatSession) -> Vec<PendingMention> {
     // another agent (not itself). It's actionable work for that agent's worker,
     // which — unlike the desktop's inline loop — otherwise never sees it. Bound by
     // cascade depth so an A↔B chain across devices/workers can't loop forever.
-    if let Some(last) = session.messages.iter().rev().find(|m| m.role != MessageRole::System && !m.superseded) {
+    if let Some(last) = session
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role != MessageRole::System && !m.superseded)
+    {
         if let Some(agent) = cascade_target(session, last) {
             out.retain(|p| p.agent_id != agent.id);
             out.push(PendingMention {
@@ -3867,7 +4749,12 @@ impl<'a> DispatchCtx<'a> {
     /// An eligible device with no repo to cover, that hasn't waited, and
     /// sees every holder as live (so it never hands a turn over).
     pub fn plain(holder_live: &'a dyn Fn(Uuid) -> bool) -> Self {
-        Self { eligible: true, coverage: ligus_core::dispatch::Coverage::NoRepo, waited: std::time::Duration::ZERO, holder_live }
+        Self {
+            eligible: true,
+            coverage: ligus_core::dispatch::Coverage::NoRepo,
+            waited: std::time::Duration::ZERO,
+            holder_live,
+        }
     }
 }
 
@@ -3879,11 +4766,16 @@ impl<'a> DispatchCtx<'a> {
 /// claim) or for a user message's later mentions, each of which may run on
 /// another host.
 pub fn claim_receiver(session: &ChatSession, pm: &PendingMention) -> Option<Uuid> {
-    let Some(m) = session.messages.iter().find(|m| m.id == pm.message_id) else { return Some(pm.agent_id) };
+    let Some(m) = session.messages.iter().find(|m| m.id == pm.message_id) else {
+        return Some(pm.agent_id);
+    };
     if m.role != MessageRole::User {
         return Some(pm.agent_id);
     }
-    let first = crate::mentions::parse_mentions(&m.body, session).agents.first().copied();
+    let first = crate::mentions::parse_mentions(&m.body, session)
+        .agents
+        .first()
+        .copied();
     (first != Some(pm.agent_id)).then_some(pm.agent_id)
 }
 
@@ -3892,18 +4784,38 @@ pub fn pending_turns(session: &ChatSession) -> Vec<PendingMention> {
     if session.cascade_depth() >= ligus_core::MAX_CASCADE_DEPTH {
         return out;
     }
-    for card in session.flow.handoffs.iter().filter(|h| h.via == "tool" || h.via == "directive") {
-        let (Some(agent_id), Some(trigger)) = (ligus_core::flow::agent_from_key(&card.to), card.message_id) else { continue };
-        let Some(agent) = session.workspace_agents.iter().find(|a| a.id == agent_id) else { continue };
-        let Some(at) = session.messages.iter().position(|m| m.id == trigger) else { continue };
+    for card in session
+        .flow
+        .handoffs
+        .iter()
+        .filter(|h| h.via == "tool" || h.via == "directive")
+    {
+        let (Some(agent_id), Some(trigger)) =
+            (ligus_core::flow::agent_from_key(&card.to), card.message_id)
+        else {
+            continue;
+        };
+        let Some(agent) = session.workspace_agents.iter().find(|a| a.id == agent_id) else {
+            continue;
+        };
+        let Some(at) = session.messages.iter().position(|m| m.id == trigger) else {
+            continue;
+        };
         // Any later reply by the receiver consumes the hand-off (an @mention
         // cascade of the same reply may have answered it first).
-        let answered = session.messages[at + 1..]
-            .iter()
-            .any(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && m.responder_id == Some(agent_id) && !m.superseded);
+        let answered = session.messages[at + 1..].iter().any(|m| {
+            matches!(m.role, MessageRole::Assistant | MessageRole::Agent)
+                && m.responder_id == Some(agent_id)
+                && !m.superseded
+        });
         if !answered {
             out.retain(|p| p.agent_id != agent_id);
-            out.push(PendingMention { session_id: session.id, message_id: trigger, agent_id, agent_name: agent.name.clone() });
+            out.push(PendingMention {
+                session_id: session.id,
+                message_id: trigger,
+                agent_id,
+                agent_name: agent.name.clone(),
+            });
         }
     }
     out
@@ -3926,7 +4838,10 @@ pub fn empty_reply_notice(runtime_label: &str) -> String {
 /// hand it to @coder or @chat") used to wake each of them on its host, so a
 /// greeting drew a reply from every agent. The desktop's inline cascade and
 /// every host's queue use this same rule, so exactly one responder runs.
-pub fn cascade_target<'a>(session: &'a ChatSession, reply: &ChatMessage) -> Option<&'a ligus_core::WorkspaceAgent> {
+pub fn cascade_target<'a>(
+    session: &'a ChatSession,
+    reply: &ChatMessage,
+) -> Option<&'a ligus_core::WorkspaceAgent> {
     if !matches!(reply.role, MessageRole::Assistant | MessageRole::Agent)
         || reply.superseded
         || session.cascade_depth() >= ligus_core::MAX_CASCADE_DEPTH
@@ -3941,7 +4856,11 @@ pub fn cascade_target<'a>(session: &'a ChatSession, reply: &ChatMessage) -> Opti
         .filter(|a| a.name != reply.author)
         // The one named first in the reply (ties: roster order, which every
         // device shares).
-        .min_by_key(|a| lower.find(&format!("@{}", a.name.to_lowercase())).unwrap_or(usize::MAX))
+        .min_by_key(|a| {
+            lower
+                .find(&format!("@{}", a.name.to_lowercase()))
+                .unwrap_or(usize::MAX)
+        })
 }
 
 /// Resolve a workspace runtime's credential to a usable secret — where a
@@ -3967,11 +4886,15 @@ pub fn resolve_workspace_credential(cred: &WorkspaceCredential) -> Option<String
 pub fn refuse_workspace_keys(payload: &SessionEvent) -> Result<()> {
     let inline = match payload {
         SessionEvent::WorkspaceRuntimeUpserted { runtime } => runtime.credential.is_legacy_inline(),
-        SessionEvent::WorkspaceRuntimesUpdated { runtimes } => runtimes.iter().any(|r| r.credential.is_legacy_inline()),
+        SessionEvent::WorkspaceRuntimesUpdated { runtimes } => {
+            runtimes.iter().any(|r| r.credential.is_legacy_inline())
+        }
         _ => false,
     };
     if inline {
-        return Err(ChatError::Unauthorized(ligus_core::NO_WORKSPACE_KEYS.to_string()));
+        return Err(ChatError::Unauthorized(
+            ligus_core::NO_WORKSPACE_KEYS.to_string(),
+        ));
     }
     Ok(())
 }
@@ -3994,7 +4917,11 @@ pub fn turns_for(session: &ChatSession, own_id: Option<Uuid>, own_author: &str) 
 /// stay unprefixed: they are genuinely "your" earlier outputs, so the model has
 /// a clean template and never learns to prefix its own name. Pass an empty
 /// `own_author` to attribute every turn (no self to exclude).
-pub fn turns_from(messages: &[ChatMessage], own_id: Option<Uuid>, own_author: &str) -> Vec<ChatTurn> {
+pub fn turns_from(
+    messages: &[ChatMessage],
+    own_id: Option<Uuid>,
+    own_author: &str,
+) -> Vec<ChatTurn> {
     repair_alternation(attributed_turns(messages, own_id, own_author))
 }
 
@@ -4031,7 +4958,11 @@ pub fn turns_with_summary(
 /// that reply is the responder's input, not its own unfinished output. Left as
 /// a trailing `assistant` turn, an OpenAI-style server treats it as a prefill
 /// to continue, and a local model typically ends it at once: an empty reply.
-fn attributed_turns(messages: &[ChatMessage], own_id: Option<Uuid>, own_author: &str) -> Vec<ChatTurn> {
+fn attributed_turns(
+    messages: &[ChatMessage],
+    own_id: Option<Uuid>,
+    own_author: &str,
+) -> Vec<ChatTurn> {
     // "Own" turns stay unprefixed. Key on the responder's stable id when
     // responding as an agent (robust to rename/duplicate name); for the primary
     // (no agent id) fall back to a primary-authored turn matched by name.
@@ -4043,11 +4974,15 @@ fn attributed_turns(messages: &[ChatMessage], own_id: Option<Uuid>, own_author: 
             m.responder_id.is_none()
                 && !own_author.is_empty()
                 && (m.author == own_author
-                    || (own_author == ligus_core::agent::PRIMARY_NAME && ligus_core::agent::is_legacy_primary_reply(m)))
+                    || (own_author == ligus_core::agent::PRIMARY_NAME
+                        && ligus_core::agent::is_legacy_primary_reply(m)))
         }
     };
     // A superseded answer (the dispatcher fenced a duplicate) is never context.
-    let kept: Vec<&ChatMessage> = messages.iter().filter(|m| !m.body.is_empty() && !m.is_streaming && !m.superseded).collect();
+    let kept: Vec<&ChatMessage> = messages
+        .iter()
+        .filter(|m| !m.body.is_empty() && !m.is_streaming && !m.superseded)
+        .collect();
     let mut turns: Vec<ChatTurn> = kept
         .iter()
         .filter_map(|m| {
@@ -4101,8 +5036,15 @@ fn repair_alternation(turns: Vec<ChatTurn>) -> Vec<ChatTurn> {
             _ => merged.push(t),
         }
     }
-    if merged.first().map(|t| t.role == "assistant").unwrap_or(false) {
-        merged.insert(0, ChatTurn::user("(Continuing the earlier conversation.)".to_string()));
+    if merged
+        .first()
+        .map(|t| t.role == "assistant")
+        .unwrap_or(false)
+    {
+        merged.insert(
+            0,
+            ChatTurn::user("(Continuing the earlier conversation.)".to_string()),
+        );
     }
     merged
 }
@@ -4114,13 +5056,30 @@ struct RoleCx {
     local_session: Option<Option<ChatSession>>,
     /// The config log and timeline, keyed by the workspace they were loaded
     /// for (a lookup for another workspace never reads them).
-    config: Option<(Uuid, (Option<ChatSession>, std::sync::Arc<ligus_core::authz::ConfigTimeline>))>,
+    config: Option<(
+        Uuid,
+        (
+            Option<ChatSession>,
+            std::sync::Arc<ligus_core::authz::ConfigTimeline>,
+        ),
+    )>,
 }
 
 impl RoleCx {
-    fn config(&mut self, svc: &ChatService, workspace_id: Uuid) -> Result<&(Option<ChatSession>, std::sync::Arc<ligus_core::authz::ConfigTimeline>)> {
+    fn config(
+        &mut self,
+        svc: &ChatService,
+        workspace_id: Uuid,
+    ) -> Result<&(
+        Option<ChatSession>,
+        std::sync::Arc<ligus_core::authz::ConfigTimeline>,
+    )> {
         if self.config.as_ref().is_none_or(|(w, _)| *w != workspace_id) {
-            let loaded = svc.store.load_config(workspace_id, svc.trusted_founder.as_deref(), svc.local_workspace_id)?;
+            let loaded = svc.store.load_config(
+                workspace_id,
+                svc.trusted_founder.as_deref(),
+                svc.local_workspace_id,
+            )?;
             self.config = Some((workspace_id, loaded));
         }
         Ok(&self.config.as_ref().expect("loaded above").1)
@@ -4137,7 +5096,9 @@ struct Chain {
 /// The stamped author of workflow run `run_id`'s first record on this log.
 fn run_initiator(envs: &[SessionEventEnvelope], run_id: Uuid) -> Option<String> {
     envs.iter()
-        .filter(|e| matches!(&e.payload, SessionEvent::WorkflowRunUpserted { run } if run.id == run_id))
+        .filter(
+            |e| matches!(&e.payload, SessionEvent::WorkflowRunUpserted { run } if run.id == run_id),
+        )
         .min_by_key(|e| (e.lamport, e.event_id))
         .and_then(|e| e.actor_stamp.as_ref())
         .map(|s| s.actor.id.clone())
@@ -4167,28 +5128,38 @@ fn touching_message(envs: &[SessionEventEnvelope], id: Uuid) -> Vec<&SessionEven
     envs.iter()
         .filter(|e| match &e.payload {
             SessionEvent::MessageAppended { message } => message.id == id,
-            SessionEvent::MessageChunkReceived { message_id, .. } | SessionEvent::MessageCompleted { message_id, .. } => *message_id == id,
+            SessionEvent::MessageChunkReceived { message_id, .. }
+            | SessionEvent::MessageCompleted { message_id, .. } => *message_id == id,
             _ => false,
         })
         .collect()
 }
 
-
 /// A box admission's `JoinApproved` (expiring `ttl_ms` from now, clamped to
 /// a minute .. 7 days less a minute), its invite and its redeem key's seed.
 /// Issued for a box's join request, it is bound to that box's account and
 /// device key.
-pub(crate) fn box_admission_payload(ttl_ms: i64, request: Option<&crate::box_admission::JoinRequest>) -> Result<(SessionEvent, Uuid, [u8; 32])> {
+pub(crate) fn box_admission_payload(
+    ttl_ms: i64,
+    request: Option<&crate::box_admission::JoinRequest>,
+) -> Result<(SessionEvent, Uuid, [u8; 32])> {
     let ttl = ttl_ms.clamp(60_000, ligus_core::admission::MAX_ADMISSION_TTL_MS - 60_000);
     let now = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64;
     let id = Uuid::new_v4();
-    let key = ligus_core::admission::RedeemKey::generate().map_err(|e| ChatError::Unauthorized(format!("no redeem key: {e}")))?;
+    let key = ligus_core::admission::RedeemKey::generate()
+        .map_err(|e| ChatError::Unauthorized(format!("no redeem key: {e}")))?;
     let payload = SessionEvent::JoinApproved {
         subject: ligus_core::authorization::invite_subject(id),
         admission: Some(match request {
-            Some(r) => ligus_core::admission::Admission::service(now + ttl, Some(r.account_id), key.public()).for_device(&r.device_public_key),
+            Some(r) => ligus_core::admission::Admission::service(
+                now + ttl,
+                Some(r.account_id),
+                key.public(),
+            )
+            .for_device(&r.device_public_key),
             None => ligus_core::admission::Admission::service(now + ttl, None, key.public()),
-        }), redeem_key: None,
+        }),
+        redeem_key: None,
     };
     Ok((payload, id, key.seed()))
 }
@@ -4218,11 +5189,22 @@ mod tests {
     fn hive_era_chat(svc: &mut ChatService, roster: Vec<WorkspaceAgent>) -> (Uuid, Uuid) {
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("HomeLab", wid, "claude-code").unwrap();
-        svc.append_signed(chat.id, wid, SessionEvent::AgentRosterUpdated { agents: roster }).unwrap();
+        svc.append_signed(
+            chat.id,
+            wid,
+            SessionEvent::AgentRosterUpdated { agents: roster },
+        )
+        .unwrap();
         let ask = ChatMessage::new(MessageRole::User, "Mara", "@hive what's the disk at?");
-        svc.append_signed(chat.id, wid, SessionEvent::MessageAppended { message: ask }).unwrap();
+        svc.append_signed(chat.id, wid, SessionEvent::MessageAppended { message: ask })
+            .unwrap();
         let reply = ChatMessage::new(MessageRole::Assistant, "Hive", "71% used.");
-        svc.append_signed(chat.id, wid, SessionEvent::MessageAppended { message: reply }).unwrap();
+        svc.append_signed(
+            chat.id,
+            wid,
+            SessionEvent::MessageAppended { message: reply },
+        )
+        .unwrap();
         (wid, chat.id)
     }
 
@@ -4249,10 +5231,18 @@ mod tests {
         // The default agent's history: its Hive-era reply is its own turn
         // (unprefixed), not another participant's "Hive: ...".
         let turns = turns_for(&s, None, "Ligus");
-        assert!(turns.iter().any(|t| t.role == "assistant" && t.content == "71% used."), "{turns:?}");
+        assert!(
+            turns
+                .iter()
+                .any(|t| t.role == "assistant" && t.content == "71% used."),
+            "{turns:?}"
+        );
         // A named agent reading the same history sees it as Ligus's.
         let turns = turns_for(&s, Some(Uuid::new_v4()), "coder");
-        assert!(turns.iter().any(|t| t.content.contains("Ligus: 71% used.")), "{turns:?}");
+        assert!(
+            turns.iter().any(|t| t.content.contains("Ligus: 71% used.")),
+            "{turns:?}"
+        );
     }
 
     /// A custom agent someone deliberately named "hive" (possible before the
@@ -4267,7 +5257,9 @@ mod tests {
         let t = crate::mentions::parse_mentions("@hive what's the disk at?", &s);
         assert!(!t.primary && t.agents == vec![hive.id], "{t:?}");
         // Its replies carry its roster id, so they are never read as Ligus's.
-        let id = svc.begin_assistant_message(chat, wid, "hive", "ollama", Some(hive.id), None).unwrap();
+        let id = svc
+            .begin_assistant_message(chat, wid, "hive", "ollama", Some(hive.id), None)
+            .unwrap();
         let s = svc.load_resolving(chat).unwrap().unwrap();
         let mine = s.messages.iter().find(|m| m.id == id).unwrap();
         assert!(!ligus_core::agent::is_legacy_primary_reply(mine));
@@ -4280,7 +5272,13 @@ mod tests {
     #[test]
     fn a_roster_agent_named_ligus_never_answers_the_default_agents_mentions() {
         let (mut svc, _) = service();
-        let (_, chat) = hive_era_chat(&mut svc, vec![WorkspaceAgent::new("Ligus", "evil"), WorkspaceAgent::new("primary", "evil")]);
+        let (_, chat) = hive_era_chat(
+            &mut svc,
+            vec![
+                WorkspaceAgent::new("Ligus", "evil"),
+                WorkspaceAgent::new("primary", "evil"),
+            ],
+        );
         let s = svc.load_resolving(chat).unwrap().unwrap();
         for body in ["@ligus hi", "@primary hi", "@hive hi"] {
             let t = crate::mentions::parse_mentions(body, &s);
@@ -4292,18 +5290,34 @@ mod tests {
     /// under the device's public key and nobody else's.
     #[test]
     fn enroll_answer_slot_is_signed_by_this_device() {
-        use crate::phone_enroll_qr::{answer_slot, check_relayed_answer, EnrollSecret, Offer, Outcome, RelayedAnswer};
+        use crate::phone_enroll_qr::{
+            answer_slot, check_relayed_answer, EnrollSecret, Offer, Outcome, RelayedAnswer,
+        };
         let (svc, public) = service();
-        let offer = Offer { workspace_id: Uuid::new_v4(), desktop_device_id: svc.device_id(), secret: EnrollSecret::from_bytes([7; 32]), exp: 2_000_000_000 };
+        let offer = Offer {
+            workspace_id: Uuid::new_v4(),
+            desktop_device_id: svc.device_id(),
+            secret: EnrollSecret::from_bytes([7; 32]),
+            exp: 2_000_000_000,
+        };
         let keys = offer.keys();
-        let answer = crate::phone_enroll_qr::EnrollAnswer::build(&keys, Outcome::Declined, Uuid::new_v4());
+        let answer =
+            crate::phone_enroll_qr::EnrollAnswer::build(&keys, Outcome::Declined, Uuid::new_v4());
         let now_ms = 1_999_999_800_000;
         let signed = svc.sign_relayed_answer(RelayedAnswer::new(&answer, svc.device_id(), now_ms));
         assert!(signed.verify(&public));
-        let other = SigningKeypair::generate().unwrap().public_key_bytes().to_vec();
+        let other = SigningKeypair::generate()
+            .unwrap()
+            .public_key_bytes()
+            .to_vec();
         assert!(!signed.verify(&other));
         let slot = answer_slot(keys.rid);
-        assert!(check_relayed_answer(&slot, &signed, svc.device_id(), now_ms, |_| Some(public.clone())).is_ok());
+        assert!(
+            check_relayed_answer(&slot, &signed, svc.device_id(), now_ms, |_| Some(
+                public.clone()
+            ))
+            .is_ok()
+        );
     }
 
     /// The dispatcher's entry (design repos-and-checkouts 11): a turn device
@@ -4318,10 +5332,24 @@ mod tests {
         let chat = svc.create_chat("A", wid, "anthropic").unwrap();
         let trigger = svc.post_user_message(chat.id, wid, "@ligus go").unwrap().id;
         let (device_a, key_a) = (Uuid::new_v4(), SigningKeypair::generate().unwrap());
-        let mut env = svc.draft_signed(chat.id, wid, SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a, epoch: 0, supersedes: None, repo_id: None }).unwrap();
+        let mut env = svc
+            .draft_signed(
+                chat.id,
+                wid,
+                SessionEvent::TurnClaimed {
+                    trigger_id: trigger,
+                    device_id: device_a,
+                    epoch: 0,
+                    supersedes: None,
+                    repo_id: None,
+                },
+            )
+            .unwrap();
         // A claimed the turn half a minute ago (a hand-over signed sooner
         // after the claim than the timeout allows is ignored by the fold).
-        env.timestamp = ligus_core::Timestamp::from_unix_seconds(ligus_core::Timestamp::now().inner().unix_timestamp() - 30);
+        env.timestamp = ligus_core::Timestamp::from_unix_seconds(
+            ligus_core::Timestamp::now().inner().unix_timestamp() - 30,
+        );
         ligus_core::crypto::sign_envelope(&mut env, device_a, &key_a);
         assert!(svc.store.ingest(&env).unwrap());
         fn live(_: Uuid) -> bool {
@@ -4330,10 +5358,36 @@ mod tests {
         fn silent(_: Uuid) -> bool {
             false
         }
-        let ctx = |waited, holder_live: &'static dyn Fn(Uuid) -> bool| DispatchCtx { eligible: true, coverage: Coverage::NoRepo, waited, holder_live };
-        assert!(matches!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(std::time::Duration::ZERO, &silent)).unwrap(), Step::Wait(_)));
-        assert!(matches!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &live)).unwrap(), Step::Wait(_)), "a live holder keeps it");
-        assert_eq!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &silent)).unwrap(), Step::Run);
+        let ctx = |waited, holder_live: &'static dyn Fn(Uuid) -> bool| DispatchCtx {
+            eligible: true,
+            coverage: Coverage::NoRepo,
+            waited,
+            holder_live,
+        };
+        assert!(matches!(
+            svc.dispatch_turn(
+                chat.id,
+                wid,
+                trigger,
+                None,
+                ctx(std::time::Duration::ZERO, &silent)
+            )
+            .unwrap(),
+            Step::Wait(_)
+        ));
+        assert!(
+            matches!(
+                svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &live))
+                    .unwrap(),
+                Step::Wait(_)
+            ),
+            "a live holder keeps it"
+        );
+        assert_eq!(
+            svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &silent))
+                .unwrap(),
+            Step::Run
+        );
         let s = svc.load(chat.id).unwrap().unwrap();
         assert_eq!(s.turn_claims[&trigger], svc.device_id());
         assert_eq!(s.turn_dispatch[&trigger].epoch, 2);
@@ -4342,14 +5396,32 @@ mod tests {
         late.reply_to_message_id = Some(trigger);
         late.origin_device_id = Some(device_a);
         let late_id = late.id;
-        let mut env = svc.draft_signed(chat.id, wid, SessionEvent::MessageAppended { message: late }).unwrap();
+        let mut env = svc
+            .draft_signed(
+                chat.id,
+                wid,
+                SessionEvent::MessageAppended { message: late },
+            )
+            .unwrap();
         ligus_core::crypto::sign_envelope(&mut env, device_a, &key_a);
         assert!(svc.store.ingest(&env).unwrap());
-        let ours = svc.begin_assistant_message(chat.id, wid, "ligus", "rt", None, Some(trigger)).unwrap();
+        let ours = svc
+            .begin_assistant_message(chat.id, wid, "ligus", "rt", None, Some(trigger))
+            .unwrap();
         let s = svc.load(chat.id).unwrap().unwrap();
-        assert!(s.messages.iter().find(|m| m.id == late_id).unwrap().superseded);
+        assert!(
+            s.messages
+                .iter()
+                .find(|m| m.id == late_id)
+                .unwrap()
+                .superseded
+        );
         assert_eq!(s.turn_dispatch[&trigger].answer, Some(ours));
-        assert_eq!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &silent)).unwrap(), Step::StandDown);
+        assert_eq!(
+            svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &silent))
+                .unwrap(),
+            Step::StandDown
+        );
     }
 
     /// A hand-off reply that starts two receivers on two devices: device A
@@ -4362,19 +5434,43 @@ mod tests {
         let (mut svc, _pk) = service();
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "anthropic").unwrap();
-        let reply = svc.post_user_message(chat.id, wid, "hand-off reply stands in here").unwrap().id;
+        let reply = svc
+            .post_user_message(chat.id, wid, "hand-off reply stands in here")
+            .unwrap()
+            .id;
         let (first, second) = (Uuid::new_v4(), Uuid::new_v4());
         let device_a = Uuid::new_v4();
         // Device A's claim for the first receiver, signed by device A and
         // synced in (this device can't claim on A's behalf).
-        let claim = SessionEvent::TurnClaimed { trigger_id: ligus_core::turn_claim_key(reply, Some(first)), device_id: device_a, epoch: 0, supersedes: None, repo_id: None };
-        assert!(svc.append_signed(chat.id, wid, claim.clone()).is_err(), "a claim names its own signer");
+        let claim = SessionEvent::TurnClaimed {
+            trigger_id: ligus_core::turn_claim_key(reply, Some(first)),
+            device_id: device_a,
+            epoch: 0,
+            supersedes: None,
+            repo_id: None,
+        };
+        assert!(
+            svc.append_signed(chat.id, wid, claim.clone()).is_err(),
+            "a claim names its own signer"
+        );
         let mut env = svc.draft_signed(chat.id, wid, claim).unwrap();
         ligus_core::crypto::sign_envelope(&mut env, device_a, &SigningKeypair::generate().unwrap());
         assert!(svc.store.ingest(&env).unwrap());
-        assert!(svc.claim_turn_for(chat.id, wid, reply, Some(second)).unwrap(), "the second receiver runs here");
-        assert!(!svc.claim_turn_for(chat.id, wid, reply, Some(first)).unwrap(), "the first receiver is device A's");
-        assert!(svc.claim_turn_for(chat.id, wid, reply, Some(second)).unwrap(), "re-claiming our own is idempotent");
+        assert!(
+            svc.claim_turn_for(chat.id, wid, reply, Some(second))
+                .unwrap(),
+            "the second receiver runs here"
+        );
+        assert!(
+            !svc.claim_turn_for(chat.id, wid, reply, Some(first))
+                .unwrap(),
+            "the first receiver is device A's"
+        );
+        assert!(
+            svc.claim_turn_for(chat.id, wid, reply, Some(second))
+                .unwrap(),
+            "re-claiming our own is idempotent"
+        );
         // A plain trigger claim is unchanged (old devices interoperate).
         assert_eq!(ligus_core::turn_claim_key(reply, None), reply);
     }
@@ -4385,12 +5481,39 @@ mod tests {
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "copilot").unwrap();
         let with = svc
-            .begin_assistant_message_with_model(chat.id, wid, "Ligus", "copilot", Some(" gpt-5.3-codex ".into()), None, None)
+            .begin_assistant_message_with_model(
+                chat.id,
+                wid,
+                "Ligus",
+                "copilot",
+                Some(" gpt-5.3-codex ".into()),
+                None,
+                None,
+            )
             .unwrap();
-        let without = svc.begin_assistant_message_with_model(chat.id, wid, "Ligus", "copilot", Some(String::new()), None, None).unwrap();
-        let plain = svc.begin_assistant_message(chat.id, wid, "Ligus", "copilot", None, None).unwrap();
+        let without = svc
+            .begin_assistant_message_with_model(
+                chat.id,
+                wid,
+                "Ligus",
+                "copilot",
+                Some(String::new()),
+                None,
+                None,
+            )
+            .unwrap();
+        let plain = svc
+            .begin_assistant_message(chat.id, wid, "Ligus", "copilot", None, None)
+            .unwrap();
         let s = svc.load(chat.id).unwrap().unwrap();
-        let label = |id: Uuid| s.messages.iter().find(|m| m.id == id).unwrap().runtime_label.clone();
+        let label = |id: Uuid| {
+            s.messages
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .runtime_label
+                .clone()
+        };
         assert_eq!(label(with).as_deref(), Some("gpt-5.3-codex"));
         assert_eq!(label(without), None, "the harness default records nothing");
         assert_eq!(label(plain), None);
@@ -4406,11 +5529,26 @@ mod tests {
         svc.add_agent(chat.id, wid, agent).unwrap();
         let color = |svc: &ChatService| {
             let cfg = workspace_config_session_id(wid);
-            svc.load(cfg).unwrap().unwrap().workspace_agents.into_iter().find(|a| a.id == aid).unwrap().avatar_color_hex
+            svc.load(cfg)
+                .unwrap()
+                .unwrap()
+                .workspace_agents
+                .into_iter()
+                .find(|a| a.id == aid)
+                .unwrap()
+                .avatar_color_hex
         };
-        svc.set_agent_avatar(chat.id, wid, aid, None, Some("#3f72a8".into())).unwrap();
+        svc.set_agent_avatar(chat.id, wid, aid, None, Some("#3f72a8".into()))
+            .unwrap();
         assert_eq!(color(&svc).as_deref(), Some("#3f72a8"));
-        svc.set_agent_avatar(chat.id, wid, aid, None, Some("url(https://evil.example/p.gif)".into())).unwrap();
+        svc.set_agent_avatar(
+            chat.id,
+            wid,
+            aid,
+            None,
+            Some("url(https://evil.example/p.gif)".into()),
+        )
+        .unwrap();
         assert_eq!(color(&svc), None);
     }
 
@@ -4424,7 +5562,8 @@ mod tests {
         svc.add_agent(chat.id, wid, agent).unwrap();
 
         // A user @mentions the agent → queued (pending) work.
-        svc.post_user_message(chat.id, wid, "@reviewer take a look").unwrap();
+        svc.post_user_message(chat.id, wid, "@reviewer take a look")
+            .unwrap();
         let s = svc.load(chat.id).unwrap().unwrap();
         let pend = pending_mentions(&s);
         assert_eq!(pend.len(), 1);
@@ -4432,15 +5571,26 @@ mod tests {
         assert_eq!(pend[0].agent_name, "reviewer");
 
         // The agent replies → no longer pending.
-        let mid = svc.begin_assistant_message(chat.id, wid, "reviewer", "ws-claude", None, None).unwrap();
-        svc.complete_assistant_message(chat.id, wid, mid, "done").unwrap();
+        let mid = svc
+            .begin_assistant_message(chat.id, wid, "reviewer", "ws-claude", None, None)
+            .unwrap();
+        svc.complete_assistant_message(chat.id, wid, mid, "done")
+            .unwrap();
         let s = svc.load(chat.id).unwrap().unwrap();
-        assert!(pending_mentions(&s).is_empty(), "answered mention should not be pending");
+        assert!(
+            pending_mentions(&s).is_empty(),
+            "answered mention should not be pending"
+        );
 
         // A fresh mention after the reply is pending again (catch-up on the latest).
-        svc.post_user_message(chat.id, wid, "@reviewer another").unwrap();
+        svc.post_user_message(chat.id, wid, "@reviewer another")
+            .unwrap();
         let s = svc.load(chat.id).unwrap().unwrap();
-        assert_eq!(pending_mentions(&s).len(), 1, "a new unanswered mention re-queues");
+        assert_eq!(
+            pending_mentions(&s).len(),
+            1,
+            "a new unanswered mention re-queues"
+        );
     }
 
     #[test]
@@ -4454,21 +5604,31 @@ mod tests {
         let agent = WorkspaceAgent::new("reviewer", "ws-claude");
         svc.add_agent(chat.id, wid, agent).unwrap();
 
-        let m1 = svc.post_user_message(chat.id, wid, "@reviewer task one").unwrap().id;
-        let m2 = svc.post_user_message(chat.id, wid, "@reviewer task two").unwrap().id;
+        let m1 = svc
+            .post_user_message(chat.id, wid, "@reviewer task one")
+            .unwrap()
+            .id;
+        let m2 = svc
+            .post_user_message(chat.id, wid, "@reviewer task two")
+            .unwrap()
+            .id;
 
         // The agent answers task ONE — reply stamped with m1 as its request id.
         let mid = svc
             .begin_assistant_message(chat.id, wid, "reviewer", "ws-claude", None, Some(m1))
             .unwrap();
-        svc.complete_assistant_message(chat.id, wid, mid, "done with one").unwrap();
+        svc.complete_assistant_message(chat.id, wid, mid, "done with one")
+            .unwrap();
 
         // Task two must STILL be pending. Under the old author-name match this
         // reply cleared BOTH tasks; with reply_to it only clears task one.
         let s = svc.load(chat.id).unwrap().unwrap();
         let pend = pending_mentions(&s);
         assert_eq!(pend.len(), 1, "reply to task one must not answer task two");
-        assert_eq!(pend[0].message_id, m2, "the still-pending mention is task two");
+        assert_eq!(
+            pend[0].message_id, m2,
+            "the still-pending mention is task two"
+        );
     }
 
     #[test]
@@ -4484,11 +5644,17 @@ mod tests {
         svc.post_user_message(sid, wid, "kick off").unwrap();
         // Scout replies, @mentioning Nova AND itself — Nova becomes cross-device
         // cascade work (a worker can pick it up); Scout's self-mention must not.
-        let m = svc.begin_assistant_message(sid, wid, "Scout", "r", None, None).unwrap();
-        svc.complete_assistant_message(sid, wid, m, "@Nova your turn — I (@Scout) am done").unwrap();
+        let m = svc
+            .begin_assistant_message(sid, wid, "Scout", "r", None, None)
+            .unwrap();
+        svc.complete_assistant_message(sid, wid, m, "@Nova your turn — I (@Scout) am done")
+            .unwrap();
         let s = svc.load(sid).unwrap().unwrap();
         let pend = pending_mentions(&s);
-        assert!(pend.iter().any(|p| p.agent_id == nova_id), "Nova's cascade mention is queued");
+        assert!(
+            pend.iter().any(|p| p.agent_id == nova_id),
+            "Nova's cascade mention is queued"
+        );
         assert!(
             !pend.iter().any(|p| p.agent_name == "Scout"),
             "an agent's self-mention never re-triggers itself"
@@ -4510,28 +5676,48 @@ mod tests {
         svc.add_agent(sid, wid, coder).unwrap();
         svc.add_agent(sid, wid, chat).unwrap();
         svc.post_user_message(sid, wid, "Hello").unwrap();
-        let m = svc.begin_assistant_message(sid, wid, "Ligus", "r", None, None).unwrap();
-        svc.complete_assistant_message(sid, wid, m, "Hi Alex! I can take something myself, or hand it to @chat or @coder.")
+        let m = svc
+            .begin_assistant_message(sid, wid, "Ligus", "r", None, None)
             .unwrap();
+        svc.complete_assistant_message(
+            sid,
+            wid,
+            m,
+            "Hi Alex! I can take something myself, or hand it to @chat or @coder.",
+        )
+        .unwrap();
         let s = svc.load(sid).unwrap().unwrap();
 
         let pend = pending_mentions(&s);
         assert_eq!(pend.len(), 1, "{pend:?}");
         assert_eq!(pend[0].agent_name, "chat", "the agent named first");
-        assert_eq!(cascade_target(&s, s.messages.last().unwrap()).map(|a| a.name.as_str()), Some("chat"));
+        assert_eq!(
+            cascade_target(&s, s.messages.last().unwrap()).map(|a| a.name.as_str()),
+            Some("chat")
+        );
 
         // The responder's transcript ends on a user turn carrying the greeting.
         let turns = turns_for(&s, Some(coder_id), "coder");
         let last = turns.last().unwrap();
         assert_eq!(last.role, "user");
         assert!(last.content.contains("Ligus: Hi Alex!"), "{}", last.content);
-        assert_eq!(turns.len(), 1, "the user's Hello and the greeting merge into one input turn");
+        assert_eq!(
+            turns.len(),
+            1,
+            "the user's Hello and the greeting merge into one input turn"
+        );
 
         // The responder's own last reply stays an assistant turn.
-        let own = svc.begin_assistant_message(sid, wid, "coder", "r", Some(coder_id), None).unwrap();
-        svc.complete_assistant_message(sid, wid, own, "On it.").unwrap();
+        let own = svc
+            .begin_assistant_message(sid, wid, "coder", "r", Some(coder_id), None)
+            .unwrap();
+        svc.complete_assistant_message(sid, wid, own, "On it.")
+            .unwrap();
         let s = svc.load(sid).unwrap().unwrap();
-        assert_eq!(turns_for(&s, Some(coder_id), "coder").last().unwrap().role, "assistant");
+        assert_eq!(
+            turns_for(&s, Some(coder_id), "coder").last().unwrap().role,
+            "assistant"
+        );
     }
 
     #[test]
@@ -4540,16 +5726,29 @@ mod tests {
         let (mut svc, _pk) = service();
         let wid = Uuid::new_v4();
         let hid = svc.device_id().to_string();
-        svc.register_host(wid, WorkspaceHost::new(hid.clone(), HostKind::Worker, "box")).unwrap();
+        svc.register_host(
+            wid,
+            WorkspaceHost::new(hid.clone(), HostKind::Worker, "box"),
+        )
+        .unwrap();
 
         let now = Timestamp::now();
         let hosts = svc.list_hosts(wid).unwrap();
-        assert!(hosts[0].is_online(&now, 90), "just-registered host is online");
+        assert!(
+            hosts[0].is_online(&now, 90),
+            "just-registered host is online"
+        );
         // A heartbeat right after registration is throttled (no new event).
-        assert!(!svc.touch_host(wid, &hid, 60).unwrap(), "recent heartbeat throttled");
+        assert!(
+            !svc.touch_host(wid, &hid, 60).unwrap(),
+            "recent heartbeat throttled"
+        );
 
         // A host last seen at the epoch is offline.
-        let stale = WorkspaceHost { last_seen: Timestamp::from_unix_seconds(0), ..hosts[0].clone() };
+        let stale = WorkspaceHost {
+            last_seen: Timestamp::from_unix_seconds(0),
+            ..hosts[0].clone()
+        };
         assert!(!stale.is_online(&now, 90), "stale host is offline");
     }
 
@@ -4561,19 +5760,37 @@ mod tests {
         let wid = Uuid::new_v4();
         let hid = svc.device_id().to_string();
         let config = workspace_config_session_id(wid);
-        assert!(svc.ensure_host(wid, WorkspaceHost::new(hid.clone(), HostKind::Worker, "box")).unwrap());
+        assert!(svc
+            .ensure_host(
+                wid,
+                WorkspaceHost::new(hid.clone(), HostKind::Worker, "box")
+            )
+            .unwrap());
         let rows = svc.store().list(config).unwrap().len();
         // Same host again (a restart): nothing written.
-        assert!(!svc.ensure_host(wid, WorkspaceHost::new(hid.clone(), HostKind::Worker, "box")).unwrap());
+        assert!(!svc
+            .ensure_host(
+                wid,
+                WorkspaceHost::new(hid.clone(), HostKind::Worker, "box")
+            )
+            .unwrap());
         assert_eq!(svc.store().list(config).unwrap().len(), rows);
         // Renamed: one upsert.
-        assert!(svc.ensure_host(wid, WorkspaceHost::new(hid.clone(), HostKind::Worker, "Alex's box")).unwrap());
+        assert!(svc
+            .ensure_host(
+                wid,
+                WorkspaceHost::new(hid.clone(), HostKind::Worker, "Alex's box")
+            )
+            .unwrap());
         assert_eq!(svc.store().list(config).unwrap().len(), rows + 1);
         assert_eq!(svc.list_hosts(wid).unwrap()[0].label, "Alex's box");
         // The operator lists a model gateway: the record is rewritten once,
         // carrying the name (never a URL); unchanged offers write nothing.
         let mut offering = WorkspaceHost::new(hid.clone(), HostKind::Worker, "Alex's box");
-        offering.model_gateways = vec![ligus_core::HostModelGateway { name: "kgw".into(), api: "openai".into() }];
+        offering.model_gateways = vec![ligus_core::HostModelGateway {
+            name: "kgw".into(),
+            api: "openai".into(),
+        }];
         assert!(svc.ensure_host(wid, offering.clone()).unwrap());
         assert!(!svc.ensure_host(wid, offering).unwrap());
         assert_eq!(svc.store().list(config).unwrap().len(), rows + 2);
@@ -4592,7 +5809,11 @@ mod tests {
 
         // Register this box as a worker host and bind the agent to it.
         let host_id = svc.device_id().to_string();
-        svc.register_host(wid, WorkspaceHost::new(host_id.clone(), HostKind::Worker, "box-1")).unwrap();
+        svc.register_host(
+            wid,
+            WorkspaceHost::new(host_id.clone(), HostKind::Worker, "box-1"),
+        )
+        .unwrap();
         svc.set_agent_host(wid, agent_id, &host_id).unwrap();
 
         // Host + binding are visible from any chat (config hoist).
@@ -4600,8 +5821,15 @@ mod tests {
         assert_eq!(hosts.len(), 1);
         assert_eq!(hosts[0].kind, HostKind::Worker);
         let s = svc.load(chat.id).unwrap().unwrap();
-        let bound = s.workspace_agents.iter().find(|a| a.id == agent_id).unwrap();
-        assert_eq!(bound.host_id, host_id, "agent should be bound to the worker host");
+        let bound = s
+            .workspace_agents
+            .iter()
+            .find(|a| a.id == agent_id)
+            .unwrap();
+        assert_eq!(
+            bound.host_id, host_id,
+            "agent should be bound to the worker host"
+        );
         assert!(s.workspace_hosts.iter().any(|h| h.id == host_id));
 
         svc.remove_host(wid, &host_id).unwrap();
@@ -4616,8 +5844,15 @@ mod tests {
         let chat = svc.create_chat("A", wid, "anthropic").unwrap();
 
         // Define a workspace-owned runtime with an out-of-log secret reference.
-        let mut rt = WorkspaceRuntime::new("ws-claude", "Team Claude", ModelProviderKind::Anthropic, "claude-sonnet-4-5");
-        rt.credential = WorkspaceCredential::SecretRef { secret_ref: "acme".into() };
+        let mut rt = WorkspaceRuntime::new(
+            "ws-claude",
+            "Team Claude",
+            ModelProviderKind::Anthropic,
+            "claude-sonnet-4-5",
+        );
+        rt.credential = WorkspaceCredential::SecretRef {
+            secret_ref: "acme".into(),
+        };
         svc.add_workspace_runtime(wid, rt.clone()).unwrap();
 
         // It's listed on the workspace and visible from any chat (config hoist).
@@ -4630,13 +5865,24 @@ mod tests {
         // yields a key.
         assert_eq!(resolve_workspace_credential(&rt.credential), None);
         std::env::set_var("LIGUS_WS_SECRET_acme", "sk-workspace-123");
-        assert_eq!(resolve_workspace_credential(&rt.credential).as_deref(), Some("sk-workspace-123"));
+        assert_eq!(
+            resolve_workspace_credential(&rt.credential).as_deref(),
+            Some("sk-workspace-123")
+        );
         std::env::remove_var("LIGUS_WS_SECRET_acme");
-        assert_eq!(resolve_workspace_credential(&WorkspaceCredential::Inline {}), None);
+        assert_eq!(
+            resolve_workspace_credential(&WorkspaceCredential::Inline {}),
+            None
+        );
 
         // Removal clears it everywhere.
         svc.remove_workspace_runtime(wid, "ws-claude").unwrap();
-        assert!(svc.load(chat.id).unwrap().unwrap().workspace_runtimes.is_empty());
+        assert!(svc
+            .load(chat.id)
+            .unwrap()
+            .unwrap()
+            .workspace_runtimes
+            .is_empty());
     }
 
     #[test]
@@ -4647,12 +5893,18 @@ mod tests {
         svc.create_chat("A", wid, "anthropic").unwrap();
         let mut rt = WorkspaceRuntime::new("oa", "OpenAI", ModelProviderKind::OpenAI, "gpt-4o");
         rt.credential = WorkspaceCredential::Inline {};
-        let err = svc.add_workspace_runtime(wid, rt.clone()).unwrap_err().to_string();
+        let err = svc
+            .add_workspace_runtime(wid, rt.clone())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("Keys aren't stored in the workspace"), "{err}");
         assert!(err.contains("--secret-ref"), "{err}");
         assert!(svc.list_workspace_runtimes(wid).unwrap().is_empty());
         // The whole-list legacy event is refused too.
-        assert!(refuse_workspace_keys(&SessionEvent::WorkspaceRuntimesUpdated { runtimes: vec![rt] }).is_err());
+        assert!(
+            refuse_workspace_keys(&SessionEvent::WorkspaceRuntimesUpdated { runtimes: vec![rt] })
+                .is_err()
+        );
     }
 
     #[test]
@@ -4671,7 +5923,9 @@ mod tests {
         assert!(runtime.credential.is_legacy_inline());
         assert_eq!(resolve_workspace_credential(&runtime.credential), None);
         assert!(!format!("{runtime:?}").contains("sk-OLDPEER"));
-        assert!(!serde_json::to_string(&runtime).unwrap().contains("sk-OLDPEER"));
+        assert!(!serde_json::to_string(&runtime)
+            .unwrap()
+            .contains("sk-OLDPEER"));
     }
 
     #[test]
@@ -4688,7 +5942,10 @@ mod tests {
 
         // …and is therefore visible from chat B too (hoist), and from the config log.
         let b = svc.load(chat_b.id).unwrap().unwrap();
-        assert!(b.workspace_agents.iter().any(|a| a.id == agent_id), "agent not shared to chat B");
+        assert!(
+            b.workspace_agents.iter().any(|a| a.id == agent_id),
+            "agent not shared to chat B"
+        );
         let cfg = svc.load(workspace_config_session_id(wid)).unwrap().unwrap();
         assert!(cfg.workspace_agents.iter().any(|a| a.id == agent_id));
 
@@ -4727,15 +5984,23 @@ mod tests {
         let cfg = svc.load(config_id).unwrap().unwrap();
         assert!(cfg.channel_id.is_empty());
         assert_eq!(cfg.channels.len(), 1);
-        assert_eq!(cfg.members.len(), 1, "config log seeds the creator as member for authz");
+        assert_eq!(
+            cfg.members.len(),
+            1,
+            "config log seeds the creator as member for authz"
+        );
 
         // A second channel gets the next position; rename + archive fold correctly.
         let (c2, _) = svc.create_channel(wid, "ui", None, "anthropic").unwrap();
         assert_eq!(c2.position, 1);
-        svc.rename_channel(wid, &channel.id, "authentication", None).unwrap();
+        svc.rename_channel(wid, &channel.id, "authentication", None)
+            .unwrap();
         svc.archive_channel(wid, &c2.id, true).unwrap();
         let after = svc.list_channels(wid).unwrap();
-        assert_eq!(after.iter().find(|c| c.id == channel.id).unwrap().name, "authentication");
+        assert_eq!(
+            after.iter().find(|c| c.id == channel.id).unwrap().name,
+            "authentication"
+        );
         assert!(after.iter().find(|c| c.id == c2.id).unwrap().archived);
     }
 
@@ -4748,23 +6013,64 @@ mod tests {
         // A peer's event that counts from the newest one here (a lamport
         // within bounds): the next event authored here sorts after it.
         let head = svc.store.lamport_head(wid, sid).unwrap();
-        let mut peer = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionTitleChanged { title: "from peer".into() });
-        peer.actor_stamp = Some(ActorStamp { actor: svc.author().clone(), recorded_at: Timestamp::now(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+        let mut peer = SessionEventEnvelope::new(
+            sid,
+            wid,
+            1,
+            SessionEvent::SessionTitleChanged {
+                title: "from peer".into(),
+            },
+        );
+        peer.actor_stamp = Some(ActorStamp {
+            actor: svc.author().clone(),
+            recorded_at: Timestamp::now(),
+            cfg_frontier: None,
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head: None,
+        });
         ligus_core::lamport::stamp_next(&mut peer, head);
         assert!(svc.store.ingest(&peer).unwrap());
         // One with a far-ahead clock nothing accounts for moves nothing.
-        let mut ahead = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionTitleChanged { title: "ahead".into() });
+        let mut ahead = SessionEventEnvelope::new(
+            sid,
+            wid,
+            1,
+            SessionEvent::SessionTitleChanged {
+                title: "ahead".into(),
+            },
+        );
         ahead.lamport = u64::MAX - 1;
         assert!(svc.store.ingest(&ahead).unwrap());
 
         let env = svc
-            .append_signed(sid, wid, SessionEvent::SessionTitleChanged { title: "local".into() })
+            .append_signed(
+                sid,
+                wid,
+                SessionEvent::SessionTitleChanged {
+                    title: "local".into(),
+                },
+            )
             .unwrap();
         let stamp = env.actor_stamp.as_ref().unwrap();
-        assert_eq!(stamp.log_head.map(|h| h.event_id), Some(peer.event_id), "counts from the peer's event");
-        assert_eq!(env.lamport, peer.lamport + 1, "one past it, not past the far-ahead clock");
+        assert_eq!(
+            stamp.log_head.map(|h| h.event_id),
+            Some(peer.event_id),
+            "counts from the peer's event"
+        );
+        assert_eq!(
+            env.lamport,
+            peer.lamport + 1,
+            "one past it, not past the far-ahead clock"
+        );
         assert!(verify_envelope(&env, &pk).is_ok());
-        assert_eq!(svc.load(sid).unwrap().unwrap().title, "local", "the far-ahead event sorts nowhere");
+        assert_eq!(
+            svc.load(sid).unwrap().unwrap().title,
+            "local",
+            "the far-ahead event sorts nowhere"
+        );
     }
 
     #[test]
@@ -4773,7 +6079,10 @@ mod tests {
 
         let store = EventStore::open_in_memory().unwrap();
         let device_kp = SigningKeypair::generate().unwrap();
-        let device_id = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &device_kp.public_key_bytes());
+        let device_id = ligus_core::crypto::device_id_for(
+            ligus_core::crypto::SigAlg::Ed25519,
+            &device_kp.public_key_bytes(),
+        );
         let account_kp = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let author = ActorIdentity {
@@ -4789,8 +6098,11 @@ mod tests {
         };
         let mut svc = ChatService::new(store, device_kp, account_kp, author);
 
-        let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
-        svc.post_user_message(chat.id, chat.workspace_id, "hello").unwrap();
+        let chat = svc
+            .create_chat("Demo", Uuid::new_v4(), "anthropic")
+            .unwrap();
+        svc.post_user_message(chat.id, chat.workspace_id, "hello")
+            .unwrap();
 
         // A peer folds the synced trust events into a roster and verifies our
         // events: our device is trusted and our signed message is Valid.
@@ -4815,7 +6127,9 @@ mod tests {
     #[test]
     fn create_chat_seeds_creator_as_owner_member() {
         let (mut svc, _) = service();
-        let chat = svc.create_chat("New chat", Uuid::new_v4(), "claude-code").unwrap();
+        let chat = svc
+            .create_chat("New chat", Uuid::new_v4(), "claude-code")
+            .unwrap();
         assert_eq!(chat.creator_actor_id, "u1");
         assert_eq!(chat.members.len(), 1);
         assert_eq!(chat.members[0].actor.id, "u1");
@@ -4825,7 +6139,9 @@ mod tests {
     #[test]
     fn ensure_self_member_is_idempotent_for_creator() {
         let (mut svc, _) = service();
-        let chat = svc.create_chat("New chat", Uuid::new_v4(), "claude-code").unwrap();
+        let chat = svc
+            .create_chat("New chat", Uuid::new_v4(), "claude-code")
+            .unwrap();
         // Creator is already a member → no-op.
         let added = svc.ensure_self_member(chat.id, chat.workspace_id).unwrap();
         assert!(!added);
@@ -4877,24 +6193,39 @@ mod tests {
         let mut founder = svc_on(&path, "f", "Mara");
         let cfg = founder.ensure_workspace_config(wid).unwrap();
         let title = |s: &ChatService| s.load(cfg).unwrap().unwrap().title;
-        assert!(!founder.publish_workspace_name(wid, "  ").unwrap(), "an empty name is never written");
+        assert!(
+            !founder.publish_workspace_name(wid, "  ").unwrap(),
+            "an empty name is never written"
+        );
         assert_eq!(title(&founder), "");
         // Someone the roster doesn't name as Owner or Admin can't name it.
         let mut other = svc_on(&path, "o", "Ola");
         assert!(!other.publish_workspace_name(wid, "Not it").unwrap());
         assert_eq!(title(&founder), "");
-        assert!(founder.publish_workspace_name(wid, " Comb Council ").unwrap());
+        assert!(founder
+            .publish_workspace_name(wid, " Comb Council ")
+            .unwrap());
         assert_eq!(title(&founder), "Comb Council");
-        assert!(!founder.publish_workspace_name(wid, "Another name").unwrap(), "a title already there is kept");
+        assert!(
+            !founder.publish_workspace_name(wid, "Another name").unwrap(),
+            "a title already there is kept"
+        );
         assert_eq!(title(&founder), "Comb Council");
         // Bidi controls are cleaned and the length is bounded.
         let wid2 = Uuid::new_v4();
         let cfg2 = founder.ensure_workspace_config(wid2).unwrap();
-        assert!(founder.publish_workspace_name(wid2, &format!("Comb\u{202E}{}", "x".repeat(400))).unwrap());
+        assert!(founder
+            .publish_workspace_name(wid2, &format!("Comb\u{202E}{}", "x".repeat(400)))
+            .unwrap());
         let t = founder.load(cfg2).unwrap().unwrap().title;
-        assert!(!t.contains('\u{202E}') && t.chars().count() == MAX_WORKSPACE_NAME_CHARS, "{t}");
+        assert!(
+            !t.contains('\u{202E}') && t.chars().count() == MAX_WORKSPACE_NAME_CHARS,
+            "{t}"
+        );
         // A workspace this device has no config log for: nothing is founded.
-        assert!(!founder.publish_workspace_name(Uuid::new_v4(), "Ghost").unwrap());
+        assert!(!founder
+            .publish_workspace_name(Uuid::new_v4(), "Ghost")
+            .unwrap());
     }
 
     /// A3: with an agent vault, an agent bound to this device signs its own
@@ -4910,23 +6241,37 @@ mod tests {
         let account = Uuid::new_v4().to_string();
         svc.set_author_account(account.clone(), "Alex", None);
         let chat = svc.create_chat("A", wid, "rt").unwrap();
-        svc.set_agent_vault(Box::new(crate::identity_store::FileKeyVault::new(dir.path())));
+        svc.set_agent_vault(Box::new(crate::identity_store::FileKeyVault::new(
+            dir.path(),
+        )));
         let mut agent = WorkspaceAgent::new("coder", "rt");
         agent.owner_actor_id = account.clone();
         let agent_id = agent.id;
         svc.add_agent(chat.id, wid, agent).unwrap();
-        svc.set_agent_host(wid, agent_id, &svc.device_id().to_string()).unwrap();
+        svc.set_agent_host(wid, agent_id, &svc.device_id().to_string())
+            .unwrap();
 
-        let mid = svc.begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None).unwrap();
+        let mid = svc
+            .begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None)
+            .unwrap();
         // A trailing token is held back from the log until text follows it.
         svc.append_chunk(chat.id, wid, mid, "hel ").unwrap();
-        svc.complete_assistant_message(chat.id, wid, mid, "hello").unwrap();
+        svc.complete_assistant_message(chat.id, wid, mid, "hello")
+            .unwrap();
         let envs = svc.store().list(chat.id).unwrap();
         let reply: Vec<_> = envs
             .iter()
-            .filter(|e| e.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ligus_core::ActorKind::Agent))
+            .filter(|e| {
+                e.actor_stamp
+                    .as_ref()
+                    .is_some_and(|s| s.actor.kind == ligus_core::ActorKind::Agent)
+            })
             .collect();
-        assert_eq!(reply.len(), 3, "appended, chunk and completion are all agent-signed");
+        assert_eq!(
+            reply.len(),
+            3,
+            "appended, chunk and completion are all agent-signed"
+        );
         let key_id = reply[0].signer_device_id.unwrap();
         assert_ne!(key_id, svc.device_id());
         let roster = build_roster(&svc.store().trust_envelopes(wid).unwrap());
@@ -4934,15 +6279,29 @@ mod tests {
             assert_eq!(verdict_for(&roster, e), Verdict::Valid);
         }
         let s = svc.load(chat.id).unwrap().unwrap();
-        assert_eq!(s.messages.iter().find(|m| m.id == mid).unwrap().body, "hello");
+        assert_eq!(
+            s.messages.iter().find(|m| m.id == mid).unwrap().body,
+            "hello"
+        );
 
         // Rebinding to another host (Owner = Admin+) retires this device's key.
         svc.set_agent_host(wid, agent_id, "worker-9").unwrap();
         let roster = build_roster(&svc.store().trust_envelopes(wid).unwrap());
-        assert_eq!(verdict_for(&roster, reply[0]), Verdict::Quarantine(QuarantineReason::RevokedDevice));
+        assert_eq!(
+            verdict_for(&roster, reply[0]),
+            Verdict::Quarantine(QuarantineReason::RevokedDevice)
+        );
         // And this host no longer writes as the agent: it falls back to itself.
-        let mid2 = svc.begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None).unwrap();
-        let last = svc.store().list(chat.id).unwrap().into_iter().last().unwrap();
+        let mid2 = svc
+            .begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None)
+            .unwrap();
+        let last = svc
+            .store()
+            .list(chat.id)
+            .unwrap()
+            .into_iter()
+            .last()
+            .unwrap();
         assert_eq!(last.signer_device_id, Some(svc.device_id()));
         let _ = mid2;
     }
@@ -4964,35 +6323,83 @@ mod tests {
         let account = Uuid::new_v4().to_string();
         svc.set_author_account(account.clone(), "Alex", None);
         let chat = svc.create_chat("A", wid, "rt").unwrap();
-        svc.set_agent_vault(Box::new(crate::identity_store::FileKeyVault::new(dir.path())));
+        svc.set_agent_vault(Box::new(crate::identity_store::FileKeyVault::new(
+            dir.path(),
+        )));
         let mut agent = WorkspaceAgent::new("coder", "rt");
         agent.owner_actor_id = account.clone();
         let agent_id = agent.id;
         svc.add_agent(chat.id, wid, agent).unwrap();
-        svc.set_agent_host(wid, agent_id, &svc.device_id().to_string()).unwrap();
-        let mid = svc.begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None).unwrap();
-        svc.complete_assistant_message(chat.id, wid, mid, "hello").unwrap();
-        let reply = svc.store().list(chat.id).unwrap().into_iter().last().unwrap();
-        assert_eq!(reply.actor_stamp.as_ref().unwrap().actor.kind, ligus_core::ActorKind::Agent);
+        svc.set_agent_host(wid, agent_id, &svc.device_id().to_string())
+            .unwrap();
+        let mid = svc
+            .begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None)
+            .unwrap();
+        svc.complete_assistant_message(chat.id, wid, mid, "hello")
+            .unwrap();
+        let reply = svc
+            .store()
+            .list(chat.id)
+            .unwrap()
+            .into_iter()
+            .last()
+            .unwrap();
+        assert_eq!(
+            reply.actor_stamp.as_ref().unwrap().actor.kind,
+            ligus_core::ActorKind::Agent
+        );
         svc.set_agent_host(wid, agent_id, "worker-9").unwrap();
-        svc.post_user_message(chat.id, wid, "after the rebind").unwrap();
-        let after = svc.store().list(chat.id).unwrap().into_iter().last().unwrap();
-        assert_eq!(after.actor_stamp.as_ref().unwrap().log_head.map(|h| h.event_id), Some(reply.event_id), "counted from the reply");
+        svc.post_user_message(chat.id, wid, "after the rebind")
+            .unwrap();
+        let after = svc
+            .store()
+            .list(chat.id)
+            .unwrap()
+            .into_iter()
+            .last()
+            .unwrap();
+        assert_eq!(
+            after
+                .actor_stamp
+                .as_ref()
+                .unwrap()
+                .log_head
+                .map(|h| h.event_id),
+            Some(reply.event_id),
+            "counted from the reply"
+        );
 
         // Another device pulls the whole room after the rebind.
         let (_, all) = svc.store().envelopes_after_row(0).unwrap();
         let key = ligus_core::derive_workspace_key("room");
         let seal = |e: &SessionEventEnvelope| {
-            serde_json::to_value(ligus_core::e2ee::seal_symmetric(&key, 0, &serde_json::to_vec(e).unwrap()).unwrap()).unwrap()
+            serde_json::to_value(
+                ligus_core::e2ee::seal_symmetric(&key, 0, &serde_json::to_vec(e).unwrap()).unwrap(),
+            )
+            .unwrap()
         };
-        let batch: Vec<(u64, serde_json::Value)> = all.iter().enumerate().map(|(i, e)| (i as u64 + 1, seal(e))).collect();
+        let batch: Vec<(u64, serde_json::Value)> = all
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (i as u64 + 1, seal(e)))
+            .collect();
         let mut other = EventStore::open_in_memory().unwrap();
-        let mut eng = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string()).with_key(key);
+        let mut eng = SyncEngine::unscoped(
+            RelayClient::new("http://127.0.0.1:0"),
+            Uuid::new_v4().to_string(),
+        )
+        .with_key(key);
         eng.apply_fetched(&mut other, &batch).unwrap();
-        assert!(!other.has_event(reply.event_id).unwrap(), "the retired key's reply is refused here");
+        assert!(
+            !other.has_event(reply.event_id).unwrap(),
+            "the retired key's reply is refused here"
+        );
         assert!(other.has_event(after.event_id).unwrap());
         assert_eq!(
-            other.lamport_head(wid, chat.id).unwrap().map(|h| h.event_id),
+            other
+                .lamport_head(wid, chat.id)
+                .unwrap()
+                .map(|h| h.event_id),
             Some(after.event_id),
             "the event after the refused reply is within bounds here too, not held for good"
         );
@@ -5016,7 +6423,13 @@ mod tests {
         owner.ensure_workspace_config(wid).unwrap();
         let invite = owner.issue_invite(wid).unwrap();
         owner.store().set_join_invite(wid, invite).unwrap();
-        owner.store().set_join_redeem(wid, owner.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+        owner
+            .store()
+            .set_join_redeem(
+                wid,
+                owner.take_invite_redeem_seed(wid, invite).unwrap().as_ref(),
+            )
+            .unwrap();
         let mut boxed = svc_on(&path, "y", "Phone");
         boxed.set_author_account(box_id.clone(), "Phone", None);
         boxed.ensure_self_member(cfg, wid).unwrap();
@@ -5032,17 +6445,25 @@ mod tests {
         // A contributor's claim is not honored.
         assert!(owner.device_links(wid).unwrap().is_empty());
 
-        owner.set_member_role(cfg, wid, &box_id, WorkspaceRole::Admin).unwrap();
+        owner
+            .set_member_role(cfg, wid, &box_id, WorkspaceRole::Admin)
+            .unwrap();
         // The host record alone (anyone holding the device can write one)
         // isn't the owner's word: nothing links until the owner certified it.
         assert!(owner.device_links(wid).unwrap().is_empty());
-        owner.publish_foreign_certificate(wid, &boxed.device_public_key()).unwrap();
+        owner
+            .publish_foreign_certificate(wid, &boxed.device_public_key())
+            .unwrap();
         let links = owner.device_links(wid).unwrap();
         assert_eq!(links.owner_of(&box_id), Some(owner_id.as_str()));
         let chat = boxed.create_chat("phone chat", wid, "rt").unwrap();
         let chat = owner.load(chat.id).unwrap().unwrap();
         assert_eq!(links.person(&chat.creator_actor_id), owner_id);
-        assert_eq!(links.human_count(&chat), 1, "owner + their box are one person");
+        assert_eq!(
+            links.human_count(&chat),
+            1,
+            "owner + their box are one person"
+        );
 
         // A host naming the owner whose device has no cert for the box's account
         // (someone else's device id) links nothing.
@@ -5074,20 +6495,36 @@ mod tests {
         ana.ensure_workspace_config(wid).unwrap();
         let invite = ana.issue_invite(wid).unwrap();
         ana.store().set_join_invite(wid, invite).unwrap();
-        ana.store().set_join_redeem(wid, ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+        ana.store()
+            .set_join_redeem(
+                wid,
+                ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref(),
+            )
+            .unwrap();
         let mut mallory = svc_on(&path, "m", "Mallory");
         mallory.set_author_account(mallory_id.clone(), "Mallory", None);
         mallory.ensure_self_member(cfg, wid).unwrap();
         mallory.publish_identity(cfg, wid).unwrap();
-        ana.set_member_role(cfg, wid, &mallory_id, WorkspaceRole::Admin).unwrap();
+        ana.set_member_role(cfg, wid, &mallory_id, WorkspaceRole::Admin)
+            .unwrap();
         // Ana's desktop is a host she owns.
-        let host = ligus_core::WorkspaceHost::new(ana.device_id().to_string(), ligus_core::HostKind::Device, "ana-mbp");
+        let host = ligus_core::WorkspaceHost::new(
+            ana.device_id().to_string(),
+            ligus_core::HostKind::Device,
+            "ana-mbp",
+        );
         ana.register_host(wid, host).unwrap();
         // Mallory certifies Ana's public device key for her own account.
-        mallory.publish_foreign_certificate(wid, &ana.device_public_key()).unwrap();
+        mallory
+            .publish_foreign_certificate(wid, &ana.device_public_key())
+            .unwrap();
         for svc in [&ana, &mallory] {
             let links = svc.device_links(wid).unwrap();
-            assert_eq!(links.person(&mallory_id), mallory_id, "Mallory became Ana: {links:?}");
+            assert_eq!(
+                links.person(&mallory_id),
+                mallory_id,
+                "Mallory became Ana: {links:?}"
+            );
             assert!(links.owner_of(&mallory_id).is_none());
         }
     }
@@ -5102,7 +6539,11 @@ mod tests {
         let path = dir.path().join("ligus.db");
         let wid = Uuid::new_v4();
         let cfg = workspace_config_session_id(wid);
-        let (owner_id, eve_id, ben_id) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+        let (owner_id, eve_id, ben_id) = (
+            Uuid::new_v4().to_string(),
+            Uuid::new_v4().to_string(),
+            Uuid::new_v4().to_string(),
+        );
         let mut owner = svc_on(&path, "o", "Owner");
         owner.set_author_account(owner_id.clone(), "Owner", None);
         let chat = owner.create_chat("general", wid, "rt").unwrap();
@@ -5112,7 +6553,12 @@ mod tests {
             let mut svc = svc_on(&path, name, name);
             svc.set_author_account(id.to_string(), name, None);
             svc.store().set_join_invite(wid, invite).unwrap();
-            svc.store().set_join_redeem(wid, owner.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+            svc.store()
+                .set_join_redeem(
+                    wid,
+                    owner.take_invite_redeem_seed(wid, invite).unwrap().as_ref(),
+                )
+                .unwrap();
             svc.ensure_self_member(cfg, wid).unwrap();
             svc.publish_identity(cfg, wid).unwrap();
             svc
@@ -5121,11 +6567,16 @@ mod tests {
         let mut ben = join("Ben", &ben_id);
         eve.post_user_message(chat.id, wid, "Eve's plan").unwrap();
         // Ben certifies Eve's public device key for his own account.
-        ben.publish_foreign_certificate(wid, &eve.device_public_key()).unwrap();
+        ben.publish_foreign_certificate(wid, &eve.device_public_key())
+            .unwrap();
         owner.remove_member(cfg, wid, eve_id.clone()).unwrap();
         for svc in [&owner, &ben] {
             let links = svc.device_links(wid).unwrap();
-            assert_eq!(links.person(&eve_id), eve_id, "Ben inherited the removed member: {links:?}");
+            assert_eq!(
+                links.person(&eve_id),
+                eve_id,
+                "Ben inherited the removed member: {links:?}"
+            );
             assert!(!links.ids_of(&ben_id).any(|a| a == eve_id));
         }
     }
@@ -5150,21 +6601,38 @@ mod tests {
         let mut ben = svc_on(&path, "b", "Ben");
         ben.set_author_account(ben_id.clone(), "Ben", None);
         ben.store().set_join_invite(wid, invite).unwrap();
-        ben.store().set_join_redeem(wid, ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+        ben.store()
+            .set_join_redeem(
+                wid,
+                ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref(),
+            )
+            .unwrap();
         ben.ensure_self_member(cfg, wid).unwrap();
         ben.publish_identity(cfg, wid).unwrap();
 
         let phone = ligus_core::testkit::Phone::new();
-        ana.certify_phone(wid, phone.device_id, &phone.public_key()).unwrap();
+        ana.certify_phone(wid, phone.device_id, &phone.public_key())
+            .unwrap();
         assert_eq!(ana.phone_person(wid, phone.device_id).unwrap().id, ana_id);
-        assert!(ana.phone_co_holders(wid, phone.device_id).unwrap().is_empty());
-        ben.publish_foreign_phone_certificate(wid, &phone.public_key()).unwrap();
+        assert!(ana
+            .phone_co_holders(wid, phone.device_id)
+            .unwrap()
+            .is_empty());
+        ben.publish_foreign_phone_certificate(wid, &phone.public_key())
+            .unwrap();
         for svc in [&ana, &ben] {
-            let p = svc.phone_person(wid, phone.device_id).expect("the phone still has its person");
+            let p = svc
+                .phone_person(wid, phone.device_id)
+                .expect("the phone still has its person");
             assert_eq!(p.id, ana_id, "redirected to Ben");
             assert_eq!(p.device_id, Some(phone.device_id));
         }
-        let co: Vec<String> = ana.phone_co_holders(wid, phone.device_id).unwrap().into_iter().map(|a| a.id).collect();
+        let co: Vec<String> = ana
+            .phone_co_holders(wid, phone.device_id)
+            .unwrap()
+            .into_iter()
+            .map(|a| a.id)
+            .collect();
         assert_eq!(co, vec![ben_id.clone()]);
     }
 
@@ -5188,12 +6656,19 @@ mod tests {
         let mut ben = svc_on(&path, "b", "Ben");
         ben.set_author_account(ben_id.clone(), "Ben", None);
         ben.store().set_join_invite(wid, invite).unwrap();
-        ben.store().set_join_redeem(wid, ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+        ben.store()
+            .set_join_redeem(
+                wid,
+                ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref(),
+            )
+            .unwrap();
         ben.ensure_self_member(cfg, wid).unwrap();
         ben.publish_identity(cfg, wid).unwrap();
         let phone = ligus_core::testkit::Phone::new();
-        ana.certify_phone(wid, phone.device_id, &phone.public_key()).unwrap();
-        ben.publish_foreign_phone_certificate(wid, &phone.public_key()).unwrap();
+        ana.certify_phone(wid, phone.device_id, &phone.public_key())
+            .unwrap();
+        ben.publish_foreign_phone_certificate(wid, &phone.public_key())
+            .unwrap();
 
         let mut all: Vec<SessionEventEnvelope> = Vec::new();
         for env in ana.store().list(cfg).unwrap() {
@@ -5216,10 +6691,19 @@ mod tests {
                 store.ingest(env).unwrap();
             }
         }
-        svc_on(&pinned_path, "x", "Box").pin_phone_persons(wid).unwrap();
-        EventStore::open(&pinned_path).unwrap().ingest(&all[ben_at]).unwrap();
+        svc_on(&pinned_path, "x", "Box")
+            .pin_phone_persons(wid)
+            .unwrap();
+        EventStore::open(&pinned_path)
+            .unwrap()
+            .ingest(&all[ben_at])
+            .unwrap();
         let pinned = svc_on(&pinned_path, "x", "Box");
-        assert_eq!(pinned.phone_person(wid, phone.device_id).unwrap().id, ana_id, "the recorded person moved");
+        assert_eq!(
+            pinned.phone_person(wid, phone.device_id).unwrap().id,
+            ana_id,
+            "the recorded person moved"
+        );
 
         // A box that got Ben's certificate first and never saw the phone with one.
         let mut reordered = all.clone();
@@ -5235,7 +6719,10 @@ mod tests {
         let boxed = svc_on(&box_path, "y", "Box");
         boxed.pin_phone_persons(wid).unwrap();
         match boxed.phone_person(wid, phone.device_id) {
-            Ok(p) => assert_ne!(p.id, ben_id, "the box redirected Ana's phone to Ben by arrival order"),
+            Ok(p) => assert_ne!(
+                p.id, ben_id,
+                "the box redirected Ana's phone to Ben by arrival order"
+            ),
             Err(_) => {} // fail closed
         }
     }
@@ -5259,24 +6746,57 @@ mod tests {
         let mut ben = svc_on(&path, "b", "Ben");
         ben.set_author_account(ben_id.clone(), "Ben", None);
         ben.store().set_join_invite(wid, invite).unwrap();
-        ben.store().set_join_redeem(wid, ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+        ben.store()
+            .set_join_redeem(
+                wid,
+                ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref(),
+            )
+            .unwrap();
         ben.ensure_self_member(cfg, wid).unwrap();
         ben.publish_identity(cfg, wid).unwrap();
         assert_eq!(ana.load(cfg).unwrap().unwrap().authz.rules, 3);
         let phone = ligus_core::testkit::Phone::new();
-        ana.certify_phone(wid, phone.device_id, &phone.public_key()).unwrap();
-        ben.publish_foreign_phone_certificate(wid, &phone.public_key()).unwrap();
+        ana.certify_phone(wid, phone.device_id, &phone.public_key())
+            .unwrap();
+        ben.publish_foreign_phone_certificate(wid, &phone.public_key())
+            .unwrap();
         let ana_acct = Uuid::parse_str(&ana_id).unwrap();
-        assert!(ana.phone_person(wid, phone.device_id).is_err(), "contested without a statement: no one");
-        let bad = phone.sign(&ligus_core::crypto::phone_consent_preimage(wid, Uuid::parse_str(&ben_id).unwrap(), phone.device_id));
-        assert!(ben.publish_phone_consent(wid, phone.device_id, ana_acct, &bad).is_err(), "a statement for someone else");
-        let sig = phone.sign(&ligus_core::crypto::phone_consent_preimage(wid, ana_acct, phone.device_id));
+        assert!(
+            ana.phone_person(wid, phone.device_id).is_err(),
+            "contested without a statement: no one"
+        );
+        let bad = phone.sign(&ligus_core::crypto::phone_consent_preimage(
+            wid,
+            Uuid::parse_str(&ben_id).unwrap(),
+            phone.device_id,
+        ));
+        assert!(
+            ben.publish_phone_consent(wid, phone.device_id, ana_acct, &bad)
+                .is_err(),
+            "a statement for someone else"
+        );
+        let sig = phone.sign(&ligus_core::crypto::phone_consent_preimage(
+            wid,
+            ana_acct,
+            phone.device_id,
+        ));
         // Ben's device relays it (any member's device may): it is the phone's word.
-        assert!(ben.publish_phone_consent(wid, phone.device_id, ana_acct, &sig).unwrap());
-        assert!(!ben.publish_phone_consent(wid, phone.device_id, ana_acct, &sig).unwrap(), "once");
+        assert!(ben
+            .publish_phone_consent(wid, phone.device_id, ana_acct, &sig)
+            .unwrap());
+        assert!(
+            !ben.publish_phone_consent(wid, phone.device_id, ana_acct, &sig)
+                .unwrap(),
+            "once"
+        );
         assert!(ana.phone_consented(wid, phone.device_id, ana_acct).unwrap());
         assert_eq!(ana.phone_person(wid, phone.device_id).unwrap().id, ana_id);
-        assert!(ana.phone_co_holders(wid, phone.device_id).unwrap().is_empty(), "Ben's certificate counts for nothing");
+        assert!(
+            ana.phone_co_holders(wid, phone.device_id)
+                .unwrap()
+                .is_empty(),
+            "Ben's certificate counts for nothing"
+        );
     }
 
     #[test]
@@ -5296,14 +6816,32 @@ mod tests {
         };
         let mut worker = svc_on(&path, "worker", "Worker");
         assert!(worker
-            .register_host(wid, ligus_core::WorkspaceHost::new("box1", ligus_core::HostKind::Worker, "prod"))
+            .register_host(
+                wid,
+                ligus_core::WorkspaceHost::new("box1", ligus_core::HostKind::Worker, "prod")
+            )
             .is_err());
         worker.store().set_join_invite(wid, invite).unwrap();
-        worker.store().set_join_redeem(wid, worker.store().issued_invite_key(wid, invite).unwrap().as_ref()).unwrap();
-        worker.ensure_self_member(workspace_config_session_id(wid), wid).unwrap();
+        worker
+            .store()
+            .set_join_redeem(
+                wid,
+                worker
+                    .store()
+                    .issued_invite_key(wid, invite)
+                    .unwrap()
+                    .as_ref(),
+            )
+            .unwrap();
+        worker
+            .ensure_self_member(workspace_config_session_id(wid), wid)
+            .unwrap();
         // register_host stamps owner_actor_id = self → allowed via the carve-out.
         worker
-            .register_host(wid, ligus_core::WorkspaceHost::new("box1", ligus_core::HostKind::Worker, "prod"))
+            .register_host(
+                wid,
+                ligus_core::WorkspaceHost::new("box1", ligus_core::HostKind::Worker, "prod"),
+            )
             .unwrap();
         // Heartbeat its own host (throttle 0 forces an emit) → allowed.
         assert!(worker.touch_host(wid, "box1", 0).unwrap());
@@ -5321,8 +6859,12 @@ mod tests {
         let chat_a = svc.create_chat("A", wid, "anthropic").unwrap();
         let chat_b = svc.create_chat("B", wid, "anthropic").unwrap();
 
-        svc.add_member(chat_a.id, wid, test_member("u2", "Bo", WorkspaceRole::Contributor))
-            .unwrap();
+        svc.add_member(
+            chat_a.id,
+            wid,
+            test_member("u2", "Bo", WorkspaceRole::Contributor),
+        )
+        .unwrap();
 
         let b = svc.load(chat_b.id).unwrap().unwrap();
         assert!(
@@ -5341,14 +6883,29 @@ mod tests {
         let wid = Uuid::new_v4();
         let chat_a = svc.create_chat("A", wid, "anthropic").unwrap();
         let chat_b = svc.create_chat("B", wid, "anthropic").unwrap();
-        svc.add_member(chat_a.id, wid, test_member("u2", "Bo", WorkspaceRole::Contributor))
-            .unwrap();
-        assert!(svc.load(chat_b.id).unwrap().unwrap().members.iter().any(|m| m.id == "u2"));
+        svc.add_member(
+            chat_a.id,
+            wid,
+            test_member("u2", "Bo", WorkspaceRole::Contributor),
+        )
+        .unwrap();
+        assert!(svc
+            .load(chat_b.id)
+            .unwrap()
+            .unwrap()
+            .members
+            .iter()
+            .any(|m| m.id == "u2"));
 
         // Remove via chat B's service call — propagates to chat A too.
         svc.remove_member(chat_b.id, wid, "u2").unwrap();
         assert!(
-            !svc.load(chat_a.id).unwrap().unwrap().members.iter().any(|m| m.id == "u2"),
+            !svc.load(chat_a.id)
+                .unwrap()
+                .unwrap()
+                .members
+                .iter()
+                .any(|m| m.id == "u2"),
             "removal must propagate to every chat"
         );
         let cfg = svc.load(workspace_config_session_id(wid)).unwrap().unwrap();
@@ -5361,13 +6918,22 @@ mod tests {
         let wid = Uuid::new_v4();
         let chat_a = svc.create_chat("A", wid, "anthropic").unwrap();
         let chat_b = svc.create_chat("B", wid, "anthropic").unwrap();
-        svc.add_member(chat_a.id, wid, test_member("u2", "Bo", WorkspaceRole::Contributor))
+        svc.add_member(
+            chat_a.id,
+            wid,
+            test_member("u2", "Bo", WorkspaceRole::Contributor),
+        )
+        .unwrap();
+        svc.set_member_role(chat_a.id, wid, "u2", WorkspaceRole::Admin)
             .unwrap();
-        svc.set_member_role(chat_a.id, wid, "u2", WorkspaceRole::Admin).unwrap();
 
         let b = svc.load(chat_b.id).unwrap().unwrap();
         let u2 = b.members.iter().find(|m| m.id == "u2").unwrap();
-        assert_eq!(u2.role, WorkspaceRole::Admin, "role change must propagate workspace-wide");
+        assert_eq!(
+            u2.role,
+            WorkspaceRole::Admin,
+            "role change must propagate workspace-wide"
+        );
     }
 
     #[test]
@@ -5386,23 +6952,37 @@ mod tests {
             a.ensure_workspace_config(wid).unwrap();
             let invite = a.issue_invite(wid).unwrap();
             a.store().set_join_invite(wid, invite).unwrap();
-            a.store().set_join_redeem(wid, a.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+            a.store()
+                .set_join_redeem(
+                    wid,
+                    a.take_invite_redeem_seed(wid, invite).unwrap().as_ref(),
+                )
+                .unwrap();
             (ca.id, cb.id)
         };
 
         // A different device/actor u2 opens chat A and registers itself.
         {
             let mut b = svc_on(&path, "u2", "Bo");
-            assert!(b.ensure_self_member(chat_a, wid).unwrap(), "u2 should be added");
+            assert!(
+                b.ensure_self_member(chat_a, wid).unwrap(),
+                "u2 should be added"
+            );
             // Idempotent second call.
-            assert!(!b.ensure_self_member(chat_a, wid).unwrap(), "second call is a no-op");
+            assert!(
+                !b.ensure_self_member(chat_a, wid).unwrap(),
+                "second call is a no-op"
+            );
         }
 
         // From u1's device, u2 now shows up on the config log and in chat B.
         {
             let a = svc_on(&path, "u1", "Ana");
             let cfg = a.load(workspace_config_session_id(wid)).unwrap().unwrap();
-            assert!(cfg.members.iter().any(|m| m.id == "u2"), "self-member missing from config log");
+            assert!(
+                cfg.members.iter().any(|m| m.id == "u2"),
+                "self-member missing from config log"
+            );
             let b = a.load(chat_b).unwrap().unwrap();
             assert!(
                 b.members.iter().any(|m| m.id == "u2"),
@@ -5448,14 +7028,19 @@ mod tests {
             let mut a = svc_on(&path, "u1", "Ana");
             let chat = a.create_chat("A", wid, "anthropic").unwrap();
             // Enroll u2 as a Viewer on the workspace-wide roster.
-            a.add_member(chat.id, wid, test_member("u2", "Bo", WorkspaceRole::Viewer)).unwrap();
+            a.add_member(chat.id, wid, test_member("u2", "Bo", WorkspaceRole::Viewer))
+                .unwrap();
             chat.id
         };
 
         // u2 is a Viewer in the hoisted roster → cannot add members (needs Admin).
         {
             let mut b = svc_on(&path, "u2", "Bo");
-            let err = b.add_member(chat_id, wid, test_member("u3", "Cy", WorkspaceRole::Contributor));
+            let err = b.add_member(
+                chat_id,
+                wid,
+                test_member("u3", "Cy", WorkspaceRole::Contributor),
+            );
             assert!(
                 matches!(err, Err(ChatError::Unauthorized(_))),
                 "a Viewer in the hoisted roster must not add members, got {err:?}"
@@ -5465,7 +7050,12 @@ mod tests {
         // The Owner u1 still can, and it lands on the workspace roster.
         {
             let mut a = svc_on(&path, "u1", "Ana");
-            a.add_member(chat_id, wid, test_member("u3", "Cy", WorkspaceRole::Contributor)).unwrap();
+            a.add_member(
+                chat_id,
+                wid,
+                test_member("u3", "Cy", WorkspaceRole::Contributor),
+            )
+            .unwrap();
             let cfg = a.load(workspace_config_session_id(wid)).unwrap().unwrap();
             assert!(cfg.members.iter().any(|m| m.id == "u3"));
         }
@@ -5482,10 +7072,17 @@ mod tests {
         // Creating a chat seeds the config log (its roster judges the chat).
         let cfg = svc.load(workspace_config_session_id(wid)).unwrap().unwrap();
         assert_eq!(cfg.role_of("u1"), WorkspaceRole::Owner);
-        svc.add_member(chat.id, wid, test_member("u2", "Bo", WorkspaceRole::Contributor))
-            .unwrap();
+        svc.add_member(
+            chat.id,
+            wid,
+            test_member("u2", "Bo", WorkspaceRole::Contributor),
+        )
+        .unwrap();
         let cfg = svc.load(workspace_config_session_id(wid)).unwrap().unwrap();
-        assert_eq!(cfg.members.iter().find(|m| m.id == "u1").unwrap().role, WorkspaceRole::Owner);
+        assert_eq!(
+            cfg.members.iter().find(|m| m.id == "u1").unwrap().role,
+            WorkspaceRole::Owner
+        );
         assert!(cfg.members.iter().any(|m| m.id == "u2"));
     }
 
@@ -5499,12 +7096,20 @@ mod tests {
         let chat_id = {
             let mut a = svc_on(&path, "u1", "Ana");
             let chat = a.create_chat("A", wid, "anthropic").unwrap();
-            a.add_member(chat.id, wid, test_member("u2", "Bo", WorkspaceRole::Contributor)).unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member("u2", "Bo", WorkspaceRole::Contributor),
+            )
+            .unwrap();
             chat.id
         };
         let mut x = svc_on(&path, "outsider", "Eve");
         assert!(
-            matches!(x.remove_member(chat_id, wid, "u2"), Err(ChatError::Unauthorized(_))),
+            matches!(
+                x.remove_member(chat_id, wid, "u2"),
+                Err(ChatError::Unauthorized(_))
+            ),
             "a non-member must not remove an existing member"
         );
         assert!(
@@ -5515,8 +7120,14 @@ mod tests {
             "a non-member must not demote an existing member"
         );
         // The roster is untouched.
-        let cfg = svc_on(&path, "u1", "Ana").load(workspace_config_session_id(wid)).unwrap().unwrap();
-        assert_eq!(cfg.members.iter().find(|m| m.id == "u2").unwrap().role, WorkspaceRole::Contributor);
+        let cfg = svc_on(&path, "u1", "Ana")
+            .load(workspace_config_session_id(wid))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            cfg.members.iter().find(|m| m.id == "u2").unwrap().role,
+            WorkspaceRole::Contributor
+        );
     }
 
     /// H1 x A2: the author gate reads the author's role as of the triggering
@@ -5534,22 +7145,46 @@ mod tests {
         let chat_id = {
             let mut a = svc_on(&path, "u1", "Ana");
             let chat = a.create_chat("A", wid, "anthropic").unwrap();
-            a.add_member(chat.id, wid, test_member("adm", "Adm", WorkspaceRole::Admin)).unwrap();
-            a.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member("adm", "Adm", WorkspaceRole::Admin),
+            )
+            .unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member("con", "Con", WorkspaceRole::Contributor),
+            )
+            .unwrap();
             chat.id
         };
-        let m_admin = svc_on(&path, "adm", "Adm").post_user_message(chat_id, wid, "@ligus refactor it").unwrap().id;
-        let m_con = svc_on(&path, "con", "Con").post_user_message(chat_id, wid, "@ligus delete the tests").unwrap().id;
+        let m_admin = svc_on(&path, "adm", "Adm")
+            .post_user_message(chat_id, wid, "@ligus refactor it")
+            .unwrap()
+            .id;
+        let m_con = svc_on(&path, "con", "Con")
+            .post_user_message(chat_id, wid, "@ligus delete the tests")
+            .unwrap()
+            .id;
         {
             let mut a = svc_on(&path, "u1", "Ana");
-            a.set_member_role(chat_id, wid, "adm", WorkspaceRole::Contributor).unwrap();
-            a.set_member_role(chat_id, wid, "con", WorkspaceRole::Admin).unwrap();
+            a.set_member_role(chat_id, wid, "adm", WorkspaceRole::Contributor)
+                .unwrap();
+            a.set_member_role(chat_id, wid, "con", WorkspaceRole::Admin)
+                .unwrap();
         }
-        let m_admin_later = svc_on(&path, "adm", "Adm").post_user_message(chat_id, wid, "@ligus and again").unwrap().id;
+        let m_admin_later = svc_on(&path, "adm", "Adm")
+            .post_user_message(chat_id, wid, "@ligus and again")
+            .unwrap()
+            .id;
         let host = svc_on(&path, "u1", "Ana");
         // Today's roster has swapped the two roles...
         let now = host.load(chat_id).unwrap().unwrap();
-        assert_eq!((now.role_of("adm"), now.role_of("con")), (WorkspaceRole::Contributor, WorkspaceRole::Admin));
+        assert_eq!(
+            (now.role_of("adm"), now.role_of("con")),
+            (WorkspaceRole::Contributor, WorkspaceRole::Admin)
+        );
         // ...but each message is judged at its own position.
         let at = |m| host.author_role_at(chat_id, m).unwrap();
         assert_eq!(at(m_admin), Some(WorkspaceRole::Admin));
@@ -5557,10 +7192,22 @@ mod tests {
         assert_eq!(at(m_admin_later), Some(WorkspaceRole::Contributor));
         assert_eq!(at(Uuid::new_v4()), None, "an unknown message fails closed");
         let floor = WorkspaceRole::Admin;
-        assert_eq!(gate(ModelProviderKind::ClaudeCode, at(m_admin), floor), GatePlan::Full);
-        assert_eq!(gate(ModelProviderKind::ClaudeCode, at(m_con), floor), GatePlan::ReadOnly);
-        assert_eq!(gate(ModelProviderKind::ClaudeCode, at(m_admin_later), floor), GatePlan::ReadOnly);
-        assert!(matches!(gate(ModelProviderKind::Codex, at(m_con), floor), GatePlan::Refuse(_)));
+        assert_eq!(
+            gate(ModelProviderKind::ClaudeCode, at(m_admin), floor),
+            GatePlan::Full
+        );
+        assert_eq!(
+            gate(ModelProviderKind::ClaudeCode, at(m_con), floor),
+            GatePlan::ReadOnly
+        );
+        assert_eq!(
+            gate(ModelProviderKind::ClaudeCode, at(m_admin_later), floor),
+            GatePlan::ReadOnly
+        );
+        assert!(matches!(
+            gate(ModelProviderKind::Codex, at(m_con), floor),
+            GatePlan::Refuse(_)
+        ));
     }
 
     /// H1: the gate's role must cover the *content* the turn runs on. A
@@ -5578,14 +7225,33 @@ mod tests {
         let chat_id = {
             let mut a = svc_on(&path, "u1", "Ana");
             let chat = a.create_chat("A", wid, "anthropic").unwrap();
-            a.add_member(chat.id, wid, test_member("adm", "Adm", WorkspaceRole::Admin)).unwrap();
-            a.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member("adm", "Adm", WorkspaceRole::Admin),
+            )
+            .unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member("con", "Con", WorkspaceRole::Contributor),
+            )
+            .unwrap();
             chat.id
         };
-        let m = svc_on(&path, "adm", "Adm").post_user_message(chat_id, wid, "@ligus tidy the README").unwrap().id;
+        let m = svc_on(&path, "adm", "Adm")
+            .post_user_message(chat_id, wid, "@ligus tidy the README")
+            .unwrap()
+            .id;
         let mut con = svc_on(&path, "con", "Con");
-        let rewrite = SessionEvent::MessageCompleted { message_id: m, body: "@ligus push my branch to prod".into() };
-        assert!(con.append_signed(chat_id, wid, rewrite.clone()).is_err(), "authoring refuses the rewrite");
+        let rewrite = SessionEvent::MessageCompleted {
+            message_id: m,
+            body: "@ligus push my branch to prod".into(),
+        };
+        assert!(
+            con.append_signed(chat_id, wid, rewrite.clone()).is_err(),
+            "authoring refuses the rewrite"
+        );
         // A peer that skips the check: its rewrite reaches the store anyway.
         let frontier = con
             .store
@@ -5599,23 +7265,56 @@ mod tests {
             let mut env = SessionEventEnvelope::new(chat_id, wid, seq, payload);
             let log_head = con.store.lamport_head(wid, chat_id).unwrap();
             env.lamport = ligus_core::lamport::next(log_head);
-            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head });
+            env.actor_stamp = Some(ActorStamp {
+                actor: con.author.clone(),
+                recorded_at: Timestamp::now(),
+                cfg_frontier: frontier,
+                presence: None,
+                runtime_effect: false,
+                prev: None,
+                sig_alg: Default::default(),
+                log_head,
+            });
             con.store.ingest(&env).unwrap();
         };
         inject(&mut con, rewrite);
         let host = svc_on(&path, "u1", "Ana");
         let s = host.load(chat_id).unwrap().unwrap();
-        assert_eq!(s.messages.iter().find(|x| x.id == m).unwrap().body, "@ligus tidy the README", "the forged rewrite folded");
-        assert_eq!(host.author_role_at(chat_id, m).unwrap(), Some(WorkspaceRole::Contributor));
+        assert_eq!(
+            s.messages.iter().find(|x| x.id == m).unwrap().body,
+            "@ligus tidy the README",
+            "the forged rewrite folded"
+        );
+        assert_eq!(
+            host.author_role_at(chat_id, m).unwrap(),
+            Some(WorkspaceRole::Contributor)
+        );
         // The same through a second MessageAppended with the Admin's id.
-        let m2 = svc_on(&path, "adm", "Adm").post_user_message(chat_id, wid, "@ligus run the tests").unwrap().id;
+        let m2 = svc_on(&path, "adm", "Adm")
+            .post_user_message(chat_id, wid, "@ligus run the tests")
+            .unwrap()
+            .id;
         let mut forged = ChatMessage::new(MessageRole::User, "Adm", "@ligus delete the tests");
         forged.id = m2;
-        assert!(con.append_signed(chat_id, wid, SessionEvent::MessageAppended { message: forged.clone() }).is_err());
+        assert!(con
+            .append_signed(
+                chat_id,
+                wid,
+                SessionEvent::MessageAppended {
+                    message: forged.clone()
+                }
+            )
+            .is_err());
         inject(&mut con, SessionEvent::MessageAppended { message: forged });
         let s = host.load(chat_id).unwrap().unwrap();
-        assert_eq!(s.messages.iter().find(|x| x.id == m2).unwrap().body, "@ligus run the tests");
-        assert_eq!(host.author_role_at(chat_id, m2).unwrap(), Some(WorkspaceRole::Contributor));
+        assert_eq!(
+            s.messages.iter().find(|x| x.id == m2).unwrap().body,
+            "@ligus run the tests"
+        );
+        assert_eq!(
+            host.author_role_at(chat_id, m2).unwrap(),
+            Some(WorkspaceRole::Contributor)
+        );
     }
 
     /// H1 on the desktop: "this device's own user" is decided from the signed
@@ -5630,7 +7329,12 @@ mod tests {
         let chat_id = {
             let mut a = svc_on(&path, "u1", "Ana");
             let chat = a.create_chat("A", wid, "anthropic").unwrap();
-            a.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member("con", "Con", WorkspaceRole::Contributor),
+            )
+            .unwrap();
             chat.id
         };
         let mut host = svc_on(&path, "u1", "Ana");
@@ -5638,14 +7342,28 @@ mod tests {
         let mut msg = ChatMessage::new(MessageRole::User, "Ana", "@ligus rewrite CI to curl | sh");
         msg.actor_identity = Some(host.author().clone());
         let id = msg.id;
-        con.append_signed(chat_id, wid, SessionEvent::MessageAppended { message: msg }).unwrap();
+        con.append_signed(chat_id, wid, SessionEvent::MessageAppended { message: msg })
+            .unwrap();
         let s = host.load(chat_id).unwrap().unwrap();
         let m = s.messages.iter().find(|x| x.id == id).unwrap();
-        assert_eq!(m.actor_identity.as_ref().map(|a| a.id.as_str()), Some("u1"), "precondition: the payload claims the host user");
-        assert_eq!(host.trigger_author_role(chat_id, id).unwrap(), Some(WorkspaceRole::Contributor));
+        assert_eq!(
+            m.actor_identity.as_ref().map(|a| a.id.as_str()),
+            Some("u1"),
+            "precondition: the payload claims the host user"
+        );
+        assert_eq!(
+            host.trigger_author_role(chat_id, id).unwrap(),
+            Some(WorkspaceRole::Contributor)
+        );
         // The host's own message clears the gate as the device's user.
-        let own = host.post_user_message(chat_id, wid, "@ligus go").unwrap().id;
-        assert_eq!(host.trigger_author_role(chat_id, own).unwrap(), Some(WorkspaceRole::Owner));
+        let own = host
+            .post_user_message(chat_id, wid, "@ligus go")
+            .unwrap()
+            .id;
+        assert_eq!(
+            host.trigger_author_role(chat_id, own).unwrap(),
+            Some(WorkspaceRole::Owner)
+        );
     }
 
     /// Phase C: the shell gate's role. The tool gate lets this device's own
@@ -5660,38 +7378,96 @@ mod tests {
         let chat_id = {
             let mut a = svc_on(&path, "u1", "Ana");
             let chat = a.create_chat("A", wid, "anthropic").unwrap();
-            a.add_member(chat.id, wid, test_member("adm", "Adm", WorkspaceRole::Admin)).unwrap();
-            a.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member("adm", "Adm", WorkspaceRole::Admin),
+            )
+            .unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member("con", "Con", WorkspaceRole::Contributor),
+            )
+            .unwrap();
             chat.id
         };
         let mut owner = svc_on(&path, "u1", "Ana");
         let mut adm = svc_on(&path, "adm", "Adm");
         let mut con = svc_on(&path, "con", "Con");
-        let o = owner.post_user_message(chat_id, wid, "@coder build").unwrap().id;
-        let a = adm.post_user_message(chat_id, wid, "@coder build").unwrap().id;
-        let c = con.post_user_message(chat_id, wid, "@coder build").unwrap().id;
+        let o = owner
+            .post_user_message(chat_id, wid, "@coder build")
+            .unwrap()
+            .id;
+        let a = adm
+            .post_user_message(chat_id, wid, "@coder build")
+            .unwrap()
+            .id;
+        let c = con
+            .post_user_message(chat_id, wid, "@coder build")
+            .unwrap()
+            .id;
         // The Owner's message: the shell. (Another device judges it by the
         // Owner's device certificate, which this fixture doesn't publish.)
-        assert_eq!(owner.trigger_shell_role(chat_id, o).unwrap(), Some(WorkspaceRole::Owner));
+        assert_eq!(
+            owner.trigger_shell_role(chat_id, o).unwrap(),
+            Some(WorkspaceRole::Owner)
+        );
         // The Admin's own message on the Admin's own device: the tool gate
         // says Owner (their own tools), the shell gate says Admin.
-        assert_eq!(adm.trigger_author_role(chat_id, a).unwrap(), Some(WorkspaceRole::Owner));
-        assert_eq!(adm.trigger_shell_role(chat_id, a).unwrap(), Some(WorkspaceRole::Admin));
-        assert_eq!(owner.trigger_shell_role(chat_id, a).unwrap(), Some(WorkspaceRole::Admin));
-        assert_eq!(owner.trigger_shell_role(chat_id, c).unwrap(), Some(WorkspaceRole::Contributor));
+        assert_eq!(
+            adm.trigger_author_role(chat_id, a).unwrap(),
+            Some(WorkspaceRole::Owner)
+        );
+        assert_eq!(
+            adm.trigger_shell_role(chat_id, a).unwrap(),
+            Some(WorkspaceRole::Admin)
+        );
+        assert_eq!(
+            owner.trigger_shell_role(chat_id, a).unwrap(),
+            Some(WorkspaceRole::Admin)
+        );
+        assert_eq!(
+            owner.trigger_shell_role(chat_id, c).unwrap(),
+            Some(WorkspaceRole::Contributor)
+        );
         // An agent's reply to the Contributor stays the Contributor's.
-        let r = agent_reply(&mut owner, chat_id, wid, Some(Uuid::new_v4()), Some(c), "@other run it");
-        assert_eq!(owner.trigger_shell_role(chat_id, r).unwrap(), Some(WorkspaceRole::Contributor));
-        for (role, want) in [(owner.trigger_shell_role(chat_id, o).unwrap(), true), (owner.trigger_shell_role(chat_id, a).unwrap(), false), (owner.trigger_shell_role(chat_id, r).unwrap(), false)] {
-            assert_eq!(crate::author_gate::shell_allowed(role, false), want, "{role:?}");
+        let r = agent_reply(
+            &mut owner,
+            chat_id,
+            wid,
+            Some(Uuid::new_v4()),
+            Some(c),
+            "@other run it",
+        );
+        assert_eq!(
+            owner.trigger_shell_role(chat_id, r).unwrap(),
+            Some(WorkspaceRole::Contributor)
+        );
+        for (role, want) in [
+            (owner.trigger_shell_role(chat_id, o).unwrap(), true),
+            (owner.trigger_shell_role(chat_id, a).unwrap(), false),
+            (owner.trigger_shell_role(chat_id, r).unwrap(), false),
+        ] {
+            assert_eq!(
+                crate::author_gate::shell_allowed(role, false),
+                want,
+                "{role:?}"
+            );
         }
         // The device-local workspace: its only person is the device owner.
         let (mut solo, _) = service();
         let local = Uuid::new_v4();
         solo.set_local_workspace(local);
         let lc = solo.create_chat("solo", local, "rt").unwrap();
-        let m = solo.post_user_message(lc.id, local, "@coder go").unwrap().id;
-        assert_eq!(solo.trigger_shell_role(lc.id, m).unwrap(), Some(WorkspaceRole::Owner));
+        let m = solo
+            .post_user_message(lc.id, local, "@coder go")
+            .unwrap()
+            .id;
+        assert_eq!(
+            solo.trigger_shell_role(lc.id, m).unwrap(),
+            Some(WorkspaceRole::Owner)
+        );
         assert!(solo.sandbox_grants(local).is_empty());
     }
 
@@ -5699,21 +7475,46 @@ mod tests {
 
     /// An agent's reply to `to`, written by `svc` as the agent's host. With
     /// no agent vault it is host-signed (the A3 fallback).
-    fn agent_reply(svc: &mut ChatService, chat: Uuid, wid: Uuid, agent: Option<Uuid>, to: Option<Uuid>, body: &str) -> Uuid {
-        let id = svc.begin_assistant_message(chat, wid, "coder", "rt", agent, to).unwrap();
+    fn agent_reply(
+        svc: &mut ChatService,
+        chat: Uuid,
+        wid: Uuid,
+        agent: Option<Uuid>,
+        to: Option<Uuid>,
+        body: &str,
+    ) -> Uuid {
+        let id = svc
+            .begin_assistant_message(chat, wid, "coder", "rt", agent, to)
+            .unwrap();
         svc.complete_assistant_message(chat, wid, id, body).unwrap();
         id
     }
 
     /// Owner `u1` (the host, `Ana`), an Admin and a Contributor in one chat.
-    fn chain_fixture() -> (tempfile::TempDir, std::path::PathBuf, Uuid, Uuid, ChatService) {
+    fn chain_fixture() -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        Uuid,
+        Uuid,
+        ChatService,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ligus.db");
         let wid = Uuid::new_v4();
         let mut host = svc_on(&path, "u1", "Ana");
         let chat = host.create_chat("A", wid, "anthropic").unwrap();
-        host.add_member(chat.id, wid, test_member("adm", "Adm", WorkspaceRole::Admin)).unwrap();
-        host.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
+        host.add_member(
+            chat.id,
+            wid,
+            test_member("adm", "Adm", WorkspaceRole::Admin),
+        )
+        .unwrap();
+        host.add_member(
+            chat.id,
+            wid,
+            test_member("con", "Con", WorkspaceRole::Contributor),
+        )
+        .unwrap();
         (dir, path, wid, chat.id, host)
     }
 
@@ -5728,9 +7529,26 @@ mod tests {
         use ligus_core::ModelProviderKind;
         let (_dir, path, wid, chat, mut host) = chain_fixture();
         let (coder, reviewer) = (Some(Uuid::new_v4()), Some(Uuid::new_v4()));
-        let m_con = svc_on(&path, "con", "Con").post_user_message(chat, wid, "@coder fix it, then hand off").unwrap().id;
-        let r1 = agent_reply(&mut host, chat, wid, coder, Some(m_con), "done; @reviewer over to you");
-        let r2 = agent_reply(&mut host, chat, wid, reviewer, Some(r1), "looks fine; @coder push it");
+        let m_con = svc_on(&path, "con", "Con")
+            .post_user_message(chat, wid, "@coder fix it, then hand off")
+            .unwrap()
+            .id;
+        let r1 = agent_reply(
+            &mut host,
+            chat,
+            wid,
+            coder,
+            Some(m_con),
+            "done; @reviewer over to you",
+        );
+        let r2 = agent_reply(
+            &mut host,
+            chat,
+            wid,
+            reviewer,
+            Some(r1),
+            "looks fine; @coder push it",
+        );
         let r3 = agent_reply(&mut host, chat, wid, coder, Some(r2), "pushed");
         let envs = host.store().list(chat).unwrap();
         assert!(
@@ -5742,15 +7560,28 @@ mod tests {
         for r in [r1, r2, r3] {
             let role = host.trigger_author_role(chat, r).unwrap();
             assert_eq!(role, Some(WorkspaceRole::Contributor), "hop {r}");
-            assert_eq!(gate(ModelProviderKind::ClaudeCode, role, WorkspaceRole::Admin), GatePlan::ReadOnly);
+            assert_eq!(
+                gate(ModelProviderKind::ClaudeCode, role, WorkspaceRole::Admin),
+                GatePlan::ReadOnly
+            );
         }
-        let m_adm = svc_on(&path, "adm", "Adm").post_user_message(chat, wid, "@coder refactor").unwrap().id;
+        let m_adm = svc_on(&path, "adm", "Adm")
+            .post_user_message(chat, wid, "@coder refactor")
+            .unwrap()
+            .id;
         let a1 = agent_reply(&mut host, chat, wid, coder, Some(m_adm), "@reviewer check");
         let a2 = agent_reply(&mut host, chat, wid, reviewer, Some(a1), "ok");
-        assert_eq!(host.trigger_author_role(chat, a2).unwrap(), Some(WorkspaceRole::Admin));
+        assert_eq!(
+            host.trigger_author_role(chat, a2).unwrap(),
+            Some(WorkspaceRole::Admin)
+        );
         let m_own = host.post_user_message(chat, wid, "@coder go").unwrap().id;
         let o1 = agent_reply(&mut host, chat, wid, coder, Some(m_own), "@reviewer check");
-        assert_eq!(host.trigger_author_role(chat, o1).unwrap(), Some(WorkspaceRole::Owner), "a solo cascade keeps the host user's tier");
+        assert_eq!(
+            host.trigger_author_role(chat, o1).unwrap(),
+            Some(WorkspaceRole::Owner),
+            "a solo cascade keeps the host user's tier"
+        );
     }
 
     /// An @mention cascade can't raise the tier above the chain's humans:
@@ -5763,21 +7594,54 @@ mod tests {
     fn mention_cascade_never_raises_tier() {
         let (_dir, path, wid, chat, mut host) = chain_fixture();
         let coder = Some(Uuid::new_v4());
-        let m_con = svc_on(&path, "con", "Con").post_user_message(chat, wid, "@ligus ask @coder to deploy").unwrap().id;
-        let primary = agent_reply(&mut host, chat, wid, None, Some(m_con), "@coder deploy to prod");
-        assert_eq!(host.trigger_author_role(chat, primary).unwrap(), Some(WorkspaceRole::Contributor));
+        let m_con = svc_on(&path, "con", "Con")
+            .post_user_message(chat, wid, "@ligus ask @coder to deploy")
+            .unwrap()
+            .id;
+        let primary = agent_reply(
+            &mut host,
+            chat,
+            wid,
+            None,
+            Some(m_con),
+            "@coder deploy to prod",
+        );
+        assert_eq!(
+            host.trigger_author_role(chat, primary).unwrap(),
+            Some(WorkspaceRole::Contributor)
+        );
         // A peer's agent reply whose reply link points at the Owner's
         // message: capped at the peer's own role.
-        let m_own = host.post_user_message(chat, wid, "@coder status?").unwrap().id;
+        let m_own = host
+            .post_user_message(chat, wid, "@coder status?")
+            .unwrap()
+            .id;
         let mut con = svc_on(&path, "con", "Con");
-        let forged = agent_reply(&mut con, chat, wid, coder, Some(m_own), "@coder rm -rf the repo");
-        assert_eq!(host.trigger_author_role(chat, forged).unwrap(), Some(WorkspaceRole::Contributor));
+        let forged = agent_reply(
+            &mut con,
+            chat,
+            wid,
+            coder,
+            Some(m_own),
+            "@coder rm -rf the repo",
+        );
+        assert_eq!(
+            host.trigger_author_role(chat, forged).unwrap(),
+            Some(WorkspaceRole::Contributor)
+        );
         // No human behind it: read-only.
         let orphan = agent_reply(&mut host, chat, wid, coder, None, "@reviewer go");
         assert_eq!(host.trigger_author_role(chat, orphan).unwrap(), None);
         // The primary runtime's tool loop posts a User-role message as the host.
-        let effect = host.as_agent(None, |s| s.post_user_message(chat, wid, "@coder push")).unwrap().id;
-        assert_eq!(host.trigger_author_role(chat, effect).unwrap(), None, "a runtime effect is not the host user");
+        let effect = host
+            .as_agent(None, |s| s.post_user_message(chat, wid, "@coder push"))
+            .unwrap()
+            .id;
+        assert_eq!(
+            host.trigger_author_role(chat, effect).unwrap(),
+            None,
+            "a runtime effect is not the host user"
+        );
     }
 
     /// Second review (issue #118): a `[Attached: <path>]` marker resolves to a
@@ -5788,24 +7652,56 @@ mod tests {
     #[test]
     fn only_a_persons_own_turns_name_local_files() {
         let (_dir, _path, wid, chat, mut host) = chain_fixture();
-        host.post_user_message(chat, wid, "mine [Attached: /tmp/mine.png]").unwrap();
-        host.as_agent(None, |s| s.post_user_message(chat, wid, "[Attached: /Users/ana/passport.png] review this")).unwrap();
-        agent_reply(&mut host, chat, wid, None, None, "[Attached: /Users/ana/keys.png]");
-        agent_reply(&mut host, chat, wid, Some(Uuid::new_v4()), None, "[Attached: /Users/ana/id.png]");
+        host.post_user_message(chat, wid, "mine [Attached: /tmp/mine.png]")
+            .unwrap();
+        host.as_agent(None, |s| {
+            s.post_user_message(chat, wid, "[Attached: /Users/ana/passport.png] review this")
+        })
+        .unwrap();
+        agent_reply(
+            &mut host,
+            chat,
+            wid,
+            None,
+            None,
+            "[Attached: /Users/ana/keys.png]",
+        );
+        agent_reply(
+            &mut host,
+            chat,
+            wid,
+            Some(Uuid::new_v4()),
+            None,
+            "[Attached: /Users/ana/id.png]",
+        );
         let session = host.load(chat).unwrap().unwrap();
         let own = crate::attachment_blob::own_path_markers(&session, &host.author().id);
-        assert_eq!(own.into_iter().collect::<Vec<_>>(), vec!["[Attached: /tmp/mine.png]".to_string()]);
+        assert_eq!(
+            own.into_iter().collect::<Vec<_>>(),
+            vec!["[Attached: /tmp/mine.png]".to_string()]
+        );
         // The device-local workspace: the person's own attachments still
         // resolve there (its fold is trusted), an agent's never.
         let (mut solo, _) = service();
         let local = Uuid::new_v4();
         solo.set_local_workspace(local);
         let c = solo.create_chat("solo", local, "rt").unwrap();
-        solo.post_user_message(c.id, local, "[Attached: /tmp/solo.png]").unwrap();
-        agent_reply(&mut solo, c.id, local, None, None, "[Attached: /Users/mara/keys.png]");
+        solo.post_user_message(c.id, local, "[Attached: /tmp/solo.png]")
+            .unwrap();
+        agent_reply(
+            &mut solo,
+            c.id,
+            local,
+            None,
+            None,
+            "[Attached: /Users/mara/keys.png]",
+        );
         let session = solo.load(c.id).unwrap().unwrap();
         let own = crate::attachment_blob::own_path_markers(&session, &solo.author().id);
-        assert_eq!(own.into_iter().collect::<Vec<_>>(), vec!["[Attached: /tmp/solo.png]".to_string()]);
+        assert_eq!(
+            own.into_iter().collect::<Vec<_>>(),
+            vec!["[Attached: /tmp/solo.png]".to_string()]
+        );
     }
 
     /// The host-signed agent fallback (no agent key on this host: the
@@ -5820,7 +7716,10 @@ mod tests {
         assert_eq!(host.trigger_author_role(chat, lone).unwrap(), None);
         let m_own = host.post_user_message(chat, wid, "hi").unwrap().id;
         let reply = agent_reply(&mut host, chat, wid, coder, Some(m_own), "hello");
-        assert_eq!(host.trigger_author_role(chat, reply).unwrap(), Some(WorkspaceRole::Owner));
+        assert_eq!(
+            host.trigger_author_role(chat, reply).unwrap(),
+            Some(WorkspaceRole::Owner)
+        );
         // The device-local workspace host-signs every agent output.
         let (mut solo, _) = service();
         let local = Uuid::new_v4();
@@ -5830,7 +7729,10 @@ mod tests {
         assert_eq!(solo.trigger_author_role(c.id, r).unwrap(), None);
         let m = solo.post_user_message(c.id, local, "@coder go").unwrap().id;
         let r = agent_reply(&mut solo, c.id, local, coder, Some(m), "@x go");
-        assert_eq!(solo.trigger_author_role(c.id, r).unwrap(), Some(WorkspaceRole::Owner));
+        assert_eq!(
+            solo.trigger_author_role(c.id, r).unwrap(),
+            Some(WorkspaceRole::Owner)
+        );
     }
 
     /// An agent that signs with its own key (A3) is resolved through its
@@ -5844,14 +7746,24 @@ mod tests {
         let account = Uuid::new_v4().to_string();
         svc.set_author_account(account.clone(), "Alex", None);
         let chat = svc.create_chat("A", wid, "rt").unwrap();
-        svc.set_agent_vault(Box::new(crate::identity_store::FileKeyVault::new(dir.path())));
+        svc.set_agent_vault(Box::new(crate::identity_store::FileKeyVault::new(
+            dir.path(),
+        )));
         let mut agent = WorkspaceAgent::new("coder", "rt");
         agent.owner_actor_id = account.clone();
         let agent_id = agent.id;
         svc.add_agent(chat.id, wid, agent).unwrap();
-        svc.set_agent_host(wid, agent_id, &svc.device_id().to_string()).unwrap();
+        svc.set_agent_host(wid, agent_id, &svc.device_id().to_string())
+            .unwrap();
         let m = svc.post_user_message(chat.id, wid, "@coder go").unwrap().id;
-        let r = agent_reply(&mut svc, chat.id, wid, Some(agent_id), Some(m), "@reviewer check");
+        let r = agent_reply(
+            &mut svc,
+            chat.id,
+            wid,
+            Some(agent_id),
+            Some(m),
+            "@reviewer check",
+        );
         let signer = svc
             .store()
             .list(chat.id)
@@ -5861,8 +7773,18 @@ mod tests {
             .unwrap()
             .signer_device_id;
         assert_ne!(signer, Some(svc.device_id()), "precondition: agent-signed");
-        assert_eq!(svc.trigger_author_role(chat.id, r).unwrap(), Some(WorkspaceRole::Owner));
-        let orphan = agent_reply(&mut svc, chat.id, wid, Some(agent_id), None, "@reviewer check");
+        assert_eq!(
+            svc.trigger_author_role(chat.id, r).unwrap(),
+            Some(WorkspaceRole::Owner)
+        );
+        let orphan = agent_reply(
+            &mut svc,
+            chat.id,
+            wid,
+            Some(agent_id),
+            None,
+            "@reviewer check",
+        );
         assert_eq!(svc.trigger_author_role(chat.id, orphan).unwrap(), None);
     }
 
@@ -5878,18 +7800,43 @@ mod tests {
         let run = workflow::new_run(&def, "task", "con");
         let mut con = svc_on(&path, "con", "Con");
         con.upsert_workflow_run(chat, wid, run.clone()).unwrap();
-        let stage = host.post_workflow_stage_prompt(chat, wid, "**[Workflow · x → y]**\n\ndeploy", run.id).unwrap().id;
-        assert_eq!(host.trigger_author_role(chat, stage).unwrap(), Some(WorkspaceRole::Contributor));
+        let stage = host
+            .post_workflow_stage_prompt(chat, wid, "**[Workflow · x → y]**\n\ndeploy", run.id)
+            .unwrap()
+            .id;
+        assert_eq!(
+            host.trigger_author_role(chat, stage).unwrap(),
+            Some(WorkspaceRole::Contributor)
+        );
         // The stage's reply hands on at the same tier.
-        let reply = agent_reply(&mut host, chat, wid, Some(Uuid::new_v4()), Some(stage), "@next go");
-        assert_eq!(host.trigger_author_role(chat, reply).unwrap(), Some(WorkspaceRole::Contributor));
+        let reply = agent_reply(
+            &mut host,
+            chat,
+            wid,
+            Some(Uuid::new_v4()),
+            Some(stage),
+            "@next go",
+        );
+        assert_eq!(
+            host.trigger_author_role(chat, reply).unwrap(),
+            Some(WorkspaceRole::Contributor)
+        );
         // The host user's own run keeps the host user's tier.
         let own = workflow::new_run(&def, "task", "u1");
         host.upsert_workflow_run(chat, wid, own.clone()).unwrap();
-        let stage = host.post_workflow_stage_prompt(chat, wid, "stage", own.id).unwrap().id;
-        assert_eq!(host.trigger_author_role(chat, stage).unwrap(), Some(WorkspaceRole::Owner));
+        let stage = host
+            .post_workflow_stage_prompt(chat, wid, "stage", own.id)
+            .unwrap()
+            .id;
+        assert_eq!(
+            host.trigger_author_role(chat, stage).unwrap(),
+            Some(WorkspaceRole::Owner)
+        );
         // A stage prompt naming a run this log doesn't hold fails closed.
-        let ghost = host.post_workflow_stage_prompt(chat, wid, "stage", Uuid::new_v4()).unwrap().id;
+        let ghost = host
+            .post_workflow_stage_prompt(chat, wid, "stage", Uuid::new_v4())
+            .unwrap()
+            .id;
         assert_eq!(host.trigger_author_role(chat, ghost).unwrap(), None);
     }
 
@@ -5899,7 +7846,8 @@ mod tests {
         m.id = id;
         m.responder_id = Some(Uuid::new_v4());
         m.reply_to_message_id = Some(to);
-        svc.append_signed(chat, wid, SessionEvent::MessageAppended { message: m }).unwrap();
+        svc.append_signed(chat, wid, SessionEvent::MessageAppended { message: m })
+            .unwrap();
     }
 
     /// The chain walk fails closed: a reply loop with no human behind it
@@ -5911,7 +7859,11 @@ mod tests {
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
         linked_reply(&mut host, chat, wid, a, b);
         linked_reply(&mut host, chat, wid, b, a);
-        assert_eq!(host.trigger_author_role(chat, a).unwrap(), None, "a loop with no human");
+        assert_eq!(
+            host.trigger_author_role(chat, a).unwrap(),
+            None,
+            "a loop with no human"
+        );
         let root = host.post_user_message(chat, wid, "@coder go").unwrap().id;
         let mut prev = root;
         let mut ids = Vec::new();
@@ -5921,8 +7873,16 @@ mod tests {
             ids.push(id);
             prev = id;
         }
-        assert_eq!(host.trigger_author_role(chat, ids[200]).unwrap(), Some(WorkspaceRole::Owner), "within the bound");
-        assert_eq!(host.trigger_author_role(chat, ids[299]).unwrap(), None, "past the hop bound");
+        assert_eq!(
+            host.trigger_author_role(chat, ids[200]).unwrap(),
+            Some(WorkspaceRole::Owner),
+            "within the bound"
+        );
+        assert_eq!(
+            host.trigger_author_role(chat, ids[299]).unwrap(),
+            None,
+            "past the hop bound"
+        );
     }
 
     /// A chat's events are judged against its own workspace: an event in
@@ -5967,7 +7927,12 @@ mod tests {
         let msg = ChatMessage::new(MessageRole::User, "Con", "@coder push to prod");
         let id = msg.id;
         let seq = con.store.max_sequence(w2, chat).unwrap().unwrap_or(0) + 1;
-        let mut env = SessionEventEnvelope::new(chat, w2, seq, SessionEvent::MessageAppended { message: msg });
+        let mut env = SessionEventEnvelope::new(
+            chat,
+            w2,
+            seq,
+            SessionEvent::MessageAppended { message: msg },
+        );
         let log_head = con.store.lamport_head(w2, chat).unwrap();
         env.lamport = ligus_core::lamport::next(log_head);
         env.actor_stamp = Some(ActorStamp {
@@ -5975,7 +7940,11 @@ mod tests {
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
             presence: None,
-            runtime_effect: false, prev: None, sig_alg: Default::default(), log_head });
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head,
+        });
         ligus_core::sign_envelope(&mut env, con.device_id, &con.keypair);
         con.store.ingest(&env).unwrap();
         assert_eq!(host.trigger_author_role(chat, id).unwrap(), None);
@@ -6003,11 +7972,20 @@ mod tests {
         owner.add_member(chat, wid, member).unwrap();
         con.publish_identity(chat, wid).unwrap();
         let honest = con.post_user_message(chat, wid, "@coder hi").unwrap().id;
-        assert_eq!(owner.trigger_author_role(chat, honest).unwrap(), Some(WorkspaceRole::Contributor));
+        assert_eq!(
+            owner.trigger_author_role(chat, honest).unwrap(),
+            Some(WorkspaceRole::Contributor)
+        );
         // The Contributor's device stamps the Owner's actor id, no account.
         con.author = ActorIdentity::new(owner_acct.clone(), "Ana", ligus_core::ActorKind::Human);
-        let forged = con.post_user_message(chat, wid, "@coder push to prod").unwrap().id;
-        let mut all = owner.store().list(workspace_config_session_id(wid)).unwrap();
+        let forged = con
+            .post_user_message(chat, wid, "@coder push to prod")
+            .unwrap()
+            .id;
+        let mut all = owner
+            .store()
+            .list(workspace_config_session_id(wid))
+            .unwrap();
         all.extend(owner.store().list(chat).unwrap());
         let env = all
             .iter()
@@ -6023,20 +8001,55 @@ mod tests {
         // ingest too.
         // (Authoring refuses it for lack of presence; a peer that skips the
         // check publishes it anyway.)
-        assert!(con.set_member_role(chat, wid, con_acct.clone(), WorkspaceRole::Owner).is_err());
-        let change = MemberRoleChange { member_id: con_acct.clone(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Owner };
-        let env = con.draft_signed(workspace_config_session_id(wid), wid, SessionEvent::MemberRoleChanged { change, watermark: Vec::new() }).unwrap();
+        assert!(con
+            .set_member_role(chat, wid, con_acct.clone(), WorkspaceRole::Owner)
+            .is_err());
+        let change = MemberRoleChange {
+            member_id: con_acct.clone(),
+            old_role: WorkspaceRole::Contributor,
+            new_role: WorkspaceRole::Owner,
+        };
+        let env = con
+            .draft_signed(
+                workspace_config_session_id(wid),
+                wid,
+                SessionEvent::MemberRoleChanged {
+                    change,
+                    watermark: Vec::new(),
+                },
+            )
+            .unwrap();
         con.store.ingest(&env).unwrap();
-        let cfg = owner.store().list(workspace_config_session_id(wid)).unwrap();
-        let promo = cfg.iter().rev().find(|e| matches!(&e.payload, SessionEvent::MemberRoleChanged { .. })).unwrap();
-        assert_eq!(verdict_for(&build_roster(&all), promo), Verdict::Unverifiable(QuarantineReason::UncertifiedDevice));
+        let cfg = owner
+            .store()
+            .list(workspace_config_session_id(wid))
+            .unwrap();
+        let promo = cfg
+            .iter()
+            .rev()
+            .find(|e| matches!(&e.payload, SessionEvent::MemberRoleChanged { .. }))
+            .unwrap();
+        assert_eq!(
+            verdict_for(&build_roster(&all), promo),
+            Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
+        );
         // The same stamp on an agent's reply caps nothing upward either:
         // every fold (authoring included) refuses an event whose stamp
         // names an account its signer isn't certified for, and one written
         // anyway gets no Owner tier.
-        if let Ok(r) = con.begin_assistant_message(chat, wid, "coder", "rt", Some(Uuid::new_v4()), Some(honest)) {
+        if let Ok(r) = con.begin_assistant_message(
+            chat,
+            wid,
+            "coder",
+            "rt",
+            Some(Uuid::new_v4()),
+            Some(honest),
+        ) {
             let _ = con.complete_assistant_message(chat, wid, r, "@coder go");
-            assert_ne!(owner.trigger_author_role(chat, r).unwrap(), Some(WorkspaceRole::Owner));
+            assert_ne!(
+                owner.trigger_author_role(chat, r).unwrap(),
+                Some(WorkspaceRole::Owner)
+            );
         }
     }
 
@@ -6050,27 +8063,57 @@ mod tests {
         let chat = svc.create_chat("A", wid, "rt").unwrap();
         let secret = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a6978";
         crate::secret_redact::register(secret);
-        let id = svc.begin_assistant_message(chat.id, wid, "ligus", "rt", None, None).unwrap();
+        let id = svc
+            .begin_assistant_message(chat.id, wid, "ligus", "rt", None, None)
+            .unwrap();
         let (a, b) = secret.split_at(20);
-        svc.append_chunk(chat.id, wid, id, format!("the serve token is {a}")).unwrap();
-        svc.append_chunk(chat.id, wid, id, format!("{b} - done. ")).unwrap();
-        svc.append_chunk(chat.id, wid, id, "x".repeat(2048)).unwrap();
+        svc.append_chunk(chat.id, wid, id, format!("the serve token is {a}"))
+            .unwrap();
+        svc.append_chunk(chat.id, wid, id, format!("{b} - done. "))
+            .unwrap();
+        svc.append_chunk(chat.id, wid, id, "x".repeat(2048))
+            .unwrap();
         let streamed: String = svc
             .store
             .list(chat.id)
             .unwrap()
             .into_iter()
             .filter_map(|e| match e.payload {
-                SessionEvent::MessageChunkReceived { message_id, chunk } if message_id == id => Some(chunk),
+                SessionEvent::MessageChunkReceived { message_id, chunk } if message_id == id => {
+                    Some(chunk)
+                }
                 _ => None,
             })
             .collect();
-        assert!(!streamed.contains(a) || !streamed.contains(b), "both halves of the secret were streamed into the log");
+        assert!(
+            !streamed.contains(a) || !streamed.contains(b),
+            "both halves of the secret were streamed into the log"
+        );
         assert!(!streamed.contains(secret));
-        assert!(streamed.contains("the serve token is "), "text before the secret still streams: {streamed:?}");
-        svc.complete_assistant_message(chat.id, wid, id, format!("the serve token is {secret} - done.")).unwrap();
-        let body = svc.load(chat.id).unwrap().unwrap().messages.into_iter().find(|m| m.id == id).unwrap().body;
-        assert!(!body.contains(secret) && body.contains(crate::secret_redact::MARK), "{body}");
+        assert!(
+            streamed.contains("the serve token is "),
+            "text before the secret still streams: {streamed:?}"
+        );
+        svc.complete_assistant_message(
+            chat.id,
+            wid,
+            id,
+            format!("the serve token is {secret} - done."),
+        )
+        .unwrap();
+        let body = svc
+            .load(chat.id)
+            .unwrap()
+            .unwrap()
+            .messages
+            .into_iter()
+            .find(|m| m.id == id)
+            .unwrap()
+            .body;
+        assert!(
+            !body.contains(secret) && body.contains(crate::secret_redact::MARK),
+            "{body}"
+        );
     }
 
     /// Phase A, item 2: a removal carries a watermark of the member's
@@ -6084,31 +8127,60 @@ mod tests {
         let wid = Uuid::new_v4();
         let mut owner = svc_on(&path, "u1", "Ana");
         let chat = owner.create_chat("A", wid, "anthropic").unwrap().id;
-        owner.add_member(chat, wid, test_member_acct("con", "Con", WorkspaceRole::Contributor)).unwrap();
+        owner
+            .add_member(
+                chat,
+                wid,
+                test_member_acct("con", "Con", WorkspaceRole::Contributor),
+            )
+            .unwrap();
         let mut con = svc_on(&path, "con", "Con");
-        con.publish_identity(workspace_config_session_id(wid), wid).unwrap();
-        let early = con.post_user_message(chat, wid, "while a member").unwrap().id;
+        con.publish_identity(workspace_config_session_id(wid), wid)
+            .unwrap();
+        let early = con
+            .post_user_message(chat, wid, "while a member")
+            .unwrap()
+            .id;
         let old_frontier = {
             let (_, t) = con.store.load_config(wid, None, None).unwrap();
             t.head()
         };
         owner.remove_member(chat, wid, "con").unwrap();
-        let removal = owner.store().list(workspace_config_session_id(wid)).unwrap().into_iter().rev()
-            .find(|e| matches!(e.payload, SessionEvent::MemberRemoved { .. })).unwrap();
-        let SessionEvent::MemberRemoved { watermark, .. } = &removal.payload else { unreachable!() };
-        assert!(watermark.iter().any(|w| w.log == chat), "the removal names the member's chain on the chat");
+        let removal = owner
+            .store()
+            .list(workspace_config_session_id(wid))
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|e| matches!(e.payload, SessionEvent::MemberRemoved { .. }))
+            .unwrap();
+        let SessionEvent::MemberRemoved { watermark, .. } = &removal.payload else {
+            unreachable!()
+        };
+        assert!(
+            watermark.iter().any(|w| w.log == chat),
+            "the removal names the member's chain on the chat"
+        );
         // Con's device still holds its key: it signs a post stamped with the
         // pre-removal frontier and the peer stores it.
         let msg = ChatMessage::new(MessageRole::User, "Con", "backdated");
         let late = msg.id;
-        let mut env = con.draft_signed(chat, wid, SessionEvent::MessageAppended { message: msg }).unwrap();
+        let mut env = con
+            .draft_signed(chat, wid, SessionEvent::MessageAppended { message: msg })
+            .unwrap();
         env.actor_stamp.as_mut().unwrap().cfg_frontier = old_frontier;
         env.clear_raw();
         sign_envelope(&mut env, con.device_id, &con.keypair);
         con.store.ingest(&env).unwrap();
         let s = svc_on(&path, "u1", "Ana").load(chat).unwrap().unwrap();
-        assert!(s.messages.iter().any(|m| m.id == early), "the removal took back a post its author held");
-        assert!(!s.messages.iter().any(|m| m.id == late), "a removed member's backdated post folded");
+        assert!(
+            s.messages.iter().any(|m| m.id == early),
+            "the removal took back a post its author held"
+        );
+        assert!(
+            !s.messages.iter().any(|m| m.id == late),
+            "a removed member's backdated post folded"
+        );
     }
 
     /// The workspace's name (its config log's title) is what a phone shows
@@ -6126,32 +8198,83 @@ mod tests {
         let chat = {
             let mut a = svc_on(&path, "u1", "Ana");
             let chat = a.create_chat("A", wid, "anthropic").unwrap();
-            a.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
-            a.add_member(chat.id, wid, test_member("vie", "Vie", WorkspaceRole::Viewer)).unwrap();
-            a.add_member(chat.id, wid, test_member_acct("adm", "Adm", WorkspaceRole::Admin)).unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member("con", "Con", WorkspaceRole::Contributor),
+            )
+            .unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member("vie", "Vie", WorkspaceRole::Viewer),
+            )
+            .unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member_acct("adm", "Adm", WorkspaceRole::Admin),
+            )
+            .unwrap();
             chat.id
         };
         let title = || svc_on(&path, "u1", "Ana").load(cfg).unwrap().unwrap().title;
         // Squatting: a Contributor forges the name before the founder writes it.
         let mut con = svc_on(&path, "con", "Con");
-        let env = con.draft_signed(cfg, wid, SessionEvent::SessionTitleChanged { title: "Acme Payroll".into() }).unwrap();
+        let env = con
+            .draft_signed(
+                cfg,
+                wid,
+                SessionEvent::SessionTitleChanged {
+                    title: "Acme Payroll".into(),
+                },
+            )
+            .unwrap();
         con.store.ingest(&env).unwrap();
         assert_eq!(title(), "", "a Contributor named the workspace");
-        assert!(svc_on(&path, "u1", "Ana").publish_workspace_name(wid, "Comb Council").unwrap(), "the founder's name is written");
+        assert!(
+            svc_on(&path, "u1", "Ana")
+                .publish_workspace_name(wid, "Comb Council")
+                .unwrap(),
+            "the founder's name is written"
+        );
         assert_eq!(title(), "Comb Council");
         // Renaming it afterwards: refused when authored, dropped when forged.
         for (id, name) in [("con", "Con"), ("vie", "Vie")] {
             let mut s = svc_on(&path, id, name);
-            assert!(matches!(s.set_title(cfg, wid, "Other Co"), Err(ChatError::Unauthorized(_))), "{id} renamed the workspace");
-            let env = s.draft_signed(cfg, wid, SessionEvent::SessionTitleChanged { title: "Other Co".into() }).unwrap();
+            assert!(
+                matches!(
+                    s.set_title(cfg, wid, "Other Co"),
+                    Err(ChatError::Unauthorized(_))
+                ),
+                "{id} renamed the workspace"
+            );
+            let env = s
+                .draft_signed(
+                    cfg,
+                    wid,
+                    SessionEvent::SessionTitleChanged {
+                        title: "Other Co".into(),
+                    },
+                )
+                .unwrap();
             s.store.ingest(&env).unwrap();
             assert_eq!(title(), "Comb Council", "{id}'s forged rename folded");
         }
         // An Admin may rename it; a Contributor still titles a chat.
-        svc_on(&path, "adm", "Adm").set_title(cfg, wid, "Comb Council East").unwrap();
+        svc_on(&path, "adm", "Adm")
+            .set_title(cfg, wid, "Comb Council East")
+            .unwrap();
         assert_eq!(title(), "Comb Council East");
         con.set_title(chat, wid, "my chat").unwrap();
-        assert_eq!(svc_on(&path, "u1", "Ana").load(chat).unwrap().unwrap().title, "my chat");
+        assert_eq!(
+            svc_on(&path, "u1", "Ana")
+                .load(chat)
+                .unwrap()
+                .unwrap()
+                .title,
+            "my chat"
+        );
     }
 
     #[test]
@@ -6164,8 +8287,18 @@ mod tests {
         let chat_id = {
             let mut a = svc_on(&path, "u1", "Ana");
             let chat = a.create_chat("A", wid, "anthropic").unwrap();
-            a.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
-            a.add_member(chat.id, wid, test_member_acct("adm", "Adm", WorkspaceRole::Admin)).unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member("con", "Con", WorkspaceRole::Contributor),
+            )
+            .unwrap();
+            a.add_member(
+                chat.id,
+                wid,
+                test_member_acct("adm", "Adm", WorkspaceRole::Admin),
+            )
+            .unwrap();
             chat.id
         };
         let mut con = svc_on(&path, "con", "Con");
@@ -6177,8 +8310,12 @@ mod tests {
             "a Contributor must not add members"
         );
         let mut adm = svc_on(&path, "adm", "Adm");
-        adm.add_member(chat_id, wid, test_member("x", "X", WorkspaceRole::Viewer)).unwrap();
-        let cfg = svc_on(&path, "u1", "Ana").load(workspace_config_session_id(wid)).unwrap().unwrap();
+        adm.add_member(chat_id, wid, test_member("x", "X", WorkspaceRole::Viewer))
+            .unwrap();
+        let cfg = svc_on(&path, "u1", "Ana")
+            .load(workspace_config_session_id(wid))
+            .unwrap()
+            .unwrap();
         assert!(cfg.members.iter().any(|m| m.id == "x"));
     }
 
@@ -6195,7 +8332,12 @@ mod tests {
             a.ensure_workspace_config(wid).unwrap();
             let invite = a.issue_invite(wid).unwrap();
             a.store().set_join_invite(wid, invite).unwrap();
-            a.store().set_join_redeem(wid, a.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+            a.store()
+                .set_join_redeem(
+                    wid,
+                    a.take_invite_redeem_seed(wid, invite).unwrap().as_ref(),
+                )
+                .unwrap();
             chat.id
         };
         let mut eve = svc_on(&path, "eve", "Eve");
@@ -6209,7 +8351,10 @@ mod tests {
         // But an honest self-enroll (Contributor, via ensure_self_member) succeeds.
         assert!(eve.ensure_self_member(chat_id, wid).unwrap());
         let cfg = svc_on(&path, "u1", "Ana").load(cfg_id).unwrap().unwrap();
-        assert_eq!(cfg.members.iter().find(|m| m.id == "eve").unwrap().role, WorkspaceRole::Contributor);
+        assert_eq!(
+            cfg.members.iter().find(|m| m.id == "eve").unwrap().role,
+            WorkspaceRole::Contributor
+        );
     }
 
     #[test]
@@ -6224,16 +8369,25 @@ mod tests {
         svc.append_signed(
             chat.id,
             wid,
-            SessionEvent::MemberAdded { invite: None, proof: None, member: test_member("u2", "Bo", WorkspaceRole::Viewer) },
+            SessionEvent::MemberAdded {
+                invite: None,
+                proof: None,
+                member: test_member("u2", "Bo", WorkspaceRole::Viewer),
+            },
         )
         .unwrap();
         // The authoritative config-log entry gives u2 a higher role.
-        svc.add_member(chat.id, wid, test_member("u2", "Bo", WorkspaceRole::Admin)).unwrap();
+        svc.add_member(chat.id, wid, test_member("u2", "Bo", WorkspaceRole::Admin))
+            .unwrap();
 
         let loaded = svc.load(chat.id).unwrap().unwrap();
         let u2: Vec<_> = loaded.members.iter().filter(|m| m.id == "u2").collect();
         assert_eq!(u2.len(), 1, "no duplicate member after union");
-        assert_eq!(u2[0].role, WorkspaceRole::Admin, "config-log entry wins over per-session");
+        assert_eq!(
+            u2[0].role,
+            WorkspaceRole::Admin,
+            "config-log entry wins over per-session"
+        );
     }
 
     #[test]
@@ -6277,10 +8431,16 @@ mod tests {
         let sid = chat.id;
         svc.post_user_message(sid, wid, "kick off").unwrap();
         // Two agents reply into the same thread.
-        let m1 = svc.begin_assistant_message(sid, wid, "Scout", "ws-claude", None, None).unwrap();
-        svc.complete_assistant_message(sid, wid, m1, "found the bug").unwrap();
-        let m2 = svc.begin_assistant_message(sid, wid, "Nova", "ws-claude", None, None).unwrap();
-        svc.complete_assistant_message(sid, wid, m2, "drafting the fix").unwrap();
+        let m1 = svc
+            .begin_assistant_message(sid, wid, "Scout", "ws-claude", None, None)
+            .unwrap();
+        svc.complete_assistant_message(sid, wid, m1, "found the bug")
+            .unwrap();
+        let m2 = svc
+            .begin_assistant_message(sid, wid, "Nova", "ws-claude", None, None)
+            .unwrap();
+        svc.complete_assistant_message(sid, wid, m2, "drafting the fix")
+            .unwrap();
 
         // From Scout's perspective: its own turn is clean; Nova + the human are
         // attributed so Scout can tell the contributions apart. Nova's reply is
@@ -6313,10 +8473,16 @@ mod tests {
         svc.post_user_message(sid, wid, "go").unwrap();
         let nova_a = Uuid::new_v4();
         let nova_b = Uuid::new_v4();
-        let a = svc.begin_assistant_message(sid, wid, "Nova", "rt", Some(nova_a), None).unwrap();
-        svc.complete_assistant_message(sid, wid, a, "A analysis").unwrap();
-        let b = svc.begin_assistant_message(sid, wid, "Nova", "rt", Some(nova_b), None).unwrap();
-        svc.complete_assistant_message(sid, wid, b, "B take").unwrap();
+        let a = svc
+            .begin_assistant_message(sid, wid, "Nova", "rt", Some(nova_a), None)
+            .unwrap();
+        svc.complete_assistant_message(sid, wid, a, "A analysis")
+            .unwrap();
+        let b = svc
+            .begin_assistant_message(sid, wid, "Nova", "rt", Some(nova_b), None)
+            .unwrap();
+        svc.complete_assistant_message(sid, wid, b, "B take")
+            .unwrap();
 
         let session = svc.load(sid).unwrap().unwrap();
         let turns = turns_for(&session, Some(nova_a), "Nova");
@@ -6379,8 +8545,14 @@ mod tests {
             ChatMessage::new(MessageRole::Assistant, "Ligus", "hello"),
             ChatMessage::new(MessageRole::User, "Mara", "hi"),
         ];
-        assert_eq!(turns_with_summary(&kept, None, "Ligus", None), turns_from(&kept, None, "Ligus"));
-        assert_eq!(turns_with_summary(&kept, None, "Ligus", Some("  ")), turns_from(&kept, None, "Ligus"));
+        assert_eq!(
+            turns_with_summary(&kept, None, "Ligus", None),
+            turns_from(&kept, None, "Ligus")
+        );
+        assert_eq!(
+            turns_with_summary(&kept, None, "Ligus", Some("  ")),
+            turns_from(&kept, None, "Ligus")
+        );
     }
 
     #[test]
@@ -6393,12 +8565,17 @@ mod tests {
         let (sid, wid) = (chat.id, chat.workspace_id);
 
         svc.post_user_message(sid, wid, "hi").unwrap();
-        let mid = svc.begin_assistant_message(sid, wid, "Ligus", "anthropic", None, None).unwrap();
+        let mid = svc
+            .begin_assistant_message(sid, wid, "Ligus", "anthropic", None, None)
+            .unwrap();
         svc.append_chunk(sid, wid, mid, "partial reply").unwrap();
         // No complete_assistant_message — the process "died" here.
 
         let before = svc.load(sid).unwrap().unwrap();
-        assert!(before.messages.iter().any(|m| m.id == mid && m.is_streaming));
+        assert!(before
+            .messages
+            .iter()
+            .any(|m| m.id == mid && m.is_streaming));
 
         let swept = svc.clear_stale_streaming().unwrap();
         assert_eq!(swept, 1, "one ghost message swept");
@@ -6428,9 +8605,20 @@ mod tests {
         let mid = svc
             .begin_assistant_message(chat.id, chat.workspace_id, "Ligus", "anthropic", None, None)
             .unwrap();
-        assert_eq!(svc.clear_stale_streaming().unwrap(), 1, "account-stamped ghost swept");
+        assert_eq!(
+            svc.clear_stale_streaming().unwrap(),
+            1,
+            "account-stamped ghost swept"
+        );
         let after = svc.load(chat.id).unwrap().unwrap();
-        assert!(!after.messages.iter().find(|m| m.id == mid).unwrap().is_streaming);
+        assert!(
+            !after
+                .messages
+                .iter()
+                .find(|m| m.id == mid)
+                .unwrap()
+                .is_streaming
+        );
     }
 
     #[test]
@@ -6442,8 +8630,12 @@ mod tests {
         let a = svc.create_chat("A", Uuid::nil(), "anthropic").unwrap();
         let b = svc.create_chat("B", Uuid::nil(), "anthropic").unwrap();
 
-        let ga = svc.begin_assistant_message(a.id, a.workspace_id, "Ligus", "anthropic", None, None).unwrap();
-        let gb = svc.begin_assistant_message(b.id, b.workspace_id, "Ligus", "anthropic", None, None).unwrap();
+        let ga = svc
+            .begin_assistant_message(a.id, a.workspace_id, "Ligus", "anthropic", None, None)
+            .unwrap();
+        let gb = svc
+            .begin_assistant_message(b.id, b.workspace_id, "Ligus", "anthropic", None, None)
+            .unwrap();
 
         let swept = svc.clear_stale_streaming().unwrap();
         assert_eq!(swept, 2, "both sessions' ghosts swept");
@@ -6471,7 +8663,10 @@ mod tests {
         assert_ne!(old_id, new_id);
 
         svc.set_local_workspace(wid); // required for the Admin-gated member changes
-        assert!(svc.reconcile_local_owner(wid).unwrap(), "should repair the churned roster");
+        assert!(
+            svc.reconcile_local_owner(wid).unwrap(),
+            "should repair the churned roster"
+        );
 
         let config = svc
             .load(ligus_core::workspace_config_session_id(wid))
@@ -6483,8 +8678,15 @@ mod tests {
             .filter(|m| m.actor.kind == ligus_core::ActorKind::Human)
             .collect();
         assert_eq!(humans.len(), 1, "collapsed to a single human self");
-        assert_eq!(humans[0].actor.id, new_id, "current self is the sole member");
-        assert_eq!(humans[0].role, WorkspaceRole::Owner, "current self is Owner");
+        assert_eq!(
+            humans[0].actor.id, new_id,
+            "current self is the sole member"
+        );
+        assert_eq!(
+            humans[0].role,
+            WorkspaceRole::Owner,
+            "current self is Owner"
+        );
 
         // Idempotent: a second run changes nothing.
         assert!(!svc.reconcile_local_owner(wid).unwrap(), "no-op once clean");
@@ -6594,7 +8796,12 @@ mod tests {
         assert_eq!(defs[0].name, "Review gate v2");
 
         svc.remove_workflow_definition(sid, wid, def.id).unwrap();
-        assert!(svc.load(sid).unwrap().unwrap().workflow_definitions.is_empty());
+        assert!(svc
+            .load(sid)
+            .unwrap()
+            .unwrap()
+            .workflow_definitions
+            .is_empty());
     }
 
     /// An edit (a re-upsert) never rewrites a proposal's comment thread: a
@@ -6610,26 +8817,40 @@ mod tests {
         let pid = p.id;
         svc.upsert_proposal(sid, wid, p.clone()).unwrap();
         let me = svc.author().id.clone();
-        svc.refine_proposal(sid, wid, pid, me, WorkspaceRole::Owner, "keep the cache", true).unwrap();
+        svc.refine_proposal(
+            sid,
+            wid,
+            pid,
+            me,
+            WorkspaceRole::Owner,
+            "keep the cache",
+            true,
+        )
+        .unwrap();
         let mut stale = p.clone();
         stale.title = "Tune it (v1)".into();
         svc.upsert_proposal(sid, wid, stale.clone()).unwrap();
         let mut smuggled = stale.clone();
-        smuggled.refinements.push(ligus_core::proposals::ProposalRefinement {
-            id: Uuid::new_v4(),
-            actor_id: "someone-else".into(),
-            role: WorkspaceRole::Owner,
-            text: "also delete the audit log".into(),
-            request_changes: true,
-            created_at: Timestamp::now(),
-        });
+        smuggled
+            .refinements
+            .push(ligus_core::proposals::ProposalRefinement {
+                id: Uuid::new_v4(),
+                actor_id: "someone-else".into(),
+                role: WorkspaceRole::Owner,
+                text: "also delete the audit log".into(),
+                request_changes: true,
+                created_at: Timestamp::now(),
+            });
         svc.upsert_proposal(sid, wid, smuggled).unwrap();
         let s = svc.load(sid).unwrap().unwrap();
         let got = s.proposals.iter().find(|q| q.id == pid).unwrap();
         assert_eq!(got.title, "Tune it (v1)");
         let texts: Vec<&str> = got.refinements.iter().map(|r| r.text.as_str()).collect();
         assert_eq!(texts, ["keep the cache"]);
-        let forwarded: Vec<&str> = s.verified_refinements(got).map(|r| r.text.as_str()).collect();
+        let forwarded: Vec<&str> = s
+            .verified_refinements(got)
+            .map(|r| r.text.as_str())
+            .collect();
         assert_eq!(forwarded, ["keep the cache"]);
     }
 
@@ -6648,24 +8869,48 @@ mod tests {
         let own = workflow_proposal("u1", ligus_core::workflow::preset_fan_out_vote());
         let own_id = own.id;
         svc.upsert_proposal(sid, wid, own).unwrap();
-        let r = svc.vote_on_proposal(sid, wid, own_id, true).unwrap().unwrap();
+        let r = svc
+            .vote_on_proposal(sid, wid, own_id, true)
+            .unwrap()
+            .unwrap();
         assert_eq!(r.status, ligus_core::ProposalStatus::Open);
-        assert!(svc.load(sid).unwrap().unwrap().workflow_definitions.is_empty());
+        assert!(svc
+            .load(sid)
+            .unwrap()
+            .unwrap()
+            .workflow_definitions
+            .is_empty());
 
         let p = workflow_proposal("agent-scout", def.clone());
         let pid = p.id;
         svc.upsert_proposal(sid, wid, p).unwrap();
-        assert!(svc.load(sid).unwrap().unwrap().workflow_definitions.is_empty(), "filing alone adds nothing");
+        assert!(
+            svc.load(sid)
+                .unwrap()
+                .unwrap()
+                .workflow_definitions
+                .is_empty(),
+            "filing alone adds nothing"
+        );
 
         let r = svc.vote_on_proposal(sid, wid, pid, true).unwrap().unwrap();
         assert_eq!(r.status, ligus_core::ProposalStatus::Applied);
         let s = svc.load(sid).unwrap().unwrap();
         assert_eq!(s.workflow_definitions, vec![def.clone()]);
-        assert_eq!(s.proposals.iter().find(|p| p.id == pid).unwrap().status, ligus_core::ProposalStatus::Applied);
+        assert_eq!(
+            s.proposals.iter().find(|p| p.id == pid).unwrap().status,
+            ligus_core::ProposalStatus::Applied
+        );
 
         // Applying again (another device's Implement) changes nothing.
-        assert!(svc.apply_workflow_proposal(sid, wid, pid).unwrap().is_none());
-        assert_eq!(svc.load(sid).unwrap().unwrap().workflow_definitions.len(), 1);
+        assert!(svc
+            .apply_workflow_proposal(sid, wid, pid)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            svc.load(sid).unwrap().unwrap().workflow_definitions.len(),
+            1
+        );
     }
 
     /// A rules version this build doesn't enforce makes the workspace
@@ -6677,12 +8922,21 @@ mod tests {
     fn unknown_rules_version_needs_presence_to_take_effect() {
         let (mut svc, _) = service();
         svc.disable_test_presence();
-        let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
+        let chat = svc
+            .create_chat("Demo", Uuid::new_v4(), "anthropic")
+            .unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let cfg = svc.ensure_workspace_config(wid).unwrap();
         svc.post_user_message(sid, wid, "before").unwrap();
         let err = svc
-            .append_signed(cfg, wid, SessionEvent::WorkspaceRulesSet { version: ligus_core::authz::RULES_SUPPORTED + 1, presence: None })
+            .append_signed(
+                cfg,
+                wid,
+                SessionEvent::WorkspaceRulesSet {
+                    version: ligus_core::authz::RULES_SUPPORTED + 1,
+                    presence: None,
+                },
+            )
             .unwrap_err()
             .to_string();
         assert!(err.contains("passkey"), "{err}");
@@ -6695,7 +8949,9 @@ mod tests {
     #[test]
     fn a_held_vote_blocks_marking_the_proposal_applied() {
         let (mut svc, _) = service();
-        let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
+        let chat = svc
+            .create_chat("Demo", Uuid::new_v4(), "anthropic")
+            .unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         svc.ensure_workspace_config(wid).unwrap();
         let p = ActionProposal::new("Ship it", ligus_core::ProposalKind::Decision, "agent");
@@ -6703,16 +8959,37 @@ mod tests {
         svc.upsert_proposal(sid, wid, p).unwrap();
         svc.vote_on_proposal(sid, wid, pid, true).unwrap();
         // A peer's vote naming a config event this device doesn't hold.
-        let mut peer = SessionEventEnvelope::new(sid, wid, 99, SessionEvent::ProposalDismissed { proposal_id: pid, dismissed: false });
+        let mut peer = SessionEventEnvelope::new(
+            sid,
+            wid,
+            99,
+            SessionEvent::ProposalDismissed {
+                proposal_id: pid,
+                dismissed: false,
+            },
+        );
         peer.payload = SessionEvent::ProposalVoteCast {
             proposal_id: pid,
-            approval: ProposalApproval { actor_id: "u1".into(), role: WorkspaceRole::Owner, approved: false, created_at: Timestamp::now(), diff_digest: None },
+            approval: ProposalApproval {
+                actor_id: "u1".into(),
+                role: WorkspaceRole::Owner,
+                approved: false,
+                created_at: Timestamp::now(),
+                diff_digest: None,
+            },
         };
         peer.actor_stamp = Some(ActorStamp {
             actor: svc.author().clone(),
             recorded_at: Timestamp::now(),
-            cfg_frontier: Some(ligus_core::CfgFrontier { lamport: 500, event_id: Uuid::new_v4() }),
-            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None
+            cfg_frontier: Some(ligus_core::CfgFrontier {
+                lamport: 500,
+                event_id: Uuid::new_v4(),
+            }),
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head: None,
         });
         ligus_core::lamport::stamp_next(&mut peer, svc.store().lamport_head(wid, sid).unwrap());
         svc.store().append_envelope(&peer).unwrap();
@@ -6732,8 +9009,16 @@ mod tests {
         svc.upsert_proposal(sid, wid, p).unwrap();
         let r = svc.vote_on_proposal(sid, wid, pid, false).unwrap().unwrap();
         assert_eq!(r.status, ligus_core::ProposalStatus::Rejected);
-        assert!(svc.apply_workflow_proposal(sid, wid, pid).unwrap().is_none());
-        assert!(svc.load(sid).unwrap().unwrap().workflow_definitions.is_empty());
+        assert!(svc
+            .apply_workflow_proposal(sid, wid, pid)
+            .unwrap()
+            .is_none());
+        assert!(svc
+            .load(sid)
+            .unwrap()
+            .unwrap()
+            .workflow_definitions
+            .is_empty());
     }
 
     #[test]
@@ -6746,8 +9031,10 @@ mod tests {
         // directive) stay in place and can be revised.
         let existing = ligus_core::workflow::preset_review_gate();
         let other = ligus_core::workflow::preset_fan_out_vote();
-        svc.save_workflow_definition(sid, wid, existing.clone()).unwrap();
-        svc.save_workflow_definition(sid, wid, other.clone()).unwrap();
+        svc.save_workflow_definition(sid, wid, existing.clone())
+            .unwrap();
+        svc.save_workflow_definition(sid, wid, other.clone())
+            .unwrap();
 
         let mut revised = existing.clone();
         revised.name = "Review gate v2".into();
@@ -6771,8 +9058,15 @@ mod tests {
         let pid = p.id;
         svc.upsert_proposal(sid, wid, p).unwrap();
         let r = svc.vote_on_proposal(sid, wid, pid, true).unwrap().unwrap();
-        assert_eq!(r.status, ligus_core::ProposalStatus::Approved, "not auto-applied");
-        assert!(svc.apply_workflow_proposal(sid, wid, pid).unwrap().is_none());
+        assert_eq!(
+            r.status,
+            ligus_core::ProposalStatus::Approved,
+            "not auto-applied"
+        );
+        assert!(svc
+            .apply_workflow_proposal(sid, wid, pid)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -6786,7 +9080,9 @@ mod tests {
         assert!(svc.load(sid).unwrap().unwrap().workflow_definitions[0].disabled);
         svc.set_workflow_enabled(sid, wid, def.id, true).unwrap();
         assert!(!svc.load(sid).unwrap().unwrap().workflow_definitions[0].disabled);
-        assert!(svc.set_workflow_enabled(sid, wid, Uuid::new_v4(), false).is_err());
+        assert!(svc
+            .set_workflow_enabled(sid, wid, Uuid::new_v4(), false)
+            .is_err());
     }
 
     #[test]
@@ -6857,11 +9153,18 @@ mod flow_tests {
             at_ms: 0,
             expires_ms: None,
         };
-        svc.record_flow(chat.id, wid, FlowRecord::Mark(mark.clone())).unwrap();
+        svc.record_flow(chat.id, wid, FlowRecord::Mark(mark.clone()))
+            .unwrap();
         svc.record_flow(
             chat.id,
             wid,
-            FlowRecord::Progress(ProgressMark { message_id: Uuid::new_v4(), agent: "primary".into(), units: 1.0, kind: "tests_passing".into(), at_ms: 0 }),
+            FlowRecord::Progress(ProgressMark {
+                message_id: Uuid::new_v4(),
+                agent: "primary".into(),
+                units: 1.0,
+                kind: "tests_passing".into(),
+                at_ms: 0,
+            }),
         )
         .unwrap();
         // The mark is workspace config; the progress stays in the chat.
@@ -6869,7 +9172,8 @@ mod flow_tests {
         let s = svc.load(chat.id).unwrap().unwrap();
         assert_eq!(s.flow.progress.len(), 1);
         assert!(s.flow.marks.is_empty());
-        svc.record_flow(chat.id, wid, FlowRecord::MarkCleared { mark_id: mark.id }).unwrap();
+        svc.record_flow(chat.id, wid, FlowRecord::MarkCleared { mark_id: mark.id })
+            .unwrap();
         assert!(svc.flow_config(wid).unwrap().marks.is_empty());
     }
 
@@ -6916,17 +9220,34 @@ mod flow_tests {
         let mut svc = service();
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "rt").unwrap();
-        svc.record_flow(chat.id, wid, FlowRecord::TurnTagged(turn("primary", 1, false))).unwrap();
         svc.record_flow(
             chat.id,
             wid,
-            FlowRecord::Progress(ProgressMark { message_id: Uuid::new_v4(), agent: "primary".into(), units: 1.0, kind: "tests_passing".into(), at_ms: 2 }),
+            FlowRecord::TurnTagged(turn("primary", 1, false)),
         )
         .unwrap();
         svc.record_flow(
             chat.id,
             wid,
-            FlowRecord::EdgeWait(ligus_core::flow::EdgeWait { edge: "gate".into(), reference: "r".into(), wait_ms: 5, host_id: String::new(), at_ms: 3 }),
+            FlowRecord::Progress(ProgressMark {
+                message_id: Uuid::new_v4(),
+                agent: "primary".into(),
+                units: 1.0,
+                kind: "tests_passing".into(),
+                at_ms: 2,
+            }),
+        )
+        .unwrap();
+        svc.record_flow(
+            chat.id,
+            wid,
+            FlowRecord::EdgeWait(ligus_core::flow::EdgeWait {
+                edge: "gate".into(),
+                reference: "r".into(),
+                wait_ms: 5,
+                host_id: String::new(),
+                at_ms: 3,
+            }),
         )
         .unwrap();
         svc.record_flow(
@@ -6942,15 +9263,32 @@ mod flow_tests {
             }),
         )
         .unwrap();
-        assert!(flow_kinds(&svc, chat.id).is_empty(), "{:?}", flow_kinds(&svc, chat.id));
+        assert!(
+            flow_kinds(&svc, chat.id).is_empty(),
+            "{:?}",
+            flow_kinds(&svc, chat.id)
+        );
         assert!(flow_kinds(&svc, workspace_config_session_id(wid)).is_empty());
         let s = svc.load(chat.id).unwrap().unwrap();
-        assert_eq!((s.flow.turns.len(), s.flow.progress.len(), s.flow.waits.len()), (1, 1, 1));
-        assert!(svc.flow_config(wid).unwrap().route_stops.contains_key("runtime:rt"));
+        assert_eq!(
+            (
+                s.flow.turns.len(),
+                s.flow.progress.len(),
+                s.flow.waits.len()
+            ),
+            (1, 1, 1)
+        );
+        assert!(svc
+            .flow_config(wid)
+            .unwrap()
+            .route_stops
+            .contains_key("runtime:rt"));
         // Facts export as ligus.facts.v1 lines.
         let lines = svc.export_facts(0).unwrap();
         assert_eq!(lines.len(), 4);
-        assert!(lines.iter().all(|l| l.contains("\"schema\":\"ligus.facts.v1\"")));
+        assert!(lines
+            .iter()
+            .all(|l| l.contains("\"schema\":\"ligus.facts.v1\"")));
     }
 
     /// The full facts export: state facts for chats whose logs changed, guard
@@ -6961,25 +9299,58 @@ mod flow_tests {
         let mut svc = service();
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("Secret plan title", wid, "rt").unwrap();
-        let user = svc.post_user_message(chat.id, wid, "please read the private notes").unwrap();
-        let reply = svc.begin_assistant_message(chat.id, wid, "Bot", "rt", None, Some(user.id)).unwrap();
-        svc.complete_assistant_message(chat.id, wid, reply, "the private answer body").unwrap();
-        let mut p = ActionProposal::new("Secret proposal title", ligus_core::ProposalKind::Decision, "me");
+        let user = svc
+            .post_user_message(chat.id, wid, "please read the private notes")
+            .unwrap();
+        let reply = svc
+            .begin_assistant_message(chat.id, wid, "Bot", "rt", None, Some(user.id))
+            .unwrap();
+        svc.complete_assistant_message(chat.id, wid, reply, "the private answer body")
+            .unwrap();
+        let mut p = ActionProposal::new(
+            "Secret proposal title",
+            ligus_core::ProposalKind::Decision,
+            "me",
+        );
         p.body = "secret proposal body".into();
         svc.upsert_proposal(chat.id, wid, p.clone()).unwrap();
-        svc.record_signal(wid, Some(chat.id), &ligus_core::signal::GuardSignal::Hygiene { hygiene_kind: ligus_core::signal::HygieneKind::Redaction, count: 2 })
-            .unwrap();
+        svc.record_signal(
+            wid,
+            Some(chat.id),
+            &ligus_core::signal::GuardSignal::Hygiene {
+                hygiene_kind: ligus_core::signal::HygieneKind::Redaction,
+                count: 2,
+            },
+        )
+        .unwrap();
 
-        let parse = |lines: &[String]| -> Vec<serde_json::Value> { lines.iter().map(|l| serde_json::from_str(l).unwrap()).collect() };
+        let parse = |lines: &[String]| -> Vec<serde_json::Value> {
+            lines
+                .iter()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect()
+        };
         let first = svc.export_facts_since(Since::UnixMs(0), 1_000).unwrap();
         for l in &first {
-            for text in ["Secret plan", "private notes", "private answer", "Secret proposal", "secret proposal body", "Bot"] {
+            for text in [
+                "Secret plan",
+                "private notes",
+                "private answer",
+                "Secret proposal",
+                "secret proposal body",
+                "Bot",
+            ] {
                 assert!(!l.contains(text), "{text} leaked into {l}");
             }
         }
         let v = parse(&first);
         let kinds: Vec<&str> = v.iter().map(|l| l["kind"].as_str().unwrap()).collect();
-        assert!(kinds.contains(&"reply") && kinds.contains(&"proposal") && kinds.contains(&"guardSignal"), "{kinds:?}");
+        assert!(
+            kinds.contains(&"reply")
+                && kinds.contains(&"proposal")
+                && kinds.contains(&"guardSignal"),
+            "{kinds:?}"
+        );
         let r = v.iter().find(|l| l["kind"] == "reply").unwrap();
         assert_eq!(r["attributes"]["ligus.turn.id"], reply.to_string());
         assert_eq!(r["attributes"]["ligus.turn.streaming"], false);
@@ -6990,20 +9361,41 @@ mod flow_tests {
         let cursor = Cursor::parse(last["attributes"]["ligus.cursor"].as_str().unwrap()).unwrap();
 
         // Nothing new: only the cursor, unchanged.
-        let again = svc.export_facts_since(Since::Cursor(cursor), 2_000).unwrap();
+        let again = svc
+            .export_facts_since(Since::Cursor(cursor), 2_000)
+            .unwrap();
         assert_eq!(again.len(), 1, "{again:?}");
         assert!(again[0].contains(&cursor.encode()));
 
         // A vote changes the chat: it is observed again, with the fold's status.
         svc.vote_on_proposal(chat.id, wid, p.id, true).unwrap();
-        let next = parse(&svc.export_facts_since(Since::Cursor(cursor), 3_000).unwrap());
-        assert!(next.iter().any(|l| l["kind"] == "proposal" && l["attributes"]["ligus.proposal.id"] == p.id.to_string()), "{next:?}");
-        assert!(next.iter().all(|l| l["kind"] != "guardSignal"), "signals already exported");
+        let next = parse(
+            &svc.export_facts_since(Since::Cursor(cursor), 3_000)
+                .unwrap(),
+        );
+        assert!(
+            next.iter().any(|l| l["kind"] == "proposal"
+                && l["attributes"]["ligus.proposal.id"] == p.id.to_string()),
+            "{next:?}"
+        );
+        assert!(
+            next.iter().all(|l| l["kind"] != "guardSignal"),
+            "signals already exported"
+        );
 
         // A cursor from a recreated data dir (ahead of every table) starts over.
-        let ahead = Cursor { facts: 1 << 40, signals: 1 << 40, events: 1 << 40, equivocations: 1 << 40 };
+        let ahead = Cursor {
+            facts: 1 << 40,
+            signals: 1 << 40,
+            events: 1 << 40,
+            equivocations: 1 << 40,
+        };
         let over = parse(&svc.export_facts_since(Since::Cursor(ahead), 4_000).unwrap());
-        assert!(over.iter().any(|l| l["kind"] == "guardSignal") && over.iter().any(|l| l["kind"] == "reply"), "{over:?}");
+        assert!(
+            over.iter().any(|l| l["kind"] == "guardSignal")
+                && over.iter().any(|l| l["kind"] == "reply"),
+            "{over:?}"
+        );
     }
 
     /// A chat whose fold changes without a new row in its own log is observed
@@ -7016,32 +9408,55 @@ mod flow_tests {
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "rt").unwrap();
         let user = svc.post_user_message(chat.id, wid, "q").unwrap();
-        let reply = svc.begin_assistant_message(chat.id, wid, "Bot", "rt", None, Some(user.id)).unwrap();
-        svc.complete_assistant_message(chat.id, wid, reply, "a").unwrap();
+        let reply = svc
+            .begin_assistant_message(chat.id, wid, "Bot", "rt", None, Some(user.id))
+            .unwrap();
+        svc.complete_assistant_message(chat.id, wid, reply, "a")
+            .unwrap();
         let cursor_of = |lines: &[String]| {
             let v: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
             Cursor::parse(v["attributes"]["ligus.cursor"].as_str().unwrap()).unwrap()
         };
-        let observed = |lines: &[String]| lines.iter().any(|l| l.contains(&chat.id.to_string()) && l.contains("\"kind\":\"reply\""));
+        let observed = |lines: &[String]| {
+            lines
+                .iter()
+                .any(|l| l.contains(&chat.id.to_string()) && l.contains("\"kind\":\"reply\""))
+        };
         let first = svc.export_facts_since(Since::UnixMs(0), 1_000).unwrap();
         let c1 = cursor_of(&first);
 
         // Another copy under the reply's completion's id lands in the
         // copies table, not the log: the chat is observed again.
         let (_, envs) = svc.store.envelopes_after_row(0).unwrap();
-        let mut forged = envs.iter().filter(|e| e.session_id == chat.id).last().unwrap().clone();
-        forged.payload = SessionEvent::SessionTitleChanged { title: "other".into() };
+        let mut forged = envs
+            .iter()
+            .filter(|e| e.session_id == chat.id)
+            .last()
+            .unwrap()
+            .clone();
+        forged.payload = SessionEvent::SessionTitleChanged {
+            title: "other".into(),
+        };
         forged.clear_raw();
         svc.store.ingest(&forged).unwrap();
         let after = svc.export_facts_since(Since::Cursor(c1), 2_000).unwrap();
         assert!(observed(&after), "equivocation not re-observed: {after:?}");
         let c2 = cursor_of(&after);
-        assert_eq!(svc.export_facts_since(Since::Cursor(c2), 3_000).unwrap().len(), 1, "observed once");
+        assert_eq!(
+            svc.export_facts_since(Since::Cursor(c2), 3_000)
+                .unwrap()
+                .len(),
+            1,
+            "observed once"
+        );
 
         // A trust change on the config log re-observes every chat of the workspace.
         svc.issue_invite(wid).unwrap();
         let after = svc.export_facts_since(Since::Cursor(c2), 4_000).unwrap();
-        assert!(observed(&after), "config trust change not re-observed: {after:?}");
+        assert!(
+            observed(&after),
+            "config trust change not re-observed: {after:?}"
+        );
     }
 
     /// P0.5 `route_decision_still_synced`: other devices follow the first
@@ -7065,9 +9480,16 @@ mod flow_tests {
             excluded: vec![],
             at_ms: 1,
         };
-        svc.record_flow(chat.id, wid, FlowRecord::RouteDecision(d.clone())).unwrap();
+        svc.record_flow(chat.id, wid, FlowRecord::RouteDecision(d.clone()))
+            .unwrap();
         assert_eq!(flow_kinds(&svc, chat.id), vec!["routeDecision"]);
-        assert!(svc.load(chat.id).unwrap().unwrap().flow.route_decisions.contains_key(&d.trigger_id));
+        assert!(svc
+            .load(chat.id)
+            .unwrap()
+            .unwrap()
+            .flow
+            .route_decisions
+            .contains_key(&d.trigger_id));
     }
 
     /// One bounded summary per agent per complete UTC day per host, synced
@@ -7080,21 +9502,40 @@ mod flow_tests {
         let day = ligus_core::flow::utc_day(1_760_000_000_000);
         // The host is this device: a summary is signed by its own host.
         let host = svc.device_id().to_string();
-        let turn = |agent: &str, at: i64, err: bool| ligus_core::flow::TurnTag { host_id: host.clone(), ..turn(agent, at, err) };
+        let turn = |agent: &str, at: i64, err: bool| ligus_core::flow::TurnTag {
+            host_id: host.clone(),
+            ..turn(agent, at, err)
+        };
         for (agent, err) in [("a", false), ("a", true), ("b", false)] {
-            svc.record_flow(chat.id, wid, FlowRecord::TurnTagged(turn(agent, day + 1000, err))).unwrap();
+            svc.record_flow(
+                chat.id,
+                wid,
+                FlowRecord::TurnTagged(turn(agent, day + 1000, err)),
+            )
+            .unwrap();
         }
         // Today's turns wait for the day to end.
-        svc.record_flow(chat.id, wid, FlowRecord::TurnTagged(turn("a", day + 86_400_000 + 5, false))).unwrap();
+        svc.record_flow(
+            chat.id,
+            wid,
+            FlowRecord::TurnTagged(turn("a", day + 86_400_000 + 5, false)),
+        )
+        .unwrap();
         let now = day + 86_400_000 + 10;
         assert_eq!(svc.emit_daily_summaries(wid, &host, now).unwrap(), 2);
         assert_eq!(svc.emit_daily_summaries(wid, &host, now).unwrap(), 0);
         let cfg = svc.flow_config(wid).unwrap();
         let a = &cfg.outcome_summaries["a"];
         assert_eq!(a.len(), 1);
-        assert_eq!((a[0].turns, a[0].window_start, a[0].host_id.as_str()), (2, day, host.as_str()));
+        assert_eq!(
+            (a[0].turns, a[0].window_start, a[0].host_id.as_str()),
+            (2, day, host.as_str())
+        );
         assert_eq!(a[0].errors_by_class.get("code"), Some(&1));
-        assert_eq!(flow_kinds(&svc, workspace_config_session_id(wid)), vec!["agentOutcomeSummary", "agentOutcomeSummary"]);
+        assert_eq!(
+            flow_kinds(&svc, workspace_config_session_id(wid)),
+            vec!["agentOutcomeSummary", "agentOutcomeSummary"]
+        );
     }
 }
 
@@ -7121,7 +9562,12 @@ mod same_key_tests {
         fn new() -> Self {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("ligus.db");
-            Device { _dir: dir, path, seed: SigningKeypair::generate().unwrap().seed_bytes(), account: SigningKeypair::generate().unwrap().seed_bytes() }
+            Device {
+                _dir: dir,
+                path,
+                seed: SigningKeypair::generate().unwrap().seed_bytes(),
+                account: SigningKeypair::generate().unwrap().seed_bytes(),
+            }
         }
 
         /// Another service of this device: same keys, its own connection.
@@ -7136,14 +9582,22 @@ mod same_key_tests {
     }
 
     fn message(body: String) -> SessionEvent {
-        SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "U", body) }
+        SessionEvent::MessageAppended {
+            message: ChatMessage::new(MessageRole::User, "U", body),
+        }
     }
 
     /// The signer's chain heads on a log: its events no other of its events
     /// names as `prev`.
     fn heads(envs: &[SessionEventEnvelope], signer: Uuid) -> usize {
-        let mine: Vec<_> = envs.iter().filter(|e| e.signer_device_id == Some(signer)).collect();
-        let named: BTreeSet<Uuid> = mine.iter().filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev)).collect();
+        let mine: Vec<_> = envs
+            .iter()
+            .filter(|e| e.signer_device_id == Some(signer))
+            .collect();
+        let named: BTreeSet<Uuid> = mine
+            .iter()
+            .filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev))
+            .collect();
         mine.iter().filter(|e| !named.contains(&e.event_id)).count()
     }
 
@@ -7152,9 +9606,17 @@ mod same_key_tests {
         assert_eq!(heads(envs, signer), 1, "the signer's chain forked");
         let wm = ligus_core::watermark::heads_of(envs, log, &std::iter::once(signer).collect());
         let refs: Vec<&SessionEventEnvelope> = envs.iter().collect();
-        let covered = ligus_core::watermark::Chains::of(&refs).ancestors(signer, &wm[0].heads, &wm[0].gaps).len();
-        let mine = envs.iter().filter(|e| e.signer_device_id == Some(signer)).count();
-        assert_eq!(covered, mine, "a watermark covers every event of the signer");
+        let covered = ligus_core::watermark::Chains::of(&refs)
+            .ancestors(signer, &wm[0].heads, &wm[0].gaps)
+            .len();
+        let mine = envs
+            .iter()
+            .filter(|e| e.signer_device_id == Some(signer))
+            .count();
+        assert_eq!(
+            covered, mine,
+            "a watermark covers every event of the signer"
+        );
     }
 
     /// Nine stale drafts, each raced by a post of the same key through the
@@ -7167,9 +9629,17 @@ mod same_key_tests {
         let chat = a.create_chat("c", wid, "anthropic").unwrap();
         a.post_user_message(chat.id, wid, "first").unwrap();
         for i in 0..9 {
-            let stale = a.draft_signed(chat.id, wid, message(format!("a {i}"))).unwrap();
+            let stale = a
+                .draft_signed(chat.id, wid, message(format!("a {i}")))
+                .unwrap();
             b.post_user_message(chat.id, wid, format!("b {i}")).unwrap();
-            assert!(matches!(a.store_authored(&stale), Err(ChatError::Store(EventStoreError::StaleDraft))), "round {i}");
+            assert!(
+                matches!(
+                    a.store_authored(&stale),
+                    Err(ChatError::Store(EventStoreError::StaleDraft))
+                ),
+                "round {i}"
+            );
         }
         let envs = a.store().list(chat.id).unwrap();
         assert_one_chain(&envs, chat.id, a.device_id());
@@ -7185,7 +9655,9 @@ mod same_key_tests {
         let chat = a.create_chat("c", wid, "anthropic").unwrap();
         a.post_user_message(chat.id, wid, "first").unwrap();
         for i in 0..9 {
-            let stale = a.draft_signed(chat.id, wid, message(format!("a {i}"))).unwrap();
+            let stale = a
+                .draft_signed(chat.id, wid, message(format!("a {i}")))
+                .unwrap();
             b.post_user_message(chat.id, wid, format!("b {i}")).unwrap();
             let stored = a.store_authored_or_redraft(stale.clone(), false).unwrap();
             assert_ne!(stored.event_id, stale.event_id, "drafted again");
@@ -7193,10 +9665,24 @@ mod same_key_tests {
         }
         let envs = a.store().list(chat.id).unwrap();
         assert_one_chain(&envs, chat.id, a.device_id());
-        let bodies: Vec<String> = a.load(chat.id).unwrap().unwrap().messages.into_iter().map(|m| m.body).collect();
+        let bodies: Vec<String> = a
+            .load(chat.id)
+            .unwrap()
+            .unwrap()
+            .messages
+            .into_iter()
+            .map(|m| m.body)
+            .collect();
         for i in 0..9 {
             for who in ["a", "b"] {
-                assert_eq!(bodies.iter().filter(|b| **b == format!("{who} {i}")).count(), 1, "{who} {i} stored once");
+                assert_eq!(
+                    bodies
+                        .iter()
+                        .filter(|b| **b == format!("{who} {i}"))
+                        .count(),
+                    1,
+                    "{who} {i} stored once"
+                );
             }
         }
     }
@@ -7217,7 +9703,14 @@ mod same_key_tests {
         };
         let run = ligus_core::workflow::new_run(&def, "in", "x");
         let record = |id: u128, sequence: i64, who: &str| {
-            let mut e = SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), sequence, SessionEvent::WorkflowRunUpserted { run: Box::new(run.clone()) });
+            let mut e = SessionEventEnvelope::new(
+                Uuid::nil(),
+                Uuid::nil(),
+                sequence,
+                SessionEvent::WorkflowRunUpserted {
+                    run: Box::new(run.clone()),
+                },
+            );
             e.event_id = Uuid::from_u128(id);
             e.lamport = 5;
             e.actor_stamp = Some(ActorStamp {
@@ -7234,7 +9727,10 @@ mod same_key_tests {
         };
         // "low" has the lower event id but the higher (author-chosen) sequence.
         let (low, high) = (record(1, 9, "low"), record(2, 1, "high"));
-        assert_eq!(run_initiator(&[low.clone(), high.clone()], run.id).as_deref(), Some("low"));
+        assert_eq!(
+            run_initiator(&[low.clone(), high.clone()], run.id).as_deref(),
+            Some("low")
+        );
         assert_eq!(run_initiator(&[high, low], run.id).as_deref(), Some("low"));
     }
 
@@ -7254,12 +9750,35 @@ mod same_key_tests {
             });
         }));
         assert!(r.is_err());
-        assert!(a.store().in_autocommit(), "the connection left its transaction");
-        a.post_user_message(chat.id, wid, "after the panic").unwrap();
+        assert!(
+            a.store().in_autocommit(),
+            "the connection left its transaction"
+        );
+        a.post_user_message(chat.id, wid, "after the panic")
+            .unwrap();
         let other = EventStore::open(&device.path).expect("another connection opens");
-        let bodies: Vec<String> = device.service().load(chat.id).unwrap().unwrap().messages.into_iter().map(|m| m.body).collect();
-        assert_eq!(bodies, ["after the panic"], "the write after the panic is stored, the one before it rolled back");
-        other.note_lamport_witness(&SessionEventEnvelope::new(chat.id, wid, 1, message("x".into()))).unwrap();
+        let bodies: Vec<String> = device
+            .service()
+            .load(chat.id)
+            .unwrap()
+            .unwrap()
+            .messages
+            .into_iter()
+            .map(|m| m.body)
+            .collect();
+        assert_eq!(
+            bodies,
+            ["after the panic"],
+            "the write after the panic is stored, the one before it rolled back"
+        );
+        other
+            .note_lamport_witness(&SessionEventEnvelope::new(
+                chat.id,
+                wid,
+                1,
+                message("x".into()),
+            ))
+            .unwrap();
     }
 
     /// The error a failing `f` returns comes back as is, and the lock goes.
@@ -7276,7 +9795,10 @@ mod same_key_tests {
     /// test stores in the device-local workspace, which judges nothing).
     struct Counting(std::sync::atomic::AtomicUsize);
     impl super::presence::PresenceProvider for Counting {
-        fn assert(&self, _req: &crate::chat_service::PresenceRequest) -> std::result::Result<ligus_core::presence::PresenceAssertion, String> {
+        fn assert(
+            &self,
+            _req: &crate::chat_service::PresenceRequest,
+        ) -> std::result::Result<ligus_core::presence::PresenceAssertion, String> {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(ligus_core::presence::PresenceAssertion {
                 credential_id: "c".into(),
@@ -7299,16 +9821,25 @@ mod same_key_tests {
         let chat = a.create_chat("c", wid, "anthropic").unwrap();
         let asked = std::sync::Arc::new(Counting(Default::default()));
         a.set_presence_provider(Some(asked.clone()));
-        let mut draft = a.draft_signed(chat.id, wid, message("confirmed".into())).unwrap();
+        let mut draft = a
+            .draft_signed(chat.id, wid, message("confirmed".into()))
+            .unwrap();
         a.with_presence(&mut draft).unwrap();
         b.post_user_message(chat.id, wid, "meanwhile").unwrap();
         let stored = a.store_authored_or_redraft(draft.clone(), true).unwrap();
-        assert_eq!(asked.0.load(std::sync::atomic::Ordering::SeqCst), 2, "asked once more");
+        assert_eq!(
+            asked.0.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "asked once more"
+        );
         assert_ne!(stored.event_id, draft.event_id);
         assert!(stored.actor_stamp.as_ref().unwrap().presence.is_some());
         let envs = a.store().list(chat.id).unwrap();
         assert_eq!(heads(&envs, a.device_id()), 1);
-        assert!(!envs.iter().any(|e| e.event_id == draft.event_id), "the stale draft isn't stored");
+        assert!(
+            !envs.iter().any(|e| e.event_id == draft.event_id),
+            "the stale draft isn't stored"
+        );
     }
 
     /// A member of another workspace this device shares, who knows a chat's
@@ -7344,13 +9875,21 @@ mod same_key_tests {
                 x.store.ingest(&forged).unwrap();
             }
             let ws = x.store().workspace_of(chat.id).unwrap();
-            let bodies: Option<Vec<String>> = x.load(chat.id).ok().flatten().map(|c| c.messages.into_iter().map(|m| m.body).collect());
+            let bodies: Option<Vec<String>> = x
+                .load(chat.id)
+                .ok()
+                .flatten()
+                .map(|c| c.messages.into_iter().map(|m| m.body).collect());
             (ws, bodies)
         };
         let (late, early) = (run(false), run(true));
         assert_eq!(late, early, "the chat folds the same in either order");
         assert_eq!(late.0, Some(wid), "it stays in its own workspace");
-        assert_eq!(late.1, Some(vec!["genuine".to_string()]), "the genuine message stays, the forged one never folds");
+        assert_eq!(
+            late.1,
+            Some(vec!["genuine".to_string()]),
+            "the genuine message stays, the forged one never folds"
+        );
     }
 
     #[derive(Debug, Clone)]
@@ -7364,7 +9903,11 @@ mod same_key_tests {
     }
 
     fn step() -> impl Strategy<Value = Step> {
-        prop_oneof![(0..3usize).prop_map(Step::Draft), (0..3usize).prop_map(Step::Store), Just(Step::Ingest)]
+        prop_oneof![
+            (0..3usize).prop_map(Step::Draft),
+            (0..3usize).prop_map(Step::Store),
+            Just(Step::Ingest)
+        ]
     }
 
     proptest! {
@@ -7441,12 +9984,21 @@ mod workspace_log_tests {
     }
 
     fn message(body: &str) -> SessionEvent {
-        SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Evil", body) }
+        SessionEvent::MessageAppended {
+            message: ChatMessage::new(MessageRole::User, "Evil", body),
+        }
     }
 
     /// An event a member of `ws` signs under `session` with the id, lamport
     /// and head it chose.
-    fn forged(session: Uuid, ws: Uuid, payload: SessionEvent, event_id: Uuid, lamport: u64, log_head: Option<ligus_core::CfgFrontier>) -> SessionEventEnvelope {
+    fn forged(
+        session: Uuid,
+        ws: Uuid,
+        payload: SessionEvent,
+        event_id: Uuid,
+        lamport: u64,
+        log_head: Option<ligus_core::CfgFrontier>,
+    ) -> SessionEventEnvelope {
         let mut env = SessionEventEnvelope::new(session, ws, 1, payload);
         env.event_id = event_id;
         env.lamport = lamport;
@@ -7460,7 +10012,11 @@ mod workspace_log_tests {
             sig_alg: Default::default(),
             log_head,
         });
-        ligus_core::sign_envelope(&mut env, Uuid::new_v4(), &SigningKeypair::generate().unwrap());
+        ligus_core::sign_envelope(
+            &mut env,
+            Uuid::new_v4(),
+            &SigningKeypair::generate().unwrap(),
+        );
         env
     }
 
@@ -7471,8 +10027,24 @@ mod workspace_log_tests {
         let mut session = ChatSession::new("c", ws, "anthropic");
         session.id = chat;
         session.creator_actor_id = "evil".into();
-        session.members = vec![WorkspaceMember { id: "evil".into(), actor: evil, role: WorkspaceRole::Owner, title: String::new(), index: 0, joined_at: Timestamp::now() }];
-        forged(chat, ws, SessionEvent::SessionSnapshot { session: Box::new(session) }, Uuid::nil(), 1, None)
+        session.members = vec![WorkspaceMember {
+            id: "evil".into(),
+            actor: evil,
+            role: WorkspaceRole::Owner,
+            title: String::new(),
+            index: 0,
+            joined_at: Timestamp::now(),
+        }];
+        forged(
+            chat,
+            ws,
+            SessionEvent::SessionSnapshot {
+                session: Box::new(session),
+            },
+            Uuid::nil(),
+            1,
+            None,
+        )
     }
 
     /// A chat of workspace A with one genuine message: (owner, A, chat, every
@@ -7487,7 +10059,8 @@ mod workspace_log_tests {
     }
 
     fn bodies(s: &Option<ChatSession>) -> Option<Vec<String>> {
-        s.as_ref().map(|c| c.messages.iter().map(|m| m.body.clone()).collect())
+        s.as_ref()
+            .map(|c| c.messages.iter().map(|m| m.body.clone()).collect())
     }
 
     /// A forged creation seed from another workspace (lamport 1, nil id),
@@ -7511,20 +10084,43 @@ mod workspace_log_tests {
                 x.store.ingest(&seed).unwrap();
             }
             let real = x.load_in(a, chat).unwrap();
-            assert_eq!(bodies(&real), Some(vec!["genuine".to_string()]), "forged_first={forged_first}");
+            assert_eq!(
+                bodies(&real),
+                Some(vec!["genuine".to_string()]),
+                "forged_first={forged_first}"
+            );
             assert_eq!(real.as_ref().map(|c| c.workspace_id), Some(a));
             let other = x.load_in(w2, chat).unwrap();
-            assert!(other.as_ref().is_none_or(|c| c.workspace_id == w2 && c.messages.is_empty()), "{other:?}");
-            assert_eq!(x.store().workspace_of(chat).unwrap(), None, "ambiguous: no workspace from the data");
-            assert_eq!(x.load(chat).unwrap().map(|c| c.id), None, "fails closed without a context");
+            assert!(
+                other
+                    .as_ref()
+                    .is_none_or(|c| c.workspace_id == w2 && c.messages.is_empty()),
+                "{other:?}"
+            );
+            assert_eq!(
+                x.store().workspace_of(chat).unwrap(),
+                None,
+                "ambiguous: no workspace from the data"
+            );
+            assert_eq!(
+                x.load(chat).unwrap().map(|c| c.id),
+                None,
+                "fails closed without a context"
+            );
             x.set_context_workspace(Some(a));
-            assert_eq!(bodies(&x.load(chat).unwrap()), Some(vec!["genuine".to_string()]));
+            assert_eq!(
+                bodies(&x.load(chat).unwrap()),
+                Some(vec!["genuine".to_string()])
+            );
             x.set_context_workspace(Some(w2));
             assert!(bodies(&x.load(chat).unwrap()).is_none_or(|b| b.is_empty()));
             // Deleting the other workspace's chat leaves this one.
             x.delete_chat(chat).unwrap();
             assert!(x.store().list_in(w2, chat).unwrap().is_empty());
-            assert_eq!(bodies(&x.load_in(a, chat).unwrap()), Some(vec!["genuine".to_string()]));
+            assert_eq!(
+                bodies(&x.load_in(a, chat).unwrap()),
+                Some(vec!["genuine".to_string()])
+            );
         }
     }
 
@@ -7538,7 +10134,14 @@ mod workspace_log_tests {
             let (mut owner, a, chat, genuine) = genuine_chat();
             let head = owner.store().lamport_head(a, chat).unwrap().unwrap();
             let w2 = Uuid::new_v4();
-            let foreign = forged(chat, w2, message("from another workspace"), Uuid::new_v4(), head.lamport + 1, Some(head));
+            let foreign = forged(
+                chat,
+                w2,
+                message("from another workspace"),
+                Uuid::new_v4(),
+                head.lamport + 1,
+                Some(head),
+            );
             // On the owner's device the chat's events are already stored;
             // on a fresh device the foreign event comes first.
             let mut x = service();
@@ -7549,13 +10152,21 @@ mod workspace_log_tests {
                 x.store.ingest(e).unwrap();
             }
             x.store.ingest(&foreign).unwrap();
-            assert_eq!(x.store().lamport_head(a, chat).unwrap(), Some(head), "forged_first={forged_first}");
+            assert_eq!(
+                x.store().lamport_head(a, chat).unwrap(),
+                Some(head),
+                "forged_first={forged_first}"
+            );
             // In W2's own log it names a head that log doesn't hold: past the
             // bounds there, and never A's.
             assert_ne!(x.store().lamport_head(w2, chat).unwrap(), Some(head));
 
             owner.store.ingest(&foreign).unwrap();
-            assert_eq!(owner.workspace_of(chat).unwrap(), Some(a), "the owner's own chat");
+            assert_eq!(
+                owner.workspace_of(chat).unwrap(),
+                Some(a),
+                "the owner's own chat"
+            );
             let reply = owner.post_user_message(chat, a, "reply after").unwrap();
             let reply_env = owner
                 .store()
@@ -7573,7 +10184,10 @@ mod workspace_log_tests {
                 z.store.ingest(e).unwrap();
             }
             z.store.ingest(&reply_env).unwrap();
-            assert_eq!(bodies(&z.load_in(a, chat).unwrap()), Some(vec!["genuine".to_string(), "reply after".to_string()]));
+            assert_eq!(
+                bodies(&z.load_in(a, chat).unwrap()),
+                Some(vec!["genuine".to_string(), "reply after".to_string()])
+            );
         }
     }
 
@@ -7587,7 +10201,16 @@ mod workspace_log_tests {
         let w2 = Uuid::new_v4();
         let planted: Vec<SessionEventEnvelope> = genuine
             .iter()
-            .map(|g| forged(g.session_id, w2, message("planted"), g.event_id, g.lamport, g.actor_stamp.as_ref().and_then(|s| s.log_head)))
+            .map(|g| {
+                forged(
+                    g.session_id,
+                    w2,
+                    message("planted"),
+                    g.event_id,
+                    g.lamport,
+                    g.actor_stamp.as_ref().and_then(|s| s.log_head),
+                )
+            })
             .collect();
         let mut x = service();
         for p in &planted {
@@ -7597,20 +10220,46 @@ mod workspace_log_tests {
         for g in &genuine {
             assert!(x.store.ingest(g).unwrap(), "the genuine copy is new here");
         }
-        assert!(x.store().logs_changed_after(before).unwrap().contains(&(a, chat)), "reported to the change feed");
+        assert!(
+            x.store()
+                .logs_changed_after(before)
+                .unwrap()
+                .contains(&(a, chat)),
+            "reported to the change feed"
+        );
         let genuine_msg = genuine
             .iter()
             .find_map(|e| match &e.payload {
-                SessionEvent::MessageAppended { message } if e.session_id == chat => Some(message.id),
+                SessionEvent::MessageAppended { message } if e.session_id == chat => {
+                    Some(message.id)
+                }
                 _ => None,
             })
             .unwrap();
-        assert!(x.store().messages_after(before).unwrap().iter().any(|(w, s, m, _)| (*w, *s, *m) == (a, chat, genuine_msg)), "handed to dispatch");
+        assert!(
+            x.store()
+                .messages_after(before)
+                .unwrap()
+                .iter()
+                .any(|(w, s, m, _)| (*w, *s, *m) == (a, chat, genuine_msg)),
+            "handed to dispatch"
+        );
         let in_log = genuine.iter().filter(|e| e.session_id == chat).count();
         assert_eq!(x.store().list_in(a, chat).unwrap().len(), in_log);
-        assert_eq!(bodies(&x.load_in(a, chat).unwrap()), Some(vec!["genuine".to_string()]));
-        assert!(x.load_in(a, workspace_config_session_id(a)).unwrap().is_some(), "A's config log folds too");
-        assert_eq!(x.store().lamport_head(a, chat).unwrap(), owner.store().lamport_head(a, chat).unwrap());
+        assert_eq!(
+            bodies(&x.load_in(a, chat).unwrap()),
+            Some(vec!["genuine".to_string()])
+        );
+        assert!(
+            x.load_in(a, workspace_config_session_id(a))
+                .unwrap()
+                .is_some(),
+            "A's config log folds too"
+        );
+        assert_eq!(
+            x.store().lamport_head(a, chat).unwrap(),
+            owner.store().lamport_head(a, chat).unwrap()
+        );
     }
 
     /// A device's own chain stays one line after its store is pulled again
@@ -7618,7 +10267,10 @@ mod workspace_log_tests {
     /// first: its next event links to its own newest event.
     #[test]
     fn a_devices_own_chain_stays_linear_after_a_re_pull_with_planted_ids() {
-        let (seed, account) = (SigningKeypair::generate().unwrap().seed_bytes(), SigningKeypair::generate().unwrap().seed_bytes());
+        let (seed, account) = (
+            SigningKeypair::generate().unwrap().seed_bytes(),
+            SigningKeypair::generate().unwrap().seed_bytes(),
+        );
         let open = || {
             ChatService::new(
                 EventStore::open_in_memory().unwrap(),
@@ -7634,23 +10286,54 @@ mod workspace_log_tests {
         first.post_user_message(chat, a, "two").unwrap();
         let (_, mine) = first.store().envelopes_after_row(0).unwrap();
         let me = first.device_id();
-        let newest = first.store().last_signed_by(a, chat, me, u64::MAX).unwrap().unwrap();
+        let newest = first
+            .store()
+            .last_signed_by(a, chat, me, u64::MAX)
+            .unwrap()
+            .unwrap();
         let w2 = Uuid::new_v4();
         let mut again = open();
         for g in &mine {
-            again.store.ingest(&forged(g.session_id, w2, message("planted"), g.event_id, g.lamport, None)).unwrap();
+            again
+                .store
+                .ingest(&forged(
+                    g.session_id,
+                    w2,
+                    message("planted"),
+                    g.event_id,
+                    g.lamport,
+                    None,
+                ))
+                .unwrap();
         }
         for g in &mine {
             again.store.ingest(g).unwrap();
         }
-        assert_eq!(again.store().last_signed_by(a, chat, me, u64::MAX).unwrap(), Some(newest));
+        assert_eq!(
+            again.store().last_signed_by(a, chat, me, u64::MAX).unwrap(),
+            Some(newest)
+        );
         let three = again.post_user_message(chat, a, "three").unwrap();
         let log = again.store().list_in(a, chat).unwrap();
         let env = log.iter().find(|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == three.id)).unwrap();
-        assert_eq!(env.actor_stamp.as_ref().and_then(|s| s.prev), Some(newest), "links to its own newest event");
-        let ours: Vec<_> = log.iter().filter(|e| e.signer_device_id == Some(me)).collect();
-        let named: std::collections::BTreeSet<Uuid> = ours.iter().filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev)).collect();
-        assert_eq!(ours.iter().filter(|e| !named.contains(&e.event_id)).count(), 1, "one chain head");
+        assert_eq!(
+            env.actor_stamp.as_ref().and_then(|s| s.prev),
+            Some(newest),
+            "links to its own newest event"
+        );
+        let ours: Vec<_> = log
+            .iter()
+            .filter(|e| e.signer_device_id == Some(me))
+            .collect();
+        let named: std::collections::BTreeSet<Uuid> = ours
+            .iter()
+            .filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev))
+            .collect();
+        assert_eq!(
+            ours.iter().filter(|e| !named.contains(&e.event_id)).count(),
+            1,
+            "one chain head"
+        );
     }
 
     /// This device's measurement facts are per log: another workspace's
@@ -7659,18 +10342,50 @@ mod workspace_log_tests {
     fn another_workspaces_facts_never_overlay_a_chat() {
         let (mut owner, a, chat, _) = genuine_chat();
         let w2 = Uuid::new_v4();
-        let wait = |reference: &str| ligus_core::flow::FlowRecord::EdgeWait(ligus_core::flow::EdgeWait { edge: "gate".into(), reference: reference.into(), wait_ms: 5, host_id: String::new(), at_ms: 1 });
+        let wait = |reference: &str| {
+            ligus_core::flow::FlowRecord::EdgeWait(ligus_core::flow::EdgeWait {
+                edge: "gate".into(),
+                reference: reference.into(),
+                wait_ms: 5,
+                host_id: String::new(),
+                at_ms: 1,
+            })
+        };
         owner.record_flow(chat, w2, wait("from-w2")).unwrap();
-        assert!(owner.load_in(a, chat).unwrap().unwrap().flow.waits.is_empty(), "W2's fact stays off A's chat");
+        assert!(
+            owner
+                .load_in(a, chat)
+                .unwrap()
+                .unwrap()
+                .flow
+                .waits
+                .is_empty(),
+            "W2's fact stays off A's chat"
+        );
         owner.record_flow(chat, a, wait("from-a")).unwrap();
-        let waits: Vec<String> = owner.load_in(a, chat).unwrap().unwrap().flow.waits.iter().map(|w| w.reference.clone()).collect();
+        let waits: Vec<String> = owner
+            .load_in(a, chat)
+            .unwrap()
+            .unwrap()
+            .flow
+            .waits
+            .iter()
+            .map(|w| w.reference.clone())
+            .collect();
         assert_eq!(waits, vec!["from-a".to_string()]);
     }
 
     /// What a device folds for one workspace's log.
-    fn fold(svc: &ChatService, ws: Uuid, session: Uuid) -> (serde_json::Value, Option<ligus_core::CfgFrontier>) {
+    fn fold(
+        svc: &ChatService,
+        ws: Uuid,
+        session: Uuid,
+    ) -> (serde_json::Value, Option<ligus_core::CfgFrontier>) {
         let s = svc.load_in(ws, session).unwrap();
-        (serde_json::to_value(&s).unwrap(), svc.store().lamport_head(ws, session).unwrap())
+        (
+            serde_json::to_value(&s).unwrap(),
+            svc.store().lamport_head(ws, session).unwrap(),
+        )
     }
 
     proptest! {

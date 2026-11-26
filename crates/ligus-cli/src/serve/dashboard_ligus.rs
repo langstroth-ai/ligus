@@ -12,7 +12,9 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::OnceLock;
 
 use anyhow::{bail, Result};
-use ligus_core::{ChatSession, MessageRole, ProposalStatus, TranscriptEventKind, WorkflowRunStatus, WorkspaceHost};
+use ligus_core::{
+    ChatSession, MessageRole, ProposalStatus, TranscriptEventKind, WorkflowRunStatus, WorkspaceHost,
+};
 use serde_json::{json, Value};
 use time::{OffsetDateTime, UtcOffset};
 use uuid::Uuid;
@@ -225,7 +227,9 @@ impl LigusSnapshot {
         let mut busy: HashSet<Uuid> = i.busy_here.clone();
         for c in i.chats {
             for msg in c.messages.iter().rev().take(20) {
-                if msg.is_streaming && (now - msg.created_at.inner()).whole_seconds() < STREAM_STALE_SECS {
+                if msg.is_streaming
+                    && (now - msg.created_at.inner()).whole_seconds() < STREAM_STALE_SECS
+                {
                     if let Some(r) = msg.responder_id {
                         busy.insert(r);
                     }
@@ -244,17 +248,38 @@ impl LigusSnapshot {
                     let mine: Vec<bool> = i
                         .hosts
                         .iter()
-                        .filter(|(h, _)| !a.owner_actor_id.is_empty() && h.owner_actor_id == a.owner_actor_id)
+                        .filter(|(h, _)| {
+                            !a.owner_actor_id.is_empty() && h.owner_actor_id == a.owner_actor_id
+                        })
                         .map(|(_, on)| *on)
                         .collect();
-                    ("Owner's device".to_string(), if mine.is_empty() { None } else { Some(mine.contains(&true)) })
+                    (
+                        "Owner's device".to_string(),
+                        if mine.is_empty() {
+                            None
+                        } else {
+                            Some(mine.contains(&true))
+                        },
+                    )
                 } else if a.host_id == i.this_host_id {
                     (i.this_host_label.to_string(), Some(true))
                 } else {
-                    let label = i.hosts.iter().find(|(h, _)| h.id == a.host_id).map(|(h, _)| shown(&h.label));
-                    (label.unwrap_or_else(|| "Unknown host".into()), Some(online_host(&a.host_id).unwrap_or(false)))
+                    let label = i
+                        .hosts
+                        .iter()
+                        .find(|(h, _)| h.id == a.host_id)
+                        .map(|(h, _)| shown(&h.label));
+                    (
+                        label.unwrap_or_else(|| "Unknown host".into()),
+                        Some(online_host(&a.host_id).unwrap_or(false)),
+                    )
                 };
-                AgentInfo { name: shown(&a.name), host_label, online, busy: busy.contains(&a.id) }
+                AgentInfo {
+                    name: shown(&a.name),
+                    host_label,
+                    online,
+                    busy: busy.contains(&a.id),
+                }
             })
             .collect();
 
@@ -266,23 +291,39 @@ impl LigusSnapshot {
                 if !super::hub::is_open(p, c) {
                     continue;
                 }
-                let floor = ligus_core::authorization::min_role_for(&ligus_core::SessionEvent::ProposalVoteCast {
-                    proposal_id: p.id,
-                    approval: ligus_core::proposals::ProposalApproval {
-                        actor_id: i.me.to_string(),
-                        role,
-                        approved: true,
-                        created_at: ligus_core::Timestamp::now(), diff_digest: None },
-                });
+                let floor = ligus_core::authorization::min_role_for(
+                    &ligus_core::SessionEvent::ProposalVoteCast {
+                        proposal_id: p.id,
+                        approval: ligus_core::proposals::ProposalApproval {
+                            actor_id: i.me.to_string(),
+                            role,
+                            approved: true,
+                            created_at: ligus_core::Timestamp::now(),
+                            diff_digest: None,
+                        },
+                    },
+                );
                 let mine = !p.author_actor_id.is_empty() && p.author_actor_id == i.me;
                 let voted = p.approvals.iter().any(|a| a.actor_id == i.me);
                 if !mine && !voted && role.rank() >= floor.rank() {
                     awaiting_me += 1;
                 }
                 let yes = p.approvals.iter().filter(|a| a.approved).count();
-                let approvals = if p.required_approvals > 0 { format!("{yes}/{}", p.required_approvals) } else { yes.to_string() };
-                let chat = match shown(&c.title) { t if t.is_empty() => "Untitled chat".to_string(), t => t };
-                proposals.push(ProposalInfo { title: shown(&p.title), chat, approvals, created: p.created_at.inner() });
+                let approvals = if p.required_approvals > 0 {
+                    format!("{yes}/{}", p.required_approvals)
+                } else {
+                    yes.to_string()
+                };
+                let chat = match shown(&c.title) {
+                    t if t.is_empty() => "Untitled chat".to_string(),
+                    t => t,
+                };
+                proposals.push(ProposalInfo {
+                    title: shown(&p.title),
+                    chat,
+                    approvals,
+                    created: p.created_at.inner(),
+                });
             }
         }
         proposals.sort_by(|a, b| b.created.cmp(&a.created));
@@ -327,7 +368,11 @@ impl LigusSnapshot {
             now,
             today,
             agents,
-            hosts: i.hosts.iter().map(|(h, on)| (shown(&h.label), *on || h.id == i.this_host_id)).collect(),
+            hosts: i
+                .hosts
+                .iter()
+                .map(|(h, on)| (shown(&h.label), *on || h.id == i.this_host_id))
+                .collect(),
             proposals,
             awaiting_me,
             runs,
@@ -350,20 +395,33 @@ impl LigusSnapshot {
     }
 
     fn runs_with(&self, status: WorkflowRunStatus, since_today: bool) -> usize {
-        self.runs.iter().filter(|r| r.status == status && (!since_today || r.updated >= self.today)).count()
+        self.runs
+            .iter()
+            .filter(|r| r.status == status && (!since_today || r.updated >= self.today))
+            .count()
     }
 
     fn sync_age(&self) -> Option<i64> {
-        self.host.last_sync_ok.map(|t| (self.now - t).whole_seconds())
+        self.host
+            .last_sync_ok
+            .map(|t| (self.now - t).whole_seconds())
     }
 
     fn sync_row(&self) -> MetricRow {
         if !self.host.serving {
-            return MetricRow::status("Relay sync", false, "Unknown (ligus serve isn't running here)");
+            return MetricRow::status(
+                "Relay sync",
+                false,
+                "Unknown (ligus serve isn't running here)",
+            );
         }
         match (self.sync_age(), &self.host.sync_error) {
-            (_, Some(e)) => MetricRow::status("Relay sync", false, &format!("Failing: {}", clip(e, 80))),
-            (Some(a), None) => MetricRow::status("Relay sync", a <= 120, &format!("Synced {} ago", age(a))),
+            (_, Some(e)) => {
+                MetricRow::status("Relay sync", false, &format!("Failing: {}", clip(e, 80)))
+            }
+            (Some(a), None) => {
+                MetricRow::status("Relay sync", a <= 120, &format!("Synced {} ago", age(a)))
+            }
             (None, None) => MetricRow::status("Relay sync", false, "Not synced yet"),
         }
     }
@@ -518,11 +576,21 @@ pub struct MetricRow {
 
 impl MetricRow {
     fn num(label: &str, v: f64) -> Self {
-        Self { label: label.into(), value: Some(v), text: None, up: None }
+        Self {
+            label: label.into(),
+            value: Some(v),
+            text: None,
+            up: None,
+        }
     }
 
     fn status(label: &str, up: bool, text: &str) -> Self {
-        Self { label: label.into(), value: None, text: Some(text.into()), up: Some(up) }
+        Self {
+            label: label.into(),
+            value: None,
+            text: Some(text.into()),
+            up: Some(up),
+        }
     }
 }
 
@@ -531,7 +599,10 @@ pub enum MetricValue {
     Num(f64),
     Text(String),
     Rows(Vec<MetricRow>),
-    Table { columns: Vec<String>, cells: Vec<Vec<Value>> },
+    Table {
+        columns: Vec<String>,
+        cells: Vec<Vec<Value>>,
+    },
 }
 
 // ── The built-in section ───────────────────────────────────────────────────
@@ -563,40 +634,98 @@ pub fn builtin_section(snap: Option<&LigusSnapshot>) -> SectionConfig {
     let workflows = snap.is_none_or(LigusSnapshot::has_workflows);
     let remote = snap.is_none_or(LigusSnapshot::remote_enabled);
     let mut panels = vec![
-        ligus_panel("agents-online", "Agents online", Kind::Stat, "agents.online"),
+        ligus_panel(
+            "agents-online",
+            "Agents online",
+            Kind::Stat,
+            "agents.online",
+        ),
         ligus_panel("agents-busy", "Agents busy", Kind::Stat, "agents.busy"),
-        flag(ligus_panel("awaiting-me", "Awaiting your review", Kind::Stat, "proposals.awaiting_me"), Level::Warn),
-        ligus_panel("proposals-open", "Open proposals", Kind::Stat, "proposals.open"),
+        flag(
+            ligus_panel(
+                "awaiting-me",
+                "Awaiting your review",
+                Kind::Stat,
+                "proposals.awaiting_me",
+            ),
+            Level::Warn,
+        ),
+        ligus_panel(
+            "proposals-open",
+            "Open proposals",
+            Kind::Stat,
+            "proposals.open",
+        ),
         ligus_panel("turns-today", "Turns today", Kind::Stat, "turns.today"),
         ligus_panel("turns-7d", "Turns, 7 days", Kind::Stat, "turns.7d"),
     ];
     if workflows {
-        panels.push(ligus_panel("workflows-running", "Workflows running", Kind::Stat, "workflows.running"));
-        panels.push(flag(ligus_panel("workflows-gated", "Awaiting approval", Kind::Stat, "workflows.awaiting_approval"), Level::Warn));
-        panels.push(flag(ligus_panel("workflows-failed", "Failed today", Kind::Stat, "workflows.failed_today"), Level::Critical));
+        panels.push(ligus_panel(
+            "workflows-running",
+            "Workflows running",
+            Kind::Stat,
+            "workflows.running",
+        ));
+        panels.push(flag(
+            ligus_panel(
+                "workflows-gated",
+                "Awaiting approval",
+                Kind::Stat,
+                "workflows.awaiting_approval",
+            ),
+            Level::Warn,
+        ));
+        panels.push(flag(
+            ligus_panel(
+                "workflows-failed",
+                "Failed today",
+                Kind::Stat,
+                "workflows.failed_today",
+            ),
+            Level::Critical,
+        ));
     }
     if remote {
-        panels.push(ligus_panel("phones", "Phones paired", Kind::Stat, "phones.paired"));
+        panels.push(ligus_panel(
+            "phones",
+            "Phones paired",
+            Kind::Stat,
+            "phones.paired",
+        ));
     }
-    panels.push(ligus_panel("host", "This host", Kind::Status, "host.status"));
-    SectionConfig { title: BUILTIN_TITLE.into(), optional: false, show_when: None, panels }
+    panels.push(ligus_panel(
+        "host",
+        "This host",
+        Kind::Status,
+        "host.status",
+    ));
+    SectionConfig {
+        title: BUILTIN_TITLE.into(),
+        optional: false,
+        show_when: None,
+        panels,
+    }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use ligus_core::{
-        workflow, ActionProposal, ActorIdentity, ActorKind, ChatMessage, HostKind, ProposalKind, Timestamp,
-        WorkflowDefinition, WorkspaceAgent, WorkspaceRole,
-    };
     use ligus_core::identity::WorkspaceMember;
     use ligus_core::proposals::ProposalApproval;
+    use ligus_core::{
+        workflow, ActionProposal, ActorIdentity, ActorKind, ChatMessage, HostKind, ProposalKind,
+        Timestamp, WorkflowDefinition, WorkspaceAgent, WorkspaceRole,
+    };
 
     pub const ME: &str = "alex-id";
     pub const THIS_HOST: &str = "host-this";
 
     pub fn now() -> OffsetDateTime {
-        OffsetDateTime::parse("2026-11-04T15:00:00Z", &time::format_description::well_known::Rfc3339).unwrap()
+        OffsetDateTime::parse(
+            "2026-11-04T15:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap()
     }
 
     fn at(hours_ago: i64) -> Timestamp {
@@ -627,8 +756,12 @@ pub(crate) mod tests {
             a.owner_actor_id = ME.into();
             a
         };
-        let (here, remote_on, remote_off, laptop) =
-            (agent("coder", THIS_HOST), agent("writer", "host-on"), agent("tester", "host-off"), agent("helper", ""));
+        let (here, remote_on, remote_off, laptop) = (
+            agent("coder", THIS_HOST),
+            agent("writer", "host-on"),
+            agent("tester", "host-off"),
+            agent("helper", ""),
+        );
         let busy: HashSet<Uuid> = [here.id].into();
         config.workspace_agents = vec![here, remote_on.clone(), remote_off, laptop];
         let host = |id: &str, kind: HostKind, label: &str, owner: &str| {
@@ -673,14 +806,27 @@ pub(crate) mod tests {
             p
         };
         let mut voted = open("Voted", "other-id", 3);
-        voted.approvals.push(ProposalApproval { actor_id: ME.into(), role: WorkspaceRole::Contributor, approved: true, created_at: Timestamp::now(), diff_digest: None });
+        voted.approvals.push(ProposalApproval {
+            actor_id: ME.into(),
+            role: WorkspaceRole::Contributor,
+            approved: true,
+            created_at: Timestamp::now(),
+            diff_digest: None,
+        });
         // Archived by the hygiene sweep (stale): out of the open list.
         let mut dismissed = open("Dismissed", "other-id", 4);
         dismissed.dismissed = true;
         chat.guards.stale_proposals.insert(dismissed.id);
         let mut applied = open("Applied", "other-id", 5);
         applied.status = ProposalStatus::Applied;
-        chat.proposals = vec![open("Older", "other-id", 6), open("Mine", ME, 2), voted, dismissed, applied, open("Newest", "other-id", 1)];
+        chat.proposals = vec![
+            open("Older", "other-id", 6),
+            open("Mine", ME, 2),
+            voted,
+            dismissed,
+            applied,
+            open("Newest", "other-id", 1),
+        ];
 
         let def = WorkflowDefinition {
             id: Uuid::new_v4(),
@@ -705,7 +851,12 @@ pub(crate) mod tests {
             run(WorkflowRunStatus::Failed, 48),
             run(WorkflowRunStatus::Completed, 3),
         ];
-        Fixture { chats: vec![chat], config, hosts, busy }
+        Fixture {
+            chats: vec![chat],
+            config,
+            hosts,
+            busy,
+        }
     }
 
     pub fn snapshot_of(f: &Fixture, host: HostState) -> LigusSnapshot {
@@ -749,7 +900,9 @@ pub(crate) mod tests {
         };
         let s = snapshot_of(&f, host);
         for m in METRICS {
-            let v = s.metric(m.name).unwrap_or_else(|e| panic!("{}: {e}", m.name));
+            let v = s
+                .metric(m.name)
+                .unwrap_or_else(|e| panic!("{}: {e}", m.name));
             let shape = match v {
                 MetricValue::Num(_) => Shape::Number,
                 MetricValue::Text(_) => Shape::Text,
@@ -758,7 +911,11 @@ pub(crate) mod tests {
             };
             assert_eq!(shape, m.shape, "{}", m.name);
         }
-        assert!(s.metric("tokens.today").unwrap_err().to_string().contains("unknown ligus metric"));
+        assert!(s
+            .metric("tokens.today")
+            .unwrap_err()
+            .to_string()
+            .contains("unknown ligus metric"));
     }
 
     /// Apps residuals: agent names, host labels, proposal and chat titles
@@ -767,24 +924,48 @@ pub(crate) mod tests {
     fn peer_names_reach_the_dashboard_cleaned() {
         const EVIL: &str = "\u{202E}gnp.exe\u{200B}\u{2028}";
         let mut f = fixture();
-        f.config.workspace_agents.iter_mut().for_each(|a| a.name = format!("{}{EVIL}", a.name));
-        f.hosts.iter_mut().for_each(|(h, _)| h.label = format!("{}{EVIL}", h.label));
+        f.config
+            .workspace_agents
+            .iter_mut()
+            .for_each(|a| a.name = format!("{}{EVIL}", a.name));
+        f.hosts
+            .iter_mut()
+            .for_each(|(h, _)| h.label = format!("{}{EVIL}", h.label));
         for c in &mut f.chats {
             c.title = format!("{}{EVIL}", c.title);
-            c.proposals.iter_mut().for_each(|p| p.title = format!("{}{EVIL}", p.title));
-            c.workflow_runs.iter_mut().for_each(|r| r.definition.name = format!("{}{EVIL}", r.definition.name));
-            c.messages.iter_mut().for_each(|m| m.author = format!("{}{EVIL}", m.author));
+            c.proposals
+                .iter_mut()
+                .for_each(|p| p.title = format!("{}{EVIL}", p.title));
+            c.workflow_runs
+                .iter_mut()
+                .for_each(|r| r.definition.name = format!("{}{EVIL}", r.definition.name));
+            c.messages
+                .iter_mut()
+                .for_each(|m| m.author = format!("{}{EVIL}", m.author));
         }
         let s = snapshot_of(&f, HostState::default());
         let mut all: Vec<&str> = Vec::new();
-        all.extend(s.agents.iter().flat_map(|a| [a.name.as_str(), a.host_label.as_str()]));
+        all.extend(
+            s.agents
+                .iter()
+                .flat_map(|a| [a.name.as_str(), a.host_label.as_str()]),
+        );
         all.extend(s.hosts.iter().map(|h| h.0.as_str()));
-        all.extend(s.proposals.iter().flat_map(|p| [p.title.as_str(), p.chat.as_str()]));
+        all.extend(
+            s.proposals
+                .iter()
+                .flat_map(|p| [p.title.as_str(), p.chat.as_str()]),
+        );
         all.extend(s.runs.iter().map(|r| r.workflow.as_str()));
         all.extend(s.turns_by_agent_7d.keys().map(String::as_str));
         let all = all.join("|");
-        assert!(!all.contains('\u{202E}') && !all.contains('\u{200B}') && !all.contains('\u{2028}'), "{all}");
-        assert!(rows(&s, "agents").iter().any(|r| r.label.starts_with("tester") && r.label.ends_with("gnp.exe")));
+        assert!(
+            !all.contains('\u{202E}') && !all.contains('\u{200B}') && !all.contains('\u{2028}'),
+            "{all}"
+        );
+        assert!(rows(&s, "agents")
+            .iter()
+            .any(|r| r.label.starts_with("tester") && r.label.ends_with("gnp.exe")));
     }
 
     #[test]
@@ -798,13 +979,25 @@ pub(crate) mod tests {
         assert_eq!(num(&s, "agents.busy"), 2.0);
         let agents = rows(&s, "agents");
         let tester = agents.iter().find(|r| r.label == "tester").unwrap();
-        assert_eq!((tester.up, tester.text.as_deref()), (Some(false), Some("Offline")));
+        assert_eq!(
+            (tester.up, tester.text.as_deref()),
+            (Some(false), Some("Offline"))
+        );
         let writer = agents.iter().find(|r| r.label == "writer").unwrap();
         assert_eq!(writer.text.as_deref(), Some("Busy"));
-        let by_host: Vec<(String, Option<f64>)> = rows(&s, "agents.by_host").into_iter().map(|r| (r.label, r.value)).collect();
+        let by_host: Vec<(String, Option<f64>)> = rows(&s, "agents.by_host")
+            .into_iter()
+            .map(|r| (r.label, r.value))
+            .collect();
         assert_eq!(
             by_host,
-            [("Build box", 1.0), ("Home box", 1.0), ("Old box", 1.0), ("Owner's device", 1.0)].map(|(l, v)| (l.to_string(), Some(v)))
+            [
+                ("Build box", 1.0),
+                ("Home box", 1.0),
+                ("Old box", 1.0),
+                ("Owner's device", 1.0)
+            ]
+            .map(|(l, v)| (l.to_string(), Some(v)))
         );
         let hosts = rows(&s, "hosts");
         assert_eq!(hosts.iter().filter(|r| r.up == Some(true)).count(), 3);
@@ -817,9 +1010,14 @@ pub(crate) mod tests {
         assert_eq!(num(&s, "proposals.open"), 4.0);
         // Not my own, not already voted on: Older and Newest.
         assert_eq!(num(&s, "proposals.awaiting_me"), 2.0);
-        let MetricValue::Table { columns, cells } = s.metric("proposals.list").unwrap() else { panic!() };
+        let MetricValue::Table { columns, cells } = s.metric("proposals.list").unwrap() else {
+            panic!()
+        };
         assert_eq!(columns, ["Proposal", "Chat", "Approvals"]);
-        assert_eq!(cells[0], vec![json!("Newest"), json!("Release"), json!("0/1")]);
+        assert_eq!(
+            cells[0],
+            vec![json!("Newest"), json!("Release"), json!("0/1")]
+        );
         assert_eq!(cells.iter().find(|c| c[0] == "Voted").unwrap()[2], "1/1");
     }
 
@@ -828,11 +1026,22 @@ pub(crate) mod tests {
         let mut f = fixture();
         f.chats[0].members[0].role = WorkspaceRole::Viewer;
         let s = snapshot_of(&f, HostState::default());
-        let floor = ligus_core::authorization::min_role_for(&ligus_core::SessionEvent::ProposalVoteCast {
-            proposal_id: Uuid::nil(),
-            approval: ProposalApproval { actor_id: ME.into(), role: WorkspaceRole::Viewer, approved: true, created_at: Timestamp::now(), diff_digest: None },
-        });
-        let expected = if floor == WorkspaceRole::Viewer { 2.0 } else { 0.0 };
+        let floor =
+            ligus_core::authorization::min_role_for(&ligus_core::SessionEvent::ProposalVoteCast {
+                proposal_id: Uuid::nil(),
+                approval: ProposalApproval {
+                    actor_id: ME.into(),
+                    role: WorkspaceRole::Viewer,
+                    approved: true,
+                    created_at: Timestamp::now(),
+                    diff_digest: None,
+                },
+            });
+        let expected = if floor == WorkspaceRole::Viewer {
+            2.0
+        } else {
+            0.0
+        };
         assert_eq!(num(&s, "proposals.awaiting_me"), expected);
     }
 
@@ -841,15 +1050,28 @@ pub(crate) mod tests {
         let s = snapshot_of(&fixture(), HostState::default());
         assert_eq!(num(&s, "workflows.running"), 1.0);
         assert_eq!(num(&s, "workflows.awaiting_approval"), 1.0);
-        assert_eq!(num(&s, "workflows.failed_today"), 1.0, "the failure two days ago isn't today's");
+        assert_eq!(
+            num(&s, "workflows.failed_today"),
+            1.0,
+            "the failure two days ago isn't today's"
+        );
         assert_eq!(num(&s, "workflows.completed_today"), 1.0);
         assert!(s.has_workflows());
         // Replies only (not the user's message or the proposal note), the
         // in-flight streaming reply included: 1 h, 2 h, now today; + 48 h in 7 d.
         assert_eq!(num(&s, "turns.today"), 3.0);
         assert_eq!(num(&s, "turns.7d"), 4.0);
-        let by_agent: Vec<(String, Option<f64>)> = rows(&s, "turns.by_agent_7d").into_iter().map(|r| (r.label, r.value)).collect();
-        assert_eq!(by_agent, [("coder".to_string(), Some(2.0)), ("writer".to_string(), Some(2.0))]);
+        let by_agent: Vec<(String, Option<f64>)> = rows(&s, "turns.by_agent_7d")
+            .into_iter()
+            .map(|r| (r.label, r.value))
+            .collect();
+        assert_eq!(
+            by_agent,
+            [
+                ("coder".to_string(), Some(2.0)),
+                ("writer".to_string(), Some(2.0))
+            ]
+        );
 
         // Local midnight decides "today": at UTC-16 it is still the 3rd
         // (23:00), so a reply 2 h ago (21:00 on the 3rd) is today, but one
@@ -883,20 +1105,41 @@ pub(crate) mod tests {
             host: HostState::default(),
         });
         assert_eq!(num(&west_late, "turns.today"), 4.0);
-        assert_eq!(num(&snapshot_of(&late, HostState::default()), "turns.today"), 3.0, "in UTC it was yesterday");
+        assert_eq!(
+            num(&snapshot_of(&late, HostState::default()), "turns.today"),
+            3.0,
+            "in UTC it was yesterday"
+        );
     }
 
     #[test]
     fn host_status_rows() {
         let f = fixture();
-        let quiet = snapshot_of(&f, HostState { serving: true, ..HostState::default() });
+        let quiet = snapshot_of(
+            &f,
+            HostState {
+                serving: true,
+                ..HostState::default()
+            },
+        );
         let r = rows(&quiet, "host.status");
         let labels: Vec<&str> = r.iter().map(|r| r.label.as_str()).collect();
-        assert_eq!(labels, ["Ligus serve", "Push"], "no relay, no remote access: no rows for them");
+        assert_eq!(
+            labels,
+            ["Ligus serve", "Push"],
+            "no relay, no remote access: no rows for them"
+        );
         assert_eq!(r[1].text.as_deref(), Some("Off"));
         assert!(quiet.metric("sync.age").is_err());
-        assert_eq!(quiet.metric("sync.last").unwrap(), MetricValue::Text("No relay configured".into()));
-        assert!(quiet.metric("phones.paired").unwrap_err().to_string().contains("remote access is off"));
+        assert_eq!(
+            quiet.metric("sync.last").unwrap(),
+            MetricValue::Text("No relay configured".into())
+        );
+        assert!(quiet
+            .metric("phones.paired")
+            .unwrap_err()
+            .to_string()
+            .contains("remote access is off"));
 
         let busy = snapshot_of(
             &f,
@@ -905,12 +1148,20 @@ pub(crate) mod tests {
                 relay_configured: true,
                 last_sync_ok: Some(now() - time::Duration::seconds(4)),
                 sync_error: None,
-                remote: Some(RemoteState { connected: true, push: true, phones: 2, phones_with_push: 1 }),
+                remote: Some(RemoteState {
+                    connected: true,
+                    push: true,
+                    phones: 2,
+                    phones_with_push: 1,
+                }),
                 ntfy: false,
             },
         );
         let r = rows(&busy, "host.status");
-        let shown: Vec<(&str, Option<bool>, Option<&str>)> = r.iter().map(|r| (r.label.as_str(), r.up, r.text.as_deref())).collect();
+        let shown: Vec<(&str, Option<bool>, Option<&str>)> = r
+            .iter()
+            .map(|r| (r.label.as_str(), r.up, r.text.as_deref()))
+            .collect();
         assert_eq!(
             shown,
             [
@@ -925,18 +1176,37 @@ pub(crate) mod tests {
 
         let failing = snapshot_of(
             &f,
-            HostState { serving: true, relay_configured: true, sync_error: Some("relay unreachable".into()), ntfy: true, ..HostState::default() },
+            HostState {
+                serving: true,
+                relay_configured: true,
+                sync_error: Some("relay unreachable".into()),
+                ntfy: true,
+                ..HostState::default()
+            },
         );
         let r = rows(&failing, "host.status");
-        assert_eq!((r[1].up, r[1].text.as_deref()), (Some(false), Some("Failing: relay unreachable")));
+        assert_eq!(
+            (r[1].up, r[1].text.as_deref()),
+            (Some(false), Some("Failing: relay unreachable"))
+        );
         assert_eq!(r[2].text.as_deref(), Some("ntfy"));
     }
 
     #[test]
     fn builtin_section_adapts_to_the_workspace() {
         let mut f = fixture();
-        let all = builtin_section(Some(&snapshot_of(&f, HostState { remote: Some(RemoteState::default()), ..HostState::default() })));
-        let ids: Vec<&str> = all.panels.iter().map(|p| p.id.as_deref().unwrap()).collect();
+        let all = builtin_section(Some(&snapshot_of(
+            &f,
+            HostState {
+                remote: Some(RemoteState::default()),
+                ..HostState::default()
+            },
+        )));
+        let ids: Vec<&str> = all
+            .panels
+            .iter()
+            .map(|p| p.id.as_deref().unwrap())
+            .collect();
         assert_eq!(
             ids,
             [
@@ -955,7 +1225,11 @@ pub(crate) mod tests {
         );
         f.chats[0].workflow_runs.clear();
         let lean = builtin_section(Some(&snapshot_of(&f, HostState::default())));
-        assert!(lean.panels.iter().all(|p| !p.id.as_deref().unwrap().contains("workflows") && p.id.as_deref() != Some("ligus-phones")));
+        assert!(lean
+            .panels
+            .iter()
+            .all(|p| !p.id.as_deref().unwrap().contains("workflows")
+                && p.id.as_deref() != Some("ligus-phones")));
         assert_eq!(builtin_section(None).panels.len(), 11);
     }
 

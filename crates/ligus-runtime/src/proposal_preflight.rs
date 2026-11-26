@@ -49,12 +49,22 @@ pub struct PreflightInputs<'a> {
 /// The configured pre-flight test command, if any: `LIGUS_PREFLIGHT_TEST`
 /// on this device. The repository is never consulted.
 pub fn test_command() -> Option<String> {
-    ligus_core::names::var(PREFLIGHT_TEST_ENV).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    ligus_core::names::var(PREFLIGHT_TEST_ENV)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = ligus_core::process_util::git().arg("-C").arg(dir).args(args).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    let out = ligus_core::process_util::git()
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// The commit the chat's changes currently land on: its base branch if it
@@ -63,7 +73,15 @@ pub fn current_base(repo_root: &Path, chat_id: &str) -> Option<String> {
     let branch = format!("refs/heads/ligus/chat/{chat_id}");
     git_out(repo_root, &["rev-parse", "--verify", "--quiet", &branch]).or_else(|| {
         let base = git_worktree::chat_base(repo_root);
-        git_out(repo_root, &["rev-parse", "--verify", "--quiet", &format!("{base}^{{commit}}")])
+        git_out(
+            repo_root,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{base}^{{commit}}"),
+            ],
+        )
     })
 }
 
@@ -75,7 +93,9 @@ fn run_git_apply(dir: &Path, diff: &str, check_only: bool) -> Result<(), String>
     use std::io::Write;
     use std::process::Stdio;
     let mut cmd = ligus_core::process_util::git();
-    cmd.arg("-C").arg(dir).args(["apply", "--whitespace=nowarn"]);
+    cmd.arg("-C")
+        .arg(dir)
+        .args(["apply", "--whitespace=nowarn"]);
     if check_only {
         cmd.arg("--check");
     }
@@ -91,7 +111,9 @@ fn run_git_apply(dir: &Path, diff: &str, check_only: bool) -> Result<(), String>
         .ok_or("git apply: no stdin")?
         .write_all(diff.as_bytes())
         .map_err(|e| format!("git apply: {e}"))?;
-    let out = child.wait_with_output().map_err(|e| format!("git apply: {e}"))?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("git apply: {e}"))?;
     if out.status.success() {
         Ok(())
     } else {
@@ -114,7 +136,11 @@ fn check_base(inputs: &PreflightInputs<'_>) -> CheckOutcome {
                 short(now)
             ));
         }
-        notes.push(if known { "base unchanged" } else { "base recorded on another device" });
+        notes.push(if known {
+            "base unchanged"
+        } else {
+            "base recorded on another device"
+        });
     }
     if let Some(diff) = inputs.diff {
         let target = git_worktree::chat_worktree(root, inputs.chat_id).ok();
@@ -164,9 +190,13 @@ fn run_bounded(dir: &Path, cmdline: &str, timeout: Duration) -> Result<bool, Str
     let sh = shell(cmdline);
     let program = sh.get_program().to_os_string();
     let args: Vec<std::ffi::OsString> = sh.get_args().map(|a| a.to_os_string()).collect();
-    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Preflight, &program, args).cwd(Some(dir));
-    let crate::executor::Prepared { command: mut sh, guard: _sandbox } =
-        crate::executor::prepare(spec).map_err(|e| format!("couldn't start the test command: {e}"))?;
+    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Preflight, &program, args)
+        .cwd(Some(dir));
+    let crate::executor::Prepared {
+        command: mut sh,
+        guard: _sandbox,
+    } = crate::executor::prepare(spec)
+        .map_err(|e| format!("couldn't start the test command: {e}"))?;
     // `cmd /S /C "<line>"` runs <line> verbatim (Windows has no agent
     // sandbox, so the prepared command is `cmd` itself and this lands last).
     #[cfg(windows)]
@@ -197,7 +227,9 @@ fn run_bounded(dir: &Path, cmdline: &str, timeout: Duration) -> Result<bool, Str
 
 fn check_tests(inputs: &PreflightInputs<'_>, scratch_id: &str) -> CheckOutcome {
     let Some(cmd) = inputs.test_command.as_deref() else {
-        return CheckOutcome::skipped(format!("no pre-flight test command set ({PREFLIGHT_TEST_ENV})"));
+        return CheckOutcome::skipped(format!(
+            "no pre-flight test command set ({PREFLIGHT_TEST_ENV})"
+        ));
     };
     let (Some(root), Some(diff)) = (inputs.repo_root, inputs.diff) else {
         return CheckOutcome::skipped("not a code change");
@@ -205,13 +237,19 @@ fn check_tests(inputs: &PreflightInputs<'_>, scratch_id: &str) -> CheckOutcome {
     // Cut the scratch tree from the chat's base branch when it exists.
     let _ = git_worktree::chat_worktree(root, inputs.chat_id);
     let base = format!("ligus/chat/{}", inputs.chat_id);
-    let wt = match Worktree::create_from(root, scratch_id, &base).or_else(|_| Worktree::create(root, scratch_id)) {
+    let wt = match Worktree::create_from(root, scratch_id, &base)
+        .or_else(|_| Worktree::create(root, scratch_id))
+    {
         Ok(wt) => wt,
         Err(e) => return CheckOutcome::failed(format!("couldn't make a scratch worktree: {e}")),
     };
     let outcome = match run_git_apply(&wt.path, diff, false) {
         Err(e) => CheckOutcome::failed(e),
-        Ok(()) => match run_bounded(&wt.path, cmd, inputs.test_timeout.unwrap_or(DEFAULT_TEST_TIMEOUT)) {
+        Ok(()) => match run_bounded(
+            &wt.path,
+            cmd,
+            inputs.test_timeout.unwrap_or(DEFAULT_TEST_TIMEOUT),
+        ) {
             Ok(true) => CheckOutcome::passed("tests passed"),
             Ok(false) => CheckOutcome::failed("tests failed"),
             Err(e) => CheckOutcome::failed(e),
@@ -225,7 +263,11 @@ fn check_hosts(hosts: &[(String, bool)]) -> CheckOutcome {
     if hosts.is_empty() {
         return CheckOutcome::skipped("no other host involved");
     }
-    let offline: Vec<&str> = hosts.iter().filter(|(_, up)| !up).map(|(h, _)| h.as_str()).collect();
+    let offline: Vec<&str> = hosts
+        .iter()
+        .filter(|(_, up)| !up)
+        .map(|(h, _)| h.as_str())
+        .collect();
     if offline.is_empty() {
         CheckOutcome::passed(format!("{} host(s) online", hosts.len()))
     } else {
@@ -244,7 +286,11 @@ pub fn run(inputs: &PreflightInputs<'_>, scratch_id: &str) -> PreflightReport {
     } else {
         check_tests(inputs, scratch_id)
     };
-    PreflightReport { tests, base_unchanged, hosts_online: check_hosts(&inputs.hosts) }
+    PreflightReport {
+        tests,
+        base_unchanged,
+        hosts_online: check_hosts(&inputs.hosts),
+    }
 }
 
 #[cfg(test)]
@@ -255,9 +301,21 @@ mod tests {
     #[test]
     fn preflight_ignores_repo_git_config() {
         let dir = tempfile::tempdir().unwrap();
-        let run = |args: &[&str]| assert!(ligus_core::process_util::git().arg("-C").arg(dir.path()).args(args).status().unwrap().success());
+        let run = |args: &[&str]| {
+            assert!(ligus_core::process_util::git()
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success())
+        };
         run(&["init", "-q"]);
-        run(&["config", "ligus.preflightTest", "touch /tmp/ligus-preflight-pwned"]);
+        run(&[
+            "config",
+            "ligus.preflightTest",
+            "touch /tmp/ligus-preflight-pwned",
+        ]);
         let cmd = test_command();
         assert_ne!(cmd.as_deref(), Some("touch /tmp/ligus-preflight-pwned"));
     }
@@ -267,13 +325,23 @@ mod tests {
     use std::path::PathBuf;
 
     fn sh(dir: &Path, args: &[&str]) -> String {
-        let out = command("git").arg("-C").arg(dir).args(args).output().unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        let out = command("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
     fn temp_repo(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ligus-preflight-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ligus-preflight-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         sh(&dir, &["init", "-q"]);
@@ -286,7 +354,8 @@ mod tests {
         dir
     }
 
-    const DIFF: &str = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-hello\n+hello world\n";
+    const DIFF: &str =
+        "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-hello\n+hello world\n";
 
     #[test]
     fn passes_on_an_unmoved_base_with_passing_tests() {
@@ -298,7 +367,14 @@ mod tests {
             diff: Some(DIFF),
             base_commit: Some(&base),
             // `cmd /C` on Windows, `sh -c` elsewhere.
-            test_command: Some(if cfg!(windows) { r#"findstr /C:"hello world" a.txt"# } else { "grep -q 'hello world' a.txt" }.into()),
+            test_command: Some(
+                if cfg!(windows) {
+                    r#"findstr /C:"hello world" a.txt"#
+                } else {
+                    "grep -q 'hello world' a.txt"
+                }
+                .into(),
+            ),
             test_timeout: Some(Duration::from_secs(30)),
             hosts: vec![("this device".into(), true)],
         };
@@ -313,11 +389,18 @@ mod tests {
             let _ = std::fs::remove_dir_all(&repo);
             return;
         }
-        assert_eq!(r.tests.status, CheckStatus::Passed, "the diff is applied in the scratch tree: {r:?}");
+        assert_eq!(
+            r.tests.status,
+            CheckStatus::Passed,
+            "the diff is applied in the scratch tree: {r:?}"
+        );
         assert!(r.passed());
         // The scratch tree is gone and the chat tree is untouched.
         let chat = git_worktree::chat_worktree(&repo, "c1").unwrap();
-        assert_eq!(std::fs::read_to_string(chat.join("a.txt")).unwrap(), "hello\n");
+        assert_eq!(
+            std::fs::read_to_string(chat.join("a.txt")).unwrap(),
+            "hello\n"
+        );
         let _ = std::fs::remove_dir_all(&repo);
     }
 
@@ -380,7 +463,14 @@ mod tests {
         assert_eq!(r.base_unchanged.status, CheckStatus::Failed);
         assert_eq!(r.tests.status, CheckStatus::Skipped);
         // Not a repo / not a code change: everything skips, which passes.
-        let r = run(&PreflightInputs { chat_id: "x", test_command: Some("true".into()), ..Default::default() }, "pf-none");
+        let r = run(
+            &PreflightInputs {
+                chat_id: "x",
+                test_command: Some("true".into()),
+                ..Default::default()
+            },
+            "pf-none",
+        );
         assert!(r.passed());
         assert_eq!(r.tests.status, CheckStatus::Skipped);
         let _ = std::fs::remove_dir_all(&repo);

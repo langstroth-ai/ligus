@@ -40,7 +40,8 @@ pub const MAX_COVERAGE_ENTRIES: usize = 64;
 
 /// Hosts whose owner/name paths are case-insensitive: their canonical path is
 /// lowercase. A fixed table (review F5), never a device's own forge settings.
-pub const CASE_INSENSITIVE_HOSTS: &[&str] = &["github.com", "gitlab.com", "codeberg.org", "gitea.com"];
+pub const CASE_INSENSITIVE_HOSTS: &[&str] =
+    &["github.com", "gitlab.com", "codeberg.org", "gitea.com"];
 /// Forge kinds whose paths are case-insensitive (the repo entry's own hint).
 pub const CASE_INSENSITIVE_KINDS: &[&str] = &["github", "gitlab", "gitea", "forgejo"];
 
@@ -93,7 +94,9 @@ pub fn repo_id(canonical: &str) -> Uuid {
 
 /// Whether `s` is a commit id: 40 (SHA-1) or 64 (SHA-256) lowercase hex.
 pub fn is_commit_id(s: &str) -> bool {
-    (s.len() == 40 || s.len() == 64) && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    (s.len() == 40 || s.len() == 64)
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn valid_host(h: &str) -> bool {
@@ -105,7 +108,9 @@ fn valid_host(h: &str) -> bool {
                 && label.len() <= 63
                 && !label.starts_with('-')
                 && !label.ends_with('-')
-                && label.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         })
 }
 
@@ -114,7 +119,8 @@ fn valid_segment(s: &str) -> bool {
         && s.len() <= 100
         && s != "."
         && s != ".."
-        && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 /// Whether `canonical` is already in normal form (review F5): `local:<root>`,
@@ -126,7 +132,9 @@ pub fn canonical_is_normal(canonical: &str, forge_kind: &str) -> bool {
     if let Some(root) = canonical.strip_prefix("local:") {
         return is_commit_id(root);
     }
-    let Some((host, path)) = canonical.split_once('/') else { return false };
+    let Some((host, path)) = canonical.split_once('/') else {
+        return false;
+    };
     if !valid_host(host) {
         return false;
     }
@@ -137,7 +145,8 @@ pub fn canonical_is_normal(canonical: &str, forge_kind: &str) -> bool {
     if segs.last().is_some_and(|s| s.ends_with(".git")) {
         return false;
     }
-    let folds = CASE_INSENSITIVE_HOSTS.contains(&host) || CASE_INSENSITIVE_KINDS.contains(&forge_kind);
+    let folds =
+        CASE_INSENSITIVE_HOSTS.contains(&host) || CASE_INSENSITIVE_KINDS.contains(&forge_kind);
     !(folds && path.bytes().any(|b| b.is_ascii_uppercase()))
 }
 
@@ -162,10 +171,17 @@ pub fn repo_well_formed(repo: &WorkspaceRepo) -> Result<(), &'static str> {
     if !display_name_ok(&repo.display_name) {
         return Err("bad repo display name");
     }
-    if repo.forge_kind.len() > 32 || repo.default_branch.len() > 255 || repo.default_branch.chars().any(char::is_control) {
+    if repo.forge_kind.len() > 32
+        || repo.default_branch.len() > 255
+        || repo.default_branch.chars().any(char::is_control)
+    {
         return Err("bad repo hint");
     }
-    if repo.root_commit.as_deref().is_some_and(|r| !is_commit_id(r)) {
+    if repo
+        .root_commit
+        .as_deref()
+        .is_some_and(|r| !is_commit_id(r))
+    {
         return Err("bad root commit");
     }
     Ok(())
@@ -322,7 +338,12 @@ pub const COVERAGE_CONTEXT: &[u8] = b"ligus-coverage-v1\0";
 /// length, then the bytes) and `via_fork` (one byte, 0 or 1). `at` is left
 /// out: liveness isn't signed, and a replayed report loses to a later
 /// `seq`.
-pub fn coverage_message(workspace_id: Uuid, device_id: Uuid, seq: u64, coverage: &[CoverageEntry]) -> Vec<u8> {
+pub fn coverage_message(
+    workspace_id: Uuid,
+    device_id: Uuid,
+    seq: u64,
+    coverage: &[CoverageEntry],
+) -> Vec<u8> {
     let mut m = Vec::with_capacity(COVERAGE_CONTEXT.len() + 44 + coverage.len() * 32);
     m.extend_from_slice(COVERAGE_CONTEXT);
     m.extend_from_slice(workspace_id.as_bytes());
@@ -343,14 +364,28 @@ pub fn coverage_message(workspace_id: Uuid, device_id: Uuid, seq: u64, coverage:
 impl HostBeat {
     /// Bounds a reader enforces before using a beat's coverage.
     pub fn coverage_ok(&self) -> bool {
-        self.coverage.len() <= MAX_COVERAGE_ENTRIES && self.coverage.iter().all(|c| c.state.len() <= 16 && c.code.len() <= 64)
+        self.coverage.len() <= MAX_COVERAGE_ENTRIES
+            && self
+                .coverage
+                .iter()
+                .all(|c| c.state.len() <= 16 && c.code.len() <= 64)
     }
 
     /// Sign this beat's coverage as `device_id` (whose id must be the beat's
     /// `host_id`) in `workspace_id`.
-    pub fn sign_coverage(&mut self, workspace_id: Uuid, device_id: Uuid, key: &crate::crypto::SigningKeypair) {
+    pub fn sign_coverage(
+        &mut self,
+        workspace_id: Uuid,
+        device_id: Uuid,
+        key: &crate::crypto::SigningKeypair,
+    ) {
         use base64::Engine as _;
-        let sig = key.sign(&coverage_message(workspace_id, device_id, self.seq, &self.coverage));
+        let sig = key.sign(&coverage_message(
+            workspace_id,
+            device_id,
+            self.seq,
+            &self.coverage,
+        ));
         self.coverage_sig = base64::engine::general_purpose::STANDARD.encode(sig);
     }
 
@@ -359,21 +394,38 @@ impl HostBeat {
     /// (the reader's current one) has certified, not revoked, not a phone,
     /// and acting for a current member. Anything else is ignored (the
     /// beat's liveness still counts).
-    pub fn coverage_verified(&self, workspace_id: Uuid, roster: &crate::authz::RosterState) -> bool {
+    pub fn coverage_verified(
+        &self,
+        workspace_id: Uuid,
+        roster: &crate::authz::RosterState,
+    ) -> bool {
         use base64::Engine as _;
         if self.coverage.is_empty() || !self.coverage_ok() {
             return false;
         }
-        let Ok(device) = Uuid::parse_str(&self.host_id) else { return false };
-        let Some(d) = roster.devices.get(&device) else { return false };
-        if !roster.device_trusted(device) || d.phone || crate::dispatch::holder_gone(roster, device) {
+        let Ok(device) = Uuid::parse_str(&self.host_id) else {
+            return false;
+        };
+        let Some(d) = roster.devices.get(&device) else {
+            return false;
+        };
+        if !roster.device_trusted(device) || d.phone || crate::dispatch::holder_gone(roster, device)
+        {
             return false;
         }
-        let Ok(sig) = base64::engine::general_purpose::STANDARD.decode(self.coverage_sig.as_bytes()) else { return false };
-        crate::crypto::verify(&d.public_key, &coverage_message(workspace_id, device, self.seq, &self.coverage), &sig).is_ok()
+        let Ok(sig) =
+            base64::engine::general_purpose::STANDARD.decode(self.coverage_sig.as_bytes())
+        else {
+            return false;
+        };
+        crate::crypto::verify(
+            &d.public_key,
+            &coverage_message(workspace_id, device, self.seq, &self.coverage),
+            &sig,
+        )
+        .is_ok()
     }
 }
-
 
 // ── Canonical identity (repos review F5) ─────────────────────────────────
 
@@ -430,13 +482,19 @@ pub fn canonical_repo(
         return Err(CanonError::NoRemote);
     }
     if url.len() > 1024 || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err(CanonError::Refused("spaces or control characters in a remote"));
+        return Err(CanonError::Refused(
+            "spaces or control characters in a remote",
+        ));
     }
     if !url.is_ascii() {
-        return Err(CanonError::Refused("a non-ASCII remote (write the host in punycode)"));
+        return Err(CanonError::Refused(
+            "a non-ASCII remote (write the host in punycode)",
+        ));
     }
     if url.contains("::") {
-        return Err(CanonError::Refused("a git remote-helper transport is never an identity"));
+        return Err(CanonError::Refused(
+            "a git remote-helper transport is never an identity",
+        ));
     }
     let (authority, path, scp) = if let Some((scheme, rest)) = url.split_once("://") {
         match scheme.to_ascii_lowercase().as_str() {
@@ -444,9 +502,14 @@ pub fn canonical_repo(
             "file" => return Err(CanonError::NoRemote),
             _ => return Err(CanonError::Refused("an unknown transport")),
         }
-        let (auth, path) = rest.split_once('/').ok_or(CanonError::Refused("a remote without a path"))?;
+        let (auth, path) = rest
+            .split_once('/')
+            .ok_or(CanonError::Refused("a remote without a path"))?;
         (auth, path, false)
-    } else if let Some((left, path)) = url.split_once(':').filter(|(l, _)| !l.contains('/') && l.len() > 1) {
+    } else if let Some((left, path)) = url
+        .split_once(':')
+        .filter(|(l, _)| !l.contains('/') && l.len() > 1)
+    {
         (left, path, true)
     } else {
         return Err(CanonError::NoRemote);
@@ -461,7 +524,11 @@ pub fn canonical_repo(
     if host_port.starts_with('[') {
         return Err(CanonError::Refused("an IP literal host"));
     }
-    let host = if scp { host_port } else { host_port.split(':').next().unwrap_or(host_port) };
+    let host = if scp {
+        host_port
+    } else {
+        host_port.split(':').next().unwrap_or(host_port)
+    };
     let mut host = host.to_ascii_lowercase();
     while host.ends_with('.') {
         host.pop();
@@ -479,7 +546,9 @@ pub fn canonical_repo(
         return Err(CanonError::Refused("not a valid host name"));
     }
     if path.contains(['%', '\\', '?', '#']) {
-        return Err(CanonError::Refused("an encoded or reserved character in the path"));
+        return Err(CanonError::Refused(
+            "an encoded or reserved character in the path",
+        ));
     }
     let path = path.trim_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
@@ -488,7 +557,11 @@ pub fn canonical_repo(
     if segs.len() < 2 || segs.len() > MAX_SEGMENTS || !segs.iter().all(|s| valid_segment(s)) {
         return Err(CanonError::Refused("not an owner/name path"));
     }
-    let path = if folds_case(&host, forge_kind) { path.to_ascii_lowercase() } else { path.to_string() };
+    let path = if folds_case(&host, forge_kind) {
+        path.to_ascii_lowercase()
+    } else {
+        path.to_string()
+    };
     let canonical = format!("{host}/{path}");
     if canonical.len() > 300 || !canonical_is_normal(&canonical, forge_kind) {
         return Err(CanonError::Refused("not a normal-form repository name"));
@@ -514,11 +587,16 @@ pub fn split_canonical(canonical: &str) -> Option<(&str, &str)> {
 /// doesn't evade it. A display warning, never a refusal.
 pub fn lookalikes(repos: &[WorkspaceRepo]) -> std::collections::BTreeMap<Uuid, Uuid> {
     let mut out = std::collections::BTreeMap::new();
-    let skeletons: Vec<String> = repos.iter().map(|r| confusable_skeleton(&r.canonical)).collect();
+    let skeletons: Vec<String> = repos
+        .iter()
+        .map(|r| confusable_skeleton(&r.canonical))
+        .collect();
     for (i, r) in repos.iter().enumerate() {
         let root = r.root_commit.as_deref();
         if let Some(first) = repos[..i].iter().enumerate().find(|(j, o)| {
-            o.canonical != r.canonical && ((root.is_some() && o.root_commit.as_deref() == root) || skeletons[*j] == skeletons[i])
+            o.canonical != r.canonical
+                && ((root.is_some() && o.root_commit.as_deref() == root)
+                    || skeletons[*j] == skeletons[i])
         }) {
             out.insert(r.id, first.1.id);
         }
@@ -585,7 +663,11 @@ fn host_of(canonical: &str) -> Option<&str> {
 /// live repo's alias, isn't on an aliased host, and isn't a look-alike of a
 /// live canonical or another repo's alias (an alias that differs from its
 /// own repo's canonical only in ASCII case is the case-split fix, allowed).
-pub fn repo_aliases_ok(roster: &crate::authz::RosterState, repo_id: Uuid, aliases: &[String]) -> Result<(), String> {
+pub fn repo_aliases_ok(
+    roster: &crate::authz::RosterState,
+    repo_id: Uuid,
+    aliases: &[String],
+) -> Result<(), String> {
     let Some(entry) = roster.repos.get(&repo_id).filter(|e| !e.removed) else {
         return Err("no such repository".into());
     };
@@ -596,10 +678,15 @@ pub fn repo_aliases_ok(roster: &crate::authz::RosterState, repo_id: Uuid, aliase
         return Err("too many aliases".into());
     }
     let mut seen = std::collections::BTreeSet::new();
-    let others: Vec<(String, Uuid)> = live_names(roster).into_iter().filter(|(n, id)| *id != repo_id || *n == entry.repo.canonical).collect();
+    let others: Vec<(String, Uuid)> = live_names(roster)
+        .into_iter()
+        .filter(|(n, id)| *id != repo_id || *n == entry.repo.canonical)
+        .collect();
     for a in aliases {
         if !seen.insert(skeleton(a)) {
-            return Err(format!("{a} is listed twice (or as a look-alike of another alias)"));
+            return Err(format!(
+                "{a} is listed twice (or as a look-alike of another alias)"
+            ));
         }
         if a.starts_with("local:") || !canonical_is_normal(a, &entry.repo.forge_kind) {
             return Err(format!("{a} isn't a normal-form repository name"));
@@ -609,7 +696,9 @@ pub fn repo_aliases_ok(roster: &crate::authz::RosterState, repo_id: Uuid, aliase
         }
         for (name, owner) in &others {
             if a == name {
-                return Err(format!("{a} is already a repository name in this workspace"));
+                return Err(format!(
+                    "{a} is already a repository name in this workspace"
+                ));
             }
             let case_split = *owner == repo_id && a.eq_ignore_ascii_case(name);
             if !case_split && skeleton(a) == skeleton(name) {
@@ -624,9 +713,17 @@ pub fn repo_aliases_ok(roster: &crate::authz::RosterState, repo_id: Uuid, aliase
 /// valid hosts; `host` the canonical host of a live forge repo; `alias` not
 /// itself a live repo's host nor a look-alike of one; at most 16. An empty
 /// `host` clears an existing alias.
-pub fn host_alias_ok(roster: &crate::authz::RosterState, alias: &str, host: &str) -> Result<(), String> {
+pub fn host_alias_ok(
+    roster: &crate::authz::RosterState,
+    alias: &str,
+    host: &str,
+) -> Result<(), String> {
     if host.is_empty() {
-        return if roster.host_aliases.contains_key(alias) { Ok(()) } else { Err("no such host alias".into()) };
+        return if roster.host_aliases.contains_key(alias) {
+            Ok(())
+        } else {
+            Err("no such host alias".into())
+        };
     }
     if !valid_host(alias) || !valid_host(host) {
         return Err("not a host name".into());
@@ -634,20 +731,34 @@ pub fn host_alias_ok(roster: &crate::authz::RosterState, alias: &str, host: &str
     if alias == host {
         return Err("a host can't alias itself".into());
     }
-    let live_hosts: std::collections::BTreeSet<&str> =
-        roster.repos.values().filter(|e| !e.removed).filter_map(|e| host_of(&e.repo.canonical)).collect();
+    let live_hosts: std::collections::BTreeSet<&str> = roster
+        .repos
+        .values()
+        .filter(|e| !e.removed)
+        .filter_map(|e| host_of(&e.repo.canonical))
+        .collect();
     if !live_hosts.contains(host) {
-        return Err(format!("{host} isn't the host of a repository in this workspace"));
+        return Err(format!(
+            "{host} isn't the host of a repository in this workspace"
+        ));
     }
     for h in &live_hosts {
         if *h == alias {
-            return Err(format!("{alias} is a repository host here; aliasing it would shadow it"));
+            return Err(format!(
+                "{alias} is a repository host here; aliasing it would shadow it"
+            ));
         }
         if skeleton(h) == skeleton(alias) {
             return Err(format!("{alias} looks like {h}"));
         }
     }
-    if roster.repo_aliases.iter().filter(|(id, _)| roster.repo_live(**id)).flat_map(|(_, l)| l).any(|a| host_of(a) == Some(alias)) {
+    if roster
+        .repo_aliases
+        .iter()
+        .filter(|(id, _)| roster.repo_live(**id))
+        .flat_map(|(_, l)| l)
+        .any(|a| host_of(a) == Some(alias))
+    {
         return Err(format!("a repository alias is on {alias}"));
     }
     if roster.host_aliases.values().any(|t| t == alias) {
@@ -671,7 +782,9 @@ pub fn shadowed_by_alias(roster: &crate::authz::RosterState, canonical: &str) ->
         }
         for a in list {
             if a == canonical || skeleton(a) == skeleton(canonical) {
-                return Some(format!("{canonical} is (or looks like) an alias of another repository"));
+                return Some(format!(
+                    "{canonical} is (or looks like) an alias of another repository"
+                ));
             }
         }
     }
@@ -705,8 +818,16 @@ pub fn ledger(session: &crate::session::ChatSession, repo_id: Uuid) -> Vec<Ledge
         .applied_order
         .iter()
         .filter_map(|id| session.proposals.iter().find(|p| p.id == *id))
-        .filter(|p| p.repo_id == Some(repo_id) && p.kind == crate::proposals::ProposalKind::FileDiff)
-        .filter_map(|p| p.diff.as_ref().map(|d| LedgerEntry { proposal_id: p.id, diff: d.clone(), reverted: p.reverted }))
+        .filter(|p| {
+            p.repo_id == Some(repo_id) && p.kind == crate::proposals::ProposalKind::FileDiff
+        })
+        .filter_map(|p| {
+            p.diff.as_ref().map(|d| LedgerEntry {
+                proposal_id: p.id,
+                diff: d.clone(),
+                reverted: p.reverted,
+            })
+        })
         .collect()
 }
 
@@ -758,22 +879,46 @@ mod tests {
             scratch: false,
         };
         assert!(repo_well_formed(&r).is_ok());
-        assert!(repo_well_formed(&WorkspaceRepo { id: Uuid::nil(), ..r.clone() }).is_err());
-        assert!(repo_well_formed(&WorkspaceRepo { display_name: "We\u{202E}Fit".into(), ..r.clone() }).is_err());
-        assert!(repo_well_formed(&WorkspaceRepo { root_commit: Some("abc".into()), ..r }).is_err());
+        assert!(repo_well_formed(&WorkspaceRepo {
+            id: Uuid::nil(),
+            ..r.clone()
+        })
+        .is_err());
+        assert!(repo_well_formed(&WorkspaceRepo {
+            display_name: "We\u{202E}Fit".into(),
+            ..r.clone()
+        })
+        .is_err());
+        assert!(repo_well_formed(&WorkspaceRepo {
+            root_commit: Some("abc".into()),
+            ..r
+        })
+        .is_err());
     }
 
     /// The beat's wire bytes: a coverage-less beat is exactly the original
     /// beat; coverage adds `seq` and `coverage` (frozen).
     #[test]
     fn host_beat_wire_is_frozen() {
-        let plain = HostBeat { host_id: "h".into(), at: 1, ..Default::default() };
-        assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"hostId":"h","at":1}"#);
+        let plain = HostBeat {
+            host_id: "h".into(),
+            at: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"hostId":"h","at":1}"#
+        );
         let full = HostBeat {
             host_id: "h".into(),
             at: 1,
             seq: 7,
-            coverage: vec![CoverageEntry { repo_id: Uuid::nil(), state: "error".into(), code: "clone_failed".into(), via_fork: true }],
+            coverage: vec![CoverageEntry {
+                repo_id: Uuid::nil(),
+                state: "error".into(),
+                code: "clone_failed".into(),
+                via_fork: true,
+            }],
             ..Default::default()
         };
         assert_eq!(
@@ -797,9 +942,15 @@ mod tests {
             "evil.example#@github.com:zazulam/wefit",
         ] {
             let c = canonical_repo(url, "", &none);
-            assert!(c.as_deref() != Ok("github.com/zazulam/wefit"), "{url} → {c:?}");
+            assert!(
+                c.as_deref() != Ok("github.com/zazulam/wefit"),
+                "{url} → {c:?}"
+            );
         }
-        assert_eq!(canonical_repo("https://user@github.com/zazulam/wefit", "", &none).as_deref(), Ok("github.com/zazulam/wefit"));
+        assert_eq!(
+            canonical_repo("https://user@github.com/zazulam/wefit", "", &none).as_deref(),
+            Ok("github.com/zazulam/wefit")
+        );
     }
 
     /// A look-alike is flagged without any root-commit claim: the Admin who
@@ -816,13 +967,23 @@ mod tests {
             scratch: false,
         };
         let a = mk("github.com/zazulam/wefit");
-        for evil in ["github.com/zazu1am/wefit", "github.com/zazuiam/wefit", "github.com/zazularn/wefit", "github.com/zazulam/wef1t", "githu8.com/zazulam/wefit", "github.com/zazulam/we-fit"] {
+        for evil in [
+            "github.com/zazu1am/wefit",
+            "github.com/zazuiam/wefit",
+            "github.com/zazularn/wefit",
+            "github.com/zazulam/wef1t",
+            "githu8.com/zazulam/wefit",
+            "github.com/zazulam/we-fit",
+        ] {
             let b = mk(evil);
             let flags = lookalikes(&[a.clone(), b.clone()]);
             assert_eq!(flags.get(&b.id), Some(&a.id), "{evil}");
         }
         let c = mk("github.com/zazulam/infra");
-        assert!(lookalikes(&[a.clone(), c]).is_empty(), "different names aren't look-alikes");
+        assert!(
+            lookalikes(&[a.clone(), c]).is_empty(),
+            "different names aren't look-alikes"
+        );
     }
 
     #[test]
@@ -847,7 +1008,10 @@ mod tests {
 
     #[test]
     fn unknown_coverage_state_reads_as_unknown() {
-        let e: CoverageEntry = serde_json::from_str(r#"{"repoId":"00000000-0000-0000-0000-000000000000","state":"quantum"}"#).unwrap();
+        let e: CoverageEntry = serde_json::from_str(
+            r#"{"repoId":"00000000-0000-0000-0000-000000000000","state":"quantum"}"#,
+        )
+        .unwrap();
         assert_eq!(e.state(), CoverageState::Unknown);
     }
 }

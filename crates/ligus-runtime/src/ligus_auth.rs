@@ -219,7 +219,12 @@ const SESSION_SECRETS: crate::secret_store::SecretPaths = &["refresh_token", "ac
 
 pub fn load_session(dir: &Path) -> Option<Session> {
     let store = crate::secret_store::for_data_dir(dir);
-    let v = crate::secret_store::load_settings_json(&session_path(dir), &*store, "auth", SESSION_SECRETS)?;
+    let v = crate::secret_store::load_settings_json(
+        &session_path(dir),
+        &*store,
+        "auth",
+        SESSION_SECRETS,
+    )?;
     let s: Session = serde_json::from_value(v).ok()?;
     if s.refresh_token.is_empty() {
         return None;
@@ -284,7 +289,9 @@ impl TokenCell {
     /// The token, only for a request to the bound relay origin.
     pub fn get_for(&self, url: &str) -> Option<String> {
         let bound = self.origin()?;
-        (origin_of(url).as_deref() == Some(bound.as_str())).then(|| self.get()).flatten()
+        (origin_of(url).as_deref() == Some(bound.as_str()))
+            .then(|| self.get())
+            .flatten()
     }
 }
 
@@ -824,7 +831,8 @@ mod tests {
             relay_origin: None,
         };
         save_session(dir.path(), &s).unwrap();
-        let out = crate::secret_redact::redacted(&format!("refresh={refresh} access={}", s.access_token));
+        let out =
+            crate::secret_redact::redacted(&format!("refresh={refresh} access={}", s.access_token));
         assert!(!out.contains(refresh) && !out.contains("hrt1."), "{out}");
     }
 
@@ -882,7 +890,8 @@ mod tests {
             .set_modified(old)
             .unwrap();
         let second =
-            tokio::time::timeout(Duration::from_millis(800), RefreshLock::acquire(dir.path())).await;
+            tokio::time::timeout(Duration::from_millis(800), RefreshLock::acquire(dir.path()))
+                .await;
         assert!(
             !matches!(second, Ok(Ok(_))),
             "a held refresh lock was taken over"
@@ -1106,7 +1115,9 @@ mod tests {
         let cell = TokenCell::default();
         cell.set(Some("hrt1.session-token".into()));
         let auth = |base: &str, fallback: Option<&str>| {
-            let rc = crate::RelayClient::new(base).with_auth(fallback.map(str::to_string)).with_auth_cell(Some(cell.clone()));
+            let rc = crate::RelayClient::new(base)
+                .with_auth(fallback.map(str::to_string))
+                .with_auth_cell(Some(cell.clone()));
             rc.authed(ligus_forge::new_http_client().get(format!("{base}/v1/x")))
                 .build()
                 .unwrap()
@@ -1114,18 +1125,49 @@ mod tests {
                 .get("authorization")
                 .map(|v| v.to_str().unwrap().to_string())
         };
-        assert_eq!(auth("https://relay.home.example", None), None, "unbound: sent nowhere");
+        assert_eq!(
+            auth("https://relay.home.example", None),
+            None,
+            "unbound: sent nowhere"
+        );
         cell.set_origin(origin_of("https://relay.home.example/"));
-        assert_eq!(auth("https://relay.home.example", None).as_deref(), Some("Bearer hrt1.session-token"));
-        assert_eq!(auth("https://RELAY.home.example:443", None).as_deref(), Some("Bearer hrt1.session-token"));
-        assert_eq!(auth("https://evil.example", None), None, "another relay never gets it");
-        assert_eq!(auth("http://relay.home.example", None), None, "nor the same host over another scheme");
-        assert_eq!(auth("https://relay.home.example:8443", None), None, "nor another port");
-        assert_eq!(auth("https://evil.example", Some("static")).as_deref(), Some("Bearer static"));
+        assert_eq!(
+            auth("https://relay.home.example", None).as_deref(),
+            Some("Bearer hrt1.session-token")
+        );
+        assert_eq!(
+            auth("https://RELAY.home.example:443", None).as_deref(),
+            Some("Bearer hrt1.session-token")
+        );
+        assert_eq!(
+            auth("https://evil.example", None),
+            None,
+            "another relay never gets it"
+        );
+        assert_eq!(
+            auth("http://relay.home.example", None),
+            None,
+            "nor the same host over another scheme"
+        );
+        assert_eq!(
+            auth("https://relay.home.example:8443", None),
+            None,
+            "nor another port"
+        );
+        assert_eq!(
+            auth("https://evil.example", Some("static")).as_deref(),
+            Some("Bearer static")
+        );
         // A refresh keeps the binding.
-        let s = Session { relay_origin: origin_of("https://relay.home.example"), ..session_fixture() };
+        let s = Session {
+            relay_origin: origin_of("https://relay.home.example"),
+            ..session_fixture()
+        };
         cell.set_session(&s);
-        assert_eq!(auth("https://relay.home.example", None).as_deref(), Some("Bearer hrt1.fixture"));
+        assert_eq!(
+            auth("https://relay.home.example", None).as_deref(),
+            Some("Bearer hrt1.fixture")
+        );
         assert_eq!(auth("https://evil.example", None), None);
     }
 
@@ -1169,7 +1211,10 @@ mod tests {
         let nested = format!("{}https://auth.example/device", "blob:".repeat(10_000));
         for (uri, complete) in [
             (nested.clone(), None),
-            ("https://PLACEHOLDER/device".to_string(), Some(nested.clone())),
+            (
+                "https://PLACEHOLDER/device".to_string(),
+                Some(nested.clone()),
+            ),
             ("data:text/plain,device".to_string(), None),
             // blob: takes its inner URL's origin, which here is the server's
             // own: still not a link to hand the person.

@@ -60,7 +60,9 @@ pub const PRIMARY: &str = "primary";
 
 /// [`PRIMARY`] for `None`, else the agent id as a string.
 pub fn agent_key(agent: Option<Uuid>) -> String {
-    agent.map(|a| a.to_string()).unwrap_or_else(|| PRIMARY.to_string())
+    agent
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| PRIMARY.to_string())
 }
 
 /// The inverse of [`agent_key`]: `None` for the primary (or anything that
@@ -378,7 +380,11 @@ impl FlowRecord {
     pub fn is_measurement(&self) -> bool {
         matches!(
             self,
-            FlowRecord::TurnTagged(_) | FlowRecord::Touch(_) | FlowRecord::Progress(_) | FlowRecord::EdgeWait(_) | FlowRecord::RouteStop(_)
+            FlowRecord::TurnTagged(_)
+                | FlowRecord::Touch(_)
+                | FlowRecord::Progress(_)
+                | FlowRecord::EdgeWait(_)
+                | FlowRecord::RouteStop(_)
         )
     }
 
@@ -387,7 +393,10 @@ impl FlowRecord {
     pub fn is_governance(&self) -> bool {
         matches!(
             self,
-            FlowRecord::Zone(_) | FlowRecord::ZoneRemoved { .. } | FlowRecord::Beacon(_) | FlowRecord::Unknown
+            FlowRecord::Zone(_)
+                | FlowRecord::ZoneRemoved { .. }
+                | FlowRecord::Beacon(_)
+                | FlowRecord::Unknown
         )
     }
 }
@@ -548,7 +557,11 @@ pub struct AskAudience {
 
 impl AskAudience {
     pub fn people(ids: Vec<String>) -> Self {
-        Self { kind: AUDIENCE_PEOPLE.into(), member_ids: ids, min_role: None }
+        Self {
+            kind: AUDIENCE_PEOPLE.into(),
+            member_ids: ids,
+            min_role: None,
+        }
     }
     pub fn room(min_role: crate::WorkspaceRole) -> Self {
         let r = match min_role {
@@ -556,7 +569,11 @@ impl AskAudience {
             crate::WorkspaceRole::Admin => "admin",
             _ => "contributor",
         };
-        Self { kind: AUDIENCE_ROOM.into(), member_ids: Vec::new(), min_role: Some(r.into()) }
+        Self {
+            kind: AUDIENCE_ROOM.into(),
+            member_ids: Vec::new(),
+            min_role: Some(r.into()),
+        }
     }
     /// The room's floor, never below Contributor; `None` for anything this
     /// build can't read.
@@ -570,7 +587,8 @@ impl AskAudience {
     }
     /// A single named person.
     pub fn single(&self) -> Option<&str> {
-        (self.kind == AUDIENCE_PEOPLE && self.member_ids.len() == 1).then(|| self.member_ids[0].as_str())
+        (self.kind == AUDIENCE_PEOPLE && self.member_ids.len() == 1)
+            .then(|| self.member_ids[0].as_str())
     }
 }
 
@@ -634,7 +652,6 @@ pub struct AskOrigin {
 fn is_zero_u8(x: &u8) -> bool {
     *x == 0
 }
-
 
 /// A human's answer to a [`HumanAsk`].
 ///
@@ -793,14 +810,21 @@ impl AskState {
         if let Some(e) = &self.ask.effect {
             return Some(e.clone());
         }
-        self.ask.permission.then(|| AskEffect { kind: EFFECT_PERMISSION.into(), ..Default::default() })
+        self.ask.permission.then(|| AskEffect {
+            kind: EFFECT_PERMISSION.into(),
+            ..Default::default()
+        })
     }
 
     /// An answer to this grant counts only with its author's passkey: the
     /// effect says so, or it is a secret, or it came from outside Ligus
     /// (whose agent and sandbox Ligus doesn't know), whatever it says.
     pub fn grant_needs_presence(&self) -> bool {
-        let outside = self.ask.origin.as_ref().is_some_and(|o| o.via == ORIGIN_OUTSIDE);
+        let outside = self
+            .ask
+            .origin
+            .as_ref()
+            .is_some_and(|o| o.via == ORIGIN_OUTSIDE);
         self.grant().is_some_and(|e| e.needs_presence() || outside)
     }
 
@@ -832,7 +856,14 @@ impl AskState {
     /// claim, which its signer chose; the member id when unknown.
     pub fn poster_name(&self, members: &[crate::identity::WorkspaceMember]) -> Option<String> {
         let p = self.posted_by.as_ref()?;
-        Some(members.iter().find(|m| m.id == p.id).map(|m| m.actor.display_name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| p.id.clone()))
+        Some(
+            members
+                .iter()
+                .find(|m| m.id == p.id)
+                .map(|m| m.actor.display_name.clone())
+                .filter(|n| !n.trim().is_empty())
+                .unwrap_or_else(|| p.id.clone()),
+        )
     }
 
     /// Settled for eviction: what every version agrees on (the v1 shadow:
@@ -924,21 +955,43 @@ impl AgentOutcomeSummary {
         self.accepted = self.accepted.min(MAX_SUMMARY_COUNT);
         self.reverted = self.reverted.min(MAX_SUMMARY_COUNT);
         self.rejected = self.rejected.min(MAX_SUMMARY_COUNT);
-        for m in [&mut self.task_class_counts, &mut self.errors_by_class, &mut self.tests_passed_by_class, &mut self.tests_failed_by_class] {
+        for m in [
+            &mut self.task_class_counts,
+            &mut self.errors_by_class,
+            &mut self.tests_passed_by_class,
+            &mut self.tests_failed_by_class,
+        ] {
             for v in m.values_mut() {
                 *v = (*v).min(MAX_SUMMARY_COUNT);
             }
         }
-        self.cost_usd = if self.cost_usd.is_finite() { self.cost_usd.clamp(0.0, MAX_SUMMARY_COST_USD) } else { 0.0 };
+        self.cost_usd = if self.cost_usd.is_finite() {
+            self.cost_usd.clamp(0.0, MAX_SUMMARY_COST_USD)
+        } else {
+            0.0
+        };
         if self.task_class_counts.len() > MAX_SUMMARY_CLASSES {
             let mut by: Vec<(String, u32)> = self.task_class_counts.clone().into_iter().collect();
             by.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            let keep: std::collections::BTreeSet<String> = by.into_iter().take(MAX_SUMMARY_CLASSES).map(|(k, _)| k).collect();
-            for m in [&mut self.task_class_counts, &mut self.errors_by_class, &mut self.tests_passed_by_class, &mut self.tests_failed_by_class] {
+            let keep: std::collections::BTreeSet<String> = by
+                .into_iter()
+                .take(MAX_SUMMARY_CLASSES)
+                .map(|(k, _)| k)
+                .collect();
+            for m in [
+                &mut self.task_class_counts,
+                &mut self.errors_by_class,
+                &mut self.tests_passed_by_class,
+                &mut self.tests_failed_by_class,
+            ] {
                 m.retain(|k, _| keep.contains(k));
             }
         }
-        for m in [&mut self.errors_by_class, &mut self.tests_passed_by_class, &mut self.tests_failed_by_class] {
+        for m in [
+            &mut self.errors_by_class,
+            &mut self.tests_passed_by_class,
+            &mut self.tests_failed_by_class,
+        ] {
             while m.len() > MAX_SUMMARY_CLASSES {
                 let k = m.keys().next_back().cloned().unwrap_or_default();
                 m.remove(&k);
@@ -972,7 +1025,9 @@ impl FlowState {
     pub fn apply(&mut self, record: &FlowRecord) {
         match record {
             FlowRecord::RouteDecision(d) => {
-                self.route_decisions.entry(d.trigger_id).or_insert_with(|| d.clone());
+                self.route_decisions
+                    .entry(d.trigger_id)
+                    .or_insert_with(|| d.clone());
                 if self.route_decisions.len() > MAX_KEPT {
                     if let Some(oldest) = self
                         .route_decisions
@@ -1026,12 +1081,20 @@ impl FlowState {
             }
             FlowRecord::Beacon(b) => self.beacon = Some(b.clone()),
             FlowRecord::AgentOutcomeSummary(sum) => {
-                if !self.outcome_summaries.contains_key(&sum.agent_key) && self.outcome_summaries.len() >= MAX_SUMMARY_AGENTS {
+                if !self.outcome_summaries.contains_key(&sum.agent_key)
+                    && self.outcome_summaries.len() >= MAX_SUMMARY_AGENTS
+                {
                     return;
                 }
-                let list = self.outcome_summaries.entry(sum.agent_key.clone()).or_default();
+                let list = self
+                    .outcome_summaries
+                    .entry(sum.agent_key.clone())
+                    .or_default();
                 // One per (host, day): a re-emission replaces.
-                if let Some(slot) = list.iter_mut().find(|x| x.host_id == sum.host_id && x.window_start == sum.window_start) {
+                if let Some(slot) = list
+                    .iter_mut()
+                    .find(|x| x.host_id == sum.host_id && x.window_start == sum.window_start)
+                {
                     *slot = sum.clone().bounded();
                 } else {
                     list.push(sum.clone().bounded());
@@ -1066,7 +1129,10 @@ impl FlowState {
     /// consumed yet.
     pub fn pending_handoff_for(&self, agent: &str) -> Option<&HandoffCard> {
         let card = self.handoffs.iter().rev().find(|h| h.to == agent)?;
-        let consumed = self.turns.iter().any(|t| t.agent == agent && t.at_ms > card.at_ms);
+        let consumed = self
+            .turns
+            .iter()
+            .any(|t| t.agent == agent && t.at_ms > card.at_ms);
         (!consumed).then_some(card)
     }
 
@@ -1088,11 +1154,25 @@ mod tests {
 
     #[test]
     fn first_answer_wins_and_closed_asks_take_none() {
-        let ask = HumanAsk { ask_id: Uuid::from_u128(1), turn_id: Uuid::from_u128(2), agent_key: "a".into(), question: "q?".into(), at_ms: 1, ..Default::default() };
+        let ask = HumanAsk {
+            ask_id: Uuid::from_u128(1),
+            turn_id: Uuid::from_u128(2),
+            agent_key: "a".into(),
+            question: "q?".into(),
+            at_ms: 1,
+            ..Default::default()
+        };
         let mut s = FlowState::default();
         s.apply(&FlowRecord::HumanAsk(ask.clone()));
         assert!(s.asks[&ask.ask_id].is_open());
-        let ans = |t: &str| FlowRecord::HumanAnswered(HumanAnswered { ask_id: ask.ask_id, answer: t.into(), at_ms: 2, ..Default::default() });
+        let ans = |t: &str| {
+            FlowRecord::HumanAnswered(HumanAnswered {
+                ask_id: ask.ask_id,
+                answer: t.into(),
+                at_ms: 2,
+                ..Default::default()
+            })
+        };
         s.apply(&ans("first"));
         s.apply(&ans("second"));
         assert_eq!(s.asks[&ask.ask_id].answer.as_ref().unwrap().answer, "first");
@@ -1105,11 +1185,16 @@ mod tests {
         // A closed ask takes no answer.
         let mut t = FlowState::default();
         t.apply(&FlowRecord::HumanAsk(ask.clone()));
-        t.apply(&FlowRecord::HumanAsk(HumanAsk { closed: true, ..ask.clone() }));
+        t.apply(&FlowRecord::HumanAsk(HumanAsk {
+            closed: true,
+            ..ask.clone()
+        }));
         t.apply(&ans("late"));
         assert!(t.asks[&ask.ask_id].answer.is_none() && !t.asks[&ask.ask_id].is_open());
         // Wire tags.
-        assert!(serde_json::to_string(&FlowRecord::HumanAsk(ask)).unwrap().contains("\"type\":\"humanAsk\""));
+        assert!(serde_json::to_string(&FlowRecord::HumanAsk(ask))
+            .unwrap()
+            .contains("\"type\":\"humanAsk\""));
     }
 
     #[test]
@@ -1142,9 +1227,18 @@ mod tests {
 
     #[test]
     fn config_and_governance_classes() {
-        assert!(FlowRecord::MarkCleared { mark_id: Uuid::nil() }.is_config());
-        assert!(!FlowRecord::MarkCleared { mark_id: Uuid::nil() }.is_governance());
-        assert!(FlowRecord::ZoneRemoved { zone_id: Uuid::nil() }.is_governance());
+        assert!(FlowRecord::MarkCleared {
+            mark_id: Uuid::nil()
+        }
+        .is_config());
+        assert!(!FlowRecord::MarkCleared {
+            mark_id: Uuid::nil()
+        }
+        .is_governance());
+        assert!(FlowRecord::ZoneRemoved {
+            zone_id: Uuid::nil()
+        }
+        .is_governance());
         assert!(!FlowRecord::Progress(ProgressMark {
             message_id: Uuid::nil(),
             agent: PRIMARY.into(),
@@ -1222,13 +1316,25 @@ mod tests {
         let card = handoff::HandoffCard::example("a", "b", 10);
         s.apply(&FlowRecord::TurnTagged(turn("b", 5)));
         s.apply(&FlowRecord::Handoff(card.clone()));
-        assert_eq!(s.handoff_reply(&card), None, "an earlier turn of the receiver isn't the reply");
+        assert_eq!(
+            s.handoff_reply(&card),
+            None,
+            "an earlier turn of the receiver isn't the reply"
+        );
         s.apply(&FlowRecord::TurnTagged(turn("a", 15)));
-        assert_eq!(s.handoff_reply(&card), None, "the sender's turn isn't the reply");
+        assert_eq!(
+            s.handoff_reply(&card),
+            None,
+            "the sender's turn isn't the reply"
+        );
         let later = turn("b", 30);
         let first = turn("b", 20);
         s.apply(&FlowRecord::TurnTagged(later.clone()));
         s.apply(&FlowRecord::TurnTagged(first.clone()));
-        assert_eq!(s.handoff_reply(&card), Some(first.message_id), "the earliest turn after the card, in any fold order");
+        assert_eq!(
+            s.handoff_reply(&card),
+            Some(first.message_id),
+            "the earliest turn after the card, in any fold order"
+        );
     }
 }

@@ -24,7 +24,10 @@ pub enum MsgError {
     #[error("the message's signature doesn't verify")]
     BadSignature,
     #[error("the message is a {got}, not a {want}")]
-    WrongType { want: &'static str, got: &'static str },
+    WrongType {
+        want: &'static str,
+        got: &'static str,
+    },
     #[error("the message answers another request")]
     WrongRid,
     #[error("the request was read from another mailbox than it names")]
@@ -61,7 +64,9 @@ impl std::fmt::Debug for Signer {
 impl Clone for Signer {
     fn clone(&self) -> Self {
         match self {
-            Self::Ed25519(k) => Self::Ed25519(SigningKeypair::from_seed(&k.seed_bytes()).expect("32-byte seed")),
+            Self::Ed25519(k) => {
+                Self::Ed25519(SigningKeypair::from_seed(&k.seed_bytes()).expect("32-byte seed"))
+            }
             Self::P256(k) => Self::P256(k.clone()),
         }
     }
@@ -216,7 +221,13 @@ impl Verified {
         if !verify_sig(alg, &key, &pre, &sig) {
             return Err(MsgError::BadSignature);
         }
-        Ok(Self { t, alg, key, body: w.body, raw: raw.to_string() })
+        Ok(Self {
+            t,
+            alg,
+            key,
+            body: w.body,
+            raw: raw.to_string(),
+        })
     }
 
     /// The device id the signer's key derives.
@@ -226,7 +237,10 @@ impl Verified {
 
     fn expect(&self, t: MsgType) -> Result<(), MsgError> {
         if self.t != t {
-            return Err(MsgError::WrongType { want: t.as_str(), got: self.t.as_str() });
+            return Err(MsgError::WrongType {
+                want: t.as_str(),
+                got: self.t.as_str(),
+            });
         }
         Ok(())
     }
@@ -257,7 +271,10 @@ pub fn open_blob(ka: &KeyAgreementKeypair, blob: &str) -> Option<Vec<u8>> {
     if b.len() <= 32 {
         return None;
     }
-    let sealed = SealedBlob { ephemeral_public: b[..32].to_vec(), ciphertext: b[32..].to_vec() };
+    let sealed = SealedBlob {
+        ephemeral_public: b[..32].to_vec(),
+        ciphertext: b[32..].to_vec(),
+    };
     ligus_core::e2ee::open(ka, &sealed).ok()
 }
 
@@ -475,10 +492,13 @@ impl RequestSubject {
             MatchKind::Box => Self::Box(JoinRequest::decode(code).map_err(MsgError::BadCode)?),
             MatchKind::Computer => {
                 let r = LinkRequest::decode(code).map_err(|e| MsgError::BadCode(e.to_string()))?;
-                r.check_fresh(now_ms).map_err(|e| MsgError::BadCode(e.to_string()))?;
+                r.check_fresh(now_ms)
+                    .map_err(|e| MsgError::BadCode(e.to_string()))?;
                 Self::Computer(r)
             }
-            MatchKind::Phone => Self::Phone(PhoneCode::decode(code).map_err(|e| MsgError::BadCode(e.to_string()))?),
+            MatchKind::Phone => {
+                Self::Phone(PhoneCode::decode(code).map_err(|e| MsgError::BadCode(e.to_string()))?)
+            }
         })
     }
 }
@@ -507,7 +527,12 @@ impl VerifiedRequest {
     }
 
     /// Check a plaintext request read from `mailbox` under `rid`.
-    pub fn verify(plain: &[u8], rid: &[u8; 16], mailbox: &[u8; 16], now_ms: i64) -> Result<Self, MsgError> {
+    pub fn verify(
+        plain: &[u8],
+        rid: &[u8; 16],
+        mailbox: &[u8; 16],
+        now_ms: i64,
+    ) -> Result<Self, MsgError> {
         let v = Verified::parse(plain)?;
         v.expect(MsgType::Request)?;
         let b: RequestBody = v.body_as()?;
@@ -585,7 +610,12 @@ pub(crate) fn verify_open(v: &Verified, rid: &[u8; 16]) -> Result<VerifiedOpen, 
 }
 
 /// `nR` from a reveal signed by the requester (`key`, `alg`).
-pub(crate) fn verify_reveal(v: &Verified, rid: &[u8; 16], alg: SigAlg, key: &[u8]) -> Result<[u8; 32], MsgError> {
+pub(crate) fn verify_reveal(
+    v: &Verified,
+    rid: &[u8; 16],
+    alg: SigAlg,
+    key: &[u8],
+) -> Result<[u8; 32], MsgError> {
     v.expect(MsgType::Reveal)?;
     if v.alg != alg || v.key != key {
         return Err(MsgError::WrongKey);
@@ -596,14 +626,23 @@ pub(crate) fn verify_reveal(v: &Verified, rid: &[u8; 16], alg: SigAlg, key: &[u8
 }
 
 /// A result signed by `approver_sig_key`, its digest well formed.
-pub(crate) fn verify_result(v: &Verified, rid: &[u8; 16], alg: SigAlg, approver_sig_key: &[u8]) -> Result<ResultBody, MsgError> {
+pub(crate) fn verify_result(
+    v: &Verified,
+    rid: &[u8; 16],
+    alg: SigAlg,
+    approver_sig_key: &[u8],
+) -> Result<ResultBody, MsgError> {
     v.expect(MsgType::Result)?;
     if v.alg != alg || v.key != approver_sig_key {
         return Err(MsgError::WrongKey);
     }
     let b: ResultBody = v.body_as()?;
     check_rid(&b.rid, rid)?;
-    if b.grant.is_some() != b.grant_digest.is_some() || b.grant_digest.as_deref().is_some_and(|d| hex_fixed::<32>(d).is_none()) {
+    if b.grant.is_some() != b.grant_digest.is_some()
+        || b.grant_digest
+            .as_deref()
+            .is_some_and(|d| hex_fixed::<32>(d).is_none())
+    {
         return Err(MsgError::Malformed);
     }
     Ok(b)
@@ -628,7 +667,11 @@ pub(crate) fn verify_claim(v: &Verified, rid: &[u8; 16]) -> Result<ClaimBody, Ms
 
 /// An offer signed by the open's approver key, naming the open's person and
 /// device, with a well-formed digest.
-pub(crate) fn verify_offer(v: &Verified, rid: &[u8; 16], open: &VerifiedOpen) -> Result<OfferBody, MsgError> {
+pub(crate) fn verify_offer(
+    v: &Verified,
+    rid: &[u8; 16],
+    open: &VerifiedOpen,
+) -> Result<OfferBody, MsgError> {
     v.expect(MsgType::Offer)?;
     if v.alg != open.approver_alg || v.key != open.approver_sig_key {
         return Err(MsgError::WrongKey);
@@ -643,7 +686,12 @@ pub(crate) fn verify_offer(v: &Verified, rid: &[u8; 16], open: &VerifiedOpen) ->
 }
 
 /// The digest an ack signed by the requester (`alg`, `key`) acknowledges.
-pub(crate) fn verify_ack(v: &Verified, rid: &[u8; 16], alg: SigAlg, key: &[u8]) -> Result<String, MsgError> {
+pub(crate) fn verify_ack(
+    v: &Verified,
+    rid: &[u8; 16],
+    alg: SigAlg,
+    key: &[u8],
+) -> Result<String, MsgError> {
     v.expect(MsgType::Ack)?;
     if v.alg != alg || v.key != key {
         return Err(MsgError::WrongKey);
