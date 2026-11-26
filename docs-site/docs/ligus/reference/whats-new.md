@@ -4,6 +4,41 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## Unreleased
+
+### New
+
+- **Approve a box or a computer by comparing a code.** An Admin copies the
+  workspace's approval address (`ligus admit address`, or workspace menu →
+  **Admit a box…**); a box runs `ligus admit request --to ligusaddr1:…` and a
+  computer `ligus devices request --to ligusaddr1:…`. The request reaches the
+  Inbox and, for a box, a paired phone; both screens show the same 8-symbol
+  code, and the approval takes one passkey. A headless box joins only once the
+  approval is on the real workspace log, signed by an Admin's device. A
+  mismatch grants nothing. On the phone, a push-started approval asks which of
+  three codes the box shows. `ligus approvals list` and `approve` are the
+  headless approver; `ligus admit address --reset` cuts off a leaked address.
+  Paste and the fingerprint still work, and Kubernetes admissions are
+  unchanged. See [Admitting a box](../../operate/ops/admitting-a-box.md#code-match)
+  and [Add a computer](../features/linked-devices.md#code-match).
+
+### Added
+
+- **Your name and picture are one profile.** A rename or a new picture on
+  the desktop shows for everyone in every workspace you're in, in past
+  messages too; pictures no longer ride every message (16 KB at most, PNG,
+  JPEG or WebP). `ligus profile set` does it headless. See
+  [Settings → Profile](../features/settings.md#profile).
+- **Device names sync.** **Rename…** in My devices, `ligus devices rename`,
+  `lt --plain device-rename`; boxes name themselves from `--label`. A
+  computer approved but never redeemed says so and offers **Remove**.
+- **Rules v3** for new workspaces: a device certificate counts only when its
+  device accepted it, duplicate members retire into their person, model keys
+  are refused on the log. See [Rules v3](../../operate/security/index.md#rules-v3).
+- **Phones state their person.** The phone app asks once to confirm *this
+  phone is Ana's in Hive Lab*; that signed statement settles a phone
+  another member also certified.
+
 ## 0.3.1
 
 A security release: permission requests from agents, devices that act only
@@ -44,22 +79,6 @@ easier linking of a computer and a calmer relay claim. Upgrade every member.
   Every member's device received that key, so rotate it with the provider and
   move the runtime to `--secret-ref`. See
   [Headless agents](../../operate/concepts/headless-agents.md).
-
-### New
-
-- **Approve a box or a computer by comparing a code.** An Admin copies the
-  workspace's approval address (`ligus admit address`, or workspace menu →
-  **Admit a box…**); a box runs `ligus admit request --to ligusaddr1:…` and a
-  computer `ligus devices request --to ligusaddr1:…`. The request reaches the
-  Inbox and, for a box, a paired phone; both screens show the same 8-symbol
-  code, and the approval takes one passkey. A headless box joins only once the
-  approval is on the real workspace log, signed by an Admin's device. A
-  mismatch grants nothing. On the phone, a push-started approval asks which of
-  three codes the box shows. `ligus approvals list` and `approve` are the
-  headless approver; `ligus admit address --reset` cuts off a leaked address.
-  Paste and the fingerprint still work, and Kubernetes admissions are
-  unchanged. See [Admitting a box](../../operate/ops/admitting-a-box.md#code-match)
-  and [Add a computer](../features/linked-devices.md#code-match).
 
 ### Changed
 

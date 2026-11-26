@@ -425,9 +425,39 @@ pub struct DeviceCertificate {
     /// with its account's passkey presence (`authz`). Left out for Ed25519.
     #[serde(default, skip_serializing_if = "SigAlg::is_ed25519")]
     pub alg: SigAlg,
+    /// A phone's own enrollment statement (identity model v2, 7.3a; P-256
+    /// only): its key's signature over [`phone_consent_preimage`], naming
+    /// this certificate's account and the workspace. Outside the account's
+    /// signature (the phone signs it, the desktop copies it in). Under rules
+    /// 3 a phone certificate counts only with it, or while it is the only
+    /// certificate of that key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone_consent: Option<Vec<u8>>,
+}
+
+/// FROZEN signature context of a phone's enrollment statement.
+pub const PHONE_CONSENT_TAG: &[u8] = b"ligus-phone-enrol-v1\0";
+
+/// What a phone signs to say it is `account`'s phone in `workspace_id`.
+pub fn phone_consent_preimage(workspace_id: Uuid, account_id: Uuid, device_id: Uuid) -> Vec<u8> {
+    let mut out = Vec::with_capacity(PHONE_CONSENT_TAG.len() + 48);
+    out.extend_from_slice(PHONE_CONSENT_TAG);
+    out.extend_from_slice(workspace_id.as_bytes());
+    out.extend_from_slice(account_id.as_bytes());
+    out.extend_from_slice(device_id.as_bytes());
+    out
 }
 
 impl DeviceCertificate {
+    /// Whether this phone certificate carries the phone's own statement for
+    /// its account in `workspace_id`, verifying under the certified key.
+    pub fn phone_consent_ok(&self, workspace_id: Uuid) -> bool {
+        self.alg == SigAlg::P256
+            && self.phone_consent.as_ref().is_some_and(|sig| {
+                verify_p256(&self.device_public_key, &phone_consent_preimage(workspace_id, self.account_id, self.device_id), sig).is_ok()
+            })
+    }
+
     fn preimage(
         device_id: Uuid,
         device_public_key: &[u8],
@@ -483,7 +513,7 @@ impl DeviceCertificate {
     ) -> Self {
         let preimage = Self::preimage_alg(device_id, device_public_key, account_id, issued_at, SigAlg::P256);
         let signature = account_keypair.sign(&preimage).to_vec();
-        Self { device_id, device_public_key: device_public_key.to_vec(), account_id, issued_at, signature, alg: SigAlg::P256 }
+        Self { device_id, device_public_key: device_public_key.to_vec(), account_id, issued_at, signature, alg: SigAlg::P256, phone_consent: None }
     }
 
     /// Issue a certificate for an Ed25519 `device_public_key`, signed by the
@@ -513,6 +543,7 @@ impl DeviceCertificate {
             issued_at,
             signature,
             alg: SigAlg::Ed25519,
+            phone_consent: None,
         }
     }
 

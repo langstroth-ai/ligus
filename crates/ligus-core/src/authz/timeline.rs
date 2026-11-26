@@ -163,6 +163,11 @@ pub struct RosterState {
     /// The attachment policy and the blocklist of content hashes in force
     /// (issue #118).
     pub attachments: crate::attachment::AttachmentRules,
+    /// Rules 3: (device, account) certificates the log allowed that their
+    /// device hasn't accepted yet, so they count for nothing. The device
+    /// accepts by publishing its own copy, which needs no presence (the
+    /// publisher's did).
+    pub unaccepted: BTreeSet<(Uuid, Uuid)>,
 }
 
 impl RosterState {
@@ -287,6 +292,10 @@ pub struct RosterTracker {
     /// device more than one account certified ([`RosterTracker::vouched`]):
     /// what [`DeviceState::holders`] reads.
     vouched: Arc<BTreeMap<Uuid, BTreeSet<Uuid>>>,
+    /// (device, account) certificates the device itself accepted anywhere on
+    /// the log ([`RosterTracker::accepted`]): under rules 3 the only ones
+    /// that count.
+    accepted: Arc<BTreeSet<(Uuid, Uuid)>>,
 }
 
 impl RosterTracker {
@@ -333,6 +342,80 @@ impl RosterTracker {
     /// (see [`crate::account_keys`]).
     pub fn key_anchors(&self) -> BTreeMap<Uuid, Uuid> {
         self.book.anchors()
+    }
+
+    /// Record which certificates their devices accepted
+    /// ([`RosterTracker::accepted`]); a fold of a log on rules 3 sets it
+    /// before folding.
+    pub fn set_accepted(&mut self, accepted: BTreeSet<(Uuid, Uuid)>) {
+        self.accepted = Arc::new(accepted);
+    }
+
+    /// Rules 3 (identity model v2, "Rules 3 in 0.4"): the (device, account)
+    /// certificates on `envelopes` (a whole log, any position, any verdict)
+    /// that the certified device itself accepted. An Ed25519 device accepts
+    /// an account by signing anything stamped for it (its own certificate,
+    /// its admission, a key-agreement key, a label): a signature by its own
+    /// key, so nobody else can add one. A phone accepts with its signed
+    /// enrollment statement in the certificate (`phone_consent`), or, for a
+    /// phone enrolled before statements existed, by being certified by that
+    /// one account alone on the whole log. A certificate someone puts on
+    /// another device's public key is never accepted, so it counts for
+    /// nothing: it can't hold, borrow, block or redirect the device.
+    pub fn accepted(envelopes: &[&SessionEventEnvelope], workspace_id: Uuid) -> BTreeSet<(Uuid, Uuid)> {
+        let trust: Vec<SessionEventEnvelope> = envelopes
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.payload,
+                    SessionEvent::AccountKeyRegistered { .. } | SessionEvent::AccountKeyRotated { .. } | SessionEvent::DeviceCertificateAdded { .. }
+                )
+            })
+            .map(|e| (*e).clone())
+            .collect();
+        let directory = crate::copies::SignerDirectory::of(&trust);
+        let devices: BTreeMap<Uuid, (&[u8], &BTreeSet<Uuid>)> = directory.devices().collect();
+        let mut out: BTreeSet<(Uuid, Uuid)> = BTreeSet::new();
+        // Phones: the statement, or a sole certifier. Only certificates the
+        // signer directory verified count (the id is its key's, the
+        // account's registered key signed it): a planted certificate, under
+        // a key of someone's own or for a made-up account, neither carries a
+        // statement nor makes a phone contested.
+        let mut phone_certifiers: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
+        for e in envelopes {
+            if let SessionEvent::DeviceCertificateAdded { certificate: c } = &e.payload {
+                let verified = c.alg == crate::crypto::SigAlg::P256
+                    && c.id_matches_key()
+                    && devices.get(&c.device_id).is_some_and(|(key, claimants)| *key == c.device_public_key.as_slice() && claimants.contains(&c.account_id));
+                if verified {
+                    phone_certifiers.entry(c.device_id).or_default().insert(c.account_id);
+                    if c.phone_consent_ok(workspace_id) {
+                        out.insert((c.device_id, c.account_id));
+                    }
+                }
+            }
+        }
+        for (device, accounts) in &phone_certifiers {
+            if accounts.len() == 1 {
+                out.extend(accounts.iter().map(|a| (*device, *a)));
+            }
+        }
+        // Ed25519 devices: their own signature stamped for the account.
+        for e in envelopes {
+            let Some(signer) = e.signer_device_id else { continue };
+            let Some((key, claimants)) = devices.get(&signer) else { continue };
+            if key.len() != crate::crypto::KEY_LEN {
+                continue;
+            }
+            let Some(account) = e.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { continue };
+            if !claimants.contains(&account) || out.contains(&(signer, account)) {
+                continue;
+            }
+            if crate::crypto::verify_envelope(e, key).is_ok() {
+                out.insert((signer, account));
+            }
+        }
+        out
     }
 
     /// Record whom each device vouched for ([`RosterTracker::vouched`]); a
@@ -464,10 +547,15 @@ impl RosterTracker {
                 );
             }
             SessionEvent::WorkspaceRulesSet { version, presence } if allowed => {
+                let was = self.state.rules;
                 self.state.rules = *version;
                 self.state.rules_written = true;
                 if let Some(p) = presence {
                     self.state.presence_policy = p.clone();
+                }
+                // Rules 3 changes which certificates count.
+                if (was >= super::RULES_V3) != (*version >= super::RULES_V3) {
+                    self.rebuild_devices(fold);
                 }
             }
             SessionEvent::WorkspaceKeyRotated { rotation } if allowed => {
@@ -584,7 +672,14 @@ impl RosterTracker {
 
     fn rebuild_devices(&mut self, fold: &ChatSession) {
         let mut devices: BTreeMap<Uuid, DeviceState> = BTreeMap::new();
+        let rules3 = self.state.rules >= super::RULES_V3;
+        let mut unaccepted = BTreeSet::new();
         for cert in &self.certs {
+            // Rules 3: only a certificate its device accepted counts.
+            if rules3 && !self.accepted.contains(&(cert.device_id, cert.account_id)) {
+                unaccepted.insert((cert.device_id, cert.account_id));
+                continue;
+            }
             // A disputed account certifies nothing.
             let Some(key) = self.book.key(cert.account_id) else { continue };
             if cert.verify(key).is_ok() {
@@ -616,6 +711,7 @@ impl RosterTracker {
             devices.entry(*d).or_default().revoked = true;
         }
         self.state.devices = devices;
+        self.state.unaccepted = unaccepted;
         self.state.account_keys = self.book.keys();
     }
 }
@@ -626,6 +722,7 @@ fn touches_roster(e: &SessionEvent) -> bool {
         e,
         SessionEvent::MemberAdded { .. }
             | SessionEvent::MemberRemoved { .. }
+            | SessionEvent::MemberRetired { .. }
             | SessionEvent::MemberRoleChanged { .. }
             | SessionEvent::AgentRosterUpdated { .. }
             | SessionEvent::AgentUpserted { .. }

@@ -30,6 +30,7 @@ pub mod cli_detect;
 pub mod computer_link;
 pub mod connection_settings;
 pub mod context;
+pub mod device_binding;
 pub mod device_enroll;
 pub mod directory_trust;
 pub mod display;
@@ -71,6 +72,7 @@ pub mod model_gateway;
 pub mod patch_leaving;
 pub mod peer;
 pub mod phone_enroll;
+pub mod profiles;
 pub mod phone_enroll_qr;
 #[cfg(feature = "p2p")]
 pub mod peer_iroh;

@@ -34,7 +34,7 @@ export function relayMembershipCopy(s: RelayMembershipDto): RelayMembershipCopy 
   if (s.state === "off") {
     return {
       line: "Relay doesn't check membership",
-      detail: `This relay has membership turned off, so it accepts writes to this workspace from anyone who knows its id. ${LIGUS_ENFORCES} There is nothing to claim on this relay; its operator can turn membership on (LANGSTROTH_RELAY_MEMBERSHIP=1).`,
+      detail: `This relay has membership turned off, so it accepts writes to this workspace from anyone who knows its id. ${LIGUS_ENFORCES} There is nothing to claim on this relay. The relay's own roster (LANGSTROTH_RELAY_MEMBERSHIP=1) is deprecated for Ligus workspaces: who can write is decided by the signed roster on every member's device.`,
       action: null,
     };
   }

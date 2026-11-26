@@ -225,7 +225,14 @@ async fn test_person_start(cfg: &Config) -> Result<(ChatService, bool)> {
 /// own service member ([`crate::admit::prepare_box`] made it a member).
 fn register_own(svc: &mut ChatService, ws: Uuid, host_id: &str, opts: &ServeOptions) -> Result<()> {
     let host = crate::with_gateways(WorkspaceHost::new(host_id.to_string(), HostKind::Worker, opts.label.clone()));
-    svc.ensure_host(ws, host).map(|_| ()).context("registering this box as a workspace host")
+    svc.ensure_host(ws, host).map(|_| ()).context("registering this box as a workspace host")?;
+    // Its synced device name (identity model v2, 6.3): what My devices and
+    // People show for it.
+    let device = svc.device_id();
+    if let Err(e) = svc.set_device_label(ws, device, &opts.label) {
+        eprintln!("serve: naming this box's device failed (it keeps working): {e}");
+    }
+    Ok(())
 }
 
 /// State shared by the API handlers, the sync loop and the worker thread.

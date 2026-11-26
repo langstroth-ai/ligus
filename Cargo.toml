@@ -1,5 +1,9 @@
 [workspace]
 resolver = "2"
+# A standalone crate that builds the last release's core next to this one
+# (mixed-version tests); outside the workspace so `-p ligus-core` stays
+# unambiguous and the release's git source stays out of the main lockfile.
+exclude = ["compat/v03"]
 members = [
     "crates/ligus-core",
     "crates/ligus-proto",

@@ -526,6 +526,7 @@ async fn finish_redeem(
     // redeem must not leave this data dir connected as its own
     // identity with the device key the desktop certified for the person).
     let before = cfg.clone();
+    let pending_label = state.pending_for(&grant.request, now_ms()).map(|p| p.label.trim().to_string()).unwrap_or_default();
     if crate::env_opt("LIGUS_RELAY_URL").is_none() {
         cfg.relay_url = Some(grant.conn.relay_url.trim().to_string());
     }
@@ -579,6 +580,33 @@ async fn finish_redeem(
     f.ek = cfg.epoch_keys.clone();
     f.save(&cfg.data_dir)?;
     svc.act_as_owner_device(person.clone());
+    // Rules 3: the computer accepts the desktop's certificate (its own copy),
+    // without which it counts for nothing there.
+    if let Err(e) = svc.accept_device_certificate(ws) {
+        eprintln!("ligus: accepting this computer's certificate failed (will retry on the next start): {e}");
+    }
+    // Its name, as its first word as the person (identity model v2, 7.6).
+    let label = pending_label;
+    if !label.is_empty() {
+        let device = svc.device_id();
+        if let Err(e) = svc.set_device_label(ws, device, &label) {
+            eprintln!("ligus: naming this computer failed (it keeps working): {e}");
+        }
+    }
+    // The separate member this install was here before, retired into you
+    // (decision O5) when that is safe; otherwise an Admin removes it.
+    {
+        let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
+        if let Ok(stored) = bootstrap_identity(&identity) {
+            if let Ok(old_kp) = identity.account_keypair(stored.account.id) {
+                match svc.retire_previous_member(ws, &old_kp, stored.account.id, &stored.actor().id) {
+                    Ok(None) => {}
+                    Ok(Some(why)) => eprintln!("ligus: your earlier member here stays until an Admin removes it ({why})."),
+                    Err(e) => eprintln!("ligus: retiring your earlier member failed: {e}"),
+                }
+            }
+        }
+    }
     crate::publish_key_agreement(cfg, &mut svc);
     drop(svc);
     let _ = crate::sync_once(cfg).await;
@@ -651,5 +679,71 @@ pub fn cmd_list(cfg: &Config, json: bool) -> Result<()> {
     if let Some(p) = state.pending_status(now_ms()) {
         println!("{}{}", crate::link_io::pending_line(&p, now_ms()), if p.count > 1 { format!(" ({} requests)", p.count) } else { String::new() });
     }
+    Ok(())
+}
+
+/// `ligus devices rename <device-id|this> <name>`.
+pub async fn cmd_rename(cfg: &Config, device: Option<&str>, name: Option<&str>, json: bool) -> Result<()> {
+    let (Some(device), Some(name)) = (device, name) else {
+        return Err(problem(crate::problem::EXIT_USAGE, "usage", "give a device id (or `this`) and a name", Some("ligus devices rename this \"Ana's build box\"")));
+    };
+    let _ = crate::sync_once(cfg).await;
+    let mut svc = crate::open_service(cfg)?;
+    let ws = uuid_of_room(&cfg.room);
+    let id = if device == "this" {
+        svc.device_id()
+    } else {
+        Uuid::parse_str(device.trim()).map_err(|_| problem(crate::problem::EXIT_USAGE, "usage", "that isn't a device id", Some("ligus devices list --json")))?
+    };
+    let wrote = svc.set_device_label(ws, id, name).map_err(|e| problem(EXIT_REFUSED, "refused", e.to_string(), None))?;
+    drop(svc);
+    if wrote {
+        let _ = crate::sync_once(cfg).await;
+    }
+    let mut r = Report::new("devices rename");
+    let shown_name = shown(name.trim());
+    r.add(Check::ok("devices.renamed", "renamed", if shown_name.is_empty() { "name cleared".to_string() } else { format!("{id} is now called {shown_name}") }));
+    print(&r, 0, json, serde_json::json!({ "deviceId": id, "label": shown_name, "changed": wrote }), &format!("{id} is now called {shown_name}\n"));
+    Ok(())
+}
+
+/// `ligus profile set [--name NAME] [--avatar FILE | --clear-avatar]`.
+pub async fn cmd_profile_set(cfg: &Config, name: Option<&str>, avatar: Option<&str>, clear: bool, json: bool) -> Result<()> {
+    if name.is_none() && avatar.is_none() && !clear {
+        return Err(problem(crate::problem::EXIT_USAGE, "usage", "nothing to set", Some("ligus profile set --name \"Ana Ruiz\"")));
+    }
+    let picture = match avatar {
+        Some(path) => {
+            let bytes = std::fs::read(path).map_err(|e| problem(crate::problem::EXIT_USAGE, "usage", format!("can't read {path}: {e}"), None))?;
+            let kind = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+                "image/png"
+            } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                "image/jpeg"
+            } else {
+                "image/webp"
+            };
+            Some(ligus_core::profile::Avatar::new(kind, &bytes).map_err(|e| problem(crate::problem::EXIT_USAGE, "usage", e, Some("use a PNG, JPEG or WebP of 16 KB at most")))?)
+        }
+        None => None,
+    };
+    let _ = crate::sync_once(cfg).await;
+    let mut svc = crate::open_service(cfg)?;
+    let ws = uuid_of_room(&cfg.room);
+    let wrote = svc.set_profile(ws, name, picture, clear).map_err(|e| {
+        let msg = e.to_string();
+        let exit = if msg.contains("linked device") { EXIT_REFUSED } else { EXIT_ERROR };
+        problem(exit, "refused", msg, None)
+    })?;
+    if let Some(n) = name {
+        let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
+        let _ = identity.update_display_name(n);
+    }
+    drop(svc);
+    if wrote {
+        let _ = crate::sync_once(cfg).await;
+    }
+    let mut r = Report::new("profile set");
+    r.add(Check::ok("profile.set", "profile", if wrote { "published" } else { "unchanged" }));
+    print(&r, 0, json, serde_json::json!({ "changed": wrote, "workspace": cfg.room }), if wrote { "Your profile is updated.\n" } else { "Nothing changed.\n" });
     Ok(())
 }

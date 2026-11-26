@@ -354,21 +354,44 @@ fn open_service_as(cfg: &Config, linking: bool) -> Result<ChatService> {
     // in the workspaces it was linked into, without their account key.
     let link = ligus_runtime::computer_link::LinkState::load(&cfg.data_dir)
         .map_err(|e| anyhow!("{} is unreadable ({e}): fix or remove it", ligus_runtime::computer_link::LinkState::path(&cfg.data_dir).display()))?;
-    match (link.linked_in(uuid_of_room(&cfg.room)), &link.person) {
-        (Some(person), _) => svc.act_as_owner_device(person.clone()),
-        (None, Some(person)) if !linking => {
-            return Err(anyhow::Error::new(problem::Problem {
-                exit: problem::EXIT_REFUSED,
-                code: "linked_device",
-                message: format!(
-                    "this computer is one of {}'s devices and isn't linked into workspace '{}'",
-                    shown(&person.display_name),
-                    cfg.room
-                ),
-                fix: Some("add it to that workspace from your desktop (My devices > Add a computer), or use another LIGUS_DATA_DIR".into()),
-            }));
+    // Which person this computer is here, from the log (identity model v2,
+    // 7.2): the device's own choice, `computer-link.json` only a cache. A
+    // certificate someone else put on this device's key changes nothing.
+    let ws = uuid_of_room(&cfg.room);
+    if link.is_linked() {
+        use ligus_runtime::device_binding::Binding;
+        let binding = svc.binding(ws, &link, stored.account.id).unwrap_or(Binding::Pending { account: link.account_in(ws).unwrap_or_default() });
+        let act_as = |svc: &mut ChatService, account: Uuid| {
+            if let Some(person) = svc.person_actor(ws, account, link.person.as_ref()) {
+                svc.act_as_owner_device(person);
+            }
+        };
+        match binding {
+            Binding::Linked { account } => act_as(&mut svc, account),
+            Binding::NotLinkedHere if !linking => {
+                let name = link.person.as_ref().map(|p| shown(&p.display_name)).unwrap_or_else(|| "a person".into());
+                return Err(anyhow::Error::new(problem::Problem {
+                    exit: problem::EXIT_REFUSED,
+                    code: "linked_device",
+                    message: format!("this computer is one of {name}'s devices and isn't linked into workspace '{}'", cfg.room),
+                    fix: Some("add it to that workspace from your desktop (My devices > Add a computer), or use another LIGUS_DATA_DIR".into()),
+                }));
+            }
+            Binding::NotLinkedHere | Binding::Own => {}
+            other => {
+                if let Some(account) = link.account_in(ws) {
+                    act_as(&mut svc, account);
+                }
+                // Rules 3: a redeem that couldn't accept its certificate
+                // (offline, interrupted) accepts it now.
+                let healed = matches!(other, Binding::Pending { .. })
+                    && svc.accept_device_certificate(ws).unwrap_or(false)
+                    && svc.binding(ws, &link, stored.account.id).is_ok_and(|b| b.writable());
+                if !linking && !healed {
+                    svc.set_write_block(other.why_read_only());
+                }
+            }
         }
-        _ => {}
     }
     // Agents bound to this host sign their own output with keys this device
     // certifies (A3); the keys live with this host's other keys.
@@ -576,17 +599,45 @@ async fn materialize_turns(cfg: &Config, session: &ligus_core::ChatSession, head
 fn cmd_whoami(cfg: &Config, json: bool) -> Result<()> {
     let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
     let stored = bootstrap_identity(&identity)?;
+    // On a linked computer, who it acts as is the person, per workspace
+    // (identity model v2, 7.5); its own pre-link account is retired here.
+    let link = ligus_runtime::computer_link::LinkState::load(&cfg.data_dir).unwrap_or_default();
+    let ws = uuid_of_room(&cfg.room);
+    let acting = open_service(cfg).ok().map(|svc| (svc.author().clone(), svc.write_block().map(str::to_string)));
+    let linked = link.is_linked();
     if json {
+        let person = acting.as_ref().filter(|_| linked).map(|(a, block)| {
+            serde_json::json!({
+                "workspace": ws,
+                "account": a.account_id,
+                "memberId": a.id,
+                "name": shown(&a.display_name),
+                "readOnly": block,
+            })
+        });
         println!(
             "{}",
             serde_json::json!({
-                "account": stored.account.id,
+                "account": acting.as_ref().and_then(|(a, _)| a.account_id).unwrap_or(stored.account.id),
                 "device": stored.device.id,
-                "name": shown(&stored.account.display_name),
+                "name": acting.as_ref().map(|(a, _)| shown(&a.display_name)).unwrap_or_else(|| shown(&stored.account.display_name)),
                 "dataDir": cfg.data_dir,
                 "room": cfg.room,
+                "person": person,
+                "localAccount": { "id": stored.account.id, "retired": linked },
             })
         );
+        return Ok(());
+    }
+    if let (true, Some((a, block))) = (linked, &acting) {
+        println!("acts as : {} (account {}), one of their devices", shown(&a.display_name), a.account_id.map(|x| x.to_string()).unwrap_or_default());
+        if let Some(b) = block {
+            println!("here    : read-only: {b}");
+        }
+        println!("local   : {} (this install's own account, not used while linked)", stored.account.id);
+        println!("device  : {}", stored.device.id);
+        println!("data dir: {}", cfg.data_dir.display());
+        println!("room    : {}", cfg.room);
         return Ok(());
     }
     println!("account : {}", stored.account.id);
@@ -1758,6 +1809,10 @@ async fn worker_start(cfg: &mut Config, label: &str, admission: Option<String>) 
     }
     svc.ensure_host(ws, with_gateways(WorkspaceHost::new(id.clone(), HostKind::Worker, label.to_string())))
         .context("registering this box as a worker host")?;
+    let device = svc.device_id();
+    if let Err(e) = svc.set_device_label(ws, device, label) {
+        eprintln!("worker: naming this box's device failed (it keeps working): {e}");
+    }
     publish_key_agreement(cfg, &mut svc);
     if let Err(e) = sync_once(cfg).await {
         eprintln!("worker: pushing the registration failed (will retry): {e}");
@@ -2651,10 +2706,26 @@ fn run() -> Result<()> {
                         interactive.then_some(&mut ask as devices_cmd::Confirm<'_>),
                     ))
                 }
-                Some(other) => bail!("unknown `ligus devices {other}`: use list|request|approve|redeem"),
+                Some("rename") => rt()?.block_on(devices_cmd::cmd_rename(
+                    &cfg,
+                    positional.get(1).map(|s| s.as_str()),
+                    positional.get(2).map(|s| s.as_str()),
+                    json,
+                )),
+                Some(other) => bail!("unknown `ligus devices {other}`: use list|request|approve|redeem|rename"),
             }
         }
         "recovery-key" => admit::cmd_recovery_key(&cfg, &positional, flag_val("--out")),
+        "profile" => match positional.first().map(|s| s.as_str()) {
+            Some("set") => rt()?.block_on(devices_cmd::cmd_profile_set(
+                &cfg,
+                flag_val("--name").as_deref(),
+                flag_val("--avatar").as_deref(),
+                has("--clear-avatar"),
+                has("--json"),
+            )),
+            _ => bail!("use `ligus profile set [--name NAME] [--avatar FILE | --clear-avatar]`"),
+        },
         "serve" => {
             devices_cmd::refuse_if_linked(&cfg, "run as a box")?;
             hardening::require_sandbox_or_exit("this serve host");
@@ -2836,6 +2907,7 @@ fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: &mut dyn FnMut(
 /// positional argument (a test checks this against the source).
 const VALUE_FLAGS: &[&str] = &[
     "--approver-fingerprint",
+    "--avatar",
     "--to",
     "--wait",
     "--timeout",

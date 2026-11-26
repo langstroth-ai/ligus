@@ -602,7 +602,10 @@ async fn names_are_cleaned_and_look_alikes_flagged() {
         people["people"].as_array()?.iter().find(|p| p["accountId"] == json!(b_acc.to_string())).cloned()
     })
     .await;
-    assert_eq!(row["displayName"], json!("\u{0430}da"), "bidi and zero-width removed");
+    // Cleaned (bidi and zero-width removed), and told apart from the Ada it
+    // looks like (identity model v2, 5.6: Name#abcd).
+    let shown = row["displayName"].as_str().unwrap();
+    assert!(shown.starts_with("\u{0430}da#") && !shown.contains('\u{202E}') && !shown.contains('\u{200B}'), "{shown}");
     assert_eq!(row["lookAlike"], json!(true), "looks like the box's own name");
     let health = b.get("/v1/health").await;
     assert_eq!(health["identity"]["displayName"], json!("\u{0430}da"));

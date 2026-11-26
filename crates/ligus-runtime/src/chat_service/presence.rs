@@ -396,8 +396,43 @@ impl ChatService {
                 r => r?,
             }
             self.changes.local(&env);
+            // A workspace this build founded moves to its founding rules (3)
+            // with the founder's first credential: its genesis is rules 2,
+            // presence-free, which a 0.3 build accepts, so the switch is an
+            // ordinary Owner act with presence that makes 0.3 builds
+            // read-only there (identity model v2, "Rules 3 in 0.4").
+            if let Err(e) = self.adopt_founding_rules(workspace_id, prove) {
+                tracing::warn!(target: "identity", error = %e, "moving the new workspace to its founding rules failed; Settings offers it");
+            }
             return Ok(env);
         }
+    }
+
+    /// Switch a workspace this device founded, still its founder's alone, to
+    /// this build's founding rules, confirmed by `prove`. A no-op elsewhere.
+    fn adopt_founding_rules(
+        &mut self,
+        workspace_id: Uuid,
+        prove: &dyn Fn(&PresenceRequest) -> std::result::Result<PresenceAssertion, String>,
+    ) -> Result<()> {
+        let config_id = ligus_core::workspace_config_session_id(workspace_id);
+        let Some(config) = self.load_in(workspace_id, config_id)? else { return Ok(()) };
+        if config.authz.rules >= self.founding_rules || config.creator_actor_id != self.author.id || config.members.len() != 1 {
+            return Ok(());
+        }
+        let mut env = self.draft_signed(config_id, workspace_id, SessionEvent::WorkspaceRulesSet { version: self.founding_rules, presence: None })?;
+        let request = self.presence_request(&env)?;
+        let proof = prove(&request).map_err(|e| ChatError::Unauthorized(format!("passkey: {e}")))?;
+        if let Some(stamp) = env.actor_stamp.as_mut() {
+            stamp.presence = Some(proof);
+        }
+        env.clear_raw();
+        sign_envelope(&mut env, self.device_id, &self.keypair);
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
+        self.store_authored(&env)?;
+        self.changes.local(&env);
+        Ok(())
     }
 
     /// Remove one of `account_id`'s passkeys on `workspace_id` (the account
