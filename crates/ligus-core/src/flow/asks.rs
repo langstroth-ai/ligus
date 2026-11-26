@@ -363,7 +363,7 @@ fn answer_why(st: &AskState, ans: &HumanAnswered, env: &SessionEventEnvelope, ro
         if !may_grant(st, roster, author, p.signer) {
             return Some("not the host's person or the agent's owner".into());
         }
-        if e.needs_presence() {
+        if e.needs_presence() || st.grant_needs_presence() {
             let present = crate::authz::passkeys::verify_stamped(env, roster).ok().flatten();
             if present != Some(account) {
                 return Some("no passkey".into());

@@ -92,8 +92,9 @@ directives: `ligus_propose_diff`, `ligus_propose_decision`,
 `ligus_propose_command` (an exact argv a person approves and Ligus runs),
 `ligus_open_alternatives`, `ligus_handoff` (the receiving agent starts
 right away), `ligus_mark`, `ligus_read_chat` and the other read tools, and
-`ligus_ask_human` when you need a decision (your turn pauses until someone
-answers). You can't apply, vote or change settings; you can only propose.
+`ligus_ask_person` or `ligus_ask_room` when you need a decision (2 to 5
+short options or yes/no; your turn pauses until it is answered, and any
+status but `answered` means no). You can't apply, vote or change settings; you can only propose.
 See [Ligus tools for agents](../addons/ligus-mcp.md).
 
 ## In one line

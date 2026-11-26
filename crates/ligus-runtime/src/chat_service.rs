@@ -27,6 +27,8 @@ use crate::provider::ChatTurn;
 
 mod approval_check;
 pub use approval_check::WorkspaceApprovers;
+mod asks;
+pub use asks::{answer_record, AskChoice};
 mod attachments;
 mod changes;
 mod computer_link;
@@ -143,6 +145,9 @@ pub struct ChatService {
     test_presence: bool,
     /// Capture presence-needing drafts instead of refusing (serve, B3).
     capture_presence: bool,
+    /// The next write carries its author's passkey presence even where the
+    /// rules don't ask for it (a grant whose effect needs it).
+    pub(crate) force_presence: bool,
     /// The last captured draft.
     presence_draft: Option<PresenceDraft>,
     /// The code-match label and code the next passkey sheet names.
@@ -217,6 +222,7 @@ impl ChatService {
             // turns it off with `disable_test_presence`.
             test_presence: cfg!(test),
             capture_presence: false,
+            force_presence: false,
             presence_draft: None,
             match_context: None,
             agent_messages: std::collections::HashMap::new(),
@@ -859,6 +865,14 @@ impl ChatService {
                     self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
                 }
                 r => r?,
+            }
+            // A grant whose effect needs presence: the fold counts it only
+            // with the author's passkey, so ask for it here too.
+            if self.force_presence && env.actor_stamp.as_ref().is_some_and(|s| s.presence.is_none()) {
+                self.with_presence(&mut env)?;
+                let (config, timeline) =
+                    self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+                self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
             }
         }
         let env = self.store_authored_or_redraft(env, is_local)?;
