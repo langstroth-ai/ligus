@@ -8,6 +8,13 @@ Full release notes are on the
 
 ### Added
 
+- **`ligus setup` says where to confirm a step that needs your passkey.**
+  In a workspace with stricter device rules, adding an agent from the
+  command line stopped with "refused" (exit 6) and pointed at `ligus
+  doctor`, which can't help. It now stops as a person's step (exit 4) and
+  says to do it in the desktop app, or to run it again with
+  `--recovery-words-file PATH`, which `ligus setup` now accepts. See
+  [Set up](../getting-started/set-up.md).
 - **A message that wouldn't send ("this draft is out of date") sends
   again.** After older reply pieces were pulled back from the relay, every
   message to that chat from this computer was refused as out of date, and

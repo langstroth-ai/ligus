@@ -580,6 +580,7 @@ fn preflight(flow: FlowId, ctx: &mut Ctx, ops: &dyn SetupOps, inputs: &Inputs) {
 /// already done), verify. See the module docs.
 pub fn run(flow: FlowId, ops: &mut dyn SetupOps, inputs: &Inputs, secrets: &Secrets, opts: &RunOpts) -> Outcome {
     let mut ctx = Ctx::new(flow, opts);
+    ctx.surface = Some(ops.surface());
     gate::driver_gate(&mut ctx, secrets);
     if !ctx.stopped() {
         gate::run_gate(&mut ctx, ops);
@@ -634,6 +635,26 @@ pub(crate) struct Ctx {
     cancel: Option<Arc<AtomicBool>>,
     results: BTreeMap<String, String>,
     undo: Vec<(String, Undo)>,
+    /// Where the flow runs, for the one line a passkey refusal gets.
+    surface: Option<Surface>,
+}
+
+/// The fix line for a write the workspace's rules hold for its author's
+/// passkey, by surface. The CLI has no passkey of its own: the desktop app
+/// confirms it, or a recovery-words file does.
+pub(crate) fn presence_fix(surface: Option<Surface>) -> &'static str {
+    match surface {
+        Some(Surface::Cli) => {
+            "this needs your passkey: do it in the desktop app, or run this again with --recovery-words-file PATH (your recovery key's 24 words, an owner-only file)"
+        }
+        _ => "confirm with your passkey when asked, then run this again",
+    }
+}
+
+/// Whether a failure is the rules asking for its author's passkey (a
+/// person's step, exit 4), not a refusal.
+pub(crate) fn is_presence_refusal(detail: &str) -> bool {
+    detail.contains(ligus_core::authz::PRESENCE_REQUIRED)
 }
 
 impl Ctx {
@@ -650,6 +671,7 @@ impl Ctx {
             cancel: opts.cancel.clone(),
             results: BTreeMap::new(),
             undo: Vec::new(),
+            surface: None,
         }
     }
 
@@ -681,8 +703,15 @@ impl Ctx {
         self.checks.push(Check::skip(&id, title, detail));
     }
 
-    /// A blocking failure: the run stops with `code`.
+    /// A blocking failure: the run stops with `code`. A write the rules
+    /// hold for its author's passkey is a person's step instead (exit 4),
+    /// with the one line that says where to confirm it.
     pub(crate) fn fail(&mut self, id: &str, title: &str, detail: impl Into<String>, fix: impl Into<String>, code: i32) {
+        let detail = detail.into();
+        if is_presence_refusal(&detail) {
+            let what = presence_fix(self.surface);
+            return self.person(id, title, detail, what);
+        }
         let id = self.id(id);
         self.checks.push(Check::fail(&id, title, detail).fix(fix));
         self.stop(code);

@@ -42,6 +42,8 @@ pub struct Fake {
     pub probe: ProbeFact,
     /// Ops whose write fails (by name: "add_agent", "add_mcp_server", ...).
     pub fail: Vec<&'static str>,
+    /// Ops the workspace's rules hold for the author's passkey.
+    pub needs_presence: Vec<&'static str>,
     /// Every write, in order.
     pub writes: Vec<String>,
     pub test_turn: Result<TestTurn, OpsError>,
@@ -82,6 +84,7 @@ impl Default for Fake {
             invites: Vec::new(),
             probe: ProbeFact::Ok,
             fail: Vec::new(),
+            needs_presence: Vec::new(),
             writes: Vec::new(),
             test_turn: Ok(TestTurn { ok: true, latency_ms: 900, detail: "PINGOK".into() }),
             local_servers: Vec::new(),
@@ -106,6 +109,9 @@ impl Fake {
     fn write(&mut self, op: &'static str, what: String) -> OpsResult<()> {
         if self.fail.contains(&op) {
             return Err(OpsError::Failed(format!("{op} failed")));
+        }
+        if self.needs_presence.contains(&op) {
+            return Err(OpsError::Refused(ligus_core::authz::PRESENCE_REQUIRED.into()));
         }
         self.writes.push(format!("{op} {what}"));
         Ok(())
