@@ -83,10 +83,10 @@ pane's page in these docs.
   the one that approves a workflow proposal, it adds the workflow to the
   **Workflows** pane then and there (it doesn't run it). See
   [Apply on a host](../../operate/ops/serve-box.md#apply-on-a-host).
-  **Questions from agents** (`ligus_ask_human`, and ACP permission requests
-  that need a person) appear at the top of the pane with their options; the
-  asking turn waits for your answer. See
-  [Ligus tools for agents](../addons/ligus-mcp.md#asks).
+  **Questions from agents** (decision cards, and ACP permission requests
+  that need a person) appear at the top of the pane while they are open;
+  the asking turn waits for your answer. See
+  [Questions from agents](agent-questions.md).
   **Proposal sets** (competing alternatives with scout scores, the quorum
   dial, and pre-flight then apply) sit at the top of the pane; see
   [Exploring options](proposal-sets.md).

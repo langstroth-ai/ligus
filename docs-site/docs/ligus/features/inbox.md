@@ -21,7 +21,7 @@ Most urgent first:
 | **Linking “lt on mbp” didn't finish. Nothing was added.** | you matched the codes, but the computer didn't confirm within 2 minutes, so nothing was signed or published and no key left this device. Start again from the computer. Kept for a day |
 | **This workspace's sandbox grants changed** | **Review** opens Settings → Sandbox; **Dismiss** marks it seen ([guards](guards.md)) |
 | **This workspace wants to run N commands** | **Review** lists each command the repository ships; nothing runs until you enable it ([Trust this workspace](../concepts/security.md#workspace-trust)) |
-| **An agent asked you something** | answer it right there (pick an option or type an answer), or **Open chat**. The agent's turn waits until someone answers |
+| **builder asks you** | one row per [question](agent-questions.md) you can answer. Opening it opens the card in its chat, where you answer it with the conversation on screen; nothing is answered from the Inbox. The agent's turn waits until the card is settled. Questions for others show only when nothing else needs you |
 | **Your vote: …** | **Review** opens the chat on its Review pane, with the change on screen. You can't approve from the Inbox |
 | **Ready to apply: …** | the proposal reached its approvals; **Review** opens it to apply |
 | **The last run failed** | a run on this device failed. **Open chat** to see it, or **Dismiss** |

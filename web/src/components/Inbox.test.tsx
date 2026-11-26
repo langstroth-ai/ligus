@@ -50,14 +50,43 @@ describe("Inbox", () => {
     expect(screen.queryByRole("list", { name: "Needs you" })).toBeNull();
   });
 
-  it("answers an agent's question in place", async () => {
-    mount(needsYouItems({ attention: [{ sessionId: "c1", openAsks: 1, paused: false, proposals: [] }], chatTitles: titles }));
+  it("lists each question you can answer, with no answer buttons, and opens its chat", async () => {
+    const a = mount(
+      needsYouItems({
+        attention: [
+          {
+            sessionId: "c1",
+            openAsks: 1,
+            paused: false,
+            proposals: [],
+            asks: [
+              { askId: "a1", agentName: "scout", kind: "question", eligible: true, audience: "you" },
+              { askId: "a2", agentName: "builder", kind: "question", eligible: false, audience: "Admins" },
+            ],
+          },
+        ],
+        chatTitles: titles,
+      }),
+    );
     expect(screen.getByText("1 needs you")).toBeInTheDocument();
-    expect(screen.getByText("An agent asked you something")).toBeInTheDocument();
-    expect(await screen.findByText("Retry cap: 30 s or 60 s?")).toBeInTheDocument();
-    const ipc = await import("@/lib/ipc");
-    await userEvent.click(screen.getByRole("button", { name: "30 s" }));
-    expect(ipc.answerAsk).toHaveBeenCalledWith("c1", "a1", "", 0);
+    expect(screen.getByText("scout asks you")).toBeInTheDocument();
+    expect(screen.queryByText("builder asks Admins")).toBeNull();
+    const list = screen.getByRole("list", { name: "Needs you" });
+    expect(within(list).queryByRole("button", { name: "30 s" })).toBeNull();
+    expect(screen.queryByTestId("ask-card")).toBeNull();
+    await userEvent.click(screen.getByText("scout asks you"));
+    expect(a.openChat).toHaveBeenCalledWith("c1");
+  });
+
+  it("shows questions put to others only when nothing else waits", () => {
+    mount(
+      needsYouItems({
+        attention: [{ sessionId: "c1", openAsks: 0, paused: false, proposals: [], asks: [{ askId: "a2", agentName: "builder", kind: "question", eligible: false, audience: "Admins" }] }],
+        chatTitles: titles,
+      }),
+    );
+    expect(screen.getByText("builder asks Admins")).toBeInTheDocument();
+    expect(screen.getByText("Nothing needs you.")).toBeInTheDocument();
   });
 
   it("sends a vote to the change, never approving from the list", async () => {

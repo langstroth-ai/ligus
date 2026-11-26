@@ -29,6 +29,20 @@ pub(crate) struct AttentionProposalDto {
     pub needs_me: bool,
 }
 
+/// One agent question still waiting, as an Inbox row names it.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AttentionAskDto {
+    pub ask_id: String,
+    pub agent_name: String,
+    /// `question`, `permission` or `secret`.
+    pub kind: &'static str,
+    /// This person may answer it (else the row says who it waits on).
+    pub eligible: bool,
+    /// "you", "Admins", "the room", or the named people.
+    pub audience: String,
+}
+
 /// What one chat is waiting on. Chats waiting on nothing are left out.
 #[derive(serde::Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -36,8 +50,11 @@ pub(crate) struct ChatAttentionDto {
     pub session_id: String,
     /// The chat's workspace: a chat is (workspace, chat).
     pub workspace_id: String,
-    /// Agent questions nobody has answered yet that are still waiting.
+    /// Agent questions still waiting that this person may answer.
     pub open_asks: u32,
+    /// Every question still waiting (expiry is a view), newest first;
+    /// `eligible` says which this person may answer.
+    pub asks: Vec<AttentionAskDto>,
     pub proposals: Vec<AttentionProposalDto>,
     /// A lockdown holds the chat's agents until a person clears it.
     pub paused: bool,
@@ -63,12 +80,23 @@ fn needs_me(p: &ActionProposal, me: &str) -> bool {
 /// The chat's attention, or None when it waits on nothing.
 pub(crate) fn chat_attention(s: &ChatSession, me: &str, now_ms: i64, hidden: &BTreeSet<Uuid>) -> Option<ChatAttentionDto> {
     let now = Timestamp::from_unix_seconds(now_ms / 1000);
-    let open_asks = s
-        .flow
-        .asks
-        .values()
-        .filter(|a| a.is_open() && (a.ask.expires_at_ms == 0 || a.ask.expires_at_ms > now_ms))
-        .count() as u32;
+    let mut live: Vec<&ligus_core::flow::AskState> = s.flow.asks.values().filter(|a| a.is_live(now_ms)).collect();
+    live.sort_by_key(|a| std::cmp::Reverse(a.ask.at_ms));
+    let asks: Vec<AttentionAskDto> = live
+        .iter()
+        .map(|a| {
+            let v = ligus_runtime::ask_view::view(s, a, me, now_ms, &|_| None);
+            let audience = match (v.audience.kind, v.audience.min_role) {
+                ("people", _) if v.eligible && v.audience.member_ids.len() == 1 => "you".to_string(),
+                ("people", _) => v.audience.names.join(", "),
+                (_, Some("admin")) => "Admins".into(),
+                (_, Some("owner")) => "Owners".into(),
+                _ => "the room".into(),
+            };
+            AttentionAskDto { ask_id: v.ask_id, agent_name: v.agent_name, kind: v.kind, eligible: v.eligible, audience }
+        })
+        .collect();
+    let open_asks = asks.iter().filter(|a| a.eligible).count() as u32;
     let proposals: Vec<AttentionProposalDto> = s
         .proposals
         .iter()
@@ -81,10 +109,10 @@ pub(crate) fn chat_attention(s: &ChatSession, me: &str, now_ms: i64, hidden: &BT
         })
         .collect();
     let paused = !s.guards.lockdowns_of(s.id).is_empty();
-    if open_asks == 0 && proposals.is_empty() && !paused {
+    if asks.is_empty() && proposals.is_empty() && !paused {
         return None;
     }
-    Some(ChatAttentionDto { session_id: s.id.to_string(), workspace_id: s.workspace_id.to_string(), open_asks, proposals, paused })
+    Some(ChatAttentionDto { session_id: s.id.to_string(), workspace_id: s.workspace_id.to_string(), open_asks, asks, proposals, paused })
 }
 
 #[tauri::command]
@@ -126,7 +154,43 @@ mod tests {
     use uuid::Uuid;
 
     fn session() -> ChatSession {
-        ChatSession::new("t", Uuid::new_v4(), "rt")
+        let mut s = ChatSession::new("t", Uuid::new_v4(), "rt");
+        s.members.push(ligus_core::WorkspaceMember {
+            id: "me".into(),
+            actor: ligus_core::ActorIdentity::new("me", "Mike", ligus_core::ActorKind::Human),
+            role: WorkspaceRole::Contributor,
+            title: String::new(),
+            index: 1,
+            joined_at: Default::default(),
+        });
+        s
+    }
+
+    /// An ask put to someone else is listed (the Inbox shows it only when
+    /// nothing else waits) but doesn't count as needing you.
+    #[test]
+    fn asks_for_others_are_listed_but_not_counted() {
+        let mut s = session();
+        let id = Uuid::new_v4();
+        s.flow.asks.insert(
+            id,
+            AskState {
+                ask: HumanAsk {
+                    ask_id: id,
+                    question: "Ship?".into(),
+                    options: vec!["Yes".into(), "No".into()],
+                    v: ligus_core::flow::ASK_V2,
+                    audience: Some(ligus_core::flow::AskAudience::room(WorkspaceRole::Admin)),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let a = chat_attention(&s, "me", 1_000, &BTreeSet::new()).unwrap();
+        assert_eq!(a.open_asks, 0);
+        assert_eq!(a.asks.len(), 1);
+        assert!(!a.asks[0].eligible);
+        assert_eq!(a.asks[0].audience, "Admins");
     }
 
     fn ask(s: &mut ChatSession, expires_at_ms: i64, answered: bool, closed: bool) {

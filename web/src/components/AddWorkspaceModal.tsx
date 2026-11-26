@@ -69,8 +69,8 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
     await qc.invalidateQueries({ queryKey: ["connection-settings"] });
   }
 
-  async function onCreate() {
-    const n = name.trim();
+  async function onCreate(preset?: string) {
+    const n = (preset ?? name).trim();
     if (!n || busy || pickedRelayMissing) return;
     setBusy(true);
     try {
@@ -303,13 +303,27 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
             currentRelay && <p className="text-xs text-ink-soft">Syncs through {currentRelay}.</p>
           )}
           <button
-            onClick={onCreate}
+            onClick={() => void onCreate()}
             disabled={busy || !name.trim() || pickedRelayMissing}
             className="w-full rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40"
             style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
           >
             {busy ? "Creating…" : "Create workspace"}
           </button>
+          <div className="flex items-start gap-2 border-t pt-3" style={{ borderColor: "var(--ligus-line)" }} data-testid="personal-workspace">
+            <p className="min-w-0 flex-1 text-xs text-ink-soft">
+              Personal: a workspace only you are in, for permission prompts from Claude Code sessions outside
+              Ligus (ligus hook permission). Every chat is visible to every member of its workspace, so keep
+              those prompts out of shared ones.
+            </p>
+            <button
+              onClick={() => void onCreate("Personal")}
+              disabled={busy || pickedRelayMissing}
+              className="shrink-0 rounded-md px-2 py-1 text-xs font-medium underline text-ink-soft hover:text-ink disabled:opacity-40"
+            >
+              Make a Personal workspace
+            </button>
+          </div>
           {lastInvite && (
             <div className="rounded-lg border p-2" style={{ borderColor: "var(--ligus-line)" }}>
               <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-soft">

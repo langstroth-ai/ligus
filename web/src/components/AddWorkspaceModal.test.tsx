@@ -90,4 +90,14 @@ describe("AddWorkspaceModal relay choice", () => {
     await userEvent.click(screen.getByRole("button", { name: "Create workspace" }));
     await waitFor(() => expect(ipc.createWorkspace).toHaveBeenCalledWith("Acme"));
   });
+
+  it("offers a Personal workspace for outside prompts, made only on request", async () => {
+    getConn.mockResolvedValue(conn("https://relay.acme.example"));
+    renderIt();
+    const row = await screen.findByTestId("personal-workspace");
+    expect(row.textContent).toMatch(/visible to every member/);
+    expect(ipc.createWorkspace).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Make a Personal workspace" }));
+    await waitFor(() => expect(ipc.createWorkspace).toHaveBeenCalledWith("Personal"));
+  });
 });
