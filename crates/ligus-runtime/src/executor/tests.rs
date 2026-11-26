@@ -1866,6 +1866,7 @@ fn a_scratch_repo_in_the_data_dir_runs_agents_with_the_usual_rules() {
     let worktree = repo.join(".ligus/worktrees/chat-1");
     std::fs::create_dir_all(worktree.join(".git")).unwrap();
     std::fs::write(worktree.join("README.md"), "scratch-hello").unwrap();
+    std::fs::create_dir_all(worktree.join("src")).unwrap();
     std::fs::write(repo.join("MAIN.md"), "main").unwrap();
     let f = Fixture { data: base.data.clone(), worktree: worktree.clone(), outside: base.outside.clone() };
     // Inside the data dir and not allowed: refused before anything runs.
@@ -1881,7 +1882,7 @@ fn a_scratch_repo_in_the_data_dir_runs_agents_with_the_usual_rules() {
         allow_agent_dir(&link);
         assert!(!host_paths().allow_read.contains(&link));
     }
-    let (ok, out) = run_sh(&*e, &f, "cat README.md && echo made > new.txt && cat new.txt", isolated());
+    let (ok, out) = run_sh(&*e, &f, "cat README.md && echo made > src/new.txt && cat src/new.txt", isolated());
     assert!(ok && out.contains("scratch-hello") && out.contains("made"), "{out}");
     for secret in ["keys/device.seed", "settings.json"] {
         let (ok, out) = run_sh(&*e, &f, &format!("cat '{}'", base.data.join(secret).display()), isolated());

@@ -645,6 +645,12 @@ pub fn remove_dir_checked(entry: &ScratchRepo) -> Result<()> {
     {
         let _lock = super::marker::lock(&dir, std::time::Duration::from_secs(30)).map_err(|e| ScratchError::Io(e.to_string()))?;
         let dir = verify_dir(entry)?;
+        // The checkout's lock file is inside the folder: Windows refuses to rename
+        // a folder with a file open in it, so there the lock goes just before
+        // the rename (it has waited out any git operation; one that starts in
+        // between holds files open here, and the rename then fails).
+        #[cfg(windows)]
+        drop(_lock);
         std::fs::rename(&dir, &trash).map_err(io_err)?;
     }
     Ok(())
@@ -781,6 +787,10 @@ pub fn keep_dir(entry: &ScratchRepo, dest: &Path, forbidden: &[PathBuf]) -> Resu
         .filter(|p| p != &src && p.starts_with(&src))
         .collect();
     let _lock = super::marker::lock(&src, std::time::Duration::from_secs(30)).map_err(|e| ScratchError::Io(e.to_string()))?;
+    // As in [`remove_dir_checked`]: on Windows the lock (a file inside the
+    // folder) goes just before the rename.
+    #[cfg(windows)]
+    drop(_lock);
     std::fs::rename(&src, &dest).map_err(|e| {
         if e.raw_os_error() == Some(18) {
             ScratchError::Io("that folder is on another disk; pick one on the same disk as the scratch folder".into())
