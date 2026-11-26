@@ -186,6 +186,7 @@ function handle(cmd: string, args: Args): unknown {
               { path: "/Users/mock/.ssh", access: "denied", why: "credentials (never opened by a signed grant)" },
             ],
             shell: "the workspace Owner's turns only (the device owner's in the local workspace); other members' turns run without it",
+            localServers: "off: no listening sockets and no connections to this machine's other servers (the Owner can turn it on for one agent)",
           },
         ],
         grants: {},

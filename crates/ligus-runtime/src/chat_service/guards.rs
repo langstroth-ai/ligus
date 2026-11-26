@@ -207,7 +207,7 @@ impl ChatService {
 
     /// Set the workspace's sandbox grants (Phase C; the whole set, replacing
     /// the one in force). Admin + presence, and only the Owner turns an
-    /// agent's shell grant on or off (authorized here and again on every
+    /// agent's shell or local-servers grant on or off (authorized here and again on every
     /// device's ingest).
     pub fn set_sandbox_grants(&mut self, workspace_id: Uuid, grants: ligus_core::sandbox::SandboxGrants) -> Result<()> {
         grants.well_formed().map_err(|e| ChatError::Unauthorized(format!("sandbox grants: {}", e.0)))?;
@@ -217,6 +217,10 @@ impl ChatService {
                 let shell_change = !grants.shell_changes(&cfg.guards.sandbox_grants).is_empty();
                 if shell_change && self.actor_role(&cfg) != ligus_core::WorkspaceRole::Owner {
                     return Err(ChatError::Unauthorized("only the Owner grants or withdraws an agent's shell".into()));
+                }
+                let local_servers_change = !grants.local_servers_changes(&cfg.guards.sandbox_grants).is_empty();
+                if local_servers_change && self.actor_role(&cfg) != ligus_core::WorkspaceRole::Owner {
+                    return Err(ChatError::Unauthorized("only the Owner lets an agent run local servers".into()));
                 }
             }
         }

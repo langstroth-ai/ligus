@@ -12,6 +12,9 @@ import {
 import { InfoTip, Button, Field, Section, Switch, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { SELECT_CLASS } from "@/components/settings/shared";
+import { SANDBOX_AGENT_EVENT, takeSandboxAgentRequest } from "@/lib/nav";
+
+type AgentDraft = { ro: string; rw: string; shell: boolean; localServers: boolean };
 
 /// One path per line, trimmed, blanks dropped.
 export function parsePaths(text: string): string[] {
@@ -41,6 +44,7 @@ export function normalizeGrants(g: SandboxGrants): SandboxGrants {
     if (a.readOnly?.length) x.readOnly = a.readOnly;
     if (a.readWrite?.length) x.readWrite = a.readWrite;
     if (a.shell) x.shell = true;
+    if (a.localServers) x.localServers = true;
     if (Object.keys(x).length) agents[id] = x;
   }
   if (Object.keys(agents).length) out.agents = agents;
@@ -83,6 +87,11 @@ function PolicyTable({ p }: { p: EffectivePolicy }) {
       <p className="mt-2 text-[11.5px]">
         <span className="font-semibold">Shell:</span> {p.shell}
       </p>
+      {p.localServers && (
+        <p className="mt-1 text-[11.5px]">
+          <span className="font-semibold">Local servers:</span> {p.localServers}
+        </p>
+      )}
     </div>
   );
 }
@@ -119,7 +128,16 @@ function PathsField({
 /// and an agent's shell for other members' turns (the Owner's).
 export function SandboxSection() {
   const qc = useQueryClient();
-  const [agentId, setAgentId] = useState<string>("");
+  const [agentId, setAgentId] = useState<string>(() => takeSandboxAgentRequest() ?? "");
+  // An agent row's "Sandbox…" while this section is already open.
+  useEffect(() => {
+    const on = (e: Event) => {
+      takeSandboxAgentRequest();
+      setAgentId((e as CustomEvent<string>).detail);
+    };
+    window.addEventListener(SANDBOX_AGENT_EVENT, on);
+    return () => window.removeEventListener(SANDBOX_AGENT_EVENT, on);
+  }, []);
   // Keep the last answer while another agent's policy loads, so the draft
   // below isn't reset by the switch.
   const q = useQuery({
@@ -132,16 +150,16 @@ export function SandboxSection() {
   // The editable draft, reset whenever the grants in force change.
   const [wsRo, setWsRo] = useState("");
   const [wsRw, setWsRw] = useState("");
-  const [agents, setAgents] = useState<Record<string, { ro: string; rw: string; shell: boolean }>>({});
+  const [agents, setAgents] = useState<Record<string, AgentDraft>>({});
   const grantsKey = useMemo(() => (d ? JSON.stringify(d.grants) : null), [d]);
   useEffect(() => {
     if (grantsKey === null) return;
     const g = d?.grants ?? {};
     setWsRo((g.workspace?.readOnly ?? []).join("\n"));
     setWsRw((g.workspace?.readWrite ?? []).join("\n"));
-    const a: Record<string, { ro: string; rw: string; shell: boolean }> = {};
+    const a: Record<string, AgentDraft> = {};
     for (const [id, x] of Object.entries(g.agents ?? {})) {
-      a[id] = { ro: (x.readOnly ?? []).join("\n"), rw: (x.readWrite ?? []).join("\n"), shell: !!x.shell };
+      a[id] = { ro: (x.readOnly ?? []).join("\n"), rw: (x.readWrite ?? []).join("\n"), shell: !!x.shell, localServers: !!x.localServers };
     }
     setAgents(a);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -150,7 +168,7 @@ export function SandboxSection() {
   const draft = (): SandboxGrants => {
     const g: SandboxGrants = { workspace: { readOnly: parsePaths(wsRo), readWrite: parsePaths(wsRw) }, agents: {} };
     for (const [id, a] of Object.entries(agents)) {
-      g.agents![id] = { readOnly: parsePaths(a.ro), readWrite: parsePaths(a.rw), shell: a.shell };
+      g.agents![id] = { readOnly: parsePaths(a.ro), readWrite: parsePaths(a.rw), shell: a.shell, localServers: a.localServers };
     }
     return normalizeGrants(g);
   };
@@ -193,8 +211,8 @@ export function SandboxSection() {
   }
 
   const agent = d.agents.find((a) => a.id === agentId);
-  const cur = (agentId && agents[agentId]) || { ro: "", rw: "", shell: false };
-  const setCur = (patch: Partial<{ ro: string; rw: string; shell: boolean }>) =>
+  const cur: AgentDraft = (agentId && agents[agentId]) || { ro: "", rw: "", shell: false, localServers: false };
+  const setCur = (patch: Partial<AgentDraft>) =>
     setAgents((prev) => ({ ...prev, [agentId]: { ...cur, ...patch } }));
 
   return (
@@ -232,7 +250,7 @@ export function SandboxSection() {
 
       <Section
         title="Signed grants"
-        info="Grants are signed into the workspace and reach every device that runs these agents and applies them. Changing paths needs an Admin and a passkey; only the workspace Owner grants an agent the shell for other members' turns."
+        info="Grants are signed into the workspace and reach every device that runs these agents and applies them. Changing paths needs an Admin and a passkey; only the workspace Owner grants an agent the shell for other members' turns or lets it run local servers."
         action={
           <Button variant="primary" disabled={!d.canEditPaths || !dirty || save.isPending} onClick={() => save.mutate()}>
             {save.isPending ? "Confirm with your passkey…" : "Save"}
@@ -293,6 +311,29 @@ export function SandboxSection() {
                 disabled={!d.canEditShell}
               />
             </div>
+            <div
+              className="flex items-center justify-between gap-2"
+              data-tip={d.canEditShell ? undefined : "Only the workspace Owner lets an agent run local servers"}
+            >
+              <span className="flex items-center gap-1.5">
+                <span className="text-[12.5px]">May run local servers</span>
+                <InfoTip
+                  label="May run local servers"
+                  text="Some agent CLIs run their own helper server (agy does) and fail without it. Linux with bubblewrap: each turn has its own loopback, where that works; the Landlock tier keeps it off. Not available on macOS yet: the Mac's sandbox can't keep a listener loopback-only, so here it has no effect. Files, keys, unix sockets and egress never change."
+                />
+              </span>
+              <Switch
+                on={cur.localServers}
+                onChange={(v) => setCur({ localServers: v })}
+                label={`May run local servers (@${agent.name})`}
+                disabled={!d.canEditShell}
+              />
+            </div>
+            {d.policies.some((p) => p.tier === "seatbelt") && (
+              <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
+                Not available on macOS yet: the Mac's sandbox can't keep a listener loopback-only, so it has no effect on this Mac.
+              </p>
+            )}
           </div>
         ) : (
           <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>

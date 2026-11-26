@@ -1,6 +1,6 @@
 //! Phase C: the sandbox grants (`WorkspaceSandboxSet`) on the config log.
-//! Path grants are an Admin's with presence; an agent's shell grant is the
-//! Owner's with presence; agents, phones, Contributors and chat logs never set
+//! Path grants are an Admin's with presence; an agent's shell and
+//! local-servers grants are the Owner's with presence; agents, phones, Contributors and chat logs never set
 //! them. The property test runs 256 cases by default (`PROPTEST_CASES=4096`
 //! in release for the gate).
 
@@ -84,6 +84,58 @@ fn only_the_owner_grants_or_withdraws_a_shell() {
     assert!(w.config().guards.sandbox_grants.is_empty());
 }
 
+fn local_servers_for(id: Uuid) -> SandboxGrants {
+    let mut g = SandboxGrants::default();
+    g.agents.insert(id, AgentGrant { local_servers: true, ..Default::default() });
+    g
+}
+
+#[test]
+fn only_the_owner_lets_an_agent_run_local_servers() {
+    let mut w = world();
+    let (a, b) = (agent(1), agent(2));
+    assert!(!w.config().guards.sandbox_grants.local_servers_granted(a), "off by default");
+    let by_admin = w.push("adm", set(&local_servers_for(a)));
+    assert_eq!(w.verdict(by_admin), Verdict::Denied, "an Admin can't turn it on");
+    let by_owner_bare = w.push_bare("owner", set(&local_servers_for(a)));
+    assert_eq!(w.verdict(by_owner_bare), Verdict::Denied, "the Owner needs presence too");
+    let by_owner = w.push("owner", set(&local_servers_for(a)));
+    assert_eq!(w.verdict(by_owner), Verdict::Allowed);
+    let g = &w.config().guards.sandbox_grants;
+    assert!(g.local_servers_granted(a) && !g.local_servers_granted(b), "only that agent");
+    assert!(!g.shell_granted(a), "it grants no shell");
+    assert!(g.paths_for(Some(a)).local_servers && !g.paths_for(Some(b)).local_servers && !g.paths_for(None).local_servers);
+    assert!(g.paths_for(Some(a)).read_only.is_empty() && g.paths_for(Some(a)).read_write.is_empty(), "it opens no path");
+    // An Admin may change paths while keeping it as it is, but not withdraw it.
+    let mut keep = local_servers_for(a);
+    keep.agents.get_mut(&a).unwrap().read_only.push("/opt/data".into());
+    let keeps = w.push("adm", set(&keep));
+    assert_eq!(w.verdict(keeps), Verdict::Allowed);
+    let drops = w.push("adm", set(&SandboxGrants::default()));
+    assert_eq!(w.verdict(drops), Verdict::Denied);
+    let owner_drops = w.push("owner", set(&SandboxGrants::default()));
+    assert_eq!(w.verdict(owner_drops), Verdict::Allowed);
+    assert!(!w.config().guards.sandbox_grants.local_servers_granted(a));
+}
+
+#[test]
+fn local_servers_is_additive_on_the_wire() {
+    // Off is not written, so a set without it is byte-identical to 0.4.0's.
+    let mut g = SandboxGrants::default();
+    g.agents.insert(agent(1), AgentGrant { shell: true, ..Default::default() });
+    let wire = serde_json::to_string(&g).unwrap();
+    assert!(!wire.contains("localServers"), "{wire}");
+    // On, it is one optional camelCase key.
+    let on = serde_json::to_string(&local_servers_for(agent(1))).unwrap();
+    assert!(on.contains("\"localServers\":true"), "{on}");
+    // A 0.4.0 set (no key) reads as off.
+    let old: SandboxGrants = serde_json::from_str(&format!("{{\"agents\":{{\"{}\":{{\"shell\":true}}}}}}", agent(1))).unwrap();
+    assert!(!old.local_servers_granted(agent(1)) && old.shell_granted(agent(1)));
+    // The workspace-wide grant has no such switch on the wire.
+    let ws: SandboxGrants = serde_json::from_str(r#"{"workspace":{"readOnly":["~/x"],"localServers":true}}"#).unwrap();
+    assert!(!ws.workspace.local_servers && !ws.paths_for(None).local_servers);
+}
+
 #[test]
 fn agents_chats_and_malformed_sets_are_refused() {
     let mut w = world();
@@ -131,14 +183,14 @@ fn arb_grants() -> impl Strategy<Value = SandboxGrants> {
     (
         proptest::collection::vec(arb_path(), 0..3),
         proptest::collection::vec(arb_path(), 0..2),
-        proptest::collection::vec((0u128..3, any::<bool>(), proptest::collection::vec(arb_path(), 0..2)), 0..3),
+        proptest::collection::vec((0u128..3, any::<bool>(), any::<bool>(), proptest::collection::vec(arb_path(), 0..2)), 0..3),
     )
         .prop_map(|(ro, rw, agents)| {
             let mut g = SandboxGrants::default();
             g.workspace.read_only = ro;
             g.workspace.read_write = rw;
-            for (i, shell, ro) in agents {
-                g.agents.insert(agent(i), AgentGrant { read_only: ro, read_write: Vec::new(), shell });
+            for (i, shell, local_servers, ro) in agents {
+                g.agents.insert(agent(i), AgentGrant { read_only: ro, read_write: Vec::new(), shell, local_servers });
             }
             g
         })
@@ -165,7 +217,7 @@ proptest! {
             let allowed = s.presence
                 && role.is_some_and(|r| r.rank() >= WorkspaceRole::Admin.rank())
                 && s.grants.well_formed().is_ok()
-                && (s.grants.shell_changes(&model).is_empty() || role == Some(WorkspaceRole::Owner));
+                && ((s.grants.shell_changes(&model).is_empty() && s.grants.local_servers_changes(&model).is_empty()) || role == Some(WorkspaceRole::Owner));
             if allowed {
                 model = s.grants.clone();
             }

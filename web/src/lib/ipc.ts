@@ -2230,11 +2230,13 @@ export const approveJoin = (subject: string) => invoke<void>("approve_join", { w
 /// One line of a turn's effective filesystem policy.
 export type SandboxPolicyEntry = { path: string; access: "denied" | "read" | "read-write"; why: string };
 /// What an agent turn of one runtime may reach on this device, and why.
-export type EffectivePolicy = { runtime: string; tier: string; home: string | null; entries: SandboxPolicyEntry[]; shell: string };
+/// `localServers`: whether this agent's turns may run local servers here, and what that means on this tier.
+export type EffectivePolicy = { runtime: string; tier: string; home: string | null; entries: SandboxPolicyEntry[]; shell: string; localServers: string };
 /// Extra paths (`~/...` or absolute). Empty lists are omitted on the wire.
 export type PathGrants = { readOnly?: string[]; readWrite?: string[] };
-/// One agent's grants: paths, and the shell for other members' turns.
-export type AgentGrant = PathGrants & { shell?: boolean };
+/// One agent's grants: paths, the shell for other members' turns, and
+/// local servers (listen and connect on this machine; both the Owner's).
+export type AgentGrant = PathGrants & { shell?: boolean; localServers?: boolean };
 /// The signed sandbox grants in force (workspace config log).
 export type SandboxGrants = { workspace?: PathGrants; agents?: Record<string, AgentGrant> };
 export type SandboxAgent = { id: string; name: string; runtime: string };

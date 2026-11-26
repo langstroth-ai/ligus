@@ -296,8 +296,23 @@ pub trait SetupOps {
     fn add_agent(&mut self, name: &str, runtime_id: &str) -> OpsResult<Uuid> {
         Err(OpsError::Unsupported)
     }
+    /// Whether the agent's signed `localServers` grant is on.
+    fn local_servers(&self, agent_id: Uuid) -> bool {
+        false
+    }
+    /// Turn the agent's `localServers` grant on or off (the Owner's, with a
+    /// passkey in a shared workspace: a signed `WorkspaceSandboxSet` keeping
+    /// every other grant).
+    fn set_local_servers(&mut self, agent_id: Uuid, on: bool) -> OpsResult<()> {
+        Err(OpsError::Unsupported)
+    }
     fn test_turn(&mut self, runtime_id: &str) -> OpsResult<TestTurn> {
         Err(OpsError::Unsupported)
+    }
+    /// [`SetupOps::test_turn`] for an agent that may run local servers
+    /// (agy's helper server); by default the plain test turn.
+    fn test_turn_with(&mut self, runtime_id: &str, local_servers: bool) -> OpsResult<TestTurn> {
+        self.test_turn(runtime_id)
     }
 
     // tool

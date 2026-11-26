@@ -154,6 +154,54 @@ fn agent_flow_creates_runtime_then_agent_and_reruns_as_a_no_op() {
 }
 
 #[test]
+fn local_servers_are_offered_for_agy_only_and_stay_off_unless_asked() {
+    let f = Fake::default();
+    let field = |h: &str| {
+        let mut i = Inputs::new();
+        i.set("harness", h);
+        agent::steps(&f, &i).into_iter().flat_map(|s| s.fields).find(|x| x.id == "local-servers").map(|x| (x.applies(&i), x.default.clone()))
+    };
+    assert_eq!(field("antigravity"), Some((true, None)), "shown for agy, off by default");
+    assert_eq!(field("claude-code"), Some((false, None)), "hidden for other harnesses");
+    // Not asked: nothing written but the runtime and the agent.
+    let mut f = Fake::default();
+    f.harnesses.push(super::fake::harness("antigravity", true, crate::cli_detect::LoginState::LoggedIn));
+    let o = run_(FlowId::Agent, &mut f, &[("harness", "antigravity"), ("name", "gem")]);
+    assert_eq!(o.exit, 0, "{:?}", ids(&o));
+    assert!(f.local_servers.is_empty() && !f.writes.iter().any(|w| w.starts_with("set_local_servers")), "{:?}", f.writes);
+    // Asked: on for that agent only, after it exists; a rerun is a no-op.
+    let o = run_(FlowId::Agent, &mut f, &[("harness", "antigravity"), ("name", "gem2"), ("local-servers", "on")]);
+    assert_eq!(o.exit, 0, "{:?}", ids(&o));
+    assert_eq!(f.writes.last().map(String::as_str), Some("set_local_servers gem2 true"), "{:?}", f.writes);
+    let gem2 = f.agents.iter().find(|a| a.name == "gem2").unwrap().id;
+    assert_eq!(f.local_servers, vec![gem2]);
+    assert!(has(&o, "agent.local-servers.macos", Status::Warn), "a Mac says it has no effect here: {:?}", ids(&o));
+    let n = f.writes.len();
+    let again = run_(FlowId::Agent, &mut f, &[("harness", "antigravity"), ("name", "gem2"), ("local-servers", "on")]);
+    assert_eq!(again.exit, 0);
+    assert_eq!(f.writes.len(), n, "{:?}", f.writes);
+    // A test turn of an agent with the grant runs with it.
+    let o = run_(FlowId::Agent, &mut f, &[("harness", "antigravity"), ("name", "gem2"), ("test-turn", "on")]);
+    assert_eq!(o.exit, 0, "{:?}", ids(&o));
+    assert!(f.writes.iter().any(|w| w.starts_with("test_turn_with_local_servers")), "{:?}", f.writes);
+    // The existing agent turned on by a rerun with the flag.
+    let o = run_(FlowId::Agent, &mut f, &[("harness", "antigravity"), ("name", "gem"), ("local-servers", "on")]);
+    assert_eq!(o.exit, 0, "{:?}", ids(&o));
+    assert_eq!(f.local_servers.len(), 2);
+}
+
+#[test]
+fn local_servers_are_the_owners_and_dry_run_writes_nothing() {
+    let mut f = Fake { role: Some(WorkspaceRole::Admin), ..Fake::default() };
+    let o = run_(FlowId::Agent, &mut f, &[("harness", "claude-code"), ("name", "builder"), ("model", "sonnet"), ("local-servers", "on")]);
+    assert_eq!(o.exit, exit::REFUSED, "{:?}", ids(&o));
+    assert!(!f.writes.iter().any(|w| w.starts_with("add_agent")), "refused before the agent is written: {:?}", f.writes);
+    let mut f = Fake::default();
+    let o = run_o(FlowId::Agent, &mut f, &[("harness", "claude-code"), ("name", "builder"), ("model", "sonnet"), ("local-servers", "on")], &[], &RunOpts { dry_run: true, ..RunOpts::default() });
+    assert!(f.writes.is_empty() && has(&o, "agent.local-servers", Status::Skip), "{:?}", ids(&o));
+}
+
+#[test]
 fn agent_flow_reuses_a_matching_runtime() {
     let mut f = Fake { runtimes: vec![RuntimeFact { id: "cc".into(), harness: "claude-code".into(), model: "sonnet".into(), endpoint: String::new() }], ..Fake::default() };
     run_(FlowId::Agent, &mut f, AGENT);
