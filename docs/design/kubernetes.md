@@ -362,7 +362,7 @@ Ligus already supports as a `custom` runtime:
 ```toml
 # runtimes.toml on the serve/worker pod
 [[runtime]]
-id = "*"
+id = "<the agent's runtime id>"
 name = "In-cluster vLLM"
 provider = "custom"
 model = "Qwen/Qwen3-32B"

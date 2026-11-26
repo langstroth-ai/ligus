@@ -1343,6 +1343,53 @@ async fn an_owner_only_agent_refuses_the_phone_without_a_model_call() {
     assert_eq!(code, 403);
 }
 
+/// An agent sent to this box on a runtime the box doesn't have is refused
+/// with the reason in its chat, never run on the `runtimes.toml` `*`
+/// entry's model instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_on_a_runtime_this_host_lacks_is_refused_in_its_chat() {
+    let (endpoint, model) = spawn_model(vec![vec![delta(json!({"content": "should never run"}))]]).await;
+    let h = harness(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")]).await;
+    let ws = h.handle.shared.ws;
+    std::fs::write(
+        h.handle.shared.cfg.data_dir.join(crate::worker::LOCAL_RUNTIMES_FILE),
+        format!("[[runtime]]\nid = \"*\"\nname = \"Lab\"\nprovider = \"custom\"\nmodel = \"other-model\"\nendpoint = \"{endpoint}\"\ncredential = {{ kind = \"none\" }}\n"),
+    )
+    .unwrap();
+    let local = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        let mut a = WorkspaceAgent::new("local", "desktop-only-runtime");
+        a.owner_actor_id = desk.author().id.clone();
+        a.access = ligus_core::agent::ACCESS_EVERYONE.into();
+        let id = a.id;
+        desk.add_agent(ws, ws, a).unwrap();
+        id
+    };
+    desktop_sync(&h).await;
+    let host = this_host(&h).await;
+    bind_here(&h, &host, &[local]).await;
+
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Try it" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@local hi" }))).await;
+    let want = "@local did not run: this host doesn't have runtime 'desktop-only-runtime'; update it or pick another host";
+    let mut note = false;
+    for _ in 0..300 {
+        let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await.to_string();
+        if msgs.contains(want) {
+            note = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(note, "the sender is told why");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(model.bodies.lock().unwrap().is_empty(), "no model call on the catch-all");
+    let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await.to_string();
+    assert_eq!(msgs.matches("did not run").count(), 1, "said once: {msgs}");
+    h.handle.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reject_with_reason_and_last_event_id_replay() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
