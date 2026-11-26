@@ -56,7 +56,7 @@ impl JoinRequest {
             device_id,
             device_public_key: device_public_key.to_vec(),
             ka_public: ka_public.to_vec(),
-            label: label.chars().filter(|c| !c.is_control()).take(64).collect(),
+            label: clamp_label(label),
         }
     }
 
@@ -102,6 +102,11 @@ impl JoinRequest {
         if r.device_public_key.len() != 32 || r.ka_public.len() != 32 {
             return Err("the join request's keys are malformed".into());
         }
+        // Every surface shows the label: one that isn't its own clamp (too
+        // long, or with controls, bidi or invisible characters) is refused.
+        if r.label != clamp_label(&r.label) {
+            return Err("the join request's label is malformed".into());
+        }
         // A box's device id is the one its key derives: an admission bound to
         // the request names the device that key is.
         if r.device_id != ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &r.device_public_key) {
@@ -116,6 +121,17 @@ impl JoinRequest {
         let json = serde_json::to_vec(&blob).map_err(|e| e.to_string())?;
         Ok(format!("{SEALED_PREFIX}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)))
     }
+}
+
+/// The longest label a join request carries, in characters.
+pub const MAX_LABEL_CHARS: usize = 64;
+
+/// A join request's label as it is carried: controls, bidi and invisible
+/// characters dropped, at most [`MAX_LABEL_CHARS`] characters. Earlier
+/// producers dropped controls and kept 64 characters, so their requests stay
+/// valid.
+pub fn clamp_label(label: &str) -> String {
+    label.chars().filter(|c| !crate::phone_enroll::hidden_or_reordering(*c)).take(MAX_LABEL_CHARS).collect()
 }
 
 /// The `hivews1:` invite inside an admission code: opened with this box's
@@ -211,6 +227,21 @@ mod tests {
         r.device_id = Uuid::new_v4();
         let err = JoinRequest::decode(&r.encode()).unwrap_err();
         assert!(err.contains("derives"), "{err}");
+    }
+
+    /// A label that isn't its own clamp is refused on decode.
+    #[test]
+    fn a_join_requests_label_is_bounded_and_clean() {
+        let ka = ligus_core::KeyAgreementKeypair::generate().unwrap();
+        let mut r = request(&ka);
+        assert_eq!(JoinRequest::decode(&r.encode()).unwrap().label, "build-1");
+        r.label = "x".repeat(65);
+        assert!(JoinRequest::decode(&r.encode()).unwrap_err().contains("label"));
+        r.label = "build\u{202E}1-dliub".into();
+        assert!(JoinRequest::decode(&r.encode()).is_err());
+        r.label = "ü".repeat(64);
+        assert!(JoinRequest::decode(&r.encode()).is_ok(), "64 characters, whatever their bytes");
+        assert_eq!(clamp_label(&"a".repeat(100)).len(), 64);
     }
 
     #[test]

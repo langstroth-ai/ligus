@@ -5,6 +5,7 @@ import { needsYouCount, needsYouItems, type NeedsYouItem } from "@/lib/needsYou"
 import { useChatAttention } from "@/state/useSessionStates";
 import { useLiveTurns } from "@/state/liveTurns";
 import { usePhoneAlerts } from "@/state/phoneAlerts";
+import { useApprovals } from "@/state/approvals";
 
 /// Everything waiting on this person in the active workspace, plus what
 /// reaches this device from outside it (invites, device requests, a phone
@@ -19,6 +20,7 @@ export function useNeedsYou(workspaceId: string): NeedsYouItem[] {
   const trust = useQuery({ queryKey: ["workspace-trust"], queryFn: getWorkspaceTrust, refetchInterval: 30_000 });
   const sandbox = useQuery({ queryKey: ["sandbox-policy", null], queryFn: () => getSandboxPolicy(null), refetchInterval: 30_000 });
   const phone = usePhoneAlerts();
+  const approvals = useApprovals();
   return useMemo(() => {
     const titles = new Map((chats.data ?? []).map((c) => [c.id, c.title]));
     // Only chats of this workspace: a failure elsewhere shows there.
@@ -32,8 +34,14 @@ export function useNeedsYou(workspaceId: string): NeedsYouItem[] {
       phoneAlerts: phone.map((a) => ({ rid: a.rid, otherDeviceId: a.other.deviceId, addedLabel: a.added.label })),
       trustWaiting: (trust.data?.items ?? []).filter((i) => !i.enabled).length,
       sandboxChanged: Boolean(sandbox.data?.changed),
+      // This workspace's requests and facts: the sheet approves in the
+      // active workspace only.
+      approvals: approvals.requests
+        .filter((r) => r.workspaceId === workspaceId)
+        .map((r) => ({ workspaceId: r.workspaceId, rid: r.rid, kind: r.kind, label: r.label, createdAt: r.createdAt })),
+      approvalFacts: approvals.facts.filter((f) => f.workspaceId === workspaceId),
     });
-  }, [attention.data, chats.data, live, invites.data, devices.data, trust.data, sandbox.data, phone]);
+  }, [attention.data, chats.data, live, invites.data, devices.data, trust.data, sandbox.data, phone, approvals.requests, approvals.facts, workspaceId]);
 }
 
 /// Mirror the count on the dock icon (macOS) and the tray tooltip. Zero

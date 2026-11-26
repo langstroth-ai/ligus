@@ -182,10 +182,16 @@ impl ChatService {
                 .load_in(workspace_id, ligus_core::workspace_config_session_id(workspace_id))?
                 .map(|c| c.members.iter().filter_map(|m| m.actor.account_id).collect())
                 .unwrap_or_default();
+            // A device counts for a member only when the member holds it
+            // (the accounts it vouched for itself): a certificate a current
+            // member put on a removed member's device key doesn't let that
+            // device through lockdown.
+            let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+            let head = timeline.current();
             dearth.admitted_devices = roster
                 .certified_devices()
                 .into_iter()
-                .filter(|d| members.iter().any(|a| roster.device_signs_for(*d, *a)))
+                .filter(|d| members.iter().any(|a| roster.device_signs_for(*d, *a) && head.account_holds_device(*a, *d)))
                 .collect();
             // This device is always admitted by the Admin switching it on.
             if !dearth.admitted_devices.contains(&self.device_id) {
@@ -542,12 +548,14 @@ mod tests {
     fn named(name: &str) -> ChatService {
         let store = crate::event_store::EventStore::open_in_memory().unwrap();
         let author = ligus_core::ActorIdentity::new(name, name, ligus_core::ActorKind::Human);
-        ChatService::new(
+        let mut svc = ChatService::new(
             store,
             ligus_core::SigningKeypair::generate().unwrap(),
             ligus_core::SigningKeypair::generate().unwrap(),
             author,
-        )
+        );
+        svc.set_founding_rules(2);
+        svc
     }
 
     /// Deliver every event `from` has that `to` lacks (both directions = a sync).

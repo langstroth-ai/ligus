@@ -23,8 +23,13 @@ pub struct LinkPreview {
     pub already_mine: bool,
     /// Revoked here: the computer needs a new device key.
     pub revoked: bool,
-    /// Certified here for someone else (their name).
+    /// Already acting here for someone else (their name): the computer
+    /// itself signed as them. Refused.
     pub someone_elses: Option<String>,
+    /// Members whose account certified this computer's key without it ever
+    /// acting for them (their names). A foreign certificate gives them
+    /// nothing over it and doesn't stop the link; it is only shown.
+    pub also_certified_by: Vec<String>,
     /// The member this computer proved it was here (its account key signed
     /// the request), if any.
     pub previous_member: Option<WorkspaceMember>,
@@ -47,10 +52,17 @@ impl ChatService {
                 .map(|m| crate::display::shown(&m.actor.display_name))
                 .unwrap_or_else(|| format!("account {}", &account.to_string()[..8]))
         };
+        // Who the computer chose is read from its own signatures, never from
+        // a certificate (anyone can certify a public device key).
+        let chosen = self.device_chosen_accounts(workspace_id, request.device_id, &request.device_public_key)?;
         let someone_elses = device
             .filter(|d| !d.revoked)
-            .and_then(|d| d.accounts.iter().find(|a| Some(**a) != me).copied())
+            .and_then(|_| chosen.iter().find(|a| Some(**a) != me).copied())
             .map(name_of);
+        let also_certified_by = device
+            .filter(|d| !d.revoked)
+            .map(|d| d.accounts.iter().filter(|a| Some(**a) != me && !chosen.contains(a)).map(|a| name_of(*a)).collect())
+            .unwrap_or_default();
         // The proof shows only for a current human member other than you,
         // under the account key this workspace registers for them.
         let previous_member = request.previous.as_ref().and_then(|p| {
@@ -67,19 +79,13 @@ impl ChatService {
             already_mine,
             revoked,
             someone_elses,
+            also_certified_by,
             previous_member,
         })
     }
 
-    /// Approve `request` as one of **your** devices in `workspace_id`:
-    /// publish its certificate under your account key on the config log,
-    /// confirmed with your passkey (one ceremony: every account here holds a
-    /// credential first), and return the grant (`ligusgrant1:…`) to paste on
-    /// the computer, valid for [`GRANT_TTL_MS`] from `now_ms`. `conn` is the
-    /// workspace connection (`hivews1:` codec) without an invite. The computer
-    /// is a device that acts for you without your account key (delegated).
-    /// Sync to publish the certificate before the computer redeems.
-    pub fn issue_computer_link(&mut self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<String> {
+    /// Everything approving `request` checks first; the account it adds to.
+    fn computer_link_checks(&self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<Uuid> {
         request.check_fresh(now_ms).map_err(|e| refused(e.to_string()))?;
         if self.delegated {
             return Err(refused("only a device holding your account key can add a computer (do it on your desktop)"));
@@ -125,7 +131,12 @@ impl ChatService {
             if d.accounts.contains(&account_id) {
                 return Err(refused("this computer is already one of your devices here"));
             }
-            if !d.accounts.is_empty() {
+            // Refused only when the computer itself acted as someone else
+            // here (a signature by its own key). Another member's
+            // certificate of its public key alone is foreign: it gives them
+            // nothing and must not block the person's own link.
+            let chosen = self.device_chosen_accounts(workspace_id, request.device_id, &request.device_public_key)?;
+            if chosen.iter().any(|a| *a != account_id) {
                 return Err(refused(
                     "this computer is already in the workspace as someone else: on it, make a new request with a new device key",
                 ));
@@ -134,12 +145,52 @@ impl ChatService {
         if head.passkeys.get(&account_id).is_none_or(|m| m.is_empty()) {
             return Err(refused("add a passkey first (Settings > Passkeys & keys): adding a computer is confirmed with it"));
         }
+        Ok(account_id)
+    }
+
+    /// Approve `request` as one of **your** devices in `workspace_id`:
+    /// publish its certificate under your account key on the config log,
+    /// confirmed with your passkey (one ceremony: every account here holds a
+    /// credential first), and return the grant (`ligusgrant1:…`) to paste on
+    /// the computer, valid for [`GRANT_TTL_MS`] from `now_ms`. `conn` is the
+    /// workspace connection (`hivews1:` codec) without an invite. The computer
+    /// is a device that acts for you without your account key (delegated).
+    /// Sync to publish the certificate before the computer redeems.
+    pub fn issue_computer_link(&mut self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<String> {
+        self.computer_link_checks(workspace_id, request, conn, now_ms)?;
+        self.publish_link_certificate(workspace_id, request)?;
+        self.seal_link_grant(workspace_id, request, conn, now_ms)
+    }
+
+    /// Code-match approval, step one for a computer (identity model v2,
+    /// 8.1): every check [`Self::issue_computer_link`] makes, then the grant,
+    /// sealed now and **nothing written**. The caller offers its digest and,
+    /// once the computer acknowledged, calls [`Self::publish_computer_link`].
+    pub fn prepare_computer_link(&self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<String> {
+        self.computer_link_checks(workspace_id, request, conn, now_ms)?;
+        self.seal_link_grant(workspace_id, request, conn, now_ms)
+    }
+
+    /// Code-match approval, step two: the checks again, then the
+    /// certificate on the config log with the passkey ceremony, drafted
+    /// fresh now. Sync to publish it.
+    pub fn publish_computer_link(&mut self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<()> {
+        self.computer_link_checks(workspace_id, request, conn, now_ms)?;
+        self.publish_link_certificate(workspace_id, request)
+    }
+
+    fn publish_link_certificate(&mut self, workspace_id: Uuid, request: &LinkRequest) -> Result<()> {
+        let account_id = self.author.account_id.ok_or_else(|| refused("this device has no account identity"))?;
         let config_id = workspace_config_session_id(workspace_id);
         let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &request.device_public_key, Timestamp::now());
         // The account holds a credential, so the rules ask its presence for a
         // new device: `append_signed` runs the ceremony (the desktop's
         // passkey, the CLI's recovery key) or refuses.
         self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate })?;
+        Ok(())
+    }
+
+    fn seal_link_grant(&self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<String> {
         let person = crate::computer_link::device_local_cleared(&self.author);
         Grant::seal(request, workspace_id, conn, &person, self.device_id, &self.keypair, now_ms.saturating_add(GRANT_TTL_MS))
             .map_err(|e| refused(e.to_string()))
@@ -149,9 +200,11 @@ impl ChatService {
     /// the grant's founder pin): whether the workspace agrees with the grant.
     /// The founding is verified; the person is a human member; the approving
     /// device is theirs (certified, not delegated, not revoked, its key the
-    /// grant's); this device is certified for the person and for no one
-    /// else, and isn't revoked; no lockdown. Writes nothing. Returns the
-    /// person (to `act_as_owner_device`).
+    /// grant's); this device is certified for the person, never acted for
+    /// anyone else here, and isn't revoked; no lockdown. A certificate
+    /// another member put on this device's key is ignored (it gives them
+    /// nothing). Writes nothing. Returns the person (to
+    /// `act_as_owner_device`).
     pub fn check_computer_link(&self, grant: &OpenedGrant, now_ms: i64) -> Result<ActorIdentity> {
         let person = grant.check(&self.keypair.public_key_bytes(), now_ms).map_err(|e| refused(e.to_string()))?;
         let ws = grant.workspace_id;
@@ -176,18 +229,84 @@ impl ChatService {
         if config.guards.dearth_on().is_some() {
             return Err(refused("the workspace is in lockdown: no device can be added until an Admin turns it off"));
         }
+        // Rules 3: the desktop's certificate counts once this computer
+        // accepts it (`accept_device_certificate`, right after the link is
+        // recorded); until then it is on the log, unaccepted.
+        if head.unaccepted.contains(&(self.device_id, account)) && !config.guards.revoked_devices.contains(&self.device_id) {
+            let chosen = self.device_chosen_accounts(ws, self.device_id, &self.keypair.public_key_bytes())?;
+            if chosen.iter().any(|a| *a != account) {
+                return Err(refused("this computer is already in the workspace as someone else: make a new request with a new device key"));
+            }
+            return Ok(person);
+        }
         let Some(me) = head.devices.get(&self.device_id) else {
             return Err(refused(crate::computer_link::NOT_ON_RELAY_YET));
         };
         if me.revoked {
             return Err(refused("this computer's device was revoked in this workspace: make a new request with a new device key"));
         }
-        if me.accounts.iter().any(|a| *a != account) {
+        let chosen = self.device_chosen_accounts(ws, self.device_id, &self.keypair.public_key_bytes())?;
+        if chosen.iter().any(|a| *a != account) {
             return Err(refused("this computer is already in the workspace as someone else: make a new request with a new device key"));
         }
         if !me.accounts.contains(&account) {
             return Err(refused(crate::computer_link::NOT_ON_RELAY_YET));
         }
         Ok(person)
+    }
+
+    /// On a linked computer acting as its person, right after it accepted
+    /// its certificate: retire the separate member this install was here
+    /// before (identity model v2, 8.3; decision O5), signed by that
+    /// member's own account key (`old_account`). Rules 3 only. Returns
+    /// `None` when it retired it (or there was nothing to retire), else why
+    /// not, for the person to read ("needs an Admin to remove it").
+    pub fn retire_previous_member(&mut self, workspace_id: Uuid, old_account: &ligus_core::SigningKeypair, old_account_id: Uuid, old_member_id: &str) -> Result<Option<String>> {
+        let Some(account) = self.author.account_id else { return Ok(None) };
+        if account == old_account_id {
+            return Ok(None);
+        }
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let Some(config) = config else { return Ok(None) };
+        if !config.members.iter().any(|m| m.id == old_member_id) {
+            return Ok(None);
+        }
+        if timeline.current().rules < ligus_core::authz::RULES_V3 {
+            return Ok(Some("this workspace is on older rules: an Admin removes the earlier member".into()));
+        }
+        let retirement = ligus_core::retirement::MemberRetirement::sign(old_account, workspace_id, old_member_id, old_account_id, account, self.device_id);
+        match self.append_signed(workspace_config_session_id(workspace_id), workspace_id, SessionEvent::MemberRetired { retirement }) {
+            Ok(_) => Ok(None),
+            Err(ChatError::Unauthorized(why)) => Ok(Some(why)),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// On a linked computer acting as its person (after
+    /// [`Self::check_computer_link`] and `act_as_owner_device`): publish this
+    /// device's own copy of the certificate the person's desktop published
+    /// for it. Under rules 3 that is the computer's acceptance, without
+    /// which the certificate counts for nothing; under rules 2 it changes
+    /// nothing. Needs no presence. A no-op when it already accepted.
+    pub fn accept_device_certificate(&mut self, workspace_id: Uuid) -> Result<bool> {
+        let Some(account) = self.author.account_id else { return Ok(false) };
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let head = timeline.current();
+        if !head.unaccepted.contains(&(self.device_id, account)) {
+            return Ok(false);
+        }
+        let mine = self.device_id;
+        let key = head.account_keys.get(&account).cloned().unwrap_or_default();
+        let cert = self.store.trust_envelopes(workspace_id)?.into_iter().find_map(|e| match e.payload {
+            SessionEvent::DeviceCertificateAdded { certificate }
+                if certificate.device_id == mine && certificate.account_id == account && certificate.verify(&key).is_ok() =>
+            {
+                Some(certificate)
+            }
+            _ => None,
+        });
+        let Some(certificate) = cert else { return Ok(false) };
+        self.append_signed(workspace_config_session_id(workspace_id), workspace_id, SessionEvent::DeviceCertificateAdded { certificate })?;
+        Ok(true)
     }
 }
