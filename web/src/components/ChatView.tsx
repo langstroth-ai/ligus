@@ -1,4 +1,5 @@
 import { TaskStatePanel } from "@/components/TaskStatePanel";
+import { DecisionCard } from "@/components/DecisionCard";
 import { responderBadge } from "@/lib/responderBadge";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -38,6 +39,8 @@ import {
   type ChatMessageDto,
   type RuntimeSummaryDto,
   type WorkspaceAgentDto,
+  listAsks,
+  type AskDto,
 } from "@/lib/ipc";
 import { splitAttachments, fileBaseName, isImagePath } from "@/lib/attachments";
 import { SharedAttachmentCard } from "@/components/SharedAttachmentCard";
@@ -250,6 +253,18 @@ export function ChatView({
     placeholderData: (prev) => prev,
   });
   const handoffIndex = useMemo(() => handoffsByMessage(handoffs.data ?? []), [handoffs.data]);
+  // Agents' decision cards sit in the transcript where the agent asked:
+  // after the asking turn's reply, or (while that turn still streams) after
+  // the live bubble.
+  const asks = useQuery({ queryKey: ["asks", sessionId], queryFn: () => listAsks(sessionId), enabled: Boolean(sessionId), refetchInterval: 4000 });
+  const asksByTurn = useMemo(() => {
+    const m = new Map<string, AskDto[]>();
+    for (const a of [...(asks.data ?? [])].sort((x, y) => x.atMs - y.atMs)) {
+      const k = a.turnId ?? "";
+      m.set(k, [...(m.get(k) ?? []), a]);
+    }
+    return m;
+  }, [asks.data]);
 
   // The local user's display name — the same author the backend stamps on a
   // persisted message. Used to label the optimistic bubble so it doesn't flip
@@ -1310,6 +1325,7 @@ export function ChatView({
                   }}
                   />
                   {handoffIndex.get(m.id)?.map((card) => <HandoffCardView key={card.id} card={card} />)}
+                  {asksByTurn.get(m.id)?.map((a) => <DecisionCard key={a.askId} sessionId={sessionId} ask={a} />)}
                 </Fragment>
               );
             })}
@@ -1350,6 +1366,15 @@ export function ChatView({
               </button>
             </div>
           )}
+          {(() => {
+            // Cards whose turn isn't drawn as a stored message yet (it still
+            // streams), or that have no turn (an outside prompt).
+            const shownTurns = new Set(messages.filter((m) => !streams.has(m.id) && !activity.has(m.id)).map((m) => m.id));
+            return [...asksByTurn.entries()]
+              .filter(([turn]) => !shownTurns.has(turn))
+              .flatMap(([, list]) => list.filter((a) => a.live))
+              .map((a) => <DecisionCard key={a.askId} sessionId={sessionId} ask={a} />);
+          })()}
           {sending && streams.size === 0 && activity.size === 0 && !stalled && <TypingDots label={`${streamAuthor} is thinking`} />}
           {busy && stalled && (
             <div className="tt-note" role="status">

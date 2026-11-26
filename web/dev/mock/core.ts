@@ -11,6 +11,8 @@
 //   (a model picked for the Copilot runtime) &modelproblem=1 (Copilot's
 //   model failed as unavailable: the composer's one-line note)
 //   &noagents=1 (no agents, MCP servers or hosts: the panes' Set up actions)
+//   &asks=question|grant|quorum|waiting|settled|all (agents' decision cards
+//   in the open chat, and their Inbox rows)
 //   &approvals=box|computer|contested|several|mismatch (code-match approval
 //   requests in the Inbox; dev/mock/approvals.ts)
 import * as fx from "./fixtures";
@@ -32,6 +34,7 @@ const flags = {
   // An older workspace whose Owner may switch to rules 3 (identity model v2).
   rules3: params.get("rules3") === "1",
   empty: scenario === "empty" || scenario === "onboarding",
+  asks: params.get("asks") ?? "",
 };
 
 type Args = Record<string, unknown> | undefined;
@@ -411,6 +414,30 @@ function handle(cmd: string, args: Args): unknown {
   }
 }
 
+/// Agents' decision cards in the open chat (`&asks=…`).
+function askExtras(cmd: string, args: Args, base: unknown): unknown {
+  const pick = fx.demoAsks.filter((a) => flags.asks === "all" || a.demo === flags.asks);
+  switch (cmd) {
+    case "list_asks":
+      return (args?.sessionId ?? "chat-1") === "chat-1" ? pick : base;
+    case "list_chat_attention": {
+      const live = pick.filter((a) => a.live);
+      const rows = (base as typeof fx.chatAttention).filter((a) => a.sessionId !== "chat-1");
+      const mine = (base as typeof fx.chatAttention).find((a) => a.sessionId === "chat-1") ?? { sessionId: "chat-1", openAsks: 0, paused: false, proposals: [] };
+      return [
+        ...rows,
+        {
+          ...mine,
+          openAsks: live.filter((a) => a.eligible).length,
+          asks: live.map((a) => ({ askId: a.askId, agentName: a.agentName, kind: a.kind, eligible: a.eligible, audience: a.eligible ? "you" : "Maya" })),
+        },
+      ];
+    }
+    default:
+      return base;
+  }
+}
+
 /// Extra things that need you, for previewing the Inbox (`&inbox=1`).
 function inboxExtras(cmd: string, args: Args, base: unknown): unknown {
   switch (cmd) {
@@ -445,7 +472,8 @@ export async function invoke<T>(cmd: string, args?: Args): Promise<T> {
     throw new Error(`${cmd}: relay unreachable (mock)`);
   }
   await new Promise((r) => setTimeout(r, 15));
-  const out = handle(cmd, args);
+  let out = handle(cmd, args);
+  if (flags.asks) out = askExtras(cmd, args, out);
   return structuredClone(flags.inbox ? inboxExtras(cmd, args, out) : out) as T;
 }
 

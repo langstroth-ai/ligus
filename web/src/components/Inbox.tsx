@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AgentAsks } from "@/components/AgentAsks";
 import { PendingInviteRows } from "@/components/PendingInvitesBanner";
 import { SandboxGrantsNotice } from "@/components/SandboxGrantsBanner";
 import { WorkspaceTrustSheet } from "@/components/WorkspaceTrustBanner";
@@ -23,8 +22,8 @@ export interface InboxActions {
   openSettingsTab: (tab: string) => void;
 }
 
-/// Everything that needs you, in one place: agents' questions (answered right
-/// here), proposals waiting on your vote or ready to apply, runs that failed,
+/// Everything that needs you, in one place: agents' questions (one row each,
+/// answered in their chat), proposals waiting on your vote or ready to apply, runs that failed,
 /// a phone code another phone answered, changed sandbox grants, repository
 /// commands to enable, boxes asking to be your device, and invites. Below,
 /// quieter, suggestions that don't need you. Opening a row takes you to it.
@@ -89,18 +88,18 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
     const where = item.chatTitle;
     switch (item.kind) {
       case "ask":
-        return [
+      case "waiting":
+        // No answer buttons here: the card is answered in its chat, where
+        // its consequences are on screen.
+        return (
           <InboxItem
             key={item.key}
             state="idle"
             title={item.title}
             context={where}
             onOpen={() => actions.openChat(item.chatId!)}
-          />,
-          <div key={`${item.key}:answer`} role="listitem" aria-label={`Answer in ${where ?? "the chat"}`} className="px-3 pb-1">
-            <AgentAsks sessionId={item.chatId!} />
-          </div>,
-        ];
+          />
+        );
       case "vote":
       case "apply":
         return (

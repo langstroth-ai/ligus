@@ -68,6 +68,9 @@ export const VIEWS = [
   ["workflows", "", pane("Workflows")],
   ["people", "", pane("People")],
   ["settings", "", settings("Appearance")],
+  // Agents' decision cards in the transcript, and their Inbox rows.
+  ["asks", "asks=all", null],
+  ["asks-inbox", "asks=all", async (p) => p.getByRole("button", { name: /^Inbox/ }).first().click()],
   ["inbox-approval", "approvals=box", inbox],
   ["approval-sheet", "approvals=box", approvalSheet],
 ];

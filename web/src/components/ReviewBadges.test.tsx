@@ -25,8 +25,8 @@ const base: ProposalDto = {
 const invoke = vi.fn(async (cmd: string, _args?: unknown) => {
   if (cmd === "list_asks")
     return [
-      { askId: "q1", agentName: "@coder", question: "Which database?", options: ["sqlite", "postgres"], expiresAtMs: 0, open: true },
-      { askId: "q0", agentName: "@coder", question: "Old one", options: [], expiresAtMs: 0, open: false, answer: "done" },
+      { askId: "q1", agentName: "@coder", question: "Which database?", options: ["sqlite", "postgres"], expiresAtMs: 0, open: true, live: true, chatId: "s1", kind: "question", v: 2, allowText: false, audience: { kind: "room", minRole: "contributor" }, quorum: 1, eligible: true, tally: [0, 0], declined: false, answeredBy: [], olderAnswerUncounted: false, atMs: 0 },
+      { askId: "q0", agentName: "@coder", question: "Old one", options: [], expiresAtMs: 0, open: false, live: false, answer: "done", chatId: "s1", kind: "question", v: 2, allowText: false, audience: { kind: "room", minRole: "contributor" }, quorum: 1, eligible: true, tally: [0, 0], declined: false, answeredBy: [], olderAnswerUncounted: false, atMs: 0 },
     ];
   return null;
 });
@@ -133,9 +133,9 @@ describe("agent asks", () => {
       </QueryClientProvider>,
     );
     const card = await screen.findByTestId("ask-card");
-    expect(within(card).getByText("Which database?")).toBeInTheDocument();
+    expect(within(card).getByText("\u201CWhich database?\u201D")).toBeInTheDocument();
     expect(screen.queryByText("Old one")).toBeNull();
     fireEvent.click(within(card).getByRole("button", { name: "postgres" }));
-    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("answer_ask", { sessionId: "s1", askId: "q1", answer: "", optionIndex: 1 }));
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("answer_ask", { sessionId: "s1", askId: "q1", optionIndex: 1, text: null, decline: null }));
   });
 });
