@@ -12774,6 +12774,9 @@ enum InitFailure {
     /// The database needs a one-time upgrade and the disk is too full for
     /// it (nothing was changed): free some space and try again.
     DiskSpace(String),
+    /// The database was written by a newer Ligus (identity model v2, 10.4):
+    /// update, or use another data dir. Trying again can't help.
+    NewerData(String),
     /// Anything else.
     Other(String),
 }
@@ -12789,6 +12792,9 @@ impl InitFailure {
         }
         if l.contains("to upgrade the ligus database") {
             return Self::DiskSpace(e.to_string());
+        }
+        if l.contains("written by a newer ligus") {
+            return Self::NewerData(e.to_string());
         }
         Self::Other(e.to_string())
     }
@@ -12820,6 +12826,11 @@ impl InitFailure {
                 "Ligus needs more disk space",
                 format!("Ligus has to upgrade its database once, and there isn't room: {e}.\n\nFree up space on this disk, then choose Try again."),
                 true,
+            ),
+            Self::NewerData(e) => (
+                "This data is from a newer Ligus",
+                format!("Ligus can't use its data: {e}.\n\nInstall the newer version of Ligus. Nothing was changed."),
+                false,
             ),
             Self::Other(e) => (
                 "Ligus couldn't start",
@@ -12929,6 +12940,11 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
 
     let db_path = data_dir.join("ligus.db");
     let store = EventStore::open(&db_path).map_err(map_err)?;
+    // A newer Ligus wrote this database (identity model v2, 10.4): it opened
+    // read-only, and this build stops here rather than run on it.
+    if store.newer_schema().is_some() {
+        return Err(ligus_runtime::event_store::NEWER_DATA_MESSAGE.to_string());
+    }
     clock.phase("  event store");
     // NB: chunk-row pruning (one-time DB shrink) is deferred to a background
     // thread after the window is live — see `run()`. Running it here scanned
@@ -13149,6 +13165,27 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         save_settings(&data_dir, &s);
         id
     };
+    // Identity model v2 (section 11, M1): the sync state is keyed by relay
+    // and workspace, once, while this is the only connection to the store
+    // (otherwise on a later launch; it starts from 0 meanwhile, which is
+    // safe).
+    {
+        let conns: Vec<(String, String)> = {
+            let s = settings.lock().unwrap();
+            let mut c: Vec<(String, String)> = s.workspaces.iter().map(|w| (w.relay_url.clone(), w.room.clone())).collect();
+            if let Some(url) = s.relay_url.clone().filter(|u| !u.is_empty()) {
+                c.push((url, s.sync_room.clone()));
+            }
+            c
+        };
+        match service.store().migrate_sync_tables(&conns) {
+            Ok(ligus_runtime::event_store::SyncMigration::Migrated { backup, reset, .. }) => {
+                tracing::info!(target: "sync", backup = ?backup, reset = reset.len(), "sync state is now kept per relay and workspace");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(target: "sync", "upgrading the sync state failed; it runs again on the next launch: {e}"),
+        }
+    }
     // The private local workspace skips governance authz (solo, never-synced), so
     // an identity churn can't lock the sole user out of routine actions in their
     // own Home workspace.
