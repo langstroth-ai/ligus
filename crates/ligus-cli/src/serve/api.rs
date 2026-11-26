@@ -1777,14 +1777,23 @@ struct PushPref {
     /// (on by default).
     #[serde(default)]
     previews: Option<bool>,
+    /// The push kinds the phone's notification switches allow (asks,
+    /// mentions, proposals, finished replies...). Absent = keep the stored
+    /// value (every kind for a phone that never said).
+    #[serde(default)]
+    kinds: Option<Vec<String>>,
 }
 
-/// `PUT /v1/tunnel/push {"enabled": bool, "previews"?: bool}` →
-/// `{"enabled": bool, "previews": bool}`.
+/// `PUT /v1/tunnel/push {"enabled": bool, "previews"?: bool, "kinds"?:
+/// [string]}` → `{"enabled": bool, "previews": bool}`.
 async fn tunnel_push(State(s): S, peer: Option<Extension<TunnelPeer>>, body: Bytes) -> ApiResult<Json<Value>> {
     let (t, rec) = tunnel_phone(&s, peer)?;
     let pref: PushPref = serde_json::from_slice(&body).map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?;
-    let (enabled, previews) = t.registry.set_push(&rec.pid, pref.enabled, pref.previews)?.ok_or_else(|| ApiError::not_found("phone"))?;
+    if pref.kinds.as_ref().is_some_and(|k| k.len() > 32 || k.iter().any(|x| x.len() > 64)) {
+        return Err(ApiError::bad_request("too many notification kinds"));
+    }
+    let (enabled, previews) =
+        t.registry.set_push(&rec.pid, pref.enabled, pref.previews, pref.kinds)?.ok_or_else(|| ApiError::not_found("phone"))?;
     Ok(Json(json!({ "enabled": enabled, "previews": previews })))
 }
 

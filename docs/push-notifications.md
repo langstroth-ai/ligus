@@ -121,8 +121,9 @@ Rules:
 
 ## Per-phone settings
 
-Each paired phone has two preferences, set by the app through the tunnel-only
-route `PUT /v1/tunnel/push {"enabled": bool, "previews"?: bool}`:
+Each paired phone has three preferences, set by the app through the
+tunnel-only route `PUT /v1/tunnel/push {"enabled": bool, "previews"?: bool,
+"kinds"?: [string]}`:
 
 - `enabled` (default off until the app asks for permission): pushes go only
   to active (not revoked) phones with `enabled` on.
@@ -130,6 +131,16 @@ route `PUT /v1/tunnel/push {"enabled": bool, "previews"?: bool}`:
   is absent, so the notification says only who did what ("coder replied").
   The phone's settings screen has the toggle. If an encrypted push with its
   preview would exceed 2 048 bytes, the host sends it without the preview.
+- `kinds` (default: every kind, for an app that never sent it): the push
+  kinds the phone's notification switches allow. Of `proposal.created`,
+  `workflow.approval`, `review.recruit`, `ask.pending`, `approval.request`,
+  `mention` and `message.done`, the host sends only the ones listed; any
+  other kind (`phone.paired`, `test`) isn't one of the switches and always
+  goes. A body without `kinds` keeps the stored list.
+
+Forget host on the phone turns `enabled` off on that box before it deletes
+the pairing (best effort: an offline box keeps it until the pairing is
+revoked with `ligus phones revoke`).
 
 ## Host-side limits
 

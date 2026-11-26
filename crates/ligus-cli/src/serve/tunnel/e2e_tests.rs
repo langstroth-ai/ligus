@@ -386,6 +386,34 @@ async fn a_suspended_phones_stale_events_stream_stops_suppressing_pushes() {
     h.handle.shutdown();
 }
 
+/// The phone's notification switches (`kinds` in `PUT /v1/tunnel/push`)
+/// decide which pushes it gets: a kind it turned off isn't sent, one it
+/// kept is, and a push that isn't one of its switches (a test, a new phone
+/// paired) still goes. Turning push off (what Forget host sends) stops all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_phones_notification_switches_pick_the_kinds_it_gets() {
+    let (relay, h, t, mut c, pid, _key) = push_phone().await;
+    let r = c.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": true, "previews": true, "kinds": ["mention"] }))).await.unwrap();
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(t.registry.get(&pid).unwrap().push_kinds, Some(vec!["mention".to_string()]));
+    // A body without kinds (an older app) keeps them.
+    assert_eq!(c.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": true }))).await.unwrap().status, 200);
+    assert_eq!(t.registry.get(&pid).unwrap().push_kinds, Some(vec!["mention".to_string()]));
+    let push = |kind: &str, chat: &str| tun::PushContent { kind: kind.into(), chat_id: Some(chat.into()), title: "x".into(), ..Default::default() };
+    // Quiet past the foreground window, so the open session doesn't hold pushes.
+    let later = std::time::Instant::now() + tun::push::FOREGROUND_QUIET + Duration::from_secs(1);
+    assert_eq!(t.push_all_at(&push("message.done", "c1"), later), 0, "a finished reply the phone turned off");
+    assert_eq!(t.push_all_at(&push("proposal.created", "c2"), later), 0, "a proposal the phone turned off");
+    assert_eq!(t.push_all_at(&push("mention", "c3"), later), 1, "a mention it kept");
+    assert_eq!(t.push_all_at(&push("phone.paired", "c4"), later), 1, "not one of its switches");
+    relay.wait_for("push", |m| m["pid"] == json!(pid), WAIT).await.unwrap();
+    // Push off: nothing at all.
+    assert_eq!(c.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": false }))).await.unwrap().status, 200);
+    assert_eq!(t.push_all_at(&push("mention", "c5"), later), 0);
+    t.push_available.store(false, std::sync::atomic::Ordering::SeqCst);
+    h.handle.shutdown();
+}
+
 /// An agent's question for one person, asked from the desktop (its turn
 /// runs there), pushes to that person's phone through a box that joined as
 /// its own member: the audience is matched against the phone's person (the
