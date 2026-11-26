@@ -14,6 +14,20 @@ Full release notes are on the
   Retry didn't help. A message now links to this computer's newest event in
   the chat, whatever order the relay delivered them in, so it sends the first
   time.
+- **Add an agent picks where it runs in the same step.** "Runs on" lists
+  this device, your always-on boxes (`ligus serve` and workers) and your
+  other computers, and saving writes the agent and its host together, so
+  there's no separate step afterwards and only one passkey confirmation. For
+  a model that goes through a model gateway, it starts on the one box that
+  offers that gateway, and says so if you pick a host that doesn't.
+- **A model gateway runtime is OpenAI-compatible.** Picking a model gateway
+  in Add a runtime switches the kind to OpenAI-compatible and hides the
+  Ollama-only settings (its address, keep-loaded and the context size sent
+  to Ollama). Type the model the gateway serves.
+- **First-run Ollama gets a real model.** Choosing Ollama during first
+  setup offers the models installed on this computer (or a field to type
+  one), instead of creating the runtime with `gpt-4o`. The first-run error
+  note says "press Next", matching the button.
 - **A reply written after you answer an agent's question reads after your
   answer.** An agent's reply is stamped with when it was posted (when its
   turn finished), not when the turn started, on the desktop and the phone. On
