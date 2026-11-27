@@ -86,6 +86,9 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
 
   // Secure: the passkey, then the recovery key's words (shown once).
   const [hasPasskey, setHasPasskey] = useState(false);
+  // A linked device can't make the person's passkey: when the account has
+  // none yet, the first run says where to add it before it ends.
+  const [linkedWithoutPasskey, setLinkedWithoutPasskey] = useState(false);
   const [words, setWords] = useState<string | null>(null);
 
   // The agent screen: runtime + access
@@ -253,6 +256,20 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
       setWords(await recoveryKeyCreate());
     });
 
+  /// Linked as one of the person's devices: the workspace and profile are
+  /// theirs already, so the first run ends here, after Secure only if the
+  /// account has no passkey yet.
+  const linked = async () => {
+    let passkey = true;
+    try {
+      passkey = (await securityStatus()).passkeys.some((p) => !p.recovery);
+    } catch {
+      /* the status isn't there yet: nothing to ask */
+    }
+    if (passkey) await onComplete();
+    else setLinkedWithoutPasskey(true);
+  };
+
   const finish = () =>
     run(async () => {
       // Guarantee a responding agent: for an API provider, verify the key
@@ -360,7 +377,18 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
           </div>
         )}
 
-        {step === "link" && <LinkThisDevice onBack={() => go("back")} />}
+        {step === "link" && !linkedWithoutPasskey && <LinkThisDevice onBack={() => go("back")} onLinked={linked} />}
+
+        {step === "link" && linkedWithoutPasskey && (
+          <div className="space-y-3" data-testid="first-run-linked-secure">
+            <div className="text-sm font-medium">One thing left: a passkey</div>
+            <p className="text-xs text-ink-soft">
+              Your account has no passkey yet, so changes to who's in a workspace wait for one. Add it on your first device
+              (Settings → Passkeys & keys); this computer uses it from then on.
+            </p>
+            {primary("Done", () => void run(async () => onComplete()))}
+          </div>
+        )}
 
         {step === "you" && (
           <div className="space-y-3">

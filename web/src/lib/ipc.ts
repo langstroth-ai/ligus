@@ -134,6 +134,40 @@ export const firstRunWorkspace = (name: string) => invoke<WorkspaceInfoDto>("fir
 /// code. A hint only; joining still works.
 export const inviteLinkHint = (code: string) => invoke<boolean>("invite_link_hint", { code });
 
+/// "I already use Ligus": this desktop links itself to the person's account
+/// (`app/src/link_request_ui.rs`). `phase` says where it stands: idle,
+/// waiting, code, approving, checking, confirmPerson, paste,
+/// confirmApprover, linking, linked, noMailbox or failed.
+export type LinkFlowDto = {
+  phase: string;
+  request: string | null;
+  fingerprint: string | null;
+  label: string | null;
+  code: string | null;
+  codeSpelled: string | null;
+  claimedName: string | null;
+  claimedFingerprint: string | null;
+  personName: string | null;
+  workspaceName: string | null;
+  workspaceId: string | null;
+  approverFingerprint: string | null;
+  notice: string | null;
+  error: string | null;
+  canRetry: boolean;
+};
+export const linkRequestStatus = () => invoke<LinkFlowDto>("link_request_status");
+/// Post this desktop's link request to the approval address the other device shows.
+export const linkRequestStart = (address: string) => invoke<LinkFlowDto>("link_request_start", { address });
+export const linkRequestCodesMatch = (matches: boolean) => invoke<LinkFlowDto>("link_request_codes_match", { matches });
+export const linkRequestLinkAs = (yes: boolean) => invoke<LinkFlowDto>("link_request_link_as", { yes });
+export const linkRequestCancel = () => invoke<LinkFlowDto>("link_request_cancel");
+/// The paste path: a request to copy to the other device, then its code back.
+export const linkRequestPaste = () => invoke<LinkFlowDto>("link_request_paste");
+export const linkRequestOpenGrant = (grant: string) => invoke<LinkFlowDto>("link_request_open_grant", { grant });
+export const linkRequestRedeem = () => invoke<LinkFlowDto>("link_request_redeem");
+export const onLinkFlowChanged = (cb: (v: LinkFlowDto) => void): Promise<UnlistenFn> =>
+  listen<LinkFlowDto>("link://changed", (e) => cb(e.payload));
+
 /// Git branch + dirty count for the active workspace. Separate (lazy) command —
 /// it shells out to git, so it's queried only where the pill is shown.
 export interface GitStatus {

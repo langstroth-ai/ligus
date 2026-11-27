@@ -28,6 +28,8 @@ vi.mock("@/lib/ipc", () => ({
   getConnectionSettings: vi.fn(),
   openExternal: vi.fn(async () => {}),
   inviteLinkHint: vi.fn(async () => false),
+  linkRequestStatus: vi.fn(async () => ({ phase: "idle" })),
+  onLinkFlowChanged: vi.fn(async () => () => {}),
 }));
 
 vi.mock("@/components/Toast", () => ({
