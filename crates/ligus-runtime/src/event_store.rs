@@ -86,6 +86,9 @@ mod agent_usage;
 mod blob_renewals;
 mod held;
 mod hidden_proposals;
+mod log_hygiene;
+#[cfg(test)]
+mod log_hygiene_tests;
 #[cfg(test)]
 mod order_lint;
 mod repo_tables;
@@ -94,8 +97,10 @@ pub use held::{claimed_account, HeldEvent, HeldStats, HoldItem, RefetchRow, HELD
 pub use agent_usage::{parse_day, utc_day, AgentUsageRow};
 pub use blob_renewals::BlobRenewal;
 pub use repo_tables::{CheckoutSource, RepoMapping};
+pub use log_hygiene::{HygieneMigration, DISPATCH_AGE_BOUND_MS, PRUNE_EVERY_MS};
 pub use storage_v2::{
     invite_secret, redeem_secret, relay_origin, seed_backups, SyncKey, SyncMigration, NEWER_DATA_MESSAGE, PERSON_SEED_KEEP_MS, SCHEMA_VERSION,
+    SYNC_SCHEMA_VERSION,
 };
 
 /// A chat responder's compaction state as kept on this device: the first
@@ -892,6 +897,8 @@ impl EventStore {
         repo_tables::init(conn)?;
         storage_v2::init(conn)?;
         storage_v2::stamp_if_nothing_to_migrate(conn)?;
+        log_hygiene::init(conn)?;
+        log_hygiene::stamp_if_new(conn)?;
         held::init(conn)?;
         hidden_proposals::init(conn)?;
         agent_usage::init(conn)?;
@@ -1198,6 +1205,7 @@ impl EventStore {
                 json,
             ],
         )?;
+        self.mark_authored(env)?;
         let after = self.rows_sig(env.workspace_id, env.session_id)?;
         tx.commit()?;
         if let Some((sig, head)) = cached {
@@ -1275,6 +1283,7 @@ impl EventStore {
                 json,
             ],
         )?;
+        self.mark_authored(&env)?;
         tx.commit()?;
         Ok(env)
     }
@@ -1365,27 +1374,6 @@ impl EventStore {
             rusqlite::params![after_equiv, sid],
             |r| r.get(0),
         )?)
-    }
-
-    /// The messages stored after row `after` (row ids are this device's
-    /// arrival cursor), as `(session, message, signing device)` in fold order
-    /// `(lamport, event_id)`: what one sync pull brought in, message by
-    /// message. A pull can carry several user turns for one chat (two posts a
-    /// few ms apart); dispatch must consider each of them, not only the
-    /// chat's last. The signer lets the caller skip its own device's posts.
-    ///
-    /// Each as `(workspace, session, message, signing device)`: the log is
-    /// (workspace, session), the workspace the one the event carries.
-    pub fn messages_after(&self, after: i64) -> Result<Vec<(Uuid, Uuid, Uuid, Option<Uuid>)>> {
-        let mut envs = self.query_envelopes("SELECT envelope_json FROM events WHERE row_id > ?1 AND kind = 'messageAppended'", [after])?;
-        envs.sort_by_key(|e| e.canonical_key());
-        Ok(envs
-            .into_iter()
-            .filter_map(|e| match e.payload {
-                SessionEvent::MessageAppended { message } => Some((e.workspace_id, e.session_id, message.id, e.signer_device_id)),
-                _ => None,
-            })
-            .collect())
     }
 
     /// Whether this workspace already carries a device certificate binding
@@ -1576,6 +1564,22 @@ impl EventStore {
             tx.commit()?;
             return Ok(false);
         }
+        // A pruned event fetched again: the same copy is a witness only,
+        // never a new row; another copy under the id is kept beside the
+        // tombstone (the fold decides), never in the log's own place.
+        match self.tombstoned(env)? {
+            log_hygiene::Tombstoned::Same => {
+                self.note_lamport_witness(env)?;
+                tx.commit()?;
+                return Ok(false);
+            }
+            log_hygiene::Tombstoned::Other => {
+                self.keep_beside_tombstone(env, sealed_epoch)?;
+                tx.commit()?;
+                return Ok(false);
+            }
+            log_hygiene::Tombstoned::No => {}
+        }
         if authored && self.forks_chain(env)? {
             return Err(EventStoreError::StaleDraft);
         }
@@ -1612,6 +1616,9 @@ impl EventStore {
                 sealed_epoch,
             ],
         )?;
+        if authored {
+            self.mark_authored(env)?;
+        }
         tx.commit()?;
         Ok(true)
     }
@@ -2285,21 +2292,29 @@ impl EventStore {
     /// a device `signer_key` returns a key for (the caller's certified,
     /// non-revoked devices of `account`): anyone else can stamp any account
     /// on what they sign. A delivery address only: what is dropped there is
-    /// sealed to keys verified on the config log. Newest by `(lamport,
-    /// event_id)`, never by row: an old event pulled again is a new row.
+    /// sealed to keys verified on the config log.
+    ///
+    /// Newest by the signed envelope time, then event id: the stamps are read
+    /// across every log of the workspace, and a lamport counts within one log
+    /// only (a busy chat's lamport says nothing against a quiet one's). The
+    /// time is the signer's own clock, and the signer is the account's own
+    /// device, so only the account itself can misdate its address. Never by
+    /// row: an old event pulled again is a new row.
     pub fn latest_contact_of(
         &self,
         workspace_id: Uuid,
         account: Uuid,
         signer_key: &dyn Fn(Uuid) -> Option<Vec<u8>>,
     ) -> Result<Option<String>> {
-        let envs = self.query_envelopes(
-            "SELECT envelope_json FROM (SELECT 0 AS t, event_id, workspace_id, envelope_json FROM events \
-             UNION ALL SELECT 1, event_id, workspace_id, envelope_json FROM equivocations) \
+        let mut envs = self.query_envelopes(
+            "SELECT envelope_json FROM (SELECT 0 AS t, event_id, workspace_id, timestamp AS ts, envelope_json FROM events \
+             UNION ALL SELECT 1, event_id, workspace_id, json_extract(envelope_json, '$.timestamp'), envelope_json FROM equivocations) \
              WHERE workspace_id = ?1 AND envelope_json LIKE '%\"contact\":\"%' \
-             ORDER BY COALESCE(json_extract(envelope_json, '$.lamport'), 0) DESC, event_id DESC, t LIMIT 200",
+             ORDER BY julianday(ts) DESC, event_id DESC, t LIMIT 200",
             [workspace_id.to_string()],
         )?;
+        // Exact, past the index's floating-point day.
+        envs.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then(b.event_id.cmp(&a.event_id)));
         Ok(envs.into_iter().find_map(|e| {
             let key = e.signer_device_id.and_then(signer_key)?;
             ligus_core::crypto::verify_envelope(&e, &key).ok()?;
@@ -2461,41 +2476,6 @@ impl EventStore {
         }
     }
 
-    /// The newest `sessionSnapshot` on a log by `(lamport, event_id)`, if
-    /// any, as that key (a legacy event without a lamport counts as 0).
-    fn latest_snapshot_key(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<(i64, String)>> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT COALESCE(json_extract(envelope_json, '$.lamport'), 0), event_id FROM events \
-                 WHERE session_id = ?1 AND workspace_id = ?2 AND kind = 'sessionSnapshot' \
-                 ORDER BY COALESCE(json_extract(envelope_json, '$.lamport'), 0) DESC, event_id DESC LIMIT 1",
-                [session_id.to_string(), workspace_id.to_string()],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()?)
-    }
-
-    /// How many events of a log sort after its newest snapshot in fold
-    /// order `(lamport, event_id)` — drives periodic re-snapshotting. Not by
-    /// row: an old event pulled again lands as a new row but isn't new.
-    pub fn rows_since_last_snapshot(&self, workspace_id: Uuid, session_id: Uuid) -> Result<i64> {
-        let n = match self.latest_snapshot_key(workspace_id, session_id)? {
-            Some((lamport, event_id)) => self.conn.query_row(
-                "SELECT COUNT(*) FROM events WHERE session_id = ?1 AND workspace_id = ?2 \
-                 AND (COALESCE(json_extract(envelope_json, '$.lamport'), 0), event_id) > (?3, ?4)",
-                rusqlite::params![session_id.to_string(), workspace_id.to_string(), lamport, event_id],
-                |r| r.get::<_, i64>(0),
-            )?,
-            None => self.conn.query_row(
-                "SELECT COUNT(*) FROM events WHERE session_id = ?1 AND workspace_id = ?2",
-                [session_id.to_string(), workspace_id.to_string()],
-                |r| r.get::<_, i64>(0),
-            )?,
-        };
-        Ok(n)
-    }
-
     /// Workspaces that hold events but aren't `keep` and that `own_device`
     /// never signed an event in, with their event counts — what
     /// [`purge_foreign_workspaces`](Self::purge_foreign_workspaces) would drop.
@@ -2649,6 +2629,8 @@ impl EventStore {
             )?;
             tx.execute("DELETE FROM events WHERE workspace_id = ?1", [&ws_s])?;
             tx.execute("DELETE FROM equivocations WHERE workspace_id = ?1", [&ws_s])?;
+            tx.execute("DELETE FROM pruned_events WHERE workspace_id = ?1", [&ws_s])?;
+            tx.execute("DELETE FROM dispatch_processed WHERE workspace_id = ?1", [&ws_s])?;
             for room in rooms.iter().filter(|r| ligus_core::room_workspace_id(r) == *ws) {
                 tx.execute("DELETE FROM sync_cursor WHERE workspace = ?1", [room])?;
                 tx.execute("DELETE FROM pushed WHERE workspace = ?1", [room])?;
@@ -2664,14 +2646,21 @@ impl EventStore {
         Ok(doomed)
     }
 
-    /// One-time maintenance: delete `messageChunkReceived` rows whose message
-    /// already has a `messageCompleted` (the completed body supersedes them).
-    /// Shrinks DBs written before per-token persistence was removed; projection
-    /// is unaffected. A pruned chunk stays a lamport witness (its id, lamport,
+    /// Delete the `messageChunkReceived` copies whose message already has a
+    /// `messageCompleted` in its log (the completed body supersedes them);
+    /// projection is unaffected. Each pruned copy leaves a tombstone
+    /// (`pruned_events`, see `log_hygiene`), so the same copy fetched again
+    /// is never stored again, and stays a lamport witness (its id, lamport,
     /// log head and chain link, `ligus_core::lamport`): an event here or one
     /// still to arrive from a device that held the chunk may count from it,
-    /// and without it that event would be held. Returns rows removed.
+    /// and without it that event would be held. Hosts call
+    /// [`EventStore::prune_if_due`], which runs this at most daily. Returns
+    /// the log rows removed.
     pub fn prune_superseded_chunks(&mut self) -> Result<usize> {
+        self.prune_superseded_chunks_at(storage_v2::now_ms())
+    }
+
+    pub(crate) fn prune_superseded_chunks_at(&mut self, now: i64) -> Result<usize> {
         fn message_id_of(json: &str) -> Option<String> {
             // SessionEvent variant fields keep snake_case (the enum's
             // rename_all only renames variant tags, not their fields).
@@ -2705,33 +2694,35 @@ impl EventStore {
             return Ok(0);
         }
 
-        let mut doomed: Vec<(String, String)> = Vec::new(); // (workspace, event_id)
-        let mut witnesses: Vec<SessionEventEnvelope> = Vec::new();
-        {
-            let mut stmt = self.conn.prepare(
-                "SELECT workspace_id, session_id, event_id, envelope_json FROM events WHERE kind = 'messageChunkReceived' ORDER BY row_id",
-            )?;
+        // Chunks in the log, and chunks held only beside a tombstone (a
+        // different copy under an id pruned before).
+        let mut doomed: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new(); // (workspace, event_id)
+        for table in ["events", "equivocations"] {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT workspace_id, session_id, event_id, envelope_json FROM {table} WHERE kind = 'messageChunkReceived' ORDER BY row_id"
+            ))?;
             let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
             for row in rows {
                 let (ws, sid, event_id, json) = row?;
                 if message_id_of(&json).is_some_and(|m| completed.contains(&(ws.clone(), sid, m))) {
-                    if let Ok(env) = serde_json::from_str::<SessionEventEnvelope>(&json) {
-                        witnesses.push(env);
-                    }
-                    doomed.push((ws, event_id));
+                    doomed.insert((ws, event_id));
                 }
             }
         }
 
-        // Every other copy held under a pruned id goes with it (left alone,
-        // one would fold in the pruned chunk's place), a witness like it.
+        // Every copy held under a pruned id goes with it (left alone, one
+        // would fold in the pruned chunk's place), a witness and a tombstone
+        // like it.
         for (ws, event_id) in &doomed {
-            for env in self.query_envelopes("SELECT envelope_json FROM equivocations WHERE workspace_id = ?1 AND event_id = ?2 ORDER BY row_id", [ws, event_id])? {
-                witnesses.push(env);
+            let copies = self.query_envelopes(
+                "SELECT envelope_json FROM (SELECT 0 AS t, row_id AS o, envelope_json FROM events WHERE workspace_id = ?1 AND event_id = ?2 \
+                 UNION ALL SELECT 1, row_id, envelope_json FROM equivocations WHERE workspace_id = ?1 AND event_id = ?2) ORDER BY t, o",
+                [ws, event_id],
+            )?;
+            for env in &copies {
+                self.note_lamport_witness(env)?;
+                self.note_pruned(env, log_hygiene::SUPERSEDED_CHUNK, now)?;
             }
-        }
-        for env in &witnesses {
-            self.note_lamport_witness(env)?;
         }
         let mut removed = 0;
         for (ws, event_id) in &doomed {
@@ -2739,6 +2730,10 @@ impl EventStore {
             tx.execute("DELETE FROM equivocations WHERE workspace_id = ?1 AND event_id = ?2", [ws, event_id])?;
         }
         tx.commit()?;
+        if removed > 0 {
+            self.projections.lock().unwrap_or_else(|p| p.into_inner()).clear();
+            self.heads.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        }
         Ok(removed)
     }
 }
@@ -3069,18 +3064,21 @@ mod tests {
     }
 
     #[test]
-    fn messages_after_lists_every_message_a_pull_added_in_order() {
+    fn dispatch_takes_every_message_a_pull_added_in_order_once() {
         let (mut store, sid, wid) = seeded_store();
         let before = store.max_row_id().unwrap();
         let a = ChatMessage::new(MessageRole::User, "Alex", "@ligus status?");
         let b = ChatMessage::new(MessageRole::User, "Alex", "@coder run the tests");
         let (a_id, b_id) = (a.id, b.id);
-        store.append(sid, wid, SessionEvent::MessageAppended { message: a }).unwrap();
-        store.append(sid, wid, SessionEvent::SessionTitleChanged { title: "x".into() }).unwrap();
-        store.append(sid, wid, SessionEvent::MessageAppended { message: b }).unwrap();
+        store.ingest_next(&SessionEventEnvelope::new(sid, wid, 0, SessionEvent::MessageAppended { message: a })).unwrap();
+        store.ingest_next(&SessionEventEnvelope::new(sid, wid, 0, SessionEvent::SessionTitleChanged { title: "x".into() })).unwrap();
+        store.ingest_next(&SessionEventEnvelope::new(sid, wid, 0, SessionEvent::MessageAppended { message: b })).unwrap();
         let fixture = Some(FIXTURE_DEVICE);
-        assert_eq!(store.messages_after(before).unwrap(), vec![(wid, sid, a_id, fixture), (wid, sid, b_id, fixture)]);
-        assert!(store.messages_after(store.max_row_id().unwrap()).unwrap().is_empty());
+        assert_eq!(store.take_dispatch_candidates(before).unwrap(), vec![(wid, sid, a_id, fixture), (wid, sid, b_id, fixture)]);
+        assert!(store.take_dispatch_candidates(before).unwrap().is_empty(), "each once");
+        // What this device writes is never handed to dispatch.
+        store.append(sid, wid, SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", "mine") }).unwrap();
+        assert!(store.take_dispatch_candidates(before).unwrap().is_empty());
     }
 
     #[test]
@@ -3474,9 +3472,8 @@ mod tests {
             )
             .unwrap();
 
-        // One event (the "after" message) has landed since the snapshot, and a
-        // full projection still reconstructs the complete state.
-        assert_eq!(store.rows_since_last_snapshot(wid, sid).unwrap(), 1);
+        // A full projection still reconstructs the complete state (a later
+        // snapshot from an older writer is inert in the fold).
         let s = store.load_session(sid).unwrap().unwrap();
         assert_eq!(s.messages.len(), 4);
         assert_eq!(s.messages[3].body, "after");

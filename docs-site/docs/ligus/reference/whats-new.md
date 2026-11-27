@@ -4,6 +4,22 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## Unreleased
+
+### Changed
+
+- **Less work after launch, and old reply pieces stay gone.** The desktop
+  app cleaned up finished replies' streamed pieces on every launch, holding
+  up the app on a large database, and pieces fetched again from the relay
+  came back. It now cleans up at most once a day, a minute after launch, and
+  a piece it removed is never stored again. A reply streaming on another
+  device now updates every two seconds (sooner for long bursts) instead of
+  about every second; the finished reply is the same. Messages are answered once by id,
+  so one written offline is still answered when it arrives, and one signed
+  more than a day ago isn't. The first 0.5 start upgrades `ligus.db` (after
+  a backup); Ligus 0.4 then opens it read-only. See
+  [Pruned events and answered messages](../../operate/security/index.md#seeds-and-backups).
+
 ## 0.4.1
 
 Fixes for setting up and running agents: replies read in order, an agent's
