@@ -56,9 +56,9 @@ next start, if another program was reading at the time), so the seed
 doesn't linger on disk. After a downgrade, invites issued by 0.4 can't be
 turned into codes by the older version: issue them again.
 
-**Backups.** Before the 0.4 upgrade of its sync state, and before the
-cleanup of other workspaces' events, Ligus copies the whole database next to
-it (`ligus.db.bak-...`). A backup is a full copy, so it also holds the seeds
+**Backups.** Before the 0.4 upgrade of its sync state, the 0.5 upgrade of
+its log tables, and the cleanup of other workspaces' events, Ligus copies
+the whole database next to it (`ligus.db.bak-...`). A backup is a full copy, so it also holds the seeds
 the database held at the time. Ligus doesn't delete these by itself:
 `ligus doctor` lists each one with its path. Delete one once you no longer
 need the backup.
@@ -76,6 +76,19 @@ relay is set up for that room; otherwise that workspace fetches again from
 the start, which is safe and only takes longer. The upgrade runs when no
 other Ligus process has the data dir open, so restart `ligus serve` after
 upgrading the CLI.
+
+**Pruned events and answered messages.** Once a reply is finished, the
+pieces it streamed in are deleted from `ligus.db`, at most once a day and
+never while Ligus starts. Each deleted piece leaves a small record (its id
+and a digest, never its text), so a copy fetched again from the relay, after
+a sync starts over for example, is not stored again. A different copy under
+the same id is kept beside it and judged like any other copy. Ligus also
+records which messages it has handed to its agents, by id, so a message is
+answered once however late it arrives; one signed more than a day ago is
+never taken up by this path. Both records stay on the device and are never
+synced. The 0.5 upgrade that adds them runs when no other Ligus process has
+the data dir open; until then pruning waits. After it, Ligus 0.4 opens the
+data dir read-only (see the database version above).
 
 ## Encryption {#encryption}
 

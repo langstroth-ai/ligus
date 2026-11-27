@@ -20,8 +20,13 @@ use crate::secret_store::{SecretId, SecretStore};
 
 /// The schema version this build writes and knows (`PRAGMA user_version`):
 /// 0 on a database made before 0.4, 1 once the sync tables are keyed by
-/// relay and workspace (M1). A database with a higher one opens read-only.
-pub const SCHEMA_VERSION: i64 = 1;
+/// relay and workspace (M1, 0.4), 2 once pruned events leave tombstones and
+/// dispatch keeps the events it handled (M8 and M10, 0.5: see
+/// `log_hygiene`). A database with a higher one opens read-only.
+pub const SCHEMA_VERSION: i64 = 2;
+
+/// The version M1 leaves: the sync tables keyed by relay and workspace.
+pub const SYNC_SCHEMA_VERSION: i64 = 1;
 
 /// What a build says when its database was written by a newer one.
 pub const NEWER_DATA_MESSAGE: &str = "this data was written by a newer Ligus; update or use another data dir";
@@ -202,7 +207,8 @@ pub(super) fn shared_lock(db: &Path) -> Option<std::fs::File> {
 /// What [`EventStore::migrate_sync_tables`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncMigration {
-    /// The database is already at [`SCHEMA_VERSION`]: nothing to do.
+    /// The database is already past M1 ([`SYNC_SCHEMA_VERSION`]): nothing
+    /// to do.
     AlreadyDone,
     /// Migrated: the rooms whose state was copied (exactly one connection
     /// names each) and the rooms that start again from 0, with the backup
@@ -229,7 +235,7 @@ pub(super) fn stamp_if_nothing_to_migrate(conn: &Connection) -> rusqlite::Result
         Ok(!conn.prepare("SELECT 1 FROM sync_cursor UNION ALL SELECT 1 FROM pushed UNION ALL SELECT 1 FROM parked_bodies LIMIT 1")?.exists([])?)
     };
     if user_version(conn)? == 0 && empty()? {
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        conn.pragma_update(None, "user_version", SYNC_SCHEMA_VERSION)?;
     }
     Ok(())
 }
@@ -237,15 +243,24 @@ pub(super) fn stamp_if_nothing_to_migrate(conn: &Connection) -> rusqlite::Result
 /// A copy of the whole database next to it before M1 (`VACUUM INTO`); none
 /// in memory. One that fails part way is removed again.
 fn sync_backup(conn: &Connection) -> Result<Option<PathBuf>> {
+    backup_marked(conn, SYNC_BACKUP_MARK, "m1-backup")
+}
+
+/// A copy of the whole database next to it (`VACUUM INTO`), named
+/// `<db><mark><secs>-<nanos>-<pid>`; none in memory. One that fails part
+/// way is removed again. `hook` names the step for the test failure hooks.
+pub(super) fn backup_marked(conn: &Connection, mark: &str, hook: &str) -> Result<Option<PathBuf>> {
     let Some(db) = db_path(conn) else { return Ok(None) };
     super::check_upgrade_space(&db)?;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let mut name = db.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    name.push(format!("{SYNC_BACKUP_MARK}{}-{:09}-{}", now.as_secs(), now.subsec_nanos(), std::process::id()));
+    name.push(format!("{mark}{}-{:09}-{}", now.as_secs(), now.subsec_nanos(), std::process::id()));
     let path = db.with_file_name(name);
     let copied = conn.execute("VACUUM INTO ?1", [path.to_string_lossy()]).map(|_| ());
+    #[cfg(not(test))]
+    let _ = hook;
     #[cfg(test)]
-    let copied = if super::test_hooks::fails("m1-backup") { Err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL), None)) } else { copied };
+    let copied = if super::test_hooks::fails(hook) { Err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL), None)) } else { copied };
     if let Err(e) = copied {
         remove_backup(&path);
         return Err(e.into());
@@ -293,7 +308,7 @@ fn copy_sync_state(tx: &Connection, connections: &[(String, String)]) -> Result<
         tx.execute("INSERT OR IGNORE INTO sync_v2_rooms (room) VALUES (?1)", [&room])?;
         copied.push(room);
     }
-    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    tx.pragma_update(None, "user_version", SYNC_SCHEMA_VERSION)?;
     Ok((copied, reset))
 }
 
@@ -312,7 +327,7 @@ impl EventStore {
     /// M1 (identity model v2, section 11): key the durable sync state by
     /// (relay origin, workspace id). `connections` are this data dir's
     /// connections as (relay URL, room). Runs once (then the version is
-    /// [`SCHEMA_VERSION`]); only while this process holds the store alone
+    /// [`SYNC_SCHEMA_VERSION`]); only while this process holds the store alone
     /// (the lock file exclusive, so this connection must be the only one
     /// open in this process too): otherwise [`SyncMigration::Busy`] and it
     /// runs on a later start. One backup first; the copy and the version are
@@ -322,11 +337,16 @@ impl EventStore {
         if self.newer.is_some() {
             return Ok(SyncMigration::ReadOnly);
         }
-        if user_version(&self.conn)? >= SCHEMA_VERSION {
+        if user_version(&self.conn)? >= SYNC_SCHEMA_VERSION {
             return Ok(SyncMigration::AlreadyDone);
         }
-        // Exclusive: this connection's own shared hold becomes exclusive, or
-        // M1 waits for another start.
+        self.exclusively(|| self.migrate_sync_tables_locked(connections)).unwrap_or(Ok(SyncMigration::Busy))
+    }
+
+    /// Run `f` while this process holds the store alone: the lock file
+    /// exclusive (this connection's own shared hold becomes exclusive). `None`
+    /// when another connection holds it: the step waits for a later start.
+    pub(super) fn exclusively<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
         let db = db_path(&self.conn);
         let mut fresh = None;
         let lock = match (&self.lock, &db) {
@@ -341,24 +361,24 @@ impl EventStore {
             let _ = l.unlock();
             if l.try_lock().is_err() {
                 let _ = l.lock_shared();
-                return Ok(SyncMigration::Busy);
+                return None;
             }
         } else if db.is_some() {
-            return Ok(SyncMigration::Busy);
+            return None;
         }
-        let result = self.migrate_sync_tables_locked(connections);
+        let result = f();
         if let Some(l) = lock {
             let _ = l.unlock();
             if fresh.is_none() {
                 let _ = l.lock_shared();
             }
         }
-        result
+        Some(result)
     }
 
     fn migrate_sync_tables_locked(&self, connections: &[(String, String)]) -> Result<SyncMigration> {
         let _upgrade = super::upgrade_lock().lock().unwrap_or_else(|p| p.into_inner());
-        if user_version(&self.conn)? >= SCHEMA_VERSION {
+        if user_version(&self.conn)? >= SYNC_SCHEMA_VERSION {
             return Ok(SyncMigration::AlreadyDone);
         }
         let backup = if legacy_rooms(&self.conn)?.is_empty() { None } else { sync_backup(&self.conn)? };

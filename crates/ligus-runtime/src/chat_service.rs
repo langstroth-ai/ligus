@@ -168,6 +168,9 @@ pub struct ChatService {
     /// token (at most [`STREAM_HOLD`] bytes) is held back so a secret split
     /// across chunk boundaries is redacted whole before any of it is signed.
     stream_hold: std::collections::HashMap<Uuid, String>,
+    /// When each streaming reply last wrote a chunk to the log: chunks are
+    /// coalesced to at most one per [`CHUNK_EVERY`] or per [`CHUNK_BYTES`].
+    chunk_flushed: std::collections::HashMap<Uuid, std::time::Instant>,
     /// The dispatcher's wait clock (design repos-and-checkouts 11.4): per
     /// claim key, the holder and epoch this device last saw and since when,
     /// so "how long has this holder been silent" restarts at every new
@@ -181,6 +184,13 @@ pub struct ChatService {
 /// arrives (longer than any Ligus secret or common credential; see
 /// `append_chunk`).
 const STREAM_HOLD: usize = 512;
+
+/// A streaming reply writes at most one chunk per this long to the log
+/// (workspace model v3, 8.1: live text stays on the log, coalesced) ...
+pub const CHUNK_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// ... unless this much text is waiting: then it writes at once.
+pub const CHUNK_BYTES: usize = 4096;
 
 /// How long after its expiry an unredeemed box admission stays open before
 /// an Admin's device closes it naming no redemption (a lagging push).
@@ -232,6 +242,7 @@ impl ChatService {
             refusals: Default::default(),
             acting_agent: None,
             stream_hold: std::collections::HashMap::new(),
+            chunk_flushed: std::collections::HashMap::new(),
             dispatch_seen: std::collections::HashMap::new(),
             changes: ChangeFeed::default(),
         }
@@ -665,11 +676,17 @@ impl ChatService {
         &self.store
     }
 
-    /// One-time DB maintenance: drop chunk rows already superseded by a
-    /// completed message. Deliberately *not* called on the launch path — the
-    /// app defers it to a background task so it never blocks first paint.
+    /// Drop chunk rows already superseded by a completed message, each
+    /// leaving a tombstone (see [`EventStore::prune_superseded_chunks`]).
     pub fn prune_superseded_chunks(&mut self) -> std::result::Result<usize, EventStoreError> {
         self.store.prune_superseded_chunks()
+    }
+
+    /// [`Self::prune_superseded_chunks`] when a day has passed since the last
+    /// prune on this data dir ([`EventStore::prune_if_due`]). Never call it on
+    /// the launch path: hosts run it from a background task.
+    pub fn prune_if_due(&mut self) -> std::result::Result<Option<usize>, EventStoreError> {
+        self.store.prune_if_due()
     }
 
     /// Drop the events of every workspace outside `keep` that this device never
@@ -1305,12 +1322,29 @@ impl ChatService {
         Ok(id)
     }
 
+    /// Stream `chunk` of a reply begun with [`Self::begin_assistant_message`].
+    /// What reaches the log is coalesced: the first text at once, then at
+    /// most one chunk per [`CHUNK_EVERY`], or sooner once [`CHUNK_BYTES`]
+    /// are waiting; [`Self::complete_assistant_message`] writes the whole
+    /// body. (The local live view streams from the turn's own deltas.)
     pub fn append_chunk(
         &mut self,
         session_id: Uuid,
         workspace_id: Uuid,
         message_id: Uuid,
         chunk: impl Into<String>,
+    ) -> Result<()> {
+        self.append_chunk_at(session_id, workspace_id, message_id, chunk, std::time::Instant::now())
+    }
+
+    /// [`Self::append_chunk`] at `now` (tests drive the clock).
+    pub(crate) fn append_chunk_at(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        message_id: Uuid,
+        chunk: impl Into<String>,
+        now: std::time::Instant,
     ) -> Result<()> {
         // Envelope: mask credentials before they reach the synced log. A chunk
         // boundary can split one, and every chunk is a signed event members
@@ -1323,6 +1357,11 @@ impl ChatService {
             p.push_str(&chunk.into());
             p
         };
+        // Coalesce: wait for the interval or the byte budget.
+        let due = pending.len() >= CHUNK_BYTES || self.chunk_flushed.get(&message_id).is_none_or(|t| now.saturating_duration_since(*t) >= CHUNK_EVERY);
+        if !due {
+            return Ok(());
+        }
         let token_start = pending
             .char_indices()
             .rev()
@@ -1352,6 +1391,7 @@ impl ChatService {
         let (head, rest) = (head.to_string(), tail.to_string());
         *pending = rest;
         let chunk = self.redact_for_log(workspace_id, session_id, head);
+        self.chunk_flushed.insert(message_id, now);
         self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageChunkReceived { message_id, chunk })
     }
 
@@ -1366,9 +1406,7 @@ impl ChatService {
         self.stream_hold.remove(&message_id);
         self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageCompleted { message_id, body })?;
         self.agent_messages.remove(&message_id);
-        // A completed reply is a natural checkpoint — snapshot periodically so
-        // reopening a long chat replays only recent events (#3).
-        self.maybe_snapshot(session_id, workspace_id)?;
+        self.chunk_flushed.remove(&message_id);
         Ok(())
     }
 
@@ -1437,6 +1475,7 @@ impl ChatService {
             for (message_id, mut body) in stale {
                 // Text this process held back from the log (a trailing token)
                 // belongs to the body too, redacted whole.
+                self.chunk_flushed.remove(&message_id);
                 if let Some(held) = self.stream_hold.remove(&message_id) {
                     body.push_str(&held);
                     body = crate::guard_scan::redact_secrets(&body).0;
@@ -1471,28 +1510,6 @@ impl ChatService {
             workspace_id,
             SessionEvent::MessageRemoved { message_id },
         )?;
-        Ok(())
-    }
-
-    /// Number of events after the latest snapshot that triggers a re-snapshot.
-    const SNAPSHOT_EVERY: i64 = 200;
-
-    /// Write a fresh `SessionSnapshot` of the current projected state when the
-    /// session has accumulated enough events since the last one. Bounds replay
-    /// cost on long sessions; the snapshot is signed like any other event.
-    pub fn maybe_snapshot(&mut self, session_id: Uuid, workspace_id: Uuid) -> Result<()> {
-        if self.store.rows_since_last_snapshot(workspace_id, session_id)? < Self::SNAPSHOT_EVERY {
-            return Ok(());
-        }
-        if let Some(session) = self.load_in_unresolved(workspace_id, session_id)? {
-            self.append_signed(
-                session_id,
-                workspace_id,
-                SessionEvent::SessionSnapshot {
-                    session: Box::new(session),
-                },
-            )?;
-        }
         Ok(())
     }
 
@@ -1966,7 +1983,6 @@ impl ChatService {
             workspace_id,
             SessionEvent::ChannelCreated { channel: channel.clone() },
         )?;
-        self.maybe_snapshot(config_id, workspace_id)?;
         Ok((channel, default_chat))
     }
 
@@ -7233,11 +7249,12 @@ mod same_key_tests {
 
     /// Two computers of one person (the desktop and a terminal). The
     /// desktop's pruned reply chunks are pulled back from the relay later
-    /// (they land as new rows, after the events that follow them), and the
-    /// other computer posts in between. The desktop's next message still
-    /// sends: its chain link is its newest event by lamport, not the newest
-    /// row (that link is already taken, so every draft and every redraft of
-    /// it was refused as out of date).
+    /// (before tombstones they landed as new rows, after the events that
+    /// follow them; now they are witnesses only), and the other computer
+    /// posts in between. The desktop's next message still sends: its chain
+    /// link is its newest event by lamport, not the newest row (that link is
+    /// already taken, so every draft and every redraft of it was refused as
+    /// out of date).
     #[test]
     fn a_post_after_pruned_chunks_are_pulled_back_links_to_the_newest_event() {
         let (desk_dev, term_dev) = (Device::new(), Device::new());
@@ -7246,8 +7263,10 @@ mod same_key_tests {
         let chat = desk.create_chat("c", wid, "anthropic").unwrap();
         desk.post_user_message(chat.id, wid, "first").unwrap();
         let reply = desk.begin_assistant_message(chat.id, wid, "ligus", "anthropic", None, None).unwrap();
-        desk.append_chunk(chat.id, wid, reply, "Hello there ").unwrap();
-        desk.append_chunk(chat.id, wid, reply, "and more ").unwrap();
+        // Each its own chunk on the log (past the coalescing interval).
+        let t0 = std::time::Instant::now();
+        desk.append_chunk_at(chat.id, wid, reply, "Hello there ", t0).unwrap();
+        desk.append_chunk_at(chat.id, wid, reply, "and more ", t0 + CHUNK_EVERY).unwrap();
         desk.complete_assistant_message(chat.id, wid, reply, "Hello there and more").unwrap();
         desk.post_user_message(chat.id, wid, "second").unwrap();
         let chunks: Vec<SessionEventEnvelope> = desk
@@ -7264,9 +7283,10 @@ mod same_key_tests {
             term.store.ingest(e).unwrap();
         }
         let theirs = term.draft_signed(chat.id, wid, message("from the terminal".to_string())).unwrap();
-        // The relay hands the pruned chunks back, then the terminal's message.
+        // The relay hands the pruned chunks back (witnesses only: their
+        // tombstones), then the terminal's message.
         for e in &chunks {
-            assert!(desk.store.ingest(e).unwrap(), "pulled back as a new row");
+            assert!(!desk.store.ingest(e).unwrap(), "a pruned chunk was stored again");
         }
         assert!(desk.store.ingest(&theirs).unwrap());
         let me = desk.device_id();
@@ -7283,15 +7303,16 @@ mod same_key_tests {
         let envs = desk.store().list(chat.id).unwrap();
         let env = envs.iter().find(|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == third.id)).unwrap();
         assert_eq!(env.actor_stamp.as_ref().and_then(|s| s.prev), Some(newest), "links to its newest event");
-        assert_one_chain(&envs, chat.id, me);
+        // One chain, counting the chunks this device pruned (its witnesses).
+        assert_one_chain(&[envs.clone(), chunks.clone()].concat(), chat.id, me);
         // And again: the next one doesn't trip over it either.
         desk.post_user_message(chat.id, wid, "fourth").unwrap();
-        assert_one_chain(&desk.store().list(chat.id).unwrap(), chat.id, me);
+        assert_one_chain(&[desk.store().list(chat.id).unwrap(), chunks.clone()].concat(), chat.id, me);
     }
 
     /// Two computers of one person keep posting into one chat after the
     /// desktop's pruned reply chunks come back from the relay out of order
-    /// (as new rows, after everything that follows them). Twenty posts,
+    /// (witnesses only, behind their tombstones). Twenty posts,
     /// alternating, each synced to the other computer: every one sends (no
     /// draft is refused as stale), each computer's chain stays one line,
     /// and the log's newest event is the last post on both, whatever the
@@ -7306,8 +7327,9 @@ mod same_key_tests {
         let chat = desk.create_chat("c", wid, "anthropic").unwrap().id;
         desk.post_user_message(chat, wid, "first").unwrap();
         let reply = desk.begin_assistant_message(chat, wid, "ligus", "anthropic", None, None).unwrap();
-        for part in ["a ", "b ", "c "] {
-            desk.append_chunk(chat, wid, reply, part).unwrap();
+        let t0 = std::time::Instant::now();
+        for (i, part) in ["a ", "b ", "c "].into_iter().enumerate() {
+            desk.append_chunk_at(chat, wid, reply, part, t0 + CHUNK_EVERY * i as u32).unwrap();
         }
         desk.complete_assistant_message(chat, wid, reply, "a b c").unwrap();
         let chunks: Vec<SessionEventEnvelope> =
@@ -7317,9 +7339,10 @@ mod same_key_tests {
         for e in desk.store().envelopes_after_row(0).unwrap().1.iter().chain(&chunks) {
             term.store.ingest(e).unwrap();
         }
-        // Pulled back newest first: the oldest chunk is the newest row.
+        // Pulled back newest first: witnesses only (their tombstones), never
+        // rows again.
         for e in chunks.iter().rev() {
-            assert!(desk.store.ingest(e).unwrap(), "pulled back as a new row");
+            assert!(!desk.store.ingest(e).unwrap(), "a pruned chunk was stored again");
         }
         let mut cursors = (desk.store().max_row_id().unwrap(), term.store().max_row_id().unwrap());
         for i in 0..20 {
@@ -7342,7 +7365,11 @@ mod same_key_tests {
         // The other computer's posts reached the desktop's cursor too.
         cursors.0 = desk.store().max_row_id().unwrap();
         for svc in [&desk, &term] {
-            let envs = svc.store().list_in(wid, chat).unwrap();
+            // One chain each, counting the chunks the desktop pruned.
+            let mut envs = svc.store().list_in(wid, chat).unwrap();
+            if !envs.iter().any(|e| e.event_id == chunks[0].event_id) {
+                envs.extend(chunks.iter().cloned());
+            }
             assert_one_chain(&envs, chat, desk.device_id());
             assert_one_chain(&envs, chat, term.device_id());
             let bodies: Vec<String> = svc.load_in(wid, chat).unwrap().unwrap().messages.iter().filter(|m| m.body.starts_with("post ")).map(|m| m.body.clone()).collect();
@@ -7798,7 +7825,7 @@ mod workspace_log_tests {
                 _ => None,
             })
             .unwrap();
-        assert!(x.store().messages_after(before).unwrap().iter().any(|(w, s, m, _)| (*w, *s, *m) == (a, chat, genuine_msg)), "handed to dispatch");
+        assert!(x.store().take_dispatch_candidates(before).unwrap().iter().any(|(w, s, m, _)| (*w, *s, *m) == (a, chat, genuine_msg)), "handed to dispatch");
         let in_log = genuine.iter().filter(|e| e.session_id == chat).count();
         assert_eq!(x.store().list_in(a, chat).unwrap().len(), in_log);
         assert_eq!(bodies(&x.load_in(a, chat).unwrap()), Some(vec!["genuine".to_string()]));

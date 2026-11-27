@@ -31,7 +31,7 @@ const STORAGE: &str = "a migration or prune scan";
 /// `(file under src/, function or const, why row order is right)`.
 const ALLOWED: &[(&str, &str, &str)] = &[
     ("event_store.rs", "migrate_event_ids_per_workspace", STORAGE),
-    ("event_store.rs", "prune_superseded_chunks", STORAGE),
+    ("event_store.rs", "prune_superseded_chunks_at", STORAGE),
     ("event_store.rs", "rows_sig", CURSOR),
     ("event_store.rs", "max_row_id", CURSOR),
     ("event_store.rs", "max_equivocation_row", CURSOR),

@@ -13379,6 +13379,16 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
             Ok(_) => {}
             Err(e) => tracing::warn!(target: "sync", "upgrading the sync state failed; it runs again on the next launch: {e}"),
         }
+        // Workspace model v3 (M8, M10): tombstones for pruned events and
+        // the set of messages dispatch handled. After M1, under the same
+        // rule (only while this is the only connection).
+        match service.store().migrate_log_hygiene() {
+            Ok(ligus_runtime::event_store::HygieneMigration::Migrated { backup, tombstones, processed }) => {
+                tracing::info!(target: "sync", backup = ?backup, tombstones, processed, "pruned events now leave tombstones");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(target: "sync", "upgrading the local log tables failed; it runs again on the next launch: {e}"),
+        }
     }
     // The private local workspace skips governance authz (solo, never-synced), so
     // an identity churn can't lock the sole user out of routine actions in their
@@ -13790,7 +13800,9 @@ async fn sync_pull_once(
                 // ownership, host binding, busy guard, the cross-device claim.
                 // Every message of the pull, not only each chat's last: two
                 // posts a few ms apart arrive together and both need answers.
-                let arrived = store.messages_after(before_row).unwrap_or_default();
+                // Every message this device hasn't handled yet (by event id,
+                // within a day of its signed time), however low it sorts.
+                let arrived = store.take_dispatch_candidates(before_row).unwrap_or_default();
                 dispatch_synced_messages(app, arrived);
                 // Wake every live workflow driver so a stage suspended on a
                 // remote reply (or a remote gate vote) reacts within sync
@@ -16791,22 +16803,33 @@ pub fn run() {
             }
             clock.phase("auth, passkeys and fs watcher");
 
-            // Deferred one-time DB maintenance (chunk-row shrink). Kept off the
-            // launch path entirely: we wait a few seconds so first paint and the
-            // frontend's initial queries finish, then prune during idle. This is
-            // why startup no longer stalls on a large carried-over ligus.db.
+            // Chunk prune: at most once a day per data dir (the store keeps
+            // when it last ran), never on the launch path. First checked a
+            // minute after launch, then hourly while the app runs.
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                    let Some(state) = handle.try_state::<AppState>() else { return };
+                    if let Ok(mut svc) = state.service.lock() {
+                        match svc.prune_if_due() {
+                            Ok(Some(removed)) if removed > 0 => tracing::info!(target: "event_store", removed, "pruned superseded chunk rows"),
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!(target: "event_store", "pruning superseded chunks: {e}"),
+                        }
+                    }
+                    drop(state);
+                    std::thread::sleep(std::time::Duration::from_secs(59 * 60));
+                });
+            }
+            // Deferred one-time DB maintenance, off the launch path: we wait a
+            // few seconds so first paint and the frontend's initial queries
+            // finish.
             {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     if let Some(state) = handle.try_state::<AppState>() {
-                        if let Ok(mut svc) = state.service.lock() {
-                            if let Ok(removed) = svc.prune_superseded_chunks() {
-                                if removed > 0 {
-                                    eprintln!("pruned {removed} superseded chunk rows");
-                                }
-                            }
-                        }
                         // One-time cleanup after the room-scoping fix: events of a
                         // workspace this device isn't in (and never wrote in) that
                         // an older client pushed into a shared room. Backed up first.

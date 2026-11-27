@@ -964,8 +964,10 @@ it.
       so a device keeps every event it refuses, for any reason, as an inert
       witness (its id, lamport, log head and chain link, kept by that whole
       structure, so a forged copy of an id never shadows the genuine one),
-      and every chunk it prunes too: whatever another device accepted and
-      counted from, this one counts from as well. A device never counts its
+      and every chunk it prunes too (with a tombstone, so the same copy
+      fetched again stays a witness and is never stored again): whatever
+      another device accepted and counted from, this one counts from as
+      well. A device never counts its
       own next event from a witness (it doesn't push the events it
       refuses). What can still hold: a relay or peer that withholds an
       event from one device holds there the events that count from it,

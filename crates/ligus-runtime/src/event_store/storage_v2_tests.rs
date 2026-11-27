@@ -137,7 +137,7 @@ fn m1_copies_a_single_relay_room_after_a_backup_and_runs_once() {
     assert!(store.legacy_parked_bodies("team").unwrap().is_empty(), "a copied room's bodies are drained from the copy");
     // Another relay's state for the same workspace starts at 0.
     assert_eq!(store.sync_cursor(&team_key("https://other.example")).unwrap(), 0);
-    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(store.schema_version().unwrap(), SYNC_SCHEMA_VERSION);
 
     // The old tables are unchanged, for a 0.3 process or a downgrade.
     let old = old_build(&db);
@@ -266,7 +266,7 @@ fn m1c_an_older_process_writing_beside_the_upgrade() {
     }
     writer.join().unwrap();
     let store = EventStore::open(&db).unwrap();
-    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(store.schema_version().unwrap(), SYNC_SCHEMA_VERSION);
     let old = old_build(&db);
     assert_eq!(count(&old, "SELECT last_fetched_seq FROM sync_cursor WHERE workspace = 'team'"), 299, "the older process's last write");
     assert_eq!(count(&old, "SELECT COUNT(*) FROM pushed WHERE workspace = 'team'"), 202);

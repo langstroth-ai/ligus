@@ -193,7 +193,8 @@ fn config() -> Config {
 /// data a newer Ligus wrote stops here with exit 3 (`ligus doctor` reports it
 /// instead), and opening it once moves the redeem key seeds to the secret
 /// store (M2). Then the sync state is keyed by relay and workspace (M1),
-/// when this process has the store alone; otherwise on a later start.
+/// and pruned events get tombstones (M8, M10), when this process has the
+/// store alone; otherwise on a later start.
 fn prepare_store(cfg: &Config, command: &str) -> Result<()> {
     let db = cfg.data_dir.join("ligus.db");
     if !db.exists() {
@@ -226,6 +227,15 @@ fn prepare_store(cfg: &Config, command: &str) -> Result<()> {
         }
         Ok(_) => {}
         Err(e) => eprintln!("ligus: upgrading the local sync state failed, it runs again on the next start: {e}"),
+    }
+    // Workspace model v3 (M8, M10): tombstones for pruned events and the
+    // messages dispatch handled. After M1, under the same rule.
+    match store.migrate_log_hygiene() {
+        Ok(ligus_runtime::event_store::HygieneMigration::Migrated { backup: Some(b), .. }) => {
+            eprintln!("ligus: upgraded the local log tables (backup: {})", b.display());
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("ligus: upgrading the local log tables failed, it runs again on the next start: {e}"),
     }
     Ok(())
 }

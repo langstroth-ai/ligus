@@ -57,6 +57,33 @@ pub(crate) fn copy_key(e: &SessionEventEnvelope) -> CopyKey {
     (e.signer_device_id, e.signature.clone(), crate::crypto::canonical_preimage(e))
 }
 
+/// A digest of a copy's [`CopyKey`]: equal for two envelopes exactly when
+/// the fold counts them as the same copy (a re-encoded or re-sealed copy of
+/// an event has its digest). What a device keeps of an event it pruned, so
+/// a copy fetched again is known without its bytes. Lower-case hex SHA-256.
+pub fn copy_digest(e: &SessionEventEnvelope) -> String {
+    use sha2::{Digest, Sha256};
+    let (signer, signature, preimage) = copy_key(e);
+    let mut h = Sha256::new();
+    match signer {
+        Some(d) => {
+            h.update([1u8]);
+            h.update(d.as_bytes());
+        }
+        None => h.update([0u8]),
+    }
+    match signature {
+        Some(s) => {
+            h.update([1u8]);
+            h.update((s.len() as u64).to_be_bytes());
+            h.update(&s);
+        }
+        None => h.update([0u8]),
+    }
+    h.update(&preimage);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// One kept copy as the fold tells them apart: its event id, and `0` for an
 /// id kept under a single copy, else its place among the id's kept copies
 /// (from 1, in the order of their [`CopyKey`]s).
