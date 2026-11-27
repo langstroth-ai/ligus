@@ -48,6 +48,25 @@ pub struct WorkspaceAgent {
     /// Tell the owner when someone else uses this agent.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub notify_on_use: bool,
+    /// What the agent runs (workspace model v3, 5.2): sticky, so an older
+    /// client's whole-record upsert without it keeps it; it always agrees
+    /// with `runtime_id`, which wins when they differ
+    /// (`crate::agent_run::merge_upsert`). Under rules 3 only the mirror
+    /// `{source: "runtime:<runtime_id>"}` with a display hint. `None` =
+    /// never written (read [`WorkspaceAgent::effective_run`]).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::agent_run::de_run")]
+    pub run: Option<crate::agent_run::AgentRun>,
+    /// Where the agent may run (5.3): sticky like `run`, and always agreeing
+    /// with `host_id`, which wins when they differ. `None` = never written
+    /// (read [`WorkspaceAgent::effective_placement`]).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::agent_run::de_placement")]
+    pub placement: Option<crate::agent_run::Placement>,
+    /// The fold's, never written: the host the placement names is gone (its
+    /// owner left the workspace, so rules 3 cleared `host_id`). The agent
+    /// runs nowhere until someone places it again; it never turns into
+    /// "the owner's devices" (5.3). See [`WorkspaceAgent::is_host_gone`].
+    #[serde(skip)]
+    pub host_gone: bool,
 }
 
 /// `WorkspaceAgent::access` values.
@@ -230,6 +249,9 @@ impl WorkspaceAgent {
             access: String::new(),
             limits: AgentLimits::default(),
             notify_on_use: false,
+            run: None,
+            placement: None,
+            host_gone: false,
         }
     }
 

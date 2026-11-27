@@ -20,6 +20,7 @@
 import * as fx from "./fixtures";
 import { setupMock } from "./setup";
 import { approvalsMock } from "./approvals";
+import { linkMock } from "./link";
 
 const params = new URLSearchParams(window.location.search);
 const scenario = params.get("scenario") ?? "default";
@@ -60,6 +61,8 @@ function handle(cmd: string, args: Args): unknown {
   if (setup.handled) return setup.value;
   const approvals = approvalsMock(cmd, args);
   if (approvals.handled) return approvals.value;
+  const link = linkMock(cmd, args);
+  if (link.handled) return link.value;
   switch (cmd) {
     case "export_theme":
       return `/Users/you/Downloads/${String(args?.fileName ?? "theme.toml")}`;
@@ -288,9 +291,16 @@ function handle(cmd: string, args: Args): unknown {
     case "set_avatar":
       profile.avatar = (args?.avatar as string | null) ?? null;
       return null;
+    case "first_run_workspace":
+      return { id: "ws-first", name: String(args?.name ?? "My workspace"), kind: "room", active: true, iconUrl: null };
+    case "recovery_key_create":
+      return "orbit maple harbor velvet canyon ember lattice quill meadow pilot raven sable tundra violet willow amber cobalt delta fjord garnet hazel indigo juniper kestrel";
+    case "invite_link_hint":
+      return false;
     case "security_status":
       return {
-        passkeys: [{ credentialId: "pk1", recovery: false }, { credentialId: "rk1", recovery: true }],
+        // The first run (?scenario=onboarding) starts with no passkey yet.
+        passkeys: flags.empty ? [] : [{ credentialId: "pk1", recovery: false }, { credentialId: "rk1", recovery: true }],
         rules: flags.rules3 ? 2 : 3,
         keyVersion: 2,
         secretBackend: "keychain",

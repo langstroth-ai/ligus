@@ -28,10 +28,10 @@ so each reader sees the one that matches the docs' colour scheme:
 | Files | What it shows | Used by |
 |---|---|---|
 | `desktop-overview-*` | Full window: a chat with agents handing work to each other, the Review pane with a proposal, its diff and votes | `index.md`, `ligus/index.md` |
-| `desktop-onboarding-identity-*` | Onboarding step 1: name and safety code | `getting-started/first-launch.md`, `features/onboarding.md` |
+| `desktop-onboarding-identity-*` | The earlier first run's name step (kept for old links) | — |
 | `desktop-onboarding-agent-*` | Onboarding: choose your agent | `getting-started/first-launch.md` |
-| `desktop-onboarding-team-*` | Onboarding: Team & sync | `features/onboarding.md` |
-| `desktop-onboarding-appearance-*` | Onboarding: palette and mode | `getting-started/first-launch.md` |
+| `desktop-onboarding-team-*` | The earlier first run's Team & sync step (kept for old links) | — |
+| `desktop-onboarding-appearance-*` | The earlier first run's appearance step (kept for old links) | — |
 | `desktop-inbox-*` | The Inbox with every kind of item | `features/inbox.md` |
 | `desktop-review-*` | Review pane: a proposal, its diff, one of two approvals | `features/right-rail.md` |
 | `desktop-tools-*` | Agents & tools pane | `features/right-rail.md` |

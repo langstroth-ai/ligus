@@ -27,6 +27,9 @@ vi.mock("@/lib/ipc", () => ({
   recoveryKeyCreate: vi.fn(),
   getConnectionSettings: vi.fn(),
   openExternal: vi.fn(async () => {}),
+  inviteLinkHint: vi.fn(async () => false),
+  linkRequestStatus: vi.fn(async () => ({ phase: "idle" })),
+  onLinkFlowChanged: vi.fn(async () => () => {}),
 }));
 
 vi.mock("@/components/Toast", () => ({
@@ -116,5 +119,51 @@ describe("AddWorkspaceModal relay choice", () => {
     expect(ipc.createWorkspace).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Make a Personal workspace" }));
     await waitFor(() => expect(ipc.createWorkspace).toHaveBeenCalledWith("Personal"));
+  });
+});
+
+describe("AddWorkspaceModal invite guard", () => {
+  beforeEach(() => vi.clearAllMocks());
+  const hint = ipc.inviteLinkHint as unknown as ReturnType<typeof vi.fn>;
+  const join = ipc.joinWorkspace as unknown as ReturnType<typeof vi.fn>;
+
+  it("hints to link this device for an invite that looks like your own, and still joins", async () => {
+    getConn.mockResolvedValue(conn("https://relay.acme.example"));
+    hint.mockResolvedValue(true);
+    join.mockResolvedValue({ id: "w2", name: "Acme", kind: "room", active: true, iconUrl: null });
+    const onClose = vi.fn();
+    renderIt(onClose);
+    await userEvent.click(screen.getByRole("button", { name: "Join" }));
+    await userEvent.type(screen.getByPlaceholderText("hivews1:…"), "hivews1:abc");
+    expect(await screen.findByTestId("invite-link-hint")).toHaveTextContent(
+      "Looks like you already use Ligus. Link this device instead",
+    );
+    expect(hint).toHaveBeenLastCalledWith("hivews1:abc");
+    // A hint, not a refusal: Join still works.
+    await userEvent.click(screen.getByRole("button", { name: "Join workspace" }));
+    await waitFor(() => expect(join).toHaveBeenCalledWith("hivews1:abc"));
+  });
+
+  it("opens the link screen from the hint, and Back returns", async () => {
+    getConn.mockResolvedValue(conn("https://relay.acme.example"));
+    hint.mockResolvedValue(true);
+    renderIt();
+    await userEvent.click(screen.getByRole("button", { name: "Join" }));
+    await userEvent.type(screen.getByPlaceholderText("e.g. K7P2QX"), "K7P2QX");
+    await userEvent.click(await screen.findByRole("button", { name: "Link this device instead" }));
+    await screen.findByTestId("link-this-device");
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByPlaceholderText("e.g. K7P2QX")).toBeInTheDocument();
+    expect(join).not.toHaveBeenCalled();
+  });
+
+  it("shows nothing for someone else's invite", async () => {
+    getConn.mockResolvedValue(conn("https://relay.acme.example"));
+    hint.mockResolvedValue(false);
+    renderIt();
+    await userEvent.click(screen.getByRole("button", { name: "Join" }));
+    await userEvent.type(screen.getByPlaceholderText("hivews1:…"), "hivews1:abc");
+    await waitFor(() => expect(hint).toHaveBeenCalled());
+    expect(screen.queryByTestId("invite-link-hint")).toBeNull();
   });
 });

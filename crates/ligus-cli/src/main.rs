@@ -755,7 +755,7 @@ fn status_report(cfg: &Config) -> serde_json::Value {
     let join = if is_box {
         "admit this box: ligus admit request, an Admin approves it (desktop: workspace menu > Admit a box), then ligus admit redeem <code> (ligus help box)"
     } else if stored.is_none() {
-        "a serve or worker box: ligus admit request (ligus help box); a person's own CLI: ligus enroll --file ./invite (ligus help quickstart)"
+        "already use Ligus on another device: ligus devices request; first device with Ligus: ligus enroll --file ./invite (ligus help quickstart); a serve or worker box: ligus admit request (ligus help box)"
     } else {
         "a person's own CLI: ligus enroll --file ./invite (ligus help quickstart); for a box use a fresh data dir and ligus admit request (ligus help box)"
     };
@@ -3595,8 +3595,11 @@ mod cli_tests {
         assert!(r["workspace"]["relayProblem"].as_str().unwrap().contains("no relay URL"));
         assert!(IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir)).load().unwrap().is_none());
         assert!(!cfg.data_dir.join("ligus.db").exists());
-        // No identity yet: both ways in, the box's first.
-        assert!(r["next"].as_str().unwrap().starts_with("a serve or worker box: ligus admit request"), "{r}");
+        // No identity yet: the first run's two answers (link this computer,
+        // or a first device's invite), then a box's way in.
+        let next = r["next"].as_str().unwrap();
+        assert!(next.starts_with("already use Ligus on another device: ligus devices request; first device with Ligus: ligus enroll"), "{r}");
+        assert!(next.contains("a serve or worker box: ligus admit request"), "{r}");
         // A box is never told to enroll.
         admit::mark_box(&cfg).unwrap();
         let r = status_report(&cfg);

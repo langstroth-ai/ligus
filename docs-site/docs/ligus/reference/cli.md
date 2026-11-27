@@ -26,7 +26,7 @@ Topics:
 
 | Topic | Guide |
 |---|---|
-| `quickstart` | join a workspace from this machine with its invite and post a message |
+| `quickstart` | first device or another one: join or link this machine, then post a message |
 | `box` | an always-on `ligus serve` box: install, admit (`ligus admit request`, an Admin approves, `ligus admit redeem`), serve, pair; with `deploy/local/ligus-local` and a systemd unit or LaunchAgent |
 | `worker` | a worker host that answers mentions for the agents bound to it |
 | `phone` | pairing, **Add a phone** by scanning the desktop's code, and pasting the phone's code instead |
@@ -407,7 +407,7 @@ keeps the old answer (exit 4: the desktop, or `--recovery-words-file`).
 | `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>] [--dry-run]` | defines an agent. |
 | `ligus hosts [--json]` | lists workspace hosts (devices and workers) |
 | `ligus register-worker [--label <name>]` | registers this box as a worker host, prints its host id |
-| `ligus set-agent-host <agent> <host-id> [--dry-run]` | binds an agent to a host |
+| `ligus set-agent-host <agent> <host-id> [--dry-run]` | binds an agent to a host; refused (exit 6) when the host's record doesn't offer the model gateway the agent's runtime uses |
 | `ligus agent [name] [--runtime <id>]` | development responder: answers new un-mentioned or `@primary` messages (in a shared room only its operator's, unless `LIGUS_AGENT_OPEN_TO_MEMBERS=1`). Refuses to run unless `LIGUS_ALLOW_PERSONAL_AGENT` is set; use `ligus worker` in production |
 
 `<provider>` is one of `anthropic`, `openai`, `openrouter`, `ollama`,
