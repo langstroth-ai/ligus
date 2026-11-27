@@ -61,7 +61,9 @@ pub enum SessionEvent {
     /// Drop a message from the transcript (used by "regenerate" to replace the
     /// last assistant turn). Idempotent — removing an unknown id is a no-op.
     MessageRemoved { message_id: Uuid },
-    /// A device claims the right to answer `trigger_id` (a user message). Because
+    /// A device claims the right to answer `trigger_id`: despite its wire
+    /// name, a claim key ([`crate::turn_claim_key`]), which is the trigger
+    /// message itself for a turn with one responder. Because
     /// ownership is account-scoped, all of a person's online devices otherwise
     /// self-elect and double-answer. The fold applies events in canonical
     /// `(lamport, event_id)` order, so the FIRST claim seen per trigger wins

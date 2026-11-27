@@ -953,6 +953,7 @@ impl ChatService {
     /// refused here, with a clear error, instead of waiting in the outbox.
     pub(crate) fn store_authored(&self, env: &SessionEventEnvelope) -> Result<()> {
         refuse_workspace_keys(&env.payload)?;
+        refuse_old_record_shapes(env)?;
         if self.local_workspace_id != Some(env.workspace_id) {
             crate::event_store::syncable(env)?;
         }
@@ -1527,11 +1528,8 @@ impl ChatService {
         // Config hoist (§11): these records are workspace-level — target the
         // workspace-config log, not the calling chat's session.
         let session_id = self.ensure_workspace_config(workspace_id)?;
-        let mut agents = self
-            .load_in(workspace_id, session_id)?
-            .map(|s| s.workspace_agents)
-            .unwrap_or_default();
-        let Some(slot) = agents.iter_mut().find(|a| a.id == agent_id) else {
+        let config = self.workspace_config(workspace_id)?;
+        let Some(mut slot) = config.as_ref().and_then(|c| c.agent(agent_id)).cloned() else {
             return Err(ChatError::NotFound("unknown agent".into()));
         };
         // Owner-only: an unowned agent (empty owner) is editable by anyone who
@@ -1544,7 +1542,7 @@ impl ChatService {
         slot.avatar_url = avatar_url.filter(|u| !u.is_empty());
         // Only a plain hex color is kept (the fold drops anything else too).
         slot.avatar_color_hex = avatar_color_hex.filter(|c| ligus_core::agent::is_valid_color_hex(c));
-        let agent = slot.clone();
+        let agent = slot;
         self.append_signed(
             session_id,
             workspace_id,
@@ -1666,7 +1664,9 @@ impl ChatService {
         Ok(added)
     }
 
-    /// Claim the right to answer `trigger_id` (a user message), returning whether
+    /// Claim the right to answer the turn under claim key `trigger_id`
+    /// ([`ligus_core::turn_claim_key`]: the trigger message itself for a
+    /// turn with one responder; see [`Self::claim_turn_for`]), returning whether
     /// THIS device won. Ownership is account-scoped, so without this every online
     /// device of the responder's owner self-elects and double-answers. The first
     /// `TurnClaimed` in canonical fold order wins deterministically, so a device
@@ -3668,6 +3668,12 @@ impl ChatService {
         Ok(Some(session))
     }
 
+    /// The workspace's config log, folded and typed: members, agents,
+    /// runtimes, hosts and guards ([`ligus_core::views::WorkspaceConfig`]).
+    pub fn workspace_config(&self, workspace_id: Uuid) -> Result<Option<ligus_core::views::WorkspaceConfig>> {
+        Ok(self.load_in(workspace_id, workspace_config_session_id(workspace_id))?.map(ligus_core::views::WorkspaceConfig::new))
+    }
+
     /// [`Self::load_in`] without the render-time names: what a snapshot is
     /// written from, so no resolved name or picture is ever baked into the log.
     fn load_in_unresolved(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<ChatSession>> {
@@ -3701,72 +3707,12 @@ impl ChatService {
             Some(_) => ligus_core::WorkspaceAuthz::Timeline(&timeline),
             None => ligus_core::WorkspaceAuthz::NoConfigLog,
         };
-        let Some(mut session) = self.store.load_session_authorized(workspace_id, session_id, founder, local, ws)? else {
+        let Some(chat) = self.store.load_session_authorized(workspace_id, session_id, founder, local, ws)? else {
             return Ok(None);
         };
-        {
-            if let Some(cfg) = cfg {
-                // Members hoist onto the config log so the roster is workspace-wide.
-                // Dedup by member id; the config-log entry is the source of truth,
-                // so it *replaces* any same-id per-session member (role/title/index
-                // are governed workspace-wide). A per-session-only member (e.g. a
-                // pre-hoist `MemberAdded` or the `create_chat` creator seed) has no
-                // config counterpart, so it's preserved (union, don't drop).
-                // Dearth mode is workspace-wide: overlay it so a chat's envelope
-                // and human gates see it. While it is on, members only this chat
-                // knows about (never admitted on the config log) are dropped from
-                // its roster, except the chat's creator: the tight entrance.
-                session.guards.dearth = cfg.guards.dearth.clone();
-                // Auto-archive is workspace-wide (`proposal_archive`).
-                session.guards.proposal_archive = cfg.guards.proposal_archive;
-                // This chat's lockdown (self-medication) lives on the config log.
-                session.guards.chat_id = Some(session.id);
-                session.guards.lockdowns = cfg
-                    .guards
-                    .lockdowns
-                    .get(&session.id)
-                    .map(|l| std::iter::once((session.id, l.clone())).collect())
-                    .unwrap_or_default();
-                if session.guards.dearth_on().is_some() {
-                    let creator = session.creator_actor_id.clone();
-                    session.members.retain(|m| m.id == creator || cfg.members.iter().any(|c| c.id == m.id));
-                }
-                for m in cfg.members {
-                    if let Some(slot) = session.members.iter_mut().find(|x| x.id == m.id) {
-                        *slot = m;
-                    } else {
-                        session.members.push(m);
-                    }
-                }
-                for a in cfg.workspace_agents {
-                    if !session.workspace_agents.iter().any(|x| x.id == a.id) {
-                        session.workspace_agents.push(a);
-                    }
-                }
-                for s in cfg.loaded_skills {
-                    // Dedup by stable id (names are display-only) — consistent with
-                    // add_skill/remove_skill's identity key.
-                    if !session.loaded_skills.iter().any(|x| x.id == s.id) {
-                        session.loaded_skills.push(s);
-                    }
-                }
-                for v in cfg.vault_sources {
-                    if !session.vault_sources.iter().any(|x| x.raw_url() == v.raw_url()) {
-                        session.vault_sources.push(v);
-                    }
-                }
-                for r in cfg.workspace_runtimes {
-                    if !session.workspace_runtimes.iter().any(|x| x.id == r.id) {
-                        session.workspace_runtimes.push(r);
-                    }
-                }
-                for h in cfg.workspace_hosts {
-                    if !session.workspace_hosts.iter().any(|x| x.id == h.id) {
-                        session.workspace_hosts.push(h);
-                    }
-                }
-            }
-        }
+        // The workspace's config laid over the chat: one function for every
+        // reader (`ligus_core::views::ChatState::view`).
+        let mut session = ligus_core::views::ChatState::new(chat).view(cfg.map(ligus_core::views::WorkspaceConfig::new));
         // This device's measurement facts (P0.5), on top of the fold.
         self.overlay_facts(&mut session);
         Ok(Some(session))
@@ -3974,6 +3920,45 @@ pub fn refuse_workspace_keys(payload: &SessionEvent) -> Result<()> {
         return Err(ChatError::Unauthorized(ligus_core::NO_WORKSPACE_KEYS.to_string()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests that write what an older build wrote (see [`as_an_older_build`]).
+    static AS_AN_OLDER_BUILD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` writing as an older build did: the shapes
+/// [`refuse_old_record_shapes`] refuses are let through (tests only).
+#[cfg(test)]
+pub(crate) fn as_an_older_build<R>(f: impl FnOnce() -> R) -> R {
+    AS_AN_OLDER_BUILD.with(|c| c.set(true));
+    let r = f();
+    AS_AN_OLDER_BUILD.with(|c| c.set(false));
+    r
+}
+
+/// Shapes this build never authors, though it still folds them from older
+/// peers: the whole-list `AgentRosterUpdated`, `WorkspaceRuntimesUpdated` and
+/// `WorkspaceHostsUpdated` (one record at a time instead, so two people's
+/// concurrent edits don't overwrite each other), and an agent record on a
+/// chat's log (agents are the workspace's, on its config log; a chat copy
+/// would shadow the workspace's agent inside that chat).
+pub fn refuse_old_record_shapes(env: &SessionEventEnvelope) -> Result<()> {
+    #[cfg(test)]
+    if AS_AN_OLDER_BUILD.with(|c| c.get()) {
+        return Ok(());
+    }
+    let why = match &env.payload {
+        SessionEvent::AgentRosterUpdated { .. } | SessionEvent::WorkspaceRuntimesUpdated { .. } | SessionEvent::WorkspaceHostsUpdated { .. } => {
+            "whole-list records are not written any more: add, change or remove one record at a time"
+        }
+        SessionEvent::AgentUpserted { .. } | SessionEvent::AgentRemoved { .. } if env.session_id != workspace_config_session_id(env.workspace_id) => {
+            "agents are the workspace's: their records go on the workspace's config log, not a chat"
+        }
+        _ => return Ok(()),
+    };
+    Err(ChatError::Unauthorized(why.into()))
 }
 
 /// Map a session's transcript into provider wire turns, attributed for the
@@ -4218,12 +4203,53 @@ mod tests {
     fn hive_era_chat(svc: &mut ChatService, roster: Vec<WorkspaceAgent>) -> (Uuid, Uuid) {
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("HomeLab", wid, "claude-code").unwrap();
-        svc.append_signed(chat.id, wid, SessionEvent::AgentRosterUpdated { agents: roster }).unwrap();
+        // As those builds wrote it (this build never authors the shape).
+        as_an_older_build(|| svc.append_signed(chat.id, wid, SessionEvent::AgentRosterUpdated { agents: roster })).unwrap();
         let ask = ChatMessage::new(MessageRole::User, "Mara", "@hive what's the disk at?");
         svc.append_signed(chat.id, wid, SessionEvent::MessageAppended { message: ask }).unwrap();
         let reply = ChatMessage::new(MessageRole::Assistant, "Hive", "71% used.");
         svc.append_signed(chat.id, wid, SessionEvent::MessageAppended { message: reply }).unwrap();
         (wid, chat.id)
+    }
+
+    /// This build writes agents, runtimes and hosts one record at a time on
+    /// the workspace's config log: a whole-list event, or an agent record on
+    /// a chat's log, is refused before it is stored, while the same shapes
+    /// from an older peer still fold.
+    #[test]
+    fn whole_list_and_chat_level_agent_records_are_never_authored() {
+        let (mut svc, _pk) = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "anthropic").unwrap();
+        let cfg = workspace_config_session_id(wid);
+        let agent = WorkspaceAgent::new("helper", "anthropic");
+        for (log, payload) in [
+            (cfg, SessionEvent::AgentRosterUpdated { agents: vec![agent.clone()] }),
+            (cfg, SessionEvent::WorkspaceRuntimesUpdated { runtimes: Vec::new() }),
+            (cfg, SessionEvent::WorkspaceHostsUpdated { hosts: Vec::new() }),
+            (chat.id, SessionEvent::AgentRosterUpdated { agents: vec![agent.clone()] }),
+            (chat.id, SessionEvent::AgentUpserted { agent: agent.clone() }),
+            (chat.id, SessionEvent::AgentRemoved { agent_id: agent.id }),
+        ] {
+            let kind = payload.kind_str();
+            assert!(matches!(svc.append_signed(log, wid, payload), Err(ChatError::Unauthorized(_))), "{kind} on {log}");
+        }
+        let old_shape = |e: &SessionEventEnvelope| match &e.payload {
+            SessionEvent::AgentRosterUpdated { .. } | SessionEvent::WorkspaceRuntimesUpdated { .. } | SessionEvent::WorkspaceHostsUpdated { .. } => true,
+            SessionEvent::AgentUpserted { .. } | SessionEvent::AgentRemoved { .. } => e.session_id == chat.id,
+            _ => false,
+        };
+        assert!(!svc.store().envelopes_after_row(0).unwrap().1.iter().any(old_shape), "nothing stored");
+        // The per-record path, on the config log, whatever chat the caller is in.
+        svc.add_agent(chat.id, wid, agent.clone()).unwrap();
+        assert!(svc.store().list_in(wid, chat.id).unwrap().iter().all(|e| !matches!(e.payload, SessionEvent::AgentUpserted { .. })));
+        assert!(svc.load_in(wid, cfg).unwrap().unwrap().workspace_agents.iter().any(|a| a.id == agent.id));
+        // An older peer's chat-level copy still folds (and shadows in that chat).
+        let mut old = agent.clone();
+        old.name = "old copy".into();
+        as_an_older_build(|| svc.append_signed(chat.id, wid, SessionEvent::AgentUpserted { agent: old })).unwrap();
+        let view = svc.load_in(wid, chat.id).unwrap().unwrap();
+        assert_eq!(view.workspace_agents.iter().find(|a| a.id == agent.id).unwrap().name, "old copy");
     }
 
     #[test]
