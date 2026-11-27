@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 21fbf731b75a7b5656c876aa89835c4d1be361ad0d5f3111e360c81ec0a2493e # shrinks to prev = WorkspaceAgent { id: 00000000-0000-0000-0000-000000000007, name: "scout", runtime_id: "", owner_actor_id: "", role: "", avatar_color_hex: None, avatar_url: None, host_id: "", created_at: Timestamp(2026-11-27 2:39:43.762823703 +00:00:00), access: "", limits: AgentLimits { member_turns_per_day: None, usd_cents_per_day: None }, notify_on_use: false, run: None, placement: Some(ChatCreator), host_gone: false }, runtime = "ws-claude", host = "", keep = false, rules = Full
