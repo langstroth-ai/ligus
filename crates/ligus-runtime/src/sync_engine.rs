@@ -11,6 +11,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use ligus_core::ids::{RoomName, WorkspaceId};
 use ligus_core::{open_symmetric, seal_symmetric_kid, SealedEnvelope, SessionEventEnvelope};
 use serde_json::Value;
 use uuid::Uuid;
@@ -118,13 +119,16 @@ impl SyncAttention {
 /// move new data.
 pub struct SyncEngine {
     relay: RelayClient,
-    workspace: String,
-    /// The workspace ids whose events belong in this room — by default just
-    /// [`ligus_core::room_workspace_id`] of the room. The store is shared by every
-    /// workspace on the device (its local workspace, each joined room), so the
-    /// push scan only sends events stamped with one of these ids, and a fetched
-    /// event stamped with any other id is dropped rather than ingested.
-    scope: HashSet<Uuid>,
+    /// The relay's address for this workspace's logs: builds relay URLs and
+    /// names the room in logs, nothing else.
+    room: RoomName,
+    /// The workspace whose events belong in this room — by default
+    /// [`RoomName::workspace_id`]. The store is shared by every workspace on
+    /// the device (its local workspace, each joined room), so the push scan
+    /// only sends events stamped with this id, and a fetched event stamped
+    /// with any other id is dropped rather than ingested. Durable sync state
+    /// is kept by it, never by the room string.
+    workspace: WorkspaceId,
     /// Test-only: admit every workspace (fixtures that predate room scoping).
     #[cfg(test)]
     any_workspace: bool,
@@ -269,14 +273,14 @@ struct Judged {
 }
 
 impl SyncEngine {
-    pub fn new(relay: RelayClient, workspace: impl Into<String>) -> Self {
-        let workspace = workspace.into();
+    pub fn new(relay: RelayClient, room: impl Into<RoomName>) -> Self {
+        let room = room.into();
         crate::identity_verifier::warn_if_identity_mode_set();
-        let scope = HashSet::from([ligus_core::room_workspace_id(&workspace)]);
+        let workspace = room.workspace_id();
         Self {
             relay,
+            room,
             workspace,
-            scope,
             #[cfg(test)]
             any_workspace: false,
             seen: HashSet::new(),
@@ -373,8 +377,8 @@ impl SyncEngine {
     /// string. For a room whose events carry an id that isn't
     /// `room_workspace_id(room)` (tests, older fixtures). Exactly one workspace:
     /// a room never mixes workspaces.
-    pub fn with_room_workspace(mut self, workspace_id: Uuid) -> Self {
-        self.scope = HashSet::from([workspace_id]);
+    pub fn with_room_workspace(mut self, workspace_id: impl Into<WorkspaceId>) -> Self {
+        self.workspace = workspace_id.into();
         self
     }
 
@@ -384,14 +388,14 @@ impl SyncEngine {
         if self.any_workspace {
             return true;
         }
-        self.scope.contains(&workspace_id)
+        self.workspace.uuid() == workspace_id
     }
 
     /// Test-only: an engine that admits every workspace, for fixtures that
     /// stamp events with arbitrary workspace ids.
     #[cfg(test)]
-    pub(crate) fn unscoped(relay: RelayClient, workspace: impl Into<String>) -> Self {
-        let mut e = Self::new(relay, workspace);
+    pub(crate) fn unscoped(relay: RelayClient, room: impl Into<RoomName>) -> Self {
+        let mut e = Self::new(relay, room);
         e.any_workspace = true;
         e
     }
@@ -426,7 +430,7 @@ impl SyncEngine {
 
     /// The workspace this room's keys belong to (the commitment binds it).
     fn room_workspace(&self) -> Uuid {
-        self.scope.iter().next().copied().unwrap_or_else(|| ligus_core::room_workspace_id(&self.workspace))
+        self.workspace.uuid()
     }
 
     /// E2EE with only the passphrase-derived epoch-0 key: the solo,
@@ -489,7 +493,7 @@ impl SyncEngine {
         if !wanted || recent {
             return;
         }
-        match self.relay.fetch_keyring_rows(&self.workspace).await {
+        match self.relay.fetch_keyring_rows(&self.room).await {
             Ok(rows) => {
                 self.relay_rows = rows;
                 self.rows_fetched = Some(std::time::Instant::now());
@@ -646,7 +650,7 @@ impl SyncEngine {
                 j += 1;
             }
             let span = (due[j] - start + 1) as u32;
-            let page = self.relay.fetch_page(&self.workspace, start.saturating_sub(1), span).await?;
+            let page = self.relay.fetch_page(&self.room, start.saturating_sub(1), span).await?;
             let want: std::collections::HashSet<u64> = due[i..=j].iter().copied().collect();
             rows.extend(page.rows.into_iter().filter(|(seq, _)| want.contains(seq)));
             i = j + 1;
@@ -863,7 +867,7 @@ impl SyncEngine {
             // The key makes a re-push (after a refusal or a lost answer) the
             // same write to the relay, not a second copy.
             let key = self.push_key(env.event_id);
-            if let Err(e) = self.relay.push_value_keyed(&self.workspace, &body, Some(&key)).await {
+            if let Err(e) = self.relay.push_value_keyed(&self.room, &body, Some(&key)).await {
                 // `413`: this relay's cap is lower than this envelope; it never
                 // will take it. Set aside, as above, and go on.
                 if matches!(&e, RelayError::Status(413)) || e.refusal().is_some_and(|r| r.status == 413) {
@@ -883,7 +887,7 @@ impl SyncEngine {
                         // hour at least), so one refusal can't stop this
                         // room's writes until a restart.
                         let until = Some(std::time::Instant::now() + r.class().write_pause(r.retry_after));
-                        tracing::warn!(target: "sync", room = %self.workspace, code = %r.code, "relay refused writes: {}", r.user_message());
+                        tracing::warn!(target: "sync", room = %self.room, code = %r.code, "relay refused writes: {}", r.user_message());
                         self.write_pause = Some((r.clone(), until));
                         return Ok(());
                     }
@@ -903,7 +907,7 @@ impl SyncEngine {
     /// so neither this round nor a restart retries it, and the outbox moves
     /// on. It stays in this device's store.
     fn set_aside(&mut self, env: &SessionEventEnvelope, why: &str) {
-        tracing::error!(target: "sync", room = %self.workspace, event_id = %env.event_id, "an event too large for the relay is not sent: {why}");
+        tracing::error!(target: "sync", room = %self.room, event_id = %env.event_id, "an event too large for the relay is not sent: {why}");
         self.pending.push(env.event_id);
     }
 
@@ -936,12 +940,12 @@ impl SyncEngine {
                 self.last_fetched_seq
             }
         };
-        let page = self.relay.fetch_page(&self.workspace, after, self.page_limit).await?;
+        let page = self.relay.fetch_page(&self.room, after, self.page_limit).await?;
         // A fresh fold starts at the founder's seed (seq 1). A first envelope
         // past it means the relay expired or trimmed the room: say so.
         if after == 0 {
             if let Some(first) = page.rows.iter().map(|(seq, _)| *seq).min().filter(|s| *s > 1) {
-                tracing::warn!(target: "sync", room = %self.workspace, first, "room expired or truncated: its log starts past seq 1");
+                tracing::warn!(target: "sync", room = %self.room, first, "room expired or truncated: its log starts past seq 1");
                 self.truncated_at = Some(first);
             }
         }
@@ -1041,7 +1045,7 @@ impl SyncEngine {
             store.park_bodies(&self.sync_key(), &to_park)?;
         }
         if foreign > 0 {
-            tracing::warn!(room = %self.workspace, foreign, "dropped fetched events stamped with another workspace");
+            tracing::warn!(room = %self.room, foreign, "dropped fetched events stamped with another workspace");
         }
         // A body held on an earlier page of this walk still caps the cursor.
         if let Some(h) = self.walk_hold {
@@ -1092,7 +1096,7 @@ impl SyncEngine {
         if !to_hold.is_empty() {
             let ws = self.room_workspace_scope(&decoded);
             let n = store.hold_events(ws, &to_hold, now_ms())?;
-            tracing::debug!(room = %self.workspace, held = n, "holding fetched events until the roster can judge them");
+            tracing::debug!(room = %self.room, held = n, "holding fetched events until the roster can judge them");
             // Nothing else to do: a held trust or config event was judged
             // together with every other held event just now (a batch that
             // carries one is judged with the held table), and content can't
@@ -1148,7 +1152,7 @@ impl SyncEngine {
         // A replay of parked bodies: forget the ones that resolved.
         for seq in settled.into_iter().filter(|s| !parked_now.contains(s)) {
             if self.in_legacy_retry {
-                store.legacy_unpark(&self.workspace, seq)?;
+                store.legacy_unpark(&self.room, seq)?;
             } else {
                 store.unpark(&self.sync_key(), seq)?;
             }
@@ -1318,7 +1322,7 @@ impl SyncEngine {
             self.held_checked = Some(now);
             let n = store.expire_held(now_ms())?;
             if n > 0 {
-                tracing::warn!(room = %self.workspace, expired = n, "dropped held events that waited longer than 30 days");
+                tracing::warn!(room = %self.room, expired = n, "dropped held events that waited longer than 30 days");
             }
         }
         let workspaces: Vec<Uuid> = store.held_workspaces()?.into_iter().filter(|w| self.in_scope(*w)).collect();
@@ -1388,7 +1392,7 @@ impl SyncEngine {
         self.parked_ring = Some(fp);
         let key = self.sync_key();
         let parked = store.parked_bodies(&key)?;
-        let legacy = store.legacy_parked_bodies(&self.workspace)?;
+        let legacy = store.legacy_parked_bodies(&self.room)?;
         if parked.is_empty() && legacy.is_empty() {
             return Ok(0);
         }
