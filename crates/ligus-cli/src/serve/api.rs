@@ -29,6 +29,7 @@ use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
+use super::principal::Principal;
 use super::tunnel::TunnelPeer;
 use super::{dashboard, lab, pair, Shared};
 use ligus_runtime::display::shown;
@@ -673,32 +674,47 @@ fn unplaced(v: &mut Value) {
 }
 
 /// Who is asking, for the fields of a view that say "you" (a proposal's
-/// `myRole`, `myVote`, `canVote`, `isMine`; a set alternative's): through the
-/// tunnel, the member who holds the calling phone (its pairing's own
-/// workspace device, and the one person that device is certified for), never
-/// this box's own identity. Empty when this box can't place that phone (a
-/// pairing from before phone keys, a revoked phone, a person who isn't a
-/// member): the view then claims nothing for it. The operator and the
-/// direct-path bearer (one token every direct-path phone shares, tied to no
-/// phone) see this box's identity, as before.
-pub(super) fn viewer(s: &Shared) -> String {
-    match caller() {
-        Caller::Tunnel(pid) => tunnel_viewer(s, &pid),
-        _ => s.my_actor_id(),
+/// `myRole`, `myVote`, `canVote`, `isMine`; a set alternative's): the
+/// request's principal ([`principal`]): for a phone, through the tunnel or
+/// with its own direct-path credential, the member who holds it, never this
+/// box's own identity. Empty when this box can't place the phone (the
+/// shared direct-path token, a pairing from before phone keys, a person who
+/// isn't a member): the view then claims nothing for it. The operator sees
+/// this box's identity.
+pub(super) fn viewer(_s: &Shared) -> String {
+    principal().actor_id()
+}
+
+/// An event from the hub (built for this box's identity) as `who` sees it:
+/// its "you" fields recomputed from the chat it belongs to (a proposal's
+/// role and vote, a question's eligibility, a chat's unread count, a
+/// message's "mine" and `@you`).
+fn as_principal(s: &Shared, mut ev: super::hub::SseEvent, who: &Principal) -> super::hub::SseEvent {
+    let viewer = who.actor_id();
+    let viewer = viewer.as_str();
+    let id_at = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).and_then(|x| Uuid::parse_str(x).ok());
+    if ev.name == "chat.updated" {
+        let chat = ev.data.get("chat").and_then(|c| id_at(c, "id")).and_then(|c| s.lock().load_resolving(c).ok().flatten());
+        if let (Some(c), Some(dto)) = (chat, ev.data.get_mut("chat")) {
+            dto["unread"] = json!(s.unread(&c, who));
+        }
+        return ev;
     }
-}
-
-/// The member who holds the phone paired as `pid` (see [`viewer`]).
-pub(super) fn tunnel_viewer(s: &Shared, pid: &str) -> String {
-    let Some(device) = s.tunnel.as_ref().and_then(|t| t.registry.get(pid)).and_then(|r| r.device_id) else {
-        return String::new();
-    };
-    s.lock().phone_person(s.ws, device).map(|a| a.id).unwrap_or_default()
-}
-
-/// A proposal event from the hub (built for this box's identity) as `viewer`
-/// sees it: its "you" fields recomputed from the chat it belongs to.
-fn as_viewer(s: &Shared, mut ev: super::hub::SseEvent, viewer: &str) -> super::hub::SseEvent {
+    if matches!(ev.name, "message.created" | "message.done") {
+        let ids = ev.data.get("message").map(|m| (id_at(m, "chatId"), id_at(m, "id")));
+        let Some((Some(chat_id), Some(msg_id))) = ids else { return ev };
+        let (chat, links) = {
+            let svc = s.lock();
+            (svc.load_resolving(chat_id).ok().flatten(), svc.device_links(s.ws).unwrap_or_default())
+        };
+        if let Some(m) = chat.as_ref().and_then(|c| c.messages.iter().find(|m| m.id == msg_id)) {
+            let c = chat.as_ref().expect("found in it");
+            let mut dto = message_dto(chat_id, m, who.viewer());
+            add_requester(&mut dto, c, m, &who.me_in(c, &links));
+            ev.data["message"] = dto;
+        }
+        return ev;
+    }
     if ev.name == "ask.pending" {
         let chat_id = ev.data.get("ask").and_then(|a| a.get("chatId")).and_then(Value::as_str).and_then(|x| Uuid::parse_str(x).ok());
         let chat = chat_id.and_then(|c| s.lock().load_resolving(c).ok().flatten()).filter(|c| c.workspace_id == s.ws);
@@ -736,7 +752,12 @@ pub enum Caller {
     /// The operator on the box: `serve.operator.token`. Never in a pairing
     /// link or a tunnel answer, so no phone holds it.
     Operator,
-    /// The direct-path bearer, `serve.token`: every direct-path phone.
+    /// A paired phone on the direct path with its own credential
+    /// ([`Shared::direct_token_for`]; its pairing id).
+    Direct(String),
+    /// The shared direct-path token, `serve.token`: a phone paired before
+    /// per-phone credentials (or by a direct-only pairing link). It acts for
+    /// nobody ([`super::principal::Standing::Unresolved`]).
     Bearer,
     /// No credential (only `GET /v1/health` answers it).
     Anonymous,
@@ -748,6 +769,7 @@ impl Caller {
     pub fn key(&self) -> String {
         match self {
             Caller::Tunnel(pid) => format!("tunnel:{pid}"),
+            Caller::Direct(pid) => format!("direct:{pid}"),
             Caller::Operator => "operator".into(),
             Caller::Bearer => "bearer".into(),
             Caller::Anonymous => "anonymous".into(),
@@ -758,6 +780,15 @@ impl Caller {
 tokio::task_local! {
     /// The request's [`Caller`], for the handler [`auth`] runs.
     static CALLER: Caller;
+    /// The request's [`Principal`], resolved once by [`auth`].
+    static PRINCIPAL: Principal;
+}
+
+/// Who the request being handled acts for, resolved once by [`auth`]
+/// ([`super::principal`]). Outside a request (or off its task: a blocking
+/// closure) it is unresolved, which claims nothing.
+pub(super) fn principal() -> Principal {
+    PRINCIPAL.try_with(Clone::clone).unwrap_or_else(|_| Principal::unresolved())
 }
 
 /// The [`Caller`] of the request being handled. Outside a request (or off
@@ -862,22 +893,50 @@ async fn auth(State(s): S, mut req: Request, next: Next) -> Response {
             return ApiError(StatusCode::UNAUTHORIZED, "this phone's pairing was revoked".into()).into_response();
         }
         let caller = Caller::Tunnel(peer.pid.clone());
+        let who = s.principal_for(&caller);
         req.extensions_mut().insert(Authorized(true));
-        return generic_500(CALLER.scope(caller, next.run(req)).await).await;
+        return generic_500(CALLER.scope(caller, PRINCIPAL.scope(who, next.run(req))).await).await;
     }
-    // D5: the operator's token first, then the phones' (both compared in
-    // constant time; they never match each other).
+    // D5: the operator's token first, then a phone's own direct-path
+    // credential, then the shared one (all compared in constant time; they
+    // never match each other).
     let caller = match bearer(req.headers()) {
         Some(t) if pair::token_matches(&s.operator_token(), t) => Caller::Operator,
-        Some(t) if pair::token_matches(&s.token(), t) => Caller::Bearer,
-        _ => Caller::Anonymous,
+        Some(t) => match s.direct_phone(t) {
+            Some(pid) => Caller::Direct(pid),
+            None if pair::token_matches(&s.token(), t) => Caller::Bearer,
+            None => Caller::Anonymous,
+        },
+        None => Caller::Anonymous,
     };
     let ok = caller != Caller::Anonymous;
     if !ok && req.uri().path() != "/v1/health" {
         return ApiError(StatusCode::UNAUTHORIZED, "missing or invalid bearer token".into()).into_response();
     }
+    let shared_token = caller == Caller::Bearer;
+    if shared_token {
+        note_shared_token_once();
+    }
+    let who = s.principal_for(&caller);
     req.extensions_mut().insert(Authorized(ok));
-    generic_500(CALLER.scope(caller, next.run(req)).await).await
+    let mut resp = generic_500(CALLER.scope(caller, PRINCIPAL.scope(who, next.run(req))).await).await;
+    if shared_token {
+        // An app that knows this header fetches its own credential over the
+        // tunnel; an older one keeps working, for workspace-wide items only.
+        resp.headers_mut().insert(super::principal::DIRECT_CREDENTIAL_HEADER, axum::http::HeaderValue::from_static("shared"));
+    }
+    resp
+}
+
+/// Say once per process, in the box's log, that a phone still uses the
+/// shared direct-path token (and so sees workspace-wide items only).
+fn note_shared_token_once() {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        println!(
+            "ligus serve: a phone is using the shared direct-path token, so it sees workspace-wide items only (no DMs, previews or personal counts). Updating the Ligus app on it fixes this."
+        );
+    }
 }
 
 pub fn router(shared: Arc<Shared>) -> Router {
@@ -992,16 +1051,26 @@ async fn health(State(s): S, Extension(Authorized(ok)): Extension<Authorized>) -
         v["workspace"] = json!(s.cfg.room);
         v["deviceLabel"] = json!(s.opts.label);
         v["identity"] = s.identity_json();
+        // Who this request acts for (`box`, `person` or `unresolved`), and
+        // what to do about an unresolved phone.
+        let who = principal();
+        v["principal"] = json!(who.standing_name());
+        if let Some(via) = &who.via_host {
+            v["principalVia"] = json!(via);
+        }
+        if who.is_unresolved() {
+            v["hint"] = json!(super::principal::UNRESOLVED_HINT);
+        }
     }
     Json(v)
 }
 
 async fn list_chats(State(s): S) -> ApiResult<Json<Value>> {
-    let me = s.my_actor_id();
-    let mut chats = s.phone_chats_for(s.dm_viewer())?;
+    let who = principal();
+    let mut chats = s.phone_chats_for(who.dm_viewer())?;
     chats.sort_by_key(|c| std::cmp::Reverse(updated_at(c)));
     let ctx = PhoneChatCtx::new(&s);
-    let list: Vec<Value> = chats.iter().map(|c| ctx.dto(&s, c, s.unread(c, &me))).collect();
+    let list: Vec<Value> = chats.iter().map(|c| ctx.dto(&s, c, s.unread(c, &who))).collect();
     Ok(Json(json!({ "chats": list })))
 }
 
@@ -1087,7 +1156,7 @@ pub(super) fn load_phone_chat(s: &Shared, raw: &str) -> ApiResult<ChatSession> {
     if let Some(c) = s.workspace_chats()?.into_iter().find(|c| c.id == id) {
         return Ok(c);
     }
-    let who = s.dm_viewer();
+    let who = principal().dm_viewer();
     s.dm_chats().into_iter().find(|c| c.id == id && who.sees(c)).ok_or_else(|| ApiError::not_found("chat"))
 }
 
@@ -1109,14 +1178,13 @@ async fn list_messages(State(s): S, Path(id): Path<String>, Query(page): Query<P
         }
         None => &msgs[msgs.len().saturating_sub(limit)..],
     };
+    let who = principal();
     if let Some(last) = slice.last() {
-        s.mark_read(&chat, last.id);
+        s.mark_read(&chat, last.id, &who);
     }
-    let (links, viewer, author) = {
-        let svc = s.lock();
-        (svc.device_links(s.ws).unwrap_or_default(), Viewer::of(&svc), svc.author().clone())
-    };
-    let me = super::notify::Me::in_chat(&author, &chat, &links);
+    let links = s.lock().device_links(s.ws).unwrap_or_default();
+    let viewer = who.viewer();
+    let me = who.me_in(&chat, &links);
     // A duplicate answer the dispatcher fenced (`superseded`) isn't shown.
     let list: Vec<Value> = slice
         .iter()
@@ -1176,17 +1244,18 @@ async fn post_message(State(s): S, Path(id): Path<String>, Json(req): Json<NewMe
         }
         Err(e) => return Err(e.into()),
     };
-    s.mark_read_after_post(chat.id, message.id);
+    let who = principal();
+    s.mark_read_after_post(chat.id, message.id, &who);
     s.after_write();
-    Ok(Json(json!({ "message": message_dto(chat.id, &message, Viewer::of(&s.lock())) })))
+    Ok(Json(json!({ "message": message_dto(chat.id, &message, who.viewer()) })))
 }
 
 impl Shared {
     /// The phone has seen its own message.
-    fn mark_read_after_post(&self, chat: Uuid, message: Uuid) {
+    fn mark_read_after_post(&self, chat: Uuid, message: Uuid, who: &Principal) {
         let loaded = self.lock().load_resolving(chat);
         if let Ok(Some(s)) = loaded {
-            self.mark_read(&s, message);
+            self.mark_read(&s, message, who);
         }
     }
 }
@@ -1207,7 +1276,7 @@ pub(super) fn hosts_and_agents(s: &Shared) -> ApiResult<(Vec<ligus_core::Workspa
     Ok((hosts, config))
 }
 
-pub(super) fn agent_dto(s: &Shared, a: &ligus_core::WorkspaceAgent, config: &ChatSession, hosts: &[ligus_core::WorkspaceHost]) -> Value {
+pub(super) fn agent_dto(s: &Shared, a: &ligus_core::WorkspaceAgent, config: &ChatSession, hosts: &[ligus_core::WorkspaceHost], who: &Principal) -> Value {
     // What the agent runs on: a workspace runtime, or — when hosted here —
     // this box's own runtime for it (see `worker::local_runtimes`).
     let mut known = config.workspace_runtimes.clone();
@@ -1251,12 +1320,15 @@ pub(super) fn agent_dto(s: &Shared, a: &ligus_core::WorkspaceAgent, config: &Cha
         // Empty host = the agent owner's own device (the desktop's default).
         v["hostLabel"] = json!("Owner's device");
     }
-    // Agent access controls: whether this box's person may use the agent
-    // (the phone greys it out with the reason), and who may.
-    let (links, roster, me) = {
+    // Agent access controls: whether the request's person may use the agent
+    // (the phone greys it out with the reason), and who may. What a phone
+    // this box can't place sends is written as this box (it has no
+    // phone-signed post), so its answer is the box's: what will happen.
+    let (links, roster, box_id) = {
         let svc = s.lock();
         (svc.device_links(s.ws).unwrap_or_default(), svc.workspace_roster(s.ws).ok(), svc.author().id.clone())
     };
+    let me = if who.is_unresolved() { box_id } else { who.actor_id() };
     let person = links.person(&me).to_string();
     let role = ligus_runtime::agent_access::person_role(roster.as_ref(), &links, &person);
     let why = ligus_runtime::agent_access::availability(a, &links, &me, role);
@@ -1308,7 +1380,8 @@ fn usage_rows(rows: &[ligus_runtime::event_store::AgentUsageRow]) -> Vec<Value> 
 
 async fn list_agents(State(s): S) -> ApiResult<Json<Value>> {
     let (hosts, config) = hosts_and_agents(&s)?;
-    let list: Vec<Value> = config.workspace_agents.iter().map(|a| agent_dto(&s, a, &config, &hosts)).collect();
+    let who = principal();
+    let list: Vec<Value> = config.workspace_agents.iter().map(|a| agent_dto(&s, a, &config, &hosts, &who)).collect();
     Ok(Json(json!({ "agents": list })))
 }
 
@@ -1320,7 +1393,7 @@ async fn list_agents(State(s): S) -> ApiResult<Json<Value>> {
 async fn workspace_guards(State(s): S) -> ApiResult<Json<Value>> {
     let g = s.lock().workspace_guards(s.ws)?;
     let chats = s.workspace_chats()?;
-    let me = s.my_actor_id();
+    let me = principal().actor_id();
     let dearth = g.dearth_on().map(|d| {
         json!({
             "reason": d.reason,
@@ -1368,19 +1441,20 @@ async fn workspace_guards(State(s): S) -> ApiResult<Json<Value>> {
         "pendingMembers": g.pending_members.len(),
         "lockedChats": locked,
         "coordinator": coordinator,
-        "myRole": role_name(role),
+        "myRole": if me.is_empty() { Value::Null } else { json!(role_name(role)) },
         "canClearLockdown": human,
     })))
 }
 
-/// This box's identity's role on the workspace roster (the config log, which
-/// every chat's roster is hoisted from) and whether it may clear a lockdown:
+/// `me`'s role on the workspace roster (the config log, which every chat's
+/// roster is hoisted from; none for a phone this box can't place, empty
+/// `me`) and whether they may clear a lockdown:
 /// a human member at Contributor or above — the same rule the core's
 /// authorization applies to `ChatLockdownCleared`.
 fn my_standing(s: &Shared, me: &str) -> ApiResult<(WorkspaceRole, bool)> {
     let (_, config) = hosts_and_agents(s)?;
     let role = config.role_of(me);
-    Ok((role, can_clear_lockdown(&config.members, me, role)))
+    Ok((role, !me.is_empty() && can_clear_lockdown(&config.members, me, role)))
 }
 
 /// The lockdown-clear rule: a human member at Contributor or above. A
@@ -1454,7 +1528,7 @@ async fn set_agent_host(
             .ok_or_else(|| ApiError::not_found("workspace config"))?;
         drop(svc);
         let agent = config.workspace_agents.iter().find(|a| a.id == agent_id).ok_or_else(|| ApiError::not_found("agent"))?;
-        agent_dto(&s, agent, &config, &hosts)
+        agent_dto(&s, agent, &config, &hosts, &principal())
     };
     s.after_write();
     Ok(Json(json!({ "agent": v })))
@@ -1560,6 +1634,11 @@ fn add_note(s: &Shared, chat: &ChatSession, pid: Uuid, text: &str, request_chang
 /// phone-signed note exists yet.
 pub const PHONE_NOTE_REFUSAL: &str = "Add notes from your desktop for now.";
 
+/// What a phone is told when it asks to send a proposal back to its agent:
+/// that records a "Sent to the agent to revise." note and posts the
+/// instruction, both as the box, and neither has a phone-signed form yet.
+pub const PHONE_REVISE_REFUSAL: &str = "Send it back to the agent from your desktop for now.";
+
 /// Refuse a note a phone (through the tunnel, or on the direct path) asks
 /// for; only the operator on the box writes one as the box ([`add_note`]).
 fn refuse_phone_note() -> ApiResult<()> {
@@ -1595,8 +1674,8 @@ async fn list_asks(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>
     let me = viewer(&s);
     let mut asks: Vec<&ligus_core::flow::AskState> = chat.flow.asks.values().collect();
     asks.sort_by_key(|a| std::cmp::Reverse(a.ask.at_ms));
-    // Opening the cards lifts the push cap (agent questions 6.5).
-    s.ask_pushes.lock().unwrap_or_else(|e| e.into_inner()).opened();
+    // Opening the cards lifts this person's push cap (agent questions 6.5).
+    s.ask_pushes_opened(&principal());
     let svc = s.lock();
     Ok(Json(json!({ "asks": asks.into_iter().take(50).map(|a| ask_card_dto(&svc, &chat, a, &me)).collect::<Vec<_>>() })))
 }
@@ -1629,12 +1708,18 @@ struct ChangesReq {
 /// hosts that agent answers it, like any mention. The revision the turn files
 /// is linked back (`parentId` / `supersededBy`) when it arrives
 /// ([`Shared::link_revisions`]). An optional `note` is added first as a change
-/// request, so the phone can do both in one tap.
+/// request. The operator's only: from a phone, every one of these writes
+/// would be the box's, not its person's, so it is refused
+/// ([`PHONE_REVISE_REFUSAL`], or [`PHONE_NOTE_REFUSAL`] with a note) and
+/// nothing is written.
 async fn request_changes(State(s): S, Path(id): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
     let req: ChangesReq = optional_json(&body)?;
     let note = req.note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
     if note.is_some() {
         refuse_phone_note()?;
+    }
+    if !is_operator() {
+        return Err(ApiError(StatusCode::FORBIDDEN, PHONE_REVISE_REFUSAL.into()));
     }
     let (chat, p) = find_proposal(&s, &id)?;
     if p.superseded_by.is_some() {
@@ -1692,13 +1777,14 @@ async fn request_changes(State(s): S, Path(id): Path<String>, body: Bytes) -> Ap
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(p.id, PendingRevision { chat: chat.id, agent: agent.id, requested_at });
-    s.mark_read_after_post(chat.id, message.id);
+    let who = principal();
+    s.mark_read_after_post(chat.id, message.id, &who);
     s.after_write();
     let chat = load_chat(&s, &chat.id.to_string()).unwrap_or(chat);
     let updated = chat.proposals.iter().find(|q| q.id == p.id).cloned().unwrap_or(current);
     Ok(Json(json!({
         "proposal": proposal_dto_as(&chat, &updated, &viewer(&s)),
-        "message": message_dto(chat.id, &message, Viewer::of(&s.lock())),
+        "message": message_dto(chat.id, &message, who.viewer()),
     })))
 }
 
@@ -1797,12 +1883,14 @@ async fn tunnel_push(State(s): S, peer: Option<Extension<TunnelPeer>>, body: Byt
     Ok(Json(json!({ "enabled": enabled, "previews": previews })))
 }
 
-/// `GET /v1/tunnel/direct` → `{"token", "url"}`: the direct-path bearer
-/// token, for a paired phone (tunnel only). The token rotates when a phone
-/// device is revoked; the phones that remain learn the new one here.
+/// `GET /v1/tunnel/direct` → `{"token", "url"}`: the calling phone's own
+/// direct-path credential (tunnel only), so its direct-path requests act for
+/// its person ([`super::principal`]). It changes when the box's direct-path
+/// secret rotates (a phone device was revoked); the phones that remain
+/// learn the new one here.
 async fn tunnel_direct(State(s): S, peer: Option<Extension<TunnelPeer>>) -> ApiResult<Json<Value>> {
-    let _ = tunnel_phone(&s, peer)?;
-    Ok(Json(json!({ "token": s.token(), "url": s.opts.server_url() })))
+    let (_, rec) = tunnel_phone(&s, peer)?;
+    Ok(Json(json!({ "token": s.direct_token_for(&rec.pid), "url": s.opts.server_url() })))
 }
 
 /// `GET /v1/revocations`: what this box did about each revoked phone device
@@ -1900,18 +1988,16 @@ fn event_stream(
         rx.mark_unchanged();
         rx
     });
-    // Proposal events are built for this box's identity; a phone through the
-    // tunnel gets them as its own person sees them (see `viewer`).
-    let viewer = peer.as_ref().map(|Extension(p)| tunnel_viewer(&s, &p.pid)).filter(|v| *v != s.my_actor_id());
+    // Events are built for this box's identity; a phone gets them as its
+    // own person sees them, and one this box can't place as nobody's (see
+    // [`principal`], resolved when the stream opened).
+    let who = principal();
     // A DM's events (its messages, typing) reach only a phone whose person
-    // is in it, as its list does ([`Shared::dm_viewer`]).
-    let dms = s.dm_viewer();
+    // is in it, as its list does.
+    let dms = who.dm_viewer();
     let personal = {
         let s = s.clone();
-        move |ev: super::hub::SseEvent| match viewer.as_deref() {
-            Some(v) => as_viewer(&s, ev, v),
-            None => ev,
-        }
+        move |ev: super::hub::SseEvent| if who.is_box() { ev } else { as_principal(&s, ev, &who) }
     };
     let shown = {
         let s = s.clone();

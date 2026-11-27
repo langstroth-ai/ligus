@@ -888,16 +888,29 @@ impl TunnelHost {
     }
 
     pub fn push_all_at(&self, content: &PushContent, at: Instant) -> usize {
-        self.push_some_at(content, None, at)
+        self.push_some_at(content, None, &[], at)
+    }
+
+    /// [`Self::push_all`], with no preview for the phones in `unplaced`
+    /// (phones this box can't place as a person: owner decision, a phone
+    /// nobody can be told is behind gets workspace-wide notices without
+    /// their content).
+    pub fn push_everyone(&self, content: &PushContent, unplaced: &[String]) -> usize {
+        self.push_some_at(content, None, unplaced, Instant::now())
+    }
+
+    #[cfg(test)]
+    pub fn push_everyone_at(&self, content: &PushContent, unplaced: &[String], at: Instant) -> usize {
+        self.push_some_at(content, None, unplaced, at)
     }
 
     /// [`Self::push_all`], to the active phones among `pids` only (a "you"
     /// notice goes only to its person's phones).
     pub fn push_to(&self, content: &PushContent, pids: &[String]) -> usize {
-        self.push_some_at(content, Some(pids), Instant::now())
+        self.push_some_at(content, Some(pids), &[], Instant::now())
     }
 
-    fn push_some_at(&self, content: &PushContent, only: Option<&[String]>, at: Instant) -> usize {
+    fn push_some_at(&self, content: &PushContent, only: Option<&[String]>, unplaced: &[String], at: Instant) -> usize {
         let phones: Vec<PhoneRecord> = self
             .registry
             .list()
@@ -927,6 +940,10 @@ impl TunnelHost {
             if verdict != push::Verdict::Send {
                 println!("push: {} to {who} {}", content.kind, verdict.describe());
                 continue;
+            }
+            let mut rec = rec;
+            if unplaced.contains(&rec.pid) {
+                rec.push_previews = false;
             }
             if self.send_push(&rec, content, false, None) {
                 sent += 1;

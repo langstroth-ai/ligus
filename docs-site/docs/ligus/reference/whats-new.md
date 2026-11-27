@@ -4,6 +4,30 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## Unreleased
+
+### Changed
+
+- **Each phone on a box sees its own.** When several people's phones use
+  the same box, unread counts, what's been read, "you" in People, which
+  agents you may use and which notifications are yours are now worked out
+  for the person each phone belongs to, not for the box. Read positions are
+  kept on the box per person, so your phones share them, and an upgrade
+  doesn't mark old messages unread. On your network, each phone now uses its
+  own token, which the app fetches over the relay. See
+  [Who the box acts for](../features/phone-app.md#who-the-box-acts-for).
+- **A phone the box can't tell is someone's gets only the workspace's.**
+  A phone paired directly only, added before phones had their own keys, or
+  still on an older app on your network sees the workspace's chats and
+  proposals but no direct messages, nothing marked as its person's, and
+  notifications without message text (none meant for one person). Updating
+  the app fixes it for a phone that also has a relay pairing. Before, such a
+  phone saw the box's own view, including every direct message the box held.
+- **Send to agent to revise is for your desktop for now.** From a phone, the
+  box would record it and send the instruction as itself, not as you, so it
+  says "Send it back to the agent from your desktop for now." and changes
+  nothing, as it already did for notes.
+
 ## 0.4.1
 
 Fixes for setting up and running agents: replies read in order, an agent's
