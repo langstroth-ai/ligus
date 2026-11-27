@@ -74,6 +74,33 @@ Each agent is told exactly who it is, its runtime, and the roster of other
 participants — so a BYOA model stops insisting it's the Primary Runtime.
 You generally don't need to re-introduce the cast each message.
 
+## When an agent's turn doesn't run {#turn-outcome}
+
+A turn runs where its agent is placed: on its owner's own devices, or on the
+host it was sent to (a box, a worker, someone's computer). It never runs
+anywhere else on its own, and never on another model. When it can't run yet,
+your message gets one quiet line under it, on your own devices only:
+
+| Line | What it means |
+|---|---|
+| "@coder runs on build-1, which is offline. It will answer when build-1 is back." | Queued: the host is offline. |
+| "build-1 has been offline for a while. @coder will answer when it's back." | The host has stayed offline for two minutes; it still answers when it's back. |
+| "build-1 was removed from the workspace. Choose where @coder runs." | The host is gone (removed, signed out, or its owner left). Place the agent again. |
+| "@coder can't run on build-1: it doesn't have 'codex-pro'." | The host says it can't run the agent as asked (a runtime or key it doesn't have). |
+| "@coder can't run on Ana's MacBook: it runs only Ana's agents." | A person's computer runs only its own person's agents unless they turn on **Run other people's agents on this computer**. |
+| "@coder can't run here: this device has no key for 'anthropic'." | Your device would run it but doesn't have its runtime's key. ⋯ → **Use Claude Code instead** runs this one turn on Claude Code. |
+| "@coder answers from Ana's devices. It will answer when one of them is online." | Someone else's agent waits for its owner's devices. |
+
+**Run here this time** is on the line when the agent is yours and this
+device can run it as it is: it runs that one turn here, once. The host,
+when it's back, sees the turn taken and doesn't answer it again. Only the
+agent's owner's devices can do this.
+
+A finished reply that didn't post normally says so under it: **Canceled**
+(stopped, or cut off by a restart) or **Failed**, with the model and host
+that ran it. A reply is shown where and when it finished, after anything
+posted while it was being written.
+
 ## Roles & titles
 
 Members have two independent axes:

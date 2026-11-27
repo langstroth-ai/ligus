@@ -446,6 +446,7 @@ nobody can register a host under someone else's computer.
 
 ```toml
 list_tools = false              # a person's computer: don't list its tools
+run_others_agents = true        # a person's computer: run other people's agents placed here
 
 [[local]]                       # a local model server; the address stays here
 name = "ollama"
@@ -471,6 +472,12 @@ secret = "acme"
 - `list_tools = false` empties a person's computer's list (the desktop's
   **Settings → Models → List this computer's tools**). Workers and boxes
   always list theirs.
+- `run_others_agents = true` lets a person's computer run agents other
+  people placed on it (the desktop's **Settings → Models → Run other
+  people's agents on this computer**). Off by default: it runs only its own
+  person's agents, and says in its beat which others it won't run, so their
+  chats read "can't run on Ana's MacBook: it runs only Ana's agents".
+  Workers and boxes run any agent placed on them.
 - An invalid `host.toml` stops `ligus serve` and `ligus worker`, with the
   line that's wrong.
 
@@ -490,7 +497,12 @@ ligus worker [--label <name>] [--health-listen <addr>]
 
 Registers this box as a host (label: `--label`, else `$HOSTNAME`, else
 `worker`), syncs, and every 3 s answers queued mentions for the agents bound
-to it, backlog included. It publishes a liveness beat on the relay's presence
+to it, backlog included. An agent it can't run as asked (a runtime it
+doesn't have, or a runtime without its key here) isn't claimed or answered:
+its beat says why, and the sender's chat shows "@coder can't run on build-1:
+it doesn't have 'codex-pro'." A `runtimes.toml` entry with `id = "*"` stands
+in only for an older agent's runtime id, never for a run spec that names a
+source and model; the chat says once when it does. It publishes a liveness beat on the relay's presence
 channel, backs off on relay errors (6 s doubling to 120 s), finishes replies a
 previous run was streaming when it stopped, and exits cleanly on SIGTERM or
 Ctrl-C. Worker turns are read-only for Claude Code unless
