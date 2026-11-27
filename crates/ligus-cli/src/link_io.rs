@@ -158,6 +158,11 @@ impl Drop for NoEcho {
 /// pasted code never lands in the scrollback). Off unix it reads nothing
 /// (the clipboard is used).
 pub fn read_hidden(prompt: &str) -> Result<String> {
+    read_hidden_max(prompt, MAX_CODE_LEN)
+}
+
+/// [`read_hidden`], reading at most `max` bytes (+1, so too long shows).
+pub fn read_hidden_max(prompt: &str, max: usize) -> Result<String> {
     if cfg!(not(unix)) {
         return Ok(String::new());
     }
@@ -167,7 +172,7 @@ pub fn read_hidden(prompt: &str) -> Result<String> {
     let _guard = NoEcho::new();
     let mut lock = std::io::stdin().lock();
     let mut buf = Vec::new();
-    std::io::Read::take(&mut lock, MAX_CODE_LEN as u64 + 1).read_until(b'\n', &mut buf)?;
+    std::io::Read::take(&mut lock, max as u64 + 1).read_until(b'\n', &mut buf)?;
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 

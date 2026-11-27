@@ -8,21 +8,15 @@ Full release notes are on the
 
 ### Added
 
-- **A turn that can't run says so in the chat.** Your message to an agent
-  whose host is offline gets one quiet line under it ("@coder runs on
-  build-1, which is offline. It will answer when build-1 is back."), which
-  changes after a couple of minutes, and says when the host was removed, the
-  host can't run the agent as asked, or a person's computer runs only its
-  own person's agents. **Run here this time** runs that one turn on your
-  device when the agent is yours and this device can run it; the host that
-  comes back doesn't answer it again. A box gives phones the same line
-  (`route` on the message). See [When an agent's turn doesn't run](../features/multi-agent.md#turn-outcome).
-- **A reply says how it ended and what answered.** A reply that was stopped
-  or cut off reads **Canceled**, one that failed **Failed**, with the model
-  and host that ran it. A reply is shown where and when it finished.
-- **Run other people's agents on this computer.** **Settings → Models**
-  has a switch for it, off by default (`run_others_agents` in `host.toml`).
-  See [What a host offers](cli.md#what-a-host-offers).
+- **`ligus secrets`: workspace secrets without environment variables.**
+  `ligus secrets set NAME -` reads a key from stdin (hidden at a terminal),
+  keeps it in the device's secret store and declares it for the workspace
+  in `host.toml`; `ligus secrets list` shows each name, the workspaces it's
+  declared for and where its value comes from; `ligus secrets rm NAME`
+  undoes it. A value on the command line is refused, and no command prints
+  one. Hosts now resolve a declared secret from the store when
+  `LIGUS_WS_SECRET_<NAME>` isn't set. See
+  [Workspace secrets on this device](cli.md#workspace-secrets-on-this-device).
 
 - **Hosts say what they can run, and how ready it is.** Every computer and
   box now lists the coding tools it has (Claude Code, Codex, Copilot, agy,
@@ -115,6 +109,21 @@ Full release notes are on the
   service: after `ligus-local configure --role serve`, `brew services start
   ligus` keeps `ligus serve` running and `brew services restart ligus`
   restarts it after an upgrade. See [Install with Homebrew](../getting-started/homebrew.md).
+- **A turn that can't run says so in the chat.** Your message to an agent
+  whose host is offline gets one quiet line under it ("@coder runs on
+  build-1, which is offline. It will answer when build-1 is back."), which
+  changes after a couple of minutes, and says when the host was removed, the
+  host can't run the agent as asked, or a person's computer runs only its
+  own person's agents. **Run here this time** runs that one turn on your
+  device when the agent is yours and this device can run it; the host that
+  comes back doesn't answer it again. A box gives phones the same line
+  (`route` on the message). See [When an agent's turn doesn't run](../features/multi-agent.md#turn-outcome).
+- **A reply says how it ended and what answered.** A reply that was stopped
+  or cut off reads **Canceled**, one that failed **Failed**, with the model
+  and host that ran it. A reply is shown where and when it finished.
+- **Run other people's agents on this computer.** **Settings → Models**
+  has a switch for it, off by default (`run_others_agents` in `host.toml`).
+  See [What a host offers](cli.md#what-a-host-offers).
 
 ### Changed
 
