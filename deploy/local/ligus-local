@@ -146,14 +146,23 @@ NAME
 USAGE
   ligus-local configure --role serve|worker --data-dir DIR [--env-file FILE] [--listen ADDR]
                         [--label NAME] [--relay-url URL] [--secret-backend file|keychain|secret-service]
+                        [--admit-to ligusaddr1:... [--admit-wait 15m]]
                         [--throwaway-workspace] [--force] [--json]
 
   Creates DIR (mode 0700) and the env file (mode 0600) with
-  LIGUS_REQUIRE_SANDBOX=1. Without a workspace connection it exits 4 and
-  prints the admission steps: with the env file loaded, `ligus admit request`
-  prints the box's join request; an Admin approves it (desktop: workspace
-  menu > Admit a box, or the phone) and sends back a code; `ligus admit
-  redeem` keeps it. A box never joins with a person's invite (`ligus help box`).
+  LIGUS_REQUIRE_SANDBOX=1. Without a workspace connection:
+  - with --admit-to (the workspace's approval address; not a secret, an
+    Admin's `ligus admit address` prints it) it admits the box by code
+    match, as `ligus setup box --to` does: the box prints a code on stderr,
+    the Admin's desktop or phone shows the same code, they approve with a
+    passkey, and the box keeps the admission once it is on the workspace
+    log. Nothing is pasted. A relay without the approval mailbox falls back
+    to the paste steps below (exit 4, with the join request).
+  - otherwise it exits 4 and prints the admission steps: with the env file
+    loaded, `ligus admit request` prints the box's join request; an Admin
+    approves it (desktop: workspace menu > Admit a box, or the phone) and
+    sends back a code; `ligus admit redeem` keeps it.
+  A box never joins with a person's invite (`ligus help box`).
 
 FLAGS
   --listen ADDR            serve: loopback, LAN or tailnet address:port (default 127.0.0.1:8787);
@@ -163,6 +172,9 @@ FLAGS
   --relay-url URL          override the relay the admission names (http or https)
   --secret-backend B       file: owner-only files in the data dir; keychain; secret-service
                            (default: unset, the OS store; macOS keychain prompts need the human)
+  --admit-to ADDRESS       admit the box by code match through this approval address
+                           (ligusaddr1:...; default: print the paste steps)
+  --admit-wait DURATION    how long --admit-to waits for an approver (90s, 15m, 1h; default 15m)
   --throwaway-workspace    a random workspace nobody else holds, for trials and tests only
                            (needs --relay-url)
   --force                  rewrite an existing env file (default: leave it unchanged)
@@ -173,6 +185,7 @@ EOF
 EXAMPLES
   ligus-local configure --role serve --data-dir ~/.ligus-serve --json
   ligus-local configure --role worker --data-dir ~/.ligus-worker --label shed --json
+  ligus-local configure --role serve --data-dir ~/.ligus-serve --admit-to ligusaddr1:... --json
   ligus-local configure --role serve --data-dir /tmp/ligus-trial --throwaway-workspace \
     --relay-url http://127.0.0.1:8443 --secret-backend file --force --json
 
@@ -180,8 +193,13 @@ ENVIRONMENT
   ligus-local --help lists the variables every command reads
 
 EXIT CODES
-  0 configured and a workspace connection exists   2 usage error   3 ligus CLI missing
-  4 stop for the human: no workspace connection yet (admission), 0.0.0.0, or the desktop app's data dir
+  0 configured and a workspace connection exists (with --admit-to: the box was admitted)
+  1 --admit-to: the codes didn't match, the approver declined, the approval wasn't on the
+    workspace log, or the relay didn't answer (nothing kept; read checks[].fix)
+  2 usage error   3 ligus CLI missing
+  4 stop for the human: no workspace connection yet (admission; with --admit-to: no approver
+    in time, a stale address, or a relay without the approval mailbox), 0.0.0.0, or the
+    desktop app's data dir
 EOF
 }
 
@@ -460,8 +478,10 @@ EOF
 ONE-SHOT SEQUENCE (an agent; the human steps are marked)
   1. ligus-local preflight --json
   2. ligus-local install-cli [--version vX.Y.Z | --from-source] --json
-  3. ligus-local configure --role serve --data-dir ~/.ligus-serve --json      (exits 4 until step 4)
-  4. Admission, with the env file loaded (configure prints the commands):
+  3. ligus-local configure --role serve --data-dir ~/.ligus-serve --admit-to ligusaddr1:... --json
+     HUMAN: an Admin confirms the code the box prints (desktop or phone) with a passkey;
+     nothing is pasted. Without --admit-to (or a relay without the mailbox) it exits 4: step 4.
+  4. Or the paste, with the env file loaded (configure prints the commands):
      ligus admit request --label NAME; HUMAN: an Admin approves it (desktop: workspace menu >
      Admit a box, or the phone) and sends back a code; ligus admit redeem ligusadmit1:...
   5. ligus-local start --role serve --data-dir ~/.ligus-serve [--systemd | --launchd] --json
@@ -514,7 +534,7 @@ case $CMD in
   help) if [ $# -gt 0 ]; then help_cmd "$1"; else usage; fi; exit 0 ;;
 esac
 
-ROLE="" DATA="${LIGUS_DATA_DIR:-}" ENVF="" ENVF_GIVEN="" LISTEN="" LABEL="" RELAY_URL="" BACKEND="" THROWAWAY=0 FORCE=0
+ROLE="" DATA="${LIGUS_DATA_DIR:-}" ENVF="" ENVF_GIVEN="" LISTEN="" LABEL="" RELAY_URL="" BACKEND="" THROWAWAY=0 FORCE=0 ADMIT_TO="" ADMIT_WAIT=""
 SYSTEMD=0 LAUNCHD=0 DEL_DATA=0 VERSION="" BIN_DIR="" FROM_SOURCE=0
 need() { if [ $# -lt 2 ] || [ -z "$2" ]; then ac_usage_error "$1 needs a value"; fi; }
 while [ $# -gt 0 ]; do
@@ -532,6 +552,8 @@ while [ $# -gt 0 ]; do
     --relay-url) need "$@"; RELAY_URL=$2; shift ;;
     --secret-backend) need "$@"; BACKEND=$2; shift ;;
     --throwaway-workspace) THROWAWAY=1 ;;
+    --admit-to) need "$@"; ADMIT_TO=$2; shift ;;
+    --admit-wait) need "$@"; ADMIT_WAIT=$2; shift ;;
     --force) FORCE=1 ;;
     --systemd) SYSTEMD=1 ;;
     --launchd) LAUNCHD=1 ;;
@@ -560,6 +582,8 @@ valid --env-file "$ENVF" '[A-Za-z0-9._/~+-]+'
 valid --listen "$LISTEN" '[A-Za-z0-9.:_%-]+|\[[0-9A-Fa-f:.%]+\]:[0-9]+'
 valid --label "$LABEL" '[A-Za-z0-9._ -]+'
 valid --relay-url "$RELAY_URL" 'https?://[A-Za-z0-9.:_/%@-]+'
+valid --admit-to "$ADMIT_TO" 'ligusaddr1:[A-Za-z0-9_=-]+'
+valid --admit-wait "$ADMIT_WAIT" '[0-9]+[smh]'
 valid --version "$VERSION" 'v?[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.]+)?'
 case $BACKEND in ""|file|keychain|secret-service) ;; *) ac_usage_error "--secret-backend must be file, keychain or secret-service" ;; esac
 
@@ -766,6 +790,8 @@ cmd_configure() {
   if [ -f "$DATA/config.toml" ] || [ -n "$(env_get LIGUS_WORKSPACE)" ]; then
     ac_check workspace pass "a workspace connection is configured"
     ac_next "ligus-local start $(inst)"
+  elif [ -n "$ADMIT_TO" ]; then
+    admit_by_code_match "$label"
   else
     ac_check workspace warn "no workspace connection yet" "HUMAN STEP (below)"
     ac_next "set -a; . $ENVF; set +a; $BIN admit request --label NAME   (prints the box's join request ligusjoin1:... and a fingerprint)"
@@ -774,6 +800,37 @@ cmd_configure() {
     ac_raise 4
   fi
   ac_finish "$AC_TOOL" configure "$(json_extra)"
+}
+
+# Admit the box by code match (--admit-to): `ligus setup box --to` with the
+# env file loaded. Its progress and the code go to stderr for the human
+# (stdout stays this script's); no terminal question, so it runs the same
+# under an agent. A relay without the approval mailbox falls back to the
+# paste: the join request (public) and the human step, exit 4.
+admit_by_code_match() {
+  local label=$1 out rc=0 req
+  out=$(umask 077; mktemp "${TMPDIR:-/tmp}/ligus-local-admit.XXXXXX")
+  ac_log "asking the approver through the approval mailbox; the code appears below (waits up to ${ADMIT_WAIT:-15m})"
+  # shellcheck disable=SC1090  # the env file configure wrote
+  (set -a; . "$ENVF"; set +a; exec "$BIN" setup box --to "$ADMIT_TO" --label "$label" ${ADMIT_WAIT:+--timeout "$ADMIT_WAIT"} </dev/null) >"$out" || rc=$?
+  cat "$out" >&2
+  req=$(grep -o 'ligusjoin1:[A-Za-z0-9_=-]*' "$out" | head -1 || true)
+  if [ "$rc" = 0 ]; then
+    ac_check workspace pass "admitted by code match: the admission is kept in $DATA"
+    ac_next "ligus-local start $(inst)"
+  elif [ "$rc" = 4 ] && grep -q 'no approval mailbox' "$out"; then
+    ac_check admission.code-match warn "the relay has no approval mailbox, so the join request is pasted instead" "a relay update brings code match"
+    ac_check workspace warn "no workspace connection yet" "HUMAN STEP (below)"
+    ac_next "HUMAN STEP: an Admin pastes the join request ${req:-printed above} (desktop: workspace menu > Admit a box, or the phone) after checking the fingerprint, and sends back a ligusadmit1: code"
+    ac_next "set -a; . $ENVF; set +a; $BIN setup box --code @FILE   (an owner-only file with that code; or: $BIN admit redeem --file FILE); then: ligus-local start $(inst)"
+    ac_raise 4
+  elif [ "$rc" = 4 ]; then
+    ac_check workspace warn "not admitted yet: no approver answered in time, or the approval address is stale (read the lines above)" "ask an Admin to approve it in their Inbox and run configure again, or get the current address (ligus admit address)"
+    ac_raise 4
+  else
+    ac_check workspace fail "code match didn't admit the box (ligus setup box exited $rc; read the lines above); nothing was kept" "run configure --admit-to again; if the codes didn't match, check the device and tell an Admin"
+  fi
+  rm -f "$out"
 }
 
 # ------------------------------------------------------------ systemd unit

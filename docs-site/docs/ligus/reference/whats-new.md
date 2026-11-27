@@ -8,6 +8,15 @@ Full release notes are on the
 
 ### Added
 
+- **Admit a box without pasting anything, from setup or the deploy
+  script.** `ligus setup box --to ligusaddr1:…` and `deploy/local/ligus-local
+  configure --admit-to ligusaddr1:…` send the box's join request to the
+  workspace's approval mailbox: the box prints a code, the Admin's desktop or
+  phone shows the same one, they approve with a passkey, and the box keeps
+  the admission once the approval is on the workspace log. A relay without
+  the approval mailbox falls back to the paste and says so. See
+  [From the setup flow or the deploy script](../../operate/ops/admitting-a-box.md#setup-box-to).
+
 - **Hosts say what they can run, and how ready it is.** Every computer and
   box now lists the coding tools it has (Claude Code, Codex, Copilot, agy,
   aider, pi), its model gateways, and the local model servers and hosted

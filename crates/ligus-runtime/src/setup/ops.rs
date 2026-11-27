@@ -197,6 +197,19 @@ pub struct BoxFact {
     pub relay: Option<String>,
 }
 
+/// How a box's request to join through the workspace's approval mailbox
+/// (code match) ended. The box only asks: an Admin's passkey decides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoxAsk {
+    /// The codes matched, the Admin's approval was found on the workspace
+    /// log and the admission is kept. `by` is the Admin's name.
+    Joined { workspace: String, by: String },
+    /// The relay has no approval mailbox: paste the join request instead.
+    NoMailbox,
+    /// It didn't finish: its exit code, one line and how to fix it.
+    Stopped { exit: i32, why: String, fix: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostFact {
@@ -370,6 +383,13 @@ pub trait SetupOps {
     }
     /// This box's join request (`ligusjoin1:…`, public) and its fingerprint.
     fn join_request(&mut self, label: &str) -> OpsResult<(String, String)> {
+        Err(OpsError::Unsupported)
+    }
+    /// Ask to join through the approval mailbox at `to` (`ligusaddr1:`):
+    /// post this box's join request, show the match code, wait for an
+    /// Admin's passkey decision, check it on the log and keep the admission.
+    /// Nothing is pasted.
+    fn ask_to_join(&mut self, to: &str, label: &str) -> OpsResult<BoxAsk> {
         Err(OpsError::Unsupported)
     }
     /// Keep a sealed admission code for this box.

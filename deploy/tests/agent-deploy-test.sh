@@ -362,6 +362,42 @@ run "$TMP/l5" env HOME="$TMP/home" LIGUS_BIN=/usr/bin/true "$LOCAL" uninstall --
 check_json "ligus-local never deletes a data dir it did not create" "$TMP/l5" 4 "$RC" data
 if [ -f "$TMP/notours/keep" ]; then pass "foreign data dir kept"; else fail "foreign data dir deleted"; fi
 
+# configure --admit-to: ligus setup box --to with the env file loaded, the
+# code on stderr and stdout kept for the JSON; a relay without the approval
+# mailbox falls back to the paste (exit 4, with the join request).
+mkdir -p "$TMP/am"
+cat >"$TMP/am/ligus" <<'FAKE'
+#!/bin/sh
+printf 'args:%s\ndata:%s\nsandbox:%s\n' "$*" "${LIGUS_DATA_DIR:-}" "${LIGUS_REQUIRE_SANDBOX:-}" >"$FAKE_LIGUS_LOG"
+case $FAKE_ADMIT in
+  ok) echo "Code: K7Q4 M9X2  (the approver's screen must show the same)" >&2
+      printf 'room = "team"\n' >"$LIGUS_DATA_DIR/config.toml"; echo "done"; exit 0 ;;
+  nomailbox) echo "[WARN] code match: this relay has no approval mailbox, so the request is pasted instead"
+      echo "ligusjoin1:PUBLICjoin_req-1"; exit 4 ;;
+  timeout) echo "[FAIL] code match: no approver answered within --wait"; exit 4 ;;
+  mismatch) echo "[FAIL] code match: the codes don't match: nothing was granted"; exit 1 ;;
+esac
+exit 0
+FAKE
+chmod +x "$TMP/am/ligus"
+admit_to() { # mode
+  run "$TMP/am-$1" env HOME="$TMP/home" LIGUS_BIN="$TMP/am/ligus" FAKE_LIGUS_LOG="$TMP/am/log-$1" FAKE_ADMIT="$1" \
+    "$LOCAL" configure --json --role serve --data-dir "$TMP/am/d-$1" --env-file "$TMP/am/e-$1" --label shed \
+    --admit-to ligusaddr1:eyJ2IjoxfQ --admit-wait 90s
+}
+admit_to ok; check_json "ligus-local configure --admit-to admits the box by code match" "$TMP/am-ok" 0 "$RC" workspace
+if grep -qx "args:setup box --to ligusaddr1:eyJ2IjoxfQ --label shed --timeout 90s" "$TMP/am/log-ok" \
+  && grep -qx "data:$TMP/am/d-ok" "$TMP/am/log-ok" && grep -qx 'sandbox:1' "$TMP/am/log-ok"; then
+  pass "--admit-to runs ligus setup box --to with the env file loaded"
+else fail "--admit-to call: $(cat "$TMP/am/log-ok" 2>/dev/null)"; fi
+if grep -q 'Code: K7Q4 M9X2' "$TMP/am-ok.err" && ! grep -q 'Code:' "$TMP/am-ok"; then pass "the code goes to stderr, stdout stays one JSON document"; else fail "--admit-to code placement"; fi
+admit_to nomailbox; check_json "ligus-local --admit-to without an approval mailbox falls back to the paste" "$TMP/am-nomailbox" 4 "$RC" admission.code-match
+if grep -q 'ligusjoin1:PUBLICjoin_req-1' "$TMP/am-nomailbox"; then pass "the fallback names the join request"; else fail "fallback join request: $(cat "$TMP/am-nomailbox")"; fi
+admit_to timeout; check_json "ligus-local --admit-to with no approver in time stops for the human" "$TMP/am-timeout" 4 "$RC" workspace
+admit_to mismatch; check_json "ligus-local --admit-to with mismatched codes fails" "$TMP/am-mismatch" 1 "$RC" workspace
+run "$TMP/am-bad" env HOME="$TMP/home" LIGUS_BIN="$TMP/am/ligus" "$LOCAL" configure --json --role serve --data-dir "$TMP/am/d-bad" --admit-to 'not an address'
+check_json "ligus-local --admit-to refuses a value that isn't an approval address" "$TMP/am-bad" 2 "$RC" usage
+
 # ligus-local's systemd unit: ExecStart arguments are quoted, with % and $
 # escaped (systemd specifiers and expansions), and a line break is refused.
 mkdir -p "$TMP/u b%h\$X"
