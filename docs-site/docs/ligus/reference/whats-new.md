@@ -8,6 +8,22 @@ Full release notes are on the
 
 ### Added
 
+- **Add an agent in one step.** One sheet, the same in the desktop (⌘K,
+  `/setup agent`, the **Tools** pane, the first run), in `lt` and in
+  `ligus setup agent`: a name, what answers, its model and where it runs,
+  then one button. What answers is one list: the coding CLIs on this
+  device and on your hosts with their sign-in state, the model gateways
+  and hosted APIs your hosts offer, a model server, or (in the desktop) an
+  API key kept on this device. The model comes from that source's own list
+  (a gateway's includes `auto` when it has one). Runs on starts on this
+  device for a CLI signed in here and on the only host that offers a
+  gateway or key, with one line that says what happens. No runtime to add
+  first and no separate host step: the agent is written with where it
+  runs, and when it also needs a new workspace runtime the sheet says
+  **Confirm 1 of 2**. A gateway's runtime now always follows the gateway's
+  wire. On the CLI, `--source`, `--model` and `--runs-on` replace
+  `--harness` and `--gateway` (both still work). See
+  [Add an agent](../getting-started/set-up.md#add-an-agent).
 - **Hosts say what they can run, and how ready it is.** Every computer and
   box now lists the coding tools it has (Claude Code, Codex, Copilot, agy,
   aider, pi), its model gateways, and the local model servers and hosted

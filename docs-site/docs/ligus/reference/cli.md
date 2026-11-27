@@ -339,7 +339,7 @@ flow's flags.
 | Command | What it does |
 |---|---|
 | `ligus setup [--json]` | lists the flows and what each has done on this device, as a `ligus.checks.v1` report (`<flow>.status`) |
-| `ligus setup agent --harness H --name NAME [--model M] [--endpoint URL \| --gateway NAME] [--test-turn]` | checks the harness is installed and signed in and the agent sandbox, reuses or defines a keyless workspace runtime (Admin), creates the agent (Contributor), optionally sends one test turn |
+| `ligus setup agent --name NAME [--source S] [--model M] [--runs-on here\|HOST] [--endpoint URL] [--local-servers] [--test-turn]` | adds an agent in one step: what answers (`claude-code`, `codex`, `copilot`, `antigravity`, `aider`, `pi`, `gateway:NAME`, `provider:NAME` or `local`; default: the best one found), its model (required except for a coding CLI), and where it runs (default: this device for a CLI signed in here, the only host that offers a gateway or key). Checks a CLI here is installed and signed in and the agent sandbox, reuses or defines a workspace runtime (Admin), and writes the agent with its host in one record (placing it on a host is an Admin's). A new workspace runtime is a second passkey (`passkey 1 of 2`). `--harness H` and `--gateway NAME` still work |
 | `ligus setup tool --id ID (--command "PROG ARGS" \| --kind url --url URL [--token - \| @FILE]) [--reach all\|AGENT,...]` | starts the MCP server once under the agent sandbox and lists its tools, then saves it with which agents may reach it (`<data dir>/mcp-servers.toml`, `mcp-reach.json`); a token goes to the secret store |
 | `ligus setup folder --path DIR [--name NAME] [--branch B]` | checks the checkout, matches (or, as an Admin, adds) the workspace repository, binds the folder |
 | `ligus setup box [--label NAME] [--code - \| @FILE]` | on a box: prints its join request and stops (exit 4) until an Admin approves it with a passkey; then keeps the admission and checks `ligus serve` |
@@ -464,6 +464,10 @@ secret = "acme"
 - **A host resolves only secret names it declared** for the workspace a
   turn is in. A runtime naming any other secret doesn't run there, even
   when the value is set, and the error says which line to add.
+- **A provider's name stands for its secret.** An agent added on
+  `provider:team-claude` names `team-claude`; this host resolves it to the
+  provider's declared `secret` (`acme` above), and only when that secret is
+  declared for the workspace.
 - On first start, a box, worker or `ligus agent` with no `host.toml` writes
   one declaring the `LIGUS_WS_SECRET_*` names already in its environment
   for the workspace it serves, so an upgrade keeps working. Later secrets
