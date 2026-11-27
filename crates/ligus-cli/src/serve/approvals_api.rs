@@ -24,6 +24,18 @@
 //! whose `code` (sealed to the requesting box) the phone signs into its
 //! `result` as `grantDigest`.
 //!
+//! A passkey hand-off (`presence`, wire note section 8) is one person's
+//! alone: it is listed, pushed and carried only for a phone this box places
+//! as the person the draft is stamped with ([`super::principal`]), once the
+//! box's own fold says the asking device is one of that person's devices
+//! ([`presence_view`]). The row adds what the phone shows and signs: the
+//! summary rendered here from the draft, the code, the challenge (the
+//! request's own `commit`), and the relying party and credentials. The
+//! phone checks the request's signature and the code itself, runs the
+//! passkey over `commit`, and signs and seals its `result`; the requesting
+//! terminal takes it only from one of its person's devices. Any other phone,
+//! and one this box can't place, never sees it (its routes answer 404).
+//!
 //! A computer's or a phone's request is listed too (the phone shows it
 //! read-only, "Approve on your desktop") but never pushed. Its code can't be
 //! shown there: the `open` and the reveal are sealed to the requester and
@@ -41,12 +53,13 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use ligus_core::match_code::{hex, MailboxKeys, MatchKind};
-use ligus_runtime::approval_mailbox::{self as am, EpochKey, LiveRequest, MailboxAuth, MailboxClient, MailboxError};
+use ligus_runtime::approval_mailbox::{self as am, AskRate, EpochKey, LiveRequest, MailboxAuth, MailboxClient, MailboxError, RequestSubject};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{watch, Notify};
 use uuid::Uuid;
 
+use super::principal::{Principal, Standing};
 use super::tunnel::{PushContent, TunnelPeer};
 use super::Shared;
 
@@ -84,6 +97,11 @@ impl PushTracker {
             return false;
         }
         self.seen.insert(rid.to_string(), now_ms);
+        // A hand-off goes to its person's phones once ([`push`]); the
+        // approver's per-device rate applies, not the box cap.
+        if kind == MatchKind::Presence {
+            return !claimed;
+        }
         if kind != MatchKind::Box || claimed {
             return false;
         }
@@ -110,6 +128,8 @@ struct Inner {
     /// The last relay error, logged once per change.
     last_error: Option<String>,
     pushes: PushTracker,
+    /// Hand-offs shown per asking device and hour (listing and pushes).
+    rate: AskRate,
     /// Tests: every request id an `approval.request` went out for.
     #[cfg(test)]
     pushed: Vec<String>,
@@ -278,11 +298,60 @@ pub fn push_content(ws: Uuid, workspace_name: &str, r: &LiveRequest) -> PushCont
 }
 
 fn push(s: &Shared, r: &LiveRequest) {
+    if r.kind() == MatchKind::Presence {
+        return push_presence(s, r);
+    }
     #[cfg(test)]
     s.approvals.lock().pushed.push(r.rid_hex());
     let Some(t) = &s.tunnel else { return };
     let content = push_content(s.ws, &super::identity_api::workspace_name(s), r);
     t.push_all(&content);
+}
+
+/// The `approval.presence` push for hand-off `rid`: "Your passkey, asked by
+/// your device: “laptop”", for the phones of the person it is for only.
+pub fn presence_push_content(ws: Uuid, rid: &str, device_name: &str) -> PushContent {
+    PushContent {
+        kind: "approval.presence".into(),
+        title: format!("Your passkey, asked by your device: {}", quoted(device_name)),
+        fixed_body: "Open Ligus to check the change and its code.".into(),
+        collapse: Some(format!("approvals:{ws}")),
+        coalesce: Some(rid.to_string()),
+        fields: vec![("workspaceId", ws.to_string()), ("rid", rid.to_string()), ("label", device_name.to_string()), ("requestKind", "presence".into())],
+        ..Default::default()
+    }
+}
+
+fn quoted(label: &str) -> String {
+    if label.is_empty() {
+        "(no name)".into()
+    } else {
+        format!("\u{201C}{label}\u{201D}")
+    }
+}
+
+/// Push hand-off `r` to the phones this box places as the draft's person,
+/// once it checks out for that person ([`presence_view`]).
+fn push_presence(s: &Shared, r: &LiveRequest) {
+    let RequestSubject::Presence(ask) = &r.request.subject else { return };
+    let account = ask.account_id();
+    let Some(view) = presence_view(s, r, account, now_ms()) else { return };
+    #[cfg(test)]
+    s.approvals.lock().pushed.push(r.rid_hex());
+    let Some(t) = &s.tunnel else { return };
+    let pids: Vec<String> = {
+        let svc = s.lock();
+        t.registry
+            .list()
+            .into_iter()
+            .filter(|rec| rec.is_active())
+            .filter(|rec| rec.device_id.and_then(|d| svc.phone_person(s.ws, d).ok()).is_some_and(|p| p.account_id == Some(account)))
+            .map(|rec| rec.pid)
+            .collect()
+    };
+    if !pids.is_empty() {
+        t.push_to(&presence_push_content(s.ws, &r.rid_hex(), &view.device_name), &pids);
+    }
 }
 
 /// Poll the approval mailboxes while the box can write (a revoked box reads
@@ -363,6 +432,60 @@ fn certified(roster: Option<&ligus_core::authz::RosterState>, id: Uuid, key: &[u
     roster.and_then(|r| r.devices.get(&id)).is_some_and(|d| !d.revoked && !d.accounts.is_empty() && d.public_key == key)
 }
 
+/// The account a request acts for when it may see hand-offs: a phone this
+/// box places as its person. The operator (the box itself), the shared
+/// token and an unplaced phone see none.
+fn handoff_account(p: &Principal) -> Option<Uuid> {
+    (p.standing == Standing::Person).then(|| p.account()).flatten()
+}
+
+/// A hand-off as the phone of `account` may see it.
+pub struct PresenceRowView {
+    /// The asking device's name on the log, else its cleaned label hint.
+    pub device_name: String,
+    pub json: Value,
+}
+
+/// Hand-off `r` for `account`'s phone, or `None` when it isn't theirs to
+/// confirm: on this box's fold the draft is for this workspace, stamped
+/// with `account`, signed by a device certified for `account` and not
+/// revoked, and a kind that can be confirmed elsewhere
+/// ([`am::check_presence_ask`]); and its asking device is within the
+/// per-device hourly rate. The summary is rendered from the draft, never
+/// from the request's label; the relying party and credentials come from
+/// this box's fold.
+pub fn presence_view(s: &Shared, r: &LiveRequest, account: Uuid, now: i64) -> Option<PresenceRowView> {
+    let RequestSubject::Presence(ask) = &r.request.subject else { return None };
+    let (view, req, name) = {
+        let svc = s.lock();
+        let mine: std::collections::HashSet<Uuid> = svc.account_device_ids(s.ws, account).ok()?.into_iter().collect();
+        let view = am::check_presence_ask(&r.request, s.ws, account, &|d| mine.contains(&d)).ok()?;
+        let req = svc.presence_request_as(&ask.draft, account).ok()?;
+        let name = svc.device_label_of(s.ws, view.device_id, account).map(|l| am::hint(&l)).filter(|l| !l.is_empty());
+        (view, req, name)
+    };
+    if req.challenge != r.request.commit {
+        return None;
+    }
+    if !s.approvals.lock().rate.admit(view.device_id, &view.rid, now) {
+        return None;
+    }
+    let device_name = name.unwrap_or_else(|| view.label.clone());
+    let json = json!({
+        "accountId": account,
+        "deviceId": view.device_id,
+        "deviceName": device_name,
+        "eventKind": view.kind,
+        "summary": view.summary,
+        "code": view.code.shown,
+        "challenge": base64url(&view.challenge),
+        "rpId": req.policy.rp_id,
+        "origins": req.policy.origins,
+        "allowCredentials": req.credential_ids,
+    });
+    Some(PresenceRowView { device_name, json })
+}
+
 fn row(ws: Uuid, workspace_name: &str, r: &LiveRequest, roster: Option<&ligus_core::authz::RosterState>, seal_key: &[u8; 32]) -> Value {
     let claims: Vec<Value> = r
         .claims
@@ -412,15 +535,23 @@ pub async fn list(State(s): State<Arc<Shared>>, peer: Option<Extension<TunnelPee
     let now = now_ms();
     let name = super::identity_api::workspace_name(&s);
     let roster = s.lock().workspace_roster(s.ws).ok();
+    let account = handoff_account(&super::api::principal());
     let rows: Vec<Value> = live
         .iter()
         .filter(|r| r.ended.is_none() && r.expires_at > now)
-        // A passkey hand-off is its person's alone: the phone confirms it
-        // only once the box acts for the phone's person (not yet).
-        .filter(|r| r.kind() != ligus_core::match_code::MatchKind::Presence)
         .filter_map(|r| {
             let key = epochs.iter().find(|e| e.epoch == r.epoch)?;
-            Some(row(s.ws, &name, r, roster.as_ref(), &MailboxKeys::derive(&key.key).seal().public_key_bytes()))
+            // A passkey hand-off is its person's alone: listed only for a
+            // phone placed as that person, and only once it checks out.
+            let presence = match r.kind() {
+                MatchKind::Presence => Some(presence_view(&s, r, account?, now)?.json),
+                _ => None,
+            };
+            let mut v = row(s.ws, &name, r, roster.as_ref(), &MailboxKeys::derive(&key.key).seal().public_key_bytes());
+            if let Some(p) = presence {
+                v["presence"] = p;
+            }
+            Some(v)
         })
         .collect();
     Json(json!({ "approvals": rows })).into_response()
@@ -428,11 +559,22 @@ pub async fn list(State(s): State<Arc<Shared>>, peer: Option<Extension<TunnelPee
 
 /// The mailbox keys of the listed request `rid` (a fresh listing when it
 /// isn't in the last one).
+///
+/// A hand-off is found only for the phone of its person (else it is as
+/// unknown as any other id): the box's member auth carries nobody else's
+/// claim, answer or abort for it, and nobody else reads its messages.
 async fn find(s: &Shared, rid: &[u8; 16]) -> Result<(MailboxKeys, [u8; 16]), Box<Response>> {
+    let account = handoff_account(&super::api::principal());
     let lookup = |s: &Shared| {
-        let g = s.approvals.lock();
-        let r = g.live.iter().find(|r| r.request.rid == *rid)?;
-        let k = g.epochs.iter().find(|e| e.epoch == r.epoch)?;
+        let (r, k) = {
+            let g = s.approvals.lock();
+            let r = g.live.iter().find(|r| r.request.rid == *rid)?.clone();
+            let k = g.epochs.iter().find(|e| e.epoch == r.epoch)?.clone();
+            (r, k)
+        };
+        if r.kind() == MatchKind::Presence {
+            presence_view(s, &r, account?, now_ms())?;
+        }
         Some((MailboxKeys::derive(&k.key), r.mailbox))
     };
     if let Some(found) = lookup(s) {

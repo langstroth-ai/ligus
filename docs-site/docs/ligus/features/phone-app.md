@@ -594,6 +594,28 @@ it there votes on the gate exactly as the desktop's Review pane does. Workflow
 proposals (an agent's suggested new workflow) appear too, as a decision with
 the stages as its text. See [Workflows](workflows.md).
 
+## Your passkey, asked by your device {#passkey-handoff}
+
+A computer of yours that has no passkey (the `ligus` CLI on a laptop, lt)
+can ask for it on one change: defining a workspace runtime, approving a
+computer or a phone, admitting a box. When the box acts for you
+([Who the box acts for](#who-the-box-acts-for)), your phone gets a
+notification, **Your passkey, asked by your device: “laptop”**, and the
+Inbox shows the same row. Open it to see what the change does and the
+8-symbol code the computer shows.
+
+- **Confirm with Face ID** runs your passkey over exactly that change and
+  sends the confirmation back; the computer writes it.
+- **Not me** writes nothing and leaves an Inbox row for a day: if you didn't
+  ask for it, remove that device on your desktop (My devices).
+
+The box shows the request only to the phones of the person it is for, once
+its own log says the asking device is yours and not revoked; another
+person's phone, or one the box can't place, never sees it. The phone checks
+the request's signature and computes the code itself. The request expires
+after 15 minutes, and a device can ask a few times an hour at most. See
+[Steps that need your passkey](linked-devices.md#passkey-hand-off).
+
 ## Push notifications
 
 With [remote access through a relay](../../operate/networking/remote-access.md) set up,

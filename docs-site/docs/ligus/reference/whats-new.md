@@ -122,6 +122,16 @@ Full release notes are on the
   finishes it later. A relay without the approval mailbox keeps the old
   answer. See [Steps that need your passkey](cli.md#handoff) and
   [Passkey hand-off](../features/linked-devices.md#passkey-hand-off).
+- **Confirm it on your phone too.** The same request reaches your phone,
+  with a notification, when its box acts for you: **Your passkey, asked by
+  your device: “laptop”**, what the change does and the code; **Confirm with
+  Face ID** or **Not me**. The box shows it only to your own phones, once its
+  log says the asking device is yours. See
+  [Your passkey, asked by your device](../features/phone-app.md#passkey-handoff).
+- **`ligus admit issue`, `ligus devices approve` and `ligus phones certify`
+  without recovery words.** Each now sends its one change to your desktop or
+  phone and waits (`--timeout`, default 10 minutes), as `ligus setup` does.
+  `--recovery-words-file` still works instead.
 - **A second desktop links itself to your account.** In the first run,
   **I already use Ligus on another device** asks for the approval address
   from your other device (**My devices → Add a computer**). Both screens

@@ -3001,16 +3001,20 @@ fn run() -> Result<()> {
                     let copy = has("--copy").then_some(&mut copier as devices_cmd::Copier<'_>);
                     devices_cmd::cmd_request(&cfg, flag_val("--label"), has("--new-device"), json, copy)
                 }
-                Some("approve") => rt()?.block_on(devices_cmd::cmd_approve(
-                    &cfg,
-                    positional.get(1).map(|s| s.as_str()),
-                    flag_val("--code-file"),
-                    flag_val("--fingerprint"),
-                    flag_val("--recovery-words-file"),
-                    flag_val("--out"),
-                    json,
-                    interactive.then_some(&mut ask as devices_cmd::Confirm<'_>),
-                )),
+                Some("approve") => {
+                    let wait = flag_val("--timeout").map(|t| cli_flags::parse_duration(&t)).transpose()?.unwrap_or(handoff::DEFAULT_TIMEOUT);
+                    rt()?.block_on(devices_cmd::cmd_approve(
+                        &cfg,
+                        positional.get(1).map(|s| s.as_str()),
+                        flag_val("--code-file"),
+                        flag_val("--fingerprint"),
+                        flag_val("--recovery-words-file"),
+                        flag_val("--out"),
+                        json,
+                        interactive.then_some(&mut ask as devices_cmd::Confirm<'_>),
+                        Some(wait),
+                    ))
+                }
                 Some("redeem") => {
                     let mut cfg = cfg.clone();
                     let mut paste = devices_cmd::paste_at_tty;
@@ -3166,6 +3170,7 @@ fn run() -> Result<()> {
                     // confirm it; non-interactive use must pass it.
                     let mut ask = admit::confirm_phone_fingerprint_on_tty;
                     let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+                    let wait = flag_val("--timeout").map(|t| cli_flags::parse_duration(&t)).transpose()?.unwrap_or(handoff::DEFAULT_TIMEOUT);
                     admit::cmd_phones_certify(
                         &cfg,
                         positional.get(1).map(|s| s.as_str()),
@@ -3173,6 +3178,7 @@ fn run() -> Result<()> {
                         flag_val("--recovery-words-file"),
                         flag_val("--fingerprint"),
                         interactive.then_some(&mut ask as admit::ConfirmFingerprint<'_>),
+                        Some(wait),
                     )
                     .map(|_| ())
                 }

@@ -46,10 +46,10 @@ async fn a_computer_links_as_the_persons_device_through_the_cli() {
 
     // Approve: refused without the fingerprint (a person compares it).
     let words = words_file(tmp.path(), alex.account_id.unwrap());
-    let e = devices_cmd::cmd_approve(&desk, Some(&request), None, None, Some(words.clone()), None, true, None).await.unwrap_err();
+    let e = devices_cmd::cmd_approve(&desk, Some(&request), None, None, Some(words.clone()), None, true, None, None).await.unwrap_err();
     assert_eq!(crate::problem::classify(&e).0, crate::problem::EXIT_HUMAN);
     let out = tmp.path().join("grant");
-    devices_cmd::cmd_approve(&desk, Some(&request), None, Some(fp), Some(words), Some(out.display().to_string()), true, None)
+    devices_cmd::cmd_approve(&desk, Some(&request), None, Some(fp), Some(words), Some(out.display().to_string()), true, None, None)
         .await
         .unwrap();
 

@@ -266,8 +266,9 @@ pub async fn cmd_approve(
     out: Option<String>,
     json: bool,
     confirm: Option<Confirm<'_>>,
+    handoff: Option<std::time::Duration>,
 ) -> Result<()> {
-    let usage = "usage: ligus devices approve <liguslink1:request> | --code-file PATH --fingerprint XXXX-XXXX-XXXX-XXXX-XXXX --recovery-words-file PATH [--out PATH]";
+    let usage = "usage: ligus devices approve <liguslink1:request> | --code-file PATH --fingerprint XXXX-XXXX-XXXX-XXXX-XXXX [--timeout 10m | --recovery-words-file PATH] [--out PATH]";
     let text = read_code(code, code_file, usage)?;
     let request = LinkRequest::decode(&text).map_err(|e| anyhow!(e))?;
     match (fingerprint, confirm) {
@@ -295,23 +296,23 @@ pub async fn cmd_approve(
             ))
         }
     }
-    let Some(words) = words else {
-        return Err(problem(
-            EXIT_HUMAN,
-            "presence_needed",
-            "adding a computer needs your passkey or recovery key",
-            Some("use the desktop (Settings > Profile > My devices > Add a computer), or pass --recovery-words-file in your own terminal"),
-        ));
-    };
+    const FIX: &str = "use the desktop (Settings > Profile > My devices > Add a computer), or pass --recovery-words-file in your own terminal";
+    let no_presence = || problem(EXIT_HUMAN, "presence_needed", "adding a computer needs your passkey or recovery key", Some(FIX));
+    if words.is_none() && handoff.is_none() {
+        return Err(no_presence());
+    }
     if identity(cfg).load()?.is_some_and(|s| s.service) {
         return Err(problem(EXIT_REFUSED, "box", "this data dir is a box: it has no devices of its own to add", None));
     }
     let mut svc = crate::open_service(cfg)?;
-    let key = crate::secret_arg::recovery_key_from_file(Path::new(&words))?;
-    svc.set_presence_provider(Some(std::sync::Arc::new(crate::admit::RecoveryPresence(key))));
+    // Your passkey: the hand-off to your desktop or phone (it waits here:
+    // the grant exists only in this process), or your recovery key.
+    let Some(presence) = crate::handoff::install_for_command(cfg, &mut svc, words.as_deref(), handoff)? else {
+        return Err(no_presence());
+    };
     let ws = uuid_of_room(&cfg.room);
     let conn = connection(cfg, &svc)?;
-    let grant = svc.issue_computer_link(ws, &request, &conn, now_ms())?;
+    let grant = svc.issue_computer_link(ws, &request, &conn, now_ms()).map_err(|e| presence.explain(e.into(), "ligus devices approve", FIX))?;
     drop(svc);
     // The certificate must reach the relay before the computer redeems.
     let pushed = crate::sync_once(cfg).await;

@@ -370,20 +370,28 @@ pub const COMMANDS: &[Cmd] = &[
         group: G_START,
         summary: "approve another computer as yours, headless (prefer the desktop)",
         purpose: "A person's own step (prefer the desktop's My devices > Add a computer): certify the computer whose \
-                  request is given as one of your devices in this workspace, confirmed with your recovery key, sync the \
-                  certificate, and print the grant for that computer (sealed to it). The fingerprint check is required: \
+                  request is given as one of your devices in this workspace, confirmed with your passkey on your own \
+                  desktop or phone (it shows the change and a code; Confirm with passkey or Not me) or with your \
+                  recovery key, sync the certificate, and print the grant for that computer (sealed to it). It waits \
+                  here for the confirmation (the grant exists only in this process). The fingerprint check is required: \
                   --fingerprint, or a yes at a terminal. Never from a box or a linked computer (no account key).",
-        synopsis: &["ligus devices approve <liguslink1:request> | --code-file PATH --fingerprint FP --recovery-words-file PATH [--out PATH] [--json]"],
+        synopsis: &["ligus devices approve <liguslink1:request> | --code-file PATH --fingerprint FP [--timeout 10m | --recovery-words-file PATH] [--out PATH] [--json]"],
         flags: &[
             f("--code-file PATH", "none", "read the request from a file"),
             f("--fingerprint FP", "none (asks at a terminal)", "the computer's fingerprint as its screen shows it"),
-            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence"),
+            f("--timeout DURATION", "10m", "how long to wait for your desktop or phone to confirm it with your passkey (the hand-off; Ctrl-C cancels)"),
+            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence, instead of your desktop or phone"),
             f("--out PATH", "stdout", "write the grant to an owner-only file"),
             JSON,
         ],
         conn: true,
         examples: &["ligus devices approve --code-file ./request --fingerprint 7F3A-91C0-77DE-0B14-5E62 --recovery-words-file ~/.ligus-recovery --out ./grant"],
-        exit: &[(4, "compare the fingerprint, or confirm with your passkey or recovery key"), (6, "refused: not yours to add, lockdown, already here")],
+        exit: &[
+            (1, "declined on your desktop or phone (Not me), or cancelled here: nothing was written"),
+            (4, "compare the fingerprint, or confirm with your passkey (no one did in time) or recovery key"),
+            (6, "refused: not yours to add, lockdown, already here"),
+            (7, "the relay is unreachable"),
+        ],
         see_also: &["ligus devices request", "ligus recovery-key create", "desktop: Settings > Profile > My devices > Add a computer"],
         ..D
     },
@@ -436,9 +444,9 @@ pub const COMMANDS: &[Cmd] = &[
         flags: &[
             JSON,
             f("--apply", "off", "the earlier `ligus setup --apply`: now `ligus setup runtimes --apply`"),
-            f("--timeout DURATION", "10m", "how long a step that needs your passkey waits for your desktop to confirm it"),
-            f("--no-wait", "off", "send a step that needs your passkey to your desktop and exit 4 (finish with ligus handoff wait)"),
-            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence for a step that needs your passkey, instead of your desktop"),
+            f("--timeout DURATION", "10m", "how long a step that needs your passkey waits for your desktop or phone to confirm it"),
+            f("--no-wait", "off", "send a step that needs your passkey to your desktop or phone and exit 4 (finish with ligus handoff wait)"),
+            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence for a step that needs your passkey, instead of your desktop or phone"),
         ],
         examples: &["ligus setup", "ligus setup agent --harness claude-code --name builder", "ligus setup --json | jq '.checks[] | {id, status}'"],
         exit: &[(0, "listed (setup never fails a listing)")],
@@ -463,9 +471,9 @@ pub const COMMANDS: &[Cmd] = &[
             f("--gateway NAME", "none", "gateway only: a model gateway a host offers (ligus hosts)"),
             f("--test-turn", "off", "send one short test message and check the reply"),
             f("--local-servers", "off", "let the agent run local servers (agy's helper server; Linux with bubblewrap; not available on macOS yet; the Owner's)"),
-            f("--timeout DURATION", "10m", "how long a step that needs your passkey waits for your desktop (Confirm on your desktop: …, with a code)"),
-            f("--no-wait", "off", "send that step to your desktop and exit 4; finish with ligus handoff wait, then run this again"),
-            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence when the workspace's rules need your passkey, instead of your desktop"),
+            f("--timeout DURATION", "10m", "how long a step that needs your passkey waits for your desktop or phone (Confirm on your desktop or phone: …, with a code)"),
+            f("--no-wait", "off", "send that step to your desktop or phone and exit 4; finish with ligus handoff wait, then run this again"),
+            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence when the workspace's rules need your passkey, instead of your desktop or phone"),
             JSON,
             DRY_RUN,
         ],
@@ -478,7 +486,7 @@ pub const COMMANDS: &[Cmd] = &[
         exit: &[
             (2, "a missing or invalid flag (the check names it)"),
             (3, "the harness isn't installed or signed in, or no agent sandbox"),
-            (4, "the workspace's rules need your passkey and your desktop didn't confirm it in time (or --no-wait; or the relay has no approval mailbox: do it in the desktop app, or pass --recovery-words-file)"),
+            (4, "the workspace's rules need your passkey and your desktop or phone didn't confirm it in time (or --no-wait; or the relay has no approval mailbox: do it in the desktop app, or pass --recovery-words-file)"),
             (6, "your role can't add an agent or a workspace runtime"),
             (7, "a local model server didn't answer"),
         ],
@@ -1341,10 +1349,11 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "handoff",
         group: G_START,
-        summary: "steps that wait for your passkey on your desktop (the passkey hand-off)",
+        summary: "steps that wait for your passkey on your desktop or phone (the passkey hand-off)",
         purpose: "The CLI has no passkey. A step the workspace's rules hold for your passkey (defining a workspace \
-                  runtime, say) is sent to your own desktop, drafted exactly as it will be written: the desktop's Inbox \
-                  shows what it does and a code, and you confirm with your passkey (or say Not me). `ligus setup` waits \
+                  runtime, say) is sent to your own desktop or phone, drafted exactly as it will be written: the desktop's \
+                  Inbox (or the phone, with a notification) shows what it does and a code, and you confirm with your \
+                  passkey (or say Not me). `ligus setup` waits \
                   for it; with --no-wait it exits 4 and these commands finish or end it. Only your own devices can answer; \
                   the passkey signs that one draft, which expires after 15 minutes. A relay without the approval mailbox \
                   can't carry it: do the step in the desktop app, or pass --recovery-words-file.",
@@ -1357,9 +1366,9 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "handoff list",
         group: G_START,
-        summary: "the hand-offs waiting for your desktop here: id, code, what each confirms",
+        summary: "the hand-offs waiting for your desktop or phone here: id, code, what each confirms",
         purpose: "List the hand-offs this data dir posted and still waits for (kept 15 minutes, owner-only: \
-                  presence-pending.json): the id, the code your desktop shows beside it, and what it confirms.",
+                  presence-pending.json): the id, the code your desktop or phone shows beside it, and what it confirms.",
         synopsis: &["ligus handoff list [--json]"],
         flags: &[JSON],
         examples: &["ligus handoff list --json"],
@@ -1369,17 +1378,17 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "handoff wait",
         group: G_START,
-        summary: "wait for your desktop to confirm a hand-off, then write the change",
+        summary: "wait for your desktop or phone to confirm a hand-off, then write the change",
         purpose: "Wait for the answer to a hand-off posted with --no-wait (the only one waiting, or <id>). When one of \
                   your own devices confirms it with your passkey, the change is written exactly as it was drafted, with \
                   that confirmation; then run the command that asked again, and it skips what is done. Not me on the \
-                  desktop writes nothing. Ctrl-C or --timeout cancels it.",
+                  desktop or phone writes nothing. Ctrl-C or --timeout cancels it.",
         synopsis: &["ligus handoff wait [<id>] [--timeout 10m] [--json]"],
         flags: &[f("--timeout DURATION", "10m", "how long to wait (90s, 10m); then the hand-off is cancelled"), JSON],
         conn: true,
         examples: &["ligus handoff wait", "ligus handoff wait 3f2a…c9 --timeout 5m --json"],
         exit: &[
-            (4, "no one confirmed it in time, or it expired: run the command again and confirm on your desktop"),
+            (4, "no one confirmed it in time, or it expired: run the command again and confirm on your desktop or phone"),
             (5, "no hand-off with that id is waiting here"),
             (7, "the relay is unreachable"),
         ],
@@ -1389,8 +1398,8 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "handoff cancel",
         group: G_START,
-        summary: "end a waiting hand-off (your desktop drops it)",
-        purpose: "End a hand-off posted with --no-wait: the desktop's Inbox drops it, nothing is written.",
+        summary: "end a waiting hand-off (your desktop or phone drops it)",
+        purpose: "End a hand-off posted with --no-wait: the desktop's Inbox and the phone drop it, nothing is written.",
         synopsis: &["ligus handoff cancel [<id>] [--json]"],
         flags: &[JSON],
         conn: true,
@@ -1551,12 +1560,15 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "admit issue",
         group: G_BOX,
-        summary: "headless Admin: issue a box admission confirmed with a recovery key",
-        purpose: "Issue a box admission from your own (non-box) CLI identity, confirmed with your recovery key. With \
-                  --request the code is sealed to that box. Prefer the desktop or the phone. Sync to publish it.",
-        synopsis: &["ligus admit issue --recovery-words-file PATH [--ttl DUR] [--request ligusjoin1:…] [--out PATH]"],
+        summary: "headless Admin: issue a box admission, confirmed on your desktop or phone (or with a recovery key)",
+        purpose: "Issue a box admission from your own (non-box) CLI identity, confirmed with your passkey on your own \
+                  desktop or phone (it shows the change and a code; it waits here, since the code exists only in this \
+                  process) or with your recovery key. With --request the code is sealed to that box. Prefer the \
+                  desktop or the phone. Sync to publish it.",
+        synopsis: &["ligus admit issue [--timeout 10m | --recovery-words-file PATH] [--ttl DUR] [--request ligusjoin1:…] [--out PATH]"],
         flags: &[
-            f("--recovery-words-file PATH", "required", "your recovery key's 24 words (owner-only file)"),
+            f("--timeout DURATION", "10m", "how long to wait for your desktop or phone to confirm it with your passkey (the hand-off; Ctrl-C cancels)"),
+            f("--recovery-words-file PATH", "none (the hand-off)", "your recovery key's 24 words (owner-only file), instead of your desktop or phone"),
             f("--ttl DUR", "1h with --request, else 24h", "lifetime: 90m, 1h, 2d or seconds (1 minute to just under 7 days)"),
             f("--request ligusjoin1:…", "none (a bearer code)", "the box's join request to seal the code to"),
             f("--out PATH", "stdout", "write the code owner-only (0600) into an existing directory"),
@@ -1758,16 +1770,18 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "phones certify",
         group: G_PHONE,
-        summary: "headless \"Add a phone\": certify a phone's key with your recovery key",
+        summary: "headless \"Add a phone\": certify a phone's key, confirmed on your desktop or phone (or a recovery key)",
         purpose: "Certify the phone whose code (`ligusphone1:…`, from the app: Settings > This phone > Can't scan? Show \
                   this phone's code) is given as one of this identity's devices, at the phone tier, confirmed with \
-                  your recovery key. The fingerprint is required: --fingerprint, or at a terminal it shows the \
+                  your passkey on your own desktop or an already certified phone (it waits here), or with your \
+                  recovery key. The fingerprint is required: --fingerprint, or at a terminal it shows the \
                   fingerprint and asks; with neither (stdin not a terminal) it refuses. Never from a box. Sync to \
                   publish, then tap Retry on the phone.",
-        synopsis: &["ligus phones certify <ligusphone1:code> | --code-file PATH  --recovery-words-file PATH [--fingerprint XXXX-XXXX-XXXX-XXXX-XXXX]"],
+        synopsis: &["ligus phones certify <ligusphone1:code> | --code-file PATH  [--timeout 10m | --recovery-words-file PATH] [--fingerprint XXXX-XXXX-XXXX-XXXX-XXXX]"],
         flags: &[
             f("--code-file PATH", "none", "read the phone's code from a file"),
-            f("--recovery-words-file PATH", "required", "your recovery key's 24 words (owner-only file)"),
+            f("--timeout DURATION", "10m", "how long to wait for your desktop or phone to confirm it with your passkey (the hand-off; Ctrl-C cancels)"),
+            f("--recovery-words-file PATH", "none (the hand-off)", "your recovery key's 24 words (owner-only file), instead of your desktop or phone"),
             f("--fingerprint F", "asked at a terminal; required otherwise", "the fingerprint the phone shows"),
         ],
         conn: true,
@@ -2820,12 +2834,13 @@ the workspace lockdown refuses it; 7 the relay or the server didn't answer.
 
 A workspace with stricter device rules holds some writes (a workspace runtime, a
 repository) for your passkey. The CLI has none, so it sends the change, drafted
-exactly as it will be written, to your own desktop and waits:
+exactly as it will be written, to your own desktop or phone and waits:
 
-  Confirm on your desktop: Define workspace runtime “coder” (ClaudeCode, model “sonnet”) (code K7Q4 M9X2)
+  Confirm on your desktop or phone: Define workspace runtime “coder” (ClaudeCode, model “sonnet”) (code K7Q4 M9X2)
 
-The desktop's Inbox shows the same change and code; Confirm with passkey writes it,
-Not me writes nothing. --timeout (default 10m) and Ctrl-C cancel; --no-wait exits 4
+The desktop's Inbox (or the phone, with a notification, when its box acts for you)
+shows the same change and code; Confirm with passkey (Confirm with Face ID on the
+phone) writes it, Not me writes nothing. --timeout (default 10m) and Ctrl-C cancel; --no-wait exits 4
 at once, and `ligus handoff wait` finishes it (then run the command again). Only
 your own devices can answer, and the passkey signs that one draft. A relay without
 the approval mailbox can't carry it: do the step in the desktop app, or pass

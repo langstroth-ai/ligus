@@ -791,6 +791,13 @@ pub(super) fn principal() -> Principal {
     PRINCIPAL.try_with(Clone::clone).unwrap_or_else(|_| Principal::unresolved())
 }
 
+/// Tests: run `f` as a request from the operator's loopback channel acting
+/// for `who` (a phone's person, unresolved, …), as [`auth`] would set it.
+#[cfg(test)]
+pub(super) async fn acting_as<F: std::future::Future>(who: Principal, f: F) -> F::Output {
+    CALLER.scope(Caller::Operator, PRINCIPAL.scope(who, f)).await
+}
+
 /// The [`Caller`] of the request being handled. Outside a request (or off
 /// its task: a blocking closure) it is [`Caller::Anonymous`], which no gate
 /// accepts.

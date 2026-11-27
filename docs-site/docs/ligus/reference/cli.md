@@ -358,14 +358,15 @@ refused on the command line.
 A workspace with stricter device rules holds some writes (defining a
 workspace runtime, say) for your passkey, and the CLI has none. `ligus setup`
 sends the change, drafted exactly as it will be written, to your own desktop
-and waits:
+or phone and waits:
 
 ```text
-Confirm on your desktop: Define workspace runtime “coder” (ClaudeCode, model “sonnet”) (code K7Q4 M9X2)
-Waiting for your desktop (Ctrl-C cancels)…
+Confirm on your desktop or phone: Define workspace runtime “coder” (ClaudeCode, model “sonnet”) (code K7Q4 M9X2)
+Waiting for your desktop or phone (Ctrl-C cancels)…
 ```
 
-Your desktop's Inbox shows the same change and the same code. **Confirm with
+Your desktop's Inbox shows the same change and the same code, and so does
+your phone (with a notification) when its box acts for you. **Confirm with
 passkey** writes it; **Not me** writes nothing (and offers to revoke the
 device that asked). `--timeout DURATION` (default 10 minutes) and Ctrl-C
 cancel it. `--no-wait` sends it and exits 4 at once, with the code and a
@@ -374,8 +375,8 @@ cancel it. `--no-wait` sends it and exits 4 at once, with the code and a
 | Command | What it does |
 |---|---|
 | `ligus handoff list [--json]` (or `ligus handoff`) | the hand-offs this data dir is waiting for: id, code, what each confirms (they expire after 15 minutes) |
-| `ligus handoff wait [<id>] [--timeout 10m] [--json]` | waits for your desktop, then writes the change with its passkey confirmation; run the command that asked again and it skips what is done. Exit 4 when no one confirmed it in time, 5 when no such hand-off is waiting |
-| `ligus handoff cancel [<id>] [--json]` | ends a waiting hand-off; your desktop drops it |
+| `ligus handoff wait [<id>] [--timeout 10m] [--json]` | waits for your desktop or phone, then writes the change with its passkey confirmation; run the command that asked again and it skips what is done. Exit 4 when no one confirmed it in time, 5 when no such hand-off is waiting |
+| `ligus handoff cancel [<id>] [--json]` | ends a waiting hand-off; your desktop and phone drop it |
 
 Only your own devices (certified for your account, not revoked) can answer,
 and the passkey signs that one draft; nothing about the hand-off goes on the
@@ -383,6 +384,14 @@ workspace log. A relay without the approval mailbox can't carry it: the step
 then stops as before (exit 4: do it in the desktop app, or pass
 `--recovery-words-file PATH`). See
 [Passkey hand-off](../features/linked-devices.md#passkey-hand-off).
+
+`ligus admit issue`, `ligus devices approve` and `ligus phones certify` do the
+same when you don't pass `--recovery-words-file`: each sends its one change to
+your desktop or phone and waits (`--timeout`, default 10 minutes; Ctrl-C
+cancels). They have no `--no-wait`, since the admission code or the grant
+they print exists only in that process. Not me exits 1 (`declined`), no answer
+in time exits 4 (`not_confirmed`), and a relay without the approval mailbox
+keeps the old answer (exit 4: the desktop, or `--recovery-words-file`).
 
 ## Runtimes and agents
 

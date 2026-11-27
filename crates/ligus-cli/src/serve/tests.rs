@@ -4406,9 +4406,12 @@ async fn a_headless_admin_admits_serve_and_a_worker_into_one_workspace() {
         };
         crate::admit::cmd_admit(&founder, &[&"issue".to_string()], flags).unwrap();
     }
-    // Without a recovery key the CLI can't confirm: refused.
-    let none = crate::admit::cmd_admit(&founder, &[&"issue".to_string()], |_| None);
-    assert!(none.is_err());
+    // Without a recovery key the CLI hands the step to the person's other
+    // devices and waits; with none to confirm it, nothing is issued. (A short
+    // --timeout: the default wait is ten minutes.)
+    let none = crate::admit::cmd_admit(&founder, &[&"issue".to_string()], |f| (f == "--timeout").then(|| "2s".to_string()));
+    let e = none.expect_err("issued without a confirmation");
+    assert_eq!(crate::problem::classify(&e), (crate::problem::EXIT_HUMAN, "not_confirmed"), "{e:#}");
     sync_once(&founder).await.unwrap();
 
     let sdir = tmp.path().join("serve");
@@ -4871,11 +4874,11 @@ async fn phones_certify_headless_then_me_on_loopback() {
     };
     // No recovery key: refused. A wrong fingerprint: refused.
     let fp = || Some(code.fingerprint());
-    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, None, fp(), None).is_err());
-    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), Some("0000-0000-0000-0000-0000".into()), None).is_err());
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, None, fp(), None, None).is_err());
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), Some("0000-0000-0000-0000-0000".into()), None, None).is_err());
     // No fingerprint and nobody at a terminal to confirm it: refused, saying
     // how to pass it.
-    let err = crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, None).unwrap_err();
+    let err = crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, None, None).unwrap_err();
     assert!(err.to_string().contains("--fingerprint"), "{err}");
     // A person at a terminal who doesn't confirm it (or answers anything but
     // yes): refused; the prompt was shown this code.
@@ -4884,12 +4887,12 @@ async fn phones_certify_headless_then_me_on_loopback() {
         shown.push(p.fingerprint());
         Ok(false)
     };
-    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, Some(&mut say_no)).is_err());
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, Some(&mut say_no), None).is_err());
     assert_eq!(shown, vec![code.fingerprint()]);
     assert_eq!(code.fingerprint().len(), 24, "five groups of four");
     // A box can't.
     let box_cfg = h.handle.shared.cfg.clone();
-    assert!(crate::admit::cmd_phones_certify(&box_cfg, Some(&code.encode()), None, Some(w.clone()), fp(), None).is_err());
+    assert!(crate::admit::cmd_phones_certify(&box_cfg, Some(&code.encode()), None, Some(w.clone()), fp(), None, None).is_err());
     assert_eq!(certs(), 0);
 
     // Not certified yet: 403 device_not_certified.
@@ -4901,11 +4904,11 @@ async fn phones_certify_headless_then_me_on_loopback() {
     // The code from a file, the fingerprint checked: certified once.
     let f = h._tmp.path().join("phone.code");
     std::fs::write(&f, format!("{}\n", code.encode())).unwrap();
-    crate::admit::cmd_phones_certify(&h.desktop, None, Some(f.to_string_lossy().into_owned()), Some(w.clone()), Some(code.fingerprint().to_lowercase()), None)
+    crate::admit::cmd_phones_certify(&h.desktop, None, Some(f.to_string_lossy().into_owned()), Some(w.clone()), Some(code.fingerprint().to_lowercase()), None, None)
         .unwrap();
     // Confirmed at a terminal instead of --fingerprint.
     let mut say_yes = |_: &ligus_runtime::phone_enroll::PhoneCode| Ok(true);
-    crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, Some(&mut say_yes)).unwrap();
+    crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, Some(&mut say_yes), None).unwrap();
     assert_eq!(certs(), 1, "certifying again writes nothing");
     // The owner's desktop names the workspace on its config log: the box
     // learns the name from there (it joined from an admission, never an
@@ -5333,6 +5336,7 @@ mod approvals;
 mod box_removal;
 mod devices_link;
 mod foreign_certificate;
+mod handoff;
 mod principals;
 mod scratch;
 

@@ -93,7 +93,7 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
     let mut secrets = Secrets::new();
     let (mut json, mut dry_run) = (false, false);
     let mut stdin = crate::secret_arg::stdin_once();
-    // The passkey hand-off to your desktop (unless a recovery-words file
+    // The passkey hand-off to your desktop or phone (unless a recovery-words file
     // confirms instead): how long to wait for it, or not at all.
     let mut recovery = false;
     let mut handoff_wait = Some(crate::handoff::DEFAULT_TIMEOUT);
@@ -115,7 +115,7 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
                 ops.svc.set_presence_provider(Some(std::sync::Arc::new(crate::admit::RecoveryPresence(key))));
                 recovery = true;
             }
-            // A step that needs your passkey goes to your desktop: post it
+            // A step that needs your passkey goes to your desktop or phone: post it
             // and exit 4 (`ligus handoff wait` finishes it), or wait so long.
             "--no-wait" => handoff_wait = None,
             "--timeout" => {

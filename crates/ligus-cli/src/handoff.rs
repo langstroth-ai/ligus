@@ -4,7 +4,7 @@
 //! confirms it with the passkey. The CLI prints
 //!
 //! ```text
-//! Confirm on your desktop: Define workspace runtime “coder” (ClaudeCode, model “sonnet”) (code K7Q4 M9X2)
+//! Confirm on your desktop or phone: Define workspace runtime “coder” (ClaudeCode, model “sonnet”) (code K7Q4 M9X2)
 //! ```
 //!
 //! and waits (Ctrl-C cancels, `--timeout`, default 10 minutes), then writes
@@ -36,7 +36,7 @@ use crate::checks::{Check, Report};
 use crate::problem::{Problem, EXIT_ERROR, EXIT_HUMAN, EXIT_NOT_FOUND, EXIT_OFFLINE};
 use crate::{uuid_of_room, Config};
 
-/// How long the CLI waits for your desktop by default.
+/// How long the CLI waits for your desktop or phone by default.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// How a hand-off ended (what `ligus setup` reports after the flow).
@@ -152,7 +152,7 @@ async fn hand_off(
         Err(MailboxError::NoRoutes) => {
             return (HandoffEnd::Unavailable("this relay has no approval mailbox".into()), Err(unavailable("this relay has no approval mailbox")))
         }
-        Err(e) => return (HandoffEnd::Failed(e.to_string()), Err(format!("couldn't reach your desktop through the relay: {e}"))),
+        Err(e) => return (HandoffEnd::Failed(e.to_string()), Err(format!("couldn't reach your desktop or phone through the relay: {e}"))),
     };
     let signer = device_signer(&ctx.device_seed);
     let ask = match PresenceAsk::new(&ctx.label, &signer.public_key(), &draft) {
@@ -165,20 +165,20 @@ async fn hand_off(
             return (HandoffEnd::Unavailable("this relay has no approval mailbox".into()), Err(unavailable("this relay has no approval mailbox")))
         }
         Err(RequesterError::Mailbox(MailboxError::TooLarge)) => {
-            return (HandoffEnd::Unavailable("the change is too large to send".into()), Err(unavailable("the change is too large to send to your desktop")))
+            return (HandoffEnd::Unavailable("the change is too large to send".into()), Err(unavailable("the change is too large to send to your desktop or phone")))
         }
         Err(e) => return (HandoffEnd::Failed(e.to_string()), Err(e.to_string())),
     };
     let code = req.code().shown.clone();
-    eprintln!("Confirm on your desktop: {summary} (code {code})");
+    eprintln!("Confirm on your desktop or phone: {summary} (code {code})");
     let Some(timeout) = timeout else {
         let rid = req.rid_hex();
         return (
             HandoffEnd::Pending { rid: rid.clone(), code: code.clone(), summary },
-            Err(format!("{PRESENCE_REQUIRED}: waiting for your desktop (code {code}); finish with: ligus handoff wait {rid}")),
+            Err(format!("{PRESENCE_REQUIRED}: waiting for your desktop or phone (code {code}); finish with: ligus handoff wait {rid}")),
         );
     };
-    eprintln!("Waiting for your desktop (Ctrl-C cancels)…");
+    eprintln!("Waiting for your desktop or phone (Ctrl-C cancels)…");
     let mine = ctx.mine.clone();
     let (end, result) = wait(&mut req, &mine, timeout).await;
     let _ = req.settle().await;
@@ -193,7 +193,7 @@ async fn wait(req: &mut PresenceRequester, mine: &HashSet<Uuid>, timeout: Durati
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
             let _ = req.cancel().await;
-            return (HandoffEnd::TimedOut, Err(format!("{PRESENCE_REQUIRED}: no one confirmed it on your desktop in time (nothing was written)")));
+            return (HandoffEnd::TimedOut, Err(format!("{PRESENCE_REQUIRED}: no one confirmed it on your desktop or phone in time (nothing was written)")));
         }
         let polled = tokio::select! {
             r = req.poll(left.as_secs().clamp(1, am::MAX_WAIT_SECS), &is_mine) => r,
@@ -205,11 +205,11 @@ async fn wait(req: &mut PresenceRequester, mine: &HashSet<Uuid>, timeout: Durati
         match polled {
             Ok(None) => {}
             Ok(Some(PresenceOutcome::Approved { assertion, .. })) => {
-                eprintln!("Confirmed on your desktop.");
+                eprintln!("Confirmed on your desktop or phone.");
                 return (HandoffEnd::Approved, Ok(assertion));
             }
             Ok(Some(PresenceOutcome::Declined { .. })) | Ok(Some(PresenceOutcome::Aborted { .. })) => {
-                return (HandoffEnd::Declined, Err("declined on your desktop: nothing was written".into()))
+                return (HandoffEnd::Declined, Err("declined on your desktop or phone: nothing was written".into()))
             }
             Ok(Some(PresenceOutcome::Expired)) => {
                 return (HandoffEnd::Expired, Err(format!("{PRESENCE_REQUIRED}: the request expired (15 minutes): nothing was written")))
@@ -220,15 +220,82 @@ async fn wait(req: &mut PresenceRequester, mine: &HashSet<Uuid>, timeout: Durati
     }
 }
 
+// ---- Commands that took --recovery-words-file only ----
+
+/// The name a command's hand-off shows on your desktop or phone (a hint:
+/// the approver prefers this device's name on the log).
+pub fn command_label() -> String {
+    crate::env_opt("LIGUS_HOST_LABEL").or_else(ligus_runtime::machine_hostname).unwrap_or_else(|| "this computer".into())
+}
+
+/// What [`install_for_command`] installed.
+pub enum CmdPresence {
+    /// The recovery key from a recovery-words file.
+    Recovery,
+    /// The hand-off; how it ended, once it ran.
+    Handoff(Arc<Mutex<Option<HandoffEnd>>>),
+}
+
+impl CmdPresence {
+    /// A command's error, in the hand-off's words when it ran and ended
+    /// without a confirmation (else the error as it was). `rerun` is the
+    /// command to run again, `fallback` the fix when the hand-off couldn't
+    /// run here (the relay has no approval mailbox, …).
+    pub fn explain(&self, err: anyhow::Error, rerun: &str, fallback: &str) -> anyhow::Error {
+        let Self::Handoff(end) = self else { return err };
+        let Some(end) = end.lock().unwrap().clone() else { return err };
+        match end {
+            HandoffEnd::Approved | HandoffEnd::Pending { .. } => err,
+            HandoffEnd::TimedOut | HandoffEnd::Expired => problem(
+                EXIT_HUMAN,
+                "not_confirmed",
+                "no one confirmed it on your desktop or phone in time: nothing was written",
+                Some(&format!("run {rerun} again and confirm on your desktop or phone")),
+            ),
+            HandoffEnd::Declined => problem(EXIT_ERROR, "declined", "declined on your desktop or phone (Not me): nothing was written", None),
+            HandoffEnd::Cancelled => problem(EXIT_ERROR, "cancelled", "cancelled here: nothing was written", None),
+            HandoffEnd::Unavailable(why) => problem(EXIT_HUMAN, "presence_needed", format!("this needs your passkey, and {why}"), Some(fallback)),
+            HandoffEnd::Failed(why) => {
+                problem(EXIT_OFFLINE, "relay", format!("couldn't reach your desktop or phone: {why}"), Some("check the network and the relay, then retry"))
+            }
+        }
+    }
+}
+
+/// The passkey a command that writes one presence-held event uses
+/// (`ligus admit issue`, `ligus devices approve`, `ligus phones certify`):
+/// the recovery key in `words` when given, else the hand-off to your desktop
+/// or phone, waiting up to `handoff` (`None` turns the hand-off off). It
+/// waits in this process (no --no-wait): what these commands hand back (an
+/// admission code, a grant) exists only here. `Ok(None)`: neither can run
+/// (no relay, key or account for the hand-off), and the command keeps its
+/// old answer.
+pub fn install_for_command(
+    cfg: &Config,
+    svc: &mut ligus_runtime::ChatService,
+    words: Option<&str>,
+    handoff: Option<Duration>,
+) -> Result<Option<CmdPresence>> {
+    if let Some(path) = words {
+        let key = crate::secret_arg::recovery_key_from_file(std::path::Path::new(path))?;
+        svc.set_presence_provider(Some(Arc::new(crate::admit::RecoveryPresence(key))));
+        return Ok(Some(CmdPresence::Recovery));
+    }
+    let Some(timeout) = handoff else { return Ok(None) };
+    let Some((p, end)) = HandoffPresence::for_service(cfg, svc, &command_label(), Some(timeout)) else { return Ok(None) };
+    svc.set_presence_provider(Some(Arc::new(p)));
+    Ok(Some(CmdPresence::Handoff(end)))
+}
+
 /// The `next` lines a flow ends with after a hand-off that didn't finish.
 pub fn next_lines(end: &HandoffEnd, rerun: &str) -> Option<Vec<String>> {
     match end {
         HandoffEnd::Pending { rid, code, summary } => Some(vec![
-            format!("confirm on your desktop: {summary} (code {code})"),
+            format!("confirm on your desktop or phone: {summary} (code {code})"),
             format!("ligus handoff wait {rid}"),
             format!("then run this again: {rerun}"),
         ]),
-        HandoffEnd::TimedOut | HandoffEnd::Expired => Some(vec![format!("run this again and confirm on your desktop: {rerun}")]),
+        HandoffEnd::TimedOut | HandoffEnd::Expired => Some(vec![format!("run this again and confirm on your desktop or phone: {rerun}")]),
         _ => None,
     }
 }
@@ -257,7 +324,7 @@ pub fn cmd_list(cfg: &Config, json: bool) -> Result<()> {
     let mut r = Report::new("handoff list");
     let mut text = String::new();
     for e in &live {
-        r.add(Check::warn("handoff.pending", "waiting for your desktop", format!("{} (code {})", e.summary, e.code)).fix(format!("ligus handoff wait {}", e.rid)));
+        r.add(Check::warn("handoff.pending", "waiting for your desktop or phone", format!("{} (code {})", e.summary, e.code)).fix(format!("ligus handoff wait {}", e.rid)));
         text.push_str(&format!("{}  code {}  {}\n", e.rid, e.code, e.summary));
     }
     if live.is_empty() {
@@ -296,15 +363,15 @@ fn resume(cfg: &Config, e: &am::PresencePending) -> Result<(ligus_runtime::ChatS
 pub async fn cmd_wait(cfg: &Config, rid: Option<&str>, timeout: Duration, json: bool) -> Result<()> {
     let e = pick(cfg, rid)?;
     let (mut svc, mut req, mine) = resume(cfg, &e)?;
-    eprintln!("Confirm on your desktop: {} (code {})", e.summary, e.code);
-    eprintln!("Waiting for your desktop (Ctrl-C cancels)…");
+    eprintln!("Confirm on your desktop or phone: {} (code {})", e.summary, e.code);
+    eprintln!("Waiting for your desktop or phone (Ctrl-C cancels)…");
     let (end, result) = wait(&mut req, &mine, timeout).await;
     let _ = req.settle().await;
     let mut r = Report::new("handoff wait");
     let assertion = match (end, result) {
         (HandoffEnd::Approved, Ok(a)) => a,
         (HandoffEnd::TimedOut, Err(m)) | (HandoffEnd::Expired, Err(m)) => {
-            return Err(problem(EXIT_HUMAN, "not_confirmed", m.replace(&format!("{PRESENCE_REQUIRED}: "), ""), Some("run the command again and confirm on your desktop")))
+            return Err(problem(EXIT_HUMAN, "not_confirmed", m.replace(&format!("{PRESENCE_REQUIRED}: "), ""), Some("run the command again and confirm on your desktop or phone")))
         }
         (HandoffEnd::Failed(m), _) => return Err(problem(EXIT_OFFLINE, "relay", m, Some("check the network and the relay, then retry"))),
         (_, Err(m)) => return Err(problem(EXIT_ERROR, "declined", m, None)),
@@ -316,11 +383,11 @@ pub async fn cmd_wait(cfg: &Config, rid: Option<&str>, timeout: Duration, json: 
     })?;
     r.add(Check::ok("handoff.written", "written", format!("{} (event {})", e.summary, env.event_id)));
     r.next("run the command that asked again: it skips what is done");
-    print(&r, json, serde_json::json!({ "id": e.rid, "eventId": env.event_id, "summary": e.summary }), &format!("Confirmed on your desktop and written: {}\n", e.summary));
+    print(&r, json, serde_json::json!({ "id": e.rid, "eventId": env.event_id, "summary": e.summary }), &format!("Confirmed on your desktop or phone and written: {}\n", e.summary));
     Ok(())
 }
 
-/// `ligus handoff cancel [<id>]`: end a waiting hand-off (your desktop drops it).
+/// `ligus handoff cancel [<id>]`: end a waiting hand-off (your desktop or phone drops it).
 pub async fn cmd_cancel(cfg: &Config, rid: Option<&str>, json: bool) -> Result<()> {
     let e = pick(cfg, rid)?;
     let (_svc, mut req, _) = resume(cfg, &e)?;
