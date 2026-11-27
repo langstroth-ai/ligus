@@ -85,10 +85,11 @@ export function LinkThisDevice({ onBack, onLinked }: { onBack: () => void; onLin
         else u();
       })
       .catch(() => {});
-    // A flow started before this screen opened picks up where it is.
+    // A request still open from before this screen opened picks up where it
+    // is; a finished one (linked, failed) isn't shown again.
     void linkRequestStatus()
       .then((v) => {
-        if (live && v) setFlow(v);
+        if (live && v && (OPEN.has(v.phase) || v.phase === "linking")) setFlow(v);
       })
       .catch(() => {});
     return () => {

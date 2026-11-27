@@ -143,6 +143,18 @@ describe("LinkThisDevice", () => {
     await waitFor(() => expect(onLinked).toHaveBeenCalled());
   });
 
+  it("picks up a request still open, but never shows a finished one again", async () => {
+    (ipc.linkRequestStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(flow("linked", { personName: "Ana" }));
+    const { unmount } = render(<LinkThisDevice onBack={vi.fn()} />);
+    await waitFor(() => expect(ipc.linkRequestStatus).toHaveBeenCalled());
+    expect(screen.queryByTestId("link-linked")).toBeNull();
+    expect(screen.getByLabelText("The approval address from your other device")).toBeTruthy();
+    unmount();
+    (ipc.linkRequestStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(flow("code", { code: "K7Q4M9X2" }));
+    render(<LinkThisDevice onBack={vi.fn()} />);
+    expect(await screen.findByTestId("match-code")).toHaveTextContent("K7Q4M9X2");
+  });
+
   it("a request code is there from the start, behind one quiet link", async () => {
     render(<LinkThisDevice onBack={vi.fn()} />);
     await click("Use a request code instead");
