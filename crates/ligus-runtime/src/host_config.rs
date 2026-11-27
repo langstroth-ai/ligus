@@ -6,6 +6,10 @@
 //! # workers and boxes always list theirs).
 //! list_tools = false
 //!
+//! # Run other people's agents placed on this computer (a person's own
+//! # computer only; off by default: it runs only its own person's agents).
+//! run_others_agents = true
+//!
 //! # Local model servers: the address stays here, the workspace sees the name.
 //! [[local]]
 //! name = "ollama"
@@ -51,6 +55,12 @@ pub struct HostConfig {
     /// computers honour `false`; workers and boxes always list.
     #[serde(default = "default_true")]
     pub list_tools: bool,
+    /// A person's own computer runs other people's agents placed on it only
+    /// when this is set (workspace model v3, 5.4, D16). Off: it runs only
+    /// its own person's agents and its beat says it refuses the rest.
+    /// Workers and boxes run any agent placed on them and ignore it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub run_others_agents: bool,
     /// Local model servers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub local: Vec<LocalSource>,
@@ -61,7 +71,7 @@ pub struct HostConfig {
 
 impl Default for HostConfig {
     fn default() -> Self {
-        Self { list_tools: true, local: Vec::new(), workspaces: BTreeMap::new() }
+        Self { list_tools: true, run_others_agents: false, local: Vec::new(), workspaces: BTreeMap::new() }
     }
 }
 
@@ -237,6 +247,15 @@ pub fn seed_declarations(data_dir: &Path, workspace_id: Uuid, names: &[String]) 
 pub fn set_list_tools(data_dir: &Path, list: bool) -> Result<HostConfig, HostConfigError> {
     let mut cfg = HostConfig::load(data_dir)?;
     cfg.list_tools = list;
+    cfg.save(data_dir)?;
+    Ok(cfg)
+}
+
+/// Set "Run other people's agents on this computer" (`run_others_agents`)
+/// in `data_dir/host.toml`, keeping the rest.
+pub fn set_run_others_agents(data_dir: &Path, run: bool) -> Result<HostConfig, HostConfigError> {
+    let mut cfg = HostConfig::load(data_dir)?;
+    cfg.run_others_agents = run;
     cfg.save(data_dir)?;
     Ok(cfg)
 }

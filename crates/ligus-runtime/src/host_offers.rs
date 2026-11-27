@@ -190,7 +190,7 @@ pub fn status_now(offers: &[HostOffer], build: &str, role: HostRole) -> HostStat
         };
         out.push(st);
     }
-    HostStatus { build: build.to_string(), offers: out, refuses: refusals(&cfg, role, gws.exclusive()) }.sanitized()
+    HostStatus { build: build.to_string(), offers: out, refuses: refusals(&cfg, role, gws.exclusive()), refused_agents: Vec::new() }.sanitized()
 }
 
 /// A gateway's models (`GET /v1/models` through it, with its own
@@ -221,6 +221,43 @@ async fn gateway_models(g: std::sync::Arc<crate::model_gateway::Gateway>) -> Mod
 struct Local {
     status: Option<HostStatus>,
     at: Option<Instant>,
+    /// Per workspace: the agents placed on this host that it won't run
+    /// (workspace model v3, 5.4), refreshed by the dispatch loop, carried in
+    /// every beat (not only every five minutes, with the readiness lists).
+    refused: std::collections::HashMap<Uuid, Vec<ligus_core::outcome::AgentRefusal>>,
+}
+
+/// Record the agents placed on this host that it won't run in `workspace`,
+/// each with why. Replaces the last list; the next beat carries it.
+pub fn set_refused_agents(workspace: Uuid, mut list: Vec<ligus_core::outcome::AgentRefusal>) {
+    list.sort_by_key(|r| r.agent_id);
+    list.dedup_by_key(|r| r.agent_id);
+    let mut s = slot().write().unwrap_or_else(|e| e.into_inner());
+    if list.is_empty() {
+        s.refused.remove(&workspace);
+    } else {
+        s.refused.insert(workspace, list);
+    }
+}
+
+/// The agents this host refuses in `workspace` ([`set_refused_agents`]).
+pub fn refused_agents(workspace: Uuid) -> Vec<ligus_core::outcome::AgentRefusal> {
+    slot().read().unwrap_or_else(|e| e.into_inner()).refused.get(&workspace).cloned().unwrap_or_default()
+}
+
+/// The status this host's beat for `workspace` carries: the readiness
+/// report with this workspace's refused agents. `None` when there is
+/// neither yet.
+pub fn beat_status(workspace: Uuid) -> Option<HostStatus> {
+    let refused = refused_agents(workspace);
+    match local_status() {
+        Some(mut st) => {
+            st.refused_agents = refused;
+            Some(st.sanitized())
+        }
+        None if refused.is_empty() => None,
+        None => Some(HostStatus { refused_agents: refused, ..Default::default() }.sanitized()),
+    }
 }
 
 fn slot() -> &'static RwLock<Local> {
@@ -366,6 +403,7 @@ mod tests {
                 OfferStatus { name: "codex".into(), ready: false, why: "not signed in".into(), ..Default::default() },
             ],
             refuses: vec![],
+            refused_agents: vec![],
         };
         assert_eq!(readiness_line(&offers, Some(&st), true), "claude-code ready · codex not signed in");
         assert_eq!(readiness_line(&offers, None, true), "claude-code, codex");

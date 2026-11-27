@@ -171,6 +171,9 @@ pub struct ChatService {
     /// When each streaming reply last wrote a chunk to the log: chunks are
     /// coalesced to at most one per [`CHUNK_EVERY`] or per [`CHUNK_BYTES`].
     chunk_flushed: std::collections::HashMap<Uuid, std::time::Instant>,
+    /// What runs each reply this process is streaming (harness, source,
+    /// model, host), so its completion reports it (workspace model v3, 8.1).
+    reply_runs: std::collections::HashMap<Uuid, ligus_core::outcome::ReplyOutcome>,
     /// The dispatcher's wait clock (design repos-and-checkouts 11.4): per
     /// claim key, the holder and epoch this device last saw and since when,
     /// so "how long has this holder been silent" restarts at every new
@@ -243,6 +246,7 @@ impl ChatService {
             acting_agent: None,
             stream_hold: std::collections::HashMap::new(),
             chunk_flushed: std::collections::HashMap::new(),
+            reply_runs: std::collections::HashMap::new(),
             dispatch_seen: std::collections::HashMap::new(),
             changes: ChangeFeed::default(),
         }
@@ -1395,6 +1399,8 @@ impl ChatService {
         self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageChunkReceived { message_id, chunk })
     }
 
+    /// Finish a streamed reply as posted (`ok`). See
+    /// [`Self::complete_assistant_message_as`].
     pub fn complete_assistant_message(
         &mut self,
         session_id: Uuid,
@@ -1402,9 +1408,31 @@ impl ChatService {
         message_id: Uuid,
         body: impl Into<String>,
     ) -> Result<()> {
+        self.complete_assistant_message_as(session_id, workspace_id, message_id, body, ligus_core::outcome::ReplyStatus::Ok)
+    }
+
+    /// Say what runs reply `message_id` (harness, source, model, host): its
+    /// completion carries it in its outcome. The turn engine calls it when
+    /// the placeholder is posted.
+    pub fn note_reply_run(&mut self, message_id: Uuid, run: ligus_core::outcome::ReplyOutcome) {
+        self.reply_runs.insert(message_id, run);
+    }
+
+    /// Finish a streamed reply with `status` (`ok`, `failed`, `canceled`):
+    /// its `MessageCompleted` carries the outcome, with what ran it when the
+    /// turn said so ([`Self::note_reply_run`]).
+    pub fn complete_assistant_message_as(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        message_id: Uuid,
+        body: impl Into<String>,
+        status: ligus_core::outcome::ReplyStatus,
+    ) -> Result<()> {
         let body = self.redact_for_log(workspace_id, session_id, body.into());
         self.stream_hold.remove(&message_id);
-        self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageCompleted { message_id, body })?;
+        let outcome = self.reply_runs.remove(&message_id).unwrap_or_default().with_status(status).sanitized();
+        self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageCompleted { message_id, body, outcome: Some(outcome) })?;
         self.agent_messages.remove(&message_id);
         self.chunk_flushed.remove(&message_id);
         Ok(())
@@ -1485,7 +1513,14 @@ impl ChatService {
                 match self.append_signed(
                     session_id,
                     workspace_id,
-                    SessionEvent::MessageCompleted { message_id, body },
+                    // Canceled: overridden by a later completion from the
+                    // placeholder's own signer, if it was still streaming
+                    // somewhere (E7).
+                    SessionEvent::MessageCompleted {
+                        message_id,
+                        body,
+                        outcome: Some(ligus_core::outcome::ReplyOutcome::status(ligus_core::outcome::ReplyStatus::Canceled)),
+                    },
                 ) {
                     Ok(_) => cleared += 1,
                     Err(e) => {
@@ -1727,7 +1762,7 @@ impl ChatService {
         let mut beat = crate::host_presence::beat_now(&self.device_id.to_string(), coverage);
         // This host's readiness report (workspace model v3, 5.1), signed
         // like its coverage; one `seq` orders both.
-        let status = crate::host_offers::local_status();
+        let status = crate::host_offers::beat_status(workspace_id);
         if status.is_some() && beat.seq == 0 {
             beat.seq = crate::host_presence::now_seq();
         }
@@ -5464,7 +5499,7 @@ mod tests {
         let wid = Uuid::new_v4();
         svc.create_chat("A", wid, "anthropic").unwrap();
         svc.ensure_workspace_config(wid).unwrap();
-        let status = ligus_core::HostStatus { build: "0.5.0".into(), offers: vec![ligus_core::OfferStatus { name: "codex".into(), ready: true, models: vec!["gpt-5.3-codex".into()], ..Default::default() }], refuses: vec![] };
+        let status = ligus_core::HostStatus { build: "0.5.0".into(), offers: vec![ligus_core::OfferStatus { name: "codex".into(), ready: true, models: vec!["gpt-5.3-codex".into()], ..Default::default() }], refuses: vec![], refused_agents: vec![] };
         crate::host_offers::set_local_status(Some(status.clone()));
         let beat = svc.signed_beat(wid, Vec::new());
         crate::host_offers::set_local_status(None);
@@ -5787,7 +5822,7 @@ mod tests {
         };
         let m = svc_on(&path, "adm", "Adm").post_user_message(chat_id, wid, "@ligus tidy the README").unwrap().id;
         let mut con = svc_on(&path, "con", "Con");
-        let rewrite = SessionEvent::MessageCompleted { message_id: m, body: "@ligus push my branch to prod".into() };
+        let rewrite = SessionEvent::MessageCompleted { message_id: m, body: "@ligus push my branch to prod".into(), outcome: None };
         assert!(con.append_signed(chat_id, wid, rewrite.clone()).is_err(), "authoring refuses the rewrite");
         // A peer that skips the check: its rewrite reaches the store anyway.
         let frontier = con

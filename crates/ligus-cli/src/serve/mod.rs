@@ -863,6 +863,7 @@ impl Shared {
                         let me = notify::Me::in_chat(&author, s, &links);
                         let mut dto = api::message_dto(chat, m, viewer);
                         api::add_requester(&mut dto, s, m, &me);
+                        api::add_outcome(&mut dto, m, &s.workspace_hosts, &self.host_id);
                         self.hub.emit(name, hub::wrap("message", dto));
                         // Agent replies notify when done; other members'
                         // messages when they appear (only if they mention you).

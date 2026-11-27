@@ -404,7 +404,8 @@ impl ChatService {
             return Ok(false);
         }
         let mid = self.begin_assistant_message(session_id, workspace_id, name, runtime, agent.map(|a| a.id), Some(trigger))?;
-        self.complete_assistant_message(session_id, workspace_id, mid, note.to_string())?;
+        // A refusal: the turn didn't run (the note says why).
+        self.complete_assistant_message_as(session_id, workspace_id, mid, note.to_string(), ligus_core::outcome::ReplyStatus::Failed)?;
         Ok(true)
     }
 

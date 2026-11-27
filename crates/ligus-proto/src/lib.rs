@@ -113,6 +113,61 @@ pub struct ChatMessageDto {
     /// The viewer is that person: `@you` is highlighted as mentioning them.
     #[serde(default)]
     pub requester_is_viewer: bool,
+    /// How a finished reply ended and what answered (its completion's
+    /// outcome). None while it streams, and on other messages.
+    #[serde(default)]
+    pub outcome: Option<ReplyOutcomeDto>,
+    /// On a person's message whose turn doesn't run (yet): where it waits or
+    /// why it can't run, for one quiet row under the message. Only on the
+    /// sender's own devices. None when the turn runs or was answered.
+    #[serde(default)]
+    pub route: Option<TurnRouteDto>,
+}
+
+/// How a reply ended (workspace model v3, 8.1), as its author reported it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct ReplyOutcomeDto {
+    /// "ok" | "failed" | "canceled"
+    pub status: String,
+    /// The harness that ran it ("claudeCode", "codex", "openai", ...).
+    #[serde(default)]
+    pub harness: Option<String>,
+    /// The model that answered.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The host that ran it, by its label ("this device" for this one).
+    #[serde(default, serialize_with = "crate::names::ser_clean_opt")]
+    pub host: Option<String>,
+}
+
+/// Where a turn that doesn't run is (workspace model v3, 5.4).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct TurnRouteDto {
+    /// "queued" | "hostGone" | "unrunnable"
+    pub state: String,
+    /// Why, as a code: "offline", "removed", "revoked", "left",
+    /// "sourceNotOffered", "modelNotOffered", "notAllowedOnHost", "ownerGone",
+    /// "noKeyHere", "waiting".
+    pub reason: String,
+    /// The one line the chat shows.
+    pub text: String,
+    /// The host it names, by its label.
+    #[serde(default, serialize_with = "crate::names::ser_clean_opt")]
+    pub host: Option<String>,
+    /// RFC 3339: since when it waits.
+    #[serde(default)]
+    pub since: Option<String>,
+    /// "Run here this time" is offered (this device is one of the agent's
+    /// owner's and can run it).
+    #[serde(default)]
+    pub run_here: bool,
+    /// "Use Claude Code instead" for this one turn is offered.
+    #[serde(default)]
+    pub use_claude_code: bool,
 }
 
 /// A tool invocation an assistant turn made (MCP or built-in).

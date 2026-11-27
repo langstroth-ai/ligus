@@ -1193,16 +1193,75 @@ async fn list_messages(State(s): S, Path(id): Path<String>, Query(page): Query<P
     let viewer = who.viewer();
     let me = who.me_in(&chat, &links);
     // A duplicate answer the dispatcher fenced (`superseded`) isn't shown.
+    let routes = Routes::load(&s);
     let list: Vec<Value> = slice
         .iter()
         .filter(|m| !m.superseded)
         .map(|m| {
             let mut v = linked_message_dto(&chat, m, &links, viewer);
             add_requester(&mut v, &chat, m, &me);
+            add_outcome(&mut v, m, &routes.facts.all, &s.host_id);
+            if who.wrote(&me, m) {
+                routes.add(&mut v, &s, &chat, m, &links);
+            }
             v
         })
         .collect();
     Ok(Json(json!({ "messages": list })))
+}
+
+/// A finished reply's `outcome` (workspace model v3, 8.1): `{status, harness,
+/// model, host}`, `host` by label ("this box" for this one). Absent while it
+/// streams, on other messages and on replies from older builds without one.
+pub fn add_outcome(v: &mut Value, m: &ChatMessage, hosts: &[ligus_core::WorkspaceHost], this_host: &str) {
+    let label = |h: &str| {
+        if h == this_host {
+            return "this box".to_string();
+        }
+        hosts
+            .iter()
+            .find(|x| x.id == h)
+            .map(|x| ligus_proto::names::clean_display_name(&x.label))
+            .filter(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| format!("host {}", h.get(..8).unwrap_or(h)))
+    };
+    if let Some(o) = ligus_runtime::turn_route::outcome_dto(m, &label) {
+        v["outcome"] = serde_json::to_value(o).unwrap_or(Value::Null);
+    }
+}
+
+/// The hosts, read once per listing, for the `route` of the person's own
+/// messages whose turn doesn't run (yet; an unresolved phone gets none): `{state, reason, text, host,
+/// since}` (workspace model v3, 5.4). A phone runs nothing, so it never
+/// offers "Run here this time".
+pub struct Routes {
+    pub facts: ligus_runtime::turn_route::HostFacts,
+}
+
+impl Routes {
+    pub fn load(s: &Shared) -> Self {
+        Self { facts: ligus_runtime::turn_route::HostFacts::load(&s.lock(), s.ws) }
+    }
+
+    pub fn add(&self, v: &mut Value, s: &Shared, chat: &ChatSession, m: &ChatMessage, links: &ligus_core::DeviceLinks) {
+        use ligus_runtime::turn_route::{self as tr, Here};
+        let now = Timestamp::now();
+        let me = s.host_id.as_str();
+        let online = |h: &ligus_core::WorkspaceHost| h.id == me || s.presence.is_online(h, &now);
+        let status = |h: &str| if h == me { ligus_runtime::host_offers::beat_status(s.ws) } else { s.presence.status_of(h) };
+        let view = self.facts.view(&online, &status);
+        // This box runs only the agents placed on it, and says so in its
+        // own beat when it won't: the route reads that like anyone's.
+        let here = |_: Option<&ligus_core::WorkspaceAgent>| Here { eligible: false, resolves: Ok(()) };
+        let Some(p) = tr::pending_route(chat, m, links, false, &here, &view, now) else { return };
+        let Some(agent) = p.agent.as_ref() else { return };
+        let owner = chat.members.iter().find(|x| x.id == agent.owner_actor_id || x.actor.id == agent.owner_actor_id).map(|x| x.actor.display_name.clone()).unwrap_or_default();
+        let label = |h: &str| if h == me { "this box".to_string() } else { self.facts.label(h) };
+        let names = tr::Names { agent: &agent.name, owner: &owner, host: &label };
+        if let Some(dto) = tr::route_dto(&p.route, &names, false, false) {
+            v["route"] = serde_json::to_value(dto).unwrap_or(Value::Null);
+        }
+    }
 }
 
 #[derive(Deserialize)]
