@@ -17,11 +17,13 @@ with Ligus?**
   them off).
 - **I already use Ligus on another device** links this device to your
   account instead. It asks for no name and makes or joins no workspace, so
-  you never end up as a second person in your own workspaces. The desktop
-  app can't link itself in this version: the screen says so, and its **?**
-  says how to link lt or the `ligus` CLI on the same computer (`ligus
-  devices request`, approved on your other device under **My devices → Add
-  a computer**). **Back** returns to the question.
+  you never end up as a second person in your own workspaces: you paste the
+  approval address from your other device, both screens show the same code,
+  and your other device confirms with your passkey (see
+  [From a second desktop](linked-devices.md#desktop)). The workspace and
+  your profile then come from your other device. The first run ends there,
+  unless your account has no passkey yet: then one screen says to add it on
+  your first device. **Back** returns to the question.
 
 The answer is kept in `settings.json` (`"first_run_path"`), where the
 invite guard below reads it.

@@ -244,7 +244,14 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
       </div>
 
       {linking ? (
-        <LinkThisDevice onBack={() => setLinking(false)} />
+        <LinkThisDevice
+          onBack={() => setLinking(false)}
+          onLinked={async () => {
+            await refresh();
+            setLinking(false);
+            onClose();
+          }}
+        />
       ) : securing && confirmLeave ? (
         <div className="space-y-3" data-testid="secure-finish-later">
           <p className="text-sm font-semibold">Finish later?</p>
@@ -430,6 +437,12 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
             </button>
           </div>
           <InviteLinkHint code={joinCode} onLink={() => setLinking(true)} />
+          <p className="pt-1 text-xs text-ink-soft">
+            Your own workspace, from another device?{" "}
+            <button type="button" className="underline hover:text-ink" onClick={() => setLinking(true)}>
+              Link this computer
+            </button>
+          </p>
         </div>
       )}
 

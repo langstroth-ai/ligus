@@ -134,7 +134,7 @@ export function AddComputerPanel({
           Linking <strong>"{suggested.displayName}"</strong>: you can remove that member once it's added.
         </p>
       )}
-      {shownWorkspace() && <ApprovalAddress workspaceId={shownWorkspace()} hint={<>On the computer, run <code>ligus devices request --to</code> with it. The request comes to your Inbox.</>} />}
+      {shownWorkspace() && <ApprovalAddress workspaceId={shownWorkspace()} hint={<>On the other computer, paste it in Ligus (I already use Ligus → Link this computer), or run <code>ligus devices request --to</code> with it. The request comes to your Inbox.</>} />}
       <p className="text-xs text-ink-soft">
         Or paste: on the other computer, choose <em>Link to my devices</em> in lt (Settings or People, or the palette), or run{" "}
         <code>ligus devices request</code>. Paste what it shows. An invite would make a second member; this makes the

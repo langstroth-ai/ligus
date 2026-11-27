@@ -37,12 +37,18 @@ from source, are unsigned, so first launch needs a nudge:
 The first run opens on one question: **Is this your first device with
 Ligus?**
 
-- **I already use Ligus on another device**: this device should be linked
-  to your account, not start a new one (starting again would make a second
-  you, with its own name and keys). The desktop app can't link itself in
-  this version, so this screen says so; lt and the `ligus` CLI on the same
-  computer can be linked now (see [Add a computer](../features/linked-devices.md)).
-  Nothing is made or joined, and **Back** returns to the question.
+- **I already use Ligus on another device**: this computer becomes one
+  more of your devices, not a new you (starting again would make a second
+  you, with its own name and keys). It asks no name and makes no workspace.
+  On your other device, open **Settings → Profile → My devices → Add a
+  computer** and copy the approval address; paste it here and choose
+  **Continue**. Both screens show the same code: check it, choose **Codes
+  match**, and confirm on your other device with your passkey. Then choose
+  **Link** when this computer asks **Link this computer as Ana?**. Your
+  workspace and your profile come from your other device. If your relay
+  can't carry the request, choose **Use a request code instead** (see
+  [From a second desktop](../features/linked-devices.md#desktop)). **Back**
+  returns to the question.
 - **Yes, start here**: three steps, counted off by the dots at the top.
 
 1. **You**: a display name (prefilled from git) and, optionally, a
@@ -102,11 +108,10 @@ people compare with the code they see for you (see
 
 - **More devices** join your account from **Settings → Profile → My
   devices** (**Add a phone**, **Add a computer**). They don't sign in
-  anywhere. A computer asks to join from `lt` (**Link to my devices**) or
-  with `ligus devices request`; a second desktop app can't ask to link yet
-  (its first run says so when you answer **I already use Ligus**). Don't
-  invite yourself from another computer: that makes a second
-  member. See [Add a computer](../features/linked-devices.md).
+  anywhere. A computer asks to join from the desktop app's first run (**I
+  already use Ligus**), from `lt` (**Link to my devices**) or with `ligus
+  devices request`. Don't invite yourself from another computer: that makes
+  a second member. See [Add a computer](../features/linked-devices.md).
 - **Commits** Ligus makes on your behalf are attributed to the commit email
   in your profile.
 - **Reaching people** works through invite links and through the workspaces

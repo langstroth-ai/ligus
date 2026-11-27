@@ -20,6 +20,7 @@
 import * as fx from "./fixtures";
 import { setupMock } from "./setup";
 import { approvalsMock } from "./approvals";
+import { linkMock } from "./link";
 
 const params = new URLSearchParams(window.location.search);
 const scenario = params.get("scenario") ?? "default";
@@ -60,6 +61,8 @@ function handle(cmd: string, args: Args): unknown {
   if (setup.handled) return setup.value;
   const approvals = approvalsMock(cmd, args);
   if (approvals.handled) return approvals.value;
+  const link = linkMock(cmd, args);
+  if (link.handled) return link.value;
   switch (cmd) {
     case "export_theme":
       return `/Users/you/Downloads/${String(args?.fileName ?? "theme.toml")}`;
