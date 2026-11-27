@@ -40,6 +40,8 @@ _ligus-local() {
       '--bin-dir[where to install]:dir:_files -/' ;;
     configure) _arguments $common '--listen[serve listen address]:addr:' '--label[the box label]:label:' \
       '--relay-url[the relay URL]:url:' '--secret-backend[secret store]:backend:(file keychain secret-service)' \
+      '--admit-to[admit by code match through this approval address]:address:' \
+      '--admit-wait[how long --admit-to waits]:duration:' \
       '--throwaway-workspace[a random throwaway workspace]' '--force[rewrite an env file]' ;;
     start|stop|verify|status) _arguments $common $svc ;;
     unit) _arguments $common '--launchd[the plist instead of the systemd unit]' ;;

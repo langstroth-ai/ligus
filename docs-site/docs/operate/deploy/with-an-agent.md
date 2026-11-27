@@ -78,7 +78,7 @@ the full operator guide is [Kubernetes (preview)](kubernetes.md).
 ```sh
 L=deploy/local/ligus-local
 $L preflight --role serve --data-dir ~/.ligus-serve --json
-$L configure --role serve --data-dir ~/.ligus-serve --json   # then admit the box: ligus admit request --to ligusaddr1:…, you approve it
+$L configure --role serve --data-dir ~/.ligus-serve --admit-to 'ligusaddr1:…' --json   # admits the box by code match: you confirm the code
 $L start --role serve --data-dir ~/.ligus-serve --json
 $L verify --role serve --data-dir ~/.ligus-serve --json
 $L stop --role serve --data-dir ~/.ligus-serve

@@ -34,6 +34,8 @@ pub struct Fake {
     pub folder: FolderFact,
     pub repos: Vec<RepoFact>,
     pub box_state: Result<BoxFact, OpsError>,
+    /// How asking by code match ends (`ligus setup box --to`).
+    pub code_match: Result<BoxAsk, OpsError>,
     pub serve: ServeFact,
     pub hosts: Vec<HostFact>,
     pub phones: Vec<String>,
@@ -89,6 +91,7 @@ impl Default for Fake {
             folder: FolderFact::default(),
             repos: Vec::new(),
             box_state: Ok(BoxFact::default()),
+            code_match: Err(OpsError::Unsupported),
             serve: ServeFact::Running("127.0.0.1:7777".into()),
             hosts: Vec::new(),
             phones: Vec::new(),
@@ -331,6 +334,14 @@ impl SetupOps for Fake {
     fn join_request(&mut self, label: &str) -> OpsResult<(String, String)> {
         self.write("join_request", label.into())?;
         Ok(("ligusjoin1:PUBLIC".into(), "ABCD-EFGH".into()))
+    }
+    fn ask_to_join(&mut self, to: &str, label: &str) -> OpsResult<BoxAsk> {
+        self.write("ask_to_join", format!("{to} {label}"))?;
+        let r = self.code_match.clone();
+        if let (Ok(BoxAsk::Joined { .. }), Ok(b)) = (&r, &mut self.box_state) {
+            b.joined = true;
+        }
+        r
     }
     fn redeem(&mut self, code: &Zeroizing<String>) -> OpsResult<String> {
         self.secrets_seen.push(code.to_string());

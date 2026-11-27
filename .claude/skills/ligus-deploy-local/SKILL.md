@@ -68,7 +68,26 @@ human answers; `--secret-backend file` keeps them in owner-only files.
 
 A box joins a workspace only through a **box admission**, never with a
 person's invite (`ligus enroll` is for a person's own CLI device, not a box).
-`configure` exits 4 and prints the commands. With the env file loaded:
+
+**Code match (nothing pasted).** Ask the human for the workspace's approval
+address (`ligusaddr1:…`; not a secret: an Admin's `ligus admit address`, or
+the desktop's workspace menu > Admit a box > Copy) and pass it to configure:
+
+```sh
+$L configure --role serve --data-dir ~/.ligus-serve --admit-to 'ligusaddr1:…' --json
+```
+
+It runs `ligus setup box --to` with the env file loaded and prints
+`Code: XXXX XXXX` on stderr. **Human:** an Admin opens the request in their
+Inbox (desktop or phone), checks the code matches and approves with a
+passkey. The box keeps the admission only once the approval is on the
+workspace log; configure then exits 0 (`--admit-wait 15m` by default; exit 4
+if nobody approved in time, exit 1 if the codes didn't match). A relay
+without the approval mailbox exits 4 with the join request: use the paste
+below.
+
+**Paste.** Without an address, `configure` exits 4 and prints the commands.
+With the env file loaded:
 
 ```sh
 set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
