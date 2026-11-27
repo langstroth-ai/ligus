@@ -474,7 +474,10 @@ fn a_0_4_1_database_migrates_up_once_with_a_backup() {
     assert_eq!(tombstones, f.pruned.len());
     assert_eq!(processed, 4, "q1, r1, q2 and r2");
     let backup = backup.expect("a backup");
-    assert_eq!(backups(&f.db), vec![backup.clone()]);
+    // Compare real paths: the store names its file by the real path, the
+    // listing by the temp dir's (on macOS /var is a link to /private/var).
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap();
+    assert_eq!(backups(&f.db).iter().map(|p| real(p.as_path())).collect::<Vec<_>>(), vec![real(&backup)]);
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     // The backup is the 0.4.1 database as it was.
     let old = rusqlite::Connection::open(&backup).unwrap();
