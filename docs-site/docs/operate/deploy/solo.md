@@ -41,9 +41,11 @@ claude --version        # or: codex --version, ollama list
 
 ## 2. First launch
 
-Open **Ligus**. The five-step wizard asks for a name (and shows your safety code),
-the project folder, a runtime, an optional relay (**skip it**) and a theme.
-See [First launch](../../ligus/getting-started/first-launch.md#wizard-steps).
+Open **Ligus** and answer **Yes, start here** to "Is this your first device
+with Ligus?". The first run asks for a name, secures your first workspace
+(a passkey and your recovery key) and picks a runtime. No relay is asked.
+Then pick your project folder from the sidebar.
+See [First launch](../../ligus/getting-started/first-launch.md#first-run).
 
 Expected result: an empty workspace with your folder bound and the runtime
 you picked as the chat's primary runtime. **Settings → Team sync** shows no
