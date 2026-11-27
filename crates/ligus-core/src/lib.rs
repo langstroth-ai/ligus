@@ -6,6 +6,7 @@ pub mod admission;
 pub mod attachment;
 pub mod account_keys;
 pub mod agent;
+pub mod agent_run;
 pub mod authorization;
 pub mod authz;
 pub mod channel;

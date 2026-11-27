@@ -25,6 +25,7 @@ use ligus_core::authorization::{evaluate as authorize, requires_authz};
 use crate::event_store::{EventStore, EventStoreError};
 use crate::provider::ChatTurn;
 
+mod agent_run;
 mod approval_check;
 pub use approval_check::WorkspaceApprovers;
 mod asks;
@@ -1506,6 +1507,10 @@ impl ChatService {
         // Config hoist (§11): these records are workspace-level — target the
         // workspace-config log, not the calling chat's session.
         let session_id = self.ensure_workspace_config(workspace_id)?;
+        // Name, runtime, host, run and placement in one record (workspace
+        // model v3, 5.2): run and placement mirror the legacy fields.
+        self.refuse_unoffered_placement(workspace_id, &agent)?;
+        let agent = self.agent_for_write(workspace_id, &agent);
         self.append_signed(
             session_id,
             workspace_id,
@@ -1542,7 +1547,7 @@ impl ChatService {
         slot.avatar_url = avatar_url.filter(|u| !u.is_empty());
         // Only a plain hex color is kept (the fold drops anything else too).
         slot.avatar_color_hex = avatar_color_hex.filter(|c| ligus_core::agent::is_valid_color_hex(c));
-        let agent = slot;
+        let agent = self.agent_for_write(workspace_id, &slot);
         self.append_signed(
             session_id,
             workspace_id,
@@ -2254,8 +2259,12 @@ impl ChatService {
         let Some(slot) = agents.iter_mut().find(|a| a.id == agent_id) else {
             return Err(ChatError::NotFound("unknown agent".into()));
         };
-        slot.host_id = host_id.to_string();
+        // The host and the placement move together; an agent whose host was
+        // gone is placed again.
+        slot.place(host_id);
         let agent = slot.clone();
+        self.refuse_unoffered_placement(workspace_id, &agent)?;
+        let agent = self.agent_for_write(workspace_id, &agent);
         self.append_signed(
             config_id,
             workspace_id,

@@ -928,13 +928,20 @@ impl ChatSession {
             // New writes use the per-item `AgentUpserted`/`AgentRemoved` deltas
             // below; mixing the two is safe because the canonical fold order
             // resolves them deterministically on every device.
+            // Each entry starts over: no sticky field carries across a
+            // whole-list replace (workspace model v3, 5.6 rule 4).
             SessionEvent::AgentRosterUpdated { agents } => {
-                self.workspace_agents = agents.clone();
+                self.workspace_agents = agents.iter().map(|a| crate::agent_run::normalize(a, crate::agent_run::RunRules::Mirror)).collect();
                 self.workspace_agents.iter_mut().for_each(WorkspaceAgent::sanitize_color);
             }
-            // Per-item agent delta — upsert by id (mirrors `ChannelCreated`).
+            // Per-item agent delta — upsert by id (mirrors `ChannelCreated`),
+            // merged with the record it replaces: `run` and `placement` are
+            // sticky and always agree with `runtime_id` and `host_id`, which
+            // win (`crate::agent_run::merge_upsert`). Rules 3 keeps them a
+            // mirror of the legacy fields.
             SessionEvent::AgentUpserted { agent } => {
-                let mut agent = agent.clone();
+                let prev = self.workspace_agents.iter().find(|a| a.id == agent.id);
+                let mut agent = crate::agent_run::merge_upsert(prev, agent, crate::agent_run::RunRules::Mirror);
                 agent.sanitize_color();
                 if let Some(slot) = self.workspace_agents.iter_mut().find(|a| a.id == agent.id) {
                     *slot = agent;
@@ -2474,7 +2481,9 @@ fn fold_pass(
         _ => tracker.state.rules,
     };
     // Rules 3: a host whose owner isn't a member any more is inert (agents
-    // bound to it become unbound everywhere at once).
+    // bound to it become unbound everywhere at once, for older readers).
+    // A placement-aware reader sees the agent as `host_gone`: it keeps
+    // naming the host and runs nowhere (workspace model v3, 5.3).
     if session.authz.rules >= authz::RULES_V3 && session.id == crate::channel::workspace_config_session_id(session.workspace_id) {
         let members: std::collections::BTreeSet<&str> = session.members.iter().map(|m| m.id.as_str()).collect();
         let gone: Vec<String> = session
@@ -2487,10 +2496,16 @@ fn fold_pass(
             session.workspace_hosts.retain(|h| !gone.contains(&h.id));
             for a in session.workspace_agents.iter_mut() {
                 if gone.contains(&a.host_id) {
-                    a.host_id.clear();
+                    a.placement = Some(crate::agent_run::Placement::Host { host_id: std::mem::take(&mut a.host_id) });
+                    a.host_gone = true;
                 }
             }
         }
+    }
+    // A placement naming a host the legacy field no longer does (a seed
+    // taken after the pass above) is gone too.
+    for a in session.workspace_agents.iter_mut() {
+        a.host_gone = a.is_host_gone();
     }
     Some(session)
 }

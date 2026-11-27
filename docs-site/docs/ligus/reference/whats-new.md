@@ -4,6 +4,28 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## Unreleased
+
+### Changed
+
+- **An agent records what it runs and where, in one record.** Adding an
+  agent writes its name, runtime and host in one signed record, now with its
+  run and placement too. Older versions read the same runtime and host, so
+  every device routes the agent the same way. The desktop fills these in
+  once for agents you already own; nothing changes for them and no passkey
+  is asked.
+- **An agent can't be placed on a host that can't run it.** Binding an agent
+  whose runtime goes through a model gateway to a host that doesn't offer
+  that gateway is refused ("build-1 doesn't offer gw-home") instead of
+  failing at its first turn. See
+  [Runtimes and agents](cli.md#runtimes-and-agents).
+
+### Fixed
+
+- **Renaming an agent whose host left the workspace.** When a host's owner
+  left, renaming or recoloring one of its agents was refused as a move. The
+  agent now keeps naming that host until someone places it again.
+
 ## 0.4.1
 
 Fixes for setting up and running agents: replies read in order, an agent's
