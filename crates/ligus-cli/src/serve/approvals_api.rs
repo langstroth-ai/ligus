@@ -441,7 +441,6 @@ fn handoff_account(p: &Principal) -> Option<Uuid> {
 
 /// A hand-off as the phone of `account` may see it.
 pub struct PresenceRowView {
-    pub device_id: Uuid,
     /// The asking device's name on the log, else its cleaned label hint.
     pub device_name: String,
     pub json: Value,
@@ -484,7 +483,7 @@ pub fn presence_view(s: &Shared, r: &LiveRequest, account: Uuid, now: i64) -> Op
         "origins": req.policy.origins,
         "allowCredentials": req.credential_ids,
     });
-    Some(PresenceRowView { device_id: view.device_id, device_name, json })
+    Some(PresenceRowView { device_name, json })
 }
 
 fn row(ws: Uuid, workspace_name: &str, r: &LiveRequest, roster: Option<&ligus_core::authz::RosterState>, seal_key: &[u8; 32]) -> Value {

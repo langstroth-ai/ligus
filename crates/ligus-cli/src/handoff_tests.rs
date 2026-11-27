@@ -242,6 +242,14 @@ fn devices_approve(cfg: &Config, request: &str, fp: &str, out: &std::path::Path,
     })
 }
 
+/// Whether the desk's log holds a certificate for `device`, with presence.
+fn certificate_of(w: &World, device: Uuid) -> bool {
+    open_service(&w.desk).unwrap().store().list(workspace_config_session_id(w.ws)).unwrap().into_iter().any(|e| {
+        matches!(&e.payload, ligus_core::SessionEvent::DeviceCertificateAdded { certificate } if certificate.device_id == device)
+            && e.actor_stamp.as_ref().is_some_and(|s| s.presence.is_some())
+    })
+}
+
 fn phone_code(phone: &ligus_core::testkit::Phone) -> ligus_runtime::phone_enroll::PhoneCode {
     ligus_runtime::phone_enroll::PhoneCode::new_signed(phone.device_id, phone.public_key(), "Alex's iPad", |m| ligus_core::crypto::sign_p256(&phone.key, m))
 }
@@ -264,7 +272,7 @@ async fn the_recovery_word_commands_wait_for_your_desktop_or_phone() {
     t.join().unwrap().unwrap();
     assert!(std::fs::read_to_string(&grant).unwrap().trim().len() > 20, "the grant for the computer");
     let comp = ligus_runtime::computer_link::LinkRequest::decode(&request).unwrap().device_id;
-    assert!(open_service(&w.desk).unwrap().my_device_ids(w.ws).unwrap().contains(&comp), "certified with the phone's confirmation");
+    assert!(certificate_of(&w, comp), "certified with the phone's confirmation");
 
     // phones certify
     let ipad = ligus_core::testkit::Phone::new();
@@ -273,7 +281,7 @@ async fn the_recovery_word_commands_wait_for_your_desktop_or_phone() {
     let view = phone_answers(&w, &phone, true).await;
     assert!(view.summary.starts_with("Enroll phone"), "{}", view.summary);
     t.join().unwrap().unwrap();
-    assert!(open_service(&w.desk).unwrap().my_device_ids(w.ws).unwrap().contains(&ipad.device_id));
+    assert!(certificate_of(&w, ipad.device_id), "the phone certified with the other phone's confirmation");
 
     // admit issue
     let out = w.root.join("admission");
@@ -299,7 +307,7 @@ async fn not_me_a_timeout_and_no_mailbox_on_the_recovery_word_commands() {
     let phone = alexs_phone(&w).await;
     let (request, fp) = link_request(&w, "laptop");
     let comp = ligus_runtime::computer_link::LinkRequest::decode(&request).unwrap().device_id;
-    let certified = || open_service(&w.desk).unwrap().my_device_ids(w.ws).unwrap().contains(&comp);
+    let certified = || certificate_of(&w, comp);
 
     // Not me.
     let t = devices_approve(&w.desk, &request, &fp, &w.root.join("g1"), Duration::from_secs(60));
