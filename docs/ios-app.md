@@ -67,7 +67,21 @@ API plus a Server-Sent Events stream.
 
 JSON, camelCase, ISO-8601 UTC timestamps (`2026-10-20T17:03:11.52Z`). Every
 request needs `Authorization: Bearer <token>`, except `GET /v1/health`.
-A missing or bad token gets `401 {"error": …}`. Errors are
+A missing or bad token gets `401 {"error": …}`.
+
+Every request acts for a principal, worked out once per request: through the
+tunnel, the person who holds the pairing's workspace device; on the direct
+path, the same for a phone's own token (`ld1.<pid>.<mac>`, an HMAC of the
+pairing id under `serve.token`, handed out only by `GET /v1/tunnel/direct`
+and changed whenever `serve.token` rotates); the operator token is the box
+itself. The shared `serve.token` (a direct-only pairing link, or an app from
+before 0.5) and a phone the box can't place are **unresolved**: the
+workspace's chats, proposals and join requests only, no DMs, every "you"
+field empty or false (`myRole`, `myVote`, `isSelf`, `isYou`,
+`canClearLockdown`), unread counts kept in one set shared by all such phones,
+and no "you" pushes (workspace-wide ones without previews). Answers to the
+shared token carry the header `ligus-direct-credential: shared`; the app
+then fetches its own token over the tunnel and retries. Errors are
 `{"error": "<message>"}` with 400, 401, 403 (roster role too low), 404 or 409
 (apply conflict). The server binds to its configured address: default
 `127.0.0.1:8787`, and on the home host its Tailscale IP. It refuses `0.0.0.0`
@@ -79,7 +93,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | POST | `/v1/phone-enroll/check` `{workspaceId, desktopDeviceId, rid, exp, deviceId?}` | 0.1.1. Who showed a scanned `ligusenroll1:` code: `{workspaceId, workspaceName, person: {accountId, memberId, displayName, role, nameCollision}, desktopLabel, phone: {standing: "new"\|"alreadyMine"}}`. See "Add a phone by scanning the desktop's QR" below |
 | POST | `/v1/phone-enroll/requests` `{request}` | 0.1.1. `202 {rid, state: "relayed"}`: the box passed the phone's `ligusenrollreq1:` request to the desktop |
 | GET | `/v1/phone-enroll/requests/{rid}?wait=N` | 0.1.1. `{state: "waiting"\|"answered"\|"expired", answer?, certified}`, long poll up to 25 s |
-| GET | `/v1/health` | `{ok: true, version, workspace?, deviceLabel?, identity?}`. `workspace` (room name), `deviceLabel` and `identity` appear only when authorized. `identity = {mode: "member"\|"revoked", actorId, displayName, deviceFingerprint}`: the box's own service-member identity (`"owner"` is never reached: a box enrolled as a person's device refuses to start) |
+| GET | `/v1/health` | `{ok: true, version, workspace?, deviceLabel?, identity?, principal?, principalVia?, hint?}`. `workspace` (room name), `deviceLabel`, `identity` and `principal` appear only when authorized. `principal` is who the request acts for: `box` (the operator), `person` (a placed phone; `principalVia` is this host's id) or `unresolved` (with a one-line `hint`). `identity = {mode: "member"\|"revoked", actorId, displayName, deviceFingerprint}`: the box's own service-member identity (`"owner"` is never reached: a box enrolled as a person's device refuses to start) |
 | GET | `/v1/chats` | `{chats: [{id, title, updatedAt, preview, unread: int, channelId, participants: [Participant]}]}`, newest first |
 | POST | `/v1/chats` `{title?}` | `{chat}` |
 | GET | `/v1/chats/{id}/messages?after=<messageId>&limit=<n>` | `{messages: [Message]}`, oldest first. Without `after`, the latest page (default limit 100, max 1000) |
@@ -97,7 +111,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | GET | `/v1/proposals/{id}/file?path=&side=old\|new` | `{path, side, content, size, base, applied}`: one file of the proposal's diff, whole, before (`old`) or after (`new`, the default) the change. Read from the chat's bound checkout (branch `ligus/chat/<id>`, else `HEAD`) with the file's patch applied in a scratch directory, never in the checkout; `applied` means the base already carries the change and `old` was recovered by reversing it. `400`: `path` isn't a plain relative path or isn't in the diff, or a bad `side`. `404`: no diff, no checkout bound here, or that side doesn't exist (a new file has no `old`, a deleted one no `new`). `409`: the diff applies to neither base. `413` over 512 KB, `415` not UTF-8. The app uses it to render a changed Markdown file |
 | GET | `/v1/proposals/{id}/comments` | `{comments: [Comment]}`, the refinement thread, oldest first |
 | POST | `/v1/proposals/{id}/comments` `{text, requestChanges?}` | `{comment, proposal}`. `requestChanges: true` marks it a change request. The note is written as this box, so only the operator token may add one: a phone gets `403 {"error": "Add notes from your desktop for now."}` |
-| POST | `/v1/proposals/{id}/request-changes` `{note?}` | `{proposal, message}`. The desktop's "Send to agent to revise"; `note` is added first as a change request (operator only, as above: a phone sends none) |
+| POST | `/v1/proposals/{id}/request-changes` `{note?}` | `{proposal, message}`. The desktop's "Send to agent to revise"; `note` is added first as a change request. Operator only: its thread line and instruction would be the box's writes, so a phone gets `403 {"error": "Send it back to the agent from your desktop for now."}` (with a `note`: the notes refusal) and nothing is written |
 | GET | `/v1/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, every [proposal set](../docs-site/docs/ligus/features/proposal-sets.md) in the workspace, newest first (open by default). Read-only |
 | GET | `/v1/proposal-sets/{id}` | `{set: ProposalSet}` |
 | GET | `/v1/chats/{id}/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, one chat's sets (all by default) |
@@ -179,9 +193,13 @@ A workflow run in `GET /v1/chats/{id}/details` also carries `coordinator:
 
 Field notes:
 
-- `unread` counts messages after the phone's read mark that this box didn't
-  write. System notes don't count. Fetching messages moves the mark to the last
-  message returned. On startup every existing chat is marked read.
+- `unread` counts messages after the person's read mark that they didn't
+  write on any of their devices. System notes don't count. Fetching messages
+  moves that person's mark to the last message returned. Marks are kept per
+  person (their account) in `serve-state.json` (`readMarksByPerson`), so all
+  of one person's phones share them; `readMarks` is the baseline a person who
+  never opened a chat counts from (on startup every existing chat's newest
+  message, and the marks an older box kept).
 - `preview` is the newest non-empty, non-system message, up to 140 characters.
 - `/v1/proposals?status=open` lists open proposals that haven't been dismissed
   or superseded. `all` lists every proposal.
@@ -212,7 +230,8 @@ Field notes:
   `worker` or `device` (another registered host). `hostOnline` is present
   for an agent with a host.
 - `Person = {actorId, displayName, kind, role: "owner"|"admin"|"contributor"|"viewer", title?, avatarUrl?, isSelf: bool}`.
-  `isSelf` marks this box's own identity (the one the phone writes as).
+  `isSelf` marks the request's person (the operator's: this box's own
+  identity; an unresolved phone: nobody).
 - `channelId` files a chat under a channel (`""` = unfiled). A channel's
   `defaultChatId` is its drop-in chat. `POST /v1/chats` files the new chat
   under the first channel, as the desktop does.
