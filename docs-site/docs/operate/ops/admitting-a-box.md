@@ -157,6 +157,40 @@ From the [shared table](../reference/cli-conventions.md#exit-codes):
 | 6 | the relay refused the request (check the relay access token) |
 | 7 | the relay is unreachable, busy or its mailbox is full: retry |
 
+### From the setup flow or the deploy script {#setup-box-to}
+
+`ligus setup box` and `deploy/local/ligus-local configure` take the same
+approval address and run the same exchange, so a box set up with either is
+admitted without pasting anything:
+
+```sh
+ligus setup box --to 'ligusaddr1:…' --label build-1 [--timeout 15m] [--json]
+deploy/local/ligus-local configure --role serve --data-dir ~/.ligus-serve \
+  --label build-1 --admit-to 'ligusaddr1:…' [--admit-wait 15m] --json
+```
+
+`ligus setup box --to` first checks the data dir and the agent sandbox, then
+asks as above (the code is on stderr, so `--json` stays one document), keeps
+the admission once the approval is on the workspace log, and checks that
+`ligus serve` answers. `configure --admit-to` writes the env file, then runs
+`ligus setup box --to` with it loaded and no terminal question (the
+Admin's match and passkey are the human step).
+
+If the relay has no approval mailbox, neither stops at exit 3: they fall
+back to the [paste](#paste), print the join request and exit 4, with a
+`code match` warning that says why. Then send the request to an Admin and
+keep their code with `ligus setup box --code @FILE` (an owner-only file) or
+`ligus admit redeem`. `--to` and `--code` together are a usage error.
+
+| Code | `ligus setup box --to` | `ligus-local configure --admit-to` |
+|---|---|---|
+| 0 | admitted; the admission is kept | admitted |
+| 1 | the codes didn't match, the request was declined or expired, or the approval wasn't on the workspace log | the same, or the relay didn't answer (read `checks[].fix`) |
+| 2 | a damaged address, or `--to` with `--code` | a value that isn't an approval address |
+| 3 | the desktop app's data dir, or no agent sandbox | the ligus CLI is missing |
+| 4 | no approver within `--timeout`, a stale address, or the paste fallback | the same |
+| 7 | the relay is unreachable, busy or its mailbox is full | (exit 1) |
+
 ### Reset address
 
 If the address leaks and requests you don't want arrive, an Admin makes a new

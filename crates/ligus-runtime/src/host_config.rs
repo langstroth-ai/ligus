@@ -6,6 +6,10 @@
 //! # workers and boxes always list theirs).
 //! list_tools = false
 //!
+//! # Run other people's agents placed on this computer (a person's own
+//! # computer only; off by default: it runs only its own person's agents).
+//! run_others_agents = true
+//!
 //! # Local model servers: the address stays here, the workspace sees the name.
 //! [[local]]
 //! name = "ollama"
@@ -28,6 +32,10 @@
 //! could point a runtime at a secret meant for another workspace on a shared
 //! worker. The gateway allow-list stays in its own file
 //! (`crate::model_gateway`).
+//!
+//! A declared secret's value comes from `LIGUS_WS_SECRET_<name>` (or a file
+//! in `LIGUS_WS_SECRET_DIR`), else from this device's secret store, where
+//! `ligus secrets set` keeps it ([`SECRET_SCOPE`], [`held_value`]).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -38,6 +46,18 @@ use uuid::Uuid;
 
 /// The file's name in the data dir.
 pub const HOST_CONFIG_FILE: &str = "host.toml";
+
+/// The secret-store scope of workspace secrets kept on this device
+/// (`ligus secrets set`). One value per name for the device; `host.toml`
+/// says which workspaces may use it.
+pub const SECRET_SCOPE: &str = "ws-secret";
+
+/// Whether `name` can be a secret name: letters, digits, `_` and `-` (it
+/// becomes part of `LIGUS_WS_SECRET_<name>`, the rule `LIGUS_WS_SECRET_DIR`
+/// files follow too).
+pub fn valid_secret_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 128 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
 
 fn default_true() -> bool {
     true
@@ -51,6 +71,12 @@ pub struct HostConfig {
     /// computers honour `false`; workers and boxes always list.
     #[serde(default = "default_true")]
     pub list_tools: bool,
+    /// A person's own computer runs other people's agents placed on it only
+    /// when this is set (workspace model v3, 5.4, D16). Off: it runs only
+    /// its own person's agents and its beat says it refuses the rest.
+    /// Workers and boxes run any agent placed on them and ignore it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub run_others_agents: bool,
     /// Local model servers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub local: Vec<LocalSource>,
@@ -61,7 +87,7 @@ pub struct HostConfig {
 
 impl Default for HostConfig {
     fn default() -> Self {
-        Self { list_tools: true, local: Vec::new(), workspaces: BTreeMap::new() }
+        Self { list_tools: true, run_others_agents: false, local: Vec::new(), workspaces: BTreeMap::new() }
     }
 }
 
@@ -244,6 +270,95 @@ pub fn seed_declarations(data_dir: &Path, workspace_id: Uuid, names: &[String]) 
     Ok(true)
 }
 
+/// Declare secret `name` for `workspace_id` in `data_dir/host.toml`, keeping
+/// the rest. Returns whether it was newly declared.
+pub fn declare_secret(data_dir: &Path, workspace_id: Uuid, name: &str) -> Result<bool, HostConfigError> {
+    let mut cfg = HostConfig::load(data_dir)?;
+    let d = cfg.workspaces.entry(workspace_id.to_string()).or_default();
+    if d.secrets.iter().any(|s| s == name) {
+        return Ok(false);
+    }
+    d.secrets.push(name.to_string());
+    d.secrets.sort();
+    cfg.save(data_dir)?;
+    Ok(true)
+}
+
+/// Stop declaring secret `name` for `workspace_id` in `data_dir/host.toml`,
+/// keeping the rest (a provider backed by it stays listed but isn't offered
+/// until the name is declared again). An entry left empty is removed.
+/// Returns whether it was declared.
+pub fn undeclare_secret(data_dir: &Path, workspace_id: Uuid, name: &str) -> Result<bool, HostConfigError> {
+    if !path_in(data_dir).exists() {
+        return Ok(false);
+    }
+    let mut cfg = HostConfig::load(data_dir)?;
+    let key = workspace_id.to_string();
+    let Some(d) = cfg.workspaces.get_mut(&key) else { return Ok(false) };
+    let before = d.secrets.len();
+    d.secrets.retain(|s| s != name);
+    if d.secrets.len() == before {
+        return Ok(false);
+    }
+    if d.secrets.is_empty() && d.providers.is_empty() {
+        cfg.workspaces.remove(&key);
+    }
+    cfg.save(data_dir)?;
+    Ok(true)
+}
+
+impl HostConfig {
+    /// The workspaces (ids) this host declares `name` for.
+    pub fn workspaces_declaring(&self, name: &str) -> Vec<String> {
+        self.workspaces.iter().filter(|(_, d)| d.secrets.iter().any(|s| s == name)).map(|(w, _)| w.clone()).collect()
+    }
+
+    /// Every secret name declared for any workspace, sorted.
+    pub fn declared_names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.workspaces.values().flat_map(|d| d.secrets.iter().cloned()).collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+}
+
+/// The secret-store id of workspace secret `name` on this device.
+pub fn secret_id(name: &str) -> crate::secret_store::SecretId {
+    crate::secret_store::SecretId::new(SECRET_SCOPE, name)
+}
+
+/// The value of workspace secret `name` this process holds:
+/// `LIGUS_WS_SECRET_<name>` (env, or a `LIGUS_WS_SECRET_DIR` file) wins,
+/// else this device's secret store (`ligus secrets set`) for the data dir
+/// [`init_host`] loaded. Whether a workspace may use it is
+/// [`HostConfig::declares_secret`]'s call, not this one's. A value read from
+/// the store is registered for redaction like the env ones.
+pub fn held_value(name: &str) -> Option<zeroize::Zeroizing<String>> {
+    let dir = data_dir_slot().read().unwrap_or_else(|e| e.into_inner()).clone();
+    held_value_in(dir.as_deref(), name)
+}
+
+/// [`held_value`] with the store of `data_dir` (None: env only).
+pub fn held_value_in(data_dir: Option<&Path>, name: &str) -> Option<zeroize::Zeroizing<String>> {
+    if !valid_secret_name(name) {
+        return None;
+    }
+    if let Ok(v) = ligus_core::names::var(&ligus_core::WorkspaceCredential::env_var(name)) {
+        if !v.is_empty() {
+            return Some(zeroize::Zeroizing::new(v));
+        }
+    }
+    let v = crate::secret_store::for_data_dir(data_dir?).get_string(&secret_id(name)).ok().flatten().filter(|v| !v.is_empty())?;
+    crate::secret_redact::register(&v);
+    Some(v)
+}
+
+/// Whether this process holds a value for workspace secret `name`
+/// ([`held_value`]).
+pub fn is_held(name: &str) -> bool {
+    held_value(name).is_some()
+}
+
 /// Set "Don't list this computer's tools" (`list_tools = !hide`) in
 /// `data_dir/host.toml`, keeping the rest.
 pub fn set_list_tools(data_dir: &Path, list: bool) -> Result<HostConfig, HostConfigError> {
@@ -251,6 +366,20 @@ pub fn set_list_tools(data_dir: &Path, list: bool) -> Result<HostConfig, HostCon
     cfg.list_tools = list;
     cfg.save(data_dir)?;
     Ok(cfg)
+}
+
+/// Set "Run other people's agents on this computer" (`run_others_agents`)
+/// in `data_dir/host.toml`, keeping the rest.
+pub fn set_run_others_agents(data_dir: &Path, run: bool) -> Result<HostConfig, HostConfigError> {
+    let mut cfg = HostConfig::load(data_dir)?;
+    cfg.run_others_agents = run;
+    cfg.save(data_dir)?;
+    Ok(cfg)
+}
+
+fn data_dir_slot() -> &'static RwLock<Option<PathBuf>> {
+    static SLOT: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
+    SLOT.get_or_init(|| RwLock::new(None))
 }
 
 fn slot() -> &'static RwLock<Arc<HostConfig>> {
@@ -271,6 +400,7 @@ pub fn install(cfg: HostConfig) {
 /// Load and install `data_dir/host.toml`. An invalid file is an error: the
 /// host must not guess what its operator declared.
 pub fn init_host(data_dir: &Path) -> Result<Arc<HostConfig>, HostConfigError> {
+    *data_dir_slot().write().unwrap_or_else(|e| e.into_inner()) = Some(data_dir.to_path_buf());
     let cfg = HostConfig::load(data_dir)?;
     install(cfg);
     Ok(host())
@@ -337,5 +467,54 @@ mod tests {
         let empty = tempfile::tempdir().unwrap();
         assert!(!seed_declarations(empty.path(), ws, &[]).unwrap(), "nothing to declare: no file");
         assert_eq!(HostConfig::load(empty.path()).unwrap(), HostConfig::default());
+    }
+
+    #[test]
+    fn declares_and_undeclares_keeping_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ws, other) = (Uuid::new_v4(), Uuid::new_v4());
+        set_list_tools(dir.path(), false).unwrap();
+        assert!(declare_secret(dir.path(), ws, "team-claude").unwrap());
+        assert!(!declare_secret(dir.path(), ws, "team-claude").unwrap(), "already declared");
+        assert!(declare_secret(dir.path(), ws, "acme").unwrap());
+        assert!(declare_secret(dir.path(), other, "acme").unwrap());
+        let cfg = HostConfig::load(dir.path()).unwrap();
+        assert!(!cfg.list_tools, "the rest is kept");
+        assert_eq!(cfg.workspaces[&ws.to_string()].secrets, ["acme", "team-claude"]);
+        assert_eq!(cfg.workspaces_declaring("acme").len(), 2);
+        assert_eq!(cfg.declared_names(), ["acme", "team-claude"]);
+        assert!(undeclare_secret(dir.path(), other, "acme").unwrap());
+        assert!(!undeclare_secret(dir.path(), other, "acme").unwrap(), "no longer declared");
+        let cfg = HostConfig::load(dir.path()).unwrap();
+        assert!(!cfg.workspaces.contains_key(&other.to_string()), "an empty entry goes");
+        assert!(cfg.declares_secret(ws, "acme"), "the other workspace keeps it");
+        let none = tempfile::tempdir().unwrap();
+        assert!(!undeclare_secret(none.path(), ws, "acme").unwrap());
+        assert!(!path_in(none.path()).exists(), "undeclaring never creates host.toml");
+    }
+
+    #[test]
+    fn a_stored_secret_is_held_and_env_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "held-test-7f3a";
+        assert!(held_value_in(Some(dir.path()), name).is_none());
+        crate::secret_store::for_data_dir(dir.path()).put(&secret_id(name), b"sk-stored").unwrap();
+        assert_eq!(held_value_in(Some(dir.path()), name).as_deref().map(String::as_str), Some("sk-stored"));
+        assert!(held_value_in(None, name).is_none(), "no data dir: env only");
+        assert!(held_value_in(Some(dir.path()), "bad name").is_none());
+        std::env::set_var("LIGUS_WS_SECRET_held-env-7f3a", "sk-env");
+        crate::secret_store::for_data_dir(dir.path()).put(&secret_id("held-env-7f3a"), b"sk-stored").unwrap();
+        assert_eq!(held_value_in(Some(dir.path()), "held-env-7f3a").as_deref().map(String::as_str), Some("sk-env"), "the environment wins");
+        std::env::remove_var("LIGUS_WS_SECRET_held-env-7f3a");
+    }
+
+    #[test]
+    fn secret_names() {
+        for ok in ["team-claude", "ACME_1", "a"] {
+            assert!(valid_secret_name(ok), "{ok}");
+        }
+        for bad in ["", "a b", "a=b", "../x", "a.b", &"x".repeat(129)] {
+            assert!(!valid_secret_name(bad), "{bad}");
+        }
     }
 }

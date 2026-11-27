@@ -555,23 +555,43 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "setup box",
         group: G_START,
-        summary: "on a box: print its join request, then keep the admission an Admin approved",
-        purpose: "Run it on the box, with the box's own data dir (never the desktop app's). The first run checks the \
-                  agent sandbox, prints the box's join request and fingerprint (public) and stops with exit 4: an Admin \
-                  approves it with a passkey on the desktop (workspace menu > Admit a box) or the phone. Run it again \
-                  with the sealed code they send back; it keeps the admission (as ligus admit redeem does) and checks \
-                  that ligus serve answers. No flag can approve a box.",
-        synopsis: &["ligus setup box [--label NAME] [--code - | @FILE] [--json] [--dry-run]"],
+        summary: "on a box: join by code match (--to), or print its join request and keep the admission an Admin approved",
+        purpose: "Run it on the box, with the box's own data dir (never the desktop app's). It first checks the agent \
+                  sandbox. With --to and the workspace's approval address (ligusaddr1:…, not a secret; an Admin's \
+                  ligus admit address prints it), the box posts its join request to the workspace's approval mailbox \
+                  and shows a code (K7Q4 M9X2) on stderr; the Admin's desktop or phone shows the same code, they \
+                  approve with a passkey, and the box keeps the admission only after finding that approval on the \
+                  workspace log. Nothing is pasted either way. If the relay has no approval mailbox, it falls back to \
+                  the paste below. Without --to it prints the box's join request and fingerprint (public) and stops \
+                  with exit 4: an Admin approves it on the desktop (workspace menu > Admit a box) or the phone; run it \
+                  again with the sealed code they send back and it keeps the admission (as ligus admit redeem does). \
+                  Either way it then checks that ligus serve answers. No flag can approve a box.",
+        synopsis: &[
+            "ligus setup box --to ligusaddr1:… [--label NAME] [--timeout 15m] [--json] [--dry-run]",
+            "ligus setup box [--label NAME] [--code - | @FILE] [--json] [--dry-run]",
+        ],
         flags: &[
             f("--label NAME", "LIGUS_HOST_LABEL, else the host name", "how the workspace names this box"),
-            f("--code - | @FILE", "none", "the sealed admission code, from stdin or an owner-only file"),
+            f("--to ADDRESS", "none (the paste)", "the workspace's approval address (ligusaddr1:…): ask by code match, nothing pasted"),
+            f("--timeout DURATION", "15m with --to", "how long --to waits for an approver (90s, 15m, 1h)"),
+            f("--code - | @FILE", "none", "the sealed admission code, from stdin or an owner-only file (not with --to)"),
             JSON,
             DRY_RUN,
         ],
         env: &["LIGUS_DATA_DIR", "LIGUS_HOST_LABEL", "LIGUS_SERVE_LISTEN"],
-        examples: &["LIGUS_DATA_DIR=~/.ligus-serve ligus setup box --label home", "ligus setup box --code - < ./admission"],
-        exit: &[(3, "the desktop app's data dir, or no agent sandbox"), (4, "waiting for an Admin's passkey approval")],
-        see_also: &["ligus admit request", "ligus help box", "desktop: workspace menu > Admit a box (where the Admin approves)"],
+        examples: &[
+            "LIGUS_DATA_DIR=~/.ligus-serve ligus setup box --to ligusaddr1:… --label home",
+            "LIGUS_DATA_DIR=~/.ligus-serve ligus setup box --label home",
+            "ligus setup box --code - < ./admission",
+        ],
+        exit: &[
+            (1, "with --to: the codes didn't match, the approver declined, or the approval wasn't on the workspace log (nothing kept)"),
+            (2, "--to and --code together, or a damaged approval address"),
+            (3, "the desktop app's data dir, or no agent sandbox"),
+            (4, "waiting for an Admin's passkey approval: the paste (also when the relay has no approval mailbox), or --to timed out or the address is stale"),
+            (7, "with --to: the relay didn't answer"),
+        ],
+        see_also: &["ligus admit address", "ligus admit request", "ligus help box", "desktop: workspace menu > Admit a box (where the Admin approves)"],
         ..D
     },
     Cmd {
@@ -1130,12 +1150,92 @@ pub const COMMANDS: &[Cmd] = &[
                   \x20 harness = \"anthropic\"          # anthropic | openAI | openRouter\n\
                   \x20 secret = \"team-claude\"\n\n\
                   A box or worker with no host.toml declares the LIGUS_WS_SECRET_* names it already has \
-                  for its workspace on first start. Workers and boxes always list their tools.",
+                  for its workspace on first start. `ligus secrets set NAME -` keeps a value in this device's \
+                  secret store and declares it for you. Workers and boxes always list their tools.",
         synopsis: &["ligus hosts [--json]"],
         flags: &[JSON],
         conn: true,
         examples: &["ligus hosts", "ligus hosts --json"],
         see_also: &["ligus register-worker", "ligus set-agent-host"],
+        ..D
+    },
+    Cmd {
+        name: "secrets",
+        group: G_AGENTS,
+        summary: "keep workspace secrets on this device: set, list, rm",
+        purpose: "Keep the secrets a workspace runtime or provider names (--secret-ref NAME) on this device, \
+                  and declare which workspace may use each one in host.toml, without exporting \
+                  LIGUS_WS_SECRET_<NAME> or editing the file by hand. A value lives in this device's secret store \
+                  (LIGUS_SECRET_BACKEND; one value per name) and is read from stdin only: a value on the command \
+                  line is refused, since it would land in shell history and ps. Values are never printed, in text, \
+                  JSON or errors. LIGUS_WS_SECRET_<NAME> (or a file in LIGUS_WS_SECRET_DIR), when set, wins over \
+                  the stored value. A running serve or worker reads host.toml at start: restart it after a change.",
+        synopsis: &[
+            "ligus secrets set NAME - [--workspace ID] [--json]",
+            "ligus secrets list [--workspace ID] [--json]",
+            "ligus secrets rm NAME [--workspace ID] [--json]",
+        ],
+        flags: &[f("--workspace ID", "this data dir's workspace (LIGUS_WORKSPACE)", "the workspace id to declare the name for (ligus status shows it)"), JSON],
+        env: &["LIGUS_WORKSPACE", "LIGUS_WS_SECRET_<ref>", "LIGUS_WS_SECRET_DIR"],
+        examples: &[
+            "ligus secrets set team-claude - < ~/anthropic.key",
+            "ligus secrets list",
+            "ligus secrets rm team-claude",
+        ],
+        exit: &[(3, "this device's secret store can't be used (ligus doctor shows why)"), (5, "rm: the name isn't declared for that workspace here")],
+        see_also: &["ligus secrets set", "ligus add-runtime", "ligus hosts", "ligus help security"],
+        ..D
+    },
+    Cmd {
+        name: "secrets set",
+        group: G_AGENTS,
+        summary: "save a workspace secret from stdin and declare it for the workspace",
+        purpose: "Read a secret's value from stdin (hidden at a terminal, else all of stdin up to 64 KiB; one trailing \
+                  line end is dropped), save it in this device's secret store under NAME, and declare NAME for the \
+                  workspace in host.toml so its runtimes and providers can use it here. The value is never an \
+                  argument: `ligus secrets set NAME VALUE`, --value and --secret are refused (exit 2) before stdin \
+                  is read, and if that was a real key, treat it as exposed and rotate it. An empty value is refused. \
+                  Setting a name again replaces its value for every workspace on this device that declares it. \
+                  NAME is 1-64 letters, digits, _ and - (it is the --secret-ref).",
+        synopsis: &["ligus secrets set NAME - [--workspace ID] [--json]"],
+        flags: &[f("--workspace ID", "this data dir's workspace (LIGUS_WORKSPACE)", "the workspace id to declare the name for (ligus status shows it)"), JSON],
+        env: &["LIGUS_WORKSPACE", "LIGUS_WS_SECRET_<ref>"],
+        examples: &[
+            "ligus secrets set team-claude - < ~/anthropic.key",
+            "op read op://dev/anthropic/key | ligus secrets set team-claude -",
+            "ligus secrets set team-claude --workspace 6f1c0c4e-0000-4000-8000-000000000000",
+        ],
+        exit: &[(3, "this device's secret store can't be used (ligus doctor shows why)")],
+        see_also: &["ligus secrets list", "ligus add-runtime", "ligus help hosts"],
+        ..D
+    },
+    Cmd {
+        name: "secrets list",
+        group: G_AGENTS,
+        summary: "list workspace secret names, where they're declared and whether a value is held",
+        purpose: "List the secret names this device knows: those host.toml declares for any workspace, and those \
+                  LIGUS_WS_SECRET_* provides. For each: the workspaces it is declared for (and whether for this one), \
+                  and where its value comes from (environment, secret store, or no value here). Never a value.",
+        synopsis: &["ligus secrets list [--workspace ID] [--json]"],
+        flags: &[f("--workspace ID", "this data dir's workspace (LIGUS_WORKSPACE)", "the workspace id to declare the name for (ligus status shows it)"), JSON],
+        env: &["LIGUS_WORKSPACE", "LIGUS_WS_SECRET_<ref>"],
+        examples: &["ligus secrets list", "ligus secrets list --json"],
+        see_also: &["ligus secrets set", "ligus secrets rm", "ligus runtimes"],
+        ..D
+    },
+    Cmd {
+        name: "secrets rm",
+        group: G_AGENTS,
+        summary: "stop declaring a workspace secret, and delete its value when no workspace uses it",
+        purpose: "Remove NAME's declaration for the workspace from host.toml. Its value is deleted from this \
+                  device's secret store when no other workspace here still declares it; otherwise it is kept and \
+                  rm says for which. A LIGUS_WS_SECRET_<NAME> variable is not touched (rm says when one is set).",
+        synopsis: &["ligus secrets rm NAME [--workspace ID] [--json]"],
+        flags: &[f("--workspace ID", "this data dir's workspace (LIGUS_WORKSPACE)", "the workspace id to declare the name for (ligus status shows it)"), JSON],
+        env: &["LIGUS_WORKSPACE", "LIGUS_WS_SECRET_<ref>"],
+        examples: &["ligus secrets rm team-claude", "ligus secrets rm team-claude --workspace 6f1c0c4e-0000-4000-8000-000000000000 --json"],
+        exit: &[(3, "this device's secret store can't be used"), (5, "the name isn't declared for that workspace here")],
+        see_also: &["ligus secrets list", "ligus help hosts"],
         ..D
     },
     Cmd {
@@ -2652,7 +2752,7 @@ pub const ENV: &[(&str, &[EnvVar])] = &[
             e("LIGUS_WORKSPACE_KEY_FILE", "unset", "a file holding LIGUS_WORKSPACE_KEY (not both)"),
             e("LIGUS_SECRET_BACKEND", "the OS store", "where secrets live: keychain, secret-service, systemd-creds, k8s or file"),
             e("LIGUS_SECRETS_DIR", "/var/run/secrets/ligus with the k8s backend", "the k8s backend's mounted Secret dir"),
-            e("LIGUS_WS_SECRET_<ref>", "unset", "the key of a workspace runtime with secretRef <ref>"),
+            e("LIGUS_WS_SECRET_<ref>", "unset", "the key of a workspace runtime with secretRef <ref>; wins over a value ligus secrets set stored"),
             e("LIGUS_WS_SECRET_DIR", "unset", "a dir of files, each becoming LIGUS_WS_SECRET_<file name>"),
             e("LIGUS_ADMISSION_FILE", "unset", "a file holding a box admission code, redeemed by serve and worker at start-up"),
             e("LIGUS_IDENTITY_MODE", "ignored", "ignored (logs a warning)"),
@@ -2823,7 +2923,8 @@ what to do when something fails (the `fix:` line under it).
   ligus setup tool    --id notes --command \"npx -y @modelcontextprotocol/server-filesystem ~/notes\" [--reach builder]
   ligus setup tool    --id linear --kind url --url https://mcp.linear.app/mcp --token @./token
   ligus setup folder  --path ~/src/app
-  ligus setup box     [--label home]          on the box; then --code - with the Admin's code
+  ligus setup box     --to ligusaddr1:…       on the box: code match, nothing pasted
+                      (or [--label home], then --code - with the Admin's code)
   ligus setup phone                           then: ligus pair, in your own terminal
   ligus setup invite                          invites are made on the desktop; this tracks them
   ligus setup relay   [--kind own --url https://relay.example.com] [--token - | @FILE]
@@ -2882,9 +2983,15 @@ With the deploy script (from a checkout of the repository; every step has --json
   L=deploy/local/ligus-local
   1. $L preflight --role serve --data-dir ~/.ligus-serve
   2. $L install-cli                          # or: brew install langstroth-ai/ligus/ligus
-  3. $L configure --role serve --data-dir ~/.ligus-serve --listen 127.0.0.1:8787 --label home-box
-     (exits 4 until the box is admitted, and prints the next commands)
-  4. Admit the box, with the env file loaded:
+  3. $L configure --role serve --data-dir ~/.ligus-serve --listen 127.0.0.1:8787 --label home-box \\
+       --admit-to ligusaddr1:…
+     With --admit-to (the approval address an Admin gives you: ligus admit address, or
+     the desktop's workspace menu > Admit a box) it admits the box by code match, as
+     ligus setup box --to does: it prints Code: XXXX XXXX, the Admin's screen shows the
+     same code, they confirm with a passkey, and nothing is pasted. A relay without the
+     approval mailbox falls back to the paste. Without --admit-to it exits 4 until the
+     box is admitted, and prints the next commands.
+  4. Or admit the box yourself, with the env file loaded:
        set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
      Live (code match), with the approval address an Admin gives you
      (ligus admit address, or the desktop's workspace menu > Admit a box):
@@ -3843,6 +3950,7 @@ mod tests {
             ("forge", src("forge_cmd.rs"), "pub fn cmd(", "\n}\n", &["oauth", "gh", "none"]),
             ("setup", src("setup_cmd.rs"), "pub fn cmd(", "\n}\n", &["-", "--json", "--dry-run"]),
             ("gateway", src("gateway_cmd.rs"), "pub fn cmd(", "\n}\n", &[]),
+            ("secrets", src("secrets_cmd.rs"), "pub fn cmd(", "\n}\n", &[]),
         ];
         let mut seen_subs = BTreeSet::new();
         for (cmd, text, start, end, not_subs) in groups {

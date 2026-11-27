@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RuntimeSummaryDto } from "@/bindings/RuntimeSummaryDto";
 import { GatewayPicker, gatewayModels } from "./GatewayPicker";
 import { ListToolsRow } from "./ListToolsRow";
+import { RunOthersAgentsRow } from "./RunOthersAgentsRow";
 import {
   addRuntime,
   listWorkspaceHosts,
@@ -315,6 +316,7 @@ function ProvidersSection() {
       <DetectPanel onConfigured={() => qc.invalidateQueries({ queryKey: ["runtimes"] })} />
       <CliRuntimesPanel />
       <ListToolsRow />
+      <RunOthersAgentsRow />
       {visible.length === 0 && <p className="px-1 py-2 text-xs text-ink-soft">No providers yet.</p>}
       <RowList label="Providers">
         {visible.map((p) => (

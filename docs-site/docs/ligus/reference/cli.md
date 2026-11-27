@@ -342,6 +342,7 @@ flow's flags.
 | `ligus setup agent --name NAME [--source S] [--model M] [--runs-on here\|HOST] [--endpoint URL] [--local-servers] [--test-turn]` | adds an agent in one step: what answers (`claude-code`, `codex`, `copilot`, `antigravity`, `aider`, `pi`, `gateway:NAME`, `provider:NAME` or `local`; default: the best one found), its model (required except for a coding CLI), and where it runs (default: this device for a CLI signed in here, the only host that offers a gateway or key). Checks a CLI here is installed and signed in and the agent sandbox, reuses or defines a workspace runtime (Admin), and writes the agent with its host in one record (placing it on a host is an Admin's). A new workspace runtime is a second passkey (`passkey 1 of 2`). `--harness H` and `--gateway NAME` still work |
 | `ligus setup tool --id ID (--command "PROG ARGS" \| --kind url --url URL [--token - \| @FILE]) [--reach all\|AGENT,...]` | starts the MCP server once under the agent sandbox and lists its tools, then saves it with which agents may reach it (`<data dir>/mcp-servers.toml`, `mcp-reach.json`); a token goes to the secret store |
 | `ligus setup folder --path DIR [--name NAME] [--branch B]` | checks the checkout, matches (or, as an Admin, adds) the workspace repository, binds the folder |
+| `ligus setup box --to ligusaddr1:… [--label NAME] [--timeout 15m]` | on a box: asks the workspace's Admins by code match (both screens show the same code, an Admin approves with a passkey), keeps the admission once it is on the workspace log, and checks `ligus serve`. Nothing is pasted; a relay without the approval mailbox falls back to the paste (exit 4) |
 | `ligus setup box [--label NAME] [--code - \| @FILE]` | on a box: prints its join request and stops (exit 4) until an Admin approves it with a passkey; then keeps the admission and checks `ligus serve` |
 | `ligus setup phone` | checks the box can pair, then hands over to `ligus pair` in your own terminal (exit 4) |
 | `ligus setup invite` | checks you can invite and lists invites and whether they were accepted; invites are created on the desktop (exit 4) |
@@ -397,7 +398,7 @@ keeps the old answer (exit 4: the desktop, or `--recovery-words-file`).
 
 | Command | What it does |
 |---|---|
-| `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host has `LIGUS_WS_SECRET_<ref>`; a key an older version stored in the workspace shows as `stored key (unused)` with a warning) |
+| `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host holds its value, from `LIGUS_WS_SECRET_<ref>` or `ligus secrets set`; a key an older version stored in the workspace shows as `stored key (unused)` with a warning) |
 | `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name>] [--dry-run]` | defines (or replaces by id) a workspace runtime. `--dry-run` checks the arguments and prints what it would define, signing and writing nothing (the same on `rm-runtime`, `add-agent` and `set-agent-host`; `add-agent --dry-run` also checks the runtime exists). Any other command refuses `--dry-run` with a usage error (exit 2) and runs nothing. |
 | `ligus rm-runtime <id> [--dry-run]` | removes a workspace runtime. |
 | `ligus setup runtimes [--apply]` | detects what this box can reach (API keys in env, Ollama on `127.0.0.1:11434`, `claude`, `codex`, `agy`, `copilot`); `--apply` defines the keyless ones as workspace runtimes. This was `ligus setup [--apply]`; `ligus setup --apply` still works for one release |
@@ -407,6 +408,9 @@ keeps the old answer (exit 4: the desktop, or `--recovery-words-file`).
 | `ligus agents set <agent> --local-servers on\|off [--json]` | turns an agent's [local-servers switch](../concepts/security.md#local-servers) on or off (agy needs it for its helper server; Linux with bubblewrap; not available on macOS yet, where it is stored but has no effect). The workspace Owner's; in a shared workspace it needs a passkey, so use Settings → Sandbox there. Exit 6 when refused. |
 | `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>] [--dry-run]` | defines an agent. |
 | `ligus hosts [--json]` | lists workspace hosts (devices and workers), online or offline, with a second line saying what each offers and how ready it is (see [What a host offers](#what-a-host-offers)) |
+| `ligus secrets set <name> - [--workspace <id>] [--json]` | reads a workspace secret's value from stdin (hidden at a terminal), saves it in this device's secret store and declares `<name>` for the workspace in `host.toml`. A value on the command line is refused (exit 2). See [Workspace secrets on this device](#workspace-secrets-on-this-device) |
+| `ligus secrets list [--workspace <id>] [--json]` | lists the secret names this device knows, the workspaces each is declared for and where its value comes from (environment, secret store, or none). Never a value |
+| `ligus secrets rm <name> [--workspace <id>] [--json]` | stops declaring `<name>` for the workspace, and deletes its stored value when no other workspace here declares it (exit 5 when it isn't declared there) |
 | `ligus register-worker [--label <name>]` | registers this box as a worker host, prints its host id |
 | `ligus set-agent-host <agent> <host-id> [--dry-run]` | binds an agent to a host; refused (exit 6) when the host's record doesn't offer the model gateway the agent's runtime uses |
 | `ligus agent [name] [--runtime <id>]` | development responder: answers new un-mentioned or `@primary` messages (in a shared room only its operator's, unless `LIGUS_AGENT_OPEN_TO_MEMBERS=1`). Refuses to run unless `LIGUS_ALLOW_PERSONAL_AGENT` is set; use `ligus worker` in production |
@@ -419,9 +423,40 @@ Credentials for `add-runtime`:
 
 - `--secret-ref <name>`: each host that runs the agent sets
   `LIGUS_WS_SECRET_<name>` (or a file in `LIGUS_WS_SECRET_DIR`) and
-  declares `<name>` for the workspace in its `host.toml` (below). Keys are
+  declares `<name>` for the workspace in its `host.toml` (below), or runs
+  `ligus secrets set <name> -`, which does both with the device's secret
+  store. Keys are
   never stored in the workspace.
 - without it: keyless (local models, subscription CLIs).
+
+### Workspace secrets on this device
+
+`ligus secrets` keeps a `--secret-ref` value on this device without an
+environment variable or a hand-edited `host.toml`:
+
+```sh
+ligus secrets set team-claude - < ~/anthropic.key     # or: op read … | ligus secrets set team-claude -
+ligus add-runtime team-claude "Team Claude" anthropic claude-sonnet-4-6 --secret-ref team-claude
+ligus secrets list
+```
+
+- The value goes in this device's secret store (`LIGUS_SECRET_BACKEND`: the
+  keychain, Secret Service, systemd-creds or owner-only files), one value per
+  name, and `<name>` is declared for the workspace (`--workspace <id>`, else
+  this data dir's) in `host.toml`.
+- The value is read from stdin only, hidden at a terminal; one trailing line
+  end is dropped and an empty value is refused. `ligus secrets set NAME VALUE`,
+  `--value` and `--secret` are refused (exit 2) before anything is read: a
+  value on the command line lands in shell history and `ps`. If you typed a
+  real key that way, rotate it.
+- No command prints a value: not `list`, not `--json`, not an error.
+- `LIGUS_WS_SECRET_<name>` (or a file in `LIGUS_WS_SECRET_DIR`), when set,
+  wins over the stored value. `ligus runtimes` shows `✓` for either.
+- `rm` removes the declaration for the workspace, and the stored value once
+  no other workspace on this device declares the name.
+- A running `ligus serve` or `ligus worker` reads `host.toml` at start:
+  restart it after a change. Run these with the box's data dir
+  (`LIGUS_DATA_DIR`).
 
 ### What a host offers
 
@@ -446,6 +481,7 @@ nobody can register a host under someone else's computer.
 
 ```toml
 list_tools = false              # a person's computer: don't list its tools
+run_others_agents = true        # a person's computer: run other people's agents placed here
 
 [[local]]                       # a local model server; the address stays here
 name = "ollama"
@@ -471,10 +507,16 @@ secret = "acme"
 - On first start, a box, worker or `ligus agent` with no `host.toml` writes
   one declaring the `LIGUS_WS_SECRET_*` names already in its environment
   for the workspace it serves, so an upgrade keeps working. Later secrets
-  are declared by hand.
+  are declared with `ligus secrets set` (above) or by hand.
 - `list_tools = false` empties a person's computer's list (the desktop's
   **Settings → Models → List this computer's tools**). Workers and boxes
   always list theirs.
+- `run_others_agents = true` lets a person's computer run agents other
+  people placed on it (the desktop's **Settings → Models → Run other
+  people's agents on this computer**). Off by default: it runs only its own
+  person's agents, and says in its beat which others it won't run, so their
+  chats read "can't run on Ana's MacBook: it runs only Ana's agents".
+  Workers and boxes run any agent placed on them.
 - An invalid `host.toml` stops `ligus serve` and `ligus worker`, with the
   line that's wrong.
 
@@ -494,7 +536,12 @@ ligus worker [--label <name>] [--health-listen <addr>]
 
 Registers this box as a host (label: `--label`, else `$HOSTNAME`, else
 `worker`), syncs, and every 3 s answers queued mentions for the agents bound
-to it, backlog included. It publishes a liveness beat on the relay's presence
+to it, backlog included. An agent it can't run as asked (a runtime it
+doesn't have, or a runtime without its key here) isn't claimed or answered:
+its beat says why, and the sender's chat shows "@coder can't run on build-1:
+it doesn't have 'codex-pro'." A `runtimes.toml` entry with `id = "*"` stands
+in only for an older agent's runtime id, never for a run spec that names a
+source and model; the chat says once when it does. It publishes a liveness beat on the relay's presence
 channel, backs off on relay errors (6 s doubling to 120 s), finishes replies a
 previous run was streaming when it stopped, and exits cleanly on SIGTERM or
 Ctrl-C. Worker turns are read-only for Claude Code unless

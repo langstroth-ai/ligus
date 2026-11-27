@@ -57,7 +57,16 @@ pub enum SessionEvent {
     SessionSnapshot { session: Box<ChatSession> },
     MessageAppended { message: ChatMessage },
     MessageChunkReceived { message_id: Uuid, chunk: String },
-    MessageCompleted { message_id: Uuid, body: String },
+    /// A streamed reply is finished. `outcome` (additive, 0.5) is the
+    /// author's report of how the turn ended and what answered
+    /// ([`crate::outcome::ReplyOutcome`]); absent from older writers, which
+    /// reads as posted. Display only.
+    MessageCompleted {
+        message_id: Uuid,
+        body: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<crate::outcome::ReplyOutcome>,
+    },
     /// Drop a message from the transcript (used by "regenerate" to replace the
     /// last assistant turn). Idempotent — removing an unknown id is a no-op.
     MessageRemoved { message_id: Uuid },
@@ -857,6 +866,55 @@ impl SessionEventEnvelope {
 }
 
 impl ChatSession {
+    fn next_transcript_seq(&mut self) -> u64 {
+        self.transcript_seq += 1;
+        self.transcript_seq
+    }
+
+    /// Fold a `MessageCompleted` (workspace model v3, 8.1); whether it took
+    /// effect. `signer`: the envelope's signer, when the fold has one.
+    ///
+    /// - A completion without an outcome (an older writer) is `ok`.
+    /// - A `canceled` never replaces a reply that already finished another
+    ///   way: the stale-stream sweep can't undo a completion it raced.
+    /// - A `canceled` reply is taken over by a later completion only from
+    ///   the placeholder's own signer (another device of the same account
+    ///   may still have been streaming it, E7), or when either signer is
+    ///   unknown (an unsigned legacy fold).
+    /// - Otherwise the last completion in canonical order wins, as before.
+    pub(crate) fn fold_completion(
+        &mut self,
+        message_id: Uuid,
+        body: &str,
+        outcome: Option<&crate::outcome::ReplyOutcome>,
+        signer: Option<Option<Uuid>>,
+    ) -> bool {
+        use crate::outcome::ReplyStatus;
+        let Some(idx) = self.message_index(message_id) else { return false };
+        let incoming = outcome.cloned().map(|o| o.sanitized()).unwrap_or_default();
+        let m = &self.messages[idx];
+        match m.outcome.as_ref().map(|o| o.status) {
+            Some(prev) if prev != ReplyStatus::Canceled && incoming.is_canceled() => return false,
+            Some(ReplyStatus::Canceled) if !incoming.is_canceled() => {
+                let from_signer = match (signer.flatten(), m.appended_by) {
+                    (Some(s), Some(first)) => s == first,
+                    _ => true,
+                };
+                if !from_signer {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+        let seq = self.next_transcript_seq();
+        let m = &mut self.messages[idx];
+        m.body = body.to_string();
+        m.is_streaming = false;
+        m.outcome = Some(incoming);
+        m.posted_seq = Some(seq);
+        true
+    }
+
     /// Apply a single delta event in place. `SessionSnapshot` is a base seed,
     /// not a delta, so it is ignored here (handled by [`project`]).
     pub fn apply(&mut self, event: &SessionEvent) {
@@ -869,9 +927,15 @@ impl ChatSession {
                 message.superseded = false;
                 message.completed_at = None;
                 message.appended_at = None;
+                message.outcome = None;
+                message.appended_by = None;
+                // A finished message is posted where it is appended; a
+                // streaming placeholder where it completes.
+                message.posted_seq = (!message.is_streaming).then(|| self.next_transcript_seq());
                 if let Some(idx) = self.message_index(message.id) {
-                    // A re-append keeps the first append's time.
+                    // A re-append keeps the first append's time and signer.
                     message.appended_at = self.messages[idx].appended_at;
+                    message.appended_by = self.messages[idx].appended_by;
                     self.messages[idx] = message;
                 } else {
                     self.messages.push(message);
@@ -883,11 +947,8 @@ impl ChatSession {
                     self.messages[idx].is_streaming = true;
                 }
             }
-            SessionEvent::MessageCompleted { message_id, body } => {
-                if let Some(idx) = self.message_index(*message_id) {
-                    self.messages[idx].body = body.clone();
-                    self.messages[idx].is_streaming = false;
-                }
+            SessionEvent::MessageCompleted { message_id, body, outcome } => {
+                self.fold_completion(*message_id, body, outcome.as_ref(), None);
             }
             SessionEvent::MessageRemoved { message_id } => {
                 self.messages.retain(|m| &m.id != message_id);
@@ -2407,27 +2468,33 @@ fn fold_pass(
                         .is_some_and(|h| at.is_some_and(|r| crate::dispatch::holder_gone(r, *h)));
                     let claim = crate::dispatch::Claim { device: *device_id, epoch: *epoch, supersedes: *supersedes, repo_id: *repo_id };
                     crate::dispatch::fold_claim_at(&mut session, *trigger_id, claim, crate::dispatch::ClaimAt { ms: Some(ms), holder_gone });
+                } else if let SessionEvent::MessageCompleted { message_id, body, outcome } = payload {
+                    // A streamed reply is posted when it completes: its
+                    // placeholder was appended at the turn's start
+                    // (`ChatMessage::posted_at`), and its outcome folds with
+                    // who signed it (E7). Display state only.
+                    if session.fold_completion(*message_id, body, outcome.as_ref(), Some(env.signer_device_id)) {
+                        if let Some(idx) = session.message_index(*message_id) {
+                            session.messages[idx].completed_at = Some(env.timestamp);
+                        }
+                    }
                 } else {
                     session.apply(payload);
                     // The reader view of hosts: each host's latest record
                     // signed by its own device (workspace model v3, 5.1, H11).
                     crate::workspace_host::fold_signers(&mut session.authz.host_signers, payload, env.signer_device_id);
                 }
-                // A streamed reply is posted when it completes: its
-                // placeholder was appended at the turn's start
-                // (`ChatMessage::posted_at`). Display state only.
-                if let SessionEvent::MessageCompleted { message_id, .. } = payload {
-                    if let Some(idx) = session.message_index(*message_id) {
-                        session.messages[idx].completed_at = Some(env.timestamp);
-                    }
-                }
-                // The first append's signed time (`ChatMessage::appended_at`).
+                // The first append's signed time (`ChatMessage::appended_at`)
+                // and signer (`ChatMessage::appended_by`).
                 if let SessionEvent::MessageAppended { message } = payload {
                     if let Some(idx) = session.message_index(message.id) {
                         // Not for a received envelope that carried no time
                         // (a legacy one decodes it as "now"): `created_at`.
                         if env.raw.as_ref().is_none_or(|r| r.timestamp().is_some()) {
                             session.messages[idx].appended_at.get_or_insert(env.timestamp);
+                        }
+                        if session.messages[idx].appended_by.is_none() {
+                            session.messages[idx].appended_by = env.signer_device_id;
                         }
                     }
                 }
@@ -2623,7 +2690,7 @@ mod tests {
         placeholder.created_at = start;
         placeholder.completed_at = Some(Timestamp::from_unix_seconds(1_900_000_000));
         let mid = placeholder.id;
-        let mut done = SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MessageCompleted { message_id: mid, body: "You said yes.".into() });
+        let mut done = SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MessageCompleted { message_id: mid, body: "You said yes.".into(), outcome: None });
         done.timestamp = Timestamp::from_unix_seconds(1_800_000_120);
         let streaming = project(&[snapshot_env(base.clone(), 1), SessionEventEnvelope::new(sid, wid, 2, SessionEvent::MessageAppended { message: placeholder.clone() })]).unwrap();
         assert_eq!(streaming.messages[0].completed_at, None, "an author's completedAt is not folded");
@@ -2632,6 +2699,119 @@ mod tests {
         let s = project(&envs).unwrap();
         assert_eq!(s.messages[0].created_at, start, "created_at stays the turn's start");
         assert_eq!(s.messages[0].posted_at(), Timestamp::from_unix_seconds(1_800_000_120));
+    }
+
+    fn outcome(status: crate::outcome::ReplyStatus) -> Option<crate::outcome::ReplyOutcome> {
+        Some(crate::outcome::ReplyOutcome { model: "opus".into(), harness: "claudeCode".into(), ..crate::outcome::ReplyOutcome::status(status) })
+    }
+
+    fn signed(mut e: SessionEventEnvelope, by: Uuid) -> SessionEventEnvelope {
+        e.signer_device_id = Some(by);
+        e
+    }
+
+    /// A streamed reply, its trigger and the envelopes of its placeholder
+    /// (signed by `agent_key`): (base, trigger env, placeholder env, ids).
+    fn reply_setup(agent_key: Uuid) -> (ChatSession, Vec<SessionEventEnvelope>, Uuid, Uuid) {
+        let base = base_session();
+        let (sid, wid) = (base.id, base.workspace_id);
+        let trigger = ChatMessage::new(MessageRole::User, "Ana", "@ligus hi");
+        let tid = trigger.id;
+        let mut placeholder = ChatMessage::new(MessageRole::Assistant, "ligus", "");
+        placeholder.is_streaming = true;
+        placeholder.reply_to_message_id = Some(tid);
+        let mid = placeholder.id;
+        let envs = vec![
+            snapshot_env(base.clone(), 1),
+            SessionEventEnvelope::new(sid, wid, 2, SessionEvent::MessageAppended { message: trigger }),
+            signed(SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MessageAppended { message: placeholder }), agent_key),
+        ];
+        (base, envs, tid, mid)
+    }
+
+    /// E2: a completion's outcome folds onto the reply (the Turn view's
+    /// Posted, Failed and Canceled are in `tests/turn_view_props.rs`); a
+    /// completion from an older writer (no outcome) is posted.
+    #[test]
+    fn a_completion_carries_its_outcome() {
+        use crate::outcome::ReplyStatus;
+        let key = Uuid::new_v4();
+        for status in [Some(ReplyStatus::Ok), Some(ReplyStatus::Failed), Some(ReplyStatus::Canceled), None] {
+            let (base, mut envs, _tid, mid) = reply_setup(key);
+            let (sid, wid) = (base.id, base.workspace_id);
+            envs.push(signed(
+                SessionEventEnvelope::new(sid, wid, 5, SessionEvent::MessageCompleted { message_id: mid, body: "done".into(), outcome: status.and_then(outcome) }),
+                key,
+            ));
+            let s = project(&envs).unwrap();
+            let m = s.messages.iter().find(|m| m.id == mid).unwrap();
+            assert!(!m.is_streaming);
+            assert_eq!(m.outcome.as_ref().map(|o| o.status), Some(status.unwrap_or(ReplyStatus::Ok)));
+            if status.is_some() {
+                assert_eq!(m.outcome.as_ref().unwrap().model, "opus", "which model answered");
+            }
+        }
+    }
+
+    /// E7: a `canceled` written by the stale sweep (another device's key) is
+    /// overridden by a later completion from the placeholder's own signer,
+    /// whatever their order; a completion from anyone else doesn't lift it,
+    /// and a sweep never downgrades a reply that already finished.
+    #[test]
+    fn a_swept_cancel_is_overridden_by_the_placeholders_own_signer() {
+        use crate::outcome::ReplyStatus;
+        let (agent, sweeper, other) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let (base, envs, _tid, mid) = reply_setup(agent);
+        let (sid, wid) = (base.id, base.workspace_id);
+        let cancel = |seq| signed(SessionEventEnvelope::new(sid, wid, seq, SessionEvent::MessageCompleted { message_id: mid, body: "partial".into(), outcome: outcome(ReplyStatus::Canceled) }), sweeper);
+        let done = |seq, by| signed(SessionEventEnvelope::new(sid, wid, seq, SessionEvent::MessageCompleted { message_id: mid, body: "whole".into(), outcome: outcome(ReplyStatus::Ok) }), by);
+        let fold = |extra: Vec<SessionEventEnvelope>| {
+            let mut all = envs.clone();
+            all.extend(extra);
+            let s = project(&all).unwrap();
+            let m = s.messages.iter().find(|m| m.id == mid).unwrap().clone();
+            (m.outcome.unwrap().status, m.body)
+        };
+        // Swept, then the streaming device finishes: posted.
+        assert_eq!(fold(vec![cancel(4), done(5, agent)]), (ReplyStatus::Ok, "whole".into()));
+        // The sweep lands after the real completion: still posted.
+        assert_eq!(fold(vec![done(4, agent), cancel(5)]), (ReplyStatus::Ok, "whole".into()));
+        // Someone else's completion doesn't lift a cancel.
+        assert_eq!(fold(vec![cancel(4), done(5, other)]), (ReplyStatus::Canceled, "partial".into()));
+        // A cancel alone stands.
+        assert_eq!(fold(vec![cancel(4)]), (ReplyStatus::Canceled, "partial".into()));
+    }
+
+    /// E1 and D7: a reply is shown at its completion's time, never earlier
+    /// than its trigger, and the transcript draws it where it finished: after
+    /// a message posted while it streamed. A reply still streaming is a live
+    /// row at the end.
+    #[test]
+    fn a_reply_is_shown_where_and_when_it_finished() {
+        let key = Uuid::new_v4();
+        let (base, mut envs, tid, mid) = reply_setup(key);
+        let (sid, wid) = (base.id, base.workspace_id);
+        // The trigger's own time is later than the completion's (a skewed
+        // clock): the reply is shown no earlier than the trigger.
+        envs[1].timestamp = Timestamp::from_unix_seconds(1_900_000_000);
+        let aside = ChatMessage::new(MessageRole::User, "Ben", "meanwhile");
+        let aside_id = aside.id;
+        envs.push(SessionEventEnvelope::new(sid, wid, 4, SessionEvent::MessageAppended { message: aside }));
+        let streaming = project(&envs).unwrap();
+        let order: Vec<Uuid> = streaming.transcript().iter().map(|m| m.id).collect();
+        assert_eq!(order.last(), Some(&mid), "a streaming reply is the live row at the end");
+        let mut done = signed(SessionEventEnvelope::new(sid, wid, 5, SessionEvent::MessageCompleted { message_id: mid, body: "ok".into(), outcome: None }), key);
+        done.timestamp = Timestamp::from_unix_seconds(1_800_000_000);
+        envs.push(done);
+        let s = project(&envs).unwrap();
+        let order: Vec<Uuid> = s.transcript().iter().map(|m| m.id).collect();
+        let at = |id| order.iter().position(|x| *x == id).unwrap();
+        assert!(at(tid) < at(aside_id) && at(aside_id) < at(mid), "drawn where it finished: {order:?}");
+        let reply = s.messages.iter().find(|m| m.id == mid).unwrap();
+        let trigger = s.messages.iter().find(|m| m.id == tid).unwrap();
+        assert!(s.display_at(reply) >= trigger.posted_at(), "never earlier than its trigger");
+        // The fold's own order is unchanged.
+        assert_eq!(s.messages.iter().position(|m| m.id == mid), Some(1));
     }
 
     /// A message's append time is its envelope's signed time, from the first
@@ -2722,7 +2902,7 @@ mod tests {
                 5,
                 SessionEvent::MessageCompleted {
                     message_id: mid,
-                    body: "Hello".into(),
+                    body: "Hello".into(), outcome: None,
                 },
             ),
         ];
@@ -3015,7 +3195,7 @@ mod tests {
             env(sid, wid, 9, SessionEvent::SessionTitleChanged { title: "Bar".into() }),
             env(sid, wid, 10, SessionEvent::MessageReactionRemoved { message_id: mid, actor_id: "u1".into(), emoji: "👍".into() }),
             env(sid, wid, 11, SessionEvent::MessageReactionAdded { message_id: mid, reaction: reaction("u2", "🎉") }),
-            env(sid, wid, 12, SessionEvent::MessageCompleted { message_id: mid, body: "final".into() }),
+            env(sid, wid, 12, SessionEvent::MessageCompleted { message_id: mid, body: "final".into(), outcome: None }),
         ];
 
         let expected = project(&events).expect("session");

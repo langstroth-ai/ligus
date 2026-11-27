@@ -81,6 +81,7 @@ import {
 import { Avatar } from "@/components/Avatar";
 import { safeColorHex } from "@/lib/avatar";
 import { ChatRepoChip, PinnedHostWarning } from "@/components/ChatRepoChip";
+import { TurnRouteRow, ReplyOutcomeLine } from "@/components/TurnRouteRow";
 import {
   ModelStep,
   effectiveModel,
@@ -246,6 +247,9 @@ export function ChatView({
   const chat = useQuery({
     queryKey: ["chat", sessionId],
     queryFn: () => getChat(sessionId),
+    // A waiting turn's row changes with time (queued, then the host reads
+    // offline): look again now and then while one shows.
+    refetchInterval: (q) => (q.state.data?.messages.some((m) => m.route) ? 30000 : false),
   });
   // Hand-off cards recorded in this chat, refetched whenever the chat does.
   const handoffs = useQuery({
@@ -1292,7 +1296,7 @@ export function ChatView({
                   createdAt={m.createdAt}
                   streaming={m.isStreaming}
                   via={prov.via}
-                  model={prov.model}
+                  model={m.outcome?.model ?? prov.model}
                   host={prov.host}
                   shared={shared}
                   // Personal agents tint the turn with their own avatar colour;
@@ -1330,6 +1334,8 @@ export function ChatView({
                     ]);
                   }}
                   />
+                  {m.role === "user" && m.route && <TurnRouteRow sessionId={sessionId} messageId={m.id} route={m.route} />}
+                  {(m.role === "assistant" || m.role === "agent") && <ReplyOutcomeLine outcome={m.outcome} />}
                   {handoffIndex.get(m.id)?.map((card) => <HandoffCardView key={card.id} card={card} />)}
                   {turnAsks.after.map((a) => <DecisionCard key={a.askId} sessionId={sessionId} ask={a} />)}
                 </Fragment>

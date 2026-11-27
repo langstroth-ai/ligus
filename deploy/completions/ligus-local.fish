@@ -35,6 +35,8 @@ complete -c ligus-local -n '__fish_seen_subcommand_from install-cli upgrade' -l 
 complete -c ligus-local -n '__fish_seen_subcommand_from configure' -l label -x -d 'the box label'
 complete -c ligus-local -n '__fish_seen_subcommand_from configure' -l relay-url -x -d 'the relay URL'
 complete -c ligus-local -n '__fish_seen_subcommand_from configure' -l secret-backend -x -a 'file keychain secret-service' -d 'secret store'
+complete -c ligus-local -n '__fish_seen_subcommand_from configure' -l admit-to -x -d 'admit by code match through this approval address'
+complete -c ligus-local -n '__fish_seen_subcommand_from configure' -l admit-wait -x -d 'how long --admit-to waits'
 complete -c ligus-local -n '__fish_seen_subcommand_from configure' -l throwaway-workspace -d 'a random throwaway workspace'
 complete -c ligus-local -n '__fish_seen_subcommand_from configure' -l force -d 'rewrite an env file'
 complete -c ligus-local -n '__fish_seen_subcommand_from start stop verify status unit upgrade' -l launchd -d 'a LaunchAgent'

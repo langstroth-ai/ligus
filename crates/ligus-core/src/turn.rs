@@ -13,8 +13,11 @@
 
 use uuid::Uuid;
 
+use crate::chat::ChatMessage;
 use crate::ids::TurnId;
+use crate::outcome::{ReplyOutcome, ReplyStatus};
 use crate::session::{turn_claim_key, ChatSession};
+use crate::time_util::Timestamp;
 
 /// Where a turn stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +32,11 @@ pub enum TurnState {
     WaitingOnAsk,
     /// Its committed reply is complete.
     Posted,
+    /// Its committed reply completed as `failed` (the body says why).
+    Failed,
+    /// Its committed reply completed as `canceled` (stopped, swept after a
+    /// crash, or overtaken).
+    Canceled,
 }
 
 /// One turn of a chat.
@@ -47,6 +55,8 @@ pub struct Turn {
     pub state: TurnState,
     /// The questions the turn asked (open or not), by ask id.
     pub asks: Vec<Uuid>,
+    /// How its reply ended, once it did (the author's report, display only).
+    pub outcome: Option<ReplyOutcome>,
 }
 
 impl Turn {
@@ -88,11 +98,16 @@ impl Turn {
                     TurnState::Running
                 }
             }
-            Some(_) => TurnState::Posted,
+            Some(m) => match m.outcome.as_ref().map(|o| o.status) {
+                Some(ReplyStatus::Failed) => TurnState::Failed,
+                Some(ReplyStatus::Canceled) => TurnState::Canceled,
+                _ => TurnState::Posted,
+            },
             None if claim.is_some() => TurnState::Claimed,
             None => TurnState::Queued,
         };
-        Some(Turn { key, trigger, agent, id, claim, state, asks })
+        let outcome = reply.filter(|m| !m.is_streaming).and_then(|m| m.outcome.clone());
+        Some(Turn { key, trigger, agent, id, claim, state, asks, outcome })
     }
 }
 
@@ -100,5 +115,29 @@ impl ChatSession {
     /// [`Turn::of`] this chat.
     pub fn turn(&self, trigger: Uuid, agent: Option<Uuid>) -> Option<Turn> {
         Turn::of(self, trigger, agent)
+    }
+
+    /// When `m` is shown as posted (workspace model v3, 8.1, E1): a reply's
+    /// completion time ([`ChatMessage::posted_at`]), never earlier than the
+    /// message it answers; anything else its own time.
+    pub fn display_at(&self, m: &ChatMessage) -> Timestamp {
+        let at = m.posted_at();
+        let trigger = m.reply_to_message_id.and_then(|t| self.messages.iter().find(|x| x.id == t)).map(ChatMessage::posted_at);
+        match trigger {
+            Some(t) if t > at => t,
+            _ => at,
+        }
+    }
+
+    /// The messages in the order a transcript draws them (8.1, D7): each
+    /// where it was posted in fold order (a streamed reply where it
+    /// completed, not where its placeholder went), and every reply still
+    /// streaming at the end, as live rows. Messages seeded from a snapshot
+    /// keep their place, before everything folded after them. The fold's
+    /// own order is unchanged.
+    pub fn transcript(&self) -> Vec<&ChatMessage> {
+        let mut out: Vec<(usize, &ChatMessage)> = self.messages.iter().enumerate().collect();
+        out.sort_by_key(|(i, m)| (m.is_streaming, m.posted_seq.unwrap_or(0), *i));
+        out.into_iter().map(|(_, m)| m).collect()
     }
 }

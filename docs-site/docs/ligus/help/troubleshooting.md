@@ -203,7 +203,9 @@ rate-limited, or refused by the relay and why). The full checklist is in
    phone messages to an agent.
 4. **Does the runtime resolve?** A worker uses workspace runtimes only
    (never a personal key). A runtime with a `secretRef` needs
-   `LIGUS_WS_SECRET_<ref>` in the worker's environment; a subscription CLI
+   `LIGUS_WS_SECRET_<ref>` in the worker's environment (or
+   `ligus secrets set <ref> -` with the worker's data dir), declared for the
+   workspace in its `host.toml` (`ligus secrets list` shows both); a subscription CLI
    needs to be signed in on that box (`ligus setup runtimes` shows which).
 5. **Did a turn hard-fail?** A mention whose reply failed isn't retried every
    tick; restart the worker to retry, and check its log for the error.
