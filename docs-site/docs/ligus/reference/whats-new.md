@@ -6,6 +6,33 @@ Full release notes are on the
 
 ## Unreleased
 
+### Changed
+
+- **The first run asks one question first.** Before it asks for a name,
+  the desktop app asks **Is this your first device with Ligus?** Answering
+  **I already use Ligus on another device** links this device to your
+  account instead of starting a second you; it asks no name and makes or
+  joins nothing. lt asks the same question, and `ligus help quickstart` and `ligus status` on a new
+  data dir name both answers. See [Onboarding](../features/onboarding.md).
+- **Your first workspace is made for you, and secured in the first run.**
+  **Yes, start here** goes You, Secure, then your agent. Secure makes your
+  workspace, then a passkey and your recovery key from one button. It can't
+  be closed half-done: **Finish later** asks first and says what stays
+  locked. The folder, relay and team come up when you first pick a folder,
+  invite someone or join a team, and the theme is in **Settings →
+  Appearance**. See [First launch](../getting-started/first-launch.md).
+- **Less work after launch, and old reply pieces stay gone.** The desktop
+  app cleaned up finished replies' streamed pieces on every launch, holding
+  up the app on a large database, and pieces fetched again from the relay
+  came back. It now cleans up at most once a day, a minute after launch, and
+  a piece it removed is never stored again. A reply streaming on another
+  device now updates every two seconds (sooner for long bursts) instead of
+  about every second; the finished reply is the same. Messages are answered once by id,
+  so one written offline is still answered when it arrives, and one signed
+  more than a day ago isn't. The first 0.5 start upgrades `ligus.db` (after
+  a backup); Ligus 0.4 then opens it read-only. See
+  [Pruned events and answered messages](../../operate/security/index.md#seeds-and-backups).
+
 ### Added
 
 - **A second desktop links itself to your account.** In the first run,
@@ -21,33 +48,6 @@ Full release notes are on the
   using Ligus shows one line: "Looks like you already use Ligus. Link this
   device instead." Joining still works. See
   [The invite guard](../features/onboarding.md#the-invite-guard).
-
-### Changed
-
-- **Less work after launch, and old reply pieces stay gone.** The desktop
-  app cleaned up finished replies' streamed pieces on every launch, holding
-  up the app on a large database, and pieces fetched again from the relay
-  came back. It now cleans up at most once a day, a minute after launch, and
-  a piece it removed is never stored again. A reply streaming on another
-  device now updates every two seconds (sooner for long bursts) instead of
-  about every second; the finished reply is the same. Messages are answered once by id,
-  so one written offline is still answered when it arrives, and one signed
-  more than a day ago isn't. The first 0.5 start upgrades `ligus.db` (after
-  a backup); Ligus 0.4 then opens it read-only. See
-  [Pruned events and answered messages](../../operate/security/index.md#seeds-and-backups).
-- **The first run asks one question first.** Before it asks for a name,
-  the desktop app asks **Is this your first device with Ligus?** Answering
-  **I already use Ligus on another device** links this device to your
-  account instead of starting a second you; it asks no name and makes or
-  joins nothing. lt asks the same question, and `ligus help quickstart` and `ligus status` on a new
-  data dir name both answers. See [Onboarding](../features/onboarding.md).
-- **Your first workspace is made for you, and secured in the first run.**
-  **Yes, start here** goes You, Secure, then your agent. Secure makes your
-  workspace, then a passkey and your recovery key from one button. It can't
-  be closed half-done: **Finish later** asks first and says what stays
-  locked. The folder, relay and team come up when you first pick a folder,
-  invite someone or join a team, and the theme is in **Settings →
-  Appearance**. See [First launch](../getting-started/first-launch.md).
 
 ## 0.4.1
 
