@@ -66,6 +66,8 @@ vi.mock("@/lib/ipc", () => ({
   passkeyRegister: vi.fn(async () => {}),
   recoveryKeyCreate: vi.fn(async () => "alpha bravo charlie"),
   securityStatus: vi.fn(async () => ({ passkeys: [], rules: 3, keyVersion: 0, secretBackend: "file", deviceConfirmed: true })),
+  linkRequestStatus: vi.fn(async () => ({ phase: "idle" })),
+  onLinkFlowChanged: vi.fn(async () => () => {}),
 }));
 
 beforeEach(() => vi.clearAllMocks());
@@ -154,6 +156,36 @@ describe("Onboarding wizard flow", () => {
     for (const f of [ipc.setDisplayName, ipc.firstRunWorkspace, ipc.passkeyRegister, ipc.joinWorkspace, ipc.redeemShortCode, ipc.addRuntime])
       expect(f).not.toHaveBeenCalled();
     expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it("a linked device ends the first run, saying where to add a passkey when the account has none", async () => {
+    const onComplete = vi.fn();
+    (ipc.linkRequestStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ phase: "linked", personName: "Ana", workspaceId: "w1" });
+    render(<Onboarding onComplete={onComplete} />);
+    await clickByName("I already use Ligus on another device");
+    expect(await screen.findByTestId("link-linked")).toHaveTextContent("one of Ana's devices");
+    await clickByName("Continue");
+    // The account has no passkey yet (securityStatus): one calm note, then done.
+    await screen.findByTestId("first-run-linked-secure");
+    expect(onComplete).not.toHaveBeenCalled();
+    await clickByName("Done");
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    // Nothing of a first device's run happened.
+    for (const f of [ipc.setDisplayName, ipc.firstRunWorkspace, ipc.passkeyRegister, ipc.addRuntime]) expect(f).not.toHaveBeenCalled();
+    (ipc.linkRequestStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ phase: "idle" });
+  });
+
+  it("a linked device whose account has a passkey goes straight on", async () => {
+    const onComplete = vi.fn();
+    (ipc.linkRequestStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ phase: "linked", personName: "Ana", workspaceId: "w1" });
+    (ipc.securityStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ passkeys: [{ credentialId: "pk", recovery: false }], rules: 3 });
+    render(<Onboarding onComplete={onComplete} />);
+    await clickByName("I already use Ligus on another device");
+    await screen.findByTestId("link-linked");
+    await clickByName("Continue");
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(screen.queryByTestId("first-run-linked-secure")).toBeNull();
+    (ipc.linkRequestStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ phase: "idle" });
   });
 
   it("Secure can't be skipped half-done: Finish later asks first", async () => {
