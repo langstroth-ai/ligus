@@ -6,6 +6,39 @@ Full release notes are on the
 
 ## Unreleased
 
+### Fixed
+
+- **Renaming an agent whose host left the workspace.** When a host's owner
+  left, renaming or recoloring one of its agents was refused as a move. The
+  agent now keeps naming that host until someone places it again.
+
+### Changed
+
+- **The first run asks one question first.** Before it asks for a name,
+  the desktop app asks **Is this your first device with Ligus?** Answering
+  **I already use Ligus on another device** links this device to your
+  account instead of starting a second you; it asks no name and makes or
+  joins nothing. lt asks the same question, and `ligus help quickstart` and `ligus status` on a new
+  data dir name both answers. See [Onboarding](../features/onboarding.md).
+- **An agent records what it runs and where, in one record.** Adding an
+  agent writes its name, runtime and host in one signed record, now with its
+  run and placement too. Older versions read the same runtime and host, so
+  every device routes the agent the same way. The desktop fills these in
+  once for agents you already own; nothing changes for them and no passkey
+  is asked.
+- **An agent can't be placed on a host that can't run it.** Binding an agent
+  whose runtime goes through a model gateway to a host that doesn't offer
+  that gateway is refused ("build-1 doesn't offer gw-home") instead of
+  failing at its first turn. See
+  [Runtimes and agents](cli.md#runtimes-and-agents).
+- **Your first workspace is made for you, and secured in the first run.**
+  **Yes, start here** goes You, Secure, then your agent. Secure makes your
+  workspace, then a passkey and your recovery key from one button. It can't
+  be closed half-done: **Finish later** asks first and says what stays
+  locked. The folder, relay and team come up when you first pick a folder,
+  invite someone or join a team, and the theme is in **Settings →
+  Appearance**. See [First launch](../getting-started/first-launch.md).
+
 ### Added
 
 - **A second desktop links itself to your account.** In the first run,
@@ -21,39 +54,6 @@ Full release notes are on the
   using Ligus shows one line: "Looks like you already use Ligus. Link this
   device instead." Joining still works. See
   [The invite guard](../features/onboarding.md#the-invite-guard).
-
-### Changed
-
-- **An agent records what it runs and where, in one record.** Adding an
-  agent writes its name, runtime and host in one signed record, now with its
-  run and placement too. Older versions read the same runtime and host, so
-  every device routes the agent the same way. The desktop fills these in
-  once for agents you already own; nothing changes for them and no passkey
-  is asked.
-- **An agent can't be placed on a host that can't run it.** Binding an agent
-  whose runtime goes through a model gateway to a host that doesn't offer
-  that gateway is refused ("build-1 doesn't offer gw-home") instead of
-  failing at its first turn. See
-  [Runtimes and agents](cli.md#runtimes-and-agents).
-- **The first run asks one question first.** Before it asks for a name,
-  the desktop app asks **Is this your first device with Ligus?** Answering
-  **I already use Ligus on another device** links this device to your
-  account instead of starting a second you; it asks no name and makes or
-  joins nothing. lt asks the same question, and `ligus help quickstart` and `ligus status` on a new
-  data dir name both answers. See [Onboarding](../features/onboarding.md).
-- **Your first workspace is made for you, and secured in the first run.**
-  **Yes, start here** goes You, Secure, then your agent. Secure makes your
-  workspace, then a passkey and your recovery key from one button. It can't
-  be closed half-done: **Finish later** asks first and says what stays
-  locked. The folder, relay and team come up when you first pick a folder,
-  invite someone or join a team, and the theme is in **Settings →
-  Appearance**. See [First launch](../getting-started/first-launch.md).
-
-### Fixed
-
-- **Renaming an agent whose host left the workspace.** When a host's owner
-  left, renaming or recoloring one of its agents was refused as a move. The
-  agent now keeps naming that host until someone places it again.
 
 ## 0.4.1
 
