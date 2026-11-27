@@ -1122,11 +1122,13 @@ pub const COMMANDS: &[Cmd] = &[
         name: "set-agent-host",
         group: G_AGENTS,
         summary: "bind an agent to a host",
-        purpose: "Bind an agent (by name) to a host id, so that host answers its mentions. Sync to apply.",
+        purpose: "Bind an agent (by name) to a host id, so that host answers its mentions. Sync to apply. The \
+                  agent's placement moves with it in the same record. A host whose published record doesn't offer \
+                  the model gateway the agent's runtime uses is refused (\"build-1 doesn't offer gw-home\").",
         synopsis: &["ligus set-agent-host <agent-name> <host-id> [--dry-run]"],
         flags: &[DRY_RUN],
         conn: true,
-        exit: &[(5, "no agent with that name")],
+        exit: &[(5, "no agent with that name"), (6, "refused: the host doesn't offer the agent's gateway, or the move needs an Admin")],
         examples: &["ligus set-agent-host coder 5b1c0f7e-… && ligus sync"],
         see_also: &["ligus hosts", "ligus agents", "ligus queue"],
         ..D

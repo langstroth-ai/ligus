@@ -6,14 +6,50 @@ Full release notes are on the
 
 ## Unreleased
 
+### Fixed
+
+- **Renaming an agent whose host left the workspace.** When a host's owner
+  left, renaming or recoloring one of its agents was refused as a move. The
+  agent now keeps naming that host until someone places it again.
+
 ### Changed
 
+- **Each phone on a box sees its own.** When several people's phones use
+  the same box, unread counts, what's been read, "you" in People, which
+  agents you may use and which notifications are yours are now worked out
+  for the person each phone belongs to, not for the box. Read positions are
+  kept on the box per person, so your phones share them, and an upgrade
+  doesn't mark old messages unread. On your network, each phone now uses its
+  own token, which the app fetches over the relay. See
+  [Who the box acts for](../features/phone-app.md#who-the-box-acts-for).
+- **A phone the box can't tell is someone's gets only the workspace's.**
+  A phone paired directly only, added before phones had their own keys, or
+  still on an older app on your network sees the workspace's chats and
+  proposals but no direct messages, nothing marked as its person's, and
+  notifications without message text (none meant for one person). Updating
+  the app fixes it for a phone that also has a relay pairing. Before, such a
+  phone saw the box's own view, including every direct message the box held.
+- **Send to agent to revise is for your desktop for now.** From a phone, the
+  box would record it and send the instruction as itself, not as you, so it
+  says "Send it back to the agent from your desktop for now." and changes
+  nothing, as it already did for notes.
 - **The first run asks one question first.** Before it asks for a name,
   the desktop app asks **Is this your first device with Ligus?** Answering
   **I already use Ligus on another device** links this device to your
   account instead of starting a second you; it asks no name and makes or
   joins nothing. lt asks the same question, and `ligus help quickstart` and `ligus status` on a new
   data dir name both answers. See [Onboarding](../features/onboarding.md).
+- **An agent records what it runs and where, in one record.** Adding an
+  agent writes its name, runtime and host in one signed record, now with its
+  run and placement too. Older versions read the same runtime and host, so
+  every device routes the agent the same way. The desktop fills these in
+  once for agents you already own; nothing changes for them and no passkey
+  is asked.
+- **An agent can't be placed on a host that can't run it.** Binding an agent
+  whose runtime goes through a model gateway to a host that doesn't offer
+  that gateway is refused ("build-1 doesn't offer gw-home") instead of
+  failing at its first turn. See
+  [Runtimes and agents](cli.md#runtimes-and-agents).
 - **Your first workspace is made for you, and secured in the first run.**
   **Yes, start here** goes You, Secure, then your agent. Secure makes your
   workspace, then a passkey and your recovery key from one button. It can't
@@ -22,8 +58,29 @@ Full release notes are on the
   invite someone or join a team, and the theme is in **Settings →
   Appearance**. See [First launch](../getting-started/first-launch.md).
 
+### Fixed
+
+- **Linking a device works when you have a profile picture.** The code
+  your desktop sends a new device no longer carries your picture, which
+  made it too large to send through the relay or paste. The new device
+  shows your picture once your workspace has synced. See
+  [Linked devices](../features/linked-devices.md).
+
 ### Added
 
+- **Confirm a command-line step on your desktop.** A step that needs your
+  passkey (defining a workspace runtime for a new agent, say) used to stop
+  `ligus setup` with "do it in the desktop app". Now the CLI sends the
+  change, drafted exactly as it will be written, to your own desktop and
+  waits: "Confirm on your desktop: Define workspace runtime “coder”
+  (ClaudeCode, model “sonnet”) (code K7Q4 M9X2)". Your desktop's Inbox
+  shows the same change and code (and a notification); **Confirm with
+  passkey** writes it, **Not me** writes nothing and offers to revoke the
+  device. Only your own devices can ask or answer, and the passkey signs
+  that one change. `--no-wait` exits 4 at once; `ligus handoff wait`
+  finishes it later. A relay without the approval mailbox keeps the old
+  answer. See [Steps that need your passkey](cli.md#handoff) and
+  [Passkey hand-off](../features/linked-devices.md#passkey-hand-off).
 - **A second desktop links itself to your account.** In the first run,
   **I already use Ligus on another device** asks for the approval address
   from your other device (**My devices → Add a computer**). Both screens
@@ -48,19 +105,6 @@ Full release notes are on the
   using Ligus shows one line: "Looks like you already use Ligus. Link this
   device instead." Joining still works. See
   [The invite guard](../features/onboarding.md#the-invite-guard).
-- **Confirm a command-line step on your desktop.** A step that needs your
-  passkey (defining a workspace runtime for a new agent, say) used to stop
-  `ligus setup` with "do it in the desktop app". Now the CLI sends the
-  change, drafted exactly as it will be written, to your own desktop and
-  waits: "Confirm on your desktop: Define workspace runtime “coder”
-  (ClaudeCode, model “sonnet”) (code K7Q4 M9X2)". Your desktop's Inbox
-  shows the same change and code (and a notification); **Confirm with
-  passkey** writes it, **Not me** writes nothing and offers to revoke the
-  device. Only your own devices can ask or answer, and the passkey signs
-  that one change. `--no-wait` exits 4 at once; `ligus handoff wait`
-  finishes it later. A relay without the approval mailbox keeps the old
-  answer. See [Steps that need your passkey](cli.md#handoff) and
-  [Passkey hand-off](../features/linked-devices.md#passkey-hand-off).
 
 ## 0.4.1
 

@@ -685,3 +685,41 @@ async fn names_come_from_profiles_and_labels() {
     assert!(mac.svc.set_device_label(ws, new_id, "Alex's lt").unwrap());
     assert_eq!(mac.svc.device_label_of(ws, new_id, mac.account()).as_deref(), Some("Alex's lt"));
 }
+
+/// A person with the largest profile picture links a computer: the grant
+/// stays small (the picture isn't in it, so it fits one approval-mailbox
+/// message), and the computer shows the picture once the workspace's
+/// profile has synced.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_large_picture_stays_out_of_the_grant_and_arrives_by_sync() {
+    let relay = spawn_relay().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let room = "acme";
+    let ws = ligus_core::room_workspace_id(room);
+    let cfg = workspace_config_session_id(ws);
+
+    let mut mac = Dev::open(&tmp.path().join("mac"), "Alex", &relay, ws);
+    mac.found(ws);
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    bytes.resize(ligus_core::profile::MAX_AVATAR_BYTES, 0x5A);
+    let picture = ligus_core::profile::Avatar::new("image/png", &bytes).unwrap();
+    mac.svc.set_author_avatar(Some(picture.data_url()));
+    assert!(mac.svc.set_profile(ws, None, Some(picture.clone()), false).unwrap());
+    mac.sync().await;
+
+    let mut lt = Dev::open(&tmp.path().join("lt"), "lt on mbp", &relay, ws);
+    let request = lt.request("lt on mbp");
+    let grant = mac.svc.issue_computer_link(ws, &request, &mac.conn(room), now_ms()).unwrap();
+    eprintln!("grant {} bytes with a {} byte picture on the author", grant.len(), picture.data_url().len());
+    assert!(grant.len() < crate::approval_mailbox::MAX_MSG_BLOB / 2, "grant is {} bytes", grant.len());
+    mac.sync().await;
+
+    let person = lt.redeem(&grant).await.unwrap();
+    assert_eq!(person.id, mac.id());
+    assert_eq!(person.avatar_url, None, "not carried by the grant");
+    lt.sync().await;
+    let config = lt.svc.load_in(ws, cfg).unwrap().unwrap();
+    assert_eq!(config.profiles.get(&mac.account()).and_then(|p| p.avatar.clone()), Some(picture.clone()));
+    let me = config.members.iter().find(|m| m.actor.account_id == Some(mac.account())).unwrap();
+    assert_eq!(me.actor.avatar_url.as_deref(), Some(picture.data_url().as_str()), "rendered from the profile");
+}

@@ -126,7 +126,9 @@ fn roster(config: &ChatSession) -> impl Iterator<Item = &WorkspaceMember> {
 /// with them (`dmChatId`). This box's own entry carries its safety code.
 pub async fn list_people(State(s): S) -> ApiResult<Json<Value>> {
     let (_, config) = hosts_and_agents(&s)?;
-    let me = s.my_actor_id();
+    // "You" is the request's person (nobody for a phone this box can't
+    // place), not this box.
+    let me = super::api::principal().actor_id();
     let extras = super::identity_api::person_extras(&s);
     let my_account = s.my_account();
     let my_code = s.my_fingerprint().as_deref().and_then(ligus_runtime::directory_trust::safety_code);
@@ -405,8 +407,8 @@ fn workflow_run_dto(chat: &ChatSession, r: &ligus_core::WorkflowRun) -> Value {
 pub async fn chat_details(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let chat = load_chat(&s, &id)?;
     let (hosts, config) = hosts_and_agents(&s)?;
-    let me = s.my_actor_id();
-    let unread = s.unread(&chat, &me);
+    let who = super::api::principal();
+    let unread = s.unread(&chat, &who);
 
     let spoke: HashSet<String> =
         participants(&chat, usize::MAX).iter().filter_map(|p| p["id"].as_str().map(str::to_string)).collect();
@@ -415,14 +417,14 @@ pub async fn chat_details(State(s): S, Path(id): Path<String>) -> ApiResult<Json
         .workspace_agents
         .iter()
         .map(|a| {
-            let mut v = agent_dto(&s, a, &config, &hosts);
+            let mut v = agent_dto(&s, a, &config, &hosts, &who);
             v["inChat"] = json!(spoke.contains(&a.id.to_string()) || chat.participant_agent_ids.contains(&a.id));
             v
         })
         .collect();
     let people: Vec<Value> = roster(&config)
         .map(|m| {
-            let mut v = person_dto(m, &me);
+            let mut v = person_dto(m, &who.actor_id());
             v["inChat"] = json!(spoke.contains(&m.actor.id));
             v
         })

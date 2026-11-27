@@ -610,10 +610,14 @@ Host connector (`ligus serve`):
     whether they carry a message preview (§14). `previews` defaults to `true`
     for a newly paired phone; when the field is absent the stored value is
     kept.
-  - `GET /v1/tunnel/direct` → `{"token","url"}`: the direct-path bearer
-    token and URL (tunnel only; `404` on the direct path). The token rotates
-    when a phone device is revoked; a phone whose direct request gets `401`
-    fetches it again here.
+  - `GET /v1/tunnel/direct` → `{"token","url"}`: this phone's own
+    direct-path token and the URL (tunnel only; `404` on the direct path).
+    The token is `ld1.<pid>.<hex HMAC-SHA256(serve.token, "ligus-direct-v1\0"
+    || pid)>`, so it acts for the phone's person on the direct path and
+    changes when `serve.token` rotates (a phone device was revoked); a phone
+    whose direct request gets `401`, or an answer marked
+    `ligus-direct-credential: shared` (it used the shared `serve.token`,
+    which acts for no one), fetches it again here.
 
 Phone client: the transport layer maps each `URLRequest` onto one stream and
 builds an `HTTPURLResponse` and body or byte sequence from the reply. In the

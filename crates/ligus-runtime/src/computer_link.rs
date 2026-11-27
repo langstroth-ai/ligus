@@ -319,7 +319,10 @@ pub struct Grant;
 impl Grant {
     /// Seal a grant for `request`: `conn` (a `hivews1:` connection without an
     /// invite) and the `person` the computer now acts for, signed by the
-    /// approving device.
+    /// approving device. The person's picture is left out: it can be 16 KiB
+    /// (more on an older identity), too large for one approval-mailbox
+    /// message once sealed, and the computer reads it from the workspace's
+    /// profile once it has synced.
     pub fn seal(
         request: &LinkRequest,
         workspace_id: Uuid,
@@ -335,7 +338,7 @@ impl Grant {
             workspace_id,
             conn: conn.to_string(),
             device_id: request.device_id,
-            person: serde_json::to_string(person).map_err(|_| LinkError::Malformed)?,
+            person: serde_json::to_string(&ActorIdentity { avatar_url: None, ..person.clone() }).map_err(|_| LinkError::Malformed)?,
             approver_device_id,
             approver_key: approver.public_key_bytes().to_vec(),
             expires_at,

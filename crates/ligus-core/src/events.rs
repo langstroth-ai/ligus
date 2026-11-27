@@ -61,7 +61,9 @@ pub enum SessionEvent {
     /// Drop a message from the transcript (used by "regenerate" to replace the
     /// last assistant turn). Idempotent — removing an unknown id is a no-op.
     MessageRemoved { message_id: Uuid },
-    /// A device claims the right to answer `trigger_id` (a user message). Because
+    /// A device claims the right to answer `trigger_id`: despite its wire
+    /// name, a claim key ([`crate::turn_claim_key`]), which is the trigger
+    /// message itself for a turn with one responder. Because
     /// ownership is account-scoped, all of a person's online devices otherwise
     /// self-elect and double-answer. The fold applies events in canonical
     /// `(lamport, event_id)` order, so the FIRST claim seen per trigger wins
@@ -866,7 +868,10 @@ impl ChatSession {
                 let mut message = message.clone();
                 message.superseded = false;
                 message.completed_at = None;
+                message.appended_at = None;
                 if let Some(idx) = self.message_index(message.id) {
+                    // A re-append keeps the first append's time.
+                    message.appended_at = self.messages[idx].appended_at;
                     self.messages[idx] = message;
                 } else {
                     self.messages.push(message);
@@ -926,13 +931,20 @@ impl ChatSession {
             // New writes use the per-item `AgentUpserted`/`AgentRemoved` deltas
             // below; mixing the two is safe because the canonical fold order
             // resolves them deterministically on every device.
+            // Each entry starts over: no sticky field carries across a
+            // whole-list replace (workspace model v3, 5.6 rule 4).
             SessionEvent::AgentRosterUpdated { agents } => {
-                self.workspace_agents = agents.clone();
+                self.workspace_agents = agents.iter().map(|a| crate::agent_run::normalize(a, crate::agent_run::RunRules::Mirror)).collect();
                 self.workspace_agents.iter_mut().for_each(WorkspaceAgent::sanitize_color);
             }
-            // Per-item agent delta — upsert by id (mirrors `ChannelCreated`).
+            // Per-item agent delta — upsert by id (mirrors `ChannelCreated`),
+            // merged with the record it replaces: `run` and `placement` are
+            // sticky and always agree with `runtime_id` and `host_id`, which
+            // win (`crate::agent_run::merge_upsert`). Rules 3 keeps them a
+            // mirror of the legacy fields.
             SessionEvent::AgentUpserted { agent } => {
-                let mut agent = agent.clone();
+                let prev = self.workspace_agents.iter().find(|a| a.id == agent.id);
+                let mut agent = crate::agent_run::merge_upsert(prev, agent, crate::agent_run::RunRules::Mirror);
                 agent.sanitize_color();
                 if let Some(slot) = self.workspace_agents.iter_mut().find(|a| a.id == agent.id) {
                     *slot = agent;
@@ -2412,6 +2424,16 @@ fn fold_pass(
                         session.messages[idx].completed_at = Some(env.timestamp);
                     }
                 }
+                // The first append's signed time (`ChatMessage::appended_at`).
+                if let SessionEvent::MessageAppended { message } = payload {
+                    if let Some(idx) = session.message_index(message.id) {
+                        // Not for a received envelope that carried no time
+                        // (a legacy one decodes it as "now"): `created_at`.
+                        if env.raw.as_ref().is_none_or(|r| r.timestamp().is_some()) {
+                            session.messages[idx].appended_at.get_or_insert(env.timestamp);
+                        }
+                    }
+                }
                 // The dispatcher's commit (`crate::dispatch`): an answer whose
                 // origin device is the signer (or certified the signing agent
                 // key, as the workspace roster at its position holds it)
@@ -2472,7 +2494,9 @@ fn fold_pass(
         _ => tracker.state.rules,
     };
     // Rules 3: a host whose owner isn't a member any more is inert (agents
-    // bound to it become unbound everywhere at once).
+    // bound to it become unbound everywhere at once, for older readers).
+    // A placement-aware reader sees the agent as `host_gone`: it keeps
+    // naming the host and runs nowhere (workspace model v3, 5.3).
     if session.authz.rules >= authz::RULES_V3 && session.id == crate::channel::workspace_config_session_id(session.workspace_id) {
         let members: std::collections::BTreeSet<&str> = session.members.iter().map(|m| m.id.as_str()).collect();
         let gone: Vec<String> = session
@@ -2485,10 +2509,16 @@ fn fold_pass(
             session.workspace_hosts.retain(|h| !gone.contains(&h.id));
             for a in session.workspace_agents.iter_mut() {
                 if gone.contains(&a.host_id) {
-                    a.host_id.clear();
+                    a.placement = Some(crate::agent_run::Placement::Host { host_id: std::mem::take(&mut a.host_id) });
+                    a.host_gone = true;
                 }
             }
         }
+    }
+    // A placement naming a host the legacy field no longer does (a seed
+    // taken after the pass above) is gone too.
+    for a in session.workspace_agents.iter_mut() {
+        a.host_gone = a.is_host_gone();
     }
     Some(session)
 }
@@ -2605,6 +2635,33 @@ mod tests {
         let s = project(&envs).unwrap();
         assert_eq!(s.messages[0].created_at, start, "created_at stays the turn's start");
         assert_eq!(s.messages[0].posted_at(), Timestamp::from_unix_seconds(1_800_000_120));
+    }
+
+    /// A message's append time is its envelope's signed time, from the first
+    /// append in fold order; a re-append under the same id keeps it, and
+    /// an author's own `created_at` never stands in for it.
+    #[test]
+    fn a_messages_append_time_is_its_first_envelopes_time() {
+        let base = base_session();
+        let (sid, wid) = (base.id, base.workspace_id);
+        let mut msg = ChatMessage::new(MessageRole::User, "Mara", "hi");
+        msg.created_at = Timestamp::from_unix_seconds(1_900_000_000);
+        let mut first = SessionEventEnvelope::new(sid, wid, 2, SessionEvent::MessageAppended { message: msg.clone() });
+        first.timestamp = Timestamp::from_unix_seconds(1_800_000_000);
+        let mut edited = msg.clone();
+        edited.body = "hi again".into();
+        let mut again = SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MessageAppended { message: edited });
+        again.timestamp = Timestamp::from_unix_seconds(1_800_000_500);
+        let s = project(&[snapshot_env(base.clone(), 1), first.clone()]).unwrap();
+        assert_eq!(s.messages[0].appended_at(), Timestamp::from_unix_seconds(1_800_000_000));
+        let s = project(&[snapshot_env(base.clone(), 1), first, again]).unwrap();
+        assert_eq!(s.messages[0].body, "hi again");
+        assert_eq!(s.messages[0].appended_at(), Timestamp::from_unix_seconds(1_800_000_000), "a re-append keeps the first time");
+        // Seeded from a snapshot (no envelope of its own): its created_at.
+        let mut seeded = base;
+        seeded.messages.push(msg);
+        let s = project(&[snapshot_env(seeded, 1)]).unwrap();
+        assert_eq!(s.messages[0].appended_at(), Timestamp::from_unix_seconds(1_900_000_000));
     }
 
     #[test]
