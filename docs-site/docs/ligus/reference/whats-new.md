@@ -22,6 +22,14 @@ Full release notes are on the
   invite someone or join a team, and the theme is in **Settings →
   Appearance**. See [First launch](../getting-started/first-launch.md).
 
+### Fixed
+
+- **Linking a device works when you have a profile picture.** The code
+  your desktop sends a new device no longer carries your picture, which
+  made it too large to send through the relay or paste. The new device
+  shows your picture once your workspace has synced. See
+  [Linked devices](../features/linked-devices.md).
+
 ### Added
 
 - **A second desktop links itself to your account.** In the first run,

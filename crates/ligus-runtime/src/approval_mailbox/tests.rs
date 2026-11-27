@@ -1312,3 +1312,47 @@ mod review_regressions {
         assert_eq!(super::super::envelope::verify_open(&Verified::parse(forged.as_bytes()).unwrap(), &l.request.rid).unwrap_err(), MsgError::WrongKey);
     }
 }
+
+/// A 16 KiB PNG profile picture (the largest a profile takes) as the data
+/// URL the person's identity carries.
+fn max_picture() -> String {
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut x: u32 = 0x9E37_79B9;
+    while bytes.len() < ligus_core::profile::MAX_AVATAR_BYTES {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        bytes.push(x as u8);
+    }
+    ligus_core::profile::Avatar::new("image/png", &bytes).unwrap().data_url()
+}
+
+/// A person with the largest profile picture links a computer through the
+/// mailbox: the grant leaves the picture out (the computer reads it from the
+/// workspace's profile once synced), so the result fits one message.
+#[tokio::test]
+async fn a_person_with_a_large_picture_links_a_computer_through_the_mailbox() {
+    let env = env().await;
+    let c = Computer::new(env.clock.now());
+    let (me, desk) = approver("Ana");
+    let (mut req, mut session, _, _) = exchange(&env, c.spec(), me, &mut SeenSet::in_memory()).await;
+    let mut ana = person();
+    ana.avatar_url = Some(max_picture());
+    let code = encode_workspace_invite(&conn(&env, &env.room, &env.fk, None, 3));
+    let id = device_id_for(SigAlg::Ed25519, &desk.public_key_bytes());
+    let grant = Grant::seal(&c.request, ligus_core::room_workspace_id(&env.room), &code, &ana, id, &desk, env.clock.now() + 30 * MIN).unwrap();
+    let sealed = seal_blob(&c.ka.public_key_bytes(), sign_message(MsgType::Result, &approved("00", &grant), &Signer::Ed25519(SigningKeypair::from_seed(&desk.seed_bytes()).unwrap())).as_bytes()).unwrap();
+    eprintln!("grant {} bytes, sealed result {} bytes, limit {MAX_MSG_BLOB}", grant.len(), sealed.len());
+    assert!(sealed.len() < MAX_MSG_BLOB / 2, "a result with the grant is {} bytes", sealed.len());
+    session.offer(grant.clone()).await.unwrap();
+    let RequesterEvent::Offered { .. } = req.poll(0).await.unwrap().remove(0) else { panic!() };
+    req.ack().await.unwrap();
+    assert!(session.await_ack(0).await.unwrap());
+    session.finish_approved(Some(&grant)).await.unwrap();
+    let RequesterEvent::Result(r) = req.poll(0).await.unwrap().remove(0) else { panic!() };
+    let pk = c.key.public_key_bytes();
+    req.check_grant(&r, GrantTarget::Computer { request: &c.request, ka: &c.ka, device_key: &pk }, env.clock.now()).unwrap();
+    let opened = Grant::open(r.grant.as_deref().unwrap(), &c.ka).unwrap();
+    assert_eq!(opened.person.id, ana.id);
+    assert_eq!(opened.person.avatar_url, None, "the picture comes from the workspace's profile, not the grant");
+}
