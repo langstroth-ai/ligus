@@ -16,41 +16,41 @@ use crate::{open_service, sync_once, Config};
 
 use crate::serve::tests::test_relay;
 
-const PASSPHRASE: &str = "code match cli passphrase";
+pub(crate) const PASSPHRASE: &str = "code match cli passphrase";
 
-async fn spawn(router: axum::Router) -> String {
+pub(crate) async fn spawn(router: axum::Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     format!("http://{addr}")
 }
 
-fn config(dir: &Path, relay: &str, room: &str) -> Config {
+pub(crate) fn config(dir: &Path, relay: &str, room: &str) -> Config {
     std::fs::create_dir_all(dir).unwrap();
     Config { data_dir: dir.to_path_buf(), relay_url: Some(relay.into()), token: None, room: room.into(), key: Some(PASSPHRASE.into()), epoch_keys: Vec::new() }
 }
 
-fn fresh(dir: &Path) -> Config {
+pub(crate) fn fresh(dir: &Path) -> Config {
     std::fs::create_dir_all(dir).unwrap();
     Config { data_dir: dir.to_path_buf(), relay_url: None, token: None, room: "default".into(), key: None, epoch_keys: Vec::new() }
 }
 
-struct World {
+pub(crate) struct World {
     _tmp: tempfile::TempDir,
-    root: std::path::PathBuf,
-    relay: String,
-    room: String,
-    ws: Uuid,
-    desk: Config,
-    words: String,
+    pub(crate) root: std::path::PathBuf,
+    pub(crate) relay: String,
+    pub(crate) room: String,
+    pub(crate) ws: Uuid,
+    pub(crate) desk: Config,
+    pub(crate) words: String,
 }
 
 /// Alex founds a workspace with a recovery key registered (an Admin's presence).
-async fn world() -> World {
+pub(crate) async fn world() -> World {
     world_on(test_relay::router()).await
 }
 
-async fn world_on(router: axum::Router) -> World {
+pub(crate) async fn world_on(router: axum::Router) -> World {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
     let relay = spawn(router).await;
@@ -72,7 +72,7 @@ async fn world_on(router: axum::Router) -> World {
 }
 
 /// The workspace's approval address, as `ligus admit address` prints it.
-async fn address(w: &World) -> am::ApprovalAddress {
+pub(crate) async fn address(w: &World) -> am::ApprovalAddress {
     let svc = open_service(&w.desk).unwrap();
     let keys = svc.approval_epoch_keys(w.ws, &crate::key_source(&w.desk).unwrap()).unwrap();
     let pin = svc.founder_pin_hex(w.ws).unwrap().unwrap();
@@ -80,7 +80,7 @@ async fn address(w: &World) -> am::ApprovalAddress {
 }
 
 /// The rid of the first live request, once it is there.
-async fn first_rid(w: &World) -> String {
+pub(crate) async fn first_rid(w: &World) -> String {
     let svc = open_service(&w.desk).unwrap();
     let keys = svc.approval_epoch_keys(w.ws, &crate::key_source(&w.desk).unwrap()).unwrap();
     drop(svc);
@@ -101,14 +101,14 @@ async fn live_count(w: &World) -> usize {
     am::list_live(&am::MailboxClient::new(&w.relay), &keys).await.unwrap().live.len()
 }
 
-fn to(addr: &am::ApprovalAddress, label: &str, tx: Option<mpsc::Sender<String>>) -> ToOptions {
+pub(crate) fn to(addr: &am::ApprovalAddress, label: &str, tx: Option<mpsc::Sender<String>>) -> ToOptions {
     let mut o = ToOptions::new(addr.encode(), label.into(), Duration::from_secs(60), false, true);
     o.code_tx = tx;
     o.log_retry = Duration::from_secs(15);
     o
 }
 
-fn approve(w: &World, rid: &str) -> ApproveOptions {
+pub(crate) fn approve(w: &World, rid: &str) -> ApproveOptions {
     ApproveOptions { rid: rid.into(), code: None, words: Some(w.words.clone()), json: true, end: false }
 }
 

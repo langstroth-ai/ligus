@@ -352,6 +352,37 @@ Every flow takes `--json` (one report: `command` is `setup <flow>`, plus
 writes nothing). A secret flag takes `-` (stdin) or `@FILE` (owner-only) and is
 refused on the command line.
 
+### Steps that need your passkey {#handoff}
+
+A workspace with stricter device rules holds some writes (defining a
+workspace runtime, say) for your passkey, and the CLI has none. `ligus setup`
+sends the change, drafted exactly as it will be written, to your own desktop
+and waits:
+
+```text
+Confirm on your desktop: Define workspace runtime “coder” (ClaudeCode, model “sonnet”) (code K7Q4 M9X2)
+Waiting for your desktop (Ctrl-C cancels)…
+```
+
+Your desktop's Inbox shows the same change and the same code. **Confirm with
+passkey** writes it; **Not me** writes nothing (and offers to revoke the
+device that asked). `--timeout DURATION` (default 10 minutes) and Ctrl-C
+cancel it. `--no-wait` sends it and exits 4 at once, with the code and a
+`next:` line:
+
+| Command | What it does |
+|---|---|
+| `ligus handoff list [--json]` (or `ligus handoff`) | the hand-offs this data dir is waiting for: id, code, what each confirms (they expire after 15 minutes) |
+| `ligus handoff wait [<id>] [--timeout 10m] [--json]` | waits for your desktop, then writes the change with its passkey confirmation; run the command that asked again and it skips what is done. Exit 4 when no one confirmed it in time, 5 when no such hand-off is waiting |
+| `ligus handoff cancel [<id>] [--json]` | ends a waiting hand-off; your desktop drops it |
+
+Only your own devices (certified for your account, not revoked) can answer,
+and the passkey signs that one draft; nothing about the hand-off goes on the
+workspace log. A relay without the approval mailbox can't carry it: the step
+then stops as before (exit 4: do it in the desktop app, or pass
+`--recovery-words-file PATH`). See
+[Passkey hand-off](../features/linked-devices.md#passkey-hand-off).
+
 ## Runtimes and agents
 
 | Command | What it does |

@@ -155,10 +155,16 @@ sign-in or sandbox to fix, 4 a person must act, 6 refused by your role or
 the lockdown, 7 the relay or server didn't answer.
 
 In a workspace with stricter device rules, some writes (a workspace runtime
-for a new agent, a repository) need your passkey. The CLI has none, so such a
-step stops with exit 4 and says so: do it in the desktop app, or run the flow
-again with `--recovery-words-file PATH` (your recovery key's 24 words, in a
-file only you can read).
+for a new agent, a repository) need your passkey. The CLI has none, so it
+sends that change to your own desktop and waits, printing what it is and a
+code: "Confirm on your desktop: Define workspace runtime “builder” (…) (code
+K7Q4 M9X2)". Your desktop's Inbox shows the same change and code; confirm it
+with your passkey there (Ctrl-C or `--timeout` cancels; `--no-wait` exits 4
+and `ligus handoff wait` finishes it, see
+[Steps that need your passkey](../reference/cli.md#handoff)). If the relay
+has no approval mailbox, the step stops with exit 4 as before: do it in the
+desktop app, or run the flow again with `--recovery-words-file PATH` (your
+recovery key's 24 words, in a file only you can read).
 
 ```sh
 ligus setup agent --harness claude-code --name builder --json | jq '.done'

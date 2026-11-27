@@ -173,4 +173,20 @@ describe("Inbox", () => {
     expect(within(row).getByRole("button", { name: "About a request that didn't match" })).toBeInTheDocument();
     expect(screen.getByText("Nothing needs you.")).toBeInTheDocument();
   });
+
+  it("shows a passkey hand-off with what it does, opening the sheet", async () => {
+    const summary = "Define workspace runtime \u201Ccoder\u201D (ClaudeCode, model \u201Csonnet\u201D)";
+    mount(needsYouItems({ approvals: [{ workspaceId: "w1", rid: "h1", kind: "presence", label: "laptop", createdAt: Date.now(), summary }] }));
+    expect(screen.getByText(summary)).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Your passkey, asked by your device: \u201Claptop\u201D"));
+    expect(approvalSheet.snapshot()).toEqual({ workspaceId: "w1", rid: "h1" });
+    approvalSheet.close();
+  });
+
+  it("keeps a Not me fact with My devices to revoke the device", async () => {
+    const a = mount(needsYouItems({ approvalFacts: [{ key: "h1", kind: "notMe", label: "laptop", at: Date.now(), help: "Not me revokes nothing by itself." }] }));
+    const row = screen.getByText("You said Not me to a request from \u201Claptop\u201D. Nothing was written.").closest('[role="listitem"]') as HTMLElement;
+    await userEvent.click(within(row).getByRole("button", { name: "My devices" }));
+    expect(a.openSettingsTab).toHaveBeenCalledWith("account");
+  });
 });

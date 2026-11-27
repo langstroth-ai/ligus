@@ -53,6 +53,9 @@ mod devices_cmd;
 mod link_io;
 mod forge_cmd;
 mod gateway_check;
+mod handoff;
+#[cfg(test)]
+mod handoff_tests;
 mod hardening;
 mod help;
 mod hook_cmd;
@@ -2858,6 +2861,19 @@ fn run() -> Result<()> {
             }
             Some(other) => bail!("unknown `ligus approvals {other}`: use list|approve"),
         },
+        "handoff" => {
+            let json = has("--json");
+            let id = positional.get(1).map(|s| s.as_str());
+            match positional.first().map(|s| s.as_str()) {
+                Some("list") | None => handoff::cmd_list(&cfg, json),
+                Some("wait") => {
+                    let timeout = flag_val("--timeout").map(|t| cli_flags::parse_duration(&t)).transpose()?.unwrap_or(handoff::DEFAULT_TIMEOUT);
+                    rt()?.block_on(handoff::cmd_wait(&cfg, id, timeout, json))
+                }
+                Some("cancel") => rt()?.block_on(handoff::cmd_cancel(&cfg, id, json)),
+                Some(other) => bail!("unknown `ligus handoff {other}`: use list|wait|cancel"),
+            }
+        }
         "devices" => {
             let json = has("--json");
             let interactive = link_io::interactive();

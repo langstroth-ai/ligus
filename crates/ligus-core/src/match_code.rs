@@ -40,6 +40,10 @@ pub const ABORT_CTX: &[u8] = b"ligus-match-abort-v1\0";
 pub const OFFER_CTX: &[u8] = b"ligus-match-offer-v1\0";
 /// The requester's acknowledgement of an offer.
 pub const ACK_CTX: &[u8] = b"ligus-match-ack-v1\0";
+/// A passkey hand-off's code (new in 0.5): derived from the request alone,
+/// so a terminal can show it before any approver answers and exit while it
+/// waits (`docs/design/code-match-wire.md` section 8).
+pub const PRESENCE_CODE_CTX: &[u8] = b"ligus-presence-code-v1\0";
 /// HKDF salt of every approval-mailbox key.
 pub const MAILBOX_SALT: &[u8] = b"ligus-approval-mailbox-v1";
 /// What a mailbox register or reset is signed over (by the mailbox auth key).
@@ -68,6 +72,10 @@ pub enum MatchKind {
     Computer,
     /// A phone asking to be one of a person's devices (`ligusphone1:`).
     Phone,
+    /// A terminal of a person asking that person's desktop or phone to
+    /// confirm one drafted event with their passkey (`liguspresence1:`,
+    /// new in 0.5).
+    Presence,
 }
 
 impl MatchKind {
@@ -76,6 +84,7 @@ impl MatchKind {
             Self::Box => 1,
             Self::Computer => 2,
             Self::Phone => 3,
+            Self::Presence => 4,
         }
     }
     pub fn as_str(self) -> &'static str {
@@ -83,6 +92,7 @@ impl MatchKind {
             Self::Box => "box",
             Self::Computer => "computer",
             Self::Phone => "phone",
+            Self::Presence => "presence",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -90,6 +100,7 @@ impl MatchKind {
             "box" => Some(Self::Box),
             "computer" => Some(Self::Computer),
             "phone" => Some(Self::Phone),
+            "presence" => Some(Self::Presence),
             _ => None,
         }
     }
@@ -167,6 +178,22 @@ pub fn code_bits(transcript: &[u8; 32], n_r: &[u8; 32], bits: u32) -> u64 {
 /// The 40-bit code.
 pub fn code40(transcript: &[u8; 32], n_r: &[u8; 32]) -> u64 {
     code_bits(transcript, n_r, CODE_BITS)
+}
+
+/// A passkey hand-off's 40-bit code:
+/// `SHA256("ligus-presence-code-v1\0" ‖ mailbox ‖ rid ‖ SHA256(request code))`,
+/// first 40 bits. The request code (`liguspresence1:…`) carries the drafted
+/// event, so the code names that exact draft on that request.
+pub fn presence_code40(mailbox: &[u8; 16], rid: &[u8; 16], request_code: &[u8]) -> u64 {
+    let mut h = Sha256::new();
+    h.update(PRESENCE_CODE_CTX);
+    h.update(mailbox);
+    h.update(rid);
+    h.update(Sha256::digest(request_code));
+    let d: [u8; 32] = h.finalize().into();
+    let mut first = [0u8; 8];
+    first.copy_from_slice(&d[..8]);
+    u64::from_be_bytes(first) >> (64 - CODE_BITS)
 }
 
 /// The shown form: 8 Crockford symbols in two groups of four, `K7Q4 M9X2`.
@@ -382,6 +409,22 @@ mod tests {
         assert_eq!(MatchKind::Box.byte(), 1);
         assert_eq!(MatchKind::Computer.byte(), 2);
         assert_eq!(MatchKind::Phone.byte(), 3);
+        assert_eq!(MatchKind::Presence.byte(), 4);
+        assert_eq!(hex(PRESENCE_CODE_CTX), "6c696775732d70726573656e63652d636f64652d763100");
+    }
+
+    #[test]
+    fn a_presence_code_moves_with_every_input() {
+        let c = presence_code40(&[1; 16], &[2; 16], b"liguspresence1:abc");
+        // Pinned (computed independently): other clients derive the same.
+        assert_eq!(c, 0x52_2833_f4fd);
+        assert_eq!(encode(c), "A8M3 7X7X");
+        assert_eq!(c, presence_code40(&[1; 16], &[2; 16], b"liguspresence1:abc"));
+        assert_ne!(c, presence_code40(&[0; 16], &[2; 16], b"liguspresence1:abc"));
+        assert_ne!(c, presence_code40(&[1; 16], &[0; 16], b"liguspresence1:abc"));
+        assert_ne!(c, presence_code40(&[1; 16], &[2; 16], b"liguspresence1:abd"));
+        assert_eq!(MatchKind::parse("presence"), Some(MatchKind::Presence));
+        assert_eq!(MatchKind::Presence.as_str(), "presence");
     }
 
     #[test]
