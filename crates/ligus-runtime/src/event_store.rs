@@ -86,6 +86,8 @@ mod agent_usage;
 mod blob_renewals;
 mod held;
 mod hidden_proposals;
+#[cfg(test)]
+mod order_lint;
 mod repo_tables;
 mod storage_v2;
 pub use held::{claimed_account, HeldEvent, HeldStats, HoldItem, RefetchRow, HELD_PER_SIGNER, HELD_PER_WORKSPACE, HELD_REFETCH_PER_WORKSPACE, HELD_REFETCH_TRIES, HELD_RETRY_EVERY, HELD_TOTAL, HELD_TTL_MS};
@@ -183,9 +185,10 @@ const FORKS_CHAIN_SQL: &str = "SELECT 1 FROM events WHERE session_id = ?1 AND +w
 /// workspace checked on its rows, as in [`FORKS_CHAIN_SQL`]). Newest by
 /// lamport, not by row: a signer's chain climbs in lamport, while rows can
 /// arrive out of order (a pruned chunk pulled back from the relay lands as a
-/// new row long after the events that follow it).
+/// new row long after the events that follow it). Ties go to the higher
+/// event id, as in the fold.
 const LAST_SIGNED_BY_SQL: &str = "SELECT event_id FROM events WHERE session_id = ?1 AND +workspace_id = ?4 AND json_extract(envelope_json, '$.signerDeviceId') = ?2 \
-     AND json_extract(envelope_json, '$.lamport') < ?3 ORDER BY json_extract(envelope_json, '$.lamport') DESC, row_id DESC LIMIT 1";
+     AND json_extract(envelope_json, '$.lamport') < ?3 ORDER BY json_extract(envelope_json, '$.lamport') DESC, event_id DESC LIMIT 1";
 
 /// A fresh name for the foreign-workspace cleanup's backup next to the
 /// database in `data_dir`: unique per call (time to the nanosecond and the
@@ -1364,8 +1367,9 @@ impl EventStore {
         )?)
     }
 
-    /// The messages appended after row `after`, as `(session, message, signing
-    /// device)` in arrival order: what one sync pull brought in, message by
+    /// The messages stored after row `after` (row ids are this device's
+    /// arrival cursor), as `(session, message, signing device)` in fold order
+    /// `(lamport, event_id)`: what one sync pull brought in, message by
     /// message. A pull can carry several user turns for one chat (two posts a
     /// few ms apart); dispatch must consider each of them, not only the
     /// chat's last. The signer lets the caller skip its own device's posts.
@@ -1373,11 +1377,9 @@ impl EventStore {
     /// Each as `(workspace, session, message, signing device)`: the log is
     /// (workspace, session), the workspace the one the event carries.
     pub fn messages_after(&self, after: i64) -> Result<Vec<(Uuid, Uuid, Uuid, Option<Uuid>)>> {
-        Ok(self
-            .query_envelopes(
-                "SELECT envelope_json FROM events WHERE row_id > ?1 AND kind = 'messageAppended' ORDER BY row_id ASC",
-                [after],
-            )?
+        let mut envs = self.query_envelopes("SELECT envelope_json FROM events WHERE row_id > ?1 AND kind = 'messageAppended'", [after])?;
+        envs.sort_by_key(|e| e.canonical_key());
+        Ok(envs
             .into_iter()
             .filter_map(|e| match e.payload {
                 SessionEvent::MessageAppended { message } => Some((e.workspace_id, e.session_id, message.id, e.signer_device_id)),
@@ -1641,12 +1643,14 @@ impl EventStore {
         }
     }
 
-    /// A log's envelopes (`workspace_id`, `session_id`) in sequence order.
+    /// A log's envelopes (`workspace_id`, `session_id`) in fold order
+    /// `(lamport, event_id)`, so the last one is the log's newest. Not in row
+    /// or local `sequence` order: those are arrival order on this device.
     pub fn list_in(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
-        self.query_envelopes(
-            "SELECT envelope_json FROM events WHERE session_id = ?1 AND workspace_id = ?2 ORDER BY sequence ASC",
-            [session_id.to_string(), workspace_id.to_string()],
-        )
+        let mut envs =
+            self.query_envelopes("SELECT envelope_json FROM events WHERE session_id = ?1 AND workspace_id = ?2", [session_id.to_string(), workspace_id.to_string()])?;
+        envs.sort_by_key(|e| e.canonical_key());
+        Ok(envs)
     }
 
     /// [`Self::list_in`] the workspace [`Self::workspace_of`] names (nothing
@@ -1678,15 +1682,6 @@ impl EventStore {
             }
         }
         Ok((last, out))
-    }
-
-    /// A log's envelopes with `sequence > after`, in order — the sync fetch
-    /// path.
-    pub fn list_after(&self, workspace_id: Uuid, session_id: Uuid, after: i64) -> Result<Vec<SessionEventEnvelope>> {
-        self.query_envelopes(
-            "SELECT envelope_json FROM events WHERE session_id = ?1 AND workspace_id = ?3 AND sequence > ?2 ORDER BY sequence ASC",
-            rusqlite::params![session_id.to_string(), after, workspace_id.to_string()],
-        )
     }
 
     /// Like [`EventStore::query_envelopes`] for `SELECT envelope_json,
@@ -2290,7 +2285,8 @@ impl EventStore {
     /// a device `signer_key` returns a key for (the caller's certified,
     /// non-revoked devices of `account`): anyone else can stamp any account
     /// on what they sign. A delivery address only: what is dropped there is
-    /// sealed to keys verified on the config log.
+    /// sealed to keys verified on the config log. Newest by `(lamport,
+    /// event_id)`, never by row: an old event pulled again is a new row.
     pub fn latest_contact_of(
         &self,
         workspace_id: Uuid,
@@ -2298,10 +2294,10 @@ impl EventStore {
         signer_key: &dyn Fn(Uuid) -> Option<Vec<u8>>,
     ) -> Result<Option<String>> {
         let envs = self.query_envelopes(
-            "SELECT envelope_json FROM (SELECT row_id, workspace_id, envelope_json FROM events \
-             UNION ALL SELECT row_id + 9000000000000, workspace_id, envelope_json FROM equivocations) \
+            "SELECT envelope_json FROM (SELECT 0 AS t, event_id, workspace_id, envelope_json FROM events \
+             UNION ALL SELECT 1, event_id, workspace_id, envelope_json FROM equivocations) \
              WHERE workspace_id = ?1 AND envelope_json LIKE '%\"contact\":\"%' \
-             ORDER BY row_id DESC LIMIT 200",
+             ORDER BY COALESCE(json_extract(envelope_json, '$.lamport'), 0) DESC, event_id DESC, t LIMIT 200",
             [workspace_id.to_string()],
         )?;
         Ok(envs.into_iter().find_map(|e| {
@@ -2465,26 +2461,30 @@ impl EventStore {
         }
     }
 
-    /// Row id of the latest `sessionSnapshot` on a log, if any.
-    fn latest_snapshot_row(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<i64>> {
+    /// The newest `sessionSnapshot` on a log by `(lamport, event_id)`, if
+    /// any, as that key (a legacy event without a lamport counts as 0).
+    fn latest_snapshot_key(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<(i64, String)>> {
         Ok(self
             .conn
             .query_row(
-                "SELECT MAX(row_id) FROM events WHERE session_id = ?1 AND workspace_id = ?2 AND kind = 'sessionSnapshot'",
+                "SELECT COALESCE(json_extract(envelope_json, '$.lamport'), 0), event_id FROM events \
+                 WHERE session_id = ?1 AND workspace_id = ?2 AND kind = 'sessionSnapshot' \
+                 ORDER BY COALESCE(json_extract(envelope_json, '$.lamport'), 0) DESC, event_id DESC LIMIT 1",
                 [session_id.to_string(), workspace_id.to_string()],
-                |row| row.get::<_, Option<i64>>(0),
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
             )
-            .optional()?
-            .flatten())
+            .optional()?)
     }
 
-    /// How many events a session has accumulated since its latest snapshot —
-    /// drives periodic re-snapshotting.
+    /// How many events of a log sort after its newest snapshot in fold
+    /// order `(lamport, event_id)` — drives periodic re-snapshotting. Not by
+    /// row: an old event pulled again lands as a new row but isn't new.
     pub fn rows_since_last_snapshot(&self, workspace_id: Uuid, session_id: Uuid) -> Result<i64> {
-        let n = match self.latest_snapshot_row(workspace_id, session_id)? {
-            Some(row) => self.conn.query_row(
-                "SELECT COUNT(*) FROM events WHERE session_id = ?1 AND workspace_id = ?3 AND row_id > ?2",
-                rusqlite::params![session_id.to_string(), row, workspace_id.to_string()],
+        let n = match self.latest_snapshot_key(workspace_id, session_id)? {
+            Some((lamport, event_id)) => self.conn.query_row(
+                "SELECT COUNT(*) FROM events WHERE session_id = ?1 AND workspace_id = ?2 \
+                 AND (COALESCE(json_extract(envelope_json, '$.lamport'), 0), event_id) > (?3, ?4)",
+                rusqlite::params![session_id.to_string(), workspace_id.to_string(), lamport, event_id],
                 |r| r.get::<_, i64>(0),
             )?,
             None => self.conn.query_row(
@@ -3337,26 +3337,6 @@ mod tests {
         assert_eq!(session.messages[0].body, "hi");
     }
 
-    #[test]
-    fn list_after_returns_only_newer_events() {
-        let (mut store, sid, wid) = seeded_store();
-        for i in 0..3 {
-            store
-                .append(
-                    sid,
-                    wid,
-                    SessionEvent::MessageAppended {
-                        message: ChatMessage::new(MessageRole::User, "u", format!("m{i}")),
-                    },
-                )
-                .unwrap();
-        }
-        // snapshot is seq 1; messages are 2,3,4
-        let after_2 = store.list_after(wid, sid, 2).unwrap();
-        assert_eq!(after_2.len(), 2);
-        assert_eq!(after_2[0].sequence, 3);
-    }
-
     /// An envelope authored against a sequence another connection took in
     /// the meantime is stored at the next place, as written (its signed
     /// sequence unchanged); the row already there is untouched. The same
@@ -3377,9 +3357,10 @@ mod tests {
         store.append_envelope(&late).unwrap();
         let stored = store.list(sid).unwrap();
         assert_eq!(stored.len(), 2);
-        assert_eq!(stored[0].event_id, first[0].event_id, "the row at 1 stays");
-        assert_eq!(stored[1].event_id, late.event_id);
-        assert_eq!(stored[1].sequence, 1, "stored as written");
+        // Listed in fold order (lamport, event id), not by place.
+        assert!(stored.iter().any(|e| e.event_id == first[0].event_id), "the row at 1 stays");
+        let late_row = stored.iter().find(|e| e.event_id == late.event_id).unwrap();
+        assert_eq!(late_row.sequence, 1, "stored as written");
         assert_eq!(store.max_sequence(wid, sid).unwrap(), Some(2), "at the next place");
         assert!(store.append_envelope(&late).is_err(), "an event id is stored once");
         assert_eq!(store.list(sid).unwrap().len(), 2);

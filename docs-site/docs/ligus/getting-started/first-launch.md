@@ -1,11 +1,8 @@
 # First launch
 
-Ligus is a desktop app for macOS, Windows and Linux. On first launch
-you'll see a guided onboarding wizard that captures your identity, picks a
-workspace folder, and configures a runtime.
-
-![Onboarding, step 1: who are you? A display name and the safety code for this device (demo data)](../images/desktop-onboarding-identity-light.png#only-light){ width="560" loading=lazy }
-![Onboarding, step 1: who are you? A display name and the safety code for this device (demo data)](../images/desktop-onboarding-identity-dark.png#only-dark){ width="560" loading=lazy }
+Ligus is a desktop app for macOS, Windows and Linux. On first launch it
+asks whether this is your first device with Ligus, then sets up your name,
+secures your first workspace and adds an agent.
 
 ## Install
 
@@ -35,50 +32,56 @@ from source, are unsigned, so first launch needs a nudge:
 - **Windows:** SmartScreen → **More info → Run anyway**.
 - **Linux:** `chmod +x Ligus_*.AppImage && ./Ligus_*.AppImage`.
 
-## Wizard steps
+## First run
 
-The onboarding is **five quick steps** (the progress dots at the top count
-them off):
+The first run opens on one question: **Is this your first device with
+Ligus?**
 
-1. **Identity** — enter a display name and, optionally, a picture. Ligus
-   has already made your account key and this device's key behind the
-   scenes; this step shows your safety code (see below).
-2. **Project folder** — pick a folder on disk. Ligus treats this as the
-   root; everything agents do (file edits, command runs, git
-   operations) is scoped to this directory.
-3. **Runtime** — choose the agent that generates replies: **Claude
-   Code**, **Codex**, an **OpenAI-compatible API** (OpenAI / OpenRouter / any
-   local OpenAI-style server), an **Anthropic API key**, or **Ollama**
-   (offered only when a local Ollama daemon is detected). Ligus defaults
-   the selection to whatever it finds installed. A **"Let agents edit
-   files in my project"** checkbox sets Claude Code's permission mode —
-   checked lets agents write files (`acceptEdits`), unchecked is
-   read-only. You can add aider, pi, or more runtimes later from
-   Settings.
-4. **Team & sync** — optional. **Just me (no sync)** keeps everything on
-   this machine (the default). **Join a team** takes an invite or short
-   code, which carries the relay. **Sync through a relay** offers the
-   [community relay](../../operate/networking/community-relay.md)
-   (`relay.langstroth.ai`, free and best-effort; preselected) or your own
-   relay's URL and token. You can change it later in **Settings → Team
-   sync**.
-5. **Appearance** — pick a theme (Pollen, Obsidian, Slate, Studio,
-   Harbor or Meadow) and light / dark / auto. It applies live as you choose, and
-   you can change it anytime from **Settings → Appearance**.
+- **I already use Ligus on another device**: this computer becomes one
+  more of your devices, not a new you (starting again would make a second
+  you, with its own name and keys). It asks no name and makes no workspace.
+  On your other device, open **Settings → Profile → My devices → Add a
+  computer** and copy the approval address; paste it here and choose
+  **Continue**. Both screens show the same code: check it, choose **Codes
+  match**, and confirm on your other device with your passkey. Then choose
+  **Link** when this computer asks **Link this computer as Ana?**. Your
+  workspace and your profile come from your other device. If your relay
+  can't carry the request, choose **Use a request code instead** (see
+  [From a second desktop](../features/linked-devices.md#desktop)). **Back**
+  returns to the question.
+- **Yes, start here**: three steps, counted off by the dots at the top.
+
+1. **You**: a display name (prefilled from git) and, optionally, a
+   picture. Ligus has already made your account key and this device's key
+   behind the scenes; your safety code is behind the **?** (see below).
+2. **Secure**: Ligus makes your first workspace, named after you, then one
+   button creates a passkey and your recovery key (24 words, shown once:
+   write them down). The passkey confirms changes to who's in a workspace
+   and what agents may do. The only way past this step before it's done is
+   **Finish later**, which asks first; finish it any time in **Settings →
+   Passkeys & keys**.
+3. **Agent**: choose what answers: **Claude Code**, **Codex**, an
+   **OpenAI-compatible API** (OpenAI / OpenRouter / any local
+   OpenAI-style server), an **Anthropic API key**, or **Ollama** (offered
+   only when a local Ollama daemon is detected). Ligus defaults the
+   selection to whatever it finds installed. A **"Let agents edit files
+   and run commands"** checkbox sets Claude Code's permission mode. You can
+   add aider, pi, or more runtimes later from Settings. **Finish** saves
+   everything.
 
 ![Onboarding, the agent step: Claude Code detected, other harnesses and API keys listed (demo data)](../images/desktop-onboarding-agent-light.png#only-light){ width="560" loading=lazy }
 ![Onboarding, the agent step: Claude Code detected, other harnesses and API keys listed (demo data)](../images/desktop-onboarding-agent-dark.png#only-dark){ width="560" loading=lazy }
 
-![Onboarding, the last step: pick a palette and light, dark or auto](../images/desktop-onboarding-appearance-light.png#only-light){ width="560" loading=lazy }
-![Onboarding, the last step: pick a palette and light, dark or auto](../images/desktop-onboarding-appearance-dark.png#only-dark){ width="560" loading=lazy }
-
-There's no separate Welcome, Permissions, or Finish/Review screen —
-identity is the first thing you see, and the last step's **Finish**
-button saves everything.
+The project folder, the relay and your team come up when they first mean
+something: pick a folder from the sidebar, and invite people or join a
+team from **＋** in the workspace rail (the
+[community relay](../../operate/networking/community-relay.md) is
+preselected there). The theme is in **Settings → Appearance**. See
+[Onboarding](../features/onboarding.md) for the details.
 
 ## What gets written
 
-After onboarding:
+After the first run:
 
 - The app data dir `ai.ligus.desktop/` — the event store `ligus.db`
   (every workspace's signed events), your account + device records
@@ -99,15 +102,16 @@ toggle).
 
 There is no sign-in. On first launch Ligus makes an account key and a random
 account id on this device, silently, and certifies this device with it.
-Onboarding shows your **safety code**, the fingerprint of that key, which
+The first run shows your **safety code** (behind the **?** on You), the fingerprint of that key, which
 people compare with the code they see for you (see
 [Identity & devices](../concepts/identity.md#safety-code)).
 
 - **More devices** join your account from **Settings → Profile → My
   devices** (**Add a phone**, **Add a computer**). They don't sign in
-  anywhere. A computer asks to join from `lt` (**Link to my devices**) or
-  with `ligus devices request`; a second desktop app can't ask to link yet. Don't invite yourself from another computer: that makes a second
-  member. See [Add a computer](../features/linked-devices.md).
+  anywhere. A computer asks to join from the desktop app's first run (**I
+  already use Ligus**), from `lt` (**Link to my devices**) or with `ligus
+  devices request`. Don't invite yourself from another computer: that makes
+  a second member. See [Add a computer](../features/linked-devices.md).
 - **Commits** Ligus makes on your behalf are attributed to the commit email
   in your profile.
 - **Reaching people** works through invite links and through the workspaces

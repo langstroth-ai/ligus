@@ -982,11 +982,6 @@ export function App() {
         onComplete={async () => {
           // Throws into Onboarding, which shows the error on its last step.
           await markOnboarded();
-          // Onboarding's appearance step persisted the theme + mode to
-          // localStorage; sync App's state so its own applyTheme effect doesn't
-          // revert to the mount-time default.
-          setPalette(loadTheme());
-          setAppearanceMode(loadMode());
           await qc.invalidateQueries({ queryKey: ["settings"] });
           refreshWorkspaceShell();
         }}

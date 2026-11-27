@@ -37,6 +37,35 @@ Full release notes are on the
   service: after `ligus-local configure --role serve`, `brew services start
   ligus` keeps `ligus serve` running and `brew services restart ligus`
   restarts it after an upgrade. See [Install with Homebrew](../getting-started/homebrew.md).
+- **A second desktop links itself to your account.** In the first run,
+  **I already use Ligus on another device** asks for the approval address
+  from your other device (**My devices → Add a computer**). Both screens
+  show the same code, your other device confirms with your passkey, and
+  this desktop becomes one more of your devices: the same member, never a
+  second one. When the relay can't carry the request, a request code is
+  pasted across instead. See
+  [From a second desktop](../features/linked-devices.md#desktop).
+- **A hint when an invite looks like your own.** Joining with an invite or
+  a short code on a device that looks like it belongs to someone already
+  using Ligus shows one line: "Looks like you already use Ligus. Link this
+  device instead." Joining still works. See
+  [The invite guard](../features/onboarding.md#the-invite-guard).
+
+### Changed
+
+- **The first run asks one question first.** Before it asks for a name,
+  the desktop app asks **Is this your first device with Ligus?** Answering
+  **I already use Ligus on another device** links this device to your
+  account instead of starting a second you; it asks no name and makes or
+  joins nothing. lt asks the same question, and `ligus help quickstart` and `ligus status` on a new
+  data dir name both answers. See [Onboarding](../features/onboarding.md).
+- **Your first workspace is made for you, and secured in the first run.**
+  **Yes, start here** goes You, Secure, then your agent. Secure makes your
+  workspace, then a passkey and your recovery key from one button. It can't
+  be closed half-done: **Finish later** asks first and says what stays
+  locked. The folder, relay and team come up when you first pick a folder,
+  invite someone or join a team, and the theme is in **Settings →
+  Appearance**. See [First launch](../getting-started/first-launch.md).
 
 ### Docs
 
