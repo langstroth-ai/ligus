@@ -4,9 +4,6 @@ import {
   setAvatar,
   myProfile,
   setGitEmail,
-  pickWorkspaceFolder,
-  addWorkspaceToList,
-  setWorkspaceRoot,
   addRuntime,
   setClaudeCodeModel,
   setDefaultModel,
@@ -15,46 +12,26 @@ import {
   getConnectionSettings,
   detectEnvironment,
   openExternal,
-  joinWorkspace,
-  redeemShortCode,
-  probeRelay,
-  probeRelayAt,
   probeProvider,
   listOllamaModels,
+  setFirstRunPath,
+  firstRunWorkspace,
+  passkeyRegister,
+  recoveryKeyCreate,
+  securityStatus,
   type RuntimeTestResult,
   type EnvDetectDto,
   type ClaudeModelOption,
   type ClaudePermissionMode,
-  type RelayProbeDto,
 } from "@/lib/ipc";
 import { LigusBrandIcon } from "@/components/LigusBrand";
-import { RelayPicker } from "@/components/RelayPicker";
-import { relayUrlFor, type RelayChoice } from "@/lib/communityRelay";
 import { Avatar } from "@/components/Avatar";
 import { InfoTip } from "@/components/ui";
+import { LinkThisDevice } from "@/components/LinkThisDevice";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
-import {
-  applyTheme,
-  loadMode,
-  loadTheme,
-  resolvePalette,
-  saveMode,
-  savePalette,
-  type AppearanceMode,
-  type ThemeName,
-} from "@/lib/theme";
+import { FIRST_RUN_DOTS, firstRunDot, firstRunNext, firstWorkspaceName, type FirstRunEvent, type FirstRunStep } from "@/lib/firstRun";
 
 type RuntimeChoice = "claudeCode" | "codex" | "openai" | "anthropic" | "ollama";
-
-// Onboarding's appearance step. Order + labels for the accent-family picker.
-const THEME_CHOICES: { name: ThemeName; label: string; blurb: string }[] = [
-  { name: "pollen", label: "Pollen", blurb: "Warm honey — the Ligus default" },
-  { name: "obsidian", label: "Obsidian", blurb: "True dark — monochrome near-black glass, silver accent" },
-  { name: "slate", label: "Slate", blurb: "Cool blue-grey" },
-  { name: "studio", label: "Studio", blurb: "Neutral graphite" },
-  { name: "harbor", label: "Harbor", blurb: "Ocean blue" },
-  { name: "meadow", label: "Meadow", blurb: "Botanical green" },
-];
 
 // backgroundColor (not the `background` shorthand) so the global `select` rule's
 // chevron background-image survives on the runtime/model dropdowns.
@@ -85,24 +62,36 @@ function claudeDefaultModelFor(value: string): string {
   return v.replace(/\[[^\]]*\]$/, "");
 }
 
-/// First-run wizard: identity → project folder → agent + file access → optional
-/// team. Detects what's installed (Claude Code, Ollama, API keys) to default
-/// well, and supports any OpenAI-compatible API (OpenAI/OpenRouter/local).
+/// The first run. It asks one question first, "Is this your first device
+/// with Ligus?" (`lib/firstRun` has the screens and their order):
+///
+/// - **I already use Ligus**: link this device (`LinkThisDevice`). No name,
+///   no workspace.
+/// - **Yes, start here**: You (name, picture), then Secure (the person's
+///   first workspace is made, then a passkey and the recovery key; the only
+///   way out before it's done is Finish later, which asks first), then the
+///   agent. Folder, relay and team are asked when they first mean something;
+///   the theme lives in Settings → Appearance.
 export function Onboarding({ onComplete }: { onComplete: () => void | Promise<void> }) {
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState<FirstRunStep>("fork");
+  const go = (event: FirstRunEvent) => setStep((s) => firstRunNext(s, event));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [env, setEnv] = useState<EnvDetectDto | null>(null);
 
-  // Step 1 — identity
+  // You
   const [name, setName] = useState("");
   const [picture, setPicture] = useState<string | null>(null);
   const [safetyCode, setSafetyCode] = useState<string | null>(null);
 
-  // Step 2 — project
-  const [folder, setFolder] = useState<string | null>(null);
+  // Secure: the passkey, then the recovery key's words (shown once).
+  const [hasPasskey, setHasPasskey] = useState(false);
+  // A linked device can't make the person's passkey: when the account has
+  // none yet, the first run says where to add it before it ends.
+  const [linkedWithoutPasskey, setLinkedWithoutPasskey] = useState(false);
+  const [words, setWords] = useState<string | null>(null);
 
-  // Step 3 — runtime + access
+  // The agent screen: runtime + access
   const [choice, setChoice] = useState<RuntimeChoice>("claudeCode");
   const [apiKey, setApiKey] = useState("");
   // Agent connectivity check (API providers): verify the key actually answers
@@ -162,38 +151,6 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
   const [claudeCustom, setClaudeCustom] = useState(false);
   const [letEdit, setLetEdit] = useState(true); // Accept edits by default
 
-  // Step 5 — appearance (accent family + light/dark). Applied live for preview
-  // and persisted to localStorage; App re-reads both on completion.
-  const [theme, setTheme] = useState<ThemeName>(loadTheme);
-  const [appearance, setAppearance] = useState<AppearanceMode>(loadMode);
-  const pickTheme = (name: ThemeName) => {
-    setTheme(name);
-    savePalette(name);
-    applyTheme(resolvePalette(name, appearance));
-  };
-  const pickAppearance = (m: AppearanceMode) => {
-    setAppearance(m);
-    saveMode(m);
-    applyTheme(resolvePalette(theme, m));
-  };
-
-  // Step 4 — team / relay connection
-  type TeamMode = "local" | "join" | "host";
-  const [teamMode, setTeamMode] = useState<TeamMode>("local");
-  const [inviteCode, setInviteCode] = useState("");
-  // "host": which relay to sync through. The community relay is preselected;
-  // "own" uses the typed URL. (No relay is the "local" mode.)
-  const [relayChoice, setRelayChoice] = useState<RelayChoice>("community");
-  const [relayUrl, setRelayUrl] = useState("");
-  const hostRelayUrl = relayUrlFor(relayChoice, relayUrl);
-  const [accessToken, setAccessToken] = useState("");
-  // The community relay is open: a token typed for "own" never goes to it.
-  const hostToken = relayChoice === "own" ? accessToken.trim() : "";
-  const [probe, setProbe] = useState<RelayProbeDto | null>(null);
-  const [testing, setTesting] = useState(false);
-  // A connection is "good enough to finish" only when the last probe was ok.
-  const connectionOk = probe?.status === "ok";
-
   const [reChecking, setReChecking] = useState(false);
   // Re-run environment detection — so a user who installs a CLI mid-onboarding
   // can pick it up without restarting the app. Doesn't override an explicit
@@ -229,12 +186,6 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
         /* ignore */
       }
       try {
-        const c = await getConnectionSettings();
-        setRelayUrl(c.relayUrl);
-      } catch {
-        /* ignore */
-      }
-      try {
         setClaudeModels(await listClaudeCodeModels());
       } catch {
         /* ignore — the dropdown falls back to base aliases */
@@ -251,76 +202,93 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
     }
   }
 
-  async function pickFolder() {
-    try {
-      const p = await pickWorkspaceFolder();
-      if (p) {
-        setFolder(p);
-        await addWorkspaceToList(p);
-        await setWorkspaceRoot(p);
-      }
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  const pickMode = (m: TeamMode) => {
-    setTeamMode(m);
-    setProbe(null);
-    setError(null);
-  };
-
-  const canNext =
-    (step === 1 && name.trim().length > 0) ||
-    (step === 2) ||
-    (step === 3 && (choice === "claudeCode" || choice === "codex" || choice === "ollama" || apiKey.trim().length > 0)) ||
-    // Step 4: local is always fine; join/host must have a verified connection.
-    (step === 4 && (teamMode === "local" || connectionOk)) ||
-    // Step 5 (appearance) always has a valid selection.
-    (step === 5);
-
-  async function next() {
+  async function run(f: () => Promise<void>) {
     setError(null);
     setBusy(true);
     try {
-      if (step === 1) {
-        if (name.trim()) {
-          await setDisplayName(name.trim());
-          if (env?.gitEmail) await setGitEmail(env.gitEmail);
-        }
-        if (picture) await setAvatar(picture);
-        setStep(2);
-      } else if (step === 2) {
-        setStep(3);
-      } else if (step === 3) {
-        // Guarantee a responding agent: for an API provider, verify the key
-        // actually answers before advancing. A first failure warns and holds;
-        // a second Next (agentAckFail) proceeds anyway so a transient/edge probe
-        // failure can't trap the user.
-        if (agentNeedsKey && !(typeof agentProbe === "object" && agentProbe?.ok) && !agentAckFail) {
-          const ok = await probeAgent();
-          if (!ok) {
-            setAgentAckFail(true);
-            setError(
-              "Couldn't reach that provider with this key — @ligus won't answer until it works. Fix the key, or press Next again to set it up anyway.",
-            );
-            return;
-          }
-        }
-        await applyRuntime();
-        setStep(4);
-      } else if (step === 4) {
-        await finishStep4();
-        setStep(5);
-      } else {
-        await onComplete();
-      }
+      await f();
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
   }
+
+  /// The question's answer, recorded on this data dir (the invite guard
+  /// reads it), then its first screen.
+  const choose = (path: "first" | "link") =>
+    run(async () => {
+      await setFirstRunPath(path);
+      go(path === "first" ? "chooseFirst" : "chooseLink");
+    });
+
+  /// You → Secure: save the name and picture, and make the person's first
+  /// workspace (a first run started again reuses the one it made).
+  const saveYou = () =>
+    run(async () => {
+      await setDisplayName(name.trim());
+      if (env?.gitEmail) await setGitEmail(env.gitEmail);
+      if (picture) await setAvatar(picture);
+      await firstRunWorkspace(firstWorkspaceName(name));
+      // A first run started again may find its passkey already made.
+      try {
+        const st = await securityStatus();
+        setHasPasskey(st.passkeys.some((p) => !p.recovery));
+        if (st.passkeys.some((p) => p.recovery)) {
+          go("named");
+          go("secured");
+          return;
+        }
+      } catch {
+        /* the Secure screen still works from the start */
+      }
+      go("named");
+    });
+
+  /// Secure's one button: the passkey, then the recovery key (each is one
+  /// confirmation in the system's passkey dialog).
+  const secure = () =>
+    run(async () => {
+      if (!hasPasskey) {
+        await passkeyRegister("Passkey");
+        setHasPasskey(true);
+      }
+      setWords(await recoveryKeyCreate());
+    });
+
+  /// Linked as one of the person's devices: the workspace and profile are
+  /// theirs already, so the first run ends here, after Secure only if the
+  /// account has no passkey yet.
+  const linked = async () => {
+    let passkey = true;
+    try {
+      passkey = (await securityStatus()).passkeys.some((p) => !p.recovery);
+    } catch {
+      /* the status isn't there yet: nothing to ask */
+    }
+    if (passkey) await onComplete();
+    else setLinkedWithoutPasskey(true);
+  };
+
+  const finish = () =>
+    run(async () => {
+      // Guarantee a responding agent: for an API provider, verify the key
+      // actually answers before finishing. A first failure warns and holds;
+      // a second Finish (agentAckFail) goes on anyway so a transient probe
+      // failure can't trap the user.
+      if (agentNeedsKey && !(typeof agentProbe === "object" && agentProbe?.ok) && !agentAckFail) {
+        const ok = await probeAgent();
+        if (!ok) {
+          setAgentAckFail(true);
+          setError(
+            "Couldn't reach that provider with this key — @ligus won't answer until it works. Fix the key, or press Finish again to set it up anyway.",
+          );
+          return;
+        }
+      }
+      await applyRuntime();
+      await onComplete();
+    });
 
   async function applyRuntime() {
     const c = await getConnectionSettings();
@@ -358,90 +326,71 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
     });
   }
 
-  const permMode: ClaudePermissionMode = letEdit ? "runCommands" : "default";
-
-  /// Test the relay connection for the current mode, without finishing.
-  /// - join: redeem the invite/short code (sets relay+room+key), apply any
-  ///   token, then probe the now-configured relay.
-  /// - host: probe the entered URL+token *without* saving it yet.
-  async function testConnection() {
-    setError(null);
-    setProbe(null);
-    setTesting(true);
-    try {
-      if (teamMode === "join") {
-        const code = inviteCode.trim();
-        if (!code) return;
-        if (code.toLowerCase().startsWith("hivews1:")) {
-          await joinWorkspace(code);
-        } else {
-          await redeemShortCode(code);
-        }
-        const c = await getConnectionSettings();
-        if (accessToken.trim()) {
-          await updateConnectionSettings({
-            relayUrl: c.relayUrl,
-            room: c.room,
-            workspaceKey: null, // preserve the key the invite set
-            apiKey: null,
-            relayAccessToken: accessToken.trim(),
-            permissionMode: permMode,
-          });
-        }
-        setProbe(await probeRelay());
-      } else if (teamMode === "host") {
-        setProbe(await probeRelayAt(hostRelayUrl, hostToken || null));
-      }
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setTesting(false);
-    }
-  }
-
-  async function finishStep4() {
-    const c = await getConnectionSettings();
-    if (teamMode === "local") {
-      // Clear any relay so we never finish half-configured.
-      await updateConnectionSettings({
-        relayUrl: "",
-        room: c.room,
-        workspaceKey: null,
-        apiKey: null,
-        relayAccessToken: "",
-        permissionMode: permMode,
-      });
-    } else if (teamMode === "host") {
-      await updateConnectionSettings({
-        relayUrl: hostRelayUrl,
-        room: c.room,
-        workspaceKey: null,
-        apiKey: null,
-        relayAccessToken: hostToken,
-        permissionMode: permMode,
-      });
-    }
-    // join already applied its settings during testConnection().
-  }
+  const dot = firstRunDot(step);
+  const primary = (label: string, onClick: () => void, disabled = false) => (
+    <button
+      onClick={onClick}
+      disabled={disabled || busy}
+      className="rounded-xl px-5 py-2.5 text-sm font-semibold disabled:opacity-40"
+      style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
+    >
+      {busy ? "…" : label}
+    </button>
+  );
+  const quiet = "text-xs text-ink-soft hover:text-ink disabled:opacity-20";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ background: "var(--ligus-canvas)" }}>
       <div className="w-full max-w-md rounded-3xl border p-8" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}>
-        <div className="mb-1 flex items-center gap-3">
+        <div className="mb-4 flex items-center gap-3">
           <LigusBrandIcon size={40} />
           <h1 className="ligus-display">Welcome to Ligus</h1>
         </div>
-        <div className="mb-4 text-sm text-ink-soft">
-          A local-first workspace where you and your AI agents build side by side — bring your own
-          models, keep your code and keys on your machine. A few quick steps:
-        </div>
-        <div className="mb-5 flex gap-1.5">
-          {[1, 2, 3, 4, 5].map((n) => (
-            <div key={n} className="h-1 flex-1 rounded-full" style={{ background: n <= step ? "var(--ligus-accent-cool)" : "var(--ligus-line)" }} />
-          ))}
-        </div>
+        {dot > 0 && (
+          <div className="mb-5 flex gap-1.5" data-testid="first-run-dots">
+            {Array.from({ length: FIRST_RUN_DOTS }, (_, i) => i + 1).map((n) => (
+              <div key={n} className="h-1 flex-1 rounded-full" style={{ background: n <= dot ? "var(--ligus-accent-cool)" : "var(--ligus-line)" }} />
+            ))}
+          </div>
+        )}
 
-        {step === 1 && (
+        {step === "fork" && (
+          <div className="space-y-3" data-testid="first-run-fork">
+            <div className="flex items-center gap-1.5">
+              <div className="text-sm font-medium">Is this your first device with Ligus?</div>
+              <InfoTip
+                label="this question"
+                text="Ligus keeps one you across your computers and phone. If you already use it somewhere, link this device to that account instead of starting again: starting again here would make a second you, with its own name and keys."
+              />
+            </div>
+            <button
+              onClick={() => void choose("first")}
+              disabled={busy}
+              className="w-full rounded-xl px-5 py-2.5 text-sm font-semibold disabled:opacity-40"
+              style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
+            >
+              Yes, start here
+            </button>
+            <button onClick={() => void choose("link")} disabled={busy} className={"w-full py-1.5 " + quiet}>
+              I already use Ligus on another device
+            </button>
+          </div>
+        )}
+
+        {step === "link" && !linkedWithoutPasskey && <LinkThisDevice onBack={() => go("back")} onLinked={linked} />}
+
+        {step === "link" && linkedWithoutPasskey && (
+          <div className="space-y-3" data-testid="first-run-linked-secure">
+            <div className="text-sm font-medium">One thing left: a passkey</div>
+            <p className="text-xs text-ink-soft">
+              Your account has no passkey yet, so changes to who's in a workspace wait for one. Add it on your first device
+              (Settings → Passkeys & keys); this computer uses it from then on.
+            </p>
+            {primary("Done", () => void run(async () => onComplete()))}
+          </div>
+        )}
+
+        {step === "you" && (
           <div className="space-y-3">
             <div className="text-sm font-medium">Who are you?</div>
             <div className="flex items-center gap-3">
@@ -460,40 +409,51 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
               </label>
               <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" className={field} style={inputStyle} />
             </div>
-            <div className="text-xs text-ink-soft">
-              How teammates see you. The picture is optional and stays small; it is cropped on this device.
-            </div>
-            <div className="rounded-xl border px-3 py-2.5 text-xs" style={inputStyle}>
-              <div className="mb-1 font-medium">Your account on this device</div>
-              <div className="text-ink-soft">
-                Ligus made an account key on this device. No provider signs you in. Your safety code, which people
-                can compare with the code they see for you:
-              </div>
-              <code className="mt-1 block font-mono text-sm font-bold tracking-wider">{safetyCode ?? "…"}</code>
-              <div className="mt-1 flex items-center gap-1 text-ink-soft">
-                <span>Already use Ligus on another computer? Link this one from lt or the ligus CLI.</span>
-                <InfoTip
-                  label="linking this computer"
-                  text="A second desktop app can't link itself yet: joining your workspace from here makes a second member with your name. To be the same person on this computer, run lt (Add to my devices) or ligus devices request here, then approve it on your other desktop under Settings → Profile → My devices."
-                />
-              </div>
+            <div className="flex items-center gap-1.5 text-xs text-ink-soft">
+              <span>Shown to people you work with. Change it any time.</span>
+              <InfoTip
+                label="your account on this device"
+                text={`Ligus made an account key on this device; no provider signs you in. Your safety code, which people can compare with the code they see for you: ${safetyCode ?? "…"}`}
+              />
             </div>
           </div>
         )}
 
-        {step === 2 && (
-          <div className="space-y-3">
-            <div className="text-sm font-medium">Open your project</div>
-            <div className="text-xs text-ink-soft">Pick the folder agents should work in (a git repo is ideal).</div>
-            <button className="rounded-xl px-3 py-2.5 text-sm font-semibold" style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }} onClick={pickFolder}>
-              {folder ? "Choose a different folder…" : "Choose folder…"}
-            </button>
-            {folder && <div className="truncate rounded-lg border px-3 py-2 font-mono text-xs" style={inputStyle}>✓ {folder}</div>}
-            {!folder && <div className="text-xs text-ink-soft">You can also set this later from the sidebar.</div>}
+        {step === "secure" && (
+          <div className="space-y-3" data-testid="first-run-secure">
+            <div className="flex items-center gap-1.5">
+              <div className="text-sm font-medium">Secure your workspace</div>
+              <InfoTip
+                label="passkeys and the recovery key"
+                text="Your passkey confirms changes to who's in a workspace and what agents may do. Ligus never sends it anywhere. The recovery key is 24 words that stand in for a lost passkey: without it, someone who loses every passkey can't make those changes again."
+              />
+            </div>
+            {words ? (
+              <>
+                <p className="text-xs text-ink-soft">Write down your recovery key and keep it somewhere safe. It is shown once.</p>
+                <code className="block whitespace-pre-wrap rounded-lg border p-2 text-xs" style={inputStyle} data-testid="first-run-recovery-words">
+                  {words}
+                </code>
+              </>
+            ) : (
+              <p className="text-xs text-ink-soft">
+                {hasPasskey ? "Your passkey is ready. Now make your recovery key." : "Create a passkey, then a recovery key in case you lose it."}
+              </p>
+            )}
           </div>
         )}
 
-        {step === 3 && (
+        {step === "finishLater" && (
+          <div className="space-y-3" data-testid="first-run-finish-later">
+            <p className="text-sm font-semibold">Finish later?</p>
+            <p className="text-xs text-ink-soft">
+              Until your workspace has your passkey and recovery key, inviting people and other changes that need your
+              passkey stay locked. Finish it any time in Settings → Passkeys & keys.
+            </p>
+          </div>
+        )}
+
+        {step === "agent" && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="text-sm font-medium">Choose your agent</div>
@@ -646,153 +606,42 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
           </div>
         )}
 
-        {step === 4 && (
-          <div className="space-y-3">
-            <div className="text-sm font-medium">Team &amp; sync</div>
-            <div className="text-xs text-ink-soft">
-              How do you want to sync? You can always change this later in Settings → Team.
-            </div>
-
-            <div className="space-y-1.5">
-              <TeamModeOption v="local" mode={teamMode} set={pickMode} title="Just me (no sync)" note="Local-only. Nothing leaves this machine." />
-              <TeamModeOption v="join" mode={teamMode} set={pickMode} title="Join a team" note="Paste an invite or short code someone shared." />
-              <TeamModeOption v="host" mode={teamMode} set={pickMode} title="Sync through a relay" note="The community relay, or one you (or your org) host." />
-            </div>
-
-            {teamMode === "join" && (
-              <div className="space-y-2 rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
-                <input
-                  value={inviteCode}
-                  onChange={(e) => { setInviteCode(e.target.value); setProbe(null); }}
-                  placeholder="Invite code (hivews1:…) or short code"
-                  className={field + " font-mono text-xs"}
-                  style={inputStyle}
-                />
-                {probe?.status === "unauthorized" && (
-                  <input
-                    value={accessToken}
-                    onChange={(e) => { setAccessToken(e.target.value); setProbe(null); }}
-                    placeholder="Relay access token (from your team admin)"
-                    className={field + " font-mono text-xs"}
-                    style={inputStyle}
-                  />
-                )}
-              </div>
-            )}
-
-            {teamMode === "host" && (
-              <div className="space-y-2 rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
-                <RelayPicker
-                  choice={relayChoice}
-                  onChoice={(c) => { setRelayChoice(c); setProbe(null); }}
-                  ownUrl={relayUrl}
-                  onOwnUrl={(u) => { setRelayUrl(u); setProbe(null); }}
-                  inputClassName={field + " font-mono text-xs"}
-                  inputStyle={inputStyle}
-                />
-                {relayChoice === "own" && (
-                  <input
-                    value={accessToken}
-                    onChange={(e) => { setAccessToken(e.target.value); setProbe(null); }}
-                    placeholder="Access token (blank for an open relay)"
-                    className={field + " font-mono text-xs"}
-                    style={inputStyle}
-                  />
-                )}
-              </div>
-            )}
-
-            {teamMode !== "local" && (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={testConnection}
-                  disabled={testing || (teamMode === "join" ? !inviteCode.trim() : !hostRelayUrl)}
-                  className="rounded-lg border px-3 py-1.5 text-xs font-medium disabled:opacity-40"
-                  style={inputStyle}
-                >
-                  {testing ? "Testing…" : "Test connection"}
-                </button>
-                {probe && (
-                  <span className="text-xs" style={{ color: connectionOk ? "var(--ligus-success-ink)" : "var(--ligus-accent-warm)" }}>
-                    {connectionOk ? "✓ Connected" : probe.detail}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {step === 5 && (
-          <div className="space-y-3">
-            <div className="text-sm font-medium">Make it yours</div>
-            <div className="text-xs text-ink-soft">Pick a look — change it anytime in Settings → Appearance.</div>
-            <div className="grid grid-cols-2 gap-2">
-              {THEME_CHOICES.map((t) => {
-                const p = resolvePalette(t.name, appearance);
-                const active = theme === t.name;
-                return (
-                  <button
-                    key={t.name}
-                    type="button"
-                    onClick={() => pickTheme(t.name)}
-                    className="flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left"
-                    style={{ borderColor: active ? "var(--ligus-accent-cool)" : "var(--ligus-line)", background: active ? "var(--ligus-mist)" : "transparent" }}
-                  >
-                    <span
-                      className="relative h-8 w-8 shrink-0 overflow-hidden rounded-lg border"
-                      style={{ borderColor: "var(--ligus-line)", background: p.canvas }}
-                      aria-hidden
-                    >
-                      <span className="absolute bottom-1 left-1 h-3 w-3 rounded-full" style={{ background: p.accentWarm }} />
-                      <span className="absolute right-1 top-1 h-3 w-3 rounded-full" style={{ background: p.accentCool }} />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium">{t.label}</span>
-                      <span className="block truncate text-[11px] text-ink-soft">{t.blurb}</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="flex gap-1.5">
-              {(["auto", "light", "dark"] as AppearanceMode[]).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => pickAppearance(m)}
-                  className="flex-1 rounded-lg border px-3 py-1.5 text-xs font-medium capitalize"
-                  style={{ borderColor: appearance === m ? "var(--ligus-accent-cool)" : "var(--ligus-line)", background: appearance === m ? "var(--ligus-mist)" : "transparent" }}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-            <div className="text-xs text-ink-soft">Auto follows your system light/dark setting.</div>
-          </div>
-        )}
 
         {error && <p className="mt-3 text-xs" style={{ color: "var(--ligus-warm-ink)" }}>{error}</p>}
 
-        <div className="mt-6 flex items-center justify-between">
-          <button className="text-xs text-ink-soft hover:text-ink disabled:opacity-20" disabled={step === 1 || busy} onClick={() => setStep((s) => s - 1)}>
-            ← Back
-          </button>
-          <div className="flex items-center gap-3">
-            {step === 2 && (
-              <button className="text-xs text-ink-soft hover:text-ink" disabled={busy} onClick={() => setStep(step + 1)}>
-                Skip
-              </button>
-            )}
-            <button
-              onClick={next}
-              disabled={!canNext || busy}
-              className="rounded-xl px-5 py-2.5 text-sm font-semibold disabled:opacity-40"
-              style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
-            >
-              {busy ? "…" : step === 5 ? "Finish" : "Next"}
-            </button>
+        {step !== "fork" && step !== "link" && (
+          <div className="mt-6 flex items-center justify-between">
+            <span>
+              {step === "you" && (
+                <button className={quiet} disabled={busy} onClick={() => go("back")}>
+                  ← Back
+                </button>
+              )}
+              {step === "secure" && !words && (
+                <button className={quiet} disabled={busy} onClick={() => go("askFinishLater")}>
+                  Finish later
+                </button>
+              )}
+              {step === "finishLater" && (
+                <button className={quiet} onClick={() => go("finishLater")}>
+                  Finish later
+                </button>
+              )}
+            </span>
+            {step === "you" && primary("Next", () => void saveYou(), name.trim().length === 0)}
+            {step === "secure" &&
+              (words
+                ? primary("I wrote them down", () => go("secured"))
+                : primary(hasPasskey ? "Create a recovery key" : "Create a passkey", () => void secure()))}
+            {step === "finishLater" && primary("Keep going", () => go("keepGoing"))}
+            {step === "agent" &&
+              primary(
+                "Finish",
+                () => void finish(),
+                !(choice === "claudeCode" || choice === "codex" || choice === "ollama" || apiKey.trim().length > 0),
+              )}
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -820,32 +669,6 @@ function RuntimeOption({
     >
       <span className="font-medium">{label}</span>
       <span className="ml-2 text-xs text-ink-soft">{note}</span>
-    </button>
-  );
-}
-
-function TeamModeOption<T extends string>({
-  v,
-  mode,
-  set,
-  title,
-  note,
-}: {
-  v: T;
-  mode: T;
-  set: (m: T) => void;
-  title: string;
-  note: string;
-}) {
-  const active = mode === v;
-  return (
-    <button
-      onClick={() => set(v)}
-      className="flex w-full items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left"
-      style={{ borderColor: active ? "var(--ligus-accent-cool)" : "var(--ligus-line)", background: active ? "var(--ligus-mist)" : "transparent" }}
-    >
-      <span className="text-sm font-medium">{title}</span>
-      <span className="text-xs text-ink-soft">{note}</span>
     </button>
   );
 }
