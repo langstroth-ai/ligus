@@ -301,7 +301,7 @@ both:
 
 | Path | How | What the phone stores |
 |---|---|---|
-| **Direct** | plain HTTP to the box's address (`http://<host>:8787`) on your LAN or tailnet, with the box's bearer token | the URL and `serve.token` |
+| **Direct** | plain HTTP to the box's address (`http://<host>:8787`) on your LAN or tailnet, with a bearer token | the URL and the phone's own token (fetched over the relay; a direct-only pairing has the shared `serve.token`, see [Who the box acts for](#who-the-box-acts-for)) |
 | **Relay** | a Noise session through your relay's tunnel; the relay forwards ciphertext only | the box's host id and public key, the relay URL, and the phone's own key and credential (90 days, renewed daily while used) |
 
 Pair by scanning the QR code `ligus pair` prints (or opening its
@@ -330,6 +330,32 @@ The app can hold several host profiles, each stored as its own Keychain
 item. Credentials live in the iOS Keychain; the phone never holds a
 workspace key. Its own device key lives in the Secure Enclave and never
 leaves it ([Add your phone](#add-this-phone)).
+
+### Who the box acts for {#who-the-box-acts-for}
+
+One box can serve several people's phones. Everything personal it shows a
+phone is worked out for the person that phone belongs to (the member who
+added it from their desktop): unread counts and what they've read, which
+direct messages they see, "you" in People, their own role and vote on a
+proposal, which questions they may answer, which agents they may use, and
+the notifications meant for them. Ana's phone and Ben's phone on the same
+box each see their own.
+
+- **Through the relay**, the box knows the phone from its pairing.
+- **On the direct path**, each phone uses its own token, which the app
+  fetches from the box over the relay the first time it connects there. The
+  box's shared token (`serve.token`, the one in a direct pairing link) acts
+  for no one.
+- **A phone the box can't tell is someone's** (paired directly only, added
+  before phones had their own keys, or using the shared token) still works,
+  but sees only what is the workspace's: its chats, proposals and join
+  requests, no direct messages, nothing marked as its person's, unread
+  counts shared with any other phone in the same state, and notifications
+  without message text (none of the ones meant for one person). Updating the app on that phone fixes
+  it when it also has a relay pairing; otherwise pair it through the relay.
+
+Read positions are kept on the box for each person, so all of one person's
+phones share them.
 
 ## Host path policy
 
@@ -511,11 +537,14 @@ phone with the same collaboration state as the desktop's Review card:
 - **Refinement thread.** Read the proposal's notes. Adding a note (or a
   reason with a vote) is for your desktop for now: a note sent through a box
   would be signed as the box, not as you, so the box refuses it.
-- **Request changes.** *Send to agent to revise* bundles the change requests
-  (or every note, if none is marked), records it on the thread and sends the
-  instruction to the agent that produced the proposal. When that agent files
-  its next version in the chat, the new version is linked to the old one and
-  the old one leaves the open list.
+- **Request changes.** *Send to agent to revise* is for your desktop for
+  now, like notes: it records a line on the thread and posts the instruction
+  to the agent, and through a box both would be signed as the box, not as
+  you, so the box refuses it ("Send it back to the agent from your desktop
+  for now."). On the desktop it bundles the change requests (or every note,
+  if none is marked) and sends them to the agent that produced the proposal;
+  when that agent files its next version, the new version is linked to the
+  old one and the old one leaves the open list.
 - **Archive.** A settled proposal (applied, rejected or replaced) has
   **Archive** in its menu: it leaves the inbox for everyone in the workspace,
   signed by the phone like a vote. Archived proposals (by a person, or after
