@@ -2,12 +2,14 @@
 //!
 //! A host's operator lists the LLM gateways its agents may use (LiteLLM,
 //! kgateway, Envoy AI Gateway, ... anything speaking the OpenAI or Anthropic
-//! wire) in a mounted file, `LIGUS_MODEL_GATEWAYS_FILE`. Each entry names a
+//! wire) in a file: `LIGUS_MODEL_GATEWAYS_FILE`, else `model-gateways.json` in
+//! the data dir (what `ligus gateway add` writes). Each entry names a
 //! base URL and how to authenticate to it; the credential is always a file
 //! (a projected ServiceAccount token, an API key, a client certificate),
 //! read by this process on every request and never handed to an agent child.
 //!
-//! - [`ModelGateways`] is the host's list ([`host`]), loaded once.
+//! - [`ModelGateways`] is the host's list ([`host`]), loaded at startup and,
+//!   on serve and workers, again whenever the file changes ([`watch_host`]).
 //! - [`Gateway`] is one entry: its TLS client ([`Gateway::client`]: the pinned
 //!   CA, the mTLS identity, a vetted address) and its credential headers
 //!   ([`Gateway::auth_headers`]). The egress proxy's gateway route and the
@@ -24,14 +26,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use ligus_core::{HostModelGateway, ModelProviderKind};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// The env var naming the gateways file.
 pub const GATEWAYS_FILE_ENV: &str = "LIGUS_MODEL_GATEWAYS_FILE";
+/// The gateways file in the data dir, read when [`GATEWAYS_FILE_ENV`] is unset.
+pub const DEFAULT_GATEWAYS_FILE: &str = "model-gateways.json";
 /// `0` turns exclusivity off: the host then also runs turns that don't use a
-/// listed gateway.
+/// listed gateway. Set, it wins over the file's `exclusive`; any other value
+/// keeps the host exclusive.
 pub const EXCLUSIVE_ENV: &str = "LIGUS_MODEL_GATEWAYS_EXCLUSIVE";
 /// An operator-provided attribution key file (32+ bytes, the same on every
 /// host of a workspace so the pseudonymous ids agree).
@@ -52,7 +57,7 @@ pub const DUMMY_KEY: &str = "ligus-gateway";
 pub const ROUTE_PREFIX: &str = "/ligus-gw/";
 
 /// The wire a gateway speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Api {
     #[default]
@@ -71,7 +76,7 @@ impl Api {
 }
 
 /// How the host authenticates to a gateway.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "mode", rename_all = "camelCase", deny_unknown_fields)]
 pub enum AuthConfig {
     /// A projected, audience-bound ServiceAccount token, sent as a bearer.
@@ -82,7 +87,7 @@ pub enum AuthConfig {
     #[serde(rename_all = "camelCase")]
     ApiKey {
         key_file: PathBuf,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         header: Option<String>,
     },
     /// A client certificate and key (PEM); the CA is `caFile`.
@@ -93,27 +98,112 @@ pub enum AuthConfig {
 }
 
 /// One gateway entry in the operator's file.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GatewayConfig {
     pub name: String,
     pub url: String,
     #[serde(default)]
     pub api: Api,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_plaintext: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub attribution: bool,
     pub auth: AuthConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Deserialize)]
+/// The gateways file: the list, and whether the host is exclusive. A file
+/// without `exclusive` is exclusive once it lists a gateway (the default
+/// before `ligus gateway add` wrote the choice down).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct GatewaysFile {
+pub struct GatewaysFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclusive: Option<bool>,
     #[serde(default)]
-    gateways: Vec<GatewayConfig>,
+    pub gateways: Vec<GatewayConfig>,
+}
+
+/// Where a host's gateways file comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileSource {
+    /// `LIGUS_MODEL_GATEWAYS_FILE`.
+    Env,
+    /// `<data dir>/model-gateways.json`.
+    DataDir,
+}
+
+impl FileSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FileSource::Env => "env",
+            FileSource::DataDir => "data-dir",
+        }
+    }
+}
+
+/// The gateways file this host reads: `LIGUS_MODEL_GATEWAYS_FILE` when set,
+/// else `model-gateways.json` in `data_dir` (which may not exist yet). None
+/// without either.
+pub fn gateways_file(data_dir: Option<&Path>) -> Option<(PathBuf, FileSource)> {
+    if let Some(p) = ligus_core::names::var(GATEWAYS_FILE_ENV).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+        return Some((PathBuf::from(p), FileSource::Env));
+    }
+    data_dir.map(|d| (d.join(DEFAULT_GATEWAYS_FILE), FileSource::DataDir))
+}
+
+/// What decided whether a host is exclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExclusiveSource {
+    /// `LIGUS_MODEL_GATEWAYS_EXCLUSIVE`.
+    Env,
+    /// The file's `exclusive`.
+    File,
+    /// Neither: exclusive once a gateway is listed.
+    Default,
+}
+
+impl ExclusiveSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExclusiveSource::Env => "env",
+            ExclusiveSource::File => "file",
+            ExclusiveSource::Default => "default",
+        }
+    }
+}
+
+/// Whether a host listing `listed` gateways is exclusive, given the file's
+/// `exclusive` and `env` (`LIGUS_MODEL_GATEWAYS_EXCLUSIVE`'s value). Only an
+/// explicit `0`/`false` turns it off: anything unclear stays exclusive.
+pub fn exclusive_of(listed: usize, file: Option<bool>, env: Option<&str>) -> (bool, ExclusiveSource) {
+    let (on, src) = match env.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => (!(v == "0" || v.eq_ignore_ascii_case("false")), ExclusiveSource::Env),
+        None => match file {
+            Some(b) => (b, ExclusiveSource::File),
+            None => (true, ExclusiveSource::Default),
+        },
+    };
+    (on && listed > 0, src)
+}
+
+impl GatewaysFile {
+    /// Parse (no validation of the entries: [`ModelGateways::parse`] does).
+    pub fn from_json(text: &str) -> Result<Self, GatewayError> {
+        serde_json::from_str(text).map_err(|e| GatewayError::Config(e.to_string()))
+    }
+    /// The file's text, as `ligus gateway add` writes it.
+    pub fn to_json(&self) -> String {
+        let mut s = serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into());
+        s.push('\n');
+        s
+    }
+    /// Validate every entry with the rules the host loads it with.
+    pub fn validate(&self) -> Result<Vec<Gateway>, GatewayError> {
+        ModelGateways::validate(self.gateways.clone())
+    }
 }
 
 /// Why a gateway or the file was refused, or a request couldn't be made.
@@ -602,14 +692,20 @@ pub struct ModelGateways {
     gateways: Vec<Arc<Gateway>>,
     exclusive: bool,
     attribution_key: Option<Zeroizing<Vec<u8>>>,
+    /// The file became invalid while the host ran: every model turn is
+    /// refused until it is fixed (as an invalid file stops a starting host).
+    broken: Option<String>,
 }
 
 impl ModelGateways {
     /// Parse and validate a gateways file's contents.
     pub fn parse(text: &str) -> Result<Vec<Gateway>, GatewayError> {
-        let f: GatewaysFile = serde_json::from_str(text).map_err(|e| GatewayError::Config(e.to_string()))?;
+        Self::validate(GatewaysFile::from_json(text)?.gateways)
+    }
+
+    fn validate(entries: Vec<GatewayConfig>) -> Result<Vec<Gateway>, GatewayError> {
         let mut out: Vec<Gateway> = Vec::new();
-        for c in f.gateways {
+        for c in entries {
             let g = Gateway::new(c)?;
             if out.iter().any(|o| o.name() == g.name()) {
                 return Err(GatewayError::Config(format!("gateway '{}' is listed twice", g.name())));
@@ -623,22 +719,47 @@ impl ModelGateways {
     }
 
     pub fn new(gateways: Vec<Gateway>, exclusive: bool, attribution_key: Option<Vec<u8>>) -> Self {
-        Self { gateways: gateways.into_iter().map(Arc::new).collect(), exclusive, attribution_key: attribution_key.map(Zeroizing::new) }
+        Self { gateways: gateways.into_iter().map(Arc::new).collect(), exclusive, attribution_key: attribution_key.map(Zeroizing::new), broken: None }
     }
 
-    /// Load from the environment (`LIGUS_MODEL_GATEWAYS_FILE`, ...). No
-    /// variable: no gateways. A listed file that can't be read or is invalid
-    /// is an error (the host must not run without the gateways its operator
-    /// listed). `data_dir` holds the generated attribution key.
+    /// A host whose gateways file broke while it ran: refuses every model
+    /// turn (except a Ligus daemon on loopback, as an exclusive host does).
+    pub fn refusing(why: impl Into<String>) -> Self {
+        Self { exclusive: true, broken: Some(why.into()), ..Self::default() }
+    }
+
+    /// Load from the environment: the file [`gateways_file`] names
+    /// (`LIGUS_MODEL_GATEWAYS_FILE`, else `model-gateways.json` in
+    /// `data_dir`). No file: no gateways. A named file that can't be read,
+    /// or any file that is invalid, is an error (the host must not run
+    /// without the gateways its operator listed). `data_dir` also holds the
+    /// generated attribution key.
     pub fn from_env(data_dir: Option<&Path>) -> Result<Self, GatewayError> {
-        let Some(path) = ligus_core::names::var(GATEWAYS_FILE_ENV).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
+        let env = ligus_core::names::var(EXCLUSIVE_ENV).ok();
+        Self::load_from(gateways_file(data_dir), env.as_deref(), data_dir)
+    }
+
+    /// [`from_env`](Self::from_env) with the file and
+    /// `LIGUS_MODEL_GATEWAYS_EXCLUSIVE` given.
+    pub fn load_from(file: Option<(PathBuf, FileSource)>, exclusive_env: Option<&str>, data_dir: Option<&Path>) -> Result<Self, GatewayError> {
+        let Some((path, source)) = file else {
             return Ok(Self::default());
         };
-        let text = std::fs::read_to_string(&path).map_err(|e| GatewayError::Config(format!("{path}: {e}")))?;
-        let gateways = Self::parse(&text)?;
-        let exclusive = !gateways.is_empty() && !ligus_core::names::var(EXCLUSIVE_ENV).is_ok_and(|v| v.trim() == "0" || v.trim().eq_ignore_ascii_case("false"));
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if source == FileSource::DataDir && e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(GatewayError::Config(format!("{}: {e}", path.display()))),
+        };
+        let file = GatewaysFile::from_json(&text).map_err(|e| GatewayError::Config(format!("{}: {e}", path.display())))?;
+        let gateways = file.validate()?;
+        let (exclusive, _) = exclusive_of(gateways.len(), file.exclusive, exclusive_env);
         let key = if gateways.iter().any(|g| g.attribution()) { Some(attribution_key(data_dir)?) } else { None };
         Ok(Self::new(gateways, exclusive, key))
+    }
+
+    /// Why every model turn is refused (the file broke while the host ran).
+    pub fn broken(&self) -> Option<&str> {
+        self.broken.as_deref()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -688,6 +809,14 @@ impl ModelGateways {
         endpoint: &str,
         selected: Option<&GatewaySelection>,
     ) -> Result<Option<ResolvedGateway>, String> {
+        if let Some(why) = &self.broken {
+            let local_daemon = provider == ModelProviderKind::LigusDaemon && endpoint_is_loopback(endpoint) && selected.is_none_or(|s| s.name.is_empty());
+            if !local_daemon {
+                return Err(format!(
+                    "this host's model gateways file is invalid, so every model turn is refused until it is fixed ({why}); ligus gateway list shows the problem"
+                ));
+            }
+        }
         if let Some(sel) = selected.filter(|s| !s.name.is_empty()) {
             let Some(g) = self.get(&sel.name) else {
                 return Err(format!(
@@ -848,9 +977,104 @@ pub fn host() -> Arc<ModelGateways> {
 /// files to agent children, and install them. serve and workers call it at
 /// startup; an error must stop the host.
 pub fn init_host(data_dir: &Path) -> Result<Arc<ModelGateways>, GatewayError> {
+    // The list itself is hidden from agent children too (they can't write
+    // outside their turn's paths anyway): a running host reads it again when
+    // it changes ([`watch_host`]), so it steers the host's model routes.
+    if let Some((path, _)) = gateways_file(Some(data_dir)) {
+        crate::executor::configure_secret_files(&[path]);
+    }
     let g = Arc::new(ModelGateways::from_env(Some(data_dir))?);
     install(g.clone());
     Ok(g)
+}
+
+/// How often [`watch_host`] looks at the gateways file.
+pub const WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What the watcher last saw of the gateways file: absent, its bytes, or
+/// why it couldn't be read.
+pub type FileSnapshot = Option<Result<Vec<u8>, String>>;
+
+/// The gateways file as it is now.
+pub fn snapshot(path: Option<&Path>) -> FileSnapshot {
+    match std::fs::read(path?) {
+        Ok(b) => Some(Ok(b)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => Some(Err(e.kind().to_string())),
+    }
+}
+
+/// Whether the file at `path` changed since `last` (and remember it).
+pub fn changed(path: Option<&Path>, last: &mut FileSnapshot) -> bool {
+    let now = snapshot(path);
+    if now == *last {
+        return false;
+    }
+    *last = now;
+    true
+}
+
+/// Load this host's gateways again and install them. A file that became
+/// invalid installs [`ModelGateways::refusing`]: every model turn is refused
+/// until it is fixed, never run with a list the operator didn't write.
+pub fn reload_host(data_dir: &Path) -> Result<Arc<ModelGateways>, GatewayError> {
+    match ModelGateways::from_env(Some(data_dir)) {
+        Ok(g) => {
+            let g = Arc::new(g);
+            install(g.clone());
+            Ok(g)
+        }
+        Err(e) => {
+            install(Arc::new(ModelGateways::refusing(e.to_string())));
+            Err(e)
+        }
+    }
+}
+
+/// The gateways file of `data_dir` as it is now: take it before
+/// [`init_host`] and hand it to [`watch_host`], so a change between the two
+/// is still seen.
+pub fn file_snapshot(data_dir: &Path) -> FileSnapshot {
+    snapshot(gateways_file(Some(data_dir)).map(|(p, _)| p).as_deref())
+}
+
+/// What a running host does when its gateways file changed from `before`
+/// to `now`: a file that existed and is gone refuses every model turn (a
+/// host that started without one runs with none; one that loses it while
+/// running must not quietly stop being exclusive). None: load it again.
+pub fn vanished(before: &FileSnapshot, now: &FileSnapshot) -> Option<String> {
+    (before.is_some() && now.is_none()).then(|| "the gateways file was removed while the host ran; recreate it (ligus gateway add) or restart the host to run without gateways".to_string())
+}
+
+/// serve and workers: reload the gateways whenever the file changes
+/// (checked every [`WATCH_INTERVAL`]), so `ligus gateway add` and `remove`
+/// apply without a restart. `last` is the file as [`init_host`] read it
+/// ([`file_snapshot`] before it). What the host advertises on its host
+/// record (the gateway names the desktop lists) still changes at the next
+/// start, and a turn already running keeps the route it started with.
+pub fn watch_host(data_dir: PathBuf, mut last: FileSnapshot) {
+    let path = gateways_file(Some(&data_dir)).map(|(p, _)| p);
+    let _ = std::thread::Builder::new().name("ligus-gateways-watch".into()).spawn(move || loop {
+        std::thread::sleep(WATCH_INTERVAL);
+        let before = last.clone();
+        if !changed(path.as_deref(), &mut last) {
+            continue;
+        }
+        if let Some(why) = vanished(&before, &last) {
+            tracing::error!(target: "dispatch", "model gateways: {why}; every model turn on this host is refused");
+            install(Arc::new(ModelGateways::refusing(why)));
+            continue;
+        }
+        match reload_host(&data_dir) {
+            Ok(g) => tracing::info!(
+                target: "dispatch",
+                "model gateways file changed: {} gateway(s), {}",
+                g.all().len(),
+                if g.exclusive() { "exclusive" } else { "not exclusive" }
+            ),
+            Err(e) => tracing::error!(target: "dispatch", "{e}; every model turn on this host is refused until the file is fixed"),
+        }
+    });
 }
 
 /// Install `g` as this host's list (also tests), adding its credential files

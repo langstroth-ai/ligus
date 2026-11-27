@@ -114,11 +114,61 @@ the private ranges opens.
 
 ### Outside Kubernetes
 
-On a serve or worker box without the chart, write the same JSON file
-yourself and set `LIGUS_MODEL_GATEWAYS_FILE` to it. An unreadable or invalid
-file stops the host at startup: a host whose operator listed gateways never
-runs without them. `LIGUS_MODEL_GATEWAYS_EXCLUSIVE=0` turns off exclusive
-mode.
+On a serve or worker box without the chart, list gateways with `ligus
+gateway`, run with the box's data dir (its env file loaded, or
+`LIGUS_DATA_DIR`):
+
+```sh
+mkdir -p ~/.config/ligus-gateways
+(umask 077; cat > ~/.config/ligus-gateways/litellm.key)   # paste the key, Ctrl-D
+ligus gateway add litellm --url https://litellm.example.ts.net --api openai \
+  --auth bearer-file ~/.config/ligus-gateways/litellm.key
+ligus gateway list
+ligus gateway check litellm --model gpt-4o-mini
+```
+
+- `add` writes `model-gateways.json` in the data dir, owner-only. The host
+  reads it when `LIGUS_MODEL_GATEWAYS_FILE` is unset; when it is set, that
+  file is the one `add` and `remove` edit.
+- An entry is checked with the same rules the host loads it with: a name of
+  `a-z`, `0-9` and `-`, no credentials or query in the URL, no link-local
+  or metadata address, and `https://` unless you add `--allow-plaintext`.
+  `add` then prints "Plain http is readable on the path. Prefer HTTPS (e.g.
+  tailscale serve)."
+- A credential is only ever a file path: `--auth bearer-file PATH`
+  (`Authorization: Bearer`), `api-key-file PATH --header x-api-key|api-key`,
+  `token-file PATH` (a projected token), or `mtls --cert-file PATH
+  --client-key-file PATH`. `add` never reads, stores or prints the secret.
+  The file must sit in a directory of its own: the host hides a
+  credential's directory from every agent, so `add` refuses a key directly
+  in your home directory.
+- **Exclusive** stays the default once a gateway is listed: every model turn
+  on the box goes through a listed gateway and any other turn is refused.
+  `add` says so in one line. `--not-exclusive` is the explicit choice to
+  also run agents directly (a personal box with a hosted key next to a
+  local model); the choice is written into the file as `"exclusive"`.
+  `LIGUS_MODEL_GATEWAYS_EXCLUSIVE`, when set in the box's environment,
+  still wins, and `add` warns when the box's env file sets it.
+- When the systemd unit, LaunchAgent or Homebrew service that runs this
+  data dir names another file (`LIGUS_MODEL_GATEWAYS_FILE` in its env
+  file), `add` and `remove` refuse (exit 3) rather than edit a file the box
+  doesn't read: load that env file first. When no such service is found,
+  they say so, in case the data dir isn't the box's.
+- The same `add` again changes nothing; other settings for an existing name
+  need `--replace`. `remove` of a name that isn't listed changes nothing.
+- A running serve or worker reads the file again within a few seconds of a
+  change, so routing and exclusive mode apply without a restart. The
+  gateway names the desktop lists come from the box's host record, written
+  at start: `add` and `remove` print the restart command for this data dir
+  (`systemctl --user restart ligus-serve`, `launchctl kickstart -k
+  gui/$(id -u)/ai.ligus.serve`, or `brew services restart ligus`).
+
+An unreadable or invalid file stops the host at startup: a host whose
+operator listed gateways never runs without them. A file that becomes
+invalid, or is deleted, while the host runs makes it refuse every model turn
+until it is fixed (a turn already running finishes on its route); `ligus gateway list` shows what is wrong, and `ligus gateway remove`
+takes a bad entry off. You can also write the file by hand, in the format
+above, with `"exclusive": true|false` at the top level.
 
 ## Choosing a gateway for an agent
 
@@ -456,10 +506,10 @@ The gateway side validates issuer, audience (`team-gw`), subject
 (`system:serviceaccount:ligus-ws-acme:<release ServiceAccount>`) and expiry
 against the cluster's JWKS, as above.
 
-## Checking a host: `ligus gateway-check`
+## Checking a host: `ligus gateway check`
 
 Run it on a gateway host (for example `kubectl exec <serve pod> -- ligus
-gateway-check`). For each listed gateway it makes a hosted-API call through
+gateway check`, or `ligus gateway-check`, the same checks). For each listed gateway it makes a hosted-API call through
 the same code path as an agent turn, then starts a sandboxed child that is
 given the proxy route as its base URL. The child prints its environment,
 tries to read the credential files, sends a request with a credential of its
@@ -473,9 +523,10 @@ is refused. It prints no secret; exit status 0 means every check passed.
 | Message (in the chat or the host log) | Meaning |
 |---|---|
 | this runtime uses the model gateway '`X`', which this host doesn't offer | The agent's runtime names a gateway this host's operator didn't list. Bind the agent to a host that offers it, or add it to that host's `modelGateways`. |
-| this host sends model traffic only through its operator's model gateways | Exclusive mode: the runtime has no gateway and its endpoint isn't a listed gateway. Set the runtime's gateway, or set `modelGatewaysExclusive: false`. |
+| this host sends model traffic only through its operator's model gateways | Exclusive mode: the runtime has no gateway and its endpoint isn't a listed gateway. Set the runtime's gateway, or set `modelGatewaysExclusive: false` (outside Kubernetes: `ligus gateway add NAME ... --not-exclusive`). |
+| this host's model gateways file is invalid, so every model turn is refused | The file changed while the host ran and the host can't use it. `ligus gateway list` shows why; fix it or `ligus gateway remove` the entry. |
 | the `<CLI>` CLI has no base-URL setting Ligus can point at a model gateway | pi, Antigravity and Copilot can't be pointed at a gateway. Use Claude Code (Anthropic-wire gateway), Codex, Aider or Hermes, or an HTTP model runtime. |
-| startup error naming `LIGUS_MODEL_GATEWAYS_FILE` | The allow-list file is missing, unreadable or invalid; the host won't start without it. |
+| startup error naming the gateways file | The allow-list file (`LIGUS_MODEL_GATEWAYS_FILE`, or `model-gateways.json` in the data dir) is missing, unreadable or invalid; the host won't start without it. `ligus gateway list` shows why. |
 | 401 or 403 from the gateway | The gateway rejected the credential: check the audience, issuer and subject it expects, or the key. |
 | the turn hangs, then times out connecting | NetworkPolicy doesn't open the gateway: check the selectors or CIDRs and ports in `modelGateways[].networkPolicy`. |
 

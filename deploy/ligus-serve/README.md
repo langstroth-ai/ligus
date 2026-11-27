@@ -97,25 +97,27 @@ People pane before the phone's vote counts. Defining workspace runtimes
   agent's runtime id exists.
 - **A model gateway (optional).** To send agents' model traffic through a
   gateway (LiteLLM, llama.cpp's server, any OpenAI- or Anthropic-wire
-  endpoint), list it in a JSON file and name the file in the env file:
-
-  ```json
-  { "gateways": [ { "name": "home-gw", "url": "https://gw.example.ts.net",
-      "api": "openai", "auth": { "mode": "apiKey", "keyFile": "/home/you/.config/ligus-serve/gw.key" } } ] }
-  ```
+  endpoint), list it with the box's env file loaded:
 
   ```sh
-  LIGUS_MODEL_GATEWAYS_FILE=/home/you/.config/ligus-serve/gateways.json
+  mkdir -p ~/.config/ligus-gateways
+  (umask 077; cat > ~/.config/ligus-gateways/home-gw.key)   # paste the key, Ctrl-D
+  ligus gateway add home-gw --url https://gw.example.ts.net/v1 --api openai \
+    --auth bearer-file ~/.config/ligus-gateways/home-gw.key
+  ligus gateway check home-gw --model qwen3-coder
   ```
 
-  An unreadable or invalid file stops the box at start-up. Once a gateway is
-  listed, the box runs only turns that go through one
-  (`LIGUS_MODEL_GATEWAYS_EXCLUSIVE=0` turns that off). A plain `http://`
-  gateway needs `"allowPlaintext": true`; that is your choice as the
-  operator, for a gateway inside a private network. Check it with
-  `ligus gateway-check`. The box advertises the gateway's name (never its
-  URL or key), and an Admin picks it on a runtime and binds the agent to this
-  box. See the docs: Deploying with an LLM gateway.
+  It writes `model-gateways.json` in the data dir (no env var needed;
+  `LIGUS_MODEL_GATEWAYS_FILE` still names another file). The key stays a
+  file: only its path is stored. Once a gateway is listed the box runs only
+  turns that go through one, and `add` says so; `--not-exclusive` also runs
+  agents that don't use a gateway. A plain `http://` gateway needs
+  `--allow-plaintext`: that is your choice as the operator. A running serve
+  applies the change within a few seconds; restart it (the command `add`
+  prints) so the desktop lists the gateway. The box advertises the gateway's
+  name (never its URL or key), and an Admin picks it on a runtime and binds
+  the agent to this box. `ligus help gateways` has the steps; see the docs:
+  Deploying with an LLM gateway.
 - **Repos.** Clone the checkouts agents should work on under `LIGUS_REPOS_DIR`
   and bind one:
 
@@ -158,6 +160,17 @@ copied into the plist, except names that look like secrets; rerun `start
 macOS.
 
 ### Upgrading
+
+```sh
+deploy/local/ligus-local upgrade --role serve --data-dir ~/.ligus-serve --json
+```
+
+It upgrades the CLI the way it was installed (`brew upgrade ligus`, or the
+release into the binary's directory), restarts the box the way it runs,
+checks the new version on `/v1/health` and runs `verify`; a second run
+changes nothing. It also reports Hive-era leftovers (`hive-serve` units,
+`ai.hive.*` LaunchAgents, `~/.local/bin/hive`, `~/.hive*`) with the command
+to remove each, and never removes them. By hand:
 
 ```sh
 brew upgrade ligus        # or rebuild and reinstall as in step 1

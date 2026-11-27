@@ -561,6 +561,26 @@ jobs:
               bin.install Dir["ligus-*"].first => "ligus"
             end
 
+            # brew services start ligus: ligus serve with the env file
+            # deploy/local/ligus-local configure writes (the box's data dir and
+            # settings). Without it, it logs why and stops. One data dir is one
+            # process: use this or ligus-local start, not both.
+            service do
+              run ["/bin/sh", "-c", [
+                "f=\"\${XDG_CONFIG_HOME:-\$HOME/.config}/ligus-serve/ligus-serve.env\"",
+                "if [ ! -f \"\$f\" ]; then echo \"ligus serve: no \$f (run deploy/local/ligus-local configure --role serve)\" >&2; exit 0; fi",
+                "set -a; . \"\$f\"; set +a",
+                "if [ -z \"\${LIGUS_DATA_DIR:-}\" ]; then echo \"ligus serve: \$f sets no LIGUS_DATA_DIR\" >&2; exit 0; fi",
+                "PATH=\"\$HOME/.local/bin:\$PATH\"",
+                "cd \"\$LIGUS_DATA_DIR\" || exit 1",
+                "exec \"#{opt_bin}/ligus\" serve",
+              ].join("; ")]
+              environment_variables PATH: std_service_path_env
+              keep_alive successful_exit: false
+              log_path var/"log/ligus-serve.log"
+              error_log_path var/"log/ligus-serve.log"
+            end
+
             test do
               assert_path_exists bin/"ligus"
             end

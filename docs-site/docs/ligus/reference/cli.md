@@ -29,6 +29,7 @@ Topics:
 | `quickstart` | first device or another one: join or link this machine, then post a message |
 | `box` | an always-on `ligus serve` box: install, admit (`ligus admit request`, an Admin approves, `ligus admit redeem`), serve, pair; with `deploy/local/ligus-local` and a systemd unit or LaunchAgent |
 | `worker` | a worker host that answers mentions for the agents bound to it |
+| `gateways` (also `model-gateways`, `local-models`) | a box's model gateways or local model server: `ligus gateway add`, exclusive mode, plain http, the restart |
 | `phone` | pairing, **Add a phone** by scanning the desktop's code, and pasting the phone's code instead |
 | `remote` | reaching the box from the phone through a relay tunnel |
 | `kubernetes` | one workspace on a cluster with `deploy/kubernetes/ligus-k8s` |
@@ -43,7 +44,7 @@ Topics:
 | `agents-guide` (also `AGENTS`) | a one-shot playbook for coding agents: set up a box, add an agent, deploy on Kubernetes, check health |
 
 A name that is both a topic and a command (`agents`, `repos`, `remote`,
-`worker`) prints the guide, then the command's reference; `ligus <command>
+`worker`, `gateway`) prints the guide, then the command's reference; `ligus <command>
 --help` prints only the reference. Help never opens the data dir. It prints to
 stdout and exits 0; an unknown command or topic exits 2.
 
@@ -127,7 +128,7 @@ command prompts when standard input isn't a terminal: the one question
 | `ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]` | the sandbox checks only, as a preflight that exits 1 when one fails: `--require-confined` without an agent sandbox, `--expect-tier` on any other tier, `--turn-test` runs one real headless agent turn against an in-process stub model that probes the sandbox (its findings are `turn test: …` lines). `--legacy-exit-codes` exits 3, 4 and 5 instead, as before 0.2 |
 | `ligus doctor --sandbox [--runtime <name>] [--agent <id>]` | the sandbox checks only, then what an agent turn may read and write on this host (the home is denied by default), why, the shell rule, and the signed grants in force |
 | `ligus doctor --gateways [--gateway <name>] [--model <id>]` | the model gateway checks only, the same ones `ligus gateway-check` runs, as checks |
-| `ligus gateway-check [--gateway <name>] [--model <id>]` | proves this host's [model gateways](../../operate/deploy/model-gateways.md): a hosted-API turn and a sandboxed CLI child through the egress proxy's route |
+| `ligus gateway-check [--gateway <name>] [--model <id>]` | proves this host's [model gateways](../../operate/deploy/model-gateways.md): a hosted-API turn and a sandboxed CLI child through the egress proxy's route (also `ligus gateway check`) |
 
 ```console
 $ ligus whoami
@@ -493,6 +494,31 @@ address. See
 $ ligus worker --label prod-box
 worker 5b1c… online — draining queued mentions for its agents. Ctrl-C to stop.
 ```
+
+## Model gateways on a box {#gateways}
+
+The [model gateways](../../operate/deploy/model-gateways.md) a box (`ligus
+serve`) or worker may send its agents' model traffic through: a LiteLLM
+proxy, a llama.cpp or vLLM server, a hosted gateway. Run these with the box's
+data dir (its env file loaded, or `LIGUS_DATA_DIR`). They edit the file the
+host reads: `LIGUS_MODEL_GATEWAYS_FILE` when set, else `model-gateways.json`
+in the data dir.
+
+| Command | What it does |
+|---|---|
+| `ligus gateway add NAME --url URL --api openai\|anthropic [--auth none \| bearer-file PATH \| api-key-file PATH [--header H] \| token-file PATH \| mtls --cert-file PATH --client-key-file PATH] [--ca-file PATH] [--allow-plaintext] [--attribution] [--exclusive \| --not-exclusive] [--replace] [--json]` | lists a gateway, checked with the rules the host loads it with (https unless `--allow-plaintext`, names of `a-z`, `0-9` and `-`). A credential is a file path only, never read, stored or printed. The first gateway makes the box exclusive, and `add` says so; `--not-exclusive` also runs agents that don't use a gateway. The same entry again changes nothing; other settings for the same name need `--replace`. Exit 2 for an entry the host would refuse, 3 when a credential file is missing or empty |
+| `ligus gateway list [--json]` | the file, whether the box is exclusive and why (`LIGUS_MODEL_GATEWAYS_EXCLUSIVE`, the file, or the default), and each gateway. Exit 1 for an entry the host would refuse |
+| `ligus gateway check [NAME] [--model ID] [--json]` | proves a gateway end to end, as `ligus gateway-check` does; `--json` prints a `ligus.checks.v1` report. Exit 3 with no gateway listed, 5 for an unknown name |
+| `ligus gateway remove NAME [--json]` | takes it off the list; a name that isn't listed changes nothing |
+
+A running serve or worker applies a change within a few seconds. The gateway
+names the desktop lists come from the box's host record, which it writes at
+start, so `add` and `remove` print the restart command for this data dir:
+`systemctl --user restart ligus-serve`, `launchctl kickstart -k
+gui/$(id -u)/ai.ligus.serve` or `brew services restart ligus`. `--json`
+prints a `ligus.gateways.v1` document: `file`, `fileSource` (`env` or
+`data-dir`), `exclusive`, `exclusiveSource`, `gateways`, and for `add` and
+`remove` a `result`, `notices` and `restart`.
 
 ## The home host for the phone
 

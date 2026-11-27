@@ -11,6 +11,7 @@
 #   ligus-local verify     --role serve|worker     process (or its systemd unit / LaunchAgent), health, sandbox (alias: status)
 #   ligus-local stop       --role serve|worker     (--systemd / --launchd: also no start at login)
 #   ligus-local uninstall  --role serve|worker [--delete-data]
+#   ligus-local upgrade    --role serve|worker     upgrade the CLI (brew or the release), restart, verify
 #
 # Common flags: --data-dir DIR (required: this device's identity and event
 # log) --env-file FILE --json. The desktop app is installed and first opened
@@ -350,6 +351,54 @@ EXIT CODES
 EOF
 }
 
+hc_upgrade() {
+  cat <<'EOF'
+NAME
+  ligus-local upgrade - upgrade the ligus CLI, restart serve or worker, verify
+
+USAGE
+  ligus-local upgrade --role serve|worker --data-dir DIR [--env-file FILE] [--systemd | --launchd]
+                      [--version vX.Y.Z | --from-source] [--bin-dir DIR] [--json]
+
+  Upgrades the ligus binary the way it was installed: brew upgrade ligus for a
+  Homebrew install (the binary is under brew --prefix), else the release with
+  the repository's install.sh into the binary's own directory (--version pins
+  one; --from-source builds this checkout). Then restarts this data dir's
+  process the way it runs (the systemd user unit or LaunchAgent start
+  installed, Homebrew's service, or the background process) and runs verify.
+  Idempotent: with nothing newer and the process already on this version,
+  nothing is restarted. A process that isn't running is left stopped.
+  Also reports what the Hive-era install left behind (hive-serve or
+  hive-worker units, ai.hive.* LaunchAgents, ~/.local/bin/hive, ~/.hive* data
+  dirs, a running hive process) as a warn check with the commands to remove
+  them. It never deletes them: a data dir may still hold an identity a human
+  wants.
+
+FLAGS
+  --version vX.Y.Z         the release to install (default: latest; not with a Homebrew install)
+  --from-source            cargo build --release -p ligus-cli from this checkout instead
+  --bin-dir DIR            where the new binary goes (default: the current binary's directory)
+  --systemd                require the systemd user unit ligus-ROLE (default: found by itself)
+  --launchd                require the LaunchAgent (macOS; default: found by itself)
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+EXAMPLES
+  ligus-local upgrade --role serve --data-dir ~/.ligus-serve --json
+  ligus-local upgrade --role serve --data-dir ~/.ligus-serve --launchd --json
+  ligus-local upgrade --role worker --data-dir ~/.ligus-worker --version v0.5.0 --json
+
+ENVIRONMENT
+  ligus-local --help lists the variables every command reads
+
+EXIT CODES
+  0 upgraded (or already current), restarted if it ran, healthy (warnings allowed: leftovers)
+  1 the upgrade, the restart or verify failed (read checks[].fix)   2 usage error
+  3 ligus CLI, brew or cargo missing, --launchd off macOS   4 the desktop app's data dir
+EOF
+}
+
 # One command's section; an unknown command is a usage error (exit 2).
 help_cmd_body() {
   case $1 in
@@ -361,6 +410,7 @@ help_cmd_body() {
     verify|status) hc_verify ;;
     stop) hc_stop ;;
     uninstall) hc_uninstall ;;
+    upgrade) hc_upgrade ;;
     exit-codes) printf 'EXIT CODES (one table for every Ligus tool)\n'; ac_exit_codes ;;
     *) ac_usage_error "no help for unknown command: $1 (ligus-local --help lists them)" ;;
   esac
@@ -400,6 +450,7 @@ COMMANDS
   verify         process, health and sandbox checks (alias: status)
   stop           stop it (--systemd / --launchd: also no start at login)
   uninstall      stop and remove it (--delete-data: also this device's identity)
+  upgrade        upgrade the CLI (brew or the release), restart, verify; reports Hive-era leftovers
 
 FLAGS (every command)
 EOF
@@ -416,6 +467,7 @@ ONE-SHOT SEQUENCE (an agent; the human steps are marked)
   5. ligus-local start --role serve --data-dir ~/.ligus-serve [--systemd | --launchd] --json
   6. ligus-local verify --role serve --data-dir ~/.ligus-serve --json
   7. HUMAN: pair the phone (`ligus pair`, prints a secret), any exposure beyond loopback
+  Later: ligus-local upgrade --role serve --data-dir ~/.ligus-serve --json (idempotent)
 
 EXAMPLES
   ligus-local preflight --role serve --data-dir ~/.ligus-serve --json
@@ -432,7 +484,8 @@ ENVIRONMENT
   NO_COLOR           set: no colour on stderr (--color always still colours)
   CLICOLOR_FORCE     set (not 0): colour on stderr even when it isn't a terminal
   Tests only: LIGUS_LOCAL_OS (uname -s), LIGUS_LOCAL_LAUNCHCTL (launchctl),
-  LIGUS_LOCAL_BWRAP (the bwrap path), LIGUS_LOCAL_USERNS (yes|no, user namespaces).
+  LIGUS_LOCAL_BWRAP (the bwrap path), LIGUS_LOCAL_USERNS (yes|no, user namespaces),
+  LIGUS_LOCAL_BREW (brew), LIGUS_LOCAL_INSTALL_SH (install.sh), LIGUS_LOCAL_PS (ps).
 
 EXIT CODES
 EOF
@@ -444,7 +497,7 @@ EOF
 COMMAND DETAILS
 EOF
   local c
-  for c in preflight install-cli configure start unit verify stop uninstall; do
+  for c in preflight install-cli configure start unit verify stop uninstall upgrade; do
     echo
     help_cmd_body "$c"
   done
@@ -524,7 +577,12 @@ case $BIN in ""|/*) ;; *) BIN="$PWD/$BIN" ;; esac
 
 # The flags that name this instance, for the commands we print.
 inst() { printf -- '--role %s --data-dir %q' "$ROLE" "$DATA"; [ -n "$ENVF_GIVEN" ] && printf -- ' --env-file %q' "$ENVF"; return 0; }
-json_extra() { printf ',"role":%s,"dataDir":%s,"envFile":%s,"bin":%s' "$(ac_jstr "$ROLE")" "$(ac_jstr "$DATA")" "$(ac_jstr "$ENVF")" "$(ac_jstr "$BIN")"; }
+json_extra() {
+  printf ',"role":%s,"dataDir":%s,"envFile":%s,"bin":%s' "$(ac_jstr "$ROLE")" "$(ac_jstr "$DATA")" "$(ac_jstr "$ENVF")" "$(ac_jstr "$BIN")"
+  # upgrade: the versions before and after.
+  if [ -n "${UPG_TO:-}${UPG_FROM:-}" ]; then printf ',"fromVersion":%s,"toVersion":%s' "$(ac_jstr "${UPG_FROM:-}")" "$(ac_jstr "${UPG_TO:-}")"; fi
+  return 0
+}
 require_role() { [ -n "$ROLE" ] || ac_usage_error "--role serve|worker is required"; }
 
 # The desktop app's own data dir is one device; a headless process must never share it.
@@ -608,6 +666,7 @@ cmd_preflight() {
     ac_have systemctl && ac_check systemd info "systemd present (start --systemd installs a user unit)"
   fi
   if [ "$OS" = Darwin ] && ac_have "$LAUNCHCTL"; then ac_check launchd info "launchd present (start --launchd installs a LaunchAgent: start at login)"; fi
+  legacy_check
 
   if [ -n "$ROLE" ]; then
     require_data
@@ -1077,15 +1136,7 @@ cmd_start() {
     ac_finish "$AC_TOOL" start "$(json_extra)"
   fi
   if p=$(running_pid); then ac_check start pass "$ROLE already running (pid $p)"; ac_finish "$AC_TOOL" start "$(json_extra)"; fi
-  (umask 077; : >>"$(LOGF)")
-  # The log never gets a pairing link: start never passes --pair.
-  # shellcheck disable=SC1090  # the env file configure wrote
-  ( set -a; . "$ENVF"; set +a; umask 077
-    if [ "$ROLE" = worker ]; then exec nohup "$BIN" worker --label "${LIGUS_WORKER_LABEL:-worker}" >>"$(LOGF)" 2>&1 </dev/null
-    else exec nohup "$BIN" serve >>"$(LOGF)" 2>&1 </dev/null; fi ) &
-  echo $! >"$(PIDF)"
-  sleep 2
-  if p=$(running_pid); then
+  if bg_launch && p=$(running_pid); then
     ac_check start pass "$ROLE started (pid $p, log $(LOGF))"
     ac_next "ligus-local verify $(inst) --json"
   else
@@ -1137,8 +1188,8 @@ cmd_verify() {
   fi
   if [ "$(env_get LIGUS_REQUIRE_SANDBOX)" = 1 ]; then ac_check sandbox pass "LIGUS_REQUIRE_SANDBOX=1: the process exits rather than run agents unconfined"
   else ac_check sandbox fail "LIGUS_REQUIRE_SANDBOX is not 1 in $ENVF" "a human decides that; ligus-local configure sets it to 1"; fi
-  [ "$AC_WORST" = 0 ] && [ "$ROLE" = serve ] && ac_next "HUMAN STEP: pair the phone in their own terminal (it prints a secret): set -a; . $ENVF; set +a; $BIN pair"
-  ac_finish "$AC_TOOL" verify "$(json_extra)"
+  [ "$AC_WORST" = 0 ] && [ "$ROLE" = serve ] && [ "${VERIFY_AS:-verify}" = verify ] && ac_next "HUMAN STEP: pair the phone in their own terminal (it prints a secret): set -a; . $ENVF; set +a; $BIN pair"
+  ac_finish "$AC_TOOL" "${VERIFY_AS:-verify}" "$(json_extra)"
 }
 
 # --------------------------------------------------------------------- stop
@@ -1215,6 +1266,210 @@ cmd_uninstall() {
   ac_finish "$AC_TOOL" uninstall "$(json_extra)"
 }
 
+# ------------------------------------------------------------------ legacy
+# What the Hive-era install left behind (before the rename to Ligus): units,
+# LaunchAgents, the binary, data dirs and a running process. Reported as one
+# warn check with the exact commands to remove each; never removed here (a
+# data dir may hold an identity a human still wants, and a unit may be
+# someone else's).
+legacy_check() {
+  local found="" fix="" f u pids psout
+  legacy_add() { found="$found${found:+; }$1"; fix="$fix${fix:+; }$2"; }
+  for f in "$HOME/.config/systemd/user"/hive-serve*.service "$HOME/.config/systemd/user"/hive-worker*.service; do
+    [ -f "$f" ] || continue
+    u=$(basename "$f" .service)
+    legacy_add "systemd user unit $u ($f)" "systemctl --user disable --now $(printf '%q' "$u") && rm $(printf '%q' "$f") && systemctl --user daemon-reload"
+  done
+  for f in /etc/systemd/system/hive-serve*.service /etc/systemd/system/hive-worker*.service; do
+    [ -f "$f" ] || continue
+    u=$(basename "$f" .service)
+    legacy_add "systemd unit $u ($f)" "sudo systemctl disable --now $(printf '%q' "$u") && sudo rm $(printf '%q' "$f") && sudo systemctl daemon-reload"
+  done
+  for f in "$HOME/Library/LaunchAgents"/ai.hive.*.plist; do
+    [ -f "$f" ] || continue
+    u=$(basename "$f" .plist)
+    legacy_add "LaunchAgent $u ($f)" "launchctl bootout gui/\$(id -u)/$(printf '%q' "$u"); rm $(printf '%q' "$f")"
+  done
+  f="$HOME/.local/bin/hive"
+  if [ -e "$f" ] || [ -L "$f" ]; then legacy_add "binary $f" "rm $(printf '%q' "$f")"; fi
+  for f in "$HOME/.hive" "$HOME"/.hive-serve* "$HOME"/.hive-worker*; do
+    [ -d "$f" ] || continue
+    legacy_add "data dir $f (a Hive-era identity and event log)" "once nothing uses it: rm -rf $(printf '%q' "$f")"
+  done
+  psout=$(${LIGUS_LOCAL_PS:-ps} -axo pid=,command= 2>/dev/null || true)
+  pids=$(printf '%s\n' "$psout" | awk '{ n = split($2, p, "/") } p[n] == "hive" && ($3 == "serve" || $3 == "worker") { printf "%s ", $1 }')
+  pids=${pids% }
+  [ -n "$pids" ] && legacy_add "a running hive serve or worker (pid $pids)" "kill -TERM $pids"
+  if [ -n "$found" ]; then
+    ac_check legacy.hive warn "left over from the Hive-era install (ligus-local never removes them): $found" "remove each by hand once nothing uses it: $fix"
+  else
+    ac_check legacy.hive pass "no Hive-era units, LaunchAgents, binary, data dirs or processes"
+  fi
+}
+
+# ------------------------------------------------------------------ upgrade
+BREW=${LIGUS_LOCAL_BREW:-brew}
+UPG_FROM="" UPG_TO=""
+
+# A symlink's final target (no readlink -f on older macOS).
+resolve_path() {
+  local p=$1 n i=0
+  while [ -L "$p" ] && [ $i -lt 40 ]; do
+    n=$(readlink "$p")
+    case $n in /*) p=$n ;; *) p="$(dirname "$p")/$n" ;; esac
+    i=$((i + 1))
+  done
+  printf '%s' "$p"
+}
+bin_version() { "$BIN" --version 2>/dev/null | sed -n 's/^ligus //p' | head -1; }
+# Whether $BIN is Homebrew's (under brew --prefix, or its Cellar).
+bin_from_brew() {
+  local pfx
+  ac_have "$BREW" || return 1
+  pfx=$("$BREW" --prefix 2>/dev/null) || return 1
+  [ -n "$pfx" ] || return 1
+  case $BIN in "$pfx"/*) return 0 ;; esac
+  case $(resolve_path "$BIN") in "$pfx"/*|*/Cellar/ligus/*) return 0 ;; esac
+  return 1
+}
+health_listen() {
+  if [ "$ROLE" = serve ]; then env_get LIGUS_SERVE_LISTEN; else env_get LIGUS_WORKER_HEALTH_LISTEN; fi
+}
+# The version the running process reports on /v1/health; empty if none.
+running_version() {
+  local l; l=$(health_listen)
+  [ -n "$l" ] || return 0
+  curl -s -m 3 "http://$l/v1/health" 2>/dev/null | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' | head -1
+}
+# Homebrew's own service (brew services start ligus) runs ligus serve with
+# the default serve env file: it is this box's when that is ours.
+brew_service_file() {
+  local f
+  [ "$ROLE" = serve ] || return 1
+  [ "$ENVF" = "${XDG_CONFIG_HOME:-$HOME/.config}/ligus-serve/ligus-serve.env" ] || return 1
+  if [ "$OS" = Darwin ]; then f="$HOME/Library/LaunchAgents/homebrew.mxcl.ligus.plist"; else f="$HOME/.config/systemd/user/homebrew.ligus.service"; fi
+  [ -f "$f" ] || return 1
+  # ... and it names this data dir.
+  [ "$(env_get LIGUS_DATA_DIR)" = "$DATA" ] || return 1
+  printf '%s' "$f"
+}
+# Start the background process (start's default mode). 0 when it runs.
+bg_launch() {
+  (umask 077; : >>"$(LOGF)")
+  # The log never gets a pairing link: start never passes --pair.
+  # shellcheck disable=SC1090  # the env file configure wrote
+  ( set -a; . "$ENVF"; set +a; umask 077
+    if [ "$ROLE" = worker ]; then exec nohup "$BIN" worker --label "${LIGUS_WORKER_LABEL:-worker}" >>"$(LOGF)" 2>&1 </dev/null
+    else exec nohup "$BIN" serve >>"$(LOGF)" 2>&1 </dev/null; fi ) &
+  echo $! >"$(PIDF)"
+  sleep 2
+  running_pid >/dev/null
+}
+
+cmd_upgrade() {
+  require_role; require_data
+  [ -n "$BIN" ] || { ac_check cli.binary fail "ligus CLI not found (PATH, ~/.local/bin, LIGUS_BIN)" "ligus-local install-cli, then start"; ac_raise 3; ac_finish "$AC_TOOL" upgrade "$(json_extra)"; }
+  if [ -n "$VERSION" ] && [ $FROM_SOURCE = 1 ]; then ac_usage_error "--version and --from-source are exclusive"; fi
+  [ $LAUNCHD = 1 ] && la_need upgrade
+  legacy_check
+
+  # How it runs now, found before anything changes.
+  local mode="" label="" la="" before
+  if [ $SYSTEMD = 1 ] || { ac_have systemctl && sd_ours; }; then
+    mode=systemd
+    if [ "$OS" != Linux ] || ! ac_have systemctl; then ac_check systemd fail "--systemd needs Linux with systemd" "drop --systemd"; ac_raise 3; ac_finish "$AC_TOOL" upgrade "$(json_extra)"; fi
+    # Only a unit start --systemd wrote for this env file: never another data dir's.
+    if ! sd_ours; then ac_check systemd fail "$(SD_UNIT) isn't a unit ligus-local start --systemd wrote for $ENVF" "restart it yourself after the upgrade, or ligus-local start $(inst) --systemd to install this box's unit"; ac_finish "$AC_TOOL" upgrade "$(json_extra)"; fi
+  elif [ "$OS" = Darwin ] && la=$(la_find); then
+    mode=launchd; label=$(basename "$la" .plist)
+  elif [ $LAUNCHD = 1 ]; then
+    ac_check launchd fail "no launchd agent installed for this data dir" "ligus-local start $(inst) --launchd"; ac_finish "$AC_TOOL" upgrade "$(json_extra)"
+  elif brew_service_file >/dev/null; then
+    mode=brew-service
+  elif running_pid >/dev/null; then
+    mode=background
+  fi
+  before=$(running_version)
+
+  # Upgrade the binary the way it was installed.
+  local src dir
+  UPG_FROM=$(bin_version)
+  if [ $FROM_SOURCE = 1 ]; then src=source
+  elif bin_from_brew; then src=brew
+  else src=release; fi
+  case $src in
+    brew)
+      [ -z "$VERSION" ] || ac_usage_error "--version can't pin a Homebrew install (brew installs the tap's newest); drop --version, or install a pinned release with ligus-local install-cli --version $VERSION --bin-dir DIR"
+      if ! "$BREW" upgrade ligus >&2; then
+        ac_check cli.upgrade fail "brew upgrade ligus failed" "read brew's output above; brew doctor"; ac_finish "$AC_TOOL" upgrade "$(json_extra)"
+      fi ;;
+    source)
+      ac_have cargo || { ac_check cargo fail "cargo not found" "install Rust (https://rustup.rs), or drop --from-source"; ac_raise 3; ac_finish "$AC_TOOL" upgrade "$(json_extra)"; }
+      dir=${BIN_DIR:-$(dirname "$BIN")}
+      if (cd "$ROOT" && cargo build --release -p ligus-cli >&2) && mkdir -p "$dir" && install -m 0755 "${CARGO_TARGET_DIR:-$ROOT/target}/release/ligus" "$dir/ligus"; then
+        BIN="$dir/ligus"
+      else
+        ac_check cli.upgrade fail "cargo build or install into $dir failed" "read the build output above"; ac_finish "$AC_TOOL" upgrade "$(json_extra)"
+      fi ;;
+    release)
+      dir=${BIN_DIR:-$(dirname "$BIN")}
+      if LIGUS_VERSION="${VERSION:-latest}" LIGUS_INSTALL_DIR="$dir" sh "${LIGUS_LOCAL_INSTALL_SH:-$ROOT/install.sh}" >&2; then
+        BIN="$dir/ligus"
+      else
+        ac_check cli.upgrade fail "install.sh failed (release ${VERSION:-latest} into $dir)" "check the release exists for this platform and $dir is writable; or --from-source"; ac_finish "$AC_TOOL" upgrade "$(json_extra)"
+      fi ;;
+  esac
+  UPG_TO=$(bin_version)
+  if [ -z "$UPG_TO" ]; then
+    ac_check cli.upgrade fail "$BIN doesn't run after the upgrade" "reinstall: ligus-local install-cli"; ac_finish "$AC_TOOL" upgrade "$(json_extra)"
+  elif [ "$UPG_FROM" = "$UPG_TO" ]; then
+    ac_check cli.upgrade pass "ligus $UPG_TO is already the newest ($src)"
+  else
+    ac_check cli.upgrade pass "ligus ${UPG_FROM:-?} -> $UPG_TO ($src, $BIN)"
+  fi
+
+  # Restart only when it runs and runs something older.
+  if [ -z "$mode" ]; then
+    ac_check restart info "$ROLE isn't running for this data dir; left stopped"
+    ac_next "ligus-local start $(inst)"
+    ac_finish "$AC_TOOL" upgrade "$(json_extra)"
+  fi
+  if [ "$UPG_FROM" = "$UPG_TO" ] && { [ -z "$before" ] || [ "$before" = "$UPG_TO" ]; }; then
+    ac_check restart pass "$ROLE already runs ligus $UPG_TO ($mode); not restarted"
+  else
+    local p ok=1
+    case $mode in
+      systemd) systemctl --user restart "ligus-$ROLE" >/dev/null 2>&1 || ok=0 ;;
+      launchd) "$LAUNCHCTL" kickstart -k "gui/$(id -u)/$label" >/dev/null 2>&1 || ok=0 ;;
+      brew-service) "$BREW" services restart ligus >&2 || ok=0 ;;
+      background)
+        if p=$(running_pid); then
+          kill -TERM "$p" 2>/dev/null || true
+          for _ in $(seq 1 25); do kill -0 "$p" 2>/dev/null || break; sleep 1; done
+          kill -0 "$p" 2>/dev/null && ok=0
+        fi
+        [ $ok = 1 ] && { bg_launch || ok=0; } ;;
+    esac
+    if [ $ok = 1 ]; then ac_check restart pass "$ROLE restarted ($mode) on ligus $UPG_TO"
+    else ac_check restart fail "restarting $ROLE ($mode) failed" "ligus-local verify $(inst) says what runs; ligus-local stop $(inst), then start it again"; fi
+  fi
+  # The process now reports the new version (serve and workers with a health address).
+  if [ -n "$(health_listen)" ] && [ "$AC_WORST" = 0 ]; then
+    local now=""
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do now=$(running_version); [ "$now" = "$UPG_TO" ] && break; sleep 1; done
+    if [ "$now" = "$UPG_TO" ]; then ac_check version pass "$ROLE reports ligus $now"
+    else ac_check version fail "$ROLE reports ${now:-no version} on /v1/health, not $UPG_TO" "read its log; ligus-local verify $(inst)"; fi
+  fi
+  if [ "$mode" = brew-service ]; then
+    # verify's process check knows ligus-local's own modes; Homebrew's is checked by health.
+    if [ "$(env_get LIGUS_REQUIRE_SANDBOX)" = 1 ]; then ac_check sandbox pass "LIGUS_REQUIRE_SANDBOX=1: the process exits rather than run agents unconfined"
+    else ac_check sandbox fail "LIGUS_REQUIRE_SANDBOX is not 1 in $ENVF" "a human decides that; ligus-local configure sets it to 1"; fi
+    ac_finish "$AC_TOOL" upgrade "$(json_extra)"
+  fi
+  [ "$mode" = systemd ] && SYSTEMD=1
+  VERIFY_AS=upgrade cmd_verify
+}
+
 case $CMD in
   preflight) cmd_preflight ;;
   install-cli) cmd_install_cli ;;
@@ -1224,5 +1479,6 @@ case $CMD in
   verify|status) cmd_verify ;;
   stop) cmd_stop ;;
   uninstall) cmd_uninstall ;;
-  *) ac_usage_error "unknown command: $CMD (preflight, install-cli, configure, start, unit, verify, stop, uninstall)" ;;
+  upgrade) cmd_upgrade ;;
+  *) ac_usage_error "unknown command: $CMD (preflight, install-cli, configure, start, unit, verify, stop, uninstall, upgrade)" ;;
 esac

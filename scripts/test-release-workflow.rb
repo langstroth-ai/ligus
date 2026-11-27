@@ -1375,3 +1375,85 @@ class ReleaseNotesAndVersionJson < Minitest::Test
     refute run_script("compare", "1.2.3", "v1.2.3")[0]
   end
 end
+
+# The tap formula release.yml writes: valid Ruby once bash has expanded the
+# heredoc, and its `service do` runs ligus serve with ligus-local's serve env
+# file (brew services start ligus), or logs why and stops without it.
+class FormulaService < Minitest::Test
+  # The formula's text as bash renders the unquoted heredoc.
+  def rendered
+    body = run_text(RELEASE, "formula")[/<<RUBY\n(.*?)\nRUBY\n/m, 1]
+    refute_nil body, "no formula heredoc in release.yml"
+    # Every $ bash would expand is one of the job's own: the rest are escaped.
+    stray = body.gsub("\\$", "").scan(/\$\{?[A-Za-z_]+/).reject { |v| v =~ /\A\$\{(base|sha)\z/ }
+    assert_empty stray, "unescaped $ in the formula heredoc (bash would expand it at release time)"
+    body.gsub("${base}", "https://example.invalid/dl").gsub(/\$\{sha\[[^\]]+\]\}/, "0" * 64).gsub("\\$", "$")
+  end
+
+  # Evaluate the formula against a stub of Homebrew's DSL; returns the
+  # service block's settings.
+  def service_of(src, opt_bin)
+    svc = {}
+    rec = Object.new
+    rec.define_singleton_method(:run) { |a| svc[:run] = a }
+    rec.define_singleton_method(:environment_variables) { |h| svc[:env] = h }
+    rec.define_singleton_method(:keep_alive) { |v| svc[:keep_alive] = v }
+    rec.define_singleton_method(:log_path) { |v| svc[:log] = v }
+    rec.define_singleton_method(:error_log_path) { |v| svc[:err] = v }
+    rec.define_singleton_method(:opt_bin) { opt_bin }
+    rec.define_singleton_method(:var) { Pathname.new("/brew/var") }
+    rec.define_singleton_method(:std_service_path_env) { "/brew/bin:/usr/bin:/bin" }
+    base = Class.new do
+      define_singleton_method(:method_missing) { |*_a, &_b| nil }
+      define_singleton_method(:respond_to_missing?) { |*_a| true }
+      define_singleton_method(:service) { |&b| rec.instance_exec(&b) }
+      define_singleton_method(:test) { |*_a, &_b| nil } # Kernel#test otherwise
+    end
+    mod = Module.new
+    mod.const_set(:Formula, base)
+    mod.module_eval(src)
+    svc
+  end
+
+  def test_formula_parses_and_has_a_service
+    require "pathname"
+    src = rendered
+    Dir.mktmpdir do |d|
+      f = File.join(d, "ligus.rb")
+      File.write(f, src)
+      _o, e, st = Open3.capture3("ruby", "-c", f)
+      assert st.success?, e
+    end
+    svc = service_of(src, "/brew/opt/ligus/bin")
+    assert_equal ["/bin/sh", "-c"], svc[:run][0, 2]
+    assert_equal({ successful_exit: false }, svc[:keep_alive])
+    assert_equal "/brew/var/log/ligus-serve.log", svc[:log].to_s
+    assert_includes svc[:run][2], "exec \"/brew/opt/ligus/bin/ligus\" serve"
+  end
+
+  def test_service_runs_serve_with_the_env_file_or_stops
+    require "pathname"
+    Dir.mktmpdir do |d|
+      bin = File.join(d, "opt/bin")
+      FileUtils.mkdir_p(bin)
+      File.write(File.join(bin, "ligus"), "#!/bin/sh\necho \"args=$* data=$LIGUS_DATA_DIR sandbox=$LIGUS_REQUIRE_SANDBOX cwd=$(pwd -P)\"\n")
+      File.chmod(0o755, File.join(bin, "ligus"))
+      script = service_of(rendered, bin)[:run][2]
+      home = File.join(d, "home")
+      FileUtils.mkdir_p(home)
+      env = { "HOME" => home, "PATH" => "/usr/bin:/bin", "XDG_CONFIG_HOME" => nil }
+      # No env file: logs what to run and exits 0 (not restarted).
+      o, e, st = Open3.capture3(env, "/bin/sh", "-c", script)
+      assert st.success?, e
+      assert_empty o
+      assert_includes e, "ligus-local configure --role serve"
+      # With ligus-local's env file: ligus serve in the data dir, with its settings.
+      data = File.join(d, "data")
+      FileUtils.mkdir_p([data, File.join(home, ".config/ligus-serve")])
+      File.write(File.join(home, ".config/ligus-serve/ligus-serve.env"), "LIGUS_DATA_DIR='#{data}'\nLIGUS_REQUIRE_SANDBOX=1\n")
+      o, e, st = Open3.capture3(env, "/bin/sh", "-c", script)
+      assert st.success?, e
+      assert_equal "args=serve data=#{data} sandbox=1 cwd=#{File.realpath(data)}", o.strip
+    end
+  end
+end

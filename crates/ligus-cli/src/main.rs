@@ -53,6 +53,7 @@ mod devices_cmd;
 mod link_io;
 mod forge_cmd;
 mod gateway_check;
+mod gateway_cmd;
 mod handoff;
 #[cfg(test)]
 mod handoff_tests;
@@ -2739,12 +2740,23 @@ fn run() -> Result<()> {
     // database, serve token) or its secret files; checked-out repos under
     // the data dir stay readable.
     ligus_runtime::executor::configure_host(&cfg.data_dir, &secret_paths, &[repos::repos_dir(&cfg.data_dir)]);
-    // The operator's model gateways (LIGUS_MODEL_GATEWAYS_FILE): their
-    // credential files join the deny list. A listed file that can't be used
-    // stops the host rather than running without the gateways.
+    // The operator's model gateways (LIGUS_MODEL_GATEWAYS_FILE, else
+    // model-gateways.json in the data dir): their credential files join the
+    // deny list. A listed file that can't be used stops the host rather than
+    // running without the gateways; `ligus gateway` itself still runs, so
+    // `list` can show the problem and `remove` can fix it.
+    let gateways_seen = ligus_runtime::model_gateway::file_snapshot(&cfg.data_dir);
     if let Err(e) = ligus_runtime::model_gateway::init_host(&cfg.data_dir) {
-        eprintln!("ligus: {e}");
-        std::process::exit(2);
+        if first != "gateway" {
+            eprintln!("ligus: {e}");
+            eprintln!("  fix: ligus gateway list shows the file; fix or remove the entry");
+            std::process::exit(2);
+        }
+    }
+    // serve and workers apply `ligus gateway add` and `remove` without a
+    // restart: the file is read again when it changes.
+    if matches!(first, "serve" | "worker") {
+        ligus_runtime::model_gateway::watch_host(cfg.data_dir.clone(), gateways_seen);
     }
     // Turn scratch dirs a killed turn or host left behind are swept (now and
     // every ten minutes) once older than the longest turn.
@@ -2804,6 +2816,7 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
+        "gateway" => gateway_cmd::cmd(&cfg.data_dir, (!cfg.room.is_empty()).then(|| uuid_of_room(&cfg.room)), rest),
         "gateway-check" => {
             let ws = (!cfg.room.is_empty()).then(|| uuid_of_room(&cfg.room));
             let model = flag_val("--model").unwrap_or_else(|| "ligus-gateway-check".into());

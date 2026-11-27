@@ -91,9 +91,7 @@ OpenAI-compatible)** fills in:
   machine (`localhost`). For a gateway on another machine, prefer
   `https://` (for example a reverse proxy, or `tailscale serve` on the
   gateway machine). Plain `http://` to another machine is your choice on
-  this device; **⌘K → Set up an agent** and `ligus setup agent` refuse it,
-  and on a box the operator lists the gateway with `"allowPlaintext": true`
-  (see [Deploying with an LLM gateway](../../operate/deploy/model-gateways.md#outside-kubernetes))
+  this device; **⌘K → Set up an agent** and `ligus setup agent` refuse it.
 - **Supports tools** on
 
 Add one runtime per model you want to use (each sends a different
@@ -102,6 +100,28 @@ Add one runtime per model you want to use (each sends a different
 gateway serves in one chat without adding a runtime, pick it from the
 route pill under the composer (the list is the gateway's `/v1/models`);
 see [Picking the model for a chat](configuring-a-runtime.md#pick-a-model).
+
+### On an always-on box {#on-a-box}
+
+Agents that run on a box (`ligus serve`) or a worker reach the gateway
+through the box. List it there, with the box's env file loaded, and keep
+any key a file on the box:
+
+```bash
+ligus gateway add home-gw --url https://gpu-box.tailnet.ts.net/v1 --api openai
+ligus gateway check home-gw --model gpt-oss:20b
+```
+
+Use `https://` (for example `tailscale serve` on the gateway machine).
+Plain `http://` is readable on the path; `ligus gateway add` refuses it
+unless you add `--allow-plaintext`, which is your choice as the box's
+operator. Once a gateway is listed, the box sends model traffic only
+through its gateways and refuses other agent turns. `add` says so in one
+line, and `--not-exclusive` lets the box also run agents that use a hosted
+key. Restart the box with the command `add` prints, so the desktop lists the
+gateway, then pick it on a workspace runtime and bind the agent to the box.
+See [Deploying with an LLM gateway](../../operate/deploy/model-gateways.md#outside-kubernetes)
+and `ligus help gateways`.
 
 The equivalent `ligus.config.toml` block:
 
