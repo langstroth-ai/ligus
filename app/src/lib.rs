@@ -58,6 +58,7 @@ mod repos_ui;
 mod scratch_ui;
 mod setup_ui;
 mod first_run_ui;
+mod link_request_ui;
 mod turn_host;
 mod attention;
 mod notices;
@@ -13392,6 +13393,18 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         Ok(false) => {}
         Err(e) => eprintln!("reconcile local owner: {e}"),
     }
+    // A desktop linked as a person's device ("I already use Ligus") acts as
+    // them, without their account key; each workspace checks it counts there
+    // when it opens (`link_request_ui::bind_workspace`).
+    if link_request_ui::adopt_at_launch(&mut service, &data_dir)? {
+        // The team workspace that syncs from launch (the device-host beat
+        // writes there before any workspace is opened) is bound now.
+        let room = settings.lock().unwrap().sync_room.clone();
+        if settings.lock().unwrap().workspaces.iter().any(|w| w.room == room && w.dm_account.is_none()) {
+            link_request_ui::bind_workspace(&mut service, &data_dir, ligus_core::room_workspace_id(&room), Some(stored.account.id));
+        }
+        service.set_author_git_email(settings.lock().unwrap().git_email.clone());
+    }
 
     // MIGRATION (per-workspace code dir): the effective `workspace_root` now
     // follows the active workspace via device-local `workspace_dirs` bindings.
@@ -14329,6 +14342,18 @@ pub(crate) fn set_active_workspace_sync(state: State<AppState>, workspace_id: St
         // uses the in-band self-consistency rule.
         let mut svc = state.service.lock().unwrap();
         svc.set_trusted_founder(None);
+        // A linked desktop's block follows the team workspace that keeps
+        // syncing meanwhile (the device-host beat writes there), not Home.
+        if link_request_ui::linked_person(&state.data_dir).is_some() {
+            let room = state.settings.lock().unwrap().sync_room.clone();
+            let synced = state.settings.lock().unwrap().workspaces.iter().any(|w| w.room == room && w.dm_account.is_none());
+            if synced {
+                let local_account = state.identity.load().ok().flatten().map(|s| s.account.id);
+                link_request_ui::bind_workspace(&mut svc, &state.data_dir, ligus_core::room_workspace_id(&room), local_account);
+            } else {
+                svc.set_write_block(None);
+            }
+        }
         // A chat id several workspaces claim reads as the active one's.
         svc.set_context_workspace(Some(state.local_workspace_id));
         *state.active_workspace.lock().unwrap() = state.local_workspace_id;
@@ -14371,6 +14396,10 @@ pub(crate) fn set_active_workspace_sync(state: State<AppState>, workspace_id: St
                     tracing::error!(target: "workspace", "pinning the founder failed: {e}");
                 }
             }
+            // A linked desktop acts as its person here, or writes nothing
+            // (before anything below writes as this device's own account).
+            let local_account = state.identity.load().ok().flatten().map(|s| s.account.id);
+            link_request_ui::bind_workspace(&mut svc, &state.data_dir, id, local_account);
             if let Err(e) =
                 svc.ensure_self_member(ligus_core::workspace_config_session_id(id), id)
             {
@@ -14491,6 +14520,7 @@ pub(crate) fn create_workspace_sync(state: State<AppState>, name: String, relay_
     if display.is_empty() {
         return Err("workspace name can't be empty".to_string());
     }
+    link_request_ui::refuse_if_linked(&state.data_dir, "found workspaces")?;
     // The relay the creator picked (the community relay, their own, or none);
     // None keeps the currently configured relay. Never a silent default.
     let picked = relay_url.map(|u| u.trim().to_string());
@@ -14566,6 +14596,8 @@ pub(crate) fn join_workspace_sync(state: State<AppState>, invite: String) -> Res
     // account, from a founder whose key the shared logs confirm).
     if conn.dm_account.is_some() {
         people::admit_dm_invite(&state, &mut conn, false)?;
+    } else {
+        link_request_ui::refuse_if_linked(&state.data_dir, "join workspaces with an invite")?;
     }
     join_workspace_conn(state, conn, redeem)
 }
@@ -17051,6 +17083,14 @@ pub fn run() {
             first_run_ui::set_first_run_path,
             first_run_ui::first_run_workspace,
             first_run_ui::invite_link_hint,
+            link_request_ui::link_request_status,
+            link_request_ui::link_request_start,
+            link_request_ui::link_request_codes_match,
+            link_request_ui::link_request_link_as,
+            link_request_ui::link_request_cancel,
+            link_request_ui::link_request_paste,
+            link_request_ui::link_request_open_grant,
+            link_request_ui::link_request_redeem,
             mark_tour_seen,
             get_git_status,
             list_runtimes,

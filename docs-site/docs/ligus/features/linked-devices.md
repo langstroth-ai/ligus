@@ -1,8 +1,9 @@
 # Add a computer to your devices
 
 You are one person in a workspace, on every computer you use. If you already
-use Ligus on your desktop and want a second computer (the `lt` terminal app,
-or the `ligus` command line), **link it as one of your devices**. Don't invite
+use Ligus on your desktop and want a second computer (another desktop app,
+the `lt` terminal app, or the `ligus` command line), **link it as one of your
+devices**. Don't invite
 yourself: an invite always makes a **new member**, and you'd show up as two
 people with the same name.
 
@@ -71,6 +72,55 @@ minutes of your match, nothing is signed or added, and the desktop's Inbox
 shows "Linking work-laptop didn't finish. Nothing was added." Start again from
 the computer. With no approval mailbox on the relay it exits 3: use the paste
 path below.
+
+### From a second desktop {#desktop}
+
+A second desktop app links itself in its first run. Answer **Is this your
+first device with Ligus?** with **I already use Ligus on another device**. It
+asks no name and makes no workspace.
+
+1. **On your first desktop**, open **Settings → Profile → My devices → Add a
+    computer** and choose **Copy** next to the approval address.
+2. **On the new desktop**, paste it and choose **Continue**. It says
+    "Waiting for your other device. Open the request in its Inbox."
+3. **On your first desktop**, open the request in the Inbox. Both screens
+    show the same 8-symbol code. Check they match and choose **Codes match**
+    on both (on the new desktop, **They don't match** ends it and nothing is
+    granted).
+4. **On your first desktop**, confirm with your passkey.
+5. **On the new desktop**, the approval is checked on the workspace log, then
+    it asks **Link this computer as Ana?**. Choose **Link**.
+
+The new desktop is now one more of your devices in that workspace: the same
+member, with your name and your role. It names itself after the computer
+(rename it in My devices). If your account has no passkey yet, the first run
+says to add one on your first desktop.
+
+Problems are said on the screen, with **Try again** when trying again can
+help: the relay can't be reached, the address is out of date (copy it again),
+the code expired (after 5 minutes) or no device opened the request in 15
+minutes.
+
+**When the relay can't carry the request** (no approval mailbox), the screen
+says so and offers **Use a request code**. It is also behind **Use a request
+code instead** on the first screen:
+
+1. The new desktop shows its link request (`liguslink1:…`) with **Copy**, and
+    its fingerprint.
+2. On your first desktop, paste it into **Add a computer**, compare the
+    fingerprint, and confirm with your passkey. Choose **Copy for lt**.
+3. On the new desktop, paste that code and choose **Continue**. It shows
+    *Approved by Ana's device for Acme* and the approving device's
+    fingerprint: compare it with **This desktop** on your first desktop and
+    choose **Yes, link**.
+
+A desktop links into the workspace whose address it used. To add another of
+your workspaces to it, copy that workspace's approval address on your first
+desktop and, on the linked one, choose **＋ → Join → Link this computer**. A
+linked desktop doesn't create workspaces or join with invites: do that on your
+first desktop, then link this one to the workspace. A desktop that already
+has workspaces of its own can't be linked (it would be a second you in them):
+use a fresh install, or reset it under **Settings → Advanced** first.
 
 ### By paste {#paste}
 
