@@ -10708,9 +10708,11 @@ async fn regenerate(
     // different workspace is active would otherwise mis-scope its events (matches
     // `send_message`, which uses `session.workspace_id`).
     let workspace_id = session.workspace_id;
+    // The last reply as the transcript draws it (where each finished), the
+    // one the chat's Regenerate sits on.
     let (last_id, answered) = session
-        .messages
-        .iter()
+        .transcript()
+        .into_iter()
         .rev()
         .find(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && !m.superseded)
         .map(|m| (m.id, m.reply_to_message_id))
