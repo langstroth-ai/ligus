@@ -182,7 +182,13 @@ proptest! {
                 let wire_plain = newer_encoder_after(&kp, sid, &p, &Value::Null, 2, Some(&seed));
                 let env_plain: SessionEventEnvelope = serde_json::from_str(&wire_plain).unwrap();
                 let expected = ligus_core::project(&[seed, env_plain]).unwrap();
-                prop_assert_eq!(folded.messages, expected.messages);
+                // Two envelopes, each with its own signed time: the payloads
+                // fold alike, the append times are the envelopes'.
+                let untimed = |mut m: Vec<ligus_core::ChatMessage>| {
+                    m.iter_mut().for_each(|m| m.appended_at = None);
+                    m
+                };
+                prop_assert_eq!(untimed(folded.messages), untimed(expected.messages));
                 prop_assert_eq!(folded.title, expected.title);
                 prop_assert_eq!(folded.proposals, expected.proposals);
             }
