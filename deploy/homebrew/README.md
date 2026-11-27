@@ -37,6 +37,12 @@ binaries. Both need `HOMEBREW_TAP_TOKEN` (Contents:write on the tap) and skip
 cleanly without it. `update-cask.yml` re-bumps the cask for a past, published
 tag by hand.
 
+The formula has a `service do` block: `brew services start ligus` runs
+`ligus serve` with the env file `deploy/local/ligus-local configure --role
+serve` writes (`~/.config/ligus-serve/ligus-serve.env`), and logs why and
+stops without it. `scripts/test-release-workflow.rb` (`FormulaService`)
+renders the heredoc, parses it and runs the service's command.
+
 Never recreate the pre-rename `Formula/hive-cli.rb` or `Casks/hive.rb` in the
 tap: its `formula_renames.json` and `cask_renames.json` map those names to
 `ligus` and `ligus-app`, so existing installs upgrade in place.

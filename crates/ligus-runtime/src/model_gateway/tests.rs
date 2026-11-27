@@ -915,3 +915,96 @@ fn the_member_pseudonym_is_unlinkable_across_workspaces() {
     assert_eq!(a, Attribution::new(&key, Some(w1), None).with_member(&key, Some(w1), Some(member)).member.unwrap(), "stable within a workspace");
     assert!(Attribution::new(&key, None, None).with_member(&key, None, Some(member)).member.is_none());
 }
+
+/// The data dir's `model-gateways.json` is read without the env var; a
+/// missing one is no gateways, but a missing env-named file is an error.
+#[test]
+fn default_file_in_the_data_dir() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join(DEFAULT_GATEWAYS_FILE);
+    let none = ModelGateways::load_from(Some((path.clone(), FileSource::DataDir)), None, Some(d.path())).unwrap();
+    assert!(none.is_empty() && !none.exclusive());
+    assert!(ModelGateways::load_from(Some((path.clone(), FileSource::Env)), None, Some(d.path())).is_err(), "a named file must exist");
+    std::fs::write(&path, r#"{"gateways":[{"name":"box-gw","url":"https://gw.example:8443/v1","auth":{"mode":"none"}}]}"#).unwrap();
+    let g = ModelGateways::load_from(Some((path.clone(), FileSource::DataDir)), None, Some(d.path())).unwrap();
+    assert_eq!(g.all().len(), 1);
+    assert!(g.exclusive(), "a file without `exclusive` stays exclusive");
+    std::fs::write(&path, "{not json").unwrap();
+    assert!(ModelGateways::load_from(Some((path, FileSource::DataDir)), None, Some(d.path())).is_err(), "an invalid file stops the host");
+}
+
+/// Exclusive: the env var wins, then the file, then on; only an explicit
+/// 0/false turns it off; never with no gateway listed.
+#[test]
+fn exclusive_choice() {
+    use ExclusiveSource as S;
+    assert_eq!(exclusive_of(1, None, None), (true, S::Default));
+    assert_eq!(exclusive_of(1, Some(false), None), (false, S::File));
+    assert_eq!(exclusive_of(1, Some(true), None), (true, S::File));
+    assert_eq!(exclusive_of(1, Some(false), Some("1")), (true, S::Env));
+    assert_eq!(exclusive_of(1, Some(true), Some(" 0 ")), (false, S::Env));
+    assert_eq!(exclusive_of(1, Some(true), Some("FALSE")), (false, S::Env));
+    assert_eq!(exclusive_of(1, Some(false), Some("no")), (true, S::Env), "an unclear value stays exclusive");
+    assert_eq!(exclusive_of(1, Some(false), Some("")), (false, S::File), "an empty variable is unset");
+    assert!(!exclusive_of(0, Some(true), Some("1")).0);
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join(DEFAULT_GATEWAYS_FILE);
+    std::fs::write(&path, r#"{"exclusive":false,"gateways":[{"name":"a","url":"https://gw","auth":{"mode":"none"}}]}"#).unwrap();
+    let src = || Some((path.clone(), FileSource::DataDir));
+    assert!(!ModelGateways::load_from(src(), None, None).unwrap().exclusive());
+    assert!(ModelGateways::load_from(src(), Some("1"), None).unwrap().exclusive());
+}
+
+/// What `ligus gateway add` writes reads back the same, with no default
+/// noise, and the file's `exclusive` round-trips.
+#[test]
+fn file_round_trip() {
+    let f = GatewaysFile {
+        exclusive: Some(false),
+        gateways: vec![GatewayConfig {
+            name: "box-gw".into(),
+            url: "http://100.64.0.2:8080/v1".into(),
+            api: Api::Openai,
+            allow_plaintext: true,
+            attribution: false,
+            auth: AuthConfig::ApiKey { key_file: "/k/box-gw.key".into(), header: None },
+            ca_file: None,
+        }],
+    };
+    let text = f.to_json();
+    assert!(!text.contains("attribution") && !text.contains("caFile") && !text.contains("header"), "{text}");
+    assert!(text.contains("\"allowPlaintext\": true") && text.contains("\"mode\": \"apiKey\"") && text.contains("\"keyFile\""), "{text}");
+    assert_eq!(GatewaysFile::from_json(&text).unwrap(), f);
+    assert_eq!(f.validate().unwrap().len(), 1);
+    assert!(ModelGateways::parse(&text).is_ok(), "the host reads what add writes");
+}
+
+/// A file that breaks while the host runs refuses every model turn
+/// (except a Ligus daemon on loopback); the watcher sees each change once.
+#[test]
+fn broken_file_refuses_and_changes_are_seen_once() {
+    let r = ModelGateways::refusing("bad json");
+    assert!(r.route(ModelProviderKind::OpenAI, "https://api.openai.com/v1/chat/completions", None).unwrap_err().contains("invalid"));
+    assert!(r.route(ModelProviderKind::ClaudeCode, "", Some(&GatewaySelection::named("a"))).unwrap_err().contains("invalid"));
+    assert!(r.route(ModelProviderKind::LigusDaemon, "http://127.0.0.1:7777/v1", None).unwrap().is_none());
+    assert_eq!(r.broken(), Some("bad json"));
+
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join(DEFAULT_GATEWAYS_FILE);
+    let mut last = snapshot(Some(&p));
+    assert!(last.is_none());
+    assert!(!changed(Some(&p), &mut last));
+    std::fs::write(&p, "{}").unwrap();
+    assert!(changed(Some(&p), &mut last));
+    assert!(!changed(Some(&p), &mut last));
+    std::fs::write(&p, r#"{"gateways":[]}"#).unwrap();
+    assert!(changed(Some(&p), &mut last));
+    let before = last.clone();
+    std::fs::remove_file(&p).unwrap();
+    assert!(changed(Some(&p), &mut last));
+    assert!(vanished(&before, &last).is_some(), "a file removed while running refuses, never opens the host");
+    assert!(vanished(&None, &Some(Ok(b"{}".to_vec()))).is_none());
+    assert!(vanished(&Some(Ok(b"{}".to_vec())), &Some(Ok(b"{ }".to_vec()))).is_none());
+    assert!(!changed(None, &mut last));
+    assert_eq!(file_snapshot(d.path()), None);
+}

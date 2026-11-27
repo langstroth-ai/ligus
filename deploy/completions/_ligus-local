@@ -16,6 +16,7 @@ _ligus-local() {
     'status:the same as verify'
     'stop:stop it'
     'uninstall:stop and remove it'
+    'upgrade:upgrade the CLI, restart and verify'
     'help:help for a command, or exit-codes'
   )
   common=(
@@ -43,7 +44,9 @@ _ligus-local() {
     start|stop|verify|status) _arguments $common $svc ;;
     unit) _arguments $common '--launchd[the plist instead of the systemd unit]' ;;
     uninstall) _arguments $common '--delete-data[also delete the data dir]' ;;
-    help) _arguments '2:command:(preflight install-cli configure start unit verify stop uninstall exit-codes)' ;;
+    upgrade) _arguments $common $svc '--version[a release, vX.Y.Z]:version:' '--from-source[build from this checkout]' \
+      '--bin-dir[where to install]:dir:_files -/' ;;
+    help) _arguments '2:command:(preflight install-cli configure start unit verify stop uninstall upgrade exit-codes)' ;;
   esac
 }
 

@@ -58,7 +58,18 @@ workflow. A box (`ligus serve` or `ligus worker`) joins as its own member
 through an admission an Admin approves (`ligus admit request`), never with
 your invite: see [Admitting a box](../../operate/ops/admitting-a-box.md).
 After `brew upgrade ligus`, restart the box so it runs the new binary
-([Personal fleet](../../operate/deploy/personal-fleet.md#operating-it)).
+([Personal fleet](../../operate/deploy/personal-fleet.md#operating-it)), or
+let `deploy/local/ligus-local upgrade --role serve --data-dir ~/.ligus-serve`
+do both and check the result.
+
+The formula also has a Homebrew service: once `deploy/local/ligus-local
+configure --role serve` has written `~/.config/ligus-serve/ligus-serve.env`
+and the box is admitted, `brew services start ligus` runs `ligus serve` with
+that env file (at login on macOS, as a systemd user unit on Linux), and
+`brew services restart ligus` restarts it after an upgrade. Without the env
+file it logs why and stops (`$(brew --prefix)/var/log/ligus-serve.log`). Use
+it or `ligus-local start --systemd`/`--launchd`, not both: one data dir is
+one process.
 
 ## Other platforms
 

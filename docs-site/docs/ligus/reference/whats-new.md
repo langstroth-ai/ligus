@@ -4,6 +4,47 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## Unreleased
+
+### Added
+
+- **Add a model gateway to a box with one command.** Pointing a box's
+  agents at your own gateway or local model server used to mean writing a
+  JSON file by hand, naming it in the box's env file and restarting. Now
+  `ligus gateway add NAME --url URL --api openai` lists it (and `list`,
+  `check` and `remove` do the rest). It writes a file in the box's data dir,
+  so no environment variable is needed, checks the entry with the same rules
+  the box uses, and stores a key only as the path of a file on the box,
+  never the key itself. A running box picks up the change within a few
+  seconds; `add` prints the command that restarts it so the desktop lists
+  the new gateway. See [Model gateways on a box](cli.md#gateways) and
+  [Deploying with an LLM gateway](../../operate/deploy/model-gateways.md#outside-kubernetes).
+- **The gateway-only choice is said out loud.** A box that lists a gateway
+  still sends model traffic only through its gateways and refuses other
+  agent turns, as before. `ligus gateway add` now says so in one line and
+  offers `--not-exclusive` to let the box also run agents directly; the
+  choice is written into the gateway file instead of an env setting you had
+  to know about.
+- **Upgrade a box in one step.** `deploy/local/ligus-local upgrade --role
+  serve --data-dir ~/.ligus-serve` upgrades the `ligus` CLI the way it was
+  installed (Homebrew or the release), restarts the box the way it runs,
+  checks it reports the new version and runs `verify`. Running it again
+  changes nothing. It also lists what the old Hive install left behind
+  (`hive-serve` units, `ai.hive.*` LaunchAgents, `~/.local/bin/hive`,
+  `~/.hive*` folders) with the command to remove each; it never removes them
+  itself. See [Personal fleet](../../operate/deploy/personal-fleet.md#operating-it).
+- **`brew services` runs a box.** The `ligus` Homebrew formula now has a
+  service: after `ligus-local configure --role serve`, `brew services start
+  ligus` keeps `ligus serve` running and `brew services restart ligus`
+  restarts it after an upgrade. See [Install with Homebrew](../getting-started/homebrew.md).
+
+### Docs
+
+- The local models page no longer suggests plain `http://` to a gateway on
+  another machine: use `https://` (for example `tailscale serve`), or opt in
+  with `ligus gateway add … --allow-plaintext`. See
+  [Offline setup with local models](../getting-started/offline-local-models.md#on-a-box).
+
 ## 0.4.1
 
 Fixes for setting up and running agents: replies read in order, an agent's

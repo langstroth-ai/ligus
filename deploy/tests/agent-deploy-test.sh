@@ -410,6 +410,9 @@ d=${FAKE_LAUNCHCTL_DIR:?}
 printf '%s\n' "$*" >>"$d/calls"
 case $1 in
   enable|disable) exit 0 ;;
+  kickstart)
+    label=${3##*/}
+    if [ ! -e "$d/loaded.$label" ]; then echo "Could not find service \"$label\" in domain" >&2; exit 113; fi ;;
   bootstrap)
     label=$(awk 'p { sub(/^[ \t]*<string>/, ""); sub(/<\/string>.*/, ""); print; exit } /<key>Label<\/key>/ { p = 1 }' "$3")
     if [ -e "$d/loaded.$label" ]; then echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; fi
@@ -511,6 +514,24 @@ else fail "reinstall: $(cat "$TMP/lc/calls"; ls -a "$LA")"; fi
 run "$TMP/la3" la status --json --role serve --data-dir "$TMP/ls" --env-file "$TMP/ls.env"
 check_json "ligus-local status with the launchd agent" "$TMP/la3" 0 "$RC" launchd
 if grep -q '"pid 4242' "$TMP/la3" || grep -q 'pid 4242' "$TMP/la3"; then pass "status reports the launchd pid"; else fail "status: $(cat "$TMP/la3")"; fi
+# upgrade restarts the launchd agent with kickstart -k (a fake release install
+# into its own bin dir, so the agent's binary path stays the test's).
+mkdir -p "$TMP/la-inst"
+cat >"$TMP/la-inst/install.sh" <<'FAKE'
+#!/bin/sh
+mkdir -p "$LIGUS_INSTALL_DIR"
+printf '#!/bin/sh\n[ "$1" = --version ] && echo "ligus 0.5.0"\nexit 0\n' >"$LIGUS_INSTALL_DIR/ligus"
+chmod +x "$LIGUS_INSTALL_DIR/ligus"
+FAKE
+run "$TMP/la-up" env LIGUS_LOCAL_INSTALL_SH="$TMP/la-inst/install.sh" LIGUS_LOCAL_BREW=/nonexistent \
+  HOME="$H" PATH="$TMP/fakebin:$PATH" LIGUS_LOCAL_OS=Darwin LIGUS_LOCAL_LAUNCHCTL="$TMP/fakebin/launchctl" \
+  FAKE_LAUNCHCTL_DIR="$TMP/lc" LIGUS_BIN="$LB" "$LOCAL" upgrade --json --role serve --data-dir "$TMP/ls" \
+  --env-file "$TMP/ls.env" --bin-dir "$TMP/la-newbin"
+check_json "ligus-local upgrade with the launchd agent" "$TMP/la-up" 0 "$RC" restart
+if grep -qx "kickstart -k gui/$UID_/ai.ligus.serve" "$TMP/lc/calls" && grep -q '"toVersion":"0.5.0"' "$TMP/la-up" \
+  && grep -q '"command":"upgrade"' "$TMP/la-up" && grep -q '"id":"launchd","status":"pass"' "$TMP/la-up"; then
+  pass "upgrade restarts the LaunchAgent (kickstart -k) and verifies it"
+else fail "upgrade with launchd: $(cat "$TMP/la-up" "$TMP/lc/calls")"; fi
 run "$TMP/la4" la start --json --role serve --data-dir "$TMP/ls" --env-file "$TMP/ls.env"
 check_json "ligus-local start (no flag) leaves the launchd box alone" "$TMP/la4" 0 "$RC" start
 if [ ! -e "$TMP/ls/ligus-local-serve.pid" ]; then pass "no second process next to the launchd one"; else fail "plain start started a second process"; fi
@@ -656,6 +677,120 @@ run "$TMP/l8" env HOME="$TMP/home" LIGUS_BIN=/usr/bin/true "$LOCAL" uninstall --
   --data-dir "$TMP/d 7" --env-file "$TMP/foreign.env" --delete-data
 check_json "ligus-local uninstall with a foreign env file" "$TMP/l8" 0 "$RC" data
 if [ -f "$TMP/foreign.env" ] && [ ! -e "$TMP/d 7" ]; then pass "foreign env file kept, own data dir deleted"; else fail "uninstall removed a file it did not write"; fi
+
+# ligus-local upgrade: the release install (a FAKE install.sh), Homebrew (a
+# FAKE brew and its service), the systemd unit (a FAKE systemctl), idempotent
+# reruns, and Hive-era leftovers reported with their commands but never removed.
+U="$TMP/up"; UH="$U/home"; mkdir -p "$UH" "$U/bin" "$U/fake" "$U/brew/bin"
+cat >"$U/fake/install.sh" <<'FAKE'
+#!/bin/sh
+# Fake install.sh: installs a ligus that reports $FAKE_NEW_VERSION.
+printf 'install %s %s\n' "$LIGUS_VERSION" "$LIGUS_INSTALL_DIR" >>"$FAKE_UP_LOG"
+mkdir -p "$LIGUS_INSTALL_DIR"
+printf '#!/bin/sh\n[ "$1" = --version ] && echo "ligus %s"\nexit 0\n' "$FAKE_NEW_VERSION" >"$LIGUS_INSTALL_DIR/ligus"
+chmod +x "$LIGUS_INSTALL_DIR/ligus"
+FAKE
+cat >"$U/fake/brew" <<'FAKE'
+#!/bin/sh
+# Fake brew: --prefix, upgrade ligus (bumps the version), services restart.
+printf 'brew %s\n' "$*" >>"$FAKE_UP_LOG"
+case $1 in
+  --prefix) printf '%s\n' "$FAKE_BREW_PREFIX" ;;
+  upgrade) printf '#!/bin/sh\n[ "$1" = --version ] && echo "ligus %s"\nexit 0\n' "$FAKE_NEW_VERSION" >"$FAKE_BREW_PREFIX/bin/ligus" ;;
+  services) exit 0 ;;
+  *) echo "fake brew: unexpected: $*" >&2; exit 64 ;;
+esac
+FAKE
+cat >"$U/fake/systemctl" <<'FAKE'
+#!/bin/sh
+printf 'systemctl %s\n' "$*" >>"$FAKE_UP_LOG"
+[ "$1" = --user ] || exit 64
+case $2 in is-active|restart) exit 0 ;; *) exit 64 ;; esac
+FAKE
+cat >"$U/fake/ps" <<'FAKE'
+#!/bin/sh
+printf '  101 /usr/sbin/sshd -D\n  4321 /home/me/.local/bin/hive serve --listen 127.0.0.1:8787\n  4322 /usr/bin/grep hive serve\n'
+FAKE
+chmod +x "$U/fake/install.sh" "$U/fake/brew" "$U/fake/systemctl" "$U/fake/ps"
+# shellcheck disable=SC2016  # the $1 is the fake binary's own
+fake_ligus() { printf '#!/bin/sh\n[ "$1" = --version ] && echo "ligus %s"\nexit 0\n' "$2" >"$1"; chmod +x "$1"; }
+up() { # bin new-version args...: ligus-local upgrade on "Linux" with the fakes and the temp HOME
+  local bin=$1 ver=$2; shift 2
+  env HOME="$UH" PATH="$U/fake:/usr/bin:/bin" LIGUS_LOCAL_OS=Linux FAKE_UP_LOG="$U/log" FAKE_BREW_PREFIX="$U/brew" \
+    LIGUS_BIN="$bin" FAKE_NEW_VERSION="$ver" LIGUS_LOCAL_INSTALL_SH="$U/fake/install.sh" LIGUS_LOCAL_BREW="$U/fake/brew" \
+    LIGUS_LOCAL_PS="$U/fake/ps" "$LOCAL" upgrade "$@"
+}
+la_env "$U/serve.env" "$U/data" serve upbox
+
+run "$U/u0" up "$U/bin/ligus" 0.5.0 --json --data-dir "$U/data"
+check_json "ligus-local upgrade without --role is a usage error" "$U/u0" 2 "$RC"
+
+# A release install, nothing running: upgraded in place, left stopped; again: nothing new.
+fake_ligus "$U/bin/ligus" 0.4.1
+run "$U/u1" up "$U/bin/ligus" 0.5.0 --json --role serve --data-dir "$U/data" --env-file "$U/serve.env"
+check_json "ligus-local upgrade, release install, not running" "$U/u1" 0 "$RC" cli.upgrade
+if grep -q '"fromVersion":"0.4.1","toVersion":"0.5.0"' "$U/u1" && grep -qx "install latest $U/bin" "$U/log" \
+  && grep -q '"id":"restart","status":"info"' "$U/u1" && [ "$("$U/bin/ligus" --version)" = "ligus 0.5.0" ]; then
+  pass "upgrade installs the release into the binary's own directory and leaves a stopped box stopped"
+else fail "upgrade, release install: $(cat "$U/u1" "$U/log")"; fi
+run "$U/u2" up "$U/bin/ligus" 0.5.0 --json --role serve --data-dir "$U/data" --env-file "$U/serve.env"
+check_json "ligus-local upgrade again (idempotent)" "$U/u2" 0 "$RC" cli.upgrade
+if grep -q 'already the newest' "$U/u2"; then pass "a second upgrade says it is current"; else fail "second upgrade: $(cat "$U/u2")"; fi
+run "$U/u3" up "$U/bin/ligus" 0.0.0 --json --role serve --data-dir "$U/data" --env-file "$U/serve.env" --version v1 --from-source
+check_json "ligus-local upgrade --version with --from-source is a usage error" "$U/u3" 2 "$RC"
+
+# The systemd unit start --systemd installed: restarted only when the binary changed.
+mkdir -p "$UH/.config/systemd/user"
+env HOME="$UH" LIGUS_LOCAL_OS=Linux LIGUS_BIN="$U/bin/ligus" "$LOCAL" unit --role serve --data-dir "$U/data" --env-file "$U/serve.env" \
+  >"$UH/.config/systemd/user/ligus-serve.service" 2>/dev/null
+: >"$U/log"
+run "$U/u4" up "$U/bin/ligus" 0.5.1 --json --role serve --data-dir "$U/data" --env-file "$U/serve.env"
+check_json "ligus-local upgrade with the systemd unit" "$U/u4" 0 "$RC" restart
+if grep -qx 'systemctl --user restart ligus-serve' "$U/log" && grep -q '"id":"process","status":"pass"' "$U/u4"; then
+  pass "upgrade restarts the systemd unit and verifies it"
+else fail "upgrade with systemd: $(cat "$U/u4" "$U/log")"; fi
+: >"$U/log"
+run "$U/u5" up "$U/bin/ligus" 0.5.1 --json --role serve --data-dir "$U/data" --env-file "$U/serve.env"
+check_json "ligus-local upgrade with the systemd unit, again" "$U/u5" 0 "$RC" restart
+if ! grep -q 'restart ligus-serve' "$U/log" && grep -q 'not restarted' "$U/u5"; then pass "nothing newer: the unit is not restarted"; else fail "idempotent systemd upgrade: $(cat "$U/u5" "$U/log")"; fi
+rm -f "$UH/.config/systemd/user/ligus-serve.service"
+
+# Homebrew: brew upgrade ligus, then Homebrew's service for the default serve env file.
+fake_ligus "$U/brew/bin/ligus" 0.4.1
+mkdir -p "$UH/.config/ligus-serve"; la_env "$UH/.config/ligus-serve/ligus-serve.env" "$U/data" serve upbox
+printf '[Service]\nExecStart=/bin/sh -c true\n' >"$UH/.config/systemd/user/homebrew.ligus.service"
+: >"$U/log"
+run "$U/u6" up "$U/brew/bin/ligus" 0.5.0 --json --role serve --data-dir "$U/data"
+check_json "ligus-local upgrade, Homebrew install and service" "$U/u6" 0 "$RC" restart
+if grep -qx 'brew upgrade ligus' "$U/log" && grep -qx 'brew services restart ligus' "$U/log" && ! grep -q '^install ' "$U/log"; then
+  pass "a Homebrew install upgrades with brew and restarts brew's service"
+else fail "upgrade with brew: $(cat "$U/u6" "$U/log")"; fi
+run "$U/u7" up "$U/brew/bin/ligus" 0.0.0 --json --role serve --data-dir "$U/data" --version v0.5.0
+check_json "ligus-local upgrade --version on a Homebrew install is a usage error" "$U/u7" 2 "$RC"
+
+# Hive-era leftovers: one warn check with each removal command; nothing removed.
+mkdir -p "$UH/Library/LaunchAgents" "$UH/.local/bin" "$UH/.hive-serve" "$UH/.hive"
+: >"$UH/.config/systemd/user/hive-serve.service"; : >"$UH/Library/LaunchAgents/ai.hive.serve.plist"; : >"$UH/.local/bin/hive"
+run "$U/u8" up "$U/bin/ligus" 0.5.1 --json --role serve --data-dir "$U/data" --env-file "$U/serve.env"
+check_json "ligus-local upgrade with Hive-era leftovers (warnings only)" "$U/u8" 0 "$RC" legacy.hive
+if python3 -I - "$U/u8" "$UH" <<'PY'
+import json, sys
+d = json.loads(open(sys.argv[1]).read())
+h = sys.argv[2]
+c = [c for c in d["checks"] if c["id"] == "legacy.hive"][0]
+assert c["status"] == "warn", c
+for want in ("systemctl --user disable --now hive-serve", "launchctl bootout gui/$(id -u)/ai.hive.serve",
+             "rm " + h + "/.local/bin/hive", "rm -rf " + h + "/.hive-serve", "rm -rf " + h + "/.hive", "kill -TERM 4321"):
+    assert want in c["fix"], (want, c["fix"])
+assert "4322" not in c["fix"], "a grep for hive is not a hive process"
+PY
+then pass "leftovers reported with the exact cleanup commands"; else fail "leftovers: $(cat "$U/u8")"; fi
+if [ -f "$UH/.config/systemd/user/hive-serve.service" ] && [ -f "$UH/Library/LaunchAgents/ai.hive.serve.plist" ] \
+  && [ -f "$UH/.local/bin/hive" ] && [ -d "$UH/.hive-serve" ] && [ -d "$UH/.hive" ]; then
+  pass "upgrade never removes a leftover"
+else fail "upgrade removed a leftover"; fi
+run "$U/u9" env HOME="$UH" LIGUS_LOCAL_OS=Linux PATH="$U/fake:/usr/bin:/bin" LIGUS_LOCAL_PS="$U/fake/ps" LIGUS_BIN=/nonexistent "$LOCAL" preflight --json
+if grep -q '"id":"legacy.hive","status":"warn"' "$U/u9"; then pass "preflight reports Hive-era leftovers too"; else fail "preflight leftovers: $(cat "$U/u9")"; fi
 
 # Only the deploy skills' SKILL.md files under .claude/ can be committed.
 if command -v git >/dev/null 2>&1 && git -C "$ROOT" rev-parse >/dev/null 2>&1; then

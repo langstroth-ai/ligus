@@ -2374,10 +2374,132 @@ pub const COMMANDS: &[Cmd] = &[
         ..D
     },
     Cmd {
+        name: "gateway",
+        group: G_BOX,
+        summary: "list the model gateways this box may use: add, list, check, remove",
+        purpose: "Manage this host's model gateways: the OpenAI- or Anthropic-compatible endpoints (LiteLLM, a \
+                  llama.cpp or vLLM server behind a proxy, a hosted gateway) that agent turns on this box or worker may \
+                  send model traffic through. The list is a file the host reads: LIGUS_MODEL_GATEWAYS_FILE when set, else \
+                  model-gateways.json in the data dir, so run these with the box's data dir (LIGUS_DATA_DIR, or its env \
+                  file loaded). Credentials are files the host reads; their contents are never stored, sent to the \
+                  workspace or printed. Once a gateway is listed the box is exclusive by default: every model turn goes \
+                  through a listed gateway and others are refused (add --not-exclusive to allow both). A running serve or \
+                  worker applies a change within a few seconds; the gateway names the desktop lists change when it restarts.",
+        synopsis: &[
+            "ligus gateway add NAME --url URL --api openai|anthropic [--auth MODE [PATH]] [--allow-plaintext] [--exclusive | --not-exclusive] [--replace]",
+            "ligus gateway list [--json]",
+            "ligus gateway check [NAME] [--model ID] [--json]",
+            "ligus gateway remove NAME [--json]",
+        ],
+        flags: &[JSON],
+        env: &["LIGUS_MODEL_GATEWAYS_FILE", "LIGUS_MODEL_GATEWAYS_EXCLUSIVE"],
+        examples: &[
+            "ligus gateway add home-gw --url https://gw.tailnet.ts.net/v1 --api openai --auth bearer-file ~/.config/ligus-gateways/home-gw.key",
+            "ligus gateway list",
+            "ligus gateway check home-gw --model qwen3-coder",
+        ],
+        exit: &[(3, "a credential file is missing, or check: no gateway is listed"), (5, "check: no gateway by that name")],
+        see_also: &["ligus gateway add", "ligus help gateways", "ligus help box", "docs: Model gateways"],
+        ..D
+    },
+    Cmd {
+        name: "gateway add",
+        group: G_BOX,
+        summary: "list a model gateway this box may send model traffic through",
+        purpose: "Add (or, with --replace, change) one entry in this host's gateways file, checked with the rules the \
+                  host loads it with: a name of a-z, 0-9 and '-', a URL without credentials, a query or a link-local or \
+                  metadata address, and https unless --allow-plaintext. A credential is only ever a file path (never \
+                  read, stored or printed here): the file must exist, be non-empty and sit in a directory of its own, since \
+                  the host hides a credential's directory from every agent. The first gateway makes the box exclusive \
+                  (every model turn goes through a listed gateway; others are refused), and add says so in one line; \
+                  --not-exclusive is the explicit choice to also run agents directly, and the choice is written into the \
+                  file (LIGUS_MODEL_GATEWAYS_EXCLUSIVE, when set, still wins). Adding the same entry again changes nothing. \
+                  A running serve or worker on this data dir applies the change within a few seconds; add prints the \
+                  command that restarts it (systemd, launchd or Homebrew, as found for this data dir) so the desktop \
+                  lists the new gateway. --json prints a ligus.gateways.v1 document: file, fileSource (env or data-dir), \
+                  exclusive, exclusiveSource (env, file or default), gateways, result {action: added, replaced or \
+                  unchanged; changed; created; gateway}, notices and restart.",
+        synopsis: &["ligus gateway add NAME --url URL --api openai|anthropic [--auth none | bearer-file PATH | api-key-file PATH [--header H] | token-file PATH | mtls --cert-file PATH --client-key-file PATH] [--ca-file PATH] [--allow-plaintext] [--attribution] [--exclusive | --not-exclusive] [--replace] [--json]"],
+        flags: &[
+            f("--url URL", "required", "the gateway's base URL (the API path is appended: /v1/chat/completions or /v1/messages); also the second word"),
+            f("--api openai|anthropic", "required", "the wire it speaks: OpenAI chat completions or Anthropic Messages"),
+            f("--auth MODE", "none", "none; bearer-file PATH (Authorization: Bearer, from the file); api-key-file PATH (with --header); token-file PATH (a projected ServiceAccount token); mtls"),
+            f("--header H", "authorization", "with api-key-file: authorization (bearer), x-api-key or api-key"),
+            f("--cert-file PATH", "none", "with --auth mtls: the client certificate (PEM)"),
+            f("--client-key-file PATH", "none", "with --auth mtls: the client key (PEM)"),
+            f("--ca-file PATH", "the system roots", "pin the CA that signed the gateway's certificate"),
+            f("--allow-plaintext", "off", "allow an http:// URL: the operator's explicit choice (prefer https, for example tailscale serve)"),
+            f("--attribution", "off", "send pseudonymous workspace, agent and member ids as x-ligus-* headers"),
+            f("--exclusive", "on for the first gateway", "every model turn on this host goes through a listed gateway; others are refused"),
+            f("--not-exclusive", "off", "also run agents that don't use a gateway directly"),
+            f("--replace", "off", "overwrite an entry of the same name that has other settings"),
+            JSON,
+        ],
+        env: &["LIGUS_MODEL_GATEWAYS_FILE", "LIGUS_MODEL_GATEWAYS_EXCLUSIVE"],
+        examples: &[
+            "ligus gateway add home-gw --url https://gw.tailnet.ts.net/v1 --api openai --auth bearer-file ~/.config/ligus-gateways/home-gw.key",
+            "ligus gateway add lab --url http://100.64.0.2:8080/v1 --api openai --allow-plaintext --not-exclusive",
+            "ligus gateway add claude-gw --url https://ai.example.com/anthropic --api anthropic --auth api-key-file ~/.config/ligus-gateways/claude.key --header x-api-key --json",
+        ],
+        exit: &[(3, "the credential or CA file doesn't exist, is empty or isn't a file, or this data dir's serve reads another gateways file (load its env file first)")],
+        see_also: &["ligus gateway list", "ligus gateway check", "ligus help gateways"],
+        ..D
+    },
+    Cmd {
+        name: "gateway list",
+        group: G_BOX,
+        summary: "show this box's model gateways and whether it is exclusive",
+        purpose: "Print the gateways file this host reads, whether the box is exclusive (and what decided it: \
+                  LIGUS_MODEL_GATEWAYS_EXCLUSIVE, the file, or the default), and each gateway: name, wire, URL and how \
+                  it authenticates (credential file paths, never their contents). An entry the host would refuse is \
+                  reported and exits 1: serve and workers don't start with it (a running one refuses every model turn \
+                  until it is fixed). --json prints a ligus.gateways.v1 document with exists, file, fileSource, \
+                  exclusive, exclusiveSource and gateways.",
+        synopsis: &["ligus gateway list [--json]"],
+        flags: &[JSON],
+        env: &["LIGUS_MODEL_GATEWAYS_FILE", "LIGUS_MODEL_GATEWAYS_EXCLUSIVE"],
+        examples: &["ligus gateway list", "LIGUS_DATA_DIR=~/.ligus-serve ligus gateway list --json"],
+        see_also: &["ligus gateway add", "ligus gateway remove"],
+        ..D
+    },
+    Cmd {
+        name: "gateway check",
+        group: G_BOX,
+        summary: "prove a model gateway works end to end (ligus gateway-check)",
+        purpose: "Prove one gateway (or every gateway) works the two ways agent turns use it: a hosted-API turn, and a \
+                  sandboxed CLI child through the egress proxy's route, which must not see the credential. On an \
+                  exclusive box it also checks an unlisted endpoint is refused. It sends a real (one-word) model \
+                  request. The same checks as ligus gateway-check; --json prints them as a ligus.checks.v1 report. \
+                  Prints nothing secret.",
+        synopsis: &["ligus gateway check [NAME] [--model ID] [--json]"],
+        flags: &[f("--model ID", "ligus-gateway-check", "the model id to ask the gateway for"), JSON],
+        env: &["LIGUS_MODEL_GATEWAYS_FILE", "LIGUS_MODEL_GATEWAYS_EXCLUSIVE", "LIGUS_MODEL_GATEWAY_ATTRIBUTION_KEY_FILE", "LIGUS_WORKSPACE"],
+        examples: &["ligus gateway check home-gw --model qwen3-coder", "ligus gateway check --json"],
+        exit: &[(3, "this host lists no gateway"), (5, "no gateway by that name")],
+        see_also: &["ligus gateway list", "ligus doctor --gateways"],
+        ..D
+    },
+    Cmd {
+        name: "gateway remove",
+        group: G_BOX,
+        summary: "take a model gateway off this box's list",
+        purpose: "Remove one entry from this host's gateways file. Removing a name that isn't listed changes nothing \
+                  and exits 0. With no gateway left the box is no longer exclusive. A running serve or worker stops using \
+                  it within a few seconds; remove prints the restart command so the desktop stops listing it. Credential \
+                  files are left where they are. --json prints a ligus.gateways.v1 document with result {action: \
+                  removed or unchanged; changed; name} and restart.",
+        synopsis: &["ligus gateway remove NAME [--json]"],
+        flags: &[JSON],
+        env: &["LIGUS_MODEL_GATEWAYS_FILE"],
+        examples: &["ligus gateway remove home-gw"],
+        see_also: &["ligus gateway list", "ligus gateway add"],
+        ..D
+    },
+    Cmd {
         name: "gateway-check",
         group: G_CHECK,
         summary: "prove this host's model gateways end to end",
-        purpose: "Prove the model gateways from LIGUS_MODEL_GATEWAYS_FILE work the two ways agent turns use them: a \
+        purpose: "Prove this host's model gateways (ligus gateway list) work the two ways agent turns use them: a \
                   hosted-API turn, and a sandboxed CLI child through the egress proxy's route (which must not see the \
                   credential). Prints nothing secret.",
         synopsis: &["ligus gateway-check [--gateway NAME] [--model ID] [--legacy-exit-codes]"],
@@ -2389,7 +2511,7 @@ pub const COMMANDS: &[Cmd] = &[
         env: &["LIGUS_MODEL_GATEWAYS_FILE", "LIGUS_MODEL_GATEWAYS_EXCLUSIVE", "LIGUS_MODEL_GATEWAY_ATTRIBUTION_KEY_FILE", "LIGUS_WORKSPACE"],
         examples: &["ligus gateway-check", "ligus gateway-check --gateway litellm --model gpt-4o-mini"],
         exit: &[(6, "only with --legacy-exit-codes: a check failed (otherwise 1)")],
-        see_also: &["ligus doctor"],
+        see_also: &["ligus gateway check", "ligus doctor"],
         ..D
     },
 ];
@@ -2480,8 +2602,8 @@ pub const ENV: &[(&str, &[EnvVar])] = &[
             e("LIGUS_TURN_TIMEOUT_SECS", "3600", "total backstop for one turn"),
             e("LIGUS_TURN_IDLE_TIMEOUT_SECS", "300", "how long a streaming model may stay silent"),
             e("LIGUS_AGENT_TIMEOUT_SECS", "300", "wall-clock budget of one subprocess agent turn"),
-            e("LIGUS_MODEL_GATEWAYS_FILE", "unset", "the operator's model gateways; an unusable file stops the host (exit 2)"),
-            e("LIGUS_MODEL_GATEWAYS_EXCLUSIVE", "on when gateways are listed", "0: also run turns that don't use a listed gateway"),
+            e("LIGUS_MODEL_GATEWAYS_FILE", "<data dir>/model-gateways.json", "the operator's model gateways (ligus gateway add writes the file in effect); an unusable file stops the host (exit 2)"),
+            e("LIGUS_MODEL_GATEWAYS_EXCLUSIVE", "the file's choice, else on when gateways are listed", "set, it wins over the file: 0 also runs turns that don't use a listed gateway"),
             e("LIGUS_MODEL_GATEWAY_ATTRIBUTION_KEY_FILE", "generated in the data dir", "attribution key file (32+ bytes, the same on every host of a workspace)"),
             e("LIGUS_MODEL_PRICES", "unset", "prefix=in/out,… USD per million tokens, for spend budgets"),
             e("LIGUS_MCP_MAX_SPEND_USD", "unset", "spend per turn"),
@@ -2679,6 +2801,60 @@ Keep it running: deploy/local/ligus-local start --systemd (Linux, a user unit) o
 --launchd (macOS, a LaunchAgent that starts at login); `stop` with the same flag
 removes it. Listen on loopback, a LAN or a Tailscale address; 0.0.0.0 is refused.
 On Kubernetes the admission is a mounted Secret (LIGUS_ADMISSION_FILE): ligus help kubernetes.
+
+A local model server or gateway for this box's agents (ligus help gateways):
+  ligus gateway add home-gw --url https://gw.tailnet.ts.net/v1 --api openai \\
+    --auth bearer-file ~/.config/ligus-gateways/home-gw.key
+  ligus gateway check home-gw --model qwen3-coder
+Upgrade, restart and verify in one step, idempotent (it also reports leftover
+hive-era units, binaries and data dirs, with the commands to remove them):
+  $L upgrade --role serve --data-dir ~/.ligus-serve --json
+",
+    },
+    Topic {
+        name: "gateways",
+        aliases: &["model-gateways", "local-models", "gateway"],
+        summary: "send a box's agent model traffic through a gateway or a local model server",
+        text: "\
+A model gateway is an endpoint speaking the OpenAI chat-completions or Anthropic
+Messages wire: LiteLLM, a llama.cpp, vLLM or Ollama server (behind a proxy, or
+direct), a hosted gateway. A box (ligus serve) or worker lists the gateways its
+agents may use; the desktop then offers them by name on a workspace runtime, for
+agents bound to that host. Credentials stay files on the box: the host adds them
+to each request and agents never see them.
+
+Run these with the box's data dir: its env file loaded
+(set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a), or LIGUS_DATA_DIR.
+  1. The credential, if the gateway needs one, in a directory of its own:
+       mkdir -p ~/.config/ligus-gateways
+       (umask 077; cat > ~/.config/ligus-gateways/home-gw.key)    # paste, Ctrl-D
+  2. ligus gateway add home-gw --url https://gw.tailnet.ts.net/v1 --api openai \\
+       --auth bearer-file ~/.config/ligus-gateways/home-gw.key
+     It writes model-gateways.json in the data dir (LIGUS_MODEL_GATEWAYS_FILE, when
+     set, names the file instead) and prints what changed.
+  3. ligus gateway check home-gw --model qwen3-coder   # one real request, both paths
+  4. A running serve or worker applies the change within a few seconds. Restart it
+     so the desktop lists the gateway: add prints the command for this data dir
+     (systemctl --user restart ligus-serve, launchctl kickstart -k
+     gui/$(id -u)/ai.ligus.serve, or brew services restart ligus).
+  5. HUMAN (an Admin, on the desktop): Settings > Models & runtimes, a workspace
+     runtime on the gateway, and bind the agent to this box.
+
+Exclusive. Once a gateway is listed the box is exclusive by default: every model
+turn on it goes through a listed gateway and any other turn is refused, so model
+traffic can't leave by another path. add says so in one line. To also run agents
+that don't use a gateway (a personal box with a hosted key next to a local model):
+  ligus gateway add home-gw ... --not-exclusive
+The choice is written into the file; LIGUS_MODEL_GATEWAYS_EXCLUSIVE in serve's
+environment still wins over it (add warns when serve's env file sets it).
+
+Plain http is refused unless the operator adds --allow-plaintext: the traffic and
+any bearer key are readable on the path. Prefer https (for example tailscale serve
+in front of the model server).
+
+  ligus gateway list                # the file, the mode, each gateway
+  ligus gateway remove home-gw      # idempotent
+Docs: Model gateways and Offline setup with local models (docs site).
 ",
     },
     Topic {
@@ -3004,8 +3180,15 @@ serve or worker exits 3
   LIGUS_REQUIRE_SANDBOX=1 and no agent sandbox: ligus doctor says why.
 
 Every command exits 2 at start with a model gateway error
-  The file LIGUS_MODEL_GATEWAYS_FILE names can't be used: fix it or unset the
-  variable. ligus gateway-check tests the gateways.
+  The gateways file (LIGUS_MODEL_GATEWAYS_FILE, else model-gateways.json in the
+  data dir) can't be used: ligus gateway list shows why, ligus gateway remove NAME
+  takes a bad entry off. ligus gateway check tests the gateways.
+
+Agent turns on a box are refused: \"only through its operator's model gateways\"
+  The box is exclusive (ligus gateway list says \"gateways only\"): point the
+  runtime at one of its gateways, or allow both: ligus gateway add NAME --url URL
+  --api API --not-exclusive (LIGUS_MODEL_GATEWAYS_EXCLUSIVE in serve's env file
+  wins over that: remove the line).
 
 A worker doesn't answer: ligus agents (bound to this host?), ligus queue (host
 online?), ligus runtimes (secretRef ✓?), and its log for \"sync:\" lines.
@@ -3532,6 +3715,7 @@ mod tests {
             ("repo", src("scratch_cmd.rs"), "pub fn cmd_repo(", "\n}\n", &[]),
             ("forge", src("forge_cmd.rs"), "pub fn cmd(", "\n}\n", &["oauth", "gh", "none"]),
             ("setup", src("setup_cmd.rs"), "pub fn cmd(", "\n}\n", &["-", "--json", "--dry-run"]),
+            ("gateway", src("gateway_cmd.rs"), "pub fn cmd(", "\n}\n", &[]),
         ];
         let mut seen_subs = BTreeSet::new();
         for (cmd, text, start, end, not_subs) in groups {
@@ -3567,7 +3751,7 @@ mod tests {
             .flat_map(|fl| fl.flag.split([' ', ',']).filter(|w| w.starts_with("--")).map(|w| w.to_string()).collect::<Vec<_>>())
             .collect();
         let mut missing = Vec::new();
-        for file in ["main.rs", "admit.rs", "repos_cmd.rs", "scratch_cmd.rs", "hook_cmd.rs"] {
+        for file in ["main.rs", "admit.rs", "repos_cmd.rs", "scratch_cmd.rs", "hook_cmd.rs", "gateway_cmd.rs"] {
             let text = src(file);
             for pat in ["flag_val(\"", "has(\"", "flag(\""] {
                 for part in text.split(pat).skip(1) {

@@ -288,13 +288,22 @@ See [Headless agents](../concepts/headless-agents.md).
 ## Optional: a model gateway on the server
 
 To run agents on a gateway the server reaches (LiteLLM, llama.cpp's
-server), list it in a JSON file and set `LIGUS_MODEL_GATEWAYS_FILE` in the
-env file. An invalid file stops the server, and once a gateway is listed
-the server runs only turns that use one (`LIGUS_MODEL_GATEWAYS_EXCLUSIVE=0`
-turns that off). Use `https://`; a plain `http://` gateway needs
-`"allowPlaintext": true`, which is your choice as the operator. Check it
-with `ligus gateway-check`, then on the laptop pick the gateway on a runtime
-and bind the agent to the server. See
+server), list it on the server with its env file loaded:
+
+```sh
+set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
+ligus gateway add home-gw --url https://gw.tailnet.ts.net/v1 --api openai
+ligus gateway check home-gw --model qwen3-coder
+```
+
+Once a gateway is listed the server runs only turns that use one, and `add`
+says so; add `--not-exclusive` to also run agents with a hosted key. Use
+`https://`; a plain `http://` gateway needs `--allow-plaintext`, which is
+your choice as the operator. A key is a file on the server
+(`--auth bearer-file PATH`), never stored anywhere else. The running server
+applies the change within a few seconds; restart it with the command `add`
+prints so the laptop lists the gateway, then on the laptop pick the
+gateway on a runtime and bind the agent to the server. See
 [Deploying with an LLM gateway](model-gateways.md#outside-kubernetes).
 
 ## Verify the whole thing
@@ -307,13 +316,23 @@ and bind the agent to the server. See
 
 ## Operating it
 
-- Upgrades: `brew upgrade ligus`, then restart the box:
-  `systemctl --user restart ligus-serve` on Linux, or `$L start --role serve
-  --data-dir ~/.ligus-serve --launchd` again on a Mac (it stops the running
-  box and starts the new binary). The unit file in `deploy/ligus-serve/` runs
-  `~/.local/bin/ligus`; with Homebrew, install the unit with `$L start
-  --systemd` instead (it runs the `ligus` on your `PATH`) or edit its
-  `ExecStart`, or the upgrade won't change what runs.
+- Upgrades: one command upgrades the CLI the way it was installed
+  (`brew upgrade ligus` for Homebrew, else the release into the binary's
+  own directory), restarts the box the way it runs (the systemd unit, the
+  LaunchAgent, Homebrew's service or the background process), checks that
+  it reports the new version and runs `verify`:
+
+  ```sh
+  $L upgrade --role serve --data-dir ~/.ligus-serve --json
+  ```
+
+  Run it again and nothing changes. It also lists anything the Hive-era
+  install left (`hive-serve` units, `ai.hive.*` LaunchAgents,
+  `~/.local/bin/hive`, `~/.hive*` data dirs, a running `hive` process) with
+  the command to remove each; it never removes them itself. The unit file in
+  `deploy/ligus-serve/` runs `~/.local/bin/ligus`; with Homebrew, install
+  the unit with `$L start --systemd` instead (it runs the `ligus` on your
+  `PATH`), or the upgrade won't change what runs.
 - Back up `~/.ligus-serve` (keys, events, phone pairings). See
   [Operations](../ops/operations.md).
 - Lost phone: `ligus phones revoke <name>`. Lost server: an Admin removes its

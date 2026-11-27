@@ -130,6 +130,33 @@ secret), relay remote access (`ligus remote enable`), binding repos agents
 may touch (`ligus bind-repo`), and approving the box on the desktop.
 Reference: `deploy/ligus-serve/README.md`.
 
+## Model gateways and local models
+
+To send this box's agent model traffic through a gateway or a local model
+server, with the env file loaded (`ligus help gateways`):
+
+```sh
+ligus gateway add NAME --url https://HOST/v1 --api openai [--auth bearer-file PATH] --json
+ligus gateway check NAME --model MODEL --json
+```
+
+A key is a file the human creates (owner-only, in a directory of its own);
+never put a key on the command line. Two choices are the **human's**: plain
+`http://` (`--allow-plaintext`) and `--not-exclusive` (the first gateway
+makes the box send model traffic only through its gateways and refuse
+other agent turns; `add` says so). Run the restart command `add` prints so
+the desktop lists the gateway.
+
+## Upgrade
+
+```sh
+$L upgrade --role serve --data-dir ~/.ligus-serve --json   # brew or the release, restart, verify; idempotent
+```
+
+A `legacy.hive` warn lists Hive-era units, binaries and data dirs with the
+commands to remove them. Never run those yourself: show them to the human
+(a data dir may hold an identity they still want).
+
 ## Stop and remove
 
 ```sh

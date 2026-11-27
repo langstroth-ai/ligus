@@ -38,7 +38,7 @@ pub fn check_agent_id() -> Uuid {
 /// before 0.2, for one release).
 pub async fn run(workspace: Option<Uuid>, only: Option<String>, model: String, legacy_exit_codes: bool) -> Result<i32> {
     if model_gateway::host().is_empty() {
-        return Err(anyhow!("this host lists no model gateways (set LIGUS_MODEL_GATEWAYS_FILE)"));
+        return Err(anyhow!("this host lists no model gateways (ligus gateway add NAME --url URL --api openai|anthropic)"));
     }
     let checks = checks(workspace, only, model, true).await;
     let failed = checks.iter().any(|c| c.status == Status::Fail);
@@ -62,10 +62,10 @@ pub async fn checks(workspace: Option<Uuid>, only: Option<String>, model: String
     let gws = model_gateway::host();
     let mut out = Vec::new();
     if gws.is_empty() {
-        out.push(Check::skip("gateways", "model gateways", "this host lists none (LIGUS_MODEL_GATEWAYS_FILE)"));
+        out.push(Check::skip("gateways", "model gateways", "this host lists none (ligus gateway list)"));
         return out;
     }
-    const FIX: &str = "check the gateway's entry in LIGUS_MODEL_GATEWAYS_FILE and its credential file; ligus gateway-check prints the probe's findings";
+    const FIX: &str = "check the gateway's entry (ligus gateway list) and its credential file; ligus gateway check prints the probe's findings";
     for g in gws.all().iter().filter(|g| only.as_deref().is_none_or(|n| n == g.name())) {
         say(format!("gateway {} ({} wire, {})", g.name(), g.api().as_str(), if gws.exclusive() { "exclusive host" } else { "non-exclusive host" }));
         let sel = GatewaySelection::named(g.name()).with_ids(workspace, Some(check_agent_id()));
