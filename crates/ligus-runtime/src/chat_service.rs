@@ -52,7 +52,7 @@ mod repos;
 pub use repos::canonical_from_input;
 pub use keys::RotationIssued;
 pub use phone_sign::{PhoneDraft, BAD_CONSENT, STALE_DRAFT};
-pub use presence::{summarize_with, MatchContext, PresenceDraft, PresenceProvider, PresenceRequest};
+pub use presence::{summarize, summarize_with, MatchContext, PresenceDraft, PresenceProvider, PresenceRequest};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChatError {

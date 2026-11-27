@@ -1784,7 +1784,9 @@ export interface ApprovalDto {
   workspaceId: string;
   workspaceName: string;
   rid: string;
-  kind: "box" | "computer" | "phone";
+  /// `presence`: a passkey hand-off (another device of yours sent one
+  /// drafted change for your passkey).
+  kind: "box" | "computer" | "phone" | "presence";
   label: string;
   /// The 80-bit fingerprint (Details only).
   fingerprint: string;
@@ -1799,13 +1801,18 @@ export interface ApprovalDto {
   phase: ApprovalPhase | null;
   /// The label looks like an existing device or member name.
   nameClash?: boolean;
+  /// A hand-off: what the change does (rendered from the draft) and the code
+  /// the terminal printed.
+  summary?: string | null;
+  code?: string | null;
 }
 
 /// A device-local Inbox fact kept for a day.
 export interface ApprovalFactDto {
   /// The request's rid (what dismisses it).
   key: string;
-  kind: "mismatch" | "didntFinish";
+  /// `notMe`: you said Not me to a hand-off (the Inbox offers My devices).
+  kind: "mismatch" | "didntFinish" | "notMe";
   workspaceId: string;
   label: string;
   at: number;
@@ -1836,7 +1843,7 @@ export type ApprovalPhase =
 export interface ApprovalSessionDto {
   rid: string;
   workspaceId: string;
-  kind: "box" | "computer" | "phone";
+  kind: "box" | "computer" | "phone" | "presence";
   label: string;
   fingerprint: string;
   relay: string;
@@ -1849,6 +1856,9 @@ export interface ApprovalSessionDto {
   /// When the code appeared (the 3-second hold starts here).
   codeAt: number | null;
   message: string | null;
+  /// A hand-off: what the change does, from the draft, and its event kind.
+  summary?: string | null;
+  changeKind?: string | null;
 }
 
 /// A workspace's approval address (`ligusaddr1:`): not a secret.

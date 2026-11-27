@@ -25,6 +25,10 @@
 //! * [`list_live`] and [`ApproverSession`]: the approver's side, with the
 //!   device-local [`SeenSet`].
 //!
+//! * [`PresenceRequester`] and [`PresenceApproval`]: the passkey hand-off
+//!   (0.5), where a terminal asks its person's desktop to confirm one
+//!   drafted event with the passkey.
+//!
 //! Pure functions (the code, the keys, the preimages) are in
 //! [`ligus_core::match_code`].
 
@@ -34,7 +38,10 @@ mod client;
 mod envelope;
 mod log_check;
 mod notices;
+mod presence_ask;
 mod requester;
+#[cfg(test)]
+mod presence_tests;
 #[cfg(test)]
 mod tests;
 
@@ -50,6 +57,10 @@ pub use envelope::{
 };
 pub use notices::{Notice, NoticeKind, Notices, NOTICES_FILE, NOTICE_TTL_MS};
 pub use log_check::{retry_log_check, LogApproval, LogApprovalCheck, LogSubject, LogVerdict, LOG_CHECK_RETRY_MS};
+pub use presence_ask::{
+    check_presence_ask, presence_code, AskRate, PresenceAsk, PresenceApproval, PresenceOutcome, PresencePending, PresencePendingStore, PresenceRefusal,
+    PresenceRequester, PresenceView, ASK_RATE_PER_HOUR, ASSERTION_PREFIX, MAX_DRAFT_BYTES, PRESENCE_PENDING_FILE, PRESENCE_PREFIX,
+};
 pub use requester::{
     CheckedGrant, ClaimedApprover, DeadLog, GrantError, GrantTarget, PendingEntry, PendingStore, Requester, RequesterError, RequesterEvent,
     RequestSpec, DEAD_FILE, DEAD_LIMIT, DEAD_WINDOW_MS, PENDING_FILE,

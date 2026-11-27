@@ -10,6 +10,7 @@ use super::{b64, hex_fixed};
 use crate::box_admission::JoinRequest;
 use crate::computer_link::LinkRequest;
 use crate::phone_enroll::PhoneCode;
+use super::presence_ask::PresenceAsk;
 
 /// How far ahead of this device's clock a request may be dated.
 pub const CLOCK_SKEW_MS: i64 = 5 * 60 * 1000;
@@ -405,6 +406,9 @@ pub enum RequestSubject {
     Box(JoinRequest),
     Computer(LinkRequest),
     Phone(PhoneCode),
+    /// A passkey hand-off: one drafted event from one of the person's own
+    /// devices (`liguspresence1:`).
+    Presence(Box<PresenceAsk>),
 }
 
 impl RequestSubject {
@@ -414,6 +418,7 @@ impl RequestSubject {
             Self::Box(r) => &r.label,
             Self::Computer(r) => &r.label,
             Self::Phone(c) => &c.label,
+            Self::Presence(a) => &a.label,
         };
         hint(l)
     }
@@ -424,6 +429,7 @@ impl RequestSubject {
             Self::Box(r) => r.fingerprint(),
             Self::Computer(r) => r.fingerprint(),
             Self::Phone(c) => c.fingerprint(),
+            Self::Presence(a) => crate::device_enroll::fingerprint(&a.device_key),
         }
     }
 
@@ -433,6 +439,7 @@ impl RequestSubject {
             Self::Box(r) => r.device_id,
             Self::Computer(r) => r.device_id,
             Self::Phone(c) => c.device_id,
+            Self::Presence(a) => a.device_id(),
         }
     }
 
@@ -442,6 +449,7 @@ impl RequestSubject {
             Self::Box(r) => &r.device_public_key,
             Self::Computer(r) => &r.device_public_key,
             Self::Phone(c) => &c.public_key,
+            Self::Presence(a) => &a.device_key,
         }
     }
 
@@ -457,7 +465,7 @@ impl RequestSubject {
         match self {
             Self::Box(r) => Some(&r.ka_public),
             Self::Computer(r) => Some(&r.ka_public),
-            Self::Phone(_) => None,
+            Self::Phone(_) | Self::Presence(_) => None,
         }
     }
 
@@ -467,6 +475,7 @@ impl RequestSubject {
             MatchKind::Box => crate::box_admission::JOIN_PREFIX,
             MatchKind::Computer => crate::computer_link::REQUEST_PREFIX,
             MatchKind::Phone => crate::phone_enroll::CODE_PREFIX,
+            MatchKind::Presence => super::presence_ask::PRESENCE_PREFIX,
         };
         if !code.trim_start().starts_with(prefix) {
             return Err(MsgError::KindMismatch);
@@ -479,6 +488,7 @@ impl RequestSubject {
                 Self::Computer(r)
             }
             MatchKind::Phone => Self::Phone(PhoneCode::decode(code).map_err(|e| MsgError::BadCode(e.to_string()))?),
+            MatchKind::Presence => Self::Presence(Box::new(PresenceAsk::decode(code)?)),
         })
     }
 }
@@ -533,6 +543,13 @@ impl VerifiedRequest {
         }
         if subject.ka().is_some_and(|ka| ka != requester_ka) {
             return Err(MsgError::WrongRequesterKa);
+        }
+        // A hand-off commits to its draft's passkey challenge: the bytes the
+        // approver signs are the ones the request names.
+        if let RequestSubject::Presence(a) = &subject {
+            if a.challenge() != commit {
+                return Err(MsgError::BadCode("the request names another draft than it carries".into()));
+            }
         }
         Ok(Self {
             rid: *rid,
@@ -601,6 +618,18 @@ pub(crate) fn verify_result(v: &Verified, rid: &[u8; 16], alg: SigAlg, approver_
     if v.alg != alg || v.key != approver_sig_key {
         return Err(MsgError::WrongKey);
     }
+    let b: ResultBody = v.body_as()?;
+    check_rid(&b.rid, rid)?;
+    if b.grant.is_some() != b.grant_digest.is_some() || b.grant_digest.as_deref().is_some_and(|d| hex_fixed::<32>(d).is_none()) {
+        return Err(MsgError::Malformed);
+    }
+    Ok(b)
+}
+
+/// A result signed by any key (a passkey hand-off's requester learns who
+/// answered from the signature, then checks that device on its own log).
+pub(crate) fn verify_result_any(v: &Verified, rid: &[u8; 16]) -> Result<ResultBody, MsgError> {
+    v.expect(MsgType::Result)?;
     let b: ResultBody = v.body_as()?;
     check_rid(&b.rid, rid)?;
     if b.grant.is_some() != b.grant_digest.is_some() || b.grant_digest.as_deref().is_some_and(|d| hex_fixed::<32>(d).is_none()) {
