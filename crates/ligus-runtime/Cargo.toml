@@ -12,6 +12,7 @@ ligus-forge.workspace = true
 async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true
+toml = "1.2"
 thiserror.workspace = true
 anyhow.workspace = true
 uuid.workspace = true

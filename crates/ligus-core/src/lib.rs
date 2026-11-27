@@ -71,7 +71,7 @@ pub use agent::{AgentLimits, AgentPolicy, WorkspaceAgent};
 pub use authorization::{evaluate as authorize, AuthzDecision, AuthzReason};
 pub use channel::{room_workspace_id, workspace_config_session_id, Channel};
 pub use device_link::DeviceLinks;
-pub use workspace_host::{HostKind, HostModelGateway, WorkspaceHost};
+pub use workspace_host::{HostKind, HostModelGateway, HostOffer, HostStatus, OfferKind, OfferStatus, WorkspaceHost, HOST_ONLINE_WINDOW_SECS};
 pub use workspace_runtime::{WorkspaceCredential, WorkspaceRuntime, LEGACY_INLINE_LABEL, LEGACY_INLINE_WARNING, NO_WORKSPACE_KEYS};
 pub use chat::{
     ChatMessage, ChatToolCall, ChatToolResult, MessageReaction, MessageRole, TranscriptEventKind,

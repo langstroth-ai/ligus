@@ -1002,7 +1002,8 @@ pub const COMMANDS: &[Cmd] = &[
         purpose: "Define a workspace-owned runtime. <provider> is anthropic, openai, openrouter, ollama, custom (any \
                   OpenAI-compatible server), claude-code, codex, antigravity (agy) or copilot. Credential: \
                   --secret-ref NAME: each host that runs it sets LIGUS_WS_SECRET_<NAME> (or a file in \
-                  LIGUS_WS_SECRET_DIR); without it the runtime is keyless. Keys are never stored in the workspace: \
+                  LIGUS_WS_SECRET_DIR) and declares NAME for the workspace in its host.toml (ligus help \
+                  hosts); without it the runtime is keyless. Keys are never stored in the workspace: \
                   --secret is a usage error. Share with `ligus sync`.",
         synopsis: &["ligus add-runtime <id> <name> <provider> <model> [--endpoint URL] [--secret-ref NAME] [--dry-run]"],
         flags: &[
@@ -1088,8 +1089,26 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "hosts",
         group: G_AGENTS,
-        summary: "list workspace hosts (devices and workers)",
-        purpose: "List the workspace's hosts: id, kind, label, and which one is this box.",
+        summary: "list workspace hosts, what they offer and how ready they are",
+        purpose: "List the workspace's hosts: id, kind, label, online or offline, and which one is this box. \
+                  The second line says what each host offers and how ready it is (signed in, its build): \
+                  `claude-code ready · codex not signed in · Ligus 0.5.0`. Offers are names and kinds from \
+                  the host's own configuration: the coding CLIs it has, its model gateways, and what its \
+                  host.toml declares; readiness and model lists come from the host's signed presence beat, \
+                  never the shared log. Only a record its own device signed counts.\n\n\
+                  host.toml (in the data dir, never synced):\n\
+                  \x20 list_tools = false              # a person's computer: don't list its tools\n\
+                  \x20 [[local]]                       # a local model server; the URL stays here\n\
+                  \x20 name = \"ollama\"\n\
+                  \x20 url = \"http://127.0.0.1:11434\"\n\
+                  \x20 [workspaces.\"<workspace-id>\"]\n\
+                  \x20 secrets = [\"team-claude\"]      # the only secret names this host resolves there\n\
+                  \x20 [[workspaces.\"<workspace-id>\".providers]]\n\
+                  \x20 name = \"team-claude\"\n\
+                  \x20 harness = \"anthropic\"          # anthropic | openAI | openRouter\n\
+                  \x20 secret = \"team-claude\"\n\n\
+                  A box or worker with no host.toml declares the LIGUS_WS_SECRET_* names it already has \
+                  for its workspace on first start. Workers and boxes always list their tools.",
         synopsis: &["ligus hosts [--json]"],
         flags: &[JSON],
         conn: true,
@@ -2857,7 +2876,8 @@ by a host: its owner's device, or a worker or serve box.
      verify: ligus queue                  # empty once answered ; ligus tail <chat-id>
 
 Credentials: --secret-ref NAME keeps the key off the shared log; every host running
-the agent sets LIGUS_WS_SECRET_<NAME> (or a file in LIGUS_WS_SECRET_DIR). Keys are never stored
+the agent sets LIGUS_WS_SECRET_<NAME> (or a file in LIGUS_WS_SECRET_DIR) and declares
+NAME for the workspace in its host.toml (ligus help hosts). Keys are never stored
 in the workspace (--secret was removed); ligus doctor warns about a key an older
 version stored there (runtimes.inline-key): rotate it and use --secret-ref.
 

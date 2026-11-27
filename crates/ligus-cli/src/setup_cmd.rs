@@ -319,7 +319,7 @@ impl SetupOps for CliOps {
             .into_iter()
             .find(|r| r.id == runtime_id)
             .ok_or_else(|| OpsError::Failed(format!("no runtime '{runtime_id}'")))?;
-        let rt = crate::workspace_runtime_resolved(&wr);
+        let rt = crate::workspace_runtime_resolved(self.ws, &wr);
         service::block_on(async move { service::ping_with(&rt, None, local_servers).await }).ok_or_else(|| OpsError::Failed("couldn't run the test turn".into()))
     }
 

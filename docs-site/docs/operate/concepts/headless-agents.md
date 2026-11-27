@@ -250,6 +250,12 @@ LIGUS_WS_SECRET_acme=sk-…  ligus agent bot --runtime ws-claude
 
 - `--secret-ref <name>` keeps the key **off** the synced log — the worker holds
   it in env `LIGUS_WS_SECRET_<name>`. `ligus runtimes` shows `✓` when it's present.
+- The worker resolves only secret names its `host.toml` declares for the
+  workspace ([What a host offers](../../ligus/reference/cli.md#what-a-host-offers)).
+  A worker with no `host.toml` declares the names already in its
+  environment on first start; add later ones to `[workspaces."<id>"]
+  secrets`. A log string can't point a runtime at another workspace's
+  secret on a shared box.
 - Keys are never stored in the workspace: there is no inline option.
 
 A runtime whose key an older version stored in the workspace (the removed

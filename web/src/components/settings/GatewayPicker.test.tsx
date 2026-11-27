@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import type { WorkspaceHostDto } from "@/bindings/WorkspaceHostDto";
-import { GatewayPicker, gatewayOffers, hostGatewaysLabel } from "./GatewayPicker";
+import { GatewayPicker, gatewayModels, gatewayOffers, hostGatewaysLabel } from "./GatewayPicker";
 
 const host = (id: string, label: string, gws: [string, string][]): WorkspaceHostDto => ({
   id,
@@ -13,6 +13,9 @@ const host = (id: string, label: string, gws: [string, string][]): WorkspaceHost
   lastSeen: "",
   modelGateways: gws.map(([name, api]) => ({ name, api })),
   ownerName: "",
+  offers: [],
+  readiness: "",
+  build: "",
   mine: false,
 });
 
@@ -63,5 +66,21 @@ describe("GatewayPicker", () => {
     expect(screen.getByTestId("gateway-note").textContent).toContain("credentials stay on those hosts");
     // No URL is ever shown.
     expect(document.body.textContent).not.toMatch(/https?:\/\//);
+  });
+});
+
+describe("gatewayModels", () => {
+  it("collects the models hosts report for a gateway, once each", () => {
+    const withModels = (id: string, models: string[]): WorkspaceHostDto => ({
+      ...host(id, id, [["litellm", "openai"]]),
+      offers: [
+        { name: "litellm", kind: "gateway", harness: "", wire: "openai", ready: true, why: "", models, complete: false },
+        { name: "codex", kind: "cli", harness: "codex", wire: "", ready: true, why: "", models: ["gpt-5.3-codex"], complete: false },
+      ],
+    });
+    const hs = [withModels("a", ["qwen3", "llama3:8b"]), withModels("b", ["llama3:8b", "gpt-oss"])];
+    expect(gatewayModels(hs, "litellm")).toEqual(["qwen3", "llama3:8b", "gpt-oss"]);
+    expect(gatewayModels(hs, "codex")).toEqual([]);
+    expect(gatewayModels(hs, "none")).toEqual([]);
   });
 });

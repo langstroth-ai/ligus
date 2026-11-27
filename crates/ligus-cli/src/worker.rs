@@ -317,6 +317,7 @@ fn warn_legacy_inline_once(runtime_id: &str) {
 }
 
 pub fn agent_workspace_runtime(
+    workspace_id: Uuid,
     runtimes: &[WorkspaceRuntime],
     agent: &WorkspaceAgent,
 ) -> Result<(ResolvedRuntime, String)> {
@@ -334,10 +335,20 @@ pub fn agent_workspace_runtime(
     if wr.credential.is_legacy_inline() {
         warn_legacy_inline_once(&wr.id);
     }
-    let api_key = if gateway.is_some() { None } else { resolve_workspace_credential(&wr.credential) };
+    let api_key = if gateway.is_some() { None } else { resolve_workspace_credential(&wr.credential, workspace_id) };
     if api_key.is_none() && gateway.is_none() && !keyless_ok(wr) {
         if wr.credential.is_legacy_inline() {
             bail!("workspace runtime '{}' has no key on this box. {}", wr.name, ligus_core::LEGACY_INLINE_WARNING);
+        }
+        // A host resolves only the secret names it declared for this
+        // workspace (host.toml), never one a log string picks.
+        if let Some(name) = ligus_runtime::undeclared_secret(&wr.credential, workspace_id) {
+            bail!(
+                "workspace runtime '{}' uses secret '{name}', which this box hasn't declared for this workspace; \
+                 add it to {}: [workspaces.\"{workspace_id}\"] secrets = [\"{name}\"]",
+                wr.name,
+                ligus_runtime::host_config::HOST_CONFIG_FILE
+            );
         }
         bail!("workspace runtime '{}' has no secret on this box (provision LIGUS_WS_SECRET_…)", wr.name);
     }
@@ -630,7 +641,7 @@ async fn run_turn(
             return Err(anyhow!("refused: this host doesn't have runtime '{}'", agent.runtime_id));
         }
     }
-    let (mut rt, rt_label) = agent_workspace_runtime(runtimes, &agent)?;
+    let (mut rt, rt_label) = agent_workspace_runtime(s.workspace_id, runtimes, &agent)?;
     // The gateway's attribution (when its operator turned it on) hashes these.
     if let Some(g) = rt.gateway.as_mut() {
         g.workspace_id = Some(s.workspace_id);
@@ -912,14 +923,42 @@ impl TurnHost for WorkerHost<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The workspace these tests resolve runtimes in, with this host's
+    /// `host.toml` declaring the secret names the tests provision (H7: a
+    /// host resolves only declared names).
+    fn test_ws() -> Uuid {
+        let ws = Uuid::from_u128(0x7e57);
+        let mut cfg = ligus_runtime::host_config::HostConfig::default();
+        let names = ["worker_hosted_tools_test", "worker_builtin_tools_test"];
+        cfg.workspaces.insert(
+            ws.to_string(),
+            ligus_runtime::host_config::WorkspaceDecl { secrets: names.iter().map(|n| n.to_string()).collect(), providers: vec![] },
+        );
+        ligus_runtime::host_config::install(cfg);
+        ws
+    }
+
+    /// An agent naming a secret this host never declared for its workspace
+    /// doesn't run, even with the value provisioned (H7).
+    #[test]
+    fn an_undeclared_secret_is_never_resolved() {
+        let mut wr = WorkspaceRuntime::new("oa", "OpenAI", ModelProviderKind::OpenAI, "gpt-4o");
+        std::env::set_var("LIGUS_WS_SECRET_worker_undeclared_test", "sk-other-workspace");
+        wr.credential = WorkspaceCredential::SecretRef { secret_ref: "worker_undeclared_test".into() };
+        let err = agent_workspace_runtime(test_ws(), &[wr], &agent("oa")).unwrap_err().to_string();
+        assert!(err.contains("hasn't declared"), "{err}");
+        assert!(err.contains("host.toml"), "{err}");
+        assert!(!err.contains("sk-other-workspace"));
+    }
     use ligus_core::{WorkspaceCredential, WorkspaceRuntime};
 
     fn rt_with(provider: ModelProviderKind, args: &[&str]) -> ResolvedRuntime {
         let wr = WorkspaceRuntime::new("gate", "Gate", provider, "m");
-        let mut rt = agent_workspace_runtime(&[wr], &agent("gate")).map(|r| r.0).unwrap_or_else(|_| {
+        let mut rt = agent_workspace_runtime(test_ws(), &[wr], &agent("gate")).map(|r| r.0).unwrap_or_else(|_| {
             // Runtimes that need a secret on this box: shape one by hand.
             let wr = WorkspaceRuntime::new("gate", "Gate", ModelProviderKind::ClaudeCode, "m");
-            let mut rt = agent_workspace_runtime(&[wr], &agent("gate")).unwrap().0;
+            let mut rt = agent_workspace_runtime(test_ws(), &[wr], &agent("gate")).unwrap().0;
             rt.provider = provider;
             rt
         });
@@ -985,7 +1024,7 @@ mod tests {
     fn keyless_local_gateway_resolves_with_tools_on() {
         let mut wr = WorkspaceRuntime::new("gw", "Lab gateway", ModelProviderKind::Custom, "gpt-oss:20b");
         wr.endpoint = "http://100.101.102.103:8080/v1/chat/completions".into();
-        let (rt, label) = agent_workspace_runtime(&[wr], &agent("gw")).unwrap();
+        let (rt, label) = agent_workspace_runtime(test_ws(), &[wr], &agent("gw")).unwrap();
         assert_eq!(label, "gw");
         assert!(rt.api_key.is_none());
         assert!(rt.runs_agent_tools(), "a tailnet llama.cpp gateway runs the tool loop");
@@ -1018,7 +1057,7 @@ credential = { kind = "none" }
         assert_eq!(rts.len(), 2);
         assert_eq!(runtime_for(&rts, &agent("lab")).unwrap().model, "gpt-oss:20b");
         assert_eq!(runtime_for(&rts, &agent("desktop-local-id")).unwrap().model, "gemma4:12b");
-        let (rt, _) = agent_workspace_runtime(&rts, &agent("desktop-local-id")).unwrap();
+        let (rt, _) = agent_workspace_runtime(test_ws(), &rts, &agent("desktop-local-id")).unwrap();
         assert!(rt.runs_agent_tools());
         // It isn't silent: the chat is told which model stands in, and why.
         assert_eq!(
@@ -1041,7 +1080,7 @@ credential = { kind = "none" }
     fn subscription_clis_are_keyless_and_read_only_by_default() {
         for p in [ModelProviderKind::Antigravity, ModelProviderKind::Copilot, ModelProviderKind::ClaudeCode] {
             let wr = WorkspaceRuntime::new("cli", "CLI", p, "");
-            let (rt, _) = agent_workspace_runtime(&[wr], &agent("cli")).unwrap();
+            let (rt, _) = agent_workspace_runtime(test_ws(), &[wr], &agent("cli")).unwrap();
             assert!(rt.api_key.is_none());
             assert!(!rt.runs_agent_tools(), "CLI agents bring their own tools");
         }
@@ -1057,7 +1096,7 @@ credential = { kind = "none" }
         let mut wr = WorkspaceRuntime::new("oa", "OpenAI", ModelProviderKind::OpenAI, "gpt-4o");
         wr.endpoint = "https://api.openai.com/v1/chat/completions".into();
         wr.credential = WorkspaceCredential::SecretRef { secret_ref: "definitely_unset_ref_xyz".into() };
-        assert!(agent_workspace_runtime(&[wr], &agent("oa")).is_err());
+        assert!(agent_workspace_runtime(test_ws(), &[wr], &agent("oa")).is_err());
     }
 
     #[test]
@@ -1066,13 +1105,13 @@ credential = { kind = "none" }
         let mut wr = WorkspaceRuntime::new("oa", "OpenAI", ModelProviderKind::OpenAI, "gpt-4o");
         wr.endpoint = "https://api.openai.com/v1/chat/completions".into();
         wr.credential = WorkspaceCredential::Inline {};
-        let err = agent_workspace_runtime(&[wr], &agent("oa")).unwrap_err().to_string();
+        let err = agent_workspace_runtime(test_ws(), &[wr], &agent("oa")).unwrap_err().to_string();
         assert!(err.contains("stored in the workspace by an older version"), "{err}");
         assert!(err.contains("--secret-ref"), "{err}");
         // A keyless-capable runtime still runs, with no key.
         let mut wr = WorkspaceRuntime::new("ol", "Ollama", ModelProviderKind::Ollama, "llama3.2");
         wr.credential = WorkspaceCredential::Inline {};
-        let (rt, _) = agent_workspace_runtime(&[wr], &agent("ol")).unwrap();
+        let (rt, _) = agent_workspace_runtime(test_ws(), &[wr], &agent("ol")).unwrap();
         assert!(rt.api_key.is_none());
     }
 
@@ -1081,7 +1120,7 @@ credential = { kind = "none" }
         let mut wr = WorkspaceRuntime::new("oa", "OpenAI", ModelProviderKind::OpenAI, "gpt-4o");
         std::env::set_var("LIGUS_WS_SECRET_worker_hosted_tools_test", "sk-test");
         wr.credential = WorkspaceCredential::SecretRef { secret_ref: "worker_hosted_tools_test".into() };
-        let (rt, _) = agent_workspace_runtime(&[wr], &agent("oa")).unwrap();
+        let (rt, _) = agent_workspace_runtime(test_ws(), &[wr], &agent("oa")).unwrap();
         assert!(!rt.runs_agent_tools());
     }
 
@@ -1091,7 +1130,7 @@ credential = { kind = "none" }
         wr.endpoint = "https://models.example.com/v1/chat/completions".into();
         std::env::set_var("LIGUS_WS_SECRET_worker_builtin_tools_test", "k");
         wr.credential = WorkspaceCredential::SecretRef { secret_ref: "worker_builtin_tools_test".into() };
-        let (rt, _) = agent_workspace_runtime(&[wr], &agent("gw")).unwrap();
+        let (rt, _) = agent_workspace_runtime(test_ws(), &[wr], &agent("gw")).unwrap();
         let mut settings = ToolSettings::default();
         assert!(!reply::wants_builtin_tools(&rt, &settings), "public endpoint: no file tools by default");
         settings.allow_remote_file_tools = true;

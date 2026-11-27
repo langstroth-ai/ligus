@@ -1248,13 +1248,7 @@ impl ChatSession {
                 self.workspace_hosts = hosts.clone();
             }
             // Per-item host delta — upsert / remove by id.
-            SessionEvent::WorkspaceHostUpserted { host } => {
-                if let Some(slot) = self.workspace_hosts.iter_mut().find(|h| h.id == host.id) {
-                    *slot = host.clone();
-                } else {
-                    self.workspace_hosts.push(host.clone());
-                }
-            }
+            SessionEvent::WorkspaceHostUpserted { host } => crate::workspace_host::upsert_sticky(&mut self.workspace_hosts, host),
             SessionEvent::WorkspaceHostRemoved { host_id } => {
                 self.workspace_hosts.retain(|h| &h.id != host_id);
             }
@@ -2403,6 +2397,9 @@ fn fold_pass(
                     crate::dispatch::fold_claim_at(&mut session, *trigger_id, claim, crate::dispatch::ClaimAt { ms: Some(ms), holder_gone });
                 } else {
                     session.apply(payload);
+                    // The reader view of hosts: each host's latest record
+                    // signed by its own device (workspace model v3, 5.1, H11).
+                    crate::workspace_host::fold_signers(&mut session.authz.host_signers, payload, env.signer_device_id);
                 }
                 // A streamed reply is posted when it completes: its
                 // placeholder was appended at the turn's start

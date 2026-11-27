@@ -4634,11 +4634,37 @@ pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<Wo
             .map(|m| shown(&m.actor.display_name))
             .unwrap_or_default()
     };
+    let here = svc.device_id().to_string();
     Ok(svc
         .list_hosts(active)
         .map_err(map_err)?
         .iter()
-        .map(|h| WorkspaceHostDto {
+        .map(|h| {
+            let online = state.host_presence.is_online(h, &now);
+            let offers = h.listed_offers();
+            // This computer's own report needs no beat round trip.
+            let status = if h.id == here { ligus_runtime::host_offers::local_status() } else { state.host_presence.status_of(&h.id) };
+            (h, online, offers, status)
+        })
+        .map(|(h, online, offers, status)| WorkspaceHostDto {
+            readiness: ligus_runtime::host_offers::readiness_line(&offers, status.as_ref(), online),
+            build: status.as_ref().map(|s| s.build.clone()).unwrap_or_default(),
+            offers: offers
+                .iter()
+                .map(|o| {
+                    let st = status.as_ref().and_then(|s| s.offer(&o.name));
+                    ligus_proto::HostOfferDto {
+                        name: o.name.clone(),
+                        kind: o.kind.as_str().to_string(),
+                        harness: o.harness.clone(),
+                        wire: o.wire.clone(),
+                        ready: st.map(|s| s.ready),
+                        why: st.map(|s| s.why.clone()).unwrap_or_default(),
+                        models: st.map(|s| s.models.clone()).unwrap_or_default(),
+                        complete: st.is_some_and(|s| s.complete),
+                    }
+                })
+                .collect(),
             owner_name: owner_name(&h.owner_actor_id),
             mine: !h.owner_actor_id.is_empty() && h.owner_actor_id == me,
             id: h.id.clone(),
@@ -4648,7 +4674,7 @@ pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<Wo
             }
             .to_string(),
             label: shown(&h.label),
-            online: state.host_presence.is_online(h, &now),
+            online,
             last_seen: rfc3339(state.host_presence.last_seen(h)),
             model_gateways: h
                 .offered_gateways()
@@ -4656,6 +4682,24 @@ pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<Wo
                 .collect(),
         })
         .collect())
+}
+
+/// Whether this computer lists its tools on its host record (Settings:
+/// "List this computer's tools"; `list_tools` in its host.toml).
+#[tauri::command]
+fn get_list_tools() -> bool {
+    ligus_runtime::host_config::host().list_tools
+}
+
+/// Turn listing this computer's tools on or off. The host record follows on
+/// the next host tick (offers emptied, never the record removed).
+#[tauri::command]
+fn set_list_tools(state: State<AppState>, list: bool) -> Result<(), String> {
+    let cfg = ligus_runtime::host_config::set_list_tools(&state.data_dir, list).map_err(map_err)?;
+    ligus_runtime::host_config::install(cfg);
+    // The next beat carries the new refusals.
+    ligus_runtime::host_offers::invalidate_status();
+    Ok(())
 }
 
 /// Bind an agent to a host (empty = owner's device); "run on worker instead".
@@ -13164,6 +13208,11 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     // Agent processes never read this device's data dir (keys, settings,
     // the database).
     ligus_runtime::executor::configure_host(&data_dir, &[], &[]);
+    // This computer's host.toml: whether it lists its tools, its local
+    // model servers (workspace model v3, 5.1).
+    if let Err(e) = ligus_runtime::host_config::init_host(&data_dir) {
+        tracing::warn!(target: "hosts", "host.toml ignored: {e}");
+    }
     // Turn scratch dirs a killed turn (or a killed app) left behind are swept
     // now and every ten minutes, once older than the longest turn.
     ligus_runtime::executor::start_turn_dir_sweeper(std::time::Duration::from_secs(
@@ -13564,7 +13613,11 @@ async fn run_device_host_loop(app: AppHandle) {
             if !matches!(svc.load_in(ws, ligus_core::workspace_config_session_id(ws)), Ok(Some(_))) {
                 continue;
             }
-            let host = ligus_core::WorkspaceHost::new(host_id.clone(), ligus_core::HostKind::Device, label.clone());
+            let mut host = ligus_core::WorkspaceHost::new(host_id.clone(), ligus_core::HostKind::Device, label.clone());
+            // What this computer offers (names and kinds only; workspace
+            // model v3, 5.1), unless Settings says "Don't list this
+            // computer's tools".
+            host.offers = Some(ligus_runtime::host_offers::offers_now(ligus_runtime::host_offers::HostRole::OwnComputer, Some(ws)));
             if let Err(e) = svc.ensure_host(ws, host) {
                 tracing::debug!(target: "hosts", "device host registration failed: {e}");
             }
@@ -13580,6 +13633,11 @@ async fn run_device_host_loop(app: AppHandle) {
             None => true,
         };
         if due {
+            // Readiness and model lists for the beat, at most every five
+            // minutes, off the async workers.
+            drop(tauri::async_runtime::spawn_blocking(move || {
+                ligus_runtime::host_offers::refresh_if_due(ligus_runtime::host_offers::HostRole::OwnComputer, Some(ws), env!("CARGO_PKG_VERSION"));
+            }));
             let coverage = crate::repos_ui::beat_coverage(&state, ws);
             let beat = state.service.lock().unwrap().signed_beat(ws, coverage);
             match ligus_runtime::host_presence::publish_beat(&relay, &room, &ring, &beat).await {
@@ -16974,6 +17032,8 @@ pub fn run() {
             remove_agent,
             list_queued_work,
             list_workspace_hosts,
+            get_list_tools,
+            set_list_tools,
             set_agent_host,
             set_agent_access,
             get_agent_usage,

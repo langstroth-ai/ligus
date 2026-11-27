@@ -967,6 +967,45 @@ pub struct WorkspaceHostDto {
     /// The host belongs to the local account.
     #[serde(default)]
     pub mine: bool,
+    /// What the host offers (names and kinds from its own configuration),
+    /// with readiness and models when its signed beat reports them.
+    #[serde(default)]
+    pub offers: Vec<HostOfferDto>,
+    /// One line for a Hosts row: "claude-code ready · codex not signed in"
+    /// (empty: nothing to say).
+    #[serde(default)]
+    pub readiness: String,
+    /// The host's Ligus build from its beat (empty: not reported).
+    #[serde(default)]
+    pub build: String,
+}
+
+/// One source a host offers. Never a URL or a secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct HostOfferDto {
+    pub name: String,
+    /// "cli" | "local" | "gateway" | "provider"
+    pub kind: String,
+    /// The harness that runs it (`claudeCode`, `ollama`); empty for a gateway.
+    #[serde(default)]
+    pub harness: String,
+    /// A gateway's wire (`openai` | `anthropic`).
+    #[serde(default)]
+    pub wire: String,
+    /// Installed and signed in (or the server answered); `None`: not reported.
+    #[serde(default)]
+    pub ready: Option<bool>,
+    /// Why it isn't ready, in a few words.
+    #[serde(default)]
+    pub why: String,
+    /// Models the host reported (at most 64).
+    #[serde(default)]
+    pub models: Vec<String>,
+    /// The list is everything it runs.
+    #[serde(default)]
+    pub complete: bool,
 }
 
 /// A model gateway a host offers: its operator-given name and wire
@@ -1069,6 +1108,7 @@ mod tests {
         QueuedWorkDto::export_all(&cfg).unwrap();
         WorkspaceHostDto::export_all(&cfg).unwrap();
         HostModelGatewayDto::export_all(&cfg).unwrap();
+        HostOfferDto::export_all(&cfg).unwrap();
         MentionStateDto::export_all(&cfg).unwrap();
         LspServerDto::export_all(&cfg).unwrap();
         ProposalSetDto::export_all(&cfg).unwrap();

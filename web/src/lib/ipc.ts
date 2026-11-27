@@ -1216,6 +1216,11 @@ export const setNeedsYouCount = (count: number) => invoke<void>("set_needs_you_c
 export const listWorkspaceHosts = () =>
   invoke<WorkspaceHostDto[]>("list_workspace_hosts");
 
+/// Whether this computer lists its tools (names and sign-in state only) on
+/// its host record, so members can place agents here.
+export const getListTools = () => invoke<boolean>("get_list_tools");
+export const setListTools = (list: boolean) => invoke<void>("set_list_tools", { list });
+
 /// Reassign an agent to a host — "run on worker instead". Empty host = owner's
 /// device.
 export const setAgentHost = (agentId: string, hostId: string) =>

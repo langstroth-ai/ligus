@@ -365,7 +365,7 @@ refused on the command line.
 | `ligus agents [--json]` | lists workspace agents, and which may run local servers. |
 | `ligus agents set <agent> --local-servers on\|off [--json]` | turns an agent's [local-servers switch](../concepts/security.md#local-servers) on or off (agy needs it for its helper server; Linux with bubblewrap; not available on macOS yet, where it is stored but has no effect). The workspace Owner's; in a shared workspace it needs a passkey, so use Settings → Sandbox there. Exit 6 when refused. |
 | `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>] [--dry-run]` | defines an agent. |
-| `ligus hosts [--json]` | lists workspace hosts (devices and workers) |
+| `ligus hosts [--json]` | lists workspace hosts (devices and workers), online or offline, with a second line saying what each offers and how ready it is (see [What a host offers](#what-a-host-offers)) |
 | `ligus register-worker [--label <name>]` | registers this box as a worker host, prints its host id |
 | `ligus set-agent-host <agent> <host-id> [--dry-run]` | binds an agent to a host |
 | `ligus agent [name] [--runtime <id>]` | development responder: answers new un-mentioned or `@primary` messages (in a shared room only its operator's, unless `LIGUS_AGENT_OPEN_TO_MEMBERS=1`). Refuses to run unless `LIGUS_ALLOW_PERSONAL_AGENT` is set; use `ligus worker` in production |
@@ -377,9 +377,61 @@ refused on the command line.
 Credentials for `add-runtime`:
 
 - `--secret-ref <name>`: each host that runs the agent sets
-  `LIGUS_WS_SECRET_<name>` (or a file in `LIGUS_WS_SECRET_DIR`). Keys are
+  `LIGUS_WS_SECRET_<name>` (or a file in `LIGUS_WS_SECRET_DIR`) and
+  declares `<name>` for the workspace in its `host.toml` (below). Keys are
   never stored in the workspace.
 - without it: keyless (local models, subscription CLIs).
+
+### What a host offers
+
+Each host's record lists what it can run, by name and kind only: the coding
+CLIs it has (`claude-code`, `codex`, `copilot`, `antigravity`, `aider`,
+`pi`), its [model gateways](../../operate/deploy/model-gateways.md), and the local model servers and
+hosted providers its `host.toml` declares. No address, account or key is
+ever on the record. Whether each one is ready (installed and signed in, or
+the server answered), up to 64 of its models and the host's Ligus version
+travel in the host's presence beat, sealed and signed by the host's own
+device, and refresh at most every five minutes. `ligus hosts` prints it:
+
+```text
+3f0c…  Worker  build-1  online
+    claude-code ready · codex not signed in · Ligus 0.5.0
+```
+
+Readers use a host record only when the computer it names signed it, so
+nobody can register a host under someone else's computer.
+
+`host.toml` lives in the data dir and is never synced:
+
+```toml
+list_tools = false              # a person's computer: don't list its tools
+
+[[local]]                       # a local model server; the address stays here
+name = "ollama"
+harness = "ollama"              # ollama | openai
+url = "http://127.0.0.1:11434"
+
+[workspaces."<workspace-id>"]
+secrets = ["acme"]              # the only secret names this host resolves there
+
+[[workspaces."<workspace-id>".providers]]
+name = "team-claude"
+harness = "anthropic"           # anthropic | openAI | openRouter
+secret = "acme"
+```
+
+- **A host resolves only secret names it declared** for the workspace a
+  turn is in. A runtime naming any other secret doesn't run there, even
+  when the value is set, and the error says which line to add.
+- On first start, a box, worker or `ligus agent` with no `host.toml` writes
+  one declaring the `LIGUS_WS_SECRET_*` names already in its environment
+  for the workspace it serves, so an upgrade keeps working. Later secrets
+  are declared by hand.
+- `list_tools = false` empties a person's computer's list (the desktop's
+  **Settings → Models → List this computer's tools**). Workers and boxes
+  always list theirs.
+- An invalid `host.toml` stops `ligus serve` and `ligus worker`, with the
+  line that's wrong.
 
 `--secret` was removed: passing it is a usage error (exit 2). A runtime whose key an older version stored in the workspace (the removed
 `--secret` flag) keeps working only if it can run keyless; its stored key is

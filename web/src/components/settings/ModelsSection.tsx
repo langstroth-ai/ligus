@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RuntimeSummaryDto } from "@/bindings/RuntimeSummaryDto";
-import { GatewayPicker } from "./GatewayPicker";
+import { GatewayPicker, gatewayModels } from "./GatewayPicker";
+import { ListToolsRow } from "./ListToolsRow";
 import {
   addRuntime,
   listWorkspaceHosts,
@@ -316,6 +317,7 @@ function ProvidersSection() {
     >
       <DetectPanel onConfigured={() => qc.invalidateQueries({ queryKey: ["runtimes"] })} />
       <CliRuntimesPanel />
+      <ListToolsRow />
       {visible.length === 0 && <p className="px-1 py-2 text-xs text-ink-soft">No providers yet.</p>}
       <RowList label="Providers">
         {visible.map((p) => (
@@ -684,7 +686,10 @@ function RuntimesSection() {
   // An operator-listed model gateway, picked by name from what hosts offer
   // ("" = the runtime's own endpoint).
   const [runtimeGateway, setRuntimeGateway] = useState("");
+  // The models the hosts offering the picked gateway report (their signed
+  // beats), for the model field's suggestions.
   const hosts = useQuery({ queryKey: ["workspace-hosts"], queryFn: listWorkspaceHosts, retry: false });
+  const gatewayModelList = runtimeGateway ? gatewayModels(hosts.data ?? [], runtimeGateway) : [];
   const thinkProviders = ["ollama", "custom", "ligus-daemon"];
   const httpProviders = ["ollama", "openAI", "openRouter", "azure", "custom", "ligus-daemon"];
   // Providers whose "Supports tools" runs Ligus's agent tool loop (MCP + file
@@ -1109,10 +1114,27 @@ function RuntimesSection() {
             runtimeGateway ? "Model the gateway serves" : runtimeProvider === "pi" ? "Model — e.g. qwen2.5-coder" : "Preferred model"
           }
           aria-label="Model"
-          list={runtimeGateway ? undefined : runtimeProvider === "ollama" ? "ollama-form-models" : runtimeProvider ? "runtime-form-models" : undefined}
+          list={
+            runtimeGateway
+              ? gatewayModelList.length > 0
+                ? "gateway-form-models"
+                : undefined
+              : runtimeProvider === "ollama"
+                ? "ollama-form-models"
+                : runtimeProvider
+                  ? "runtime-form-models"
+                  : undefined
+          }
           className="w-full rounded-xl border px-3 py-2 text-sm"
           style={fieldStyle}
         />
+        {runtimeGateway && gatewayModelList.length > 0 && (
+          <datalist id="gateway-form-models" data-testid="gateway-form-models">
+            {gatewayModelList.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+        )}
         {!runtimeGateway && runtimeProvider !== "ollama" && runtimeProvider !== "" && (
           <ModelFieldHelp
             listId="runtime-form-models"

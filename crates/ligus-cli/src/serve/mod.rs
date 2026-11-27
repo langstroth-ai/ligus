@@ -1642,6 +1642,9 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             Err(_) => ligus_runtime::keyring::KeyringEngine::passphrase(shared.ws, key),
         };
         if writable {
+            // Readiness and offers (workspace model v3, 5.1), in the background.
+            let sh = shared.clone();
+            drop(tokio::task::spawn_blocking(move || crate::refresh_own_host(&sh.svc, sh.ws, &sh.host_id)));
             let beat = shared.lock().signed_beat(shared.ws, coverage);
             if let Err(e) = publish_beat(&relay, &room, &ring, &beat).await {
                 eprintln!("presence: publishing this host's beat failed: {e}");

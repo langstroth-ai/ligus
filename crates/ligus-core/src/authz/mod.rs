@@ -184,6 +184,12 @@ pub struct AuthzState {
     /// some other way (a compaction seed) is shown but never forwarded. Kept
     /// in the device-local workspace too.
     pub refinement_authors: BTreeMap<Uuid, String>,
+    /// The signing device of each host's latest allowed record, by host id
+    /// (workspace model v3, 5.1). Readers and pickers use only a host whose
+    /// latest record its own device signed ([`crate::ChatSession::bound_hosts`]),
+    /// never one someone else wrote under its id (H11); the fold's
+    /// `workspace_hosts` keeps every allowed record for authorization.
+    pub host_signers: BTreeMap<String, Option<Uuid>>,
 }
 
 impl AuthzState {

@@ -53,6 +53,9 @@ const host = (id: string, label: string, kind = "device", online = true, ownerNa
   lastSeen: "2026-11-22T10:00:00Z",
   modelGateways: [],
   ownerName,
+  offers: [],
+  readiness: "",
+  build: "",
   mine,
 });
 

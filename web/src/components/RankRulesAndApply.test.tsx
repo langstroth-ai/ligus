@@ -79,8 +79,8 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "list_proposals") return proposals;
     if (cmd === "list_workspace_hosts")
       return [
-        { id: HOST, kind: "worker", label: "sff", online: true, lastSeen: "", modelGateways: [], ownerName: "", mine: false },
-        { id: "not-a-uuid", kind: "device", label: "legacy", online: false, lastSeen: "", modelGateways: [], ownerName: "", mine: false },
+        { id: HOST, kind: "worker", label: "sff", online: true, lastSeen: "", modelGateways: [], ownerName: "", mine: false, offers: [], readiness: "", build: "" },
+        { id: "not-a-uuid", kind: "device", label: "legacy", online: false, lastSeen: "", modelGateways: [], ownerName: "", mine: false, offers: [], readiness: "", build: "" },
       ];
     if (cmd === "request_apply_on_host") return "r-new";
     if (cmd?.startsWith("list_")) return [];
