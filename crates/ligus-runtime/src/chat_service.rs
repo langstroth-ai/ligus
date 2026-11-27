@@ -1767,7 +1767,9 @@ impl ChatService {
                 .iter()
                 .find(|m| m.id == trigger)
                 .map(|m| {
-                    let secs = (ligus_core::Timestamp::now().0 - m.created_at.0).whole_seconds();
+                    // By the trigger's signed envelope time, not the
+                    // payload's `created_at` (a clock its author picks).
+                    let secs = (ligus_core::Timestamp::now().0 - m.appended_at().0).whole_seconds();
                     std::time::Duration::from_secs(secs.max(0) as u64)
                 })
                 .unwrap_or_default();
@@ -4390,6 +4392,43 @@ mod tests {
         assert!(s.messages.iter().find(|m| m.id == late_id).unwrap().superseded);
         assert_eq!(s.turn_dispatch[&trigger].answer, Some(ours));
         assert_eq!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &silent)).unwrap(), Step::StandDown);
+    }
+
+    /// A turn's takeover age is read from its trigger's signed envelope
+    /// time, not the payload's `created_at` (a field its author fills in):
+    /// a trigger signed an hour ago that claims to be new is not handed
+    /// over, and one signed now that claims to be an hour old is.
+    #[test]
+    fn takeover_age_is_the_triggers_envelope_time_not_its_created_at() {
+        use ligus_core::dispatch::{Coverage, Step, CLAIM_TIMEOUT};
+        let hour_ago = || ligus_core::Timestamp::from_unix_seconds(ligus_core::Timestamp::now().inner().unix_timestamp() - 3600);
+        fn silent(_: Uuid) -> bool {
+            false
+        }
+        for (envelope_old, expect) in [(true, Step::StandDown), (false, Step::Run)] {
+            let (mut svc, _pk) = service();
+            let wid = Uuid::new_v4();
+            let chat = svc.create_chat("A", wid, "anthropic").unwrap();
+            let (device_b, key_b) = (Uuid::new_v4(), SigningKeypair::generate().unwrap());
+            let mut trigger_msg = ChatMessage::new(MessageRole::User, "b", "@ligus go");
+            if !envelope_old {
+                trigger_msg.created_at = hour_ago();
+            }
+            let trigger = trigger_msg.id;
+            let mut env = svc.draft_signed(chat.id, wid, SessionEvent::MessageAppended { message: trigger_msg }).unwrap();
+            if envelope_old {
+                env.timestamp = hour_ago();
+            }
+            ligus_core::crypto::sign_envelope(&mut env, device_b, &key_b);
+            assert!(svc.store.ingest(&env).unwrap());
+            let (device_a, key_a) = (Uuid::new_v4(), SigningKeypair::generate().unwrap());
+            let mut env = svc.draft_signed(chat.id, wid, SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a, epoch: 0, supersedes: None, repo_id: None }).unwrap();
+            env.timestamp = ligus_core::Timestamp::from_unix_seconds(ligus_core::Timestamp::now().inner().unix_timestamp() - 30);
+            ligus_core::crypto::sign_envelope(&mut env, device_a, &key_a);
+            assert!(svc.store.ingest(&env).unwrap());
+            let ctx = DispatchCtx { eligible: true, coverage: Coverage::NoRepo, waited: CLAIM_TIMEOUT, holder_live: &silent };
+            assert_eq!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx).unwrap(), expect, "envelope_old={envelope_old}");
+        }
     }
 
     /// A hand-off reply that starts two receivers on two devices: device A
@@ -7326,6 +7365,67 @@ mod same_key_tests {
         // And again: the next one doesn't trip over it either.
         desk.post_user_message(chat.id, wid, "fourth").unwrap();
         assert_one_chain(&desk.store().list(chat.id).unwrap(), chat.id, me);
+    }
+
+    /// Two computers of one person keep posting into one chat after the
+    /// desktop's pruned reply chunks come back from the relay out of order
+    /// (as new rows, after everything that follows them). Twenty posts,
+    /// alternating, each synced to the other computer: every one sends (no
+    /// draft is refused as stale), each computer's chain stays one line,
+    /// and the log's newest event is the last post on both, whatever the
+    /// row order.
+    #[test]
+    fn twenty_posts_from_two_computers_after_an_out_of_order_re_pull_never_go_stale() {
+        let desk_dev = Device::new();
+        let mut term_dev = Device::new();
+        term_dev.account = desk_dev.account;
+        let (mut desk, mut term) = (desk_dev.service(), term_dev.service());
+        let wid = Uuid::new_v4();
+        let chat = desk.create_chat("c", wid, "anthropic").unwrap().id;
+        desk.post_user_message(chat, wid, "first").unwrap();
+        let reply = desk.begin_assistant_message(chat, wid, "ligus", "anthropic", None, None).unwrap();
+        for part in ["a ", "b ", "c "] {
+            desk.append_chunk(chat, wid, reply, part).unwrap();
+        }
+        desk.complete_assistant_message(chat, wid, reply, "a b c").unwrap();
+        let chunks: Vec<SessionEventEnvelope> =
+            desk.store().list_in(wid, chat).unwrap().into_iter().filter(|e| matches!(e.payload, SessionEvent::MessageChunkReceived { .. })).collect();
+        assert_eq!(desk.prune_superseded_chunks().unwrap(), 3);
+        // The terminal holds everything (the workspace's config log too).
+        for e in desk.store().envelopes_after_row(0).unwrap().1.iter().chain(&chunks) {
+            term.store.ingest(e).unwrap();
+        }
+        // Pulled back newest first: the oldest chunk is the newest row.
+        for e in chunks.iter().rev() {
+            assert!(desk.store.ingest(e).unwrap(), "pulled back as a new row");
+        }
+        let mut cursors = (desk.store().max_row_id().unwrap(), term.store().max_row_id().unwrap());
+        for i in 0..20 {
+            let body = format!("post {i}");
+            let (from, to, cursor) = if i % 2 == 0 { (&mut desk, &mut term, &mut cursors.0) } else { (&mut term, &mut desk, &mut cursors.1) };
+            let posted = from.post_user_message(chat, wid, &body).unwrap_or_else(|e| panic!("post {i} refused: {e}"));
+            let (last, new) = from.store().envelopes_after_row(*cursor).unwrap();
+            *cursor = last;
+            for e in &new {
+                to.store.ingest(e).unwrap();
+            }
+            for svc in [&*from, &*to] {
+                let newest = svc.store().list_in(wid, chat).unwrap().pop().unwrap();
+                assert!(
+                    matches!(&newest.payload, SessionEvent::MessageAppended { message } if message.id == posted.id),
+                    "post {i}: the log's newest event is the post just made"
+                );
+            }
+        }
+        // The other computer's posts reached the desktop's cursor too.
+        cursors.0 = desk.store().max_row_id().unwrap();
+        for svc in [&desk, &term] {
+            let envs = svc.store().list_in(wid, chat).unwrap();
+            assert_one_chain(&envs, chat, desk.device_id());
+            assert_one_chain(&envs, chat, term.device_id());
+            let bodies: Vec<String> = svc.load_in(wid, chat).unwrap().unwrap().messages.iter().filter(|m| m.body.starts_with("post ")).map(|m| m.body.clone()).collect();
+            assert_eq!(bodies, (0..20).map(|i| format!("post {i}")).collect::<Vec<_>>());
+        }
     }
 
     /// Nine stale drafts, each raced by a post of the same key through the

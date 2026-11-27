@@ -866,7 +866,10 @@ impl ChatSession {
                 let mut message = message.clone();
                 message.superseded = false;
                 message.completed_at = None;
+                message.appended_at = None;
                 if let Some(idx) = self.message_index(message.id) {
+                    // A re-append keeps the first append's time.
+                    message.appended_at = self.messages[idx].appended_at;
                     self.messages[idx] = message;
                 } else {
                     self.messages.push(message);
@@ -2409,6 +2412,16 @@ fn fold_pass(
                         session.messages[idx].completed_at = Some(env.timestamp);
                     }
                 }
+                // The first append's signed time (`ChatMessage::appended_at`).
+                if let SessionEvent::MessageAppended { message } = payload {
+                    if let Some(idx) = session.message_index(message.id) {
+                        // Not for a received envelope that carried no time
+                        // (a legacy one decodes it as "now"): `created_at`.
+                        if env.raw.as_ref().is_none_or(|r| r.timestamp().is_some()) {
+                            session.messages[idx].appended_at.get_or_insert(env.timestamp);
+                        }
+                    }
+                }
                 // The dispatcher's commit (`crate::dispatch`): an answer whose
                 // origin device is the signer (or certified the signing agent
                 // key, as the workspace roster at its position holds it)
@@ -2602,6 +2615,33 @@ mod tests {
         let s = project(&envs).unwrap();
         assert_eq!(s.messages[0].created_at, start, "created_at stays the turn's start");
         assert_eq!(s.messages[0].posted_at(), Timestamp::from_unix_seconds(1_800_000_120));
+    }
+
+    /// A message's append time is its envelope's signed time, from the first
+    /// append in fold order; a re-append under the same id keeps it, and
+    /// an author's own `created_at` never stands in for it.
+    #[test]
+    fn a_messages_append_time_is_its_first_envelopes_time() {
+        let base = base_session();
+        let (sid, wid) = (base.id, base.workspace_id);
+        let mut msg = ChatMessage::new(MessageRole::User, "Mara", "hi");
+        msg.created_at = Timestamp::from_unix_seconds(1_900_000_000);
+        let mut first = SessionEventEnvelope::new(sid, wid, 2, SessionEvent::MessageAppended { message: msg.clone() });
+        first.timestamp = Timestamp::from_unix_seconds(1_800_000_000);
+        let mut edited = msg.clone();
+        edited.body = "hi again".into();
+        let mut again = SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MessageAppended { message: edited });
+        again.timestamp = Timestamp::from_unix_seconds(1_800_000_500);
+        let s = project(&[snapshot_env(base.clone(), 1), first.clone()]).unwrap();
+        assert_eq!(s.messages[0].appended_at(), Timestamp::from_unix_seconds(1_800_000_000));
+        let s = project(&[snapshot_env(base.clone(), 1), first, again]).unwrap();
+        assert_eq!(s.messages[0].body, "hi again");
+        assert_eq!(s.messages[0].appended_at(), Timestamp::from_unix_seconds(1_800_000_000), "a re-append keeps the first time");
+        // Seeded from a snapshot (no envelope of its own): its created_at.
+        let mut seeded = base;
+        seeded.messages.push(msg);
+        let s = project(&[snapshot_env(seeded, 1)]).unwrap();
+        assert_eq!(s.messages[0].appended_at(), Timestamp::from_unix_seconds(1_900_000_000));
     }
 
     #[test]
