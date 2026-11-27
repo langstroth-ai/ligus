@@ -24,6 +24,9 @@ pub enum NoticeKind {
     Mismatch,
     /// A computer never acknowledged the offer within 2 minutes.
     DidntFinish,
+    /// The person said Not me to a passkey hand-off from one of their
+    /// devices: nothing was written, and the Inbox offers to revoke it.
+    NotMe,
 }
 
 /// One notice.
@@ -42,6 +45,9 @@ pub struct Notice {
     /// Who ended it, when it wasn't this device: a workspace device's name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by: Option<String>,
+    /// The device that asked (Not me: the one to revoke).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<Uuid>,
 }
 
 impl Notice {
@@ -51,6 +57,7 @@ impl Notice {
         match self.kind {
             NoticeKind::Mismatch => format!("Request from {label} didn't match. Nothing was granted."),
             NoticeKind::DidntFinish => format!("Linking {label} didn't finish. Nothing was added."),
+            NoticeKind::NotMe => format!("You said Not me to a request from {label}. Nothing was written."),
         }
     }
 
@@ -64,6 +71,10 @@ impl Notice {
             NoticeKind::DidntFinish => {
                 "The computer didn't confirm in time, so nothing was signed or published and no key left this device. \
                  Start again from the computer."
+            }
+            NoticeKind::NotMe => {
+                "Not me revokes nothing by itself. If you didn't ask for this on that device, someone else may be using \
+                 it: revoke it in My devices, and rotate the workspace key if it held one."
             }
         }
     }
@@ -123,7 +134,7 @@ mod tests {
     use super::*;
 
     fn n(kind: NoticeKind, rid: &str, at: i64) -> Notice {
-        Notice { kind, workspace_id: Uuid::nil(), rid: rid.into(), request_kind: MatchKind::Box, label: "build-1".into(), at, by: None }
+        Notice { kind, workspace_id: Uuid::nil(), rid: rid.into(), request_kind: MatchKind::Box, label: "build-1".into(), at, by: None, device_id: None }
     }
 
     #[test]
@@ -138,6 +149,9 @@ mod tests {
         assert_eq!(live[0].text(), "Linking build-1 didn't finish. Nothing was added.");
         assert_eq!(live[1].text(), "Request from build-1 didn't match. Nothing was granted.");
         assert!(s.live(3_000 + NOTICE_TTL_MS + 2_000).unwrap().is_empty(), "a day later");
+        let not_me = Notice { device_id: Some(Uuid::nil()), ..n(NoticeKind::NotMe, "c", 3_000) };
+        assert_eq!(not_me.text(), "You said Not me to a request from build-1. Nothing was written.");
+        assert!(not_me.help().contains("revokes nothing by itself"));
         s.dismiss("b").unwrap();
         assert_eq!(s.live(3_000).unwrap().len(), 1);
     }

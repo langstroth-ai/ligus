@@ -172,6 +172,9 @@ impl crate::approval_mailbox::ApproverClassifier for WorkspaceApprovers {
             MatchKind::Computer | MatchKind::Phone => {
                 !d.phone && self.viewer.is_some_and(|v| self.humans.contains(&v) && d.accounts.contains(&v) && !d.delegated_for(v))
             }
+            // A passkey hand-off: any of the viewer's own devices that can
+            // run a passkey (a phone too), never a delegated box.
+            MatchKind::Presence => self.viewer.is_some_and(|v| self.humans.contains(&v) && d.accounts.contains(&v) && !d.delegated_for(v)),
         };
         if ok { Approvability::CanApprove } else { Approvability::Cannot }
     }
@@ -224,6 +227,8 @@ mod classify_tests {
         assert_eq!(w.classify(MatchKind::Computer, mallory_dev, &key), Approvability::Cannot);
         assert_eq!(w.classify(MatchKind::Phone, mallory_dev, &key), Approvability::Cannot);
         assert_eq!(w.classify(MatchKind::Computer, ana_dev, &key), Approvability::CanApprove);
+        assert_eq!(w.classify(MatchKind::Presence, mallory_dev, &key), Approvability::Cannot, "another person's device");
+        assert_eq!(w.classify(MatchKind::Presence, ana_dev, &key), Approvability::CanApprove);
         // A box: any Admin's device.
         assert_eq!(w.classify(MatchKind::Box, mallory_dev, &key), Approvability::CanApprove);
         assert_eq!(w.classify(MatchKind::Box, ana_dev, &key), Approvability::Cannot);

@@ -38,7 +38,7 @@ export function useNeedsYou(workspaceId: string): NeedsYouItem[] {
       // active workspace only.
       approvals: approvals.requests
         .filter((r) => r.workspaceId === workspaceId)
-        .map((r) => ({ workspaceId: r.workspaceId, rid: r.rid, kind: r.kind, label: r.label, createdAt: r.createdAt })),
+        .map((r) => ({ workspaceId: r.workspaceId, rid: r.rid, kind: r.kind, label: r.label, createdAt: r.createdAt, summary: r.summary })),
       approvalFacts: approvals.facts.filter((f) => f.workspaceId === workspaceId),
     });
   }, [attention.data, chats.data, live, invites.data, devices.data, trust.data, sandbox.data, phone, approvals.requests, approvals.facts, workspaceId]);

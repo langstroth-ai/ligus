@@ -732,6 +732,14 @@ pub async fn cmd_approve(cfg: &Config, o: ApproveOptions, mut type_code: Option<
     let listing = am::list_live(&client, &epochs).await.map_err(|e| mailbox_problem(e, "paste the request instead"))?;
     let rid = o.rid.trim().to_ascii_lowercase();
     let live = listing.live.into_iter().find(|l| l.rid_hex() == rid).ok_or_else(|| crate::problem::not_found(format!("no live approval request {rid}")))?;
+    if matches!(live.request.subject, RequestSubject::Presence(_)) {
+        return Err(problem(
+            EXIT_REFUSED,
+            "presence",
+            "a step another device of yours sent for your passkey is confirmed on your desktop (its Inbox), never from the CLI",
+            None,
+        ));
+    }
     if matches!(live.request.subject, RequestSubject::Phone(_)) {
         return Err(problem(EXIT_REFUSED, "phone", "add a phone on your desktop (My devices > Add a phone) or with ligus phones certify", None));
     }
@@ -777,6 +785,7 @@ pub async fn cmd_approve(cfg: &Config, o: ApproveOptions, mut type_code: Option<
         label: live.label(),
         at: now_ms(),
         by: None,
+        device_id: None,
     };
     let start = Instant::now();
     let code = loop {
@@ -858,7 +867,7 @@ pub async fn cmd_approve(cfg: &Config, o: ApproveOptions, mut type_code: Option<
             session.finish_approved(None).await.map_err(approver_problem)?;
             r.add(Check::ok("approval.sent", "grant sent", "sealed to the computer, after it acknowledged"));
         }
-        RequestSubject::Phone(_) => unreachable!("refused above"),
+        RequestSubject::Phone(_) | RequestSubject::Presence(_) => unreachable!("refused above"),
     }
     print_report(
         &r,

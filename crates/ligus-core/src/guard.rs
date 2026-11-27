@@ -106,7 +106,7 @@ pub struct GuardState {
     /// Coordinator leases folded on this log, keyed by `lease::lease_key`.
     #[serde(default, skip_serializing_if = "LeaseTable::is_empty")]
     pub leases: LeaseTable,
-    /// Dearth mode (config log; overlaid onto chats by `ChatService::load`).
+    /// Dearth mode (config log; overlaid onto chats by `crate::views::ChatState::view`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dearth: Option<DearthMode>,
     /// Members added during dearth mode, awaiting a second approval.
@@ -139,7 +139,7 @@ pub struct GuardState {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub verified_approvals: BTreeMap<Uuid, BTreeSet<String>>,
     /// Active chat lockdowns, by chat id (config log; a chat's own entry is
-    /// overlaid onto it by `ChatService::load`).
+    /// overlaid onto it by `crate::views::ChatState::view`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub lockdowns: BTreeMap<Uuid, Vec<ChatLockdown>>,
     /// Proposals the hygiene sweep found stale (their diff no longer applies).
@@ -160,7 +160,7 @@ pub struct GuardState {
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub used_invites: BTreeSet<Uuid>,
     /// The workspace's auto-archive setting (`ProposalArchivePolicySet`,
-    /// config log; overlaid onto chats by `ChatService::load`). Absent = the
+    /// config log; overlaid onto chats by `crate::views::ChatState::view`). Absent = the
     /// default ([`crate::proposal_archive::DEFAULT_AFTER_DAYS`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal_archive: Option<crate::proposal_archive::ProposalArchivePolicy>,

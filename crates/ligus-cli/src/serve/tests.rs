@@ -1509,6 +1509,8 @@ async fn comments_and_votes_show_who_and_stream_updates() {
     let (_, pid) = filed_proposal(&h, Some(h.agent_id)).await;
     let mut rx = h.events(None).await;
 
+    // The box's own view (the operator): its identity's standing.
+    h.as_operator = true;
     let listed = h.get("/v1/proposals").await["proposals"][0].clone();
     assert_eq!(listed["commentCount"], 0);
     assert_eq!(listed["requiredApprovals"], 1);
@@ -1520,6 +1522,7 @@ async fn comments_and_votes_show_who_and_stream_updates() {
     let empty = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "  " }))).await;
     assert_eq!(empty.0, 400);
     // A phone's note would be signed as the box: refused, nothing written.
+    h.as_operator = false;
     let phone = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "Looks close" }))).await;
     assert_eq!(phone, (403, json!({ "error": crate::serve::api::PHONE_NOTE_REFUSAL })));
     assert_eq!(h.get(&format!("/v1/proposals/{pid}/comments")).await["comments"], json!([]));
@@ -1603,16 +1606,21 @@ async fn request_changes_asks_the_agent_and_links_the_revision() {
     let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     let (chat_id, pid) = filed_proposal(&h, Some(h.agent_id)).await;
 
-    // Nothing on the thread yet: nothing to forward.
-    let bare = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/request-changes"), None).await;
-    assert_eq!(bare.0, 400, "{}", bare.1);
-    // A phone's note would be signed as the box: refused, nothing sent.
+    // From a phone: its note, and the instruction and the thread's marker,
+    // would all be signed as the box: refused, nothing sent.
     let phone = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/request-changes"), Some(json!({ "note": "redo" }))).await;
     assert_eq!(phone, (403, json!({ "error": crate::serve::api::PHONE_NOTE_REFUSAL })));
-    assert!(h.handle.shared.lock().load_resolving(chat_id).unwrap().unwrap().proposals.iter().all(|p| p.refinements.is_empty()));
+    let bare = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/request-changes"), None).await;
+    assert_eq!(bare, (403, json!({ "error": crate::serve::api::PHONE_REVISE_REFUSAL })));
+    let chat = h.handle.shared.lock().load_resolving(chat_id).unwrap().unwrap();
+    assert!(chat.proposals.iter().all(|p| p.refinements.is_empty()));
+    assert!(chat.messages.is_empty(), "nothing was posted for the phone");
 
     // The box's operator can.
     h.as_operator = true;
+    // Nothing on the thread yet: nothing to forward.
+    let bare = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/request-changes"), None).await;
+    assert_eq!(bare.0, 400, "{}", bare.1);
 
     let res = h
         .send(
@@ -1715,6 +1723,8 @@ async fn a_viewer_cannot_vote_comment_or_request_changes() {
     }
     assert!(is_viewer, "the demotion never synced to the box");
 
+    // The box's own view (the operator): its viewer standing.
+    h.as_operator = true;
     let p = h.get(&format!("/v1/proposals/{pid}")).await;
     assert_eq!(p["proposal"]["canVote"], false);
     assert_eq!(p["proposal"]["myRole"], "viewer");
@@ -3038,7 +3048,9 @@ async fn chat_with_set(h: &Harness) -> (Uuid, Uuid, Uuid, Uuid) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn proposal_sets_are_listed_with_standing_and_votable_alternatives() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // The box's own view (the operator): its identity's standing.
+    h.as_operator = true;
     let (chat_id, set_id, aid, bid) = chat_with_set(&h).await;
 
     let sets = h.get("/v1/proposal-sets").await;
@@ -3102,7 +3114,10 @@ async fn lockdown_clear_needs_a_human_contributor() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
     // A person's box: the clear is a human's (a real box, a service member,
     // is refused: `a_service_box_never_acts_as_a_person`).
-    let h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.test_person = true).await;
+    let mut h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.test_person = true).await;
+    // The box's own view (the operator): a phone this box can't place may
+    // never clear one.
+    h.as_operator = true;
     let ws = h.handle.shared.ws;
     let lock = |chat: Uuid| {
         h.handle
@@ -5318,6 +5333,7 @@ mod approvals;
 mod box_removal;
 mod devices_link;
 mod foreign_certificate;
+mod principals;
 mod scratch;
 
 /// Archiving from the phone (0.4): a settled proposal is archived for

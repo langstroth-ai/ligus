@@ -93,6 +93,10 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
     let mut secrets = Secrets::new();
     let (mut json, mut dry_run) = (false, false);
     let mut stdin = crate::secret_arg::stdin_once();
+    // The passkey hand-off to your desktop (unless a recovery-words file
+    // confirms instead): how long to wait for it, or not at all.
+    let mut recovery = false;
+    let mut handoff_wait = Some(crate::handoff::DEFAULT_TIMEOUT);
     let mut i = 0;
     let mut seen_flow = false;
     while i < rest.len() {
@@ -109,6 +113,15 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
                 i += 1;
                 let key = crate::secret_arg::recovery_key_from_file(Path::new(path))?;
                 ops.svc.set_presence_provider(Some(std::sync::Arc::new(crate::admit::RecoveryPresence(key))));
+                recovery = true;
+            }
+            // A step that needs your passkey goes to your desktop: post it
+            // and exit 4 (`ligus handoff wait` finishes it), or wait so long.
+            "--no-wait" => handoff_wait = None,
+            "--timeout" => {
+                let v = rest.get(i).ok_or_else(|| help::usage_error("--timeout needs a duration (10m, 90s)"))?;
+                i += 1;
+                handoff_wait = Some(crate::cli_flags::parse_duration(v)?);
             }
             _ if !a.starts_with("--") => {
                 if !seen_flow && a == flow.as_str() {
@@ -143,7 +156,27 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
             }
         }
     }
-    let out = setup::run(flow, &mut ops, &inputs, &secrets, &RunOpts { dry_run, ..Default::default() });
+    let handoff = if recovery || dry_run {
+        None
+    } else {
+        let label = ops.label.clone();
+        crate::handoff::HandoffPresence::for_service(cfg, &ops.svc, &label, handoff_wait).map(|(p, end)| {
+            ops.svc.set_presence_provider(Some(std::sync::Arc::new(p)));
+            end
+        })
+    };
+    let mut out = setup::run(flow, &mut ops, &inputs, &secrets, &RunOpts { dry_run, ..Default::default() });
+    if let Some(end) = handoff.and_then(|e| e.lock().unwrap().clone()) {
+        let quote = |a: &str| if a.chars().any(char::is_whitespace) { format!("'{a}'") } else { a.to_string() };
+        let rerun = format!("ligus setup {}", rest.iter().filter(|a| *a != "--no-wait").map(|a| quote(a)).collect::<Vec<_>>().join(" "));
+        if let Some(next) = crate::handoff::next_lines(&end, &rerun) {
+            // The step's fix says where to confirm it now, not the desktop-only line.
+            if let Some(c) = out.report.checks.iter_mut().rev().find(|c| c.fix.as_deref().is_some_and(|f| f.contains("--recovery-words-file"))) {
+                c.fix = Some(next[0].clone());
+            }
+            out.report.next = next;
+        }
+    }
     print_outcome(&out, json, dry_run);
     if out.exit != 0 {
         std::process::exit(out.exit);

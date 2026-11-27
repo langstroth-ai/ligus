@@ -430,11 +430,13 @@ pub const COMMANDS: &[Cmd] = &[
                   done on this device, from the same engine the desktop's Set up commands use. `ligus setup <flow> \
                   --help` shows a flow's flags. Every flow checks first, writes only when every check passed, is safe \
                   to run again, and stops with exit 4 at a step only a person can do. `ligus help setup` is the guide.",
-        synopsis: &["ligus setup [--json]", "ligus setup <flow> [flags] [--recovery-words-file PATH] [--json] [--dry-run]"],
+        synopsis: &["ligus setup [--json]", "ligus setup <flow> [flags] [--no-wait | --timeout 10m] [--recovery-words-file PATH] [--json] [--dry-run]"],
         flags: &[
             JSON,
             f("--apply", "off", "the earlier `ligus setup --apply`: now `ligus setup runtimes --apply`"),
-            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence for a step that needs your passkey"),
+            f("--timeout DURATION", "10m", "how long a step that needs your passkey waits for your desktop to confirm it"),
+            f("--no-wait", "off", "send a step that needs your passkey to your desktop and exit 4 (finish with ligus handoff wait)"),
+            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence for a step that needs your passkey, instead of your desktop"),
         ],
         examples: &["ligus setup", "ligus setup agent --harness claude-code --name builder", "ligus setup --json | jq '.checks[] | {id, status}'"],
         exit: &[(0, "listed (setup never fails a listing)")],
@@ -450,7 +452,7 @@ pub const COMMANDS: &[Cmd] = &[
                   member's), pick the model, reuse a keyless workspace runtime with that harness and model or define one \
                   (Admin), create the agent (Contributor), and optionally send one test turn. A failure after the \
                   runtime was defined removes it again.",
-        synopsis: &["ligus setup agent --harness H --name NAME [--model M] [--endpoint URL | --gateway NAME] [--local-servers] [--test-turn] [--recovery-words-file PATH] [--json] [--dry-run]"],
+        synopsis: &["ligus setup agent --harness H --name NAME [--model M] [--endpoint URL | --gateway NAME] [--local-servers] [--test-turn] [--no-wait | --timeout 10m] [--recovery-words-file PATH] [--json] [--dry-run]"],
         flags: &[
             f("--harness H", "required", "claude-code, codex, copilot, antigravity, aider, pi, local (Ollama or OpenAI-compatible) or gateway"),
             f("--name NAME", "required", "the agent's @name"),
@@ -459,7 +461,9 @@ pub const COMMANDS: &[Cmd] = &[
             f("--gateway NAME", "none", "gateway only: a model gateway a host offers (ligus hosts)"),
             f("--test-turn", "off", "send one short test message and check the reply"),
             f("--local-servers", "off", "let the agent run local servers (agy's helper server; Linux with bubblewrap; not available on macOS yet; the Owner's)"),
-            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence when the workspace's rules need your passkey"),
+            f("--timeout DURATION", "10m", "how long a step that needs your passkey waits for your desktop (Confirm on your desktop: …, with a code)"),
+            f("--no-wait", "off", "send that step to your desktop and exit 4; finish with ligus handoff wait, then run this again"),
+            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence when the workspace's rules need your passkey, instead of your desktop"),
             JSON,
             DRY_RUN,
         ],
@@ -472,7 +476,7 @@ pub const COMMANDS: &[Cmd] = &[
         exit: &[
             (2, "a missing or invalid flag (the check names it)"),
             (3, "the harness isn't installed or signed in, or no agent sandbox"),
-            (4, "the workspace's rules need your passkey: do it in the desktop app, or pass --recovery-words-file"),
+            (4, "the workspace's rules need your passkey and your desktop didn't confirm it in time (or --no-wait; or the relay has no approval mailbox: do it in the desktop app, or pass --recovery-words-file)"),
             (6, "your role can't add an agent or a workspace runtime"),
             (7, "a local model server didn't answer"),
         ],
@@ -1116,11 +1120,13 @@ pub const COMMANDS: &[Cmd] = &[
         name: "set-agent-host",
         group: G_AGENTS,
         summary: "bind an agent to a host",
-        purpose: "Bind an agent (by name) to a host id, so that host answers its mentions. Sync to apply.",
+        purpose: "Bind an agent (by name) to a host id, so that host answers its mentions. Sync to apply. The \
+                  agent's placement moves with it in the same record. A host whose published record doesn't offer \
+                  the model gateway the agent's runtime uses is refused (\"build-1 doesn't offer gw-home\").",
         synopsis: &["ligus set-agent-host <agent-name> <host-id> [--dry-run]"],
         flags: &[DRY_RUN],
         conn: true,
-        exit: &[(5, "no agent with that name")],
+        exit: &[(5, "no agent with that name"), (6, "refused: the host doesn't offer the agent's gateway, or the move needs an Admin")],
         examples: &["ligus set-agent-host coder 5b1c0f7e-… && ligus sync"],
         see_also: &["ligus hosts", "ligus agents", "ligus queue"],
         ..D
@@ -1309,6 +1315,67 @@ pub const COMMANDS: &[Cmd] = &[
         examples: &["ligus worker --label build-box", "ligus worker --label build-box --health-listen 127.0.0.1:8788"],
         exit: &[(3, "LIGUS_REQUIRE_SANDBOX is on and this host has no agent sandbox")],
         see_also: &["ligus help worker", "ligus admit", "ligus queue", "ligus doctor"],
+        ..D
+    },
+    Cmd {
+        name: "handoff",
+        group: G_START,
+        summary: "steps that wait for your passkey on your desktop (the passkey hand-off)",
+        purpose: "The CLI has no passkey. A step the workspace's rules hold for your passkey (defining a workspace \
+                  runtime, say) is sent to your own desktop, drafted exactly as it will be written: the desktop's Inbox \
+                  shows what it does and a code, and you confirm with your passkey (or say Not me). `ligus setup` waits \
+                  for it; with --no-wait it exits 4 and these commands finish or end it. Only your own devices can answer; \
+                  the passkey signs that one draft, which expires after 15 minutes. A relay without the approval mailbox \
+                  can't carry it: do the step in the desktop app, or pass --recovery-words-file.",
+        synopsis: &["ligus handoff list [--json]", "ligus handoff wait [<id>] [--timeout 10m] [--json]", "ligus handoff cancel [<id>] [--json]"],
+        conn: true,
+        examples: &["ligus setup agent --harness claude-code --name coder --no-wait", "ligus handoff wait"],
+        see_also: &["ligus handoff wait", "ligus setup", "ligus help setup"],
+        ..D
+    },
+    Cmd {
+        name: "handoff list",
+        group: G_START,
+        summary: "the hand-offs waiting for your desktop here: id, code, what each confirms",
+        purpose: "List the hand-offs this data dir posted and still waits for (kept 15 minutes, owner-only: \
+                  presence-pending.json): the id, the code your desktop shows beside it, and what it confirms.",
+        synopsis: &["ligus handoff list [--json]"],
+        flags: &[JSON],
+        examples: &["ligus handoff list --json"],
+        see_also: &["ligus handoff wait", "ligus handoff cancel"],
+        ..D
+    },
+    Cmd {
+        name: "handoff wait",
+        group: G_START,
+        summary: "wait for your desktop to confirm a hand-off, then write the change",
+        purpose: "Wait for the answer to a hand-off posted with --no-wait (the only one waiting, or <id>). When one of \
+                  your own devices confirms it with your passkey, the change is written exactly as it was drafted, with \
+                  that confirmation; then run the command that asked again, and it skips what is done. Not me on the \
+                  desktop writes nothing. Ctrl-C or --timeout cancels it.",
+        synopsis: &["ligus handoff wait [<id>] [--timeout 10m] [--json]"],
+        flags: &[f("--timeout DURATION", "10m", "how long to wait (90s, 10m); then the hand-off is cancelled"), JSON],
+        conn: true,
+        examples: &["ligus handoff wait", "ligus handoff wait 3f2a…c9 --timeout 5m --json"],
+        exit: &[
+            (4, "no one confirmed it in time, or it expired: run the command again and confirm on your desktop"),
+            (5, "no hand-off with that id is waiting here"),
+            (7, "the relay is unreachable"),
+        ],
+        see_also: &["ligus handoff list", "ligus setup"],
+        ..D
+    },
+    Cmd {
+        name: "handoff cancel",
+        group: G_START,
+        summary: "end a waiting hand-off (your desktop drops it)",
+        purpose: "End a hand-off posted with --no-wait: the desktop's Inbox drops it, nothing is written.",
+        synopsis: &["ligus handoff cancel [<id>] [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus handoff cancel"],
+        exit: &[(5, "no hand-off with that id is waiting here")],
+        see_also: &["ligus handoff list"],
         ..D
     },
     Cmd {
@@ -2731,8 +2798,17 @@ act (a passkey approval, pairing, creating an invite): stop and ask; 6 your role
 the workspace lockdown refuses it; 7 the relay or the server didn't answer.
 
 A workspace with stricter device rules holds some writes (a workspace runtime, a
-repository) for your passkey. The CLI has none: do that step in the desktop app, or
-pass --recovery-words-file PATH (your recovery key's 24 words, an owner-only file).
+repository) for your passkey. The CLI has none, so it sends the change, drafted
+exactly as it will be written, to your own desktop and waits:
+
+  Confirm on your desktop: Define workspace runtime “coder” (ClaudeCode, model “sonnet”) (code K7Q4 M9X2)
+
+The desktop's Inbox shows the same change and code; Confirm with passkey writes it,
+Not me writes nothing. --timeout (default 10m) and Ctrl-C cancel; --no-wait exits 4
+at once, and `ligus handoff wait` finishes it (then run the command again). Only
+your own devices can answer, and the passkey signs that one draft. A relay without
+the approval mailbox can't carry it: do the step in the desktop app, or pass
+--recovery-words-file PATH (your recovery key's 24 words, an owner-only file).
 
 Who may run what: adding an agent needs a Contributor (defining a workspace runtime
 for it, an Admin); connecting a tool and binding a folder a Contributor; adding a
@@ -3703,6 +3779,7 @@ mod tests {
             ("admit", src("admit.rs"), "pub fn cmd_admit", "\n}\n", &[]),
             ("admit", main.clone(), "\"admit\" => {", "\n        \"approvals\"", &[]),
             ("approvals", main.clone(), "\"approvals\" => match", "\n        },\n", &[]),
+            ("handoff", main.clone(), "\"handoff\" => {", "\n        \"devices\"", &[]),
             ("recovery-key", src("admit.rs"), "pub fn cmd_recovery_key", "\n}\n", &[]),
             ("config", main.clone(), "\"config\" => match", "\n        },\n", &[]),
             ("remote", main.clone(), "\"remote\" => {", "\n        }\n", &[]),

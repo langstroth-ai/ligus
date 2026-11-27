@@ -144,7 +144,9 @@ fn channel(s: &Shared, prov: Option<&ProvisionalPeer>, peer: Option<&TunnelPeer>
     }
     match caller() {
         Caller::Operator => Some(Channel::Operator),
-        Caller::Bearer => Some(Channel::Bearer),
+        // A phone's own direct-path credential binds no device here (plain
+        // HTTP on a network): counted like the shared token.
+        Caller::Bearer | Caller::Direct(_) => Some(Channel::Bearer),
         Caller::Tunnel(pid) => {
             let device = s.tunnel.as_ref().and_then(|t| t.registry.get(&pid)).and_then(|r| r.device_id);
             Some(Channel::Paired { pid, device })
