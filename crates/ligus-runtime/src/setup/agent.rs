@@ -627,6 +627,8 @@ fn plan(ops: &dyn SetupOps, inputs: &Inputs) -> Option<Plan> {
     let endpoint = inputs.get("endpoint").unwrap_or(endpoint_default(Some(s))).to_string();
     let model = match inputs.get("model") {
         Some(m) => m.to_string(),
+        // A CLI's default is its own (empty): no listing needed.
+        None if s.kind == Kind::Cli => String::new(),
         None => default_model(s, &model_list(ops, s, Some(&t), &endpoint)),
     };
     let runtimes = ops.runtimes();
@@ -881,8 +883,10 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, secret
     verify(ctx, ops, inputs, &fields, &runtime_id, &name, &t);
 }
 
-fn test_turn_on(inputs: &Inputs, fields: &[Field]) -> bool {
-    value(inputs, fields, "test-turn").is_some_and(|v| matches!(v, "true" | "on" | "yes" | "1"))
+/// Only what was given: a surface sends the toggle's default as an input
+/// (the sheet prefills it), and the CLI's `--test-turn` stays opt-in.
+fn test_turn_on(inputs: &Inputs, _fields: &[Field]) -> bool {
+    inputs.on("test-turn")
 }
 
 /// A coding CLI on this device: installed, signed in, and a sandbox to run in.

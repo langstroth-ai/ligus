@@ -365,6 +365,18 @@ fn the_first_agent_gets_a_test_turn_by_default_except_on_the_cli() {
     let f = Fake::default();
     let form = super::form(FlowId::Agent, &f, &Inputs::new());
     assert_eq!(field(&form, "test-turn").default, None);
+    // The default is the sheet's prefill, never a run's: switched off (or
+    // left out), no test turn runs.
+    for given in [None, Some("false")] {
+        let mut f = Fake { surface: Surface::Desktop, test_turn: Err(OpsError::Failed("must not run".into())), ..Fake::default() };
+        let mut i = vec![("name", "builder"), ("source", "claude-code")];
+        if let Some(v) = given {
+            i.push(("test-turn", v));
+        }
+        let o = run_(FlowId::Agent, &mut f, &i);
+        assert_eq!(o.exit, exit::OK, "{given:?}: {:?}", ids(&o));
+        assert!(!o.report.checks.iter().any(|c| c.id == "agent.test-turn"));
+    }
 }
 
 #[test]
