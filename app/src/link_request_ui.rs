@@ -232,6 +232,11 @@ impl Slot {
         Some(s.view.clone())
     }
 
+    /// Whether `gen` is still the flow's (not cancelled or replaced).
+    fn current(&self, gen: u64) -> bool {
+        self.0.lock().unwrap().gen == gen
+    }
+
     fn answer(&self, a: Answer) -> Result<(), String> {
         let s = self.0.lock().unwrap();
         match &s.answers {
@@ -491,8 +496,16 @@ async fn drive_inner<H: LinkHost>(
                         v.phase = "checking".into();
                         v.workspace_name = Some(shown_ws(&grant.conn));
                     });
-                    let (person, had_pin) = verify_on_log(host, &grant, LOG_BUDGET).await?;
-                    // Check 6: the person says who they link as.
+                    let live = || slot.current(gen);
+                    let (person, had_pin) = verify_on_log(host, &grant, LOG_BUDGET, &live).await?;
+                    // Check 6: the person says who they link as. Only an answer
+                    // given after the name is on screen counts.
+                    while let Ok(a) = rx.try_recv() {
+                        if a == Answer::Cancel {
+                            forget_unlinked(host, grant.workspace_id, had_pin, &live);
+                            return Err(Failed::new("Cancelled. Nothing was granted."));
+                        }
+                    }
                     let name = crate::shown(&person.display_name);
                     update(&|v| {
                         v.phase = "confirmPerson".into();
@@ -502,14 +515,14 @@ async fn drive_inner<H: LinkHost>(
                         match rx.recv().await {
                             Some(Answer::LinkAs(true)) => break,
                             Some(Answer::LinkAs(false)) | Some(Answer::Cancel) | None => {
-                                forget_unlinked(host, grant.workspace_id, had_pin);
+                                forget_unlinked(host, grant.workspace_id, had_pin, &live);
                                 return Err(Failed::new("Not linked. Nothing was saved on this computer."));
                             }
                             Some(_) => {}
                         }
                     }
                     update(&|v| v.phase = "linking".into());
-                    let person = commit(host, &grant, &person, had_pin).await?;
+                    let person = commit(host, &grant, &person, had_pin, &live).await?;
                     let pn = crate::shown(&person.display_name);
                     update(&|v| {
                         v.phase = "linked".into();
@@ -532,7 +545,8 @@ async fn drive_inner<H: LinkHost>(
 /// Pin the grant's founder, pull its workspace and find this desktop's
 /// certificate on the log (check 5), retrying while it syncs. Writes
 /// nothing to the workspace.
-async fn verify_on_log<H: LinkHost>(host: &H, grant: &OpenedGrant, budget: Duration) -> Result<(ActorIdentity, bool), Failed> {
+async fn verify_on_log<H: LinkHost>(host: &H, grant: &OpenedGrant, budget: Duration, live: &Live<'_>) -> Result<(ActorIdentity, bool), Failed> {
+    refuse_other_person(host, grant)?;
     let (founder, fk) = grant.conn.founder_pin().ok_or_else(|| Failed::final_("The approval names no workspace founder. Nothing was linked."))?;
     if ligus_runtime::workspace_invite::invite_relay_problem(&grant.conn.relay_url).is_some() {
         return Err(Failed::final_("The workspace has no relay this computer can use. Nothing was linked."));
@@ -545,27 +559,52 @@ async fn verify_on_log<H: LinkHost>(host: &H, grant: &OpenedGrant, budget: Durat
             Ok::<_, ligus_runtime::EventStoreError>(had)
         })
         .map_err(|e| Failed::new(format!("Couldn't pin the workspace ({e}).")))?;
-    let r = check_on_log(host, grant, &founder, budget).await;
+    let r = check_on_log(host, grant, &founder, budget, live).await;
     if r.is_err() {
-        forget_unlinked(host, ws, had_pin);
+        forget_unlinked(host, ws, had_pin, live);
     }
     r.map(|p| (p, had_pin))
 }
 
+/// Whether the flow is still the one the person sees (not cancelled or
+/// replaced by a new start).
+type Live<'a> = dyn Fn() -> bool + Sync + 'a;
+
+fn cancelled() -> Failed {
+    Failed::new("Cancelled. Nothing was granted.")
+}
+
+/// An install already linked to someone stops before it pulls another
+/// person's workspace (`LinkState::record_link` would refuse it anyway).
+fn refuse_other_person<H: LinkHost>(host: &H, grant: &OpenedGrant) -> Result<(), Failed> {
+    let link = LinkState::load(&host.data_dir()).map_err(|e| Failed::final_(format!("This computer's link record is unreadable ({e}).")))?;
+    match link.person {
+        Some(p) if p.account_id != grant.person.account_id => Err(Failed::final_(format!(
+            "This computer is already one of {}'s devices, so it can't be someone else's too.",
+            crate::shown(&p.display_name)
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// A link that didn't happen leaves no copy of a workspace this computer
-/// didn't have before.
-fn forget_unlinked<H: LinkHost>(host: &H, ws: Uuid, had_pin: bool) {
-    if !had_pin {
+/// didn't have before. A flow that was cancelled or replaced leaves it: a
+/// newer flow may be linking the same workspace with that pin.
+fn forget_unlinked<H: LinkHost>(host: &H, ws: Uuid, had_pin: bool, live: &Live<'_>) {
+    if !had_pin && live() {
         if let Err(e) = host.with_svc(|svc| svc.store().forget_workspace(ws)) {
             tracing::warn!(target: "link", "forgetting the workspace of a link that didn't happen failed: {e}");
         }
     }
 }
 
-async fn check_on_log<H: LinkHost>(host: &H, grant: &OpenedGrant, founder: &str, budget: Duration) -> Result<ActorIdentity, Failed> {
+async fn check_on_log<H: LinkHost>(host: &H, grant: &OpenedGrant, founder: &str, budget: Duration, live: &Live<'_>) -> Result<ActorIdentity, Failed> {
     let start = Instant::now();
     let mut last;
     loop {
+        if !live() {
+            return Err(cancelled());
+        }
         last = match host.sync(&grant.conn).await {
             Err(e) => format!("couldn't sync the workspace: {e}"),
             Ok(()) => {
@@ -602,9 +641,13 @@ async fn check_on_log<H: LinkHost>(host: &H, grant: &OpenedGrant, founder: &str,
 
 /// The writes of a link, once the person confirmed: record it, act as the
 /// person, accept the certificate, name this desktop, keep the workspace.
-async fn commit<H: LinkHost>(host: &H, grant: &OpenedGrant, person: &ActorIdentity, had_pin: bool) -> Result<ActorIdentity, Failed> {
+async fn commit<H: LinkHost>(host: &H, grant: &OpenedGrant, person: &ActorIdentity, had_pin: bool, live: &Live<'_>) -> Result<ActorIdentity, Failed> {
     let dir = host.data_dir();
     let ws = grant.workspace_id;
+    // Cancelled while it was checking: nothing is saved.
+    if !live() {
+        return Err(cancelled());
+    }
     let recorded = (|| {
         let mut link = LinkState::load(&dir).map_err(|e| Failed::final_(format!("This computer's link record is unreadable ({e}).")))?;
         let label = link.pending_for(&grant.request, now_ms()).map(|p| p.label.trim().to_string()).unwrap_or_default();
@@ -615,7 +658,7 @@ async fn commit<H: LinkHost>(host: &H, grant: &OpenedGrant, person: &ActorIdenti
     let label = match recorded {
         Ok(l) => l,
         Err(f) => {
-            forget_unlinked(host, ws, had_pin);
+            forget_unlinked(host, ws, had_pin, live);
             return Err(f);
         }
     };
@@ -697,6 +740,7 @@ pub(crate) fn open_grant<H: LinkHost>(host: &H, slot: &Slot, text: &str) -> Resu
     let device_id = pending.device_id;
     let (device, _) = host.keys()?;
     let person = grant.check(&device.public_key_bytes(), now_ms()).map_err(|e| format!("{e}."))?;
+    refuse_other_person(host, &grant).map_err(|f| f.text)?;
     let (person_name, ws_name, fp) = (crate::shown(&person.display_name), shown_ws(&grant.conn), grant.approver_fingerprint());
     let mut s = slot.0.lock().unwrap();
     s.pasted = Some((grant, device_id));
@@ -720,10 +764,11 @@ pub(crate) async fn redeem<H: LinkHost>(host: Arc<H>, slot: Arc<Slot>) -> LinkFl
         (grant, s.gen)
     };
     host.changed(&slot.view());
+    let live = || slot.current(gen);
     let r = async {
         may_link(&*host)?;
-        let (person, had_pin) = verify_on_log(&*host, &grant, LOG_BUDGET).await?;
-        commit(&*host, &grant, &person, had_pin).await
+        let (person, had_pin) = verify_on_log(&*host, &grant, LOG_BUDGET, &live).await?;
+        commit(&*host, &grant, &person, had_pin, &live).await
     }
     .await;
     let v = match r {

@@ -13397,6 +13397,12 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     // them, without their account key; each workspace checks it counts there
     // when it opens (`link_request_ui::bind_workspace`).
     if link_request_ui::adopt_at_launch(&mut service, &data_dir)? {
+        // The team workspace that syncs from launch (the device-host beat
+        // writes there before any workspace is opened) is bound now.
+        let room = settings.lock().unwrap().sync_room.clone();
+        if settings.lock().unwrap().workspaces.iter().any(|w| w.room == room && w.dm_account.is_none()) {
+            link_request_ui::bind_workspace(&mut service, &data_dir, ligus_core::room_workspace_id(&room), Some(stored.account.id));
+        }
         service.set_author_git_email(settings.lock().unwrap().git_email.clone());
     }
 
@@ -14336,10 +14342,17 @@ pub(crate) fn set_active_workspace_sync(state: State<AppState>, workspace_id: St
         // uses the in-band self-consistency rule.
         let mut svc = state.service.lock().unwrap();
         svc.set_trusted_founder(None);
-        // The private Home workspace never syncs: a linked desktop writes there
-        // whatever its team workspaces allow.
+        // A linked desktop's block follows the team workspace that keeps
+        // syncing meanwhile (the device-host beat writes there), not Home.
         if link_request_ui::linked_person(&state.data_dir).is_some() {
-            svc.set_write_block(None);
+            let room = state.settings.lock().unwrap().sync_room.clone();
+            let synced = state.settings.lock().unwrap().workspaces.iter().any(|w| w.room == room && w.dm_account.is_none());
+            if synced {
+                let local_account = state.identity.load().ok().flatten().map(|s| s.account.id);
+                link_request_ui::bind_workspace(&mut svc, &state.data_dir, ligus_core::room_workspace_id(&room), local_account);
+            } else {
+                svc.set_write_block(None);
+            }
         }
         // A chat id several workspaces claim reads as the active one's.
         svc.set_context_workspace(Some(state.local_workspace_id));

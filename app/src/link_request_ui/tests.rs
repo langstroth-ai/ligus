@@ -446,3 +446,30 @@ async fn saying_no_to_link_as_leaves_nothing_behind() {
     assert!(!LinkState::load(&two.dir).unwrap().is_linked());
     assert!(two.adopted.lock().unwrap().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_stops_a_pasted_link_that_is_still_checking() {
+    let relay = spawn_relay().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut first = First::found(&tmp.path().join("one"), &relay, "acme");
+    first.sync().await;
+    let ws = first.ws();
+    let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
+    let slot = Arc::new(Slot::default());
+    let v = paste(&*two, &slot);
+    let request = LinkRequest::decode(v.request.as_deref().unwrap()).unwrap();
+    // The grant, but the certificate hasn't reached the relay yet.
+    let grant = first.svc.issue_computer_link(ws, &request, &encode_workspace_invite(&first.conn()), now_ms()).unwrap();
+    open_grant(&*two, &slot, &grant).unwrap();
+    let running = tokio::spawn(redeem(two.clone(), slot.clone()));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(slot.view().phase, "linking");
+    // The person cancels; then the certificate arrives.
+    slot.reset();
+    first.sync().await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), running).await.expect("the redeem stops");
+    assert!(!LinkState::load(&two.dir).unwrap().is_linked(), "cancelled: nothing linked");
+    assert!(!two.svc.lock().unwrap().is_delegated());
+    assert!(two.adopted.lock().unwrap().is_empty());
+    assert_eq!(slot.view().phase, "idle");
+}
