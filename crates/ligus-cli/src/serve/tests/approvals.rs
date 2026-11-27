@@ -16,11 +16,11 @@ use sha2::Digest as _;
 
 use super::*;
 
-fn b64(b: &[u8]) -> String {
+pub(super) fn b64(b: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
 }
 
-fn unb64(s: &str) -> Vec<u8> {
+pub(super) fn unb64(s: &str) -> Vec<u8> {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).unwrap()
 }
 
@@ -56,25 +56,25 @@ impl BoxDev {
 }
 
 /// A signed envelope (wire note 3.2) by a phone's P-256 key.
-fn phone_envelope(t: &str, body: &Value, phone: &ligus_core::testkit::Phone) -> String {
+pub(super) fn phone_envelope(t: &str, body: &Value, phone: &ligus_core::testkit::Phone) -> String {
     let body = body.to_string();
     let pre = mc::message_preimage(t, &body).unwrap();
     let sig = ligus_core::crypto::sign_p256(&phone.key, &pre);
     json!({ "t": t, "alg": "p256", "key": b64(&phone.public_key()), "body": body, "sig": b64(&sig) }).to_string()
 }
 
-struct World {
-    h: Harness,
-    ws: Uuid,
+pub(super) struct World {
+    pub(super) h: Harness,
+    pub(super) ws: Uuid,
     /// A member's mailbox client on the relay (to read what it stores).
-    relay: MailboxClient,
-    epoch: am::EpochKey,
-    address: ApprovalAddress,
-    phone: ligus_core::testkit::Phone,
-    account: Uuid,
+    pub(super) relay: MailboxClient,
+    pub(super) epoch: am::EpochKey,
+    pub(super) address: ApprovalAddress,
+    pub(super) phone: ligus_core::testkit::Phone,
+    pub(super) account: Uuid,
 }
 
-async fn kick_until<F: Fn() -> bool>(h: &Harness, what: &str, done: F) {
+pub(super) async fn kick_until<F: Fn() -> bool>(h: &Harness, what: &str, done: F) {
     for _ in 0..300 {
         if done() {
             return;
@@ -89,7 +89,7 @@ async fn kick_until<F: Fn() -> bool>(h: &Harness, what: &str, done: F) {
 /// A serve box (a service member) in a desktop's workspace, a phone the
 /// desktop certified for its person (an Admin), and the box's approval
 /// mailbox registered by the box itself.
-async fn world() -> World {
+pub(super) async fn world() -> World {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
     let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     // Through the tunnel in real life; the operator on loopback here (the

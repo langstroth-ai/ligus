@@ -263,7 +263,10 @@ pub fn cmd_admit(cfg: &Config, positional: &[&String], flag: impl Fn(&str) -> Op
             println!("Kept the box admission for workspace '{}'. Start `ligus serve` or `ligus worker`: it joins as its own member.", r.room);
             Ok(())
         }
-        Some("issue") => cmd_issue(cfg, flag("--ttl"), flag("--request"), flag("--recovery-words-file"), flag("--out")),
+        Some("issue") => {
+            let wait = flag("--timeout").map(|t| crate::cli_flags::parse_duration(&t)).transpose()?.unwrap_or(crate::handoff::DEFAULT_TIMEOUT);
+            cmd_issue(cfg, flag("--ttl"), flag("--request"), flag("--recovery-words-file"), flag("--out"), Some(wait))
+        }
         Some("close") => {
             let mut svc = crate::open_service(cfg)?;
             let n = svc.close_settled_admissions(uuid_of_room(&cfg.room))?;
@@ -272,7 +275,7 @@ pub fn cmd_admit(cfg: &Config, positional: &[&String], flag: impl Fn(&str) -> Op
         }
         _ => bail!(
             "usage: ligus admit request [--label NAME] | redeem <ligusadmit1:code> | redeem - | redeem --file PATH | \
-             issue [--ttl 1h] [--request ligusjoin1:...] --recovery-words-file PATH [--out PATH] | close"
+             issue [--ttl 1h] [--request ligusjoin1:...] [--timeout 10m | --recovery-words-file PATH] [--out PATH] | close"
         ),
     }
 }
@@ -332,29 +335,37 @@ impl ligus_runtime::chat_service::PresenceProvider for RecoveryPresence {
 
 /// The recovery key in a recovery-words file: a regular file only its owner
 /// can read (the words are the person's presence), wiped once parsed.
+#[cfg(test)]
 fn recovery_from_file(path: &str) -> Result<ligus_core::presence::RecoveryKey> {
     crate::secret_arg::recovery_key_from_file(Path::new(path))
 }
 
-/// `ligus admit issue`: the headless Admin path.
-fn cmd_issue(cfg: &Config, ttl: Option<String>, request: Option<String>, words: Option<String>, out: Option<String>) -> Result<()> {
+/// `ligus admit issue`: the headless Admin path. The Admin's passkey: a
+/// hand-off to their own desktop or phone (waiting up to `handoff`), or
+/// their recovery key (`words`).
+fn cmd_issue(cfg: &Config, ttl: Option<String>, request: Option<String>, words: Option<String>, out: Option<String>, handoff: Option<std::time::Duration>) -> Result<()> {
     let request = request.map(|r| JoinRequest::decode(&r).map_err(|e| anyhow!(e))).transpose()?;
     let ttl = match ttl {
         Some(t) => parse_ttl(&t)?,
         None if request.is_some() => box_admission::DEFAULT_TTL_MS,
         None => box_admission::DEFAULT_BEARER_TTL_MS,
     };
-    let Some(words) = words else {
-        bail!("issuing an admission needs an Admin's presence: use the desktop or phone, or pass --recovery-words-file");
-    };
+    const NO_PRESENCE: &str = "issuing an admission needs an Admin's presence: use the desktop or phone, or pass --recovery-words-file";
+    if words.is_none() && handoff.is_none() {
+        bail!(NO_PRESENCE);
+    }
     let ids = identity(cfg);
     if ids.load()?.is_some_and(|s| s.service) {
         bail!("this data dir is a box (a service member); an Admin issues admissions from their own identity");
     }
     let mut svc = crate::open_service(cfg)?;
-    svc.set_presence_provider(Some(std::sync::Arc::new(RecoveryPresence(recovery_from_file(&words)?))));
+    let Some(presence) = crate::handoff::install_for_command(cfg, &mut svc, words.as_deref(), handoff)? else {
+        bail!(NO_PRESENCE);
+    };
     let ws = uuid_of_room(&cfg.room);
-    let (inv, mut seed) = svc.issue_box_admission(ws, ttl, request.as_ref())?;
+    let (inv, mut seed) = svc
+        .issue_box_admission(ws, ttl, request.as_ref())
+        .map_err(|e| presence.explain(e.into(), "ligus admit issue", "admit the box from the desktop or phone, or pass --recovery-words-file"))?;
     let code = crate::serve::admission_code(cfg, &svc, inv, &seed);
     // The redeem seed is in the code now; no other copy is kept.
     zeroize::Zeroize::zeroize(&mut seed);
@@ -393,9 +404,10 @@ pub fn cmd_phones_certify(
     words: Option<String>,
     fingerprint: Option<String>,
     confirm: Option<ConfirmFingerprint<'_>>,
+    handoff: Option<std::time::Duration>,
 ) -> Result<ligus_runtime::phone_enroll::PhoneCode> {
     use ligus_runtime::phone_enroll::{PhoneCode, PhoneStanding};
-    let usage = "usage: ligus phones certify <ligusphone1:code> | --code-file PATH  --recovery-words-file PATH --fingerprint XXXX-XXXX-XXXX-XXXX-XXXX";
+    let usage = "usage: ligus phones certify <ligusphone1:code> | --code-file PATH  --fingerprint XXXX-XXXX-XXXX-XXXX-XXXX [--timeout 10m | --recovery-words-file PATH]";
     let text = match (code, code_file) {
         (Some(c), None) => c.to_string(),
         (None, Some(path)) => read_code_file(Path::new(&path))?,
@@ -417,20 +429,26 @@ pub fn cmd_phones_certify(
             "compare the fingerprint with the phone's screen (Settings > This phone) and pass it: --fingerprint XXXX-XXXX-XXXX-XXXX-XXXX (or run this at a terminal to confirm it there)"
         ),
     }
-    let Some(words) = words else {
-        bail!("certifying a phone needs its person's presence: use the desktop (My devices > Add this phone), or pass --recovery-words-file");
-    };
+    const NO_PRESENCE: &str =
+        "certifying a phone needs its person's presence: use the desktop (My devices > Add this phone), or pass --recovery-words-file";
+    if words.is_none() && handoff.is_none() {
+        bail!(NO_PRESENCE);
+    }
     if identity(cfg).load()?.is_some_and(|s| s.service) {
         bail!("this data dir is a box (a service member); a phone is certified by its own person's identity");
     }
     let mut svc = crate::open_service(cfg)?;
-    svc.set_presence_provider(Some(std::sync::Arc::new(RecoveryPresence(recovery_from_file(&words)?))));
     let ws = uuid_of_room(&cfg.room);
     if svc.phone_standing(ws, &phone)? == PhoneStanding::AlreadyMine {
         println!("phone {} ({}) is already one of your devices", phone.device_id, phone.fingerprint());
         return Ok(phone);
     }
-    let id = svc.certify_phone_code(ws, &phone)?;
+    let Some(presence) = crate::handoff::install_for_command(cfg, &mut svc, words.as_deref(), handoff)? else {
+        bail!(NO_PRESENCE);
+    };
+    let id = svc
+        .certify_phone_code(ws, &phone)
+        .map_err(|e| presence.explain(e.into(), "ligus phones certify", "use the desktop (My devices > Add this phone), or pass --recovery-words-file"))?;
     println!(
         "certified phone '{}' ({id}, fingerprint {}) as one of your devices (the phone tier). Sync to publish it (`ligus sync`), give the box a few seconds to pull it, then tap Retry on the phone (or scan a new `ligus pair` link).",
         phone.label,

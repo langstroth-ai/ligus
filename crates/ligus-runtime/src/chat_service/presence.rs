@@ -217,7 +217,16 @@ impl ChatService {
     /// is stamped with this device's account.
     pub fn presence_request_for(&self, env: &SessionEventEnvelope) -> Result<PresenceRequest> {
         let mine = self.author.account_id.ok_or_else(|| ChatError::Unauthorized("this device has no account".into()))?;
-        if env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) != Some(mine) {
+        self.presence_request_as(env, mine)
+    }
+
+    /// [`ChatService::presence_request_for`] for `account`, a person this
+    /// device acts for without being their device (`ligus serve`, for a
+    /// phone it places as that person): refused unless the draft is stamped
+    /// with `account`. The relying party and credentials come from this
+    /// device's fold, the summary from the draft.
+    pub fn presence_request_as(&self, env: &SessionEventEnvelope, account: Uuid) -> Result<PresenceRequest> {
+        if env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) != Some(account) {
             return Err(ChatError::Unauthorized("that draft isn't stamped with your account".into()));
         }
         let mut req = self.presence_request(env)?;
@@ -238,6 +247,13 @@ impl ChatService {
     /// revoked), as this device's fold sees them.
     pub fn my_device_ids(&self, workspace_id: Uuid) -> Result<Vec<Uuid>> {
         let Some(account) = self.author.account_id else { return Ok(Vec::new()) };
+        self.account_device_ids(workspace_id, account)
+    }
+
+    /// `account`'s devices on `workspace_id` (certified for it, trusted and
+    /// not revoked), as this device's fold sees them: who may ask for, or
+    /// answer, that person's passkey hand-off.
+    pub fn account_device_ids(&self, workspace_id: Uuid, account: Uuid) -> Result<Vec<Uuid>> {
         let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         let head = timeline.current();
         Ok(head
