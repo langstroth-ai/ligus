@@ -35,6 +35,7 @@ pub mod connection_settings;
 pub mod context;
 pub mod device_binding;
 pub mod device_enroll;
+pub mod device_lifecycle;
 pub mod directory_trust;
 pub mod display;
 pub mod dm;
@@ -117,6 +118,8 @@ pub mod workspace_trust;
 pub mod test_relay;
 #[cfg(test)]
 mod computer_link_tests;
+#[cfg(test)]
+mod leave_tests;
 #[cfg(test)]
 mod dearth_roster_tests;
 #[cfg(test)]

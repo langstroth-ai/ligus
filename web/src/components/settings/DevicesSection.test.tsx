@@ -98,7 +98,7 @@ describe("DevicesSection", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Details" }));
     expect(screen.getByTestId("device-details-p1").textContent).toContain("Tunnel: done");
     await userEvent.click(within(row).getByRole("button", { name: "Actions for Old iPhone" }));
-    const hide = screen.getByRole("menuitem", { name: "Hide from this list" });
+    const hide = screen.getByRole("menuitem", { name: "Remove from view" });
     expect(hide.closest("[data-tip]")?.getAttribute("data-tip") ?? hide.getAttribute("data-tip") ?? "").toContain(
       "it stays revoked",
     );

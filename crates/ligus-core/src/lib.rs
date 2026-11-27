@@ -51,6 +51,7 @@ pub mod profile;
 pub mod proposal_archive;
 pub mod proposal_sets;
 pub mod proposals;
+pub mod leave;
 pub mod retirement;
 pub mod runtime;
 pub mod sandbox;

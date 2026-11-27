@@ -527,8 +527,28 @@ impl ChatService {
             crate::phone_enroll::PhoneStanding::Conflict(why) => return Err(ChatError::Unauthorized(why)),
         }
         let cert = self.certify_phone(workspace_id, code.device_id, &code.public_key)?;
+        // Named in the same step (workspace model v3, 10.1; U5): the name the
+        // phone chose, else "Phone · added 24 Nov". Synced, so every desktop
+        // and box shows it, and renameable later. Best effort: the phone is
+        // enrolled either way.
+        let label = phone_label(&code.label, cert.issued_at);
+        if let Err(e) = self.set_device_label(workspace_id, cert.device_id, &label) {
+            tracing::warn!(error = %e, "couldn't name the phone at enrolment");
+        }
         Ok(cert.device_id)
     }
+}
+
+/// The synced name a phone gets at enrolment: the one it chose (cleaned),
+/// else what it is and the day it was added ("Phone · added 24 Nov").
+pub fn phone_label(chosen: &str, added: Timestamp) -> String {
+    let chosen = ligus_proto::names::clean_display_name(chosen);
+    if !chosen.trim().is_empty() && ligus_core::profile::label_ok(&chosen).is_ok() {
+        return chosen;
+    }
+    let d = added.inner().date();
+    let month = d.month().to_string();
+    format!("Phone \u{00B7} added {} {}", d.day(), &month[..3])
 }
 
 /// The refusal of an enrollment statement that doesn't verify.

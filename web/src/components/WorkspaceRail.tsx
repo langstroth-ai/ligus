@@ -11,13 +11,15 @@ import {
   workspaceInvite,
   workspaceShareCode,
   removeWorkspace,
+  leaveWorkspace,
+  leaveWorkspaceCheck,
   type WorkspaceInfoDto,
 } from "@/lib/ipc";
 import { LigusBrandMark } from "@/components/LigusBrand";
 import { AdmitBoxModal } from "@/components/AdmitBoxModal";
 import { MenuPanel, type MenuItemSpec } from "@/components/Menu";
 import { toast, errMsg } from "@/components/Toast";
-import { confirmThen } from "@/lib/confirm";
+import { confirmDialog } from "@/components/Dialog";
 import { IconPlus, IconUsers, IconPanelLeft, IconGear, IconInfo } from "@/lib/icons";
 
 /// Discord-style rail of workspace "servers": Personal (local) pinned at top,
@@ -161,22 +163,52 @@ export function WorkspaceRail({
         { label: "Admit a box…", onClick: () => setAdmitting(ws) },
         { type: "separator" },
         // leave() asks for confirmation itself.
-        { label: "Leave workspace", danger: true, onClick: () => leave(ws) },
+        { label: "Leave workspace", danger: true, onClick: () => void leave(ws) },
       );
     }
     return items;
   }
 
-  function leave(ws: WorkspaceInfoDto) {
-    confirmThen(`Leave “${ws.name}”? Its chats stop syncing on this device.`, async () => {
+  /// Leave on your own (workspace model v3, 10.4): one line on what
+  /// happens, and that leaving isn't revoking. Where the workspace refuses
+  /// it (the founder, the last Owner, a linked computer), the only offer is
+  /// removing it from this device.
+  async function leave(ws: WorkspaceInfoDto) {
+    let check;
+    try {
+      check = await leaveWorkspaceCheck(ws.id);
+    } catch (e) {
+      toast.error(errMsg(e));
+      return;
+    }
+    if (check.state === "refused") {
+      const ok = await confirmDialog(
+        `${check.refusal ?? "This workspace doesn't let you leave from here."} You can remove “${ws.name}” from this device only: you stay a member and its chats stop syncing here.`,
+        { title: "Couldn't leave", confirmLabel: "Remove from this device", danger: true },
+      );
+      if (!ok) return;
       try {
         await removeWorkspace(ws.id);
         await refresh();
-        toast.success(`Left “${ws.name}”.`);
+        toast.success(`Removed “${ws.name}” from this device.`);
       } catch (e) {
         toast.error(errMsg(e));
       }
+      return;
+    }
+    const ok = await confirmDialog(`${check.line} ${check.reminder}`, {
+      title: `Leave “${ws.name}”?`,
+      confirmLabel: check.state === "passkey" ? "Leave with passkey" : "Leave",
+      danger: true,
     });
+    if (!ok) return;
+    try {
+      await leaveWorkspace(ws.id);
+      await refresh();
+      toast.success(`Left “${ws.name}”.`);
+    } catch (e) {
+      toast.error(errMsg(e));
+    }
   }
 
   return (

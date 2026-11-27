@@ -163,6 +163,17 @@ pub struct ChatSession {
     /// events, never serialized.
     #[serde(skip)]
     pub retired: BTreeMap<String, Uuid>,
+    /// Members who asked to leave (`MemberLeft`, workspace model v3, 10.4):
+    /// member id → when and from where. Under rules 3 display only: they
+    /// stay in `members`. Dropped when the member is removed or retired.
+    /// Folded only from signed events, never serialized.
+    #[serde(skip)]
+    pub left: BTreeMap<String, crate::leave::Left>,
+    /// When each (device, account) label was last set and by which device
+    /// (render-only, beside `device_labels`): lt follows a rename made on
+    /// the person's desktop by comparing it with the name it wrote itself.
+    #[serde(skip)]
+    pub device_label_set: BTreeMap<(Uuid, Uuid), crate::profile::LabelSet>,
     /// Fold state, never serialized: a counter the fold stamps on each
     /// message as it is posted (appended finished, or completed), so the
     /// transcript draws a reply where it finished
@@ -274,6 +285,8 @@ impl ChatSession {
             profiles: BTreeMap::new(),
             device_labels: BTreeMap::new(),
             retired: BTreeMap::new(),
+            left: BTreeMap::new(),
+            device_label_set: BTreeMap::new(),
             transcript_seq: 0,
         }
     }

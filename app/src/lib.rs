@@ -49,6 +49,7 @@ mod phone_enroll_ui;
 mod phones_ui;
 mod approvals_ui;
 mod people;
+mod leave_ui;
 mod links_ui;
 mod agent_iface;
 mod hook_socket;
@@ -3316,6 +3317,7 @@ fn member_dto(m: &WorkspaceMember, self_actor_id: &str) -> WorkspaceMemberDto {
         remove_refusal: None,
         role_options: Vec::new(),
         regrant_refusal: None,
+        left_at: None,
     }
 }
 
@@ -5056,6 +5058,7 @@ pub(crate) fn list_members_sync(state: State<AppState>, session_id: String) -> R
         if let Ok((Some(config), timeline)) = svc.store().load_config(s.workspace_id, None, None) {
             for dto in out.iter_mut() {
                 gate_member_actions(dto, &me, timeline.current(), &config);
+                dto.left_at = config.left.get(&dto.id).map(|l| rfc3339(l.at));
             }
         }
     }
@@ -5076,7 +5079,7 @@ pub(crate) fn list_members_sync(state: State<AppState>, session_id: String) -> R
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MembershipAuditDto {
-    /// "added" | "removed".
+    /// "added" | "removed" | "left" (asked to leave).
     action: String,
     /// The affected member's display name (or their id if never seen added).
     member: String,
@@ -5131,6 +5134,10 @@ pub(crate) fn list_membership_audit_sync(state: State<AppState>) -> Result<Vec<M
             ligus_core::SessionEvent::MemberRemoved { member_id, .. } => {
                 let member = names.get(member_id).cloned().unwrap_or_else(|| member_id.clone());
                 out.push(MembershipAuditDto { action: "removed".into(), member, role: None, by, at });
+            }
+            ligus_core::SessionEvent::MemberLeft { member_id, .. } => {
+                let member = names.get(member_id).cloned().unwrap_or_else(|| member_id.clone());
+                out.push(MembershipAuditDto { action: "left".into(), member, role: None, by, at });
             }
             _ => {}
         }
@@ -5236,6 +5243,8 @@ struct MyDeviceDto {
     /// offered as Remove.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     never_written: bool,
+    /// "pending" | "active" | "idle" | "revoked" (workspace model v3, 10.1).
+    state: &'static str,
 }
 
 /// A host that names you as its owner but isn't certified as your device
@@ -5539,16 +5548,20 @@ pub(crate) fn list_my_devices_sync(state: State<AppState>) -> Result<Vec<MyDevic
         .flatten()
         .map(|c| c.device_labels.iter().filter_map(|(d, m)| Some((*d, m.get(&me?)?.clone()))).collect())
         .unwrap_or_default();
+    let certified: HashMap<Uuid, Option<ligus_core::Timestamp>> = devices.iter().map(|d| (d.device_id, d.certified_at)).collect();
+    let beats: HashMap<String, ligus_core::Timestamp> = hosts.iter().map(|h| (h.id.clone(), state.host_presence.last_seen(h))).collect();
     let mut rows = my_device_rows(devices, here, |d| phones.contains(&d), |d| {
         let host = hosts.iter().find(|h| h.id == d.to_string())?;
         Some((host.label.clone(), rfc3339(state.host_presence.last_seen(host))))
     }, &phone_labels);
+    let now = ligus_core::Timestamp::now();
     for r in &mut rows {
         let Ok(d) = Uuid::parse_str(&r.device_id) else { continue };
         if let Some(l) = synced.get(&d) {
             r.label = shown(l);
             r.named = true;
         }
+        r.note = notes.get(&d).cloned();
         if !r.phone && !r.revoked && !r.this_device {
             if let Ok(Some(at)) = svc.never_written(ws, d) {
                 r.never_written = true;
@@ -5556,9 +5569,17 @@ pub(crate) fn list_my_devices_sync(state: State<AppState>) -> Result<Vec<MyDevic
                 r.note = Some(format!("Approved on {} {}, {}. It hasn't written anything yet.", day.month(), day.day(), day.year()));
             }
         }
-    }
-    for r in &mut rows {
-        r.note = Uuid::parse_str(&r.device_id).ok().and_then(|d| notes.get(&d).cloned());
+        // Pending, Active, Idle or Revoked (workspace model v3, 10.1). A
+        // phone's pairings seen by a box count as beats on the page.
+        let facts = ligus_runtime::device_lifecycle::DeviceFacts {
+            revoked: r.revoked,
+            never_written: r.never_written,
+            this_device: r.this_device,
+            last_signed: svc.store().newest_signed_at(ws, d).ok().flatten(),
+            last_beat: beats.get(&r.device_id).copied(),
+            certified_at: certified.get(&d).copied().flatten(),
+        };
+        r.state = ligus_runtime::device_lifecycle::state_of(&facts, now).as_str();
     }
     Ok(rows)
 }
@@ -5654,6 +5675,7 @@ fn my_device_rows(
                 named,
                 note: None,
                 never_written: false,
+                state: if d.revoked { "revoked" } else { "active" },
             }
         })
         .collect()
@@ -17376,6 +17398,8 @@ pub fn run() {
             inspect_box_request,
             admit_box,
             remove_workspace,
+            leave_ui::leave_workspace_check,
+            leave_ui::leave_workspace,
             get_connection_settings,
             update_connection_settings,
             get_claude_code_model,

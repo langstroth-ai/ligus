@@ -358,14 +358,23 @@ function handle(cmd: string, args: Args): unknown {
       return { macos: true, translocated: false, quarantined: false };
     case "list_membership_audit":
       return [];
+    case "leave_workspace_check":
+      return {
+        state: "passkey",
+        refusal: null,
+        line: "Others see you as asked to leave until an Admin removes you, and this device stops syncing the workspace.",
+        reminder: "Leaving isn't revoking: your other devices and anything they already copied keep their keys. Revoke a lost device in My devices.",
+      };
+    case "leave_workspace":
+      return null;
     case "workspace_list_invites":
       return [];
     case "list_my_devices":
       return [
-        { deviceId: "d1", label: "MacBook Pro", fingerprint: "a1b2-c3d4", thisDevice: true, revoked: false, lastSeen: null, phone: false, named: true },
-        { deviceId: "p1", label: "Ana's iPhone", fingerprint: "e5f6-a7b8", thisDevice: false, revoked: false, lastSeen: null, phone: true, named: true },
-        { deviceId: "c1", label: "Device 376b5d72", fingerprint: "7f3a-91c0", thisDevice: false, revoked: false, lastSeen: null, phone: false, named: false },
-        { deviceId: "f3b686ca", label: "Device f3b686ca", fingerprint: "2c41-88e0", thisDevice: false, revoked: false, lastSeen: null, phone: false, named: false, neverWritten: true, note: "Approved on November 12, 2026. It hasn't written anything yet." },
+        { deviceId: "d1", label: "MacBook Pro", fingerprint: "a1b2-c3d4", thisDevice: true, revoked: false, lastSeen: null, phone: false, named: true, state: "active" },
+        { deviceId: "p1", label: "Ana's iPhone", fingerprint: "e5f6-a7b8", thisDevice: false, revoked: false, lastSeen: null, phone: true, named: true, state: "active" },
+        { deviceId: "c1", label: "Device 376b5d72", fingerprint: "7f3a-91c0", thisDevice: false, revoked: false, lastSeen: null, phone: false, named: false, state: "idle" },
+        { deviceId: "f3b686ca", label: "Device f3b686ca", fingerprint: "2c41-88e0", thisDevice: false, revoked: false, lastSeen: null, phone: false, named: false, neverWritten: true, state: "pending", note: "Approved on November 12, 2026. It hasn't written anything yet." },
         ...(flags.devices ? fx.revokedDevices : []),
       ].map((d) => (deviceNames[d.deviceId] ? { ...d, label: deviceNames[d.deviceId], named: true } : d));
     case "rename_device":

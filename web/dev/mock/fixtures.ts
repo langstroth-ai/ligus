@@ -251,6 +251,7 @@ export const members = [
   { id: "mem-maya", actorId: "a-maya", displayName: "Maya", role: "admin", title: "Backend", index: 2, isSelf: false, avatarUrl: null },
   { id: "mem-theo", actorId: "a-theo", displayName: "Theo", role: "contributor", title: "Design", index: 3, isSelf: false, avatarUrl: null },
   { id: "mem-iris", actorId: "a-iris", displayName: "Iris", role: "viewer", title: "", index: 4, isSelf: false, avatarUrl: null },
+  { id: "mem-ola", actorId: "a-ola", displayName: "Ola", role: "contributor", title: "", index: 5, isSelf: false, avatarUrl: null, leftAt: iso(60 * 24 * 3) },
 ];
 
 export const serverMembers = [

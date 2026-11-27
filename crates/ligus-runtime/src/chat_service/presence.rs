@@ -118,6 +118,7 @@ pub fn summarize(payload: &SessionEvent) -> String {
         }
         SessionEvent::PasskeyRegistered { credential } => format!("Register passkey {}", shown(&credential.label)),
         SessionEvent::PasskeyRemoved { .. } => "Remove a passkey".into(),
+        SessionEvent::MemberLeft { .. } => "Leave this workspace (you're listed as asked to leave)".into(),
         // The relying party decides where every later passkey ceremony
         // happens: the sheet names it, never just the version.
         SessionEvent::WorkspaceRulesSet { version, presence: Some(p) } => {

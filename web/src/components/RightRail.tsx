@@ -122,6 +122,7 @@ import { AgentAsks } from "@/components/AgentAsks";
 import { MemoryPane } from "@/components/MemoryPane";
 import { hostGatewaysLabel } from "@/components/settings/GatewayPicker";
 import { LIKELY_ME_HINT, likelyMeReason } from "@/lib/likelyMe";
+import { isIdleSince, leftLine, loadHiddenLeft, saveHiddenLeft } from "@/lib/lifecycle";
 import { openArchivedProposals, openSetup, requestDevices } from "@/lib/nav";
 
 // Re-exported from the shared pane source so existing
@@ -1846,7 +1847,22 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
   // yourself — a footgun (the last owner can't be removed anyway, and "revoke
   // myself" would rotate a key you keep). Leaving a workspace is the workspace
   // rail's job. Matches the sidebar People count, which already excludes self.
-  const collaborators = (members.data ?? []).filter((m) => !m.isSelf);
+  const everyone = (members.data ?? []).filter((m) => !m.isSelf);
+  // Members who asked to leave and were removed from view here (this device
+  // only; they stay listed in the workspace until an Admin removes them).
+  const [hiddenLeft, setHiddenLeft] = useState(loadHiddenLeft);
+  const [showHiddenLeft, setShowHiddenLeft] = useState(false);
+  const setHiddenLeftOne = (id: string, hide: boolean) =>
+    setHiddenLeft((prev) => {
+      const next = new Set(prev);
+      if (hide) next.add(id);
+      else next.delete(id);
+      saveHiddenLeft(next);
+      return next;
+    });
+  const hiddenHere = (m: { id: string; leftAt?: string | null }) => Boolean(m.leftAt) && hiddenLeft.has(m.id);
+  const hiddenCount = everyone.filter(hiddenHere).length;
+  const collaborators = everyone.filter((m) => showHiddenLeft || !hiddenHere(m));
   // Your own membership row — shown so a solo/owned workspace doesn't read as
   // empty ("0 people / no extra members"). Absent means you aren't in this
   // workspace's roster (e.g. it was created under a different/previous identity).
@@ -2130,6 +2146,8 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   )
                 }
                 onRemoveFromRelay={relay ? () => removeFromRelay(relay, member.displayName) : undefined}
+                hiddenHere={hiddenHere(member)}
+                onHideHere={member.leftAt ? (hide) => setHiddenLeftOne(member.id, hide) : undefined}
                 onLinkComputer={
                   canLinkComputers && selfMember && likelyMeReason(member, selfMember.displayName, hosts.data ?? [])
                     ? () => requestDevices({ open: "computer", member: { memberId: member.id, displayName: member.displayName } })
@@ -2139,7 +2157,17 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
             );
           })}
         </RowList>
-        {collaborators.length === 0 && <EmptyHint text="No other members yet" />}
+        {hiddenCount > 0 && (
+          <button
+            type="button"
+            className="px-1 text-[11.5px] text-ink-soft hover:text-ink"
+            onClick={() => setShowHiddenLeft((v) => !v)}
+            data-testid="show-hidden-left"
+          >
+            {showHiddenLeft ? "Leave removed ones out" : `${hiddenCount} removed from view · Show`}
+          </button>
+        )}
+        {collaborators.length === 0 && hiddenCount === 0 && <EmptyHint text="No other members yet" />}
       </Section>
 
       {relayOnly.length > 0 && (
@@ -2295,12 +2323,18 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
             <RowList label="Membership changes">
               {(audit.data ?? []).map((e, i) => (
                 <li key={i} className="ligus-listrow flex items-baseline justify-between gap-2 px-1 text-xs">
-                  <span className="min-w-0 truncate">
-                    <span style={{ color: e.action === "removed" ? "var(--ligus-danger-ink)" : "var(--ligus-accent-warm)" }}>
-                      {e.action === "removed" ? "removed" : `added${e.role ? ` (${e.role})` : ""}`}
-                    </span>{" "}
-                    <b>{e.member}</b> <span className="text-ink-soft">by {e.by}</span>
-                  </span>
+                  {e.action === "left" ? (
+                    <span className="min-w-0 truncate">
+                      <b>{e.member}</b> <span className="text-ink-soft">asked to leave</span>
+                    </span>
+                  ) : (
+                    <span className="min-w-0 truncate">
+                      <span style={{ color: e.action === "removed" ? "var(--ligus-danger-ink)" : "var(--ligus-accent-warm)" }}>
+                        {e.action === "removed" ? "removed" : `added${e.role ? ` (${e.role})` : ""}`}
+                      </span>{" "}
+                      <b>{e.member}</b> <span className="text-ink-soft">by {e.by}</span>
+                    </span>
+                  )}
                   <span className="shrink-0 text-ink-soft" data-tip={e.at}>
                     {new Date(e.at).toLocaleDateString()}
                   </span>
@@ -2433,6 +2467,8 @@ export function MemberRow({
   onRevoke,
   onRemoveFromRelay,
   onLinkComputer,
+  hiddenHere,
+  onHideHere,
 }: {
   member: RosterMember;
   online: boolean;
@@ -2448,7 +2484,12 @@ export function MemberRow({
   /// Set when this member looks like you on another computer (lib/likelyMe):
   /// offer Add a computer, never act.
   onLinkComputer?: () => void;
+  /// A member who asked to leave: removed from view on this device.
+  hiddenHere?: boolean;
+  /// Set for a member who asked to leave: remove from view here, or show again.
+  onHideHere?: (hide: boolean) => void;
 }) {
+  const left = Boolean(member.leftAt);
   // The backend computes each refusal with the fold's own rules (an older
   // backend sends none: everything stays offered).
   const refusalOf = (r: string) => member.roleOptions?.find((o) => o.role === r)?.refusal ?? null;
@@ -2501,9 +2542,20 @@ export function MemberRow({
           },
         ]
       : []),
+    ...(onHideHere
+      ? [
+          hiddenHere
+            ? { label: "Show in the list", onSelect: () => onHideHere(false) }
+            : {
+                label: "Remove from view",
+                onSelect: () => onHideHere(true),
+                title: "Hides them on this device only; they stay listed until an Admin removes them",
+              },
+        ]
+      : []),
   ]);
   return (
-    <li className="px-1" {...rm.rowProps} data-testid={`member-${member.id}`}>
+    <li className="px-1" {...rm.rowProps} data-testid={`member-${member.id}`} style={left ? { opacity: 0.6 } : undefined}>
       <div className="ligus-listrow flex items-center gap-2" data-tip={onLinkComputer ? LIKELY_ME_HINT : undefined}>
         <span className="relative shrink-0">
           <Avatar name={member.displayName} url={member.avatarUrl} kind="human" size={22} />
@@ -2520,6 +2572,13 @@ export function MemberRow({
           )}
           <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-soft">
             {member.title ? `${member.title} · ${member.role}` : member.role}
+            {left && (
+              <span data-testid="member-left" data-tip="They left on their own. Until an Admin removes them they're still a member and keep their keys">
+                {" "}
+                · {leftLine(member.leftAt!)}
+                {hiddenHere ? " · removed from view" : ""}
+              </span>
+            )}
             {onLinkComputer && <span data-testid="likely-me"> · you on another computer?</span>}
           </span>
         </span>
@@ -2540,11 +2599,13 @@ export function MemberRow({
 function HostRow({ host }: { host: WorkspaceHostDto }) {
   const gateways = hostGatewaysLabel(host);
   const tip = [gateways ? `Gateways: ${gateways}` : "", host.build ? `Ligus ${host.build}` : ""].filter(Boolean).join(" · ");
+  // Idle: no beat for 30 days (workspace model v3, 10.1), shown grey.
+  const idle = !host.online && isIdleSince(host.lastSeen);
   return (
     <ListRow
-      leading={<StatusDot on={host.online} size={8} label={host.online ? "Online" : "Offline"} />}
-      title={host.label || "Unnamed host"}
-      meta={[host.kind, host.online ? "online" : relativeAgo(host.lastSeen), host.readiness].filter(Boolean).join(" · ")}
+      leading={<StatusDot on={host.online} size={8} label={host.online ? "Online" : idle ? "Idle" : "Offline"} />}
+      title={<span style={idle ? { opacity: 0.6 } : undefined}>{host.label || "Unnamed host"}</span>}
+      meta={[host.kind, host.online ? "online" : idle ? "idle" : relativeAgo(host.lastSeen), host.readiness].filter(Boolean).join(" · ")}
       tip={tip || undefined}
     />
   );

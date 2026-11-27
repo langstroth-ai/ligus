@@ -49,4 +49,10 @@ roleOptions: Array<MemberRoleOptionDto>,
  * Why "Allow new passkey" doesn't apply (a service member holds no
  * passkey), or none.
  */
-regrantRefusal: string | null, };
+regrantRefusal: string | null, 
+/**
+ * When this member asked to leave (RFC 3339), if they did (workspace
+ * model v3, 10.4). Under rules 3 they are still a member: People shows
+ * them as "asked to leave", with Remove for Admins.
+ */
+leftAt: string | null, };
