@@ -59,7 +59,7 @@ private.
 | `identity_links` | none | [Linked accounts](../features/linked-identities.md) on this device: `checkForges` (absent = on), `forges` (self-managed forges this device may ask: `provider`, `host`, `baseUrl`), `contactLinks` (links signed for this device's contact card). Never synced |
 | `provider_keys`, `provider_base_urls` | `{}` | per provider: `anthropic`, `openAI`, `openRouter`, `custom` |
 | `workspaces` | `[]` | each `{name, relay_url, room, key, icon, dm_account, founder_actor_id}` |
-| `agent_templates` | `[]` | `{id, name, runtimeId, role, instructions}` |
+| `agent_templates` | absent | Agent templates saved by older versions. Kept on disk as they were; nothing reads them (the Add an agent sheet replaced templates) |
 | `local_workspace_icon` | none | |
 | `schedules` | `[]` | `{id, enabled, label, workspaceId, runtimeId, prompt, trigger, lastRun}`; daily times are UTC |
 | `mcp_oauth` | `{}` | per server: OAuth tokens and endpoints |

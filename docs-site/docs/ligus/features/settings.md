@@ -229,8 +229,10 @@ that Gemini CLI no longer serves Google AI Pro / Ultra sign-ins. See
 **Export** dumps this machine's runtimes + MCP setup as a `ligus.toml`
 you can copy to another device or share with a teammate; **Import**
 stamps a pasted `ligus.toml` onto this machine (**additive** — it adds
-what's missing and never deletes what you already have). API keys travel
-with the export, so treat it like a secret.
+what's missing and never deletes what you already have). No API keys or
+tokens are included: a runtime records only the env var its key is read
+from. Agents aren't part of it; add them with **Add an agent**. An older
+export's agents are skipped on import.
 
 ### Context commands
 

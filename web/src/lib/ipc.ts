@@ -922,25 +922,6 @@ export const setProviderKey = (kind: string, key: string) =>
 export const setProviderBaseUrl = (kind: string, baseUrl: string) =>
   invoke<void>("set_provider_base_url", { kind, baseUrl });
 
-/// Reusable agent definitions (persona = name + model/runtime + role +
-/// instructions) you can attach to any chat.
-export interface AgentTemplateDto {
-  id: string;
-  name: string;
-  runtimeId: string;
-  role: string;
-  instructions: string;
-}
-export const listAgentTemplates = () => invoke<AgentTemplateDto[]>("list_agent_templates");
-export const addAgentTemplate = (
-  name: string,
-  runtimeId: string,
-  role: string,
-  instructions: string,
-) => invoke<void>("add_agent_template", { name, runtimeId, role, instructions });
-export const removeAgentTemplate = (id: string) =>
-  invoke<void>("remove_agent_template", { id });
-
 /// A server-side workspace member (relays with membership turned on only).
 export interface MemberEntry {
   account: string; // the relay subject: "ligus:<account id>" or "<tenant>:<user>"

@@ -30,8 +30,6 @@ import {
   setProviderKey,
   setProviderBaseUrl,
   type ProviderDto,
-  listAgentTemplates,
-  removeAgentTemplate,
   getContextCommands,
   setContextCommands,
   getUtilityRuntime,
@@ -78,7 +76,7 @@ export function ModelsSection() {
   );
 }
 
-/// Export the runtime/agent/MCP setup as portable TOML (no secrets), or import
+/// Export the runtime/MCP setup as portable TOML (no secrets), or import
 /// one — so an architect can version-control a setup and stamp it across a team.
 function PortableConfigSection() {
   const qc = useQueryClient();
@@ -108,7 +106,6 @@ function PortableConfigSection() {
       const summary = await importConfig(text);
       qc.invalidateQueries({ queryKey: ["runtimes"] });
       qc.invalidateQueries({ queryKey: ["providers"] });
-      qc.invalidateQueries({ queryKey: ["agent-templates"] });
       qc.invalidateQueries({ queryKey: ["mcp"] });
       toast.success(summary);
       setSheet(null);
@@ -122,7 +119,7 @@ function PortableConfigSection() {
   return (
     <Section
       title="Portable config"
-      info="Export your runtimes, agents, and MCP servers as TOML to version-control and share with a team. No API keys or tokens are included (each records only the env var its key comes from). Paste one here and Import to stamp that setup onto this machine (additive; nothing is deleted)."
+      info="Export your runtimes and MCP servers as TOML to version-control and share with a team. No API keys or tokens are included (each records only the env var its key comes from). Paste one here and Import to stamp that setup onto this machine (additive; nothing is deleted)."
       action={
         <span className="flex gap-1.5">
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => void doExport()}>
@@ -1638,21 +1635,8 @@ function ClaudeCodeRowModel() {
 }
 
 /// Agents: one way to add one (the Add an agent sheet, where the model is
-/// per agent and no runtime comes first). Agents saved by older versions are
-/// listed so they can be removed.
+/// per agent and no runtime comes first).
 function AgentsSection() {
-  const qc = useQueryClient();
-  const templates = useQuery({ queryKey: ["agent-templates"], queryFn: listAgentTemplates });
-  const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: listRuntimes });
-  const rts = runtimes.data ?? [];
-  const refresh = () => qc.invalidateQueries({ queryKey: ["agent-templates"] });
-  const remove = useMutation({
-    mutationFn: (id: string) => removeAgentTemplate(id),
-    onSuccess: refresh,
-    onError: (e) => toast.error(errMsg(e)),
-  });
-  const saved = templates.data ?? [];
-
   return (
     <Section
       title="Agents"
@@ -1663,24 +1647,7 @@ function AgentsSection() {
         </Button>
       }
     >
-      {saved.length > 0 && (
-        <RowList label="Saved agents">
-          {saved.map((t) => {
-            const rt = rts.find((r) => r.id === t.runtimeId);
-            return (
-              <ListRow
-                key={t.id}
-                title={t.name}
-                meta={`${t.role} · ${rt?.label ?? t.runtimeId ?? "no model"}`}
-                tip={t.instructions || undefined}
-                actions={[
-                  { label: "Remove", danger: true, onSelect: () => confirmThen(`Remove agent "${t.name}"?`, () => remove.mutate(t.id)) },
-                ]}
-              />
-            );
-          })}
-        </RowList>
-      )}
+      {null}
     </Section>
   );
 }

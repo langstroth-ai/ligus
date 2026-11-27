@@ -28,7 +28,6 @@ vi.mock("@/lib/nav", async (orig) => ({
 vi.mock("@/lib/ipc", async (orig) => ({
   ...(await orig<typeof import("@/lib/ipc")>()),
   listRuntimes: vi.fn(async () => [runtime("cc", "Claude Code"), runtime("gw", "Gateway model", "litellm")]),
-  listAgentTemplates: vi.fn(async () => []),
   listAgents: vi.fn(async () => []),
   listMcpServers: vi.fn(async () => []),
   listWorkspaceHosts: vi.fn(async () => [
