@@ -91,7 +91,11 @@ Rules:
   member is never "you": a question for the phone's person reaches their
   phone, and another person's phone on the same box gets nothing for it. A
   phone whose person can't be told (a pairing without a device, a contested
-  device) uses this host's identity. ntfy follows this host's identity.
+  device) is no one's: it gets none of the "you" kinds (`mention`,
+  `message.done`, `ask.pending`, `review.recruit`), and the workspace-wide
+  ones (`proposal.created`, `workflow.approval`) without previews, whatever
+  its `previews` setting. ntfy follows this host's identity. The
+  `ask.pending` cap (10 an hour) is each person's own.
   A mention is `@<your name>` (or `@<name>#<n>`), `@all`, a role group you're
   in (`@owners`, `@admins`, …), or `@you` in an agent's reply whose requester
   (the person whose message started the turn) is you. A person's `@you` is

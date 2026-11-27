@@ -1665,7 +1665,15 @@ fn agent_change_floor(
     workspace: Option<&RosterState>,
 ) -> Option<WorkspaceRole> {
     let one = |new: &WorkspaceAgent| -> WorkspaceRole {
-        let in_chat = fold.workspace_agents.iter().find(|a| a.id == new.id);
+        let in_chat = fold.workspace_agents.iter().find(|a| a.id == new.id).map(|a| a.as_judged());
+        let in_chat = in_chat.as_deref();
+        // Judged on the record the upsert leaves, never the payload alone
+        // (workspace model v3, 5.6 rule 5): an older writer's upsert that
+        // drops the sticky fields, or a newer one whose sticky fields
+        // disagree with its legacy ones, is judged by where the agent ends
+        // up.
+        let merged = crate::agent_run::merge_upsert(in_chat, new, crate::agent_run::RunRules::Mirror);
+        let new = &merged;
         if let (None, Some(ws)) = (in_chat, workspace.and_then(|w| w.agents.get(&new.id))) {
             return if ws.host_id != new.host_id || ws.runtime_id != new.runtime_id || ws.owner != new.owner_actor_id {
                 WorkspaceRole::Admin
@@ -1682,11 +1690,7 @@ fn agent_change_floor(
             None if !new.owner_actor_id.is_empty() && new.owner_actor_id != author => WorkspaceRole::Admin,
             None => WorkspaceRole::Contributor,
             Some(old) if old == new => WorkspaceRole::Contributor,
-            Some(old)
-                if old.host_id != new.host_id
-                    || old.runtime_id != new.runtime_id
-                    || old.owner_actor_id != new.owner_actor_id =>
-            {
+            Some(old) if new.moves_from(old) || old.owner_actor_id != new.owner_actor_id => {
                 WorkspaceRole::Admin
             }
             Some(old) if old.owner_actor_id.is_empty() || old.owner_actor_id == author => WorkspaceRole::Contributor,

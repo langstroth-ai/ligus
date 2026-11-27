@@ -59,6 +59,7 @@ pub mod people;
 pub mod phone_actions_api;
 pub mod phone_enroll_api;
 pub mod presence_api;
+pub mod principal;
 pub mod proposal_file;
 pub mod repos_api;
 pub mod scratch_api;
@@ -266,14 +267,14 @@ pub struct Shared {
     pub svc: Mutex<ChatService>,
     pub hub: hub::Hub,
     differ: Mutex<hub::Differ>,
-    /// Pushes for agents' questions in the last hour (device-local; agent
-    /// questions 6.5).
-    pub ask_pushes: Mutex<notify::AskPushCap>,
+    /// Pushes for agents' questions in the last hour, per person (their
+    /// actor id; device-local; agent questions 6.5).
+    pub ask_pushes: Mutex<HashMap<String, notify::AskPushCap>>,
     /// Replies this box's worker is streaming: their tokens already went out
     /// as `message.delta`, so the differ doesn't repeat their checkpoints.
     local_streams: Mutex<HashSet<Uuid>>,
-    /// chat id → id of the last message the phone has seen.
-    read_marks: Mutex<HashMap<Uuid, Uuid>>,
+    /// What each person has read here ([`ReadMarks`]).
+    read_marks: Mutex<ReadMarks>,
     pub sync_kick: Notify,
     pub worker_kick: Notify,
     /// The worker's running turns, each with its own stop signal.
@@ -753,34 +754,50 @@ impl Shared {
         self.lock().author().id.clone()
     }
 
-    /// Unread count for `s`: messages after the phone's read mark that this
-    /// box didn't write (system notes excluded). No mark = all of them.
-    pub fn unread(&self, s: &ChatSession, me: &str) -> usize {
-        let marks = self.read_marks.lock().unwrap_or_else(|e| e.into_inner());
-        let start = match marks.get(&s.id) {
-            Some(mark) => match s.messages.iter().position(|m| m.id == *mark) {
+    /// Unread count for `s`, for `who`: messages after their read mark
+    /// that they didn't write on any of their devices (system notes
+    /// excluded). A person who never opened the chat here counts from the
+    /// box's baseline ([`ReadMarks`]); no mark at all = all of them.
+    pub fn unread(&self, s: &ChatSession, who: &principal::Principal) -> usize {
+        let mark = self.read_marks.lock().unwrap_or_else(|e| e.into_inner()).mark(Some(&who.read_key()), s.id);
+        let start = match mark {
+            Some(mark) => match s.messages.iter().position(|m| m.id == mark) {
                 Some(i) => i + 1,
                 None => s.messages.len(),
             },
             None => 0,
         };
+        let links = if who.is_unresolved() { ligus_core::DeviceLinks::default() } else { self.lock().device_links(self.ws).unwrap_or_default() };
+        let me = who.me_in(s, &links);
         s.messages[start.min(s.messages.len())..]
             .iter()
             .filter(|m| m.role != MessageRole::System && !m.superseded)
-            .filter(|m| !(m.role == MessageRole::User && m.actor_identity.as_ref().is_some_and(|a| a.id == me)))
+            .filter(|m| !who.wrote(&me, m))
             .count()
     }
 
-    /// Advance the read mark for `s` to `message` (never backwards).
-    pub fn mark_read(&self, s: &ChatSession, message: Uuid) {
+    /// Advance `who`'s read mark for `s` to `message` (never backwards).
+    pub fn mark_read(&self, s: &ChatSession, message: Uuid, who: &principal::Principal) {
+        let key = who.read_key();
         let mut marks = self.read_marks.lock().unwrap_or_else(|e| e.into_inner());
         let new_idx = s.messages.iter().position(|m| m.id == message);
-        let old_idx = marks.get(&s.id).and_then(|old| s.messages.iter().position(|m| m.id == *old));
+        let old_idx = marks.mark(Some(&key), s.id).and_then(|old| s.messages.iter().position(|m| m.id == old));
         if new_idx.is_some() && new_idx >= old_idx {
-            marks.insert(s.id, message);
-            let body = json!({ "readMarks": &*marks });
+            marks.by_person.entry(key).or_default().insert(s.id, message);
+            let body = marks.to_json();
             drop(marks);
             let _ = std::fs::write(state_path(&self.cfg), body.to_string());
+        }
+    }
+
+    /// `who` opened their questions: their question pushes may resume.
+    pub fn ask_pushes_opened(&self, who: &principal::Principal) {
+        let id = who.actor_id();
+        if id.is_empty() {
+            return;
+        }
+        if let Some(cap) = self.ask_pushes.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) {
+            cap.opened();
         }
     }
 
@@ -799,8 +816,16 @@ impl Shared {
         };
         let me = author.id.clone();
         // Who a "you" notice is for: each paired phone's person, and this
-        // box's own identity (ntfy, older pairings) — see [`Shared::push_audiences`].
-        let audiences = self.push_audiences(&author);
+        // box's own identity (ntfy) — see [`Shared::push_audiences`]. A
+        // phone this box can't place gets no "you" notices, and the
+        // workspace-wide ones without previews.
+        let (audiences, unplaced) = self.push_audiences(&author);
+        let box_principal = principal::Principal {
+            person: Some(author.clone()),
+            device: viewer.device,
+            via_host: None,
+            standing: principal::Standing::Box,
+        };
         let mut notices: Vec<Outgoing> = Vec::new();
         let mut created = Vec::new();
         {
@@ -894,12 +919,12 @@ impl Shared {
                                 .iter()
                                 .filter_map(|au| notify::for_ask(s, a, &notify::Me::in_chat(&au.who, s, &links)).map(|n| (n, au)))
                                 .collect();
-                            if !asked.is_empty() {
-                                match self.ask_pushes.lock().unwrap_or_else(|e| e.into_inner()).admit(std::time::Instant::now()) {
-                                    notify::AskPush::Send => notices.extend(asked.into_iter().map(|(n, au)| Outgoing::to(n, au))),
-                                    notify::AskPush::Summary => {
-                                        notices.extend(asked.into_iter().map(|(_, au)| Outgoing::to(notify::several_asking(s), au)))
-                                    }
+                            // The cap is each person's own.
+                            let mut caps = self.ask_pushes.lock().unwrap_or_else(|e| e.into_inner());
+                            for (n, au) in asked {
+                                match caps.entry(au.who.id.clone()).or_default().admit(std::time::Instant::now()) {
+                                    notify::AskPush::Send => notices.push(Outgoing::to(n, au)),
+                                    notify::AskPush::Summary => notices.push(Outgoing::to(notify::several_asking(s), au)),
                                     notify::AskPush::Hold => {}
                                 }
                             }
@@ -912,7 +937,7 @@ impl Shared {
                     }
                     Change::ChatUpdated { chat } => {
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
-                        let unread = self.unread(s, &me);
+                        let unread = self.unread(s, &box_principal);
                         let ctx = phone_ctx.get_or_insert_with(|| api::PhoneChatCtx::new(self));
                         self.hub.emit("chat.updated", hub::wrap("chat", ctx.dto(self, s, unread)));
                     }
@@ -931,7 +956,7 @@ impl Shared {
         if let Some(t) = &self.tunnel {
             for o in &notices {
                 match &o.phones {
-                    None => t.push_all(&o.push),
+                    None => t.push_everyone(&o.push, &unplaced),
                     Some(pids) if !pids.is_empty() => t.push_to(&o.push, pids),
                     Some(_) => 0,
                 };
@@ -970,25 +995,30 @@ impl Shared {
     /// ([`ChatService::phone_person`], as its API calls see it), not this
     /// box's identity: a box that joined as its own member is never the
     /// one an agent asks. A phone whose person can't be told (a pairing
-    /// without a device, a contested device) gets this box's, as every
-    /// phone did before. The box's own identity is always listed, and is
-    /// the one ntfy hears about.
-    fn push_audiences(&self, author: &ligus_core::ActorIdentity) -> Vec<PushAudience> {
+    /// without a device, a contested device) is no one's: it is returned
+    /// apart (the second list), gets no "you" notice, and gets the
+    /// workspace-wide ones without previews (fail closed). The box's own
+    /// identity is always listed, and is the one ntfy hears about.
+    fn push_audiences(&self, author: &ligus_core::ActorIdentity) -> (Vec<PushAudience>, Vec<String>) {
         let mut out = vec![PushAudience { who: author.clone(), phones: Vec::new(), ntfy: true }];
-        let Some(t) = &self.tunnel else { return out };
+        let mut unplaced = Vec::new();
+        let Some(t) = &self.tunnel else { return (out, unplaced) };
         let phones: Vec<_> = t.registry.list().into_iter().filter(|r| r.is_active()).collect();
         if phones.is_empty() {
-            return out;
+            return (out, unplaced);
         }
         let svc = self.lock();
         for rec in phones {
-            let who = rec.device_id.and_then(|d| svc.phone_person(self.ws, d).ok()).unwrap_or_else(|| author.clone());
+            let Some(who) = rec.device_id.and_then(|d| svc.phone_person(self.ws, d).ok()) else {
+                unplaced.push(rec.pid);
+                continue;
+            };
             match out.iter_mut().find(|a| a.who.id == who.id) {
                 Some(a) => a.phones.push(rec.pid),
                 None => out.push(PushAudience { who, phones: vec![rec.pid], ntfy: false }),
             }
         }
-        out
+        (out, unplaced)
     }
 
     /// Whether `chat` belongs to one of the box's DMs.
@@ -1158,12 +1188,40 @@ impl ServeHandle {
     }
 }
 
-fn load_read_marks(cfg: &Config) -> HashMap<Uuid, Uuid> {
-    std::fs::read_to_string(state_path(cfg))
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| serde_json::from_value(v.get("readMarks")?.clone()).ok())
-        .unwrap_or_default()
+/// What each person has read on this box, chat id → id of the last
+/// message they've seen, kept in `serve-state.json`:
+///
+/// - `readMarksByPerson`: per person (their account, else their actor id;
+///   [`principal::Principal::read_key`]), shared by all their phones;
+/// - `readMarks`: the box's baseline, the one map older versions kept for
+///   every phone together, plus every chat's newest message when serve
+///   starts. A person who never opened a chat here counts its unread from
+///   there, so an upgrade (or a new phone) doesn't show all history as
+///   unread. Older versions read only this map.
+#[derive(Debug, Default)]
+pub struct ReadMarks {
+    pub baseline: HashMap<Uuid, Uuid>,
+    pub by_person: HashMap<String, HashMap<Uuid, Uuid>>,
+}
+
+impl ReadMarks {
+    /// `key`'s mark for `chat`, else the baseline's.
+    pub fn mark(&self, key: Option<&str>, chat: Uuid) -> Option<Uuid> {
+        key.and_then(|k| self.by_person.get(k)).and_then(|m| m.get(&chat)).or_else(|| self.baseline.get(&chat)).copied()
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        json!({ "readMarks": &self.baseline, "readMarksByPerson": &self.by_person })
+    }
+}
+
+fn load_read_marks(cfg: &Config) -> ReadMarks {
+    let v = std::fs::read_to_string(state_path(cfg)).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let field = |k: &str| v.as_ref().and_then(|v| v.get(k)).cloned();
+    ReadMarks {
+        baseline: field("readMarks").and_then(|m| serde_json::from_value(m).ok()).unwrap_or_default(),
+        by_person: field("readMarksByPerson").and_then(|m| serde_json::from_value(m).ok()).unwrap_or_default(),
+    }
 }
 
 /// Start everything on the current (multi-threaded) tokio runtime and return
@@ -1279,7 +1337,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         svc: Mutex::new(svc),
         hub: hub::Hub::new(),
         differ: Mutex::new(hub::Differ::default()),
-        ask_pushes: Mutex::new(notify::AskPushCap::default()),
+        ask_pushes: Mutex::new(HashMap::new()),
         local_streams: Mutex::new(HashSet::new()),
         read_marks: Mutex::new(load_read_marks(&cfg)),
         sync_kick: Notify::new(),
@@ -1331,7 +1389,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         let mut marks = shared.read_marks.lock().unwrap_or_else(|e| e.into_inner());
         for s in &chats {
             if let Some(last) = s.messages.last() {
-                marks.entry(s.id).or_insert(last.id);
+                marks.baseline.entry(s.id).or_insert(last.id);
             }
         }
     }

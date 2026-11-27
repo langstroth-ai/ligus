@@ -78,6 +78,7 @@ describe("the code", () => {
     expect(titleFor("box")).toBe("Admit a box?");
     expect(titleFor("computer")).toBe("Add a computer to your devices?");
     expect(titleFor("phone")).toBe("Add a phone to your devices?");
+    expect(titleFor("presence")).toBe("Confirm with your passkey?");
   });
 });
 
@@ -110,6 +111,41 @@ describe("ApprovalSheet", () => {
     await userEvent.click(match);
     await waitFor(() => expect(ipc.approvalCodesMatch).toHaveBeenCalledWith("r1"));
     expect(await screen.findByTestId("approval-approved")).toBeInTheDocument();
+  });
+
+  it("a passkey hand-off shows the change from the draft and the terminal's code, and holds Confirm for 3 s", async () => {
+    const summary = "Define workspace runtime \u201Ccoder\u201D (ClaudeCode, model \u201Csonnet\u201D)";
+    listing = [request({ kind: "presence", label: "laptop", summary, code: "K7Q4 M9X2" })];
+    vi.mocked(ipc.approvalOpen).mockResolvedValueOnce(
+      session({ kind: "presence", label: "laptop", summary, changeKind: "workspaceRuntimeUpserted", expiresAt: T0 + 15 * 60_000 }),
+    );
+    vi.mocked(ipc.approvalCodesMatch).mockResolvedValueOnce(session({ kind: "presence", label: "laptop", phase: "approved" }));
+    mount();
+    expect(await screen.findByTestId("handoff-summary")).toHaveTextContent(summary);
+    expect(screen.getByRole("heading", { name: "Confirm with your passkey?" })).toBeInTheDocument();
+    expect(screen.getByTestId("approval-subject")).toHaveTextContent("Asked by\u201Claptop\u201D");
+    expect(screen.getByTestId("match-code").textContent).toBe("K7Q4M9X2");
+    expect(screen.getByText(COPY.checkTerminal)).toBeInTheDocument();
+    expect(screen.getByTestId("approval-details").textContent).toContain("workspaceRuntimeUpserted");
+    const confirm = screen.getByRole("button", { name: "Confirm with passkey" });
+    expect(confirm).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Not me" })).toBeEnabled();
+    clock = T0 + HOLD_MS;
+    await waitFor(() => expect(confirm).toBeEnabled());
+    await userEvent.click(confirm);
+    await waitFor(() => expect(ipc.approvalCodesMatch).toHaveBeenCalledWith("r1"));
+    expect(await screen.findByTestId("approval-approved")).toHaveTextContent("Confirmed. \u201Claptop\u201D writes the change.");
+  });
+
+  it("Not me on a hand-off writes nothing and says so", async () => {
+    listing = [request({ kind: "presence", label: "laptop", summary: "Remove agent x", code: "K7Q4 M9X2" })];
+    vi.mocked(ipc.approvalOpen).mockResolvedValueOnce(session({ kind: "presence", label: "laptop", summary: "Remove agent x" }));
+    vi.mocked(ipc.approvalDontMatch).mockResolvedValueOnce(session({ kind: "presence", label: "laptop", phase: "declined" }));
+    mount();
+    await userEvent.click(await screen.findByRole("button", { name: "Not me" }));
+    await waitFor(() => expect(ipc.approvalDontMatch).toHaveBeenCalledWith("r1"));
+    expect(await screen.findByTestId("approval-over")).toHaveTextContent("Nothing was written.");
+    expect(ipc.approvalCodesMatch).not.toHaveBeenCalled();
   });
 
   it("keeps the fingerprint under Details, collapsed", async () => {

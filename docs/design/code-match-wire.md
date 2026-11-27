@@ -266,3 +266,79 @@ desktop accepts it. When a 0.4 approver is given pasted text and its mailbox
 holds a live request whose `code` is byte-equal (after trimming whitespace),
 it runs the code-match exchange for that request instead of the fingerprint
 compare. Otherwise it shows the fingerprint compare exactly as today.
+
+## 8. Passkey hand-off (`presence`, new in 0.5)
+
+A terminal (the CLI, lt) has no passkey. For a write the workspace's rules
+hold for its author's passkey, it asks its person's own desktop (or, later,
+phone) through the same mailbox (workspace model v3, 17.3). No rule, wire id
+or fold changes: the passkey signs `presence::challenge(env)` exactly as for
+any other event, and the fold checks it as today.
+
+**Request.** `kind = "presence"` (transcript byte 4). The body is the
+ordinary request body of 3.3 with:
+
+```
+code   = liguspresence1:<b64u(JSON)>
+         {"v":1,"label":"laptop","deviceKey":"<b64u Ed25519 32>","draft":"<the drafted envelope's JSON text, verbatim>"}
+commit = b64u(presence::challenge(draft))     (32 bytes)
+requesterKa = a fresh X25519 key for this request
+```
+
+The request is signed by `deviceKey`. A reader refuses it unless the draft
+parses (at most 4 KiB of JSON, so the sealed request fits the relay's 8 KiB
+request blob), its `signerDeviceId` is the device id `deviceKey` derives, its
+device signature verifies with `deviceKey`, its stamp names an account and
+carries no presence yet, its payload is a kind this build reads, and
+`commit` equals the draft's challenge.
+
+**Code.** Derived from the request alone, so the terminal shows it at once
+and may exit while it waits:
+
+```
+code40 = first 40 bits of SHA256("ligus-presence-code-v1\0" ‖ mailbox ‖ rid ‖ SHA256(code bytes))
+```
+
+shown like 3.4 (`K7Q4 M9X2`). It names this draft on this request; it isn't
+a key exchange. The request is signed by a device the approver checks on its
+own log (below), so the relay can't substitute one, and nothing secret is
+granted: the answer is an assertion over a challenge the approver computed
+itself. `ligus_core::match_code::presence_code40` (pinned in its tests).
+
+**Approver.** Before showing it, the approver checks, on its own folded log:
+the draft is for this workspace, stamped with the approver's own account,
+and signed by a device certified for that account that isn't revoked; and
+the change isn't a passkey registration. It renders the summary from the
+draft's payload (never from `label`, which is a hint) and its relying party
+and credential ids from its own log. It posts a `claim` to the members (the
+person's other devices show who is checking it), runs the passkey over the
+challenge it computed from the draft, checks the assertion's client data
+names that challenge, and posts a `result` sealed to `requesterKa`:
+
+```
+{"rid":…,"outcome":"approved","grant":"ligusassert1:<b64u(JSON PresenceAssertion)>","grantDigest":"<hex SHA256(grant)>"}
+```
+
+**Not me** posts `outcome: "declined"` and an abort (`cancelled`) to the
+members; it revokes nothing, and leaves a device-local Inbox notice
+(`notMe`, with the asking device's id) offering My devices.
+
+**Requester.** It takes a result or an abort only when its signer is one
+of its own account's devices on its own log, and an approval only when the
+assertion's client data names the draft's challenge. It attaches the
+assertion inside the draft's stamp and stores it (the chain link may move
+past its own later writes, as for serve's prepare/commit); the fold checks
+the presence. A terminal cancel is an abort sealed to the members. The
+request lives 15 minutes; 3 dead ones in 15 minutes stop the terminal
+(`approval-dead.json`), and an approver shows at most 6 hand-offs per asking
+device and hour.
+
+`presence-pending.json` (the requester, owner-only): `[{"rid","relay",
+"mailbox","sealKey","workspaceId","createdAt","readKey","kaSeed","ask",
+"summary","code"}]`, what `--no-wait` leaves for `ligus handoff wait`.
+`kaSeed` and `readKey` only read this request's answer; the draft is what
+will be stored anyway. Deleted on settle, dropped after 15 minutes.
+
+`ligus serve` doesn't list hand-offs to phones yet (a phone confirms only
+once the box acts for the phone's own person). An older approver refuses the
+unknown kind (it never lists).

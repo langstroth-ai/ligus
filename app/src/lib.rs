@@ -13834,6 +13834,7 @@ async fn sync_pull_once(
                     tracing::warn!(target: "sync", "closing settled box admissions: {e}");
                 }
                 fulfil_apply_requests(app);
+                mirror_agent_run_fields(app, active);
                 attachments::share_approved_offers(app);
                 attachments::renew_attachment_blobs(app);
                 first_profile(app, active);
@@ -13929,6 +13930,30 @@ async fn open_store_patiently(db_path: &std::path::Path, what: &str) -> Result<E
             }
             Err(e) => return Err(e.to_string()),
         }
+    }
+}
+
+/// M13 (workspace model v3, 16.2): once per workspace and launch, after a
+/// full config sync, write `run` and `placement` for this person's agents
+/// that don't carry them yet. Under rules 3 they only mirror the runtime and
+/// host, so no Admin or passkey is needed and `runtime_id` is never
+/// rewritten. Retried on the next caught-up cycle if it fails.
+fn mirror_agent_run_fields(app: &AppHandle, workspace_id: Uuid) {
+    static DONE: std::sync::OnceLock<Mutex<std::collections::HashSet<Uuid>>> = std::sync::OnceLock::new();
+    let done = DONE.get_or_init(Default::default);
+    if done.lock().unwrap().contains(&workspace_id) {
+        return;
+    }
+    let state = app.state::<AppState>();
+    let written = state.service.lock().unwrap().mirror_agent_run_fields(workspace_id);
+    match written {
+        Ok(n) => {
+            if n > 0 {
+                tracing::info!(target: "sync", "recorded run and placement for {n} agent(s)");
+            }
+            done.lock().unwrap().insert(workspace_id);
+        }
+        Err(e) => tracing::warn!(target: "sync", "recording agents' run and placement: {e}"),
     }
 }
 

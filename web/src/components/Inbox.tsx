@@ -59,6 +59,7 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
       key={`approval:${a.rid}`}
       state="idle"
       title={approvalTitle(a)}
+      detail={a.kind === "presence" && a.summary ? a.summary : undefined}
       when={shortAgo(a.createdAt)}
       whenInline
       onOpen={() => approvalSheet.open(a.workspaceId, a.rid)}
@@ -200,7 +201,14 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
             when={item.at ? shortAgo(item.at) : undefined}
             whenInline
             actions={
-              item.fact?.help || item.fact?.kind === "mismatch" ? (
+              item.fact?.kind === "notMe" ? (
+                <>
+                  {item.fact.help && <InfoTip label="what Not me does" text={item.fact.help} />}
+                  <Button size="sm" onClick={() => actions.openSettingsTab("account")}>
+                    My devices
+                  </Button>
+                </>
+              ) : item.fact?.help || item.fact?.kind === "mismatch" ? (
                 <InfoTip
                   label={item.fact.kind === "mismatch" ? "a request that didn't match" : "a link that didn't finish"}
                   text={item.fact.help ?? APPROVAL_COPY.aboutMismatch}

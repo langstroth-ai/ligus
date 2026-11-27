@@ -255,6 +255,18 @@ async fn pushes_reach_the_relay_encrypted_and_skip_a_foreground_phone() {
     let key: [u8; 32] = tun::b64u_fixed(&t.registry.get(&pid).unwrap().push_key).unwrap();
     let shared = h.handle.shared.clone();
     let ws = shared.ws;
+    // The desktop owner certifies the phone: its "you" notices are theirs.
+    let owner_name = {
+        let mut desk = crate::open_service(&h.desktop).unwrap();
+        desk.certify_phone(ws, phone.device_id(), &phone.device.public_key()).unwrap();
+        desk.author().display_name.clone()
+    };
+    desktop_sync(&h).await;
+    wait_until("the box places the phone", WAIT, || {
+        shared.sync_kick.notify_one();
+        shared.lock().phone_person(ws, phone.device_id()).is_ok()
+    })
+    .await;
     let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
     let chat_id = uuid::Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
 
@@ -293,8 +305,9 @@ async fn pushes_reach_the_relay_encrypted_and_skip_a_foreground_phone() {
         }
     };
 
-    // An agent reply that mentions the user → one `mention` push, not two.
-    let me = shared.lock().author().display_name.clone();
+    // An agent reply that mentions the phone's person → one `mention`
+    // push, not two.
+    let me = owner_name;
     let mid = shared.lock().begin_assistant_message(chat_id, ws, "coder".to_string(), "gw".to_string(), Some(h.agent_id), None).unwrap();
     shared.lock().complete_assistant_message(chat_id, ws, mid, format!("@{me} the build is green")).unwrap();
     shared.refresh();
@@ -1134,7 +1147,15 @@ async fn revoking_a_phone_device_rotates_the_direct_token() {
     let mut c = testkit::phone_session(&info, &keep_keys, &keep_cred).await.unwrap();
     let r = c.request("GET", "/v1/tunnel/direct", None).await.unwrap();
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
-    assert_eq!(r.json()["token"], json!(h.handle.shared.token()));
+    let own = h.handle.shared.direct_token_for(&keep_pid);
+    assert_eq!(r.json()["token"], json!(own));
+    // It is new too: one derived from the old secret no longer opens anything.
+    let stale = crate::serve::principal::direct_token(&old, &keep_pid);
+    assert_ne!(stale, own);
+    let r = h.client.get(format!("{}/v1/chats", h.base)).bearer_auth(&stale).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    let r = h.client.get(format!("{}/v1/chats", h.base)).bearer_auth(&own).send().await.unwrap();
+    assert_eq!(r.status(), 200);
     // The direct path itself never hands the token out.
     let r = h.client.get(format!("{}/v1/tunnel/direct", h.base)).bearer_auth(h.handle.shared.token()).send().await.unwrap();
     assert_eq!(r.status(), 404);
@@ -1542,7 +1563,10 @@ async fn admission_prepare_is_bound_to_the_pairings_phone() {
     assert_eq!(op.trim().len(), 64, "the operator token exists");
     let (status, body) = call("GET", "/v1/tunnel/direct", json!(null)).await;
     assert_eq!(status, 200, "{body}");
-    assert!(body.contains(&h.handle.shared.token()) && !body.contains(op.trim()), "{body}");
+    // The phone's own direct-path credential: neither the shared token nor
+    // the operator's.
+    assert!(body.contains(&h.handle.shared.direct_token_for(&pid)), "{body}");
+    assert!(!body.contains(&h.handle.shared.token()) && !body.contains(op.trim()), "{body}");
     h.handle.shutdown();
 }
 
@@ -1626,8 +1650,8 @@ async fn a_phone_sees_its_own_persons_role_and_vote() {
     c.send(Frame::reset(sse, frame::reset::CANCEL, "")).await.unwrap();
 
     // A pairing that names no device this box can place claims nothing.
-    assert_eq!(crate::serve::api::tunnel_viewer(&h.handle.shared, &pid_pair), owner);
-    assert_eq!(crate::serve::api::tunnel_viewer(&h.handle.shared, "no-such-pairing"), "");
+    assert_eq!(h.handle.shared.principal_for_phone(&pid_pair).actor_id(), owner);
+    assert_eq!(h.handle.shared.principal_for_phone("no-such-pairing").actor_id(), "");
     let chat = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
     let prop = chat.proposals.iter().find(|p| p.id == pid).unwrap();
     let blank = crate::serve::api::proposal_dto_as(&chat, prop, "");
@@ -1680,7 +1704,13 @@ async fn a_phone_lists_only_its_persons_dms() {
         svc.create_chat("dm", dm_ws, "").unwrap().id
     };
     let listed = |v: &Value| v["chats"].as_array().unwrap().iter().any(|c| c["id"] == json!(dm_chat));
-    assert!(listed(&h.get("/v1/chats").await), "the box's own view lists its DM");
+    let operator = |path: &str| {
+        let req = h.client.get(format!("{}{path}", h.base)).bearer_auth(h.handle.shared.operator_token());
+        async move { req.send().await.unwrap().json::<Value>().await.unwrap() }
+    };
+    assert!(listed(&operator("/v1/chats").await), "the box's own view lists its DM");
+    // The shared direct-path token acts for nobody: no DM.
+    assert!(!listed(&h.get("/v1/chats").await), "a phone this box can't place listed a DM");
 
     let mut c = testkit::phone_session(&info, &keys, &credential).await.unwrap();
     let r = c.request("GET", "/v1/chats", None).await.unwrap();
@@ -1719,6 +1749,206 @@ async fn a_phone_lists_only_its_persons_dms() {
     let box_account = h.handle.shared.my_account().unwrap();
     assert!(DmViewer::Person(box_account).sees(&chat), "a member of the DM sees it");
     assert!(!DmViewer::Person(Uuid::new_v4()).sees(&chat));
+    h.handle.shutdown();
+}
+
+/// Ben joins the desktop owner's (Ana's) workspace from his own desktop
+/// and certifies `phone` as his: a second person on the box.
+async fn join_ben(h: &Harness, phone: &ligus_core::testkit::Phone) -> (Config, String) {
+    let ws = h.handle.shared.ws;
+    let cfg_id = workspace_config_session_id(ws);
+    let (invite, seed) = {
+        let mut desk = crate::open_service(&h.desktop).unwrap();
+        let invite = desk.issue_invite(ws).unwrap();
+        (invite, desk.take_invite_redeem_seed(ws, invite).unwrap())
+    };
+    desktop_sync(h).await;
+    let ben = Config { data_dir: h._tmp.path().join("ben"), ..h.desktop.clone() };
+    std::fs::create_dir_all(&ben.data_dir).unwrap();
+    {
+        let svc = crate::open_service(&ben).unwrap();
+        svc.store().set_join_invite(ws, invite).unwrap();
+        svc.store().set_join_redeem(ws, seed.as_ref()).unwrap();
+    }
+    sync_once(&ben).await.unwrap();
+    let ben_id = {
+        let mut svc = crate::open_service(&ben).unwrap();
+        svc.ensure_self_member(cfg_id, ws).unwrap();
+        svc.publish_identity(cfg_id, ws).unwrap();
+        svc.certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
+        svc.author().id.clone()
+    };
+    sync_once(&ben).await.unwrap();
+    (ben, ben_id)
+}
+
+/// Every request through the box acts for the phone's person: two people's
+/// phones on one box (Ana, the desktop owner; Ben, who joined) each see
+/// their own unread counts and read marks, "you" in the people list and
+/// agent availability for themselves, through the tunnel and on the direct
+/// path with their own credential. A phone the box can't place (paired,
+/// never certified) and the shared direct-path token act for nobody: no "you"
+/// notices, workspace-wide pushes without previews.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_peoples_phones_each_see_their_own() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(WAIT).await.unwrap();
+    let ws = h.handle.shared.ws;
+    let (t, info, ana_keys, ana_pid, ana_cred, ana_phone) = pair_bound(&h, &relay).await;
+    let (_, _, ben_keys, ben_pid, ben_cred, ben_phone) = pair_bound(&h, &relay).await;
+    let (_, _, nobody_keys, nobody_pid, nobody_cred, _) = pair_bound(&h, &relay).await;
+    let ana_id = {
+        let mut desk = crate::open_service(&h.desktop).unwrap();
+        desk.certify_phone(ws, ana_phone.device_id, &ana_phone.public_key()).unwrap();
+        desk.author().id.clone()
+    };
+    let (ben, ben_id) = join_ben(&h, &ben_phone).await;
+    desktop_sync(&h).await;
+    let shared = h.handle.shared.clone();
+    wait_until("the box places Ana's and Ben's phones", WAIT, || {
+        shared.sync_kick.notify_one();
+        let svc = shared.lock();
+        svc.phone_person(ws, ana_phone.device_id).is_ok_and(|p| p.id == ana_id) && svc.phone_person(ws, ben_phone.device_id).is_ok_and(|p| p.id == ben_id)
+    })
+    .await;
+    assert_ne!(ana_id, ben_id);
+    let mut ana = testkit::phone_session(&info, &ana_keys, &ana_cred).await.unwrap();
+    let mut bens = testkit::phone_session(&info, &ben_keys, &ben_cred).await.unwrap();
+    let mut nobody = testkit::phone_session(&info, &nobody_keys, &nobody_cred).await.unwrap();
+
+    // Ana writes in a chat on her desktop.
+    let chat_id = {
+        let mut desk = crate::open_service(&h.desktop).unwrap();
+        let chat = desk.create_chat("plans", ws, "").unwrap();
+        desk.post_user_message(chat.id, ws, "from Ana's desktop").unwrap();
+        chat.id
+    };
+    desktop_sync(&h).await;
+    let messages_here = |n: usize| {
+        let shared = shared.clone();
+        move || {
+            shared.sync_kick.notify_one();
+            shared.lock().load_resolving(chat_id).ok().flatten().is_some_and(|c| c.messages.len() >= n)
+        }
+    };
+    wait_until("the box has Ana's message", WAIT, messages_here(1)).await;
+    async fn unread(c: &mut testkit::PhoneConn<testkit::ClientWs>, chat: Uuid) -> Value {
+        let r = c.request("GET", "/v1/chats", None).await.unwrap();
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+        r.json()["chats"].as_array().unwrap().iter().find(|c| c["id"] == json!(chat)).map(|c| c["unread"].clone()).unwrap_or(Value::Null)
+    }
+    // Her own message (written on another of her devices) isn't unread to
+    // her; it is to Ben, and to the phone nobody can be told is behind.
+    assert_eq!(unread(&mut ana, chat_id).await, json!(0));
+    assert_eq!(unread(&mut bens, chat_id).await, json!(1));
+    assert_eq!(unread(&mut nobody, chat_id).await, json!(1));
+    // Ben reads it: his mark moves, nobody else's.
+    let r = bens.request("GET", &format!("/v1/chats/{chat_id}/messages"), None).await.unwrap();
+    assert_eq!(r.status, 200);
+    assert_eq!(unread(&mut bens, chat_id).await, json!(0));
+    assert_eq!(unread(&mut nobody, chat_id).await, json!(1));
+    // Ben answers from his desktop (once it has the chat): unread to Ana,
+    // not to him.
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        sync_once(&ben).await.unwrap();
+        if crate::open_service(&ben).unwrap().load_resolving(chat_id).unwrap().is_some_and(|c| !c.messages.is_empty()) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "Ana's chat never reached Ben's desktop");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    crate::open_service(&ben).unwrap().post_user_message(chat_id, ws, "from Ben's desktop").unwrap();
+    sync_once(&ben).await.unwrap();
+    wait_until("the box has Ben's message", WAIT, messages_here(2)).await;
+    assert_eq!(unread(&mut ana, chat_id).await, json!(1));
+    assert_eq!(unread(&mut bens, chat_id).await, json!(0));
+    assert_eq!(unread(&mut nobody, chat_id).await, json!(2));
+    // The marks are kept per person on the box.
+    let state: Value = serde_json::from_str(&std::fs::read_to_string(h.handle.shared.cfg.data_dir.join("serve-state.json")).unwrap()).unwrap();
+    let ben_account = shared.lock().phone_person(ws, ben_phone.device_id).unwrap().account_id.unwrap();
+    assert!(state["readMarksByPerson"][ben_account.to_string()][chat_id.to_string()].is_string(), "{state}");
+
+    // "You" in the people list is the phone's person.
+    let selves = |v: Value| -> Vec<String> {
+        v["people"].as_array().unwrap().iter().filter(|p| p["isSelf"] == json!(true)).map(|p| p["actorId"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(selves(ana.request("GET", "/v1/people", None).await.unwrap().json()), vec![ana_id.clone()]);
+    assert_eq!(selves(bens.request("GET", "/v1/people", None).await.unwrap().json()), vec![ben_id.clone()]);
+    assert!(selves(nobody.request("GET", "/v1/people", None).await.unwrap().json()).is_empty());
+
+    // Ana's personal agent is usable by Ana only.
+    let private = {
+        let mut desk = crate::open_service(&h.desktop).unwrap();
+        let mut a = WorkspaceAgent::new("anas", "gw");
+        a.owner_actor_id = ana_id.clone();
+        a.access = ligus_core::agent::ACCESS_OWNER.into();
+        let id = a.id;
+        desk.add_agent(ws, ws, a).unwrap();
+        id
+    };
+    desktop_sync(&h).await;
+    wait_until("the box has Ana's agent", WAIT, || {
+        shared.sync_kick.notify_one();
+        crate::serve::api::hosts_and_agents(&shared).is_ok_and(|(_, c)| c.workspace_agents.iter().any(|a| a.id == private))
+    })
+    .await;
+    let available = |v: Value| v["agents"].as_array().unwrap().iter().find(|a| a["id"] == json!(private)).unwrap()["available"].clone();
+    assert_eq!(available(ana.request("GET", "/v1/agents", None).await.unwrap().json()), json!(true));
+    assert_eq!(available(bens.request("GET", "/v1/agents", None).await.unwrap().json()), json!(false));
+
+    // The direct path: each phone gets its own credential over the tunnel,
+    // and it acts for that phone's person.
+    let own = |v: Value| v["token"].as_str().unwrap().to_string();
+    let ana_direct = own(ana.request("GET", "/v1/tunnel/direct", None).await.unwrap().json());
+    let ben_direct = own(bens.request("GET", "/v1/tunnel/direct", None).await.unwrap().json());
+    assert_ne!(ana_direct, ben_direct);
+    assert_ne!(ana_direct, shared.token());
+    let direct = |token: &str, path: &str| {
+        let req = h.client.get(format!("{}{path}", h.base)).bearer_auth(token);
+        async move { req.send().await.unwrap() }
+    };
+    let health: Value = direct(&ana_direct, "/v1/health").await.json().await.unwrap();
+    assert_eq!(health["principal"], "person", "{health}");
+    let chat_row = |v: Value| v["chats"].as_array().unwrap().iter().find(|c| c["id"] == json!(chat_id)).unwrap().clone();
+    assert_eq!(chat_row(direct(&ana_direct, "/v1/chats").await.json().await.unwrap())["unread"], json!(1));
+    assert_eq!(chat_row(direct(&ben_direct, "/v1/chats").await.json().await.unwrap())["unread"], json!(0));
+    let r = direct(&ana_direct, "/v1/people").await;
+    assert!(r.headers().get(crate::serve::principal::DIRECT_CREDENTIAL_HEADER).is_none());
+    assert_eq!(selves(r.json().await.unwrap()), vec![ana_id.clone()]);
+    // The shared token acts for nobody, and says so.
+    let r = direct(&shared.token(), "/v1/health").await;
+    assert_eq!(r.headers().get(crate::serve::principal::DIRECT_CREDENTIAL_HEADER).unwrap(), "shared");
+    let health: Value = r.json().await.unwrap();
+    assert_eq!((health["principal"].clone(), health["hint"].clone()), (json!("unresolved"), json!(crate::serve::principal::UNRESOLVED_HINT)));
+    assert!(selves(direct(&shared.token(), "/v1/people").await.json().await.unwrap()).is_empty());
+    // Ana's credential with Ben's pairing id opens nothing.
+    let forged = ana_direct.replacen(&ana_pid, &ben_pid, 1);
+    assert_eq!(direct(&forged, "/v1/chats").await.status(), 401);
+
+    // Pushes: "you" notices go to each person's own phones; the phone the
+    // box can't place gets none, and workspace-wide ones without previews.
+    let author = shared.lock().author().clone();
+    let (audiences, unplaced) = shared.push_audiences(&author);
+    assert_eq!(unplaced, vec![nobody_pid.clone()]);
+    let phones_of = |id: &str| audiences.iter().find(|a| a.who.id == id).map(|a| a.phones.clone()).unwrap_or_default();
+    assert_eq!(phones_of(&ana_id), vec![ana_pid.clone()]);
+    assert_eq!(phones_of(&ben_id), vec![ben_pid.clone()]);
+    assert!(audiences.iter().all(|a| !a.phones.contains(&nobody_pid)));
+    let r = nobody.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": true, "previews": true }))).await.unwrap();
+    assert_eq!(r.status, 200);
+    t.push_available.store(true, std::sync::atomic::Ordering::SeqCst);
+    let content = tun::PushContent { kind: "proposal.created".into(), chat_id: Some(chat_id.to_string()), title: "Change ready for review".into(), preview: Some("rename the secret table".into()), ..Default::default() };
+    let later = std::time::Instant::now() + tun::push::FOREGROUND_QUIET + Duration::from_secs(1);
+    assert_eq!(t.push_everyone_at(&content, &unplaced, later), 1, "only the phone that turned push on");
+    let key: [u8; 32] = tun::b64u_fixed(&t.registry.get(&nobody_pid).unwrap().push_key).unwrap();
+    let hid = t.host_id().to_string();
+    let m = relay.wait_for("push", |m| m["pid"] == json!(nobody_pid), WAIT).await.unwrap();
+    let pt = testkit::open_push(&key, &hid, &nobody_pid, &tun::b64u_decode(m["ct"].as_str().unwrap()).unwrap());
+    assert_eq!(pt["title"], "Change ready for review");
+    assert!(pt.get("preview").is_none() && !pt.to_string().contains("secret table"), "{pt}");
+    t.push_available.store(false, std::sync::atomic::Ordering::SeqCst);
     h.handle.shutdown();
 }
 

@@ -292,7 +292,7 @@ pub fn dm_relay_allowed(own_relay: Option<&str>, relay: &str) -> bool {
 /// Whose DMs a request may see ([`Shared::dm_viewer`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DmViewer {
-    /// This box's own view (the operator, the direct-path bearer): every DM.
+    /// This box's own view (the operator): every DM.
     Box,
     /// A phone's person (an account): only the DMs they are a member of.
     Person(Uuid),
@@ -338,23 +338,12 @@ impl Shared {
         Ok(all)
     }
 
-    /// Whose DMs the request being handled may see: through the tunnel, the
-    /// phone's person ([`ligus_runtime::ChatService::phone_person`], as its
-    /// other calls see it), or nobody when this box can't place the phone
-    /// (or off a request's task). The operator and the direct-path bearer
-    /// see this box's own view, as before.
+    /// Whose DMs the request being handled may see: its principal's
+    /// ([`super::api::principal`]): a phone's person, nobody for a phone
+    /// this box can't place (the shared direct-path token among them) or
+    /// off a request's task, and every DM for the operator.
     pub fn dm_viewer(&self) -> DmViewer {
-        match super::api::caller() {
-            super::api::Caller::Tunnel(pid) => {
-                let device = self.tunnel.as_ref().and_then(|t| t.registry.get(&pid)).and_then(|r| r.device_id);
-                device
-                    .and_then(|d| self.lock().phone_person(self.ws, d).ok())
-                    .and_then(|a| a.account_id)
-                    .map_or(DmViewer::Nobody, DmViewer::Person)
-            }
-            super::api::Caller::Operator | super::api::Caller::Bearer => DmViewer::Box,
-            super::api::Caller::Anonymous => DmViewer::Nobody,
-        }
+        super::api::principal().dm_viewer()
     }
 
     /// [`Self::dm_rows`] for the DMs `who` may see (a DM whose chat hasn't

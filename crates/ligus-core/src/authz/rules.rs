@@ -169,10 +169,15 @@ fn foreign_host(fold: &ChatSession, id: &str, author: &str) -> bool {
     fold.workspace_hosts.iter().any(|h| h.id == id && h.owner_actor_id != author)
 }
 
+/// Judged on the record the upsert leaves (workspace model v3, 5.6 rule
+/// 5), not on its payload alone: any change of the effective host,
+/// placement, runtime or run source is a move.
 fn agent_rebinds(agent: &crate::agent::WorkspaceAgent, fold: &ChatSession) -> bool {
-    match fold.workspace_agents.iter().find(|a| a.id == agent.id) {
-        None => !agent.host_id.is_empty() || !agent.runtime_id.is_empty(),
-        Some(old) => old.host_id != agent.host_id || old.runtime_id != agent.runtime_id,
+    let old = fold.workspace_agents.iter().find(|a| a.id == agent.id).map(|a| a.as_judged());
+    let merged = crate::agent_run::merge_upsert(old.as_deref(), agent, crate::agent_run::RunRules::Mirror);
+    match old {
+        None => !merged.host_id.is_empty() || !merged.runtime_id.is_empty(),
+        Some(old) => merged.moves_from(&old),
     }
 }
 

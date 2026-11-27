@@ -5,6 +5,12 @@
 // The code is not a secret: it shows during screen sharing, and on purpose
 // has no Copy button (it is for comparing, not for sending). Codes match
 // enables 3 seconds after the code appears.
+//
+// A passkey hand-off (kind `presence`) uses the same sheet: another device
+// of yours (the CLI, lt) sent one drafted change. The sheet shows what it
+// does (rendered from the draft by this desktop, never from the other
+// device's words) and the code that device printed; Confirm with passkey
+// signs exactly that change, Not me writes nothing.
 
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -37,17 +43,21 @@ export const COPY = {
   waitingComputer: "Waiting for the computer to confirm…",
   aboutMismatch:
     "The two screens showed different codes, so someone may have tried to intercept the request. Check the device you're adding and start again; tell an Admin if it happens twice.",
+  aboutHandoff:
+    "A terminal of yours has no passkey, so it sent this change here. Your passkey signs exactly the change shown, nothing else, and only for this request. The terminal shows the same code. If you didn't ask for this, choose Not me: nothing is written.",
+  checkTerminal: "Check the terminal that asked shows the same code.",
 };
 
 /// The sheet's title, from the request's kind only: the requester's label
 /// never leads (it sits quoted on its own line beneath).
 export function titleFor(kind: string): string {
+  if (kind === "presence") return "Confirm with your passkey?";
   return kind === "box" ? "Admit a box?" : kind === "phone" ? "Add a phone to your devices?" : "Add a computer to your devices?";
 }
 
 /// The small kind word beside the label, from the request's kind.
 export function kindWord(kind: string): string {
-  return kind === "box" ? "Box" : kind === "phone" ? "Phone" : "Computer";
+  return kind === "box" ? "Box" : kind === "phone" ? "Phone" : kind === "presence" ? "Asked by" : "Computer";
 }
 
 /// The quoted label on its own line, after the kind word.
@@ -97,6 +107,7 @@ function Details({
   createdAt,
   relay,
   nameClash,
+  changeKind,
 }: {
   kind: string;
   label: string;
@@ -104,6 +115,7 @@ function Details({
   createdAt: number;
   relay: string;
   nameClash?: boolean;
+  changeKind?: string | null;
 }) {
   const row = (k: string, v: string, mono = false) => (
     <div className="flex gap-3">
@@ -115,8 +127,18 @@ function Details({
     <details className="mt-4 text-[12.5px]" data-testid="approval-details">
       <summary className="cursor-pointer select-none text-ink-soft">Details</summary>
       <dl className="mt-2 space-y-1">
-        {row("Kind", kind === "box" ? "A box joining as its own member" : kind === "computer" ? "A computer of yours" : "A phone of yours")}
-        {row("Label", quoteLabel(label))}
+        {row(
+          "Kind",
+          kind === "box"
+            ? "A box joining as its own member"
+            : kind === "computer"
+              ? "A computer of yours"
+              : kind === "presence"
+                ? "A change another device of yours sent for your passkey"
+                : "A phone of yours",
+        )}
+        {row(kind === "presence" ? "Device" : "Label", quoteLabel(label))}
+        {kind === "presence" && changeKind && row("Change", changeKind, true)}
         {row("Fingerprint", fingerprint, true)}
         {row("Asked at", when(createdAt))}
         {row("Relay", relay, true)}
@@ -173,6 +195,8 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
   const kind = s?.kind ?? request?.kind ?? "box";
   const label = s?.label ?? request?.label ?? "";
   const mine = kind !== "box";
+  const handoff = kind === "presence";
+  const summary = s?.summary ?? request?.summary ?? "";
   const final = s ? !["waiting", "code", "confirming", "passkey"].includes(s.phase) : false;
 
   function close() {
@@ -201,7 +225,13 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
 
   const corner =
     s?.expiresAt && (s.phase === "code" || s.phase === "waiting") ? (
-      <Countdown expiresAt={s.expiresAt} ring={false} label="The code expires in" onExpire={() => void run(() => approvalExpire(rid))} now={now} />
+      <Countdown
+        expiresAt={s.expiresAt}
+        ring={false}
+        label={handoff ? "The request expires in" : "The code expires in"}
+        onExpire={() => void run(() => approvalExpire(rid))}
+        now={now}
+      />
     ) : null;
 
   let body: React.ReactNode;
@@ -249,6 +279,32 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
       <p className="py-4 text-center text-[13px] text-ink-soft" data-testid="approval-waiting">
         {kind === "box" ? "Waiting for the box to answer…" : "Waiting for the device to answer…"}
       </p>
+    );
+  } else if (handoff && s.phase === "code" && s.code) {
+    body = (
+      <>
+        <p className="text-[12.5px] text-ink-soft">Asks to:</p>
+        <p className="mt-1 rounded-md border px-3 py-2 text-[13.5px]" style={{ borderColor: "var(--ligus-line)", color: "var(--ligus-ink)" }} data-testid="handoff-summary">
+          {summary}
+        </p>
+        <MatchCode code={s.code} />
+        <p className="text-center text-[13px]">{COPY.checkTerminal}</p>
+        {s.message && (
+          <p className="mt-2 text-center text-[12.5px]" role="alert" style={{ color: "var(--ligus-danger-ink)" }}>
+            {s.message}
+          </p>
+        )}
+      </>
+    );
+    footer = (
+      <>
+        <Button size="md" disabled={busy} onClick={() => void run(() => approvalDontMatch(rid))}>
+          Not me
+        </Button>
+        <Button variant="primary" size="md" disabled={!held || busy} onClick={() => void run(() => approvalCodesMatch(rid))}>
+          Confirm with passkey
+        </Button>
+      </>
     );
   } else if (s.phase === "code" && s.code) {
     body = (
@@ -298,7 +354,11 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
   } else if (s.phase === "approved") {
     body = (
       <p className="text-[13px]" role="status" data-testid="approval-approved">
-        {kind === "box" ? `The box ${quoteLabel(label)} is admitted. It joins on its own.` : `The computer ${quoteLabel(label)} is one of your devices.`}
+        {kind === "box"
+          ? `The box ${quoteLabel(label)} is admitted. It joins on its own.`
+          : handoff
+            ? `Confirmed. ${quoteLabel(label)} writes the change.`
+            : `The computer ${quoteLabel(label)} is one of your devices.`}
       </p>
     );
     footer = (
@@ -307,8 +367,11 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
       </Button>
     );
   } else {
-    const text =
-      s.phase === "mismatch"
+    const text = handoff
+      ? s.phase === "declined"
+        ? "Nothing was written. Your Inbox offers to revoke that device if you didn't ask for this."
+        : (s.message ?? "Nothing was confirmed.")
+      : s.phase === "mismatch"
         ? `Request from ${quoteLabel(label)} didn't match. Nothing was granted.`
         : s.phase === "didntFinish"
           ? `Linking ${quoteLabel(label)} didn't finish. Nothing was added.`
@@ -334,7 +397,7 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
     <Sheet
       title={titleFor(kind)}
       description={<Subject kind={kind} label={label} />}
-      titleAddon={<InfoTip label="what a match proves" text={COPY.aboutMatch} />}
+      titleAddon={handoff ? <InfoTip label="what this confirms" text={COPY.aboutHandoff} /> : <InfoTip label="what a match proves" text={COPY.aboutMatch} />}
       corner={corner}
       side="center"
       width={460}
@@ -351,6 +414,7 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
             createdAt={s?.createdAt ?? request?.createdAt ?? 0}
             relay={s?.relay ?? request?.relay ?? ""}
             nameClash={request?.nameClash}
+            changeKind={s?.changeKind}
           />
         )}
       </div>

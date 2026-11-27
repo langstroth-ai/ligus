@@ -69,7 +69,9 @@ pub struct ChatSession {
     /// answers un-`@mentioned` messages. Empty on legacy sessions (→ local).
     #[serde(default)]
     pub creator_actor_id: String,
-    /// Turn-answer claims: `trigger user-message id → winning device id`. The
+    /// Turn-answer claims: `claim key → winning device id`. The key is
+    /// [`turn_claim_key`]: the trigger message itself for a turn with one
+    /// responder, a per-receiver key for one receiver of a hand-off. The
     /// first `TurnClaimed` in canonical fold order wins, so every device agrees
     /// which one answers a given turn — preventing account-scoped double-answers.
     /// Ephemeral coordination state; empty on legacy sessions.

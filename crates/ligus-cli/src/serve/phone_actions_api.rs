@@ -270,7 +270,7 @@ pub async fn commit(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<Com
             out["messageId"] = json!(message.id);
             let chat = s.lock().load_resolving(*chat_id).ok().flatten();
             if let Some(c) = chat {
-                s.mark_read(&c, message.id);
+                s.mark_read(&c, message.id, &super::api::principal());
             }
         }
         (PhoneAction::RequestApply { host_device_id, .. }, ligus_core::SessionEvent::ProposalApplyRequested { request }) => {
