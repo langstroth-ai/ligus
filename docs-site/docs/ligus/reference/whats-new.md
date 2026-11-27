@@ -6,6 +6,13 @@ Full release notes are on the
 
 ## Unreleased
 
+### Security
+
+- **A host counts only when its own computer registered it.** A member
+  could register a host under another person's computer before that
+  computer did, and pickers would show it. Pickers, workers and `ligus
+  hosts` now ignore any host record the computer it names didn't sign.
+
 ### Fixed
 
 - **Renaming an agent whose host left the workspace.** When a host's owner
@@ -22,6 +29,14 @@ Full release notes are on the
   doesn't mark old messages unread. On your network, each phone now uses its
   own token, which the app fetches over the relay. See
   [Who the box acts for](../features/phone-app.md#who-the-box-acts-for).
+- **A box or worker uses only the secrets it declared.** A runtime's
+  `--secret-ref` name now resolves only when the host's `host.toml` lists it
+  for that workspace. Before, any name on the shared log picked
+  `LIGUS_WS_SECRET_<name>`, so on a box serving more than one workspace an
+  Admin of one could point a runtime at another's key. On first start a box
+  with no `host.toml` declares the secrets it already has, so existing
+  setups keep working; a later secret needs one line, and the error says
+  which. See [What a host offers](cli.md#what-a-host-offers).
 - **A phone the box can't tell is someone's gets only the workspace's.**
   A phone paired directly only, added before phones had their own keys, or
   still on an older app on your network sees the workspace's chats and
@@ -79,6 +94,21 @@ Full release notes are on the
 
 ### Added
 
+- **Hosts say what they can run, and how ready it is.** Every computer and
+  box now lists the coding tools it has (Claude Code, Codex, Copilot, agy,
+  aider, pi), its model gateways, and the local model servers and hosted
+  providers its operator declared: names and kinds only, never an address,
+  account or key. Whether each one is signed in, the models it offers and
+  the host's Ligus version travel in the host's own signed, sealed presence
+  beat, not on the shared log. `ligus hosts` shows it on a second line per
+  host, the desktop's **Workers & hosts** list in one line, and **Add
+  runtime** now suggests the models a picked gateway serves. See
+  [What a host offers](cli.md#what-a-host-offers).
+- **"List this computer's tools".** Your own computers list their tools by
+  default so the people you work with can place agents there. **Settings →
+  Models → List this computer's tools** turns it off (or `list_tools =
+  false` in the data dir's `host.toml`). Workers and boxes always list
+  theirs.
 - **Confirm a command-line step on your desktop.** A step that needs your
   passkey (defining a workspace runtime for a new agent, say) used to stop
   `ligus setup` with "do it in the desktop app". Now the CLI sends the

@@ -51,6 +51,8 @@ pub mod git_attribution;
 pub mod git_worktree;
 pub mod frozen_ns;
 pub mod guard_scan;
+pub mod host_config;
+pub mod host_offers;
 pub mod host_presence;
 pub mod revocation_status;
 pub mod role_refusal;
@@ -125,7 +127,7 @@ mod relay_refusal_tests;
 
 pub use builtin_tools::{BuiltinTools, Policy as BuiltinToolPolicy};
 pub use chat_service::{
-    cascade_target, claim_receiver, empty_reply_notice, pending_mentions, pending_turns, resolve_workspace_credential, turns_for, turns_from, turns_with_summary,
+    cascade_target, claim_receiver, empty_reply_notice, pending_mentions, pending_turns, resolve_declared_credential, resolve_workspace_credential, undeclared_secret, turns_for, turns_from, turns_with_summary,
     ChatService, DispatchCtx, PendingMention, SUMMARY_TURN_HEADER,
 };
 pub use context::{Compactor, CompactionResult, Summarizer};

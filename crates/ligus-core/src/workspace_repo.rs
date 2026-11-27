@@ -307,6 +307,35 @@ pub struct HostBeat {
     /// ([`HostBeat::coverage_verified`]); liveness needs no signature.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub coverage_sig: String,
+    /// The host's readiness report (workspace model v3, 5.1): a JSON-encoded
+    /// [`crate::workspace_host::HostStatus`] (readiness and model lists per
+    /// offer, build version, refusals), kept as the exact bytes the host
+    /// signed so a newer build's extra fields still verify. Empty from an
+    /// older build.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
+    /// The host device's Ed25519 signature over its status
+    /// ([`status_message`]), base64. Like coverage, a status counts only
+    /// when this verifies ([`HostBeat::status_verified`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status_sig: String,
+}
+
+/// The signing context of a status report. Frozen: never rename it.
+pub const STATUS_CONTEXT: &[u8] = b"ligus-host-status-v1\0";
+
+/// What a host signs for its status: the context, the workspace, the host's
+/// device id, the beat's `seq` (u64 LE), then the status bytes (u32 LE
+/// length, then the bytes).
+pub fn status_message(workspace_id: Uuid, device_id: Uuid, seq: u64, status: &str) -> Vec<u8> {
+    let mut m = Vec::with_capacity(STATUS_CONTEXT.len() + 44 + status.len());
+    m.extend_from_slice(STATUS_CONTEXT);
+    m.extend_from_slice(workspace_id.as_bytes());
+    m.extend_from_slice(device_id.as_bytes());
+    m.extend_from_slice(&seq.to_le_bytes());
+    m.extend_from_slice(&(status.len() as u32).to_le_bytes());
+    m.extend_from_slice(status.as_bytes());
+    m
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -352,6 +381,35 @@ impl HostBeat {
         use base64::Engine as _;
         let sig = key.sign(&coverage_message(workspace_id, device_id, self.seq, &self.coverage));
         self.coverage_sig = base64::engine::general_purpose::STANDARD.encode(sig);
+    }
+
+    /// Attach `status` (sanitized first) and sign it as `device_id` (whose id
+    /// must be the beat's `host_id`) in `workspace_id`. Call after `seq` is set.
+    pub fn sign_status(&mut self, workspace_id: Uuid, device_id: Uuid, status: crate::workspace_host::HostStatus, key: &crate::crypto::SigningKeypair) {
+        use base64::Engine as _;
+        let Ok(text) = serde_json::to_string(&status.sanitized()) else { return };
+        let sig = key.sign(&status_message(workspace_id, device_id, self.seq, &text));
+        self.status = text;
+        self.status_sig = base64::engine::general_purpose::STANDARD.encode(sig);
+    }
+
+    /// This beat's status when it may be used in `workspace_id`: signed by
+    /// the device its `host_id` names, which `roster` has certified, not
+    /// revoked, not a phone, and acting for a current member; then
+    /// sanitized. `None` otherwise (the beat's liveness still counts).
+    pub fn status_verified(&self, workspace_id: Uuid, roster: &crate::authz::RosterState) -> Option<crate::workspace_host::HostStatus> {
+        use base64::Engine as _;
+        if self.status.is_empty() || self.status.len() > 4 * crate::workspace_host::MAX_STATUS_BYTES {
+            return None;
+        }
+        let device = Uuid::parse_str(&self.host_id).ok()?;
+        let d = roster.devices.get(&device)?;
+        if !roster.device_trusted(device) || d.phone || crate::dispatch::holder_gone(roster, device) {
+            return None;
+        }
+        let sig = base64::engine::general_purpose::STANDARD.decode(self.status_sig.as_bytes()).ok()?;
+        crate::crypto::verify(&d.public_key, &status_message(workspace_id, device, self.seq, &self.status), &sig).ok()?;
+        serde_json::from_str::<crate::workspace_host::HostStatus>(&self.status).ok().map(crate::workspace_host::HostStatus::sanitized)
     }
 
     /// Whether this beat's coverage may be used in `workspace_id`: within

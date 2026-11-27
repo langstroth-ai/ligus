@@ -15,6 +15,9 @@ const host = (
   lastSeen: "",
   modelGateways: [],
   ownerName: "",
+  offers: [],
+  readiness: "",
+  build: "",
   mine: false,
   ...opts,
 });

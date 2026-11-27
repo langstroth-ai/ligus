@@ -1388,16 +1388,16 @@ fn resolve_agent_runtime(cfg: &Config, runtime_id: Option<&str>) -> Result<(Reso
         .into_iter()
         .find(|r| r.id == id)
         .ok_or_else(|| anyhow!("no workspace runtime '{id}' (run `ligus runtimes`, or define one in the app)"))?;
-    Ok((workspace_runtime_resolved(&wr), format!("workspace:{}", wr.name)))
+    Ok((workspace_runtime_resolved(uuid_of_room(&cfg.room), &wr), format!("workspace:{}", wr.name)))
 }
 
 /// `ligus agent`'s runtime from a workspace runtime. A runtime that names a
 /// model gateway goes through it (dispatch refuses it where this host
 /// doesn't offer it), without the runtime's own key, as on serve and workers
 /// ([`worker::agent_workspace_runtime`]).
-fn workspace_runtime_resolved(wr: &ligus_core::WorkspaceRuntime) -> ResolvedRuntime {
+fn workspace_runtime_resolved(workspace_id: Uuid, wr: &ligus_core::WorkspaceRuntime) -> ResolvedRuntime {
     let gateway = Some(wr.gateway.trim()).filter(|g| !g.is_empty()).map(ligus_runtime::model_gateway::GatewaySelection::named);
-    let api_key = if gateway.is_some() { None } else { resolve_workspace_credential(&wr.credential) };
+    let api_key = if gateway.is_some() { None } else { resolve_workspace_credential(&wr.credential, workspace_id) };
     ResolvedRuntime {
         provider: wr.provider,
         model: wr.model.clone(),
@@ -1748,18 +1748,26 @@ fn cmd_agents_set(cfg: &Config, rest: &[String]) -> Result<()> {
 
 fn cmd_hosts(cfg: &Config, json: bool) -> Result<()> {
     let svc = open_service(cfg)?;
+    let ws = uuid_of_room(&cfg.room);
     let me = svc.device_id().to_string();
-    let hosts = svc.list_hosts(uuid_of_room(&cfg.room))?;
+    let hosts = svc.list_hosts(ws)?;
+    // Liveness and each host's signed readiness report, best effort.
+    let presence = fetch_presence_with(cfg, Some(&svc));
+    let now = Timestamp::now();
     if json {
         let rows: Vec<serde_json::Value> = hosts
             .iter()
             .map(|h| {
+                let status = presence.status_of(&h.id);
                 serde_json::json!({
                     "id": h.id,
                     "kind": h.kind,
                     "label": shown(&h.label),
                     "thisBox": h.id == me,
+                    "online": h.id == me || presence.is_online(h, &now),
                     "modelGateways": h.model_gateways,
+                    "offers": h.listed_offers(),
+                    "status": status,
                 })
             })
             .collect();
@@ -1771,15 +1779,80 @@ fn cmd_hosts(cfg: &Config, json: bool) -> Result<()> {
     }
     for h in hosts {
         let mark = if h.id == me { "  ← this box" } else { "" };
-        println!("{:<38} {:?}  {}{mark}", h.id, h.kind, shown(&h.label));
+        let online = h.id == me || presence.is_online(&h, &now);
+        println!("{:<38} {:?}  {}  {}{mark}", h.id, h.kind, shown(&h.label), if online { "online" } else { "offline" });
+        let offers = h.listed_offers();
+        let status = presence.status_of(&h.id);
+        let line = ligus_runtime::host_offers::readiness_line(&offers, status.as_ref(), online);
+        let build = status.as_ref().map(|s| s.build.as_str()).filter(|b| !b.is_empty());
+        match (line.is_empty(), build) {
+            (true, None) if offers.is_empty() => println!("    lists no tools"),
+            (true, None) => {}
+            (true, Some(b)) => println!("    Ligus {b}"),
+            (false, None) => println!("    {line}"),
+            (false, Some(b)) => println!("    {line} · Ligus {b}"),
+        }
     }
     Ok(())
 }
 
-/// `h` with the model gateways this host's operator lists (names only).
+/// The workspace this box or worker serves (set once at start).
+static HOST_WORKSPACE: std::sync::OnceLock<Uuid> = std::sync::OnceLock::new();
+
+/// This host's `host.toml` (workspace model v3, 5.1): what it offers and the
+/// secret names it resolves. A box or worker with no `host.toml` yet
+/// declares the secrets already provisioned in its environment for the
+/// workspace it serves, once, so an upgrade keeps working. An invalid file
+/// stops a box or worker (it must not guess what its operator declared);
+/// other commands warn and go on.
+fn init_host_config(cfg: &Config, first: &str) {
+    let is_host = matches!(first, "serve" | "worker" | "register-worker" | "agent" | "setup");
+    if !cfg.room.is_empty() {
+        let _ = HOST_WORKSPACE.set(uuid_of_room(&cfg.room));
+    }
+    if is_host && !cfg.room.is_empty() {
+        let names = ligus_runtime::host_config::env_secret_names();
+        match ligus_runtime::host_config::seed_declarations(&cfg.data_dir, uuid_of_room(&cfg.room), &names) {
+            Ok(true) => eprintln!(
+                "ligus: declared this box's provisioned secrets ({}) for its workspace in {}",
+                names.join(", "),
+                ligus_runtime::host_config::path_in(&cfg.data_dir).display()
+            ),
+            Ok(false) => {}
+            Err(e) => eprintln!("ligus: couldn't write host.toml: {e}"),
+        }
+    }
+    if let Err(e) = ligus_runtime::host_config::init_host(&cfg.data_dir) {
+        eprintln!("ligus: {e}");
+        if is_host {
+            eprintln!("  fix: correct host.toml (ligus help hosts shows its format)");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// `h` with what this host offers: the model gateways its operator lists
+/// (names and wires, still filled for older readers) and its offers (names
+/// and kinds from its own configuration; never a URL or secret).
 pub(crate) fn with_gateways(mut h: WorkspaceHost) -> WorkspaceHost {
     h.model_gateways = ligus_runtime::model_gateway::host().offers();
+    h.offers = Some(ligus_runtime::host_offers::offers_now(ligus_runtime::host_offers::HostRole::Box, HOST_WORKSPACE.get().copied()));
     h
+}
+
+/// Refresh this box's readiness report when due (blocking: run it off the
+/// async workers) and rewrite its host record when what it offers changed
+/// (a gateway added, a CLI installed). Liveness is never a change.
+pub(crate) fn refresh_own_host(svc: &std::sync::Mutex<ChatService>, ws: Uuid, host_id: &str) {
+    ligus_runtime::host_offers::refresh_if_due(ligus_runtime::host_offers::HostRole::Box, Some(ws), env!("CARGO_PKG_VERSION"));
+    let mut svc = svc.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(current) = svc.list_hosts(ws).ok().and_then(|hs| hs.into_iter().find(|h| h.id == host_id)) else { return };
+    let next = with_gateways(current.clone());
+    if next.offers != current.offers || next.model_gateways != current.model_gateways {
+        if let Err(e) = svc.ensure_host(ws, next) {
+            eprintln!("hosts: updating this box's offers failed: {e}");
+        }
+    }
 }
 
 fn cmd_register_worker(cfg: &Config, label: Option<String>) -> Result<String> {
@@ -1878,7 +1951,11 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
     let beat_every = Duration::from_secs(ligus_runtime::host_presence::HOST_BEAT_EVERY_SECS as u64);
     loop {
         if last_beat.is_none_or(|t| t.elapsed() >= beat_every) {
-            publish_beat(cfg, &my_host).await;
+            // Readiness and offers (workspace model v3, 5.1), off the loop.
+            let (sv, id) = (svc.clone(), my_host.clone());
+            drop(tokio::task::spawn_blocking(move || refresh_own_host(&sv, ws, &id)));
+            let beat = svc.lock().unwrap_or_else(|e| e.into_inner()).signed_beat(ws, Vec::new());
+            publish_beat(cfg, &beat).await;
             last_beat = Some(std::time::Instant::now());
         }
         if cfg.relay_url.is_some() {
@@ -2035,12 +2112,21 @@ fn cmd_queue(cfg: &Config) -> Result<()> {
 /// view without a relay, a key, or a reachable relay: the durable record then
 /// decides, see [`ligus_runtime::HostPresence::is_online`]).
 fn fetch_presence(cfg: &Config) -> ligus_runtime::HostPresence {
+    fetch_presence_with(cfg, None)
+}
+
+/// [`fetch_presence`], also taking each host's signed readiness report when
+/// `svc` can check it against the workspace's roster.
+fn fetch_presence_with(cfg: &Config, svc: Option<&ChatService>) -> ligus_runtime::HostPresence {
     let presence = ligus_runtime::HostPresence::new();
     if let (Ok(relay), Some(_), Some(ring)) = (relay_client(cfg), cfg.key.as_deref(), box_ring(cfg)) {
         if let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            let fetch = ligus_runtime::host_presence::fetch_host_beats(&relay, &cfg.room, &ring);
+            let fetch = ligus_runtime::host_presence::fetch_beats(&relay, &cfg.room, &ring);
             if let Ok(Ok(beats)) = rt.block_on(async { tokio::time::timeout(Duration::from_secs(5), fetch).await }) {
-                presence.merge(beats);
+                match svc {
+                    Some(svc) => presence.merge_beats(beats, svc.beat_verifier(uuid_of_room(&cfg.room))),
+                    None => presence.merge(beats.into_iter().map(|(h, b)| (h, b.at)).collect()),
+                }
             }
         }
     }
@@ -2048,9 +2134,9 @@ fn fetch_presence(cfg: &Config) -> ligus_runtime::HostPresence {
 }
 
 /// Publish this host's liveness beat (best effort; no relay or key = no-op).
-async fn publish_beat(cfg: &Config, host_id: &str) {
+async fn publish_beat(cfg: &Config, beat: &ligus_core::workspace_repo::HostBeat) {
     if let (Ok(relay), Some(_), Some(ring)) = (relay_client(cfg), cfg.key.as_deref(), box_ring(cfg)) {
-        if let Err(e) = ligus_runtime::host_presence::publish_host_beat(&relay, &cfg.room, &ring, host_id).await {
+        if let Err(e) = ligus_runtime::host_presence::publish_beat(&relay, &cfg.room, &ring, beat).await {
             eprintln!("presence: publishing this host's beat failed: {e}");
         }
     }
@@ -2668,6 +2754,7 @@ fn run() -> Result<()> {
     ligus_runtime::secret_redact::register_env_secrets();
     // `ligus setup tool`'s servers, saved tokens and per-agent reach.
     mcp_config::set_context(&cfg.data_dir, uuid_of_room(&cfg.room));
+    init_host_config(&cfg, first);
     let cmd = args.first().map(String::as_str).unwrap_or("");
     let rest = &args[args.len().min(1)..];
     let has = |flag: &str| rest.iter().any(|a| a == flag);
@@ -3459,11 +3546,11 @@ mod cli_tests {
         std::env::set_var("LIGUS_WS_SECRET_agent_gateway_test", "sk-RUNTIME-OWN");
         wr.credential = ligus_core::WorkspaceCredential::SecretRef { secret_ref: "agent_gateway_test".into() };
         wr.gateway = "litellm".into();
-        let rt = workspace_runtime_resolved(&wr);
+        let rt = workspace_runtime_resolved(Uuid::nil(), &wr);
         assert_eq!(rt.gateway.as_ref().map(|g| g.name.as_str()), Some("litellm"));
         assert!(rt.api_key.is_none(), "the runtime's key rides along to a gateway turn");
         wr.gateway.clear();
-        assert!(workspace_runtime_resolved(&wr).gateway.is_none());
+        assert!(workspace_runtime_resolved(Uuid::nil(), &wr).gateway.is_none());
     }
 
     /// A box enrolled with `ligus enroll` is named after its label or host.

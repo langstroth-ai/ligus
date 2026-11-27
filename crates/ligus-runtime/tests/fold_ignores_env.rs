@@ -39,6 +39,7 @@ const FOLD_ENV_DENYLIST: &[(&str, &str, &str)] = &[
     ("\"LIGUS_RUNTIME_TEST_TIMEOUT_SECS\"", "LIGUS_RUNTIME_TEST_TIMEOUT_SECS", "how long a setup test turn waits for its reply (never the fold)"),
     ("PREFLIGHT_TEST_ENV", "LIGUS_PREFLIGHT_TEST", "pre-flight test command (a side effect, recorded as an event)"),
     ("&WorkspaceCredential::env_var(secret_ref)", "LIGUS_CRED_FOLD_ENV", "a runtime credential for a turn"),
+    ("&ligus_core::WorkspaceCredential::env_var(&p.secret)", "LIGUS_CRED_FOLD_ENV", "whether a declared provider secret is held here (readiness in the host's beat)"),
     ("MIN_ROLE_ENV", "LIGUS_MCP_MIN_ROLE", "this host's tool floor for a turn (H1 author gate)"),
     ("\"LIGUS_DATA_DIR\"", "LIGUS_DATA_DIR", "a directory the OS sandbox denies to agent processes"),
     ("\"LIGUS_SANDBOX\"", "LIGUS_SANDBOX", "which executor spawns agent processes"),

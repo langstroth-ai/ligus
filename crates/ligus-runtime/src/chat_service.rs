@@ -1725,18 +1725,27 @@ impl ChatService {
     /// readers use a coverage report only when its host signed it).
     pub fn signed_beat(&self, workspace_id: Uuid, coverage: Vec<ligus_core::workspace_repo::CoverageEntry>) -> ligus_core::workspace_repo::HostBeat {
         let mut beat = crate::host_presence::beat_now(&self.device_id.to_string(), coverage);
+        // This host's readiness report (workspace model v3, 5.1), signed
+        // like its coverage; one `seq` orders both.
+        let status = crate::host_offers::local_status();
+        if status.is_some() && beat.seq == 0 {
+            beat.seq = crate::host_presence::now_seq();
+        }
         if !beat.coverage.is_empty() {
             beat.sign_coverage(workspace_id, self.device_id, &self.keypair);
+        }
+        if let Some(st) = status {
+            beat.sign_status(workspace_id, self.device_id, st, &self.keypair);
         }
         beat
     }
 
-    /// Whether a fetched beat's coverage is its host's own signed report
-    /// that the current roster of `workspace_id` vouches for (certified, not
-    /// revoked, acting for a member). Unsigned or wrongly signed: ignored.
-    pub fn beat_verifier(&self, workspace_id: Uuid) -> impl Fn(&ligus_core::workspace_repo::HostBeat) -> bool {
-        let roster = self.workspace_roster(workspace_id).ok();
-        move |b| roster.as_ref().is_some_and(|r| b.coverage_verified(workspace_id, r))
+    /// Checks a fetched beat's coverage and status: each counts only as its
+    /// host's own signed report that the current roster of `workspace_id`
+    /// vouches for (certified, not revoked, acting for a member). Unsigned
+    /// or wrongly signed: ignored (its liveness still counts).
+    pub fn beat_verifier(&self, workspace_id: Uuid) -> crate::host_presence::BeatVerifier {
+        crate::host_presence::BeatVerifier { workspace_id, roster: self.workspace_roster(workspace_id).ok() }
     }
 
     /// The device-keyed dispatcher's one entry (design repos-and-checkouts
@@ -2220,7 +2229,9 @@ impl ChatService {
         }
         let current = self.list_hosts(workspace_id)?.into_iter().find(|h| h.id == host.id);
         if let Some(h) = current {
-            if h.kind == host.kind && h.label == host.label && h.owner_actor_id == host.owner_actor_id && h.model_gateways == host.model_gateways {
+            // Offers: `None` keeps what the record lists (sticky).
+            let same_offers = host.offers.is_none() || h.offers == host.offers;
+            if h.kind == host.kind && h.label == host.label && h.owner_actor_id == host.owner_actor_id && h.model_gateways == host.model_gateways && same_offers {
                 return Ok(false);
             }
             host.created_at = h.created_at;
@@ -3686,11 +3697,22 @@ impl ChatService {
         if session_id == config_id {
             let profiles = session.profiles.clone();
             crate::profiles::resolve(&mut session, &profiles);
+            // Readers see each host's record signed by its own device only
+            // (workspace model v3, 5.1, H11).
+            session.workspace_hosts = ligus_core::workspace_host::bound_hosts(&session.workspace_hosts, &session.authz.host_signers);
         } else if let Ok((Some(cfg), _)) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id) {
             crate::profiles::resolve(&mut session, &cfg.profiles);
             session.device_labels = cfg.device_labels;
             session.retired = cfg.retired;
             session.profiles = cfg.profiles;
+            // A chat's hosts are the workspace's (config hoist), bound ones only.
+            let mut hosts = ligus_core::workspace_host::bound_hosts(&cfg.workspace_hosts, &cfg.authz.host_signers);
+            for h in ligus_core::workspace_host::bound_hosts(&session.workspace_hosts, &session.authz.host_signers) {
+                if !hosts.iter().any(|x| x.id == h.id) {
+                    hosts.push(h);
+                }
+            }
+            session.workspace_hosts = hosts;
         }
         Ok(Some(session))
     }
@@ -3920,17 +3942,35 @@ pub fn cascade_target<'a>(session: &'a ChatSession, reply: &ChatMessage) -> Opti
 /// Resolve a workspace runtime's credential to a usable secret — where a
 /// headless worker turns a **workspace-owned** runtime into an actual key (spec
 /// §12.5), never a personal one. `SecretRef` reads the worker's out-of-band env
-/// (`LIGUS_WS_SECRET_<ref>`); `None` is keyless. A legacy `Inline` credential
-/// (a key an older version stored in the workspace) resolves as **no key**:
-/// keys are never taken from the workspace.
-pub fn resolve_workspace_credential(cred: &WorkspaceCredential) -> Option<String> {
+/// (`LIGUS_WS_SECRET_<ref>`), and only when this host's `host.toml` declares
+/// that name for `workspace_id` (workspace model v3, 5.1): a string on the log
+/// never picks a secret by itself. `None` is keyless. A legacy `Inline`
+/// credential (a key an older version stored in the workspace) resolves as
+/// **no key**: keys are never taken from the workspace.
+pub fn resolve_workspace_credential(cred: &WorkspaceCredential, workspace_id: Uuid) -> Option<String> {
+    resolve_declared_credential(cred, workspace_id, &crate::host_config::host())
+}
+
+/// [`resolve_workspace_credential`] against a given `host.toml`.
+pub fn resolve_declared_credential(cred: &WorkspaceCredential, workspace_id: Uuid, host: &crate::host_config::HostConfig) -> Option<String> {
     match cred {
-        WorkspaceCredential::SecretRef { secret_ref } => {
+        WorkspaceCredential::SecretRef { secret_ref } if host.declares_secret(workspace_id, secret_ref) => {
             ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref))
                 .ok()
                 .filter(|s| !s.is_empty())
         }
-        WorkspaceCredential::Inline {} | WorkspaceCredential::None => None,
+        WorkspaceCredential::SecretRef { .. } | WorkspaceCredential::Inline {} | WorkspaceCredential::None => None,
+    }
+}
+
+/// The secret a credential names that this host hasn't declared for
+/// `workspace_id` (for the error a turn shows), if any.
+pub fn undeclared_secret(cred: &WorkspaceCredential, workspace_id: Uuid) -> Option<String> {
+    match cred {
+        WorkspaceCredential::SecretRef { secret_ref } if !crate::host_config::host().declares_secret(workspace_id, secret_ref) => {
+            Some(secret_ref.clone())
+        }
+        _ => None,
     }
 }
 
@@ -4634,13 +4674,13 @@ mod tests {
 
         let now = Timestamp::now();
         let hosts = svc.list_hosts(wid).unwrap();
-        assert!(hosts[0].is_online(&now, 90), "just-registered host is online");
+        assert!(hosts[0].is_online(&now), "just-registered host is online");
         // A heartbeat right after registration is throttled (no new event).
         assert!(!svc.touch_host(wid, &hid, 60).unwrap(), "recent heartbeat throttled");
 
         // A host last seen at the epoch is offline.
         let stale = WorkspaceHost { last_seen: Timestamp::from_unix_seconds(0), ..hosts[0].clone() };
-        assert!(!stale.is_online(&now, 90), "stale host is offline");
+        assert!(!stale.is_online(&now), "stale host is offline");
     }
 
     /// Restarts and liveness never append host events; only a real change does.
@@ -4716,13 +4756,18 @@ mod tests {
         assert_eq!(loaded.workspace_runtimes.len(), 1);
         assert_eq!(loaded.workspace_runtimes[0].id, "ws-claude");
 
-        // SecretRef resolves from the worker's env; a legacy Inline never
+        // SecretRef resolves from the worker's env, only when this host
+        // declares the name for this workspace (H7); a legacy Inline never
         // yields a key.
-        assert_eq!(resolve_workspace_credential(&rt.credential), None);
+        let mut host = crate::host_config::HostConfig::default();
+        assert_eq!(resolve_declared_credential(&rt.credential, wid, &host), None);
         std::env::set_var("LIGUS_WS_SECRET_acme", "sk-workspace-123");
-        assert_eq!(resolve_workspace_credential(&rt.credential).as_deref(), Some("sk-workspace-123"));
+        assert_eq!(resolve_declared_credential(&rt.credential, wid, &host), None, "provisioned but undeclared: no key");
+        host.workspaces.insert(wid.to_string(), crate::host_config::WorkspaceDecl { secrets: vec!["acme".into()], providers: vec![] });
+        assert_eq!(resolve_declared_credential(&rt.credential, wid, &host).as_deref(), Some("sk-workspace-123"));
+        assert_eq!(resolve_declared_credential(&rt.credential, Uuid::new_v4(), &host), None, "declared for another workspace only");
         std::env::remove_var("LIGUS_WS_SECRET_acme");
-        assert_eq!(resolve_workspace_credential(&WorkspaceCredential::Inline {}), None);
+        assert_eq!(resolve_declared_credential(&WorkspaceCredential::Inline {}, wid, &host), None);
 
         // Removal clears it everywhere.
         svc.remove_workspace_runtime(wid, "ws-claude").unwrap();
@@ -4759,7 +4804,7 @@ mod tests {
             panic!("legacy event must still decode: {ev:?}");
         };
         assert!(runtime.credential.is_legacy_inline());
-        assert_eq!(resolve_workspace_credential(&runtime.credential), None);
+        assert_eq!(resolve_workspace_credential(&runtime.credential, Uuid::new_v4()), None);
         assert!(!format!("{runtime:?}").contains("sk-OLDPEER"));
         assert!(!serde_json::to_string(&runtime).unwrap().contains("sk-OLDPEER"));
     }
@@ -5369,6 +5414,71 @@ mod tests {
         assert!(ana.phone_co_holders(wid, phone.device_id).unwrap().is_empty(), "Ben's certificate counts for nothing");
     }
 
+    /// H11 at the reader: a host record written under another device's id
+    /// is never listed (nor picked, nor dispatched to); the device's own
+    /// record is, with its offers.
+    #[test]
+    fn hosts_list_only_records_their_own_device_signed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let wid = Uuid::new_v4();
+        let cfg = workspace_config_session_id(wid);
+        let mut ana = svc_on(&path, "a", "Ana");
+        ana.set_author_account(Uuid::new_v4().to_string(), "Ana", None);
+        ana.create_chat("general", wid, "rt").unwrap();
+        ana.ensure_workspace_config(wid).unwrap();
+        let invite = ana.issue_invite(wid).unwrap();
+        ana.store().set_join_invite(wid, invite).unwrap();
+        ana.store().set_join_redeem(wid, ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+        let mut cy = svc_on(&path, "c", "Cy");
+        cy.set_author_account(Uuid::new_v4().to_string(), "Cy", None);
+        cy.ensure_self_member(cfg, wid).unwrap();
+        cy.publish_identity(cfg, wid).unwrap();
+        // Cy registers a host under Ana's device id first (the id squat).
+        let squat = ligus_core::WorkspaceHost::new(ana.device_id().to_string(), ligus_core::HostKind::Device, "ana-mbp");
+        cy.register_host(wid, squat).unwrap();
+        assert!(ana.list_all_hosts(wid).unwrap().is_empty(), "a squatted record reached a reader");
+        assert!(cy.list_hosts(wid).unwrap().is_empty());
+        // Cy's own computer, with what it offers.
+        let mut own = ligus_core::WorkspaceHost::new(cy.device_id().to_string(), ligus_core::HostKind::Device, "cy-mbp");
+        own.offers = Some(vec![ligus_core::HostOffer { name: "codex".into(), kind: ligus_core::OfferKind::Cli, harness: "codex".into(), wire: String::new() }]);
+        assert!(cy.ensure_host(wid, own.clone()).unwrap());
+        assert!(!cy.ensure_host(wid, own.clone()).unwrap(), "unchanged offers: no write");
+        let mut older = own.clone();
+        older.offers = None;
+        assert!(!cy.ensure_host(wid, older).unwrap(), "an unset field keeps the record");
+        let hosts = ana.list_hosts(wid).unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].listed_offers().len(), 1);
+        // A chat sees the workspace's bound hosts only.
+        let chat = ana.create_chat("c2", wid, "rt").unwrap();
+        let s = ana.load_in(wid, chat.id).unwrap().unwrap();
+        assert_eq!(s.workspace_hosts.iter().map(|h| h.id.clone()).collect::<Vec<_>>(), [cy.device_id().to_string()]);
+    }
+
+    /// The beat carries this host's readiness report, signed by its device,
+    /// and a reader checks it against the roster.
+    #[test]
+    fn the_beat_carries_a_signed_status() {
+        let (mut svc, _pk) = service();
+        let wid = Uuid::new_v4();
+        svc.create_chat("A", wid, "anthropic").unwrap();
+        svc.ensure_workspace_config(wid).unwrap();
+        let status = ligus_core::HostStatus { build: "0.5.0".into(), offers: vec![ligus_core::OfferStatus { name: "codex".into(), ready: true, models: vec!["gpt-5.3-codex".into()], ..Default::default() }], refuses: vec![] };
+        crate::host_offers::set_local_status(Some(status.clone()));
+        let beat = svc.signed_beat(wid, Vec::new());
+        crate::host_offers::set_local_status(None);
+        assert!(beat.seq > 0 && !beat.status_sig.is_empty());
+        use crate::host_presence::VerifyBeat as _;
+        let v = svc.beat_verifier(wid);
+        assert_eq!(v.status(&beat), Some(status.clone()));
+        let p = crate::HostPresence::new();
+        p.merge_beats(std::collections::HashMap::from([(beat.host_id.clone(), beat.clone())]), v);
+        assert_eq!(p.status_of(&beat.host_id), Some(status));
+        // Another workspace's roster doesn't vouch for it.
+        assert!(svc.beat_verifier(Uuid::new_v4()).status(&beat).is_none());
+    }
+
     #[test]
     fn a_worker_manages_its_own_host_only_once_it_is_a_member() {
         // Every author must be a workspace member (0.1): a worker box holding
@@ -5385,18 +5495,21 @@ mod tests {
             owner.issue_invite(wid).unwrap()
         };
         let mut worker = svc_on(&path, "worker", "Worker");
+        // A host's id is its device id (readers use only a record its own
+        // device signed).
+        let box1 = worker.device_id().to_string();
         assert!(worker
-            .register_host(wid, ligus_core::WorkspaceHost::new("box1", ligus_core::HostKind::Worker, "prod"))
+            .register_host(wid, ligus_core::WorkspaceHost::new(box1.clone(), ligus_core::HostKind::Worker, "prod"))
             .is_err());
         worker.store().set_join_invite(wid, invite).unwrap();
         worker.store().set_join_redeem(wid, worker.store().issued_invite_key(wid, invite).unwrap().as_ref()).unwrap();
         worker.ensure_self_member(workspace_config_session_id(wid), wid).unwrap();
         // register_host stamps owner_actor_id = self → allowed via the carve-out.
         worker
-            .register_host(wid, ligus_core::WorkspaceHost::new("box1", ligus_core::HostKind::Worker, "prod"))
+            .register_host(wid, ligus_core::WorkspaceHost::new(box1.clone(), ligus_core::HostKind::Worker, "prod"))
             .unwrap();
         // Heartbeat its own host (throttle 0 forces an emit) → allowed.
-        assert!(worker.touch_host(wid, "box1", 0).unwrap());
+        assert!(worker.touch_host(wid, &box1, 0).unwrap());
         // But governance stays denied — the Viewer floor holds for member adds.
         let victim = test_member("victim", "V", WorkspaceRole::Contributor);
         assert!(worker.add_member(wid, wid, victim).is_err());

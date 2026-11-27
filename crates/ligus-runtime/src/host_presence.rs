@@ -26,8 +26,9 @@ use serde_json::Value;
 use crate::keyring::KeyringEngine;
 use crate::relay_client::{RelayClient, RelayError};
 
-/// A host counts as online when it beat within this many seconds.
-pub const HOST_ONLINE_WINDOW_SECS: i64 = 90;
+/// A host counts as online when it beat within this many seconds (the one
+/// window, `ligus_core::HOST_ONLINE_WINDOW_SECS`).
+pub use ligus_core::HOST_ONLINE_WINDOW_SECS;
 /// How often a running host publishes its beat (well inside the window, so one
 /// lost beat doesn't flip it offline).
 pub const HOST_BEAT_EVERY_SECS: i64 = 30;
@@ -128,8 +129,12 @@ pub async fn publish_host_beat(relay: &RelayClient, room: &str, ring: &KeyringEn
 /// (`ChatService::sign_beat`), or readers ignore it.
 pub fn beat_now(host_id: &str, coverage: Vec<ligus_core::workspace_repo::CoverageEntry>) -> Beat {
     let now = Timestamp::now().inner().unix_timestamp();
-    let seq = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    Beat { host_id: host_id.to_string(), at: now, seq: if coverage.is_empty() { 0 } else { seq }, coverage, ..Default::default() }
+    Beat { host_id: host_id.to_string(), at: now, seq: if coverage.is_empty() { 0 } else { now_seq() }, coverage, ..Default::default() }
+}
+
+/// A beat's `seq`: this host's clock in milliseconds.
+pub fn now_seq() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// Publish a whole beat (see [`beat_now`]) to the room's presence channel.
@@ -162,6 +167,40 @@ pub struct HostPresence {
     beats: Arc<Mutex<HashMap<String, i64>>>,
     /// Each host's latest reported repo coverage, with its beat's `seq`.
     coverage: Arc<Mutex<HashMap<String, ReportedCoverage>>>,
+    /// Each host's latest verified status (readiness, model lists, build,
+    /// refusals), with its beat's `seq`.
+    status: Arc<Mutex<HashMap<String, (u64, ligus_core::HostStatus)>>>,
+}
+
+/// What a reader checks on a fetched beat: its coverage and its status are
+/// each the host device's own signed report. A plain `Fn(&Beat) -> bool`
+/// checks coverage only (and never takes a status).
+pub trait VerifyBeat {
+    fn coverage(&self, beat: &Beat) -> bool;
+    fn status(&self, _beat: &Beat) -> Option<ligus_core::HostStatus> {
+        None
+    }
+}
+
+impl<F: Fn(&Beat) -> bool> VerifyBeat for F {
+    fn coverage(&self, beat: &Beat) -> bool {
+        self(beat)
+    }
+}
+
+/// Checks beats against one workspace's roster (`ChatService::beat_verifier`).
+pub struct BeatVerifier {
+    pub workspace_id: uuid::Uuid,
+    pub roster: Option<ligus_core::authz::RosterState>,
+}
+
+impl VerifyBeat for BeatVerifier {
+    fn coverage(&self, beat: &Beat) -> bool {
+        self.roster.as_ref().is_some_and(|r| beat.coverage_verified(self.workspace_id, r))
+    }
+    fn status(&self, beat: &Beat) -> Option<ligus_core::HostStatus> {
+        self.roster.as_ref().and_then(|r| beat.status_verified(self.workspace_id, r))
+    }
 }
 
 impl HostPresence {
@@ -203,10 +242,37 @@ impl HostPresence {
 
     /// Merge fetched whole beats; `verified` says whether a beat's coverage
     /// is its own host's signed report (see [`Self::record_beat`]).
-    pub fn merge_beats(&self, beats: HashMap<String, Beat>, verified: impl Fn(&Beat) -> bool) {
+    pub fn merge_beats(&self, beats: HashMap<String, Beat>, verified: impl VerifyBeat) {
         for b in beats.values() {
-            self.record_beat(b, verified(b));
+            self.record_beat(b, verified.coverage(b));
+            if let Some(st) = verified.status(b) {
+                self.record_status(&b.host_id, b.seq, st);
+            }
         }
+    }
+
+    /// Record `host_id`'s verified status when its `seq` is the highest seen.
+    pub fn record_status(&self, host_id: &str, seq: u64, status: ligus_core::HostStatus) {
+        if !seq_plausible(seq, Timestamp::now().inner().unix_timestamp()) {
+            return;
+        }
+        let mut m = self.status.lock().unwrap_or_else(|p| p.into_inner());
+        match m.get(host_id) {
+            Some((s, _)) if *s > seq => {}
+            _ => {
+                m.insert(host_id.to_string(), (seq, status));
+            }
+        }
+    }
+
+    /// The status `host_id` last reported (`None`: none verified yet).
+    pub fn status_of(&self, host_id: &str) -> Option<ligus_core::HostStatus> {
+        self.status.lock().unwrap_or_else(|p| p.into_inner()).get(host_id).map(|(_, s)| s.clone())
+    }
+
+    /// Every verified status seen, by host id.
+    pub fn statuses(&self) -> HashMap<String, ligus_core::HostStatus> {
+        self.status.lock().unwrap_or_else(|p| p.into_inner()).iter().map(|(k, (_, s))| (k.clone(), s.clone())).collect()
     }
 
     /// The coverage `host_id` last reported (`None`: it reports nothing, so
@@ -327,10 +393,10 @@ mod tests {
         let forged = HostBeat { host_id: "box".into(), at: 9, seq: 2, coverage: vec![entry("missing")], ..Default::default() };
         let mut beats = HashMap::new();
         beats.insert("box".to_string(), real.clone());
-        p.merge_beats(beats, |b| b == &real);
+        p.merge_beats(beats, |b: &HostBeat| b == &real);
         let mut beats = HashMap::new();
         beats.insert("box".to_string(), forged);
-        p.merge_beats(beats, |_| false);
+        p.merge_beats(beats, |_: &HostBeat| false);
         assert_eq!(p.coverage_of("box").unwrap()[0].state, "present", "the forged report is ignored");
         assert_eq!(p.beat_of("box"), Some(9), "its liveness still counts");
     }

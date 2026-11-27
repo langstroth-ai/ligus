@@ -165,15 +165,18 @@ mod tests {
         let mut rt = ligus_core::WorkspaceRuntime::new("gw-rt", "Gateway", ligus_core::ModelProviderKind::OpenAI, "m");
         rt.gateway = "gw-home".into();
         svc.add_workspace_runtime(ws, rt).unwrap();
-        let host = ligus_core::WorkspaceHost::new("build-1", ligus_core::HostKind::Worker, "build-1");
+        // Readers count a host record only when the device it names signed
+        // it, so the host is this device's own record, labelled "build-1".
+        let host_id = svc.device_id().to_string();
+        let host = ligus_core::WorkspaceHost::new(host_id.clone(), ligus_core::HostKind::Worker, "build-1");
         svc.register_host(ws, host).unwrap();
         let mut a = WorkspaceAgent::new("gw", "gw-rt");
         a.owner_actor_id = svc.author().id.clone();
         let id = a.id;
         svc.add_agent(chat.id, ws, a.clone()).unwrap();
-        let err = svc.set_agent_host(ws, id, "build-1").unwrap_err().to_string();
+        let err = svc.set_agent_host(ws, id, &host_id).unwrap_err().to_string();
         assert!(err.contains("build-1 doesn't offer gw-home"), "{err}");
-        a.host_id = "build-1".into();
+        a.host_id = host_id;
         assert!(svc.add_agent(chat.id, ws, a).is_err());
         assert_eq!(agent_in(&svc, ws, id).host_id, "", "nothing was written");
     }

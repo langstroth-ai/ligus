@@ -26,7 +26,7 @@ vi.mock("@/lib/ipc", async (orig) => ({
   listAgents: vi.fn(async () => []),
   listMcpServers: vi.fn(async () => []),
   listWorkspaceHosts: vi.fn(async () => [
-    { id: "me", kind: "device", label: "Desk", online: true, lastSeen: "", modelGateways: [], ownerName: "", mine: true },
+    { id: "me", kind: "device", label: "Desk", online: true, lastSeen: "", modelGateways: [], ownerName: "", mine: true, offers: [], readiness: "", build: "" },
     {
       id: "box",
       kind: "worker",
@@ -35,6 +35,9 @@ vi.mock("@/lib/ipc", async (orig) => ({
       lastSeen: "",
       modelGateways: [{ name: "litellm", api: "openai" }],
       ownerName: "",
+      offers: [],
+      readiness: "",
+      build: "",
       mine: false,
     },
   ]),

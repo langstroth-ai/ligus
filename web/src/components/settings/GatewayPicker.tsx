@@ -23,6 +23,20 @@ export function gatewayOffers(hosts: WorkspaceHostDto[]): GatewayOffer[] {
   return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/// The models hosts report for gateway `name` (from their signed beats),
+/// deduplicated in first-seen order. Empty when no host reports any: the
+/// model field stays free text.
+export function gatewayModels(hosts: WorkspaceHostDto[], name: string): string[] {
+  const out: string[] = [];
+  for (const h of hosts) {
+    for (const o of h.offers ?? []) {
+      if (o.kind !== "gateway" || o.name !== name) continue;
+      for (const m of o.models ?? []) if (!out.includes(m)) out.push(m);
+    }
+  }
+  return out;
+}
+
 /// "litellm (openai), claude-gw (anthropic)" for a host row.
 export function hostGatewaysLabel(h: WorkspaceHostDto): string {
   return (h.modelGateways ?? []).map((g) => `${g.name} (${g.api})`).join(", ");

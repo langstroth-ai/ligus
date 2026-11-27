@@ -2665,12 +2665,13 @@ export function MemberRow({
 /// status dot, and a relative "last seen".
 function HostRow({ host }: { host: WorkspaceHostDto }) {
   const gateways = hostGatewaysLabel(host);
+  const tip = [gateways ? `Gateways: ${gateways}` : "", host.build ? `Ligus ${host.build}` : ""].filter(Boolean).join(" · ");
   return (
     <ListRow
       leading={<StatusDot on={host.online} size={8} label={host.online ? "Online" : "Offline"} />}
       title={host.label || "Unnamed host"}
-      meta={`${host.kind} · ${host.online ? "online" : relativeAgo(host.lastSeen)}`}
-      tip={gateways ? `Gateways: ${gateways}` : undefined}
+      meta={[host.kind, host.online ? "online" : relativeAgo(host.lastSeen), host.readiness].filter(Boolean).join(" · ")}
+      tip={tip || undefined}
     />
   );
 }
