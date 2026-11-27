@@ -183,7 +183,7 @@ pub fn status_now(offers: &[HostOffer], build: &str, role: HostRole) -> HostStat
                     .values()
                     .flat_map(|d| d.providers.iter())
                     .find(|p| p.name == o.name)
-                    .is_some_and(|p| ligus_core::names::var(&ligus_core::WorkspaceCredential::env_var(&p.secret)).is_ok_and(|v| !v.is_empty()));
+                    .is_some_and(|p| crate::host_config::is_held(&p.secret));
                 OfferStatus { name: o.name.clone(), ready: held, why: if held { String::new() } else { "no key here".into() }, ..Default::default() }
             }
             OfferKind::Other => continue,

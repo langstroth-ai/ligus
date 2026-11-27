@@ -253,8 +253,9 @@ LIGUS_WS_SECRET_acme=sk-…  ligus agent bot --runtime ws-claude
 - The worker resolves only secret names its `host.toml` declares for the
   workspace ([What a host offers](../../ligus/reference/cli.md#what-a-host-offers)).
   A worker with no `host.toml` declares the names already in its
-  environment on first start; add later ones to `[workspaces."<id>"]
-  secrets`. A log string can't point a runtime at another workspace's
+  environment on first start; add later ones with
+  `ligus secrets set <name> -` (the value from stdin into the box's secret
+  store, declared for you) or to `[workspaces."<id>"] secrets` by hand. A log string can't point a runtime at another workspace's
   secret on a shared box.
 - Keys are never stored in the workspace: there is no inline option.
 
