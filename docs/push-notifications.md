@@ -57,10 +57,10 @@ Plaintext (JSON) of every push:
 | `proposalId` | UUID | `proposal.created`, `workflow.approval`, `review.recruit` | the proposal to review |
 | `workflowRunId` | UUID | `workflow.approval` | the run waiting on the gate |
 | `workflowId` | UUID | `workflow.approval` | the run's workflow definition |
-| `workspaceId` | UUID | `approval.request` | the workspace the request asks to join |
-| `rid` | 32 hex | `approval.request` | the approval request (`GET /v1/approvals` lists it) |
-| `label` | ≤ 64 bytes | `approval.request` | the label the requesting box gave itself (a display hint, not verified) |
-| `requestKind` | `box` | `approval.request` | what asks: always `box` today (see below) |
+| `workspaceId` | UUID | `approval.request`, `approval.presence` | the workspace the request is for |
+| `rid` | 32 hex | `approval.request`, `approval.presence` | the approval request (`GET /v1/approvals` lists it) |
+| `label` | ≤ 64 bytes | `approval.request`, `approval.presence` | the requesting box's own label (a hint, not verified); for a hand-off, the asking device's name on the log |
+| `requestKind` | `box`, `presence` | `approval.request`, `approval.presence` | what asks (see below) |
 | `preview` | `true` | when `body` is a content preview | |
 
 Unknown fields and kinds must be ignored by the app (an unknown kind shows
@@ -75,6 +75,7 @@ Unknown fields and kinds must be ignored by the app (an unknown kind shows
 | `workflow.approval` | a workflow run's approval gate is waiting (again on each rerouted attempt) | `<workflow name> needs approval` | the gate's stage name |
 | `review.recruit` | a backed-up review queue asked you to help (a `flowRecorded` recruit with action `approvers` naming you) | `The review queue needs you` | the title of the proposal that has waited longest for you (one you haven't voted on and didn't write); `proposalId` deep-links to it |
 | `approval.request` | a box asks to join the workspace through its approval mailbox (code-match approval, `docs/design/code-match-approval.md` 7.3) and nobody is checking it yet | `<label> wants to join <workspace>` | `Open Ligus to compare the code the box shows.` (always shown; no preview) |
+| `approval.presence` | one of **your** devices (a CLI or lt computer) asks for your passkey on one change (the passkey hand-off, `docs/design/code-match-wire.md` section 8), and the box placed this phone as you and checked the asking device is yours on its log. Only your own phones get it, once per request, at most 6 per asking device an hour | `Your passkey, asked by your device: “laptop”` | `Open Ligus to check the change and its code.` (always shown; no preview) |
 | `phone.paired` | a new phone was paired with this host | `New phone paired` | the phone's name (always shown) |
 | `test` | reserved for a test push | | |
 

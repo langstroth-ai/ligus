@@ -270,8 +270,8 @@ compare. Otherwise it shows the fingerprint compare exactly as today.
 ## 8. Passkey hand-off (`presence`, new in 0.5)
 
 A terminal (the CLI, lt) has no passkey. For a write the workspace's rules
-hold for its author's passkey, it asks its person's own desktop (or, later,
-phone) through the same mailbox (workspace model v3, 17.3). No rule, wire id
+hold for its author's passkey, it asks its person's own desktop or phone
+through the same mailbox (workspace model v3, 17.3). No rule, wire id
 or fold changes: the passkey signs `presence::challenge(env)` exactly as for
 any other event, and the fold checks it as today.
 
@@ -339,6 +339,25 @@ device and hour.
 `kaSeed` and `readKey` only read this request's answer; the draft is what
 will be stored anyway. Deleted on settle, dropped after 15 minutes.
 
-`ligus serve` doesn't list hand-offs to phones yet (a phone confirms only
-once the box acts for the phone's own person). An older approver refuses the
-unknown kind (it never lists).
+**Phone.** `ligus serve` lists a hand-off (`GET /v1/approvals`, with a
+`presence` object) only to a phone it places as the person the draft is
+stamped with, once the checks above pass on the box's own fold and the
+asking device is within the hourly rate; it pushes `approval.presence` to
+that person's phones only. Every other caller (another person's phone, a
+phone it can't place, the operator) never sees it, and the box's
+`/v1/approvals/{rid}/msgs|claim|result|abort` answer 404 for it to them:
+
+```
+"presence": {"accountId","deviceId","deviceName","eventKind","summary",
+             "code","challenge" (= commit, b64u),"rpId","origins","allowCredentials"}
+```
+
+The phone checks the request's signature, that the ask's `deviceKey` signed
+it, that the draft's stamp names its own account and its `signerDeviceId`
+the asking device, and computes the code itself; it runs the passkey over
+`commit` (from the signed request) and signs the `result` with its own P-256
+device key, sealed to `requesterKa`. The terminal accepts it because the
+phone is certified for its account on its own log. The summary text is the
+box's rendering of the draft, as for the phone's own `/v1/presence/prepare`.
+
+An older approver refuses the unknown kind (it never lists).
