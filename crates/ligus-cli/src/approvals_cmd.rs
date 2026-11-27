@@ -549,10 +549,25 @@ async fn wait_computer(
                     }
                     confirmed = true;
                 }
-                RequesterEvent::Offered { .. } if confirmed => {
-                    req.ack().await.map_err(|e| requester_problem(e, "ligus devices request"))?;
+                RequesterEvent::Offered { .. } => {
+                    // A data dir syncs one workspace: this one takes only the
+                    // workspace whose address it was sent to (the plain ack),
+                    // so the desktop adds it nowhere else.
+                    let more = req.offered_more();
+                    if !more.is_empty() {
+                        let names: Vec<String> = more.iter().map(|m| shown(&m.name)).collect();
+                        note(&format!(
+                            "Your desktop also offers {} more workspace{} ({}). This data dir syncs one workspace, so it links only this one; link another from its own data dir: LIGUS_DATA_DIR=DIR ligus devices request --to <that workspace's approval address>",
+                            more.len(),
+                            if more.len() == 1 { "" } else { "s" },
+                            names.join(", ")
+                        ));
+                        r.add(Check::ok("approval.more", "more workspaces", format!("{} offered, not taken (one workspace per data dir)", more.len())));
+                    }
+                    if confirmed {
+                        req.ack().await.map_err(|e| requester_problem(e, "ligus devices request"))?;
+                    }
                 }
-                RequesterEvent::Offered { .. } => {}
                 RequesterEvent::Result(res) if res.outcome == Outcome::Approved => {
                     let checked = req
                         .check_grant(&res, GrantTarget::Computer { request, ka, device_key }, now_ms())

@@ -244,8 +244,10 @@ pub const COMMANDS: &[Cmd] = &[
                   then) and newDevice. Expired requests are cleaned up as you go. With --to (the approval address your \
                   desktop shows under My devices) the request also goes to your desktop's Inbox: both screens then show \
                   the same 8-symbol code, you confirm it here, your desktop confirms with your passkey, and this computer \
-                  links after checking the approval on the workspace log and asking \"Link this computer as <you>?\". The \
-                  paste text and fingerprint are printed straight away for an older desktop. An install that was already connected (it may have written as its own \
+                  links after checking the approval on the workspace log and asking \"Link this computer as <you>?\". A \
+                  data dir syncs one workspace, so it links only the one whose address it was sent to; when your \
+                  desktop offers your other workspaces too, it says which, and nothing is added there (link each from \
+                  its own data dir). The paste text and fingerprint are printed straight away for an older desktop. An install that was already connected (it may have written as its own \
                   member) asks with a new device key, switched to only when you redeem, and adds a proof that it was that \
                   member, so the desktop can offer to remove the duplicate. A box can't: it joins with `ligus admit`.",
         synopsis: &[

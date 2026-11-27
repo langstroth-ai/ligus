@@ -130,6 +130,17 @@ Full release notes are on the
   second one. When the relay can't carry the request, a request code is
   pasted across instead. See
   [From a second desktop](../features/linked-devices.md#desktop).
+- **One link brings all your workspaces.** Linking a new desktop or `lt`
+  with the approval address now adds it to every workspace your approving
+  desktop can add it to, not only the one whose address you copied. The
+  desktop asks your passkey once per workspace, with a count ("in “Beta”
+  (2 of 3)"); the new computer shows "Linking 3 workspaces…", asks **Link
+  this computer as Ana in 3 workspaces?** once, and lists each result. A
+  workspace that didn't link shows why, with **Try again** when that can
+  help. `ligus devices request --to` still links one workspace per data dir
+  and says which others were offered. Older desktops and computers link one
+  workspace, as before. See
+  [All your workspaces at once](../features/linked-devices.md#all-workspaces).
 - **A hint when an invite looks like your own.** Joining with an invite or
   a short code on a device that looks like it belongs to someone already
   using Ligus shows one line: "Looks like you already use Ligus. Link this

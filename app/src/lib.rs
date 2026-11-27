@@ -59,6 +59,7 @@ mod scratch_ui;
 mod setup_ui;
 mod first_run_ui;
 mod link_request_ui;
+mod link_more;
 mod turn_host;
 mod attention;
 mod notices;
@@ -17199,6 +17200,7 @@ pub fn run() {
             link_request_ui::link_request_paste,
             link_request_ui::link_request_open_grant,
             link_request_ui::link_request_redeem,
+            link_request_ui::link_request_retry,
             mark_tour_seen,
             get_git_status,
             list_runtimes,

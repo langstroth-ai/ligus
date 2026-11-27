@@ -177,6 +177,32 @@ describe("ApprovalSheet", () => {
     vi.mocked(ipc.approvalSession).mockResolvedValue(null);
   });
 
+  it("a computer link lists the other workspaces it brings and counts the passkeys", async () => {
+    const more = [
+      { workspaceId: "w2", name: "Beta", state: "added", message: null },
+      { workspaceId: "w3", name: "Gamma", state: "adding", message: null },
+      { workspaceId: "w4", name: "Delta", state: "skipped", message: "Add a passkey first." },
+    ];
+    listing = [request({ kind: "computer", label: "lt on mbp" })];
+    vi.mocked(ipc.approvalSession).mockResolvedValue(session({ kind: "computer", label: "lt on mbp", phase: "passkey", step: "3 of 3", more }));
+    mount();
+    expect(await screen.findByTestId("approval-passkey")).toHaveTextContent("Confirm with your passkey (3 of 3)…");
+    const rows = screen.getByTestId("approval-more");
+    expect(rows).toHaveTextContent("Beta");
+    expect(rows).toHaveTextContent("Add a passkey first.");
+    expect(screen.getByTestId("approval-more-adding")).toHaveTextContent("Gamma");
+    vi.mocked(ipc.approvalSession).mockResolvedValue(null);
+  });
+
+  it("a computer link with nothing more reads as before", async () => {
+    listing = [request({ kind: "computer", label: "lt on mbp" })];
+    vi.mocked(ipc.approvalSession).mockResolvedValue(session({ kind: "computer", label: "lt on mbp", phase: "approved", more: [] }));
+    mount();
+    expect(await screen.findByTestId("approval-approved")).toHaveTextContent("The computer \u201Clt on mbp\u201D is one of your devices.");
+    expect(screen.queryByTestId("approval-more")).toBeNull();
+    vi.mocked(ipc.approvalSession).mockResolvedValue(null);
+  });
+
   it("a contested request offers End this request and never opens", async () => {
     listing = [request({ claim: { state: "contested", name: null } })];
     const onClose = mount();

@@ -42,6 +42,15 @@ vi.mock("@/lib/ipc", () => ({
     flow("confirmApprover", { personName: "Ana", workspaceName: "Acme", approverFingerprint: "1234-5678-9ABC-DEFG-HJKM" }),
   ),
   linkRequestRedeem: vi.fn(async () => flow("linked", { personName: "Ana", workspaceId: "w1" })),
+  linkRequestRetry: vi.fn(async (id: string) =>
+    flow("linked", {
+      personName: "Ana",
+      workspaces: [
+        { workspaceId: "w1", name: "Acme", state: "linked", error: null, canRetry: false },
+        { workspaceId: id, name: "Delta", state: "linked", error: null, canRetry: false },
+      ],
+    }),
+  ),
 }));
 
 const ADDRESS = "ligusaddr1:abc";
@@ -183,3 +192,55 @@ describe("LinkThisDevice", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("another computer's request");
   });
 });
+
+describe("LinkThisDevice, several workspaces", () => {
+  const ws = (workspaceId: string, name: string, state: string, error: string | null = null, canRetry = false) => ({
+    workspaceId,
+    name,
+    state,
+    error,
+    canRetry,
+  });
+
+  it("says how many come, asks once, and shows each one's result with Try again", async () => {
+    render(<LinkThisDevice onBack={vi.fn()} />);
+    await pasteAddress();
+    emit(flow("approving", { code: "K7Q4M9X2", workspaces: [ws("w2", "Beta", "waiting"), ws("w3", "Gamma", "waiting")] }));
+    expect((await screen.findByTestId("link-approving")).textContent).toContain("once for each of the 3 workspaces");
+
+    emit(flow("checking", { workspaces: [ws("w1", "Acme", "ready"), ws("w2", "Beta", "checking"), ws("w3", "Gamma", "checking")] }));
+    expect((await screen.findByTestId("link-checking")).textContent).toBe("Linking 3 workspaces…");
+    expect(screen.getByTestId("link-workspaces").textContent).toContain("Beta");
+
+    emit(
+      flow("confirmPerson", {
+        personName: "Ana",
+        workspaces: [ws("w1", "Acme", "ready"), ws("w2", "Beta", "ready"), ws("w3", "Gamma", "notIncluded", "Link it later.")],
+      }),
+    );
+    expect(await screen.findByText(/in 2 workspaces\?/)).toBeTruthy();
+    expect(screen.getByText("Link it later.")).toBeTruthy();
+    await click("Link");
+    expect(ipc.linkRequestLinkAs).toHaveBeenCalledTimes(1);
+
+    emit(
+      flow("linked", {
+        personName: "Ana",
+        workspaces: [ws("w1", "Acme", "linked"), ws("w4", "Delta", "failed", "Not on its log yet.", true)],
+      }),
+    );
+    expect((await screen.findByTestId("link-linked")).textContent).toContain("in 1 of 2 workspaces");
+    await click("Try again");
+    expect(ipc.linkRequestRetry).toHaveBeenCalledWith("w4");
+    await waitFor(() => expect(screen.getByTestId("link-linked").textContent).toContain("in both workspaces"));
+  });
+
+  it("shows no list for one workspace (an older approving device)", async () => {
+    render(<LinkThisDevice onBack={vi.fn()} />);
+    await pasteAddress();
+    emit(flow("linked", { personName: "Ana", workspaces: [] }));
+    expect((await screen.findByTestId("link-linked")).textContent).toBe("This computer is now one of Ana's devices.");
+    expect(screen.queryByTestId("link-workspaces")).toBeNull();
+  });
+});
+

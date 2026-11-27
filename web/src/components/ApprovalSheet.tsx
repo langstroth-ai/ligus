@@ -23,6 +23,7 @@ import {
   approvalOpen,
   approvalSession,
   type ApprovalDto,
+  type ApprovalMoreDto,
   type ApprovalSessionDto,
 } from "@/lib/ipc";
 import { Countdown, Sheet, groupMatchCode, spellMatchCode } from "@/components/kit";
@@ -149,6 +150,38 @@ function Details({
         </p>
       )}
     </details>
+  );
+}
+
+const MORE_STATE: Record<string, string> = {
+  offered: "Comes along",
+  skipped: "Not added",
+  leftOut: "Not added",
+  notTaken: "Not added",
+  adding: "Passkey…",
+  added: "Added",
+  notAdded: "Not added",
+};
+
+/// A computer link's other workspaces: one row each, with why one isn't
+/// added (this desktop can't add it there, its passkey was cancelled…).
+function MoreWorkspaces({ rows }: { rows?: ApprovalMoreDto[] }) {
+  if (!rows || rows.length === 0) return null;
+  return (
+    <div className="space-y-1.5" data-testid="approval-more">
+      <p className="text-[12px] text-ink-soft">Your other workspaces, one passkey each:</p>
+      <ul className="space-y-1">
+        {rows.map((m) => (
+          <li key={m.workspaceId} className="text-[12px]" data-testid={`approval-more-${m.state}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 truncate">{m.name}</span>
+              <span className="shrink-0 text-ink-soft">{MORE_STATE[m.state] ?? m.state}</span>
+            </div>
+            {m.message && <p className="text-ink-soft">{m.message}</p>}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -340,26 +373,34 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
         <p className="text-center text-[13px] text-ink-soft" role="status" data-testid="approval-confirming">
           {COPY.waitingComputer}
         </p>
+        <MoreWorkspaces rows={s.more} />
       </>
     );
   } else if (s.phase === "passkey") {
     body = (
       <>
         {s.code && <MatchCode code={s.code} dim />}
-        <p className="text-center text-[13px] text-ink-soft" role="status">
-          Confirm with your passkey…
+        <p className="text-center text-[13px] text-ink-soft" role="status" data-testid="approval-passkey">
+          {s.step ? `Confirm with your passkey (${s.step})…` : "Confirm with your passkey…"}
         </p>
+        <MoreWorkspaces rows={s.more} />
       </>
     );
   } else if (s.phase === "approved") {
+    const added = (s.more ?? []).filter((m) => m.state === "added").length;
     body = (
-      <p className="text-[13px]" role="status" data-testid="approval-approved">
-        {kind === "box"
-          ? `The box ${quoteLabel(label)} is admitted. It joins on its own.`
-          : handoff
-            ? `Confirmed. ${quoteLabel(label)} writes the change.`
-            : `The computer ${quoteLabel(label)} is one of your devices.`}
-      </p>
+      <>
+        <p className="text-[13px]" role="status" data-testid="approval-approved">
+          {kind === "box"
+            ? `The box ${quoteLabel(label)} is admitted. It joins on its own.`
+            : handoff
+              ? `Confirmed. ${quoteLabel(label)} writes the change.`
+              : added > 0
+                ? `The computer ${quoteLabel(label)} is one of your devices in ${added + 1} workspaces.`
+                : `The computer ${quoteLabel(label)} is one of your devices.`}
+        </p>
+        <MoreWorkspaces rows={s.more} />
+      </>
     );
     footer = (
       <Button variant="primary" size="md" onClick={close}>

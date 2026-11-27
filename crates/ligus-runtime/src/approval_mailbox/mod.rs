@@ -37,9 +37,12 @@ mod approver;
 mod client;
 mod envelope;
 mod log_check;
+mod more;
 mod notices;
 mod presence_ask;
 mod requester;
+#[cfg(test)]
+mod more_tests;
 #[cfg(test)]
 mod presence_tests;
 #[cfg(test)]
@@ -55,6 +58,7 @@ pub use envelope::{
     hint, open_blob, seal_blob, AbortBody, AckBody, OfferBody, AbortReason, ApproverPerson, ClaimBody, MsgError, MsgType, OpenBody, Outcome, RequestBody, RequestSubject,
     ResultBody, RevealBody, Signer, Verified, VerifiedOpen, VerifiedRequest, CLOCK_SKEW_MS, MAX_HINT_CHARS,
 };
+pub use more::{MoreGrant, MoreGrantCheck, MoreOffer, MAX_MORE};
 pub use notices::{Notice, NoticeKind, Notices, NOTICES_FILE, NOTICE_TTL_MS};
 pub use log_check::{retry_log_check, LogApproval, LogApprovalCheck, LogSubject, LogVerdict, LOG_CHECK_RETRY_MS};
 pub use presence_ask::{

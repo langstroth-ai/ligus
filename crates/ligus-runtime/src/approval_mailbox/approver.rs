@@ -401,6 +401,15 @@ struct Offered {
     grant: zeroize::Zeroizing<String>,
     digest: String,
     at: i64,
+    /// The more workspaces offered with it ([`super::more`]), and which of
+    /// them the computer acknowledged.
+    more: Vec<OfferedMore>,
+}
+
+struct OfferedMore {
+    offer: super::more::MoreOffer,
+    grant: zeroize::Zeroizing<String>,
+    acked: bool,
 }
 
 impl std::fmt::Debug for ApproverSession {
@@ -549,8 +558,12 @@ impl ApproverSession {
     }
 
     async fn post_result(&mut self, outcome: Outcome, grant: Option<&str>) -> Result<(), ApproverError> {
+        self.post_result_with(outcome, grant, &[]).await
+    }
+
+    async fn post_result_with(&mut self, outcome: Outcome, grant: Option<&str>, more: &[String]) -> Result<(), ApproverError> {
         let body = ResultBody { rid: self.request.rid_hex(), outcome, grant: grant.map(str::to_string), grant_digest: grant.map(grant_digest) };
-        let msg = zeroize::Zeroizing::new(sign_message(MsgType::Result, &body, &self.signer));
+        let msg = zeroize::Zeroizing::new(sign_message(MsgType::Result, &super::more::ResultWire { base: &body, more_grants: more }, &self.signer));
         let blob = seal_to(&self.request.requester_ka, &msg)?;
         self.client.post_msg(MailboxAuth::Member(&self.keys), &self.request.mailbox, &self.request.rid, &blob, "requester").await?;
         self.ended = true;
@@ -563,6 +576,16 @@ impl ApproverSession {
     /// The grant stays in memory until [`Self::finish_approved`]. If the
     /// workspace key rotates before that, [`Self::decline`] and start again.
     pub async fn offer(&mut self, grant: String) -> Result<(), ApproverError> {
+        self.offer_with(grant, Vec::new()).await.map(|_| ())
+    }
+
+    /// [`Self::offer`], with one more grant for each other workspace of the
+    /// person's where this device can add the computer ([`super::more`]).
+    /// Only digests go out now. Returns the workspaces left out because all
+    /// the grants wouldn't fit in one result message (the person links those
+    /// afterwards). An older computer ignores the extras and acknowledges
+    /// only its own workspace.
+    pub async fn offer_with(&mut self, grant: String, more: Vec<super::more::MoreGrant>) -> Result<Vec<Uuid>, ApproverError> {
         if self.ended {
             return Err(ApproverError::Ended);
         }
@@ -579,17 +602,129 @@ impl ApproverSession {
             return Err(ApproverError::CodeExpired);
         }
         let digest = grant_digest(&grant);
+        let (kept, left_out) = self.fit_more(&grant, more);
+        let offers: Vec<super::more::MoreOffer> = kept.iter().map(|m| m.offer.clone()).collect();
         let body = OfferBody {
             rid: self.request.rid_hex(),
             grant_digest: digest.clone(),
             person: self.person.clone(),
             approver_device_id: self.approver_device_id,
         };
-        let msg = sign_message(MsgType::Offer, &body, &self.signer);
+        let msg = sign_message(MsgType::Offer, &super::more::OfferWire { base: &body, more: &offers }, &self.signer);
         let blob = seal_to(&self.request.requester_ka, &msg)?;
         self.client.post_msg(MailboxAuth::Member(&self.keys), &self.request.mailbox, &self.request.rid, &blob, "requester").await?;
-        self.offered = Some(Offered { grant: zeroize::Zeroizing::new(grant), digest, at: now });
+        self.offered = Some(Offered { grant: zeroize::Zeroizing::new(grant), digest, at: now, more: kept });
+        Ok(left_out)
+    }
+
+    /// The more grants that fit, with the first one, in one sealed result
+    /// ([`super::MAX_MSG_BLOB`]), in the order given; the rest's workspaces.
+    fn fit_more(&self, grant: &str, more: Vec<super::more::MoreGrant>) -> (Vec<OfferedMore>, Vec<Uuid>) {
+        let mut kept: Vec<OfferedMore> = Vec::new();
+        let mut left_out = Vec::new();
+        let mut texts: Vec<String> = Vec::new();
+        for m in more {
+            if kept.iter().any(|k| k.offer.workspace_id == m.workspace_id) {
+                continue;
+            }
+            let Some(c) = super::more::compact(&m.grant).filter(|_| kept.len() < super::more::MAX_MORE) else {
+                left_out.push(m.workspace_id);
+                continue;
+            };
+            texts.push(c);
+            if self.result_blob_len(grant, &texts) > super::MAX_MSG_BLOB {
+                texts.pop();
+                left_out.push(m.workspace_id);
+                continue;
+            }
+            let offer = super::more::MoreOffer { workspace_id: m.workspace_id, name: super::envelope::hint(&m.name), grant_digest: grant_digest(&m.grant) };
+            kept.push(OfferedMore { offer, grant: zeroize::Zeroizing::new(m.grant), acked: false });
+        }
+        for t in &mut texts {
+            zeroize::Zeroize::zeroize(t);
+        }
+        (kept, left_out)
+    }
+
+    /// The length of the sealed result carrying `grant` and `more`.
+    fn result_blob_len(&self, grant: &str, more: &[String]) -> usize {
+        let body = ResultBody { rid: self.request.rid_hex(), outcome: Outcome::Approved, grant: Some(grant.to_string()), grant_digest: Some(grant_digest(grant)) };
+        let msg = zeroize::Zeroizing::new(sign_message(MsgType::Result, &super::more::ResultWire { base: &body, more_grants: more }, &self.signer));
+        // `b64u(ephemeral(32) ‖ ciphertext(plain + 16))`.
+        (32 + msg.len() + 16).div_ceil(3) * 4
+    }
+
+    /// The more workspaces the computer acknowledged: only for these may a
+    /// certificate be published (one passkey each), then
+    /// [`Self::finish_approved_with`] sends their grants.
+    pub fn acked_more(&self) -> Vec<super::more::MoreOffer> {
+        self.offered.as_ref().map(|o| o.more.iter().filter(|m| m.acked).map(|m| m.offer.clone()).collect()).unwrap_or_default()
+    }
+
+    /// The more workspaces offered (acknowledged or not).
+    pub fn offered_more(&self) -> Vec<super::more::MoreOffer> {
+        self.offered.as_ref().map(|o| o.more.iter().map(|m| m.offer.clone()).collect()).unwrap_or_default()
+    }
+
+    fn take_ack_more(&mut self, v: &Verified) {
+        let taken = super::more::ack_more(v);
+        if let Some(o) = self.offered.as_mut() {
+            for m in &mut o.more {
+                m.acked = taken.contains(&m.offer.grant_digest);
+            }
+        }
+    }
+
+    /// Between the passkeys of a link's more workspaces: whether the
+    /// computer ended the request meanwhile (one read, no wait).
+    pub async fn still_open(&mut self) -> Result<(), ApproverError> {
+        if self.ended {
+            return Err(ApproverError::Ended);
+        }
+        let msgs = self.client.get_msgs(MailboxAuth::Member(&self.keys), &self.request.mailbox, &self.request.rid, self.cursor, 0).await?;
+        let seal = self.keys.seal();
+        for m in msgs {
+            self.cursor = self.cursor.max(m.seq);
+            let plain = open_blob(&self.ka, &m.blob).or_else(|| open_blob(&seal, &m.blob));
+            let Some(v) = plain.and_then(|p| Verified::parse(&p).ok()) else { continue };
+            if v.t == MsgType::Abort {
+                if let Ok(reason) = verify_abort(&v, &self.request.rid) {
+                    self.ended = true;
+                    self.offered = None;
+                    return Err(ApproverError::Aborted(reason));
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// **Computers**: the first certificate is on the log, and so is one for
+    /// each of `published` (acknowledged more workspaces whose passkey went
+    /// through): send the result with the first grant and theirs. A
+    /// workspace that wasn't acknowledged is refused.
+    pub async fn finish_approved_with(&mut self, published: &[Uuid]) -> Result<(), ApproverError> {
+        if self.ended {
+            return Err(ApproverError::Ended);
+        }
+        if self.request.kind != MatchKind::Computer {
+            return Err(ApproverError::NotAComputer);
+        }
+        if !self.acked {
+            return Err(ApproverError::NotAcknowledged);
+        }
+        let acked = self.acked_more();
+        if published.iter().any(|w| !acked.iter().any(|m| m.workspace_id == *w)) {
+            return Err(ApproverError::NotAcknowledged);
+        }
+        let offered = self.offered.take().ok_or(ApproverError::NotAcknowledged)?;
+        let more: Vec<String> = offered
+            .more
+            .iter()
+            .filter(|m| m.acked && published.contains(&m.offer.workspace_id))
+            .filter_map(|m| super::more::compact(&m.grant))
+            .collect();
+        let more = zeroize::Zeroizing::new(more);
+        self.post_result_with(Outcome::Approved, Some(&offered.grant), &more).await
     }
 
     /// Wait (up to `wait_secs`) for the computer's ack of the offer, signed
@@ -626,6 +761,7 @@ impl ApproverSession {
                     let Ok(d) = verify_ack(&v, &self.request.rid, self.request.signer_alg, &self.request.signer_key) else { continue };
                     if self.offered.as_ref().is_some_and(|o| o.digest == d) && self.client.now() <= deadline {
                         self.acked = true;
+                        self.take_ack_more(&v);
                         return Ok(true);
                     }
                 }
@@ -698,6 +834,9 @@ impl ApproverSession {
             if v.t == MsgType::Ack && self.request.kind == MatchKind::Computer && !self.acked {
                 if let Ok(d) = verify_ack(&v, &self.request.rid, self.request.signer_alg, &self.request.signer_key) {
                     self.acked = self.offered.as_ref().is_some_and(|o| o.digest == d);
+                    if self.acked {
+                        self.take_ack_more(&v);
+                    }
                 }
             }
         }

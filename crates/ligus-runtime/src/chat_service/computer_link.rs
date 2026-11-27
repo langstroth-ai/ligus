@@ -13,6 +13,14 @@ fn refused(why: impl Into<String>) -> ChatError {
     ChatError::Unauthorized(why.into())
 }
 
+/// A refusal's reason as a person reads it (without the error's prefix).
+fn chat_reason(e: &ChatError) -> String {
+    match e {
+        ChatError::Unauthorized(why) => why.clone(),
+        other => other.to_string(),
+    }
+}
+
 /// What the desktop shows before approving a request.
 #[derive(Debug, Clone)]
 pub struct LinkPreview {
@@ -177,6 +185,55 @@ impl ChatService {
     pub fn publish_computer_link(&mut self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<()> {
         self.computer_link_checks(workspace_id, request, conn, now_ms)?;
         self.publish_link_certificate(workspace_id, request)
+    }
+
+    /// A link that brings all the person's workspaces
+    /// ([`crate::approval_mailbox::MoreGrant`]): for each of `others`
+    /// (workspace, its name, its connection as [`Self::prepare_computer_link`]
+    /// takes it), every check that approves `request` there, then its grant,
+    /// sealed now and **nothing written**; or why this device can't add the
+    /// computer there (not a member, not confirmed, no passkey there,
+    /// already one of your devices, lockdown…). Each runs under that
+    /// workspace's own founder. The grant leaves out your picture (the
+    /// computer reads your profile from the log), to keep the result small.
+    pub fn prepare_more_computer_links(
+        &mut self,
+        request: &LinkRequest,
+        others: &[(Uuid, String, String)],
+        now_ms: i64,
+    ) -> Vec<(Uuid, std::result::Result<crate::approval_mailbox::MoreGrant, String>)> {
+        others
+            .iter()
+            .map(|(ws, name, conn)| {
+                let r = self.with_pinned_founder(*ws, |svc| {
+                    svc.computer_link_checks(*ws, request, conn, now_ms)?;
+                    let mut person = crate::computer_link::device_local_cleared(&svc.author);
+                    person.avatar_url = None;
+                    Grant::seal(request, *ws, conn, &person, svc.device_id, &svc.keypair, now_ms.saturating_add(GRANT_TTL_MS)).map_err(|e| refused(e.to_string()))
+                });
+                (*ws, r.map(|grant| crate::approval_mailbox::MoreGrant { workspace_id: *ws, name: name.clone(), grant }).map_err(|e| chat_reason(&e)))
+            })
+            .collect()
+    }
+
+    /// [`Self::publish_computer_link`] in a workspace that may not be the
+    /// open one (a link's more workspaces): the checks and the certificate
+    /// with its passkey, under that workspace's own founder.
+    pub fn publish_computer_link_in(&mut self, workspace_id: Uuid, request: &LinkRequest, conn: &str, now_ms: i64) -> Result<()> {
+        self.with_pinned_founder(workspace_id, |svc| svc.publish_computer_link(workspace_id, request, conn, now_ms))
+    }
+
+    /// Run `f` with `workspace_id`'s pinned founder trusted (the open
+    /// workspace's is put back after).
+    fn with_pinned_founder<R>(&mut self, workspace_id: Uuid, f: impl FnOnce(&mut Self) -> Result<R>) -> Result<R> {
+        let Some(pin) = self.store.workspace_pin(workspace_id)? else {
+            return Err(refused("this device has no founder pin for the workspace (join it from an invite)"));
+        };
+        let before = self.trusted_founder.clone();
+        self.trusted_founder = Some(pin.founder_account.to_string());
+        let r = f(self);
+        self.trusted_founder = before;
+        r
     }
 
     fn publish_link_certificate(&mut self, workspace_id: Uuid, request: &LinkRequest) -> Result<()> {

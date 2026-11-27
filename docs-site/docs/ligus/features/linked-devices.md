@@ -114,13 +114,60 @@ code instead** on the first screen:
     fingerprint: compare it with **This desktop** on your first desktop and
     choose **Yes, link**.
 
-A desktop links into the workspace whose address it used. To add another of
-your workspaces to it, copy that workspace's approval address on your first
+With the approval address, one link brings all your workspaces: see
+[All your workspaces at once](#all-workspaces). With a request code, a desktop
+links into the one workspace the code was approved in. To add a workspace that
+didn't come along, copy that workspace's approval address on your first
 desktop and, on the linked one, choose **＋ → Join → Link this computer**. A
 linked desktop doesn't create workspaces or join with invites: do that on your
 first desktop, then link this one to the workspace. A desktop that already
 has workspaces of its own can't be linked (it would be a second you in them):
 use a fresh install, or reset it under **Settings → Advanced** first.
+
+### All your workspaces at once {#all-workspaces}
+
+The approval address belongs to one workspace, but you link a computer once.
+When your desktop approves a link, it also adds the computer to your other
+workspaces on that desktop, so a new desktop or `lt` ends up in all of them as
+you.
+
+- **On your desktop**, after **Codes match**, the sheet lists your other
+    workspaces under "Your other workspaces, one passkey each". The passkey
+    is asked once for each workspace, and the prompt counts them:
+    `Add computer “work-laptop” to your devices, code K7Q4 M9X2, in “Beta”
+    (2 of 3)`. Cancel one and that workspace is skipped; the others still go
+    through. One passkey for all of them comes in a later release.
+- **On the new desktop** (or `lt`), the screen says "Linking 3
+    workspaces…" and checks each one on its own workspace log. It asks
+    **Link this computer as Ana in 3 workspaces?** once. Afterwards it lists
+    each workspace with **Linked**, **Didn't link** or **Not included**.
+- A workspace whose approval hasn't reached the new computer yet shows
+    **Didn't link** with **Try again** (the approval stays good for 30
+    minutes). One your desktop didn't add the computer to (its passkey was
+    cancelled) shows **Not included**: link it later with **＋ → Join → Link
+    this computer** and that workspace's approval address.
+
+Your desktop adds the computer only where it can:
+
+- you are a member there, and this desktop is confirmed for you there;
+- your account has a passkey in that workspace;
+- the workspace isn't in lockdown, and the computer isn't already one of your
+    devices there.
+
+Anything else is listed on the desktop's sheet with the reason, and nothing is
+written there. If you have many workspaces, as many as fit in one message
+come along (usually four or five besides the first); the sheet says to link
+the rest afterwards.
+
+The `ligus` command line keeps one workspace per data dir, so `ligus devices
+request --to` takes only the workspace whose address it was sent to. When your
+desktop offers more, it prints which, and nothing is added there. To link
+another one, use another data dir (`LIGUS_DATA_DIR=DIR ligus devices request
+--to …` with that workspace's address).
+
+Mixed versions still link. A desktop from before this release adds the
+computer to the one workspace whose address it used. A computer from before
+this release takes only that workspace, and your desktop adds it nowhere else.
 
 ### By paste {#paste}
 
@@ -333,6 +380,9 @@ a one-line warning and **Retry now**.
 | "this relay has no approval mailbox" (exit 3) | the relay doesn't offer it | paste the link request `--to` printed ([By paste](#paste)) |
 | "the approval wasn't found on the workspace log: nothing was linked" | your desktop hasn't published the certificate yet | keep the desktop online and synced, then start again |
 | "Linking … didn't finish. Nothing was added." (desktop Inbox) | the computer didn't confirm within 2 minutes | start again from the computer |
+| a workspace shows **Not included** on the new computer | your desktop didn't add it there (its passkey was cancelled, or it can't add devices there) | link it later: **＋ → Join → Link this computer** with that workspace's approval address |
+| a workspace shows **Didn't link** with **Try again** | its approval hasn't reached the new computer yet | keep your desktop online, then **Try again** (within 30 minutes) |
+| "Your desktop also offers 2 more workspaces" (`ligus devices request --to`) | a CLI data dir syncs one workspace | link each from its own data dir |
 
 For how this works underneath (the codes, what is sealed, what each side
 checks), see the design note `docs/design/link-a-computer.md` in the
