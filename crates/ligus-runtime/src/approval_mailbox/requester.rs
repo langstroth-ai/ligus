@@ -222,6 +222,11 @@ pub struct Requester {
     /// A computer's offered digest, and whether it was acknowledged.
     offered: Option<String>,
     acked: Option<String>,
+    /// The offer's more workspaces ([`super::more`]), the ones this computer
+    /// acknowledged, and the extra grants the result carried.
+    offered_more: Vec<super::more::MoreOffer>,
+    acked_more: Vec<super::more::MoreOffer>,
+    result_more: Vec<String>,
     other_relay: bool,
     ended: bool,
     pending: Option<PendingStore>,
@@ -315,6 +320,9 @@ impl Requester {
             match_code: None,
             offered: None,
             acked: None,
+            offered_more: Vec::new(),
+            acked_more: Vec::new(),
+            result_more: Vec::new(),
             other_relay: false,
             ended: false,
             pending,
@@ -390,11 +398,15 @@ impl Requester {
                     let Some(open) = &self.open else { continue };
                     let Ok(o) = verify_offer(&v, &self.rid, open) else { continue };
                     self.offered = Some(o.grant_digest.clone());
+                    self.offered_more = super::more::offer_more(&v, Some(self.address.workspace_id));
                     out.push(RequesterEvent::Offered { grant_digest: o.grant_digest, person_name: super::envelope::hint(&o.person.name) });
                 }
                 MsgType::Result => {
                     let Some(open) = &self.open else { continue };
                     let Ok(r) = verify_result(&v, &self.rid, open.approver_alg, &open.approver_sig_key) else { continue };
+                    if r.outcome == Outcome::Approved {
+                        self.result_more = super::more::result_more(&v);
+                    }
                     if r.outcome != Outcome::Approved {
                         self.mark_dead();
                     } else {
@@ -466,16 +478,44 @@ impl Requester {
     /// the person confirmed the code on this computer. The result must then
     /// carry a grant that hashes to this digest.
     pub async fn ack(&mut self) -> Result<(), RequesterError> {
+        self.ack_with(false).await
+    }
+
+    /// [`Self::ack`], also taking every more workspace the offer named
+    /// ([`Self::offered_more`]): the approver then adds this computer there
+    /// too (one passkey each) and sends their grants with the result
+    /// ([`Self::check_more_grants`]). For a computer that can keep more than
+    /// one workspace (the desktop, lt); the CLI keeps one.
+    pub async fn ack_all(&mut self) -> Result<(), RequesterError> {
+        self.ack_with(true).await
+    }
+
+    /// The more workspaces the approver offered (empty from an older
+    /// approver, or one that holds no other workspace of the person's).
+    pub fn offered_more(&self) -> &[super::more::MoreOffer] {
+        &self.offered_more
+    }
+
+    /// The more workspaces this computer acknowledged.
+    pub fn acked_more(&self) -> &[super::more::MoreOffer] {
+        &self.acked_more
+    }
+
+    async fn ack_with(&mut self, more: bool) -> Result<(), RequesterError> {
         let (Some(open), Some(digest)) = (&self.open, &self.offered) else {
             return Err(RequesterError::BadSpec("there is no offer to acknowledge".into()));
         };
         if self.match_code.as_ref().is_none_or(|c| c.expired(self.client.now())) {
             return Err(RequesterError::BadSpec("the code expired: start again".into()));
         }
-        let msg = sign_message(MsgType::Ack, &AckBody { rid: hex(&self.rid), grant_digest: digest.clone() }, &self.signer);
+        let taken: Vec<super::more::MoreOffer> = if more { self.offered_more.clone() } else { Vec::new() };
+        let digests: Vec<String> = taken.iter().map(|m| m.grant_digest.clone()).collect();
+        let body = AckBody { rid: hex(&self.rid), grant_digest: digest.clone() };
+        let msg = sign_message(MsgType::Ack, &super::more::AckWire { base: &body, more: &digests }, &self.signer);
         let blob = seal_blob(&open.approver_ka, msg.as_bytes()).map_err(|e| RequesterError::BadSpec(e.to_string()))?;
         self.client.post_msg(MailboxAuth::Requester(&self.read_key), &self.address.mailbox, &self.rid, &blob, "approver").await?;
         self.acked = Some(digest.clone());
+        self.acked_more = taken;
         Ok(())
     }
 
@@ -485,6 +525,12 @@ impl Requester {
     /// then use that override, never the grant's relay.
     pub fn allow_relay_override(&mut self, yes: bool) {
         self.other_relay = yes;
+    }
+
+    /// Tests: the accepted open.
+    #[cfg(test)]
+    pub(crate) fn open_for_tests(&self) -> Option<VerifiedOpen> {
+        self.open.clone()
     }
 
     /// Tests: acknowledge `digest` without an offer (to reach checks 1 to 4).
@@ -560,6 +606,27 @@ impl Requester {
         }
         check_grant(&self.address, self.kind, open, result, target, now_ms, self.other_relay)
     }
+
+    /// After [`Self::check_grant`] passed on the first workspace (`first`):
+    /// every more workspace this computer acknowledged, with its grant
+    /// checked the same way ([`super::more`]), or why not (the approver
+    /// didn't send it: [`GrantError::NotSent`]). Each still needs check 5 on
+    /// its own workspace's log. Empty when none was acknowledged.
+    pub fn check_more_grants(&self, first: &CheckedGrant, target: GrantTarget<'_>, now_ms: i64) -> Vec<super::more::MoreGrantCheck> {
+        let GrantTarget::Computer { request, ka, device_key } = target else { return Vec::new() };
+        let Some(open) = self.open.as_ref() else { return Vec::new() };
+        self.acked_more
+            .iter()
+            .map(|m| {
+                let grant = self.result_more.iter().find(|g| grant_digest(g) == m.grant_digest).map(String::as_str);
+                super::more::MoreGrantCheck {
+                    workspace_id: m.workspace_id,
+                    name: m.name.clone(),
+                    outcome: super::more::check_more_grant(m, grant, open, request, ka, device_key, first, now_ms),
+                }
+            })
+            .collect()
+    }
 }
 
 fn claimed(open: &VerifiedOpen) -> ClaimedApprover {
@@ -626,6 +693,11 @@ pub enum GrantError {
     OldEpoch,
     #[error("the grant names another relay than the approval address")]
     WrongRelay,
+    /// A more workspace this computer acknowledged whose grant the approver
+    /// didn't send (its passkey was cancelled there, or it couldn't add the
+    /// computer).
+    #[error("your other device didn't add this computer there")]
+    NotSent,
 }
 
 fn newest_epoch(conn: &WorkspaceConn) -> u32 {

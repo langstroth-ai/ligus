@@ -154,6 +154,18 @@ export type LinkFlowDto = {
   notice: string | null;
   error: string | null;
   canRetry: boolean;
+  /// When the other device brings more than one workspace: each one, the
+  /// first one first ("Linking 3 workspaces…"). Empty for one workspace.
+  workspaces?: LinkWsDto[];
+};
+/// One workspace of a link that brings several. `state`: waiting, checking,
+/// ready, linking, linked, failed (with `canRetry`) or notIncluded.
+export type LinkWsDto = {
+  workspaceId: string;
+  name: string;
+  state: string;
+  error: string | null;
+  canRetry: boolean;
 };
 export const linkRequestStatus = () => invoke<LinkFlowDto>("link_request_status");
 /// Post this desktop's link request to the approval address the other device shows.
@@ -165,6 +177,8 @@ export const linkRequestCancel = () => invoke<LinkFlowDto>("link_request_cancel"
 export const linkRequestPaste = () => invoke<LinkFlowDto>("link_request_paste");
 export const linkRequestOpenGrant = (grant: string) => invoke<LinkFlowDto>("link_request_open_grant", { grant });
 export const linkRequestRedeem = () => invoke<LinkFlowDto>("link_request_redeem");
+/// Try one workspace of a link again (a `failed` row with `canRetry`).
+export const linkRequestRetry = (workspaceId: string) => invoke<LinkFlowDto>("link_request_retry", { workspaceId });
 export const onLinkFlowChanged = (cb: (v: LinkFlowDto) => void): Promise<UnlistenFn> =>
   listen<LinkFlowDto>("link://changed", (e) => cb(e.payload));
 
@@ -1859,6 +1873,20 @@ export interface ApprovalSessionDto {
   /// A hand-off: what the change does, from the draft, and its event kind.
   summary?: string | null;
   changeKind?: string | null;
+  /// A computer link: the person's other workspaces it brings.
+  more?: ApprovalMoreDto[];
+  /// Which passkey is up when there is more than one ("2 of 3").
+  step?: string | null;
+}
+
+/// One more workspace a computer link brings. `state`: offered, skipped
+/// (this device can't add the computer there), leftOut (too many at once),
+/// notTaken (the computer keeps one workspace), adding, added, notAdded.
+export interface ApprovalMoreDto {
+  workspaceId: string;
+  name: string;
+  state: string;
+  message: string | null;
 }
 
 /// A workspace's approval address (`ligusaddr1:`): not a secret.

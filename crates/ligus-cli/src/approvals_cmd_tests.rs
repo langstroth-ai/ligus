@@ -602,3 +602,51 @@ async fn approve_respects_claims_and_ends_contested_requests() {
         let _ = boxed.await;
     }
 }
+
+/// A data dir syncs one workspace: when the desktop offers the person's
+/// other workspaces too, `ligus devices request --to` takes only its own
+/// (the plain ack), so nothing is added elsewhere, and it links that one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cli_computer_takes_only_its_own_workspace_when_more_are_offered() {
+    let w = world().await;
+    let addr = address(&w).await;
+    let comp = fresh(&w.root.join("laptop"));
+    let cc = comp.clone();
+    let linking = tokio::spawn(async move {
+        let mut ask = |_: &str| Ok(true);
+        ac::cmd_devices_request_to(&cc, to(&addr, "laptop", None), false, Some(&mut ask)).await.map_err(|e| (classify(&e).0, e.to_string()))
+    });
+    let rid = first_rid(&w).await;
+    let live = live_of(&w, &rid).await;
+    let mut svc = open_service(&w.desk).unwrap();
+    let ids = ligus_runtime::IdentityStore::new(&w.desk.data_dir, ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&w.desk.data_dir));
+    let me = am::ApproverIdentity {
+        signer: am::Signer::Ed25519(ids.device_keypair(svc.device_id()).unwrap()),
+        device_name: "Alex's desktop".into(),
+        person: am::ApproverPerson { account_id: svc.author().account_id.unwrap(), name: svc.author().display_name.clone() },
+    };
+    let keys = svc.approval_epoch_keys(w.ws, &crate::key_source(&w.desk).unwrap()).unwrap();
+    let epoch = keys.iter().find(|k| k.epoch == live.epoch).unwrap().clone();
+    let mut session = am::ApproverSession::begin(am::MailboxClient::new(&w.relay), &epoch, &live.request, me, &mut am::SeenSet::in_memory()).await.unwrap();
+    while session.await_reveal(1).await.unwrap().is_none() {}
+    let am::RequestSubject::Computer(link) = session.request().subject.clone() else { panic!() };
+    let conn = crate::devices_cmd::connection(&w.desk, &svc).unwrap();
+    let now = ligus_core::flow::now_ms();
+    let grant = svc.prepare_computer_link(w.ws, &link, &conn, now).unwrap();
+    // Another workspace's grant, offered with it.
+    let other = Uuid::new_v4();
+    let extra = am::MoreGrant { workspace_id: other, name: "Beta".into(), grant: grant.clone() };
+    session.offer_with(grant, vec![extra]).await.unwrap();
+    while !session.await_ack(1).await.unwrap() {}
+    assert!(session.acked_more().is_empty(), "the CLI takes only its own workspace");
+    let key = crate::secret_arg::recovery_key_from_file(Path::new(&w.words)).unwrap();
+    svc.set_presence_provider(Some(std::sync::Arc::new(crate::admit::RecoveryPresence(key))));
+    svc.publish_computer_link(w.ws, &link, &conn, now).unwrap();
+    drop(svc);
+    sync_once(&w.desk).await.unwrap();
+    session.finish_approved_with(&[]).await.unwrap();
+    linking.await.unwrap().unwrap();
+    let state = ligus_runtime::computer_link::LinkState::load(&comp.data_dir).unwrap();
+    assert!(state.linked_in(w.ws).is_some());
+    assert_eq!(state.workspaces, vec![w.ws]);
+}

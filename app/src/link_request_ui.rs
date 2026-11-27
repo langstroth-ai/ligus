@@ -55,7 +55,10 @@ pub(crate) const CHANGED_EVENT: &str = "link://changed";
 /// How long one poll of the mailbox waits for a message.
 const POLL_SECS: u64 = 2;
 /// How long the certificate may take to reach this desktop after approval.
+#[cfg(not(test))]
 const LOG_BUDGET: Duration = Duration::from_millis(am::LOG_CHECK_RETRY_MS as u64);
+#[cfg(test)]
+const LOG_BUDGET: Duration = Duration::from_secs(3);
 
 fn now_ms() -> i64 {
     ligus_core::flow::now_ms()
@@ -108,6 +111,30 @@ pub(crate) struct LinkFlowDto {
     pub notice: Option<String>,
     pub error: Option<String>,
     pub can_retry: bool,
+    /// When the other device brings more than one workspace: each one, the
+    /// first one first ("Linking 3 workspaces…").
+    pub workspaces: Vec<LinkWsDto>,
+}
+
+/// One workspace of a link that brings several. `state` is one of
+/// `checking`, `ready` (verified, waiting for the person's yes), `linking`,
+/// `linked`, `failed` (`error`; `canRetry` when trying again can help, with
+/// [`retry`]) or `notIncluded` (the other device didn't add this computer
+/// there; `error` says what to do).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LinkWsDto {
+    pub workspace_id: String,
+    pub name: String,
+    pub state: String,
+    pub error: Option<String>,
+    pub can_retry: bool,
+}
+
+fn ws_row(view: &mut LinkFlowDto, ws: Uuid, f: impl FnOnce(&mut LinkWsDto)) {
+    if let Some(r) = view.workspaces.iter_mut().find(|r| r.workspace_id == ws.to_string()) {
+        f(r);
+    }
 }
 
 fn view(phase: &str) -> LinkFlowDto {
@@ -194,6 +221,9 @@ struct SlotInner {
     answers: Option<mpsc::UnboundedSender<Answer>>,
     /// The paste path: the grant pasted and opened, waiting for "that's my device".
     pasted: Option<(OpenedGrant, Uuid)>,
+    /// Workspaces of a linked flow that failed and can be tried again: their
+    /// grant (valid 30 minutes) and this computer's name.
+    retry: Vec<(OpenedGrant, String)>,
 }
 
 /// One link flow (the app has one; tests make their own).
@@ -217,6 +247,7 @@ impl Slot {
         s.gen += 1;
         s.view = v;
         s.pasted = None;
+        s.retry.clear();
         let (tx, rx) = mpsc::unbounded_channel();
         s.answers = Some(tx);
         (s.gen, rx)
@@ -254,6 +285,7 @@ impl Slot {
         s.gen += 1;
         s.view = view("idle");
         s.pasted = None;
+        s.retry.clear();
         s.view.clone()
     }
 }
@@ -279,6 +311,9 @@ pub(crate) trait LinkHost: Send + Sync + 'static {
     /// Keep `conn` as one of this desktop's workspaces and make it active
     /// (after the link is recorded).
     fn adopt_workspace(&self, conn: &WorkspaceConn) -> Result<(), String>;
+    /// Keep `conn` as one of this desktop's workspaces, leaving the active
+    /// one as it is (a link's more workspaces).
+    fn keep_workspace(&self, conn: &WorkspaceConn) -> Result<(), String>;
     /// The view changed.
     fn changed(&self, view: &LinkFlowDto);
 }
@@ -448,7 +483,7 @@ async fn drive_inner<H: LinkHost>(
                     confirmed = true;
                     update(&|v| v.phase = "approving".into());
                     if offered {
-                        req.ack().await.map_err(|e| requester_failed(&e))?;
+                        req.ack_all().await.map_err(|e| requester_failed(&e))?;
                     }
                 }
                 _ => {}
@@ -481,55 +516,29 @@ async fn drive_inner<H: LinkHost>(
                 }
                 RequesterEvent::Offered { .. } => {
                     offered = true;
+                    // The other device brings more of the person's workspaces.
+                    let more: Vec<LinkWsDto> = req
+                        .offered_more()
+                        .iter()
+                        .map(|m| LinkWsDto { workspace_id: m.workspace_id.to_string(), name: crate::shown(&m.name), state: "waiting".into(), ..LinkWsDto::default() })
+                        .collect();
+                    if !more.is_empty() {
+                        update(&|v| v.workspaces = more.clone());
+                    }
                     if confirmed {
-                        req.ack().await.map_err(|e| requester_failed(&e))?;
+                        req.ack_all().await.map_err(|e| requester_failed(&e))?;
                     }
                 }
                 RequesterEvent::Result(res) if res.outcome == Outcome::Approved => {
+                    let target = || GrantTarget::Computer { request: &ctx.request, ka: &ctx.ka, device_key: &ctx.device_key };
                     let checked = req
-                        .check_grant(&res, GrantTarget::Computer { request: &ctx.request, ka: &ctx.ka, device_key: &ctx.device_key }, now_ms())
+                        .check_grant(&res, target(), now_ms())
                         .map_err(|e| Failed::new(format!("The approval didn't check out ({e}). Nothing was linked; start again.")))?;
+                    let more = req.check_more_grants(&checked, target(), now_ms());
                     let CheckedGrant::Computer { grant, .. } = checked else {
                         return Err(Failed::new("The approval wasn't for a computer. Nothing was linked."));
                     };
-                    update(&|v| {
-                        v.phase = "checking".into();
-                        v.workspace_name = Some(shown_ws(&grant.conn));
-                    });
-                    let live = || slot.current(gen);
-                    let (person, had_pin) = verify_on_log(host, &grant, LOG_BUDGET, &live).await?;
-                    // Check 6: the person says who they link as. Only an answer
-                    // given after the name is on screen counts.
-                    while let Ok(a) = rx.try_recv() {
-                        if a == Answer::Cancel {
-                            forget_unlinked(host, grant.workspace_id, had_pin, &live);
-                            return Err(Failed::new("Cancelled. Nothing was granted."));
-                        }
-                    }
-                    let name = crate::shown(&person.display_name);
-                    update(&|v| {
-                        v.phase = "confirmPerson".into();
-                        v.person_name = Some(name.clone());
-                    });
-                    loop {
-                        match rx.recv().await {
-                            Some(Answer::LinkAs(true)) => break,
-                            Some(Answer::LinkAs(false)) | Some(Answer::Cancel) | None => {
-                                forget_unlinked(host, grant.workspace_id, had_pin, &live);
-                                return Err(Failed::new("Not linked. Nothing was saved on this computer."));
-                            }
-                            Some(_) => {}
-                        }
-                    }
-                    update(&|v| v.phase = "linking".into());
-                    let person = commit(host, &grant, &person, had_pin, &live).await?;
-                    let pn = crate::shown(&person.display_name);
-                    update(&|v| {
-                        v.phase = "linked".into();
-                        v.person_name = Some(pn.clone());
-                        v.workspace_id = Some(grant.workspace_id.to_string());
-                    });
-                    return Ok(());
+                    return link_all(host, slot, gen, rx, *grant, more).await;
                 }
                 RequesterEvent::Result(res) => return Err(outcome_failed(res.outcome)),
                 RequesterEvent::Aborted { reason, .. } => return Err(abort_failed(reason)),
@@ -639,9 +648,26 @@ async fn check_on_log<H: LinkHost>(host: &H, grant: &OpenedGrant, founder: &str,
     }
 }
 
+/// The name this computer asked with (its pending request's label), read
+/// before the link is recorded (recording uses the request up).
+fn pending_label<H: LinkHost>(host: &H, grant: &OpenedGrant) -> String {
+    LinkState::load(&host.data_dir()).ok().and_then(|l| l.pending_for(&grant.request, now_ms()).map(|p| p.label.trim().to_string())).unwrap_or_default()
+}
+
 /// The writes of a link, once the person confirmed: record it, act as the
-/// person, accept the certificate, name this desktop, keep the workspace.
-async fn commit<H: LinkHost>(host: &H, grant: &OpenedGrant, person: &ActorIdentity, had_pin: bool, live: &Live<'_>) -> Result<ActorIdentity, Failed> {
+/// person, accept the certificate, name this desktop (`label`), keep the
+/// workspace: made the active one (`activate`), or kept beside it, the open
+/// workspace's founder, author and write block put back (a link's more
+/// workspaces).
+async fn commit<H: LinkHost>(
+    host: &H,
+    grant: &OpenedGrant,
+    person: &ActorIdentity,
+    had_pin: bool,
+    live: &Live<'_>,
+    label: &str,
+    activate: bool,
+) -> Result<ActorIdentity, Failed> {
     let dir = host.data_dir();
     let ws = grant.workspace_id;
     // Cancelled while it was checking: nothing is saved.
@@ -650,10 +676,9 @@ async fn commit<H: LinkHost>(host: &H, grant: &OpenedGrant, person: &ActorIdenti
     }
     let recorded = (|| {
         let mut link = LinkState::load(&dir).map_err(|e| Failed::final_(format!("This computer's link record is unreadable ({e}).")))?;
-        let label = link.pending_for(&grant.request, now_ms()).map(|p| p.label.trim().to_string()).unwrap_or_default();
         link.record_link(person, ws).map_err(|e| Failed::final_(e.to_string()))?;
         link.save(&dir).map_err(|e| Failed::final_(format!("Couldn't save the link ({e}).")))?;
-        Ok(label)
+        Ok(label.to_string())
     })();
     let label = match recorded {
         Ok(l) => l,
@@ -663,6 +688,9 @@ async fn commit<H: LinkHost>(host: &H, grant: &OpenedGrant, person: &ActorIdenti
         }
     };
     let ka_pub = host.keys().ok().map(|(_, ka)| ka.public_key_bytes());
+    let before = (!activate).then(|| {
+        host.with_svc(|svc| (svc.trusted_founder().map(str::to_string), svc.author().clone(), svc.is_delegated(), svc.write_block().map(str::to_string)))
+    });
     let (accepted, named) = host.with_svc(|svc| {
         // The workspace opens right after (`adopt_workspace`), with this pin.
         svc.set_trusted_founder(grant.conn.founder_pin().map(|(f, _)| f));
@@ -685,6 +713,16 @@ async fn commit<H: LinkHost>(host: &H, grant: &OpenedGrant, person: &ActorIdenti
         }
         (accepted, named)
     });
+    // A more workspace: the open one is as it was.
+    if let Some((founder, author, delegated, block)) = before {
+        host.with_svc(|svc| {
+            svc.set_trusted_founder(founder);
+            if delegated {
+                svc.act_as_owner_device(author);
+            }
+            svc.set_write_block(block);
+        });
+    }
     // A failed acceptance is retried when the workspace opens
     // ([`bind_workspace`]); it is never silently dropped.
     if let Err(e) = &accepted {
@@ -696,9 +734,225 @@ async fn commit<H: LinkHost>(host: &H, grant: &OpenedGrant, person: &ActorIdenti
     let mut conn = grant.conn.clone();
     conn.inv = None;
     conn.sig = None;
-    host.adopt_workspace(&conn).map_err(|e| Failed::new(format!("Linked, but opening the workspace failed: {e}")))?;
+    if activate {
+        host.adopt_workspace(&conn).map_err(|e| Failed::new(format!("Linked, but opening the workspace failed: {e}")))?;
+    } else {
+        host.keep_workspace(&conn).map_err(|e| Failed::new(format!("Linked, but keeping the workspace failed: {e}")))?;
+    }
     let _ = host.sync(&conn).await;
     Ok(host.with_svc(|svc| svc.author().clone()))
+}
+
+/// What the screen says about a more workspace whose grant didn't come or
+/// didn't check out (nothing was written there).
+fn not_included(e: &am::GrantError) -> String {
+    match e {
+        am::GrantError::NotSent => {
+            "Your other device didn't add this computer here (its passkey was cancelled, or it couldn't). Link it later: ＋ → Join → Link this computer.".into()
+        }
+        other => format!("The approval for this workspace didn't check out ({other}). Link it later: ＋ → Join → Link this computer."),
+    }
+}
+
+/// A link's grants, the first one first: check 5 on each workspace's own
+/// log, then "Link this computer as Ana?" once, then each workspace's
+/// writes. One that fails leaves the others linked; it is shown, with Try
+/// again when that can help ([`retry`]). With no more workspaces this is
+/// exactly the one-workspace link.
+async fn link_all<H: LinkHost>(
+    host: &H,
+    slot: &Slot,
+    gen: u64,
+    rx: &mut mpsc::UnboundedReceiver<Answer>,
+    first: OpenedGrant,
+    more: Vec<am::MoreGrantCheck>,
+) -> Result<(), Failed> {
+    let update = |f: &dyn Fn(&mut LinkFlowDto)| {
+        if let Some(v) = slot.set(gen, |v| f(v)) {
+            host.changed(&v);
+        }
+    };
+    let live = || slot.current(gen);
+    let several = !more.is_empty();
+    let row = |g: &OpenedGrant| LinkWsDto { workspace_id: g.workspace_id.to_string(), name: shown_ws(&g.conn), state: "checking".into(), ..LinkWsDto::default() };
+    let mut rows = vec![row(&first)];
+    let label = pending_label(host, &first);
+    let mut grants = vec![first];
+    for m in more {
+        match m.outcome {
+            Ok(CheckedGrant::Computer { grant, .. }) => {
+                rows.push(row(&grant));
+                grants.push(*grant);
+            }
+            Ok(_) => {}
+            Err(e) => rows.push(LinkWsDto {
+                workspace_id: m.workspace_id.to_string(),
+                name: crate::shown(&m.name),
+                state: "notIncluded".into(),
+                error: Some(not_included(&e)),
+                can_retry: false,
+            }),
+        }
+    }
+    let first_name = shown_ws(&grants[0].conn);
+    update(&|v| {
+        v.phase = "checking".into();
+        v.workspace_name = Some(first_name.clone());
+        if several {
+            v.workspaces = rows.clone();
+        }
+    });
+
+    // Check 5, on each workspace's own log.
+    let mut verified: Vec<(OpenedGrant, ActorIdentity, bool)> = Vec::new();
+    let mut later: Vec<OpenedGrant> = Vec::new();
+    let mut first_failure = None;
+    let forget_all = |verified: &[(OpenedGrant, ActorIdentity, bool)]| {
+        for (g, _, had) in verified {
+            forget_unlinked(host, g.workspace_id, *had, &live);
+        }
+    };
+    for g in grants {
+        match verify_on_log(host, &g, LOG_BUDGET, &live).await {
+            Ok((p, had)) => {
+                update(&|v| ws_row(v, g.workspace_id, |r| r.state = "ready".into()));
+                verified.push((g, p, had));
+            }
+            Err(f) => {
+                if !live() {
+                    forget_all(&verified);
+                    return Err(cancelled());
+                }
+                update(&|v| {
+                    ws_row(v, g.workspace_id, |r| {
+                        r.state = "failed".into();
+                        r.error = Some(f.text.clone());
+                        r.can_retry = f.retry;
+                    })
+                });
+                if f.retry {
+                    later.push(g);
+                }
+                first_failure.get_or_insert(f);
+            }
+        }
+    }
+    let Some((_, person, _)) = verified.first() else {
+        return Err(first_failure.unwrap_or_else(|| Failed::new("Nothing was linked. Start again.")));
+    };
+
+    // Check 6: the person says who they link as. Only an answer given after
+    // the name is on screen counts.
+    while let Ok(a) = rx.try_recv() {
+        if a == Answer::Cancel {
+            forget_all(&verified);
+            return Err(cancelled());
+        }
+    }
+    let name = crate::shown(&person.display_name);
+    update(&|v| {
+        v.phase = "confirmPerson".into();
+        v.person_name = Some(name.clone());
+    });
+    loop {
+        match rx.recv().await {
+            Some(Answer::LinkAs(true)) => break,
+            Some(Answer::LinkAs(false)) | Some(Answer::Cancel) | None => {
+                forget_all(&verified);
+                return Err(Failed::new("Not linked. Nothing was saved on this computer."));
+            }
+            Some(_) => {}
+        }
+    }
+    update(&|v| v.phase = "linking".into());
+
+    // The first workspace that checked out opens; the others are kept beside it.
+    let mut linked: Option<(ActorIdentity, Uuid)> = None;
+    for (i, (g, p, had)) in verified.iter().enumerate() {
+        update(&|v| ws_row(v, g.workspace_id, |r| r.state = "linking".into()));
+        match commit(host, g, p, *had, &live, &label, i == 0).await {
+            Ok(person) => {
+                update(&|v| ws_row(v, g.workspace_id, |r| r.state = "linked".into()));
+                linked.get_or_insert((person, g.workspace_id));
+            }
+            Err(f) if i == 0 => {
+                forget_all(&verified[1..]);
+                return Err(f);
+            }
+            Err(f) => {
+                update(&|v| {
+                    ws_row(v, g.workspace_id, |r| {
+                        r.state = "failed".into();
+                        r.error = Some(f.text.clone());
+                        r.can_retry = f.retry;
+                    })
+                });
+                if f.retry {
+                    later.push(g.clone());
+                }
+            }
+        }
+    }
+    let Some((person, ws)) = linked else { return Err(Failed::new("Nothing was linked. Start again.")) };
+    {
+        let mut s = slot.0.lock().unwrap();
+        if s.gen == gen {
+            s.retry = later.into_iter().map(|g| (g, label.clone())).collect();
+        }
+    }
+    let pn = crate::shown(&person.display_name);
+    update(&|v| {
+        v.phase = "linked".into();
+        v.person_name = Some(pn.clone());
+        v.workspace_id = Some(ws.to_string());
+    });
+    Ok(())
+}
+
+/// Try one workspace of a link again (`failed` with Try again): check 5 on
+/// its log, then its writes, beside the open workspace.
+pub(crate) async fn retry<H: LinkHost>(host: Arc<H>, slot: Arc<Slot>, workspace_id: Uuid) -> LinkFlowDto {
+    let (grant, label, gen) = {
+        let mut s = slot.0.lock().unwrap();
+        let Some(i) = s.retry.iter().position(|(g, _)| g.workspace_id == workspace_id) else { return s.view.clone() };
+        let (g, l) = s.retry.remove(i);
+        ws_row(&mut s.view, workspace_id, |r| {
+            r.state = "checking".into();
+            r.error = None;
+            r.can_retry = false;
+        });
+        (g, l, s.gen)
+    };
+    host.changed(&slot.view());
+    let live = || slot.current(gen);
+    let r = async {
+        may_link(&*host)?;
+        let (person, had_pin) = verify_on_log(&*host, &grant, LOG_BUDGET, &live).await?;
+        commit(&*host, &grant, &person, had_pin, &live, &label, false).await
+    }
+    .await;
+    let v = match r {
+        Ok(_) => slot.set(gen, |v| ws_row(v, workspace_id, |r| r.state = "linked".into())),
+        Err(f) => {
+            let again = f.retry && live();
+            {
+                let mut s = slot.0.lock().unwrap();
+                if again && s.gen == gen {
+                    s.retry.push((grant, label));
+                }
+            }
+            slot.set(gen, |v| {
+                ws_row(v, workspace_id, |r| {
+                    r.state = "failed".into();
+                    r.error = Some(f.text.clone());
+                    r.can_retry = again;
+                })
+            })
+        }
+    }
+    .unwrap_or_else(|| slot.view());
+    host.changed(&v);
+    v
 }
 
 // ── The paste path ───────────────────────────────────────────────────────
@@ -768,7 +1022,7 @@ pub(crate) async fn redeem<H: LinkHost>(host: Arc<H>, slot: Arc<Slot>) -> LinkFl
     let r = async {
         may_link(&*host)?;
         let (person, had_pin) = verify_on_log(&*host, &grant, LOG_BUDGET, &live).await?;
-        commit(&*host, &grant, &person, had_pin, &live).await
+        commit(&*host, &grant, &person, had_pin, &live, &pending_label(&*host, &grant), true).await
     }
     .await;
     let v = match r {
@@ -878,6 +1132,17 @@ pub(crate) async fn sync_with(db: PathBuf, mut engine: ligus_runtime::SyncEngine
     .map_err(|e| e.to_string())?
 }
 
+/// One push and pull of `conn`'s workspace, open or not (the store, its
+/// keys and the relay's access token from the app).
+pub(crate) fn sync_conn(st: &crate::AppState, conn: &WorkspaceConn) -> impl Future<Output = Result<(), String>> + Send {
+    let src = crate::key_source_for(st, Some(conn));
+    let static_token = st.settings.lock().unwrap().relay_access_token.clone();
+    let token = crate::ligus_auth_ui::effective(Some(&conn.relay_url), static_token);
+    let db = st.db_path.clone();
+    let engine = ligus_runtime::SyncEngine::new(ligus_runtime::RelayClient::new(&conn.relay_url).with_auth(token), conn.room.clone()).with_key_source(src);
+    sync_with(db, engine, true)
+}
+
 // ── The app's host and commands ──────────────────────────────────────────
 
 static FLOW: LazyLock<Arc<Slot>> = LazyLock::new(|| Arc::new(Slot::default()));
@@ -933,12 +1198,7 @@ impl LinkHost for AppHost {
     }
 
     fn sync(&self, conn: &WorkspaceConn) -> impl Future<Output = Result<(), String>> + Send {
-        let st = self.state();
-        let src = crate::key_source_for(&st, Some(conn));
-        let token = self.token(&conn.relay_url);
-        let db = st.db_path.clone();
-        let engine = ligus_runtime::SyncEngine::new(ligus_runtime::RelayClient::new(&conn.relay_url).with_auth(token), conn.room.clone()).with_key_source(src);
-        sync_with(db, engine, true)
+        sync_conn(&self.state(), conn)
     }
 
     fn adopt_workspace(&self, conn: &WorkspaceConn) -> Result<(), String> {
@@ -953,6 +1213,16 @@ impl LinkHost for AppHost {
             crate::save_settings(&st.data_dir, &s);
         }
         crate::set_active_workspace_sync(st, conn.id().to_string())
+    }
+
+    fn keep_workspace(&self, conn: &WorkspaceConn) -> Result<(), String> {
+        let st = self.state();
+        let mut s = st.settings.lock().unwrap();
+        if !s.workspaces.iter().any(|w| w.room == conn.room) {
+            s.workspaces.push(conn.clone());
+        }
+        crate::save_settings(&st.data_dir, &s);
+        Ok(())
     }
 
     fn changed(&self, view: &LinkFlowDto) {
@@ -1011,6 +1281,13 @@ pub(crate) async fn link_request_open_grant(app: tauri::AppHandle, grant: String
 #[tauri::command]
 pub(crate) async fn link_request_redeem(app: tauri::AppHandle) -> Result<LinkFlowDto, String> {
     Ok(redeem(Arc::new(AppHost(app)), FLOW.clone()).await)
+}
+
+/// Try one workspace of a link that brought several again.
+#[tauri::command]
+pub(crate) async fn link_request_retry(app: tauri::AppHandle, workspace_id: String) -> Result<LinkFlowDto, String> {
+    let ws = Uuid::parse_str(&workspace_id).map_err(|e| e.to_string())?;
+    Ok(retry(Arc::new(AppHost(app)), FLOW.clone(), ws).await)
 }
 
 #[cfg(test)]

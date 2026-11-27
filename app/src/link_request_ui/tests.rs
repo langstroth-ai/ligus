@@ -169,12 +169,13 @@ struct NewDesktop {
     ka: KeyAgreementKeypair,
     own: usize,
     adopted: Mutex<Vec<WorkspaceConn>>,
+    kept: Mutex<Vec<WorkspaceConn>>,
 }
 
 impl NewDesktop {
     fn open(dir: &Path) -> Self {
         let svc = open_svc(dir, "You");
-        Self { dir: dir.to_path_buf(), svc: Mutex::new(svc), ka: KeyAgreementKeypair::generate().unwrap(), own: 0, adopted: Mutex::new(Vec::new()) }
+        Self { dir: dir.to_path_buf(), svc: Mutex::new(svc), ka: KeyAgreementKeypair::generate().unwrap(), own: 0, adopted: Mutex::new(Vec::new()), kept: Mutex::new(Vec::new()) }
     }
 }
 
@@ -205,6 +206,10 @@ impl LinkHost for NewDesktop {
     }
     fn adopt_workspace(&self, conn: &WorkspaceConn) -> Result<(), String> {
         self.adopted.lock().unwrap().push(conn.clone());
+        Ok(())
+    }
+    fn keep_workspace(&self, conn: &WorkspaceConn) -> Result<(), String> {
+        self.kept.lock().unwrap().push(conn.clone());
         Ok(())
     }
     fn changed(&self, _: &LinkFlowDto) {}
@@ -472,4 +477,210 @@ async fn cancel_stops_a_pasted_link_that_is_still_checking() {
     assert!(!two.svc.lock().unwrap().is_delegated());
     assert!(two.adopted.lock().unwrap().is_empty());
     assert_eq!(slot.view().phase, "idle");
+}
+
+// ── One link, all the person's workspaces ────────────────────────────────
+
+/// Device 1 holds `rooms` (each with a passkey), all synced.
+fn found_more(first: &mut First, rooms: &[&str]) {
+    for room in rooms {
+        let ws = ligus_core::room_workspace_id(room);
+        first.svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        let acct = first.svc.author().account_id.unwrap();
+        let key = ligus_core::testkit::test_recovery_key(acct);
+        first.svc.register_passkey(ws, key.credential(acct, "Test recovery key"), &|req| Ok(key.assert(&req.challenge))).unwrap();
+    }
+}
+
+fn conn_in(first: &First, room: &str) -> WorkspaceConn {
+    WorkspaceConn { name: room[..1].to_uppercase() + &room[1..], room: room.into(), ..first.conn() }
+}
+
+async fn sync_room(first: &First, room: &str) {
+    sync_dir(&first.dir, &conn_in(first, room)).await.unwrap();
+}
+
+/// Device 1's Inbox for a link that brings `more` too: the offer names them,
+/// then the passkey for each one the computer took, except `cancel`.
+async fn approve_all_in_inbox(first: &mut First, client: &MailboxClient, ek: &EpochKey, slot: &Slot, more: &[&str], cancel: &[&str]) {
+    let ws = first.ws();
+    let live = list_live(&client, std::slice::from_ref(&ek)).await.unwrap().live.remove(0);
+    let mut session = ApproverSession::begin(client.clone(), &ek, &live.request, first.identity(), &mut SeenSet::in_memory()).await.unwrap();
+    let RequestSubject::Computer(parsed) = session.request().subject.clone() else { panic!("a computer's request") };
+    wait_for(&slot, "code").await;
+    session.await_reveal(5).await.unwrap().expect("the reveal arrives");
+    slot.answer(Answer::CodesMatch(true)).unwrap();
+    let now = now_ms();
+    let grant = first.svc.prepare_computer_link(ws, &parsed, &encode_workspace_invite(&first.conn()), now).unwrap();
+    let others: Vec<(Uuid, String, String)> =
+        more.iter().map(|r| (ligus_core::room_workspace_id(r), conn_in(first, r).name, encode_workspace_invite(&conn_in(first, r)))).collect();
+    let grants: Vec<_> = first.svc.prepare_more_computer_links(&parsed, &others, now).into_iter().map(|(_, g)| g.unwrap()).collect();
+    assert!(session.offer_with(grant, grants).await.unwrap().is_empty());
+    let mut acked = false;
+    for _ in 0..20 {
+        if session.await_ack(1).await.unwrap() {
+            acked = true;
+            break;
+        }
+    }
+    assert!(acked, "device 2 acknowledged the offer");
+    let v = slot.view();
+    assert_eq!(v.workspaces.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), more.iter().map(|r| conn_in(first, r).name).collect::<Vec<_>>(), "device 2 shows what comes");
+    first.svc.publish_computer_link(ws, &parsed, &encode_workspace_invite(&first.conn()), now).unwrap();
+    first.sync().await;
+    let mut published = Vec::new();
+    for m in session.acked_more() {
+        let room = more.iter().find(|r| ligus_core::room_workspace_id(r) == m.workspace_id).unwrap();
+        if cancel.contains(room) {
+            continue;
+        }
+        first.svc.publish_computer_link_in(m.workspace_id, &parsed, &encode_workspace_invite(&conn_in(first, room)), now).unwrap();
+        sync_room(first, room).await;
+        published.push(m.workspace_id);
+    }
+    session.finish_approved_with(&published).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_link_brings_all_three_workspaces_as_the_same_member() {
+    let relay = spawn_relay().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut first = First::found(&tmp.path().join("one"), &relay, "acme");
+    found_more(&mut first, &["beta", "gamma"]);
+    first.sync().await;
+    sync_room(&first, "beta").await;
+    sync_room(&first, "gamma").await;
+    let (client, ek, address) = mailbox(&first).await;
+    let ana = first.svc.author().clone();
+
+    let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
+    let slot = Arc::new(Slot::default());
+    start(two.clone(), slot.clone(), &address.encode()).await;
+    approve_all_in_inbox(&mut first, &client, &ek, &slot, &["beta", "gamma"], &[]).await;
+
+    let v = wait_for(&slot, "confirmPerson").await;
+    assert_eq!(v.person_name.as_deref(), Some("Ana"));
+    assert_eq!(v.workspaces.iter().map(|w| (w.name.as_str(), w.state.as_str())).collect::<Vec<_>>(), [("Acme", "ready"), ("Beta", "ready"), ("Gamma", "ready")]);
+    assert!(LinkState::load(&two.dir).unwrap().person.is_none(), "nothing is saved before the person says yes");
+    slot.answer(Answer::LinkAs(true)).unwrap();
+    let v = wait_for(&slot, "linked").await;
+    assert!(v.workspaces.iter().all(|w| w.state == "linked"), "{:?}", v.workspaces);
+    assert_eq!(v.workspace_id.as_deref(), Some(first.ws().to_string().as_str()), "the first workspace opens");
+    assert_eq!(two.adopted.lock().unwrap().iter().map(|c| c.room.as_str()).collect::<Vec<_>>(), ["acme"]);
+    assert_eq!(two.kept.lock().unwrap().iter().map(|c| c.room.as_str()).collect::<Vec<_>>(), ["beta", "gamma"]);
+    {
+        let svc = two.svc.lock().unwrap();
+        assert_eq!((svc.author().id.as_str(), svc.author().account_id), (ana.id.as_str(), ana.account_id));
+        assert_eq!(svc.trusted_founder(), Some(ana.id.as_str()), "the open workspace's founder");
+    }
+    let link = LinkState::load(&two.dir).unwrap();
+    let device2 = two.svc.lock().unwrap().device_id();
+    for room in ["acme", "beta", "gamma"] {
+        let ws = ligus_core::room_workspace_id(room);
+        assert_eq!(link.account_in(ws), ana.account_id, "{room}: linked as Ana");
+        sync_room(&first, room).await;
+        let cfg = first.svc.load_in(ws, workspace_config_session_id(ws)).unwrap().unwrap();
+        let humans: Vec<_> = cfg.members.iter().filter(|m| m.actor.kind == ActorKind::Human).map(|m| m.id.clone()).collect();
+        assert_eq!(humans, vec![ana.id.clone()], "{room}: never a second member");
+        assert!(first.svc.own_devices(ws).unwrap().iter().any(|d| d.device_id == device2 && !d.revoked), "{room}: one of Ana's devices");
+        assert_eq!(first.svc.device_label_of(ws, device2, ana.account_id.unwrap()).as_deref(), Some("Ana's MacBook Air"), "{room}: named");
+        // Each workspace binds when it opens, and counts there.
+        let mut relaunched = open_svc(&two.dir, "You");
+        assert!(adopt_at_launch(&mut relaunched, &two.dir).unwrap());
+        relaunched.set_trusted_founder(Some(ana.id.clone()));
+        bind_workspace(&mut relaunched, &two.dir, ws, None);
+        assert_eq!(relaunched.write_block(), None, "{room}: it counts here");
+    }
+}
+
+/// A passkey cancelled on device 1 for one workspace, and one whose
+/// approval hasn't reached device 2: the others link, those two are shown,
+/// and the second links on Try again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_partial_link_shows_what_didnt_come_and_try_again_links_it() {
+    let relay = spawn_relay().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut first = First::found(&tmp.path().join("one"), &relay, "acme");
+    found_more(&mut first, &["beta", "gamma", "delta"]);
+    first.sync().await;
+    for room in ["beta", "gamma", "delta"] {
+        sync_room(&first, room).await;
+    }
+    let (client, ek, address) = mailbox(&first).await;
+    let ana = first.svc.author().clone();
+    let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
+    let slot = Arc::new(Slot::default());
+    start(two.clone(), slot.clone(), &address.encode()).await;
+
+    // Delta's certificate is written, but device 1 doesn't push it yet.
+    let ws = first.ws();
+    let live = list_live(&client, std::slice::from_ref(&ek)).await.unwrap().live.remove(0);
+    let mut session = ApproverSession::begin(client.clone(), &ek, &live.request, first.identity(), &mut SeenSet::in_memory()).await.unwrap();
+    let RequestSubject::Computer(parsed) = session.request().subject.clone() else { panic!() };
+    wait_for(&slot, "code").await;
+    session.await_reveal(5).await.unwrap();
+    slot.answer(Answer::CodesMatch(true)).unwrap();
+    let now = now_ms();
+    let grant = first.svc.prepare_computer_link(ws, &parsed, &encode_workspace_invite(&first.conn()), now).unwrap();
+    let rooms = ["beta", "gamma", "delta"];
+    let others: Vec<(Uuid, String, String)> =
+        rooms.iter().map(|r| (ligus_core::room_workspace_id(r), conn_in(&first, r).name, encode_workspace_invite(&conn_in(&first, r)))).collect();
+    let grants: Vec<_> = first.svc.prepare_more_computer_links(&parsed, &others, now).into_iter().map(|(_, g)| g.unwrap()).collect();
+    session.offer_with(grant, grants).await.unwrap();
+    while !session.await_ack(1).await.unwrap() {}
+    first.svc.publish_computer_link(ws, &parsed, &encode_workspace_invite(&first.conn()), now).unwrap();
+    first.sync().await;
+    let (beta, gamma, delta) = (ligus_core::room_workspace_id("beta"), ligus_core::room_workspace_id("gamma"), ligus_core::room_workspace_id("delta"));
+    first.svc.publish_computer_link_in(beta, &parsed, &encode_workspace_invite(&conn_in(&first, "beta")), now).unwrap();
+    sync_room(&first, "beta").await;
+    // Gamma: the person cancels its passkey (nothing written there).
+    first.svc.publish_computer_link_in(delta, &parsed, &encode_workspace_invite(&conn_in(&first, "delta")), now).unwrap();
+    session.finish_approved_with(&[beta, delta]).await.unwrap();
+
+    let v = wait_for(&slot, "confirmPerson").await;
+    let state = |v: &LinkFlowDto, name: &str| v.workspaces.iter().find(|w| w.name == name).map(|w| (w.state.clone(), w.can_retry)).unwrap();
+    assert_eq!(state(&v, "Acme").0, "ready");
+    assert_eq!(state(&v, "Beta").0, "ready");
+    assert_eq!(state(&v, "Gamma"), ("notIncluded".into(), false));
+    assert!(v.workspaces.iter().find(|w| w.name == "Gamma").unwrap().error.as_deref().unwrap().contains("Link this computer"));
+    assert_eq!(state(&v, "Delta"), ("failed".into(), true), "not on its log yet: Try again");
+    slot.answer(Answer::LinkAs(true)).unwrap();
+    let v = wait_for(&slot, "linked").await;
+    assert_eq!(state(&v, "Acme").0, "linked");
+    assert_eq!(state(&v, "Beta").0, "linked");
+    let link = LinkState::load(&two.dir).unwrap();
+    assert_eq!(link.account_in(gamma), None);
+    assert_eq!(link.account_in(delta), None);
+    assert!(two.svc.lock().unwrap().store().workspace_pin(delta).unwrap().is_none(), "a workspace that didn't link isn't kept");
+
+    // Device 1 pushes delta's certificate; Try again links it.
+    sync_room(&first, "delta").await;
+    let v = retry(two.clone(), slot.clone(), delta).await;
+    assert_eq!(state(&v, "Delta").0, "linked", "{:?}", v.workspaces);
+    assert_eq!(LinkState::load(&two.dir).unwrap().account_in(delta), ana.account_id);
+    assert_eq!(two.svc.lock().unwrap().author().id, ana.id);
+    assert_eq!(two.kept.lock().unwrap().iter().map(|c| c.room.as_str()).collect::<Vec<_>>(), ["beta", "delta"]);
+    assert_eq!(v.workspace_id.as_deref(), Some(ws.to_string().as_str()), "the open workspace is still the first");
+}
+
+/// An older approving device sends one grant: the link is the one-workspace
+/// link, with no list.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_approver_links_one_workspace_as_before() {
+    let relay = spawn_relay().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut first = First::found(&tmp.path().join("one"), &relay, "acme");
+    found_more(&mut first, &["beta"]);
+    first.sync().await;
+    let (client, ek, address) = mailbox(&first).await;
+    let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
+    let slot = Arc::new(Slot::default());
+    start(two.clone(), slot.clone(), &address.encode()).await;
+    approve_in_inbox(&mut first, &client, &ek, &slot).await;
+    let v = wait_for(&slot, "confirmPerson").await;
+    assert!(v.workspaces.is_empty());
+    slot.answer(Answer::LinkAs(true)).unwrap();
+    let v = wait_for(&slot, "linked").await;
+    assert!(v.workspaces.is_empty());
+    assert!(two.kept.lock().unwrap().is_empty());
 }

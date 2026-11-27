@@ -385,6 +385,11 @@ pub(crate) struct SessionDto {
     /// A passkey hand-off: what it does, from the draft, and its event kind.
     pub summary: Option<String>,
     pub change_kind: Option<String>,
+    /// A computer link: the person's other workspaces it brings
+    /// ([`crate::link_more`]).
+    pub more: Vec<crate::link_more::MoreWsDto>,
+    /// Which passkey is up when there is more than one (`2 of 3`).
+    pub step: Option<String>,
 }
 
 fn set_view(app: &AppHandle, slot: &Slot, f: impl FnOnce(&mut SessionDto)) -> SessionDto {
@@ -981,20 +986,26 @@ async fn computer_match(app: AppHandle, slot: Arc<Slot>, ctx: MatchContext) -> R
         let grant = crate::off_main(app.clone(), move |app| {
             let st = app.state::<AppState>();
             let conn = crate::computer_link_conn(&st, ws)?;
-            let svc = st.service.lock().unwrap();
-            svc.prepare_computer_link(ws, &req2, &conn, now_ms()).map_err(|e| e.to_string())
+            let grant = st.service.lock().unwrap().prepare_computer_link(ws, &req2, &conn, now_ms()).map_err(|e| e.to_string())?;
+            // The person's other workspaces come along (each its own grant).
+            let (more, skipped) = crate::link_more::prepare(&st, ws, &req2, now_ms());
+            Ok::<_, String>((grant, more, skipped))
         })
         .await;
-        let grant = match grant {
+        let (grant, more, skipped) = match grant {
             Ok(g) => g,
             Err(e) => return Ok(back_to_code(&app, &slot, e)),
         };
-        if let Err(e) = slot.session.lock().await.offer(grant).await {
-            return Ok(fail(&app, &slot, &e));
-        }
+        let names: Vec<(Uuid, String)> = more.iter().map(|m| (m.workspace_id, m.name.clone())).collect();
+        let left_out = match slot.session.lock().await.offer_with(grant, more).await {
+            Ok(l) => l,
+            Err(e) => return Ok(fail(&app, &slot, &e)),
+        };
         set_view(&app, &slot, |v| {
             v.phase = "confirming".into();
             v.message = None;
+            v.more = crate::link_more::offered_rows(&names, &left_out);
+            v.more.extend(skipped);
         });
         loop {
             if phase(&slot) != "confirming" {
@@ -1010,20 +1021,37 @@ async fn computer_match(app: AppHandle, slot: Arc<Slot>, ctx: MatchContext) -> R
             }
         }
     }
+    // The computer took these more workspaces: one passkey each, after this one.
+    let acked_more = slot.session.lock().await.acked_more();
+    let total = 1 + acked_more.len();
+    let first_name = {
+        let st = app.state::<AppState>();
+        let s = st.settings.lock().unwrap();
+        s.workspaces.iter().find(|w| w.id() == ws).map(|w| crate::shown(&w.display_name())).unwrap_or_default()
+    };
     set_view(&app, &slot, |v| {
         v.phase = "passkey".into();
         v.message = None;
+        v.step = (total > 1).then(|| format!("1 of {total}"));
+        for r in &mut v.more {
+            if r.state == "offered" && !acked_more.iter().any(|m| m.workspace_id.to_string() == r.workspace_id) {
+                r.state = "notTaken".into();
+                r.message = Some("This computer links one workspace at a time: link it there afterwards.".into());
+            }
+        }
     });
     let app2 = app.clone();
+    let (req1, ctx1) = (req.clone(), ctx.clone());
     let published = commit_if_ready(&slot.session, move || {
         crate::off_main(app2, move |app| {
             let st = app.state::<AppState>();
             let conn = crate::computer_link_conn(&st, ws)?;
-            let mut svc = st.service.lock().unwrap();
-            svc.set_match_context(Some(ctx));
-            let r = svc.publish_computer_link(ws, &req, &conn, now_ms()).map_err(|e| e.to_string());
-            svc.set_match_context(None);
-            r
+            crate::link_more::with_step(app, &first_name, 1, total, |svc| {
+                svc.set_match_context(Some(ctx1));
+                let r = svc.publish_computer_link(ws, &req1, &conn, now_ms()).map_err(|e| e.to_string());
+                svc.set_match_context(None);
+                r
+            })
         })
     })
     .await;
@@ -1034,7 +1062,35 @@ async fn computer_match(app: AppHandle, slot: Arc<Slot>, ctx: MatchContext) -> R
         Ok(Ok(())) => {}
     }
     tracing::info!(target: "approvals", rid = %slot.request.rid_hex(), "added a computer by code match");
-    let r = slot.session.lock().await.finish_approved(None).await;
+    let mut added = Vec::new();
+    for (i, m) in acked_more.iter().enumerate() {
+        let id = m.workspace_id.to_string();
+        let mark = |state: &str, message: Option<String>| {
+            set_view(&app, &slot, |v| {
+                v.step = Some(format!("{} of {total}", i + 2));
+                if let Some(r) = v.more.iter_mut().find(|r| r.workspace_id == id) {
+                    r.state = state.into();
+                    r.message = message;
+                }
+            })
+        };
+        // The computer may have ended the request meanwhile: stop, nothing more is written.
+        if let Err(e) = slot.session.lock().await.still_open().await {
+            return Ok(fail(&app, &slot, &e));
+        }
+        mark("adding", None);
+        match crate::link_more::publish_one(app.clone(), m.workspace_id, m.name.clone(), req.clone(), ctx.clone(), i + 2, total).await {
+            Ok(()) => {
+                added.push(m.workspace_id);
+                mark("added", None);
+            }
+            Err(e) => {
+                mark("notAdded", Some(e));
+            }
+        }
+    }
+    tracing::info!(target: "approvals", rid = %slot.request.rid_hex(), more = added.len(), of = acked_more.len(), "added the computer to more workspaces");
+    let r = slot.session.lock().await.finish_approved_with(&added).await;
     Ok(match r {
         Ok(()) => set_view(&app, &slot, |v| v.phase = "approved".into()),
         Err(e) => fail(&app, &slot, &e),
@@ -1201,6 +1257,7 @@ async fn presence_open(app: AppHandle, t: Target, live: LiveRequest) -> Result<S
         message: None,
         summary: Some(view.summary.clone()),
         change_kind: Some(view.kind.clone()),
+        ..SessionDto::default()
     };
     let slot = Arc::new(PresenceSlot { ws: t.id, view, session: tokio::sync::Mutex::new(session), dto: Mutex::new(dto.clone()) });
     DESK.presence.lock().unwrap().insert(rid, slot);

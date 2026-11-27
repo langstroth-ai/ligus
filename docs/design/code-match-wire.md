@@ -105,6 +105,31 @@ reveal, offer, ack and result: within the 10 messages per request. Boxes and
 phones have no `offer` or `ack`. A phone's `code` is carried verbatim, so a
 later additive field inside `ligusphone1:` rides through unchanged.
 
+**Computers: more workspaces** (new in 0.5). The approver may offer the
+person's other workspaces in the same exchange. Three optional fields, left
+out when empty, so a one-workspace exchange is byte-for-byte the 0.4 one:
+
+| t | New field | What |
+|---|---|---|
+| `offer` | `more: [{workspaceId, name, grantDigest}]` | one more grant per workspace (not the request's own, at most 32), each an ordinary `ligusgrant1:` for this request, built and sealed now, digest as for `grantDigest`; `name` is a display hint |
+| `ack` | `more: ["<hex digest>"]` | the extra digests the requester takes (a CLI data dir takes none) |
+| `result` | `moreGrants: ["<b64u>"]` | the taken grants whose certificate the approver published, compact: `b64u(ephemeralPublic(32) ‖ ciphertext)` of the grant's sealed blob. The requester rebuilds the exact `ligusgrant1:` text (`b64u(JSON{ephemeralPublic, ciphertext})` as `Grant::seal` writes it) and matches it to a taken digest |
+
+The approver offers a workspace only where it would approve the request
+itself (the person is a member, this device is confirmed and holds the
+account key there, a passkey, no lockdown), and only as many as fit one
+`result` (32 KiB sealed). After the first certificate it publishes one per
+taken workspace, each with its own passkey ceremony, each drafted fresh under
+that workspace's founder; a refused ceremony leaves that workspace out of
+`moreGrants`. The requester checks each extra grant like the first (checks 1,
+2 and 4), plus: the workspace is the one the offer named and not the first,
+the person (account and member id) is the first grant's, and the grant pins a
+founder. It then runs check 5 on that workspace's own log and links it as
+the same person. What check 3 pins for the first workspace from the pasted
+address (relay, founder) comes for the others from the approving device whose
+code the person matched. An older requester ignores `more` and acks only its
+digest; an older approver sends no `more`.
+
 ### 3.4 The code
 
 `match_code::{commit, Transcript::digest, code40, encode}`, design note 6.1.
