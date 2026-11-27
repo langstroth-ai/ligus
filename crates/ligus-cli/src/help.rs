@@ -1130,12 +1130,92 @@ pub const COMMANDS: &[Cmd] = &[
                   \x20 harness = \"anthropic\"          # anthropic | openAI | openRouter\n\
                   \x20 secret = \"team-claude\"\n\n\
                   A box or worker with no host.toml declares the LIGUS_WS_SECRET_* names it already has \
-                  for its workspace on first start. Workers and boxes always list their tools.",
+                  for its workspace on first start. `ligus secrets set NAME -` keeps a value in this device's \
+                  secret store and declares it for you. Workers and boxes always list their tools.",
         synopsis: &["ligus hosts [--json]"],
         flags: &[JSON],
         conn: true,
         examples: &["ligus hosts", "ligus hosts --json"],
         see_also: &["ligus register-worker", "ligus set-agent-host"],
+        ..D
+    },
+    Cmd {
+        name: "secrets",
+        group: G_AGENTS,
+        summary: "keep workspace secrets on this device: set, list, rm",
+        purpose: "Keep the secrets a workspace runtime or provider names (--secret-ref NAME) on this device, \
+                  and declare which workspace may use each one in host.toml, without exporting \
+                  LIGUS_WS_SECRET_<NAME> or editing the file by hand. A value lives in this device's secret store \
+                  (LIGUS_SECRET_BACKEND; one value per name) and is read from stdin only: a value on the command \
+                  line is refused, since it would land in shell history and ps. Values are never printed, in text, \
+                  JSON or errors. LIGUS_WS_SECRET_<NAME> (or a file in LIGUS_WS_SECRET_DIR), when set, wins over \
+                  the stored value. A running serve or worker reads host.toml at start: restart it after a change.",
+        synopsis: &[
+            "ligus secrets set NAME - [--workspace ID] [--json]",
+            "ligus secrets list [--workspace ID] [--json]",
+            "ligus secrets rm NAME [--workspace ID] [--json]",
+        ],
+        flags: &[f("--workspace ID", "this data dir's workspace (LIGUS_WORKSPACE)", "the workspace id to declare the name for (ligus status shows it)"), JSON],
+        env: &["LIGUS_WORKSPACE", "LIGUS_WS_SECRET_<ref>", "LIGUS_WS_SECRET_DIR"],
+        examples: &[
+            "ligus secrets set team-claude - < ~/anthropic.key",
+            "ligus secrets list",
+            "ligus secrets rm team-claude",
+        ],
+        exit: &[(3, "this device's secret store can't be used (ligus doctor shows why)"), (5, "rm: the name isn't declared for that workspace here")],
+        see_also: &["ligus secrets set", "ligus add-runtime", "ligus hosts", "ligus help security"],
+        ..D
+    },
+    Cmd {
+        name: "secrets set",
+        group: G_AGENTS,
+        summary: "save a workspace secret from stdin and declare it for the workspace",
+        purpose: "Read a secret's value from stdin (hidden at a terminal, else all of stdin up to 64 KiB; one trailing \
+                  line end is dropped), save it in this device's secret store under NAME, and declare NAME for the \
+                  workspace in host.toml so its runtimes and providers can use it here. The value is never an \
+                  argument: `ligus secrets set NAME VALUE`, --value and --secret are refused (exit 2) before stdin \
+                  is read, and if that was a real key, treat it as exposed and rotate it. An empty value is refused. \
+                  Setting a name again replaces its value for every workspace on this device that declares it. \
+                  NAME is 1-64 letters, digits, _ and - (it is the --secret-ref).",
+        synopsis: &["ligus secrets set NAME - [--workspace ID] [--json]"],
+        flags: &[f("--workspace ID", "this data dir's workspace (LIGUS_WORKSPACE)", "the workspace id to declare the name for (ligus status shows it)"), JSON],
+        env: &["LIGUS_WORKSPACE", "LIGUS_WS_SECRET_<ref>"],
+        examples: &[
+            "ligus secrets set team-claude - < ~/anthropic.key",
+            "op read op://dev/anthropic/key | ligus secrets set team-claude -",
+            "ligus secrets set team-claude --workspace 6f1c0c4e-0000-4000-8000-000000000000",
+        ],
+        exit: &[(3, "this device's secret store can't be used (ligus doctor shows why)")],
+        see_also: &["ligus secrets list", "ligus add-runtime", "ligus help hosts"],
+        ..D
+    },
+    Cmd {
+        name: "secrets list",
+        group: G_AGENTS,
+        summary: "list workspace secret names, where they're declared and whether a value is held",
+        purpose: "List the secret names this device knows: those host.toml declares for any workspace, and those \
+                  LIGUS_WS_SECRET_* provides. For each: the workspaces it is declared for (and whether for this one), \
+                  and where its value comes from (environment, secret store, or no value here). Never a value.",
+        synopsis: &["ligus secrets list [--workspace ID] [--json]"],
+        flags: &[f("--workspace ID", "this data dir's workspace (LIGUS_WORKSPACE)", "the workspace id to declare the name for (ligus status shows it)"), JSON],
+        env: &["LIGUS_WORKSPACE", "LIGUS_WS_SECRET_<ref>"],
+        examples: &["ligus secrets list", "ligus secrets list --json"],
+        see_also: &["ligus secrets set", "ligus secrets rm", "ligus runtimes"],
+        ..D
+    },
+    Cmd {
+        name: "secrets rm",
+        group: G_AGENTS,
+        summary: "stop declaring a workspace secret, and delete its value when no workspace uses it",
+        purpose: "Remove NAME's declaration for the workspace from host.toml. Its value is deleted from this \
+                  device's secret store when no other workspace here still declares it; otherwise it is kept and \
+                  rm says for which. A LIGUS_WS_SECRET_<NAME> variable is not touched (rm says when one is set).",
+        synopsis: &["ligus secrets rm NAME [--workspace ID] [--json]"],
+        flags: &[f("--workspace ID", "this data dir's workspace (LIGUS_WORKSPACE)", "the workspace id to declare the name for (ligus status shows it)"), JSON],
+        env: &["LIGUS_WORKSPACE", "LIGUS_WS_SECRET_<ref>"],
+        examples: &["ligus secrets rm team-claude", "ligus secrets rm team-claude --workspace 6f1c0c4e-0000-4000-8000-000000000000 --json"],
+        exit: &[(3, "this device's secret store can't be used"), (5, "the name isn't declared for that workspace here")],
+        see_also: &["ligus secrets list", "ligus help hosts"],
         ..D
     },
     Cmd {
@@ -2652,7 +2732,7 @@ pub const ENV: &[(&str, &[EnvVar])] = &[
             e("LIGUS_WORKSPACE_KEY_FILE", "unset", "a file holding LIGUS_WORKSPACE_KEY (not both)"),
             e("LIGUS_SECRET_BACKEND", "the OS store", "where secrets live: keychain, secret-service, systemd-creds, k8s or file"),
             e("LIGUS_SECRETS_DIR", "/var/run/secrets/ligus with the k8s backend", "the k8s backend's mounted Secret dir"),
-            e("LIGUS_WS_SECRET_<ref>", "unset", "the key of a workspace runtime with secretRef <ref>"),
+            e("LIGUS_WS_SECRET_<ref>", "unset", "the key of a workspace runtime with secretRef <ref>; wins over a value ligus secrets set stored"),
             e("LIGUS_WS_SECRET_DIR", "unset", "a dir of files, each becoming LIGUS_WS_SECRET_<file name>"),
             e("LIGUS_ADMISSION_FILE", "unset", "a file holding a box admission code, redeemed by serve and worker at start-up"),
             e("LIGUS_IDENTITY_MODE", "ignored", "ignored (logs a warning)"),
@@ -3843,6 +3923,7 @@ mod tests {
             ("forge", src("forge_cmd.rs"), "pub fn cmd(", "\n}\n", &["oauth", "gh", "none"]),
             ("setup", src("setup_cmd.rs"), "pub fn cmd(", "\n}\n", &["-", "--json", "--dry-run"]),
             ("gateway", src("gateway_cmd.rs"), "pub fn cmd(", "\n}\n", &[]),
+            ("secrets", src("secrets_cmd.rs"), "pub fn cmd(", "\n}\n", &[]),
         ];
         let mut seen_subs = BTreeSet::new();
         for (cmd, text, start, end, not_subs) in groups {

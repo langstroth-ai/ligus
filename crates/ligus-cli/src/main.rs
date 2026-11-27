@@ -69,6 +69,7 @@ mod repos;
 mod repos_cmd;
 mod scratch_cmd;
 mod secret_arg;
+mod secrets_cmd;
 mod serve;
 mod setup_cmd;
 #[cfg(test)]
@@ -1336,7 +1337,7 @@ fn cmd_runtimes(cfg: &Config, json: bool) -> Result<()> {
             .map(|r| {
                 let (kind, secret_ref, present) = match &r.credential {
                     WorkspaceCredential::SecretRef { secret_ref } => {
-                        ("secretRef", Some(secret_ref.clone()), Some(ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref)).is_ok()))
+                        ("secretRef", Some(secret_ref.clone()), Some(ligus_runtime::host_config::is_held(secret_ref)))
                     }
                     WorkspaceCredential::Inline {} => ("legacyInline", None, None),
                     WorkspaceCredential::None => ("keyless", None, None),
@@ -1364,7 +1365,7 @@ fn cmd_runtimes(cfg: &Config, json: bool) -> Result<()> {
     for r in rts {
         let cred = match &r.credential {
             WorkspaceCredential::SecretRef { secret_ref } => {
-                let have = ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref)).is_ok();
+                let have = ligus_runtime::host_config::is_held(secret_ref);
                 format!("secretRef:{secret_ref}{}", if have { " ✓" } else { " (missing)" })
             }
             WorkspaceCredential::Inline {} => ligus_core::LEGACY_INLINE_LABEL.into(),
@@ -2819,6 +2820,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         "gateway" => gateway_cmd::cmd(&cfg.data_dir, (!cfg.room.is_empty()).then(|| uuid_of_room(&cfg.room)), rest),
+        "secrets" => secrets_cmd::cmd(&cfg.data_dir, uuid_of_room(&cfg.room), rest),
         "gateway-check" => {
             let ws = (!cfg.room.is_empty()).then(|| uuid_of_room(&cfg.room));
             let model = flag_val("--model").unwrap_or_else(|| "ligus-gateway-check".into());

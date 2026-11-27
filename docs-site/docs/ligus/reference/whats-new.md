@@ -8,6 +8,16 @@ Full release notes are on the
 
 ### Added
 
+- **`ligus secrets`: workspace secrets without environment variables.**
+  `ligus secrets set NAME -` reads a key from stdin (hidden at a terminal),
+  keeps it in the device's secret store and declares it for the workspace
+  in `host.toml`; `ligus secrets list` shows each name, the workspaces it's
+  declared for and where its value comes from; `ligus secrets rm NAME`
+  undoes it. A value on the command line is refused, and no command prints
+  one. Hosts now resolve a declared secret from the store when
+  `LIGUS_WS_SECRET_<NAME>` isn't set. See
+  [Workspace secrets on this device](cli.md#workspace-secrets-on-this-device).
+
 - **Add an agent in one step.** One sheet, the same in the desktop (⌘K,
   `/setup agent`, the **Tools** pane, the first run), in `lt` and in
   `ligus setup agent`: a name, what answers, its model and where it runs,
@@ -24,6 +34,7 @@ Full release notes are on the
   wire. On the CLI, `--source`, `--model` and `--runs-on` replace
   `--harness` and `--gateway` (both still work). See
   [Add an agent](../getting-started/set-up.md#add-an-agent).
+
 - **Hosts say what they can run, and how ready it is.** Every computer and
   box now lists the coding tools it has (Claude Code, Codex, Copilot, agy,
   aider, pi), its model gateways, and the local model servers and hosted

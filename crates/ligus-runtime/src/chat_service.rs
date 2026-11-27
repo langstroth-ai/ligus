@@ -3942,7 +3942,8 @@ pub fn cascade_target<'a>(session: &'a ChatSession, reply: &ChatMessage) -> Opti
 /// Resolve a workspace runtime's credential to a usable secret — where a
 /// headless worker turns a **workspace-owned** runtime into an actual key (spec
 /// §12.5), never a personal one. `SecretRef` reads the worker's out-of-band env
-/// (`LIGUS_WS_SECRET_<ref>`), and only when this host's `host.toml` declares
+/// (`LIGUS_WS_SECRET_<ref>`), else this device's secret store (`ligus secrets
+/// set`), and only when this host's `host.toml` declares
 /// that name for `workspace_id` (workspace model v3, 5.1): a string on the log
 /// never picks a secret by itself. `None` is keyless. A legacy `Inline`
 /// credential (a key an older version stored in the workspace) resolves as
@@ -3955,9 +3956,11 @@ pub fn resolve_workspace_credential(cred: &WorkspaceCredential, workspace_id: Uu
 pub fn resolve_declared_credential(cred: &WorkspaceCredential, workspace_id: Uuid, host: &crate::host_config::HostConfig) -> Option<String> {
     match cred {
         WorkspaceCredential::SecretRef { secret_ref } if host.secret_for(workspace_id, secret_ref).is_some() => {
-            // The declared secret this reference names here.
+            // The declared secret this reference names here (the name
+            // itself, or a hosted provider offer's declared secret), from
+            // the environment or this device's secret store.
             let secret_ref = host.secret_for(workspace_id, secret_ref).unwrap_or(secret_ref);
-            ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref)).ok().filter(|s| !s.is_empty())
+            crate::host_config::held_value(secret_ref).map(|v| v.as_str().to_string())
         }
         WorkspaceCredential::SecretRef { .. } | WorkspaceCredential::Inline {} | WorkspaceCredential::None => None,
     }
