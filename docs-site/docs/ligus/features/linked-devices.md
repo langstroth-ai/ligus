@@ -166,6 +166,40 @@ A linked computer is one person's: it doesn't accept invites, can't be linked
 to someone else as well, and isn't a box (a `ligus serve` or `ligus worker`
 box joins as its own member, see [Admitting a box](../../operate/ops/serve-box.md)).
 
+## Steps that need your passkey {#passkey-hand-off}
+
+A linked computer has no passkey. When something you do there needs it
+(defining a workspace runtime for a new agent with `ligus setup agent`, in a
+workspace with stricter device rules), the computer sends the change to your
+desktop instead:
+
+1. The computer drafts the change exactly as it will be written, signs it
+   with its device key, and posts it to the workspace's approval mailbox.
+   It prints **Confirm on your desktop: …** with what the change does and an
+   8-symbol code, and waits.
+2. Your desktop checks the request comes from one of **your** devices that
+   isn't revoked, and shows it in the Inbox (with a notification):
+   **Your passkey, asked by your device: “laptop”**, what the change does,
+   and the same code. The words come from the drafted change itself, never
+   from the computer's own text.
+3. **Confirm with passkey** signs exactly that change; the computer writes
+   it. **Not me** writes nothing, and the Inbox keeps a row for a day with
+   **My devices**, where you can revoke that computer if you didn't ask for
+   this.
+
+The request expires after 15 minutes. Only your own devices can ask, and only
+your own devices can answer; a device asks at most a few times an hour. Your
+other desktops see that one of them is checking it. Nothing about the
+hand-off goes on the workspace log, only the change with your passkey's
+confirmation, which every member checks as for any other.
+
+From the command line: `--timeout` (default 10 minutes) and Ctrl-C cancel;
+`--no-wait` exits 4 at once and `ligus handoff wait` finishes it
+([Steps that need your passkey](../reference/cli.md#handoff)). A relay
+without the approval mailbox can't carry it: do the step on the desktop, or
+pass `--recovery-words-file`. Confirming from your phone and from lt comes
+next.
+
 ## Removing it
 
 **Settings → Profile → My devices → Revoke** on the computer's row (it is

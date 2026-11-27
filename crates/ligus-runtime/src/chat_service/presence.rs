@@ -47,6 +47,14 @@ pub struct PresenceRequest {
 /// gesture times out.
 pub trait PresenceProvider: Send + Sync {
     fn assert(&self, req: &PresenceRequest) -> std::result::Result<PresenceAssertion, String>;
+
+    /// [`Self::assert`], also given the drafted envelope the assertion is
+    /// for, exactly as it will be stored (a terminal's passkey hand-off sends
+    /// it to the person's desktop, which renders and signs that draft). The
+    /// default ignores it.
+    fn assert_draft(&self, req: &PresenceRequest, _draft: &SessionEventEnvelope) -> std::result::Result<PresenceAssertion, String> {
+        self.assert(req)
+    }
 }
 
 /// An event waiting for its author's passkey (serve's prepare/commit).
@@ -155,6 +163,12 @@ pub fn summarize(payload: &SessionEvent) -> String {
             }
             s
         }
+        SessionEvent::WorkspaceRuntimeUpserted { runtime } => runtime_summary(runtime),
+        SessionEvent::WorkspaceRuntimeRemoved { runtime_id } => format!("Remove workspace runtime {}", shown(runtime_id)),
+        SessionEvent::AgentUpserted { agent } => agent_summary(agent),
+        SessionEvent::AgentRemoved { agent_id } => format!("Remove agent {agent_id}"),
+        SessionEvent::WorkspaceHostUpserted { host } => format!("Add or change host {} ({})", shown(&host.label), host.id),
+        SessionEvent::WorkspaceHostRemoved { host_id } => format!("Remove host {host_id}"),
         SessionEvent::JoinApproved { subject, .. } if subject.starts_with("invite:") => {
             "Let someone join with a single-use invite".into()
         }
@@ -163,7 +177,88 @@ pub fn summarize(payload: &SessionEvent) -> String {
     }
 }
 
+/// "Define workspace runtime “sonnet” (ClaudeCode, model “sonnet”)", with
+/// everything that changes where turns go or what key they use.
+fn runtime_summary(r: &ligus_core::WorkspaceRuntime) -> String {
+    let mut s = format!("Define workspace runtime {} ({:?}, model {}", shown(&r.name), r.provider, shown(&r.model));
+    if !r.endpoint.is_empty() {
+        s.push_str(&format!(", endpoint {}", shown(&r.endpoint)));
+    }
+    if !r.gateway.is_empty() {
+        s.push_str(&format!(", gateway {}", shown(&r.gateway)));
+    }
+    if let ligus_core::WorkspaceCredential::SecretRef { secret_ref } = &r.credential {
+        s.push_str(&format!(", key from secret {}", shown(secret_ref)));
+    }
+    s.push(')');
+    s
+}
+
+/// "Add or change agent “coder” (runtime “claude-code”, on host …, open to
+/// everyone)".
+fn agent_summary(a: &ligus_core::WorkspaceAgent) -> String {
+    let mut s = format!("Add or change agent {} (runtime {}", shown(&a.name), shown(&a.runtime_id));
+    if !a.host_id.is_empty() {
+        s.push_str(&format!(", on host {}", shown(&a.host_id)));
+    }
+    if a.access == "everyone" {
+        s.push_str(", open to everyone");
+    }
+    s.push(')');
+    s
+}
+
 impl ChatService {
+    /// The passkey request for `env`, a draft another device of this
+    /// account wrote (a terminal's passkey hand-off): the challenge over that
+    /// exact draft, the summary rendered from its payload (never from text
+    /// the requester sent), and this device's own view of the workspace's
+    /// relying party and the account's credentials. Refused unless the draft
+    /// is stamped with this device's account.
+    pub fn presence_request_for(&self, env: &SessionEventEnvelope) -> Result<PresenceRequest> {
+        let mine = self.author.account_id.ok_or_else(|| ChatError::Unauthorized("this device has no account".into()))?;
+        if env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) != Some(mine) {
+            return Err(ChatError::Unauthorized("that draft isn't stamped with your account".into()));
+        }
+        let mut req = self.presence_request(env)?;
+        req.summary = summarize(&env.payload);
+        Ok(req)
+    }
+
+    /// Whether `device_id` is one of this device's account's own devices on
+    /// `workspace_id`: certified for the account, trusted and not revoked,
+    /// as this device's fold sees it. A linked computer counts (its
+    /// certificate came from the desktop: it acts for the account without
+    /// holding its key, which is why it asks).
+    pub fn is_my_device(&self, workspace_id: Uuid, device_id: Uuid) -> Result<bool> {
+        Ok(self.my_device_ids(workspace_id)?.contains(&device_id))
+    }
+
+    /// This account's own devices on `workspace_id` (certified, trusted, not
+    /// revoked), as this device's fold sees them.
+    pub fn my_device_ids(&self, workspace_id: Uuid) -> Result<Vec<Uuid>> {
+        let Some(account) = self.author.account_id else { return Ok(Vec::new()) };
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let head = timeline.current();
+        Ok(head
+            .devices
+            .iter()
+            .filter(|(id, _)| head.device_trusted(**id) && head.account_certified(account, **id))
+            .map(|(id, _)| *id)
+            .collect())
+    }
+
+    /// A draft kept elsewhere (a terminal's hand-off that exited while it
+    /// waited) as the [`PresenceDraft`] [`ChatService::commit_presence`]
+    /// takes. Refused unless this device signed it.
+    pub fn presence_draft_of(&self, env: SessionEventEnvelope) -> Result<PresenceDraft> {
+        if env.signer_device_id != Some(self.device_id) {
+            return Err(ChatError::Unauthorized("that draft was written by another device".into()));
+        }
+        let request = self.presence_request(&env)?;
+        Ok(PresenceDraft { env, request })
+    }
+
     /// Use `provider` for events that need presence (the desktop).
     pub fn set_presence_provider(&mut self, provider: Option<Arc<dyn PresenceProvider>>) {
         self.presence_provider = provider;
@@ -237,7 +332,7 @@ impl ChatService {
         }
         let request = self.presence_request(env)?;
         if let Some(provider) = self.presence_provider.clone() {
-            let assertion = provider.assert(&request).map_err(|e| ChatError::Unauthorized(format!("passkey confirmation: {e}")))?;
+            let assertion = provider.assert_draft(&request, env).map_err(|e| ChatError::Unauthorized(format!("passkey confirmation: {e}")))?;
             if let Some(stamp) = env.actor_stamp.as_mut() {
                 stamp.presence = Some(assertion);
             }

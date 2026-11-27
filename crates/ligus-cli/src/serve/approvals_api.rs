@@ -415,6 +415,9 @@ pub async fn list(State(s): State<Arc<Shared>>, peer: Option<Extension<TunnelPee
     let rows: Vec<Value> = live
         .iter()
         .filter(|r| r.ended.is_none() && r.expires_at > now)
+        // A passkey hand-off is its person's alone: the phone confirms it
+        // only once the box acts for the phone's person (not yet).
+        .filter(|r| r.kind() != ligus_core::match_code::MatchKind::Presence)
         .filter_map(|r| {
             let key = epochs.iter().find(|e| e.epoch == r.epoch)?;
             Some(row(s.ws, &name, r, roster.as_ref(), &MailboxKeys::derive(&key.key).seal().public_key_bytes()))

@@ -56,15 +56,17 @@ export interface NeedsYouItem {
   /// When it was asked or happened (ms), shown muted on the row.
   at?: number;
   /// An approval fact's kind and its key (to dismiss it).
-  fact?: { kind: "mismatch" | "didntFinish"; key: string; help?: string };
+  fact?: { kind: "mismatch" | "didntFinish" | "notMe"; key: string; help?: string };
 }
 
 export interface ApprovalRef {
   workspaceId: string;
   rid: string;
-  kind: "box" | "computer" | "phone";
+  kind: "box" | "computer" | "phone" | "presence";
   label: string;
   createdAt: number;
+  /// A hand-off: what the change does.
+  summary?: string | null;
 }
 
 /// More approval requests than this collapse into one row.
@@ -90,7 +92,14 @@ export function quoteLabel(raw: string): string {
 /// Verb first, from the request's kind; the label last and quoted:
 /// "A box asks to join: “build-1”".
 export function approvalTitle(a: { kind: string; label: string }): string {
-  const what = a.kind === "box" ? "A box asks to join" : a.kind === "phone" ? "A phone asks to be your device" : "A computer asks to be your device";
+  const what =
+    a.kind === "box"
+      ? "A box asks to join"
+      : a.kind === "phone"
+        ? "A phone asks to be your device"
+        : a.kind === "presence"
+          ? "Your passkey, asked by your device"
+          : "A computer asks to be your device";
   return `${what}: ${quoteLabel(a.label)}`;
 }
 
@@ -129,7 +138,7 @@ export interface NeedsYouSources {
   /// Code-match requests this device can approve.
   approvals?: readonly ApprovalRef[];
   /// Approval facts of the last day.
-  approvalFacts?: readonly { key: string; kind: "mismatch" | "didntFinish"; label: string; at: number; text?: string; help?: string }[];
+  approvalFacts?: readonly { key: string; kind: "mismatch" | "didntFinish" | "notMe"; label: string; at: number; text?: string; help?: string }[];
 }
 
 function plural(n: number, one: string, many: string) {
@@ -166,7 +175,9 @@ export function needsYouItems(s: NeedsYouSources): NeedsYouItem[] {
       title:
         f.kind === "mismatch"
           ? `Request from ${quoteLabel(f.label)} didn't match. Nothing was granted.`
-          : `Linking ${quoteLabel(f.label)} didn't finish. Nothing was added.`,
+          : f.kind === "notMe"
+            ? `You said Not me to a request from ${quoteLabel(f.label)}. Nothing was written.`
+            : `Linking ${quoteLabel(f.label)} didn't finish. Nothing was added.`,
       at: f.at,
       fact: { kind: f.kind, key: f.key, help: f.help },
     });
