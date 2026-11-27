@@ -888,7 +888,7 @@ mod tests {
     fn streaming_events_skip_the_check() {
         assert!(!requires_authz(&SessionEvent::MessageCompleted {
             message_id: Uuid::nil(),
-            body: "x".into()
+            body: "x".into(), outcome: None
         }));
         assert!(requires_authz(&msg()));
     }

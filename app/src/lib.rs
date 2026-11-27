@@ -64,6 +64,7 @@ mod turn_host;
 mod attention;
 mod notices;
 mod chat_models;
+mod dispatch_outcome;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -2619,6 +2620,8 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
         runtime_label: m.runtime_label.clone(),
         requester_name: None,
         requester_is_viewer: false,
+        outcome: None,
+        route: None,
     }
 }
 
@@ -2626,6 +2629,17 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
 /// `@you` names its requester, and says whether that's the viewer.
 fn message_dto_in(s: &ChatSession, m: &ChatMessage, viewer: Viewer, me: &str) -> ChatMessageDto {
     let mut dto = message_dto(m, &s.workspace_agents, viewer);
+    // How a finished reply ended and what answered (8.1), its host by label.
+    let here = viewer.device.map(|d| d.to_string()).unwrap_or_default();
+    let label = |h: &str| {
+        if h == here {
+            return "this device".to_string();
+        }
+        s.workspace_hosts.iter().find(|x| x.id == h).map(|x| shown(&x.label)).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| format!("host {}", h.get(..8).unwrap_or(h)))
+    };
+    dto.outcome = ligus_runtime::turn_route::outcome_dto(m, &label);
+    // Shown at when it was posted, never before the message it answers (E1).
+    dto.created_at = rfc3339(s.display_at(m));
     if let Some(r) = ligus_runtime::parse_mentions(&m.body, s).you.then(|| ligus_runtime::requester_of(s, m)).flatten() {
         let name = ligus_proto::names::clean_display_name(&r.display_name);
         if !name.is_empty() {
@@ -2803,7 +2817,9 @@ fn session_dto(s: &ChatSession, viewer: Viewer, me: &str) -> ChatSessionDto {
         title: s.title.clone(),
         runtime_id: s.runtime_id.clone(),
         // A duplicate answer the dispatcher fenced (`superseded`) isn't shown.
-        messages: s.messages.iter().filter(|m| !m.superseded).map(|m| message_dto_in(s, m, viewer, me)).collect(),
+        // Drawn where each was posted: a reply where it finished, a reply
+        // still streaming as the live row at the end (8.1, D7).
+        messages: s.transcript().into_iter().filter(|m| !m.superseded).map(|m| message_dto_in(s, m, viewer, me)).collect(),
     }
 }
 
@@ -4175,7 +4191,10 @@ pub(crate) fn get_chat_sync(state: State<AppState>, session_id: String) -> Resul
     let Some(mut session) = svc.load_resolving(id).map_err(map_err)? else { return Ok(None) };
     let links = device_links_of(&svc, session.workspace_id);
     attribute_linked_devices(&mut session, &links);
-    Ok(Some(session_dto(&session, Viewer::of(&svc), &svc.author().id)))
+    let mut dto = session_dto(&session, Viewer::of(&svc), &svc.author().id);
+    // Where this person's waiting turns are, or why they can't run (5.4).
+    crate::dispatch_outcome::add_routes(&state, &svc, &session, &mut dto);
+    Ok(Some(dto))
 }
 
 /// Show messages a person's other identity wrote — the separate member their
@@ -7800,6 +7819,11 @@ struct Responder {
     /// The model this device's person picked for the chat (primary only,
     /// `crate::chat_models`), applied over the runtime's own model.
     model_override: Option<String>,
+    /// Why this device can't run the agent's own runtime (none here, or no
+    /// key): the turn doesn't run here, and its sender's chat says why
+    /// (workspace model v3, 5.4). `runtime` is then only a placeholder,
+    /// never run unless the person picks "Use Claude Code instead".
+    unrunnable: Option<ligus_core::outcome::Why>,
 }
 
 struct ContextSnapshot {
@@ -8094,7 +8118,13 @@ fn responder_for(state: &AppState, session: &ChatSession, agent: Option<&Workspa
     };
     match agent {
         Some(a) => {
-            let runtime = state.resolve_runtime(&a.runtime_id);
+            // Exactly the agent's runtime, never a silent stand-in (5.4).
+            // (No host id here: callers may hold the service lock; an empty
+            // host in the reason means this device.)
+            let (runtime, unrunnable) = match state.resolve_runtime_strict(&a.runtime_id, "") {
+                Ok(r) => (r, None),
+                Err(why) => (state.resolve_runtime(&a.runtime_id), Some(why)),
+            };
             Responder {
                 system_base: with_identity(prompt::agent_system_prompt(session, a), &runtime),
                 agent_id: Some(a.id),
@@ -8102,9 +8132,12 @@ fn responder_for(state: &AppState, session: &ChatSession, agent: Option<&Workspa
                 runtime_id: a.runtime_id.clone(),
                 runtime,
                 owner_actor_id: a.owner_actor_id.clone(),
-                host_id: a.host_id.clone(),
+                // Where it is placed: a host that is gone still names that
+                // host (its turns run nowhere), never "its owner's devices".
+                host_id: a.as_judged().host_id.clone(),
                 // Agents keep their own runtime and model.
                 model_override: None,
+                unrunnable,
             }
         }
         None => {
@@ -8125,6 +8158,7 @@ fn responder_for(state: &AppState, session: &ChatSession, agent: Option<&Workspa
                 owner_actor_id: session.creator_actor_id.clone(),
                 host_id: String::new(),
                 model_override,
+                unrunnable: None,
             }
         }
     }
@@ -8158,6 +8192,7 @@ fn rebind_to_catalog(state: &AppState, responder: &Responder, catalog: &RootCata
             owner_actor_id: responder.owner_actor_id.clone(),
             host_id: responder.host_id.clone(),
             model_override: responder.model_override.clone(),
+            unrunnable: responder.unrunnable.clone(),
         },
         old_block,
         new_block,
@@ -8417,6 +8452,7 @@ fn host_online(state: &AppState, workspace_id: Uuid, host_id: &str) -> bool {
         .map(|hosts| hosts.iter().any(|h| h.id == host_id && state.host_presence.is_online(h, &now)))
         .unwrap_or(false)
 }
+
 
 
 /// Whether a provider authenticates with an API key we must supply. A hosted-API
@@ -9660,7 +9696,7 @@ async fn run_prepared_turn_inner(
             let note = format!("{} did not run: {reason}", responder.author);
             let mut svc = state.service.lock().unwrap();
             if let Ok(mid) = svc.begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to) {
-                let _ = svc.complete_assistant_message(session_id, workspace_id, mid, &note);
+                let _ = svc.complete_assistant_message_as(session_id, workspace_id, mid, &note, ligus_core::outcome::ReplyStatus::Failed);
             }
             return Err(note);
         }
@@ -10232,39 +10268,6 @@ pub(crate) fn agent_turn_allowed(state: &AppState, session_id: Uuid, workspace_i
     }
 }
 
-/// Arm the bounded-deferral fallback for a turn we just handed to another
-/// device: wait out [`DEFERRED_CLAIM_TIMEOUT`], then ask the dispatcher as an
-/// eligible device (it claims an unclaimed turn, or hands over one whose
-/// holder went silent).
-/// The chat line for a turn whose agent is bound to a host that is offline:
-/// "@agy runs on lt on Ana's MacBook Air, which is offline."
-fn offline_host_line(agent: &str, host_label: Option<&str>) -> String {
-    let who = agent.trim().trim_start_matches('@');
-    let host = host_label.map(shown).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| "another device".into());
-    format!("@{who} runs on {host}, which is offline.")
-}
-
-/// Whether the same offline line is already the last note before `trigger`
-/// with no reply since: one line while the host stays offline, not one per
-/// message.
-fn offline_line_already_shown(session: &ligus_core::ChatSession, trigger: Uuid, line: &str) -> bool {
-    let Some(at) = session.messages.iter().position(|m| m.id == trigger) else { return false };
-    session.messages[..at]
-        .iter()
-        .rev()
-        .find(|m| m.role != MessageRole::User)
-        .is_some_and(|m| m.role == MessageRole::System && m.body == line)
-}
-
-fn arm_deferred_claim_fallback(
-    app: &AppHandle,
-    session_id: Uuid,
-    workspace_id: Uuid,
-    trigger_id: Uuid,
-) {
-    arm_dispatch_watch(app, session_id, workspace_id, trigger_id, None, DEFERRED_CLAIM_TIMEOUT, std::time::Duration::ZERO);
-}
-
 /// Look at a turn again after `after` (the dispatcher said to wait, or this
 /// device lost the claim and watches its holder): spawned, so the caller
 /// returns straight away. `agent` is a hand-off receiver's claim key.
@@ -10316,7 +10319,7 @@ async fn run_dispatch_watch(
     // Re-resolve rather than capture: over the wait the relay may have been
     // cleared, the roster may have changed, and the owner's device may have
     // answered after all.
-    let (responder, claimed) = {
+    let responder = {
         let svc = state.service.lock().unwrap();
         let Some(session) = svc.load_in(workspace_id, session_id).map_err(map_err)? else {
             return Ok(());
@@ -10327,7 +10330,6 @@ async fn run_dispatch_watch(
         let Some(trigger) = session.messages.iter().find(|m| m.id == trigger_id) else {
             return Ok(());
         };
-        let claimed = session.turn_claims.contains_key(&ligus_core::turn_claim_key(trigger_id, agent));
         let links = device_links_of(&svc, session.workspace_id);
         let responder = match agent {
             Some(a) => session.workspace_agents.iter().find(|x| x.id == a).cloned().map(|x| responder_for(&state, &session, Some(&x))),
@@ -10342,17 +10344,19 @@ async fn run_dispatch_watch(
                 None => None,
             },
         };
-        (responder, claimed)
+        // Only a device both gates put the turn on watches it and takes it
+        // over (a silent holder is handed over among eligible devices). Any
+        // other device never answers it here, however long it waits: no
+        // answer-locally fallback (workspace model v3, 5.4); its sender sees
+        // where it waits instead.
+        let eligible = responder.as_ref().is_some_and(|r| {
+            let (me, here) = (svc.author().id.clone(), svc.device_id().to_string());
+            let binding = crate::dispatch_outcome::binding_for(&here, &me, &links, &r.owner_actor_id, &r.host_id);
+            r.unrunnable.is_none() && runs_here_linked(local_only, &links, &session, &me, &r.owner_actor_id, binding)
+        });
+        responder.filter(|_| eligible)
     };
     let Some(responder) = responder else { return Ok(()) };
-    // An unclaimed turn of an agent whose host came online (or was sent to
-    // one) while we waited: it answers.
-    if !claimed
-        && host_binding(&responder.host_id, &state.local_host_id()) == HostBinding::Elsewhere
-        && host_online(&state, workspace_id, &responder.host_id)
-    {
-        return Ok(());
-    }
 
     // Same double-dispatch guard `maybe_respond` takes — a sync tick may be
     // dispatching this very chat right now: look again shortly.
@@ -10387,7 +10391,7 @@ async fn run_dispatch_watch(
         responder = %responder.author,
         owner = %responder.owner_actor_id,
         after_secs = waited.as_secs(),
-        "deferred turn went unanswered — answering locally"
+        "taking over a turn its holder left silent"
     );
     run_turn_answering(app, &state, session_id, workspace_id, &responder, Some(trigger_id)).await.map(|_| ())
 }
@@ -10483,7 +10487,7 @@ async fn send_message(
         // dispatch. Mirrors `maybe_respond`; both gates must use `turn_runs_here`.
         let local_only = state.is_local_only_ws(workspace_id);
         let links = device_links_of(&state.service.lock().unwrap(), workspace_id);
-        let mut binding = host_binding(&responder.host_id, &state.local_host_id());
+        let mut binding = crate::dispatch_outcome::binding_for(&state.local_host_id(), &local_actor_id, &links, &responder.owner_actor_id, &responder.host_id);
         // "Run here this time" (6.1): the person's own message to an agent
         // pinned to a host without the chat's repo runs on this device
         // instead, once. Like an idle-host offer, the claim below decides:
@@ -10508,28 +10512,18 @@ async fn send_message(
                 local = %local_actor_id,
                 "send_message: responder runs on another device or host — deferring"
             );
-            // Bounded, not indefinite. If no device claims or answers the trigger
-            // within DEFERRED_CLAIM_TIMEOUT, answer it here — otherwise an owner
-            // no live device can satisfy means permanent silence. Only the initial
-            // user turn is claimable; a cascaded turn (depth > 0) is a
-            // single-device continuation with no trigger of its own to fall back on.
-            // An agent sent to a host that is online is that host's work: no
-            // fallback, or a slow turn there would be answered twice.
-            let host_live = binding == HostBinding::Elsewhere
-                && host_online(&state, workspace_id, &responder.host_id);
-            // Never a silent skip: an agent bound to a host that is offline
-            // says so in the chat, in one line (once while it stays offline).
-            if depth == 0 && binding == HostBinding::Elsewhere && !host_live {
-                let mut svc = state.service.lock().unwrap();
-                let label = svc.list_hosts(workspace_id).ok().and_then(|hs| hs.into_iter().find(|h| h.id == responder.host_id)).map(|h| h.label);
-                let line = offline_host_line(&responder.author, label.as_deref());
-                if !offline_line_already_shown(&session, trigger_id, &line) {
-                    let _ = svc.post_system_note(sid, workspace_id, line);
-                }
-            }
-            if depth == 0 && !host_live && !stop.is_stopped() {
-                arm_deferred_claim_fallback(&app, sid, workspace_id, trigger_id);
-            }
+            // Never answered here after a wait (workspace model v3, 5.4): the
+            // turn is its host's or its owner's devices'. The chat shows where
+            // it waits, or why it can't run, under the message (a local row,
+            // not a log line), with "Run here this time" when this device
+            // may; `get_chat` computes it.
+            break;
+        }
+        // This device would run it but doesn't have the agent's runtime, or
+        // its key: no silent stand-in. The row says why, with "Use Claude
+        // Code instead" for this one turn.
+        if let Some(why) = &responder.unrunnable {
+            tracing::info!(target: "dispatch", responder = %responder.author, reason = why.code(), "send_message: can't run here");
             break;
         }
 
@@ -10714,9 +10708,11 @@ async fn regenerate(
     // different workspace is active would otherwise mis-scope its events (matches
     // `send_message`, which uses `session.workspace_id`).
     let workspace_id = session.workspace_id;
+    // The last reply as the transcript draws it (where each finished), the
+    // one the chat's Regenerate sits on.
     let (last_id, answered) = session
-        .messages
-        .iter()
+        .transcript()
+        .into_iter()
         .rev()
         .find(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && !m.superseded)
         .map(|m| (m.id, m.reply_to_message_id))
@@ -10799,9 +10795,11 @@ fn plan_response(state: &AppState, sid: Uuid, trigger: Option<Uuid>) -> Result<O
     // ownership split only matters in a real multi-human room.
     let local_only = state.is_local_only_ws(session.workspace_id);
     let links = device_links_of(&svc, session.workspace_id);
+    // Both gates, with this computer's host policy (D16), and never an
+    // agent this device can't run as it is (no silent stand-in, 5.4).
     let runs_here = |responder: &Responder| {
-        let binding = host_binding(&responder.host_id, &local_host_id);
-        runs_here_linked(local_only, &links, &session, &local_actor_id, &responder.owner_actor_id, binding)
+        let binding = crate::dispatch_outcome::binding_for(&local_host_id, &local_actor_id, &links, &responder.owner_actor_id, &responder.host_id);
+        responder.unrunnable.is_none() && runs_here_linked(local_only, &links, &session, &local_actor_id, &responder.owner_actor_id, binding)
     };
     Ok(match m.role {
         // Same routing as `send_message` (see `flow::route_target`).
@@ -10941,8 +10939,8 @@ pub(crate) async fn handoff_turn(app: &AppHandle, sid: Uuid, agent_id: Uuid, tri
         let responder = responder_for(&state, &session, Some(&agent));
         let local_only = state.is_local_only_ws(session.workspace_id);
         let links = device_links_of(&svc, session.workspace_id);
-        let binding = host_binding(&responder.host_id, &local_host_id);
-        if !runs_here_linked(local_only, &links, &session, &local_actor_id, &responder.owner_actor_id, binding) {
+        let binding = crate::dispatch_outcome::binding_for(&local_host_id, &local_actor_id, &links, &responder.owner_actor_id, &responder.host_id);
+        if responder.unrunnable.is_some() || !runs_here_linked(local_only, &links, &session, &local_actor_id, &responder.owner_actor_id, binding) {
             return Ok(());
         }
         (session.workspace_id, responder)
@@ -13676,6 +13674,10 @@ async fn run_device_host_loop(app: AppHandle) {
                 ligus_runtime::host_offers::refresh_if_due(ligus_runtime::host_offers::HostRole::OwnComputer, Some(ws), env!("CARGO_PKG_VERSION"));
             }));
             let coverage = crate::repos_ui::beat_coverage(&state, ws);
+            // The agents placed here this computer won't run, with why
+            // (another person's, or a runtime it doesn't have): the sender's
+            // chat reads it from the beat (5.4).
+            ligus_runtime::host_offers::set_refused_agents(ws, crate::dispatch_outcome::host_refusals(&state, ws));
             let beat = state.service.lock().unwrap().signed_beat(ws, coverage);
             match ligus_runtime::host_presence::publish_beat(&relay, &room, &ring, &beat).await {
                 Ok(()) => last_beat = Some((room.clone(), std::time::Instant::now())),
@@ -17127,6 +17129,9 @@ pub fn run() {
             list_queued_work,
             list_workspace_hosts,
             get_list_tools,
+            dispatch_outcome::get_run_others_agents,
+            dispatch_outcome::set_run_others_agents,
+            dispatch_outcome::run_turn_here,
             set_list_tools,
             set_agent_host,
             set_agent_access,
@@ -17619,33 +17624,6 @@ mod dispatch_ownership_tests {
         let trigger_id = trigger.id;
         s.messages = vec![trigger];
         (s, trigger_id)
-    }
-
-    #[test]
-    fn an_agent_on_an_offline_host_says_so_once() {
-        use super::{offline_host_line, offline_line_already_shown};
-        let line = offline_host_line("agy", Some("lt on Michael's MacBook Air"));
-        assert_eq!(line, "@agy runs on lt on Michael's MacBook Air, which is offline.");
-        assert_eq!(offline_host_line("@agy", None), "@agy runs on another device, which is offline.");
-
-        // The first message gets the line; the next one, with no reply in
-        // between, doesn't get a second.
-        let (mut s, first) = deferred_session();
-        assert!(!offline_line_already_shown(&s, first, &line));
-        s.messages.push(ChatMessage::new(MessageRole::System, "Ligus", line.clone()));
-        let second = ChatMessage::new(MessageRole::User, "Michael", "again");
-        let second_id = second.id;
-        s.messages.push(second);
-        assert!(offline_line_already_shown(&s, second_id, &line));
-
-        // After a reply, a new offline spell says it again.
-        let mut reply = ChatMessage::new(MessageRole::Assistant, "agy", "back");
-        reply.reply_to_message_id = Some(second_id);
-        s.messages.push(reply);
-        let third = ChatMessage::new(MessageRole::User, "Michael", "and now?");
-        let third_id = third.id;
-        s.messages.push(third);
-        assert!(!offline_line_already_shown(&s, third_id, &line));
     }
 
     #[test]

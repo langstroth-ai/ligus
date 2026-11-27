@@ -163,6 +163,12 @@ pub struct ChatSession {
     /// events, never serialized.
     #[serde(skip)]
     pub retired: BTreeMap<String, Uuid>,
+    /// Fold state, never serialized: a counter the fold stamps on each
+    /// message as it is posted (appended finished, or completed), so the
+    /// transcript draws a reply where it finished
+    /// ([`ChatSession::transcript`], workspace model v3, 8.1).
+    #[serde(skip)]
+    pub transcript_seq: u64,
 }
 
 /// Safety ceiling on agent replies since the last human turn — a runaway/loop
@@ -268,6 +274,7 @@ impl ChatSession {
             profiles: BTreeMap::new(),
             device_labels: BTreeMap::new(),
             retired: BTreeMap::new(),
+            transcript_seq: 0,
         }
     }
 

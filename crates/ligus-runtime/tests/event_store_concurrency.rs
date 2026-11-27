@@ -351,7 +351,7 @@ fn big_chain(path: &Path, n: usize) -> (Uuid, Uuid, Uuid, SigningKeypair, Option
     let mut store = EventStore::open(path).unwrap();
     let mut prev = None;
     for i in 0..n {
-        let env = chained(sid, ws, dev, &kp, i as i64 + 1, prev, SessionEvent::MessageCompleted { message_id: Uuid::new_v4(), body: "x".repeat(400) });
+        let env = chained(sid, ws, dev, &kp, i as i64 + 1, prev, SessionEvent::MessageCompleted { message_id: Uuid::new_v4(), body: "x".repeat(400), outcome: None });
         prev = Some(env.event_id);
         store.ingest(&env).unwrap();
     }
@@ -409,7 +409,7 @@ fn a_write_during_prune_waits_and_lands() {
         for i in 0..5_000 {
             let mid = Uuid::new_v4();
             s.ingest(&SessionEventEnvelope::new(sid, ws, 2 * i + 1, SessionEvent::MessageChunkReceived { message_id: mid, chunk: "c".into() })).unwrap();
-            s.ingest(&SessionEventEnvelope::new(sid, ws, 2 * i + 2, SessionEvent::MessageCompleted { message_id: mid, body: "x".repeat(200) })).unwrap();
+            s.ingest(&SessionEventEnvelope::new(sid, ws, 2 * i + 2, SessionEvent::MessageCompleted { message_id: mid, body: "x".repeat(200), outcome: None })).unwrap();
         }
     }
     let mut a = EventStore::open(&path).unwrap();
@@ -434,7 +434,7 @@ fn opening_during_the_index_build_after_an_upgrade_gets_through() {
     {
         let mut s = EventStore::open(&path).unwrap();
         for i in 0..20_000 {
-            let mut e = SessionEventEnvelope::new(sid, ws, i + 1, SessionEvent::MessageCompleted { message_id: Uuid::new_v4(), body: "x".repeat(400) });
+            let mut e = SessionEventEnvelope::new(sid, ws, i + 1, SessionEvent::MessageCompleted { message_id: Uuid::new_v4(), body: "x".repeat(400), outcome: None });
             e.signer_device_id = Some(Uuid::new_v4());
             s.ingest(&e).unwrap();
         }

@@ -3573,7 +3573,7 @@ mod tests {
             .append(
                 sid,
                 wid,
-                SessionEvent::MessageCompleted { message_id: mid, body: "Hello".into() },
+                SessionEvent::MessageCompleted { message_id: mid, body: "Hello".into(), outcome: None },
             )
             .unwrap();
 
@@ -3605,7 +3605,7 @@ mod tests {
         ligus_core::sign_envelope(&mut other, Uuid::new_v4(), &kp);
         store.ingest(&other).unwrap();
         assert_eq!(store.list_copies(sid).unwrap().iter().filter(|e| e.event_id == chunk.event_id).count(), 2);
-        store.append(sid, wid, SessionEvent::MessageCompleted { message_id: mid, body: "Hello".into() }).unwrap();
+        store.append(sid, wid, SessionEvent::MessageCompleted { message_id: mid, body: "Hello".into(), outcome: None }).unwrap();
         assert!(store.prune_superseded_chunks().unwrap() >= 1);
         assert!(store.list_copies(sid).unwrap().iter().all(|e| e.event_id != chunk.event_id), "a copy outlived its pruned chunk");
         let s = store.load_session(sid).unwrap().unwrap();
@@ -3640,7 +3640,7 @@ mod tests {
         let t2 = fixture_next(&SessionEventEnvelope::new(sid, wid, 9, SessionEvent::SessionTitleChanged { title: "t2".into() }), key(&t1));
         store.ingest(&t1).unwrap();
         store.ingest(&t2).unwrap();
-        store.append(sid, wid, SessionEvent::MessageCompleted { message_id: mid, body: "Hello".into() }).unwrap();
+        store.append(sid, wid, SessionEvent::MessageCompleted { message_id: mid, body: "Hello".into(), outcome: None }).unwrap();
         // Meanwhile another device held the chunk as its newest event.
         let theirs = SessionEventEnvelope::new(sid, wid, 9, SessionEvent::SessionTitleChanged { title: "theirs".into() });
         let theirs = fixture_next(&theirs, at_chunk);

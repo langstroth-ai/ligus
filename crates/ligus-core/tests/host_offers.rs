@@ -160,6 +160,7 @@ fn status() -> HostStatus {
             OfferStatus { name: "codex".into(), ready: false, why: "not signed in".into(), ..Default::default() },
         ],
         refuses: vec![],
+        refused_agents: vec![],
     }
 }
 
@@ -208,6 +209,7 @@ fn an_oversized_status_drops_its_model_lists() {
             .map(|i| OfferStatus { name: format!("src-{i}"), ready: true, models: (0..200).map(|m| format!("model-{m:03}-long-name")).collect(), complete: true, ..Default::default() })
             .collect(),
         refuses: vec![],
+        refused_agents: vec![],
     }
     .sanitized();
     assert!(big.offers.iter().all(|o| o.models.is_empty() && !o.complete));
@@ -246,6 +248,7 @@ proptest! {
             build: bad.clone(),
             offers: vec![OfferStatus { name: name.clone(), ready: false, why: bad.clone(), models: vec![bad.clone(), "sonnet".into()], complete: true }],
             refuses: vec![bad.clone()],
+            refused_agents: vec![ligus_core::outcome::AgentRefusal { agent_id: uuid::Uuid::nil(), kind: Default::default(), why: bad.clone() }],
         }
         .sanitized();
         let text = serde_json::to_string(&st).unwrap();

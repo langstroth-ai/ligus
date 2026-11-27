@@ -1339,7 +1339,7 @@ fn an_agent_signs_its_own_reply() {
     let (mut w, a) = agent_world("mara");
     let (mid, reply) = agent_reply(&a, 0x51);
     let ok = w.agent_push(&a, reply);
-    let chunk = w.agent_push(&a, SessionEvent::MessageCompleted { message_id: mid, body: "done".into() });
+    let chunk = w.agent_push(&a, SessionEvent::MessageCompleted { message_id: mid, body: "done".into(), outcome: None });
     // Not someone else's message.
     let (_, theirs) = {
         let mut m = ligus_core::ChatMessage::new(ligus_core::MessageRole::Assistant, "ligus", "x");
@@ -1743,9 +1743,9 @@ fn only_its_author_rewrites_a_message() {
     forged.body = "rm -rf everything".into();
     let reappend = w.chat_push("mara", SessionEvent::MessageAppended { message: forged });
     let chunk = w.chat_push("mara", SessionEvent::MessageChunkReceived { message_id: mid, chunk: " and more".into() });
-    let complete = w.chat_push("mara", SessionEvent::MessageCompleted { message_id: mid, body: "rewritten".into() });
+    let complete = w.chat_push("mara", SessionEvent::MessageCompleted { message_id: mid, body: "rewritten".into(), outcome: None });
     let remove = w.chat_push("mara", SessionEvent::MessageRemoved { message_id: mid });
-    let own = w.chat_push("ada", SessionEvent::MessageCompleted { message_id: mid, body: "ship it now".into() });
+    let own = w.chat_push("ada", SessionEvent::MessageCompleted { message_id: mid, body: "ship it now".into(), outcome: None });
     let v = w.verdicts();
     assert_eq!((v[&reappend], v[&chunk], v[&complete], v[&remove]), (Verdict::Denied, Verdict::Denied, Verdict::Denied, Verdict::Denied));
     assert_eq!(v[&own], Verdict::Allowed);

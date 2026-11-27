@@ -22,6 +22,8 @@ pub mod attachment_safety;
 pub mod agent_access;
 #[cfg(test)]
 mod agent_access_tests;
+#[cfg(test)]
+mod dispatch_outcome_tests;
 pub mod author_gate;
 pub mod box_admission;
 pub mod builtin_tools;
@@ -101,6 +103,7 @@ pub mod sync_engine;
 pub mod sync_service;
 pub mod tool_loop;
 pub mod turn_dispatch;
+pub mod turn_route;
 pub mod turn_engine;
 pub mod vault_fetcher;
 pub mod workflow_directive;

@@ -109,6 +109,18 @@ ligus answered) and, when it was this box or another device of the account the
 box writes as, `responderDevice`: `this` or `mine` (absent otherwise; the
 phone then says "<name>'s device"). Both are left out when unset.
 
+A finished reply carries `outcome`: `{status, harness, model, host}`, where
+`status` is `ok`, `failed` or `canceled` and `host` the label of the host that
+ran it (`this box` for this one); absent while it streams and on replies from
+older builds. On the requesting person's own message whose turn doesn't run
+yet, `GET /v1/chats/:id/messages` adds `route`: `{state, reason, text, host,
+since, runHere, useClaudeCode}`. `state` is `queued`, `hostGone` or
+`unrunnable`; `reason` is `waiting`, `offline`, `removed`, `revoked`, `left`,
+`sourceNotOffered`, `modelNotOffered`, `notAllowedOnHost`, `ownerGone` or
+`noKeyHere`; `text` is the one line to show. A phone runs nothing, so
+`runHere` and `useClaudeCode` are always false there. A request the box can't
+place on a person gets no `route`.
+
 #### Typing {#typing}
 
 The phone sends `POST /v1/chats/:id/typing {"typing": true}` about every
