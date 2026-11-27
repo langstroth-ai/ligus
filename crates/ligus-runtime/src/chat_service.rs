@@ -3954,10 +3954,9 @@ pub fn resolve_workspace_credential(cred: &WorkspaceCredential, workspace_id: Uu
 /// [`resolve_workspace_credential`] against a given `host.toml`.
 pub fn resolve_declared_credential(cred: &WorkspaceCredential, workspace_id: Uuid, host: &crate::host_config::HostConfig) -> Option<String> {
     match cred {
-        WorkspaceCredential::SecretRef { secret_ref } if host.declares_secret(workspace_id, secret_ref) => {
-            ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref))
-                .ok()
-                .filter(|s| !s.is_empty())
+        WorkspaceCredential::SecretRef { secret_ref } if host.secret_for(workspace_id, secret_ref).is_some() => {
+            let name = host.secret_for(workspace_id, secret_ref).unwrap_or(secret_ref);
+            ligus_core::names::var(&WorkspaceCredential::env_var(name)).ok().filter(|s| !s.is_empty())
         }
         WorkspaceCredential::SecretRef { .. } | WorkspaceCredential::Inline {} | WorkspaceCredential::None => None,
     }
@@ -3967,7 +3966,7 @@ pub fn resolve_declared_credential(cred: &WorkspaceCredential, workspace_id: Uui
 /// `workspace_id` (for the error a turn shows), if any.
 pub fn undeclared_secret(cred: &WorkspaceCredential, workspace_id: Uuid) -> Option<String> {
     match cred {
-        WorkspaceCredential::SecretRef { secret_ref } if !crate::host_config::host().declares_secret(workspace_id, secret_ref) => {
+        WorkspaceCredential::SecretRef { secret_ref } if crate::host_config::host().secret_for(workspace_id, secret_ref).is_none() => {
             Some(secret_ref.clone())
         }
         _ => None,

@@ -103,7 +103,7 @@ impl FlowId {
 #[serde(rename_all = "camelCase")]
 pub struct FlowDef {
     pub id: FlowId,
-    /// The palette and wizard title ("Set up an agent").
+    /// The palette and wizard title ("Add an agent").
     pub title: &'static str,
     /// One line for lists.
     pub summary: &'static str,
@@ -139,11 +139,12 @@ pub fn role_name(r: WorkspaceRole) -> &'static str {
 pub static FLOWS: [FlowDef; 7] = [
     FlowDef {
         id: FlowId::Agent,
-        title: "Set up an agent",
-        summary: "an agent on a coding CLI or model that is installed and signed in",
-        why: "An agent answers when you @mention it. It runs one harness (Claude Code, Codex, Copilot, \
-              Antigravity, Aider, Pi or a local model) inside this device's agent sandbox.",
-        keywords: "agent harness runtime claude codex copilot agy aider pi ollama model",
+        title: "Add an agent",
+        summary: "an agent in one step: what answers, its model, and where it runs",
+        why: "An agent answers when you @mention it. It runs a coding CLI (Claude Code, Codex, Copilot, \
+              Antigravity, Aider, Pi), a model gateway or hosted API a host offers, or a model server, on this \
+              device or on a host you choose.",
+        keywords: "agent harness runtime claude codex copilot agy aider pi ollama model gateway host",
         min_role: Some(WorkspaceRole::Contributor),
         person_steps: false,
     },
@@ -290,11 +291,20 @@ pub struct Field {
     /// (`("harness", ["local"])`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<(&'static str, Vec<&'static str>)>,
+    /// One line shown under the field, for the current inputs ("Turns run
+    /// on build-1. When it's offline, @coder waits.").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 impl Field {
     fn new(id: &'static str, label: &'static str, kind: FieldKind) -> Self {
-        Field { id, label, kind, required: false, default: None, help: "", when: None }
+        Field { id, label, kind, required: false, default: None, help: "", when: None, note: None }
+    }
+    fn note(mut self, n: impl Into<String>) -> Self {
+        let n = n.into();
+        self.note = (!n.is_empty()).then_some(n);
+        self
     }
     fn required(mut self) -> Self {
         self.required = true;
@@ -375,6 +385,18 @@ pub struct Form {
     pub preflight: Vec<Check>,
     pub blocked: bool,
     pub steps: Vec<StepDef>,
+    /// The one button's label for the current inputs ("Add @coder").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// How many passkey confirmations the run will ask for (0: none). Two
+    /// on a rules-3 workspace when a workspace runtime is defined too; the
+    /// surface says "Confirm 1 of 2".
+    #[serde(skip_serializing_if = "is_zero")]
+    pub confirmations: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 fn checks_json<S: serde::Serializer>(c: &[Check], s: S) -> Result<S::Ok, S::Error> {
@@ -547,6 +569,8 @@ pub fn status(ops: &dyn SetupOps) -> Vec<FlowStatus> {
 /// with choices filled from `ops` and `inputs` (the models of the chosen
 /// harness).
 pub fn form(flow: FlowId, ops: &dyn SetupOps, inputs: &Inputs) -> Form {
+    let normalized = normalize(flow, ops, inputs);
+    let inputs = &normalized;
     let mut ctx = Ctx::new(flow, &RunOpts::default());
     gate::run_gate(&mut ctx, ops);
     if !ctx.stopped() {
@@ -561,7 +585,20 @@ pub fn form(flow: FlowId, ops: &dyn SetupOps, inputs: &Inputs) -> Form {
         FlowId::Invite => human::invite_steps(ops),
         FlowId::Relay => relay::steps(ops, inputs),
     };
-    Form { flow: flow.def(), blocked: ctx.stopped(), preflight: ctx.checks, steps }
+    let (action, confirmations) = match flow {
+        FlowId::Agent => agent::action(ops, inputs),
+        _ => (None, 0),
+    };
+    Form { flow: flow.def(), blocked: ctx.stopped(), preflight: ctx.checks, steps, action, confirmations }
+}
+
+/// Inputs as the flow reads them: older spellings mapped to today's (the
+/// agent flow's `--harness` and `--gateway`).
+fn normalize(flow: FlowId, ops: &dyn SetupOps, inputs: &Inputs) -> Inputs {
+    match flow {
+        FlowId::Agent => agent::normalize(ops, inputs),
+        _ => inputs.clone(),
+    }
 }
 
 fn preflight(flow: FlowId, ctx: &mut Ctx, ops: &dyn SetupOps, inputs: &Inputs) {
@@ -579,6 +616,8 @@ fn preflight(flow: FlowId, ctx: &mut Ctx, ops: &dyn SetupOps, inputs: &Inputs) {
 /// Run a flow: gate, preflight, validation, the steps (each skipped when
 /// already done), verify. See the module docs.
 pub fn run(flow: FlowId, ops: &mut dyn SetupOps, inputs: &Inputs, secrets: &Secrets, opts: &RunOpts) -> Outcome {
+    let normalized = normalize(flow, ops, inputs);
+    let inputs = &normalized;
     let mut ctx = Ctx::new(flow, opts);
     ctx.surface = Some(ops.surface());
     gate::driver_gate(&mut ctx, secrets);
@@ -593,7 +632,7 @@ pub fn run(flow: FlowId, ops: &mut dyn SetupOps, inputs: &Inputs, secrets: &Secr
     }
     if !ctx.stopped() {
         match flow {
-            FlowId::Agent => agent::run(&mut ctx, ops, inputs),
+            FlowId::Agent => agent::run(&mut ctx, ops, inputs, secrets),
             FlowId::Tool => tool::run(&mut ctx, ops, inputs, secrets),
             FlowId::Folder => folder::run(&mut ctx, ops, inputs),
             FlowId::Box => human::box_run(&mut ctx, ops, inputs, secrets),

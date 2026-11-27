@@ -97,26 +97,76 @@ impl SandboxFact {
 }
 
 /// A runtime an agent can name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeFact {
     pub id: String,
-    /// The harness id (see [`HarnessFact::id`]).
+    /// The harness id (see [`HarnessFact::id`]; `anthropic`, `openai` and
+    /// `openrouter` for a hosted API).
     pub harness: String,
     pub model: String,
     /// For `local`: the endpoint; for `gateway`: its name.
     pub endpoint: String,
+    /// A workspace runtime (on the log): other hosts can run it. A
+    /// device-local runtime only runs on the device that keeps it.
+    pub shared: bool,
+    /// The secret reference a hosted-API runtime names (never a key).
+    pub secret_ref: String,
+    /// The provider kind's wire name (`anthropic`, `custom`), when known.
+    pub provider: String,
 }
 
 /// What a new runtime should be.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeSpec {
     /// A free id (the engine picks one no runtime has).
     pub id: String,
     pub name: String,
     pub harness: String,
     pub model: String,
+    /// For `local`: the server's URL; for `gateway`: the gateway's name.
     pub endpoint: String,
+    /// The provider kind's wire name (`claudeCode`, `custom`, `anthropic`):
+    /// for a gateway it follows the gateway's wire, never a member's choice.
+    pub provider: String,
+    /// For a hosted API on a host: the secret reference the host resolves
+    /// (a name its `host.toml` declares; never a key).
+    pub secret_ref: String,
+    /// It must be a workspace runtime: the agent runs on another host.
+    pub shared: bool,
+}
+
+/// One source a host lists for agents (an offer on its record), with the
+/// readiness its signed beat reports. Names and states only: never a URL,
+/// an account or a key.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSourceFact {
+    pub host_id: String,
+    pub host_label: String,
+    /// `device` (a person's computer) or `worker` (a box or worker).
+    pub host_kind: String,
+    /// The host is this device.
+    pub this_device: bool,
+    /// The host is one of this person's own devices or boxes.
+    pub mine: bool,
+    pub online: bool,
+    /// The host's Ligus build from its beat ("" when unknown).
+    pub build: String,
+    /// The offer's name (`claude-code`, `gw-home`).
+    pub name: String,
+    /// `cli`, `local`, `gateway` or `provider`.
+    pub kind: String,
+    /// The harness wire name (`claudeCode`, `anthropic`); empty for a gateway.
+    pub harness: String,
+    /// A gateway's wire: `openai` or `anthropic`.
+    pub wire: String,
+    /// Installed and signed in, or the server answered; `None` with no report.
+    pub ready: Option<bool>,
+    pub why: String,
+    pub models: Vec<String>,
+    /// The model list is everything it runs.
+    pub complete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -294,6 +344,52 @@ pub trait SetupOps {
         Vec::new()
     }
     fn add_agent(&mut self, name: &str, runtime_id: &str) -> OpsResult<Uuid> {
+        Err(OpsError::Unsupported)
+    }
+    /// Add an agent with where it runs, in one record (one event): `host_id`
+    /// empty is its owner's own devices, else that host.
+    fn add_agent_placed(&mut self, name: &str, runtime_id: &str, host_id: &str) -> OpsResult<Uuid> {
+        if host_id.is_empty() {
+            self.add_agent(name, runtime_id)
+        } else {
+            Err(OpsError::Unsupported)
+        }
+    }
+    /// The sources the hosts of this workspace list (their offers), one
+    /// entry per host and offer, from host records their own devices signed.
+    fn host_sources(&self) -> Vec<HostSourceFact> {
+        Vec::new()
+    }
+    /// What people call this device in a list ("this Mac").
+    fn this_device_label(&self) -> String {
+        "this device".into()
+    }
+    /// Whether a new runtime is a write on the workspace's log here (the
+    /// CLI's always are; the desktop keeps its own runtimes on the device
+    /// unless another host must run it).
+    fn runtime_on_log(&self, shared: bool) -> bool {
+        shared
+    }
+    /// Whether this workspace holds new agents and workspace runtimes for
+    /// their author's passkey (a shared workspace).
+    fn passkey_writes(&self) -> bool {
+        false
+    }
+    /// Told before each write that asks for the passkey: `step` of `of`,
+    /// and what it is ("Add @coder"), so the surface can say "Confirm 1 of 2".
+    fn confirming(&mut self, step: usize, of: usize, what: &str) {}
+    /// Whether this device can keep a model API key in its own secret store
+    /// (the desktop).
+    fn keeps_model_keys(&self) -> bool {
+        false
+    }
+    /// Whether a key for hosted API `harness` (`anthropic`, `openai`) is
+    /// saved on this device already.
+    fn has_model_key(&self, harness: &str) -> bool {
+        false
+    }
+    /// Save a model API key in this device's secret store (never the log).
+    fn put_model_key(&mut self, harness: &str, key: &Zeroizing<String>) -> OpsResult<()> {
         Err(OpsError::Unsupported)
     }
     /// Whether the agent's signed `localServers` grant is on.

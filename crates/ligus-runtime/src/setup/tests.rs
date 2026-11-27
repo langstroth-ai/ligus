@@ -7,6 +7,8 @@ use zeroize::Zeroizing;
 use super::fake::Fake;
 use super::*;
 use crate::checks::Status;
+use crate::cli_detect::LoginState;
+use crate::model_catalog::ModelList;
 
 const CANARY: &str = "canary-SECRET-7f3a9c0e1d";
 
@@ -138,6 +140,246 @@ fn unknown_and_misplaced_inputs_are_usage_errors() {
 
 // ── agent ───────────────────────────────────────────────────────────────────
 
+// ── the one-step agent (workspace model v3, 17.4) ──────────────────────────
+
+fn field<'a>(form: &'a Form, id: &str) -> &'a Field {
+    form.fields().find(|f| f.id == id).unwrap_or_else(|| panic!("no field {id}"))
+}
+
+fn options(f: &Field) -> Vec<(String, Option<String>)> {
+    match &f.kind {
+        FieldKind::Choice { options } | FieldKind::Suggest { options } | FieldKind::Multi { options } => {
+            options.iter().map(|o| (o.value.clone(), o.hint.clone())).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn inputs(pairs: &[(&str, &str)]) -> Inputs {
+    let mut i = Inputs::new();
+    for (k, v) in pairs {
+        i.set(k, *v);
+    }
+    i
+}
+
+/// A shared workspace with one box that offers a gateway (and `auto`).
+fn with_gateway_box() -> Fake {
+    use super::fake::offer;
+    Fake {
+        surface: Surface::Desktop,
+        passkey_writes: true,
+        host_sources: vec![
+            offer("box-1-id", "box-1", "gateway", "gw-home", "openai", Some(true), &["auto", "qwen3-coder"]),
+            offer("box-1-id", "box-1", "cli", "codex", "", Some(false), &[]),
+        ],
+        ..Fake::default()
+    }
+}
+
+#[test]
+fn what_answers_lists_this_devices_clis_and_every_hosts_offers() {
+    let f = with_gateway_box();
+    let form = super::form(FlowId::Agent, &f, &Inputs::new());
+    let src = options(field(&form, "source"));
+    let get = |v: &str| src.iter().find(|(x, _)| x == v).map(|(_, h)| h.clone().unwrap_or_default());
+    assert_eq!(get("claude-code").as_deref(), Some("signed in · this Mac"));
+    assert_eq!(get("codex").as_deref(), Some("not signed in · this Mac · also box-1"));
+    assert_eq!(get("copilot").as_deref(), Some("not installed"));
+    assert_eq!(get("gateway:gw-home").as_deref(), Some("offered by box-1"));
+    assert_eq!(get("local").as_deref(), Some("this Mac"));
+    assert!(get("key:anthropic").is_none(), "keys only where this device keeps them");
+    // The order: CLIs, then gateways, then a model server.
+    let pos = |v: &str| src.iter().position(|(x, _)| x == v).unwrap();
+    assert!(pos("pi") < pos("gateway:gw-home") && pos("gateway:gw-home") < pos("local"));
+    // The best source is preselected: Claude Code, signed in here.
+    assert_eq!(field(&form, "source").default.as_deref(), Some("claude-code"));
+    assert_eq!(field(&form, "runs-on").default.as_deref(), Some(agent::HERE));
+    assert_eq!(field(&form, "runs-on").note.as_deref(), Some("Turns run on this device while Ligus is open."));
+    // Someone else's computer is never offered as a host.
+    let mut f = with_gateway_box();
+    let mut theirs = super::fake::offer("anas-laptop", "Ana's laptop", "gateway", "gw-ana", "openai", Some(true), &[]);
+    theirs.host_kind = "device".into();
+    f.host_sources.push(theirs);
+    let form = super::form(FlowId::Agent, &f, &Inputs::new());
+    assert!(!options(field(&form, "source")).iter().any(|(v, _)| v == "gateway:gw-ana"));
+}
+
+#[test]
+fn a_gateway_runs_on_the_one_host_that_offers_it_with_its_models() {
+    let f = with_gateway_box();
+    let i = inputs(&[("name", "coder"), ("source", "gateway:gw-home")]);
+    let form = super::form(FlowId::Agent, &f, &i);
+    assert_eq!(field(&form, "runs-on").default.as_deref(), Some("box-1-id"));
+    assert_eq!(field(&form, "runs-on").note.as_deref(), Some("Turns run on box-1. When it's offline, @coder waits."));
+    let models: Vec<String> = options(field(&form, "model")).into_iter().map(|(v, _)| v).collect();
+    assert_eq!(models, ["auto", "qwen3-coder"], "the gateway's own list, auto included");
+    assert!(field(&form, "model").required);
+    assert_eq!(form.action.as_deref(), Some("Add @coder"));
+    assert_eq!(form.confirmations, 2, "a workspace runtime and the agent");
+
+    // Two hosts offer it: the person picks, and the line says so.
+    let mut f2 = with_gateway_box();
+    let mut other = super::fake::offer("box-2-id", "box-2", "gateway", "gw-home", "openai", Some(true), &["auto"]);
+    other.online = true;
+    f2.host_sources.push(other);
+    let form = super::form(FlowId::Agent, &f2, &i);
+    assert_eq!(field(&form, "runs-on").default, None);
+    assert_eq!(field(&form, "runs-on").note.as_deref(), Some("2 hosts offer gw-home (OpenAI API): pick where turns run."));
+    let o = run_(FlowId::Agent, &mut f2, &[("name", "coder"), ("source", "gateway:gw-home"), ("model", "auto")]);
+    assert_eq!(o.exit, exit::USAGE, "{:?}", ids(&o));
+    assert!(f2.writes.is_empty());
+}
+
+#[test]
+fn coder_on_a_gateway_model_bound_to_a_host_in_one_step() {
+    let mut f = with_gateway_box();
+    let o = run_(FlowId::Agent, &mut f, &[("name", "coder"), ("source", "gateway:gw-home"), ("model", "auto")]);
+    assert_eq!(o.exit, exit::OK, "{:?}", ids(&o));
+    // A workspace runtime the box can resolve (its client follows the
+    // gateway's wire), then one agent record placed on the box.
+    assert_eq!(f.writes, ["add_runtime gw-home-auto", "add_agent coder on box-1-id"]);
+    let rt = f.runtimes.iter().find(|r| r.id == "gw-home-auto").unwrap();
+    assert!(rt.shared && rt.endpoint == "gw-home" && rt.provider == "custom" && rt.model == "auto", "{rt:?}");
+    assert_eq!(f.confirms, ["1 of 2: Define gw-home (OpenAI API) for @coder", "2 of 2: Add @coder"]);
+    assert_eq!(o.results.get("confirmations").map(String::as_str), Some("2"));
+    assert!(has(&o, "agent.test-turn", Status::Skip) || !o.report.checks.iter().any(|c| c.id == "agent.test-turn"));
+
+    // A second agent on the same model reuses the runtime: one confirmation.
+    let form = super::form(FlowId::Agent, &f, &inputs(&[("name", "reviewer"), ("source", "gateway:gw-home"), ("model", "auto")]));
+    assert_eq!(form.confirmations, 1);
+    f.confirms.clear();
+    let o = run_(FlowId::Agent, &mut f, &[("name", "reviewer"), ("source", "gateway:gw-home"), ("model", "auto")]);
+    assert_eq!(o.exit, exit::OK, "{:?}", ids(&o));
+    assert_eq!(&f.writes[2..], ["add_agent reviewer on box-1-id"]);
+    assert_eq!(f.confirms, ["1 of 1: Add @reviewer"]);
+    // Running it again is a no-op.
+    let o = run_(FlowId::Agent, &mut f, &[("name", "coder"), ("source", "gateway:gw-home"), ("model", "auto")]);
+    assert_eq!(o.exit, exit::OK);
+    assert_eq!(f.writes.len(), 3);
+}
+
+#[test]
+fn an_anthropic_wire_gateway_gets_an_anthropic_runtime() {
+    let mut f = Fake {
+        host_sources: vec![super::fake::offer("box-1-id", "box-1", "gateway", "gw-claude", "anthropic", Some(true), &["claude-sonnet-4-6"])],
+        ..Fake::default()
+    };
+    let o = run_(FlowId::Agent, &mut f, &[("name", "coder"), ("source", "gateway:gw-claude")]);
+    assert_eq!(o.exit, exit::OK, "{:?}", ids(&o));
+    let rt = &f.runtimes[0];
+    assert_eq!((rt.provider.as_str(), rt.model.as_str()), ("anthropic", "claude-sonnet-4-6"), "the first listed model by default");
+}
+
+#[test]
+fn older_spellings_and_host_names_still_work() {
+    let mut f = with_gateway_box();
+    let o = run_(FlowId::Agent, &mut f, &[("harness", "gateway"), ("gateway", "gw-home"), ("name", "coder"), ("model", "auto"), ("runs-on", "box-1")]);
+    assert_eq!(o.exit, exit::OK, "{:?}", ids(&o));
+    assert_eq!(f.writes.last().map(String::as_str), Some("add_agent coder on box-1-id"));
+}
+
+#[test]
+fn a_host_that_doesnt_offer_the_source_is_refused() {
+    let mut f = with_gateway_box();
+    f.host_sources.push(super::fake::offer("box-2-id", "box-2", "cli", "claude-code", "", Some(true), &[]));
+    let o = run_(FlowId::Agent, &mut f, &[("name", "coder"), ("source", "gateway:gw-home"), ("model", "auto"), ("runs-on", "box-2-id")]);
+    assert_eq!(o.exit, exit::USAGE, "{:?}", ids(&o));
+    let c = o.report.checks.iter().find(|c| c.id == "agent.input.runs-on").expect("runs-on check");
+    assert_eq!(c.detail, "box-2: doesn't offer gw-home (OpenAI API)");
+    assert!(f.writes.is_empty());
+    // A gateway never runs on this device.
+    let o = run_(FlowId::Agent, &mut f, &[("name", "coder"), ("source", "gateway:gw-home"), ("model", "auto"), ("runs-on", "here")]);
+    assert_eq!(o.exit, exit::USAGE);
+}
+
+#[test]
+fn a_contributor_cant_place_an_agent_on_a_host() {
+    let mut f = Fake { role: Some(WorkspaceRole::Contributor), ..with_gateway_box() };
+    let o = run_(FlowId::Agent, &mut f, &[("name", "coder"), ("source", "gateway:gw-home"), ("model", "auto")]);
+    assert_eq!(o.exit, exit::REFUSED, "{:?}", ids(&o));
+    assert!(f.writes.is_empty());
+    // On their own devices they can.
+    let o = run_(FlowId::Agent, &mut f, &[("name", "mine"), ("source", "claude-code")]);
+    assert_eq!(o.exit, exit::OK, "{:?}", ids(&o));
+    assert_eq!(f.confirms, ["1 of 1: Add @mine"]);
+}
+
+#[test]
+fn a_cli_only_on_a_host_runs_there_and_skips_the_local_test_turn() {
+    let mut f = Fake {
+        harnesses: vec![super::fake::harness("claude-code", false, LoginState::Unknown)],
+        host_sources: vec![super::fake::offer("box-1-id", "box-1", "cli", "claude-code", "", Some(true), &["sonnet", "opus"])],
+        ..Fake::default()
+    };
+    let form = super::form(FlowId::Agent, &f, &Inputs::new());
+    assert_eq!(field(&form, "source").default.as_deref(), Some("claude-code"));
+    assert_eq!(field(&form, "runs-on").default.as_deref(), Some("box-1-id"));
+    let o = run_(FlowId::Agent, &mut f, &[("name", "coder"), ("source", "claude-code"), ("model", "opus"), ("test-turn", "true")]);
+    assert_eq!(o.exit, exit::OK, "{:?}", ids(&o));
+    assert!(f.runtimes[0].shared, "another host runs it: a workspace runtime");
+    assert!(has(&o, "agent.test-turn", Status::Skip));
+    // A model the host's complete list doesn't have is refused.
+    let o = run_(FlowId::Agent, &mut f, &[("name", "two"), ("source", "claude-code"), ("model", "nope")]);
+    assert_eq!(o.exit, exit::USAGE, "{:?}", ids(&o));
+}
+
+#[test]
+fn a_hosted_api_on_a_host_names_its_secret_reference_never_a_key() {
+    let mut f = Fake { host_sources: vec![super::fake::offer("box-1-id", "box-1", "provider", "team-claude", "", Some(true), &["claude-sonnet-4-6"])], ..Fake::default() };
+    let form = super::form(FlowId::Agent, &f, &Inputs::new());
+    let src = options(field(&form, "source"));
+    assert!(src.iter().any(|(v, h)| v == "provider:team-claude" && h.as_deref() == Some("key by secret reference on box-1")), "{src:?}");
+    let o = run_(FlowId::Agent, &mut f, &[("name", "claude"), ("source", "provider:team-claude")]);
+    assert_eq!(o.exit, exit::OK, "{:?}", ids(&o));
+    let rt = &f.runtimes[0];
+    assert_eq!((rt.secret_ref.as_str(), rt.harness.as_str(), rt.shared), ("team-claude", "anthropic", true));
+}
+
+#[test]
+fn an_api_key_on_this_device_goes_to_its_secret_store_only() {
+    let mut f = Fake { surface: Surface::Desktop, keeps_keys: true, ..Fake::default() };
+    let form = super::form(FlowId::Agent, &f, &inputs(&[("source", "key:anthropic")]));
+    assert!(field(&form, "api-key").required && field(&form, "api-key").applies(&inputs(&[("source", "key:anthropic")])));
+    let o = run_s(FlowId::Agent, &mut f, &[("name", "claude"), ("source", "key:anthropic")], &[("api-key", CANARY)]);
+    assert_eq!(o.exit, exit::OK, "{:?}", ids(&o));
+    assert_eq!(f.writes[0], "put_model_key anthropic");
+    assert!(!f.runtimes[0].shared);
+    assert!(!printed(&o).contains(CANARY));
+    assert_eq!(f.secrets_seen, [CANARY]);
+    // With the key saved, none is asked again.
+    let form = super::form(FlowId::Agent, &f, &inputs(&[("source", "key:anthropic")]));
+    assert!(!field(&form, "api-key").required);
+    // Without one, the run says so before writing anything.
+    let mut g = Fake { surface: Surface::Desktop, keeps_keys: true, ..Fake::default() };
+    let o = run_(FlowId::Agent, &mut g, &[("name", "claude"), ("source", "key:openai"), ("model", "gpt-5")]);
+    assert_eq!(o.exit, exit::USAGE, "{:?}", ids(&o));
+    assert!(g.writes.is_empty());
+}
+
+#[test]
+fn the_first_agent_gets_a_test_turn_by_default_except_on_the_cli() {
+    let f = Fake { surface: Surface::Desktop, ..Fake::default() };
+    let form = super::form(FlowId::Agent, &f, &Inputs::new());
+    assert_eq!(field(&form, "test-turn").default.as_deref(), Some("true"));
+    let f = Fake::default();
+    let form = super::form(FlowId::Agent, &f, &Inputs::new());
+    assert_eq!(field(&form, "test-turn").default, None);
+}
+
+#[test]
+fn a_model_server_needs_a_model_and_a_safe_address() {
+    let mut f = Fake::default();
+    let o = run_(FlowId::Agent, &mut f, &[("name", "local"), ("source", "local"), ("endpoint", "http://10.0.0.2:11434"), ("model", "llama3:8b")]);
+    assert_eq!(o.exit, exit::USAGE);
+    let mut f = Fake { models: ModelList { models: vec![], source: crate::model_catalog::ModelSource::None, complete: false, note: None, error: None }, ..Fake::default() };
+    let o = run_(FlowId::Agent, &mut f, &[("name", "local"), ("source", "local")]);
+    assert_eq!(o.exit, exit::USAGE, "{:?}", ids(&o));
+    let o = run_(FlowId::Agent, &mut f, &[("name", "local"), ("source", "local"), ("model", "llama3:8b")]);
+    assert_eq!(o.exit, exit::OK, "{:?}", ids(&o));
+    assert_eq!(f.runtimes[0].endpoint, agent::LOCAL_DEFAULT);
+}
+
 #[test]
 fn agent_flow_creates_runtime_then_agent_and_reruns_as_a_no_op() {
     let mut f = Fake::default();
@@ -158,7 +400,7 @@ fn local_servers_are_offered_for_agy_only_and_stay_off_unless_asked() {
     let f = Fake::default();
     let field = |h: &str| {
         let mut i = Inputs::new();
-        i.set("harness", h);
+        i.set("source", h);
         agent::steps(&f, &i).into_iter().flat_map(|s| s.fields).find(|x| x.id == "local-servers").map(|x| (x.applies(&i), x.default.clone()))
     };
     assert_eq!(field("antigravity"), Some((true, None)), "shown for agy, off by default");
@@ -203,7 +445,7 @@ fn local_servers_are_the_owners_and_dry_run_writes_nothing() {
 
 #[test]
 fn agent_flow_reuses_a_matching_runtime() {
-    let mut f = Fake { runtimes: vec![RuntimeFact { id: "cc".into(), harness: "claude-code".into(), model: "sonnet".into(), endpoint: String::new() }], ..Fake::default() };
+    let mut f = Fake { runtimes: vec![RuntimeFact { id: "cc".into(), harness: "claude-code".into(), model: "sonnet".into(), endpoint: String::new(), ..Default::default() }], ..Fake::default() };
     run_(FlowId::Agent, &mut f, AGENT);
     assert_eq!(f.writes, ["add_agent builder"]);
 }
@@ -622,11 +864,11 @@ fn status_lists_all_seven_without_side_effects() {
 #[test]
 fn forms_offer_choices_and_flag_names() {
     let f = Fake::default();
-    let form = form(FlowId::Agent, &f, &Inputs::new().with("harness", "claude-code"));
+    let form = form(FlowId::Agent, &f, &Inputs::new().with("source", "claude-code"));
     assert!(!form.blocked);
-    let h = form.fields().find(|f| f.id == "harness").unwrap();
+    let h = form.fields().find(|f| f.id == "source").unwrap();
     let FieldKind::Choice { options } = &h.kind else { panic!() };
-    assert_eq!(options.iter().find(|o| o.value == "codex").and_then(|o| o.hint.as_deref()), Some("not signed in"));
+    assert_eq!(options.iter().find(|o| o.value == "codex").and_then(|o| o.hint.as_deref()), Some("not signed in · this Mac"));
     assert_eq!(options.iter().find(|o| o.value == "copilot").and_then(|o| o.hint.as_deref()), Some("not installed"));
     let m = form.fields().find(|f| f.id == "model").unwrap();
     assert!(matches!(&m.kind, FieldKind::Suggest { options } if options.iter().any(|o| o.value == "sonnet")));

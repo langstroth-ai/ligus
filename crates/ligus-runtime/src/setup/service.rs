@@ -65,8 +65,17 @@ pub fn member_names(svc: &ChatService, ws: Uuid) -> Vec<String> {
 
 /// Add an agent owned by this device's author.
 pub fn add_agent(svc: &mut ChatService, ws: Uuid, name: &str, runtime_id: &str) -> OpsResult<Uuid> {
+    add_agent_placed(svc, ws, name, runtime_id, "")
+}
+
+/// Add an agent owned by this device's author with where it runs
+/// (`host_id` empty: its owner's own devices): name, runtime, host, run and
+/// placement in one record, one event (workspace model v3, 5.2). A host
+/// whose record doesn't offer the runtime's gateway is refused.
+pub fn add_agent_placed(svc: &mut ChatService, ws: Uuid, name: &str, runtime_id: &str, host_id: &str) -> OpsResult<Uuid> {
     let mut agent = WorkspaceAgent::new(name, runtime_id);
     agent.owner_actor_id = svc.author().id.clone();
+    agent.host_id = host_id.to_string();
     let id = agent.id;
     svc.add_agent(ws, ws, agent).map_err(|e| match e {
         crate::chat_service::ChatError::Unauthorized(m) => OpsError::Refused(m),
@@ -110,8 +119,20 @@ pub fn provider_of(harness: &str) -> Option<ModelProviderKind> {
         "pi" => ModelProviderKind::Pi,
         "local" => ModelProviderKind::Ollama,
         "gateway" => ModelProviderKind::Custom,
+        "anthropic" => ModelProviderKind::Anthropic,
+        "openai" => ModelProviderKind::OpenAI,
+        "openrouter" => ModelProviderKind::OpenRouter,
         _ => return None,
     })
+}
+
+/// The provider kind a runtime spec asks for: its wire name when it has
+/// one (a gateway's follows the gateway's wire), else its harness's.
+pub fn provider_of_spec(spec: &super::RuntimeSpec) -> Option<ModelProviderKind> {
+    (!spec.provider.is_empty())
+        .then(|| crate::host_offers::harness_kind(&spec.provider))
+        .flatten()
+        .or_else(|| provider_of(&spec.harness))
 }
 
 /// The harness id of a provider kind (the inverse of [`provider_of`] for
@@ -126,8 +147,107 @@ pub fn harness_of(kind: ModelProviderKind, gateway: bool) -> Option<&'static str
         ModelProviderKind::Aider => "aider",
         ModelProviderKind::Pi => "pi",
         ModelProviderKind::Ollama => "local",
+        ModelProviderKind::Anthropic => "anthropic",
+        ModelProviderKind::OpenAI => "openai",
+        ModelProviderKind::OpenRouter => "openrouter",
         _ => return None,
     })
+}
+
+/// The workspace runtimes an agent can name, as the engine sees them
+/// (`shared`: other hosts can run them). Never a key: a hosted API's names
+/// its secret reference, and a legacy inline key is left out.
+pub fn workspace_runtimes(svc: &ChatService, ws: Uuid) -> Vec<super::RuntimeFact> {
+    svc.list_workspace_runtimes(ws)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|r| {
+            let secret_ref = match &r.credential {
+                ligus_core::WorkspaceCredential::None => String::new(),
+                ligus_core::WorkspaceCredential::SecretRef { secret_ref } => secret_ref.clone(),
+                ligus_core::WorkspaceCredential::Inline {} => return None,
+            };
+            let gw = !r.gateway.trim().is_empty();
+            let h = harness_of(r.provider, gw)?;
+            Some(super::RuntimeFact {
+                id: r.id.clone(),
+                harness: h.into(),
+                model: r.model.clone(),
+                endpoint: if gw {
+                    r.gateway.clone()
+                } else if h == "local" || h == "openai" {
+                    r.endpoint.clone()
+                } else {
+                    String::new()
+                },
+                shared: true,
+                secret_ref,
+                provider: crate::host_offers::harness_name(r.provider),
+            })
+        })
+        .collect()
+}
+
+/// Define workspace runtime `spec` (on the log: an Admin's, with the
+/// passkey on a shared workspace). Its harness follows the spec's provider
+/// (for a gateway, the gateway's wire); a hosted API names its secret
+/// reference, never a key.
+pub fn add_workspace_runtime(svc: &mut ChatService, ws: Uuid, spec: &super::RuntimeSpec) -> OpsResult<()> {
+    let kind = provider_of_spec(spec).ok_or_else(|| OpsError::Failed(format!("unknown harness {}", spec.harness)))?;
+    let mut wr = ligus_core::WorkspaceRuntime::new(spec.id.as_str(), spec.name.as_str(), kind, spec.model.as_str());
+    match spec.harness.as_str() {
+        "gateway" => wr.gateway = spec.endpoint.clone(),
+        "local" | "openai" => wr.endpoint = spec.endpoint.clone(),
+        _ => {}
+    }
+    if !spec.secret_ref.is_empty() {
+        wr.credential = ligus_core::WorkspaceCredential::SecretRef { secret_ref: spec.secret_ref.clone() };
+    }
+    svc.add_workspace_runtime(ws, wr).map_err(OpsError::from)
+}
+
+/// The sources the workspace's hosts list, one entry per host and offer,
+/// with each one's readiness and models from the host's signed beat
+/// (`status_of`, `online`). Only host records their own device signed are
+/// read (`list_hosts`).
+pub fn host_sources(
+    svc: &ChatService,
+    ws: Uuid,
+    status_of: impl Fn(&str) -> Option<ligus_core::HostStatus>,
+    online: impl Fn(&ligus_core::WorkspaceHost) -> bool,
+) -> Vec<super::HostSourceFact> {
+    let here = svc.device_id().to_string();
+    let me = svc.author().id.clone();
+    let mut out = Vec::new();
+    for h in svc.list_hosts(ws).unwrap_or_default() {
+        let this = h.id == here;
+        let status = if this { crate::host_offers::local_status() } else { status_of(&h.id) };
+        let up = this || online(&h);
+        for o in h.listed_offers() {
+            let st = status.as_ref().and_then(|s| s.offer(&o.name));
+            out.push(super::HostSourceFact {
+                host_id: h.id.clone(),
+                host_label: h.label.clone(),
+                host_kind: match h.kind {
+                    ligus_core::HostKind::Worker => "worker".into(),
+                    _ => "device".into(),
+                },
+                this_device: this,
+                mine: !me.is_empty() && h.owner_actor_id == me,
+                online: up,
+                build: status.as_ref().map(|s| s.build.clone()).unwrap_or_default(),
+                name: o.name.clone(),
+                kind: o.kind.as_str().to_string(),
+                harness: o.harness.clone(),
+                wire: o.wire.clone(),
+                ready: st.map(|s| s.ready),
+                why: st.map(|s| s.why.clone()).unwrap_or_default(),
+                models: st.map(|s| s.models.clone()).unwrap_or_default(),
+                complete: st.is_some_and(|s| s.complete),
+            });
+        }
+    }
+    out
 }
 
 /// Every harness on this host: installed, version, sign-in (never a token).
