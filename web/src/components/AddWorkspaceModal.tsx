@@ -20,6 +20,8 @@ import { relayUrlFor, type RelayChoice } from "@/lib/communityRelay";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { Modal } from "@/components/ui";
+import { InviteLinkHint } from "@/components/InviteLinkHint";
+import { LinkThisDevice } from "@/components/LinkThisDevice";
 
 type Tab = "create" | "join";
 
@@ -34,6 +36,8 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
   const [joinCode, setJoinCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [lastInvite, setLastInvite] = useState<string | null>(null);
+  // The invite guard's "Link this device instead": the link screen in place.
+  const [linking, setLinking] = useState(false);
   // A new workspace is secured before anything else: the founder's passkey
   // and recovery key (rules v2 from the first event; nobody can be let in,
   // and nothing governed, until the founder's passkey exists).
@@ -239,7 +243,16 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
         ))}
       </div>
 
-      {securing && confirmLeave ? (
+      {linking ? (
+        <LinkThisDevice
+          onBack={() => setLinking(false)}
+          onLinked={async () => {
+            await refresh();
+            setLinking(false);
+            onClose();
+          }}
+        />
+      ) : securing && confirmLeave ? (
         <div className="space-y-3" data-testid="secure-finish-later">
           <p className="text-sm font-semibold">Finish later?</p>
           <p className="text-xs text-ink-soft">
@@ -391,6 +404,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
             className="w-full resize-none rounded-lg border px-3 py-2 font-mono text-xs outline-none"
             style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-canvas)", color: "var(--ligus-ink)" }}
           />
+          <InviteLinkHint code={invite} onLink={() => setLinking(true)} />
           <button
             onClick={onJoin}
             disabled={busy || !invite.trim()}
@@ -422,6 +436,13 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
               Use code
             </button>
           </div>
+          <InviteLinkHint code={joinCode} onLink={() => setLinking(true)} />
+          <p className="pt-1 text-xs text-ink-soft">
+            Your own workspace, from another device?{" "}
+            <button type="button" className="underline hover:text-ink" onClick={() => setLinking(true)}>
+              Link this computer
+            </button>
+          </p>
         </div>
       )}
 

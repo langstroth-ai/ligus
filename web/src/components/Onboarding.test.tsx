@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Onboarding } from "./Onboarding";
 import * as ipc from "@/lib/ipc";
-import { COMMUNITY_RELAY_URL } from "@/lib/communityRelay";
 
 // Mock the IPC boundary — this is what makes a full UI flow testable headlessly.
 vi.mock("@/lib/ipc", () => ({
@@ -62,75 +61,199 @@ vi.mock("@/lib/ipc", () => ({
   probeRelay: vi.fn(async () => ({ status: "ok", detail: "" })),
   probeRelayAt: vi.fn(async () => ({ status: "ok", detail: "" })),
   listOllamaModels: vi.fn(async () => ({ base: "http://localhost:11434", host: "localhost", models: [], pulling: [] })),
+  setFirstRunPath: vi.fn(async () => {}),
+  firstRunWorkspace: vi.fn(async (name: string) => ({ id: "w1", name, kind: "room", active: true, iconUrl: null })),
+  passkeyRegister: vi.fn(async () => {}),
+  recoveryKeyCreate: vi.fn(async () => "alpha bravo charlie"),
+  securityStatus: vi.fn(async () => ({ passkeys: [], rules: 3, keyVersion: 0, secretBackend: "file", deviceConfirmed: true })),
+  linkRequestStatus: vi.fn(async () => ({ phase: "idle" })),
+  onLinkFlowChanged: vi.fn(async (cb: (v: unknown) => void) => {
+    linkPush = cb;
+    return () => {};
+  }),
 }));
+
+// The link screen's backend events; tests push them by hand.
+let linkPush: (v: unknown) => void = () => {};
 
 beforeEach(() => vi.clearAllMocks());
 
 const clickByName = (name: string | RegExp) =>
   userEvent.click(screen.getByRole("button", { name }));
 
+/// The question, then You (the name prefilled from git).
+async function toYou() {
+  await clickByName("Yes, start here");
+  await screen.findByPlaceholderText("Your name");
+}
+
+/// The question, You and Secure, to the agent screen.
+async function toAgent() {
+  await toYou();
+  await waitFor(() => expect((screen.getByPlaceholderText("Your name") as HTMLInputElement).value).toBe("Sam Dev"));
+  await clickByName("Next");
+  await screen.findByTestId("first-run-secure");
+  await clickByName("Create a passkey");
+  await screen.findByTestId("first-run-recovery-words");
+  await clickByName("I wrote them down");
+  await screen.findByText("Choose your agent");
+}
+
 describe("Onboarding wizard flow", () => {
-  it("walks identity → project → agent → team and finishes with accept-edits", async () => {
+  it("asks the question first, then walks You → Secure → agent and finishes with accept-edits", async () => {
     const onComplete = vi.fn();
     render(<Onboarding onComplete={onComplete} />);
 
-    // Step 1: name is prefilled from git config.
+    // The question comes before a name.
+    await screen.findByText("Is this your first device with Ligus?");
+    expect(screen.queryByPlaceholderText("Your name")).toBeNull();
+    await clickByName("Yes, start here");
+    expect(ipc.setFirstRunPath).toHaveBeenCalledWith("first");
+
+    // You: the name is prefilled from git config.
     const nameInput = await screen.findByPlaceholderText("Your name");
     await waitFor(() => expect((nameInput as HTMLInputElement).value).toBe("Sam Dev"));
     await clickByName("Next");
     expect(ipc.setDisplayName).toHaveBeenCalledWith("Sam Dev");
     expect(ipc.setGitEmail).toHaveBeenCalledWith("sam@example.com");
+    // The person's first workspace is made for them.
+    await waitFor(() => expect(ipc.firstRunWorkspace).toHaveBeenCalledWith("Sam's workspace"));
 
-    // Step 2: skip choosing a folder.
-    await screen.findByText("Open your project");
-    await clickByName("Next");
+    // Secure: one button makes the passkey, then the recovery key.
+    await screen.findByTestId("first-run-secure");
+    await clickByName("Create a passkey");
+    expect(await screen.findByTestId("first-run-recovery-words")).toHaveTextContent("alpha bravo charlie");
+    expect(ipc.passkeyRegister).toHaveBeenCalledOnce();
+    expect(ipc.recoveryKeyCreate).toHaveBeenCalledOnce();
+    await clickByName("I wrote them down");
 
-    // Step 3: Claude Code is detected + preselected; finish the step.
+    // The agent: Claude Code is detected + preselected.
     await screen.findByText("Choose your agent");
-    await clickByName("Next");
+    await clickByName("Finish");
     // The claude-code path persists the --model choice ("" = CLI default)…
     await waitFor(() => expect(ipc.setClaudeCodeModel).toHaveBeenCalledWith(""));
     // …and syncs the Primary Runtime's default model so the chat header matches
     // the pick (CLI-default → Sonnet).
-    await waitFor(() =>
-      expect(ipc.setDefaultModel).toHaveBeenCalledWith("claude-sonnet-4-6"),
-    );
+    await waitFor(() => expect(ipc.setDefaultModel).toHaveBeenCalledWith("claude-sonnet-4-6"));
     // …and default permission = runCommands ("edit files and run commands" on).
     await waitFor(() =>
       expect(ipc.updateConnectionSettings).toHaveBeenCalledWith(
         expect.objectContaining({ permissionMode: "runCommands", apiKey: null }),
       ),
     );
-
-    // Step 4: "Just me" is the default → Next clears any relay (local-only) and
-    // advances to the appearance step.
-    await screen.findByText("Team & sync");
-    await clickByName("Next");
-    // Step 5: pick-a-look → Finish completes onboarding.
-    await screen.findByText("Make it yours");
-    await clickByName("Finish");
     await waitFor(() => expect(onComplete).toHaveBeenCalled());
-    expect(ipc.updateConnectionSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ relayUrl: "" }),
-    );
-    // No team-join happened on the solo path.
+    // No folder, relay, team or theme is asked, and nothing is joined.
+    expect(screen.queryByText("Open your project")).toBeNull();
+    expect(screen.queryByText("Team & sync")).toBeNull();
+    expect(screen.queryByText("Make it yours")).toBeNull();
     expect(ipc.joinWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("I already use Ligus: links this device, and asks no name and makes no workspace", async () => {
+    const onComplete = vi.fn();
+    render(<Onboarding onComplete={onComplete} />);
+    await clickByName("I already use Ligus on another device");
+    expect(ipc.setFirstRunPath).toHaveBeenCalledWith("link");
+    await screen.findByTestId("link-this-device");
+    expect(screen.queryByPlaceholderText("Your name")).toBeNull();
+    // Back returns to the question; nothing was made or joined.
+    await clickByName("Back");
+    await screen.findByText("Is this your first device with Ligus?");
+    for (const f of [ipc.setDisplayName, ipc.firstRunWorkspace, ipc.passkeyRegister, ipc.joinWorkspace, ipc.redeemShortCode, ipc.addRuntime])
+      expect(f).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it("a linked device ends the first run, saying where to add a passkey when the account has none", async () => {
+    const onComplete = vi.fn();
+    render(<Onboarding onComplete={onComplete} />);
+    await clickByName("I already use Ligus on another device");
+    await screen.findByTestId("link-this-device");
+    act(() => linkPush({ phase: "linked", personName: "Ana", workspaceId: "w1" }));
+    expect(await screen.findByTestId("link-linked")).toHaveTextContent("one of Ana's devices");
+    await clickByName("Continue");
+    // The account has no passkey yet (securityStatus): one calm note, then done.
+    await screen.findByTestId("first-run-linked-secure");
+    expect(onComplete).not.toHaveBeenCalled();
+    await clickByName("Done");
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    // Nothing of a first device's run happened.
+    for (const f of [ipc.setDisplayName, ipc.firstRunWorkspace, ipc.passkeyRegister, ipc.addRuntime]) expect(f).not.toHaveBeenCalled();
+  });
+
+  it("a linked device whose account has a passkey goes straight on", async () => {
+    const onComplete = vi.fn();
+    (ipc.securityStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ passkeys: [{ credentialId: "pk", recovery: false }], rules: 3 });
+    render(<Onboarding onComplete={onComplete} />);
+    await clickByName("I already use Ligus on another device");
+    await screen.findByTestId("link-this-device");
+    act(() => linkPush({ phase: "linked", personName: "Ana", workspaceId: "w1" }));
+    await screen.findByTestId("link-linked");
+    await clickByName("Continue");
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(screen.queryByTestId("first-run-linked-secure")).toBeNull();
+  });
+
+  it("Secure can't be skipped half-done: Finish later asks first", async () => {
+    render(<Onboarding onComplete={vi.fn()} />);
+    await toYou();
+    await clickByName("Next");
+    await screen.findByTestId("first-run-secure");
+    // No Back once the workspace is made.
+    expect(screen.queryByRole("button", { name: "← Back" })).toBeNull();
+    await clickByName("Finish later");
+    await screen.findByTestId("first-run-finish-later");
+    expect(screen.getByText("Finish later?")).toBeInTheDocument();
+    await clickByName("Keep going");
+    await screen.findByTestId("first-run-secure");
+    await clickByName("Finish later");
+    await clickByName("Finish later");
+    await screen.findByText("Choose your agent");
+    expect(ipc.passkeyRegister).not.toHaveBeenCalled();
+  });
+
+  it("a failed passkey stays on Secure, and the retry makes only what's missing", async () => {
+    (ipc.recoveryKeyCreate as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("dismissed"));
+    render(<Onboarding onComplete={vi.fn()} />);
+    await toYou();
+    await clickByName("Next");
+    await clickByName("Create a passkey");
+    await screen.findByText(/dismissed/);
+    expect(screen.getByTestId("first-run-secure")).toBeInTheDocument();
+    await clickByName("Create a recovery key");
+    await screen.findByTestId("first-run-recovery-words");
+    expect(ipc.passkeyRegister).toHaveBeenCalledOnce();
+    expect(ipc.recoveryKeyCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it("a first run started again after Secure goes straight to the agent", async () => {
+    (ipc.securityStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      passkeys: [
+        { credentialId: "a", recovery: false },
+        { credentialId: "r", recovery: true },
+      ],
+      rules: 3,
+      keyVersion: 0,
+      secretBackend: "file",
+      deviceConfirmed: true,
+    });
+    render(<Onboarding onComplete={vi.fn()} />);
+    await toYou();
+    await clickByName("Next");
+    await screen.findByText("Choose your agent");
+    expect(ipc.passkeyRegister).not.toHaveBeenCalled();
   });
 
   it("picks Claude Code + Opus and makes Opus the Primary Runtime default", async () => {
     render(<Onboarding onComplete={vi.fn()} />);
 
-    await screen.findByPlaceholderText("Your name");
-    await clickByName("Next"); // identity
-    await clickByName("Next"); // project
-
-    await screen.findByText("Choose your agent");
+    await toAgent();
     // Claude Code is preselected; choose Opus in its model dropdown.
     await userEvent.selectOptions(
       screen.getByLabelText("Claude Code model"),
       "opus",
     );
-    await clickByName("Next");
+    await clickByName("Finish");
 
     // The CLI --model flag AND the displayed/default Primary Runtime both move to
     // Opus — otherwise the chat header silently falls back to Sonnet.
@@ -143,11 +266,7 @@ describe("Onboarding wizard flow", () => {
   it("surfaces a cached Claude Code model (Fable) and wires the default from it", async () => {
     render(<Onboarding onComplete={vi.fn()} />);
 
-    await screen.findByPlaceholderText("Your name");
-    await clickByName("Next"); // identity
-    await clickByName("Next"); // project
-
-    await screen.findByText("Choose your agent");
+    await toAgent();
     // The dropdown is populated from listClaudeCodeModels — Fable (cached,
     // account-specific) is present even though it isn't hardcoded.
     const select = screen.getByLabelText("Claude Code model");
@@ -157,7 +276,7 @@ describe("Onboarding wizard flow", () => {
       ).toContain("claude-fable-5[1m]"),
     );
     await userEvent.selectOptions(select, "claude-fable-5[1m]");
-    await clickByName("Next");
+    await clickByName("Finish");
 
     await waitFor(() =>
       expect(ipc.setClaudeCodeModel).toHaveBeenCalledWith("claude-fable-5[1m]"),
@@ -172,14 +291,10 @@ describe("Onboarding wizard flow", () => {
     const onComplete = vi.fn();
     render(<Onboarding onComplete={onComplete} />);
 
-    await screen.findByPlaceholderText("Your name");
-    await clickByName("Next"); // identity
-    await clickByName("Next"); // project (skip-by-next)
-
-    await screen.findByText("Choose your agent");
+    await toAgent();
     await clickByName(/OpenAI-compatible API/);
     await userEvent.type(screen.getByPlaceholderText(/API key/), "sk-test-123");
-    await clickByName("Next");
+    await clickByName("Finish");
 
     await waitFor(() =>
       expect(ipc.addRuntime).toHaveBeenCalledWith(
@@ -214,13 +329,10 @@ describe("Onboarding wizard flow", () => {
       pulling: [],
     });
     render(<Onboarding onComplete={vi.fn()} />);
-    await screen.findByPlaceholderText("Your name");
-    await clickByName("Next"); // identity
-    await clickByName("Next"); // project
-    await screen.findByText("Choose your agent");
+    await toAgent();
     const field = (await screen.findByLabelText("Ollama model")) as HTMLInputElement;
     await waitFor(() => expect(field.value).toBe("qwen2.5-coder:7b"));
-    await clickByName("Next");
+    await clickByName("Finish");
     await waitFor(() =>
       expect(ipc.addRuntime).toHaveBeenCalledWith(
         "ollama-local",
@@ -235,20 +347,17 @@ describe("Onboarding wizard flow", () => {
     );
   });
 
-  it("says Next, the button's own name, when a probe fails", async () => {
+  it("says Finish, the button's own name, when a probe fails", async () => {
     (ipc.probeProvider as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, latency_ms: 0, reply: "", error: "401" });
     render(<Onboarding onComplete={vi.fn()} />);
-    await screen.findByPlaceholderText("Your name");
-    await clickByName("Next");
-    await clickByName("Next");
-    await screen.findByText("Choose your agent");
+    await toAgent();
     await clickByName(/Anthropic API key/);
     await userEvent.type(screen.getByPlaceholderText(/Anthropic API key/), "sk-ant-bad");
-    await clickByName("Next");
-    await screen.findByText(/press Next again/);
+    await clickByName("Finish");
+    await screen.findByText(/press Finish again/);
   });
 
-  it("holds on a failed agent probe, then proceeds on a second Continue", async () => {
+  it("holds on a failed agent probe, then proceeds on a second Finish", async () => {
     // A bad key: the probe fails, so the first Next must NOT advance/configure.
     (ipc.probeProvider as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       ok: false,
@@ -258,21 +367,17 @@ describe("Onboarding wizard flow", () => {
     });
     render(<Onboarding onComplete={vi.fn()} />);
 
-    await screen.findByPlaceholderText("Your name");
-    await clickByName("Next"); // identity
-    await clickByName("Next"); // project
-
-    await screen.findByText("Choose your agent");
+    await toAgent();
     await clickByName(/Anthropic API key/);
     await userEvent.type(screen.getByPlaceholderText(/Anthropic API key/), "sk-ant-bad");
-    await clickByName("Next"); // probes → fails → holds
+    await clickByName("Finish"); // probes → fails → holds
 
     // The failure is surfaced and no runtime was configured yet.
     await screen.findByText(/won't answer until it works/);
     expect(ipc.addRuntime).not.toHaveBeenCalled();
 
     // A second Continue proceeds anyway (transient/edge escape hatch).
-    await clickByName("Next");
+    await clickByName("Finish");
     await waitFor(() => expect(ipc.updateConnectionSettings).toHaveBeenCalled());
   });
 
@@ -285,93 +390,15 @@ describe("Onboarding wizard flow", () => {
       gitEmail: "",
     });
     render(<Onboarding onComplete={vi.fn()} />);
-    await screen.findByPlaceholderText("Your name");
-    await screen.findByText("0011 2233 4455 6677 8899 aabb ccdd eeff");
+    await toYou();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "About your account on this device" }).getAttribute("data-tip")).toContain(
+        "0011 2233 4455 6677 8899 aabb ccdd eeff",
+      ),
+    );
     expect(screen.queryByText(/GitHub/)).toBeNull();
     fireEvent.change(screen.getByPlaceholderText("Your name"), { target: { value: "Ana" } });
     await clickByName("Next");
     await waitFor(() => expect(ipc.setDisplayName).toHaveBeenCalledWith("Ana"));
   });
-
-  it("blocks Finish when a host relay is unauthorized, allows it once connected", async () => {
-    const onComplete = vi.fn();
-    // First probe: unauthorized; after a token, ok.
-    (ipc.probeRelayAt as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ status: "unauthorized", detail: "token rejected" })
-      .mockResolvedValueOnce({ status: "ok", detail: "" });
-
-    render(<Onboarding onComplete={onComplete} />);
-    await screen.findByPlaceholderText("Your name");
-    await clickByName("Next"); // identity
-    await clickByName("Next"); // project
-    await screen.findByText("Choose your agent");
-    await clickByName("Next"); // runtime → step 4
-    await screen.findByText("Team & sync");
-
-    // Choose "Sync through a relay" → "Your own relay", enter a URL, test → unauthorized.
-    await clickByName(/Sync through a relay/);
-    await userEvent.click(screen.getByRole("radio", { name: /Your own relay/ }));
-    await userEvent.type(
-      screen.getByPlaceholderText(/Relay URL/),
-      "https://relay.example",
-    );
-    await clickByName("Test connection");
-    await screen.findByText("token rejected");
-    // Next is disabled — a broken relay can't advance past the team step.
-    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
-
-    // Paste a token + re-test → connected → Next enabled.
-    await userEvent.type(screen.getByPlaceholderText(/access token/i), "good-token");
-    await clickByName("Test connection");
-    await screen.findByText("✓ Connected");
-    expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
-  });
-
-  async function toTeamStep() {
-    await screen.findByPlaceholderText("Your name");
-    await clickByName("Next"); // identity
-    await clickByName("Next"); // project
-    await screen.findByText("Choose your agent");
-    await clickByName("Next"); // agent (Claude Code)
-    await screen.findByText("Team & sync");
-  }
-
-  it("offers the community relay preselected, probes it and saves it", async () => {
-    render(<Onboarding onComplete={vi.fn()} />);
-    await toTeamStep();
-    expect(screen.getByRole("button", { name: /Just me \(no sync\)/ })).toBeTruthy();
-    await clickByName(/Sync through a relay/);
-    const community = screen.getByRole("radio", { name: /Community relay \(relay\.langstroth\.ai, best-effort\)/ });
-    expect(community.getAttribute("aria-checked")).toBe("true");
-    // No relay URL field for the community relay.
-    expect(screen.queryByLabelText("Relay URL")).toBeNull();
-    await clickByName("Test connection");
-    await waitFor(() => expect(ipc.probeRelayAt).toHaveBeenCalledWith(COMMUNITY_RELAY_URL, null));
-    await screen.findByText(/Connected/);
-    await clickByName("Next");
-    await screen.findByText("Make it yours");
-    expect(ipc.updateConnectionSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ relayUrl: COMMUNITY_RELAY_URL, relayAccessToken: "" }),
-    );
-  });
-
-  it("uses a typed URL and token for your own relay", async () => {
-    render(<Onboarding onComplete={vi.fn()} />);
-    await toTeamStep();
-    await clickByName(/Sync through a relay/);
-    await userEvent.click(screen.getByRole("radio", { name: /Your own relay/ }));
-    // Test connection waits for a URL.
-    expect((screen.getByRole("button", { name: "Test connection" }) as HTMLButtonElement).disabled).toBe(true);
-    await userEvent.type(screen.getByLabelText("Relay URL"), "https://relay.acme.example");
-    await userEvent.type(screen.getByPlaceholderText(/Access token/), "tok-1");
-    await clickByName("Test connection");
-    await waitFor(() => expect(ipc.probeRelayAt).toHaveBeenCalledWith("https://relay.acme.example", "tok-1"));
-    await screen.findByText(/Connected/);
-    await clickByName("Next");
-    await screen.findByText("Make it yours");
-    expect(ipc.updateConnectionSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ relayUrl: "https://relay.acme.example", relayAccessToken: "tok-1" }),
-    );
-  });
 });
-

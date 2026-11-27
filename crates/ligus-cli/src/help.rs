@@ -2545,22 +2545,27 @@ pub const TOPICS: &[Topic] = &[
     Topic {
         name: "quickstart",
         aliases: &["start"],
-        summary: "join a workspace from this machine and post a message",
+        summary: "first device or another one: join or link this machine, then post a message",
         text: "\
-Join an existing workspace from this machine with its invite, then read and post.
-Every step ends with a command that shows it worked.
+Set up Ligus on this machine, then read and post. Every step ends with a command
+that shows it worked.
 
 1. Install the CLI (macOS, Linux):
      brew install langstroth-ai/ligus/ligus
      # or: curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh | sh
    verify: ligus --version
-2. Already in the workspace on your desktop? Link this computer as yours
-   instead of inviting yourself (an invite makes a second member):
-     ligus devices request     # then My devices > Add a computer on the desktop
-   Otherwise, get an invite from the desktop app (workspace menu > Invite) and save it to a
-   file. It carries the workspace key: don't paste it on the command line.
-     ligus enroll --file ./invite              # add --token @./relay-token for a gated relay
-   verify: ligus status
+2. Is this your first device with Ligus?
+   - I already use Ligus on another device: link this computer to that account
+     instead (an invite would make a second you, with its own name and keys):
+       ligus devices request --to ligusaddr1:…
+       # the address: My devices > Add a computer on the other device; both
+       # screens show the same code: compare it, then confirm there
+     verify: ligus status
+   - Yes, start here: get an invite from whoever runs the workspace (the desktop app:
+     workspace menu > Invite) and save it to a file. It carries the workspace key:
+     don't paste it on the command line.
+       ligus enroll --file ./invite              # add --token @./relay-token for a gated relay
+     verify: ligus status
 3. Pull the workspace:
      ligus sync
    verify: ligus chats
@@ -3698,6 +3703,20 @@ mod tests {
                 assert!(!t.text.contains(bad), "topic {} says {bad}", t.name);
             }
         }
+    }
+
+    /// The quickstart asks the first run's question before anything joins:
+    /// someone who already uses Ligus links this computer, and only a first
+    /// device enrolls with an invite.
+    #[test]
+    fn quickstart_asks_first_device_before_joining() {
+        let t = find_topic("quickstart").unwrap().text;
+        let ask = t.find("Is this your first device with Ligus?").expect("the question");
+        let link = t.find("ligus devices request").expect("the link path");
+        let enroll = t.find("ligus enroll").expect("the invite path");
+        assert!(ask < link && ask < enroll, "the question comes first");
+        assert!(link < enroll, "the link answer is offered before the invite");
+        assert!(t.contains("I already use Ligus on another device") && t.contains("Yes, start here"));
     }
 
     /// A box (serve, worker, k8s) joins only through an admission: its
