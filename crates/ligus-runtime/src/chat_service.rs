@@ -3955,8 +3955,9 @@ pub fn resolve_workspace_credential(cred: &WorkspaceCredential, workspace_id: Uu
 pub fn resolve_declared_credential(cred: &WorkspaceCredential, workspace_id: Uuid, host: &crate::host_config::HostConfig) -> Option<String> {
     match cred {
         WorkspaceCredential::SecretRef { secret_ref } if host.secret_for(workspace_id, secret_ref).is_some() => {
-            let name = host.secret_for(workspace_id, secret_ref).unwrap_or(secret_ref);
-            ligus_core::names::var(&WorkspaceCredential::env_var(name)).ok().filter(|s| !s.is_empty())
+            // The declared secret this reference names here.
+            let secret_ref = host.secret_for(workspace_id, secret_ref).unwrap_or(secret_ref);
+            ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref)).ok().filter(|s| !s.is_empty())
         }
         WorkspaceCredential::SecretRef { .. } | WorkspaceCredential::Inline {} | WorkspaceCredential::None => None,
     }
