@@ -5,12 +5,14 @@
 
 use ligus_core::flow::{FlowRecord, HumanAsk};
 use ligus_core::ids::TurnId;
+use ligus_core::outcome::{ReplyOutcome, ReplyStatus};
 use ligus_core::turn::TurnState;
 use ligus_core::{ChatMessage, ChatSession, MessageRole, SessionEvent, SessionEventEnvelope};
 use proptest::prelude::*;
 use uuid::Uuid;
 
 const DEVICE: Uuid = Uuid::from_u128(0xd1);
+const SWEEPER: Uuid = Uuid::from_u128(0xd2);
 
 #[derive(Debug, Clone, Copy)]
 struct Present {
@@ -19,12 +21,19 @@ struct Present {
     ask: bool,
     close_ask: bool,
     complete: bool,
+    /// The completion's outcome (`None`: an older writer's, none at all).
+    status: Option<ReplyStatus>,
+    /// A stale-stream sweep's `canceled` from another device, after the
+    /// completion in fold order.
+    swept: bool,
     remove: bool,
 }
 
 fn present() -> impl Strategy<Value = Present> {
-    (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>())
-        .prop_map(|(claim, reply, ask, close_ask, complete, remove)| Present { claim, reply, ask, close_ask, complete, remove })
+    let status = prop_oneof![Just(None), Just(Some(ReplyStatus::Ok)), Just(Some(ReplyStatus::Failed)), Just(Some(ReplyStatus::Canceled))];
+    (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>(), status, any::<bool>(), any::<bool>()).prop_map(
+        |(claim, reply, ask, close_ask, complete, status, swept, remove)| Present { claim, reply, ask, close_ask, complete, status, swept, remove },
+    )
 }
 
 struct Fixture {
@@ -68,7 +77,12 @@ fn fixture(p: Present) -> Fixture {
         }
     }
     if p.complete {
-        events.push(env(&base, 7, Some(DEVICE), SessionEvent::MessageCompleted { message_id: reply, body: "done".into() }));
+        let outcome = p.status.map(|st| ReplyOutcome { model: "opus".into(), ..ReplyOutcome::status(st) });
+        events.push(env(&base, 7, Some(DEVICE), SessionEvent::MessageCompleted { message_id: reply, body: "done".into(), outcome }));
+    }
+    if p.swept {
+        let cancel = Some(ReplyOutcome::status(ReplyStatus::Canceled));
+        events.push(env(&base, 9, Some(SWEEPER), SessionEvent::MessageCompleted { message_id: reply, body: "partial".into(), outcome: cancel }));
     }
     if p.remove {
         events.push(env(&base, 8, None, SessionEvent::MessageRemoved { message_id: reply }));
@@ -85,7 +99,13 @@ fn expected(p: Present) -> TurnState {
     let removed = p.reply && p.remove;
     if p.reply && !removed {
         if p.complete {
-            TurnState::Posted
+            match p.status {
+                Some(ReplyStatus::Failed) => TurnState::Failed,
+                Some(ReplyStatus::Canceled) => TurnState::Canceled,
+                _ => TurnState::Posted,
+            }
+        } else if p.swept {
+            TurnState::Canceled
         } else if p.ask && !p.close_ask {
             TurnState::WaitingOnAsk
         } else {
@@ -122,12 +142,18 @@ proptest! {
         prop_assert_eq!(canonical.id, committed.then_some(TurnId(f.reply)));
         prop_assert_eq!(canonical.claim.map(|c| c.0), (p.claim && !(p.reply && p.remove)).then_some(DEVICE));
         prop_assert_eq!(canonical.asks.len(), usize::from(committed && p.ask));
+        let finished = committed && (p.complete || p.swept);
+        prop_assert_eq!(canonical.outcome.is_some(), finished);
+        // A later sweep replaces only a canceled report.
+        if committed && p.complete && p.status.is_some() && !(p.swept && p.status == Some(ReplyStatus::Canceled)) {
+            prop_assert_eq!(canonical.outcome.as_ref().map(|o| o.model.as_str()), Some("opus"), "which model answered");
+        }
     }
 }
 
 #[test]
 fn a_removed_trigger_has_no_turn() {
-    let p = Present { claim: true, reply: true, ask: false, close_ask: false, complete: true, remove: false };
+    let p = Present { claim: true, reply: true, ask: false, close_ask: false, complete: true, status: None, swept: false, remove: false };
     let mut f = fixture(p);
     let base = fold(&f.events[..1]);
     f.events.push(env(&base, 9, None, SessionEvent::MessageRemoved { message_id: f.trigger }));
