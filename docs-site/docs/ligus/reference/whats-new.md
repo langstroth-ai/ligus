@@ -8,6 +8,16 @@ Full release notes are on the
 
 ### Added
 
+- **`ligus secrets`: workspace secrets without environment variables.**
+  `ligus secrets set NAME -` reads a key from stdin (hidden at a terminal),
+  keeps it in the device's secret store and declares it for the workspace
+  in `host.toml`; `ligus secrets list` shows each name, the workspaces it's
+  declared for and where its value comes from; `ligus secrets rm NAME`
+  undoes it. A value on the command line is refused, and no command prints
+  one. Hosts now resolve a declared secret from the store when
+  `LIGUS_WS_SECRET_<NAME>` isn't set. See
+  [Workspace secrets on this device](cli.md#workspace-secrets-on-this-device).
+
 - **Leave a workspace on your own.** **Leave workspace** (right-click it in
   the rail) now tells the others: they see you as **asked to leave** until
   an Admin removes you, and this device stops syncing it. One line says so,
@@ -32,6 +42,7 @@ Full release notes are on the
 - **`lt` follows a rename of itself.** Renaming an `lt` computer in My
   devices on your desktop now changes the name `lt` keeps for itself too,
   live, instead of being reverted the next time it starts.
+
 
 - **Hosts say what they can run, and how ready it is.** Every computer and
   box now lists the coding tools it has (Claude Code, Codex, Copilot, agy,
