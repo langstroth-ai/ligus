@@ -447,10 +447,11 @@ struct LiveSettings {
     /// forges it may ask, links on its contact card. Never synced.
     #[serde(default, skip_serializing_if = "links_ui::LinkSettings::is_default")]
     identity_links: links_ui::LinkSettings,
-    /// Reusable agent definitions (a persona = name + model/runtime + role +
-    /// instructions) the user can attach to any chat.
-    #[serde(default)]
-    agent_templates: Vec<AgentTemplate>,
+    /// Agent templates saved by older versions. Templates are gone (the Add
+    /// an agent sheet replaced them): nothing reads this. It is kept only so
+    /// rewriting settings.json never drops what is already on disk.
+    #[serde(default, rename = "agent_templates", skip_serializing_if = "Vec::is_empty")]
+    retired_agent_templates: Vec<serde_json::Value>,
     /// Optional icon for the local "My workspace", as a `data:` URL. Team
     /// workspace icons live on their `WorkspaceConn` instead.
     #[serde(default)]
@@ -619,20 +620,6 @@ fn default_true() -> bool {
     true
 }
 
-/// A reusable agent definition. Attaching to a chat creates a WorkspaceAgent
-/// from (name, runtime, role).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentTemplate {
-    id: String,
-    name: String,
-    runtime_id: String,
-    #[serde(default)]
-    role: String,
-    #[serde(default)]
-    instructions: String,
-}
-
 fn default_sync_room() -> String {
     "default".to_string()
 }
@@ -686,7 +673,7 @@ impl Default for LiveSettings {
             archived_dms: Vec::new(),
             contact: None,
             identity_links: Default::default(),
-            agent_templates: Vec::new(),
+            retired_agent_templates: Vec::new(),
             local_workspace_icon: None,
             schedules: Vec::new(),
             mcp_oauth: std::collections::HashMap::new(),
@@ -13290,7 +13277,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         archived_dms: Vec::new(),
         contact: None,
         identity_links: Default::default(),
-        agent_templates: Vec::new(),
+        retired_agent_templates: Vec::new(),
         local_workspace_icon: None,
         schedules: Vec::new(),
         mcp_oauth: std::collections::HashMap::new(),
@@ -15817,44 +15804,6 @@ fn set_provider_base_url(state: State<AppState>, kind: String, base_url: String)
 }
 
 #[tauri::command]
-fn list_agent_templates(state: State<AppState>) -> Vec<AgentTemplate> {
-    state.settings.lock().unwrap().agent_templates.clone()
-}
-
-#[tauri::command]
-fn add_agent_template(
-    state: State<AppState>,
-    name: String,
-    runtime_id: String,
-    role: String,
-    instructions: String,
-) -> Result<(), String> {
-    let name = name.trim().to_string();
-    if name.is_empty() {
-        return Err("Agent name can't be empty.".to_string());
-    }
-    let mut s = state.settings.lock().unwrap();
-    let role = role.trim();
-    s.agent_templates.push(AgentTemplate {
-        id: Uuid::new_v4().to_string(),
-        name,
-        runtime_id: runtime_id.trim().to_string(),
-        role: if role.is_empty() { "contributor".to_string() } else { role.to_string() },
-        instructions: instructions.trim().to_string(),
-    });
-    save_settings(&state.data_dir, &s);
-    Ok(())
-}
-
-#[tauri::command]
-fn remove_agent_template(state: State<AppState>, id: String) -> Result<(), String> {
-    let mut s = state.settings.lock().unwrap();
-    s.agent_templates.retain(|t| t.id != id);
-    save_settings(&state.data_dir, &s);
-    Ok(())
-}
-
-#[tauri::command]
 fn detect_environment() -> EnvDetectDto {
     let ollama = "127.0.0.1:11434"
         .parse()
@@ -16006,8 +15955,10 @@ struct PortableConfig {
     defaults: PortableDefaults,
     #[serde(default)]
     runtimes: Vec<PortableRuntime>,
-    #[serde(default)]
-    agents: Vec<AgentTemplate>,
+    /// Agents in a config exported by an older version. Agent templates are
+    /// gone, so import skips them (and says so); export never writes any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    agents: Vec<toml::Value>,
     #[serde(default)]
     mcp_servers: Vec<McpServerSpec>,
 }
@@ -16047,7 +15998,7 @@ struct PortableRuntime {
     key_env: Option<String>,
 }
 
-/// Serialize the current runtime/agent/MCP setup + defaults to portable TOML.
+/// Serialize the current runtime/MCP setup + defaults to portable TOML.
 #[tauri::command]
 fn export_config(state: State<AppState>) -> Result<String, String> {
     let runtimes: Vec<PortableRuntime> = state
@@ -16076,13 +16027,9 @@ fn export_config(state: State<AppState>) -> Result<String, String> {
             m
         })
         .collect();
-    let (default_model, permission_mode, agents) = {
+    let (default_model, permission_mode) = {
         let s = state.settings.lock().unwrap();
-        (
-            s.default_model.clone().unwrap_or_default(),
-            s.claude_permission_mode.clone(),
-            s.agent_templates.clone(),
-        )
+        (s.default_model.clone().unwrap_or_default(), s.claude_permission_mode.clone())
     };
     let cfg = PortableConfig {
         version: portable_version(),
@@ -16092,7 +16039,7 @@ fn export_config(state: State<AppState>) -> Result<String, String> {
             permission_mode,
         },
         runtimes,
-        agents,
+        agents: Vec::new(),
         mcp_servers,
     };
     let header = "# Ligus portable config. Version-control this to stamp a setup across machines.\n\
@@ -16103,7 +16050,7 @@ fn export_config(state: State<AppState>) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Apply a portable TOML config: add its runtimes/agents/MCP servers and set
+/// Apply a portable TOML config: add its runtimes/MCP servers and set
 /// defaults. Additive + idempotent (upserts by id); never deletes existing
 /// setup. Returns a human summary; individual failures are collected, not fatal.
 #[tauri::command]
@@ -16118,7 +16065,6 @@ fn import_config(state: State<AppState>, toml_text: String) -> Result<String, St
         ));
     }
     let mut runtimes = 0usize;
-    let mut agents = 0usize;
     let mut mcp = 0usize;
     let mut warnings: Vec<String> = Vec::new();
 
@@ -16150,11 +16096,11 @@ fn import_config(state: State<AppState>, toml_text: String) -> Result<String, St
             Err(e) => warnings.push(format!("runtime {}: {e}", r.id)),
         }
     }
-    for a in cfg.agents {
-        match add_agent_template(state.clone(), a.name.clone(), a.runtime_id, a.role, a.instructions) {
-            Ok(()) => agents += 1,
-            Err(e) => warnings.push(format!("agent {}: {e}", a.name)),
-        }
+    if !cfg.agents.is_empty() {
+        warnings.push(format!(
+            "{} agent(s): agent templates are gone; add agents with Add an agent",
+            cfg.agents.len()
+        ));
     }
     for m in cfg.mcp_servers {
         if let McpTransport::Http { url } = &m.transport {
@@ -16179,7 +16125,7 @@ fn import_config(state: State<AppState>, toml_text: String) -> Result<String, St
         save_settings(&state.data_dir, &s);
     }
 
-    let mut summary = format!("Imported {runtimes} runtime(s), {agents} agent(s), {mcp} MCP server(s).");
+    let mut summary = format!("Imported {runtimes} runtime(s), {mcp} MCP server(s).");
     if !warnings.is_empty() {
         summary.push_str(&format!(" Skipped {}: {}", warnings.len(), warnings.join("; ")));
     }
@@ -17358,9 +17304,6 @@ pub fn run() {
             model_profile_hint,
             set_provider_key,
             set_provider_base_url,
-            list_agent_templates,
-            add_agent_template,
-            remove_agent_template,
             list_workspaces,
             set_active_workspace,
             set_active_chat,
@@ -19760,6 +19703,45 @@ mod mcp_bearer_tests {
         let preview: String = out.chars().take(400).collect();
         eprintln!("{tool} -> {} chars: {preview}", out.len());
         assert!(!out.trim().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod retired_agent_templates_tests {
+    use super::{LiveSettings, PortableConfig};
+
+    /// Templates saved by an older version stay in settings.json when the
+    /// settings are rewritten, though nothing reads them any more.
+    #[test]
+    fn stored_templates_survive_a_settings_rewrite() {
+        let mut v = serde_json::to_value(LiveSettings::default()).unwrap();
+        assert!(v.get("agent_templates").is_none(), "no empty list is written");
+        let saved = serde_json::json!([{
+            "id": "t1", "name": "Reviewer", "runtimeId": "claude-code",
+            "role": "contributor", "instructions": "Review carefully."
+        }]);
+        v["agent_templates"] = saved.clone();
+        let s: LiveSettings = serde_json::from_value(v).unwrap();
+        let again = serde_json::to_value(&s).unwrap();
+        assert_eq!(again["agent_templates"], saved);
+    }
+
+    /// A config exported by an older version, with agents in it, still
+    /// imports; the agents are skipped and a new export writes none.
+    #[test]
+    fn old_portable_config_with_agents_still_parses() {
+        let text = r#"
+version = 1
+
+[[agents]]
+id = "t1"
+name = "Reviewer"
+runtimeId = "claude-code"
+"#;
+        let cfg: PortableConfig = toml::from_str(text).unwrap();
+        assert_eq!(cfg.agents.len(), 1);
+        let out = toml::to_string_pretty(&PortableConfig { agents: Vec::new(), ..cfg }).unwrap();
+        assert!(!out.contains("agents"), "{out}");
     }
 }
 

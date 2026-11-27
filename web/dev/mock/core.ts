@@ -281,8 +281,6 @@ function handle(cmd: string, args: Args): unknown {
       return [];
     case "detect_environment":
       return { claudeCode: true, codex: false, ollama: true, anthropicEnv: false, openaiEnv: false, gitName: "Zaz", gitEmail: "zaz@example.com" };
-    case "list_agent_templates":
-      return [];
     case "my_profile":
       return { accountId: "6f1c2d3e-8a7b-4c1d-9e0f-112233445566", displayName: profile.name, avatarUrl: profile.avatar, safetyCode: "3f2a 91c0 77de 0b14 c2e8 5a6f 9d31 e047", gitEmail: "zaz@example.com" };
     case "set_display_name":

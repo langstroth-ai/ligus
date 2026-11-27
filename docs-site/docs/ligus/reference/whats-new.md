@@ -118,6 +118,12 @@ Full release notes are on the
 
 ### Changed
 
+- **Agent templates are gone; the Add an agent sheet replaces them.**
+  Settings no longer lists saved agent templates, and a portable config
+  no longer exports or imports agents (an older config's agents are
+  skipped, with a note in the import summary). Templates already saved
+  stay in `settings.json` untouched; nothing reads them. See
+  [Add an agent](../getting-started/set-up.md#add-an-agent).
 - **Each phone on a box sees its own.** When several people's phones use
   the same box, unread counts, what's been read, "you" in People, which
   agents you may use and which notifications are yours are now worked out
