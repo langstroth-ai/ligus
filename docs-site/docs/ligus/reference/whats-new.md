@@ -6,22 +6,6 @@ Full release notes are on the
 
 ## Unreleased
 
-### Added
-
-- **A second desktop links itself to your account.** In the first run,
-  **I already use Ligus on another device** asks for the approval address
-  from your other device (**My devices → Add a computer**). Both screens
-  show the same code, your other device confirms with your passkey, and
-  this desktop becomes one more of your devices: the same member, never a
-  second one. When the relay can't carry the request, a request code is
-  pasted across instead. See
-  [From a second desktop](../features/linked-devices.md#desktop).
-- **A hint when an invite looks like your own.** Joining with an invite or
-  a short code on a device that looks like it belongs to someone already
-  using Ligus shows one line: "Looks like you already use Ligus. Link this
-  device instead." Joining still works. See
-  [The invite guard](../features/onboarding.md#the-invite-guard).
-
 ### Changed
 
 - **Each phone on a box sees its own.** When several people's phones use
@@ -56,6 +40,22 @@ Full release notes are on the
   locked. The folder, relay and team come up when you first pick a folder,
   invite someone or join a team, and the theme is in **Settings →
   Appearance**. See [First launch](../getting-started/first-launch.md).
+
+### Added
+
+- **A second desktop links itself to your account.** In the first run,
+  **I already use Ligus on another device** asks for the approval address
+  from your other device (**My devices → Add a computer**). Both screens
+  show the same code, your other device confirms with your passkey, and
+  this desktop becomes one more of your devices: the same member, never a
+  second one. When the relay can't carry the request, a request code is
+  pasted across instead. See
+  [From a second desktop](../features/linked-devices.md#desktop).
+- **A hint when an invite looks like your own.** Joining with an invite or
+  a short code on a device that looks like it belongs to someone already
+  using Ligus shows one line: "Looks like you already use Ligus. Link this
+  device instead." Joining still works. See
+  [The invite guard](../features/onboarding.md#the-invite-guard).
 
 ## 0.4.1
 
