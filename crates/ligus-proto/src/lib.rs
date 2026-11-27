@@ -645,6 +645,11 @@ pub struct WorkspaceMemberDto {
     /// passkey), or none.
     #[serde(default)]
     pub regrant_refusal: Option<String>,
+    /// When this member asked to leave (RFC 3339), if they did (workspace
+    /// model v3, 10.4). Under rules 3 they are still a member: People shows
+    /// them as "asked to leave", with Remove for Admins.
+    #[serde(default)]
+    pub left_at: Option<String>,
 }
 
 /// One role in a member's role picker and why it is off-limits, if it is.

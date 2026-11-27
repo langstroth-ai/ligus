@@ -8,6 +8,31 @@ Full release notes are on the
 
 ### Added
 
+- **Leave a workspace on your own.** **Leave workspace** (right-click it in
+  the rail) now tells the others: they see you as **asked to leave** until
+  an Admin removes you, and this device stops syncing it. One line says so,
+  with the reminder that leaving isn't revoking: your other devices keep
+  their keys. Your passkey confirms it when your account holds one. The
+  founder, the last Owner and a linked computer or phone can't leave this
+  way, and the dialog says why and offers removing it from this device only.
+  A box leaves with `ligus serve leave --yes`, and `lt` with **Leave
+  workspace** in its palette. People shows a member who asked to leave grey,
+  with **Remove** for Admins and **Remove from view** for anyone (this
+  device only). Builds before 0.5 keep listing the member as before. See
+  [Leaving a workspace](../features/invites.md#leaving-a-workspace).
+- **Pending, Active, Idle and Revoked devices.** My devices now shows a
+  device that was approved but never wrote anything as **pending**, and one
+  with nothing signed and no beat for 30 days as **idle**, both grey with
+  **Remove**. Workers & hosts shows a host idle for 30 days the same way.
+  See [Device states](../features/linked-devices.md#device-states).
+- **A phone is named when it's added.** The desktop that adds a phone now
+  writes its synced name in the same step: the name the phone chose, or
+  **Phone · added 24 Nov**. Every desktop and box shows it, and you can
+  rename it in My devices.
+- **`lt` follows a rename of itself.** Renaming an `lt` computer in My
+  devices on your desktop now changes the name `lt` keeps for itself too,
+  live, instead of being reverted the next time it starts.
+
 - **Hosts say what they can run, and how ready it is.** Every computer and
   box now lists the coding tools it has (Claude Code, Codex, Copilot, agy,
   aider, pi), its model gateways, and the local model servers and hosted
@@ -102,6 +127,8 @@ Full release notes are on the
 
 ### Changed
 
+- **"Hide from this list" is now "Remove from view"** on revoked devices in
+  My devices: still this device only, and the device stays revoked.
 - **Each phone on a box sees its own.** When several people's phones use
   the same box, unread counts, what's been read, "you" in People, which
   agents you may use and which notifications are yours are now worked out

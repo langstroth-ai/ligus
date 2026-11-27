@@ -1307,6 +1307,28 @@ pub const COMMANDS: &[Cmd] = &[
         ..D
     },
     Cmd {
+        name: "serve leave",
+        group: G_BOX,
+        summary: "this box leaves its workspace on its own",
+        purpose: "Write this box's own leave (`memberLeft`) on the workspace config log, signed by its device key, \
+                  and push it. Members then see the box as \"asked to leave\" in People until an Admin removes it; \
+                  until then it is still a member (workspace rules 3). Works for any box data dir (serve or worker). \
+                  Leaving isn't revoking: the box keeps the keys and copies it holds until an Admin removes it and \
+                  rotates the workspace key. Without --yes it only prints what it would do and exits 4. Refused \
+                  for the founder, the last Owner, and a member that holds a passkey (a person leaves from their \
+                  desktop).",
+        synopsis: &["ligus serve leave [--yes] [--json]"],
+        flags: &[f("--yes", "off", "leave (without it, nothing is written)"), f("--json", "off", "one ligus.checks.v1 report on stdout")],
+        conn: true,
+        examples: &["ligus serve leave", "ligus serve leave --yes --json"],
+        exit: &[
+            (4, "not confirmed: rerun with --yes"),
+            (6, "refused by the workspace rules (the founder, the last Owner, a passkey holder, rules 2)"),
+        ],
+        see_also: &["ligus serve", "ligus help box"],
+        ..D
+    },
+    Cmd {
         name: "worker",
         group: G_BOX,
         summary: "the worker daemon: answer queued mentions for the agents bound here",
@@ -3835,6 +3857,7 @@ mod tests {
             ("forge", src("forge_cmd.rs"), "pub fn cmd(", "\n}\n", &["oauth", "gh", "none"]),
             ("setup", src("setup_cmd.rs"), "pub fn cmd(", "\n}\n", &["-", "--json", "--dry-run"]),
             ("gateway", src("gateway_cmd.rs"), "pub fn cmd(", "\n}\n", &[]),
+            ("serve", main.clone(), "\"serve\" if positional.first().map(|s| s.as_str()) == Some(\"leave\")", "\n        \"serve\" => {", &[]),
         ];
         let mut seen_subs = BTreeSet::new();
         for (cmd, text, start, end, not_subs) in groups {

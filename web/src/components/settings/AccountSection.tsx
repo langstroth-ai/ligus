@@ -39,6 +39,7 @@ import {
   type RevocationStep,
 } from "@/lib/ipc";
 import { deviceName, pairingLine, revokeConfirmText } from "@/lib/myDevices";
+import { deviceState } from "@/lib/lifecycle";
 import { confirmDialog, promptDialog } from "@/components/Dialog";
 import { Button, Hint, InfoTip, ListRow, RowList, Section, Switch, fieldStyle } from "@/components/ui";
 import { Row } from "@/components/settings/FlowSection";
@@ -481,22 +482,35 @@ export function DevicesSection() {
         <RowList label="My devices">
           {groups.active.map((d) => {
             const pl = pairingLine(d, pairs) ?? "";
+            // Pending (approved, nothing written) and Idle (no signature or
+            // beat for 30 days) show grey and offer Remove (a revocation).
+            const st = deviceState(d, pairs);
+            const quiet = st === "pending" || st === "idle";
             return (
               <ListRow
                 key={d.deviceId}
                 testId={`device-${d.deviceId}`}
                 title={
-                  <span>
+                  <span style={quiet ? { opacity: 0.6 } : undefined}>
                     {nameOf(d)}
                     {d.thisDevice && <span className="font-normal text-ink-soft"> · this device</span>}
                   </span>
                 }
-                meta={<span className="font-mono">{d.fingerprint}</span>}
+                meta={
+                  <span>
+                    {quiet && (
+                      <span data-testid={`device-state-${d.deviceId}`} data-tip={st === "idle" ? "Nothing signed and no beat for 30 days" : "Approved, nothing written yet"}>
+                        {st} ·{" "}
+                      </span>
+                    )}
+                    <span className="font-mono">{d.fingerprint}</span>
+                  </span>
+                }
                 tip={pl || undefined}
                 actionsLabel={`Actions for ${nameOf(d)}`}
                 actions={[
                   { label: "Rename…", onSelect: () => void rename(d) },
-                  ...(!d.thisDevice ? [{ label: d.neverWritten ? "Remove" : "Revoke", danger: true, onSelect: () => void revoke(d) }] : []),
+                  ...(!d.thisDevice ? [{ label: quiet || d.neverWritten ? "Remove" : "Revoke", danger: true, onSelect: () => void revoke(d) }] : []),
                 ]}
               >
                 {d.note && (
@@ -576,9 +590,9 @@ export function DevicesSection() {
                         isHidden
                           ? { label: "Show in this list", onSelect: () => setHiddenOne(d.deviceId, false) }
                           : {
-                              label: "Hide from this list",
+                              label: "Remove from view",
                               onSelect: () => setHiddenOne(d.deviceId, true),
-                              title: "Hides it here; it stays revoked",
+                              title: "Hides it on this device only; it stays revoked",
                             },
                       ]}
                     >

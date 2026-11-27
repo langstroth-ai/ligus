@@ -43,6 +43,7 @@ pub mod passkeys;
 pub mod links;
 pub mod profiles;
 pub mod retire;
+pub mod leave;
 pub mod phone;
 pub mod rules;
 
@@ -716,6 +717,12 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
         SessionEvent::MemberRetired { retirement } => {
             return match retire::retirement_ok(env, retirement, on_config, ctx.running, fold) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
+        SessionEvent::MemberLeft { member_id, account_id, .. } => {
+            return match leave::leave_ok(env, member_id, *account_id, on_config, ctx.running, fold) {
                 Ok(()) => Decision::Allow,
                 Err(why) => Decision::deny(why),
             };

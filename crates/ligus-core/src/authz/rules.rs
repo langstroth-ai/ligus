@@ -48,6 +48,12 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         SessionEvent::ProfileUpdated { .. } | SessionEvent::DeviceLabelSet { .. } => false,
         // The old account's own key signs it; it holds no passkey to give.
         SessionEvent::MemberRetired { .. } => false,
+        // Leaving (workspace model v3, 10.4): with the account's passkey when
+        // it holds one, so a stolen desktop can't quietly make its person
+        // leave. A box holds none.
+        SessionEvent::MemberLeft { account_id, .. } => {
+            account_id.is_some_and(|a| roster.passkeys.get(&a).is_some_and(|m| !m.is_empty()))
+        }
         // Guards.
         SessionEvent::DearthModeChanged { .. } | SessionEvent::ChatLockdownCleared { .. } => true,
         // Zones and the beacon (the governance flow records).

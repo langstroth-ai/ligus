@@ -128,6 +128,13 @@ pub struct DeviceLabel {
     pub label: String,
 }
 
+/// When a device label was last set and by which device (render-only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LabelSet {
+    pub at: crate::time_util::Timestamp,
+    pub by: Option<Uuid>,
+}
+
 /// A person's folded profile.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Profile {

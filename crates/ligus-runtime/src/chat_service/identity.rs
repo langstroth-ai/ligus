@@ -122,6 +122,17 @@ impl ChatService {
         Ok(true)
     }
 
+    /// The synced name of `device` under `account` in `workspace_id` with
+    /// when it was set and by which device, if one was set: lt follows a
+    /// rename of itself made on its person's desktop (workspace model v3,
+    /// 10.1) when it is newer than the name it wrote.
+    pub fn device_label_info(&self, workspace_id: Uuid, device: Uuid, account: Uuid) -> Option<(String, ligus_core::profile::LabelSet)> {
+        let config = self.load_in(workspace_id, workspace_config_session_id(workspace_id)).ok().flatten()?;
+        let label = config.device_labels.get(&device)?.get(&account)?.clone();
+        let set = *config.device_label_set.get(&(device, account))?;
+        Some((label, set))
+    }
+
     /// The synced name of `device` under `account` in `workspace_id`, if one
     /// was set (6.3).
     pub fn device_label_of(&self, workspace_id: Uuid, device: Uuid, account: Uuid) -> Option<String> {

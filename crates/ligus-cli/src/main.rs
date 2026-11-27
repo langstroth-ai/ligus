@@ -60,6 +60,7 @@ mod handoff_tests;
 mod hardening;
 mod help;
 mod hook_cmd;
+mod leave_cmd;
 mod mcp_config;
 mod problem;
 mod memory_cmd;
@@ -3050,6 +3051,9 @@ fn run() -> Result<()> {
             )),
             _ => bail!("use `ligus profile set [--name NAME] [--avatar FILE | --clear-avatar]`"),
         },
+        "serve" if positional.first().map(|s| s.as_str()) == Some("leave") => {
+            rt()?.block_on(leave_cmd::cmd_serve_leave(&cfg, has("--yes"), has("--json")))
+        }
         "serve" => {
             devices_cmd::refuse_if_linked(&cfg, "run as a box")?;
             hardening::require_sandbox_or_exit("this serve host");

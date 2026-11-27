@@ -1987,6 +1987,21 @@ impl EventStore {
         Ok(())
     }
 
+    /// The newest envelope time of any stored event of `workspace_id` that
+    /// names `device` as its signer (My devices' Idle state; workspace model
+    /// v3, 10.1). Through `idx_events_by_signer`. Display only: the
+    /// signature isn't checked here, and RFC 3339 strings compare to the
+    /// second.
+    pub fn newest_signed_at(&self, workspace_id: Uuid, device: Uuid) -> Result<Option<ligus_core::Timestamp>> {
+        let at: Option<String> = self.conn.query_row(
+            "SELECT MAX(json_extract(envelope_json, '$.timestamp')) FROM events \
+             WHERE json_extract(envelope_json, '$.signerDeviceId') = ?1 AND +workspace_id = ?2",
+            rusqlite::params![device.to_string(), workspace_id.to_string()],
+            |r| r.get(0),
+        )?;
+        Ok(at.and_then(|s| serde_json::from_value::<ligus_core::Timestamp>(serde_json::Value::String(s)).ok()))
+    }
+
     /// The newest event `signer` put on `session_id` here (by lamport, then
     /// local row order) with a lamport below `below`: what a new event of that signer at
     /// lamport `below` names as `ActorStamp::prev` (a chain link is always

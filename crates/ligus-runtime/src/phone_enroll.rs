@@ -398,10 +398,32 @@ mod tests {
             .find(|e| matches!(&e.payload, SessionEvent::DeviceCertificateAdded { certificate } if certificate.device_id == phone.device_id))
             .unwrap();
         assert!(env.actor_stamp.as_ref().and_then(|s| s.presence.as_ref()).is_some(), "confirmed with the person's presence");
+        // U5: named in the same step, a synced name every device shows.
+        let me = svc.author().account_id.unwrap();
+        assert_eq!(svc.device_label_of(wid, phone.device_id, me).as_deref(), Some("Ana's iPhone"));
         // Again: nothing new.
         assert_eq!(svc.phone_standing(wid, &code).unwrap(), PhoneStanding::AlreadyMine);
         svc.certify_phone_code(wid, &code).unwrap();
         assert_eq!(certs(&svc, wid).len(), 1);
+    }
+
+    /// U5: a phone that chose no name is "Phone · added 24 Nov", never
+    /// "Device 1a2b3c4d", and renameable afterwards.
+    #[test]
+    fn a_phone_without_a_name_gets_a_dated_one_at_enrolment() {
+        let (mut svc, wid) = desktop();
+        let phone = ligus_core::testkit::Phone::new();
+        let code = PhoneCode::decode(&PhoneCode::new(phone.device_id, &phone, "  ").encode()).unwrap();
+        svc.certify_phone_code(wid, &code).unwrap();
+        let me = svc.author().account_id.unwrap();
+        let label = svc.device_label_of(wid, phone.device_id, me).expect("named at enrolment");
+        assert!(label.starts_with("Phone \u{00B7} added "), "{label}");
+        assert!(!label.contains("Device"));
+        assert!(svc.set_device_label(wid, phone.device_id, "Work phone").unwrap());
+        assert_eq!(svc.device_label_of(wid, phone.device_id, me).as_deref(), Some("Work phone"));
+        let at = ligus_core::Timestamp::from_unix_seconds(1_795_521_600); // 24 Nov 2026
+        assert_eq!(crate::chat_service::phone_label("", at), "Phone \u{00B7} added 24 Nov");
+        assert_eq!(crate::chat_service::phone_label("Ana's iPhone", at), "Ana's iPhone");
     }
 
     #[test]

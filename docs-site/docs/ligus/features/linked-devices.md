@@ -354,14 +354,35 @@ its host ("lt on studio-mini"). To make it one of your devices and leave one
    prove it was that member, the confirmation says so: remove it only if it
    was you.
 
+## Device states
+
+Each device in My devices is in one of four states, read from what is
+already on the workspace log and from presence (nothing new is written):
+
+- **Pending**: approved, but it hasn't written anything yet (a computer that
+  never finished linking). Shown grey; **Remove** in its row menu.
+- **Active**: it signed something, or beat, in the last 30 days.
+- **Idle**: nothing signed and no beat for 30 days (a phone counts as seen
+  when a box saw it). Shown grey; **Remove** in its row menu. Idle is only
+  a view: the device still counts until you remove it.
+- **Revoked**: see below.
+
+**Remove** on a Pending or Idle device is a revocation, confirmed with your
+passkey: every member stops accepting what it writes. **Workers & hosts** in
+People shows a host idle for 30 days grey, as **idle**.
+
+A phone gets its name when it is added: the one it chose, or **Phone ·
+added 24 Nov** when it chose none. The name syncs, so every desktop and box
+shows it; rename it here.
+
 ## Revoked devices
 
 Revoked devices fold into **Revoked (N)** at the bottom of My devices,
 collapsed (Ligus remembers whether you opened it, on this device). Each is one
 line, its name and when it was revoked; **Details** in its row menu shows what
-each box did (tunnel, push, session). **Hide from this list** hides it here
-only: it stays revoked, and every member keeps refusing it. **Show hidden** in
-the group's **⋯** brings hidden ones back. A revoked device whose cleanup isn't
+each box did (tunnel, push, session). **Remove from view** hides it on this
+device only: it stays revoked, and every member keeps refusing it. **Show
+hidden** in the group's **⋯** brings hidden ones back. A revoked device whose cleanup isn't
 finished on some box (a tunnel not cut yet) stays in view above the group with
 a one-line warning and **Retry now**.
 

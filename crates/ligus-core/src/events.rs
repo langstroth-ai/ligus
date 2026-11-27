@@ -569,6 +569,21 @@ pub enum SessionEvent {
     /// was (config log; identity model v2, 8.3). Rules 3 only: removes that
     /// member like a self-leave. See [`crate::retirement`].
     MemberRetired { retirement: crate::retirement::MemberRetirement },
+    /// A member leaves on its own (config log; workspace model v3, 10.4): a
+    /// person from a non-delegated, non-phone device of their account (with
+    /// a passkey when the account holds one), a box with `ligus serve
+    /// leave`. Never the founder or the last Owner. Under rules 3 it is
+    /// display only ("asked to leave"): the member stays, writes and gets
+    /// key rotations, so authorization is the same with and without it.
+    /// `watermark` names the leaver's own heads, as a removal's does, for
+    /// the rules that make a leave a removal. See [`crate::leave`].
+    MemberLeft {
+        member_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account_id: Option<Uuid>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        watermark: Vec<crate::watermark::Watermark>,
+    },
     /// Remove a linked identity (the account itself, or an Admin for
     /// moderation).
     IdentityLinkRemoved { account_id: Uuid, link_id: Uuid },
@@ -680,6 +695,7 @@ impl SessionEvent {
             SessionEvent::ProfileUpdated { .. } => "profileUpdated",
             SessionEvent::DeviceLabelSet { .. } => "deviceLabelSet",
             SessionEvent::MemberRetired { .. } => "memberRetired",
+            SessionEvent::MemberLeft { .. } => "memberLeft",
             SessionEvent::IdentityLinkRemoved { .. } => "identityLinkRemoved",
             SessionEvent::ProposalApplyRequested { .. } => "proposalApplyRequested",
             SessionEvent::ProposalApplyFailed { .. } => "proposalApplyFailed",
@@ -740,6 +756,7 @@ impl SessionEvent {
             | SessionEvent::ProfileUpdated { .. }
             | SessionEvent::DeviceLabelSet { .. }
             | SessionEvent::MemberRetired { .. }
+            | SessionEvent::MemberLeft { .. }
             | SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
             | SessionEvent::WorkspaceRepoRemoved { .. }
@@ -913,6 +930,8 @@ impl ChatSession {
                 if let Some(idx) = self.members.iter().position(|m| m.id == member.id) {
                     self.members[idx] = member.clone();
                 } else {
+                    // Added back after leaving and being removed: a new stay.
+                    self.left.remove(&member.id);
                     self.members.push(member.clone());
                 }
             }
@@ -921,6 +940,7 @@ impl ChatSession {
                     self.guards.removed_members.insert(member_id.clone());
                 }
                 self.members.retain(|m| &m.id != member_id);
+                self.left.remove(member_id);
             }
             SessionEvent::MemberRoleChanged { change, .. } => {
                 if let Some(m) = self.members.iter_mut().find(|m| m.id == change.member_id) {
@@ -1137,7 +1157,11 @@ impl ChatSession {
                 }
                 self.members.retain(|m| m.id != retirement.member_id);
                 self.retired.insert(retirement.member_id.clone(), retirement.successor_account_id);
+                self.left.remove(&retirement.member_id);
             }
+            // Folded with its signed event in projection (`fold_pass`):
+            // display only under rules 3 (`crate::leave`).
+            SessionEvent::MemberLeft { .. } => {}
             SessionEvent::ProposalReverted { proposal_id, .. } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     p.reverted = p.status == crate::proposals::ProposalStatus::Applied;
@@ -2323,7 +2347,23 @@ fn fold_pass(
                 SessionEvent::ProfileUpdated { profile } => {
                     session.profiles.entry(profile.account_id).or_default().apply(profile, env.event_id);
                 }
+                // A member asked to leave (workspace model v3, 10.4): who,
+                // when, and from which device. Display only under rules 3.
+                SessionEvent::MemberLeft { member_id, account_id, .. } => {
+                    if session.members.iter().any(|m| &m.id == member_id) {
+                        session.left.entry(member_id.clone()).or_insert(crate::leave::Left {
+                            account_id: *account_id,
+                            at: env.timestamp,
+                            event_id: env.event_id,
+                            device_id: env.signer_device_id,
+                        });
+                    }
+                }
                 SessionEvent::DeviceLabelSet { label } => {
+                    session.device_label_set.insert(
+                        (label.device_id, label.account_id),
+                        crate::profile::LabelSet { at: env.timestamp, by: env.signer_device_id },
+                    );
                     let per = session.device_labels.entry(label.device_id).or_default();
                     if label.label.is_empty() {
                         per.remove(&label.account_id);

@@ -34,11 +34,13 @@ mod attachments;
 mod changes;
 mod computer_link;
 pub use computer_link::LinkPreview;
+pub use leave::{LeaveCheck, LEAVE_CONSEQUENCE, NOT_REVOKING};
 pub use changes::{ChangeFeed, ChangeOrigin, ChatChange, CHANGE_FEED_CAPACITY};
 mod facts;
 mod guards;
 mod identity;
 mod keys;
+mod leave;
 mod links;
 mod memory;
 pub use memory::MemoryDraft;
@@ -52,7 +54,7 @@ pub use relay_removal::{RelayRemoval, RelayRemovalError, RelaySubject, BOX_SUBJE
 mod repos;
 pub use repos::canonical_from_input;
 pub use keys::RotationIssued;
-pub use phone_sign::{PhoneDraft, BAD_CONSENT, STALE_DRAFT};
+pub use phone_sign::{phone_label, PhoneDraft, BAD_CONSENT, STALE_DRAFT};
 pub use presence::{summarize, summarize_with, MatchContext, PresenceDraft, PresenceProvider, PresenceRequest};
 
 #[derive(Debug, thiserror::Error)]

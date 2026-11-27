@@ -55,7 +55,8 @@ full `hivews1:` code out-of-band instead, or
 for a paste-free path that keeps the key off the relay.
 
 You can **Copy invite** (the full `hivews1:` code) or **Leave** a
-workspace from the *Your team workspaces* list.
+workspace from the *Your team workspaces* list (see
+[Leaving a workspace](#leaving-a-workspace)).
 
 An invite needs a relay: a workspace created while **Settings → Team sync →
 Relay URL** was empty has none, so Ligus copies no invite for it and offers a
@@ -124,6 +125,35 @@ the same **Relay URL** and join the same room + key (an invite code
 does this automatically). Configure the relay under
 **Settings → Team sync**. See [Self-hosting a relay](../../operate/networking/self-host.md)
 for how to run one.
+
+## Leaving a workspace
+
+Right-click a workspace in the rail and choose **Leave workspace**. One line
+says what happens: others see you as **asked to leave** until an Admin
+removes you, and this device stops syncing the workspace. **Leaving isn't
+revoking**: your other devices, and anything they already copied, keep their
+keys. Revoke a lost device in
+[My devices](linked-devices.md#device-states) instead. When your account
+holds a passkey, the button reads **Leave with passkey** and your passkey
+confirms it.
+
+Some members can't leave on their own, and the dialog says why: the
+workspace's founder, the last Owner (make someone else an Owner first), and a
+computer or phone linked to your account (leave from your main desktop).
+There, **Remove from this device** only takes the workspace off this device:
+you stay a member.
+
+Until an Admin removes a member who asked to leave, they are still a member:
+they can still write and still get new keys, so People lists them grey,
+**asked to leave**, with **Remove** in their row menu for Admins. Anyone can
+**Remove from view** to hide them on their own device only (a count at the
+bottom of the list shows them again). Membership history records the leave.
+A box leaves the same way with `ligus serve leave --yes`
+([CLI](../reference/cli.md#the-home-host-for-the-phone)), and `lt` has
+**Leave workspace** in its palette.
+
+Builds before 0.5 don't know about leaving: they keep listing the member as
+before, and decide everything else the same way.
 
 ## Revocation
 

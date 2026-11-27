@@ -12,7 +12,7 @@ import type { ProposalDto } from "@/lib/ipc";
 const HOST = "11111111-2222-4333-8444-555555555555";
 
 const members = [
-  { id: "me", actorId: "me", displayName: "Ana", role: "admin", title: "", index: 1, isSelf: true, avatarUrl: null, kind: "human", isFounder: false, removeRefusal: null, roleOptions: [], regrantRefusal: null },
+  { id: "me", actorId: "me", displayName: "Ana", role: "admin", title: "", index: 1, isSelf: true, avatarUrl: null, kind: "human", isFounder: false, removeRefusal: null, roleOptions: [], regrantRefusal: null, leftAt: null },
   {
     id: "maya",
     actorId: "maya",
@@ -32,6 +32,7 @@ const members = [
       { role: "viewer", refusal: "a cut goes strictly down the ranks" },
     ],
     regrantRefusal: null,
+    leftAt: null,
   },
   {
     id: "box",
@@ -52,6 +53,7 @@ const members = [
       { role: "viewer", refusal: null },
     ],
     regrantRefusal: "a service member holds no passkey",
+    leftAt: null,
   },
 ];
 

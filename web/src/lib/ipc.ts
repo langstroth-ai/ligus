@@ -672,7 +672,7 @@ export const readRecentLogs = (maxLines?: number) =>
 export const logDirPath = () => invoke<string | null>("log_dir_path");
 
 export type MembershipAuditEntry = {
-  action: "added" | "removed";
+  action: "added" | "removed" | "left";
   member: string;
   role: string | null;
   by: string;
@@ -1436,7 +1436,10 @@ export interface MyDeviceDto {
   note?: string;
   /** Approved here but it never wrote anything: offered as Remove. */
   neverWritten?: boolean;
+  /** Pending (approved, nothing written), Active, Idle (no signature or beat for 30 days) or Revoked. */
+  state?: DeviceState;
 }
+export type DeviceState = "pending" | "active" | "idle" | "revoked";
 export interface DeviceRequestDto {
   hostId: string;
   label: string;
@@ -1956,9 +1959,23 @@ export const acceptPendingInvite = (invite: PendingInvite, confirmSafetyCode = f
 export const dismissPendingInvite = (invite: PendingInvite) =>
   invoke<void>("dismiss_pending_invite", { relay: invite.relay, seq: invite.seq });
 
-/// Leave a team workspace (removes it from the rail).
+/// Remove a team workspace from this device only (the rail); you stay a member.
 export const removeWorkspace = (workspaceId: string) =>
   invoke<void>("remove_workspace", { workspaceId });
+
+/// What leaving a workspace would do: "ready", "passkey" (your passkey
+/// confirms it), "left" (already asked to leave) or "refused" (why, in
+/// `refusal`). `line` and `reminder` are the confirmation's text.
+export interface LeaveCheckDto {
+  state: "ready" | "passkey" | "left" | "refused";
+  refusal: string | null;
+  line: string;
+  reminder: string;
+}
+export const leaveWorkspaceCheck = (workspaceId: string) => invoke<LeaveCheckDto>("leave_workspace_check", { workspaceId });
+/// Leave a team workspace: others see you as asked to leave, then it is
+/// removed from this device. Not a revocation of any device.
+export const leaveWorkspace = (workspaceId: string) => invoke<void>("leave_workspace", { workspaceId });
 
 export type ClaudePermissionMode =
   | "default"

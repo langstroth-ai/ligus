@@ -110,6 +110,7 @@ fn tag(e: &SessionEvent) -> &'static str {
         E::ProfileUpdated { .. } => "profileUpdated",
         E::DeviceLabelSet { .. } => "deviceLabelSet",
         E::MemberRetired { .. } => "memberRetired",
+        E::MemberLeft { .. } => "memberLeft",
         E::Unknown => "unknown",
     }
 }
@@ -132,7 +133,7 @@ const ALL: &[&str] = &[
     "proposalApplied", "agentKeyCertified", "workspaceKeyRotated", "deviceKeyAgreementPublished", "passkeyRegistered",
     "passkeyRemoved", "identityLinkPublished", "identityLinkRemoved", "proposalApplyRequested", "workspaceRepoAdded",
     "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned", "proposalApplyFailed",
-    "profileUpdated", "deviceLabelSet", "memberRetired",
+    "profileUpdated", "deviceLabelSet", "memberRetired", "memberLeft",
     "proposalApplyWithdrawn", "workspaceSandboxSet", "workspaceRepoAliasesSet", "workspaceHostAliasSet", "chatBaseRepinned", "attachmentPolicySet", "attachmentHashBlocked", "attachmentHashUnblocked", "attachmentShared",
     "attachmentDeleted", "proposalArchivePolicySet",
 ];
@@ -629,6 +630,51 @@ fn identity_v2_goldens() {
             log_head: None,
         });
         ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 70, event_id: u(0x7005) }));
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// Writes the member-exit lines (workspace model v3, 10.4): a person's
+/// `memberLeft` with a watermark, and a box's without an account. Run with
+/// `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the lines.
+#[test]
+#[ignore]
+fn member_left_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let cfg = ligus_core::workspace_config_session_id(ws);
+    let cases = [
+        ("memberLeft", 0u64, SessionEvent::MemberLeft {
+            member_id: u(9).to_string(),
+            account_id: Some(u(9)),
+            watermark: vec![ligus_core::watermark::Watermark { signer: u(1), log: cfg, heads: vec![u(0x8001)], gaps: Vec::new() }],
+        }),
+        ("memberLeft/box", 1, SessionEvent::MemberLeft { member_id: "box-1".into(), account_id: None, watermark: Vec::new() }),
+    ];
+    let mut out = String::new();
+    for (label, i, payload) in cases {
+        let mut e = SessionEventEnvelope::new(cfg, ws, 801 + i as i64, payload);
+        e.id = u(0x8010 + 2 * i as u128);
+        e.event_id = u(0x8011 + 2 * i as u128);
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x8003) }),
+            presence: None,
+            runtime_effect: false,
+            prev: Some(u(0x8004)),
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
+        });
+        ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 80, event_id: u(0x8005) }));
         sign_envelope(&mut e, u(1), &kp);
         out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
     }

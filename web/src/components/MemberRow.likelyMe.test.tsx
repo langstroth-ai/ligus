@@ -21,6 +21,7 @@ const zaz: RosterMember = {
   removeRefusal: null,
   roleOptions: [],
   regrantRefusal: null,
+  leftAt: null,
 };
 
 function row(onLinkComputer?: () => void) {
