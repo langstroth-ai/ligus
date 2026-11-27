@@ -397,7 +397,7 @@ keeps the old answer (exit 4: the desktop, or `--recovery-words-file`).
 
 | Command | What it does |
 |---|---|
-| `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host has `LIGUS_WS_SECRET_<ref>`; a key an older version stored in the workspace shows as `stored key (unused)` with a warning) |
+| `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host holds its value, from `LIGUS_WS_SECRET_<ref>` or `ligus secrets set`; a key an older version stored in the workspace shows as `stored key (unused)` with a warning) |
 | `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name>] [--dry-run]` | defines (or replaces by id) a workspace runtime. `--dry-run` checks the arguments and prints what it would define, signing and writing nothing (the same on `rm-runtime`, `add-agent` and `set-agent-host`; `add-agent --dry-run` also checks the runtime exists). Any other command refuses `--dry-run` with a usage error (exit 2) and runs nothing. |
 | `ligus rm-runtime <id> [--dry-run]` | removes a workspace runtime. |
 | `ligus setup runtimes [--apply]` | detects what this box can reach (API keys in env, Ollama on `127.0.0.1:11434`, `claude`, `codex`, `agy`, `copilot`); `--apply` defines the keyless ones as workspace runtimes. This was `ligus setup [--apply]`; `ligus setup --apply` still works for one release |
@@ -407,6 +407,9 @@ keeps the old answer (exit 4: the desktop, or `--recovery-words-file`).
 | `ligus agents set <agent> --local-servers on\|off [--json]` | turns an agent's [local-servers switch](../concepts/security.md#local-servers) on or off (agy needs it for its helper server; Linux with bubblewrap; not available on macOS yet, where it is stored but has no effect). The workspace Owner's; in a shared workspace it needs a passkey, so use Settings → Sandbox there. Exit 6 when refused. |
 | `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>] [--dry-run]` | defines an agent. |
 | `ligus hosts [--json]` | lists workspace hosts (devices and workers), online or offline, with a second line saying what each offers and how ready it is (see [What a host offers](#what-a-host-offers)) |
+| `ligus secrets set <name> - [--workspace <id>] [--json]` | reads a workspace secret's value from stdin (hidden at a terminal), saves it in this device's secret store and declares `<name>` for the workspace in `host.toml`. A value on the command line is refused (exit 2). See [Workspace secrets on this device](#workspace-secrets-on-this-device) |
+| `ligus secrets list [--workspace <id>] [--json]` | lists the secret names this device knows, the workspaces each is declared for and where its value comes from (environment, secret store, or none). Never a value |
+| `ligus secrets rm <name> [--workspace <id>] [--json]` | stops declaring `<name>` for the workspace, and deletes its stored value when no other workspace here declares it (exit 5 when it isn't declared there) |
 | `ligus register-worker [--label <name>]` | registers this box as a worker host, prints its host id |
 | `ligus set-agent-host <agent> <host-id> [--dry-run]` | binds an agent to a host; refused (exit 6) when the host's record doesn't offer the model gateway the agent's runtime uses |
 | `ligus agent [name] [--runtime <id>]` | development responder: answers new un-mentioned or `@primary` messages (in a shared room only its operator's, unless `LIGUS_AGENT_OPEN_TO_MEMBERS=1`). Refuses to run unless `LIGUS_ALLOW_PERSONAL_AGENT` is set; use `ligus worker` in production |
@@ -419,9 +422,40 @@ Credentials for `add-runtime`:
 
 - `--secret-ref <name>`: each host that runs the agent sets
   `LIGUS_WS_SECRET_<name>` (or a file in `LIGUS_WS_SECRET_DIR`) and
-  declares `<name>` for the workspace in its `host.toml` (below). Keys are
+  declares `<name>` for the workspace in its `host.toml` (below), or runs
+  `ligus secrets set <name> -`, which does both with the device's secret
+  store. Keys are
   never stored in the workspace.
 - without it: keyless (local models, subscription CLIs).
+
+### Workspace secrets on this device
+
+`ligus secrets` keeps a `--secret-ref` value on this device without an
+environment variable or a hand-edited `host.toml`:
+
+```sh
+ligus secrets set team-claude - < ~/anthropic.key     # or: op read … | ligus secrets set team-claude -
+ligus add-runtime team-claude "Team Claude" anthropic claude-sonnet-4-6 --secret-ref team-claude
+ligus secrets list
+```
+
+- The value goes in this device's secret store (`LIGUS_SECRET_BACKEND`: the
+  keychain, Secret Service, systemd-creds or owner-only files), one value per
+  name, and `<name>` is declared for the workspace (`--workspace <id>`, else
+  this data dir's) in `host.toml`.
+- The value is read from stdin only, hidden at a terminal; one trailing line
+  end is dropped and an empty value is refused. `ligus secrets set NAME VALUE`,
+  `--value` and `--secret` are refused (exit 2) before anything is read: a
+  value on the command line lands in shell history and `ps`. If you typed a
+  real key that way, rotate it.
+- No command prints a value: not `list`, not `--json`, not an error.
+- `LIGUS_WS_SECRET_<name>` (or a file in `LIGUS_WS_SECRET_DIR`), when set,
+  wins over the stored value. `ligus runtimes` shows `✓` for either.
+- `rm` removes the declaration for the workspace, and the stored value once
+  no other workspace on this device declares the name.
+- A running `ligus serve` or `ligus worker` reads `host.toml` at start:
+  restart it after a change. Run these with the box's data dir
+  (`LIGUS_DATA_DIR`).
 
 ### What a host offers
 
@@ -467,7 +501,7 @@ secret = "acme"
 - On first start, a box, worker or `ligus agent` with no `host.toml` writes
   one declaring the `LIGUS_WS_SECRET_*` names already in its environment
   for the workspace it serves, so an upgrade keeps working. Later secrets
-  are declared by hand.
+  are declared with `ligus secrets set` (above) or by hand.
 - `list_tools = false` empties a person's computer's list (the desktop's
   **Settings → Models → List this computer's tools**). Workers and boxes
   always list theirs.

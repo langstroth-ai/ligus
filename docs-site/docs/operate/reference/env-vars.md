@@ -36,7 +36,7 @@ first time it is created; after that, Settings is the source of truth.
 
 | Variable | Default | Read by | Effect |
 |---|---|---|---|
-| `LIGUS_WS_SECRET_<ref>` | unset | desktop and CLI | the key for a workspace runtime defined with `secretRef = <ref>`. Set it on each host that runs the agent |
+| `LIGUS_WS_SECRET_<ref>` | unset | desktop and CLI | the key for a workspace runtime defined with `secretRef = <ref>`. Set it on each host that runs the agent, or keep it in the host's secret store with `ligus secrets set <ref> -`; this variable wins when both are there |
 | `LIGUS_WORKER_PERMISSION_MODE` | read-only | CLI worker | `acceptEdits`, `runCommands` or `bypassPermissions` lets worker turns of Claude Code and the subscription CLIs edit files / run commands. Edits land in an isolated worktree as a proposal |
 | `LIGUS_WORKER_HEALTH_LISTEN` | unset | CLI worker | address for `GET /v1/health` and `/v1/ready` (same as `ligus worker --health-listen`) |
 | `LIGUS_RUNTIMES_FILE` | `<data dir>/runtimes.toml` | CLI | this host's local runtimes, for example a mounted ConfigMap |
