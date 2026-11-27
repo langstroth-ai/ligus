@@ -6,22 +6,8 @@ Full release notes are on the
 
 ## Unreleased
 
-### Added
-
-- **Confirm a command-line step on your desktop.** A step that needs your
-  passkey (defining a workspace runtime for a new agent, say) used to stop
-  `ligus setup` with "do it in the desktop app". Now the CLI sends the
-  change, drafted exactly as it will be written, to your own desktop and
-  waits: "Confirm on your desktop: Define workspace runtime “coder”
-  (ClaudeCode, model “sonnet”) (code K7Q4 M9X2)". Your desktop's Inbox
-  shows the same change and code (and a notification); **Confirm with
-  passkey** writes it, **Not me** writes nothing and offers to revoke the
-  device. Only your own devices can ask or answer, and the passkey signs
-  that one change. `--no-wait` exits 4 at once; `ligus handoff wait`
-  finishes it later. A relay without the approval mailbox keeps the old
-  answer. See [Steps that need your passkey](cli.md#handoff) and
-  [Passkey hand-off](../features/linked-devices.md#passkey-hand-off).
 ### Changed
+
 - **The first run asks one question first.** Before it asks for a name,
   the desktop app asks **Is this your first device with Ligus?** Answering
   **I already use Ligus on another device** links this device to your
@@ -38,6 +24,19 @@ Full release notes are on the
 
 ### Added
 
+- **Confirm a command-line step on your desktop.** A step that needs your
+  passkey (defining a workspace runtime for a new agent, say) used to stop
+  `ligus setup` with "do it in the desktop app". Now the CLI sends the
+  change, drafted exactly as it will be written, to your own desktop and
+  waits: "Confirm on your desktop: Define workspace runtime “coder”
+  (ClaudeCode, model “sonnet”) (code K7Q4 M9X2)". Your desktop's Inbox
+  shows the same change and code (and a notification); **Confirm with
+  passkey** writes it, **Not me** writes nothing and offers to revoke the
+  device. Only your own devices can ask or answer, and the passkey signs
+  that one change. `--no-wait` exits 4 at once; `ligus handoff wait`
+  finishes it later. A relay without the approval mailbox keeps the old
+  answer. See [Steps that need your passkey](cli.md#handoff) and
+  [Passkey hand-off](../features/linked-devices.md#passkey-hand-off).
 - **A second desktop links itself to your account.** In the first run,
   **I already use Ligus on another device** asks for the approval address
   from your other device (**My devices → Add a computer**). Both screens
