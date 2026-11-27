@@ -9,7 +9,7 @@ use super::{RosterState, RULES_V3};
 
 /// `MemberLeft`, under rules 3 and later: on the config log; by the member
 /// itself (a person or a box, never an agent or a runtime effect); for its
-/// own account; signed by a device certified for that account here that is
+/// own account (an accountless member can't leave this way); signed by a device certified for that account here that is
 /// neither a phone nor delegated (a linked computer, a box acting for the
 /// person), so a stolen linked computer or phone can't make its person
 /// leave; a current member that hasn't asked already and wasn't retired;
@@ -30,6 +30,9 @@ pub fn leave_ok(env: &SessionEventEnvelope, member_id: &str, account_id: Option<
     if stamp.actor.id != member_id {
         return Err("a member leaves only by itself: an Admin removes someone else".into());
     }
+    // An accountless member (still admitted under rules 3) can't leave this
+    // way: nothing would tie the signing device to them.
+    let Some(a) = account_id else { return Err("a leave names the leaver's account".into()) };
     let member = fold.members.iter().find(|m| m.id == member_id).ok_or("not a member here")?;
     if member.actor.account_id != account_id || stamp.actor.account_id != account_id {
         return Err("a leave names the leaver's own account".into());
@@ -38,10 +41,11 @@ pub fn leave_ok(env: &SessionEventEnvelope, member_id: &str, account_id: Option<
     if device.phone {
         return Err("a phone can't make its person leave: leave from your desktop".into());
     }
-    if let Some(a) = account_id {
-        if device.delegated_for(a) {
-            return Err("a linked device can't make its person leave: leave from your desktop".into());
-        }
+    if !device.accounts.contains(&a) {
+        return Err("signed by a device that doesn't act for the leaver".into());
+    }
+    if device.delegated_for(a) {
+        return Err("a linked device can't make its person leave: leave from your desktop".into());
     }
     if fold.left.contains_key(member_id) {
         return Err("already asked to leave".into());
