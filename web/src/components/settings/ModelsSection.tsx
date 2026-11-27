@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { openSetup } from "@/lib/nav";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RuntimeSummaryDto } from "@/bindings/RuntimeSummaryDto";
 import { GatewayPicker, gatewayModels } from "./GatewayPicker";
@@ -29,7 +30,6 @@ import {
   setProviderBaseUrl,
   type ProviderDto,
   listAgentTemplates,
-  addAgentTemplate,
   removeAgentTemplate,
   getContextCommands,
   setContextCommands,
@@ -1635,122 +1635,49 @@ function ClaudeCodeRowModel() {
   );
 }
 
-/// Reusable agent definitions (personas) the user can attach to any chat.
+/// Agents: one way to add one (the Add an agent sheet, where the model is
+/// per agent and no runtime comes first). Agents saved by older versions are
+/// listed so they can be removed.
 function AgentsSection() {
   const qc = useQueryClient();
   const templates = useQuery({ queryKey: ["agent-templates"], queryFn: listAgentTemplates });
   const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: listRuntimes });
-  const [name, setName] = useState("");
-  const [runtimeId, setRuntimeId] = useState("");
-  const [role, setRole] = useState("contributor");
-  const [instructions, setInstructions] = useState("");
-  const [showForm, setShowForm] = useState(false);
   const rts = runtimes.data ?? [];
   const refresh = () => qc.invalidateQueries({ queryKey: ["agent-templates"] });
-
-  const add = useMutation({
-    mutationFn: () => addAgentTemplate(name.trim(), runtimeId || rts[0]?.id || "", role, instructions),
-    onSuccess: () => {
-      setName("");
-      setInstructions("");
-      setShowForm(false);
-      refresh();
-    },
-    onError: (e) => toast.error(errMsg(e)),
-  });
   const remove = useMutation({
     mutationFn: (id: string) => removeAgentTemplate(id),
     onSuccess: refresh,
     onError: (e) => toast.error(errMsg(e)),
   });
+  const saved = templates.data ?? [];
 
   return (
     <Section
       title="Agents"
-      info="A reusable persona: name, model (runtime), role and instructions. Define once here, then attach it to any chat from that chat's Tools pane."
+      info="Add an agent in one step: what answers, its model, and where it runs. The workspace's agents are in each chat's Tools pane."
       action={
-        <Button size="sm" onClick={() => setShowForm(true)}>
+        <Button size="sm" onClick={() => openSetup("agent")}>
           Add an agent
         </Button>
       }
     >
-      {(templates.data ?? []).length === 0 && <p className="px-1 text-[13px] text-ink-soft">No saved agents yet</p>}
-      <RowList label="Saved agents">
-        {(templates.data ?? []).map((t) => {
-          const rt = rts.find((r) => r.id === t.runtimeId);
-          return (
-            <ListRow
-              key={t.id}
-              title={t.name}
-              meta={`${t.role} · ${rt?.label ?? t.runtimeId ?? "no model"}`}
-              tip={t.instructions || undefined}
-              actions={[
-                { label: "Remove", danger: true, onSelect: () => confirmThen(`Remove agent "${t.name}"?`, () => remove.mutate(t.id)) },
-              ]}
-            />
-          );
-        })}
-      </RowList>
-
-      {showForm && (
-      <Sheet
-        title="Add an agent"
-        side="center"
-        width={460}
-        onClose={() => setShowForm(false)}
-        footer={
-          <>
-            <Button onClick={() => setShowForm(false)}>Cancel</Button>
-            <Button variant="primary" disabled={!name.trim() || add.isPending} onClick={() => add.mutate()}>
-              Save agent
-            </Button>
-          </>
-        }
-      >
-      <div className="space-y-2">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          aria-label="Agent name"
-          placeholder="Agent name (e.g. Reviewer)"
-          className="w-full rounded-xl border px-3 py-2 text-sm"
-          style={fieldStyle}
-        />
-        <select
-          value={runtimeId || rts[0]?.id || ""}
-          onChange={(e) => setRuntimeId(e.target.value)}
-          className="w-full rounded-xl border px-3 py-2 text-sm"
-          style={fieldStyle}
-        >
-          {rts.length === 0 && <option value="">(no models configured)</option>}
-          {rts.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.label}
-            </option>
-          ))}
-        </select>
-        <select
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-          className="w-full rounded-xl border px-3 py-2 text-sm"
-          style={fieldStyle}
-        >
-          {["owner", "admin", "contributor", "viewer"].map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-        <textarea
-          value={instructions}
-          onChange={(e) => setInstructions(e.target.value)}
-          placeholder="Instructions (optional)"
-          rows={2}
-          className="w-full resize-none rounded-xl border px-3 py-2 text-sm"
-          style={fieldStyle}
-        />
-      </div>
-      </Sheet>
+      {saved.length > 0 && (
+        <RowList label="Saved agents">
+          {saved.map((t) => {
+            const rt = rts.find((r) => r.id === t.runtimeId);
+            return (
+              <ListRow
+                key={t.id}
+                title={t.name}
+                meta={`${t.role} · ${rt?.label ?? t.runtimeId ?? "no model"}`}
+                tip={t.instructions || undefined}
+                actions={[
+                  { label: "Remove", danger: true, onSelect: () => confirmThen(`Remove agent "${t.name}"?`, () => remove.mutate(t.id)) },
+                ]}
+              />
+            );
+          })}
+        </RowList>
       )}
     </Section>
   );

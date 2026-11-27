@@ -74,7 +74,7 @@ export function openAdmitBox() {
   window.dispatchEvent(new CustomEvent(ADMIT_BOX_EVENT));
 }
 
-/// Open a guided setup flow (⌘K "Set up an agent", `/setup agent`, an empty
+/// Open a guided setup flow (⌘K "Add an agent", `/setup agent`, an empty
 /// pane's action); App owns the wizard.
 export const OPEN_SETUP_EVENT = "ligus:open-setup";
 

@@ -2947,10 +2947,21 @@ export type SetupField = {
   help?: string;
   /// Shown only when another field has one of these values.
   when?: [string, string[]];
+  /// One line under the field for the current inputs ("Turns run on box-1.").
+  note?: string;
 };
 export type SetupStep = { id: string; title: string; kind: "input" | "person" | "verify"; fields?: SetupField[]; where?: string };
 export type SetupCheck = { id: string; title: string; status: "ok" | "warn" | "fail" | "skip"; detail: string; fix?: string; notes?: string[] };
-export type SetupForm = { flow: SetupFlowDef; preflight: SetupCheck[]; blocked: boolean; steps: SetupStep[] };
+export type SetupForm = {
+  flow: SetupFlowDef;
+  preflight: SetupCheck[];
+  blocked: boolean;
+  steps: SetupStep[];
+  /// The one button's label ("Add @coder").
+  action?: string;
+  /// Passkey confirmations the run will ask for (2: "Confirm 1 of 2").
+  confirmations?: number;
+};
 export type SetupStatus = { flow: SetupFlowDef; progress: "done" | "waiting" | "todo" | "unavailable"; detail: string };
 /// A run: a `ligus.checks.v1` report plus the flow's outcome.
 export type SetupOutcome = {
@@ -2973,3 +2984,7 @@ export const setupForm = (flow: SetupFlowId, inputs: Record<string, string>) => 
 export const setupRun = (flow: SetupFlowId, inputs: Record<string, string>, secrets: Record<string, string>, dryRun = false) =>
   invoke<SetupOutcome>("setup_run", { flow, inputs, secrets, dryRun });
 export const setupCancel = (flow: SetupFlowId) => invoke<void>("setup_cancel", { flow });
+/// While a run asks for the passkey: which confirmation of how many, and what.
+export type SetupConfirming = { step: number; of: number; what: string };
+export const onSetupConfirming = (cb: (e: SetupConfirming) => void): Promise<UnlistenFn> =>
+  listen<SetupConfirming>("setup-confirming", (evt) => cb(evt.payload));

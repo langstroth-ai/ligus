@@ -67,10 +67,26 @@ vi.mock("@/lib/ipc", () => ({
   recoveryKeyCreate: vi.fn(async () => "alpha bravo charlie"),
   securityStatus: vi.fn(async () => ({ passkeys: [], rules: 3, keyVersion: 0, secretBackend: "file", deviceConfirmed: true })),
   linkRequestStatus: vi.fn(async () => ({ phase: "idle" })),
+  setDefaultRuntime: vi.fn(async () => {}),
   onLinkFlowChanged: vi.fn(async (cb: (v: unknown) => void) => {
     linkPush = cb;
     return () => {};
   }),
+}));
+
+// The one-step agent sheet has its own tests (AddAgentSheet.test.tsx): here
+// it is a stub whose button reports what the engine would.
+vi.mock("@/components/setup/AddAgentSheet", () => ({
+  AddAgentSheet: ({ inline, onDone }: { inline?: boolean; onDone?: (o: unknown, i: Record<string, string>) => void }) => (
+    <div data-testid="sheet-stub" data-inline={String(!!inline)}>
+      <button onClick={() => onDone?.({ exitCode: 0, results: { agentId: "a1", runtimeId: "claude-code" } }, { name: "coder", source: "claude-code", "runs-on": "here" })}>
+        Add @coder
+      </button>
+      <button onClick={() => onDone?.({ exitCode: 0, results: { agentId: "a2", runtimeId: "gw-home-auto" } }, { name: "coder", source: "gateway:gw-home", "runs-on": "box-1" })}>
+        Add @coder on box-1
+      </button>
+    </div>
+  ),
 }));
 
 // The link screen's backend events; tests push them by hand.
@@ -96,7 +112,7 @@ async function toAgent() {
   await clickByName("Create a passkey");
   await screen.findByTestId("first-run-recovery-words");
   await clickByName("I wrote them down");
-  await screen.findByText("Choose your agent");
+  await screen.findByText("Add your first agent");
 }
 
 describe("Onboarding wizard flow", () => {
@@ -127,14 +143,12 @@ describe("Onboarding wizard flow", () => {
     expect(ipc.recoveryKeyCreate).toHaveBeenCalledOnce();
     await clickByName("I wrote them down");
 
-    // The agent: Claude Code is detected + preselected.
-    await screen.findByText("Choose your agent");
-    await clickByName("Finish");
-    // The claude-code path persists the --model choice ("" = CLI default)…
-    await waitFor(() => expect(ipc.setClaudeCodeModel).toHaveBeenCalledWith(""));
-    // …and syncs the Primary Runtime's default model so the chat header matches
-    // the pick (CLI-default → Sonnet).
-    await waitFor(() => expect(ipc.setDefaultModel).toHaveBeenCalledWith("claude-sonnet-4-6"));
+    // The agent: the one-step sheet, in place.
+    await screen.findByText("Add your first agent");
+    expect(screen.getByTestId("sheet-stub")).toHaveAttribute("data-inline", "true");
+    await clickByName("Add @coder");
+    // It runs here: its runtime answers untagged messages too.
+    await waitFor(() => expect(ipc.setDefaultRuntime).toHaveBeenCalledWith("claude-code"));
     // …and default permission = runCommands ("edit files and run commands" on).
     await waitFor(() =>
       expect(ipc.updateConnectionSettings).toHaveBeenCalledWith(
@@ -208,7 +222,7 @@ describe("Onboarding wizard flow", () => {
     await screen.findByTestId("first-run-secure");
     await clickByName("Finish later");
     await clickByName("Finish later");
-    await screen.findByText("Choose your agent");
+    await screen.findByText("Add your first agent");
     expect(ipc.passkeyRegister).not.toHaveBeenCalled();
   });
 
@@ -240,145 +254,28 @@ describe("Onboarding wizard flow", () => {
     render(<Onboarding onComplete={vi.fn()} />);
     await toYou();
     await clickByName("Next");
-    await screen.findByText("Choose your agent");
+    await screen.findByText("Add your first agent");
     expect(ipc.passkeyRegister).not.toHaveBeenCalled();
   });
 
-  it("picks Claude Code + Opus and makes Opus the Primary Runtime default", async () => {
-    render(<Onboarding onComplete={vi.fn()} />);
-
-    await toAgent();
-    // Claude Code is preselected; choose Opus in its model dropdown.
-    await userEvent.selectOptions(
-      screen.getByLabelText("Claude Code model"),
-      "opus",
-    );
-    await clickByName("Finish");
-
-    // The CLI --model flag AND the displayed/default Primary Runtime both move to
-    // Opus — otherwise the chat header silently falls back to Sonnet.
-    await waitFor(() => expect(ipc.setClaudeCodeModel).toHaveBeenCalledWith("opus"));
-    await waitFor(() =>
-      expect(ipc.setDefaultModel).toHaveBeenCalledWith("claude-opus-4-8"),
-    );
-  });
-
-  it("surfaces a cached Claude Code model (Fable) and wires the default from it", async () => {
-    render(<Onboarding onComplete={vi.fn()} />);
-
-    await toAgent();
-    // The dropdown is populated from listClaudeCodeModels — Fable (cached,
-    // account-specific) is present even though it isn't hardcoded.
-    const select = screen.getByLabelText("Claude Code model");
-    await waitFor(() =>
-      expect(
-        Array.from((select as HTMLSelectElement).options).map((o) => o.value),
-      ).toContain("claude-fable-5[1m]"),
-    );
-    await userEvent.selectOptions(select, "claude-fable-5[1m]");
-    await clickByName("Finish");
-
-    await waitFor(() =>
-      expect(ipc.setClaudeCodeModel).toHaveBeenCalledWith("claude-fable-5[1m]"),
-    );
-    // The Primary Runtime default uses the full id with the [1m] suffix stripped.
-    await waitFor(() =>
-      expect(ipc.setDefaultModel).toHaveBeenCalledWith("claude-fable-5"),
-    );
-  });
-
-  it("adds an OpenAI-compatible runtime with key + base URL", async () => {
+  it("an agent on a host leaves this device's default alone", async () => {
     const onComplete = vi.fn();
     render(<Onboarding onComplete={onComplete} />);
-
     await toAgent();
-    await clickByName(/OpenAI-compatible API/);
-    await userEvent.type(screen.getByPlaceholderText(/API key/), "sk-test-123");
-    await clickByName("Finish");
-
-    await waitFor(() =>
-      expect(ipc.addRuntime).toHaveBeenCalledWith(
-        expect.any(String),
-        "OpenAI-compatible",
-        "openAI",
-        "remote",
-        "https://api.openai.com/v1/chat/completions",
-        "gpt-4o",
-        true,
-        false,
-      ),
-    );
-    expect(ipc.updateConnectionSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKey: "sk-test-123", permissionMode: "runCommands" }),
-    );
+    await clickByName("Add @coder on box-1");
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(ipc.setDefaultRuntime).not.toHaveBeenCalled();
   });
 
-  it("gives the Ollama runtime an installed model, never gpt-4o", async () => {
-    (ipc.detectEnvironment as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      claudeCode: false,
-      ollama: true,
-      anthropicEnv: false,
-      openaiEnv: false,
-      gitName: "Sam Dev",
-      gitEmail: "sam@example.com",
-    });
-    (ipc.listOllamaModels as ReturnType<typeof vi.fn>).mockResolvedValue({
-      base: "http://localhost:11434",
-      host: "localhost",
-      models: [{ name: "qwen2.5-coder:7b" }],
-      pulling: [],
-    });
-    render(<Onboarding onComplete={vi.fn()} />);
+  it("Skip for now finishes the first run without an agent, keeping the edit switch", async () => {
+    const onComplete = vi.fn();
+    render(<Onboarding onComplete={onComplete} />);
     await toAgent();
-    const field = (await screen.findByLabelText("Ollama model")) as HTMLInputElement;
-    await waitFor(() => expect(field.value).toBe("qwen2.5-coder:7b"));
-    await clickByName("Finish");
-    await waitFor(() =>
-      expect(ipc.addRuntime).toHaveBeenCalledWith(
-        "ollama-local",
-        "Ollama (local)",
-        "ollama",
-        "local",
-        "http://localhost:11434",
-        "qwen2.5-coder:7b",
-        true,
-        false,
-      ),
-    );
-  });
-
-  it("says Finish, the button's own name, when a probe fails", async () => {
-    (ipc.probeProvider as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, latency_ms: 0, reply: "", error: "401" });
-    render(<Onboarding onComplete={vi.fn()} />);
-    await toAgent();
-    await clickByName(/Anthropic API key/);
-    await userEvent.type(screen.getByPlaceholderText(/Anthropic API key/), "sk-ant-bad");
-    await clickByName("Finish");
-    await screen.findByText(/press Finish again/);
-  });
-
-  it("holds on a failed agent probe, then proceeds on a second Finish", async () => {
-    // A bad key: the probe fails, so the first Next must NOT advance/configure.
-    (ipc.probeProvider as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      ok: false,
-      latency_ms: 0,
-      reply: "",
-      error: "401 Unauthorized",
-    });
-    render(<Onboarding onComplete={vi.fn()} />);
-
-    await toAgent();
-    await clickByName(/Anthropic API key/);
-    await userEvent.type(screen.getByPlaceholderText(/Anthropic API key/), "sk-ant-bad");
-    await clickByName("Finish"); // probes → fails → holds
-
-    // The failure is surfaced and no runtime was configured yet.
-    await screen.findByText(/won't answer until it works/);
-    expect(ipc.addRuntime).not.toHaveBeenCalled();
-
-    // A second Continue proceeds anyway (transient/edge escape hatch).
-    await clickByName("Finish");
-    await waitFor(() => expect(ipc.updateConnectionSettings).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole("checkbox"));
+    await clickByName("Skip for now");
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(ipc.setDefaultRuntime).not.toHaveBeenCalled();
+    expect(ipc.updateConnectionSettings).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: "default" }));
   });
 
   it("onboards without any provider: a name, an optional picture and the safety code", async () => {

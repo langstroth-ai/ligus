@@ -9,7 +9,7 @@ import { ADMIT_BOX_EVENT } from "@/lib/nav";
 const flowDef = (id: string, title: string) => ({ id, title, summary: "", why: `why ${id}`, keywords: "", minRole: null, personSteps: false });
 
 const agentForm = (inputs: Record<string, string>) => ({
-  flow: flowDef("agent", "Set up an agent"),
+  flow: flowDef("agent", "Add an agent"),
   preflight: [{ id: "agent.sandbox", title: "agent sandbox", status: "ok", detail: "seatbelt" }],
   blocked: false,
   steps: [
@@ -120,7 +120,7 @@ describe("SetupWizard", () => {
     const user = userEvent.setup();
     vi.mocked(ipc.setupRun).mockResolvedValue(outcome({}));
     open("agent");
-    expect(await screen.findByText("Set up an agent")).toBeInTheDocument();
+    expect(await screen.findByText("Add an agent")).toBeInTheDocument();
     // The preflight passed: the first screen is the harness, Next waits for it.
     const next = screen.getByRole("button", { name: "Next" });
     expect(next).toBeDisabled();

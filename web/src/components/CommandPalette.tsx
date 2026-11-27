@@ -51,7 +51,7 @@ export interface PaletteActions {
   addComputer?: () => void;
   /// Settings → Profile, scrolled to My devices.
   myDevices?: () => void;
-  /// Open a guided setup flow ("Set up an agent", "Connect a tool", …).
+  /// Open a guided setup flow ("Add an agent", "Connect a tool", …).
   setup?: (flow: SetupFlowId) => void;
   /// The ⌘/ keyboard shortcuts sheet.
   showShortcuts?: () => void;
