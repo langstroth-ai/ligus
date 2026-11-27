@@ -1402,6 +1402,62 @@ async fn an_agent_on_the_catch_all_runtime_says_so_in_its_chat() {
     h.handle.shutdown();
 }
 
+/// A box missing an agent's runtime (and with no catch-all) refuses the
+/// turn before any claim and writes nothing; the phone's own message reads
+/// "can't run" with the reason (workspace model v3, 5.4, H2), never a
+/// silent answer elsewhere.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_box_without_the_agents_runtime_says_it_cant_run_it() {
+    let (endpoint, model) = spawn_model(vec![vec![delta(json!({"content": "should not run"}))]]).await;
+    let mut h = harness(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")]).await;
+    // The box's own person writes (an unresolved phone sees no routes).
+    h.as_operator = true;
+    let ws = h.handle.shared.ws;
+    let local = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        let mut a = WorkspaceAgent::new("local", "desktop-only-runtime");
+        a.owner_actor_id = desk.author().id.clone();
+        a.access = ligus_core::agent::ACCESS_EVERYONE.into();
+        let id = a.id;
+        desk.add_agent(ws, ws, a).unwrap();
+        id
+    };
+    desktop_sync(&h).await;
+    let host = this_host(&h).await;
+    bind_here(&h, &host, &[local]).await;
+
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Try it" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let sent = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@local hi" }))).await;
+    let sent_id = sent["message"]["id"].as_str().unwrap().to_string();
+    let mut route = Value::Null;
+    for _ in 0..300 {
+        let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await;
+        route = msgs["messages"].as_array().unwrap().iter().find(|m| m["id"] == sent_id.as_str()).map(|m| m["route"].clone()).unwrap_or(Value::Null);
+        if !route.is_null() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(route["state"], "unrunnable", "{route}");
+    assert_eq!(route["reason"], "sourceNotOffered", "{route}");
+    assert_eq!(route["text"], "@local can't run on this box: it doesn't have 'desktop-only-runtime'.", "{route}");
+    assert_eq!(route["runHere"], false, "a phone runs nothing");
+    // A request the box can't place (the shared bearer alone) sees no route:
+    // whose message it is isn't known.
+    h.as_operator = false;
+    let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await;
+    assert!(msgs["messages"].as_array().unwrap().iter().all(|m| m.get("route").is_none()), "{msgs}");
+    // Nothing ran and nothing was written for the turn: no claim, no
+    // placeholder, no note.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(model.bodies.lock().unwrap().is_empty(), "the model was never called");
+    let s = h.handle.shared.lock().load_in(ws, Uuid::parse_str(&chat_id).unwrap()).unwrap().unwrap();
+    assert_eq!(s.messages.iter().filter(|m| m.role != MessageRole::User).count(), 0, "{:?}", s.messages);
+    assert!(s.turn_claims.is_empty());
+    h.handle.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reject_with_reason_and_last_event_id_replay() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;

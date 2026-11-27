@@ -342,6 +342,7 @@ flow's flags.
 | `ligus setup agent --harness H --name NAME [--model M] [--endpoint URL \| --gateway NAME] [--test-turn]` | checks the harness is installed and signed in and the agent sandbox, reuses or defines a keyless workspace runtime (Admin), creates the agent (Contributor), optionally sends one test turn |
 | `ligus setup tool --id ID (--command "PROG ARGS" \| --kind url --url URL [--token - \| @FILE]) [--reach all\|AGENT,...]` | starts the MCP server once under the agent sandbox and lists its tools, then saves it with which agents may reach it (`<data dir>/mcp-servers.toml`, `mcp-reach.json`); a token goes to the secret store |
 | `ligus setup folder --path DIR [--name NAME] [--branch B]` | checks the checkout, matches (or, as an Admin, adds) the workspace repository, binds the folder |
+| `ligus setup box --to ligusaddr1:… [--label NAME] [--timeout 15m]` | on a box: asks the workspace's Admins by code match (both screens show the same code, an Admin approves with a passkey), keeps the admission once it is on the workspace log, and checks `ligus serve`. Nothing is pasted; a relay without the approval mailbox falls back to the paste (exit 4) |
 | `ligus setup box [--label NAME] [--code - \| @FILE]` | on a box: prints its join request and stops (exit 4) until an Admin approves it with a passkey; then keeps the admission and checks `ligus serve` |
 | `ligus setup phone` | checks the box can pair, then hands over to `ligus pair` in your own terminal (exit 4) |
 | `ligus setup invite` | checks you can invite and lists invites and whether they were accepted; invites are created on the desktop (exit 4) |
@@ -480,6 +481,7 @@ nobody can register a host under someone else's computer.
 
 ```toml
 list_tools = false              # a person's computer: don't list its tools
+run_others_agents = true        # a person's computer: run other people's agents placed here
 
 [[local]]                       # a local model server; the address stays here
 name = "ollama"
@@ -505,6 +507,12 @@ secret = "acme"
 - `list_tools = false` empties a person's computer's list (the desktop's
   **Settings → Models → List this computer's tools**). Workers and boxes
   always list theirs.
+- `run_others_agents = true` lets a person's computer run agents other
+  people placed on it (the desktop's **Settings → Models → Run other
+  people's agents on this computer**). Off by default: it runs only its own
+  person's agents, and says in its beat which others it won't run, so their
+  chats read "can't run on Ana's MacBook: it runs only Ana's agents".
+  Workers and boxes run any agent placed on them.
 - An invalid `host.toml` stops `ligus serve` and `ligus worker`, with the
   line that's wrong.
 
@@ -524,7 +532,12 @@ ligus worker [--label <name>] [--health-listen <addr>]
 
 Registers this box as a host (label: `--label`, else `$HOSTNAME`, else
 `worker`), syncs, and every 3 s answers queued mentions for the agents bound
-to it, backlog included. It publishes a liveness beat on the relay's presence
+to it, backlog included. An agent it can't run as asked (a runtime it
+doesn't have, or a runtime without its key here) isn't claimed or answered:
+its beat says why, and the sender's chat shows "@coder can't run on build-1:
+it doesn't have 'codex-pro'." A `runtimes.toml` entry with `id = "*"` stands
+in only for an older agent's runtime id, never for a run spec that names a
+source and model; the chat says once when it does. It publishes a liveness beat on the relay's presence
 channel, backs off on relay errors (6 s doubling to 120 s), finishes replies a
 previous run was streaming when it stopped, and exits cleanly on SIGTERM or
 Ctrl-C. Worker turns are read-only for Claude Code unless

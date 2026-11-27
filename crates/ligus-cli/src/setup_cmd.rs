@@ -17,7 +17,7 @@ use ligus_runtime::mcp::{McpServerSpec, McpTransport};
 use ligus_runtime::model_catalog::ModelList;
 use ligus_runtime::setup::{self, service, FieldKind, FlowId, Inputs, Outcome, Progress, RunOpts, Secrets, Surface};
 use ligus_runtime::setup::{
-    AgentFact, BoxFact, FolderFact, HarnessFact, HostFact, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RuntimeFact, RuntimeSpec, ServeFact,
+    AgentFact, BoxAsk, BoxFact, FolderFact, HarnessFact, HostFact, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RuntimeFact, RuntimeSpec, ServeFact,
     SetupOps, TestTurn,
 };
 use ligus_runtime::{ChatService, McpReach};
@@ -97,6 +97,7 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
     // confirms instead): how long to wait for it, or not at all.
     let mut recovery = false;
     let mut handoff_wait = Some(crate::handoff::DEFAULT_TIMEOUT);
+    let mut admit_wait = None;
     let mut i = 0;
     let mut seen_flow = false;
     while i < rest.len() {
@@ -122,6 +123,7 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
                 let v = rest.get(i).ok_or_else(|| help::usage_error("--timeout needs a duration (10m, 90s)"))?;
                 i += 1;
                 handoff_wait = Some(crate::cli_flags::parse_duration(v)?);
+                admit_wait = handoff_wait;
             }
             _ if !a.starts_with("--") => {
                 if !seen_flow && a == flow.as_str() {
@@ -155,6 +157,10 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
                 }
             }
         }
+    }
+    ops.json = json;
+    if let Some(w) = admit_wait {
+        ops.admit_wait = w;
     }
     let handoff = if recovery || dry_run {
         None
@@ -227,13 +233,26 @@ pub struct CliOps {
     ws: Uuid,
     env: DetectEnv,
     label: String,
+    /// How long `ligus setup box --to` waits for an approver (`--timeout`).
+    admit_wait: std::time::Duration,
+    /// `--json`: what the code-match step prints goes to stderr.
+    json: bool,
+    /// Ask at a terminal whether the approver's screen shows the code (off
+    /// in tests).
+    ask_on_tty: bool,
+    /// Hears the code as it is shown (tests).
+    code_tx: Option<std::sync::mpsc::Sender<String>>,
 }
 
 impl CliOps {
     pub fn open(cfg: &Config) -> Result<Self> {
         let svc = crate::open_service(cfg)?;
         let label = crate::env_opt("LIGUS_HOST_LABEL").or_else(|| crate::env_opt("HOSTNAME")).unwrap_or_else(|| "this host".into());
-        Ok(CliOps { cfg: cfg.clone(), ws: crate::uuid_of_room(&cfg.room), svc, env: DetectEnv::from_process(), label })
+        Ok(CliOps { cfg: cfg.clone(), ws: crate::uuid_of_room(&cfg.room), svc, env: DetectEnv::from_process(), label, admit_wait: crate::approvals_cmd::DEFAULT_WAIT,
+            json: false,
+            ask_on_tty: true,
+            code_tx: None,
+        })
     }
 
     fn reach(&self) -> Result<McpReach, OpsError> {
@@ -242,6 +261,26 @@ impl CliOps {
 
     fn joined(&self) -> bool {
         self.cfg.relay_url.is_some() && self.svc.my_workspace_role(self.ws).is_some()
+    }
+}
+
+/// What the box's code-match step came to, as the engine reads it. A relay
+/// without the mailbox routes falls back to the paste.
+fn box_ask(done: Result<(String, String)>) -> BoxAsk {
+    match done {
+        Ok((workspace, approver)) => BoxAsk::Joined { workspace, by: approver },
+        Err(e) => {
+            let (exit, code) = crate::problem::classify(&e);
+            if code == "no_mailbox_routes" {
+                return BoxAsk::NoMailbox;
+            }
+            let fix = e.chain().find_map(|c| c.downcast_ref::<crate::problem::Problem>()).and_then(|p| p.fix.clone());
+            BoxAsk::Stopped {
+                exit,
+                why: ligus_runtime::secret_redact::redacted(&format!("{e:#}")),
+                fix: fix.unwrap_or_else(|| "start again: ligus setup box --to ligusaddr1:…".into()),
+            }
+        }
     }
 }
 
@@ -479,6 +518,23 @@ impl SetupOps for CliOps {
         let r = crate::admit::join_request(&self.cfg, &label).map_err(OpsError::from)?;
         Ok((r.encode(), r.fingerprint()))
     }
+    fn ask_to_join(&mut self, to: &str, label: &str) -> OpsResult<BoxAsk> {
+        let label = if label.is_empty() { self.label.clone() } else { label.to_string() };
+        let mut o = crate::approvals_cmd::ToOptions::new(to.to_string(), label, self.admit_wait, false, self.json);
+        o.code_tx = self.code_tx.clone();
+        let cfg = self.cfg.clone();
+        // At a terminal the box asks whether the approver's screen shows the code.
+        let interactive = self.ask_on_tty && std::io::IsTerminal::is_terminal(&std::io::stdin());
+        let done = service::block_on(async move {
+            let mut ask = crate::devices_cmd::confirm_on_tty;
+            let mut r = Report::new("setup box");
+            crate::approvals_cmd::ask_as_box(&cfg, &o, interactive.then_some(&mut ask as crate::approvals_cmd::Ask<'_>), &mut r)
+                .await
+                .map(|a| (a.workspace, a.approver))
+        })
+        .ok_or_else(|| OpsError::Failed("the code-match step stopped".into()))?;
+        Ok(box_ask(done))
+    }
     fn redeem(&mut self, code: &Zeroizing<String>) -> OpsResult<String> {
         let r = crate::admit::redeem(&mut self.cfg, code.trim()).map_err(OpsError::from)?;
         Ok(r.room)
@@ -590,6 +646,64 @@ mod tests {
         assert!(!format!("{e:#}").contains("hrt1-canary-value"), "{e:#}");
         let mut stdin = || Ok("  tok\n".to_string());
         assert_eq!(read_secret("--token", Some("-".into()), &mut stdin).unwrap().as_str(), "tok");
+    }
+
+    /// `ligus setup box --to`: the box asks through the mailbox, the Admin
+    /// approves with the code it shows, and the box keeps the admission
+    /// (after finding the approval on the workspace log) with nothing pasted.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn setup_box_to_joins_by_code_match() {
+        use crate::approvals_cmd_tests as t;
+        let w = t::world().await;
+        let addr = t::address(&w).await.encode();
+        let boxc = t::fresh(&w.root.join("box"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let bc = boxc.clone();
+        let boxed = tokio::task::spawn_blocking(move || {
+            let mut ops = CliOps::open(&bc).unwrap();
+            ops.ask_on_tty = false;
+            ops.json = true;
+            ops.code_tx = Some(tx);
+            ops.ask_to_join(&addr, "build-1")
+        });
+        let rid = t::first_rid(&w).await;
+        let mut typed = || Ok(rx.recv_timeout(std::time::Duration::from_secs(30))?);
+        crate::approvals_cmd::cmd_approve(&w.desk, t::approve(&w, &rid), Some(&mut typed)).await.unwrap();
+        match boxed.await.unwrap().unwrap() {
+            BoxAsk::Joined { workspace, by: approver } => {
+                assert_eq!(workspace, w.room);
+                assert!(!approver.is_empty());
+            }
+            other => panic!("not admitted: {other:?}"),
+        }
+        assert_eq!(crate::load_file_config(&boxc.data_dir).room.as_deref(), Some(w.room.as_str()), "the admission is kept");
+    }
+
+    /// A relay without the approval mailbox routes: the box falls back to
+    /// the paste (the flow prints the join request), and nothing is kept.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn setup_box_to_falls_back_to_the_paste_without_a_mailbox() {
+        use crate::approvals_cmd_tests as t;
+        let w = t::world().await;
+        let mut addr = t::address(&w).await;
+        addr.relay = t::spawn(axum::Router::new().route("/v1/health", axum::routing::get(|| async { "ok" }))).await;
+        let boxc = t::fresh(&w.root.join("box"));
+        let bc = boxc.clone();
+        let to = addr.encode();
+        let got = tokio::task::spawn_blocking(move || {
+            let mut ops = CliOps::open(&bc).unwrap();
+            ops.ask_on_tty = false;
+            ops.ask_to_join(&to, "build-1")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(got, BoxAsk::NoMailbox);
+        assert!(crate::load_file_config(&boxc.data_dir).room.is_none(), "nothing kept");
+        // A damaged address is a usage error, not a fallback.
+        let bc = boxc.clone();
+        let got = tokio::task::spawn_blocking(move || CliOps::open(&bc).unwrap().ask_to_join("ligusaddr1:nope", "x")).await.unwrap().unwrap();
+        assert!(matches!(got, BoxAsk::Stopped { exit: 2, .. }), "{got:?}");
     }
 
     #[test]

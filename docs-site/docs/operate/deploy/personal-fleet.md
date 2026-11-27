@@ -116,6 +116,18 @@ The request appears in your Inbox on the laptop. Open it, check that the
 code matches the server's, choose **Codes match** and confirm with your
 passkey. The server keeps the admission by itself.
 
+The guided flow and the deploy script take the same address, so nothing is
+pasted there either:
+
+```sh
+ligus setup box --to 'ligusaddr1:…' --label home-server     # also checks the agent sandbox and ligus serve
+deploy/local/ligus-local configure --role serve --data-dir ~/.ligus-serve \
+  --label home-server --admit-to 'ligusaddr1:…' --json       # writes the env file, then admits
+```
+
+If the relay has no approval mailbox, both fall back to the paste below and
+say so (exit 4, with the join request).
+
 Without the address, `ligus admit request --label home-server` prints a join
 request (`ligusjoin1:…`) to paste into **Admit a box… → From the box's join
 request**; copy the code it gives you back to the server with

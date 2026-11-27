@@ -158,6 +158,12 @@ pub struct HostStatus {
     /// gateways only", "tools not listed").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refuses: Vec<String>,
+    /// Agents placed on this host that it won't run, each with why
+    /// (workspace model v3, 5.4): a source it can't resolve, no key, or a
+    /// desktop that runs only its own person's agents. Additive; older
+    /// readers ignore it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused_agents: Vec<crate::outcome::AgentRefusal>,
 }
 
 /// One offer's readiness and models.
@@ -186,6 +192,8 @@ pub const MAX_MODEL_NAME: usize = 128;
 pub const MAX_REASON: usize = 120;
 /// At most this many refusal reasons.
 pub const MAX_REFUSALS: usize = 8;
+/// At most this many refused agents in one status.
+pub const MAX_REFUSED_AGENTS: usize = 32;
 /// The longest build string.
 pub const MAX_BUILD: usize = 32;
 /// A status larger than this (serialized) drops its model lists first, so a
@@ -214,6 +222,10 @@ impl HostStatus {
             }
         }
         self.refuses = self.refuses.iter().filter_map(|r| clean(r, MAX_REASON)).take(MAX_REFUSALS).collect();
+        self.refused_agents.truncate(MAX_REFUSED_AGENTS);
+        for r in &mut self.refused_agents {
+            r.why = clean(&r.why, MAX_REASON).unwrap_or_default();
+        }
         if serde_json::to_vec(&self).map_or(0, |v| v.len()) > MAX_STATUS_BYTES {
             for o in &mut self.offers {
                 o.models.clear();
@@ -221,6 +233,11 @@ impl HostStatus {
             }
         }
         self
+    }
+
+    /// Why this host won't run `agent`, if it said so.
+    pub fn refusal_of(&self, agent: uuid::Uuid) -> Option<&crate::outcome::AgentRefusal> {
+        self.refused_agents.iter().find(|r| r.agent_id == agent)
     }
 
     /// The status of offer `name`.

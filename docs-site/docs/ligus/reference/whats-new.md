@@ -8,6 +8,15 @@ Full release notes are on the
 
 ### Added
 
+- **Admit a box without pasting anything, from setup or the deploy
+  script.** `ligus setup box --to ligusaddr1:…` and `deploy/local/ligus-local
+  configure --admit-to ligusaddr1:…` send the box's join request to the
+  workspace's approval mailbox: the box prints a code, the Admin's desktop or
+  phone shows the same one, they approve with a passkey, and the box keeps
+  the admission once the approval is on the workspace log. A relay without
+  the approval mailbox falls back to the paste and says so. See
+  [From the setup flow or the deploy script](../../operate/ops/admitting-a-box.md#setup-box-to).
+
 - **`ligus secrets`: workspace secrets without environment variables.**
   `ligus secrets set NAME -` reads a key from stdin (hidden at a terminal),
   keeps it in the device's secret store and declares it for the workspace
@@ -135,11 +144,49 @@ Full release notes are on the
   service: after `ligus-local configure --role serve`, `brew services start
   ligus` keeps `ligus serve` running and `brew services restart ligus`
   restarts it after an upgrade. See [Install with Homebrew](../getting-started/homebrew.md).
+- **A turn that can't run says so in the chat.** Your message to an agent
+  whose host is offline gets one quiet line under it ("@coder runs on
+  build-1, which is offline. It will answer when build-1 is back."), which
+  changes after a couple of minutes, and says when the host was removed, the
+  host can't run the agent as asked, or a person's computer runs only its
+  own person's agents. **Run here this time** runs that one turn on your
+  device when the agent is yours and this device can run it; the host that
+  comes back doesn't answer it again. A box gives phones the same line
+  (`route` on the message). See [When an agent's turn doesn't run](../features/multi-agent.md#turn-outcome).
+- **A reply says how it ended and what answered.** A reply that was stopped
+  or cut off reads **Canceled**, one that failed **Failed**, with the model
+  and host that ran it. A reply is shown where and when it finished.
+- **Run other people's agents on this computer.** **Settings → Models**
+  has a switch for it, off by default (`run_others_agents` in `host.toml`).
+  See [What a host offers](cli.md#what-a-host-offers).
 
 ### Changed
 
 - **"Hide from this list" is now "Remove from view"** on revoked devices in
   My devices: still this device only, and the device stays revoked.
+
+- **No silent stand-ins.** An agent whose runtime your device doesn't have,
+  or has without its key, used to answer on Claude Code without saying. Its
+  turn now reads "can't run here" with the reason, and **Use Claude Code
+  instead** (in the line's ⋯ menu) runs that one turn on Claude Code. The
+  chat's own default agent keeps its runtime and fallback as before, and its
+  reply now names the model that answered.
+- **No answering for another device.** When an agent's host or its owner's
+  devices didn't pick up a turn within about half a minute, the device it
+  was sent from used to answer it itself. Now the turn waits where it
+  belongs and the chat says so; only **Run here this time**, on the agent's
+  owner's own device, runs it elsewhere.
+- **A computer runs only its own person's agents.** An agent someone else
+  placed on your computer no longer runs there unless you turn on **Run
+  other people's agents on this computer**. Workers and boxes run any agent
+  placed on them.
+- **A box or worker refuses what it can't run.** An agent whose runtime the
+  host doesn't have, or has without its key, is no longer claimed and
+  answered with an error: the host says why in its beat and the sender's
+  chat shows it. The `runtimes.toml` catch-all (`id = "*"`) stands in only
+  for an older agent's runtime id, never for a run spec that names a source
+  and model. A chat with Ligus 0.4 peers in it doesn't see these lines on
+  those peers.
 - **Each phone on a box sees its own.** When several people's phones use
   the same box, unread counts, what's been read, "you" in People, which
   agents you may use and which notifications are yours are now worked out

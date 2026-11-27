@@ -485,6 +485,19 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     let mid = locked(host)
         .begin_assistant_message_with_model(chat_id, workspace_id, responder.author.clone(), responder.runtime_id.clone(), Some(rt.effective_model()), responder.agent_id, reply_to)
         .map_err(|e| TurnError { message: e.to_string(), stopped: false, message_id: None })?;
+    // What runs this reply, for its completion's outcome (8.1): the same
+    // fields on every host, from the runtime this host resolved.
+    {
+        let mut svc = locked(host);
+        let run = ligus_core::outcome::ReplyOutcome {
+            harness: crate::host_offers::harness_name(rt.provider),
+            source: responder.runtime_id.clone(),
+            model: rt.effective_model(),
+            host: svc.device_id().to_string(),
+            ..Default::default()
+        };
+        svc.note_reply_run(mid, run);
+    }
     stop.bind_message(mid);
     host.begun(mid);
     host.changed();
@@ -492,7 +505,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     // Stopped before the stream: the placeholder is completed empty.
     let stopped_early = || {
         tracing::info!(target: "dispatch", "turn stopped by user before it streamed");
-        let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, String::new());
+        let _ = locked(host).complete_assistant_message_as(chat_id, workspace_id, mid, String::new(), ligus_core::outcome::ReplyStatus::Canceled);
         host.changed();
         host.phase(mid, Phase::Completed, "");
         TurnError { message: STOPPED.into(), stopped: true, message_id: Some(mid) }
@@ -501,7 +514,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     // 11.5): fenced means another device's answer to this turn committed
     // first, so this run stops here.
     if placeholder_fenced(&locked(host), chat_id, mid) {
-        let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, String::new());
+        let _ = locked(host).complete_assistant_message_as(chat_id, workspace_id, mid, String::new(), ligus_core::outcome::ReplyStatus::Canceled);
         host.changed();
         return Err(fail(TURN_FENCED.into()));
     }
@@ -521,7 +534,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     let checkout = match gated {
         Ok(c) => c,
         Err(note) => {
-            let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, note.clone());
+            let _ = locked(host).complete_assistant_message_as(chat_id, workspace_id, mid, note.clone(), ligus_core::outcome::ReplyStatus::Failed);
             host.changed();
             host.phase(mid, Phase::Error, &note);
             return Err(fail(note));
@@ -565,7 +578,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     }
     if require_isolation && cli && write_capable && worktree.is_none() {
         let note = host.isolation_refusal(&responder.effect_author);
-        let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, note.clone());
+        let _ = locked(host).complete_assistant_message_as(chat_id, workspace_id, mid, note.clone(), ligus_core::outcome::ReplyStatus::Failed);
         host.changed();
         host.phase(mid, Phase::Error, &note);
         return Err(fail(note));
@@ -865,7 +878,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
             let msg = e.to_string();
             if stopped {
                 tracing::info!(target: "dispatch", "turn stopped by user");
-                let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, String::new());
+                let _ = locked(host).complete_assistant_message_as(chat_id, workspace_id, mid, String::new(), ligus_core::outcome::ReplyStatus::Canceled);
                 host.changed();
                 host.phase(mid, Phase::Completed, "");
                 return Err(TurnError { message: STOPPED.into(), stopped: true, message_id: Some(mid) });
@@ -873,7 +886,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
             tracing::error!(target: "dispatch", error = %msg, "turn failed");
             host.usage_error(rt.provider, &msg);
             let shown = host.error_text(&msg);
-            let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, format!("[error] {shown}"));
+            let _ = locked(host).complete_assistant_message_as(chat_id, workspace_id, mid, format!("[error] {shown}"), ligus_core::outcome::ReplyStatus::Failed);
             host.changed();
             host.phase(mid, Phase::Error, &msg);
             Err(fail(shown))

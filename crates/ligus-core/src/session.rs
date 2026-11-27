@@ -174,6 +174,12 @@ pub struct ChatSession {
     /// the person's desktop by comparing it with the name it wrote itself.
     #[serde(skip)]
     pub device_label_set: BTreeMap<(Uuid, Uuid), crate::profile::LabelSet>,
+    /// Fold state, never serialized: a counter the fold stamps on each
+    /// message as it is posted (appended finished, or completed), so the
+    /// transcript draws a reply where it finished
+    /// ([`ChatSession::transcript`], workspace model v3, 8.1).
+    #[serde(skip)]
+    pub transcript_seq: u64,
 }
 
 /// Safety ceiling on agent replies since the last human turn — a runaway/loop
@@ -281,6 +287,7 @@ impl ChatSession {
             retired: BTreeMap::new(),
             left: BTreeMap::new(),
             device_label_set: BTreeMap::new(),
+            transcript_seq: 0,
         }
     }
 

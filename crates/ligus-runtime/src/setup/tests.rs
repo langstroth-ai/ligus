@@ -502,6 +502,55 @@ fn box_flow_stops_for_the_person_then_redeems() {
 }
 
 #[test]
+fn box_flow_by_code_match_joins_without_a_paste() {
+    let mut f = Fake { code_match: Ok(BoxAsk::Joined { workspace: "team".into(), by: "Ana".into() }), ..Fake::default() };
+    let o = run_(FlowId::Box, &mut f, &[("label", "home"), ("to", "ligusaddr1:ADDR")]);
+    assert_eq!(o.exit, 0, "{:?}", ids(&o));
+    assert!(o.done);
+    assert_eq!(f.writes, ["ask_to_join ligusaddr1:ADDR home"], "no join request to paste, no redeem of a pasted code");
+    assert!(o.report.checks.iter().any(|c| c.id.ends_with("approval") && c.detail.contains("Ana")));
+    // Joined: a rerun only verifies.
+    assert_eq!(run_(FlowId::Box, &mut f, &[("to", "ligusaddr1:ADDR")]).exit, 0);
+    assert_eq!(f.writes.len(), 1);
+}
+
+#[test]
+fn box_flow_by_code_match_falls_back_to_the_paste_without_a_mailbox() {
+    let mut f = Fake { code_match: Ok(BoxAsk::NoMailbox), ..Fake::default() };
+    let o = run_(FlowId::Box, &mut f, &[("label", "home"), ("to", "ligusaddr1:ADDR")]);
+    assert_eq!(o.exit, exit::PERSON, "{:?}", ids(&o));
+    assert_eq!(o.results.get("joinRequest").map(String::as_str), Some("ligusjoin1:PUBLIC"));
+    assert!(o.report.checks.iter().any(|c| c.id.ends_with("approval") && c.detail.contains("no approval mailbox")));
+    assert!(o.report.next.iter().any(|n| n.contains("--code -")));
+}
+
+#[test]
+fn box_flow_by_code_match_stops_with_its_exit_code() {
+    let mut f = Fake { code_match: Ok(BoxAsk::Stopped { exit: exit::PERSON, why: "no approver answered".into(), fix: "ask an Admin".into() }), ..Fake::default() };
+    let o = run_(FlowId::Box, &mut f, &[("to", "ligusaddr1:ADDR")]);
+    assert_eq!(o.exit, exit::PERSON);
+    assert!(!o.done);
+    // Only the CLI offers it (lt and the desktop don't show the field).
+    let term = Fake { surface: Surface::Term, ..Fake::default() };
+    assert!(!form(FlowId::Box, &term, &Inputs::new()).fields().any(|f| f.id == "to"));
+    assert!(form(FlowId::Box, &Fake::default(), &Inputs::new()).fields().any(|f| f.id == "to"));
+    // A surface that can't ask (the default) says where it can.
+    let mut f = Fake::default();
+    assert_eq!(run_(FlowId::Box, &mut f, &[("to", "ligusaddr1:ADDR")]).exit, exit::FIXABLE);
+    // A dry run asks nobody.
+    let mut f = Fake { code_match: Ok(BoxAsk::NoMailbox), ..Fake::default() };
+    let o = run_o(FlowId::Box, &mut f, &[("to", "ligusaddr1:ADDR")], &[], &RunOpts { dry_run: true, ..Default::default() });
+    assert_eq!(o.exit, 0);
+    assert!(f.writes.is_empty());
+    // --to with --code is a usage error, and the code isn't echoed.
+    let mut f = Fake { code_match: Ok(BoxAsk::NoMailbox), ..Fake::default() };
+    let o = run_s(FlowId::Box, &mut f, &[("to", "ligusaddr1:ADDR")], &[("code", CANARY)]);
+    assert_eq!(o.exit, exit::USAGE);
+    assert!(f.writes.is_empty());
+    assert!(!printed(&o).contains(CANARY));
+}
+
+#[test]
 fn setup_box_refuses_the_code_on_argv_and_the_desktop_data_dir() {
     let mut f = Fake::default();
     let o = run_(FlowId::Box, &mut f, &[("code", "ligusadmit1:xyz")]);

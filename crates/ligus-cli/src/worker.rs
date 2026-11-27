@@ -272,8 +272,38 @@ pub fn local_runtimes(data_dir: &std::path::Path) -> Vec<WorkspaceRuntime> {
 /// The runtime an agent runs on here: a workspace runtime with its id, else a
 /// host-local one with its id, else the host-local catch-all (`id = "*"`).
 /// `runtimes` is workspace runtimes first, then [`local_runtimes`].
+///
+/// The catch-all stands in only for a legacy runtime id. A full run spec
+/// (`run:` ids, workspace model v3, 5.4) names a source and a model: a host
+/// that can't resolve it refuses it rather than run another model.
 pub fn runtime_for<'a>(runtimes: &'a [WorkspaceRuntime], agent: &WorkspaceAgent) -> Option<&'a WorkspaceRuntime> {
-    runtimes.iter().find(|r| r.id == agent.runtime_id).or_else(|| runtimes.iter().find(|r| r.id == "*"))
+    runtimes.iter().find(|r| r.id == agent.runtime_id).or_else(|| {
+        if ligus_core::agent_run::is_full_spec_id(&agent.runtime_id) {
+            return None;
+        }
+        runtimes.iter().find(|r| r.id == "*")
+    })
+}
+
+/// Why this host won't run `agent` (placed on it), if it won't: what its
+/// beat says, so the sender's chat shows "can't run" with the reason
+/// instead of waiting (workspace model v3, 5.4). `None`: it runs.
+pub fn refusal_for(workspace_id: Uuid, runtimes: &[WorkspaceRuntime], agent: &WorkspaceAgent) -> Option<ligus_core::outcome::AgentRefusal> {
+    use ligus_core::outcome::{AgentRefusal, RefusalKind};
+    let id = ligus_proto::names::clean_display_name(&agent.runtime_id);
+    let shown = if ligus_core::agent_run::is_full_spec_id(&agent.runtime_id) {
+        let run = ligus_core::agent_run::from_legacy_id(&agent.runtime_id);
+        if run.model.is_empty() { run.source } else { format!("{} / {}", run.source, run.model) }
+    } else {
+        id
+    };
+    if runtime_for(runtimes, agent).is_none() {
+        return Some(AgentRefusal { agent_id: agent.id, kind: RefusalKind::SourceNotOffered, why: format!("it doesn't have '{shown}'") });
+    }
+    match agent_workspace_runtime(workspace_id, runtimes, agent) {
+        Ok(_) => None,
+        Err(_) => Some(AgentRefusal { agent_id: agent.id, kind: RefusalKind::NoKey, why: format!("it has no key for '{shown}'") }),
+    }
 }
 
 /// Whether this is the first turn in `chat` (since this process started)
@@ -402,16 +432,22 @@ pub async fn drain_tick(
         }
         // Liveness is published to the relay's presence channel by the caller
         // (`ligus serve`'s presence loop, `ligus worker`'s loop), not the log.
-        let hosted: HashSet<Uuid> = svc
+        let placed: Vec<WorkspaceAgent> = svc
             .load_in(ctx.ws, workspace_config_session_id(ctx.ws))?
             .map(|s| s.workspace_agents)
             .unwrap_or_default()
             .into_iter()
             .filter(|a| a.host_id == ctx.my_host)
-            .map(|a| a.id)
             .collect();
         let mut runtimes = svc.list_workspace_runtimes(ctx.ws)?;
         runtimes.extend(local_runtimes(&ctx.cfg.data_dir));
+        // Never a silent substitute (workspace model v3, 5.4): an agent this
+        // host can't resolve is refused before any claim, and the beat says
+        // why, so the sender's chat shows "can't run" with the reason.
+        let refusals: Vec<ligus_core::outcome::AgentRefusal> = placed.iter().filter_map(|a| refusal_for(ctx.ws, &runtimes, a)).collect();
+        let refused_ids: HashSet<Uuid> = refusals.iter().map(|r| r.agent_id).collect();
+        ligus_runtime::host_offers::set_refused_agents(ctx.ws, refusals);
+        let hosted: HashSet<Uuid> = placed.iter().map(|a| a.id).filter(|id| !refused_ids.contains(id)).collect();
         let mut candidates: Vec<PendingMention> = Vec::new();
         // This workspace's chats, each read as (workspace, chat).
         for id in svc.store().sessions_of_workspace(ctx.ws)? {
@@ -574,7 +610,7 @@ pub fn recover_interrupted_turns(svc: &mut ChatService) -> Result<Vec<(Uuid, Uui
             } else {
                 format!("{}\n\n{INTERRUPTED_NOTE}", m.body.trim_end())
             };
-            match svc.complete_assistant_message(s.id, s.workspace_id, m.id, body) {
+            match svc.complete_assistant_message_as(s.id, s.workspace_id, m.id, body, ligus_core::outcome::ReplyStatus::Canceled) {
                 Ok(()) => out.push((s.id, m.id)),
                 Err(e) => eprintln!("worker: finishing interrupted reply {} failed: {e}", m.id),
             }
@@ -630,16 +666,16 @@ async fn run_turn(
         return Ok(());
     };
     // Never silently on another model: the chat says when the catch-all
-    // stands in, and why a turn with no runtime here doesn't run.
+    // stands in (once per chat). A turn with no runtime here was refused
+    // before its claim, and the beat says why (workspace model v3, 5.4).
     let found = runtime_for(runtimes, &agent);
-    if let Some(note) = runtime_note(&agent, found).filter(|_| found.is_none() || catch_all_first_time(s.id, &agent)) {
+    if let Some(note) = runtime_note(&agent, found).filter(|_| found.is_some() && catch_all_first_time(s.id, &agent)) {
         let _ = lock(svc).post_system_note(s.id, s.workspace_id, note);
         sink.changed();
-        if found.is_none() {
-            // An error puts the mention in the failed set, so the note
-            // isn't re-posted every tick.
-            return Err(anyhow!("refused: this host doesn't have runtime '{}'", agent.runtime_id));
-        }
+    }
+    if found.is_none() {
+        // The mention goes to the failed set; nothing is written.
+        return Err(anyhow!("refused: this host doesn't have runtime '{}'", agent.runtime_id));
     }
     let (mut rt, rt_label) = agent_workspace_runtime(s.workspace_id, runtimes, &agent)?;
     // The gateway's attribution (when its operator turned it on) hashes these.
@@ -1074,6 +1110,30 @@ credential = { kind = "none" }
         all.extend(rts);
         assert_eq!(runtime_for(&all, &agent("desktop-local-id")).unwrap().name, "WS");
         assert!(runtime_for(&[], &agent("x")).is_none());
+    }
+
+    /// H16 (worker): a full run spec this host can't resolve is refused with
+    /// its reason, never handed to the `*` catch-all, which stays for legacy
+    /// runtime ids only; a runtime without its key here is refused too.
+    #[test]
+    fn a_full_run_spec_is_refused_not_caught_all() {
+        let catch_all = WorkspaceRuntime::new("*", "Default", ModelProviderKind::Ollama, "gemma4:12b");
+        let rts = vec![catch_all];
+        let spec = ligus_core::agent_run::AgentRun { harness: String::new(), source: "gw-home".into(), model: "llama3:8b".into(), resolved: None };
+        let full = agent(&ligus_core::agent_run::legacy_id(&spec));
+        assert!(runtime_for(&rts, &full).is_none(), "a full spec never runs on the catch-all");
+        let r = refusal_for(test_ws(), &rts, &full).expect("refused");
+        assert_eq!(r.kind, ligus_core::outcome::RefusalKind::SourceNotOffered);
+        assert_eq!(r.why, "it doesn't have 'gw-home / llama3:8b'");
+        // A legacy id still runs on the catch-all.
+        assert!(refusal_for(test_ws(), &rts, &agent("desktop-local-id")).is_none());
+        assert_eq!(runtime_for(&rts, &agent("desktop-local-id")).unwrap().id, "*");
+        // A hosted runtime without its key here: refused, never keyless.
+        let mut hosted = WorkspaceRuntime::new("team", "Team", ModelProviderKind::Anthropic, "claude-opus");
+        hosted.credential = ligus_core::WorkspaceCredential::SecretRef { secret_ref: "TEAM_KEY".into() };
+        let r = refusal_for(test_ws(), &[hosted], &agent("team")).expect("refused");
+        assert_eq!(r.kind, ligus_core::outcome::RefusalKind::NoKey);
+        assert!(!r.why.contains("TEAM_KEY"), "the reason names the runtime, not the secret: {}", r.why);
     }
 
     #[test]

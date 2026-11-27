@@ -83,6 +83,13 @@ export const getChat = (sessionId: string) =>
 export const getContextTelemetry = (sessionId: string) =>
   invoke<ContextTelemetryDto | null>("get_context_telemetry", { sessionId });
 
+/// "Run here this time" for a person's own message whose turn waits (its
+/// agent's host is offline or gone): runs that turn once on this device.
+/// `useClaudeCode`: "Use Claude Code instead", for a turn that can't run
+/// here as its agent asks (no key, or a runtime this device doesn't have).
+export const runTurnHere = (sessionId: string, triggerId: string, useClaudeCode = false) =>
+  invoke<void>("run_turn_here", { sessionId, triggerId, useClaudeCode });
+
 /// `runHere`: "Run here this time" — a message to an agent pinned to a host
 /// without the chat's repository runs on this device instead, once.
 export const sendMessage = (sessionId: string, body: string, runHere?: boolean) =>
@@ -1278,6 +1285,10 @@ export const listWorkspaceHosts = () =>
 /// Whether this computer lists its tools (names and sign-in state only) on
 /// its host record, so members can place agents here.
 export const getListTools = () => invoke<boolean>("get_list_tools");
+/// "Run other people's agents on this computer" (host.toml
+/// `run_others_agents`; off by default).
+export const getRunOthersAgents = () => invoke<boolean>("get_run_others_agents");
+export const setRunOthersAgents = (run: boolean) => invoke<void>("set_run_others_agents", { run });
 export const setListTools = (list: boolean) => invoke<void>("set_list_tools", { list });
 
 /// Reassign an agent to a host — "run on worker instead". Empty host = owner's

@@ -146,6 +146,22 @@ pub struct ChatMessage {
     /// [`ChatMessage::appended_at`].
     #[serde(skip)]
     pub appended_at: Option<Timestamp>,
+    /// Fold state, never an author's word: how a streamed reply ended, from
+    /// its `MessageCompleted` (`ok` for a completion without an outcome, an
+    /// older writer's). `None` while it streams, and on a message that never
+    /// streamed. Display only (workspace model v3, 8.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<crate::outcome::ReplyOutcome>,
+    /// Fold state, never serialized: the device (or agent key) that signed
+    /// this message's first append. A `canceled` completion is overridden
+    /// only by a later completion from this signer (E7).
+    #[serde(skip)]
+    pub appended_by: Option<Uuid>,
+    /// Fold state, never serialized: where the message was posted in fold
+    /// order ([`crate::ChatSession::transcript_seq`]); `None` while it
+    /// streams, and on a message seeded from a snapshot.
+    #[serde(skip)]
+    pub posted_seq: Option<u64>,
     #[serde(default)]
     pub tool_calls: Vec<ChatToolCall>,
     #[serde(default)]
@@ -180,6 +196,9 @@ impl ChatMessage {
             superseded: false,
             completed_at: None,
             appended_at: None,
+            outcome: None,
+            appended_by: None,
+            posted_seq: None,
             tool_calls: Vec::new(),
             tool_results: Vec::new(),
             reactions: Vec::new(),
