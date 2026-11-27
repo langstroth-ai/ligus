@@ -448,28 +448,36 @@ pub const COMMANDS: &[Cmd] = &[
             f("--no-wait", "off", "send a step that needs your passkey to your desktop or phone and exit 4 (finish with ligus handoff wait)"),
             f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence for a step that needs your passkey, instead of your desktop or phone"),
         ],
-        examples: &["ligus setup", "ligus setup agent --harness claude-code --name builder", "ligus setup --json | jq '.checks[] | {id, status}'"],
+        examples: &["ligus setup", "ligus setup agent --name builder --source claude-code", "ligus setup --json | jq '.checks[] | {id, status}'"],
         exit: &[(0, "listed (setup never fails a listing)")],
-        see_also: &["ligus help setup", "ligus doctor", "desktop: ⌘K > Set up an agent (and the other Set up commands)"],
+        see_also: &["ligus help setup", "ligus doctor", "desktop: ⌘K > Add an agent (and the other setup commands)"],
         ..D
     },
     Cmd {
         name: "setup agent",
         group: G_START,
-        summary: "set up an agent on a coding CLI or model that is installed and signed in",
-        purpose: "Check the harness is installed and signed in (never reading a token), check the agent sandbox, \
-                  validate the name (one word; not a reserved mention name such as ligus or all; not another agent's or \
-                  member's), pick the model, reuse a keyless workspace runtime with that harness and model or define one \
-                  (Admin), create the agent (Contributor), and optionally send one test turn. A failure after the \
-                  runtime was defined removes it again.",
-        synopsis: &["ligus setup agent --harness H --name NAME [--model M] [--endpoint URL | --gateway NAME] [--local-servers] [--test-turn] [--no-wait | --timeout 10m] [--recovery-words-file PATH] [--json] [--dry-run]"],
+        summary: "add an agent in one step: what answers, its model, and where it runs",
+        purpose: "One step for a new agent (the same form as the desktop's Add an agent and lt's). What answers is a \
+                  coding CLI on this device or on a host (hosts list what they have, with sign-in state from their \
+                  beat), a model gateway a host offers, a hosted API whose key a host holds by secret reference, or a \
+                  model server this device reaches. The model comes from that source's list (a gateway's own list, \
+                  auto included when it has one). Runs on defaults to this device for a CLI signed in here, and to the \
+                  only host that offers a gateway or key; with several, pass --runs-on. The engine checks the CLI is \
+                  installed and signed in here (never reading a token) and the agent sandbox, validates the name (one \
+                  word; not a reserved mention name such as ligus or all; not another agent's or member's), reuses a \
+                  workspace runtime that runs the same thing or defines one, and writes the agent with its host in one \
+                  record. Placing an agent on a host, and a new workspace runtime, are an Admin's. On a shared \
+                  workspace the agent needs your passkey, and a new workspace runtime one more (passkey 1 of 2, \
+                  2 of 2), each confirmed on your desktop or phone. A failure after the runtime was defined removes it \
+                  again. --harness H and --gateway G still work (they mean --source).",
+        synopsis: &["ligus setup agent --name NAME [--source S] [--model M] [--runs-on here|HOST] [--endpoint URL] [--local-servers] [--test-turn] [--no-wait | --timeout 10m] [--recovery-words-file PATH] [--json] [--dry-run]"],
         flags: &[
-            f("--harness H", "required", "claude-code, codex, copilot, antigravity, aider, pi, local (Ollama or OpenAI-compatible) or gateway"),
             f("--name NAME", "required", "the agent's @name"),
-            f("--model M", "the harness's default", "the model (required for local)"),
+            f("--source S", "the best one found", "what answers: claude-code, codex, copilot, antigravity, aider, pi, gateway:NAME (a gateway a host offers), provider:NAME (a hosted API a host holds the key for), or local (a model server)"),
+            f("--model M", "the CLI's default; a gateway's first model", "the model (required for a gateway, a hosted API or local)"),
+            f("--runs-on here|HOST", "this device for a CLI; the one host offering a gateway or key", "where turns run: here, or a host's id or name (ligus hosts)"),
             f("--endpoint URL", "http://localhost:11434", "local only: the model server (https://, or http:// on this machine)"),
-            f("--gateway NAME", "none", "gateway only: a model gateway a host offers (ligus hosts)"),
-            f("--test-turn", "off", "send one short test message and check the reply"),
+            f("--test-turn", "off", "send one short test message and check the reply (on this device only)"),
             f("--local-servers", "off", "let the agent run local servers (agy's helper server; Linux with bubblewrap; not available on macOS yet; the Owner's)"),
             f("--timeout DURATION", "10m", "how long a step that needs your passkey waits for your desktop or phone (Confirm on your desktop or phone: …, with a code)"),
             f("--no-wait", "off", "send that step to your desktop or phone and exit 4; finish with ligus handoff wait, then run this again"),
@@ -479,18 +487,18 @@ pub const COMMANDS: &[Cmd] = &[
         ],
         env: &["PATH", "LIGUS_RUNTIME_TEST_TIMEOUT_SECS"],
         examples: &[
-            "ligus setup agent --harness claude-code --name builder --test-turn",
-            "ligus setup agent --harness local --model llama3.2 --name local --dry-run",
-            "ligus setup agent --harness antigravity --name gem --local-servers --json",
+            "ligus setup agent --name builder --source claude-code --test-turn",
+            "ligus setup agent --name coder --source gateway:gw-home --model auto --runs-on box-1",
+            "ligus setup agent --name local --source local --model llama3.2 --dry-run",
         ],
         exit: &[
-            (2, "a missing or invalid flag (the check names it)"),
-            (3, "the harness isn't installed or signed in, or no agent sandbox"),
+            (2, "a missing or invalid flag, or a host that doesn't offer the source (the check names it)"),
+            (3, "the CLI isn't installed or signed in here, or no agent sandbox"),
             (4, "the workspace's rules need your passkey and your desktop or phone didn't confirm it in time (or --no-wait; or the relay has no approval mailbox: do it in the desktop app, or pass --recovery-words-file)"),
-            (6, "your role can't add an agent or a workspace runtime"),
+            (6, "your role can't add an agent there, place it on a host, or define a workspace runtime"),
             (7, "a local model server didn't answer"),
         ],
-        see_also: &["ligus setup", "ligus add-agent", "ligus runtimes", "ligus doctor --sandbox"],
+        see_also: &["ligus setup", "ligus hosts", "ligus gateway", "ligus add-agent", "ligus doctor --sandbox"],
         ..D
     },
     Cmd {
@@ -1359,7 +1367,7 @@ pub const COMMANDS: &[Cmd] = &[
                   can't carry it: do the step in the desktop app, or pass --recovery-words-file.",
         synopsis: &["ligus handoff list [--json]", "ligus handoff wait [<id>] [--timeout 10m] [--json]", "ligus handoff cancel [<id>] [--json]"],
         conn: true,
-        examples: &["ligus setup agent --harness claude-code --name coder --no-wait", "ligus handoff wait"],
+        examples: &["ligus setup agent --name coder --source claude-code --no-wait", "ligus handoff wait"],
         see_also: &["ligus handoff wait", "ligus setup", "ligus help setup"],
         ..D
     },
@@ -2805,7 +2813,7 @@ phone (ligus help phone). The desktop app: ligus app.
         aliases: &["setup-flows", "wizard"],
         summary: "the guided setup flows: agent, tool, folder, box, phone, invite, relay",
         text: "\
-Seven guided flows, the same in the desktop (⌘K > Set up an agent, Connect a tool, …;
+Seven guided flows, the same in the desktop (⌘K > Add an agent, Connect a tool, …;
 or /setup in the composer), in lt and here. Each one checks first, writes only when
 every check passed, can be run again safely (a finished step is skipped), and says
 what to do when something fails (the `fix:` line under it).
@@ -3430,7 +3438,7 @@ Set up a box (serve) on this machine:
 
 Guided setup (each flow checks first, is safe to rerun, exits 4 at a human-only step):
   ligus setup --json                                                 # what is done, what to run next
-  ligus setup agent --harness claude-code --name <name> --json       # verify: done true
+  ligus setup agent --name <name> --source claude-code --json       # verify: done true
 
 Add an agent (from a person's CLI device or the desktop, not the box):
   ligus setup runtimes --apply                                       # verify: ligus runtimes --json

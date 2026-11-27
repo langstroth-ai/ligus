@@ -218,6 +218,9 @@ pub fn host_sources(
 ) -> Vec<super::HostSourceFact> {
     let here = svc.device_id().to_string();
     let me = svc.author().id.clone();
+    // A person's ids across their linked devices are one person.
+    let links = svc.device_links(ws).unwrap_or_default();
+    let mine = |owner: &str| !me.is_empty() && !owner.is_empty() && (owner == me || links.person(owner) == links.person(&me));
     let mut out = Vec::new();
     for h in svc.list_hosts(ws).unwrap_or_default() {
         let this = h.id == here;
@@ -233,7 +236,7 @@ pub fn host_sources(
                     _ => "device".into(),
                 },
                 this_device: this,
-                mine: !me.is_empty() && h.owner_actor_id == me,
+                mine: mine(&h.owner_actor_id),
                 online: up,
                 build: status.as_ref().map(|s| s.build.clone()).unwrap_or_default(),
                 name: o.name.clone(),

@@ -71,6 +71,8 @@ mod scratch_cmd;
 mod secret_arg;
 mod serve;
 mod setup_cmd;
+#[cfg(test)]
+mod setup_agent_tests;
 mod worker;
 
 #[derive(Clone)]

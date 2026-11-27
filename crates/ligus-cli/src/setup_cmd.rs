@@ -10,14 +10,14 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use ligus_core::{WorkspaceRole, WorkspaceRuntime};
+use ligus_core::WorkspaceRole;
 use ligus_runtime::checks::{Check, Report, Status};
 use ligus_runtime::cli_detect::DetectEnv;
 use ligus_runtime::mcp::{McpServerSpec, McpTransport};
 use ligus_runtime::model_catalog::ModelList;
 use ligus_runtime::setup::{self, service, FieldKind, FlowId, Inputs, Outcome, Progress, RunOpts, Secrets, Surface};
 use ligus_runtime::setup::{
-    AgentFact, BoxFact, FolderFact, HarnessFact, HostFact, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RuntimeFact, RuntimeSpec, ServeFact,
+    AgentFact, BoxFact, FolderFact, HarnessFact, HostFact, HostSourceFact, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RuntimeFact, RuntimeSpec, ServeFact,
     SetupOps, TestTurn,
 };
 use ligus_runtime::{ChatService, McpReach};
@@ -136,6 +136,13 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
             }
             _ => {
                 let name = &a[2..];
+                if flow == FlowId::Agent && matches!(name, "harness" | "gateway") {
+                    // The 0.4 spellings of --source (--harness H, --gateway G).
+                    let v = rest.get(i).ok_or_else(|| help::usage_error(format!("{a} needs a value")))?;
+                    i += 1;
+                    inputs.set(name, v.clone());
+                    continue;
+                }
                 let Some(f) = fields.iter().find(|f| f.id == name) else {
                     return Err(help::usage_error(format!("`ligus setup {}` has no flag {a}", flow.as_str())));
                 };
@@ -227,13 +234,23 @@ pub struct CliOps {
     ws: Uuid,
     env: DetectEnv,
     label: String,
+    /// What the workspace's hosts list, read once per command (it fetches
+    /// the hosts' beats from the relay).
+    host_sources: std::cell::OnceCell<Vec<HostSourceFact>>,
 }
 
 impl CliOps {
     pub fn open(cfg: &Config) -> Result<Self> {
         let svc = crate::open_service(cfg)?;
         let label = crate::env_opt("LIGUS_HOST_LABEL").or_else(|| crate::env_opt("HOSTNAME")).unwrap_or_else(|| "this host".into());
-        Ok(CliOps { cfg: cfg.clone(), ws: crate::uuid_of_room(&cfg.room), svc, env: DetectEnv::from_process(), label })
+        Ok(CliOps { cfg: cfg.clone(), ws: crate::uuid_of_room(&cfg.room), svc, env: DetectEnv::from_process(), label, host_sources: Default::default() })
+    }
+
+    /// Use `p` for the steps that need the person's passkey (tests: a
+    /// recovery key standing in for the desktop).
+    #[cfg(test)]
+    pub(crate) fn set_presence(&mut self, p: std::sync::Arc<dyn ligus_runtime::chat_service::PresenceProvider>) {
+        self.svc.set_presence_provider(Some(p));
     }
 
     fn reach(&self) -> Result<McpReach, OpsError> {
@@ -291,39 +308,52 @@ impl SetupOps for CliOps {
         service::models(harness, endpoint, &self.env)
     }
     fn runtimes(&self) -> Vec<RuntimeFact> {
-        // Only keyless runtimes are reused: one with a credential belongs to
-        // whoever set its key.
-        self.svc
-            .list_workspace_runtimes(self.ws)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|r| matches!(r.credential, ligus_core::WorkspaceCredential::None))
-            .filter_map(|r| {
-                let gw = !r.gateway.trim().is_empty();
-                service::harness_of(r.provider, gw).map(|h| RuntimeFact {
-                    id: r.id.clone(),
-                    harness: h.into(),
-                    model: r.model.clone(),
-                    endpoint: if gw { r.gateway.clone() } else if h == "local" { r.endpoint.clone() } else { String::new() },
-                })
-            })
-            .collect()
+        // A runtime naming a secret reference is reused only for the same
+        // reference (its key stays on the host that declares it).
+        service::workspace_runtimes(&self.svc, self.ws)
     }
     fn runtimes_need_admin(&self) -> bool {
         true
     }
-    fn add_runtime(&mut self, spec: &RuntimeSpec) -> OpsResult<()> {
-        let kind = service::provider_of(&spec.harness).ok_or_else(|| OpsError::Failed(format!("unknown harness {}", spec.harness)))?;
-        let mut wr = WorkspaceRuntime::new(spec.id.as_str(), spec.name.as_str(), kind, spec.model.as_str());
-        match spec.harness.as_str() {
-            "local" => wr.endpoint = spec.endpoint.clone(),
-            "gateway" => wr.gateway = spec.endpoint.clone(),
-            _ => {}
+    fn runtime_on_log(&self, _shared: bool) -> bool {
+        // The CLI's runtimes are workspace runtimes (a worker or box on this
+        // data dir runs them too).
+        true
+    }
+    fn passkey_writes(&self) -> bool {
+        self.joined()
+    }
+    fn confirming(&mut self, step: usize, of: usize, what: &str) {
+        if of > 1 {
+            eprintln!("passkey {step} of {of}: {what}");
         }
-        self.svc.add_workspace_runtime(self.ws, wr).map_err(OpsError::from)
+    }
+    fn host_sources(&self) -> Vec<HostSourceFact> {
+        self.host_sources
+            .get_or_init(|| {
+                // The hosts' beats come from the relay, on a thread of their
+                // own (a caller may already be inside an async runtime), read
+                // and checked there against this data dir's own fold.
+                let cfg = self.cfg.clone();
+                let ws = self.ws;
+                std::thread::spawn(move || {
+                    let Ok(svc) = crate::open_service(&cfg) else { return Vec::new() };
+                    let presence = crate::fetch_presence_with(&cfg, Some(&svc));
+                    let now = ligus_core::Timestamp::now();
+                    service::host_sources(&svc, ws, |id| presence.status_of(id), |h| presence.is_online(h, &now))
+                })
+                .join()
+                .unwrap_or_default()
+            })
+            .clone()
+    }
+    fn this_device_label(&self) -> String {
+        self.label.clone()
+    }
+    fn add_runtime(&mut self, spec: &RuntimeSpec) -> OpsResult<()> {
+        service::add_workspace_runtime(&mut self.svc, self.ws, spec)
     }
     fn remove_runtime(&mut self, id: &str) -> OpsResult<()> {
-        // A compensating event: the runtime was synced with the agent flow.
         self.svc.remove_workspace_runtime(self.ws, id).map_err(OpsError::from)
     }
     fn agents(&self) -> Vec<AgentFact> {
@@ -334,6 +364,9 @@ impl SetupOps for CliOps {
     }
     fn add_agent(&mut self, name: &str, runtime_id: &str) -> OpsResult<Uuid> {
         service::add_agent(&mut self.svc, self.ws, name, runtime_id)
+    }
+    fn add_agent_placed(&mut self, name: &str, runtime_id: &str, host_id: &str) -> OpsResult<Uuid> {
+        service::add_agent_placed(&mut self.svc, self.ws, name, runtime_id, host_id)
     }
     fn local_servers(&self, agent_id: Uuid) -> bool {
         service::local_servers(&self.svc, self.ws, agent_id)
