@@ -777,7 +777,8 @@ mod tests {
         let p = Parsed::new(&args(&["add", "gw", "--auth", "none", "--header", "x-api-key"])).unwrap();
         assert!(auth_of(&p).is_err(), "--header without api-key-file");
         let p = Parsed::new(&args(&["add", "gw", "--auth", "api-key-file", "/k", "--header", "X-Api-Key"])).unwrap();
-        assert_eq!(auth_of(&p).unwrap(), AuthConfig::ApiKey { key_file: "/k".into(), header: Some("x-api-key".into()) });
+        // The stored path is the real path: "/k" itself on Unix, made absolute (a drive prefix) on Windows.
+        assert_eq!(auth_of(&p).unwrap(), AuthConfig::ApiKey { key_file: real_path("/k").unwrap(), header: Some("x-api-key".into()) });
     }
 
     #[test]
@@ -863,11 +864,13 @@ mod tests {
             api: Api::Anthropic,
             allow_plaintext: true,
             attribution: true,
-            auth: AuthConfig::ApiKey { key_file: "/k/a b.key".into(), header: Some("x-api-key".into()) },
+            // A real (absolute) path, as `add` stores it, on every platform.
+            auth: AuthConfig::ApiKey { key_file: real_path("/k/a b.key").unwrap(), header: Some("x-api-key".into()) },
             ca_file: Some("/k/ca.pem".into()),
         };
         let line = add_command(&cfg, "--not-exclusive");
-        assert!(line.contains("'/k/a b.key'"), "{line}");
+        let key = real_path("/k/a b.key").unwrap();
+        assert!(line.contains(&format!("'{}'", key.display())), "{line}");
         // Split it as a shell would (single quotes only, as shell_word writes).
         let mut words = Vec::new();
         let (mut cur, mut q, mut any) = (String::new(), false, false);

@@ -716,7 +716,7 @@ chmod +x "$U/fake/install.sh" "$U/fake/brew" "$U/fake/systemctl" "$U/fake/ps"
 fake_ligus() { printf '#!/bin/sh\n[ "$1" = --version ] && echo "ligus %s"\nexit 0\n' "$2" >"$1"; chmod +x "$1"; }
 up() { # bin new-version args...: ligus-local upgrade on "Linux" with the fakes and the temp HOME
   local bin=$1 ver=$2; shift 2
-  env HOME="$UH" PATH="$U/fake:/usr/bin:/bin" LIGUS_LOCAL_OS=Linux FAKE_UP_LOG="$U/log" FAKE_BREW_PREFIX="$U/brew" \
+  env HOME="$UH" XDG_CONFIG_HOME="$UH/.config" PATH="$U/fake:/usr/bin:/bin" LIGUS_LOCAL_OS=Linux FAKE_UP_LOG="$U/log" FAKE_BREW_PREFIX="$U/brew" \
     LIGUS_BIN="$bin" FAKE_NEW_VERSION="$ver" LIGUS_LOCAL_INSTALL_SH="$U/fake/install.sh" LIGUS_LOCAL_BREW="$U/fake/brew" \
     LIGUS_LOCAL_PS="$U/fake/ps" "$LOCAL" upgrade "$@"
 }
@@ -741,7 +741,7 @@ check_json "ligus-local upgrade --version with --from-source is a usage error" "
 
 # The systemd unit start --systemd installed: restarted only when the binary changed.
 mkdir -p "$UH/.config/systemd/user"
-env HOME="$UH" LIGUS_LOCAL_OS=Linux LIGUS_BIN="$U/bin/ligus" "$LOCAL" unit --role serve --data-dir "$U/data" --env-file "$U/serve.env" \
+env HOME="$UH" XDG_CONFIG_HOME="$UH/.config" LIGUS_LOCAL_OS=Linux LIGUS_BIN="$U/bin/ligus" "$LOCAL" unit --role serve --data-dir "$U/data" --env-file "$U/serve.env" \
   >"$UH/.config/systemd/user/ligus-serve.service" 2>/dev/null
 : >"$U/log"
 run "$U/u4" up "$U/bin/ligus" 0.5.1 --json --role serve --data-dir "$U/data" --env-file "$U/serve.env"
@@ -789,7 +789,7 @@ if [ -f "$UH/.config/systemd/user/hive-serve.service" ] && [ -f "$UH/Library/Lau
   && [ -f "$UH/.local/bin/hive" ] && [ -d "$UH/.hive-serve" ] && [ -d "$UH/.hive" ]; then
   pass "upgrade never removes a leftover"
 else fail "upgrade removed a leftover"; fi
-run "$U/u9" env HOME="$UH" LIGUS_LOCAL_OS=Linux PATH="$U/fake:/usr/bin:/bin" LIGUS_LOCAL_PS="$U/fake/ps" LIGUS_BIN=/nonexistent "$LOCAL" preflight --json
+run "$U/u9" env HOME="$UH" XDG_CONFIG_HOME="$UH/.config" LIGUS_LOCAL_OS=Linux PATH="$U/fake:/usr/bin:/bin" LIGUS_LOCAL_PS="$U/fake/ps" LIGUS_BIN=/nonexistent "$LOCAL" preflight --json
 if grep -q '"id":"legacy.hive","status":"warn"' "$U/u9"; then pass "preflight reports Hive-era leftovers too"; else fail "preflight leftovers: $(cat "$U/u9")"; fi
 
 # Only the deploy skills' SKILL.md files under .claude/ can be committed.
