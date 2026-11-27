@@ -26,7 +26,7 @@ Topics:
 
 | Topic | Guide |
 |---|---|
-| `quickstart` | join a workspace from this machine with its invite and post a message |
+| `quickstart` | first device or another one: join or link this machine, then post a message |
 | `box` | an always-on `ligus serve` box: install, admit (`ligus admit request`, an Admin approves, `ligus admit redeem`), serve, pair; with `deploy/local/ligus-local` and a systemd unit or LaunchAgent |
 | `worker` | a worker host that answers mentions for the agents bound to it |
 | `phone` | pairing, **Add a phone** by scanning the desktop's code, and pasting the phone's code instead |

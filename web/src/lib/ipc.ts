@@ -122,6 +122,17 @@ export const getAppSettings = () => invoke<AppSettingsDto>("get_app_settings");
 /// with the data dir rather than living in the webview's storage.
 export const markOnboarded = () => invoke<void>("mark_onboarded");
 export const markTourSeen = () => invoke<void>("mark_tour_seen");
+/// The first run's answer to "Is this your first device with Ligus?":
+/// `first` (start here) or `link` (already uses Ligus on another device).
+export type FirstRunPath = "first" | "link";
+export const setFirstRunPath = (path: FirstRunPath) => invoke<void>("set_first_run_path", { path });
+/// The person's first workspace, made once by the first run and made active.
+/// Running the first run again reuses it instead of founding another.
+export const firstRunWorkspace = (name: string) => invoke<WorkspaceInfoDto>("first_run_workspace", { name });
+/// The invite guard: whether the join screen should hint "Looks like you
+/// already use Ligus. Link this device instead." for this invite or short
+/// code. A hint only; joining still works.
+export const inviteLinkHint = (code: string) => invoke<boolean>("invite_link_hint", { code });
 
 /// Git branch + dirty count for the active workspace. Separate (lazy) command —
 /// it shells out to git, so it's queried only where the pill is shown.

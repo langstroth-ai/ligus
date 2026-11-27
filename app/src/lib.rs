@@ -57,6 +57,7 @@ mod memory_ui;
 mod repos_ui;
 mod scratch_ui;
 mod setup_ui;
+mod first_run_ui;
 mod turn_host;
 mod attention;
 mod notices;
@@ -540,6 +541,14 @@ struct LiveSettings {
     /// The feature tour auto-ran (or was closed) once on this data dir.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     tour_seen: bool,
+    /// The first run's answer to "Is this your first device with Ligus?":
+    /// `first` or `link` (`first_run_ui`). Absent until answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first_run_path: Option<String>,
+    /// The workspace the first run made for the person (its id), so a first
+    /// run started again reuses it instead of founding another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first_run_workspace: Option<String>,
     /// This deployment's passkey relying party (a self-hosted Ligus): written
     /// into the genesis rules of every workspace this device founds. Absent =
     /// `ligus.ai`. Authoring only: the fold reads each workspace's own rules.
@@ -692,6 +701,8 @@ impl Default for LiveSettings {
         sandbox_grants_seen: Default::default(),
             onboarded: false,
             tour_seen: false,
+            first_run_path: None,
+            first_run_workspace: None,
             passkey_policy: None,
         }
     }
@@ -13294,6 +13305,8 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         sandbox_grants_seen: Default::default(),
         onboarded: false,
         tour_seen: false,
+        first_run_path: None,
+        first_run_workspace: None,
         passkey_policy: None,
     };
     let settings = Arc::new(Mutex::new(load_or_seed_settings(&data_dir, env_seed)));
@@ -17095,6 +17108,9 @@ pub fn run() {
             get_workspace_diffs,
             get_app_settings,
             mark_onboarded,
+            first_run_ui::set_first_run_path,
+            first_run_ui::first_run_workspace,
+            first_run_ui::invite_link_hint,
             mark_tour_seen,
             get_git_status,
             list_runtimes,

@@ -1,38 +1,69 @@
 # Onboarding
 
-Ligus's first-launch wizard, five quick steps, appears
-automatically the first time you open the app on a fresh data dir. It
-is gated on the data dir itself: it shows until `settings.json` in
-`ai.ligus.desktop/` records `"onboarded": true`, which finishing the
-wizard writes. Nothing in the webview's own storage counts, and neither
-does a display name, so deleting the data dir (or resetting it) always
-brings the wizard back with a new identity. The feature tour that runs
-after the wizard is tracked the same way (`"tour_seen"`).
+Ligus's first run appears automatically the first time you open the app on
+a fresh data dir. It is gated on the data dir itself: it shows until
+`settings.json` in `ai.ligus.desktop/` records `"onboarded": true`, which
+finishing it writes. Nothing in the webview's own storage counts, and
+neither does a display name, so deleting the data dir (or resetting it)
+always brings the first run back with a new identity. The feature tour that
+runs after it is tracked the same way (`"tour_seen"`).
 
-| Step           | Captures                                             |
-|----------------|------------------------------------------------------|
-| Identity       | Display name, optional picture; shows your safety code |
-| Project folder | The workspace folder agents work in                  |
-| Runtime        | One agent (Claude Code / Codex / OpenAI-compatible / Anthropic API key / Ollama) + "let agents edit files" |
-| Team & sync    | **Just me (no sync)**, **Join a team** (an invite or short code), or **Sync through a relay**: the [community relay](../../operate/networking/community-relay.md) (preselected, best-effort) or your own relay URL and token |
-| Appearance     | A theme and light / dark / auto                      |
+## The first question
 
-![Onboarding identity step: display name and this device's safety code (demo data)](../images/desktop-onboarding-identity-light.png#only-light){ width="560" loading=lazy }
-![Onboarding identity step: display name and this device's safety code (demo data)](../images/desktop-onboarding-identity-dark.png#only-dark){ width="560" loading=lazy }
+Before it asks for a name, the first run asks **Is this your first device
+with Ligus?**
 
-![Onboarding, Team & sync: just me, join a team, or sync through a relay](../images/desktop-onboarding-team-light.png#only-light){ width="560" loading=lazy }
-![Onboarding, Team & sync: just me, join a team, or sync through a relay](../images/desktop-onboarding-team-dark.png#only-dark){ width="560" loading=lazy }
+- **Yes, start here** goes through three steps (the dots at the top count
+  them off).
+- **I already use Ligus on another device** links this device to your
+  account instead. It asks for no name and makes or joins no workspace, so
+  you never end up as a second person in your own workspaces. The desktop
+  app can't link itself in this version: the screen says so, and its **?**
+  says how to link lt or the `ligus` CLI on the same computer (`ligus
+  devices request`, approved on your other device under **My devices → Add
+  a computer**). **Back** returns to the question.
 
-There is no separate Welcome, Permissions, or Finish/Review screen —
-identity is the first thing you see, and the last step's **Finish**
-button saves everything. The runtime picker offers Claude Code, Codex,
-OpenAI-compatible (OpenAI/OpenRouter/local), an Anthropic API key, and
-Ollama (shown only when a local Ollama daemon is detected); aider and
-pi are configured later from Settings, not here. The **"Let agents
-edit files in my project"** checkbox maps to Claude Code's permission
-mode — checked is `acceptEdits`, unchecked is read-only `default`.
+The answer is kept in `settings.json` (`"first_run_path"`), where the
+invite guard below reads it.
 
-The wizard persists your settings and identity into the app data dir
+| Step   | Captures                                             |
+|--------|------------------------------------------------------|
+| You    | Display name (prefilled from git) and an optional picture; your safety code is behind the **?** |
+| Secure | Makes your first workspace (named after you, for example "Ana's workspace"), then a passkey and your recovery key, from one button |
+| Agent  | One agent (Claude Code / Codex / OpenAI-compatible / Anthropic API key / Ollama) + "Let agents edit files and run commands" |
+
+**Secure can't be left half-done.** There is no Back once the workspace
+exists. The only way past it before it's finished is **Finish later**, which
+asks first ("Finish later?") and says what stays locked until your passkey
+and recovery key exist: inviting people and other changes that need your
+passkey. Finish it any time in **Settings → Passkeys & keys**. If the app
+quits during Secure, the next first run picks up the same workspace instead
+of making another (`"first_run_workspace"` in `settings.json`).
+
+The project folder, the relay and your team aren't asked here. They come up
+when they first mean something: when you pick a folder, invite someone or
+join a team (**＋** in the workspace rail). The theme is in **Settings →
+Appearance**.
+
+The runtime picker offers Claude Code, Codex, OpenAI-compatible
+(OpenAI/OpenRouter/local), an Anthropic API key, and Ollama (shown only when
+a local Ollama daemon is detected); aider and pi are configured later from
+Settings, not here. The **"Let agents edit files and run commands"**
+checkbox sets Claude Code's permission mode. For an API key, **Finish**
+first checks that the key answers; a second **Finish** goes on anyway.
+
+## The invite guard
+
+When you paste an invite or a short code under **＋ → Join**, and it looks
+like you already use Ligus on another device, one line says **Looks like you
+already use Ligus. Link this device instead.** It's a hint only: **Join
+workspace** still works, and invites stay for other people. It shows when
+this device's first run was answered "I already use Ligus", when this device
+is already linked to an account, or when the invite is for a workspace your
+own account made that isn't on this device. An invite for a workspace this
+device already has shows nothing.
+
+The first run persists your settings and identity into the app data dir
 (`ai.ligus.desktop/`): public account/device records as JSON, private
 key seeds under `keys/`, and `settings.json` (including any API key you
 paste). (Key seeds are files, not in the OS keystore — see
@@ -40,17 +71,17 @@ paste). (Key seeds are files, not in the OS keystore — see
 
 ## Re-running onboarding
 
-The wizard returns whenever the data dir is new. The supported way to
+The first run returns whenever the data dir is new. The supported way to
 start over is **Settings → Danger zone → Reset local data…**,
 which wipes this device's chats, identity, keys, settings, and
-workspaces and relaunches Ligus fresh into the wizard. Quitting Ligus and
+workspaces and relaunches Ligus fresh into the first run. Quitting Ligus and
 deleting `ai.ligus.desktop/` has the same effect.
 
 ## Headless / pre-seeded config
 
 You can pre-populate runtimes and transport by shipping a
 `ligus.config.toml` in your workspace root; the Settings UI is a GUI
-over the same fields. Note this does **not** skip the wizard on its
+over the same fields. Note this does **not** skip the first run on its
 own — onboarding still runs until it has been finished on this data dir.
 Minimum viable config:
 

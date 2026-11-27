@@ -41,6 +41,26 @@ Full release notes are on the
   could register a host under another person's computer before that
   computer did, and pickers would show it. Pickers, workers and `ligus
   hosts` now ignore any host record the computer it names didn't sign.
+- **The first run asks one question first.** Before it asks for a name,
+  the desktop app asks **Is this your first device with Ligus?** Answering
+  **I already use Ligus on another device** links this device to your
+  account instead of starting a second you; it asks no name and makes or
+  joins nothing. The desktop app can't link itself yet, and that screen
+  says how to link lt or the `ligus` CLI on the same computer. lt asks the
+  same question, and `ligus help quickstart` and `ligus status` on a new
+  data dir name both answers. See [Onboarding](../features/onboarding.md).
+- **Your first workspace is made for you, and secured in the first run.**
+  **Yes, start here** goes You, Secure, then your agent. Secure makes your
+  workspace, then a passkey and your recovery key from one button. It can't
+  be closed half-done: **Finish later** asks first and says what stays
+  locked. The folder, relay and team come up when you first pick a folder,
+  invite someone or join a team, and the theme is in **Settings →
+  Appearance**. See [First launch](../getting-started/first-launch.md).
+- **A hint when an invite looks like your own.** Joining with an invite or
+  a short code on a device that looks like it belongs to someone already
+  using Ligus shows one line: "Looks like you already use Ligus. Link this
+  device instead." Joining still works. See
+  [The invite guard](../features/onboarding.md#the-invite-guard).
 
 ## 0.4.1
 
