@@ -4406,9 +4406,12 @@ async fn a_headless_admin_admits_serve_and_a_worker_into_one_workspace() {
         };
         crate::admit::cmd_admit(&founder, &[&"issue".to_string()], flags).unwrap();
     }
-    // Without a recovery key the CLI can't confirm: refused.
-    let none = crate::admit::cmd_admit(&founder, &[&"issue".to_string()], |_| None);
-    assert!(none.is_err());
+    // Without a recovery key the CLI hands the step to the person's other
+    // devices and waits; with none to confirm it, nothing is issued. (A short
+    // --timeout: the default wait is ten minutes.)
+    let none = crate::admit::cmd_admit(&founder, &[&"issue".to_string()], |f| (f == "--timeout").then(|| "2s".to_string()));
+    let e = none.expect_err("issued without a confirmation");
+    assert_eq!(crate::problem::classify(&e), (crate::problem::EXIT_HUMAN, "not_confirmed"), "{e:#}");
     sync_once(&founder).await.unwrap();
 
     let sdir = tmp.path().join("serve");
