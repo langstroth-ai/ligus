@@ -51,6 +51,18 @@ pub struct Fake {
     pub test_turn: Result<TestTurn, OpsError>,
     /// Agents whose local-servers grant is on.
     pub local_servers: Vec<Uuid>,
+    /// What the workspace's hosts list.
+    pub host_sources: Vec<HostSourceFact>,
+    /// The workspace holds agents and workspace runtimes for the passkey.
+    pub passkey_writes: bool,
+    /// Runtimes are log writes (the CLI's).
+    pub runtimes_on_log: bool,
+    /// "Confirm k of n: what", in order.
+    pub confirms: Vec<String>,
+    /// This device keeps model keys (the desktop).
+    pub keeps_keys: bool,
+    /// Model keys saved here, by harness.
+    pub model_keys: BTreeMap<String, String>,
 }
 
 impl Default for Fake {
@@ -91,6 +103,12 @@ impl Default for Fake {
             writes: Vec::new(),
             test_turn: Ok(TestTurn { ok: true, latency_ms: 900, detail: "PINGOK".into() }),
             local_servers: Vec::new(),
+            host_sources: Vec::new(),
+            passkey_writes: false,
+            runtimes_on_log: false,
+            confirms: Vec::new(),
+            keeps_keys: false,
+            model_keys: BTreeMap::new(),
         }
     }
 }
@@ -154,7 +172,15 @@ impl SetupOps for Fake {
     }
     fn add_runtime(&mut self, spec: &RuntimeSpec) -> OpsResult<()> {
         self.write("add_runtime", spec.id.clone())?;
-        self.runtimes.push(RuntimeFact { id: spec.id.clone(), harness: spec.harness.clone(), model: spec.model.clone(), endpoint: spec.endpoint.clone() });
+        self.runtimes.push(RuntimeFact {
+            id: spec.id.clone(),
+            harness: spec.harness.clone(),
+            model: spec.model.clone(),
+            endpoint: spec.endpoint.clone(),
+            shared: spec.shared,
+            secret_ref: spec.secret_ref.clone(),
+            provider: spec.provider.clone(),
+        });
         Ok(())
     }
     fn remove_runtime(&mut self, id: &str) -> OpsResult<()> {
@@ -169,10 +195,41 @@ impl SetupOps for Fake {
         self.members.clone()
     }
     fn add_agent(&mut self, name: &str, runtime_id: &str) -> OpsResult<Uuid> {
-        self.write("add_agent", name.into())?;
+        self.add_agent_placed(name, runtime_id, "")
+    }
+    fn add_agent_placed(&mut self, name: &str, runtime_id: &str, host_id: &str) -> OpsResult<Uuid> {
+        let what = if host_id.is_empty() { name.to_string() } else { format!("{name} on {host_id}") };
+        self.write("add_agent", what)?;
         let id = Uuid::new_v4();
         self.agents.push(AgentFact { id, name: name.into(), runtime_id: runtime_id.into() });
         Ok(id)
+    }
+    fn host_sources(&self) -> Vec<HostSourceFact> {
+        self.host_sources.clone()
+    }
+    fn this_device_label(&self) -> String {
+        "this Mac".into()
+    }
+    fn runtime_on_log(&self, shared: bool) -> bool {
+        shared || self.runtimes_on_log
+    }
+    fn passkey_writes(&self) -> bool {
+        self.passkey_writes
+    }
+    fn confirming(&mut self, step: usize, of: usize, what: &str) {
+        self.confirms.push(format!("{step} of {of}: {what}"));
+    }
+    fn keeps_model_keys(&self) -> bool {
+        self.keeps_keys
+    }
+    fn has_model_key(&self, harness: &str) -> bool {
+        self.model_keys.contains_key(harness)
+    }
+    fn put_model_key(&mut self, harness: &str, key: &Zeroizing<String>) -> OpsResult<()> {
+        self.secrets_seen.push(key.to_string());
+        self.write("put_model_key", harness.into())?;
+        self.model_keys.insert(harness.into(), key.to_string());
+        Ok(())
     }
     fn local_servers(&self, agent_id: Uuid) -> bool {
         self.local_servers.contains(&agent_id)
@@ -319,5 +376,27 @@ impl SetupOps for Fake {
         self.write("switch_relay", url.into())?;
         self.relay = Some(url.into());
         Ok(())
+    }
+}
+
+/// One offer on a host, as `host_sources` reports it (a box unless `mine`
+/// is set by the caller).
+pub fn offer(host_id: &str, label: &str, kind: &str, name: &str, wire: &str, ready: Option<bool>, models: &[&str]) -> HostSourceFact {
+    HostSourceFact {
+        host_id: host_id.into(),
+        host_label: label.into(),
+        host_kind: "worker".into(),
+        this_device: false,
+        mine: false,
+        online: true,
+        build: "0.5.0".into(),
+        name: name.into(),
+        kind: kind.into(),
+        harness: if kind == "provider" { "anthropic".into() } else { String::new() },
+        wire: wire.into(),
+        ready,
+        why: if ready == Some(false) { "not signed in".into() } else { String::new() },
+        models: models.iter().map(|m| m.to_string()).collect(),
+        complete: !models.is_empty(),
     }
 }

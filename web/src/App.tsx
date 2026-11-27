@@ -77,6 +77,7 @@ import { tip } from "@/components/Tooltip";
 import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour } from "@/lib/firstRun";
 import { ADMIT_BOX_EVENT, OPEN_ARCHIVED_PROPOSALS_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, OPEN_SETUP_EVENT, flashMessage, openSetup, requestAddPhone, requestDevices, type OpenChatDetail } from "@/lib/nav";
 import { SetupWizard } from "@/components/setup/SetupWizard";
+import { AddAgentSheet } from "@/components/setup/AddAgentSheet";
 import { isSetupFlow } from "@/lib/setup";
 import type { SetupFlowId } from "@/lib/ipc";
 import { useCustomThemes } from "@/lib/customThemes";
@@ -578,7 +579,7 @@ export function App() {
     return () => window.removeEventListener(ADMIT_BOX_EVENT, onAdmit);
   }, []);
 
-  // Guided setup (⌘K "Set up an agent", `/setup agent`, an empty pane).
+  // Guided setup (⌘K "Add an agent", `/setup agent`, an empty pane).
   useEffect(() => {
     const onSetup = (e: Event) => {
       const flow = (e as CustomEvent<string>).detail;
@@ -1488,7 +1489,8 @@ export function App() {
         />
       )}
       {/* After Settings so it stacks above it when opened from there. */}
-      {setupFlow && <SetupWizard flow={setupFlow} workspaceId={activeWorkspace?.id} onClose={() => setSetupFlow(null)} />}
+      {setupFlow === "agent" && <AddAgentSheet onClose={() => setSetupFlow(null)} />}
+      {setupFlow && setupFlow !== "agent" && <SetupWizard flow={setupFlow} workspaceId={activeWorkspace?.id} onClose={() => setSetupFlow(null)} />}
       {admitBoxOpen && activeWorkspace?.kind === "room" && (
         <AdmitBoxModal workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} onClose={() => setAdmitBoxOpen(false)} />
       )}

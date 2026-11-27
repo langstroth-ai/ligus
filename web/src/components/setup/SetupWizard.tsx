@@ -32,9 +32,9 @@ import { openAdmitBox, requestAddPhone } from "@/lib/nav";
 import { errMsg } from "@/components/Toast";
 
 /// Fields that change other fields' options (the models of a harness).
-const DEPENDS = ["harness", "kind", "endpoint"];
+const DEPENDS = ["harness", "source", "runs-on", "kind", "endpoint"];
 
-function applies(f: SetupField, inputs: Record<string, string>): boolean {
+export function applies(f: SetupField, inputs: Record<string, string>): boolean {
   if (!f.when) return true;
   const [k, vals] = f.when;
   const v = inputs[k] ?? "";
@@ -227,7 +227,7 @@ export function SetupWizard({ flow, workspaceId, onClose }: { flow: SetupFlowId;
 }
 
 /// The explanation behind an (i): a small button with the text as its tip.
-function InfoTip({ text, label }: { text: string; label: string }) {
+export function InfoTip({ text, label }: { text: string; label: string }) {
   return (
     <span className="inline-flex items-center gap-1 text-[12px]">
       <button type="button" aria-label={`${label}: ${text}`} {...tip(text)} className="ligus-press inline-flex h-5 w-5 items-center justify-center rounded-full" style={{ color: "var(--ligus-ink-soft)" }}>
@@ -237,7 +237,7 @@ function InfoTip({ text, label }: { text: string; label: string }) {
   );
 }
 
-function FieldView({ field, value, onChange, onSecret }: { field: SetupField; value: string; onChange: (v: string) => void; onSecret: (v: string) => void }) {
+export function FieldView({ field, value, onChange, onSecret }: { field: SetupField; value: string; onChange: (v: string) => void; onSecret: (v: string) => void }) {
   const id = `setup-${field.id}`;
   const head = (
     <div className="mb-1.5 flex items-center gap-1">
@@ -371,7 +371,7 @@ function FieldView({ field, value, onChange, onSecret }: { field: SetupField; va
 }
 
 /// Checks: what needs attention in full (with its fix), what passed folded.
-function Checks({ checks }: { checks: SetupCheck[] }) {
+export function Checks({ checks }: { checks: SetupCheck[] }) {
   // An explanation the person needs (an invite's role) stays in view.
   const keep = (c: SetupCheck) => c.status === "warn" || c.status === "fail" || c.id.endsWith(".role");
   const issues = checks.filter(keep);

@@ -73,6 +73,8 @@ mod secret_arg;
 mod secrets_cmd;
 mod serve;
 mod setup_cmd;
+#[cfg(test)]
+mod setup_agent_tests;
 mod worker;
 
 #[derive(Clone)]

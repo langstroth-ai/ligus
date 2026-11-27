@@ -3992,7 +3992,11 @@ pub fn resolve_workspace_credential(cred: &WorkspaceCredential, workspace_id: Uu
 /// [`resolve_workspace_credential`] against a given `host.toml`.
 pub fn resolve_declared_credential(cred: &WorkspaceCredential, workspace_id: Uuid, host: &crate::host_config::HostConfig) -> Option<String> {
     match cred {
-        WorkspaceCredential::SecretRef { secret_ref } if host.declares_secret(workspace_id, secret_ref) => {
+        WorkspaceCredential::SecretRef { secret_ref } if host.secret_for(workspace_id, secret_ref).is_some() => {
+            // The declared secret this reference names here (the name
+            // itself, or a hosted provider offer's declared secret), from
+            // the environment or this device's secret store.
+            let secret_ref = host.secret_for(workspace_id, secret_ref).unwrap_or(secret_ref);
             crate::host_config::held_value(secret_ref).map(|v| v.as_str().to_string())
         }
         WorkspaceCredential::SecretRef { .. } | WorkspaceCredential::Inline {} | WorkspaceCredential::None => None,
@@ -4003,7 +4007,7 @@ pub fn resolve_declared_credential(cred: &WorkspaceCredential, workspace_id: Uui
 /// `workspace_id` (for the error a turn shows), if any.
 pub fn undeclared_secret(cred: &WorkspaceCredential, workspace_id: Uuid) -> Option<String> {
     match cred {
-        WorkspaceCredential::SecretRef { secret_ref } if !crate::host_config::host().declares_secret(workspace_id, secret_ref) => {
+        WorkspaceCredential::SecretRef { secret_ref } if crate::host_config::host().secret_for(workspace_id, secret_ref).is_none() => {
             Some(secret_ref.clone())
         }
         _ => None,

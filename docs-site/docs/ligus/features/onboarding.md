@@ -32,7 +32,7 @@ invite guard below reads it.
 |--------|------------------------------------------------------|
 | You    | Display name (prefilled from git) and an optional picture; your safety code is behind the **?** |
 | Secure | Makes your first workspace (named after you, for example "Ana's workspace"), then a passkey and your recovery key, from one button |
-| Agent  | One agent (Claude Code / Codex / OpenAI-compatible / Anthropic API key / Ollama) + "Let agents edit files and run commands" |
+| Agent  | The **Add an agent** sheet, prefilled with the best source found, + "Let agents edit files and run commands" |
 
 **Secure can't be left half-done.** There is no Back once the workspace
 exists. The only way past it before it's finished is **Finish later**, which
@@ -47,12 +47,12 @@ when they first mean something: when you pick a folder, invite someone or
 join a team (**＋** in the workspace rail). The theme is in **Settings →
 Appearance**.
 
-The runtime picker offers Claude Code, Codex, OpenAI-compatible
-(OpenAI/OpenRouter/local), an Anthropic API key, and Ollama (shown only when
-a local Ollama daemon is detected); aider and pi are configured later from
-Settings, not here. The **"Let agents edit files and run commands"**
-checkbox sets Claude Code's permission mode. For an API key, **Finish**
-first checks that the key answers; a second **Finish** goes on anyway.
+The agent step is the same **Add an agent** sheet as everywhere else (see
+[Add an agent](../getting-started/set-up.md#add-an-agent)), with the best
+source found already picked (a coding CLI signed in here first) and a test
+turn on. The **"Let agents edit files and run commands"** checkbox sets the
+permission mode. You can add more agents later from ⌘K or the **Tools**
+pane.
 
 ## The invite guard
 

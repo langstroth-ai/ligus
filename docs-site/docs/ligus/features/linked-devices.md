@@ -266,8 +266,8 @@ box joins as its own member, see [Admitting a box](../../operate/ops/serve-box.m
 ## Steps that need your passkey {#passkey-hand-off}
 
 A linked computer has no passkey. When something you do there needs it
-(defining a workspace runtime for a new agent with `ligus setup agent`, in a
-workspace with stricter device rules), the computer sends the change to your
+(adding an agent with `ligus setup agent`, and a workspace runtime for it,
+in a workspace with stricter device rules), the computer sends the change to your
 desktop or phone instead:
 
 1. The computer drafts the change exactly as it will be written, signs it

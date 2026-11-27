@@ -60,14 +60,13 @@ Ligus?**
    and what agents may do. The only way past this step before it's done is
    **Finish later**, which asks first; finish it any time in **Settings →
    Passkeys & keys**.
-3. **Agent**: choose what answers: **Claude Code**, **Codex**, an
-   **OpenAI-compatible API** (OpenAI / OpenRouter / any local
-   OpenAI-style server), an **Anthropic API key**, or **Ollama** (offered
-   only when a local Ollama daemon is detected). Ligus defaults the
-   selection to whatever it finds installed. A **"Let agents edit files
-   and run commands"** checkbox sets Claude Code's permission mode. You can
-   add aider, pi, or more runtimes later from Settings. **Finish** saves
-   everything.
+3. **Agent**: the **Add an agent** sheet: a name, what answers (the
+   coding CLIs on this Mac with their sign-in state, a model server such as
+   Ollama, an Anthropic or OpenAI-compatible API key, and anything your
+   hosts offer), its model and where it runs. Ligus picks the best one it
+   finds, with a test turn on. A **"Let agents edit files and run
+   commands"** checkbox sets the permission mode. One button adds the agent
+   (see [Add an agent](set-up.md#add-an-agent)).
 
 ![Onboarding, the agent step: Claude Code detected, other harnesses and API keys listed (demo data)](../images/desktop-onboarding-agent-light.png#only-light){ width="560" loading=lazy }
 ![Onboarding, the agent step: Claude Code detected, other harnesses and API keys listed (demo data)](../images/desktop-onboarding-agent-dark.png#only-dark){ width="560" loading=lazy }

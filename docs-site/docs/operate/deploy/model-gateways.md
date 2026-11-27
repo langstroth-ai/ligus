@@ -172,23 +172,33 @@ above, with `"exclusive": true|false` at the top level.
 
 ## Choosing a gateway for an agent
 
-1. Check which hosts offer it. Serve and each worker publish their gateway
-   names on their host record; the app lists them per host (the hosts list
-   in the right rail and the agent's host menu).
-2. Set the gateway on a workspace runtime (`gateway = "litellm"`) instead of
-   an endpoint URL. The runtime's model is the model name the gateway
-   expects.
-3. Bind the agent to that runtime and to a host that offers the gateway. In
-   the desktop app, Tools → **Add an agent** does both in one step: with a
-   gateway runtime picked, **Runs on** starts on the one host that offers
-   the gateway (you pick when several do).
+Add the agent in one step: the desktop's **Add an agent** (⌘K, `/setup
+agent`, the **Tools** pane), `lt`'s form, or `ligus setup agent`:
 
-Steps 2 and 3 are workspace config changes: they need an Admin and passkey
-presence, like every other change to a workspace runtime or an agent's host
-and runtime binding. A Contributor can't redirect an agent's model traffic.
+1. **What answers** lists each gateway a host offers, with its wire and
+   host: "litellm (OpenAI API) · offered by box-1". Serve and each worker
+   publish their gateway names on their host record.
+2. **Model** is the gateway's own list, as its host reports it (`auto`
+   included when the gateway lists it).
+3. **Runs on** starts on the one host that offers the gateway; when
+   several do, you pick. A host that doesn't offer it can't be picked
+   ("box-2: doesn't offer litellm").
 
-Binding an agent to a host that doesn't offer its gateway is allowed (the
-operator may add it later), but the agent won't run there until it does.
+```sh
+ligus setup agent --name coder --source gateway:litellm --model auto --runs-on box-1
+```
+
+Underneath, the agent names a workspace runtime with `gateway = "litellm"`
+and the model name the gateway expects. The sheet reuses one that already
+matches, or defines it in the same run. The runtime's client follows the
+gateway's wire (`openai` or `anthropic`), never a member's choice, so a
+gateway is never treated as an Ollama server.
+
+These are workspace config changes: they need an Admin and your passkey,
+like every other change to a workspace runtime or an agent's host and
+runtime binding. A new workspace runtime and the agent are two
+confirmations ("Confirm 1 of 2"); with a reused runtime it is one. A
+Contributor can't redirect an agent's model traffic.
 
 A device-local runtime can name a gateway too:
 

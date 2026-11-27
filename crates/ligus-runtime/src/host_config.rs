@@ -216,6 +216,18 @@ impl HostConfig {
                 .is_some_and(|d| d.secrets.iter().any(|s| s == name))
     }
 
+    /// The secret a runtime's secret reference `name` resolves to here: the
+    /// name itself when declared for `workspace_id`, or, for the name of a
+    /// hosted provider this host offers there, that provider's declared
+    /// secret (an agent picked "team-claude on box-1" by the offer's name).
+    /// `None` for anything this host didn't declare.
+    pub fn secret_for<'a>(&'a self, workspace_id: Uuid, name: &'a str) -> Option<&'a str> {
+        if self.declares_secret(workspace_id, name) {
+            return Some(name);
+        }
+        self.providers_in(workspace_id).into_iter().find(|p| p.name == name).map(|p| p.secret.as_str())
+    }
+
     /// The hosted providers offered in `workspace_id`: those whose secret is
     /// declared there.
     pub fn providers_in(&self, workspace_id: Uuid) -> Vec<&ProviderDecl> {
@@ -415,6 +427,19 @@ mod tests {
         assert!(!cfg.declares_secret(other, "team-claude"), "declared for one workspace only");
         assert!(!cfg.declares_secret(ws, "nope"));
         assert!(!cfg.declares_secret(ws, ""));
+        // A provider offer's name resolves to its declared secret; nothing
+        // else does.
+        assert_eq!(cfg.secret_for(ws, "team-claude"), Some("team-claude"));
+        assert_eq!(cfg.secret_for(ws, "nope"), None);
+        assert_eq!(cfg.secret_for(other, "team-claude"), None);
+        assert_eq!(cfg.secret_for(ws, "undeclared"), None, "a provider whose secret isn't declared");
+        let text = format!(
+            "[workspaces.\"{ws}\"]\nsecrets = [\"anthropic-key\"]\n\
+             [[workspaces.\"{ws}\".providers]]\nname = \"team\"\nharness = \"anthropic\"\nsecret = \"anthropic-key\"\n"
+        );
+        let named = HostConfig::parse(&text).unwrap();
+        assert_eq!(named.secret_for(ws, "team"), Some("anthropic-key"), "the offer's name names its secret");
+        assert_eq!(named.secret_for(ws, "anthropic-key"), Some("anthropic-key"));
         let names: Vec<_> = cfg.providers_in(ws).iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["team-claude"], "a provider whose secret isn't declared isn't offered");
         assert!(HostConfig::default().list_tools);
