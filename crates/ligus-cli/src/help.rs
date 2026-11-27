@@ -547,23 +547,43 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "setup box",
         group: G_START,
-        summary: "on a box: print its join request, then keep the admission an Admin approved",
-        purpose: "Run it on the box, with the box's own data dir (never the desktop app's). The first run checks the \
-                  agent sandbox, prints the box's join request and fingerprint (public) and stops with exit 4: an Admin \
-                  approves it with a passkey on the desktop (workspace menu > Admit a box) or the phone. Run it again \
-                  with the sealed code they send back; it keeps the admission (as ligus admit redeem does) and checks \
-                  that ligus serve answers. No flag can approve a box.",
-        synopsis: &["ligus setup box [--label NAME] [--code - | @FILE] [--json] [--dry-run]"],
+        summary: "on a box: join by code match (--to), or print its join request and keep the admission an Admin approved",
+        purpose: "Run it on the box, with the box's own data dir (never the desktop app's). It first checks the agent \
+                  sandbox. With --to and the workspace's approval address (ligusaddr1:…, not a secret; an Admin's \
+                  ligus admit address prints it), the box posts its join request to the workspace's approval mailbox \
+                  and shows a code (K7Q4 M9X2) on stderr; the Admin's desktop or phone shows the same code, they \
+                  approve with a passkey, and the box keeps the admission only after finding that approval on the \
+                  workspace log. Nothing is pasted either way. If the relay has no approval mailbox, it falls back to \
+                  the paste below. Without --to it prints the box's join request and fingerprint (public) and stops \
+                  with exit 4: an Admin approves it on the desktop (workspace menu > Admit a box) or the phone; run it \
+                  again with the sealed code they send back and it keeps the admission (as ligus admit redeem does). \
+                  Either way it then checks that ligus serve answers. No flag can approve a box.",
+        synopsis: &[
+            "ligus setup box --to ligusaddr1:… [--label NAME] [--timeout 15m] [--json] [--dry-run]",
+            "ligus setup box [--label NAME] [--code - | @FILE] [--json] [--dry-run]",
+        ],
         flags: &[
             f("--label NAME", "LIGUS_HOST_LABEL, else the host name", "how the workspace names this box"),
-            f("--code - | @FILE", "none", "the sealed admission code, from stdin or an owner-only file"),
+            f("--to ADDRESS", "none (the paste)", "the workspace's approval address (ligusaddr1:…): ask by code match, nothing pasted"),
+            f("--timeout DURATION", "15m with --to", "how long --to waits for an approver (90s, 15m, 1h)"),
+            f("--code - | @FILE", "none", "the sealed admission code, from stdin or an owner-only file (not with --to)"),
             JSON,
             DRY_RUN,
         ],
         env: &["LIGUS_DATA_DIR", "LIGUS_HOST_LABEL", "LIGUS_SERVE_LISTEN"],
-        examples: &["LIGUS_DATA_DIR=~/.ligus-serve ligus setup box --label home", "ligus setup box --code - < ./admission"],
-        exit: &[(3, "the desktop app's data dir, or no agent sandbox"), (4, "waiting for an Admin's passkey approval")],
-        see_also: &["ligus admit request", "ligus help box", "desktop: workspace menu > Admit a box (where the Admin approves)"],
+        examples: &[
+            "LIGUS_DATA_DIR=~/.ligus-serve ligus setup box --to ligusaddr1:… --label home",
+            "LIGUS_DATA_DIR=~/.ligus-serve ligus setup box --label home",
+            "ligus setup box --code - < ./admission",
+        ],
+        exit: &[
+            (1, "with --to: the codes didn't match, the approver declined, or the approval wasn't on the workspace log (nothing kept)"),
+            (2, "--to and --code together, or a damaged approval address"),
+            (3, "the desktop app's data dir, or no agent sandbox"),
+            (4, "waiting for an Admin's passkey approval: the paste (also when the relay has no approval mailbox), or --to timed out or the address is stale"),
+            (7, "with --to: the relay didn't answer"),
+        ],
+        see_also: &["ligus admit address", "ligus admit request", "ligus help box", "desktop: workspace menu > Admit a box (where the Admin approves)"],
         ..D
     },
     Cmd {
@@ -2895,7 +2915,8 @@ what to do when something fails (the `fix:` line under it).
   ligus setup tool    --id notes --command \"npx -y @modelcontextprotocol/server-filesystem ~/notes\" [--reach builder]
   ligus setup tool    --id linear --kind url --url https://mcp.linear.app/mcp --token @./token
   ligus setup folder  --path ~/src/app
-  ligus setup box     [--label home]          on the box; then --code - with the Admin's code
+  ligus setup box     --to ligusaddr1:…       on the box: code match, nothing pasted
+                      (or [--label home], then --code - with the Admin's code)
   ligus setup phone                           then: ligus pair, in your own terminal
   ligus setup invite                          invites are made on the desktop; this tracks them
   ligus setup relay   [--kind own --url https://relay.example.com] [--token - | @FILE]
@@ -2954,9 +2975,15 @@ With the deploy script (from a checkout of the repository; every step has --json
   L=deploy/local/ligus-local
   1. $L preflight --role serve --data-dir ~/.ligus-serve
   2. $L install-cli                          # or: brew install langstroth-ai/ligus/ligus
-  3. $L configure --role serve --data-dir ~/.ligus-serve --listen 127.0.0.1:8787 --label home-box
-     (exits 4 until the box is admitted, and prints the next commands)
-  4. Admit the box, with the env file loaded:
+  3. $L configure --role serve --data-dir ~/.ligus-serve --listen 127.0.0.1:8787 --label home-box \\
+       --admit-to ligusaddr1:…
+     With --admit-to (the approval address an Admin gives you: ligus admit address, or
+     the desktop's workspace menu > Admit a box) it admits the box by code match, as
+     ligus setup box --to does: it prints Code: XXXX XXXX, the Admin's screen shows the
+     same code, they confirm with a passkey, and nothing is pasted. A relay without the
+     approval mailbox falls back to the paste. Without --admit-to it exits 4 until the
+     box is admitted, and prints the next commands.
+  4. Or admit the box yourself, with the env file loaded:
        set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
      Live (code match), with the approval address an Admin gives you
      (ligus admit address, or the desktop's workspace menu > Admit a box):

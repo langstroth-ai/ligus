@@ -65,8 +65,9 @@ This machine (always pass `--data-dir`; never the desktop app's. If you pass
 L=deploy/local/ligus-local
 $L preflight --role serve --data-dir ~/.ligus-serve --json
 $L install-cli [--version vX.Y.Z | --from-source] [--bin-dir DIR]
-$L configure --role serve --data-dir ~/.ligus-serve [--listen ADDR] [--label NAME] --json
-#   then admit the box: ligus admit request; the HUMAN (an Admin) approves it; ligus admit redeem <code>
+$L configure --role serve --data-dir ~/.ligus-serve [--listen ADDR] [--label NAME] [--admit-to ligusaddr1:...] --json
+#   --admit-to: code match, the HUMAN (an Admin) confirms the code with a passkey, nothing pasted;
+#   without it: ligus admit request; the HUMAN approves it; ligus admit redeem <code>
 $L start --role serve --data-dir ~/.ligus-serve [--systemd | --launchd] --json
 $L verify --role serve --data-dir ~/.ligus-serve --json   # alias: status
 $L stop --role serve --data-dir ~/.ligus-serve [--systemd | --launchd]

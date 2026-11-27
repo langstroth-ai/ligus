@@ -6,7 +6,7 @@
 use ligus_core::WorkspaceRole;
 
 use super::agent::ops_code;
-use super::{exit, gate, Ctx, Field, FieldKind, Inputs, Progress, Secrets, ServeFact, SetupOps, StepDef, Surface};
+use super::{exit, gate, BoxAsk, Ctx, Field, FieldKind, Inputs, Progress, Secrets, ServeFact, SetupOps, StepDef, Surface};
 
 const ADMIT_WHERE: &str = "the desktop: workspace menu > Admit a box (or the phone)";
 
@@ -37,22 +37,32 @@ pub(crate) fn box_steps(ops: &dyn SetupOps) -> Vec<StepDef> {
             StepDef::person("admit", "Admit the box", "Admit a box: paste the box's join request, check its fingerprint, approve with a passkey"),
             StepDef::verify("verify", "Box joined"),
         ],
-        _ => vec![
-            StepDef::input(
-                "request",
-                "Join request",
-                vec![Field::new("label", "Label", FieldKind::Text).help("How the workspace names this box (its host name by default).")],
-            ),
-            StepDef::person("approve", "An Admin approves", ADMIT_WHERE),
-            StepDef::input(
-                "redeem",
-                "Admission",
-                vec![Field::new("code", "Admission code", FieldKind::Secret)
-                    .help("The sealed code the Admin sends back. It carries the workspace key: pass it on stdin or in an owner-only file.")],
-            ),
-            StepDef::verify("verify", "Serving"),
-        ],
+        surface => {
+            let mut request = vec![Field::new("label", "Label", FieldKind::Text).help("How the workspace names this box (its host name by default).")];
+            // Asking by code match runs in the ligus CLI on the box.
+            if surface == Surface::Cli {
+                request.push(Field::new("to", "Approval address", FieldKind::Text).help(
+                    "The workspace's approval address (ligusaddr1:…, not a secret; an Admin's ligus admit address prints it). \
+                     With it the box asks through the relay and both screens show the same code: nothing is pasted.",
+                ));
+            }
+            box_cli_steps(request)
+        }
     }
+}
+
+fn box_cli_steps(request: Vec<Field>) -> Vec<StepDef> {
+    vec![
+        StepDef::input("request", "Join request", request),
+        StepDef::person("approve", "An Admin approves", ADMIT_WHERE),
+        StepDef::input(
+            "redeem",
+            "Admission",
+            vec![Field::new("code", "Admission code", FieldKind::Secret)
+                .help("The sealed code the Admin sends back. It carries the workspace key: pass it on stdin or in an owner-only file.")],
+        ),
+        StepDef::verify("verify", "Serving"),
+    ]
 }
 
 pub(crate) fn box_preflight(ctx: &mut Ctx, ops: &dyn SetupOps) {
@@ -120,6 +130,9 @@ pub(crate) fn box_run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, se
         ctx.ok("joined", "member", format!("this box is a member of {}", b.workspace.as_deref().unwrap_or("its workspace")));
         return verify_serving(ctx, ops);
     }
+    if secrets.get("code").is_some() && inputs.get("to").is_some_and(|t| !t.trim().is_empty()) {
+        return ctx.fail("to", "approval address", "--to and --code are two ways to join: use one", "drop --code to ask by code match, or --to to keep a pasted admission", exit::USAGE);
+    }
     if let Some(code) = secrets.get("code") {
         if ctx.cancelled() {
             return;
@@ -144,6 +157,30 @@ pub(crate) fn box_run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, se
         return verify_serving(ctx, ops);
     }
     let label = inputs.get("label").unwrap_or("").to_string();
+    if let Some(to) = inputs.get("to").map(str::trim).filter(|t| !t.is_empty()) {
+        if ctx.dry_run() {
+            ctx.skip("approval", "code match", "would ask the approver at this address and wait for the code to be confirmed");
+            return ctx.done();
+        }
+        match ops.ask_to_join(to, &label) {
+            Ok(BoxAsk::Joined { workspace, by }) => {
+                ctx.ok("approval", "code match", format!("the codes matched; approved by {by} with a passkey, found on the workspace log"));
+                ctx.ok("redeem", "admission", format!("kept for {workspace}; the box joins when it starts"));
+                ctx.commit();
+                return verify_serving(ctx, ops);
+            }
+            Ok(BoxAsk::NoMailbox) => ctx.warn(
+                "approval",
+                "code match",
+                "this relay has no approval mailbox, so the request is pasted instead",
+                Some("send the join request below to an Admin; a relay update brings code match".into()),
+            ),
+            Ok(BoxAsk::Stopped { exit, why, fix }) => return ctx.fail("approval", "code match", why, fix, exit),
+            Err(e) => {
+                return ctx.fail("approval", "code match", e.to_string(), "run ligus setup box --to on the box itself (the ligus CLI)", ops_code(&e))
+            }
+        }
+    }
     if ctx.dry_run() {
         ctx.skip("request", "join request", "would print this box's join request");
         return ctx.done();

@@ -238,7 +238,38 @@ impl ToOptions {
 }
 
 /// `ligus admit request --to ligusaddr1:…`: the box's side.
-pub async fn cmd_admit_request_to(cfg: &Config, o: ToOptions, mut ask: Option<Ask<'_>>) -> Result<()> {
+pub async fn cmd_admit_request_to(cfg: &Config, o: ToOptions, ask: Option<Ask<'_>>) -> Result<()> {
+    let mut r = Report::new("admit request");
+    let a = ask_as_box(cfg, &o, ask, &mut r).await?;
+    r.next("ligus serve  (or ligus worker): the box joins as its own member");
+    print_report(
+        &r,
+        o.json,
+        serde_json::json!({ "rid": a.rid, "fingerprint": a.fingerprint, "request": a.request, "workspace": a.workspace, "approver": a.approver }),
+        &format!(
+            "Admitted by {}. Kept the admission for workspace '{}': start `ligus serve` or `ligus worker` and it joins as its own member.\n",
+            a.approver, a.workspace
+        ),
+    );
+    Ok(())
+}
+
+/// A box admitted through the approval mailbox.
+pub struct BoxAdmitted {
+    pub rid: String,
+    pub fingerprint: String,
+    /// The join request (public; what an older desktop pastes).
+    pub request: String,
+    pub workspace: String,
+    /// The verified approver's name.
+    pub approver: String,
+}
+
+/// The box's side of code match, for `ligus admit request --to` and
+/// `ligus setup box --to`: print the join request (an older desktop can
+/// paste it), post it to the mailbox, show the code, and keep the admission
+/// only after checks 1 to 5. Its checks go into `r`.
+pub async fn ask_as_box(cfg: &Config, o: &ToOptions, mut ask: Option<Ask<'_>>, r: &mut Report) -> Result<BoxAdmitted> {
     let address = parse_address(&o.to, o.insecure)?;
     let join = crate::admit::join_request(cfg, &o.label)?;
     let paste_text = join.encode();
@@ -258,20 +289,12 @@ pub async fn cmd_admit_request_to(cfg: &Config, o: ToOptions, mut ask: Option<As
     let client = client_for(cfg, &address.relay);
     let mut req = Requester::post(client, &address, spec, Some(&cfg.data_dir)).await.map_err(|e| requester_problem(e, paste))?;
     req.allow_relay_override(relay_override());
-    let mut r = Report::new("admit request");
     r.add(Check::ok("approval.posted", "posted", format!("request {} in the workspace's approval mailbox", req.rid_hex())));
     note("Waiting for an approver…");
-    let outcome = wait_box(cfg, &mut req, &ka, &join, &o, &mut ask, &mut r).await;
+    let outcome = wait_box(cfg, &mut req, &ka, &join, o, &mut ask, r).await;
     let _ = req.settle().await;
-    let (room, approver) = outcome?;
-    r.next("ligus serve  (or ligus worker): the box joins as its own member");
-    print_report(
-        &r,
-        o.json,
-        serde_json::json!({ "rid": req.rid_hex(), "fingerprint": join.fingerprint(), "request": paste_text, "workspace": room, "approver": approver }),
-        &format!("Admitted by {approver}. Kept the admission for workspace '{room}': start `ligus serve` or `ligus worker` and it joins as its own member.\n"),
-    );
-    Ok(())
+    let (workspace, approver) = outcome?;
+    Ok(BoxAdmitted { rid: req.rid_hex(), fingerprint: join.fingerprint(), request: paste_text, workspace, approver })
 }
 
 #[allow(clippy::too_many_arguments)]
