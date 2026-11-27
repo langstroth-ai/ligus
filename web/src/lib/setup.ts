@@ -10,7 +10,7 @@ import type { SetupFlowId } from "@/lib/ipc";
 import { openSetup } from "@/lib/nav";
 
 export const SETUP_FLOWS: { id: SetupFlowId; title: string; keywords: string }[] = [
-  { id: "agent", title: "Set up an agent", keywords: "agent harness runtime claude codex copilot agy aider pi ollama model" },
+  { id: "agent", title: "Add an agent", keywords: "agent harness runtime claude codex copilot agy aider pi ollama model gateway host" },
   { id: "tool", title: "Connect a tool", keywords: "tool mcp server connect integration" },
   { id: "folder", title: "Add a code folder", keywords: "folder repo repository git checkout bind code" },
   { id: "box", title: "Add a box", keywords: "box server serve worker home always-on admit admission" },

@@ -3,8 +3,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SetupAction } from "@/components/setup/SetupAction";
 import {
-  addAgent,
-  listAgentTemplates,
   listMembershipAudit,
   workspaceInvite,
   listWorkspaces,
@@ -41,7 +39,6 @@ import {
   listSkills,
   listVaults,
   listWorkspaceHosts,
-  listMyDevices,
   previewVault,
   removeAgent,
   setAgentAvatar,
@@ -91,8 +88,6 @@ import {
   IconButton,
   Modal,
   Section,
-  Field,
-  SelectField,
   FormDisclosure,
   EmptyHint,
   ErrorState,
@@ -126,9 +121,8 @@ import { ImplementPreview } from "@/components/ImplementPreview";
 import { AgentAsks } from "@/components/AgentAsks";
 import { MemoryPane } from "@/components/MemoryPane";
 import { hostGatewaysLabel } from "@/components/settings/GatewayPicker";
-import { agentHostOptions, defaultAgentHost } from "@/lib/agentHost";
 import { LIKELY_ME_HINT, likelyMeReason } from "@/lib/likelyMe";
-import { openArchivedProposals, requestDevices } from "@/lib/nav";
+import { openArchivedProposals, openSetup, requestDevices } from "@/lib/nav";
 
 // Re-exported from the shared pane source so existing
 // `import type { UtilityPane } from "@/components/RightRail"` keeps working.
@@ -375,54 +369,14 @@ export function ToolsPane({
 }) {
   const qc = useQueryClient();
   const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: listRuntimes });
-  const agentTemplates = useQuery({ queryKey: ["agent-templates"], queryFn: listAgentTemplates });
   const agents = useQuery({ queryKey: ["agents", sessionId], queryFn: () => listAgents(sessionId) });
   const mcp = useQuery({ queryKey: ["mcp"], queryFn: listMcpServers });
   const hosts = useQuery({ queryKey: ["workspace-hosts"], queryFn: listWorkspaceHosts });
   const hostList = hosts.data ?? [];
-  const myDevices = useQuery({ queryKey: ["my-devices"], queryFn: listMyDevices, retry: false });
-  const thisDeviceId = (myDevices.data ?? []).find((d) => d.thisDevice)?.deviceId ?? null;
-  const [agentName, setAgentName] = useState("");
-  const [agentRole, setAgentRole] = useState("");
-  const [agentRuntimeId, setAgentRuntimeId] = useState(activeRuntimeId);
-  const [agentHostId, setAgentHostId] = useState("");
-  // Picked by hand: a runtime change no longer moves it to the default.
-  const [agentHostTouched, setAgentHostTouched] = useState(false);
-  const agentRuntime = (runtimes.data ?? []).find((r) => r.id === agentRuntimeId);
-  const agentGateway = agentRuntime?.gateway || null;
-  const hostOptions = agentHostOptions(hostList, thisDeviceId, agentGateway);
-  useEffect(() => {
-    if (!agentHostTouched) setAgentHostId(defaultAgentHost(hostList, agentGateway));
-  }, [agentGateway, agentHostTouched, hostList]);
-  const [showAddAgent, setShowAddAgent] = useState(false);
   const [mcpSource, setMcpSource] = useState("");
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [showInstallMcp, setShowInstallMcp] = useState(false);
 
-  useEffect(() => {
-    if (!agentRuntimeId) {
-      setAgentRuntimeId(activeRuntimeId || runtimes.data?.[0]?.id || "");
-    }
-  }, [activeRuntimeId, agentRuntimeId, runtimes.data]);
-
-  const addAgentMutation = useMutation({
-    mutationFn: async () => {
-      const name = agentName.trim();
-      // The host rides in the same record: one write, one confirmation.
-      await addAgent(sessionId, name, agentRuntimeId, agentRole.trim(), agentHostId);
-    },
-    onSuccess: () => {
-      setAgentName("");
-      setAgentRole("");
-      setAgentHostId("");
-      setAgentHostTouched(false);
-      setShowAddAgent(false);
-      qc.invalidateQueries({ queryKey: ["agents", sessionId] });
-      qc.invalidateQueries({ queryKey: ["workspace-hosts"] });
-      toast.success("Agent added.");
-    },
-    onError: (e) => toast.error(`Couldn't add agent: ${errMsg(e)}`),
-  });
   const removeAgentMutation = useMutation({
     mutationFn: (agentId: string) => removeAgent(sessionId, agentId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["agents", sessionId] }),
@@ -476,12 +430,12 @@ export function ToolsPane({
       title="Tools"
       about="What the agents here can reach: this chat's runtime, the workspace's agents and its MCP servers."
       docs={PANE_DOCS.tools}
-      primary={{ label: "Add an agent", onClick: () => setShowAddAgent(true) }}
+      primary={{ label: "Add an agent", onClick: () => openSetup("agent") }}
       more={[{ label: "Install an MCP server…", onSelect: () => setShowInstallMcp(true) }]}
     >
       <Section title="Runtime" info="The runtime that answers untagged messages in this chat. Pick one here; it applies to this chat only. Manage runtimes in Settings → Models.">
         {runtimeList.length === 0 ? (
-          <EmptyHint text="No runtimes configured" action={<SetupAction flow="agent" />} />
+          <EmptyHint text="No runtime set for this chat yet: @ligus answers with this device's default" />
         ) : (
           <RuntimeSwitcher runtimes={runtimeList} activeId={activeRuntimeId} onSelect={(id) => void selectRuntime(id)} />
         )}
@@ -559,86 +513,6 @@ export function ToolsPane({
         )}
       </Section>
 
-      {showAddAgent && (
-        <Sheet title="Add an agent" side="center" width={420} onClose={() => setShowAddAgent(false)}>
-              <div className="space-y-2">
-                {(agentTemplates.data ?? []).length > 0 && (
-                  <Field label="Start from a saved agent">
-                    <SelectField
-                      value=""
-                      ariaLabel="Saved agent template"
-                      onChange={(id) => {
-                        const t = (agentTemplates.data ?? []).find((x) => x.id === id);
-                        if (!t) return;
-                        setAgentName(t.name);
-                        setAgentRole(t.role ?? "");
-                        if (t.runtimeId) setAgentRuntimeId(t.runtimeId);
-                      }}
-                    >
-                      <option value="">Saved agents…</option>
-                      {(agentTemplates.data ?? []).map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                          {t.role ? ` · ${t.role}` : ""}
-                        </option>
-                      ))}
-                    </SelectField>
-                  </Field>
-                )}
-                <input
-                  value={agentName}
-                  onChange={(event) => setAgentName(event.target.value)}
-                  placeholder="Agent name"
-                  className="w-full rounded-xl border px-3 py-2 text-sm"
-                  style={fieldStyle}
-                />
-                <input
-                  value={agentRole}
-                  onChange={(event) => setAgentRole(event.target.value)}
-                  placeholder="Role (optional)"
-                  className="w-full rounded-xl border px-3 py-2 text-sm"
-                  style={fieldStyle}
-                />
-                <Field label="Agent runtime">
-                  <SelectField value={agentRuntimeId} onChange={setAgentRuntimeId} ariaLabel="Agent runtime">
-                    {runtimeList.map((runtime) => (
-                      <option key={runtime.id} value={runtime.id}>
-                        {runtimePickerLabel(runtime)}
-                      </option>
-                    ))}
-                  </SelectField>
-                </Field>
-                <Field label="Runs on">
-                  <SelectField
-                    value={agentHostId}
-                    onChange={(v) => {
-                      setAgentHostId(v);
-                      setAgentHostTouched(true);
-                    }}
-                    ariaLabel="Agent host"
-                  >
-                    {hostOptions.map((o) => (
-                      <option key={o.id || "this-device"} value={o.id}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </SelectField>
-                </Field>
-                {agentGateway && !hostOptions.find((o) => o.id === agentHostId)?.offersGateway && (
-                  <p className="text-xs text-ink-soft" data-testid="agent-host-gateway-note">
-                    {`This model goes through the ${agentGateway} gateway, which this host doesn't offer, so it won't answer here.`}
-                  </p>
-                )}
-                <Button
-                  variant="primary"
-                  disabled={!agentName.trim() || !agentRuntimeId || addAgentMutation.isPending}
-                  onClick={() => addAgentMutation.mutate()}
-                >
-                  Add agent
-                </Button>
-              </div>
-        </Sheet>
-      )}
       {showInstallMcp && (
         <Sheet title="Install an MCP server" side="center" width={420} onClose={() => setShowInstallMcp(false)}>
               <div className="space-y-2">

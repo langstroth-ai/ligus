@@ -21,7 +21,7 @@ use crate::{open_service, sync_once, Config};
 
 /// Alex links a laptop (a CLI computer) through the mailbox, as
 /// `ligus devices request --to` does; both sides sync.
-async fn linked_laptop(w: &World) -> Config {
+pub(crate) async fn linked_laptop(w: &World) -> Config {
     let addr = address(w).await;
     let comp = fresh(&w.root.join("laptop"));
     let (tx, rx) = mpsc::channel();

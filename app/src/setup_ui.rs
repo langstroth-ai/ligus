@@ -17,7 +17,7 @@ use ligus_runtime::checks::Check;
 use ligus_runtime::cli_detect::DetectEnv;
 use ligus_runtime::model_catalog::{ModelList, ModelOption, ModelSource};
 use ligus_runtime::setup::{
-    self, service, AgentFact, FlowId, FolderFact, HarnessFact, HostFact, Inputs, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RunOpts,
+    self, service, AgentFact, FlowId, FolderFact, HarnessFact, HostFact, HostSourceFact, Inputs, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RunOpts,
     RuntimeFact, RuntimeSpec, Secrets, SetupOps, Surface, TestTurn,
 };
 use ligus_runtime::{McpReach, McpServerSpec, McpTransport};
@@ -114,8 +114,10 @@ impl SetupOps for DesktopOps<'_> {
         service::models(harness, endpoint, &DetectEnv::from_process())
     }
     fn runtimes(&self) -> Vec<RuntimeFact> {
-        // Only runtimes this device trusts (a cloned repo's stay inert).
-        self.state()
+        // This device's own runtimes (only those it trusts: a cloned repo's
+        // stay inert), then the workspace's (other hosts can run those).
+        let mut out: Vec<RuntimeFact> = self
+            .state()
             .combined_runtimes()
             .into_iter()
             .filter_map(|r| {
@@ -125,28 +127,38 @@ impl SetupOps for DesktopOps<'_> {
                     id: r.id.clone(),
                     harness: h.into(),
                     model: r.model_id.clone(),
-                    endpoint: if gw { r.gateway.clone().unwrap_or_default() } else if h == "local" { r.endpoint.clone() } else { String::new() },
+                    endpoint: if gw {
+                        r.gateway.clone().unwrap_or_default()
+                    } else if h == "local" || h == "openai" {
+                        r.endpoint.clone()
+                    } else {
+                        String::new()
+                    },
+                    shared: false,
+                    secret_ref: String::new(),
+                    provider: ligus_runtime::host_offers::harness_name(r.provider_kind),
                 })
             })
-            .collect()
+            .collect();
+        if !self.local() {
+            let shared = service::workspace_runtimes(&self.state().service.lock().unwrap(), self.ws);
+            let shared: Vec<RuntimeFact> = shared.into_iter().filter(|w| !out.iter().any(|r| r.id == w.id)).collect();
+            out.extend(shared);
+        }
+        out
     }
     fn add_runtime(&mut self, spec: &RuntimeSpec) -> OpsResult<()> {
-        let provider = match spec.harness.as_str() {
-            "claude-code" => "claudecode",
-            "local" => "ollama",
-            "gateway" => "custom",
-            h => h,
-        };
-        let (endpoint, gateway) = match spec.harness.as_str() {
-            "local" => (spec.endpoint.clone(), None),
-            "gateway" => (String::new(), Some(spec.endpoint.clone())),
-            _ => (String::new(), None),
-        };
+        if spec.shared {
+            // Another host runs it: a workspace runtime (names and a secret
+            // reference only; never a key or this device's addresses).
+            return service::add_workspace_runtime(&mut self.state().service.lock().unwrap(), self.ws, spec);
+        }
+        let (provider, endpoint, gateway) = local_runtime_args(spec);
         crate::add_runtime(
             self.state(),
             spec.id.clone(),
             spec.name.clone(),
-            provider.into(),
+            provider,
             "local".into(),
             endpoint,
             spec.model.clone(),
@@ -164,7 +176,46 @@ impl SetupOps for DesktopOps<'_> {
         .map_err(OpsError::Failed)
     }
     fn remove_runtime(&mut self, id: &str) -> OpsResult<()> {
+        let shared = !self.local() && service::workspace_runtimes(&self.state().service.lock().unwrap(), self.ws).iter().any(|r| r.id == id);
+        if shared {
+            return self.state().service.lock().unwrap().remove_workspace_runtime(self.ws, id).map_err(OpsError::from);
+        }
         crate::remove_runtime(self.state(), id.to_string()).map_err(OpsError::Failed)
+    }
+    fn runtime_on_log(&self, shared: bool) -> bool {
+        shared
+    }
+    fn passkey_writes(&self) -> bool {
+        !self.local()
+    }
+    fn confirming(&mut self, step: usize, of: usize, what: &str) {
+        use tauri::Emitter;
+        let _ = self.app.emit(CONFIRMING_EVENT, json!({ "step": step, "of": of, "what": what }));
+    }
+    fn host_sources(&self) -> Vec<HostSourceFact> {
+        let state = self.state();
+        let now = ligus_core::Timestamp::now();
+        let presence = &state.host_presence;
+        let svc = state.service.lock().unwrap();
+        service::host_sources(&svc, self.ws, |id| presence.status_of(id), |h| presence.is_online(h, &now))
+    }
+    fn this_device_label(&self) -> String {
+        if cfg!(target_os = "macos") { "this Mac".into() } else { "this computer".into() }
+    }
+    fn keeps_model_keys(&self) -> bool {
+        true
+    }
+    fn has_model_key(&self, harness: &str) -> bool {
+        let Some(name) = model_key_name(harness) else { return false };
+        self.state().settings.lock().unwrap().provider_keys.get(name).is_some_and(|k| !k.trim().is_empty())
+    }
+    fn put_model_key(&mut self, harness: &str, key: &Zeroizing<String>) -> OpsResult<()> {
+        let name = model_key_name(harness).ok_or_else(|| OpsError::Failed(format!("no key for {harness} here")))?;
+        let state = self.state();
+        let mut s = state.settings.lock().unwrap();
+        s.provider_keys.insert(name.to_string(), key.trim().to_string());
+        crate::save_settings(&state.data_dir, &s);
+        Ok(())
     }
     fn agents(&self) -> Vec<AgentFact> {
         service::agents(&self.state().service.lock().unwrap(), self.ws)
@@ -174,6 +225,9 @@ impl SetupOps for DesktopOps<'_> {
     }
     fn add_agent(&mut self, name: &str, runtime_id: &str) -> OpsResult<Uuid> {
         service::add_agent(&mut self.state().service.lock().unwrap(), self.ws, name, runtime_id)
+    }
+    fn add_agent_placed(&mut self, name: &str, runtime_id: &str, host_id: &str) -> OpsResult<Uuid> {
+        service::add_agent_placed(&mut self.state().service.lock().unwrap(), self.ws, name, runtime_id, host_id)
     }
     fn local_servers(&self, agent_id: Uuid) -> bool {
         service::local_servers(&self.state().service.lock().unwrap(), self.ws, agent_id)
@@ -329,6 +383,41 @@ impl SetupOps for DesktopOps<'_> {
     }
 }
 
+/// The event the Add an agent sheet listens to while a run asks for the
+/// passkey: `{step, of, what}` ("Confirm 1 of 2: Define gw-home for @coder").
+pub(crate) const CONFIRMING_EVENT: &str = "setup-confirming";
+
+/// A device-local runtime's provider, endpoint and gateway for `spec`. The
+/// provider is the spec's (a gateway's follows its wire), never a default
+/// such as Ollama: a gateway runtime has no endpoint of its own.
+pub(crate) fn local_runtime_args(spec: &RuntimeSpec) -> (String, String, Option<String>) {
+    let provider = if spec.provider.is_empty() {
+        match spec.harness.as_str() {
+            "claude-code" => "claudecode".to_string(),
+            "local" => "ollama".to_string(),
+            "gateway" => "custom".to_string(),
+            h => h.to_string(),
+        }
+    } else {
+        spec.provider.clone()
+    };
+    match spec.harness.as_str() {
+        "local" | "openai" => (provider, spec.endpoint.clone(), None),
+        "gateway" => (provider, String::new(), Some(spec.endpoint.clone())),
+        _ => (provider, String::new(), None),
+    }
+}
+
+/// This device's settings key for a hosted API's model key.
+fn model_key_name(harness: &str) -> Option<&'static str> {
+    match harness {
+        "anthropic" => Some("anthropic"),
+        "openai" => Some("openAI"),
+        "openrouter" => Some("openRouter"),
+        _ => None,
+    }
+}
+
 // ── commands ────────────────────────────────────────────────────────────────
 
 /// Cancel flags of running flows, by flow id.
@@ -436,6 +525,62 @@ mod tests {
         assert_eq!(ids(Some(a)), ["limited", "open"]);
         assert_eq!(ids(Some(b)), ["open"]);
         assert_eq!(ids(None), ["open"], "the default agent gets only every-agent servers");
+    }
+
+    /// A gateway runtime's client follows the gateway's wire and has no
+    /// endpoint of its own: never Ollama with localhost:11434.
+    #[test]
+    fn a_gateway_runtime_follows_its_wire_never_ollama() {
+        let spec = |harness: &str, provider: &str, endpoint: &str| RuntimeSpec {
+            id: "x".into(),
+            harness: harness.into(),
+            provider: provider.into(),
+            endpoint: endpoint.into(),
+            ..Default::default()
+        };
+        assert_eq!(local_runtime_args(&spec("gateway", "anthropic", "gw-claude")), ("anthropic".into(), String::new(), Some("gw-claude".into())));
+        assert_eq!(local_runtime_args(&spec("gateway", "custom", "gw-home")), ("custom".into(), String::new(), Some("gw-home".into())));
+        assert_eq!(local_runtime_args(&spec("gateway", "", "gw-home")).0, "custom");
+        assert_eq!(local_runtime_args(&spec("local", "ollama", "http://localhost:11434")), ("ollama".into(), "http://localhost:11434".into(), None));
+        assert_eq!(local_runtime_args(&spec("openai", "openAI", "https://api.openai.com/v1")).1, "https://api.openai.com/v1");
+        assert_eq!(local_runtime_args(&spec("claude-code", "claudeCode", "")), ("claudeCode".into(), String::new(), None));
+        for (h, p, e) in [("gateway", "custom", "gw"), ("gateway", "anthropic", "gw")] {
+            assert_ne!(local_runtime_args(&spec(h, p, e)).0.to_lowercase(), "ollama");
+        }
+        assert_eq!(model_key_name("openai"), Some("openAI"));
+        assert_eq!(model_key_name("claude-code"), None);
+    }
+
+    /// The agent flow's form for the sheet: one list, a default source and
+    /// where it runs, the one button's label.
+    #[test]
+    fn the_agent_form_serializes_for_the_sheet() {
+        struct Ops;
+        impl SetupOps for Ops {
+            fn surface(&self) -> Surface {
+                Surface::Desktop
+            }
+            fn my_role(&self) -> Option<WorkspaceRole> {
+                Some(WorkspaceRole::Owner)
+            }
+            fn keeps_model_keys(&self) -> bool {
+                true
+            }
+            fn passkey_writes(&self) -> bool {
+                true
+            }
+        }
+        let v = serde_json::to_value(setup::form(FlowId::Agent, &Ops, &Inputs::new().with("name", "coder").with("source", "local").with("model", "llama3:8b"))).unwrap();
+        let fields: Vec<Value> = v["steps"].as_array().unwrap().iter().flat_map(|s| s["fields"].as_array().cloned().unwrap_or_default()).collect();
+        let ids: Vec<&str> = fields.iter().map(|f| f["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["name", "source", "endpoint", "api-key", "local-servers", "model", "runs-on", "test-turn"]);
+        assert_eq!(v["action"], "Add @coder");
+        assert_eq!(v["confirmations"], 1);
+        let runs_on = fields.iter().find(|f| f["id"] == "runs-on").unwrap();
+        assert_eq!(runs_on["default"], "here");
+        assert_eq!(runs_on["note"], "Turns run on this device while Ligus is open.");
+        let source = fields.iter().find(|f| f["id"] == "source").unwrap();
+        assert!(source["options"].as_array().unwrap().iter().any(|o| o["value"] == "key:anthropic"));
     }
 
     #[test]

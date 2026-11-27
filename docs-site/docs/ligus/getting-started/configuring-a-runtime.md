@@ -191,6 +191,10 @@ lists each CLI it looks for:
   model first if you want one; blank uses the CLI's default. Once added,
   the row reads **runtime added**.
 
+  For an agent you @mention, you don't need this: **Add an agent** picks
+  the CLI, its model and where it runs in one step and sets up the runtime
+  itself (see [Add an agent](set-up.md#add-an-agent)).
+
 **Re-scan** checks again after you install or sign in. Detection never signs
 you in or out.
 

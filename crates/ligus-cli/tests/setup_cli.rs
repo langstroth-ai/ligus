@@ -77,7 +77,7 @@ fn the_list_is_one_checks_report_of_seven_flows() {
     assert_eq!(ids, ["agent.status", "tool.status", "folder.status", "box.status", "phone.status", "invite.status", "relay.status"]);
     let text = ligus(&b, &["setup"], None);
     assert_eq!(code(&text), 0);
-    assert!(String::from_utf8_lossy(&text.stdout).contains("Set up an agent"));
+    assert!(String::from_utf8_lossy(&text.stdout).contains("Add an agent"));
 }
 
 #[test]

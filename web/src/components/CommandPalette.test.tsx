@@ -66,7 +66,7 @@ describe("CommandPalette", () => {
     const user = userEvent.setup();
     const { acts, onClose } = setup({ setup: vi.fn() });
     await screen.findByText("New chat");
-    for (const t of ["Set up an agent", "Connect a tool", "Add a code folder", "Add a box", "Add a phone", "Invite a person", "Set up a relay"]) {
+    for (const t of ["Add an agent", "Connect a tool", "Add a code folder", "Add a box", "Add a phone", "Invite a person", "Set up a relay"]) {
       expect(screen.getByText(t)).toBeInTheDocument();
     }
     await user.type(screen.getByPlaceholderText(/search/i), "mcp");

@@ -82,8 +82,22 @@ llama-server -m gpt-oss-20b.gguf --jinja \
 
 ### Adding it in Ligus
 
-**Settings → Models → Add runtime → Preset… → Local gateway (llama.cpp,
-OpenAI-compatible)** fills in:
+To add an agent on it, use **Add an agent** (⌘K, `/setup agent` or the
+**Tools** pane): pick **A model server** under **What answers**, give its
+address and pick a model from the list it serves. **Runs on** is this
+device. One button adds the agent; no runtime to add first. On the CLI:
+
+```bash
+ligus setup agent --name local --source local --endpoint http://localhost:8080 --model gpt-oss-20b
+```
+
+For a server on another machine, put it behind a box as a gateway
+([On an always-on box](#on-a-box)): agents then pick it as a gateway and
+run on that box.
+
+To use it as the runtime of a chat (expert path), **Settings → Models →
+Add runtime → Preset… → Local gateway (llama.cpp, OpenAI-compatible)**
+fills in:
 
 - provider `custom`, no API key
 - endpoint `http://<host>:8080/v1/chat/completions`; replace `<host>`
@@ -91,7 +105,7 @@ OpenAI-compatible)** fills in:
   machine (`localhost`). For a gateway on another machine, prefer
   `https://` (for example a reverse proxy, or `tailscale serve` on the
   gateway machine). Plain `http://` to another machine is your choice on
-  this device; **⌘K → Set up an agent** and `ligus setup agent` refuse it.
+  this device; **Add an agent** and `ligus setup agent` refuse it.
 - **Supports tools** on
 
 Add one runtime per model you want to use (each sends a different
@@ -119,7 +133,16 @@ operator. Once a gateway is listed, the box sends model traffic only
 through its gateways and refuses other agent turns. `add` says so in one
 line, and `--not-exclusive` lets the box also run agents that use a hosted
 key. Restart the box with the command `add` prints, so the desktop lists the
-gateway, then pick it on a workspace runtime and bind the agent to the box.
+gateway. Then add the agent in one step: in **Add an agent**, pick
+`home-gw (OpenAI API) · offered by …` under **What answers** and a model
+from the gateway's own list; **Runs on** starts on the box. On the CLI:
+
+```bash
+ligus setup agent --name coder --source gateway:home-gw --model gpt-oss:20b --runs-on box-1
+```
+
+The gateway's wire (`--api openai` or `anthropic`) decides how Ligus talks
+to it, never a setting in the agent.
 See [Deploying with an LLM gateway](../../operate/deploy/model-gateways.md#outside-kubernetes)
 and `ligus help gateways`.
 

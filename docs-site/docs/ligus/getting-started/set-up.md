@@ -6,7 +6,7 @@ and (next) in `lt`, because one engine runs them.
 
 | Flow | Desktop (⌘K, or `/setup` in the composer) | CLI |
 |---|---|---|
-| An agent on a coding CLI or model | **Set up an agent** | `ligus setup agent` |
+| An agent, in one step | **Add an agent** | `ligus setup agent` |
 | An MCP server your agents can call | **Connect a tool** | `ligus setup tool` |
 | A git checkout bound to a workspace repository | **Add a code folder** | `ligus setup folder` |
 | An always-on `ligus serve` box | **Add a box** | `ligus setup box` (on the box) |
@@ -24,7 +24,7 @@ servers, hosts) offers its flow as its one action.
   installed and signed-in CLI, your role in the workspace, the relay) and
   writes nothing until every check has passed.
 - **It can be run again.** A step that is already done is skipped and says
-  so: running **Set up an agent** twice with the same name, harness and
+  so: running **Add an agent** twice with the same name, source and
   model changes nothing.
 - **It never leaves half a setup.** Every input is validated before the
   first write. When a later write fails, the flow undoes the writes it
@@ -47,7 +47,7 @@ servers, hosts) offers its flow as its one action.
 
 | Flow | Needs |
 |---|---|
-| Set up an agent | Contributor; defining a workspace runtime for it (the CLI's case) needs an Admin |
+| Add an agent | Contributor on your own devices; placing it on a host, or defining a workspace runtime for it, needs an Admin |
 | Connect a tool | Contributor (a tool reaches other people's prompts through shared agents) |
 | Add a code folder | Contributor to bind; Admin to add a repository to the workspace |
 | Add a box | on the desktop: Admin, with a passkey; on the box: nothing (it only asks) |
@@ -60,17 +60,76 @@ the lockdown allows.
 
 ## The flows
 
-### Set up an agent
+### Add an agent
 
-Pick the harness (Claude Code, Codex, GitHub Copilot CLI, Google
-Antigravity CLI, Aider, Pi, a local model or a model gateway); the picker
-shows which are installed and signed in, without reading any token. Name
-the agent (one word, not a reserved mention name such as `ligus` or `all`,
-and not another agent's or member's name), pick a model from the harness's
-own list (or leave it empty for the default), and optionally send one test
-turn. Without an agent sandbox on this device a coding CLI can't run, and
+One sheet, the same in the desktop (**Add an agent** in ⌘K, `/setup agent`,
+the **Tools** pane and the first run), in `lt` and in `ligus setup agent`:
+
+1. **Name**: one word, not a reserved mention name such as `ligus` or
+   `all`, and not another agent's or member's name.
+2. **What answers**: one list, each entry with its state:
+   - a coding CLI (Claude Code, Codex, GitHub Copilot CLI, Google
+     Antigravity CLI, Aider, Pi) on this device or on a host: "Claude Code ·
+     signed in · this Mac", "Codex · signed in · build-1". The sign-in state
+     on this device is checked without reading any token; a host's comes
+     from its own report;
+   - a model gateway a host offers: "gw-home (OpenAI API) · offered by
+     box-1";
+   - a hosted API whose key a host holds: "team-claude (Anthropic API) · key
+     by secret reference on box-1". The agent names the provider as the host
+     lists it; the host turns that name into the secret its `host.toml`
+     declares for this workspace, and into nothing else (see
+     [What a host offers](../reference/cli.md#what-a-host-offers));
+   - a model server this device reaches (Ollama at
+     `http://localhost:11434` by default, or another OpenAI-compatible
+     server; plain `http://` only on this machine);
+   - in the desktop, an API key kept on this device (Anthropic, or an
+     OpenAI-compatible API). The key goes to this device's secret store,
+     never to the workspace.
+
+   Hosts are the boxes and workers of the workspace and your own other
+   devices; other people's computers aren't listed. The best entry is
+   picked for you: a CLI signed in here first.
+3. **Model**: that source's own list. A gateway's list is the one its host
+   reports (with `auto` when the gateway lists it). A coding CLI can stay
+   on its own default; everything else needs a model.
+4. **Runs on**: this device for a CLI signed in here, or for a model server
+   or a key here; the only host that offers a gateway or a hosted API (you
+   pick when several do). One line below says what happens: "Turns run on
+   this device while Ligus is open." or "Turns run on box-1. When it's
+   offline, @coder waits." A host that doesn't offer the source can't be
+   picked.
+5. **Run a test turn**: on by default for your first agent in the desktop
+   and `lt` (`--test-turn` on the CLI). It runs on this device only; an
+   agent on a host is tested by asking it something in a chat.
+
+One button, **Add @name**, writes the agent with where it runs in one
+record. Underneath, the agent still names a runtime: the sheet reuses one
+that runs the same source and model, or defines one. In a shared workspace
+the new agent needs your passkey. An agent on a host needs a workspace
+runtime the host can run; when a new one is defined, that is a second
+confirmation, and the sheet says **Confirm 1 of 2**, then **2 of 2**. A
+reused runtime takes no second one.
+
+Without an agent sandbox on this device a coding CLI can't run here, and
 the flow says what is missing; it never offers to turn the sandbox off.
-See [Configuring a runtime](configuring-a-runtime.md).
+For Antigravity, **May run local servers** is offered (off by default; the
+Owner's). See [Configuring a runtime](configuring-a-runtime.md),
+[Offline and local models](offline-local-models.md) and
+[Model gateways](../../operate/deploy/model-gateways.md#choosing-a-gateway-for-an-agent).
+
+On the CLI:
+
+```sh
+ligus setup agent --name builder --source claude-code --test-turn
+ligus setup agent --name coder --source gateway:gw-home --model auto --runs-on box-1
+ligus setup agent --name local --source local --model llama3.2
+```
+
+`--source` is `claude-code`, `codex`, `copilot`, `antigravity`, `aider`,
+`pi`, `gateway:NAME`, `provider:NAME` or `local`. `--runs-on` is `here`, or
+a host's id or name (`ligus hosts` lists them and what each offers). The
+older `--harness H` and `--gateway NAME` still work and mean `--source`.
 
 ### Connect a tool
 
@@ -154,9 +213,10 @@ the shared table: 0 done, 1 failed, 2 a missing or invalid flag, 3 a tool,
 sign-in or sandbox to fix, 4 a person must act, 6 refused by your role or
 the lockdown, 7 the relay or server didn't answer.
 
-In a workspace with stricter device rules, some writes (a workspace runtime
-for a new agent, a repository) need your passkey. The CLI has none, so it
-sends that change to your own desktop and waits, printing what it is and a
+In a workspace with stricter device rules, some writes (a new agent, a workspace
+runtime for it, a repository) need your passkey. The CLI has none, so it
+sends each change to your own desktop or phone and waits (two in a row,
+"passkey 1 of 2", when an agent on a host needs a new workspace runtime), printing what it is and a
 code: "Confirm on your desktop: Define workspace runtime “builder” (…) (code
 K7Q4 M9X2)". Your desktop's Inbox shows the same change and code; confirm it
 with your passkey there (Ctrl-C or `--timeout` cancels; `--no-wait` exits 4
@@ -167,7 +227,7 @@ desktop app, or run the flow again with `--recovery-words-file PATH` (your
 recovery key's 24 words, in a file only you can read).
 
 ```sh
-ligus setup agent --harness claude-code --name builder --json | jq '.done'
+ligus setup agent --source claude-code --name builder --json | jq '.done'
 ligus setup tool --id notes --command "npx -y @modelcontextprotocol/server-filesystem ~/notes" --reach builder
 ```
 

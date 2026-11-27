@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as ipc from "@/lib/ipc";
+import * as nav from "@/lib/nav";
 
 const runtime = (id: string, name: string, gateway: string | null = null) => ({
   id,
@@ -18,6 +19,11 @@ const runtime = (id: string, name: string, gateway: string | null = null) => ({
   isManaged: false,
   gateway,
 });
+
+vi.mock("@/lib/nav", async (orig) => ({
+  ...(await orig<typeof import("@/lib/nav")>()),
+  openSetup: vi.fn(),
+}));
 
 vi.mock("@/lib/ipc", async (orig) => ({
   ...(await orig<typeof import("@/lib/ipc")>()),
@@ -60,30 +66,14 @@ function renderPane() {
 describe("Add an agent", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("binds the host in the same write, defaulting a gateway runtime to the host that offers it", async () => {
+  it("opens the one Add an agent sheet, with no dialog of its own", async () => {
     renderPane();
     await userEvent.click(await screen.findByRole("button", { name: "Add an agent" }));
-    await userEvent.type(screen.getByPlaceholderText("Agent name"), "gw-bot");
-    const runsOn = screen.getByLabelText("Agent host") as HTMLSelectElement;
-    expect(runsOn.value).toBe("");
-    await userEvent.selectOptions(screen.getByLabelText("Agent runtime"), "gw");
-    await waitFor(() => expect(runsOn.value).toBe("box"));
-    // This device isn't offered, and the serve box is listed.
-    expect([...runsOn.options].map((o) => o.textContent)).toEqual(["This device", "serve-1"]);
-    await userEvent.click(screen.getByRole("button", { name: "Add agent" }));
-    await waitFor(() =>
-      expect(ipc.addAgent).toHaveBeenCalledWith("00000000-0000-4000-8000-000000000001", "gw-bot", "gw", "", "box"),
-    );
-    expect(ipc.setAgentHost).not.toHaveBeenCalled();
-  });
-
-  it("says when the picked host can't reach the runtime's gateway", async () => {
-    renderPane();
-    await userEvent.click(await screen.findByRole("button", { name: "Add an agent" }));
-    await userEvent.selectOptions(screen.getByLabelText("Agent runtime"), "gw");
-    await waitFor(() => expect((screen.getByLabelText("Agent host") as HTMLSelectElement).value).toBe("box"));
-    expect(screen.queryByTestId("agent-host-gateway-note")).toBeNull();
-    await userEvent.selectOptions(screen.getByLabelText("Agent host"), "");
-    expect(screen.getByTestId("agent-host-gateway-note")).toHaveTextContent("litellm");
+    expect(nav.openSetup).toHaveBeenCalledWith("agent");
+    // No second form here: no runtime-first picker, no name field.
+    expect(screen.queryByPlaceholderText("Agent name")).toBeNull();
+    expect(screen.queryByLabelText("Agent runtime")).toBeNull();
+    expect(ipc.addAgent).not.toHaveBeenCalled();
+    await waitFor(() => expect(ipc.listAgents).toHaveBeenCalled());
   });
 });
