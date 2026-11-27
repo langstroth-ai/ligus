@@ -32,6 +32,14 @@ Full release notes are on the
   device instead." Joining still works. See
   [The invite guard](../features/onboarding.md#the-invite-guard).
 
+### Fixed
+
+- **Linking a device works when you have a profile picture.** The code
+  your desktop sends a new device no longer carries your picture, which
+  made it too large to send through the relay or paste. The new device
+  shows your picture once your workspace has synced. See
+  [Linked devices](../features/linked-devices.md).
+
 ## 0.4.1
 
 Fixes for setting up and running agents: replies read in order, an agent's
