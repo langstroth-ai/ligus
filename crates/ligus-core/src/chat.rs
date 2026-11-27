@@ -138,6 +138,14 @@ pub struct ChatMessage {
     /// [`ChatMessage::posted_at`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<Timestamp>,
+    /// Fold state, never an author's word and never serialized: the signed
+    /// time of the envelope that first appended this message (the first in
+    /// fold order). `created_at` is a payload field its author chooses; this
+    /// is the clock ages are read from (a turn's takeover age). `None` on a
+    /// message seeded from a snapshot. Read it through
+    /// [`ChatMessage::appended_at`].
+    #[serde(skip)]
+    pub appended_at: Option<Timestamp>,
     #[serde(default)]
     pub tool_calls: Vec<ChatToolCall>,
     #[serde(default)]
@@ -171,6 +179,7 @@ impl ChatMessage {
             workflow_run_id: None,
             superseded: false,
             completed_at: None,
+            appended_at: None,
             tool_calls: Vec::new(),
             tool_results: Vec::new(),
             reactions: Vec::new(),
@@ -183,6 +192,13 @@ impl ChatMessage {
     /// before `created_at`.
     pub fn posted_at(&self) -> Timestamp {
         self.completed_at.filter(|c| *c > self.created_at).unwrap_or(self.created_at)
+    }
+
+    /// When this message was appended: its envelope's signed time, or the
+    /// payload's `created_at` when the fold didn't see the envelope (a
+    /// snapshot seed).
+    pub fn appended_at(&self) -> Timestamp {
+        self.appended_at.unwrap_or(self.created_at)
     }
 }
 
