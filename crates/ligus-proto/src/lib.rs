@@ -1038,6 +1038,12 @@ pub struct WorkspaceHostDto {
     /// The host's Ligus build from its beat (empty: not reported).
     #[serde(default)]
     pub build: String,
+    /// A newer release this box or worker could upgrade to: the latest one
+    /// the desktop knows from the docs site's version manifest, when it is
+    /// newer than [`Self::build`] (empty: up to date, or either unknown).
+    /// Display only; nothing upgrades on its own.
+    #[serde(default)]
+    pub upgrade_to: String,
 }
 
 /// One source a host offers. Never a URL or a secret.

@@ -8,6 +8,14 @@ Full release notes are on the
 
 ### Added
 
+- **"Update available" for boxes.** When a box or worker runs an older
+  release than the latest one, its row in **People** > **Workers & hosts**
+  shows one grey line, "0.4.1 → 0.5.0 available · how", and the phone's
+  Health shows the same for its box. **how** says to run `ligus-local
+  upgrade` on the box (it runs `brew upgrade ligus` for a Homebrew install
+  and restarts the box). Ligus never upgrades a box on its own. See
+  [Operating it](../../operate/deploy/personal-fleet.md#operating-it).
+
 - **Your phone in one flow.** Scan the desktop's code (the Connect screen
   now reads it as well as the `ligus pair` code), check the name the phone
   suggests ("Ana's iPhone", editable), and choose **Add**: that one
@@ -196,6 +204,15 @@ Full release notes are on the
   See [What a host offers](cli.md#what-a-host-offers).
 
 ### Changed
+
+- **A box keeps the name you gave it.** Renaming a box on a desktop used to
+  be undone the next time it started with its `--label`. A box now writes
+  its name only when `--label` (or `LIGUS_SERVE_LABEL`) changed since the
+  last one it wrote, and its host name only on first start. Its first host
+  beat carries its build version and what it offers, and its contact id
+  rides the beat instead of a write of its own. A box that ran
+  `ligus serve leave` stops beating and writes nothing of its own, also
+  after a restart. See [`ligus serve`](cli.md).
 
 - **"Hide from this list" is now "Remove from view"** on revoked devices in
   My devices: still this device only, and the device stays revoked.

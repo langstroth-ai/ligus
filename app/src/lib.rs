@@ -4656,6 +4656,7 @@ pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<Wo
             .unwrap_or_default()
     };
     let here = svc.device_id().to_string();
+    let latest = latest_release_tag();
     Ok(svc
         .list_hosts(active)
         .map_err(map_err)?
@@ -4670,6 +4671,11 @@ pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<Wo
         .map(|(h, online, offers, status)| WorkspaceHostDto {
             readiness: ligus_runtime::host_offers::readiness_line(&offers, status.as_ref(), online),
             build: status.as_ref().map(|s| s.build.clone()).unwrap_or_default(),
+            upgrade_to: match h.kind {
+                // Boxes and workers only: a desktop updates itself (its banner).
+                ligus_core::HostKind::Worker => host_upgrade_to(status.as_ref().map(|s| s.build.as_str()).unwrap_or(""), latest.as_deref()),
+                ligus_core::HostKind::Device => String::new(),
+            },
             offers: offers
                 .iter()
                 .map(|o| {
@@ -12809,6 +12815,7 @@ async fn check_for_app_update() -> Option<UpdateInfo> {
         .build()
         .ok()?;
     let mut info = fetch_update_manifest(&client, &VERSION_MANIFEST_URLS, MANIFEST_TIMEOUT).await?;
+    remember_latest_release(&info.tag);
     info.url = release_page_url(&info.url);
     // Only offer an update when the manifest is a *strictly newer* release than
     // this build. Comparing tags for mere inequality (the old behavior) would
@@ -12818,6 +12825,61 @@ async fn check_for_app_update() -> Option<UpdateInfo> {
     match (parse_release_version(&info.tag), parse_release_version(current)) {
         (Some(remote), Some(cur)) if remote > cur => Some(info),
         _ => None,
+    }
+}
+
+/// The latest release tag this desktop last read from the version manifest,
+/// with when it read it (the update banner's check, or [`latest_release_tag`]'s
+/// own background refresh). Device-local, in memory.
+static LATEST_RELEASE: std::sync::Mutex<Option<(String, std::time::Instant)>> = std::sync::Mutex::new(None);
+/// Whether a background manifest read is running.
+static LATEST_RELEASE_FETCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How long a manifest read is reused before the next one.
+const LATEST_RELEASE_TTL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
+fn remember_latest_release(tag: &str) {
+    if parse_release_version(tag).is_some() {
+        *LATEST_RELEASE.lock().unwrap_or_else(|e| e.into_inner()) = Some((tag.trim().to_string(), std::time::Instant::now()));
+    }
+}
+
+/// The latest release this desktop knows (for "Update available" on box and
+/// worker rows). Reuses the update banner's manifest read; when there is
+/// none yet, or it is over [`LATEST_RELEASE_TTL`] old, starts one read in the
+/// background (also on dev builds, whose banner never checks) and answers
+/// with what it has. Never fails: no manifest, no line.
+fn latest_release_tag() -> Option<String> {
+    let cached = LATEST_RELEASE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let stale = cached.as_ref().is_none_or(|(_, at)| at.elapsed() >= LATEST_RELEASE_TTL);
+    if stale && !cfg!(test) && !LATEST_RELEASE_FETCHING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        tauri::async_runtime::spawn(async {
+            if let Ok(client) = ligus_forge::http_client_builder().timeout(MANIFEST_TIMEOUT).build() {
+                if let Some(info) = fetch_update_manifest(&client, &VERSION_MANIFEST_URLS, MANIFEST_TIMEOUT).await {
+                    remember_latest_release(&info.tag);
+                }
+            }
+            LATEST_RELEASE_FETCHING.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+    cached.map(|(tag, _)| tag)
+}
+
+/// "0.5.0" when `latest` is a strictly newer release than a box's `build`,
+/// else empty. Both must parse as plain `MAJOR.MINOR.PATCH` releases (a
+/// leading `v` allowed); a pre-release or dev build, or anything else odd on
+/// either side, says nothing rather than guess.
+pub(crate) fn host_upgrade_to(build: &str, latest: Option<&str>) -> String {
+    fn plain(v: &str) -> Option<(u64, u64, u64)> {
+        let core = v.trim().trim_start_matches(['v', 'V']);
+        let parts: Vec<&str> = core.split('.').collect();
+        if parts.len() != 3 || parts.iter().any(|p| p.is_empty() || p.len() > 9 || !p.bytes().all(|b| b.is_ascii_digit())) {
+            return None;
+        }
+        Some((parts[0].parse().ok()?, parts[1].parse().ok()?, parts[2].parse().ok()?))
+    }
+    match (plain(build), latest.and_then(plain)) {
+        (Some(have), Some(next)) if next > have => format!("{}.{}.{}", next.0, next.1, next.2),
+        _ => String::new(),
     }
 }
 
@@ -18039,6 +18101,36 @@ mod update_version_tests {
         assert!(!key.contains("REPLACE_WITH"), "the updater pubkey is still the placeholder");
         assert!(key.starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxNUQ2QTdCMjAyQThENzkK"));
         assert_eq!(super::VERSION_MANIFEST_URLS, ["https://docs.langstroth.ai/version.json", "https://docs.ligus.ai/version.json"]);
+    }
+
+    /// "Update available" on box and worker rows: only a strictly newer
+    /// plain release than the box's build; anything odd says nothing.
+    #[test]
+    fn host_upgrade_to_only_for_a_newer_plain_release() {
+        use super::host_upgrade_to as up;
+        assert_eq!(up("0.4.1", Some("v0.5.0")), "0.5.0");
+        assert_eq!(up("0.4.1", Some("0.4.2")), "0.4.2");
+        assert_eq!(up("0.9.9", Some("v0.10.0")), "0.10.0");
+        assert_eq!(up("0.5.0", Some("v0.5.0")), "", "up to date");
+        assert_eq!(up("0.6.0", Some("v0.5.0")), "", "a lagging manifest is never a downgrade");
+        assert_eq!(up("0.4.1", None), "", "no manifest yet");
+        assert_eq!(up("", Some("v0.5.0")), "", "no build in the beat");
+        for odd in ["0.5.0-dev", "0.5.0-rc1", "0.5.0+abc", "dev", "0.5", "1.2.3.4", "x.y.z", " ", "0.5.-1", "9999999999.0.0"] {
+            assert_eq!(up(odd, Some("v9.0.0")), "", "box build {odd:?}");
+            assert_eq!(up("0.4.1", Some(odd)), "", "manifest tag {odd:?}");
+        }
+    }
+
+    /// The banner's manifest read is what the host rows compare against;
+    /// a tag that doesn't parse is never remembered.
+    #[test]
+    fn latest_release_is_remembered_from_the_manifest_read() {
+        super::remember_latest_release("not a version");
+        let before = super::LATEST_RELEASE.lock().unwrap().clone().map(|(t, _)| t);
+        assert_ne!(before.as_deref(), Some("not a version"));
+        super::remember_latest_release("v0.5.0");
+        assert_eq!(super::latest_release_tag().as_deref(), Some("v0.5.0"));
+        assert_eq!(super::host_upgrade_to("0.4.1", super::latest_release_tag().as_deref()), "0.5.0");
     }
 
     /// The banner opens the manifest's `url` in the browser. HTTPS now trusts

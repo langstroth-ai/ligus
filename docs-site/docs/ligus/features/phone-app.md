@@ -837,6 +837,14 @@ define in `dashboard.toml` on the box. It is **Agents → Health** in the app,
 shown when the dashboard isn't empty. Format and examples:
 [`docs/dashboard.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/dashboard.md).
 
+When the box runs an older release than the latest one, Health starts with
+one grey line, "0.4.1 → 0.5.0 available · how". The box's version is the
+one its `/v1/health` reports; the latest release comes from the docs site's
+`version.json`, read at most once a day (no line when it can't be read, or
+for a pre-release or development build). **how** says to run `ligus-local
+upgrade` on the box. Nothing upgrades the box on its own. See
+[Operating it](../../operate/deploy/personal-fleet.md#operating-it).
+
 ## Accessibility
 
 - **VoiceOver** says when an agent finishes or fails in the chat you have
