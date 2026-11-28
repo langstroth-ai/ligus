@@ -15,7 +15,7 @@ pub const MAX_MSG_BLOB: usize = 32 * 1024;
 /// The longest long-poll the relay holds.
 pub const MAX_WAIT_SECS: u64 = 25;
 /// The longest any one call may take, besides a long poll's wait.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Why a mailbox call failed. [`MailboxError::exit_code`] maps it onto the
 /// shared exit-code table.
@@ -67,6 +67,14 @@ pub enum MailboxError {
     Status(u16, String),
     #[error("the relay's answer is malformed")]
     Malformed,
+    /// No live short code by that name (`code_unknown`): mistyped, expired,
+    /// already used, or the relay restarted. Exit 5.
+    #[error("no device is showing that code: check it, or ask your other device for a new one")]
+    CodeUnknown,
+    /// Another device holds that short code, or it was used (`code_taken`,
+    /// `code_used`): pick another.
+    #[error("that code is taken")]
+    CodeTaken,
 }
 
 impl MailboxError {
@@ -77,7 +85,7 @@ impl MailboxError {
             Self::NoRoutes => 3,
             Self::Unreachable(_) | Self::RateLimited(_) => 7,
             Self::Unauthorized | Self::BadCap => 6,
-            Self::RequestUnknown | Self::MailboxUnknown => 5,
+            Self::RequestUnknown | Self::MailboxUnknown | Self::CodeUnknown => 5,
             _ => 1,
         }
     }
@@ -88,7 +96,7 @@ impl MailboxError {
     }
 }
 
-fn transport(e: reqwest::Error) -> MailboxError {
+pub(super) fn transport(e: reqwest::Error) -> MailboxError {
     MailboxError::Unreachable(if e.is_timeout() { "timed out".into() } else { e.without_url().to_string() })
 }
 
@@ -144,7 +152,7 @@ struct Counter {
 /// A client of one relay's mailbox routes.
 #[derive(Clone)]
 pub struct MailboxClient {
-    http: reqwest::Client,
+    pub(super) http: reqwest::Client,
     base: String,
     token: Option<String>,
     clock: Clock,
@@ -189,7 +197,7 @@ impl MailboxClient {
         (self.clock)()
     }
 
-    fn url(&self, path: &str) -> String {
+    pub(super) fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base)
     }
 
@@ -199,14 +207,14 @@ impl MailboxClient {
         format!("{prefix}{path}")
     }
 
-    fn bearer(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    pub(super) fn bearer(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match &self.token {
             Some(t) => rb.bearer_auth(t),
             None => rb,
         }
     }
 
-    fn authed(&self, rb: reqwest::RequestBuilder, auth: MailboxAuth<'_>, method: &str, path: &str, body: &[u8]) -> reqwest::RequestBuilder {
+    pub(super) fn authed(&self, rb: reqwest::RequestBuilder, auth: MailboxAuth<'_>, method: &str, path: &str, body: &[u8]) -> reqwest::RequestBuilder {
         match auth {
             MailboxAuth::Member(keys) => {
                 let ts = self.now();
@@ -217,7 +225,7 @@ impl MailboxClient {
         }
     }
 
-    async fn send(&self, rb: reqwest::RequestBuilder) -> Result<reqwest::Response, MailboxError> {
+    pub(super) async fn send(&self, rb: reqwest::RequestBuilder) -> Result<reqwest::Response, MailboxError> {
         let resp = rb.send().await.map_err(transport)?;
         if resp.status().is_success() {
             return Ok(resp);
@@ -225,7 +233,7 @@ impl MailboxClient {
         Err(problem(resp).await)
     }
 
-    async fn json<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T, MailboxError> {
+    pub(super) async fn json<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T, MailboxError> {
         let bytes = resp.bytes().await.map_err(transport)?;
         serde_json::from_slice(&bytes).map_err(|_| MailboxError::Malformed)
     }
@@ -377,7 +385,14 @@ impl MailboxClient {
 }
 
 /// Map a non-2xx answer (a problem document `{"error": code, ...}`).
-async fn problem(resp: reqwest::Response) -> MailboxError {
+pub(super) async fn problem(resp: reqwest::Response) -> MailboxError {
+    let (status, code, retry) = problem_parts(resp).await;
+    problem_of(status, &code, retry)
+}
+
+/// A non-2xx answer's status, problem code (empty without a problem
+/// document) and `Retry-After`.
+pub(super) async fn problem_parts(resp: reqwest::Response) -> (u16, String, Option<u64>) {
     let status = resp.status().as_u16();
     let retry = resp.headers().get(reqwest::header::RETRY_AFTER).and_then(|h| h.to_str().ok()).and_then(|s| s.trim().parse::<u64>().ok());
     let text = resp.text().await.unwrap_or_default();
@@ -385,15 +400,21 @@ async fn problem(resp: reqwest::Response) -> MailboxError {
         .ok()
         .and_then(|v| v.get("error").or_else(|| v.get("code")).and_then(|c| c.as_str()).map(str::to_string))
         .unwrap_or_default();
-    match (status, code.as_str()) {
+    (status, code, retry)
+}
+
+pub(super) fn problem_of(status: u16, code: &str, retry: Option<u64>) -> MailboxError {
+    match (status, code) {
         (404, "mailbox_unknown") => MailboxError::MailboxUnknown,
         (404, "request_unknown") => MailboxError::RequestUnknown,
+        (404, "code_unknown") => MailboxError::CodeUnknown,
         // A 404 without a mailbox problem document: the routes are off or absent.
         (404, _) => MailboxError::NoRoutes,
         (403, "bad_put_cap") | (403, "bad_cap") => MailboxError::BadCap,
         (401 | 403, _) => MailboxError::Unauthorized,
         (409, "stale_counter") => MailboxError::StaleCounter,
         (409, "duplicate_message") => MailboxError::DuplicateMessage,
+        (409, "code_taken" | "code_used") => MailboxError::CodeTaken,
         (409, _) => MailboxError::RidExists,
         (413, _) => MailboxError::TooLarge,
         (429, "mailbox_full") | (507, "mailbox_full" | "mailboxes_full" | "mailbox_storage") => MailboxError::MailboxFull,

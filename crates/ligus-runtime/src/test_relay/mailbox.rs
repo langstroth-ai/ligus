@@ -68,10 +68,38 @@ impl Mailbox {
     }
 }
 
+/// A short link code (Ligus 0.5): its mailbox, sealed blob and expiry.
+struct LinkCode {
+    mailbox: String,
+    blob: String,
+    expires_at: i64,
+    used: bool,
+}
+
+/// Short link code limits (the relay's).
+pub const CODE_TTL_MAX_SECS: i64 = 600;
+pub const CODES_PER_MAILBOX: usize = 4;
+pub const CODE_RESOLVES_PER_MIN: usize = 10;
+
 #[derive(Default)]
-struct Inner {
+pub(super) struct Inner {
     boxes: HashMap<String, Mailbox>,
     puts: HashMap<String, Vec<i64>>,
+    codes: HashMap<String, LinkCode>,
+    resolves: HashMap<String, Vec<i64>>,
+}
+
+/// Forgets every mailbox, request and code, as a relay restart does.
+#[derive(Clone)]
+pub struct MailboxRestart(Arc<Mutex<Inner>>, Arc<tokio::sync::Notify>);
+
+impl MailboxRestart {
+    /// Forget everything; held long polls answer at once (a real restart
+    /// drops their connections).
+    pub fn restart(&self) {
+        *self.0.lock().unwrap() = Inner::default();
+        self.1.notify_waiters();
+    }
 }
 
 #[derive(Clone)]
@@ -82,13 +110,25 @@ struct St {
 }
 
 pub(super) fn router(clock: TestClock) -> Router {
+    router_with(clock, true).0
+}
+
+/// The mailbox routes, with the short link code routes when `codes` (a
+/// relay from before Ligus 0.5 has none), and the handle that restarts them.
+pub(super) fn router_with(clock: TestClock, codes: bool) -> (Router, MailboxRestart) {
     let st = St { inner: Arc::default(), notify: Arc::new(tokio::sync::Notify::new()), clock };
-    Router::new()
+    let restart = MailboxRestart(st.inner.clone(), st.notify.clone());
+    let mut r = Router::new()
         .route("/v1/mailboxes/{mb}", get(get_mailbox).put(register))
         .route("/v1/mailboxes/{mb}/requests", get(list))
         .route("/v1/mailboxes/{mb}/requests/{rid}", put(put_request).delete(delete_request))
-        .route("/v1/mailboxes/{mb}/requests/{rid}/msgs", get(get_msgs).post(post_msg))
-        .with_state(st)
+        .route("/v1/mailboxes/{mb}/requests/{rid}/msgs", get(get_msgs).post(post_msg));
+    if codes {
+        r = r
+            .route("/v1/mailboxes/{mb}/codes/{code}", put(put_code).get(code_status).delete(delete_code))
+            .route("/v1/link-codes/{code}", axum::routing::post(resolve_code));
+    }
+    (r.with_state(st), restart)
 }
 
 fn problem(status: StatusCode, code: &str) -> Response {
@@ -350,4 +390,110 @@ async fn delete_request(State(st): State<St>, Path((mb, rid)): Path<(String, Str
     drop(inner);
     st.notify.notify_waiters();
     StatusCode::NO_CONTENT.into_response()
+}
+
+// ---- Short link codes (Ligus 0.5) ----
+
+fn lookup_ok(code: &str) -> bool {
+    code.len() == 32 && code.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
+/// Member auth on `mb` for a code route, or the refusal.
+fn code_member(inner: &mut Inner, mb: &str, parts: &Parts, body: &[u8], now: i64) -> Result<(), Response> {
+    let Some(m) = inner.boxes.get(mb) else { return Err(problem(StatusCode::NOT_FOUND, "mailbox_unknown")) };
+    match member_ok(m, &parts.headers, parts.method.as_str(), parts.uri.path(), body, now) {
+        Some(true) => Ok(()),
+        None => Err(problem(StatusCode::UNAUTHORIZED, "auth_required")),
+        Some(false) => Err(problem(StatusCode::UNAUTHORIZED, "bad_member_auth")),
+    }
+}
+
+async fn put_code(State(st): State<St>, Path((mb, code)): Path<(String, String)>, parts: Parts, body: Bytes) -> Response {
+    let now = st.clock.now();
+    let mut inner = st.inner.lock().unwrap();
+    if !lookup_ok(&code) {
+        return problem(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    if let Err(r) = code_member(&mut inner, &mb, &parts, &body, now) {
+        return r;
+    }
+    let Ok(v) = serde_json::from_slice::<Value>(&body) else { return problem(StatusCode::BAD_REQUEST, "invalid_request") };
+    let Some(blob) = v.get("blob").and_then(Value::as_str).filter(|b| blob_ok(b)) else {
+        return problem(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if blob.len() > 2048 {
+        return problem(StatusCode::PAYLOAD_TOO_LARGE, "too_large");
+    }
+    let ttl = match v.get("ttlSecs") {
+        None => CODE_TTL_MAX_SECS,
+        Some(t) => match t.as_i64() {
+            Some(n) if (60..=CODE_TTL_MAX_SECS).contains(&n) => n,
+            _ => return problem(StatusCode::BAD_REQUEST, "invalid_request"),
+        },
+    };
+    inner.codes.retain(|_, c| c.expires_at > now);
+    if let Some(c) = inner.codes.get_mut(&code) {
+        if c.mailbox != mb {
+            return problem(StatusCode::CONFLICT, "code_taken");
+        }
+        if c.used {
+            return problem(StatusCode::CONFLICT, "code_used");
+        }
+        c.blob = blob.to_string();
+        return Json(json!({ "code": code, "expiresAt": c.expires_at, "used": false })).into_response();
+    }
+    if inner.codes.values().filter(|c| c.mailbox == mb && !c.used).count() >= CODES_PER_MAILBOX {
+        return problem(StatusCode::TOO_MANY_REQUESTS, "link_codes_full");
+    }
+    let expires_at = now + ttl * 1000;
+    inner.codes.insert(code.clone(), LinkCode { mailbox: mb, blob: blob.to_string(), expires_at, used: false });
+    (StatusCode::CREATED, Json(json!({ "code": code, "expiresAt": expires_at, "used": false }))).into_response()
+}
+
+async fn code_status(State(st): State<St>, Path((mb, code)): Path<(String, String)>, parts: Parts) -> Response {
+    let now = st.clock.now();
+    let mut inner = st.inner.lock().unwrap();
+    if let Err(r) = code_member(&mut inner, &mb, &parts, b"", now) {
+        return r;
+    }
+    match inner.codes.get(&code) {
+        Some(c) if c.mailbox == mb && c.expires_at > now => Json(json!({ "code": code, "expiresAt": c.expires_at, "used": c.used })).into_response(),
+        _ => problem(StatusCode::NOT_FOUND, "code_unknown"),
+    }
+}
+
+async fn delete_code(State(st): State<St>, Path((mb, code)): Path<(String, String)>, parts: Parts) -> Response {
+    let now = st.clock.now();
+    let mut inner = st.inner.lock().unwrap();
+    if let Err(r) = code_member(&mut inner, &mb, &parts, b"", now) {
+        return r;
+    }
+    if inner.codes.get(&code).is_some_and(|c| c.mailbox == mb) {
+        inner.codes.remove(&code);
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn resolve_code(State(st): State<St>, Path(code): Path<String>, parts: Parts) -> Response {
+    let now = st.clock.now();
+    let mut inner = st.inner.lock().unwrap();
+    if !lookup_ok(&code) {
+        return problem(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let log = inner.resolves.entry(client_of(&parts)).or_default();
+    log.retain(|t| now - *t < 60_000);
+    if log.len() >= CODE_RESOLVES_PER_MIN {
+        let mut r = problem(StatusCode::TOO_MANY_REQUESTS, "link_code_attempts");
+        r.headers_mut().insert("retry-after", "60".parse().unwrap());
+        return r;
+    }
+    log.push(now);
+    match inner.codes.get_mut(&code) {
+        Some(c) if c.expires_at > now && !c.used => {
+            c.used = true;
+            let blob = std::mem::take(&mut c.blob);
+            Json(json!({ "mailbox": c.mailbox, "blob": blob, "expiresAt": c.expires_at })).into_response()
+        }
+        _ => problem(StatusCode::NOT_FOUND, "code_unknown"),
+    }
 }
