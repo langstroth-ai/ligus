@@ -550,7 +550,7 @@ by the rules they were written under, never again.
 | A Contributor moves an agent onto someone else's computer or worker, or into a pool, including with an older client's whole-record write | Who may create and move an agent is judged on the record the write leaves, not its payload: your own agent on your own devices needs nothing; on a host you own, your passkey; anywhere else, an Admin and their passkey. A model change within the same source needs no passkey; a change of source or harness counts as a move. |
 | Placing an agent on a host that doesn't exist, was revoked, belongs to a former member, or doesn't offer what the agent runs | Refused when it is written. A host that later goes away leaves its agents "host gone": they run nowhere until someone places them again, never on the owner's desktop. |
 | Registering a host record under someone else's device id | A host record counts only when the device it names signed it, that device is trusted, and its owner holds it. |
-| Any device answering as an agent | A reply comes only from a device its placement admits (its host, its owner's devices, a pool worker that offers its source), or from the one device a signed "Run here this time" names for that one turn. The default agent answers only from the chat creator's devices. |
+| Any device answering as an agent | A reply comes only from a device its placement admits (its host, its owner's devices, a pool's boxes that offer its source; a person's own computer never joins a pool, whatever its host record says), or from the one device a signed "Run here this time" names for that one turn. The default agent answers only from the chat creator's devices. |
 | A member who left keeps writing | Leaving is a removal. The leaver's own watermark is checked and bounded, and never makes anything they did before it disappear. |
 | Members without an account, model server addresses on the log, whole-list agent, runtime and host writes, agent records on a chat's log | Refused. Existing ones keep working. |
 | A payload naming another member as its author (a message, a reaction, a proposal, a lockdown, a workflow run) | Refused. |
@@ -568,6 +568,16 @@ Residual risks:
 - **A leaver can backdate.** A member who left can still sign chat events
   claiming a position before their leave, as with any removal that carries
   no watermark of the remover's. An Admin's removal closes it.
+- **Writing as of before the switch.** A chat event is judged at the
+  position its author says they had reached on the workspace's settings
+  log, so on a workspace switched from rules 3, a member's modified client
+  that claims a position before the switch is judged by rules 3 (as a
+  device that hadn't synced the switch yet would be): a payload naming
+  another member as its author, an agent record on a chat's log, or a reply
+  for an agent that existed then, from where it ran then. Removing,
+  demoting or revoking still moves that member's position forward.
+  On a workspace founded on rules 4 only the founder was a member before
+  the switch.
 
 ### Someone with your phone {#lost-phone}
 

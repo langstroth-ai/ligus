@@ -915,3 +915,25 @@ fn sr_a_contributor_cant_move_or_remodel_a_shared_agent() {
     let f = folded(&w).unwrap();
     assert_eq!((f.effective_placement(), f.run.unwrap().model), (Placement::Host { host_id: host_of(&w, "box") }, "llama3".to_string()));
 }
+
+/// Residual (documented, not fixed): a chat event is judged at the config
+/// frontier its author stamps, so a member of a workspace switched from
+/// rules 3 who stamps a frontier from before the switch is judged by
+/// rules 3 there, as an honest device that hadn't synced the switch yet
+/// would be. The rules-4 chat-log gates (G5, G8, G10, G14) then don't bind
+/// it. A cut (removal, demotion, revocation) still lifts the frontier.
+#[test]
+fn sr_residual_a_pre_switch_frontier_is_judged_by_rules_3() {
+    let mut w = world();
+    let switch = w.cfg.iter().position(|e| matches!(e.payload, SessionEvent::WorkspaceRulesSet { version: 4, .. })).unwrap();
+    let before = ligus_core::CfgFrontier { lamport: w.cfg[switch - 1].lamport, event_id: w.cfg[switch - 1].event_id };
+    let chat = w.chat("cy", "plans");
+    let forged = |w: &SignedWorld| {
+        let mut m = ChatMessage::new(MessageRole::User, "ana", "as ana");
+        m.actor_identity = Some(w.people["ana"].actor());
+        SessionEvent::MessageAppended { message: m }
+    };
+    let at_head = w.say(chat, "cy", forged(&w));
+    let stale = w.write("cy", Some(chat), forged(&w), Some(before), Proof::None);
+    assert_eq!((v(&w, at_head), v(&w, stale)), (Verdict::Denied, Verdict::Allowed), "the residual");
+}
