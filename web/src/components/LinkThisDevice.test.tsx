@@ -63,7 +63,7 @@ beforeEach(() => {
 });
 
 async function pasteAddress() {
-  await userEvent.type(screen.getByLabelText("The approval address from your other device"), ADDRESS);
+  await userEvent.type(screen.getByLabelText("The code or approval address from your other device"), ADDRESS);
   await click("Continue");
 }
 
@@ -157,11 +157,36 @@ describe("LinkThisDevice", () => {
     const { unmount } = render(<LinkThisDevice onBack={vi.fn()} />);
     await waitFor(() => expect(ipc.linkRequestStatus).toHaveBeenCalled());
     expect(screen.queryByTestId("link-linked")).toBeNull();
-    expect(screen.getByLabelText("The approval address from your other device")).toBeTruthy();
+    expect(screen.getByLabelText("The code or approval address from your other device")).toBeTruthy();
     unmount();
     (ipc.linkRequestStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(flow("code", { code: "K7Q4M9X2" }));
     render(<LinkThisDevice onBack={vi.fn()} />);
     expect(await screen.findByTestId("match-code")).toHaveTextContent("K7Q4M9X2");
+  });
+
+  it("links with the short code the other device shows, on the community relay or another", async () => {
+    render(<LinkThisDevice onBack={vi.fn()} />);
+    const field = screen.getByLabelText("The code or approval address from your other device");
+    await userEvent.type(field, "k7q 4mx");
+    expect(screen.getByTestId("link-relay")).toHaveTextContent("On relay.langstroth.ai.");
+    await click("Continue");
+    expect(ipc.linkRequestStart).toHaveBeenLastCalledWith("k7q 4mx");
+    await screen.findByTestId("link-waiting");
+    await click("Cancel");
+
+    // A self-hosted relay: named once, then the code.
+    await userEvent.clear(screen.getByLabelText("The code or approval address from your other device"));
+    await userEvent.type(screen.getByLabelText("The code or approval address from your other device"), "K7Q-4MX");
+    await click("Another relay");
+    await userEvent.type(screen.getByLabelText("Your other device's relay"), "https://relay.example.org");
+    await click("Continue");
+    expect(ipc.linkRequestStart).toHaveBeenLastCalledWith("K7Q-4MX", "https://relay.example.org");
+  });
+
+  it("an approval address shows no relay line", async () => {
+    render(<LinkThisDevice onBack={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText("The code or approval address from your other device"), ADDRESS);
+    expect(screen.queryByTestId("link-relay")).toBeNull();
   });
 
   it("a request code is there from the start, behind one quiet link", async () => {

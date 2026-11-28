@@ -41,8 +41,9 @@ Ligus?**
   more of your devices, not a new you (starting again would make a second
   you, with its own name and keys). It asks no name and makes no workspace.
   On your other device, open **Settings → Profile → My devices → Add a
-  computer** and copy the approval address; paste it here and choose
-  **Continue**. Both screens show the same code: check it, choose **Codes
+  computer**: it shows **Link a device** with a code like `K7Q-4MX`. Type it
+  here and choose **Continue** (or paste the approval address it shows
+  under **Other ways to link**). Both screens show the same code: check it, choose **Codes
   match**, and confirm on your other device with your passkey. Then choose
   **Link** when this computer asks **Link this computer as Ana?**. Your
   workspace and your profile come from your other device. If your relay

@@ -1,12 +1,13 @@
-// My devices → Add a computer: make another computer of yours (lt, the
-// `ligus` CLI) one of your devices, instead of a second member with your
-// name. Paste its link request, compare the fingerprint, confirm with your
-// passkey, then hand the grant back to the computer: Copy for lt copies the
-// grant alone (lt and `ligus devices redeem` read it from the clipboard), and
-// Copy command copies a command that holds no grant. See
-// docs/design/link-a-computer.md.
+// My devices → Add a computer: make another computer of yours (the desktop,
+// lt, the `ligus` CLI) one of your devices, instead of a second member with
+// your name. First a short code the new device types (LinkCode); its request
+// then comes to the Inbox. Under "Other ways": the approval address to
+// paste, or the older paste path: paste its link request, compare the
+// fingerprint, confirm with your passkey, then hand the grant back to the
+// computer (Copy for lt copies the grant alone; Copy command copies a
+// command that holds no grant). See docs/design/link-a-computer.md.
 
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import {
   addComputer,
   approvalMatchPaste,
@@ -15,13 +16,14 @@ import {
   type ComputerGrantDto,
   type ComputerRequestDto,
 } from "@/lib/ipc";
-import { Button, fieldStyle } from "@/components/ui";
+import { Button, LinkButton, fieldStyle } from "@/components/ui";
 import { Fingerprint } from "@/components/kit/Fingerprint";
 import { confirmDialog } from "@/components/Dialog";
 import { toast, errMsg } from "@/components/Toast";
 import { ApprovalAddress } from "@/components/ApprovalAddress";
 import { shownWorkspace } from "@/lib/shownWorkspace";
 import { approvalSheet } from "@/state/approvals";
+import { LinkCode } from "@/components/settings/LinkCode";
 
 type MemberRef = { memberId: string; displayName: string };
 
@@ -44,6 +46,9 @@ export function AddComputerPanel({
   const [busy, setBusy] = useState(false);
   const [grant, setGrant] = useState<ComputerGrantDto | null>(null);
   const [removed, setRemoved] = useState(false);
+  const [codeState, setCodeState] = useState("posting");
+  const [otherWays, setOtherWays] = useState(false);
+  const onCodeState = useCallback((s: string) => setCodeState(s), []);
 
   async function check(next: string) {
     setCode(next);
@@ -134,21 +139,32 @@ export function AddComputerPanel({
           Linking <strong>"{suggested.displayName}"</strong>: you can remove that member once it's added.
         </p>
       )}
-      {shownWorkspace() && <ApprovalAddress workspaceId={shownWorkspace()} hint={<>On the other computer, paste it in Ligus (I already use Ligus → Link this computer), or run <code>ligus devices request --to</code> with it. The request comes to your Inbox.</>} />}
-      <p className="text-xs text-ink-soft">
-        Or paste: on the other computer, choose <em>Link to my devices</em> in lt (Settings or People, or the palette), or run{" "}
-        <code>ligus devices request</code>. Paste what it shows. An invite would make a second member; this makes the
-        computer yours.
-      </p>
-      <textarea
-        value={code}
-        onChange={(e) => void check(e.target.value)}
-        placeholder="liguslink1:…"
-        rows={3}
-        className="w-full rounded-xl border px-3 py-2 font-mono text-xs"
-        style={fieldStyle}
-        aria-label="The computer's link request"
-      />
+      {/* The short code first; the address and the paste path under Other ways. */}
+      {shownWorkspace() && !preview && <LinkCode workspaceId={shownWorkspace()} onRequest={onCancel} onState={onCodeState} />}
+      {shownWorkspace() && !preview && !otherWays && codeState !== "noRoutes" && (
+        <LinkButton tone="ink" onClick={() => setOtherWays(true)}>
+          Can't type a code? Other ways to link
+        </LinkButton>
+      )}
+      {(otherWays || codeState === "noRoutes" || !shownWorkspace() || preview) && (
+        <>
+          {shownWorkspace() && !preview && <ApprovalAddress workspaceId={shownWorkspace()} hint={<>On the other computer, paste it in Ligus (I already use Ligus → Link this computer), or run <code>ligus devices request --to</code> with it. The request comes to your Inbox.</>} />}
+          <p className="text-xs text-ink-soft">
+            Or paste: on the other computer, choose <em>Link to my devices</em> in lt (Settings or People, or the palette), or run{" "}
+            <code>ligus devices request</code>. Paste what it shows. An invite would make a second member; this makes the
+            computer yours.
+          </p>
+          <textarea
+            value={code}
+            onChange={(e) => void check(e.target.value)}
+            placeholder="liguslink1:…"
+            rows={3}
+            className="w-full rounded-xl border px-3 py-2 font-mono text-xs"
+            style={fieldStyle}
+            aria-label="The computer's link request"
+          />
+        </>
+      )}
       {problem && (
         <div className="text-xs" style={{ color: "var(--ligus-danger-ink)" }} role="alert">
           {problem}

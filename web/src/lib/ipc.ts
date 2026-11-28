@@ -175,8 +175,34 @@ export type LinkWsDto = {
   canRetry: boolean;
 };
 export const linkRequestStatus = () => invoke<LinkFlowDto>("link_request_status");
-/// Post this desktop's link request to the approval address the other device shows.
-export const linkRequestStart = (address: string) => invoke<LinkFlowDto>("link_request_start", { address });
+/// Post this desktop's link request to the approval address the other
+/// device shows, or to the one behind the short code it shows (`K7Q-4MX`),
+/// typed for `relay` (the community relay when left out).
+export const linkRequestStart = (address: string, relay?: string) =>
+  relay ? invoke<LinkFlowDto>("link_request_start", { address, relay }) : invoke<LinkFlowDto>("link_request_start", { address });
+
+/// My devices > Add a computer: "Link a device: code K7Q-4MX"
+/// (`app/src/link_code_ui.rs`). `state`: idle, posting, live, used (the
+/// new device typed it: its request comes to the Inbox), expired, noRoutes
+/// (the relay has no short codes: `address` is the approval address to give
+/// instead) or failed (`error`).
+export type LinkCodeDto = {
+  state: string;
+  workspaceId: string;
+  code: string | null;
+  codeSpelled: string | null;
+  /// The code's relay when it isn't the community relay.
+  relay: string | null;
+  expiresAt: number | null;
+  notice: string | null;
+  error: string | null;
+  address: string | null;
+};
+export const linkCodeShow = (workspaceId: string) => invoke<LinkCodeDto>("link_code_show", { workspaceId });
+export const linkCodeStatus = () => invoke<LinkCodeDto>("link_code_status");
+export const linkCodeClose = () => invoke<LinkCodeDto>("link_code_close");
+export const onLinkCodeChanged = (cb: (v: LinkCodeDto) => void): Promise<UnlistenFn> =>
+  listen<LinkCodeDto>("link-code://changed", (e) => cb(e.payload));
 export const linkRequestCodesMatch = (matches: boolean) => invoke<LinkFlowDto>("link_request_codes_match", { matches });
 export const linkRequestLinkAs = (yes: boolean) => invoke<LinkFlowDto>("link_request_link_as", { yes });
 export const linkRequestCancel = () => invoke<LinkFlowDto>("link_request_cancel");

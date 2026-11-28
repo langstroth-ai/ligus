@@ -386,3 +386,47 @@ phone is certified for its account on its own log. The summary text is the
 box's rendering of the draft, as for the phone's own `/v1/presence/prepare`.
 
 An older approver refuses the unknown kind (it never lists).
+
+## 9. Short link codes (new in 0.5)
+
+A device the person already uses shows a 6-symbol code for its workspace's
+approval address (section 2); the new device types it instead of pasting the
+address. Pure functions in `ligus_core::link_code`, flows in
+`ligus_runtime::approval_mailbox::{LinkCodeOffer, resolve_link_code}`.
+
+```text
+code    = 6 symbols of the section 3.4 alphabet (30 bits), upper case, no
+          separator; shown "K7Q-4MX"; typed leniently (case, spaces, dashes;
+          O -> 0, I and L -> 1)
+salt    = "ligus-link-code-v1\0" ‖ relay   (scheme and host lower case, no trailing /)
+stretch = Argon2id(code, salt, m = 65536 KiB, t = 3, p = 1, 48 bytes)
+lookup  = stretch[0..16]    (32 lowercase hex: the relay's {code})
+key     = stretch[16..48]
+blob    = b64u(nonce(12) ‖ ChaCha20-Poly1305(key, nonce, address text,
+               aad = "ligus-link-code-v1\0" ‖ lookup ‖ mailbox(16)))
+```
+
+Vector: code `K7Q4MX`, relay `https://relay.langstroth.ai` gives lookup
+`6446ec733620d5bfbe4c83470ecb89ee` and key
+`61225f5b5766d7472f70dfd0ac4fe93314a7c8bc13582a3cad5cae42169f8847`.
+
+Relay routes (additive, on and off with the mailboxes):
+
+| Method | Path | Auth | Body / answer |
+|---|---|---|---|
+| `PUT` | `/v1/mailboxes/{mailbox}/codes/{lookup}` | member (section 4.1) | `{"blob","ttlSecs":60..600}` → `201` / `200` (re-post, same mailbox, live and unused) `{"code","expiresAt","used"}`; `409 code_taken`, `409 code_used`, `429 link_codes_full`, `429 link_code_rate` |
+| `GET` | `/v1/mailboxes/{mailbox}/codes/{lookup}` | member | `{"code","expiresAt","used"}`; `404 code_unknown` |
+| `DELETE` | `/v1/mailboxes/{mailbox}/codes/{lookup}` | member | `204` |
+| `POST` | `/v1/link-codes/{lookup}` | none (a token in `token` mode) | `{"mailbox","blob","expiresAt"}`, single-use; `404 code_unknown`; `429 link_code_attempts` (10 a minute per client address, found or not) |
+
+The resolver checks that the blob opens, that the address inside names the
+mailbox the relay returned and the relay it asked, and only then posts its
+request. A `404` with no problem document, or a `401`/`403`/`405` with none
+(an older gated relay's access gate), means the relay has no code routes:
+the caller falls back to the address. Codes live in the relay's memory: the
+showing device checks its code every few seconds and, on `code_unknown` or
+`mailbox_unknown` before the code's expiry, registers the mailbox again and
+posts the same code for the rest of its life. A requester whose poll answers
+`request_unknown` or `mailbox_unknown` (a restart) posts its request again
+under a new rid, up to three times.
+

@@ -1008,8 +1008,10 @@ Ligus?"** (Yes, start here / I already use Ligus on another device).
 
 1. The existing desktop's **Add a computer** shows a 6-character code that
    the relay resolves to the person's approval address.
-2. The new device (desktop, lt, or `ligus devices link --code K7P2QX [--wait
-   10m] [--json]`) types it. That posts the link request to the mailbox.
+2. The new device (desktop, lt, or `ligus devices request --code K7P2QX
+   [--relay URL] [--wait 10m] [--json]`) types it. That posts the link
+   request to the mailbox. (Shipped: `ligus devices link` is the showing
+   side in a terminal; the derivation is in `code-match-wire.md` section 9.)
 3. Both screens show the match code. **Codes match** on the approving desktop
    or phone (passkey), the grant is sealed back, accepted and named. Nothing
    is copied or pasted.
