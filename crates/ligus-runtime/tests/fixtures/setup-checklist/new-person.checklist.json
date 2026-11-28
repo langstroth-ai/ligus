@@ -1,0 +1,88 @@
+{
+  "schema": "ligus.setup.v1",
+  "rows": [
+    {
+      "id": "you",
+      "title": "You",
+      "state": "notSetUp",
+      "detail": "Not set up",
+      "action": {
+        "id": "profile",
+        "label": "Set your name"
+      }
+    },
+    {
+      "id": "passkey",
+      "title": "Passkey",
+      "state": "notSetUp",
+      "detail": "Not set up",
+      "action": {
+        "id": "passkey",
+        "label": "Add a passkey"
+      }
+    },
+    {
+      "id": "device",
+      "title": "This device",
+      "state": "notSetUp",
+      "detail": "Not named",
+      "action": {
+        "id": "deviceName",
+        "label": "Name it"
+      }
+    },
+    {
+      "id": "devices",
+      "title": "My devices",
+      "state": "notSetUp",
+      "detail": "Not set up",
+      "action": {
+        "id": "addComputer",
+        "label": "Add a computer"
+      }
+    },
+    {
+      "id": "phone",
+      "title": "Phone",
+      "state": "notSetUp",
+      "detail": "Not set up",
+      "action": {
+        "id": "addPhone",
+        "label": "Add a phone"
+      }
+    },
+    {
+      "id": "box",
+      "title": "Box",
+      "state": "notSetUp",
+      "detail": "Not set up (optional)",
+      "action": {
+        "id": "addBox",
+        "label": "Add a box"
+      }
+    },
+    {
+      "id": "agents",
+      "title": "Agents",
+      "state": "notSetUp",
+      "detail": "Not set up",
+      "action": {
+        "id": "addAgent",
+        "label": "Add an agent"
+      }
+    },
+    {
+      "id": "workspace",
+      "title": "Workspace",
+      "state": "done",
+      "detail": "Ana's workspace · rules 3"
+    },
+    {
+      "id": "cleanup",
+      "title": "Clean up",
+      "state": "done",
+      "detail": "Nothing to clean up"
+    }
+  ],
+  "cleanup": []
+}

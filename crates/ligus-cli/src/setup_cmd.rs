@@ -15,7 +15,7 @@ use ligus_runtime::checks::{Check, Report, Status};
 use ligus_runtime::cli_detect::DetectEnv;
 use ligus_runtime::mcp::{McpServerSpec, McpTransport};
 use ligus_runtime::model_catalog::ModelList;
-use ligus_runtime::setup::{self, service, FieldKind, FlowId, Inputs, Outcome, Progress, RunOpts, Secrets, Surface};
+use ligus_runtime::setup::{self, checklist, service, FieldKind, FlowId, Inputs, Outcome, Progress, RunOpts, Secrets, Surface};
 use ligus_runtime::setup::{
     AgentFact, BoxAsk, BoxFact, FolderFact, HarnessFact, HostFact, HostSourceFact, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RuntimeFact, RuntimeSpec, ServeFact,
     SetupOps, TestTurn,
@@ -44,15 +44,86 @@ pub fn cmd(cfg: &Config, rest: &[String]) -> Result<()> {
         Some("phone") => run_flow(cfg, FlowId::Phone, rest),
         Some("invite") => run_flow(cfg, FlowId::Invite, rest),
         Some("relay") => run_flow(cfg, FlowId::Relay, rest),
+        Some("cleanup") => cleanup(cfg, rest, json),
         Some(other) => Err(help::usage_error(format!(
-            "unknown `ligus setup {other}`: use agent, tool, folder, box, phone, invite, relay or runtimes"
+            "unknown `ligus setup {other}`: use agent, tool, folder, box, phone, invite, relay, runtimes or cleanup"
         ))),
     }
 }
 
-/// `ligus setup`: the flows and what is done, as checks (`<flow>.status`).
+/// The "Set up Ligus" checklist for this data dir's workspace (the same rows
+/// as the desktop's Settings > Set up, lt and the phone's Health).
+fn checklist_of(ops: &CliOps) -> checklist::Checklist {
+    let live = checklist::Live {
+        this_device_word: "this computer".into(),
+        hidden: checklist::hidden::load(&ops.cfg.data_dir),
+        ..checklist::Live::default()
+    };
+    let facts = checklist::gather(&ops.svc, ops.ws, &checklist::Viewer::author(&ops.svc), &live);
+    checklist::checklist(&facts)
+}
+
+/// What a checklist row's action is on the command line (or where to do it
+/// when only another device can).
+pub fn cli_how(action: &str) -> Option<String> {
+    Some(
+        match action {
+            "profile" => "ligus profile set --name \"Your name\"",
+            "passkey" | "recovery" | "upgradeRules" => "on your desktop, Settings > Passkeys & keys",
+            "deviceName" => "ligus devices rename this \"A name\"",
+            "addComputer" => "on the other computer, ligus devices request",
+            "devices" => "ligus devices list",
+            "addPhone" => "ligus setup phone",
+            "push" => "on your phone, Settings > Notifications",
+            "addBox" => "ligus setup box",
+            "upgradeBox" => "on the box, ligus-local upgrade",
+            "addAgent" => "ligus setup agent",
+            "agents" => "ligus agents",
+            "cleanup" => "ligus setup cleanup",
+            _ => return None,
+        }
+        .to_string(),
+    )
+}
+
+/// `ligus setup cleanup [--hide KEY | --show KEY] [--json]`: the leftovers,
+/// and Remove from view on this device. A removal from the workspace is its
+/// own passkey ceremony on your desktop (Settings > Set up > Clean up).
+fn cleanup(cfg: &Config, rest: &[String], json: bool) -> Result<()> {
+    let flag = |name: &str| rest.iter().position(|a| a == name).map(|i| rest.get(i + 1).cloned());
+    for (name, show) in [("--hide", false), ("--show", true)] {
+        if let Some(key) = flag(name) {
+            let key = key.ok_or_else(|| help::usage_error(format!("{name} needs a key from `ligus setup cleanup` (kind:id)")))?;
+            checklist::hidden::set(&cfg.data_dir, &key, show).map_err(|e| help::usage_error(format!("couldn't change what Clean up shows: {e}")))?;
+        }
+    }
+    let ops = CliOps::open(cfg)?;
+    let list = checklist_of(&ops);
+    if json {
+        println!("{}", serde_json::json!({ "schema": checklist::SCHEMA, "cleanup": list.cleanup }));
+        return Ok(());
+    }
+    if list.cleanup.is_empty() {
+        println!("Nothing to clean up.");
+        return Ok(());
+    }
+    for i in &list.cleanup {
+        let detail = if i.detail.is_empty() { String::new() } else { format!(" · {}", checklist::plain(&i.detail)) };
+        let how = match i.action.id {
+            checklist::CleanupActionId::RemoveFromView => format!("ligus setup cleanup --hide {}", checklist::plain(&i.key)),
+            checklist::CleanupActionId::Remove => "Remove on your desktop: Settings > Set up > Clean up (asks for your passkey)".to_string(),
+        };
+        println!("{}{detail}\n    {how}", checklist::plain(&i.label));
+    }
+    println!("\nRemove from view changes nothing in the workspace: other devices still show it. Bring one back with --show KEY.");
+    Ok(())
+}
+
+/// `ligus setup`: the checklist, then the flows and what is done, as checks
+/// (`<flow>.status`).
 fn list(cfg: &Config, json: bool) -> Result<()> {
     let ops = CliOps::open(cfg)?;
+    let list = checklist_of(&ops);
     let mut r = Report::new("setup");
     for s in setup::status(&ops) {
         let id = format!("{}.status", s.flow.id.as_str());
@@ -68,9 +139,14 @@ fn list(cfg: &Config, json: bool) -> Result<()> {
         r.add(c);
     }
     if json {
-        println!("{}", r.to_json(0));
+        let mut doc = r.to_json(0);
+        doc["checklist"] = serde_json::to_value(&list).unwrap_or_default();
+        println!("{doc}");
         return Ok(());
     }
+    println!("Set up Ligus\n");
+    print!("{}", checklist::render_text(&list, &cli_how));
+    println!("\nGuided setup\n");
     for c in &r.checks {
         let mark = match c.status {
             Status::Ok => "done ",

@@ -72,6 +72,14 @@ key seeds under `keys/`, and `settings.json` (including any API key you
 paste). (Key seeds are files, not in the OS keystore — see
 [Identity & devices](../concepts/identity.md).)
 
+## What's left after the first run
+
+The last screen of the first run (Add your first agent) has **See what's
+left to set up**: it finishes the first run and opens
+[Set up Ligus](set-up-ligus.md), one line each for your passkey, your other
+devices, a phone, a box, agents and Clean up. It's always in **Settings > Set
+up Ligus**, on the empty Home and in **⌘K**.
+
 ## Re-running onboarding
 
 The first run returns whenever the data dir is new. The supported way to

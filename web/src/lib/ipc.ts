@@ -3038,6 +3038,52 @@ export type SetupOutcome = {
 
 export const setupFlows = () => invoke<SetupFlowDef[]>("setup_flows");
 export const setupStatus = () => invoke<SetupStatus[]>("setup_status");
+
+// ── Set up Ligus: the checklist every surface shows (`ligus.setup.v1`) ──────
+export type SetupRowId = "you" | "passkey" | "device" | "devices" | "phone" | "box" | "agents" | "workspace" | "cleanup";
+/// done ✓, notSetUp ○ (grey: never chosen), attention • (amber). Never red.
+export type SetupRowState = "done" | "notSetUp" | "attention";
+export interface SetupRowAction {
+  id: string;
+  label: string;
+}
+export interface SetupRow {
+  id: SetupRowId;
+  title: string;
+  state: SetupRowState;
+  detail: string;
+  action?: SetupRowAction;
+}
+export type LeftoverKind =
+  | "memberLeft"
+  | "memberRetired"
+  | "devicePending"
+  | "deviceIdle"
+  | "deviceRevoked"
+  | "formerHost"
+  | "legacyAgent"
+  | "unpairedPhone"
+  | "relayRoster";
+export interface CleanupItem {
+  /// `kind:id`, also the Remove from view key.
+  key: string;
+  kind: LeftoverKind;
+  id: string;
+  label: string;
+  detail: string;
+  action: { id: "remove" | "removeFromView"; label: string; passkey: boolean; confirm: string };
+}
+export interface SetupChecklist {
+  schema: string;
+  rows: SetupRow[];
+  cleanup: CleanupItem[];
+}
+/// The rows for the active workspace (local and cheap: no network).
+export const setupChecklist = () => invoke<SetupChecklist>("setup_checklist");
+/// Remove a Clean up item from view on this device (`show`: bring it back).
+export const setupHide = (key: string, show = false) => invoke<void>("setup_hide", { key, show });
+/// Remove a former member's (or a revoked device's) host record: Admin, passkey.
+export const setupRemoveHost = (hostId: string) => invoke<void>("setup_remove_host", { hostId });
 export const setupForm = (flow: SetupFlowId, inputs: Record<string, string>) => invoke<SetupForm>("setup_form", { flow, inputs });
 /// `secrets` are the masked fields: sent once, never stored by the page.
 export const setupRun = (flow: SetupFlowId, inputs: Record<string, string>, secrets: Record<string, string>, dryRun = false) =>

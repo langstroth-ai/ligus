@@ -84,6 +84,17 @@ WebSocket code `4040` and reason `device_not_certified` (see
 `4042 device_claim_invalid` and, for a provisional connection (0.1.1),
 `4043 provisional_busy`).
 
+### Set up {#setup}
+
+The phone's **Health** checklist: the same
+[Set up Ligus](../../ligus/features/set-up-ligus.md) rows as the desktop, `ligus
+setup` and lt, for the person behind the calling phone (never the box's own).
+"This device" is the phone; push comes from this box's pairing of it.
+
+| Method + path | Request | Notes |
+|---|---|---|
+| `GET /v1/setup` | nothing | `{schema: "ligus.setup.v1", rows: [{id, title, state, detail, action?: {id, label}}], cleanup: [{key, kind, id, label, detail, action: {id, label, passkey, confirm}}]}`. `state` is `done`, `notSetUp` or `attention`. The box reports its own build in the Box row. `403 {"error":"unresolved"}` for a phone this box can't place as a person (the shared direct-path token among them); the operator gets `400 {"error":"not_a_phone"}` (its checklist is `ligus setup`) |
+
 ### Chats and people
 
 | Method + path | Request | Notes |

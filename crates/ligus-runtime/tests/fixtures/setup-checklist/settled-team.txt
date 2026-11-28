@@ -1,0 +1,16 @@
+✓ You          Ana · picture
+✓ Passkey      2 passkeys · recovery key
+✓ This device  Ana's MacBook
+• My devices   this Mac, build-1, old-laptop · 1 approved, never used Review: ligus devices
+✓ Phone        Ana's iPhone · push on
+✓ Box          box-1 · 0.4.1 (0.5.0 out)                        How to upgrade: ligus upgradeBox
+✓ Agents       @coder on box-1 · @reviewer on your devices
+✓ Workspace    Team · rules 3 · Upgrade available               Upgrade: ligus upgradeRules
+• Clean up     1 member who asked to leave · 1 device never finished · +3 more Clean up: ligus cleanup
+
+Clean up
+  Taylor · asked to leave 24 Nov  [Remove]  memberLeft:member-taylor
+  old-laptop · approved, never used  [Remove]  devicePending:6f1c2a10-0000-4000-8000-000000000002
+  Device 9a8b7c6d · revoked  [Remove from view]  deviceRevoked:6f1c2a10-0000-4000-8000-000000000003
+  taylor-desktop · its owner isn't a member  [Remove]  formerHost:6f1c2a10-0000-4000-8000-000000000006
+  hive · an old name: @ligus is the default agent  [Remove]  legacyAgent:6f1c2a10-0000-4000-8000-000000000007

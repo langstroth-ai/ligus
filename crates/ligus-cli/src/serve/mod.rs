@@ -64,6 +64,7 @@ pub mod principal;
 pub mod proposal_file;
 pub mod repos_api;
 pub mod scratch_api;
+pub mod setup_api;
 pub mod sets;
 pub mod tunnel;
 pub mod typing_api;

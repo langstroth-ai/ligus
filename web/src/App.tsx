@@ -1324,6 +1324,7 @@ export function App() {
                       workspaceName={workspaceLabel}
                       onNewChat={() => void startNewChat()}
                       onOpenPalette={() => setPaletteOpen(true)}
+                      onSetUp={() => openSettings("setup")}
                     />
                   )}
                 </PaneErrorBoundary>

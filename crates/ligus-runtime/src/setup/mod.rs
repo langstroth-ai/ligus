@@ -31,6 +31,7 @@ use zeroize::Zeroizing;
 use crate::checks::{Check, Report, Status};
 
 mod agent;
+pub mod checklist;
 mod folder;
 mod gate;
 mod human;
