@@ -117,6 +117,7 @@ fn box_opts(label: &str) -> ServeOptions {
         ntfy: None,
         public_url: None,
         label: label.into(),
+        label_given: true,
         name: Some("Phone".into()),
         pair: false,
         prometheus_url: "http://127.0.0.1:9".into(),
@@ -235,6 +236,7 @@ async fn harness_with(
         ntfy: Some(ntfy::Ntfy { url: ntfy_url, topic: "ligus-test".into(), token: None, titles: true }),
         public_url: None,
         label: "sff".into(),
+        label_given: true,
         name: Some("Phone".into()),
         pair: false,
         prometheus_url: "http://127.0.0.1:9".into(),
@@ -5389,6 +5391,7 @@ async fn internal_errors_answer_a_generic_message() {
 }
 
 mod approvals;
+mod box_host;
 mod box_removal;
 mod devices_link;
 mod foreign_certificate;

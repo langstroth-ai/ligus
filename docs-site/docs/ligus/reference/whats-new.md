@@ -178,6 +178,15 @@ Full release notes are on the
 
 ### Changed
 
+- **A box keeps the name you gave it.** Renaming a box on a desktop used to
+  be undone the next time it started with its `--label`. A box now writes
+  its name only when `--label` (or `LIGUS_SERVE_LABEL`) changed since the
+  last one it wrote, and its host name only on first start. Its first host
+  beat carries its build version and what it offers, and its contact id
+  rides the beat instead of a write of its own. A box that ran
+  `ligus serve leave` stops beating and writes nothing of its own, also
+  after a restart. See [`ligus serve`](cli.md).
+
 - **"Hide from this list" is now "Remove from view"** on revoked devices in
   My devices: still this device only, and the device stays revoked.
 

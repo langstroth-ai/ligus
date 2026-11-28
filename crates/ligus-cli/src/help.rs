@@ -1357,7 +1357,7 @@ pub const COMMANDS: &[Cmd] = &[
         flags: &[
             f("--listen ADDR", "LIGUS_SERVE_LISTEN, else 127.0.0.1:8787", "API address (IP:PORT)"),
             f("--token-file PATH", "LIGUS_SERVE_TOKEN_FILE, else <data dir>/serve.token", "the direct-path bearer token file"),
-            f("--label NAME", "LIGUS_SERVE_LABEL, else the host name, else \"home host\"", "host label other members see"),
+            f("--label NAME", "LIGUS_SERVE_LABEL, else the host name, else \"home host\"", "the box's device name; written only when it changed since the box last wrote one (a rename on a desktop survives a restart; the host name only on first start)"),
             f("--name NAME", "LIGUS_SERVE_NAME, else the identity's name", "display name the box joins under"),
             f("--public-url URL", "LIGUS_SERVE_PUBLIC_URL, else http://<listen>", "URL put in the pairing link"),
             f("--ntfy-url URL", "LIGUS_NTFY_URL", "self-hosted ntfy server (https://; with --ntfy-topic)"),
@@ -1422,7 +1422,8 @@ pub const COMMANDS: &[Cmd] = &[
                   and push it. Members then see the box as \"asked to leave\" in People until an Admin removes it; \
                   until then it is still a member (workspace rules 3). Works for any box data dir (serve or worker). \
                   Leaving isn't revoking: the box keeps the keys and copies it holds until an Admin removes it and \
-                  rotates the workspace key. Without --yes it only prints what it would do and exits 4. Refused \
+                  rotates the workspace key. A box that left stops its host beat and writes no host record, label \
+                  or offers of its own, also after a restart. Without --yes it only prints what it would do and exits 4. Refused \
                   for the founder, the last Owner, and a member that holds a passkey (a person leaves from their \
                   desktop).",
         synopsis: &["ligus serve leave [--yes] [--json]"],

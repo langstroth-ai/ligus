@@ -212,9 +212,10 @@ pub async fn ensure_contact(s: &Shared) -> bool {
     announced.is_some()
 }
 
-/// Stamp `cid` on what this box writes, and write one host beat into the
-/// workspace when the log doesn't carry it yet, so co-members learn where
-/// to deliver.
+/// Stamp `cid` on what this box writes. Whether the log carries it yet is
+/// checked on the next host beat ([`stamp_contact_in_beat`]): liveness and
+/// this one-off announcement ride the beat, not a write of their own here
+/// (workspace model v3, 5.10).
 fn announce(s: &Shared, cid: Option<String>) {
     let mut svc = s.lock();
     if svc.author().contact == cid {
@@ -224,9 +225,29 @@ fn announce(s: &Shared, cid: Option<String>) {
     } else {
         svc.set_author_contact(cid.clone());
     }
-    let (Some(cid), Some(account)) = (cid, svc.author().account_id) else { return };
+    if cid.is_some() {
+        drop(svc);
+        s.contact_unstamped.store(true, std::sync::atomic::Ordering::SeqCst);
+        s.beat_kick.notify_one();
+    }
+}
+
+/// On a host beat: when this box's contact id isn't on the workspace log
+/// yet (no write of this box carried it since it changed), write its host
+/// record once with the stamp, so co-members learn where to deliver.
+/// Returns whether it wrote.
+pub(crate) fn stamp_contact_in_beat(s: &Shared) -> bool {
+    use std::sync::atomic::Ordering;
+    if !s.contact_unstamped.load(Ordering::SeqCst) {
+        return false;
+    }
+    let mut svc = s.lock();
+    let (Some(cid), Some(account)) = (svc.author().contact.clone(), svc.author().account_id) else {
+        s.contact_unstamped.store(false, Ordering::SeqCst);
+        return false;
+    };
     if svc.write_block().is_some() {
-        return;
+        return false;
     }
     let me = svc.device_id();
     let my_key = svc.device_public_key().to_vec();
@@ -235,12 +256,22 @@ fn announce(s: &Shared, cid: Option<String>) {
         .latest_contact_of(s.ws, account, &|d| (d == me).then(|| my_key.clone()))
         .ok()
         .flatten();
-    if stamped.as_deref() != Some(cid.as_str()) {
-        if let Err(e) = svc.touch_host(s.ws, &s.host_id, 0) {
-            eprintln!("serve: announcing the contact failed: {e}");
-        } else {
+    if stamped.as_deref() == Some(cid.as_str()) {
+        s.contact_unstamped.store(false, Ordering::SeqCst);
+        return false;
+    }
+    match svc.touch_host(s.ws, &s.host_id, 0) {
+        Ok(wrote) => {
+            s.contact_unstamped.store(false, Ordering::SeqCst);
             drop(svc);
-            s.sync_kick.notify_one();
+            if wrote {
+                s.sync_kick.notify_one();
+            }
+            wrote
+        }
+        Err(e) => {
+            eprintln!("serve: announcing the contact failed: {e}");
+            false
         }
     }
 }
