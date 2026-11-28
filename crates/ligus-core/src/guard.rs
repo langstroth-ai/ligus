@@ -121,6 +121,13 @@ pub struct GuardState {
     /// refused). Config log.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub service_invites: BTreeMap<Uuid, crate::admission::Admission>,
+    /// Rules 4: box admissions an Admin issued for one box (bound to its
+    /// account and device key) while no member held that account
+    /// ([`crate::admission::readmission`]). One of these lets that account's
+    /// member back in after it left; a later removal of the account's member
+    /// voids those issued before it. Config log.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub readmissions: BTreeSet<Uuid>,
     /// Person invites issued with a redeem key: invite id → the key (the
     /// first one folded). A redemption must carry its signature
     /// ([`crate::admission::person_redemption_message`]). Config log.

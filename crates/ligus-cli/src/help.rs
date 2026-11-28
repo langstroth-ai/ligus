@@ -1464,7 +1464,8 @@ pub const COMMANDS: &[Cmd] = &[
                   rotates the workspace key. A box that left stops its host beat and writes no host record, label \
                   or offers of its own, also after a restart. On rules 4 the leave removes the box: started again, \
                   it stays out (writes nothing, no beat) and logs \"This box left <workspace>. To rejoin: ligus admit \
-                  request (an Admin approves).\" Without --yes it only prints what it would do and exits 4. Refused \
+                  request (an Admin approves).\" An Admin approving that request lets it back in as the same \
+                  member. Without --yes it only prints what it would do and exits 4. Refused \
                   for the founder, the last Owner, and a member that holds a passkey (a person leaves from their \
                   desktop).",
         synopsis: &["ligus serve leave [--yes] [--json]"],

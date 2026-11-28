@@ -1,12 +1,13 @@
 //! **Leave workspace** (workspace model v3, 10.4): write this person's own
 //! `MemberLeft` (with their passkey when the account holds one), push it,
 //! then forget the connection on this device. Under rules 3 the person stays
-//! listed as "asked to leave" until an Admin removes them. Leaving isn't
+//! listed as "asked to leave" until an Admin removes them; under rules 4 the
+//! leave removes them. Leaving isn't
 //! revoking: other devices keep their keys. Where the workspace refuses the
 //! leave (the founder, the last Owner, a linked computer), the desktop
 //! offers what it did before: remove the workspace from this device only.
 
-use ligus_runtime::chat_service::{LeaveCheck, LEAVE_CONSEQUENCE, NOT_REVOKING};
+use ligus_runtime::chat_service::{LeaveCheck, NOT_REVOKING};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
@@ -20,20 +21,20 @@ pub(crate) struct LeaveCheckDto {
     state: &'static str,
     /// Why the workspace refuses it ("refused" only).
     refusal: Option<String>,
-    /// The one-line consequence.
-    line: &'static str,
+    /// The one-line consequence (on the workspace's rules).
+    line: String,
     /// Leaving isn't revoking.
     reminder: &'static str,
 }
 
-fn dto(check: LeaveCheck) -> LeaveCheckDto {
+fn dto(check: LeaveCheck, line: String) -> LeaveCheckDto {
     let (state, refusal) = match check {
         LeaveCheck::Ready => ("ready", None),
         LeaveCheck::NeedsPasskey => ("passkey", None),
         LeaveCheck::AlreadyLeft => ("left", None),
         LeaveCheck::Refused(why) => ("refused", Some(crate::shown(&why))),
     };
-    LeaveCheckDto { state, refusal, line: LEAVE_CONSEQUENCE, reminder: NOT_REVOKING }
+    LeaveCheckDto { state, refusal, line, reminder: NOT_REVOKING }
 }
 
 fn room_id(state: &AppState, workspace_id: &str) -> Result<Uuid, String> {
@@ -50,8 +51,14 @@ pub(crate) async fn leave_workspace_check(ligus_app: AppHandle, workspace_id: St
     crate::off_main(ligus_app, move |app| {
         let state = app.state::<AppState>();
         let ws = room_id(&state, &workspace_id)?;
-        let check = state.service.lock().unwrap().leave_check(ws).map_err(|e| e.to_string())?;
-        Ok(dto(check))
+        let name = {
+            let s = state.settings.lock().unwrap();
+            s.workspaces.iter().find(|w| w.id() == ws).map(|w| crate::shown(&w.display_name())).unwrap_or_else(|| "this workspace".into())
+        };
+        let mut svc = state.service.lock().unwrap();
+        let check = svc.leave_check(ws).map_err(|e| e.to_string())?;
+        let line = svc.leave_line(ws, &name).map_err(|e| e.to_string())?;
+        Ok(dto(check, line))
     })
     .await
 }
@@ -89,14 +96,25 @@ pub(crate) async fn leave_workspace(ligus_app: AppHandle, workspace_id: String) 
 mod tests {
     use super::*;
 
+    use ligus_runtime::chat_service::{leave_consequence, LEAVE_CONSEQUENCE};
+
     #[test]
     fn every_check_carries_the_line_and_the_reminder() {
         for c in [LeaveCheck::Ready, LeaveCheck::NeedsPasskey, LeaveCheck::AlreadyLeft, LeaveCheck::Refused("Couldn't leave: you're the last Owner".into())] {
-            let d = dto(c);
+            let d = dto(c, LEAVE_CONSEQUENCE.into());
             assert_eq!(d.line, LEAVE_CONSEQUENCE);
             assert!(d.reminder.starts_with("Leaving isn't revoking"));
         }
-        assert_eq!(dto(LeaveCheck::Refused("the founder stays".into())).refusal.as_deref(), Some("the founder stays"));
-        assert_eq!(dto(LeaveCheck::NeedsPasskey).state, "passkey");
+        let line = || LEAVE_CONSEQUENCE.to_string();
+        assert_eq!(dto(LeaveCheck::Refused("the founder stays".into()), line()).refusal.as_deref(), Some("the founder stays"));
+        assert_eq!(dto(LeaveCheck::NeedsPasskey, line()).state, "passkey");
+    }
+
+    #[test]
+    fn under_rules_4_the_confirm_says_you_will_be_removed() {
+        let d = dto(LeaveCheck::Ready, leave_consequence(ligus_core::authz::RULES_V4, "Garden"));
+        assert_eq!(d.line, "You'll be removed from Garden, and this device stops syncing it.");
+        let d = dto(LeaveCheck::Ready, leave_consequence(ligus_core::authz::RULES_V3, "Garden"));
+        assert_eq!(d.line, LEAVE_CONSEQUENCE);
     }
 }
