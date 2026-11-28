@@ -7,11 +7,11 @@
 
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { setupChecklist, type CleanupItem, type SetupChecklist as Checklist, type SetupRow } from "@/lib/ipc";
+import { listUnpairedPhones, setupChecklist, type CleanupItem, type SetupChecklist as Checklist, type SetupRow } from "@/lib/ipc";
 import { Button, Section } from "@/components/ui";
 import { confirmDialog } from "@/components/Dialog";
 import { toast, errMsg } from "@/components/Toast";
-import { BOX_UPGRADE_LINE, batchConfirm, goTo, rowActionTarget, rowMark, rowTone, runCleanup } from "@/lib/setupChecklist";
+import { BOX_UPGRADE_LINE, batchConfirm, goTo, rowActionTarget, rowMark, rowTone, runCleanup, unpairedItems } from "@/lib/setupChecklist";
 
 export const SETUP_CHECKLIST_KEY = ["setup-checklist"] as const;
 
@@ -125,7 +125,12 @@ export function SetupChecklistPane({ initial }: { initial?: Checklist } = {}) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: SETUP_CHECKLIST_KEY, queryFn: setupChecklist, initialData: initial, refetchOnWindowFocus: true });
   const [open, setOpen] = useState<"cleanup" | "boxUpgrade" | null>(null);
-  const refresh = () => void qc.invalidateQueries({ queryKey: SETUP_CHECKLIST_KEY });
+  const unpaired = useQuery({ queryKey: ["unpaired-phones"], queryFn: listUnpairedPhones, enabled: open === "cleanup", retry: false });
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: SETUP_CHECKLIST_KEY });
+    void qc.invalidateQueries({ queryKey: ["unpaired-phones"] });
+  };
+  const cleanup = q.data ? [...q.data.cleanup, ...unpairedItems(unpaired.data ?? [], q.data.cleanup)] : [];
 
   function act(row: SetupRow) {
     const t = rowActionTarget(row.action?.id ?? "");
@@ -152,7 +157,7 @@ export function SetupChecklistPane({ initial }: { initial?: Checklist } = {}) {
               )}
               {r.id === "cleanup" && open === "cleanup" && (
                 <div className="pb-2 pl-7">
-                  <CleanupList items={q.data.cleanup} onChanged={refresh} />
+                  <CleanupList items={cleanup} onChanged={refresh} />
                 </div>
               )}
             </div>

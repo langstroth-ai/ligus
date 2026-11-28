@@ -18,6 +18,7 @@ vi.mock("@/lib/ipc", () => ({
   removeMember: vi.fn(async () => {}),
   removeAgent: vi.fn(async () => {}),
   revokeMyDevice: vi.fn(async () => {}),
+  listUnpairedPhones: vi.fn(async () => []),
 }));
 vi.mock("@/components/Dialog", () => ({ confirmDialog: vi.fn(async () => true) }));
 vi.mock("@/components/Toast", () => ({
@@ -107,6 +108,20 @@ describe("Set up Ligus", () => {
     for (const f of [ipc.removeMember, ipc.revokeMyDevice, ipc.setupRemoveHost, ipc.removeAgent, ipc.setupHide]) {
       expect(f).not.toHaveBeenCalled();
     }
+  });
+
+  it("adds phones a box unpaired when Clean up opens, removed only after the confirm", async () => {
+    vi.mocked(ipc.listUnpairedPhones).mockResolvedValue([
+      { deviceId: "phone-9", name: "Ana's old iPhone", hostId: "h1", hostLabel: "box-1", by: "box", at: 1 },
+    ]);
+    renderPane(settled as ipc.SetupChecklist);
+    expect(ipc.listUnpairedPhones).not.toHaveBeenCalled();
+    await userEvent.click(within(screen.getByTestId("setup-row-cleanup")).getByRole("button", { name: "Clean up" }));
+    const row = await screen.findByTestId("cleanup-unpairedPhone:phone-9");
+    expect(row.textContent).toContain("unpaired from box-1");
+    await userEvent.click(within(row).getByRole("button", { name: "Remove" }));
+    expect(String(vi.mocked(dialog.confirmDialog).mock.calls.at(-1)?.[0])).toMatch(/passkey/);
+    expect(ipc.revokeMyDevice).toHaveBeenCalledWith("phone-9");
   });
 
   it("shows the box's upgrade line in place", async () => {

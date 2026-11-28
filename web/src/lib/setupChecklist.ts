@@ -11,6 +11,7 @@ import {
   setupRemoveHost,
   type CleanupItem,
   type SetupRowState,
+  type UnpairedPhoneDto,
 } from "@/lib/ipc";
 import { loadHiddenLeft, saveHiddenLeft } from "@/lib/lifecycle";
 import { loadHiddenRevoked, saveHiddenRevoked } from "@/lib/revokedDevices";
@@ -121,4 +122,33 @@ export function batchConfirm(items: CleanupItem[]): string {
   const n = items.length;
   const names = items.map((i) => i.label).join(", ");
   return `Remove ${n === 1 ? "this one" : `these ${n}`} from the workspace: ${names}? Each asks for your passkey in turn, and none can be undone.`;
+}
+
+/// Your phones a box unpaired, or that forgot a box, as Clean up items. They
+/// come from the boxes' reports (the relay), so the pane asks for them only
+/// when Clean up is open; the checklist row itself stays local.
+export function unpairedItems(phones: UnpairedPhoneDto[], have: CleanupItem[]): CleanupItem[] {
+  const seen = new Set(have.map((i) => i.key));
+  const out: CleanupItem[] = [];
+  for (const p of phones) {
+    const key = `unpairedPhone:${p.deviceId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const box = p.hostLabel.trim() || "a box";
+    const name = p.name.trim() || "your phone";
+    out.push({
+      key,
+      kind: "unpairedPhone",
+      id: p.deviceId,
+      label: name,
+      detail: p.by === "phone" ? `forgot ${box}` : `unpaired from ${box}`,
+      action: {
+        id: "remove",
+        label: "Remove",
+        passkey: true,
+        confirm: `Remove the phone ${name} from your devices? It can't be undone; add it again to use it. It asks for your passkey.`,
+      },
+    });
+  }
+  return out;
 }
