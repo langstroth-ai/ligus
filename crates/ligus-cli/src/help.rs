@@ -456,7 +456,7 @@ pub const COMMANDS: &[Cmd] = &[
             f("--no-wait", "off", "send a step that needs your passkey to your desktop or phone and exit 4 (finish with ligus handoff wait)"),
             f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence for a step that needs your passkey, instead of your desktop or phone"),
         ],
-        examples: &["ligus setup", "ligus setup agent --name builder --source claude-code", "ligus setup --json | jq '.checklist.rows[] | {id, state, detail}'", "ligus setup --json | jq '.checks[] | {id, status}'"],
+        examples: &["ligus setup", "ligus setup agent --name builder --source claude-code", "ligus setup --json | jq '.checklist.rows[] | {id, state, detail}'"],
         exit: &[(0, "listed (setup never fails a listing)")],
         see_also: &["ligus help setup", "ligus doctor", "desktop: ⌘K > Add an agent (and the other setup commands)"],
         ..D
