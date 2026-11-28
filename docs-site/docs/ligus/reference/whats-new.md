@@ -8,6 +8,14 @@ Full release notes are on the
 
 ### Added
 
+- **"Update available" for boxes.** When a box or worker runs an older
+  release than the latest one, its row in **People** > **Workers & hosts**
+  shows one grey line, "0.4.1 → 0.5.0 available · how", and the phone's
+  Health shows the same for its box. **how** says to run `ligus-local
+  upgrade` on the box (it runs `brew upgrade ligus` for a Homebrew install
+  and restarts the box). Ligus never upgrades a box on its own. See
+  [Operating it](../../operate/deploy/personal-fleet.md#operating-it).
+
 - **Admit a box without pasting anything, from setup or the deploy
   script.** `ligus setup box --to ligusaddr1:…` and `deploy/local/ligus-local
   configure --admit-to ligusaddr1:…` send the box's join request to the

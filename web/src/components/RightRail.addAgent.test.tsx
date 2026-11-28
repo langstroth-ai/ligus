@@ -31,7 +31,7 @@ vi.mock("@/lib/ipc", async (orig) => ({
   listAgents: vi.fn(async () => []),
   listMcpServers: vi.fn(async () => []),
   listWorkspaceHosts: vi.fn(async () => [
-    { id: "me", kind: "device", label: "Desk", online: true, lastSeen: "", modelGateways: [], ownerName: "", mine: true, offers: [], readiness: "", build: "" },
+    { id: "me", kind: "device", label: "Desk", online: true, lastSeen: "", modelGateways: [], ownerName: "", mine: true, offers: [], readiness: "", build: "", upgradeTo: "" },
     {
       id: "box",
       kind: "worker",
@@ -43,6 +43,7 @@ vi.mock("@/lib/ipc", async (orig) => ({
       offers: [],
       readiness: "",
       build: "",
+      upgradeTo: "",
       mine: false,
     },
   ]),
