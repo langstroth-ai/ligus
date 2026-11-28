@@ -12375,7 +12375,7 @@ fn set_workspace_root(state: State<AppState>, path: String) -> Result<(), String
         s.workspace_dirs.insert(active_id.clone(), normalized.clone());
         save_settings(&state.data_dir, &s);
     }
-    local_tables_ui::bind(&state.service.lock().unwrap(), &active_id, &normalized);
+    local_tables_ui::bind(&state.data_dir, &active_id, &normalized);
     state.reload_workspace_catalogs(&normalized);
     // Re-arm the file watcher on the new root so `workspace://fs-changed` events
     // track the workspace the editor/tree is now showing.

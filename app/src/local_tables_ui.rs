@@ -64,10 +64,13 @@ fn overlay(service: &ChatService, dirs: &mut HashMap<String, String>) -> bool {
     changed
 }
 
-/// Record `path` as `workspace_id`'s folder on this device.
-pub(crate) fn bind(service: &ChatService, workspace_id: &str, path: &str) {
+/// Record `path` as `workspace_id`'s folder on this device, in the
+/// database under `data_dir` (its own short connection: a command must
+/// never wait on the service lock). Before the import ran, the map in
+/// settings.json is the record and the import takes it later.
+pub(crate) fn bind(data_dir: &Path, workspace_id: &str, path: &str) {
     let Ok(ws) = Uuid::parse_str(workspace_id) else { return };
-    if let Err(e) = service.store().set_workspace_folder(ws, Some(path)) {
+    if let Err(e) = ligus_runtime::event_store::write_workspace_folder(&data_dir.join("ligus.db"), ws, SOURCE, Some(path)) {
         tracing::warn!(target: "settings", "couldn't record the workspace's folder: {e}");
     }
 }
@@ -150,8 +153,9 @@ mod tests {
     /// the map afterwards, and a new binding is written there.
     #[test]
     fn folders_import_once_and_the_table_wins() {
+        let tmp = tempfile::tempdir().unwrap();
         let svc = ChatService::new(
-            ligus_runtime::EventStore::open_in_memory().unwrap(),
+            ligus_runtime::EventStore::open(tmp.path().join("ligus.db")).unwrap(),
             ligus_core::crypto::SigningKeypair::generate().unwrap(),
             ligus_core::crypto::SigningKeypair::generate().unwrap(),
             ligus_core::ActorIdentity::new("me", "Me", ligus_core::ActorKind::Human),
@@ -160,8 +164,8 @@ mod tests {
         let mut dirs = HashMap::from([(a.clone(), "/src/a".to_string()), ("not-a-uuid".into(), "/x".into())]);
         import_and_overlay(&svc, &mut dirs);
         assert_eq!(svc.store().workspace_folders().unwrap().len(), 1);
-        bind(&svc, &b, "/src/b");
-        bind(&svc, &a, "/src/a2");
+        bind(tmp.path(), &b, "/src/b");
+        bind(tmp.path(), &a, "/src/a2");
         let mut stale = HashMap::from([(a.clone(), "/src/a".to_string())]);
         assert!(import_and_overlay(&svc, &mut stale));
         assert_eq!(stale.get(&a).map(String::as_str), Some("/src/a2"));
