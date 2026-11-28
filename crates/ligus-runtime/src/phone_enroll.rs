@@ -353,11 +353,19 @@ mod tests {
     /// A person's desktop (test presence: the account's test recovery key)
     /// on a fresh workspace.
     fn desktop() -> (ChatService, Uuid) {
+        desktop_on(None)
+    }
+
+    /// [`desktop`], founded on `rules` (this build's default when `None`).
+    fn desktop_on(rules: Option<u32>) -> (ChatService, Uuid) {
         let store = crate::EventStore::open_in_memory().unwrap();
         let account = Uuid::new_v4();
         let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
         author.account_id = Some(account);
         let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        if let Some(r) = rules {
+            svc.set_founding_rules(r);
+        }
         let wid = Uuid::new_v4();
         svc.ensure_workspace_config(wid).unwrap();
         (svc, wid)
@@ -459,9 +467,18 @@ mod tests {
     /// refuses the draft and says where to rename it.
     #[test]
     fn a_phone_renames_itself_only_from_rules_4() {
+        let add = |svc: &mut ChatService, wid: Uuid, phone: &ligus_core::testkit::Phone| {
+            svc.certify_phone_code(wid, &PhoneCode::decode(&PhoneCode::new(phone.device_id, phone, "Ana's iPhone").encode()).unwrap()).unwrap();
+        };
+        // A workspace this build founds is on rules 4 from its first
+        // passkey (adding the phone): its phones name themselves.
         let (mut svc, wid) = desktop();
+        add(&mut svc, wid, &ligus_core::testkit::Phone::new());
+        assert!(svc.phone_can_name_itself(wid).unwrap());
+        // One founded on rules 3 refuses the draft.
+        let (mut svc, wid) = desktop_on(Some(ligus_core::authz::RULES_V3));
         let phone = ligus_core::testkit::Phone::new();
-        svc.certify_phone_code(wid, &PhoneCode::decode(&PhoneCode::new(phone.device_id, &phone, "Ana's iPhone").encode()).unwrap()).unwrap();
+        add(&mut svc, wid, &phone);
         assert!(!svc.phone_can_name_itself(wid).unwrap());
         match svc.draft_phone_label(wid, phone.device_id, "Work phone") {
             Err(ChatError::Unauthorized(m)) => assert_eq!(m, crate::chat_service::RENAME_ON_DESKTOP),
