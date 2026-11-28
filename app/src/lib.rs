@@ -509,6 +509,12 @@ struct LiveSettings {
     /// host record; device-local, never synced (other desktops show the id).
     #[serde(default)]
     phone_labels: std::collections::HashMap<String, String>,
+    /// "Your phone forgot box-1" questions put aside with Keep: `<box host
+    /// id>:<phone device id>` → the unpairing's time it answered (unix
+    /// seconds). A later unpairing of the same phone asks again.
+    /// Device-local.
+    #[serde(default)]
+    unpaired_kept: std::collections::HashMap<String, i64>,
     /// Opt-in egress presets (Settings → Guards → Network presets), per
     /// workspace: workspace UUID (string) → preset names such as
     /// `package-registries`. Device-LOCAL on purpose: widening where this
@@ -685,6 +691,7 @@ impl Default for LiveSettings {
             workspace_root: None,
             workspace_dirs: std::collections::HashMap::new(),
             phone_labels: std::collections::HashMap::new(),
+            unpaired_kept: std::collections::HashMap::new(),
             egress_presets_by_workspace: std::collections::HashMap::new(),
             egress_presets_by_chat: std::collections::HashMap::new(),
         cli_user_config_workspaces: Default::default(),
@@ -4656,6 +4663,7 @@ pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<Wo
             .unwrap_or_default()
     };
     let here = svc.device_id().to_string();
+    let latest = latest_release_tag();
     Ok(svc
         .list_hosts(active)
         .map_err(map_err)?
@@ -4670,6 +4678,11 @@ pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<Wo
         .map(|(h, online, offers, status)| WorkspaceHostDto {
             readiness: ligus_runtime::host_offers::readiness_line(&offers, status.as_ref(), online),
             build: status.as_ref().map(|s| s.build.clone()).unwrap_or_default(),
+            upgrade_to: match h.kind {
+                // Boxes and workers only: a desktop updates itself (its banner).
+                ligus_core::HostKind::Worker => host_upgrade_to(status.as_ref().map(|s| s.build.as_str()).unwrap_or(""), latest.as_deref()),
+                ligus_core::HostKind::Device => String::new(),
+            },
             offers: offers
                 .iter()
                 .map(|o| {
@@ -5757,6 +5770,33 @@ mod my_devices_tests {
         assert_eq!(h.label, "This device");
     }
 
+    /// U4 (desktop): a box's unpaired report raises a row only for your own
+    /// phones, from a workspace host, until you keep it; a later unpairing
+    /// asks again.
+    #[test]
+    fn unpaired_rows_are_your_phones_from_hosts_until_kept() {
+        use ligus_runtime::revocation_status::{UnpairedPhone, UnpairedReport};
+        let (mine_d, theirs) = (Uuid::new_v4(), Uuid::new_v4());
+        let report = |host: &str, at: i64| {
+            let p = |d: Uuid, by: &str| UnpairedPhone { device_id: d.to_string(), at, by: by.into() };
+            UnpairedReport { host_id: host.into(), workspace_id: Uuid::nil(), at: at + 1, phones: vec![p(mine_d, "phone"), p(theirs, "box")], signature: Vec::new() }
+        };
+        let mine: HashMap<Uuid, String> = [(mine_d, "Ana\u{202E}s iPhone".to_string())].into();
+        let host = |id: &str| (id == "h1").then(|| "box-1".to_string());
+        let mut reports = HashMap::new();
+        reports.insert("h1".to_string(), report("h1", 60));
+        reports.insert("nobody".to_string(), report("nobody", 60));
+        let rows = unpaired_rows(reports.clone(), host, &mine, &HashMap::new());
+        assert_eq!(rows.len(), 1, "only your phone, only from a host: {rows:?}");
+        assert_eq!((rows[0].host_label.as_str(), rows[0].by.as_str(), rows[0].at), ("box-1", "phone", 60));
+        assert!(!rows[0].name.contains('\u{202E}'), "names are cleaned for display");
+        let kept: HashMap<String, i64> = [(format!("h1:{mine_d}"), 60)].into();
+        assert!(unpaired_rows(reports, host, &mine, &kept).is_empty(), "kept");
+        let mut later = HashMap::new();
+        later.insert("h1".to_string(), report("h1", 120));
+        assert_eq!(unpaired_rows(later, host, &mine, &kept).len(), 1, "a later unpairing asks again");
+    }
+
     #[test]
     fn pairings_name_their_box_and_sort_by_last_seen() {
         use ligus_runtime::revocation_status::{PairedPhone, PairingReport};
@@ -5937,6 +5977,90 @@ fn pairing_rows(
     }
     out.sort_by_key(|p| std::cmp::Reverse(p.last_seen));
     out
+}
+
+/// One of your phones whose pairing with a box ended while the phone stays
+/// your device: the box unpaired it, or the phone forgot the box (workspace
+/// model v3, 10.2). The Inbox asks whether to remove the device too.
+#[derive(serde::Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct UnpairedPhoneDto {
+    device_id: String,
+    /// The phone's name (its synced or remembered label).
+    name: String,
+    host_id: String,
+    host_label: String,
+    /// `box` (unpaired on the box) or `phone` (the phone forgot the box).
+    by: String,
+    /// When the pairing ended (unix seconds, to the minute).
+    at: i64,
+}
+
+/// The rows for [`list_unpaired_phones`]: reports from the workspace's
+/// hosts (`host_label` names only devices with a host record), about this
+/// account's unrevoked phones (`mine`, with their names), not kept aside.
+fn unpaired_rows(
+    reports: HashMap<String, ligus_runtime::revocation_status::UnpairedReport>,
+    host_label: impl Fn(&str) -> Option<String>,
+    mine: &HashMap<Uuid, String>,
+    kept: &HashMap<String, i64>,
+) -> Vec<UnpairedPhoneDto> {
+    let mut out = Vec::new();
+    for (host_id, r) in reports {
+        let Some(label) = host_label(&host_id) else { continue };
+        let label = Some(shown(&label)).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| "a serve box".into());
+        for p in r.phones {
+            let Ok(d) = Uuid::parse_str(&p.device_id) else { continue };
+            let Some(name) = mine.get(&d) else { continue };
+            if kept.get(&format!("{host_id}:{d}")).is_some_and(|t| *t >= p.at) {
+                continue;
+            }
+            out.push(UnpairedPhoneDto { device_id: d.to_string(), name: shown(name), host_id: host_id.clone(), host_label: label.clone(), by: p.by, at: p.at });
+        }
+    }
+    out.sort_by(|a, b| b.at.cmp(&a.at).then(a.host_id.cmp(&b.host_id)));
+    out
+}
+
+/// Your phones the workspace's boxes say were unpaired (on the box, or by
+/// the phone forgetting it) while still your devices.
+#[tauri::command]
+async fn list_unpaired_phones(state: State<'_, AppState>) -> Result<Vec<UnpairedPhoneDto>, String> {
+    let Some((relay, room, ring)) = active_presence_conn(&state) else { return Ok(Vec::new()) };
+    let ws = room_workspace_id(&room);
+    let blobs = relay.list_presence(&room).await.map_err(map_err)?;
+    let (phone_labels, kept) = {
+        let s = state.settings.lock().unwrap();
+        (s.phone_labels.clone(), s.unpaired_kept.clone())
+    };
+    let svc = state.service.lock().unwrap();
+    let hosts = svc.list_hosts(ws).unwrap_or_default();
+    let now = ligus_core::Timestamp::now().inner().unix_timestamp();
+    // Any certified, unrevoked host of the workspace may report (a box can
+    // serve another member's phones); the report only ever raises this
+    // question, and Remove takes your passkey.
+    let reports = ligus_runtime::revocation_status::open_unpaired_reports(&blobs, &ring, ws, now, |d| {
+        if !hosts.iter().any(|h| h.id == d.to_string()) {
+            return None;
+        }
+        svc.certified_device_key(ws, d).ok().flatten()
+    });
+    let roster = svc.store().load_config(ws, None, None).map(|(_, t)| t.current().clone()).ok();
+    let is_phone = |d: Uuid| roster.as_ref().is_some_and(|r| r.devices.get(&d).is_some_and(|x| x.phone && !x.revoked));
+    let mine: HashMap<Uuid, String> = my_device_labels(&svc, ws, &phone_labels).into_iter().filter(|(d, _)| is_phone(*d)).collect();
+    Ok(unpaired_rows(reports, |id| hosts.iter().find(|h| h.id == id).map(|h| h.label.clone()), &mine, &kept))
+}
+
+/// **Keep** on a "Your phone forgot box-1" row: don't ask again about this
+/// unpairing (a later one asks again).
+#[tauri::command]
+fn keep_unpaired_phone(state: State<'_, AppState>, host_id: String, device_id: String, at: i64) -> Result<(), String> {
+    let d = Uuid::parse_str(device_id.trim()).map_err(map_err)?;
+    let mut s = state.settings.lock().unwrap();
+    s.unpaired_kept.retain(|_, t| ligus_core::Timestamp::now().inner().unix_timestamp() - *t < 60 * 86_400);
+    s.unpaired_kept.insert(format!("{}:{d}", host_id.trim()), at);
+    save_settings(&state.data_dir, &s);
+    Ok(())
 }
 
 /// Ask the boxes to retry a revoked phone's unfinished steps now (they also
@@ -12814,6 +12938,7 @@ async fn check_for_app_update() -> Option<UpdateInfo> {
         .build()
         .ok()?;
     let mut info = fetch_update_manifest(&client, &VERSION_MANIFEST_URLS, MANIFEST_TIMEOUT).await?;
+    remember_latest_release(&info.tag);
     info.url = release_page_url(&info.url);
     // Only offer an update when the manifest is a *strictly newer* release than
     // this build. Comparing tags for mere inequality (the old behavior) would
@@ -12823,6 +12948,61 @@ async fn check_for_app_update() -> Option<UpdateInfo> {
     match (parse_release_version(&info.tag), parse_release_version(current)) {
         (Some(remote), Some(cur)) if remote > cur => Some(info),
         _ => None,
+    }
+}
+
+/// The latest release tag this desktop last read from the version manifest,
+/// with when it read it (the update banner's check, or [`latest_release_tag`]'s
+/// own background refresh). Device-local, in memory.
+static LATEST_RELEASE: std::sync::Mutex<Option<(String, std::time::Instant)>> = std::sync::Mutex::new(None);
+/// Whether a background manifest read is running.
+static LATEST_RELEASE_FETCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How long a manifest read is reused before the next one.
+const LATEST_RELEASE_TTL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
+fn remember_latest_release(tag: &str) {
+    if parse_release_version(tag).is_some() {
+        *LATEST_RELEASE.lock().unwrap_or_else(|e| e.into_inner()) = Some((tag.trim().to_string(), std::time::Instant::now()));
+    }
+}
+
+/// The latest release this desktop knows (for "Update available" on box and
+/// worker rows). Reuses the update banner's manifest read; when there is
+/// none yet, or it is over [`LATEST_RELEASE_TTL`] old, starts one read in the
+/// background (also on dev builds, whose banner never checks) and answers
+/// with what it has. Never fails: no manifest, no line.
+fn latest_release_tag() -> Option<String> {
+    let cached = LATEST_RELEASE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let stale = cached.as_ref().is_none_or(|(_, at)| at.elapsed() >= LATEST_RELEASE_TTL);
+    if stale && !cfg!(test) && !LATEST_RELEASE_FETCHING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        tauri::async_runtime::spawn(async {
+            if let Ok(client) = ligus_forge::http_client_builder().timeout(MANIFEST_TIMEOUT).build() {
+                if let Some(info) = fetch_update_manifest(&client, &VERSION_MANIFEST_URLS, MANIFEST_TIMEOUT).await {
+                    remember_latest_release(&info.tag);
+                }
+            }
+            LATEST_RELEASE_FETCHING.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+    cached.map(|(tag, _)| tag)
+}
+
+/// "0.5.0" when `latest` is a strictly newer release than a box's `build`,
+/// else empty. Both must parse as plain `MAJOR.MINOR.PATCH` releases (a
+/// leading `v` allowed); a pre-release or dev build, or anything else odd on
+/// either side, says nothing rather than guess.
+pub(crate) fn host_upgrade_to(build: &str, latest: Option<&str>) -> String {
+    fn plain(v: &str) -> Option<(u64, u64, u64)> {
+        let core = v.trim().trim_start_matches(['v', 'V']);
+        let parts: Vec<&str> = core.split('.').collect();
+        if parts.len() != 3 || parts.iter().any(|p| p.is_empty() || p.len() > 9 || !p.bytes().all(|b| b.is_ascii_digit())) {
+            return None;
+        }
+        Some((parts[0].parse().ok()?, parts[1].parse().ok()?, parts[2].parse().ok()?))
+    }
+    match (plain(build), latest.and_then(plain)) {
+        (Some(have), Some(next)) if next > have => format!("{}.{}.{}", next.0, next.1, next.2),
+        _ => String::new(),
     }
 }
 
@@ -13316,6 +13496,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         workspace_root: None,
         workspace_dirs: std::collections::HashMap::new(),
         phone_labels: std::collections::HashMap::new(),
+        unpaired_kept: std::collections::HashMap::new(),
         egress_presets_by_workspace: std::collections::HashMap::new(),
         egress_presets_by_chat: std::collections::HashMap::new(),
         cli_user_config_workspaces: Default::default(),
@@ -17156,6 +17337,8 @@ pub fn run() {
             list_my_devices,
             rename_device,
             list_device_pairings,
+            list_unpaired_phones,
+            keep_unpaired_phone,
             list_device_requests,
             revoke_my_device,
             list_device_revocations,
@@ -18048,6 +18231,36 @@ mod update_version_tests {
         assert!(!key.contains("REPLACE_WITH"), "the updater pubkey is still the placeholder");
         assert!(key.starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxNUQ2QTdCMjAyQThENzkK"));
         assert_eq!(super::VERSION_MANIFEST_URLS, ["https://docs.langstroth.ai/version.json", "https://docs.ligus.ai/version.json"]);
+    }
+
+    /// "Update available" on box and worker rows: only a strictly newer
+    /// plain release than the box's build; anything odd says nothing.
+    #[test]
+    fn host_upgrade_to_only_for_a_newer_plain_release() {
+        use super::host_upgrade_to as up;
+        assert_eq!(up("0.4.1", Some("v0.5.0")), "0.5.0");
+        assert_eq!(up("0.4.1", Some("0.4.2")), "0.4.2");
+        assert_eq!(up("0.9.9", Some("v0.10.0")), "0.10.0");
+        assert_eq!(up("0.5.0", Some("v0.5.0")), "", "up to date");
+        assert_eq!(up("0.6.0", Some("v0.5.0")), "", "a lagging manifest is never a downgrade");
+        assert_eq!(up("0.4.1", None), "", "no manifest yet");
+        assert_eq!(up("", Some("v0.5.0")), "", "no build in the beat");
+        for odd in ["0.5.0-dev", "0.5.0-rc1", "0.5.0+abc", "dev", "0.5", "1.2.3.4", "x.y.z", " ", "0.5.-1", "9999999999.0.0"] {
+            assert_eq!(up(odd, Some("v9.0.0")), "", "box build {odd:?}");
+            assert_eq!(up("0.4.1", Some(odd)), "", "manifest tag {odd:?}");
+        }
+    }
+
+    /// The banner's manifest read is what the host rows compare against;
+    /// a tag that doesn't parse is never remembered.
+    #[test]
+    fn latest_release_is_remembered_from_the_manifest_read() {
+        super::remember_latest_release("not a version");
+        let before = super::LATEST_RELEASE.lock().unwrap().clone().map(|(t, _)| t);
+        assert_ne!(before.as_deref(), Some("not a version"));
+        super::remember_latest_release("v0.5.0");
+        assert_eq!(super::latest_release_tag().as_deref(), Some("v0.5.0"));
+        assert_eq!(super::host_upgrade_to("0.4.1", super::latest_release_tag().as_deref()), "0.5.0");
     }
 
     /// The banner opens the manifest's `url` in the browser. HTTPS now trusts

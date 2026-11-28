@@ -33,6 +33,8 @@ pub const REPORT_CONTEXT: &[u8] = b"ligus-revocation-report-v1\0";
 pub const RETRY_CONTEXT: &[u8] = b"ligus-revocation-retry-v1\0";
 /// FROZEN signature context for a box's paired-phones report.
 pub const PAIRING_CONTEXT: &[u8] = b"ligus-pairing-report-v1\0";
+/// FROZEN signature context for a box's unpaired-phones report.
+pub const UNPAIRED_CONTEXT: &[u8] = b"ligus-unpaired-report-v1\0";
 
 /// `context ‖ canonical JSON of v without its signature`.
 fn preimage(context: &[u8], v: &impl Serialize) -> Vec<u8> {
@@ -380,6 +382,100 @@ pub async fn publish_pairing_report(relay: &RelayClient, room: &str, ring: &Keyr
     relay.publish_presence(room, &pairing_slot(&report.host_id), &blob).await
 }
 
+// ── Which phones a box unpaired ──────────────────────────────────────────────
+//
+// Workspace model v3, 10.2: a pairing ended on the box (`ligus phones
+// revoke`) or by the phone (Forget host) cuts the pairing and its push
+// registration, but the box can't revoke a person's device (it is a Service
+// member). Its report lets the person's desktop ask "Remove it from your
+// devices?". Device ids only (they are on the workspace log anyway): no
+// names, no sightings. Sealed and device-signed; it only ever raises a
+// question the person answers with a passkey.
+
+/// One device whose pairing with a box ended without its certificate being
+/// revoked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UnpairedPhone {
+    pub device_id: String,
+    /// When the pairing ended (unix seconds, to the minute).
+    pub at: i64,
+    /// `box` (unpaired on the box) or `phone` (the phone forgot the box).
+    pub by: String,
+}
+
+/// A box's report of the phones it unpaired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UnpairedReport {
+    /// The serve box's workspace device id (its host id); it signs.
+    pub host_id: String,
+    /// The workspace it reports for (signed).
+    pub workspace_id: uuid::Uuid,
+    pub at: i64,
+    pub phones: Vec<UnpairedPhone>,
+    /// Ed25519 by the box's device key over [`UNPAIRED_CONTEXT`] and the rest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signature: Vec<u8>,
+}
+
+/// Unpaired reports carry at most this many phones.
+pub const MAX_UNPAIRED_REPORTED: usize = 32;
+
+impl UnpairedReport {
+    fn unsigned(&self) -> Self {
+        Self { signature: Vec::new(), ..self.clone() }
+    }
+
+    pub fn sign(mut self, keypair: &SigningKeypair) -> Self {
+        self.signature = keypair.sign(&preimage(UNPAIRED_CONTEXT, &self.unsigned())).to_vec();
+        self
+    }
+
+    pub fn verify(&self, device_public_key: &[u8]) -> bool {
+        !self.signature.is_empty() && ligus_core::verify(device_public_key, &preimage(UNPAIRED_CONTEXT, &self.unsigned()), &self.signature).is_ok()
+    }
+}
+
+pub fn unpaired_slot(host_id: &str) -> String {
+    format!("unpaired:{host_id}")
+}
+
+pub fn seal_unpaired_report(ring: &KeyringEngine, report: &UnpairedReport) -> Option<Value> {
+    seal(ring, "unpairedReport", report)
+}
+
+/// Every box's unpaired report in a presence listing, keyed by host id,
+/// with the same checks as [`open_pairing_reports`]: its own slot, signed
+/// by a device `device_key` accepts (on a desktop: a certified, unrevoked
+/// device of the workspace), made for `workspace_id`, fresh at `now`. Bad
+/// device ids and entries dated after the report are dropped.
+pub fn open_unpaired_reports(
+    blobs: &HashMap<String, Value>,
+    ring: &KeyringEngine,
+    workspace_id: uuid::Uuid,
+    now: i64,
+    device_key: impl Fn(uuid::Uuid) -> Option<Vec<u8>>,
+) -> HashMap<String, UnpairedReport> {
+    open_all::<UnpairedReport>(blobs, ring, "unpairedReport", "unpaired:")
+        .into_iter()
+        .filter(|(slot, r)| *slot == unpaired_slot(&r.host_id))
+        .filter(|(_, r)| r.workspace_id == workspace_id && r.at >= now - PAIRING_REPORT_TTL_SECS && r.at <= now + PAIRING_REPORT_SKEW_SECS)
+        .filter(|(_, r)| uuid::Uuid::parse_str(&r.host_id).ok().and_then(&device_key).is_some_and(|pk| r.verify(&pk)))
+        .map(|(_, mut r)| {
+            r.phones.truncate(MAX_UNPAIRED_REPORTED);
+            let at = r.at;
+            r.phones.retain(|p| uuid::Uuid::parse_str(&p.device_id).is_ok() && p.at <= at && (p.by == "box" || p.by == "phone"));
+            (r.host_id.clone(), r)
+        })
+        .collect()
+}
+
+pub async fn publish_unpaired_report(relay: &RelayClient, room: &str, ring: &KeyringEngine, report: &UnpairedReport) -> Result<(), RelayError> {
+    let Some(blob) = seal_unpaired_report(ring, report) else { return Ok(()) };
+    relay.publish_presence(room, &unpaired_slot(&report.host_id), &blob).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,6 +535,47 @@ mod tests {
         }
         // A box whose device was revoked (no certified key): dropped too.
         assert!(open_reports(&blobs, &k, |_| None).is_empty());
+    }
+
+    /// An unpaired report only ever raises a question, but it still counts
+    /// only as the box's own, for this workspace, in its own slot.
+    #[test]
+    fn unpaired_reports_are_sealed_signed_and_only_in_their_own_slot() {
+        let k = key("room");
+        let (bx, other) = (dev(), dev());
+        let keys = |d: uuid::Uuid| [&bx, &other].into_iter().find(|x| x.id == d).map(|x| x.kp.public_key_bytes().to_vec());
+        let phone_dev = uuid::Uuid::new_v4();
+        let phone = UnpairedPhone { device_id: phone_dev.to_string(), at: 40, by: "phone".into() };
+        let r = UnpairedReport { host_id: bx.id.to_string(), workspace_id: uuid::Uuid::nil(), at: 41, phones: vec![phone.clone()], signature: Vec::new() }.sign(&bx.kp);
+        let mut blobs = HashMap::new();
+        blobs.insert(unpaired_slot(&bx.id.to_string()), seal_unpaired_report(&k, &r).unwrap());
+        // Another box's signature over a report naming `bx`, in its own slot.
+        blobs.insert(unpaired_slot(&other.id.to_string()), seal_unpaired_report(&k, &UnpairedReport { host_id: bx.id.to_string(), ..r.clone() }.sign(&other.kp)).unwrap());
+        let got = open_unpaired_reports(&blobs, &k, uuid::Uuid::nil(), 41, keys);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[&bx.id.to_string()], r);
+        assert!(open_unpaired_reports(&blobs, &k, uuid::Uuid::new_v4(), 41, keys).is_empty(), "another workspace's report");
+        assert!(open_unpaired_reports(&blobs, &k, uuid::Uuid::nil(), 41 + PAIRING_REPORT_TTL_SECS + 1, keys).is_empty(), "a stale report");
+        // A pairing report's signature doesn't make an unpaired report.
+        let crossed = UnpairedReport { signature: PairingReport { host_id: bx.id.to_string(), workspace_id: uuid::Uuid::nil(), at: 41, phones: Vec::new(), signature: Vec::new() }.sign(&bx.kp).signature, phones: Vec::new(), ..r.clone() };
+        let mut b = HashMap::new();
+        b.insert(unpaired_slot(&bx.id.to_string()), seal_unpaired_report(&k, &crossed).unwrap());
+        assert!(open_unpaired_reports(&b, &k, uuid::Uuid::nil(), 41, keys).is_empty());
+        // Entries that aren't a device id, dated after the report, or of an
+        // unknown kind are dropped.
+        let odd = UnpairedReport {
+            phones: vec![
+                UnpairedPhone { device_id: "not-a-uuid".into(), ..phone.clone() },
+                UnpairedPhone { at: 99, ..phone.clone() },
+                UnpairedPhone { by: "relay".into(), ..phone.clone() },
+                phone.clone(),
+            ],
+            ..r.clone()
+        }
+        .sign(&bx.kp);
+        let mut b = HashMap::new();
+        b.insert(unpaired_slot(&bx.id.to_string()), seal_unpaired_report(&k, &odd).unwrap());
+        assert_eq!(open_unpaired_reports(&b, &k, uuid::Uuid::nil(), 41, keys)[&bx.id.to_string()].phones, vec![phone]);
     }
 
     /// A pairing report shows only when its own box signed it, in its own

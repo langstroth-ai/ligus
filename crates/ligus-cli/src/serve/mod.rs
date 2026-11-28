@@ -58,6 +58,7 @@ pub mod pair;
 pub mod people;
 pub mod phone_actions_api;
 pub mod phone_enroll_api;
+pub mod phone_label_api;
 pub mod presence_api;
 pub mod principal;
 pub mod proposal_file;
@@ -116,8 +117,15 @@ pub struct ServeOptions {
     pub ntfy: Option<ntfy::Ntfy>,
     /// The URL the phone uses (pairing link); default `http://<listen>`.
     pub public_url: Option<String>,
-    /// The host label other members see for this box.
+    /// The host label other members see for this box (`--label`,
+    /// `LIGUS_SERVE_LABEL`, else the hostname). At start it becomes the
+    /// box's synced device name when that was renamed elsewhere
+    /// ([`register_own`]).
     pub label: String,
+    /// Whether `label` was given (`--label` or `LIGUS_SERVE_LABEL`) rather
+    /// than taken from the hostname: only a given label that changed since
+    /// the box last wrote one renames it (workspace model v3, 10.1).
+    pub label_given: bool,
     /// Display name this box's identity posts the phone's messages under.
     pub name: Option<String>,
     pub pair: bool,
@@ -188,6 +196,7 @@ impl ServeOptions {
             idle_timeout: IDLE_TIMEOUT,
             ntfy,
             public_url: public_url.or_else(|| env_opt("LIGUS_SERVE_PUBLIC_URL")),
+            label_given: label.is_some() || env_opt("LIGUS_SERVE_LABEL").is_some(),
             label: label
                 .or_else(|| env_opt("LIGUS_SERVE_LABEL"))
                 .or_else(ligus_runtime::machine_hostname)
@@ -223,18 +232,75 @@ async fn test_person_start(cfg: &Config) -> Result<(ChatService, bool)> {
     Ok((open_service(cfg)?, synced))
 }
 
-/// Register this box as an always-on host of the workspace it joined as its
-/// own service member ([`crate::admit::prepare_box`] made it a member).
-fn register_own(svc: &mut ChatService, ws: Uuid, host_id: &str, opts: &ServeOptions) -> Result<()> {
-    let host = crate::with_gateways(WorkspaceHost::new(host_id.to_string(), HostKind::Worker, opts.label.clone()));
-    svc.ensure_host(ws, host).map(|_| ()).context("registering this box as a workspace host")?;
-    // Its synced device name (identity model v2, 6.3): what My devices and
-    // People show for it.
-    let device = svc.device_id();
-    if let Err(e) = svc.set_device_label(ws, device, &opts.label) {
-        eprintln!("serve: naming this box's device failed (it keeps working): {e}");
+/// The file in the data dir that holds the last label this box wrote for
+/// itself (workspace model v3, 10.1).
+pub const LAST_SELF_LABEL_FILE: &str = "last_self_label";
+
+/// The label this box writes for itself at start, if any (M12, 10.1). A
+/// given label (`--label`, `LIGUS_SERVE_LABEL`) is written when it differs
+/// from the last one this box wrote; a hostname only once, on first start.
+/// A rename made on a desktop is never undone by a restart.
+///
+/// `last` is what the box wrote last time (`None`: no record yet); `synced`
+/// is its synced device name and whether this device set it. With no
+/// record, a name this device set counts as the last one it wrote, and a
+/// name set elsewhere as if the box had written `label` (an upgrade keeps a
+/// rename).
+pub(crate) fn label_to_write<'a>(given: bool, label: &'a str, last: Option<&str>, synced: Option<(&str, bool)>) -> Option<&'a str> {
+    let label_trim = label.trim();
+    if label_trim.is_empty() {
+        return None;
     }
-    Ok(())
+    let last: Option<String> = match (last, synced) {
+        (Some(l), _) => Some(l.to_string()),
+        (None, Some((name, true))) => Some(name.to_string()),
+        (None, Some((_, false))) => Some(label.to_string()),
+        (None, None) => None,
+    };
+    match last {
+        None => Some(label),
+        Some(l) if given && l != label => Some(label),
+        Some(_) => None,
+    }
+}
+
+fn read_last_self_label(data_dir: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(data_dir.join(LAST_SELF_LABEL_FILE)).ok().map(|s| s.trim_end_matches('\n').to_string())
+}
+
+/// Register this box as an always-on host of the workspace it joined as its
+/// own service member ([`crate::admit::prepare_box`] made it a member), and
+/// name its device when its label changed ([`label_to_write`]). Returns the
+/// label it goes by: its synced device name, which a desktop may have
+/// changed.
+fn register_own(svc: &mut ChatService, ws: Uuid, host_id: &str, opts: &ServeOptions, data_dir: &std::path::Path) -> Result<String> {
+    let device = svc.device_id();
+    let synced = svc.author().account_id.and_then(|a| svc.device_label_info(ws, device, a));
+    let last = read_last_self_label(data_dir);
+    let write = label_to_write(opts.label_given, &opts.label, last.as_deref(), synced.as_ref().map(|(l, set)| (l.as_str(), set.by == Some(device))));
+    let mut label = synced.map(|(l, _)| l).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| opts.label.clone());
+    if let Some(new) = write {
+        // Its synced device name (identity model v2, 6.3): what My devices
+        // and People show for it.
+        match svc.set_device_label(ws, device, new) {
+            Ok(_) => {
+                label = ligus_proto::names::clean_display_name(new);
+                if let Err(e) = std::fs::write(data_dir.join(LAST_SELF_LABEL_FILE), &label) {
+                    eprintln!("serve: remembering this box's label failed: {e}");
+                }
+            }
+            Err(e) => eprintln!("serve: naming this box's device failed (it keeps working): {e}"),
+        }
+    } else if last.is_none() {
+        // First start of a build that keeps the record: remember where it is.
+        let seed = if opts.label_given { opts.label.clone() } else { label.clone() };
+        let _ = std::fs::write(data_dir.join(LAST_SELF_LABEL_FILE), seed);
+    }
+    // The host record carries the device name (10.1: `DeviceLabelSet` is the
+    // authority, the record's label a fallback for older readers).
+    let host = crate::with_gateways(WorkspaceHost::new(host_id.to_string(), HostKind::Worker, label.clone()));
+    svc.ensure_host(ws, host).map(|_| ()).context("registering this box as a workspace host")?;
+    Ok(label)
 }
 
 /// State shared by the API handlers, the sync loop and the worker thread.
@@ -276,6 +342,11 @@ pub struct Shared {
     /// What each person has read here ([`ReadMarks`]).
     read_marks: Mutex<ReadMarks>,
     pub sync_kick: Notify,
+    /// Runs the next host beat now (a contact id to announce).
+    pub beat_kick: Notify,
+    /// This box's contact id changed and no write has carried it to the
+    /// workspace log yet ([`contacts_api::stamp_contact_in_beat`]).
+    pub contact_unstamped: AtomicBool,
     pub worker_kick: Notify,
     /// The worker's running turns, each with its own stop signal.
     pub turn_stops: Arc<ligus_runtime::turn_engine::TurnStops>,
@@ -329,6 +400,8 @@ pub struct Shared {
     pub admission_drafts: admissions_api::Drafts,
     /// Phone actions waiting for the phone's signature (Phase B).
     pub phone_action_drafts: phone_actions_api::Drafts,
+    /// A phone's own name waiting for its signature (workspace model v3, 17.6).
+    pub phone_label_drafts: phone_label_api::Drafts,
     /// The box's direct messages (`dms.rs`).
     pub dms: dms::DmStore,
     /// Wakes the DM sync loop after a local write.
@@ -1227,7 +1300,7 @@ fn load_read_marks(cfg: &Config) -> ReadMarks {
 
 /// Start everything on the current (multi-threaded) tokio runtime and return
 /// once the API is listening.
-pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
+pub async fn start(cfg: Config, mut opts: ServeOptions) -> Result<ServeHandle> {
     // Agents on this box never read the serve token, wherever it lives.
     let operator_file = operator_token_path(&cfg.data_dir);
     ligus_runtime::executor::configure_host(
@@ -1317,8 +1390,17 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         if person {
             let _ = svc.ensure_self_member(workspace_config_session_id(ws), ws);
         }
-        register_own(&mut svc, ws, &host_id, &opts)?;
-        crate::publish_key_agreement(&cfg, &mut svc);
+        if svc.has_left(ws).unwrap_or(false) {
+            // `ligus serve leave` ran: the box writes nothing of its own any
+            // more (no host record, beats or offers) until an Admin removes it.
+            eprintln!("ligus serve: this box left {}; it stays inert until an Admin removes it from People.", cfg.room);
+            if let Some(l) = svc.author().account_id.and_then(|a| svc.device_label_of(ws, svc.device_id(), a)) {
+                opts.label = l;
+            }
+        } else {
+            opts.label = register_own(&mut svc, ws, &host_id, &opts, &cfg.data_dir)?;
+            crate::publish_key_agreement(&cfg, &mut svc);
+        }
     }
     let tunnel = match &opts.remote {
         Some(settings) => Some(tunnel::TunnelHost::open(&cfg.data_dir, settings.clone()).context("opening the relay tunnel state")?),
@@ -1342,6 +1424,8 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         local_streams: Mutex::new(HashSet::new()),
         read_marks: Mutex::new(load_read_marks(&cfg)),
         sync_kick: Notify::new(),
+        beat_kick: Notify::new(),
+        contact_unstamped: AtomicBool::new(false),
         worker_kick: Notify::new(),
         turn_stops: ligus_runtime::turn_engine::TurnStops::new(),
         stopping: AtomicBool::new(false),
@@ -1364,6 +1448,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         presence_drafts: presence_api::Pending::default(),
         admission_drafts: admissions_api::Drafts::default(),
         phone_action_drafts: phone_actions_api::Drafts::default(),
+        phone_label_drafts: phone_label_api::Drafts::default(),
         dms: dms::DmStore::load(&cfg.data_dir),
         dm_kick: Notify::new(),
         contact_lock: tokio::sync::Mutex::new(()),
@@ -1679,6 +1764,8 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     // Whether the last pairing report named any phone (an empty one is sent
     // once after that, so My devices stops showing a pairing that ended).
     let mut paired_reported = false;
+    // The same for the unpaired-phones report.
+    let mut unpaired_reported = false;
     let mut known_repos: Option<Vec<uuid::Uuid>> = None;
     loop {
         shared.presence.record(&shared.host_id, Timestamp::now().inner().unix_timestamp());
@@ -1693,8 +1780,12 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             drop(tokio::task::spawn_blocking(move || repos_refresh(&sh)));
         }
         let coverage = if live_empty(&known_repos) { Vec::new() } else { repo_coverage(&shared) };
-        // A box that can't write (revoked, awaiting approval) isn't serving work.
-        let writable = shared.lock().write_block().is_none();
+        // A box that can't write (revoked, awaiting approval) isn't serving
+        // work, and one that left its workspace writes nothing of its own.
+        let writable = {
+            let svc = shared.lock();
+            svc.write_block().is_none() && !svc.has_left(shared.ws).unwrap_or(false)
+        };
         // The one keyring (B1): beats seal at the authorized head.
         let ring = match crate::key_source(&shared.cfg) {
             Ok(src) => ligus_runtime::keyring::KeyringEngine::from_store(shared.lock().store(), shared.ws, &src),
@@ -1703,7 +1794,13 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         if writable {
             // Readiness and offers (workspace model v3, 5.1), in the background.
             let sh = shared.clone();
-            drop(tokio::task::spawn_blocking(move || crate::refresh_own_host(&sh.svc, sh.ws, &sh.host_id)));
+            let refresh = tokio::task::spawn_blocking(move || crate::refresh_own_host(&sh.svc, sh.ws, &sh.host_id));
+            // The first beat carries the build and the offers' readiness:
+            // wait (a little) for the first refresh; later ones run behind.
+            if ligus_runtime::host_offers::local_status().is_none() {
+                let _ = tokio::time::timeout(FIRST_STATUS_WAIT, refresh).await;
+            }
+            contacts_api::stamp_contact_in_beat(&shared);
             let beat = shared.lock().signed_beat(shared.ws, coverage);
             if let Err(e) = publish_beat(&relay, &room, &ring, &beat).await {
                 eprintln!("presence: publishing this host's beat failed: {e}");
@@ -1717,13 +1814,18 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         if shared.tunnel.is_some() {
             revocation_presence(&shared, &relay, &room, &ring, &mut retry_seen).await;
             pairing_presence(&shared, &relay, &room, &ring, &mut paired_reported).await;
+            unpaired_presence(&shared, &relay, &room, &ring, &mut unpaired_reported).await;
         }
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(HOST_BEAT_EVERY_SECS as u64)) => {}
+            _ = shared.beat_kick.notified() => {}
             _ = stop.wait_for(|s| *s) => return,
         }
     }
 }
+
+/// How long the first beat waits for this box's first readiness report.
+const FIRST_STATUS_WAIT: Duration = Duration::from_secs(10);
 
 fn live_empty(known: &Option<Vec<uuid::Uuid>>) -> bool {
     known.as_ref().is_none_or(|v| v.is_empty())
@@ -1840,6 +1942,32 @@ async fn pairing_presence(
     match ligus_runtime::revocation_status::publish_pairing_report(relay, room, ring, &report).await {
         Ok(()) => *reported = named,
         Err(e) => eprintln!("presence: publishing the paired phones failed: {e}"),
+    }
+}
+
+/// Publish which phones were unpaired here (`ligus phones revoke`) or forgot
+/// this box (Forget host) while their device is still certified, so each
+/// phone's person is asked on their desktop whether to remove the device
+/// (workspace model v3, 10.2). Device ids only; sealed and signed by this
+/// box's device key. The box can't revoke a person's device itself.
+async fn unpaired_presence(
+    shared: &Arc<Shared>,
+    relay: &ligus_runtime::RelayClient,
+    room: &str,
+    ring: &ligus_runtime::keyring::KeyringEngine,
+    reported: &mut bool,
+) {
+    let Some(t) = shared.tunnel.as_ref() else { return };
+    let now = Timestamp::now().inner().unix_timestamp();
+    let report = t.registry.unpaired_report(&shared.host_id, shared.ws, now, |d| shared.device_lookup(d) == tunnel::device_bind::DeviceLookup::Revoked);
+    if report.phones.is_empty() && !*reported {
+        return;
+    }
+    let named = !report.phones.is_empty();
+    let report = shared.lock().sign_unpaired_report(report);
+    match ligus_runtime::revocation_status::publish_unpaired_report(relay, room, ring, &report).await {
+        Ok(()) => *reported = named,
+        Err(e) => eprintln!("presence: publishing the unpaired phones failed: {e}"),
     }
 }
 

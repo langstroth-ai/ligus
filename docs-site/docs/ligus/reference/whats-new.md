@@ -21,6 +21,33 @@ Full release notes are on the
   until an Owner switches it; builds before 0.5 open a rules 4 workspace
   read-only. See [Workspace rules 4](../../operate/security/threat-model.md#rules-4).
 
+- **"Update available" for boxes.** When a box or worker runs an older
+  release than the latest one, its row in **People** > **Workers & hosts**
+  shows one grey line, "0.4.1 → 0.5.0 available · how", and the phone's
+  Health shows the same for its box. **how** says to run `ligus-local
+  upgrade` on the box (it runs `brew upgrade ligus` for a Homebrew install
+  and restarts the box). Ligus never upgrades a box on its own. See
+  [Operating it](../../operate/deploy/personal-fleet.md#operating-it).
+
+- **Your phone in one flow.** Scan the desktop's code (the Connect screen
+  now reads it as well as the `ligus pair` code), check the name the phone
+  suggests ("Ana's iPhone", editable), and choose **Add**: that one
+  confirmation also signs the phone's statement that it is yours, so the
+  separate "Confirm this phone is Ana's" question no longer follows (it
+  stays for phones added with Can't scan? or before 0.5). On builds that can
+  push, the phone then asks once about notifications, with a line on why;
+  the last screen says what works now. A phone added again under a new name
+  is renamed for every device. See
+  [Add your phone](../features/phone-app.md#add-this-phone).
+
+- **The phone renames itself.** **Settings → This phone → Rename**, signed
+  by the phone's own key through its box, where the workspace's rules let a
+  phone name itself (rules version 4); elsewhere the **?** points to My
+  devices on your desktop. Boxes add `POST /v1/phone-label/prepare` and
+  `/commit`, and `GET /v1/me` says when it is available
+  (`capabilities.phoneLabel`). See
+  [Renaming the phone](../features/phone-app.md#rename-phone).
+
 - **Admit a box without pasting anything, from setup or the deploy
   script.** `ligus setup box --to ligusaddr1:…` and `deploy/local/ligus-local
   configure --admit-to ligusaddr1:…` send the box's join request to the
@@ -52,6 +79,16 @@ Full release notes are on the
   with **Remove** for Admins and **Remove from view** for anyone (this
   device only). Builds before 0.5 keep listing the member as before. See
   [Leaving a workspace](../features/invites.md#leaving-a-workspace).
+- **Unpairing works both ways.** Forget host on the phone now tells the box
+  first: the box stops notifying it, the relay forgets its push
+  registration, and your desktop asks "Your phone … forgot box-1. Remove
+  the device?" with **Remove** (your passkey) or **Keep the device**.
+  `ligus phones revoke` on a box asks the same. Resetting a phone's key now
+  names the old key in the new request, so the desktop that adds it offers
+  to remove the old one in the same sheet. The phone sends its notification
+  settings to every box it's paired with. Boxes drop ended pairings 30 days
+  later. See [Notifications](../features/phone-app.md) and
+  [Manage phones](../../operate/networking/remote-access.md#manage-phones).
 - **Pending, Active, Idle and Revoked devices.** My devices now shows a
   device that was approved but never wrote anything as **pending**, and one
   with nothing signed and no beat for 30 days as **idle**, both grey with
@@ -190,6 +227,15 @@ Full release notes are on the
   See [What a host offers](cli.md#what-a-host-offers).
 
 ### Changed
+
+- **A box keeps the name you gave it.** Renaming a box on a desktop used to
+  be undone the next time it started with its `--label`. A box now writes
+  its name only when `--label` (or `LIGUS_SERVE_LABEL`) changed since the
+  last one it wrote, and its host name only on first start. Its first host
+  beat carries its build version and what it offers, and its contact id
+  rides the beat instead of a write of its own. A box that ran
+  `ligus serve leave` stops beating and writes nothing of its own, also
+  after a restart. See [`ligus serve`](cli.md).
 
 - **"Hide from this list" is now "Remove from view"** on revoked devices in
   My devices: still this device only, and the device stays revoked.

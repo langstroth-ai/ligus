@@ -392,8 +392,9 @@ fn every_kind() -> Vec<SessionEvent> {
 }
 
 /// What the phone tier allows, by kind (`flowRecorded` only as an answer,
-/// `messageAppended` only as a user message, `deviceRevoked` only of the
-/// phone itself, `joinApproved` only as a box admission).
+/// `messageAppended` only as a user message, `deviceRevoked` and
+/// `deviceLabelSet` only of the phone itself, `joinApproved` only as a box
+/// admission).
 const PHONE_TIER: &[&str] = &[
     "messageAppended",
     "messageRemoved",
@@ -423,6 +424,8 @@ fn the_phone_tier_is_exactly_the_allow_list() {
             }
             SessionEvent::JoinApproved { admission, .. } => admission.is_some(),
             SessionEvent::DeviceRevoked { device_id, .. } => *device_id == me,
+            // Its own name (the label rule itself waits for rules 4).
+            SessionEvent::DeviceLabelSet { label } => label.device_id == me,
             _ => PHONE_TIER.contains(&k),
         };
         assert_eq!(allowed, expected, "{k}");
@@ -678,4 +681,50 @@ fn a_phone_request_is_fulfilled_by_the_named_box_only() {
     assert_eq!(f.w.verdict(applied), Verdict::Allowed);
     assert_eq!(f.w.state(chat).proposals[0].status, ProposalStatus::Applied);
     let _ = workspace_config_session_id(f.w.wid);
+}
+
+/// Workspace model v3, 17.6: the phone signs its own name only when the
+/// preimage is exactly that name, for itself, under its person, on the
+/// config log, without presence.
+#[test]
+fn a_phone_signs_only_its_own_name() {
+    use ligus_core::phone_action::check_phone_label_preimage;
+    use ligus_core::profile::DeviceLabel;
+    let mut f = fixture();
+    let ws = f.w.wid;
+    let mara = f.w.people["mara"].account_id;
+    let ada = f.w.people["ada"].account_id;
+    let me = f.phone.device_id;
+    let label = |device: Uuid, account: Uuid, l: &str| SessionEvent::DeviceLabelSet { label: DeviceLabel { device_id: device, account_id: account, label: l.into() } };
+    let good = draft(&mut f, None, label(me, mara, "Mara's iPhone"));
+    let pre = envelope_preimage(&good);
+    assert_eq!(check_phone_label_preimage(&pre, ws, me, mara, "Mara's iPhone"), Ok(good.event_id));
+    // Another name, device or account, or a chat log: refused.
+    assert!(check_phone_label_preimage(&pre, ws, me, mara, "Something else").is_err());
+    let desk = f.w.people["mara"].device_id;
+    let other_device = draft(&mut f, None, label(desk, mara, "Mara's iPhone"));
+    assert!(check_phone_label_preimage(&envelope_preimage(&other_device), ws, me, mara, "Mara's iPhone").is_err());
+    let other_account = draft(&mut f, None, label(me, ada, "Mara's iPhone"));
+    assert!(check_phone_label_preimage(&envelope_preimage(&other_account), ws, me, ada, "Mara's iPhone").is_err(), "stamped for mara, not ada");
+    assert!(check_phone_label_preimage(&envelope_preimage(&other_account), ws, me, mara, "Mara's iPhone").is_err());
+    let chat = f.chat;
+    let on_chat = draft(&mut f, Some(chat), label(me, mara, "Mara's iPhone"));
+    assert!(check_phone_label_preimage(&envelope_preimage(&on_chat), ws, me, mara, "Mara's iPhone").is_err());
+    // Not another kind of event under the same name.
+    let pid = f.pid;
+    let post = draft(&mut f, None, SessionEvent::ProposalDismissed { proposal_id: pid, dismissed: true });
+    assert!(check_phone_label_preimage(&envelope_preimage(&post), ws, me, mara, "Mara's iPhone").is_err());
+    // A name with hidden characters, or empty, is refused before parsing.
+    assert!(check_phone_label_preimage(&pre, ws, me, mara, "Mara\u{202E}s").is_err());
+    assert!(check_phone_label_preimage(&pre, ws, me, mara, "").is_err());
+    // Signed with presence it didn't produce: refused.
+    let mut with_presence = good.clone();
+    with_presence.actor_stamp.as_mut().unwrap().presence = Some(PresenceAssertion {
+        credential_id: "x".into(),
+        authenticator_data: "x".into(),
+        client_data_json: "x".into(),
+        signature: "x".into(),
+    });
+    with_presence.clear_raw();
+    assert!(check_phone_label_preimage(&envelope_preimage(&with_presence), ws, me, mara, "Mara's iPhone").is_err());
 }

@@ -86,6 +86,9 @@ pub async fn me(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<
     let account = person.account_id.unwrap_or_default();
     let consented = svc.phone_consented(s.ws, device, account).unwrap_or(false);
     let label = svc.device_label_of(s.ws, device, account).unwrap_or_default();
+    // Workspace model v3, 17.6: whether this phone can rename itself here
+    // (`POST /v1/phone-label/prepare`), from rules 4.
+    let names_itself = svc.phone_can_name_itself(s.ws).unwrap_or(false);
     let policy = match svc.workspace_presence_policy(s.ws) {
         Ok(p) => p,
         Err(e) => return refuse(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()),
@@ -105,7 +108,9 @@ pub async fn me(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<
         },
         // Identity model v2: this box takes the phone's enrollment
         // statement (`POST /v1/phone-consent`).
-        "capabilities": { "phoneConsent": 1 },
+        // Workspace model v3, 17.6: `phoneLabel` (present only when this
+        // phone can rename itself here: `POST /v1/phone-label/*`).
+        "capabilities": if names_itself { json!({ "phoneConsent": 1, "phoneLabel": 1 }) } else { json!({ "phoneConsent": 1 }) },
         "rpId": policy.rp_id,
         "origins": policy.origins,
     }))

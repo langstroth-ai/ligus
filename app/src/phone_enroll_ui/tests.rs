@@ -118,6 +118,7 @@ impl Flow {
             |c| self.svc.phone_standing(self.ws, c).ok(),
             |_| "Home box".into(),
             |_| false,
+            |prev| replaceable_phone(&self.svc, self.ws, prev, &[]),
             &shield.f(),
         )
     }
@@ -130,7 +131,7 @@ impl Flow {
 
     /// **Add this phone** up to the passkey, as the command does: its last
     /// presence look reads the flow's listing (`blobs`).
-    fn begin(&self, fingerprint: &str, active_ws: Uuid, now_ms: i64) -> Result<(Uuid, PhoneCode), String> {
+    fn begin(&self, fingerprint: &str, active_ws: Uuid, now_ms: i64) -> Result<(Uuid, PhoneCode, Option<Uuid>), String> {
         let key = self.bx.key();
         let bx = self.bx.id;
         self.desk.begin_approve(
@@ -148,7 +149,7 @@ impl Flow {
     /// Approve as the command does: the checks, the passkey (test presence),
     /// then the watch.
     fn approve(&mut self, fingerprint: &str, now_ms: i64, shield: &Shield) -> Result<(Watch, Option<TripwireDto>), String> {
-        let (ws, code) = self.begin(fingerprint, self.ws, now_ms)?;
+        let (ws, code, _) = self.begin(fingerprint, self.ws, now_ms)?;
         self.svc.certify_phone_code(ws, &code).map_err(|e| e.to_string())?;
         Ok(self.desk.finish_approve(&shield.f()).expect("a watch"))
     }
@@ -292,6 +293,7 @@ fn two_phones_abort_the_offer() {
         |c| f.svc.phone_standing(f.ws, c).ok(),
         |_| String::new(),
         |_| false,
+        |_| None,
         &shield.f(),
     );
     assert_eq!(got.state, "aborted");
@@ -368,7 +370,7 @@ fn a_second_phone_during_the_passkey_alerts_at_once() {
     let (a, b) = (Phone::new(), Phone::new());
     f.phone_answers(&a, "Ana's iPhone", NOW);
     let fp = f.poll(NOW, &shield).phone.unwrap().fingerprint;
-    let (ws, code) = f.begin(&fp, f.ws, NOW + HOLD_MS).unwrap();
+    let (ws, code, _) = f.begin(&fp, f.ws, NOW + HOLD_MS).unwrap();
     // While the passkey sheet is up, a second phone answers.
     let mut blobs = HashMap::new();
     f.bx.relay(&mut blobs, &f.ring, &request_text(&f.qr, &b, "Ana's iPhone", NOW + 6_000), NOW + 6_000);
@@ -490,7 +492,7 @@ fn the_desktops_own_device_cannot_relay_a_request() {
     let req = ligus_runtime::phone_enroll_qr::EnrollRequest::decode(&text).unwrap();
     let r = f.svc.sign_relayed_request(RelayedRequest::new(&text, me, NOW));
     blobs.insert(request_slot(req.rid, me, req.device_id()), seal_relayed_request(&f.ring, &r).unwrap());
-    let got = f.desk.poll(&blobs, &f.ring, NOW, |d| f.svc.enroll_relay_key(f.ws, d), |c| f.svc.phone_standing(f.ws, c).ok(), |_| String::new(), |_| false, &shield.f());
+    let got = f.desk.poll(&blobs, &f.ring, NOW, |d| f.svc.enroll_relay_key(f.ws, d), |c| f.svc.phone_standing(f.ws, c).ok(), |_| String::new(), |_| false, |_| None, &shield.f());
     assert_eq!(got.state, "waiting");
 }
 
@@ -687,4 +689,52 @@ fn my_devices_shows_the_name_a_phone_gave_itself_when_it_was_added() {
     assert_eq!(crate::device_label(other, here, None, &labels, true, at), "Phone \u{00B7} added 24 Nov");
     assert_eq!(crate::device_label(other, here, None, &labels, false, at), "Computer \u{00B7} approved 24 Nov");
     assert_eq!(crate::device_label(other, here, None, &labels, true, None), "Phone");
+}
+
+// ---- a key reset names the previous device (workspace model v3, 10.2) ----
+
+/// What a phone that reset its key sends: a v2 request naming `previous`.
+fn reset_request_text(qr: &str, p: &Phone, label: &str, previous: Uuid, now_ms: i64) -> String {
+    let offer = PhoneOffer::scan(qr, now_ms).unwrap();
+    let code = code_of(p, label);
+    let ext = ligus_runtime::phone_enroll_qr::RequestExt::previous(previous);
+    offer.build_request_with(&code, ext, |m| ligus_core::crypto::sign_p256(&p.key, m)).encode()
+}
+
+/// The card offers to remove the phone's previous device only when it is
+/// one of your phones and not revoked; approving with it removes that one
+/// after certifying the new key, in the same sheet.
+#[test]
+fn a_phone_that_reset_its_key_offers_to_remove_its_old_device() {
+    let shield = Shield::default();
+    let mut f = Flow::new(&shield);
+    // The old key, added as this account's phone.
+    let old = Phone::new();
+    f.svc.certify_phone_code(f.ws, &code_of(&old, "Ana's iPhone")).unwrap();
+    let new = Phone::new();
+    let text = reset_request_text(&f.qr, &new, "Ana's iPhone", old.device_id, NOW);
+    f.bx.relay(&mut f.blobs, &ring(), &text, NOW);
+    let card = f.poll(NOW, &shield).phone.expect("the phone's card");
+    let replaces = card.replaces.clone().expect("offers to remove the old key");
+    assert_eq!(replaces.device_id, old.device_id.to_string());
+    let (ws, code, prev) = f.begin(&card.fingerprint, f.ws, NOW + HOLD_MS).unwrap();
+    assert_eq!(prev, Some(old.device_id));
+    let id = f.svc.certify_phone_code(ws, &code).unwrap();
+    revoke_replaced(&mut f.svc, ws, old.device_id, id).unwrap();
+    let roster = f.svc.store().load_config(ws, None, None).unwrap().1.current().clone();
+    assert!(roster.devices[&old.device_id].revoked, "the old key is revoked");
+    assert!(!roster.devices[&id].revoked, "the new one is not");
+    // Never the new device itself, and not twice.
+    assert!(revoke_replaced(&mut f.svc, ws, id, id).is_err());
+    assert!(revoke_replaced(&mut f.svc, ws, old.device_id, id).is_err());
+
+    // On another person's desktop the same request offers nothing: the old
+    // device isn't one of theirs.
+    let g = Flow::new(&shield);
+    let mut g = g;
+    let text = reset_request_text(&g.qr, &new, "Ana's iPhone", old.device_id, NOW);
+    g.bx.relay(&mut g.blobs, &ring(), &text, NOW);
+    let card = g.poll(NOW, &shield).phone.expect("the phone's card");
+    assert_eq!(card.replaces, None);
+    assert_eq!(g.begin(&card.fingerprint, g.ws, NOW + HOLD_MS).unwrap().2, None);
 }

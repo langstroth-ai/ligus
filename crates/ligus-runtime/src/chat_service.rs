@@ -54,7 +54,7 @@ pub use relay_removal::{RelayRemoval, RelayRemovalError, RelaySubject, BOX_SUBJE
 mod repos;
 pub use repos::canonical_from_input;
 pub use keys::RotationIssued;
-pub use phone_sign::{phone_label, PhoneDraft, BAD_CONSENT, STALE_DRAFT};
+pub use phone_sign::{phone_label, PhoneDraft, BAD_CONSENT, RENAME_ON_DESKTOP, STALE_DRAFT};
 pub use presence::{summarize, summarize_with, MatchContext, PresenceDraft, PresenceProvider, PresenceRequest};
 
 #[derive(Debug, thiserror::Error)]
