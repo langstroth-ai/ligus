@@ -1,6 +1,6 @@
 {
-  "tag": "v0.4.0",
-  "name": "Ligus 0.4.0",
+  "tag": "v0.5.0",
+  "name": "Ligus 0.5.0",
   "url": "https://github.com/langstroth-ai/ligus/releases/latest",
-  "notes": "Ligus (short for ligustica) 0.4.0 lets you approve a box or a computer by comparing a short code, gives you one profile and named devices, brings stricter device rules, decision cards from agents (Claude Code's own prompts included), proposal archiving, scratch repositories, and keeps secrets out of the database. Upgrade every device, boxes and phones included. See https://docs.langstroth.ai/ligus/reference/whats-new/."
+  "notes": "Ligus (short for ligustica) 0.5.0 makes you one person on all your devices: link a new device with a short code, and one link brings all your workspaces. Adding an agent is one step, with its model and where it runs. A turn that can't run says so instead of quietly falling back, and a Set up Ligus checklist shows what's left. Update the box and every device first. See https://docs.langstroth.ai/ligus/reference/whats-new/."
 }
