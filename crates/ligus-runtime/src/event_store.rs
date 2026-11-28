@@ -3011,7 +3011,9 @@ mod tests {
         let before = db_bytes(&path);
         drop(EventStore::open(&path).unwrap());
         let after = db_bytes(&path);
-        assert!(after * 10 <= before * 12, "{before} -> {after}");
+        // The new indexes and the (empty) device-local tables take a few
+        // pages; a file left with the old table's pages would be about 2x.
+        assert!(after * 10 <= before * 13, "{before} -> {after}");
     }
 
     /// Ids are unique per workspace: another workspace's row under an id
