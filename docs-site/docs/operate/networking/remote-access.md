@@ -161,15 +161,20 @@ ligus phones revoke <pid|name> [--keep-token]
 ```
 
 `ligus phones list` shows each phone paired over the relay: its id, name,
-state (`active` or `revoked`), the day it was paired and the day it was last
-seen.
+state, the day it was paired and the day it was last seen. The state is
+`active`, `unverified` (a pairing from before pairings named their device:
+it gets no notices meant for a person), `unpaired` (ended on the box or by
+the phone's Forget host) or `revoked` (its device was revoked). Ended
+pairings are dropped from the list 30 days after they ended.
 
 `ligus phones revoke` takes effect at once. A running `ligus serve` ends the
 phone's live sessions, refuses its requests and handshakes, and tells the
 relay, which then rejects that phone before it reaches the box. By default it
 also **rotates the direct-path token** (`serve.token`), because a lost phone
 holds that too; every phone that uses the direct path must then pair again.
-`--keep-token` skips the rotation.
+`--keep-token` skips the rotation. The box can't remove the phone from its
+person's devices (only the person can, with their passkey), so their desktop
+asks them: "box-1 unpaired your phone …" in the Inbox, with **Remove**.
 
 ## Check the link
 

@@ -104,6 +104,18 @@ pub(crate) struct EnrollPhoneDto {
     pub via: String,
     /// One of your devices already has this name.
     pub duplicate_label: bool,
+    /// The phone reset its key and names the device it was before: one of
+    /// your phones, not revoked. Adding it offers to remove that one in the
+    /// same step (workspace model v3, 10.2).
+    pub replaces: Option<ReplacesDto>,
+}
+
+/// The device a phone that reset its key used to be.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReplacesDto {
+    pub device_id: String,
+    pub label: String,
 }
 
 /// What a poll found.
@@ -133,6 +145,11 @@ pub(crate) struct ApprovedDto {
     pub label: String,
     /// The watch for other phones runs until then (Unix seconds).
     pub watching_until: u64,
+    /// The phone's previous device was removed in the same step.
+    pub replaced: bool,
+    /// Why removing the previous device didn't happen (the phone is added
+    /// either way; remove it from My devices).
+    pub replace_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -232,6 +249,7 @@ fn phone_dto(code: &PhoneCode, standing: &PhoneStanding, via: String, duplicate_
         problem,
         via,
         duplicate_label,
+        replaces: None,
     }
 }
 
@@ -331,13 +349,18 @@ fn look(
     standing: impl Fn(&PhoneCode) -> Option<PhoneStanding>,
     via: impl Fn(Uuid) -> String,
     duplicate: impl Fn(&PhoneCode) -> bool,
+    replaces: impl Fn(Uuid) -> Option<String>,
 ) {
     for (relay, req) in valid_requests(&c.offer, blobs, ring, now_ms, &relay_key) {
         let Some(st) = standing(&req.code) else { continue };
         match c.offer.observe(&req, now_ms) {
             Ok(Seen::First) => {
                 tracing::info!(target: "identity", rid = %c.offer.rid(), "a phone answered an add-a-phone code");
-                let card = phone_dto(&req.code, &st, via(relay), duplicate(&req.code));
+                let mut card = phone_dto(&req.code, &st, via(relay), duplicate(&req.code));
+                card.replaces = req
+                    .previous_device_id()
+                    .filter(|d| *d != req.device_id())
+                    .and_then(|d| replaces(d).map(|label| ReplacesDto { device_id: d.to_string(), label }));
                 c.phone = Some(Locked { request: req, standing: st, card, first_seen_ms: now_ms });
             }
             Ok(Seen::SamePhone) => {
@@ -464,6 +487,7 @@ impl EnrollDesk {
         standing: impl Fn(&PhoneCode) -> Option<PhoneStanding>,
         via: impl Fn(Uuid) -> String,
         duplicate: impl Fn(&PhoneCode) -> bool,
+        replaces: impl Fn(Uuid) -> Option<String>,
         shield: &dyn Fn(bool),
     ) -> PollDto {
         let mut cur = self.current.lock().unwrap();
@@ -476,7 +500,7 @@ impl EnrollDesk {
             shield(false);
             return PollDto::bare("expired");
         }
-        look(c, blobs, ring, now_ms, relay_key, standing, via, duplicate);
+        look(c, blobs, ring, now_ms, relay_key, standing, via, duplicate, replaces);
         if c.offer.is_aborted() {
             if !c.approving {
                 *cur = None;
@@ -505,7 +529,8 @@ impl EnrollDesk {
     /// after the first sighting can't skip the two-phones abort. Then the
     /// hold, the lock, the fingerprint and the expiry (the codec's
     /// `check_approve`), and that the active workspace is still the offer's.
-    /// Returns the code to certify and marks the approval in flight.
+    /// Returns the code to certify, the previous device it replaces (when
+    /// the card offered it), and marks the approval in flight.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn begin_approve(
         &self,
@@ -517,7 +542,7 @@ impl EnrollDesk {
         ring: &KeyringEngine,
         relay_key: impl Fn(Uuid) -> Option<Vec<u8>>,
         standing: impl Fn(&PhoneCode) -> Option<PhoneStanding>,
-    ) -> Result<(Uuid, PhoneCode), String> {
+    ) -> Result<(Uuid, PhoneCode, Option<Uuid>), String> {
         let mut cur = self.current.lock().unwrap();
         let c = cur.as_mut().ok_or("This code was closed. Show a new code.")?;
         let rid = Rid::from_b64u(rid).ok_or("This is for another code.")?;
@@ -525,7 +550,7 @@ impl EnrollDesk {
             return Err("This is for another code.".into());
         }
         if !c.offer.is_aborted() {
-            look(c, blobs, ring, now_ms, relay_key, standing, |_| "a serve box".into(), |_| false);
+            look(c, blobs, ring, now_ms, relay_key, standing, |_| "a serve box".into(), |_| false, |_| None);
         }
         if c.offer.is_aborted() {
             // Kept (aborted) so the page's next poll shows the two-phones panel.
@@ -538,7 +563,8 @@ impl EnrollDesk {
             return Err("This phone can't be added here.".into());
         }
         c.approving = true;
-        Ok((c.ws, code))
+        let replaces = c.phone.as_ref().and_then(|l| l.card.replaces.as_ref()).and_then(|r| Uuid::parse_str(&r.device_id).ok());
+        Ok((c.ws, code, replaces))
     }
 
     /// The passkey ceremony failed or was cancelled: the offer stays.
@@ -909,6 +935,7 @@ pub(crate) async fn phone_enroll_offer_poll(ligus_app: AppHandle) -> Result<Poll
                 !label.trim().is_empty()
                     && mine.iter().any(|(id, l)| *id != code.device_id && l.eq_ignore_ascii_case(&label))
             },
+            |previous| replaceable_phone(&svc, ws, previous, &mine),
             &shield_for(app),
         ))
     })
@@ -920,7 +947,12 @@ pub(crate) async fn phone_enroll_offer_poll(ligus_app: AppHandle) -> Result<Poll
 /// person's passkey, answers `certified`, and keeps
 /// watching for other phones until the offer expires.
 #[tauri::command(async)]
-pub(crate) async fn phone_enroll_offer_approve(ligus_app: AppHandle, rid: String, fingerprint: String) -> Result<ApprovedDto, String> {
+pub(crate) async fn phone_enroll_offer_approve(
+    ligus_app: AppHandle,
+    rid: String,
+    fingerprint: String,
+    replace_previous: Option<bool>,
+) -> Result<ApprovedDto, String> {
     let app = ligus_app.clone();
     // A last look for other phones, right before certifying (fails closed:
     // no listing, no approval).
@@ -932,9 +964,9 @@ pub(crate) async fn phone_enroll_offer_approve(ligus_app: AppHandle, rid: String
         (ws, relay, room, ring)
     };
     let blobs = relay.list_presence(&room).await.map_err(|e| format!("Couldn't check that no other phone answered this code: {e}"))?;
-    let (watch, alert) = crate::off_main(ligus_app, move |app| {
+    let (watch, alert, replaced) = crate::off_main(ligus_app, move |app| {
         let state = app.state::<AppState>();
-        let (ws, code) = {
+        let (ws, code, previous) = {
             let svc = state.service.lock().unwrap();
             state.phone_enroll.begin_approve(
                 &rid,
@@ -960,16 +992,65 @@ pub(crate) async fn phone_enroll_offer_approve(ligus_app: AppHandle, rid: String
         };
         tracing::info!(target: "identity", device = %id, label = %code.label, "certified a phone as this account's");
         crate::remember_phone_label(&state, id, &code.label);
-        state.phone_enroll.finish_approve(&shield_for(app)).ok_or_else(|| "The code closed while you confirmed.".to_string())
+        // Step 2 of 2, in the same sheet: the device the phone was before
+        // its key reset, when the person kept "Remove the old one" on.
+        let replaced = match previous.filter(|_| replace_previous.unwrap_or(false)) {
+            None => None,
+            Some(old) => Some(revoke_replaced(&mut state.service.lock().unwrap(), ws, old, id)),
+        };
+        let (watch, alert) = state.phone_enroll.finish_approve(&shield_for(app)).ok_or_else(|| "The code closed while you confirmed.".to_string())?;
+        Ok((watch, alert, replaced))
     })
     .await?;
     let code = watch.added_code().clone();
-    let dto = ApprovedDto { device_id: code.device_id.to_string(), label: crate::shown(&code.label), watching_until: watch.expires_at() };
+    let dto = ApprovedDto {
+        device_id: code.device_id.to_string(),
+        label: crate::shown(&code.label),
+        watching_until: watch.expires_at(),
+        replaced: matches!(replaced, Some(Ok(()))),
+        replace_error: match replaced {
+            Some(Err(e)) => Some(e),
+            _ => None,
+        },
+    };
     if let Some(a) = alert {
         let _ = app.emit(TRIPWIRE_EVENT, a);
     }
     spawn_watch(app, watch);
     Ok(dto)
+}
+
+/// The label of `previous` when a phone that reset its key may replace it:
+/// one of this account's phones in `ws`, certified and not revoked.
+pub(crate) fn replaceable_phone(svc: &ligus_runtime::ChatService, ws: Uuid, previous: Uuid, mine: &[(Uuid, String)]) -> Option<String> {
+    let roster = svc.store().load_config(ws, None, None).ok()?.1.current().clone();
+    let d = roster.devices.get(&previous)?;
+    if d.revoked || !d.phone || previous == svc.device_id() {
+        return None;
+    }
+    let own = svc.own_devices(ws).ok()?;
+    if !own.iter().any(|o| o.device_id == previous && !o.revoked) {
+        return None;
+    }
+    Some(
+        mine.iter()
+            .find(|(id, _)| *id == previous)
+            .map(|(_, l)| crate::shown(l))
+            .filter(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| "your previous phone".into()),
+    )
+}
+
+/// Revoke `old`, the device a phone used before its key reset, right after
+/// certifying the new one (`new`): its own passkey step. Checked again here:
+/// only one of this account's phones, never the new one or this desktop.
+pub(crate) fn revoke_replaced(svc: &mut ligus_runtime::ChatService, ws: Uuid, old: Uuid, new: Uuid) -> Result<(), String> {
+    if old == new || replaceable_phone(svc, ws, old, &[]).is_none() {
+        return Err("The previous phone isn't one of your phones any more.".into());
+    }
+    svc.revoke_device(ligus_core::workspace_config_session_id(ws), ws, old).map_err(|e| e.to_string())?;
+    tracing::info!(target: "identity", old = %old, new = %new, "revoked the device a phone used before its key reset");
+    Ok(())
 }
 
 /// **Not my phone**: answer `declined` (or `refused`) and close the offer.

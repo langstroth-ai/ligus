@@ -1873,8 +1873,11 @@ pub const COMMANDS: &[Cmd] = &[
         name: "phones list",
         group: G_PHONE,
         summary: "phones paired over the relay, and revocations in progress",
-        purpose: "List each paired phone (pid, name, active or revoked, paired and last-seen dates) and the steps of \
-                  each revocation still in progress. `ligus phones` alone is the same.",
+        purpose: "List each paired phone (pid, name, state, paired and last-seen dates) and the steps of each \
+                  revocation still in progress. The state is active, unverified (an older pairing that names no \
+                  device: no notices meant for a person), unpaired (ended here or by the phone's Forget host) or \
+                  revoked (its device was revoked); ended pairings are dropped 30 days later. `ligus phones` alone \
+                  is the same.",
         synopsis: &["ligus phones [list] [--json]"],
         flags: &[JSON],
         examples: &["ligus phones list", "ligus phones list --json"],
@@ -1885,8 +1888,10 @@ pub const COMMANDS: &[Cmd] = &[
         name: "phones revoke",
         group: G_PHONE,
         summary: "revoke one phone; also rotates serve.token",
-        purpose: "Revoke a phone: a running `ligus serve` ends its sessions and tells the relay within seconds. Unless \
-                  --keep-token, also rotates the direct-path bearer token (phones on the direct path pair again).",
+        purpose: "Revoke a phone: a running `ligus serve` ends its sessions and tells the relay within seconds (the \
+                  relay drops its push registration). Unless --keep-token, also rotates the direct-path bearer token \
+                  (phones on the direct path pair again). The box can't remove the phone from its person's devices, \
+                  so their desktop asks them (Inbox: \"box-1 unpaired your phone\", with Remove).",
         synopsis: &["ligus phones revoke <pid|name> [--keep-token] [--token-file PATH]"],
         flags: &[
             f("--keep-token", "off", "don't rotate the direct-path token"),

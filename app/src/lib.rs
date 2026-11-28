@@ -509,6 +509,12 @@ struct LiveSettings {
     /// host record; device-local, never synced (other desktops show the id).
     #[serde(default)]
     phone_labels: std::collections::HashMap<String, String>,
+    /// "Your phone forgot box-1" questions put aside with Keep: `<box host
+    /// id>:<phone device id>` → the unpairing's time it answered (unix
+    /// seconds). A later unpairing of the same phone asks again.
+    /// Device-local.
+    #[serde(default)]
+    unpaired_kept: std::collections::HashMap<String, i64>,
     /// Opt-in egress presets (Settings → Guards → Network presets), per
     /// workspace: workspace UUID (string) → preset names such as
     /// `package-registries`. Device-LOCAL on purpose: widening where this
@@ -685,6 +691,7 @@ impl Default for LiveSettings {
             workspace_root: None,
             workspace_dirs: std::collections::HashMap::new(),
             phone_labels: std::collections::HashMap::new(),
+            unpaired_kept: std::collections::HashMap::new(),
             egress_presets_by_workspace: std::collections::HashMap::new(),
             egress_presets_by_chat: std::collections::HashMap::new(),
         cli_user_config_workspaces: Default::default(),
@@ -5757,6 +5764,33 @@ mod my_devices_tests {
         assert_eq!(h.label, "This device");
     }
 
+    /// U4 (desktop): a box's unpaired report raises a row only for your own
+    /// phones, from a workspace host, until you keep it; a later unpairing
+    /// asks again.
+    #[test]
+    fn unpaired_rows_are_your_phones_from_hosts_until_kept() {
+        use ligus_runtime::revocation_status::{UnpairedPhone, UnpairedReport};
+        let (mine_d, theirs) = (Uuid::new_v4(), Uuid::new_v4());
+        let report = |host: &str, at: i64| {
+            let p = |d: Uuid, by: &str| UnpairedPhone { device_id: d.to_string(), at, by: by.into() };
+            UnpairedReport { host_id: host.into(), workspace_id: Uuid::nil(), at: at + 1, phones: vec![p(mine_d, "phone"), p(theirs, "box")], signature: Vec::new() }
+        };
+        let mine: HashMap<Uuid, String> = [(mine_d, "Ana\u{202E}s iPhone".to_string())].into();
+        let host = |id: &str| (id == "h1").then(|| "box-1".to_string());
+        let mut reports = HashMap::new();
+        reports.insert("h1".to_string(), report("h1", 60));
+        reports.insert("nobody".to_string(), report("nobody", 60));
+        let rows = unpaired_rows(reports.clone(), host, &mine, &HashMap::new());
+        assert_eq!(rows.len(), 1, "only your phone, only from a host: {rows:?}");
+        assert_eq!((rows[0].host_label.as_str(), rows[0].by.as_str(), rows[0].at), ("box-1", "phone", 60));
+        assert!(!rows[0].name.contains('\u{202E}'), "names are cleaned for display");
+        let kept: HashMap<String, i64> = [(format!("h1:{mine_d}"), 60)].into();
+        assert!(unpaired_rows(reports, host, &mine, &kept).is_empty(), "kept");
+        let mut later = HashMap::new();
+        later.insert("h1".to_string(), report("h1", 120));
+        assert_eq!(unpaired_rows(later, host, &mine, &kept).len(), 1, "a later unpairing asks again");
+    }
+
     #[test]
     fn pairings_name_their_box_and_sort_by_last_seen() {
         use ligus_runtime::revocation_status::{PairedPhone, PairingReport};
@@ -5937,6 +5971,90 @@ fn pairing_rows(
     }
     out.sort_by_key(|p| std::cmp::Reverse(p.last_seen));
     out
+}
+
+/// One of your phones whose pairing with a box ended while the phone stays
+/// your device: the box unpaired it, or the phone forgot the box (workspace
+/// model v3, 10.2). The Inbox asks whether to remove the device too.
+#[derive(serde::Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct UnpairedPhoneDto {
+    device_id: String,
+    /// The phone's name (its synced or remembered label).
+    name: String,
+    host_id: String,
+    host_label: String,
+    /// `box` (unpaired on the box) or `phone` (the phone forgot the box).
+    by: String,
+    /// When the pairing ended (unix seconds, to the minute).
+    at: i64,
+}
+
+/// The rows for [`list_unpaired_phones`]: reports from the workspace's
+/// hosts (`host_label` names only devices with a host record), about this
+/// account's unrevoked phones (`mine`, with their names), not kept aside.
+fn unpaired_rows(
+    reports: HashMap<String, ligus_runtime::revocation_status::UnpairedReport>,
+    host_label: impl Fn(&str) -> Option<String>,
+    mine: &HashMap<Uuid, String>,
+    kept: &HashMap<String, i64>,
+) -> Vec<UnpairedPhoneDto> {
+    let mut out = Vec::new();
+    for (host_id, r) in reports {
+        let Some(label) = host_label(&host_id) else { continue };
+        let label = Some(shown(&label)).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| "a serve box".into());
+        for p in r.phones {
+            let Ok(d) = Uuid::parse_str(&p.device_id) else { continue };
+            let Some(name) = mine.get(&d) else { continue };
+            if kept.get(&format!("{host_id}:{d}")).is_some_and(|t| *t >= p.at) {
+                continue;
+            }
+            out.push(UnpairedPhoneDto { device_id: d.to_string(), name: shown(name), host_id: host_id.clone(), host_label: label.clone(), by: p.by, at: p.at });
+        }
+    }
+    out.sort_by(|a, b| b.at.cmp(&a.at).then(a.host_id.cmp(&b.host_id)));
+    out
+}
+
+/// Your phones the workspace's boxes say were unpaired (on the box, or by
+/// the phone forgetting it) while still your devices.
+#[tauri::command]
+async fn list_unpaired_phones(state: State<'_, AppState>) -> Result<Vec<UnpairedPhoneDto>, String> {
+    let Some((relay, room, ring)) = active_presence_conn(&state) else { return Ok(Vec::new()) };
+    let ws = room_workspace_id(&room);
+    let blobs = relay.list_presence(&room).await.map_err(map_err)?;
+    let (phone_labels, kept) = {
+        let s = state.settings.lock().unwrap();
+        (s.phone_labels.clone(), s.unpaired_kept.clone())
+    };
+    let svc = state.service.lock().unwrap();
+    let hosts = svc.list_hosts(ws).unwrap_or_default();
+    let now = ligus_core::Timestamp::now().inner().unix_timestamp();
+    // Any certified, unrevoked host of the workspace may report (a box can
+    // serve another member's phones); the report only ever raises this
+    // question, and Remove takes your passkey.
+    let reports = ligus_runtime::revocation_status::open_unpaired_reports(&blobs, &ring, ws, now, |d| {
+        if !hosts.iter().any(|h| h.id == d.to_string()) {
+            return None;
+        }
+        svc.certified_device_key(ws, d).ok().flatten()
+    });
+    let roster = svc.store().load_config(ws, None, None).map(|(_, t)| t.current().clone()).ok();
+    let is_phone = |d: Uuid| roster.as_ref().is_some_and(|r| r.devices.get(&d).is_some_and(|x| x.phone && !x.revoked));
+    let mine: HashMap<Uuid, String> = my_device_labels(&svc, ws, &phone_labels).into_iter().filter(|(d, _)| is_phone(*d)).collect();
+    Ok(unpaired_rows(reports, |id| hosts.iter().find(|h| h.id == id).map(|h| h.label.clone()), &mine, &kept))
+}
+
+/// **Keep** on a "Your phone forgot box-1" row: don't ask again about this
+/// unpairing (a later one asks again).
+#[tauri::command]
+fn keep_unpaired_phone(state: State<'_, AppState>, host_id: String, device_id: String, at: i64) -> Result<(), String> {
+    let d = Uuid::parse_str(device_id.trim()).map_err(map_err)?;
+    let mut s = state.settings.lock().unwrap();
+    s.unpaired_kept.retain(|_, t| ligus_core::Timestamp::now().inner().unix_timestamp() - *t < 60 * 86_400);
+    s.unpaired_kept.insert(format!("{}:{d}", host_id.trim()), at);
+    save_settings(&state.data_dir, &s);
+    Ok(())
 }
 
 /// Ask the boxes to retry a revoked phone's unfinished steps now (they also
@@ -13307,6 +13425,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         workspace_root: None,
         workspace_dirs: std::collections::HashMap::new(),
         phone_labels: std::collections::HashMap::new(),
+        unpaired_kept: std::collections::HashMap::new(),
         egress_presets_by_workspace: std::collections::HashMap::new(),
         egress_presets_by_chat: std::collections::HashMap::new(),
         cli_user_config_workspaces: Default::default(),
@@ -17147,6 +17266,8 @@ pub fn run() {
             list_my_devices,
             rename_device,
             list_device_pairings,
+            list_unpaired_phones,
+            keep_unpaired_phone,
             list_device_requests,
             revoke_my_device,
             list_device_revocations,

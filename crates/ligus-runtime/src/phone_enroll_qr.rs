@@ -10,6 +10,8 @@
 //! offer   = "ligusenroll1:"    + b64u( ws(16) ‖ desktop(16) ‖ secret(32) ‖ exp(u64 LE) )             72 bytes
 //! request = "ligusenrollreq1:" + b64u( rid(16) ‖ ws(16) ‖ desktop(16) ‖ exp(u64 LE) ‖ phone_sig(64)
 //!                                      ‖ mac(32) ‖ code_body(145..209) )                       297..361 bytes
+//! request = "ligusenrollreq2:" + b64u( rid(16) ‖ ws(16) ‖ desktop(16) ‖ exp(u64 LE) ‖ phone_sig(64)
+//!                                      ‖ mac(32) ‖ ext_len(u8) ‖ ext(1..64) ‖ code_body )       (v2: extensions)
 //! answer  = "ligusenrollres1:" + b64u( rid(16) ‖ outcome(u8) ‖ device_id(16) ‖ tag(32) )             65 bytes
 //!
 //! prk   = HKDF-Extract(salt = "ligus-enroll-qr-v1", ikm = secret)            (HKDF-SHA256)
@@ -18,10 +20,20 @@
 //! k_ans = HKDF-Expand(prk, "answer-mac", 32)
 //!
 //! signed    = "ligus-enroll-request-v1\0" ‖ rid ‖ ws ‖ desktop ‖ exp ‖ code_body
+//! signed v2 = "ligus-enroll-request-v2\0" ‖ rid ‖ ws ‖ desktop ‖ exp ‖ ext_len ‖ ext ‖ code_body
 //! phone_sig = ECDSA P-256 / SHA-256 over signed, r ‖ s, low S (the phone's device key)
 //! mac       = HMAC-SHA256(k_req, signed ‖ phone_sig)
 //! tag       = HMAC-SHA256(k_ans, "ligus-enroll-answer-v1\0" ‖ rid ‖ outcome ‖ device_id)
 //! ```
+//!
+//! `ext` (v2 only, workspace model v3, 10.2) is a list of `type(u8) ‖ len(u8)
+//! ‖ value` entries, each type at most once, filling `ext_len` exactly. Type
+//! 1 is `previousDeviceId` (16 bytes): after a key reset, the phone's old
+//! device id, so the desktop that certifies the new key can offer to revoke
+//! the old one in the same step. An unknown type below 0x80 is ignored; an
+//! unknown type from 0x80 up is refused (a "critical" extension). A phone
+//! sends v1 when it has no extension, so older desktops and boxes keep
+//! working.
 //!
 //! `code_body` is the phone's `ligusphone1:` code bytes, unchanged
 //! ([`PhoneCode::body`]); it passes every check of [`PhoneCode::decode`],
@@ -111,6 +123,8 @@ use crate::phone_enroll::{PhoneCode, PhoneCodeError, MAX_LABEL, P256_KEY_LEN};
 pub const OFFER_PREFIX: &str = "ligusenroll1:";
 /// Prefix of the phone's request.
 pub const REQUEST_PREFIX: &str = "ligusenrollreq1:";
+/// Prefix of the phone's request with extensions (v2).
+pub const REQUEST_V2_PREFIX: &str = "ligusenrollreq2:";
 /// Prefix of the desktop's answer.
 pub const ANSWER_PREFIX: &str = "ligusenrollres1:";
 /// HKDF-SHA256 salt for every key derived from the offer's secret.
@@ -123,6 +137,12 @@ pub const INFO_REQUEST_MAC: &[u8] = b"request-mac";
 pub const INFO_ANSWER_MAC: &[u8] = b"answer-mac";
 /// Context of the phone's signature and the request MAC.
 pub const REQUEST_CONTEXT: &[u8] = b"ligus-enroll-request-v1\0";
+/// The same for a v2 request (with extensions).
+pub const REQUEST_V2_CONTEXT: &[u8] = b"ligus-enroll-request-v2\0";
+/// v2 extension type: the phone's previous device id (16 bytes).
+pub const EXT_PREVIOUS_DEVICE: u8 = 1;
+/// v2 extensions are at most this many bytes.
+pub const MAX_EXT: usize = 64;
 /// Context of the answer's tag.
 pub const ANSWER_CONTEXT: &[u8] = b"ligus-enroll-answer-v1\0";
 /// Context of a box's signature over a request slot.
@@ -542,21 +562,124 @@ pub fn request_signed_preimage(
     out
 }
 
+/// The v2 form of [`request_signed_preimage`]: `"ligus-enroll-request-v2\0"
+/// ‖ rid ‖ ws ‖ desktop ‖ exp ‖ ext_len(u8) ‖ ext ‖ code_body`.
+pub fn request_signed_preimage_v2(
+    rid: Rid,
+    workspace_id: Uuid,
+    desktop_device_id: Uuid,
+    exp: u64,
+    ext: &[u8],
+    code_body: &[u8],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(REQUEST_V2_CONTEXT.len() + 57 + ext.len() + code_body.len());
+    out.extend_from_slice(REQUEST_V2_CONTEXT);
+    out.extend_from_slice(&rid.0);
+    out.extend_from_slice(workspace_id.as_bytes());
+    out.extend_from_slice(desktop_device_id.as_bytes());
+    out.extend_from_slice(&exp.to_le_bytes());
+    out.push(ext.len() as u8);
+    out.extend_from_slice(ext);
+    out.extend_from_slice(code_body);
+    out
+}
+
+/// What a request's v2 extensions say.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RequestExt {
+    /// The phone's device id before a key reset ([`EXT_PREVIOUS_DEVICE`]).
+    pub previous_device_id: Option<Uuid>,
+    /// The exact bytes a decoded request carried (unknown entries kept), so
+    /// it encodes and signs as it came.
+    wire: Vec<u8>,
+}
+
+impl RequestExt {
+    /// Extensions naming the phone's previous device id.
+    pub fn previous(device: Uuid) -> Self {
+        Self { previous_device_id: Some(device), wire: Vec::new() }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.encode().is_empty()
+    }
+
+    /// The `ext` bytes (empty when there is nothing to say).
+    pub fn encode(&self) -> Vec<u8> {
+        if !self.wire.is_empty() {
+            return self.wire.clone();
+        }
+        let mut out = Vec::new();
+        if let Some(d) = self.previous_device_id {
+            out.push(EXT_PREVIOUS_DEVICE);
+            out.push(16);
+            out.extend_from_slice(d.as_bytes());
+        }
+        out
+    }
+
+    /// Parse `ext`: well-formed entries filling it exactly, each type once,
+    /// no unknown critical type (0x80 and up), a previous device id of 16
+    /// bytes that isn't nil.
+    pub fn decode(ext: &[u8]) -> Result<Self, EnrollError> {
+        let mut out = Self::default();
+        let mut seen = [false; 256];
+        let mut i = 0;
+        while i < ext.len() {
+            let (ty, len) = (ext[i], *ext.get(i + 1).ok_or(EnrollError::Malformed)? as usize);
+            let value = ext.get(i + 2..i + 2 + len).ok_or(EnrollError::Malformed)?;
+            if std::mem::replace(&mut seen[ty as usize], true) {
+                return Err(EnrollError::Malformed);
+            }
+            match ty {
+                EXT_PREVIOUS_DEVICE => {
+                    let b: [u8; 16] = value.try_into().map_err(|_| EnrollError::Malformed)?;
+                    let d = Uuid::from_bytes(b);
+                    if d.is_nil() {
+                        return Err(EnrollError::Malformed);
+                    }
+                    out.previous_device_id = Some(d);
+                }
+                t if t >= 0x80 => return Err(EnrollError::Malformed),
+                _ => {}
+            }
+            i += 2 + len;
+        }
+        out.wire = ext.to_vec();
+        Ok(out)
+    }
+}
+
 /// A request's bytes, split but not yet checked.
 struct RawRequest {
     fields: OfferFields,
     phone_sig: [u8; 64],
     mac: [u8; 32],
+    /// `None` for v1; the v2 `ext` bytes otherwise (never empty).
+    ext: Option<Vec<u8>>,
     code_body: Vec<u8>,
 }
 
 impl RawRequest {
     fn parse(text: &str) -> Result<Self, EnrollError> {
-        let body = text
-            .strip_prefix(REQUEST_PREFIX)
-            .ok_or(EnrollError::NotARequest)?;
+        let (body, v2) = match (text.strip_prefix(REQUEST_PREFIX), text.strip_prefix(REQUEST_V2_PREFIX)) {
+            (Some(b), _) => (b, false),
+            (None, Some(b)) => (b, true),
+            (None, None) => return Err(EnrollError::NotARequest),
+        };
         let b = b64u_strict(body).ok_or(EnrollError::Malformed)?;
-        if b.len() < REQUEST_FIXED + CODE_MIN || b.len() > REQUEST_FIXED + CODE_MAX {
+        let (ext, code_at) = if v2 {
+            let n = *b.get(REQUEST_FIXED).ok_or(EnrollError::Malformed)? as usize;
+            if n == 0 || n > MAX_EXT {
+                return Err(EnrollError::Malformed);
+            }
+            let ext = b.get(REQUEST_FIXED + 1..REQUEST_FIXED + 1 + n).ok_or(EnrollError::Malformed)?.to_vec();
+            RequestExt::decode(&ext)?;
+            (Some(ext), REQUEST_FIXED + 1 + n)
+        } else {
+            (None, REQUEST_FIXED)
+        };
+        if b.len() < code_at + CODE_MIN || b.len() > code_at + CODE_MAX {
             return Err(EnrollError::Malformed);
         }
         let fields = OfferFields {
@@ -569,19 +692,17 @@ impl RawRequest {
             fields,
             phone_sig: b[56..120].try_into().expect("64 bytes"),
             mac: b[120..152].try_into().expect("32 bytes"),
-            code_body: b[REQUEST_FIXED..].to_vec(),
+            ext,
+            code_body: b[code_at..].to_vec(),
         })
     }
 
     fn signed(&self) -> Vec<u8> {
         let f = &self.fields;
-        request_signed_preimage(
-            f.rid,
-            f.workspace_id,
-            f.desktop_device_id,
-            f.exp,
-            &self.code_body,
-        )
+        match &self.ext {
+            None => request_signed_preimage(f.rid, f.workspace_id, f.desktop_device_id, f.exp, &self.code_body),
+            Some(ext) => request_signed_preimage_v2(f.rid, f.workspace_id, f.desktop_device_id, f.exp, ext, &self.code_body),
+        }
     }
 
     /// `phone_sig` under the key inside `code_body` (P-256, low S).
@@ -606,6 +727,8 @@ pub struct EnrollRequest {
     pub mac: [u8; 32],
     /// The phone's `ligusphone1:` code, carried unchanged.
     pub code: PhoneCode,
+    /// The v2 extensions (empty: a v1 request).
+    pub ext: RequestExt,
 }
 
 impl EnrollRequest {
@@ -613,14 +736,17 @@ impl EnrollRequest {
     /// device key (`sign`: ECDSA P-256 / SHA-256, 64 bytes `r ‖ s`, low S,
     /// over the bytes it is given) and MAC it with the offer's `k_req`.
     pub fn build(offer: &Offer, code: &PhoneCode, sign: impl FnOnce(&[u8]) -> [u8; 64]) -> Self {
+        Self::build_with(offer, code, RequestExt::default(), sign)
+    }
+
+    /// [`EnrollRequest::build`] with extensions (a v2 request when `ext`
+    /// says anything; a previous device id equal to this phone's is dropped).
+    pub fn build_with(offer: &Offer, code: &PhoneCode, mut ext: RequestExt, sign: impl FnOnce(&[u8]) -> [u8; 64]) -> Self {
+        if ext.previous_device_id == Some(code.device_id) {
+            ext = RequestExt::default();
+        }
         let keys = offer.keys();
-        let signed = request_signed_preimage(
-            keys.rid,
-            offer.workspace_id,
-            offer.desktop_device_id,
-            offer.exp,
-            &code.body(),
-        );
+        let signed = Self::preimage(keys.rid, offer.workspace_id, offer.desktop_device_id, offer.exp, &ext, &code.body());
         let phone_sig = sign(&signed);
         let mac = keys.request_mac(&signed, &phone_sig);
         Self {
@@ -631,32 +757,50 @@ impl EnrollRequest {
             phone_sig,
             mac,
             code: code.clone(),
+            ext,
+        }
+    }
+
+    fn preimage(rid: Rid, ws: Uuid, desktop: Uuid, exp: u64, ext: &RequestExt, code_body: &[u8]) -> Vec<u8> {
+        if ext.is_empty() {
+            request_signed_preimage(rid, ws, desktop, exp, code_body)
+        } else {
+            request_signed_preimage_v2(rid, ws, desktop, exp, &ext.encode(), code_body)
         }
     }
 
     /// What the phone signed.
     pub fn signed(&self) -> Vec<u8> {
-        request_signed_preimage(
-            self.rid,
-            self.workspace_id,
-            self.desktop_device_id,
-            self.exp,
-            &self.code.body(),
-        )
+        Self::preimage(self.rid, self.workspace_id, self.desktop_device_id, self.exp, &self.ext, &self.code.body())
     }
 
-    /// `ligusenrollreq1:` + b64u(rid ‖ ws ‖ desktop ‖ exp ‖ phone_sig ‖ mac ‖ code_body).
+    /// The phone's device id before a key reset, when the request says so
+    /// (signed by the new key, inside the request; never on the log).
+    pub fn previous_device_id(&self) -> Option<Uuid> {
+        self.ext.previous_device_id
+    }
+
+    /// `ligusenrollreq1:` + b64u(rid ‖ ws ‖ desktop ‖ exp ‖ phone_sig ‖ mac ‖
+    /// code_body), or `ligusenrollreq2:` with `ext_len ‖ ext` before the code
+    /// when there are extensions.
     pub fn encode(&self) -> String {
         let code = self.code.body();
-        let mut b = Vec::with_capacity(REQUEST_FIXED + code.len());
+        let ext = self.ext.encode();
+        let mut b = Vec::with_capacity(REQUEST_FIXED + 1 + ext.len() + code.len());
         b.extend_from_slice(&self.rid.0);
         b.extend_from_slice(self.workspace_id.as_bytes());
         b.extend_from_slice(self.desktop_device_id.as_bytes());
         b.extend_from_slice(&self.exp.to_le_bytes());
         b.extend_from_slice(&self.phone_sig);
         b.extend_from_slice(&self.mac);
+        if ext.is_empty() {
+            b.extend_from_slice(&code);
+            return format!("{REQUEST_PREFIX}{}", b64u(&b));
+        }
+        b.push(ext.len() as u8);
+        b.extend_from_slice(&ext);
         b.extend_from_slice(&code);
-        format!("{REQUEST_PREFIX}{}", b64u(&b))
+        format!("{REQUEST_V2_PREFIX}{}", b64u(&b))
     }
 
     /// Everything a party without the secret can check (the box's steps 1
@@ -666,12 +810,20 @@ impl EnrollRequest {
         let raw = RawRequest::parse(text)?;
         let code = PhoneCode::from_body(&raw.code_body).map_err(EnrollError::BadCode)?;
         raw.verify_phone_sig()?;
-        Ok(Self::from_raw(raw, code))
+        Self::from_raw(raw, code)
     }
 
-    fn from_raw(raw: RawRequest, code: PhoneCode) -> Self {
+    fn from_raw(raw: RawRequest, code: PhoneCode) -> Result<Self, EnrollError> {
+        let ext = match &raw.ext {
+            Some(e) => RequestExt::decode(e)?,
+            None => RequestExt::default(),
+        };
+        // A phone never names itself as its own previous device.
+        if ext.previous_device_id == Some(code.device_id) {
+            return Err(EnrollError::Malformed);
+        }
         let f = raw.fields;
-        Self {
+        Ok(Self {
             rid: f.rid,
             workspace_id: f.workspace_id,
             desktop_device_id: f.desktop_device_id,
@@ -679,7 +831,8 @@ impl EnrollRequest {
             phone_sig: raw.phone_sig,
             mac: raw.mac,
             code,
-        }
+            ext,
+        })
     }
 
     /// The offer this request names.
@@ -1044,7 +1197,7 @@ impl DesktopOffer {
         }
         raw.verify_phone_sig()?;
         let code = PhoneCode::from_body(&raw.code_body).map_err(EnrollError::BadCode)?;
-        Ok(EnrollRequest::from_raw(raw, code))
+        EnrollRequest::from_raw(raw, code)
     }
 
     /// The one-use lock (§8.1, §8.3) for a request that passed
@@ -1206,6 +1359,12 @@ impl PhoneOffer {
         sign: impl FnOnce(&[u8]) -> [u8; 64],
     ) -> EnrollRequest {
         EnrollRequest::build(&self.offer, code, sign)
+    }
+
+    /// [`PhoneOffer::build_request`] with v2 extensions (a key reset names
+    /// the previous device).
+    pub fn build_request_with(&self, code: &PhoneCode, ext: RequestExt, sign: impl FnOnce(&[u8]) -> [u8; 64]) -> EnrollRequest {
+        EnrollRequest::build_with(&self.offer, code, ext, sign)
     }
 
     /// Check an answer the box relayed: the format, `rid`, the tag

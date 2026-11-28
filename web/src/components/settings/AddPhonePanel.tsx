@@ -98,6 +98,8 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
   const [offer, setOffer] = useState<{ rid: string; expiresAt: number; account: EnrollAccountDto } | null>(null);
   const [qrSvg, setQrSvg] = useState<string | null>(null);
   const [phone, setPhone] = useState<EnrollPhoneDto | null>(null);
+  /// A phone that reset its key: also remove the device it was (on by default).
+  const [removeOld, setRemoveOld] = useState(true);
   const [holdUntil, setHoldUntil] = useState(0);
   const [matches, setMatches] = useState(false);
   const [paste, setPaste] = useState(false);
@@ -265,12 +267,13 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
     if (!phone || !offer) return;
     setPhase("approving");
     try {
-      const r = await phoneEnrollOfferApprove(offer.rid, phone.fingerprint);
+      const r = await phoneEnrollOfferApprove(offer.rid, phone.fingerprint, Boolean(phone.replaces) && removeOld);
       ridRef.current = null;
       const until = new Date(r.watchingUntil * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       toast.success(
         `${r.label || "Your phone"} is now one of your devices; the phone finishes on its own. Until ${until}, Ligus warns you if another phone answers the same code.`,
       );
+      if (r.replaceError) toast.error(`The old key wasn't removed: ${r.replaceError} Remove it from My devices.`);
       onDone();
     } catch (e) {
       toast.error(`Couldn't add the phone: ${errMsg(e)}`);
@@ -437,6 +440,12 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
               {phone.fingerprint}
             </code>
           </div>
+          {phone.replaces && canAdd && (
+            <label className="flex items-center gap-2" data-testid="add-phone-replaces">
+              <input type="checkbox" checked={removeOld} onChange={(e) => setRemoveOld(e.target.checked)} />
+              Also remove {phone.replaces.label}, the key this phone reset (a second passkey step)
+            </label>
+          )}
           {phone.standing === "alreadyMine" && (
             <div className="text-ink-soft" data-testid="phone-already-mine">
               Already one of your devices. Adding it again keeps it and updates its name in My devices.

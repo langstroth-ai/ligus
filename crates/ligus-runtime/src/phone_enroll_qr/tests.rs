@@ -399,6 +399,7 @@ fn a_valid_mac_over_another_phones_code_is_refused() {
         phone_sig,
         mac,
         code: code_b,
+        ext: Default::default(),
     };
     assert_eq!(
         d.check_request(&forged.encode(), NOW_MS).unwrap_err(),
@@ -996,4 +997,101 @@ proptest! {
         prop_assert!(d.check_request(&request, NOW_MS).is_err());
         prop_assert!(po.check_answer(&answer, Uuid::nil()).is_err());
     }
+}
+
+// ---- v2: extensions (workspace model v3, 10.2) ----
+
+fn v2_text(offer: &Offer, p: &Phone, label: &str, prev: Uuid) -> String {
+    EnrollRequest::build_with(offer, &phone_code(p, label), RequestExt::previous(prev), signer(p)).encode()
+}
+
+/// After a key reset the phone names its old device inside the request:
+/// a v2 request every side accepts, signed and MACed over the extension.
+#[test]
+fn a_v2_request_carries_the_previous_device_and_every_side_accepts_it() {
+    let p = Phone::new();
+    let d = desk(41);
+    let prev = Uuid::from_u128(0xabc);
+    let text = v2_text(&d.offer, &p, "Ana's iPhone", prev);
+    assert!(text.starts_with(REQUEST_V2_PREFIX), "{text}");
+    let req = d.check_request(&text, NOW_MS).unwrap();
+    assert_eq!(req.previous_device_id(), Some(prev));
+    assert_eq!(req.encode(), text);
+    assert_eq!(EnrollRequest::decode(&text).unwrap(), req);
+    assert!(box_check_request(&text, d.offer.workspace_id, Some(p.device_id), NOW_MS).is_ok());
+    assert!(req.signed().starts_with(REQUEST_V2_CONTEXT));
+    // Without a previous device (or naming itself) a phone sends v1.
+    let v1 = EnrollRequest::build_with(&d.offer, &phone_code(&p, "x"), RequestExt::previous(p.device_id), signer(&p)).encode();
+    assert!(v1.starts_with(REQUEST_PREFIX));
+    assert_eq!(d.check_request(&v1, NOW_MS).unwrap().previous_device_id(), None);
+}
+
+/// The extension can't be stripped (a downgrade to v1), added, or changed
+/// by whoever carries the request: the phone's signature covers it.
+#[test]
+fn the_extension_can_be_neither_stripped_nor_added_nor_changed() {
+    let p = Phone::new();
+    let d = desk(42);
+    let prev = Uuid::from_u128(0xabc);
+    let text = v2_text(&d.offer, &p, "phone", prev);
+    let b = body_of(&text, REQUEST_V2_PREFIX);
+    let n = b[REQUEST_FIXED] as usize;
+    // Stripped: the same bytes without the extension, as v1.
+    let stripped = [&b[..REQUEST_FIXED], &b[REQUEST_FIXED + 1 + n..]].concat();
+    assert!(d.check_request(&with_body(REQUEST_PREFIX, &stripped), NOW_MS).is_err());
+    assert!(EnrollRequest::decode(&with_body(REQUEST_PREFIX, &stripped)).is_err());
+    // Added: a v1 request re-wrapped as v2 with an extension.
+    let v1 = body_of(&req_text(&d.offer, &p, "phone"), REQUEST_PREFIX);
+    let ext = RequestExt::previous(prev).encode();
+    let added = [&v1[..REQUEST_FIXED], &[ext.len() as u8], &ext, &v1[REQUEST_FIXED..]].concat();
+    assert!(d.check_request(&with_body(REQUEST_V2_PREFIX, &added), NOW_MS).is_err());
+    assert!(EnrollRequest::decode(&with_body(REQUEST_V2_PREFIX, &added)).is_err());
+    // Changed: every bit of the whole v2 body.
+    for i in 0..b.len() * 8 {
+        let mut m = b.clone();
+        m[i / 8] ^= 1 << (i % 8);
+        assert!(d.check_request(&with_body(REQUEST_V2_PREFIX, &m), NOW_MS).is_err(), "bit {i}");
+    }
+    for k in 0..b.len() {
+        assert!(EnrollRequest::decode(&with_body(REQUEST_V2_PREFIX, &b[..k])).is_err(), "truncated to {k}");
+    }
+}
+
+/// Malformed extensions are refused before any signature check; an unknown
+/// ordinary entry is carried (and signed) as it came, an unknown critical
+/// one refused.
+#[test]
+fn malformed_and_critical_extensions_are_refused() {
+    let prev = Uuid::from_u128(7);
+    let ok = RequestExt::previous(prev).encode();
+    assert_eq!(RequestExt::decode(&ok).unwrap().previous_device_id, Some(prev));
+    for (what, ext) in [
+        ("duplicate", [ok.clone(), ok.clone()].concat()),
+        ("short value", vec![EXT_PREVIOUS_DEVICE, 15].into_iter().chain([1u8; 15]).collect()),
+        ("overrun", vec![EXT_PREVIOUS_DEVICE, 16, 1, 2]),
+        ("dangling type", vec![9]),
+        ("nil device", [vec![EXT_PREVIOUS_DEVICE, 16], vec![0u8; 16]].concat()),
+        ("critical unknown", vec![0x80, 0]),
+    ] {
+        assert_eq!(RequestExt::decode(&ext), Err(EnrollError::Malformed), "{what}");
+    }
+    let unknown = [ok.clone(), vec![0x22, 2, 9, 9]].concat();
+    let e = RequestExt::decode(&unknown).unwrap();
+    assert_eq!((e.previous_device_id, e.encode()), (Some(prev), unknown));
+
+    // A request whose extension is empty, too long, or names the phone
+    // itself is refused.
+    let p = Phone::new();
+    let d = desk(43);
+    let b = body_of(&req_text(&d.offer, &p, "phone"), REQUEST_PREFIX);
+    let wrap = |ext: &[u8]| with_body(REQUEST_V2_PREFIX, &[&b[..REQUEST_FIXED], &[ext.len() as u8], ext, &b[REQUEST_FIXED..]].concat());
+    assert!(EnrollRequest::decode(&wrap(&[])).is_err());
+    assert!(EnrollRequest::decode(&wrap(&vec![0x22; MAX_EXT + 1][..])).is_err());
+    let own = EnrollRequest::build_with(&d.offer, &phone_code(&p, "phone"), RequestExt::default(), signer(&p));
+    let ext_self = RequestExt::previous(p.device_id).encode();
+    let signed = request_signed_preimage_v2(own.rid, own.workspace_id, own.desktop_device_id, own.exp, &ext_self, &own.code.body());
+    let sig = ligus_core::crypto::sign_p256(&p.key, &signed);
+    let mac = d.offer.keys().request_mac(&signed, &sig);
+    let self_named = [&b[..56], &sig, &mac, &[ext_self.len() as u8], &ext_self, &b[REQUEST_FIXED..]].concat();
+    assert_eq!(d.check_request(&with_body(REQUEST_V2_PREFIX, &self_named), NOW_MS).unwrap_err(), EnrollError::Malformed);
 }

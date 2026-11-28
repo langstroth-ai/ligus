@@ -1679,6 +1679,8 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     // Whether the last pairing report named any phone (an empty one is sent
     // once after that, so My devices stops showing a pairing that ended).
     let mut paired_reported = false;
+    // The same for the unpaired-phones report.
+    let mut unpaired_reported = false;
     let mut known_repos: Option<Vec<uuid::Uuid>> = None;
     loop {
         shared.presence.record(&shared.host_id, Timestamp::now().inner().unix_timestamp());
@@ -1717,6 +1719,7 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         if shared.tunnel.is_some() {
             revocation_presence(&shared, &relay, &room, &ring, &mut retry_seen).await;
             pairing_presence(&shared, &relay, &room, &ring, &mut paired_reported).await;
+            unpaired_presence(&shared, &relay, &room, &ring, &mut unpaired_reported).await;
         }
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(HOST_BEAT_EVERY_SECS as u64)) => {}
@@ -1840,6 +1843,32 @@ async fn pairing_presence(
     match ligus_runtime::revocation_status::publish_pairing_report(relay, room, ring, &report).await {
         Ok(()) => *reported = named,
         Err(e) => eprintln!("presence: publishing the paired phones failed: {e}"),
+    }
+}
+
+/// Publish which phones were unpaired here (`ligus phones revoke`) or forgot
+/// this box (Forget host) while their device is still certified, so each
+/// phone's person is asked on their desktop whether to remove the device
+/// (workspace model v3, 10.2). Device ids only; sealed and signed by this
+/// box's device key. The box can't revoke a person's device itself.
+async fn unpaired_presence(
+    shared: &Arc<Shared>,
+    relay: &ligus_runtime::RelayClient,
+    room: &str,
+    ring: &ligus_runtime::keyring::KeyringEngine,
+    reported: &mut bool,
+) {
+    let Some(t) = shared.tunnel.as_ref() else { return };
+    let now = Timestamp::now().inner().unix_timestamp();
+    let report = t.registry.unpaired_report(&shared.host_id, shared.ws, now, |d| shared.device_lookup(d) == tunnel::device_bind::DeviceLookup::Revoked);
+    if report.phones.is_empty() && !*reported {
+        return;
+    }
+    let named = !report.phones.is_empty();
+    let report = shared.lock().sign_unpaired_report(report);
+    match ligus_runtime::revocation_status::publish_unpaired_report(relay, room, ring, &report).await {
+        Ok(()) => *reported = named,
+        Err(e) => eprintln!("presence: publishing the unpaired phones failed: {e}"),
     }
 }
 

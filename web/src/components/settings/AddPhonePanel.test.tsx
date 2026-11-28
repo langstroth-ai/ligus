@@ -164,9 +164,32 @@ describe("Add a phone (the phone scans the desktop's code)", () => {
     expect(add).toBeEnabled();
     expect(screen.queryByTestId("add-phone-hold")).toBeNull();
     await user().click(add);
-    await waitFor(() => expect(ipc.phoneEnrollOfferApprove).toHaveBeenCalledWith("rid-1", "ABCD-EF01-2345-6789-ABCD"));
+    await waitFor(() => expect(ipc.phoneEnrollOfferApprove).toHaveBeenCalledWith("rid-1", "ABCD-EF01-2345-6789-ABCD", false));
     expect(onDone).toHaveBeenCalled();
     expect(vi.mocked(toast.success).mock.calls[0][0]).toMatch(/another phone answers the same code/);
+  });
+
+  it("offers to remove the key a phone reset, on by default, in the same step", async () => {
+    vi.mocked(ipc.phoneEnrollOfferApprove).mockResolvedValue({
+      deviceId: phone.deviceId,
+      label: "Ana's iPhone",
+      watchingUntil: Math.floor(Date.now() / 1000) + 300,
+      replaced: false,
+      replaceError: "The previous phone isn't one of your phones any more.",
+    });
+    render(<AddPhonePanel onDone={vi.fn()} onCancel={vi.fn()} />);
+    await user().click(await screen.findByRole("button", { name: "Show code" }));
+    const old = { deviceId: "99999999-2222-3333-4444-555555555555", label: "Ana's old iPhone" };
+    vi.mocked(ipc.phoneEnrollOfferPoll).mockResolvedValue(request(0, { ...phone, replaces: old } as typeof phone));
+    await advance(POLL_MS);
+    const offer = await screen.findByTestId("add-phone-replaces");
+    expect(offer).toHaveTextContent("Also remove Ana's old iPhone");
+    expect(screen.getByLabelText(/Also remove/)).toBeChecked();
+    await user().click(screen.getByLabelText(/Your phone shows the same fingerprint/));
+    await user().click(screen.getByRole("button", { name: "Add this phone" }));
+    await waitFor(() => expect(ipc.phoneEnrollOfferApprove).toHaveBeenCalledWith("rid-1", "ABCD-EF01-2345-6789-ABCD", true));
+    // The phone is added either way; a failed removal says where to finish.
+    await waitFor(() => expect(vi.mocked(toast.error).mock.calls.at(-1)?.[0]).toMatch(/Remove it from My devices/));
   });
 
   it("can't add before the fingerprint was compared", async () => {

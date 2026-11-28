@@ -1954,3 +1954,87 @@ async fn two_peoples_phones_each_see_their_own() {
 
 #[path = "enroll_qr_e2e_tests.rs"]
 mod enroll_qr;
+
+/// U4 (the phone's side): Forget host calls `DELETE /v1/tunnel/pairing`.
+/// The answer comes back on the session it cuts; pushes stop at once; the
+/// relay is told to drop the pairing and its push registration; the box's
+/// unpaired report names the device for its person's desktop; and the
+/// phone can't come back on its old credential.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forget_host_unpairs_cuts_push_and_raises_the_desktop_question() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(WAIT).await.unwrap();
+    let (t, info, keys, pid, credential, phone) = pair_bound(&h, &relay).await;
+    let mut c = testkit::phone_session(&info, &keys, &credential).await.unwrap();
+    assert_eq!(c.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": true }))).await.unwrap().status, 200);
+    assert!(t.registry.get(&pid).unwrap().push_enabled);
+    // Not on the direct path, even with the bearer.
+    let direct = h.client.delete(format!("{}/v1/tunnel/pairing", h.base)).bearer_auth(&h.token).send().await.unwrap();
+    assert_eq!(direct.status(), 404);
+    assert!(t.registry.is_active(&pid));
+
+    let r = c.request("DELETE", "/v1/tunnel/pairing", None).await.unwrap();
+    assert_eq!((r.status, r.json()), (200, json!({ "unpaired": true })));
+    let rec = t.registry.get(&pid).unwrap();
+    assert!(!rec.push_enabled, "no push after the answer");
+    assert_eq!(rec.unpaired, Some(tun::phones::Unpaired::Phone));
+    t.push_available.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(t.push_all(&tun::PushContent { kind: "mention".into(), title: "t".into(), ..Default::default() }), 0);
+    t.push_available.store(false, std::sync::atomic::Ordering::SeqCst);
+    relay.wait_for("revoke", |m| m["pid"] == json!(pid), WAIT).await.unwrap();
+    wait_until("the pairing is revoked", WAIT, || !t.registry.is_active(&pid)).await;
+    let err = testkit::phone_session(&info, &keys, &credential).await.err().expect("forgotten");
+    assert_eq!(testkit::close_code(&err), Some(4003));
+
+    // The question for the person's desktop: device id only, by the phone.
+    let now = crate::serve::tunnel::now() as i64;
+    let report = t.registry.unpaired_report(t.host_id(), h.handle.shared.ws, now, |d| h.handle.shared.device_lookup(d) == tun::device_bind::DeviceLookup::Revoked);
+    assert_eq!(report.phones.len(), 1);
+    assert_eq!((report.phones[0].device_id.clone(), report.phones[0].by.as_str()), (phone.device_id.to_string(), "phone"));
+    assert!(!serde_json::to_string(&report).unwrap().contains("Mara"), "no name in the report");
+
+    // Published sealed and signed: a member's desktop opens it with the
+    // box's certified key; nothing else signs for the box.
+    let shared = h.handle.shared.clone();
+    let relay_c = crate::relay_client(&shared.cfg).unwrap();
+    let ring = match crate::key_source(&shared.cfg) {
+        Ok(src) => ligus_runtime::keyring::KeyringEngine::from_store(shared.lock().store(), shared.ws, &src),
+        Err(_) => ligus_runtime::keyring::KeyringEngine::passphrase(shared.ws, ligus_core::derive_workspace_key(shared.cfg.key.as_deref().unwrap_or_default())),
+    };
+    let mut reported = false;
+    crate::serve::unpaired_presence(&shared, &relay_c, &shared.cfg.room, &ring, &mut reported).await;
+    assert!(reported);
+    crate::sync_once(&h.desktop).await.unwrap();
+    let blobs = relay_c.list_presence(&shared.cfg.room).await.unwrap();
+    let desk = crate::open_service(&h.desktop).unwrap();
+    let ws = shared.ws;
+    let opened = ligus_runtime::revocation_status::open_unpaired_reports(&blobs, &ring, ws, now, |d| desk.certified_device_key(ws, d).ok().flatten());
+    assert_eq!(opened[&shared.host_id].phones[0].device_id, phone.device_id.to_string());
+    assert!(ligus_runtime::revocation_status::open_unpaired_reports(&blobs, &ring, ws, now, |_| None).is_empty());
+    h.handle.shutdown();
+}
+
+/// U4 (the box's side): `ligus phones revoke` cuts the pairing and its push
+/// registration and raises the same question; a certificate revoke cuts
+/// every pairing of the device and raises none (it is already answered).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unpairing_on_the_box_asks_and_a_certificate_revoke_does_not() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(WAIT).await.unwrap();
+    let (t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
+    let data_dir = h.handle.shared.cfg.data_dir.clone();
+    tun::cli::phones_revoke(&data_dir, Some(&pid), &h.handle.shared.opts.token_file, true).unwrap();
+    relay.wait_for("revoke", |m| m["pid"] == json!(pid), WAIT).await.unwrap();
+    wait_until("serve takes the box-side unpairing", WAIT, || t.registry.get(&pid).is_some_and(|r| !r.is_active() && r.unpaired == Some(tun::phones::Unpaired::Box))).await;
+    let report = |t: &tun::TunnelHost| t.registry.unpaired_report(t.host_id(), h.handle.shared.ws, crate::serve::tunnel::now() as i64, |_| false);
+    assert_eq!(report(&t).phones.iter().map(|p| (p.device_id.clone(), p.by.clone())).collect::<Vec<_>>(), vec![(phone.device_id.to_string(), "box".to_string())]);
+
+    // Two pairings of another device, cut by its certificate revoke.
+    let (_, _, _, p1, _, other) = pair_bound(&h, &relay).await;
+    t.revoke_device(other.device_id, std::slice::from_ref(&p1)).unwrap();
+    relay.wait_for("revoke", |m| m["pid"] == json!(p1), WAIT).await.unwrap();
+    assert!(report(&t).phones.iter().all(|p| p.device_id != other.device_id.to_string()), "a certificate revoke asks nothing");
+    h.handle.shutdown();
+}

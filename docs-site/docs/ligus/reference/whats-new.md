@@ -178,6 +178,17 @@ Full release notes are on the
 
 ### Changed
 
+- **Unpairing works both ways.** Forget host on the phone now tells the box
+  first: the box stops notifying it, the relay forgets its push
+  registration, and your desktop asks "Your phone … forgot box-1. Remove
+  the device?" with **Remove** (your passkey) or **Keep the device**.
+  `ligus phones revoke` on a box asks the same. Resetting a phone's key now
+  names the old key in the new request, so the desktop that adds it offers
+  to remove the old one in the same sheet. The phone sends its notification
+  settings to every box it's paired with. Boxes drop ended pairings 30 days
+  later. See [Notifications](../features/phone-app.md) and
+  [Manage phones](../../operate/networking/remote-access.md#manage-phones).
+
 - **"Hide from this list" is now "Remove from view"** on revoked devices in
   My devices: still this device only, and the device stays revoked.
 

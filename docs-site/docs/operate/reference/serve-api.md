@@ -499,7 +499,8 @@ These answer 404 on the direct path.
 | Method + path | Request | Notes |
 |---|---|---|
 | `POST /v1/tunnel/credential` | | renews this phone's `hpc1` credential (90 days) → `{credential, exp}` |
-| `PUT /v1/tunnel/push` | `{enabled, previews?}` | this phone's push preferences |
+| `PUT /v1/tunnel/push` | `{enabled, previews?, kinds?}` | this phone's push preferences |
+| `DELETE /v1/tunnel/pairing` | | the phone forgets this box (Forget host): pushes stop, the pairing and its push registration are cut, and the phone's person is asked on their desktop whether to remove the device → `{unpaired: true}` |
 
 ## Bind address
 
