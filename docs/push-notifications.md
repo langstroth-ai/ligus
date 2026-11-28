@@ -143,9 +143,16 @@ tunnel-only route `PUT /v1/tunnel/push {"enabled": bool, "previews"?: bool,
   other kind (`phone.paired`, `test`) isn't one of the switches and always
   goes. A body without `kinds` keeps the stored list.
 
-Forget host on the phone turns `enabled` off on that box before it deletes
-the pairing (best effort: an offline box keeps it until the pairing is
-revoked with `ligus phones revoke`).
+The phone sends its preferences to every box it is paired with, on change
+and when the app comes to the front, so no box keeps stale ones.
+
+Forget host on the phone calls `DELETE /v1/tunnel/pairing` on that box
+before it deletes the pairing (best effort, a few seconds): the box stops
+pushing, revokes the pairing (the relay drops its push token) and asks the
+phone's person on their desktop whether to remove the device. A box that
+predates the route answers 404; the phone then turns `enabled` off with
+`PUT /v1/tunnel/push` as before. An offline box keeps the pairing until it
+is revoked with `ligus phones revoke`.
 
 ## Host-side limits
 

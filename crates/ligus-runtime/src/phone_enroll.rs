@@ -426,6 +426,56 @@ mod tests {
         assert_eq!(crate::chat_service::phone_label("Ana's iPhone", at), "Ana's iPhone");
     }
 
+    /// U5 for a phone added again: the name it chose now is synced (a phone
+    /// enrolled before names were synced gets one too); the same name writes
+    /// nothing.
+    #[test]
+    fn a_phone_added_again_under_a_new_name_is_renamed() {
+        let (mut svc, wid) = desktop();
+        let phone = ligus_core::testkit::Phone::new();
+        let me = svc.author().account_id.unwrap();
+        let code = |l: &str| PhoneCode::decode(&PhoneCode::new(phone.device_id, &phone, l).encode()).unwrap();
+        svc.certify_phone_code(wid, &code("Ana's iPhone")).unwrap();
+        let labels = |svc: &ChatService| {
+            svc.store()
+                .list(workspace_config_session_id(wid))
+                .unwrap()
+                .into_iter()
+                .filter(|e| matches!(e.payload, SessionEvent::DeviceLabelSet { .. }))
+                .count()
+        };
+        let before = labels(&svc);
+        svc.certify_phone_code(wid, &code("Ana's iPhone")).unwrap();
+        assert_eq!(labels(&svc), before, "the same name writes nothing");
+        svc.certify_phone_code(wid, &code("Work phone")).unwrap();
+        assert_eq!(svc.device_label_of(wid, phone.device_id, me).as_deref(), Some("Work phone"));
+        assert_eq!(certs(&svc, wid).len(), 1, "no second certificate");
+        // An empty choice keeps the synced name.
+        svc.certify_phone_code(wid, &code(" ")).unwrap();
+        assert_eq!(svc.device_label_of(wid, phone.device_id, me).as_deref(), Some("Work phone"));
+    }
+
+    /// 17.6: a phone renames itself only from rules 4; before, the box
+    /// refuses the draft and says where to rename it.
+    #[test]
+    fn a_phone_renames_itself_only_from_rules_4() {
+        let (mut svc, wid) = desktop();
+        let phone = ligus_core::testkit::Phone::new();
+        svc.certify_phone_code(wid, &PhoneCode::decode(&PhoneCode::new(phone.device_id, &phone, "Ana's iPhone").encode()).unwrap()).unwrap();
+        assert!(!svc.phone_can_name_itself(wid).unwrap());
+        match svc.draft_phone_label(wid, phone.device_id, "Work phone") {
+            Err(ChatError::Unauthorized(m)) => assert_eq!(m, crate::chat_service::RENAME_ON_DESKTOP),
+            other => panic!("{other:?}"),
+        }
+        // Malformed names are refused first, whatever the rules.
+        let long = "w".repeat(49);
+        for bad in ["", " Work", "Work\u{202E}", long.as_str()] {
+            assert!(svc.draft_phone_label(wid, phone.device_id, bad).is_err(), "{bad:?}");
+        }
+        // Not a phone of this workspace.
+        assert!(svc.draft_phone_label(wid, Uuid::new_v4(), "Work phone").is_err());
+    }
+
     #[test]
     fn a_phone_code_cannot_take_over_a_device() {
         let (mut svc, wid) = desktop();

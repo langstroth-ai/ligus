@@ -1560,6 +1560,9 @@ export interface EnrollPhoneDto {
   via: string;
   /// One of your devices already has this name.
   duplicateLabel: boolean;
+  /// The phone reset its key and names the phone it was: one of yours.
+  /// Adding it offers to remove that one in the same step.
+  replaces?: { deviceId: string; label: string } | null;
 }
 export interface PhoneEnrollPollDto {
   state: "none" | "waiting" | "request" | "aborted" | "expired";
@@ -1574,6 +1577,10 @@ export interface PhoneEnrollApprovedDto {
   label: string;
   /// The desktop keeps watching for other phones until then (Unix seconds).
   watchingUntil: number;
+  /// The phone's previous device was removed in the same step.
+  replaced?: boolean;
+  /// Why it wasn't (the phone is added either way).
+  replaceError?: string | null;
 }
 /// One precheck finding: a stable `code` the panel turns into a link to the
 /// fix, the words, and whether it stops Show code.
@@ -1613,8 +1620,8 @@ export const phoneEnrollOfferCancel = () => invoke<void>("phone_enroll_offer_can
 /// Look for the phone's request (call again only after the last one settled).
 export const phoneEnrollOfferPoll = () => invoke<PhoneEnrollPollDto>("phone_enroll_offer_poll");
 /// Add this phone: certify it with your passkey (after the hold).
-export const phoneEnrollOfferApprove = (rid: string, fingerprint: string) =>
-  invoke<PhoneEnrollApprovedDto>("phone_enroll_offer_approve", { rid, fingerprint });
+export const phoneEnrollOfferApprove = (rid: string, fingerprint: string, replacePrevious = false) =>
+  invoke<PhoneEnrollApprovedDto>("phone_enroll_offer_approve", { rid, fingerprint, replacePrevious });
 /// Not my phone: answer declined and close the offer.
 export const phoneEnrollOfferDecline = (rid: string) => invoke<void>("phone_enroll_offer_decline", { rid });
 export const onPhoneEnrollTripwire = (cb: (e: PhoneEnrollTripwireDto) => void): Promise<UnlistenFn> =>
@@ -1637,6 +1644,23 @@ export interface DevicePairingDto {
 }
 /// The phones the workspace's boxes report they have paired.
 export const listDevicePairings = () => invoke<DevicePairingDto[]>("list_device_pairings");
+
+/// One of your phones whose pairing with a box ended while it stays your
+/// device: the box unpaired it (`by: "box"`) or the phone forgot the box
+/// (`by: "phone"`). The Inbox asks whether to remove the device too.
+export interface UnpairedPhoneDto {
+  deviceId: string;
+  name: string;
+  hostId: string;
+  hostLabel: string;
+  by: "box" | "phone";
+  /** When the pairing ended (unix seconds, to the minute). */
+  at: number;
+}
+export const listUnpairedPhones = () => invoke<UnpairedPhoneDto[]>("list_unpaired_phones");
+/// Keep the device: don't ask again about this unpairing.
+export const keepUnpairedPhone = (hostId: string, deviceId: string, at: number) =>
+  invoke<void>("keep_unpaired_phone", { hostId, deviceId, at });
 
 export type RevocationStepState = "pending" | "done" | "failed" | "not_applicable";
 export interface RevocationStep {

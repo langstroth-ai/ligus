@@ -147,6 +147,7 @@ fn opts(dir: &std::path::Path, name: &str) -> ServeOptions {
         ntfy: None,
         public_url: None,
         label: format!("{name}-box"),
+        label_given: true,
         name: Some(name.into()),
         pair: false,
         prometheus_url: "http://127.0.0.1:9".into(),
