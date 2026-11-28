@@ -537,8 +537,6 @@ mod tests {
         assert!(open_reports(&blobs, &k, |_| None).is_empty());
     }
 
-    /// A pairing report shows only when its own box signed it, in its own
-    /// slot: a workspace-key holder can't claim a box paired some phone.
     /// An unpaired report only ever raises a question, but it still counts
     /// only as the box's own, for this workspace, in its own slot.
     #[test]
@@ -580,6 +578,8 @@ mod tests {
         assert_eq!(open_unpaired_reports(&b, &k, uuid::Uuid::nil(), 41, keys)[&bx.id.to_string()].phones, vec![phone]);
     }
 
+    /// A pairing report shows only when its own box signed it, in its own
+    /// slot: a workspace-key holder can't claim a box paired some phone.
     #[test]
     fn pairing_reports_are_sealed_signed_and_only_in_their_own_slot() {
         let k = key("room");

@@ -742,7 +742,7 @@ impl EnrollRequest {
     /// [`EnrollRequest::build`] with extensions (a v2 request when `ext`
     /// says anything; a previous device id equal to this phone's is dropped).
     pub fn build_with(offer: &Offer, code: &PhoneCode, mut ext: RequestExt, sign: impl FnOnce(&[u8]) -> [u8; 64]) -> Self {
-        if ext.previous_device_id == Some(code.device_id) {
+        if ext.previous_device_id.is_some_and(|d| d == code.device_id || d.is_nil()) {
             ext = RequestExt::default();
         }
         let keys = offer.keys();

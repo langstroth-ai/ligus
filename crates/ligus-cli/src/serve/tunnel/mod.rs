@@ -743,9 +743,9 @@ impl TunnelHost {
     /// their desktop whether to remove the device too
     /// ([`Registry::unpaired_report`]).
     pub fn unpair(&self, pid: &str, by: phones::Unpaired) -> Result<bool> {
-        if !self.registry.mark_unpaired(pid, by)? {
-            return Ok(false);
-        }
+        // A purged or unknown pid still has its relay step (the pending
+        // file's `exp`).
+        self.registry.mark_unpaired(pid, by)?;
         self.revoke(pid)
     }
 

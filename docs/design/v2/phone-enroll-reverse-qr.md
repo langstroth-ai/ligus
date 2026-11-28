@@ -210,7 +210,7 @@ request v2 = "ligusenrollreq2:" + b64u( rid ‖ workspace_id ‖ desktop_device_
   came); an unknown type from 0x80 up is refused. A nil id, a wrong length,
   a repeated type and a phone naming itself are refused.
 - The desktop offers to remove the previous device only when it is one of
-  this account's phones, certified and not revoked ("Also remove …", on by
+  this account's phones, certified and not revoked ("Also remove …", off by
   default); it revokes it with a second passkey step, after certifying the
   new key, in the same sheet. It is never on the log. Vectors:
   `crates/ligus-core/tests/golden/phone_enroll_req_v2.jsonl`.

@@ -1976,6 +1976,11 @@ async fn forget_host_unpairs_cuts_push_and_raises_the_desktop_question() {
 
     let r = c.request("DELETE", "/v1/tunnel/pairing", None).await.unwrap();
     assert_eq!((r.status, r.json()), (200, json!({ "unpaired": true })));
+    // Durable by the time the answer is out: a stop now still leaves the
+    // pairing revoked, with its relay step pending for the next start.
+    assert!(!t.registry.is_active(&pid), "revoked before the answer");
+    let saved = tun::Registry::load(&t.dir).unwrap();
+    assert!(!saved.is_active(&pid), "revoked on disk too");
     let rec = t.registry.get(&pid).unwrap();
     assert!(!rec.push_enabled, "no push after the answer");
     assert_eq!(rec.unpaired, Some(tun::phones::Unpaired::Phone));

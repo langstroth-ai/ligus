@@ -991,3 +991,18 @@ async fn e3b_attempts_count_and_at_most_four_at_once() {
     }
     assert!(r.host.window_psk(&ps.eid).is_none(), "each provisional attempt counted");
 }
+
+/// A pending unpairing for a pid this box no longer has a record of (purged
+/// 30 days after it ended) still reaches the relay, like a plain revoke.
+#[test]
+fn a_pending_unpairing_of_an_unknown_pid_still_reaches_the_relay() {
+    let tmp = tempfile::tempdir().unwrap();
+    let host = TunnelHost::open(tmp.path(), RelaySettings::new("https://relay.example.com", None, false).unwrap()).unwrap();
+    let dir = pending_dir(&host.dir);
+    write_json(&dir.join("revoke-plain.json"), &RevokeFile { pid: "plain".into(), exp: 9, unpaired: None }).unwrap();
+    write_json(&dir.join("revoke-ghost.json"), &RevokeFile { pid: "ghost".into(), exp: 9, unpaired: Some(phones::Unpaired::Box) }).unwrap();
+    host.poll_pending();
+    let mut pending = host.pending_revocations();
+    pending.sort();
+    assert_eq!(pending, ["ghost", "plain"]);
+}

@@ -1023,6 +1023,10 @@ fn a_v2_request_carries_the_previous_device_and_every_side_accepts_it() {
     // Without a previous device (or naming itself) a phone sends v1.
     let v1 = EnrollRequest::build_with(&d.offer, &phone_code(&p, "x"), RequestExt::previous(p.device_id), signer(&p)).encode();
     assert!(v1.starts_with(REQUEST_PREFIX));
+    // A nil previous id is never sent (the decoder refuses it).
+    let nil = EnrollRequest::build_with(&d.offer, &phone_code(&p, "x"), RequestExt::previous(Uuid::nil()), signer(&p)).encode();
+    assert!(nil.starts_with(REQUEST_PREFIX));
+    assert!(d.check_request(&nil, NOW_MS).is_ok());
     assert_eq!(d.check_request(&v1, NOW_MS).unwrap().previous_device_id(), None);
 }
 

@@ -98,8 +98,9 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
   const [offer, setOffer] = useState<{ rid: string; expiresAt: number; account: EnrollAccountDto } | null>(null);
   const [qrSvg, setQrSvg] = useState<string | null>(null);
   const [phone, setPhone] = useState<EnrollPhoneDto | null>(null);
-  /// A phone that reset its key: also remove the device it was (on by default).
-  const [removeOld, setRemoveOld] = useState(true);
+  /// A phone that reset its key: also remove the device it was. Off by
+  /// default: the claim is the new phone's own, so the person opts in.
+  const [removeOld, setRemoveOld] = useState(false);
   const [holdUntil, setHoldUntil] = useState(0);
   const [matches, setMatches] = useState(false);
   const [paste, setPaste] = useState(false);

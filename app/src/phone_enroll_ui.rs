@@ -994,10 +994,7 @@ pub(crate) async fn phone_enroll_offer_approve(
         crate::remember_phone_label(&state, id, &code.label);
         // Step 2 of 2, in the same sheet: the device the phone was before
         // its key reset, when the person kept "Remove the old one" on.
-        let replaced = match previous.filter(|_| replace_previous.unwrap_or(false)) {
-            None => None,
-            Some(old) => Some(revoke_replaced(&mut state.service.lock().unwrap(), ws, old, id)),
-        };
+        let replaced = previous.filter(|_| replace_previous.unwrap_or(false)).map(|old| revoke_replaced(&mut state.service.lock().unwrap(), ws, old, id));
         let (watch, alert) = state.phone_enroll.finish_approve(&shield_for(app)).ok_or_else(|| "The code closed while you confirmed.".to_string())?;
         Ok((watch, alert, replaced))
     })

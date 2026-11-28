@@ -148,13 +148,10 @@ impl Registry {
     pub fn load(dir: &Path) -> Result<Self> {
         let path = Self::file(dir);
         let mut phones = read_json::<PhonesFile>(&path)?.map(|f| f.phones).unwrap_or_default();
-        let purged = purge(&mut phones, super::now());
-        let reg = Self { path, inner: Mutex::new(phones), generation: Default::default() };
-        if purged {
-            let phones = reg.list();
-            reg.save(&phones)?;
-        }
-        Ok(reg)
+        // In memory only: a read-only command (`ligus phones list`) never
+        // rewrites the file under a running serve; the next save purges it.
+        purge(&mut phones, super::now());
+        Ok(Self { path, inner: Mutex::new(phones), generation: Default::default() })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<PhoneRecord>> {
@@ -404,6 +401,9 @@ mod tests {
         let reg = Registry::load(dir.path()).unwrap();
         let pids: Vec<String> = reg.list().into_iter().map(|r| r.pid).collect();
         assert_eq!(pids, ["recent", "live"], "the 30-day-old revocation is purged");
+        let untouched: serde_json::Value = serde_json::from_slice(&std::fs::read(Registry::file(dir.path())).unwrap()).unwrap();
+        assert_eq!(untouched, v1, "loading (ligus phones list) never rewrites the file");
+        reg.save(&reg.list()).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(Registry::file(dir.path())).unwrap()).unwrap();
         assert_eq!(saved["v"], PHONES_FILE_VERSION);
         assert!(!saved.to_string().contains("ownerPhone"), "{saved}");

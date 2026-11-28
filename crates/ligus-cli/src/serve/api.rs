@@ -1957,7 +1957,15 @@ async fn tunnel_push(State(s): S, peer: Option<Extension<TunnelPeer>>, body: Byt
 /// unpair itself: the pairing is the tunnel peer's.
 async fn tunnel_unpair(State(s): S, peer: Option<Extension<TunnelPeer>>) -> ApiResult<Json<Value>> {
     let (t, rec) = tunnel_phone(&s, peer)?;
-    t.registry.mark_unpaired(&rec.pid, super::tunnel::phones::Unpaired::Phone)?;
+    let by = super::tunnel::phones::Unpaired::Phone;
+    t.registry.mark_unpaired(&rec.pid, by)?;
+    // Durable before the answer: a stop inside the delay below still leaves
+    // the pairing revoked and its relay step pending for the next start.
+    let exp = t.registry.revoke(&rec.pid)?.unwrap_or(rec.cred_exp);
+    super::tunnel::write_json(
+        &super::tunnel::pending_dir(&t.dir).join(format!("revoke-{}.json", rec.pid)),
+        &super::tunnel::RevokeFile { pid: rec.pid.clone(), exp, unpaired: Some(by) },
+    )?;
     let pid = rec.pid.clone();
     // After the answer is on its way: revoking ends this very session.
     tokio::spawn(async move {

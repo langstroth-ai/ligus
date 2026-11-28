@@ -169,7 +169,7 @@ describe("Add a phone (the phone scans the desktop's code)", () => {
     expect(vi.mocked(toast.success).mock.calls[0][0]).toMatch(/another phone answers the same code/);
   });
 
-  it("offers to remove the key a phone reset, on by default, in the same step", async () => {
+  it("offers to remove the key a phone reset, off by default, in the same step", async () => {
     vi.mocked(ipc.phoneEnrollOfferApprove).mockResolvedValue({
       deviceId: phone.deviceId,
       label: "Ana's iPhone",
@@ -184,7 +184,8 @@ describe("Add a phone (the phone scans the desktop's code)", () => {
     await advance(POLL_MS);
     const offer = await screen.findByTestId("add-phone-replaces");
     expect(offer).toHaveTextContent("Also remove Ana's old iPhone");
-    expect(screen.getByLabelText(/Also remove/)).toBeChecked();
+    expect(screen.getByLabelText(/Also remove/)).not.toBeChecked();
+    await user().click(screen.getByLabelText(/Also remove/));
     await user().click(screen.getByLabelText(/Your phone shows the same fingerprint/));
     await user().click(screen.getByRole("button", { name: "Add this phone" }));
     await waitFor(() => expect(ipc.phoneEnrollOfferApprove).toHaveBeenCalledWith("rid-1", "ABCD-EF01-2345-6789-ABCD", true));
