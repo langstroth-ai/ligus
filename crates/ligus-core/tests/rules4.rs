@@ -886,3 +886,32 @@ fn sr_a_revoked_devices_agent_key_doesnt_ride_a_delegation() {
     let late = agent_say(&mut w, chat, a.id, (kc.0, &kc.1), reply_to(a.id, t1));
     assert_eq!(v(&w, late), Verdict::Denied, "a revoked device's key signs nothing, delegated or not");
 }
+
+/// A shared agent (no owner) is the workspace's: moving it, changing its
+/// source, or changing its model is an Admin's, as moving it is on rules 3.
+/// A Contributor may still rename it.
+#[test]
+fn sr_a_contributor_cant_move_or_remodel_a_shared_agent() {
+    let mut w = world();
+    let a = agent(&w, "", spec("ollama", "llama3"), Placement::Host { host_id: host_of(&w, "box") });
+    let made = w.push("ben", up(&a));
+    assert_eq!(v(&w, made), Verdict::Allowed, "an Admin puts a shared agent on the box");
+    let mut off_box = folded(&w).unwrap();
+    off_box.placement = Some(Placement::OwnerDevices);
+    off_box.host_id = String::new();
+    let moved = w.push("cy", up(&off_box));
+    let mut remodel = folded(&w).unwrap();
+    remodel.run = Some(spec("ollama", "llama3:70b"));
+    remodel.runtime_id = legacy_id(remodel.run.as_ref().unwrap());
+    let remodeled = w.push("cy", up(&remodel));
+    let mut renamed = folded(&w).unwrap();
+    renamed.name = "helper".into();
+    let rename = w.push_bare("cy", up(&renamed));
+    assert_eq!(
+        (v(&w, moved), v(&w, remodeled), v(&w, rename)),
+        (Verdict::Denied, Verdict::Denied, Verdict::Allowed),
+        "a Contributor, even with presence, neither moves nor remodels the workspace's agent"
+    );
+    let f = folded(&w).unwrap();
+    assert_eq!((f.effective_placement(), f.run.unwrap().model), (Placement::Host { host_id: host_of(&w, "box") }, "llama3".to_string()));
+}

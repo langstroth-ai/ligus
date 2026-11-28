@@ -183,6 +183,10 @@ pub fn agent_floor(agent: &WorkspaceAgent, author: &str, fold: &ChatSession, ros
         None if !m.owner_actor_id.is_empty() && !own => WorkspaceRole::Admin,
         None => place_floor(&m),
         Some(old) if old.owner_actor_id != m.owner_actor_id => WorkspaceRole::Admin,
+        // A shared agent (no owner) is the workspace's: moving it, or
+        // changing what it runs, is an Admin's (a move is on rules 3 too; a
+        // model change within one source is free only on your own agent).
+        Some(old) if !own && (moves(&m, &old) || m.effective_run().model != old.effective_run().model) => WorkspaceRole::Admin,
         Some(old) if moves(&m, &old) => place_floor(&m),
         Some(old) if old.owner_actor_id.is_empty() || own => WorkspaceRole::Contributor,
         Some(_) => WorkspaceRole::Admin,
