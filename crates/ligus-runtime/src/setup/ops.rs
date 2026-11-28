@@ -169,12 +169,37 @@ pub struct HostSourceFact {
     pub complete: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentFact {
     pub id: Uuid,
     pub name: String,
     pub runtime_id: String,
+    /// The host it is placed on (`""`: its owner's own devices).
+    pub host_id: String,
+    /// Its owner's member id (`""`: a shared agent, the workspace's).
+    pub owner: String,
+    /// This device's person owns it.
+    pub mine: bool,
+    /// What it runs when it carries its own run spec (rules 4): the source
+    /// a host offers by name, its harness and model. Empty `source`: it
+    /// names a runtime (`runtime_id`).
+    pub source: String,
+    pub harness: String,
+    pub model: String,
+}
+
+/// A change to an existing agent (Change model…, Runs on…): one record,
+/// one event. `None` keeps what it has.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentEdit {
+    /// Name this runtime instead (rules 3, or a source no host offers by
+    /// name).
+    pub runtime_id: Option<String>,
+    /// Carry this run spec (rules 4): `{harness, source, model}`.
+    pub run: Option<(String, String, String)>,
+    /// Place it here (`""`: its owner's own devices).
+    pub host_id: Option<String>,
 }
 
 /// The result of a test turn.
@@ -367,6 +392,15 @@ pub trait SetupOps {
         } else {
             Err(OpsError::Unsupported)
         }
+    }
+    /// Change an existing agent in one record (Change model…, Runs on…).
+    fn change_agent(&mut self, agent_id: Uuid, edit: &AgentEdit) -> OpsResult<()> {
+        Err(OpsError::Unsupported)
+    }
+    /// The workspace's rules version (0 when unknown, as on a device with
+    /// no workspace yet). On rules 4 an agent carries its own run spec.
+    fn rules(&self) -> u32 {
+        0
     }
     /// The sources the hosts of this workspace list (their offers), one
     /// entry per host and offer, from host records their own devices signed.

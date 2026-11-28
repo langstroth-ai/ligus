@@ -29,12 +29,21 @@ import { applies, Checks, FieldView, InfoTip } from "@/components/setup/SetupWiz
 /// Inputs that change the form (the source's models, where it runs, the line
 /// under Runs on).
 const DEPENDS = ["source", "runs-on", "endpoint", "name"];
+/// Changing an agent: the model and where it runs decide what it asks for.
+const DEPENDS_CHANGE = ["agent", "runs-on", "model"];
+
+/// What the sheet changes on an existing agent: its model, or where it runs
+/// (the agent's ⋯ menu: Change model…, Runs on…). The same engine form,
+/// with `agent` set; only that one field shows.
+export type AgentChange = "model" | "runs-on";
 
 export function AddAgentSheet({
   onClose,
   onDone,
   inline = false,
   initialName,
+  agent,
+  change,
 }: {
   onClose: () => void;
   /// After a run that finished (exit 0), with what it wrote and the inputs.
@@ -42,9 +51,15 @@ export function AddAgentSheet({
   /// Render in place (the first run), without the sheet's frame.
   inline?: boolean;
   initialName?: string;
+  /// Change this existing agent instead of adding one.
+  agent?: { id: string; name: string };
+  change?: AgentChange;
 }) {
   const qc = useQueryClient();
-  const [inputs, setInputs] = useState<Record<string, string>>(initialName ? { name: initialName } : {});
+  const editing = !!agent;
+  const [inputs, setInputs] = useState<Record<string, string>>(
+    agent ? { agent: agent.id } : initialName ? { name: initialName } : {},
+  );
   const secrets = useRef<Record<string, string>>({});
   const [secretNonce, setSecretNonce] = useState(0);
   const [running, setRunning] = useState(false);
@@ -54,14 +69,14 @@ export function AddAgentSheet({
 
   // Text is debounced before it asks the engine again (the name only moves
   // the line under Runs on and the button's label).
-  const depNow = DEPENDS.map((k) => inputs[k] ?? "").join("|");
+  const depNow = (editing ? DEPENDS_CHANGE : DEPENDS).map((k) => inputs[k] ?? "").join("|");
   const [depKey, setDepKey] = useState(depNow);
   useEffect(() => {
     const t = setTimeout(() => setDepKey(depNow), 250);
     return () => clearTimeout(t);
   }, [depNow]);
   const form = useQuery({
-    queryKey: ["setup-form", "agent", depKey],
+    queryKey: ["setup-form", "agent", editing ? "change" : "add", depKey],
     queryFn: () => setupForm("agent", sendable(inputs)),
     placeholderData: (prev) => prev,
   });
@@ -95,7 +110,9 @@ export function AddAgentSheet({
   }, []);
 
   const fields: SetupField[] = (form.data?.steps ?? []).flatMap((s) => s.fields ?? []);
-  const shown = fields.filter((f) => applies(f, inputs));
+  // Changing an agent shows only the field it changes; the agent itself
+  // rides along unseen.
+  const shown = fields.filter((f) => applies(f, inputs) && (!editing || f.id === (change ?? "model")));
   const missing = shown.filter((f) => f.required && f.type !== "secret" && !(inputs[f.id] ?? "").trim());
   const confirmations = form.data?.confirmations ?? 0;
 
@@ -158,7 +175,8 @@ export function AddAgentSheet({
     onClose();
   }
 
-  const label = form.data?.action ?? "Add the agent";
+  const label = form.data?.action ?? (editing ? "Save" : "Add the agent");
+  const title = !agent ? "Add an agent" : change === "runs-on" ? `Where @${agent.name} runs` : `Change model for @${agent.name}`;
   const ok = outcome?.exitCode === 0;
 
   let body;
@@ -190,6 +208,11 @@ export function AddAgentSheet({
             </div>
           );
         })}
+        {editing && confirmations === 1 && !running && !ok && (
+          <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }} data-testid="change-agent-passkey">
+            Asks for your passkey once.
+          </p>
+        )}
         {confirmations > 1 && !running && !ok && (
           <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }} data-testid="add-agent-confirmations">
             Asks for your passkey twice: once for the model source, once for the agent.
@@ -201,7 +224,7 @@ export function AddAgentSheet({
           </p>
         )}
         {runError && <ErrorState text={runError} />}
-        {outcome && <OutcomeView outcome={outcome} />}
+        {outcome && <OutcomeView outcome={outcome} editing={editing} />}
       </div>
     );
 
@@ -230,8 +253,8 @@ export function AddAgentSheet({
 
   return (
     <Sheet
-      title="Add an agent"
-      titleAddon={form.data?.flow.why ? <InfoTip text={form.data.flow.why} label="About agents" /> : undefined}
+      title={title}
+      titleAddon={!editing && form.data?.flow.why ? <InfoTip text={form.data.flow.why} label="About agents" /> : undefined}
       side="center"
       width={460}
       onClose={close}
@@ -248,9 +271,9 @@ export function AddAgentSheet({
 }
 
 /// What the run said: done in one line, or what failed and how to fix it.
-function OutcomeView({ outcome }: { outcome: SetupOutcome }) {
+function OutcomeView({ outcome, editing = false }: { outcome: SetupOutcome; editing?: boolean }) {
   if (outcome.exitCode === 0) {
-    const agent = outcome.checks.find((c) => c.id === "agent.agent");
+    const agent = outcome.checks.find((c) => c.id === (editing ? "agent.change" : "agent.agent"));
     return (
       <p className="text-[13px] font-medium" style={{ color: "var(--ligus-success-ink)" }}>
         {agent?.detail ?? "Ready."}

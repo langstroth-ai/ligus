@@ -240,3 +240,27 @@ fn a_stray_argument_is_never_echoed() {
     let all = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
     assert!(!all.contains("CANARYSECRET456"), "{all}");
 }
+
+/// `ligus agents set <agent> --model` and `ligus workspace rules` on a data
+/// dir with no workspace: the engine's not-found, a readable status, and an
+/// upgrade only the Owner may run.
+#[test]
+fn agents_set_and_workspace_rules_answer_without_a_workspace() {
+    let b = fresh();
+    let o = ligus(&b, &["agents", "set", "ghost", "--model", "opus", "--json"], None);
+    assert_eq!(code(&o), 5, "{}", String::from_utf8_lossy(&o.stdout));
+    let d = doc(&o);
+    assert_eq!(check(&d, "agent.input.agent").map(|c| c["status"].clone()), Some(Value::from("fail")));
+    let o = ligus(&b, &["agents", "set", "ghost", "--no-wait"], None);
+    assert_eq!(code(&o), 2, "a flow flag alone is a usage error");
+    let o = ligus(&b, &["workspace", "rules", "--json"], None);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    let d = doc(&o);
+    assert!(d["changes"].as_array().is_some_and(|c| !c.is_empty()));
+    let o = ligus(&b, &["workspace", "rules", "upgrade"], None);
+    assert_eq!(code(&o), 6, "only the Owner: {}", String::from_utf8_lossy(&o.stderr));
+    let o = ligus(&b, &["workspace"], None);
+    assert_eq!(code(&o), 2);
+    let help = ligus(&b, &["workspace", "rules", "--help"], None);
+    assert!(String::from_utf8_lossy(&help.stdout).contains("0.4.1"));
+}

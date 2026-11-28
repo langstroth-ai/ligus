@@ -64,7 +64,11 @@ import {
   type WorkspaceAgentDto,
   deleteMemberAttachments,
   openExternal,
+  workspaceRules4Status,
+  runtimeEndpointMove,
+  type EndpointRuntimeDto,
 } from "@/lib/ipc";
+import { AddAgentSheet, type AgentChange } from "@/components/setup/AddAgentSheet";
 import { docsUrl, PANE_DOCS } from "@/lib/docs";
 import { confirmDialog } from "@/components/Dialog";
 import { groupProposals, implementRefusal, isSettled, isVotable, myVote } from "@/lib/proposals";
@@ -374,6 +378,10 @@ export function ToolsPane({
   const mcp = useQuery({ queryKey: ["mcp"], queryFn: listMcpServers });
   const hosts = useQuery({ queryKey: ["workspace-hosts"], queryFn: listWorkspaceHosts });
   const hostList = hosts.data ?? [];
+  // Model server addresses on the workspace (rules 4 keeps them on hosts):
+  // one quiet line under each agent that uses one.
+  const rules4 = useQuery({ queryKey: ["rules4-status"], queryFn: workspaceRules4Status, staleTime: 60_000 });
+  const endpointOf = (agentId: string) => rules4.data?.endpointRuntimes.find((r) => r.agents.some((a) => a.id === agentId));
   const [mcpSource, setMcpSource] = useState("");
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [showInstallMcp, setShowInstallMcp] = useState(false);
@@ -475,6 +483,8 @@ export function ToolsPane({
               hosts={hostList}
               runtimes={runtimeList}
               isDefault={agent.name.toLowerCase() === PRIMARY_HANDLE}
+              endpoint={endpointOf(agent.id)}
+              rules={rules4.data?.rules ?? 0}
               onRemove={() =>
                 void confirmDialog(agentRemovalConsequences(agent.name), {
                   title: `Remove @${agent.name}?`,
@@ -670,6 +680,47 @@ export function agentRemovalConsequences(name: string): string {
   );
 }
 
+/// One quiet line under an agent whose runtime keeps a model server's
+/// address on the workspace (every member can read it; workspace model v3,
+/// 5.5), with its fix: move the address to the computer that runs it.
+export function EndpointNotice({
+  endpoint,
+  agentName,
+  rules,
+  onMoved,
+}: {
+  endpoint: EndpointRuntimeDto;
+  agentName: string;
+  rules: number;
+  onMoved: () => void;
+}) {
+  const qc = useQueryClient();
+  const move = useMutation({
+    mutationFn: () => runtimeEndpointMove(endpoint.runtimeId),
+    onSuccess: (n) => {
+      void qc.invalidateQueries({ queryKey: ["rules4-status"] });
+      onMoved();
+      toast.success(n === 1 ? "The address is on this computer now." : `The address is on this computer now; ${n} agents use it.`);
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
+  const why =
+    rules < 4
+      ? `${endpoint.name} keeps its address on the workspace, where every member can read it. After the workspace rules upgrade it can move to the computer that runs @${agentName}.`
+      : `${endpoint.name} keeps its address on the workspace, where every member can read it, and rules 4 won't let it change. On the computer that runs @${agentName}, choose Move it to this computer; a box lists it in its host.toml instead.`;
+  return (
+    <div className="flex items-center gap-1.5 px-1 pb-1 text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }} data-testid={`endpoint-notice-${agentName}`}>
+      <span className="min-w-0 truncate">Its model server's address is visible to every member.</span>
+      <InfoTip label="Model server address" text={why} />
+      {endpoint.movableHere && (
+        <LinkButton disabled={move.isPending} onClick={() => move.mutate()}>
+          Move it to this computer
+        </LinkButton>
+      )}
+    </div>
+  );
+}
+
 /// Editable agent row (Workspace scope): avatar upload + host badge + remove.
 function AgentRosterRow({
   sessionId,
@@ -677,6 +728,8 @@ function AgentRosterRow({
   hosts,
   runtimes,
   isDefault = false,
+  endpoint,
+  rules = 0,
   onRemove,
   onChanged,
 }: {
@@ -686,12 +739,26 @@ function AgentRosterRow({
   runtimes: RuntimeSummaryDto[];
   /// The roster entry that carries the default handle (@ligus).
   isDefault?: boolean;
+  /// The workspace runtime it uses, when that keeps a model server address
+  /// on the workspace.
+  endpoint?: EndpointRuntimeDto;
+  /// The workspace's rules version.
+  rules?: number;
   onRemove: () => void;
   onChanged: () => void;
 }) {
   const [accessOpen, setAccessOpen] = useState(false);
+  const [change, setChange] = useState<AgentChange | null>(null);
   const avatarInput = useRef<HTMLInputElement>(null);
   const rm = useRowMenu(`More actions for @${agent.name}`, [
+    // Change model… and Runs on…: the Add an agent form for this agent
+    // (workspace model v3, 17.4); the engine says what each asks for.
+    ...(agent.canManageAccess
+      ? [
+          { label: "Change model…", onSelect: () => setChange("model") },
+          { label: "Runs on…", onSelect: () => setChange("runs-on") },
+        ]
+      : []),
     ...(agent.canManageAccess ? [{ label: "Access…", onSelect: () => setAccessOpen(true) }] : []),
     { label: "Sandbox…", onSelect: () => openSandboxForAgent(agent.id) },
     { label: "Upload avatar…", onSelect: () => avatarInput.current?.click() },
@@ -769,10 +836,19 @@ function AgentRosterRow({
         {rm.button}
       </div>
       {rm.menu}
+      {endpoint && agent.canManageAccess && <EndpointNotice endpoint={endpoint} agentName={agent.name} rules={rules} onMoved={onChanged} />}
       {accessOpen && (
         <Sheet title={`Access for @${agent.name}`} side="center" width={440} onClose={() => setAccessOpen(false)}>
           <AgentAccessEditor sessionId={sessionId} agent={agent} />
         </Sheet>
+      )}
+      {change && (
+        <AddAgentSheet
+          agent={{ id: agent.id, name: agent.name }}
+          change={change}
+          onClose={() => setChange(null)}
+          onDone={() => onChanged()}
+        />
       )}
     </li>
   );

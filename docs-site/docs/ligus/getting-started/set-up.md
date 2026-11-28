@@ -111,6 +111,13 @@ runtime the host can run; when a new one is defined, that is a second
 confirmation, and the sheet says **Confirm 1 of 2**, then **2 of 2**. A
 reused runtime takes no second one.
 
+Afterwards, the agent's **⋯** menu in the Tools pane has **Change model…**
+and **Runs on…**: the same form with only that field, listing the models
+its source offers where it runs and the hosts that can run it. On the
+command line it is `ligus agents set <agent> --model M` or
+`--runs-on here|HOST`. What each asks for depends on the workspace's rules:
+see [Changing an agent's model or where it runs](../features/workspace-rules.md#change).
+
 Without an agent sandbox on this device a coding CLI can't run here, and
 the flow says what is missing; it never offers to turn the sandbox off.
 For Antigravity, **May run local servers** is offered (off by default; the

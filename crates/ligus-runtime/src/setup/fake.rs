@@ -63,6 +63,8 @@ pub struct Fake {
     pub keeps_keys: bool,
     /// Model keys saved here, by harness.
     pub model_keys: BTreeMap<String, String>,
+    /// The workspace's rules version.
+    pub rules: u32,
 }
 
 impl Default for Fake {
@@ -109,6 +111,7 @@ impl Default for Fake {
             confirms: Vec::new(),
             keeps_keys: false,
             model_keys: BTreeMap::new(),
+            rules: 3,
         }
     }
 }
@@ -201,8 +204,38 @@ impl SetupOps for Fake {
         let what = if host_id.is_empty() { name.to_string() } else { format!("{name} on {host_id}") };
         self.write("add_agent", what)?;
         let id = Uuid::new_v4();
-        self.agents.push(AgentFact { id, name: name.into(), runtime_id: runtime_id.into() });
+        self.agents.push(AgentFact { id, name: name.into(), runtime_id: runtime_id.into(), host_id: host_id.into(), owner: "me".into(), mine: true, ..Default::default() });
         Ok(id)
+    }
+    fn change_agent(&mut self, agent_id: Uuid, edit: &AgentEdit) -> OpsResult<()> {
+        let name = self.agents.iter().find(|a| a.id == agent_id).map(|a| a.name.clone()).unwrap_or_default();
+        let what = format!(
+            "{name} runtime={} run={} host={}",
+            edit.runtime_id.clone().unwrap_or_else(|| "-".into()),
+            edit.run.as_ref().map(|(h, s, m)| format!("{h}/{s}/{m}")).unwrap_or_else(|| "-".into()),
+            edit.host_id.clone().unwrap_or_else(|| "-".into()),
+        );
+        self.write("change_agent", what)?;
+        if let Some(a) = self.agents.iter_mut().find(|a| a.id == agent_id) {
+            if let Some(r) = &edit.runtime_id {
+                a.runtime_id = r.clone();
+                a.source.clear();
+                a.harness.clear();
+                a.model.clear();
+            }
+            if let Some((h, s, m)) = &edit.run {
+                a.harness = h.clone();
+                a.source = s.clone();
+                a.model = m.clone();
+            }
+            if let Some(h) = &edit.host_id {
+                a.host_id = h.clone();
+            }
+        }
+        Ok(())
+    }
+    fn rules(&self) -> u32 {
+        self.rules
     }
     fn host_sources(&self) -> Vec<HostSourceFact> {
         self.host_sources.clone()

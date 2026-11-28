@@ -539,7 +539,8 @@ Residual risks:
 ### Workspace rules 4 {#rules-4}
 
 Ligus 0.5 founds every new workspace on rules 4; an existing one moves to it
-when an Owner switches it, with a passkey (it never goes back). A build that
+when an Owner switches it, with a passkey (it never goes back; see
+[Upgrading an existing workspace](../../ligus/features/workspace-rules.md#upgrade)). A build that
 doesn't know rules 4 (0.4 and earlier) opens such a workspace read-only and
 says to update. Every device folds the same log the same way, so what rules
 4 refuses is refused everywhere. Events written before the switch are judged
@@ -552,6 +553,7 @@ by the rules they were written under, never again.
 | Registering a host record under someone else's device id | A host record counts only when the device it names signed it, that device is trusted, and its owner holds it. |
 | Any device answering as an agent | A reply comes only from a device its placement admits (its host, its owner's devices, a pool's boxes that offer its source; a person's own computer never joins a pool, whatever its host record says), or from the one device a signed "Run here this time" names for that one turn. The default agent answers only from the chat creator's devices. |
 | A member who left keeps writing | Leaving is a removal. The leaver's own watermark is checked and bounded, and never makes anything they did before it disappear. |
+| A box that left adds itself back | Refused, also with an admission issued before it left. Only a box admission an Admin issues for that box after the leave (bound to its account and device key, with the Admin's passkey) lets it back in, redeemed with the code's proof through that box. A member an Admin removed isn't let back in this way. Verified by `under_rules_4_an_admin_lets_a_box_that_left_back_in` |
 | Members without an account, model server addresses on the log, whole-list agent, runtime and host writes, agent records on a chat's log | Refused. Existing ones keep working. |
 | A payload naming another member as its author (a message, a reaction, a proposal, a lockdown, a workflow run) | Refused. |
 | A far-future time in a question keeping it from being evicted | Questions are evicted by their position in the log. |

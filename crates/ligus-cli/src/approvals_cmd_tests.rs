@@ -650,3 +650,99 @@ async fn a_cli_computer_takes_only_its_own_workspace_when_more_are_offered() {
     assert!(state.linked_in(w.ws).is_some());
     assert_eq!(state.workspaces, vec![w.ws]);
 }
+
+/// The box asks through the mailbox, the Admin approves with their passkey
+/// (the recovery key here), and the box keeps the admission. Returns the
+/// box's config as a started box has it.
+async fn box_admitted_through_the_mailbox(w: &World, boxc: &Config, label: &str) -> Config {
+    let addr = address(w).await;
+    let (tx, rx) = mpsc::channel();
+    let o = to(&addr, label, Some(tx));
+    let bc = boxc.clone();
+    let boxed = tokio::spawn(async move { ac::cmd_admit_request_to(&bc, o, None).await.map_err(|e| e.to_string()) });
+    let rid = first_rid(w).await;
+    let mut typed = || Ok(rx.recv_timeout(Duration::from_secs(30))?);
+    ac::cmd_approve(&w.desk, approve(w, &rid), Some(&mut typed)).await.unwrap();
+    boxed.await.unwrap().unwrap();
+    let f = crate::load_file_config(&boxc.data_dir);
+    Config { room: w.room.clone(), relay_url: f.relay_url.clone(), key: f.key.clone(), epoch_keys: f.ek.clone(), ..boxc.clone() }
+}
+
+/// Whether `member` is on the workspace roster as `cfg` has it.
+fn on_roster(cfg: &Config, ws: Uuid, member: &str) -> bool {
+    open_service(cfg).unwrap().load_in(ws, workspace_config_session_id(ws)).unwrap().unwrap().members.iter().any(|m| m.id == member)
+}
+
+/// Rules 4: `ligus serve leave` removes the box, and the box can't add
+/// itself back. An Admin lets it back in through the normal admit flow:
+/// `ligus admit request` on the box, the Admin approves with their passkey,
+/// and the box rejoins as the same member on its next start.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn under_rules_4_an_admin_lets_a_box_that_left_back_in() {
+    let w = world().await;
+    {
+        let svc = open_service(&w.desk).unwrap();
+        let rules = svc.load_in(w.ws, workspace_config_session_id(w.ws)).unwrap().unwrap().authz.rules;
+        assert!(rules >= ligus_core::authz::RULES_V4, "this build founds on rules 4 (got {rules})");
+    }
+    let boxc = fresh(&w.root.join("box"));
+    let joined = box_admitted_through_the_mailbox(&w, &boxc, "sff").await;
+    let (mut svc, _) = crate::admit::prepare_box(&mut joined.clone(), "sff", None, None, |c| async move { sync_once(&c).await }).await.unwrap();
+    let member = svc.author().id.clone();
+    drop(svc);
+    sync_once(&joined).await.unwrap();
+    sync_once(&w.desk).await.unwrap();
+    assert!(on_roster(&w.desk, w.ws, &member), "control: the box joined");
+    // An admission for this box issued while it is still a member: it never
+    // lets the box back in after it leaves.
+    let stale = {
+        let request = crate::admit::join_request(&joined, "sff").unwrap();
+        let mut svc = open_service(&w.desk).unwrap();
+        let acct = svc.author().account_id.unwrap();
+        svc.set_presence_provider(Some(std::sync::Arc::new(crate::admit::RecoveryPresence(ligus_core::testkit::test_recovery_key(acct)))));
+        let (inv, seed) = svc.issue_box_admission(w.ws, 3_600_000, Some(&request)).unwrap();
+        request.seal(&crate::serve::admission_code(&w.desk, &svc, inv, &seed).unwrap()).unwrap()
+    };
+    sync_once(&w.desk).await.unwrap();
+
+    // It leaves: under rules 4 that removes it at once.
+    crate::leave_cmd::cmd_serve_leave(&joined, true, true).await.unwrap();
+    sync_once(&w.desk).await.unwrap();
+    assert!(!on_roster(&w.desk, w.ws, &member), "a rules-4 leave removes the box");
+    assert!(!on_roster(&joined, w.ws, &member));
+
+    // It can't add itself back: a restart stays out, and a self re-add is
+    // refused by the fold.
+    {
+        let mut c = joined.clone();
+        let (mut svc, _) = crate::admit::prepare_box(&mut c, "sff", None, None, |c| async move { sync_once(&c).await }).await.unwrap();
+        assert!(crate::admit::left_and_out(&svc, w.ws).unwrap(), "a box that left stays out");
+        let _ = svc.ensure_self_member(workspace_config_session_id(w.ws), w.ws);
+    }
+    let _ = sync_once(&joined).await;
+    sync_once(&w.desk).await.unwrap();
+    assert!(!on_roster(&w.desk, w.ws, &member), "the box added itself back");
+    // Nor with the admission issued before it left.
+    {
+        let mut c = joined.clone();
+        crate::admit::redeem(&mut c, &stale).unwrap();
+        let e = crate::admit::prepare_box(&mut c, "sff", None, None, |c| async move { sync_once(&c).await }).await.err().expect("an earlier admission let the box back in");
+        assert!(e.to_string().contains("couldn't join"), "{e}");
+    }
+    let _ = sync_once(&joined).await;
+    sync_once(&w.desk).await.unwrap();
+    assert!(!on_roster(&w.desk, w.ws, &member), "an earlier admission let the box back in");
+
+    // An Admin lets it back in: admit request on the box, approve with the
+    // Admin's passkey.
+    let back = box_admitted_through_the_mailbox(&w, &joined, "sff").await;
+    let mut c = back.clone();
+    let (svc, _) = crate::admit::prepare_box(&mut c, "sff", None, None, |c| async move { sync_once(&c).await }).await.unwrap();
+    assert!(!crate::admit::left_and_out(&svc, w.ws).unwrap(), "re-admitted: the box no longer stays out");
+    assert_eq!(svc.author().id, member, "the box rejoins as the same member");
+    drop(svc);
+    sync_once(&c).await.unwrap();
+    sync_once(&w.desk).await.unwrap();
+    assert!(on_roster(&w.desk, w.ws, &member), "the Admin's admission let the box back in");
+    assert!(on_roster(&c, w.ws, &member));
+}

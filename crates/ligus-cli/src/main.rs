@@ -69,6 +69,9 @@ mod problem;
 mod memory_cmd;
 mod selftest;
 mod reply;
+mod rules_cmd;
+#[cfg(test)]
+mod rules_cmd_tests;
 mod repos;
 mod repos_cmd;
 mod scratch_cmd;
@@ -1772,21 +1775,51 @@ fn cmd_agents(cfg: &Config, json: bool) -> Result<()> {
 /// signed local-servers grant (the Owner's, with presence in a shared
 /// workspace). The agent by @name or id.
 fn cmd_agents_set(cfg: &Config, rest: &[String]) -> Result<()> {
-    let usage = "usage: ligus agents set <agent> --local-servers on|off [--json]";
+    let usage = "usage: ligus agents set <agent> [--model M] [--runs-on here|HOST] [--local-servers on|off] [--dry-run] [--json]";
     let mut agent: Option<&str> = None;
     let mut local: Option<&str> = None;
     let mut json = false;
+    // Change model… and Runs on…: the agent flow with `--agent` (its flags
+    // pass through).
+    let mut change: Vec<String> = Vec::new();
+    let mut flow_flags: Vec<String> = Vec::new();
     let mut it = rest.iter().map(String::as_str).skip_while(|a| *a != "set").skip(1);
     while let Some(a) = it.next() {
         match a {
             "--json" => json = true,
             "--local-servers" => local = Some(it.next().ok_or_else(|| help::usage_error(format!("--local-servers needs on or off; {usage}")))?),
+            "--model" | "--runs-on" => {
+                let v = it.next().ok_or_else(|| help::usage_error(format!("{a} needs a value; {usage}")))?;
+                change.extend([a.to_string(), v.to_string()]);
+            }
+            "--dry-run" | "--no-wait" => flow_flags.push(a.to_string()),
+            "--timeout" | "--recovery-words-file" => {
+                let v = it.next().ok_or_else(|| help::usage_error(format!("{a} needs a value; {usage}")))?;
+                flow_flags.extend([a.to_string(), v.to_string()]);
+            }
             f if f.starts_with("--") => return Err(help::usage_error(format!("`ligus agents set` has no flag {f}; {usage}"))),
             v if agent.is_none() => agent = Some(v),
             _ => return Err(help::usage_error(usage)),
         }
     }
     let agent = agent.ok_or_else(|| help::usage_error(usage))?;
+    if !change.is_empty() {
+        if local.is_some() {
+            return Err(help::usage_error("set --local-servers on its own, then --model or --runs-on"));
+        }
+        let mut args = vec!["agent".to_string(), "--agent".to_string(), agent.to_string()];
+        args.extend(change.iter().cloned());
+        args.extend(flow_flags.iter().cloned());
+        if json {
+            args.push("--json".into());
+        }
+        let shown_args: Vec<String> = change.iter().chain(flow_flags.iter().filter(|f| *f != "--no-wait")).cloned().collect();
+        let rerun = format!("ligus agents set {agent} {}", shown_args.join(" "));
+        return setup_cmd::change_agent(cfg, &args, rerun.trim_end().to_string());
+    }
+    if !flow_flags.is_empty() {
+        return Err(help::usage_error(format!("{} goes with --model or --runs-on; {usage}", flow_flags[0])));
+    }
     let on = match local {
         Some("on" | "true" | "yes") => true,
         Some("off" | "false" | "no") => false,
@@ -3002,8 +3035,12 @@ fn run() -> Result<()> {
         },
         "agents" => match positional.first().map(|s| s.as_str()) {
             Some("set") => cmd_agents_set(&cfg, rest),
-            Some(other) => bail!("unknown `ligus agents` subcommand {other:?}; use `ligus agents [--json]` or `ligus agents set <agent> --local-servers on|off`"),
+            Some(other) => bail!("unknown `ligus agents` subcommand {other:?}; use `ligus agents [--json]` or `ligus agents set <agent> --model M | --runs-on HOST | --local-servers on|off`"),
             None => cmd_agents(&cfg, has("--json")),
+        },
+        "workspace" => match positional.first().map(|s| s.as_str()) {
+            Some("rules") => rules_cmd::cmd(&cfg, rest),
+            _ => Err(help::usage_error("usage: ligus workspace rules [upgrade] [--dry-run] [--json]")),
         },
         "proposals" => cmd_proposals(&cfg),
         "add-agent" => {
@@ -3388,6 +3425,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--gateway",
     "--model",
     "--runtime",
+    "--runs-on",
     "--endpoint",
     "--secret-ref",
     "--secret",

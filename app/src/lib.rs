@@ -45,6 +45,7 @@ pub use forges::maybe_run_git_credential;
 mod ligus_auth_ui;
 mod passkey_native;
 mod passkey_ui;
+mod rules4_ui;
 mod phone_enroll_ui;
 mod phones_ui;
 mod approvals_ui;
@@ -3590,6 +3591,16 @@ impl AppState {
         prepare_utility_runtime(provider_of(id)?, self.resolve_runtime(id))
     }
 
+    /// The runtime a full run spec id (`run:…`, rules 4) names on this
+    /// computer, when it isn't in `runtimes` already and this computer
+    /// offers its source.
+    pub(crate) fn spec_runtime(&self, runtimes: &[RuntimeTarget], runtime_id: &str) -> Option<RuntimeTarget> {
+        if runtimes.iter().any(|r| r.id == runtime_id) {
+            return None;
+        }
+        ligus_runtime::host_offers::target_for_spec(runtime_id, self.active_workspace_id(), ligus_runtime::host_offers::HostRole::OwnComputer)
+    }
+
     /// Resolve a runtime id to an executable runtime. Unknown ids fall back to
     /// the default Anthropic runtime.
     fn resolve_runtime(&self, runtime_id: &str) -> ResolvedRuntime {
@@ -3610,7 +3621,10 @@ impl AppState {
                 s.claude_permission_mode.clone(),
             )
         };
-        if let Some(rt) = runtimes.iter().find(|r| r.id == runtime_id) {
+        // A rules-4 agent's own run spec resolves through this computer's
+        // own offers (workspace model v3, 5.4), never a catalog fallback.
+        let spec = self.spec_runtime(runtimes, runtime_id);
+        if let Some(rt) = runtimes.iter().find(|r| r.id == runtime_id).or(spec.as_ref()) {
             let provider = rt.provider_kind;
             let endpoint = if provider.is_cli_agent() {
                 // subprocess: endpoint is the program (config endpoint or the
@@ -10077,6 +10091,9 @@ mod shown_workspace_tests {
         ("attachments.rs", include_str!("attachments.rs"), "block_attachment_hash"),
         ("attachments.rs", include_str!("attachments.rs"), "unblock_attachment_hash"),
         ("passkey_ui.rs", include_str!("passkey_ui.rs"), "workspace_rules_set"),
+        ("rules4_ui.rs", include_str!("rules4_ui.rs"), "workspace_rules4_status"),
+        ("rules4_ui.rs", include_str!("rules4_ui.rs"), "workspace_rules_upgrade"),
+        ("rules4_ui.rs", include_str!("rules4_ui.rs"), "runtime_endpoint_move"),
         ("passkey_ui.rs", include_str!("passkey_ui.rs"), "passkey_remove"),
         ("passkey_ui.rs", include_str!("passkey_ui.rs"), "passkey_regrant"),
         ("repos_ui.rs", include_str!("repos_ui.rs"), "set_repo_aliases"),
@@ -17239,6 +17256,10 @@ pub fn run() {
             passkey_ui::passkey_regrant,
             passkey_ui::device_confirm,
             passkey_ui::workspace_rules_set,
+            rules4_ui::workspace_rules4_status,
+            rules4_ui::workspace_rules_upgrade,
+            rules4_ui::runtime_endpoint_move,
+            rules4_ui::chat_old_agent_copies,
             passkey_ui::presence_cancel,
             passkey_ui::presence_use_recovery,
             passkey_ui::presence_use_browser,
