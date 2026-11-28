@@ -14,6 +14,7 @@ import {
   IconX,
 } from "@/lib/icons";
 import { AccountSection } from "@/components/settings/AccountSection";
+import { SetupChecklistPane } from "@/components/setup/SetupChecklist";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { FolderGitSection } from "@/components/settings/FolderGitSection";
 import { RepositoriesSection } from "@/components/settings/RepositoriesSection";
@@ -38,6 +39,7 @@ import { IconComb } from "@/components/flow/icon";
 // ── Grouped nav (§6.5) ──────────────────────────────────────────────────────
 // Settings is grouped by who a setting affects, not by a flat tab strip.
 export type SettingsTab =
+  | "setup"
   | "account"
   | "appearance"
   | "folder-git"
@@ -68,6 +70,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     cap: "You",
     items: [
+      { id: "setup", label: "Set up Ligus", icon: <IconSparkle size={16} />, keywords: ["setup", "set up", "checklist", "readiness", "health", "clean up", "cleanup", "leftovers", "former member", "never finished", "getting started", "onboarding"] },
       { id: "account", label: "Profile", icon: <IconUsers size={16} />, keywords: ["profile", "identity", "name", "avatar", "safety code", "fingerprint", "devices", "git email", "privacy", "typing", "presence"] },
       { id: "appearance", label: "Appearance", icon: <IconSparkle size={16} />, keywords: ["theme", "dark mode", "light", "color", "font"] },
     ],
@@ -120,6 +123,10 @@ export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = NAV_GROUPS.fl
 // route and older callers (e.g. FriendsView) working across the rename.
 export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
   switch ((raw ?? "").toLowerCase()) {
+    case "setup":
+    case "set-up":
+    case "cleanup":
+      return "setup";
     case "account":
       return "account";
     case "appearance":
@@ -292,6 +299,7 @@ export function SettingsView({
               payload, a missing field) degrades to a contained card with
               "Try again" instead of replacing the whole app. */}
           <PaneErrorBoundary label={TAB_LABEL[tab]}>
+          {tab === "setup" && <SetupChecklistPane />}
           {tab === "account" && <AccountSection />}
           {tab === "appearance" && (
             <AppearanceSection

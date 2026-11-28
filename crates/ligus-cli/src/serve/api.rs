@@ -966,6 +966,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/agents/{id}/host", put(set_agent_host))
         .route("/v1/agents/{id}/usage", get(agent_usage))
         .route("/v1/hosts", get(list_hosts))
+        .route("/v1/setup", get(super::setup_api::checklist))
         .route("/v1/guards", get(workspace_guards))
         .route("/v1/chats/{id}/lockdown/clear", post(clear_lockdown))
         .route("/v1/proposal-sets", get(super::sets::list_sets))

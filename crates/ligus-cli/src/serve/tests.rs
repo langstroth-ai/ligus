@@ -5397,6 +5397,7 @@ mod devices_link;
 mod foreign_certificate;
 mod handoff;
 mod principals;
+mod setup;
 mod scratch;
 
 /// Archiving from the phone (0.4): a settled proposal is archived for

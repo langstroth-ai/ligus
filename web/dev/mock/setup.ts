@@ -1,6 +1,9 @@
 // Dev-only: the guided setup flows as the engine (`ligus_runtime::setup`)
 // shapes them, with demo data, for previews and screenshots.
 
+// "Set up Ligus": the backend's own fixture rows.
+import settledChecklist from "../../../crates/ligus-runtime/tests/fixtures/setup-checklist/settled-team.checklist.json";
+
 type Args = Record<string, unknown> | undefined;
 
 const flows = [
@@ -242,6 +245,11 @@ export function setupMock(cmd: string, args: Args): { handled: boolean; value?: 
     case "setup_run":
       return { handled: true, value: outcome(flow, inputs) };
     case "setup_cancel":
+      return { handled: true, value: null };
+    case "setup_checklist":
+      return { handled: true, value: settledChecklist };
+    case "setup_hide":
+    case "setup_remove_host":
       return { handled: true, value: null };
     case "workspace_invite":
       return { handled: true, value: "hivews1:eyJkZW1vIjoiZGVtbyBpbnZpdGUsIG5vdCBhIHJlYWwga2V5In0" };

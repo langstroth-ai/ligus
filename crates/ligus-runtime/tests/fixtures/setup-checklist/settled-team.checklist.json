@@ -1,0 +1,142 @@
+{
+  "schema": "ligus.setup.v1",
+  "rows": [
+    {
+      "id": "you",
+      "title": "You",
+      "state": "done",
+      "detail": "Ana · picture"
+    },
+    {
+      "id": "passkey",
+      "title": "Passkey",
+      "state": "done",
+      "detail": "2 passkeys · recovery key"
+    },
+    {
+      "id": "device",
+      "title": "This device",
+      "state": "done",
+      "detail": "Ana's MacBook"
+    },
+    {
+      "id": "devices",
+      "title": "My devices",
+      "state": "attention",
+      "detail": "this Mac, build-1, old-laptop · 1 approved, never used",
+      "action": {
+        "id": "devices",
+        "label": "Review"
+      }
+    },
+    {
+      "id": "phone",
+      "title": "Phone",
+      "state": "done",
+      "detail": "Ana's iPhone · push on"
+    },
+    {
+      "id": "box",
+      "title": "Box",
+      "state": "done",
+      "detail": "box-1 · 0.4.1 (0.5.0 out)",
+      "action": {
+        "id": "upgradeBox",
+        "label": "How to upgrade"
+      }
+    },
+    {
+      "id": "agents",
+      "title": "Agents",
+      "state": "done",
+      "detail": "@coder on box-1 · @reviewer on your devices"
+    },
+    {
+      "id": "workspace",
+      "title": "Workspace",
+      "state": "done",
+      "detail": "Team · rules 3 · Upgrade available",
+      "action": {
+        "id": "upgradeRules",
+        "label": "Upgrade"
+      }
+    },
+    {
+      "id": "cleanup",
+      "title": "Clean up",
+      "state": "attention",
+      "detail": "1 member who asked to leave · 1 device never finished · +3 more",
+      "action": {
+        "id": "cleanup",
+        "label": "Clean up"
+      }
+    }
+  ],
+  "cleanup": [
+    {
+      "key": "memberLeft:member-taylor",
+      "kind": "memberLeft",
+      "id": "member-taylor",
+      "label": "Taylor",
+      "detail": "asked to leave 24 Nov",
+      "action": {
+        "id": "remove",
+        "label": "Remove",
+        "passkey": true,
+        "confirm": "Remove Taylor from Team? They asked to leave; this takes them off the member list and rotates the workspace key. It asks for your passkey."
+      }
+    },
+    {
+      "key": "devicePending:6f1c2a10-0000-4000-8000-000000000002",
+      "kind": "devicePending",
+      "id": "6f1c2a10-0000-4000-8000-000000000002",
+      "label": "old-laptop",
+      "detail": "approved, never used",
+      "action": {
+        "id": "remove",
+        "label": "Remove",
+        "passkey": true,
+        "confirm": "Remove old-laptop from your devices? It stops counting as yours in Team, and it can't be undone. It asks for your passkey."
+      }
+    },
+    {
+      "key": "deviceRevoked:6f1c2a10-0000-4000-8000-000000000003",
+      "kind": "deviceRevoked",
+      "id": "6f1c2a10-0000-4000-8000-000000000003",
+      "label": "Device 9a8b7c6d",
+      "detail": "revoked",
+      "action": {
+        "id": "removeFromView",
+        "label": "Remove from view",
+        "passkey": false,
+        "confirm": "Remove Device 9a8b7c6d from view on this device? Nothing changes in Team, and other devices still show it."
+      }
+    },
+    {
+      "key": "formerHost:6f1c2a10-0000-4000-8000-000000000006",
+      "kind": "formerHost",
+      "id": "6f1c2a10-0000-4000-8000-000000000006",
+      "label": "taylor-desktop",
+      "detail": "its owner isn't a member",
+      "action": {
+        "id": "remove",
+        "label": "Remove",
+        "passkey": true,
+        "confirm": "Remove the host taylor-desktop from Team? Agents placed on it stay where they are and keep saying the host is gone. It asks for your passkey."
+      }
+    },
+    {
+      "key": "legacyAgent:6f1c2a10-0000-4000-8000-000000000007",
+      "kind": "legacyAgent",
+      "id": "6f1c2a10-0000-4000-8000-000000000007",
+      "label": "hive",
+      "detail": "an old name: @ligus is the default agent",
+      "action": {
+        "id": "remove",
+        "label": "Remove",
+        "passkey": true,
+        "confirm": "Remove the agent @hive from Team? It can't be undone. It asks for your passkey."
+      }
+    }
+  ]
+}

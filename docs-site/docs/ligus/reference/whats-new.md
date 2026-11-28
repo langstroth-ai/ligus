@@ -8,6 +8,22 @@ Full release notes are on the
 
 ### Added
 
+- **Set up Ligus: one checklist on every surface.** **Settings > Set up
+  Ligus** on the desktop (also the empty Home, **⌘K** and the end of the
+  first run), `ligus setup` in a terminal, lt's setup screen and the
+  phone's Health show the same rows: you, your passkey and recovery key,
+  this device's name, your other devices, your phone and push, an
+  always-on box (optional) and its update, the agents and where each
+  answers, and the workspace with its rules version (**Upgrade** for
+  Owners when a newer one is supported). Each line has one next step; what
+  you never set up reads grey **Not set up**, never red. **Clean up** lists
+  the leftovers (members who asked to leave or were retired, devices
+  revoked, idle or never used, former members' hosts, old agent names) with
+  one action each, **Remove** (its own passkey) or **Remove from view**
+  (this device only), and removes nothing until you confirm. `ligus setup
+  --json` carries the checklist under `checklist`, and `ligus setup
+  cleanup` lists the leftovers. See [Set up Ligus](../features/set-up-ligus.md).
+
 - **"Update available" for boxes.** When a box or worker runs an older
   release than the latest one, its row in **People** > **Workers & hosts**
   shows one grey line, "0.4.1 → 0.5.0 available · how", and the phone's

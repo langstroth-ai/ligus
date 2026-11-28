@@ -57,6 +57,7 @@ mod attachments;
 mod memory_ui;
 mod repos_ui;
 mod scratch_ui;
+mod setup_checklist_ui;
 mod setup_ui;
 mod first_run_ui;
 mod link_request_ui;
@@ -17063,6 +17064,9 @@ pub fn run() {
             phones_ui::inspect_phone_code,
             setup_ui::setup_flows,
             setup_ui::setup_status,
+            setup_checklist_ui::setup_checklist,
+            setup_checklist_ui::setup_hide,
+            setup_checklist_ui::setup_remove_host,
             setup_ui::setup_form,
             setup_ui::setup_run,
             setup_ui::setup_cancel,
