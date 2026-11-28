@@ -4,7 +4,13 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
-## Unreleased
+## 0.5.0
+
+One person on all your devices: link a device with a short code, and one
+link brings all your workspaces. Add an agent in one step with its model and
+where it runs, and change either from its menu. A turn that can't run says
+so, with no silent fallbacks. Set up Ligus shows what's left, the phone sets
+up in one flow, and new workspaces start on rules 4.
 
 ### Added
 
@@ -53,7 +59,8 @@ Full release notes are on the
   model within the same source needs no passkey. **Run here this time** is a
   signed one-turn permission, so the reply counts on every device. Leaving a
   workspace removes you; a box started again after `ligus serve leave` stays
-  out and logs how to rejoin. A host record counts only from its own device, and
+  out and logs how to rejoin, and an Admin lets it back in as the same
+  member by approving its new `ligus admit request`. A host record counts only from its own device, and
   members without an account, model server addresses on the log and
   whole-list writes are refused. An existing workspace stays on its rules
   until an Owner switches it; builds before 0.5 open a rules 4 workspace
@@ -123,7 +130,9 @@ Full release notes are on the
 
 - **Leave a workspace on your own.** **Leave workspace** (right-click it in
   the rail) now tells the others: they see you as **asked to leave** until
-  an Admin removes you, and this device stops syncing it. One line says so,
+  an Admin removes you, and this device stops syncing it. In a rules 4
+  workspace leaving removes you straight away, and the dialog and `ligus
+  serve leave` say so. One line says so,
   with the reminder that leaving isn't revoking: your other devices keep
   their keys. Your passkey confirms it when your account holds one. The
   founder, the last Owner and a linked computer or phone can't leave this
