@@ -16,6 +16,25 @@ Full release notes are on the
   and restarts the box). Ligus never upgrades a box on its own. See
   [Operating it](../../operate/deploy/personal-fleet.md#operating-it).
 
+- **Your phone in one flow.** Scan the desktop's code (the Connect screen
+  now reads it as well as the `ligus pair` code), check the name the phone
+  suggests ("Ana's iPhone", editable), and choose **Add**: that one
+  confirmation also signs the phone's statement that it is yours, so the
+  separate "Confirm this phone is Ana's" question no longer follows (it
+  stays for phones added with Can't scan? or before 0.5). On builds that can
+  push, the phone then asks once about notifications, with a line on why;
+  the last screen says what works now. A phone added again under a new name
+  is renamed for every device. See
+  [Add your phone](../features/phone-app.md#add-this-phone).
+
+- **The phone renames itself.** **Settings → This phone → Rename**, signed
+  by the phone's own key through its box, where the workspace's rules let a
+  phone name itself (rules version 4); elsewhere the **?** points to My
+  devices on your desktop. Boxes add `POST /v1/phone-label/prepare` and
+  `/commit`, and `GET /v1/me` says when it is available
+  (`capabilities.phoneLabel`). See
+  [Renaming the phone](../features/phone-app.md#rename-phone).
+
 - **Admit a box without pasting anything, from setup or the deploy
   script.** `ligus setup box --to ligusaddr1:…` and `deploy/local/ligus-local
   configure --admit-to ligusaddr1:…` send the box's join request to the
