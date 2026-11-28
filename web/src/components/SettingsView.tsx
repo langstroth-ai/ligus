@@ -30,6 +30,7 @@ import { DangerZoneSection } from "@/components/settings/DangerZoneSection";
 import { GuardsSection } from "@/components/guards/GuardsSection";
 import { FlowSection } from "@/components/settings/FlowSection";
 import { SecuritySection } from "@/components/settings/SecuritySection";
+import { WorkspaceRulesSection } from "@/components/settings/WorkspaceRulesSection";
 import { SandboxSection } from "@/components/settings/SandboxSection";
 import { AttachmentsSection } from "@/components/settings/AttachmentsSection";
 import { ReviewSection } from "@/components/settings/ReviewSection";
@@ -48,6 +49,7 @@ export type SettingsTab =
   | "team-sync"
   | "guards"
   | "passkeys"
+  | "rules"
   | "attachments"
   | "review"
   | "schedules"
@@ -83,6 +85,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "code-hosts", label: "Code hosts", icon: <IconFile size={16} />, keywords: ["forge", "github", "gitlab", "codeberg", "forgejo", "gitea", "token", "clone", "repository", "pull request", "merge request"] },
       { id: "team-sync", label: "Team sync", icon: <IconUsers size={16} />, keywords: ["relay", "e2ee", "encryption", "sync", "token", "invite", "p2p", "peer", "collaborate"] },
       { id: "passkeys", label: "Passkeys & keys", icon: <IconLock size={16} />, keywords: ["passkey", "webauthn", "touch id", "recovery", "rules v2", "presence", "rotate", "workspace key", "keychain"] },
+      { id: "rules", label: "Workspace rules", icon: <IconLock size={16} />, keywords: ["rules", "rules 4", "upgrade", "read-only", "readiness", "older devices", "pin", "model choice", "workspace"] },
       { id: "attachments", label: "File attachments", icon: <IconFile size={16} />, keywords: ["attachment", "file", "upload", "share", "quarantine", "blocklist", "hash", "malware", "scan", "policy"] },
       { id: "review", label: "Review", icon: <IconFile size={16} />, keywords: ["proposals", "archive", "auto-archive", "archived", "settled", "inbox", "dismiss"] },
       { id: "guards", label: "Guards", icon: <IconLock size={16} />, keywords: ["dearth", "security", "lockdown", "entrance", "approval", "throttle", "lease", "sandbox", "egress", "network", "preset", "registries", "npm", "connectors"] },
@@ -146,6 +149,9 @@ export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
     case "passkeys":
     case "passkey":
       return "passkeys";
+    case "rules":
+    case "workspace-rules":
+      return "rules";
     case "guards":
     case "security":
     case "dearth":
@@ -315,6 +321,7 @@ export function SettingsView({
           {tab === "team-sync" && <TeamSyncSection />}
           {tab === "guards" && <GuardsSection chat={activeChat} />}
           {tab === "passkeys" && <SecuritySection />}
+          {tab === "rules" && <WorkspaceRulesSection />}
           {tab === "attachments" && <AttachmentsSection />}
           {tab === "review" && <ReviewSection />}
           {tab === "schedules" && <SchedulesSection />}

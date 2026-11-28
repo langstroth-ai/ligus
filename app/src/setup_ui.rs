@@ -17,7 +17,7 @@ use ligus_runtime::checks::Check;
 use ligus_runtime::cli_detect::DetectEnv;
 use ligus_runtime::model_catalog::{ModelList, ModelOption, ModelSource};
 use ligus_runtime::setup::{
-    self, service, AgentFact, FlowId, FolderFact, HarnessFact, HostFact, HostSourceFact, Inputs, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RunOpts,
+    self, service, AgentEdit, AgentFact, FlowId, FolderFact, HarnessFact, HostFact, HostSourceFact, Inputs, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RunOpts,
     RuntimeFact, RuntimeSpec, Secrets, SetupOps, Surface, TestTurn,
 };
 use ligus_runtime::{McpReach, McpServerSpec, McpTransport};
@@ -228,6 +228,15 @@ impl SetupOps for DesktopOps<'_> {
     }
     fn add_agent_placed(&mut self, name: &str, runtime_id: &str, host_id: &str) -> OpsResult<Uuid> {
         service::add_agent_placed(&mut self.state().service.lock().unwrap(), self.ws, name, runtime_id, host_id)
+    }
+    fn change_agent(&mut self, agent_id: Uuid, edit: &AgentEdit) -> OpsResult<()> {
+        service::change_agent(&mut self.state().service.lock().unwrap(), self.ws, agent_id, edit)
+    }
+    fn rules(&self) -> u32 {
+        if self.local() {
+            return 0;
+        }
+        service::rules(&self.state().service.lock().unwrap(), self.ws)
     }
     fn local_servers(&self, agent_id: Uuid) -> bool {
         service::local_servers(&self.state().service.lock().unwrap(), self.ws, agent_id)

@@ -81,6 +81,7 @@ import {
 import { Avatar } from "@/components/Avatar";
 import { safeColorHex } from "@/lib/avatar";
 import { ChatRepoChip, PinnedHostWarning } from "@/components/ChatRepoChip";
+import { OldAgentCopyNotice } from "@/components/OldAgentCopyNotice";
 import { TurnRouteRow, ReplyOutcomeLine } from "@/components/TurnRouteRow";
 import {
   ModelStep,
@@ -1532,6 +1533,7 @@ export function ChatView({
               </button>
             </div>
           )}
+          {!embedded && <OldAgentCopyNotice sessionId={sessionId} />}
           {!embedded && (
             <PinnedHostWarning
               sessionId={sessionId}

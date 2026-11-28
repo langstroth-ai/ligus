@@ -147,6 +147,16 @@ access token, the relay operator issues one (see
 [Self-hosting a relay](../../operate/networking/self-host.md)) and you
 paste it into the **Relay access token** field above.
 
+## Workspace rules
+
+What every device accepts on this workspace. Below rules 4 the Owner sees
+**Upgrade workspace rules**: the readiness list (devices on Ligus before
+0.5 by name and build, which go read-only there; agents whose host wouldn't
+count; members with no account; model server addresses kept on the
+workspace), **What changes** behind a disclosure, and one button that asks
+for the passkey once and can't be undone. On rules 4, agents that still name
+a runtime are listed with **Pin**. See [Workspace rules](workspace-rules.md).
+
 ## Schedules
 
 Define **scheduled agents** — recurring runs that kick off a chat turn

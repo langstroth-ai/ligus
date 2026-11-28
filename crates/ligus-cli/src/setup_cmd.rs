@@ -17,7 +17,7 @@ use ligus_runtime::mcp::{McpServerSpec, McpTransport};
 use ligus_runtime::model_catalog::ModelList;
 use ligus_runtime::setup::{self, checklist, service, FieldKind, FlowId, Inputs, Outcome, Progress, RunOpts, Secrets, Surface};
 use ligus_runtime::setup::{
-    AgentFact, BoxAsk, BoxFact, FolderFact, HarnessFact, HostFact, HostSourceFact, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RuntimeFact, RuntimeSpec, ServeFact,
+    AgentEdit, AgentFact, BoxAsk, BoxFact, FolderFact, HarnessFact, HostFact, HostSourceFact, InviteFact, McpFact, OpsError, OpsResult, ProbeFact, RepoFact, RuntimeFact, RuntimeSpec, ServeFact,
     SetupOps, TestTurn,
 };
 use ligus_runtime::{ChatService, McpReach};
@@ -163,8 +163,26 @@ fn list(cfg: &Config, json: bool) -> Result<()> {
 /// Parse a flow's flags against its fields, run it, print the outcome, and
 /// exit with its code.
 fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
+    run_flow_as(cfg, flow, rest, None)
+}
+
+/// `ligus agents set <agent> --model M --runs-on H`: the agent flow's
+/// Change model… and Runs on… (`--agent` set), with `rerun` as the command
+/// a hand-off that didn't finish says to run again.
+pub fn change_agent(cfg: &Config, args: &[String], rerun: String) -> Result<()> {
+    run_flow_as(cfg, FlowId::Agent, args, Some(rerun))
+}
+
+fn run_flow_as(cfg: &Config, flow: FlowId, rest: &[String], rerun_as: Option<String>) -> Result<()> {
     let mut ops = CliOps::open(cfg)?;
-    let fields: Vec<setup::Field> = setup::form(flow, &ops, &Inputs::new()).fields().cloned().collect();
+    // Changing an existing agent (`--agent`) has its own fields.
+    let mut base = Inputs::new();
+    if flow == FlowId::Agent {
+        if let Some(v) = rest.iter().position(|a| a == "--agent").and_then(|i| rest.get(i + 1)) {
+            base.set("agent", v.clone());
+        }
+    }
+    let fields: Vec<setup::Field> = setup::form(flow, &ops, &base).fields().cloned().collect();
     let mut inputs = Inputs::new();
     let mut secrets = Secrets::new();
     let (mut json, mut dry_run) = (false, false);
@@ -257,7 +275,7 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
     let mut out = setup::run(flow, &mut ops, &inputs, &secrets, &RunOpts { dry_run, ..Default::default() });
     if let Some(end) = handoff.and_then(|e| e.lock().unwrap().clone()) {
         let quote = |a: &str| if a.chars().any(char::is_whitespace) { format!("'{a}'") } else { a.to_string() };
-        let rerun = format!("ligus setup {}", rest.iter().filter(|a| *a != "--no-wait").map(|a| quote(a)).collect::<Vec<_>>().join(" "));
+        let rerun = rerun_as.clone().unwrap_or_else(|| format!("ligus setup {}", rest.iter().filter(|a| *a != "--no-wait").map(|a| quote(a)).collect::<Vec<_>>().join(" ")));
         if let Some(next) = crate::handoff::next_lines(&end, &rerun) {
             // The step's fix says where to confirm it now, not the desktop-only line.
             if let Some(c) = out.report.checks.iter_mut().rev().find(|c| c.fix.as_deref().is_some_and(|f| f.contains("--recovery-words-file"))) {
@@ -489,6 +507,12 @@ impl SetupOps for CliOps {
     }
     fn add_agent_placed(&mut self, name: &str, runtime_id: &str, host_id: &str) -> OpsResult<Uuid> {
         service::add_agent_placed(&mut self.svc, self.ws, name, runtime_id, host_id)
+    }
+    fn change_agent(&mut self, agent_id: Uuid, edit: &AgentEdit) -> OpsResult<()> {
+        service::change_agent(&mut self.svc, self.ws, agent_id, edit)
+    }
+    fn rules(&self) -> u32 {
+        service::rules(&self.svc, self.ws)
     }
     fn local_servers(&self, agent_id: Uuid) -> bool {
         service::local_servers(&self.svc, self.ws, agent_id)

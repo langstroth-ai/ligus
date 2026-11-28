@@ -91,7 +91,7 @@ pub(crate) enum Target {
 }
 
 impl Target {
-    fn host_id(&self) -> &str {
+    pub(crate) fn host_id(&self) -> &str {
         match self {
             Target::Here => "",
             Target::Host(h) => &h.host_id,
@@ -99,7 +99,7 @@ impl Target {
     }
 }
 
-fn wire_label(wire: &str) -> &'static str {
+pub(crate) fn wire_label(wire: &str) -> &'static str {
     match wire {
         "anthropic" => "Anthropic API",
         _ => "OpenAI API",
@@ -107,7 +107,7 @@ fn wire_label(wire: &str) -> &'static str {
 }
 
 /// The engine's harness id and label of a hosted API's provider wire name.
-fn api_of(provider: &str) -> (&'static str, &'static str) {
+pub(crate) fn api_of(provider: &str) -> (&'static str, &'static str) {
     match provider.to_ascii_lowercase().as_str() {
         "anthropic" => ("anthropic", "Anthropic API"),
         "openrouter" => ("openrouter", "OpenRouter"),
@@ -118,7 +118,7 @@ fn api_of(provider: &str) -> (&'static str, &'static str) {
 /// Hosts the person can place an agent on: boxes and workers, and their
 /// own other devices (an agent on someone else's computer runs only while
 /// they're at it, so those are left out). This device is "here".
-fn placeable(h: &HostSourceFact) -> bool {
+pub(crate) fn placeable(h: &HostSourceFact) -> bool {
     !h.this_device && (h.host_kind == "worker" || h.mine)
 }
 
@@ -210,7 +210,7 @@ pub(crate) fn sources(ops: &dyn SetupOps) -> Vec<Source> {
     out
 }
 
-fn login_word(f: &HarnessFact) -> &'static str {
+pub(crate) fn login_word(f: &HarnessFact) -> &'static str {
     match f.login {
         LoginState::LoggedIn => "signed in",
         LoginState::NotLoggedIn => "not signed in",
@@ -219,7 +219,7 @@ fn login_word(f: &HarnessFact) -> &'static str {
 }
 
 /// A host's state for one offer, in a word or two.
-fn host_word(h: &HostSourceFact, cli: bool) -> String {
+pub(crate) fn host_word(h: &HostSourceFact, cli: bool) -> String {
     let w = match h.ready {
         Some(true) if cli => "signed in".to_string(),
         Some(true) => "ready".to_string(),
@@ -234,7 +234,7 @@ fn host_word(h: &HostSourceFact, cli: bool) -> String {
     }
 }
 
-fn host_name(h: &HostSourceFact) -> String {
+pub(crate) fn host_name(h: &HostSourceFact) -> String {
     if h.host_label.trim().is_empty() {
         h.host_id.chars().take(8).collect()
     } else {
@@ -242,13 +242,13 @@ fn host_name(h: &HostSourceFact) -> String {
     }
 }
 
-fn names(hosts: &[HostSourceFact]) -> String {
+pub(crate) fn names(hosts: &[HostSourceFact]) -> String {
     hosts.iter().map(host_name).collect::<Vec<_>>().join(", ")
 }
 
 /// The one-line state next to a source ("signed in · this Mac · also
 /// build-1", "offered by box-1").
-fn hint(s: &Source, this: &str) -> String {
+pub(crate) fn hint(s: &Source, this: &str) -> String {
     match s.kind {
         Kind::Cli => {
             let here = s.here.as_ref().filter(|f| f.installed);
@@ -267,7 +267,7 @@ fn hint(s: &Source, this: &str) -> String {
     }
 }
 
-fn usable_here(s: &Source) -> bool {
+pub(crate) fn usable_here(s: &Source) -> bool {
     match s.kind {
         Kind::Cli => s.here.as_ref().is_some_and(|f| f.installed && f.login != LoginState::NotLoggedIn),
         _ => s.runs_here,
@@ -277,7 +277,7 @@ fn usable_here(s: &Source) -> bool {
 /// The best source to start from: a CLI signed in here, then one ready on a
 /// host, then a gateway or a hosted API a host offers, then a CLI installed
 /// here.
-fn default_source(list: &[Source]) -> Option<&Source> {
+pub(crate) fn default_source(list: &[Source]) -> Option<&Source> {
     let cli = |s: &&Source| s.kind == Kind::Cli;
     list.iter()
         .filter(cli)
@@ -330,7 +330,7 @@ fn chosen<'a>(list: &'a [Source], inputs: &Inputs) -> Option<&'a Source> {
 
 /// Where the inputs say to run `s`, or its default. `Err` says why the
 /// named place can't run it ("build-1 doesn't offer gw-home").
-fn target(s: &Source, inputs: &Inputs) -> Result<Option<Target>, String> {
+pub(crate) fn target(s: &Source, inputs: &Inputs) -> Result<Option<Target>, String> {
     match inputs.get("runs-on") {
         None => Ok(default_target(s)),
         Some(HERE) if s.runs_here => Ok(Some(Target::Here)),
@@ -342,7 +342,7 @@ fn target(s: &Source, inputs: &Inputs) -> Result<Option<Target>, String> {
     }
 }
 
-fn endpoint_default(s: Option<&Source>) -> &'static str {
+pub(crate) fn endpoint_default(s: Option<&Source>) -> &'static str {
     match s.map(|s| (s.kind, s.harness.as_str())) {
         Some((Kind::Key, "openai")) => OPENAI_DEFAULT,
         _ => LOCAL_DEFAULT,
@@ -350,7 +350,7 @@ fn endpoint_default(s: Option<&Source>) -> &'static str {
 }
 
 /// The models `s` offers where it would run.
-fn model_list(ops: &dyn SetupOps, s: &Source, t: Option<&Target>, endpoint: &str) -> ModelList {
+pub(crate) fn model_list(ops: &dyn SetupOps, s: &Source, t: Option<&Target>, endpoint: &str) -> ModelList {
     let from_hosts = |hosts: Vec<&HostSourceFact>| -> ModelList {
         let mut models: Vec<String> = Vec::new();
         for h in &hosts {
@@ -382,7 +382,7 @@ fn model_list(ops: &dyn SetupOps, s: &Source, t: Option<&Target>, endpoint: &str
 
 /// The model to start from: a CLI's own default (empty); otherwise the
 /// first one the source lists.
-fn default_model(s: &Source, list: &ModelList) -> String {
+pub(crate) fn default_model(s: &Source, list: &ModelList) -> String {
     match s.kind {
         Kind::Cli => String::new(),
         Kind::Key if s.harness != "anthropic" => String::new(),
@@ -391,12 +391,12 @@ fn default_model(s: &Source, list: &ModelList) -> String {
 }
 
 /// Everything but a coding CLI (which has its own default) needs a model.
-fn needs_model(s: &Source) -> bool {
+pub(crate) fn needs_model(s: &Source) -> bool {
     s.kind != Kind::Cli
 }
 
 /// The line under "Runs on".
-fn runs_on_note(s: Option<&Source>, t: Option<&Target>, name: &str) -> String {
+pub(crate) fn runs_on_note(s: Option<&Source>, t: Option<&Target>, name: &str) -> String {
     let who = if name.is_empty() { "the agent".to_string() } else { format!("@{name}") };
     match (s, t) {
         (_, Some(Target::Here)) => "Turns run on this device while Ligus is open.".into(),
@@ -443,7 +443,24 @@ pub(crate) fn status(ops: &dyn SetupOps) -> (Progress, String) {
     }
 }
 
+/// A model list as choices. A gateway that lists `auto` (it picks the
+/// model per request) gets it first, said in words.
+pub(crate) fn model_choices(list: &ModelList) -> Vec<Choice> {
+    let mut out: Vec<Choice> = list.models.iter().map(|m| Choice::new(m.id.clone(), m.label.clone().unwrap_or_else(|| m.id.clone()))).collect();
+    if let Some(i) = out.iter().position(|c| c.value == AUTO_MODEL) {
+        let auto = out.remove(i);
+        out.insert(0, Choice::new(auto.value, "auto (the gateway picks)"));
+    }
+    out
+}
+
+/// The model name a gateway lists when it picks the model itself.
+pub const AUTO_MODEL: &str = "auto";
+
 pub(crate) fn steps(ops: &dyn SetupOps, inputs: &Inputs) -> Vec<StepDef> {
+    if super::agent_edit::editing(inputs) {
+        return super::agent_edit::steps(ops, inputs);
+    }
     let this = ops.this_device_label();
     let list = sources(ops);
     let source = chosen(&list, inputs);
@@ -452,10 +469,7 @@ pub(crate) fn steps(ops: &dyn SetupOps, inputs: &Inputs) -> Vec<StepDef> {
     let ep_default = endpoint_default(source);
     let endpoint = inputs.get("endpoint").unwrap_or(ep_default);
     let models = source.map(|s| model_list(ops, s, t.as_ref(), endpoint));
-    let model_options: Vec<Choice> = models
-        .as_ref()
-        .map(|l| l.models.iter().map(|m| Choice::new(m.id.clone(), m.label.clone().unwrap_or_else(|| m.id.clone()))).collect())
-        .unwrap_or_default();
+    let model_options: Vec<Choice> = models.as_ref().map(model_choices).unwrap_or_default();
     let model_default = match (source, &models) {
         (Some(s), Some(l)) => default_model(s, l),
         _ => String::new(),
@@ -565,6 +579,9 @@ pub(crate) fn steps(ops: &dyn SetupOps, inputs: &Inputs) -> Vec<StepDef> {
 /// The one button's label and how many passkey confirmations it will ask
 /// for, for the current inputs.
 pub(crate) fn action(ops: &dyn SetupOps, inputs: &Inputs) -> (Option<String>, usize) {
+    if super::agent_edit::editing(inputs) {
+        return super::agent_edit::action(ops, inputs);
+    }
     let name = inputs.get("name").unwrap_or("").trim().to_string();
     let label = if name.is_empty() { "Add the agent".to_string() } else { format!("Add @{name}") };
     let n = match plan(ops, inputs) {
@@ -582,7 +599,7 @@ struct Plan {
     exists: bool,
 }
 
-fn spec_for(s: &Source, t: &Target, model: &str, endpoint: &str, taken: &[&str]) -> RuntimeSpec {
+pub(crate) fn spec_for(s: &Source, t: &Target, model: &str, endpoint: &str, taken: &[&str]) -> RuntimeSpec {
     let shared = matches!(t, Target::Host(_));
     let name = if model.is_empty() { s.label.clone() } else { format!("{} ({model})", s.label) };
     let (endpoint, secret_ref) = match s.kind {
@@ -611,7 +628,7 @@ fn spec_for(s: &Source, t: &Target, model: &str, endpoint: &str, taken: &[&str])
 
 /// Whether runtime `r` runs what `spec` asks for (a device-local one only
 /// when it needn't run elsewhere).
-fn runtime_matches(r: &RuntimeFact, spec: &RuntimeSpec) -> bool {
+pub(crate) fn runtime_matches(r: &RuntimeFact, spec: &RuntimeSpec) -> bool {
     r.harness == spec.harness
         && r.model == spec.model
         && r.endpoint == spec.endpoint
@@ -669,6 +686,9 @@ pub(crate) fn preflight(ctx: &mut Ctx, ops: &dyn SetupOps) {
 }
 
 pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, secrets: &Secrets) {
+    if super::agent_edit::editing(inputs) {
+        return super::agent_edit::run(ctx, ops, inputs);
+    }
     let fields: Vec<Field> = steps(ops, inputs).into_iter().flat_map(|s| s.fields).collect();
     let list = sources(ops);
     let this = ops.this_device_label();
@@ -885,12 +905,12 @@ pub(crate) fn run(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, secret
 
 /// Only what was given: a surface sends the toggle's default as an input
 /// (the sheet prefills it), and the CLI's `--test-turn` stays opt-in.
-fn test_turn_on(inputs: &Inputs, _fields: &[Field]) -> bool {
+pub(crate) fn test_turn_on(inputs: &Inputs, _fields: &[Field]) -> bool {
     inputs.on("test-turn")
 }
 
 /// A coding CLI on this device: installed, signed in, and a sandbox to run in.
-fn here_cli_ready(ctx: &mut Ctx, ops: &dyn SetupOps, s: &Source) -> bool {
+pub(crate) fn here_cli_ready(ctx: &mut Ctx, ops: &dyn SetupOps, s: &Source) -> bool {
     let label = s.label.as_str();
     match &s.here {
         Some(f) if f.installed => {
@@ -948,7 +968,7 @@ fn here_cli_ready(ctx: &mut Ctx, ops: &dyn SetupOps, s: &Source) -> bool {
 /// The agent's local-servers grant, when asked for (`--local-servers`):
 /// on, the Owner's signed switch. Never turned off here (a rerun without
 /// the flag leaves it as it is). `false` when the flow stopped.
-fn local_servers(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, id: uuid::Uuid, name: &str) -> bool {
+pub(crate) fn local_servers(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, id: uuid::Uuid, name: &str) -> bool {
     if !inputs.on("local-servers") {
         return true;
     }
@@ -990,7 +1010,7 @@ fn held_on_macos(ctx: &mut Ctx, ops: &dyn SetupOps) {
     }
 }
 
-fn verify(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, fields: &[Field], runtime_id: &str, name: &str, t: &Target) {
+pub(crate) fn verify(ctx: &mut Ctx, ops: &mut dyn SetupOps, inputs: &Inputs, fields: &[Field], runtime_id: &str, name: &str, t: &Target) {
     if !ops.agents().iter().any(|a| a.name.eq_ignore_ascii_case(name)) {
         return ctx.fail("verify", "verify", format!("@{name} isn't on the roster"), "ligus agents lists the roster; run this again", exit::FAILED);
     }

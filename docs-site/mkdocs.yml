@@ -215,6 +215,7 @@ nav:
           - Mentions & notifications: ligus/features/mentions-and-notifications.md
           - Agentic workflows: ligus/features/workflows.md
           - Workspace guards: ligus/features/guards.md
+          - Workspace rules: ligus/features/workspace-rules.md
           - Sharing files: ligus/features/attachments.md
           - Flow (routing, hand-offs, task board): ligus/features/flow.md
           - Workspace memory and task state: ligus/features/memory.md
