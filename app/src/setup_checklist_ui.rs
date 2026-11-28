@@ -66,16 +66,18 @@ pub(crate) fn setup_hide(state: State<'_, AppState>, key: String, show: Option<b
 }
 
 /// Remove a host record of a former member, a revoked device or a box that
-/// left (an Admin's, with a passkey; your own host needs none).
+/// left (an Admin's, with a passkey). Anything else is refused here, even
+/// for an Admin: Clean up only ever removes leftovers.
 #[tauri::command]
 pub(crate) async fn setup_remove_host(ligus_app: AppHandle, host_id: String) -> Result<(), String> {
     crate::off_main(ligus_app, move |app| {
         let state = app.state::<AppState>();
         let ws = state.active_workspace_id();
         let mut svc = state.service.lock().unwrap();
-        let cfg = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).map_err(crate::map_err)?;
-        if !cfg.is_some_and(|c| c.workspace_hosts.iter().any(|h| h.id == host_id)) {
-            return Err("That host isn't in this workspace any more.".into());
+        // Only a Clean up leftover: never a member's live host.
+        let facts = checklist::gather(&svc, ws, &Viewer::author(&svc), &Live::default());
+        if !checklist::is_former_host(&facts, &host_id) {
+            return Err("That host isn't a leftover any more: its owner is a member and its device is in use.".into());
         }
         svc.remove_host(ws, &host_id).map_err(crate::map_err)
     })

@@ -129,6 +129,20 @@ fn rules_upgrade_is_for_owners_only() {
     assert_eq!(checklist(&facts).row(RowId::Workspace).unwrap().detail, "Team · rules 4");
 }
 
+/// Names and labels come from other members' events: the text a terminal
+/// prints never carries their control characters (an escape sequence in an
+/// agent's name can't recolour or rewrite the screen).
+#[test]
+fn text_never_carries_control_characters() {
+    let mut facts = load_facts("settled-team");
+    facts.agents[0].name = "co\u{1b}[31mder\u{7}".into();
+    facts.leftovers[0].label = "Tay\u{1b}]0;owned\u{7}lor".into();
+    facts.boxes[0].label = "box\r\n-1".into();
+    let text = render_text(&checklist(&facts), &|_| None);
+    assert!(!text.chars().any(|c| c.is_control() && c != '\n'), "{text:?}");
+    assert!(text.contains("@co[31mder") && text.contains("Tay]0;ownedlor"), "{text}");
+}
+
 #[test]
 fn upgrade_to_says_nothing_rather_than_guess() {
     assert_eq!(gather::upgrade_to("0.4.1", Some("v0.5.0")), "0.5.0");
@@ -261,7 +275,14 @@ async fn gather_reads_the_fold_and_clean_up_follows_it() {
     let mut taylor = Dev::open(&tmp.path().join("taylor"), "Taylor", &relay, ws);
     taylor.join_via(&mut mac, ws).await;
     taylor.passkey(ws);
+    // Taylor's always-on box, a host record of their own.
+    let taylor_box = taylor.svc.device_id().to_string();
+    taylor.svc.register_host(ws, ligus_core::WorkspaceHost::new(taylor_box.clone(), ligus_core::HostKind::Worker, "taylor-box")).unwrap();
     taylor.sync().await;
+    mac.sync().await;
+    let f = mac.facts(ws);
+    assert!(f.boxes.iter().any(|b| b.id == taylor_box && b.label == "taylor-box"), "{:?}", f.boxes);
+    assert!(!is_former_host(&f, &taylor_box), "a member's live host is never a leftover");
     assert!(taylor.svc.leave_workspace(ws).unwrap());
     taylor.sync().await;
     mac.sync().await;
@@ -296,5 +317,9 @@ async fn gather_reads_the_fold_and_clean_up_follows_it() {
     mac.svc.remove_agent(ws, ws, old_id).unwrap();
     let f = mac.facts(ws);
     assert!(f.leftovers.iter().all(|l| l.kind != LeftoverKind::MemberLeft && l.kind != LeftoverKind::LegacyAgent), "{:?}", f.leftovers);
-    assert_eq!(checklist(&f).row(RowId::Cleanup).unwrap().state, RowState::Done);
+    // On rules 3 the fold makes a former member's host inert: it is no box
+    // any more, and there is nothing left over to remove.
+    assert!(f.rules >= ligus_core::authz::RULES_V3 || is_former_host(&f, &taylor_box), "{:?}", f.leftovers);
+    assert!(f.boxes.iter().all(|b| b.id != taylor_box), "{:?}", f.boxes);
+    assert_eq!(checklist(&f).row(RowId::Cleanup).unwrap().state, RowState::Done, "{:?}", f.leftovers);
 }

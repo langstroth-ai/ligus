@@ -108,12 +108,12 @@ fn cleanup(cfg: &Config, rest: &[String], json: bool) -> Result<()> {
         return Ok(());
     }
     for i in &list.cleanup {
-        let detail = if i.detail.is_empty() { String::new() } else { format!(" · {}", i.detail) };
+        let detail = if i.detail.is_empty() { String::new() } else { format!(" · {}", checklist::plain(&i.detail)) };
         let how = match i.action.id {
-            checklist::CleanupActionId::RemoveFromView => format!("ligus setup cleanup --hide {}", i.key),
+            checklist::CleanupActionId::RemoveFromView => format!("ligus setup cleanup --hide {}", checklist::plain(&i.key)),
             checklist::CleanupActionId::Remove => "Remove on your desktop: Settings > Set up > Clean up (asks for your passkey)".to_string(),
         };
-        println!("{}{detail}\n    {how}", i.label);
+        println!("{}{detail}\n    {how}", checklist::plain(&i.label));
     }
     println!("\nRemove from view changes nothing in the workspace: other devices still show it. Bring one back with --show KEY.");
     Ok(())

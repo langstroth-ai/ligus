@@ -599,6 +599,13 @@ pub fn cleanup_items(facts: &Facts) -> Vec<CleanupItem> {
     out
 }
 
+/// Whether `host_id` is a Clean up leftover in `facts`: a host of a former
+/// member, a revoked device or a box that left. A surface's "remove this
+/// host" accepts only these, never a member's live host.
+pub fn is_former_host(facts: &Facts, host_id: &str) -> bool {
+    facts.leftovers.iter().any(|l| l.kind == LeftoverKind::FormerHost && l.id == host_id)
+}
+
 /// The mark a row's state reads as in text: ✓ done, ○ not set up, • attention.
 pub fn mark(state: RowState) -> &'static str {
     match state {
@@ -608,16 +615,23 @@ pub fn mark(state: RowState) -> &'static str {
     }
 }
 
+/// `s` without control characters, for a terminal: names and labels come
+/// from other members' events, and an escape sequence must never reach the
+/// screen.
+pub fn plain(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).collect()
+}
+
 /// The checklist as text, one line per row (`ligus setup`, lt): the mark,
 /// the title, the detail and, when the row has an action, what `how` says
 /// to do for it (a command, a key). Clean up's items follow under it.
 pub fn render_text(list: &Checklist, how: &dyn Fn(&str) -> Option<String>) -> String {
     let mut out = String::new();
     for r in &list.rows {
-        let act = r.action.as_ref().and_then(|a| how(&a.id).map(|h| format!("{}: {h}", a.label)));
+        let act = r.action.as_ref().and_then(|a| how(&a.id).map(|h| format!("{}: {}", plain(&a.label), plain(&h))));
         let line = match act {
-            Some(a) => format!("{} {:<12} {:<48} {a}", mark(r.state), r.title, r.detail),
-            None => format!("{} {:<12} {}", mark(r.state), r.title, r.detail),
+            Some(a) => format!("{} {:<12} {:<48} {a}", mark(r.state), plain(&r.title), plain(&r.detail)),
+            None => format!("{} {:<12} {}", mark(r.state), plain(&r.title), plain(&r.detail)),
         };
         out.push_str(line.trim_end());
         out.push('\n');
@@ -626,8 +640,8 @@ pub fn render_text(list: &Checklist, how: &dyn Fn(&str) -> Option<String>) -> St
         out.push('\n');
         out.push_str("Clean up\n");
         for i in &list.cleanup {
-            let detail = if i.detail.is_empty() { String::new() } else { format!(" · {}", i.detail) };
-            out.push_str(&format!("  {}{detail}  [{}]  {}\n", i.label, i.action.label, i.key));
+            let detail = if i.detail.is_empty() { String::new() } else { format!(" · {}", plain(&i.detail)) };
+            out.push_str(&format!("  {}{detail}  [{}]  {}\n", plain(&i.label), plain(&i.action.label), plain(&i.key)));
         }
     }
     out

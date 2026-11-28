@@ -265,7 +265,7 @@ pub fn gather(svc: &ChatService, ws: Uuid, viewer: &Viewer, live: &Live<'_>) -> 
             f.leftovers.push(Leftover {
                 kind: LeftoverKind::LegacyAgent,
                 id: a.id.to_string(),
-                label: a.name.trim().to_string(),
+                label: shown(a.name.trim()),
                 detail: "an old name: @ligus is the default agent".into(),
                 can_remove: admin || own,
             });
@@ -293,7 +293,7 @@ pub fn gather(svc: &ChatService, ws: Uuid, viewer: &Viewer, live: &Live<'_>) -> 
                 ligus_core::outcome::TurnRoute::Unrunnable(why) => (label, false, why_words(&why)),
             }
         };
-        f.agents.push(AgentItem { name: a.name.trim().to_string(), runs_on, answers, why });
+        f.agents.push(AgentItem { name: shown(a.name.trim()), runs_on, answers, why });
     }
     f
 }

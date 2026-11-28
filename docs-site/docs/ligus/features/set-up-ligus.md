@@ -53,7 +53,7 @@ Clean up gathers what an older workspace collects over time:
 | A member **retired** into their person (a duplicate after linking) | **Remove from view** |
 | One of your devices **approved, never used** or **idle** for 30 days | **Remove** (it's revoked, with your passkey) |
 | One of your devices that was **revoked** | **Remove from view** |
-| A host of a **former member**, a revoked device or a box that left | **Remove** (Admins, with a passkey; agents placed on it keep saying the host is gone) |
+| A host whose **device was revoked** (or, in a workspace still on rules 2, a former member's host; rules 3 already takes those out of every list) | **Remove** (Admins, with a passkey; agents placed on it keep saying the host is gone) |
 | An **old agent name**: a roster agent called `hive` (from the Hive builds) or `ligus` | **Remove** (its owner or an Admin, with a passkey) |
 
 Every action asks first, in plain words, and a **Remove** then asks for your
