@@ -123,7 +123,7 @@ step with the code.
 | `LIGUS_SERVE_TOKEN_FILE` | `<data dir>/serve.token` | the direct-path bearer token file (also used by `ligus pair` and `ligus phones revoke`) |
 | (no variable) | `<data dir>/serve.operator.token` | the operator's bearer token, created at first start; the only credential for the box owner's routes and secrets on a loopback listener. Never in a pairing link |
 | `LIGUS_SERVE_PUBLIC_URL` | `http://<listen>` | URL put in the pairing link |
-| `LIGUS_SERVE_LABEL` | `$HOSTNAME`, else `home host` | the host's label |
+| `LIGUS_SERVE_LABEL` | `$HOSTNAME`, else `home host` | the box's device name, written only when it changed since the box last wrote one (a desktop rename survives a restart) |
 | `LIGUS_SERVE_NAME` | unset | display name of the box (its own service member) |
 | `LIGUS_ADMISSION_FILE` | unset | a file holding a box admission code, redeemed at start-up by `ligus serve` and `ligus worker` (the chart mounts a Secret here); denied to agent processes. See [Admitting a box](../ops/admitting-a-box.md) |
 | `LIGUS_SERVE_OWNER` | removed | refused with an error: a box is never a person's device |

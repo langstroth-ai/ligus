@@ -157,6 +157,9 @@ On a workspace on [rules 4](../../operate/security/threat-model.md#rules-4)
 removal: you stop being a member at once, write nothing more there, and the
 next key rotation leaves your devices out. A box that leaves takes its host
 with it, and the agents placed on it wait for someone to place them again.
+Started again, a box that left stays out: it writes nothing, publishes no
+beat, and logs `This box left <workspace>. To rejoin: ligus admit request (an
+Admin approves).`
 Your own leave never undoes anything you did before it.
 
 Builds before 0.5 don't know about leaving: they keep listing the member as

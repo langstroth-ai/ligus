@@ -23,7 +23,12 @@
 //! request, the 15-minute expiry, 10 puts a minute per client, no overwrite,
 //! the 8 KiB and 32 KiB caps, signed register and reset with the stale
 //! counter, member auth within 300 s, read keys scoped to their request, and
-//! delete. [`router_with_clock`] gives tests the clock they read.
+//! delete. [`router_with_clock`] gives tests the clock they read. The short
+//! link code routes (Ligus 0.5) are here too: a member posts, checks and
+//! withdraws a code, anyone resolves it once, with the 10-minute life, 4
+//! live codes per mailbox and 10 resolves a minute per client;
+//! [`router_with_restart`] restarts the mailboxes and codes, or leaves the
+//! code routes out.
 //!
 //! Deliberately omitted: the SSE `/events` stream (the client degrades to polling
 //! on 404, which the tests rely on) and everything social/directory/admin, which
@@ -83,7 +88,7 @@ fn unix_now() -> i64 {
 #[path = "test_relay/mailbox.rs"]
 mod mailbox;
 #[allow(unused_imports)]
-pub use mailbox::{AUTH_WINDOW_MS, MAX_LIVE, MAX_MSGS, PUTS_PER_MIN};
+pub use mailbox::{MailboxRestart, AUTH_WINDOW_MS, CODES_PER_MAILBOX, CODE_RESOLVES_PER_MIN, CODE_TTL_MAX_SECS, MAX_LIVE, MAX_MSGS, PUTS_PER_MIN};
 
 /// The clock a mock relay's mailboxes read: the system clock plus an offset
 /// tests move forward. [`TestClock::clock`] gives a client the same clock.
@@ -144,6 +149,17 @@ fn build(page_cap: usize, clock: TestClock) -> (Router, EnvelopeGets, ()) {
     (routes(state, true, clock), gets, ())
 }
 
+/// A mock relay whose mailboxes and short link codes can be forgotten as a
+/// restart forgets them, read `clock`, and (with `codes: false`) a relay
+/// from before the short code routes.
+#[allow(dead_code)]
+pub fn router_with_restart(codes: bool) -> (Router, TestClock, MailboxRestart) {
+    let clock = TestClock::default();
+    let state: Shared = Arc::new(Mutex::new(MockState { page_cap: DEFAULT_PAGE_CAP, ..Default::default() }));
+    let (mb, restart) = mailbox::router_with(clock.clone(), codes);
+    (base_routes(state, true).merge(mb), clock, restart)
+}
+
 /// A mock relay with a handle on its blobs; `retain: false` leaves out the
 /// retain route (a relay from before Ligus 0.4: plain `404`).
 pub fn router_with_blobs(retain: bool) -> (Router, MockBlobs) {
@@ -152,6 +168,10 @@ pub fn router_with_blobs(retain: bool) -> (Router, MockBlobs) {
 }
 
 fn routes(state: Shared, retain: bool, clock: TestClock) -> Router {
+    base_routes(state, retain).merge(mailbox::router(clock))
+}
+
+fn base_routes(state: Shared, retain: bool) -> Router {
     let mut router = Router::new()
         .route("/v1/workspaces/{ws}/blobs", post(post_blob))
         .route("/v1/workspaces/{ws}/blobs/{id}", get(get_blob).delete(delete_blob));
@@ -172,7 +192,6 @@ fn routes(state: Shared, retain: bool, clock: TestClock) -> Router {
         .route("/v1/pair", post(create_pair))
         .route("/v1/pair/{code}", get(resolve_pair))
         .with_state(state)
-        .merge(mailbox::router(clock))
 }
 
 /// Looks at and ages a mock relay's blobs.

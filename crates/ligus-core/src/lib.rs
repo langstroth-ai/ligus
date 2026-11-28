@@ -31,6 +31,7 @@ pub mod ids;
 pub mod keys;
 pub mod lamport;
 pub mod lease;
+pub mod link_code;
 pub mod match_code;
 pub mod memory;
 #[cfg(test)]

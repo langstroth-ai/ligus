@@ -2672,7 +2672,7 @@ export function MemberRow({
 
 /// A single registered device/worker: label, a kind chip, an online/offline
 /// status dot, and a relative "last seen".
-function HostRow({ host }: { host: WorkspaceHostDto }) {
+export function HostRow({ host }: { host: WorkspaceHostDto }) {
   const gateways = hostGatewaysLabel(host);
   const tip = [gateways ? `Gateways: ${gateways}` : "", host.build ? `Ligus ${host.build}` : ""].filter(Boolean).join(" · ");
   // Idle: no beat for 30 days (workspace model v3, 10.1), shown grey.
@@ -2683,7 +2683,36 @@ function HostRow({ host }: { host: WorkspaceHostDto }) {
       title={<span style={idle ? { opacity: 0.6 } : undefined}>{host.label || "Unnamed host"}</span>}
       meta={[host.kind, host.online ? "online" : idle ? "idle" : relativeAgo(host.lastSeen), host.readiness].filter(Boolean).join(" · ")}
       tip={tip || undefined}
-    />
+    >
+      {host.kind === "worker" && host.build && host.upgradeTo ? <HostUpdateLine build={host.build} next={host.upgradeTo} /> : null}
+    </ListRow>
+  );
+}
+
+/// What "how" says on a box's "Update available" line. Nothing upgrades on
+/// its own: the box's operator runs the command on the box.
+export const HOST_UPGRADE_HOW =
+  "On the box, run ligus-local upgrade. It upgrades the way Ligus was installed there (brew upgrade ligus for Homebrew), restarts the box and checks it. Ligus never upgrades a box on its own.";
+
+/// One grey line under a box or worker row: "0.4.1 → 0.5.0 available · how".
+export function HostUpdateLine({ build, next }: { build: string; next: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="pl-[18px] text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }} data-testid="host-update">
+      <span>
+        {build} → {next} available ·{" "}
+      </span>
+      <button
+        type="button"
+        className="underline decoration-dotted underline-offset-2 hover:text-ink"
+        aria-expanded={open}
+        data-tip={HOST_UPGRADE_HOW}
+        onClick={() => setOpen((v) => !v)}
+      >
+        how
+      </button>
+      {open && <p className="mt-0.5">{HOST_UPGRADE_HOW}</p>}
+    </div>
   );
 }
 

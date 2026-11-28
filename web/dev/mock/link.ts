@@ -2,6 +2,7 @@
 // data, for previews and screenshots. The flow moves on by itself a moment
 // after each step, the way the other device would answer. Knob (URL query):
 //   &link=nomailbox   (the relay can't carry requests: the paste path)
+//   &link=nocodes     (Add a computer: the relay has no short codes)
 
 import { emit } from "./event";
 
@@ -70,6 +71,24 @@ export function linkMock(cmd: string, args: Args): { handled: boolean; value?: u
         handled: true,
         value: set({ phase: "confirmApprover", personName: "Ana", workspaceName: "Apiary", approverFingerprint: "7F3A-91C0-77DE-0B14-5E62" }),
       };
+    case "link_code_show":
+    case "link_code_status":
+      return {
+        handled: true,
+        value: {
+          state: params.get("link") === "nocodes" ? "noRoutes" : "live",
+          workspaceId: (args?.workspaceId as string) ?? "ws-1",
+          code: "K7Q-4MX",
+          codeSpelled: "K 7 Q, 4 M X",
+          relay: null,
+          expiresAt: Date.now() + 10 * 60_000,
+          notice: null,
+          error: null,
+          address: null,
+        },
+      };
+    case "link_code_close":
+      return { handled: true, value: { state: "idle", workspaceId: "", code: null, codeSpelled: null, relay: null, expiresAt: null, notice: null, error: null, address: null } };
     case "link_request_redeem":
       return { handled: true, value: set({ phase: "linked", personName: "Ana", workspaceId: "ws-1" }) };
     default:

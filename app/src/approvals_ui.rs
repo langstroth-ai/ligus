@@ -739,6 +739,20 @@ pub(crate) async fn reset_approval_address(app: AppHandle, workspace_id: String)
     Ok(AddressDto { address: a.encode(), relay: a.relay, can_reset: true })
 }
 
+/// What a short link code for workspace `ws` needs (`link_code_ui`): the
+/// relay client, the founder pin and the epoch keys. Only a person's own
+/// device shows one (not a delegated box).
+pub(crate) fn link_code_target(app: &AppHandle, ws: Uuid) -> Result<(MailboxClient, String, Vec<EpochKey>), String> {
+    let t = target_for(app, ws)?;
+    if !t.can_devices {
+        return Err("Only your own desktop shows a code to link a device.".into());
+    }
+    if t.epochs.is_empty() {
+        return Err("No workspace key on this device yet.".into());
+    }
+    Ok((t.client(), t.founder_pin.clone(), t.epochs.clone()))
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PasteMatchDto {

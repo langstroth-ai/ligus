@@ -117,6 +117,7 @@ fn box_opts(label: &str) -> ServeOptions {
         ntfy: None,
         public_url: None,
         label: label.into(),
+        label_given: true,
         name: Some("Phone".into()),
         pair: false,
         prometheus_url: "http://127.0.0.1:9".into(),
@@ -239,6 +240,7 @@ async fn harness_with(
         ntfy: Some(ntfy::Ntfy { url: ntfy_url, topic: "ligus-test".into(), token: None, titles: true }),
         public_url: None,
         label: "sff".into(),
+        label_given: true,
         name: Some("Phone".into()),
         pair: false,
         prometheus_url: "http://127.0.0.1:9".into(),
@@ -5393,6 +5395,7 @@ async fn internal_errors_answer_a_generic_message() {
 }
 
 mod approvals;
+mod box_host;
 mod box_removal;
 mod devices_link;
 mod foreign_certificate;
@@ -5581,4 +5584,72 @@ async fn the_phone_gets_the_credited_ask_never_a_refused_squat() {
     let pre = b64d(listed["asks"][0]["signed"]["preimage"].as_str().unwrap());
     let payload: Value = serde_json::from_slice(&preimage_payload(&pre)).unwrap();
     assert_eq!(payload["record"]["question"], "Use Postgres or SQLite?", "the phone gets the credited envelope");
+}
+
+/// Workspace model v3, 17.6: a phone renames itself through its box as its
+/// person, signed by its own key, only from rules 4. On rules 3 the box
+/// says so (409 `rename_on_desktop`, and `/v1/me` doesn't offer it), writes
+/// nothing, and never names the phone itself; a malformed name or a stale
+/// draft is refused before anything is signed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_phone_renames_itself_only_where_the_rules_let_it() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let (phone, account) = certified_phone(&h).await;
+    let labels = |h: &Harness| {
+        h.handle
+            .shared
+            .lock()
+            .store()
+            .list(workspace_config_session_id(ws))
+            .unwrap()
+            .into_iter()
+            .filter(|e| matches!(&e.payload, ligus_core::SessionEvent::DeviceLabelSet { label } if label.device_id == phone.device_id))
+            .count()
+    };
+    let before = labels(&h);
+
+    // /v1/me (on the box itself) doesn't offer it on rules 3.
+    h.as_operator = true;
+    let (status, me) = status_of(&h, reqwest::Method::GET, &format!("/v1/me?deviceId={}", phone.device_id), None).await;
+    h.as_operator = false;
+    assert_eq!(status, 200, "{me}");
+    assert_eq!(me["capabilities"]["phoneConsent"], json!(1));
+    assert!(me["capabilities"].get("phoneLabel").is_none(), "{me}");
+
+    // A rename on rules 3: refused, with where to do it instead.
+    let (status, v) = status_of(&h, reqwest::Method::POST, "/v1/phone-label/prepare", Some(json!({ "deviceId": phone.device_id, "label": "Work phone" }))).await;
+    assert_eq!((status, v["error"].as_str()), (409, Some(super::phone_label_api::RENAME_ON_DESKTOP_CODE)), "{v}");
+    assert!(v["message"].as_str().unwrap_or_default().contains("My devices"), "{v}");
+
+    // A malformed name, or a phone this workspace doesn't know: refused
+    // before the rules are asked.
+    let long = "w".repeat(49);
+    for bad in ["", " Work phone", "Work\u{202E}phone", long.as_str()] {
+        let (status, v) = status_of(&h, reqwest::Method::POST, "/v1/phone-label/prepare", Some(json!({ "deviceId": phone.device_id, "label": bad }))).await;
+        assert_eq!(status, 403, "{bad:?}: {v}");
+    }
+    let (status, v) = status_of(&h, reqwest::Method::POST, "/v1/phone-label/prepare", Some(json!({ "deviceId": Uuid::new_v4(), "label": "Work phone" }))).await;
+    assert_eq!(status, 403, "{v}");
+    // Unknown fields are refused (nothing rides along).
+    let (status, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-label/prepare", Some(json!({ "deviceId": phone.device_id, "label": "Work phone", "accountId": account }))).await;
+    assert!(status == 400 || status == 422, "{status}");
+    // A commit with no draft.
+    let sig = ligus_core::crypto::sign_p256(&phone.key, b"anything");
+    let (status, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-label/commit", Some(json!({ "prepareId": "nope", "signature": ligus_core::presence::b64url(&sig) }))).await;
+    assert_eq!(status, 404);
+
+    // Nothing was written, and the box never named the phone as itself.
+    assert_eq!(labels(&h), before);
+    let box_wrote = h
+        .handle
+        .shared
+        .lock()
+        .store()
+        .list(workspace_config_session_id(ws))
+        .unwrap()
+        .into_iter()
+        .any(|e| matches!(&e.payload, ligus_core::SessionEvent::DeviceLabelSet { label } if label.device_id == phone.device_id) && e.signer_device_id != Some(phone.device_id) && e.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ligus_core::ActorKind::Service));
+    assert!(!box_wrote);
 }

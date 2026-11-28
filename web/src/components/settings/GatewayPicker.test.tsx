@@ -16,6 +16,7 @@ const host = (id: string, label: string, gws: [string, string][]): WorkspaceHost
   offers: [],
   readiness: "",
   build: "",
+  upgradeTo: "",
   mine: false,
 });
 
