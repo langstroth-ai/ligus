@@ -46,6 +46,7 @@ pub mod retire;
 pub mod leave;
 pub mod phone;
 pub mod rules;
+pub mod rules4;
 
 use std::collections::BTreeMap;
 
@@ -67,14 +68,20 @@ use crate::session::ChatSession;
 pub struct RulesVersion(pub u32);
 
 /// The highest rules version this build enforces.
-pub const RULES_SUPPORTED: u32 = 3;
+pub const RULES_SUPPORTED: u32 = 4;
 /// Rules version 3 (identity model v2, "Rules 3 in 0.4"): a certificate
 /// counts only with its device's own acceptance, a retired member is
 /// removed, inline credentials and member records whose ids disagree are
 /// denied, and hosts of former members are inert.
 pub const RULES_V3: u32 = 3;
-/// The rules a workspace founded by this build starts at.
-pub const RULES_NEW_WORKSPACE: u32 = 3;
+/// Rules version 4 (workspace model v3, 15): agents carry their own run
+/// spec and placement, and the fold checks them (G1 to G14, [`rules4`]).
+/// Builds before 0.5 are read-only on a workspace that sets it.
+pub const RULES_V4: u32 = 4;
+/// The rules a workspace founded by this build starts at (decision D11:
+/// new workspaces start on rules 4 in 0.5; existing ones stay until an
+/// Owner switches).
+pub const RULES_NEW_WORKSPACE: u32 = 4;
 /// The rules every workspace starts at (the seed's roster), and the lowest
 /// version a `WorkspaceRulesSet` may name.
 pub const RULES_GENESIS: u32 = 2;
@@ -191,6 +198,18 @@ pub struct AuthzState {
     /// never one someone else wrote under its id (H11); the fold's
     /// `workspace_hosts` keeps every allowed record for authorization.
     pub host_signers: BTreeMap<String, Option<Uuid>>,
+    /// Rules 4 (G14): each turn's "Run here this time", by the trigger
+    /// message it answers (the first allowed `TurnDelegated` of it).
+    pub delegations: BTreeMap<Uuid, Delegation>,
+}
+
+/// One allowed `TurnDelegated`: `device_id` may answer the turn for
+/// `agent_id`, once (workspace model v3, 5.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Delegation {
+    pub agent_id: Uuid,
+    pub device_id: Uuid,
+    pub event_id: Uuid,
 }
 
 impl AuthzState {
@@ -538,6 +557,17 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             if let Err(why) = agent::tier_allows(&env.payload, agent_id, env.signer_device_id.unwrap_or_default(), fold) {
                 return Decision::deny(why);
             }
+            // Rules 4 (G6, G14): a new reply or proposal for an agent comes
+            // from a device its placement admits, or the device a
+            // `TurnDelegated` gave that turn (chunks and completions follow
+            // their message's author).
+            if let Some(at) = ctx.workspace.filter(|w| w.rules >= RULES_V4) {
+                let new_output = matches!(env.payload, SessionEvent::MessageAppended { .. } | SessionEvent::ProposalUpserted { .. });
+                let device = env.signer_device_id.unwrap_or_default();
+                if new_output && !rules4::admitted(agent_id, device, rules4::trigger_of(&env.payload, fold), fold, at) {
+                    return Decision::deny("this device doesn't run that agent here: its placement doesn't admit it and no turn was delegated to it");
+                }
+            }
         }
     }
     // An effect of the chat's primary runtime (host-signed, no agent
@@ -572,6 +602,27 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     if rules_here >= RULES_V3 {
         if let Some(why) = rules3_refusal(&env.payload) {
             return Decision::deny(why);
+        }
+    }
+    // Rules 4 (workspace model v3, 15): see [`rules4`].
+    if rules_here >= RULES_V4 {
+        if let Some(roster) = roster_here {
+            if let Some(why) = rules4::refusal(env, on_config, roster, fold, author) {
+                return Decision::deny(why);
+            }
+            if let (SessionEvent::TurnDelegated { .. }, false) = (&env.payload, on_config) {
+                if let Some(why) = rules4::delegation_refusal(env, fold, roster, author) {
+                    return Decision::deny(why);
+                }
+            }
+            if let (SessionEvent::AgentUpserted { agent }, true) = (&env.payload, on_config) {
+                if let Some(why) = rules4::default_agent_refusal(agent, fold) {
+                    return Decision::deny(why);
+                }
+                if let Some(why) = rules4::placement_refusal(agent, fold, roster) {
+                    return Decision::deny(why);
+                }
+            }
         }
     }
 
@@ -721,7 +772,10 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 Err(why) => Decision::deny(why),
             };
         }
-        SessionEvent::MemberLeft { member_id, account_id, .. } => {
+        SessionEvent::MemberLeft { member_id, account_id, watermark } => {
+            if let Some(why) = account_id.and_then(|a| rules4::leave_watermark_refusal(watermark, a, member_id, ctx.running)) {
+                return Decision::deny(why);
+            }
             return match leave::leave_ok(env, member_id, *account_id, on_config, ctx.running, fold) {
                 Ok(()) => Decision::Allow,
                 Err(why) => Decision::deny(why),
@@ -752,6 +806,12 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         if ctx.checked && !on_config && caps_by_workspace_role(&env.payload) {
             let ws_role = ctx.workspace.and_then(|at| at.role_of(author)).unwrap_or(WorkspaceRole::Viewer);
             if ws_role.rank() < role.rank() {
+                role = ws_role;
+            }
+            // Rules 4 (G12): filing a chat into a channel follows the
+            // workspace role, not the chat's own roster (where only its
+            // creator is listed).
+            if matches!(env.payload, SessionEvent::ChatChannelChanged { .. }) && rules_here >= RULES_V4 {
                 role = ws_role;
             }
         }
@@ -799,7 +859,12 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
         // S2: binding an agent to a host or runtime is an Admin action.
         let ws_agents = if ctx.checked && !on_config { ctx.workspace } else { None };
-        if let Some(floor) = agent_change_floor(&env.payload, author, fold, ws_agents) {
+        let floor = match &env.payload {
+            // Rules 4 (G1, table 5.7) on the merged record.
+            SessionEvent::AgentUpserted { agent } if rules_here >= RULES_V4 && on_config => Some(rules4::agent_floor(agent, author, fold, ctx.running)),
+            _ => agent_change_floor(&env.payload, author, fold, ws_agents),
+        };
+        if let Some(floor) = floor {
             if role.rank() < floor.rank() {
                 return Decision::deny(format!("role {role:?} cannot change this agent's host, runtime or owner"));
             }
@@ -1158,7 +1223,17 @@ fn memory_refusal(env: &SessionEventEnvelope, record: &crate::flow::FlowRecord, 
 
 fn authorize_agent(env: &SessionEventEnvelope, ctx: &Ctx<'_>, roster: &RosterState) -> Decision {
     let author = author_of(env);
-    let Some(key) = env.signer_device_id.and_then(|k| roster.valid_agent_key(k)) else {
+    // Rules 4 (G14): a key its host certified while the placement admitted
+    // it also signs the one turn a `TurnDelegated` gives that host, while
+    // that host is still trusted (a delegation never revives a revoked
+    // device's keys).
+    let delegated_key = || {
+        let key = env.signer_device_id.and_then(|k| roster.agent_keys.get(&k)).filter(|k| roster.device_trusted(k.host_device_id))?;
+        let trigger = rules4::trigger_of(&env.payload, ctx.fold);
+        let new_output = matches!(env.payload, SessionEvent::MessageAppended { .. } | SessionEvent::ProposalUpserted { .. });
+        (roster.rules >= RULES_V4 && new_output && rules4::delegated(key.agent_id, key.host_device_id, trigger, ctx.fold)).then_some(key)
+    };
+    let Some(key) = env.signer_device_id.and_then(|k| roster.valid_agent_key(k)).or_else(delegated_key) else {
         return Decision::deny("not signed by an agent key valid here");
     };
     if key.agent_id.to_string() != author {

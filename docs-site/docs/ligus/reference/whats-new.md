@@ -8,6 +8,34 @@ Full release notes are on the
 
 ### Added
 
+- **Link a device by typing a short code.** **Settings → Profile → My
+  devices → Add a computer** now shows **Link a device** with a 6-character
+  code such as `K7Q-4MX`; the new device types it in its first run (**I
+  already use Ligus on another device**), in `lt`'s **Add to my devices**, or
+  with `ligus devices request --code K7Q-4MX`, instead of pasting the
+  approval address. From there it is the code match as before, and Add a
+  computer opens the request when it arrives. A code works once, for 10
+  minutes, and the relay sees neither the code nor the address. `ligus
+  devices link` shows a code from a terminal. If the relay restarts, the
+  desktop posts the same code again and a waiting computer asks again, and
+  both say so. This needs a relay with the short code routes (the relay's next release);
+  with an older relay, Add a computer shows the approval address as before.
+  See [With a short code](../features/linked-devices.md#short-code).
+
+- **Workspace rules 4.** New workspaces now start on rules 4, where every
+  device checks what an agent runs and where: placing an agent on a host
+  needs that host to exist, be trusted and offer what the agent runs; a
+  Contributor places their own agent on their own computer with a passkey,
+  and only an Admin places one elsewhere or in a pool; changing an agent's
+  model within the same source needs no passkey. **Run here this time** is a
+  signed one-turn permission, so the reply counts on every device. Leaving a
+  workspace removes you; a box started again after `ligus serve leave` stays
+  out and logs how to rejoin. A host record counts only from its own device, and
+  members without an account, model server addresses on the log and
+  whole-list writes are refused. An existing workspace stays on its rules
+  until an Owner switches it; builds before 0.5 open a rules 4 workspace
+  read-only. See [Workspace rules 4](../../operate/security/threat-model.md#rules-4).
+
 - **Set up Ligus: one checklist on every surface.** **Settings > Set up
   Ligus** on the desktop (also the empty Home, **⌘K** and the end of the
   first run), `ligus setup` in a terminal, lt's setup screen and the
@@ -31,6 +59,25 @@ Full release notes are on the
   upgrade` on the box (it runs `brew upgrade ligus` for a Homebrew install
   and restarts the box). Ligus never upgrades a box on its own. See
   [Operating it](../../operate/deploy/personal-fleet.md#operating-it).
+
+- **Your phone in one flow.** Scan the desktop's code (the Connect screen
+  now reads it as well as the `ligus pair` code), check the name the phone
+  suggests ("Ana's iPhone", editable), and choose **Add**: that one
+  confirmation also signs the phone's statement that it is yours, so the
+  separate "Confirm this phone is Ana's" question no longer follows (it
+  stays for phones added with Can't scan? or before 0.5). On builds that can
+  push, the phone then asks once about notifications, with a line on why;
+  the last screen says what works now. A phone added again under a new name
+  is renamed for every device. See
+  [Add your phone](../features/phone-app.md#add-this-phone).
+
+- **The phone renames itself.** **Settings → This phone → Rename**, signed
+  by the phone's own key through its box, where the workspace's rules let a
+  phone name itself (rules version 4); elsewhere the **?** points to My
+  devices on your desktop. Boxes add `POST /v1/phone-label/prepare` and
+  `/commit`, and `GET /v1/me` says when it is available
+  (`capabilities.phoneLabel`). See
+  [Renaming the phone](../features/phone-app.md#rename-phone).
 
 - **Admit a box without pasting anything, from setup or the deploy
   script.** `ligus setup box --to ligusaddr1:…` and `deploy/local/ligus-local

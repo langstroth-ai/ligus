@@ -40,6 +40,11 @@ fn founder() -> (ChatService, Uuid) {
     author.account_id = Some(account);
     let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
     svc.disable_test_presence();
+    // These fixtures admit accountless members by name (the rules-3 shape);
+    // rules 4 refuses those (D12), so they found on rules 3. A workspace
+    // this build founds is on rules 4: see
+    // `a_new_workspace_is_on_rules_v2_from_its_seed_and_v4_from_its_first_passkey`.
+    svc.set_founding_rules(ligus_core::authz::RULES_V3);
     let wid = Uuid::new_v4();
     svc.ensure_workspace_config(wid).unwrap();
     (svc, wid)
@@ -86,7 +91,7 @@ fn on_rules_v2() -> (ChatService, Uuid, Arc<SoftAuthenticator>, Arc<RecoveryKey>
     let k2 = key.clone();
     svc.register_passkey(wid, rc, &move |req| Ok(k2.get(&req.challenge))).unwrap();
     svc.set_presence_provider(Some(Arc::new(Soft(key.clone()))));
-    svc.set_workspace_rules(wid, ligus_core::authz::RULES_NEW_WORKSPACE).unwrap();
+    svc.set_workspace_rules(wid, ligus_core::authz::RULES_V3).unwrap();
     svc.set_presence_provider(None);
     (svc, wid, key, rec)
 }
@@ -128,13 +133,15 @@ fn second_passkey_needs_existing_presence() {
     assert_eq!(svc.passkeys_of(wid, account(&svc)).unwrap().len(), 2);
 }
 
-/// Phase A, and rules 3 from 0.4: a workspace is on rules v3 from its seed.
+/// Phase A, rules 3 from 0.4 and rules 4 from 0.5: a workspace is on rules
+/// v2 from its seed and on rules 4 from the founder's first credential.
 /// The genesis `WorkspaceRulesSet` names the relying party without presence
 /// (nobody has a credential yet); governance needs the founder's passkey
 /// from the first event on; there is no rules v1 to switch to.
 #[test]
-fn a_new_workspace_is_on_rules_v2_from_its_seed_and_v3_from_its_first_passkey() {
+fn a_new_workspace_is_on_rules_v2_from_its_seed_and_v4_from_its_first_passkey() {
     let (mut svc, wid) = founder();
+    svc.set_founding_rules(ligus_core::authz::RULES_NEW_WORKSPACE);
     let cfg = workspace_config_session_id(wid);
     let log = config_log(&svc, wid);
     assert!(
@@ -150,14 +157,19 @@ fn a_new_workspace_is_on_rules_v2_from_its_seed_and_v3_from_its_first_passkey() 
     // The founder's first passkey registers with the seed's grant.
     let key = Arc::new(SoftAuthenticator::es256());
     register(&mut svc, wid, &key, None).unwrap();
-    assert_eq!(svc.load(cfg).unwrap().unwrap().authz.rules, 3, "the founder's first passkey moves it to rules 3, with presence");
+    assert_eq!(svc.load(cfg).unwrap().unwrap().authz.rules, 4, "the founder's first passkey moves it to rules 4, with presence (D11)");
     assert!(!svc.workspace_secured(wid).unwrap(), "a passkey without a recovery key isn't secured yet");
     let rec = RecoveryKey::generate().unwrap();
     let k = key.clone();
     svc.register_passkey(wid, rec.credential(account(&svc), "Recovery"), &move |req| Ok(k.get(&req.challenge))).unwrap();
     assert!(svc.workspace_secured(wid).unwrap());
     svc.set_presence_provider(Some(Arc::new(Soft(key))));
-    svc.add_member(cfg, wid, member("bea", WorkspaceRole::Contributor)).unwrap();
+    // Rules 4 admits a person with their account (D12), never by name only.
+    assert!(svc.add_member(cfg, wid, member("bea", WorkspaceRole::Contributor)).is_err());
+    let bea = Uuid::new_v4();
+    let mut m = member(&bea.to_string(), WorkspaceRole::Contributor);
+    m.actor.account_id = Some(bea);
+    svc.add_member(cfg, wid, m).unwrap();
     let log = config_log(&svc, wid);
     let v = fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked);
     assert!(log.iter().filter(|e| v.contains_key(&e.event_id)).all(|e| v[&e.event_id] == Verdict::Allowed));
@@ -177,7 +189,7 @@ fn rules_v1_is_refused_by_the_fold() {
     log.push(env.clone());
     assert_eq!(fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked)[&env.event_id], Verdict::Denied);
     let (cfg, _) = ligus_core::project_config(&log, None, None);
-    assert_eq!(cfg.unwrap().authz.rules, ligus_core::authz::RULES_NEW_WORKSPACE);
+    assert_eq!(cfg.unwrap().authz.rules, ligus_core::authz::RULES_V3);
 }
 
 #[test]

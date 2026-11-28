@@ -17,8 +17,9 @@ with Ligus?**
   them off).
 - **I already use Ligus on another device** links this device to your
   account instead. It asks for no name and makes or joins no workspace, so
-  you never end up as a second person in your own workspaces: you paste the
-  approval address from your other device, both screens show the same code,
+  you never end up as a second person in your own workspaces: you type the
+  short code your other device shows (`K7Q-4MX`, or paste its approval
+  address), both screens show the same code,
   and your other device confirms with your passkey (see
   [From a second desktop](linked-devices.md#desktop)). The workspace and
   your profile then come from your other device. The first run ends there,

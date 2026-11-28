@@ -275,6 +275,11 @@ pub(crate) async fn run_turn_here(
         ligus_core::dispatch::Step::Run => {}
         _ => return Err("another device is answering it".into()),
     }
+    // Rules 4: a signed one-turn delegation, so every device accepts this
+    // device's reply for an agent placed elsewhere (G14).
+    if let Some(agent_id) = responder.agent_id {
+        state.service.lock().unwrap().delegate_turn(sid, workspace_id, trigger, agent_id).map_err(map_err)?;
+    }
     tracing::info!(target: "dispatch", responder = %responder.author, claude_code = use_cc, "running a turn here this time");
     crate::run_turn_answering(&app, &state, sid, workspace_id, &responder, Some(trigger)).await.map(|_| ())
 }

@@ -33,12 +33,18 @@ pub fn profile_ok(env: &SessionEventEnvelope, change: &ProfileChange, on_config:
     profile::change_ok(change).map_err(String::from)
 }
 
+/// The rules version from which a phone may name itself (workspace model
+/// v3, 17.6; identity model v2, O3 "the device itself"). Before it a phone's
+/// own label is denied, exactly as 0.4 folds it.
+pub const PHONE_NAMES_ITSELF_FROM: u32 = super::RULES_V4;
+
 /// `DeviceLabelSet`: on the config log, for the stamp's own account, of a
 /// device certified for that account here and not revoked, signed either by
-/// that device itself or by a non-delegated, non-phone device of the
-/// account (the person's desktop renaming their phone or computer). Labels
-/// are keyed by (device, account), so a member who certified someone else's
-/// device key for themselves only ever labels it under their own name.
+/// that device itself (a phone only from rules 4,
+/// [`PHONE_NAMES_ITSELF_FROM`]) or by a non-delegated, non-phone device of
+/// the account (the person's desktop renaming their phone or computer).
+/// Labels are keyed by (device, account), so a member who certified someone
+/// else's device key for themselves only ever labels it under their own name.
 pub fn label_ok(env: &SessionEventEnvelope, label: &DeviceLabel, on_config: bool, roster: &RosterState) -> Result<(), String> {
     if !on_config {
         return Err("a device name is set on the workspace config log".into());
@@ -56,7 +62,7 @@ pub fn label_ok(env: &SessionEventEnvelope, label: &DeviceLabel, on_config: bool
         .filter(|d| !d.revoked && d.accounts.contains(&label.account_id))
         .ok_or("that device isn't certified for this account here")?;
     let signer = super::certified_signer(env, roster)?;
-    let itself = env.signer_device_id == Some(label.device_id) && !named.phone;
+    let itself = env.signer_device_id == Some(label.device_id) && (!named.phone || roster.rules >= PHONE_NAMES_ITSELF_FROM);
     if !itself && (signer.delegated_for(label.account_id) || signer.phone) {
         return Err("a device is named by itself or from one of its person's desktops".into());
     }

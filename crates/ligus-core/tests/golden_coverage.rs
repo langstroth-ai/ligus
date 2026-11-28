@@ -111,6 +111,7 @@ fn tag(e: &SessionEvent) -> &'static str {
         E::DeviceLabelSet { .. } => "deviceLabelSet",
         E::MemberRetired { .. } => "memberRetired",
         E::MemberLeft { .. } => "memberLeft",
+        E::TurnDelegated { .. } => "turnDelegated",
         E::Unknown => "unknown",
     }
 }
@@ -133,7 +134,7 @@ const ALL: &[&str] = &[
     "proposalApplied", "agentKeyCertified", "workspaceKeyRotated", "deviceKeyAgreementPublished", "passkeyRegistered",
     "passkeyRemoved", "identityLinkPublished", "identityLinkRemoved", "proposalApplyRequested", "workspaceRepoAdded",
     "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned", "proposalApplyFailed",
-    "profileUpdated", "deviceLabelSet", "memberRetired", "memberLeft",
+    "profileUpdated", "deviceLabelSet", "memberRetired", "memberLeft", "turnDelegated",
     "proposalApplyWithdrawn", "workspaceSandboxSet", "workspaceRepoAliasesSet", "workspaceHostAliasSet", "chatBaseRepinned", "attachmentPolicySet", "attachmentHashBlocked", "attachmentHashUnblocked", "attachmentShared",
     "attachmentDeleted", "proposalArchivePolicySet",
 ];
@@ -675,6 +676,66 @@ fn member_left_goldens() {
             log_head: None,
         });
         ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 80, event_id: u(0x8005) }));
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// Writes the rules-4 lines (workspace model v3, 15): "Run here this
+/// time" (`turnDelegated`, a chat event), an agent with a full run spec in
+/// a pool, the default agent's record, and the switch to rules 4. Run with
+/// `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the lines.
+#[test]
+#[ignore]
+fn rules4_goldens() {
+    use ligus_core::agent_run::{legacy_id, AgentRun, Placement};
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let cfg = ligus_core::workspace_config_session_id(ws);
+    let chat = u(3);
+    let run = AgentRun { harness: "ollama".into(), source: "ollama".into(), model: "llama3:8b".into(), resolved: None };
+    let mut pooled = ligus_core::WorkspaceAgent::new("scout", legacy_id(&run));
+    pooled.id = u(0x9100);
+    pooled.owner_actor_id = u(9).to_string();
+    pooled.created_at = Timestamp::epoch();
+    pooled.host_id = u(0x9101).to_string();
+    pooled.run = Some(run);
+    pooled.placement = Some(Placement::Pool);
+    let default_run = AgentRun { harness: "claudeCode".into(), source: "claude-code".into(), model: "opus".into(), resolved: None };
+    let mut default = ligus_core::WorkspaceAgent::new("Ligus", legacy_id(&default_run));
+    default.id = ligus_core::authz::rules4::default_agent_id(ws);
+    default.created_at = Timestamp::epoch();
+    default.run = Some(default_run);
+    default.placement = Some(Placement::ChatCreator);
+    let cases = [
+        ("turnDelegated", 0u64, chat, SessionEvent::TurnDelegated { trigger_id: u(0x9001), agent_id: u(0x9100), device_id: u(1) }),
+        ("agentUpserted/rules4-pool", 1, cfg, SessionEvent::AgentUpserted { agent: pooled }),
+        ("agentUpserted/default-agent", 2, cfg, SessionEvent::AgentUpserted { agent: default }),
+        ("workspaceRulesSet/v4", 3, cfg, SessionEvent::WorkspaceRulesSet { version: 4, presence: None }),
+    ];
+    let mut out = String::new();
+    for (label, i, log, payload) in cases {
+        let mut e = SessionEventEnvelope::new(log, ws, 901 + i as i64, payload);
+        e.id = u(0x9010 + 2 * i as u128);
+        e.event_id = u(0x9011 + 2 * i as u128);
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 990, event_id: u(0x9003) }),
+            presence: None,
+            runtime_effect: false,
+            prev: Some(u(0x9004)),
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
+        });
+        ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 90, event_id: u(0x9005) }));
         sign_envelope(&mut e, u(1), &kp);
         out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
     }

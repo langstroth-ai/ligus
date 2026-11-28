@@ -14,6 +14,48 @@ Ligus is short for *ligustica*, the Italian honeybee.
 There are two ways to add a computer. Both end the same way: one passkey
 confirmation on your desktop, and the computer acts as you.
 
+### With a short code {#short-code}
+
+From 0.5 nothing needs to be copied: your desktop shows a short code and the
+new computer types it.
+
+1. **On your desktop**, open **Settings → Profile → My devices → Add a
+    computer**. It shows **Link a device** with a 6-character code such as
+    `K7Q-4MX`. (`ligus devices link` shows one in a terminal too.)
+2. **On the new computer**, type it: in a second desktop's first run (**I
+    already use Ligus on another device**), in `lt` (**Add to my devices**),
+    or in a terminal:
+
+    ```sh
+    ligus devices request --code K7Q-4MX --label work-laptop
+    ```
+
+    Case and the dash don't matter. The code finds your workspace's approval
+    address on the relay, and from there it is the code match below: both
+    screens show the same 8-symbol code, you compare it, and you confirm on
+    your desktop with your passkey. **Add a computer** opens that request
+    for you when it arrives.
+
+A short code works once, for 10 minutes. It isn't a secret: it only finds the
+approval address, which grants nothing, and the relay sees neither the code
+nor the address (it keeps a lookup derived from the code and the address
+sealed with it). Someone who guessed a code would still have to show the same
+8-symbol code on your desktop. A mistyped, expired or used code says "No
+device is showing that code": get a new one on your desktop.
+
+The code is for your workspace's relay. On the community relay you type the
+code alone; with your own relay, Add a computer names it ("type this code with
+the relay relay.example.org"), and the new computer names it too (**Another
+relay** on the desktop, `--relay` for `ligus`).
+
+If the relay restarts while you link, nothing is lost: the desktop posts the
+same code again ("The relay restarted; the code works again."), and a
+computer waiting for approval asks again ("The relay restarted; asking
+again."). A relay older than 0.5 has no short codes: Add a computer then shows
+the approval address instead, and the steps below work as before. Under **Can't
+type a code? Other ways to link** the address and the request code are always
+there.
+
 ### With the approval address (code match) {#code-match}
 
 From 0.4 the computer's request reaches your desktop by itself, and both
@@ -80,9 +122,12 @@ first device with Ligus?** with **I already use Ligus on another device**. It
 asks no name and makes no workspace.
 
 1. **On your first desktop**, open **Settings → Profile → My devices → Add a
-    computer** and choose **Copy** next to the approval address.
-2. **On the new desktop**, paste it and choose **Continue**. It says
-    "Waiting for your other device. Open the request in its Inbox."
+    computer**. It shows a short code (`K7Q-4MX`); the approval address is
+    under **Can't type a code? Other ways to link**.
+2. **On the new desktop**, type the code (or paste the address) and choose
+    **Continue**. With your own relay, choose **Another relay** under the
+    code and enter it first. It says "Waiting for your other device. Open the
+    request in its Inbox."
 3. **On your first desktop**, open the request in the Inbox. Both screens
     show the same 8-symbol code. Check they match and choose **Codes match**
     on both (on the new desktop, **They don't match** ends it and nothing is
@@ -99,7 +144,8 @@ says to add one on your first desktop.
 Problems are said on the screen, with **Try again** when trying again can
 help: the relay can't be reached, the address is out of date (copy it again),
 the code expired (after 5 minutes) or no device opened the request in 15
-minutes.
+minutes. A short code that finds nothing says so, and so does a relay without
+short codes (paste the approval address instead).
 
 **When the relay can't carry the request** (no approval mailbox), the screen
 says so and offers **Use a request code**. It is also behind **Use a request

@@ -367,16 +367,41 @@ fn shown_ws(conn: &WorkspaceConn) -> String {
 
 // ── Starting, answering, cancelling ──────────────────────────────────────
 
-/// Post a link request to `address` and drive it in the background. Returns
-/// the first view (`waiting`, or `failed`/`noMailbox`).
-pub(crate) async fn start<H: LinkHost>(host: Arc<H>, slot: Arc<Slot>, address: &str) -> LinkFlowDto {
+/// A short code that didn't find an address, in words a person reads.
+fn code_failed(e: &MailboxError) -> Failed {
+    match e {
+        MailboxError::NoRoutes => Failed::final_(
+            "This relay doesn't know short codes yet. On your other device, copy the approval address instead (My devices > Add a computer) and paste it here.",
+        ),
+        MailboxError::CodeUnknown => Failed::final_(
+            "No device is showing that code. Check it, or get a new one on your other device: a code lasts 10 minutes and works once. A self-hosted relay needs its address under Relay.",
+        ),
+        MailboxError::Malformed => Failed::final_("The relay's answer for that code didn't check out, so nothing was sent. Get a new code and try again."),
+        other => mailbox_failed(other),
+    }
+}
+
+/// The approval address `input` names: pasted as is, or behind a short code
+/// (`K7Q-4MX`) typed for `relay` (the community relay when none is named).
+async fn address_of<H: LinkHost>(host: &H, input: &str, relay: Option<&str>) -> Result<ApprovalAddress, Failed> {
+    let Some(code) = ligus_core::link_code::ShortCode::parse(input) else { return parse_address(input) };
+    let relay = relay.map(str::trim).filter(|r| !r.is_empty()).unwrap_or(ligus_core::COMMUNITY_RELAY_URL).trim_end_matches('/').to_string();
+    let a = crate::link_code_ui::resolve_typed(&code, &relay, host.token(&relay)).await.map_err(|e| code_failed(&e))?;
+    // The same checks as a pasted address (an https relay, or this computer's own).
+    parse_address(&a.encode())
+}
+
+/// Post a link request to `address` (an approval address, or a short code
+/// on `relay`) and drive it in the background. Returns the first view
+/// (`waiting`, or `failed`/`noMailbox`).
+pub(crate) async fn start<H: LinkHost>(host: Arc<H>, slot: Arc<Slot>, address: &str, relay: Option<&str>) -> LinkFlowDto {
     let (gen, rx) = slot.begin(view("waiting"));
     let fail = |f: Failed| {
         let v = slot.set(gen, |v| set_failed(v, &f)).unwrap_or_else(|| slot.view());
         host.changed(&v);
         v
     };
-    let address = match parse_address(address) {
+    let address = match address_of(&*host, address, relay).await {
         Ok(a) => a,
         Err(f) => return fail(f),
     };
@@ -465,6 +490,7 @@ async fn drive_inner<H: LinkHost>(
     };
     let mut confirmed = false;
     let mut offered = false;
+    let mut restarts = 0;
     loop {
         // The person's answers, between polls (a poll is never cut short).
         while let Ok(a) = rx.try_recv() {
@@ -491,13 +517,34 @@ async fn drive_inner<H: LinkHost>(
         }
         let events = match req.poll(POLL_SECS).await {
             Ok(e) => {
-                update(&|v| v.notice = None);
+                // "Asking again" stays until the other device answers.
+                update(&|v| {
+                    if v.notice.as_deref() != Some(RESTARTED) {
+                        v.notice = None;
+                    }
+                });
                 e
             }
             Err(RequesterError::Mailbox(m)) if m.retryable() => {
                 let note = format!("Can't reach the relay right now ({m}). Still trying…");
                 update(&|v| v.notice = Some(note.clone()));
                 tokio::time::sleep(Duration::from_secs(POLL_SECS)).await;
+                continue;
+            }
+            // The relay forgot the request (it restarted): ask again, once
+            // its mailbox is back (a member's device registers it again).
+            Err(RequesterError::Mailbox(m)) if am::relay_forgot(&m) && restarts < MAX_REPOSTS => {
+                restarts += 1;
+                update(&|v| {
+                    v.phase = "waiting".into();
+                    v.code = None;
+                    v.code_spelled = None;
+                    v.notice = Some(RESTARTED.into());
+                });
+                let fresh = repost(host, req, ctx, rx).await?;
+                let _ = std::mem::replace(req, fresh).settle().await;
+                confirmed = false;
+                offered = false;
                 continue;
             }
             Err(e) => return Err(requester_failed(&e)),
@@ -507,6 +554,7 @@ async fn drive_inner<H: LinkHost>(
                 RequesterEvent::Opened { code, claimed } => {
                     let name = crate::shown(&claimed.name);
                     update(&|v| {
+                        v.notice = None;
                         v.phase = "code".into();
                         v.code = Some(code.shown.clone());
                         v.code_spelled = Some(code.spelled.clone());
@@ -547,6 +595,32 @@ async fn drive_inner<H: LinkHost>(
                     return Err(Failed::new("No device opened the request in 15 minutes. Open the Inbox on your other device, then try again."))
                 }
             }
+        }
+    }
+}
+
+/// Times the request is asked again after relay restarts.
+const MAX_REPOSTS: usize = 3;
+pub(crate) const RESTARTED: &str = "The relay restarted; asking again.";
+
+/// Post this desktop's request again to the same address, retrying while
+/// the relay's mailbox comes back. Cancel stops it.
+async fn repost<H: LinkHost>(host: &H, req: &Requester, ctx: &Ctx, rx: &mut mpsc::UnboundedReceiver<Answer>) -> Result<Requester, Failed> {
+    let address = req.address().clone();
+    let until = Instant::now() + Duration::from_millis(ligus_core::match_code::REQUEST_TTL_MS as u64);
+    loop {
+        if let Ok(Answer::Cancel) = rx.try_recv() {
+            return Err(Failed::new("Cancelled. Nothing was granted."));
+        }
+        let (device, _) = host.keys().map_err(Failed::final_)?;
+        let spec = RequestSpec { kind: MatchKind::Computer, code: ctx.request.encode(), signer: Signer::Ed25519(device), ka: Some(clone_ka(&ctx.ka)) };
+        let client = MailboxClient::new(&address.relay).with_auth(host.token(&address.relay));
+        match Requester::post(client, &address, spec, Some(&host.data_dir())).await {
+            Ok(r) => return Ok(r),
+            Err(RequesterError::Mailbox(m)) if (am::relay_forgot(&m) || m.retryable()) && Instant::now() < until => {
+                tokio::time::sleep(Duration::from_secs(POLL_SECS)).await;
+            }
+            Err(e) => return Err(requester_failed(&e)),
         }
     }
 }
@@ -1239,8 +1313,8 @@ pub(crate) fn link_request_status() -> LinkFlowDto {
 /// Post this desktop's link request to the approval address the other
 /// device shows, and wait for it there.
 #[tauri::command]
-pub(crate) async fn link_request_start(app: tauri::AppHandle, address: String) -> Result<LinkFlowDto, String> {
-    Ok(start(Arc::new(AppHost(app)), FLOW.clone(), &address).await)
+pub(crate) async fn link_request_start(app: tauri::AppHandle, address: String, relay: Option<String>) -> Result<LinkFlowDto, String> {
+    Ok(start(Arc::new(AppHost(app)), FLOW.clone(), &address, relay.as_deref()).await)
 }
 
 /// The person's answer to "Does your other device show this code?".

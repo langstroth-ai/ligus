@@ -15,6 +15,8 @@ import {
   type LinkFlowDto,
   type LinkWsDto,
 } from "@/lib/ipc";
+import { COMMUNITY_RELAY_URL } from "@/lib/communityRelay";
+import { parseShortCode, relayHost } from "@/lib/shortCode";
 
 const IDLE: LinkFlowDto = {
   phase: "idle",
@@ -107,8 +109,9 @@ const OPEN = new Set(["waiting", "code", "approving", "checking", "confirmPerson
 /// joins a workspace: this computer ends as one more device of the same
 /// person, or nothing happens.
 ///
-/// The person pastes the approval address their other device shows (My
-/// devices → Add a computer). Both screens then show the same code; the
+/// The person types the short code their other device shows (My devices →
+/// Add a computer: "K7Q-4MX"), or pastes its approval address. Both screens
+/// then show the same code; the
 /// other device confirms with the passkey, and this computer confirms who it
 /// links as. When the relay can't carry requests, this computer's request
 /// code is pasted across instead, and the code the other device gives back
@@ -116,6 +119,10 @@ const OPEN = new Set(["waiting", "code", "approving", "checking", "confirmPerson
 export function LinkThisDevice({ onBack, onLinked }: { onBack: () => void; onLinked?: (flow: LinkFlowDto) => void | Promise<void> }) {
   const [flow, setFlow] = useState<LinkFlowDto>(IDLE);
   const [address, setAddress] = useState("");
+  // The relay a short code is typed for: the community relay unless the
+  // other device names another.
+  const [relay, setRelay] = useState("");
+  const [relayOpen, setRelayOpen] = useState(false);
   const [grant, setGrant] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -157,7 +164,9 @@ export function LinkThisDevice({ onBack, onLinked }: { onBack: () => void; onLin
     }
   }
 
-  const start = () => act(() => linkRequestStart(address.trim()));
+  const isCode = parseShortCode(address) !== null;
+  const start = () =>
+    act(() => (isCode && relay.trim() ? linkRequestStart(address.trim(), relay.trim()) : linkRequestStart(address.trim())));
   const usePaste = () => act(linkRequestPaste);
   const cancel = () => act(linkRequestCancel);
   const back = () => {
@@ -384,17 +393,35 @@ export function LinkThisDevice({ onBack, onLinked }: { onBack: () => void; onLin
       body = (
         <>
           {soft(
-            "On your other device, open Settings → Profile → My devices → Add a computer, and copy the approval address. Paste it here.",
+            "On your other device, open Settings → Profile → My devices → Add a computer. Type the code it shows, or paste its approval address.",
           )}
           <textarea
             value={address}
             onChange={(e) => setAddress(e.target.value)}
-            placeholder="ligusaddr1:…"
-            rows={2}
-            aria-label="The approval address from your other device"
+            placeholder="K7Q-4MX"
+            rows={isCode || address.trim().length < 12 ? 1 : 2}
+            aria-label="The code or approval address from your other device"
             className={field}
             style={fieldStyle}
           />
+          {isCode && !relayOpen && (
+            <p className="text-xs text-ink-soft" data-testid="link-relay">
+              On {relayHost(relay.trim() || COMMUNITY_RELAY_URL)}.{" "}
+              <button type="button" className="underline-offset-2 hover:underline" onClick={() => setRelayOpen(true)}>
+                Another relay
+              </button>
+            </p>
+          )}
+          {isCode && relayOpen && (
+            <input
+              value={relay}
+              onChange={(e) => setRelay(e.target.value)}
+              placeholder={COMMUNITY_RELAY_URL}
+              aria-label="Your other device's relay"
+              className={field}
+              style={fieldStyle}
+            />
+          )}
           {primary("Continue", () => void start(), address.trim().length === 0)}
           <div className="flex items-center gap-1.5">
             {quiet("Use a request code instead", () => void usePaste())}

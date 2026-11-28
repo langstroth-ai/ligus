@@ -210,6 +210,8 @@ pub const COMMANDS: &[Cmd] = &[
                   key: votes ask for your passkey, and account changes (devices, phones, passkeys, keys) stay on the \
                   desktop. One person per data dir. Revoke it from My devices.",
         synopsis: &[
+            "ligus devices link [--wait 10m] [--json]",
+            "ligus devices request --code K7Q-4MX [--relay URL] [--label NAME]",
             "ligus devices request [--label NAME] [--new-device] [--copy]",
             "ligus devices redeem [<ligusgrant1:code> | - | --code-file PATH] [--approver-fingerprint FP]",
             "ligus devices approve <liguslink1:request> | --code-file PATH --fingerprint FP --recovery-words-file PATH [--out PATH]",
@@ -218,18 +220,14 @@ pub const COMMANDS: &[Cmd] = &[
         ],
         flags: &[JSON],
         conn: true,
-        examples: &[
-            "ligus devices request | pbcopy",
-            "ligus devices redeem",
-            "ligus devices list --json",
-        ],
+        examples: &["ligus devices link", "ligus devices request --code K7Q-4MX", "ligus devices redeem"],
         exit: &[
             (3, "no usable relay URL"),
             (4, "a person must act: approve on the desktop, compare a fingerprint, confirm the approving desktop"),
             (6, "refused: a box, a computer already someone else's, lockdown, revoked"),
             (7, "the relay is unreachable, or the desktop's approval hasn't synced yet (retry)"),
         ],
-        see_also: &["ligus devices request", "ligus devices redeem", "ligus devices approve", "ligus devices list", "desktop: Settings > Profile > My devices > Add a computer"],
+        see_also: &["ligus devices link", "ligus devices request", "ligus devices redeem", "ligus devices approve", "ligus devices list", "desktop: Settings > Profile > My devices > Add a computer"],
         ..D
     },
     Cmd {
@@ -247,34 +245,75 @@ pub const COMMANDS: &[Cmd] = &[
                   links after checking the approval on the workspace log and asking \"Link this computer as <you>?\". A \
                   data dir syncs one workspace, so it links only the one whose address it was sent to; when your \
                   desktop offers your other workspaces too, it says which, and nothing is added there (link each from \
-                  its own data dir). The paste text and fingerprint are printed straight away for an older desktop. An install that was already connected (it may have written as its own \
+                  its own data dir). With --code, type the short code your other device shows instead of its address \
+                  (`ligus devices link`, or Add a computer on the desktop): the relay resolves it to the address, \
+                  once, and the code match goes on the same way. The code is for one relay: the community relay unless \
+                  this data dir has another, or --relay names it (the other device says when it isn't the community \
+                  one). A relay without short codes exits 3: use --to with the address. If the relay restarts while \
+                  this computer waits, it asks again and says so. The paste text and fingerprint are printed straight away for an older desktop. An install that was already connected (it may have written as its own \
                   member) asks with a new device key, switched to only when you redeem, and adds a proof that it was that \
                   member, so the desktop can offer to remove the duplicate. A box can't: it joins with `ligus admit`.",
         synopsis: &[
             "ligus devices request [--label NAME] [--new-device] [--copy] [--json]",
             "ligus devices request --to ligusaddr1:… [--label NAME] [--wait 15m] [--new-device] [--json]",
+            "ligus devices request --code K7Q-4MX [--relay URL] [--label NAME] [--wait 15m] [--new-device] [--json]",
         ],
         flags: &[
             f("--label NAME", "ligus on <host name>", "the label your desktop shows"),
             f("--new-device", "off (on when this data dir was connected)", "ask with a new device key"),
             f("--copy", "off", "copy the request to the clipboard instead of printing it"),
             f("--to ligusaddr1:…", "none (print the request to paste)", "send the request to the workspace's approval address (code match): it reaches your desktop's Inbox"),
-            f("--wait DUR", "15m", "with --to: how long to wait for your desktop (90s, 5m, 1h)"),
+            f("--code CODE", "none", "the short code your other device shows (K7Q-4MX; case and the dash don't matter): resolved to its approval address, then as --to"),
+            f("--relay URL", "this data dir's relay, else the community relay", "with --code: the relay the other device shows the code on"),
+            f("--wait DUR", "15m", "with --to or --code: how long to wait for your desktop (90s, 5m, 1h)"),
             f("--insecure-relay", "off", "with --to: allow an http:// relay that isn't loopback (tests)"),
             JSON,
         ],
         examples: &[
+            "ligus devices request --code K7Q-4MX",
             "ligus devices request --copy",
-            "ligus devices request --label work-laptop | pbcopy",
             "ligus devices request --to ligusaddr1:… --label work-laptop",
         ],
         exit: &[
-            (3, "with --to: the relay has no approval mailbox (paste the request instead: ligus devices request)"),
-            (4, "with --to: no terminal (a person confirms the code and who they link as here), or nobody approved within --wait"),
+            (2, "with --code: that isn't a short code"),
+            (3, "with --to: the relay has no approval mailbox (paste the request instead: ligus devices request); with --code: the relay has no short codes (use --to)"),
+            (4, "with --to or --code: no terminal (a person confirms the code and who they link as here), or nobody approved within --wait"),
+            (5, "with --code: no device shows that code on this relay (mistyped, expired or used; a self-hosted relay needs --relay)"),
             (6, "this data dir is a box, or with --to the relay refused the access token"),
-            (7, "with --to: the relay is unreachable, rate-limited or its mailbox is full"),
+            (7, "with --to or --code: the relay is unreachable, rate-limited or its mailbox is full"),
         ],
-        see_also: &["ligus devices redeem", "desktop: Settings > Profile > My devices > Add a computer"],
+        see_also: &["ligus devices link", "ligus devices redeem", "desktop: Settings > Profile > My devices > Add a computer"],
+        ..D
+    },
+    Cmd {
+        name: "devices link",
+        group: G_START,
+        summary: "show a short code your new device types to link itself",
+        purpose: "On a device you already use, show \"Link a device: code K7Q-4MX\": a 6-character code for this \
+                  workspace's approval address, good for 10 minutes and one use. On the new device choose \"I already \
+                  use Ligus\" and type it, or run `ligus devices request --code K7Q-4MX` (plus --relay when this \
+                  workspace's relay isn't the community one: the command printed says so). The new device's request \
+                  then comes to your Inbox: both screens show the same code, and you approve with your passkey on your \
+                  desktop (or `ligus approvals approve`). The code isn't a secret: it only finds the approval address, \
+                  which grants nothing; the relay sees neither. This command waits until the code is used (exit 0), \
+                  posts the same code again if the relay restarts, and exits 4 when --wait passes or the code expires \
+                  unused. A relay without short codes exits 3 and prints the approval address to use instead \
+                  (`ligus devices request --to`). --code is accepted and changes nothing.",
+        synopsis: &["ligus devices link [--code] [--wait 10m] [--json]"],
+        flags: &[
+            f("--wait DUR", "10m (the code's life)", "how long to wait for the new device to type the code; 0 prints it and exits 4"),
+            JSON,
+        ],
+        conn: true,
+        examples: &["ligus devices link", "ligus devices link --json --wait 0"],
+        exit: &[
+            (0, "the new device typed the code: approve its request in the Inbox"),
+            (3, "no relay URL, no workspace key here, or the relay has no short codes (the fix names the approval address)"),
+            (4, "waiting: --wait passed, or the code expired unused (run it again for a new code)"),
+            (6, "this data dir is a box"),
+            (7, "the relay is unreachable or rate-limited"),
+        ],
+        see_also: &["ligus devices request --code", "ligus approvals list", "ligus admit address", "desktop: Settings > Profile > My devices > Add a computer"],
         ..D
     },
     Cmd {
@@ -1454,7 +1493,9 @@ pub const COMMANDS: &[Cmd] = &[
                   until then it is still a member (workspace rules 3). Works for any box data dir (serve or worker). \
                   Leaving isn't revoking: the box keeps the keys and copies it holds until an Admin removes it and \
                   rotates the workspace key. A box that left stops its host beat and writes no host record, label \
-                  or offers of its own, also after a restart. Without --yes it only prints what it would do and exits 4. Refused \
+                  or offers of its own, also after a restart. On rules 4 the leave removes the box: started again, \
+                  it stays out (writes nothing, no beat) and logs \"This box left <workspace>. To rejoin: ligus admit \
+                  request (an Admin approves).\" Without --yes it only prints what it would do and exits 4. Refused \
                   for the founder, the last Owner, and a member that holds a passkey (a person leaves from their \
                   desktop).",
         synopsis: &["ligus serve leave [--yes] [--json]"],

@@ -18,7 +18,7 @@ use crate::time_util::Timestamp;
 /// (workspace model v3, 5.10).
 pub const HOST_ONLINE_WINDOW_SECS: i64 = 90;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum HostKind {
     /// A member's machine — online only while their app/CLI runs.

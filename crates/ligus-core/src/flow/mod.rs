@@ -674,6 +674,11 @@ pub struct HumanAnswered {
 #[serde(rename_all = "camelCase")]
 pub struct AskState {
     pub ask: HumanAsk,
+    /// Rules 4 (G10): where the ask's event sorts, `(lamport, event_id)`;
+    /// eviction orders by it. Fold state: a snapshot's word isn't evidence
+    /// (cleared when one is the base).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<(u64, Uuid)>,
     /// The first answer in canonical order that counts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<HumanAnswered>,

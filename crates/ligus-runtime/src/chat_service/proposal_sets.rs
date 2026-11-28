@@ -308,12 +308,16 @@ mod tests {
     fn service() -> ChatService {
         let store = EventStore::open_in_memory().unwrap();
         let author = ActorIdentity::new("u1", "Mara", ligus_core::ActorKind::Human);
-        ChatService::new(
+        let mut svc = ChatService::new(
             store,
             SigningKeypair::generate().unwrap(),
             SigningKeypair::generate().unwrap(),
             author,
-        )
+        );
+        // Named, accountless members (the rules-3 shape; rules 4 refuses
+        // them, D12).
+        svc.set_founding_rules(ligus_core::authz::RULES_V3);
+        svc
     }
 
     fn assessment(pid: Uuid, scout: Uuid, name: &str, score: u32) -> ScoutAssessment {
