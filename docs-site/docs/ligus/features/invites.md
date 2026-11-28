@@ -130,7 +130,8 @@ for how to run one.
 
 Right-click a workspace in the rail and choose **Leave workspace**. One line
 says what happens: others see you as **asked to leave** until an Admin
-removes you, and this device stops syncing the workspace. **Leaving isn't
+removes you, and this device stops syncing the workspace (on rules 4, below:
+**You'll be removed from** the workspace). **Leaving isn't
 revoking**: your other devices, and anything they already copied, keep their
 keys. Revoke a lost device in
 [My devices](linked-devices.md#device-states) instead. When your account
@@ -159,7 +160,11 @@ next key rotation leaves your devices out. A box that leaves takes its host
 with it, and the agents placed on it wait for someone to place them again.
 Started again, a box that left stays out: it writes nothing, publishes no
 beat, and logs `This box left <workspace>. To rejoin: ligus admit request (an
-Admin approves).`
+Admin approves).` To let it back in, an Admin approves its new request as
+for any box (`ligus admit request` on the box, then the Admin's passkey): the
+box rejoins as the same member on its next start. The box can't add itself
+back, and an admission issued for it before it left doesn't either: only one
+an Admin issues after the leave does.
 Your own leave never undoes anything you did before it.
 
 Builds before 0.5 don't know about leaving: they keep listing the member as

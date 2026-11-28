@@ -892,6 +892,15 @@ impl SessionEventEnvelope {
 }
 
 impl ChatSession {
+    /// The member `member_id` is removed: the readmissions issued for its
+    /// account before now no longer let it back in (rules 4,
+    /// [`crate::admission::readmission`]).
+    fn void_readmissions(&mut self, member_id: &str) {
+        let Some(account) = self.members.iter().find(|m| m.id == member_id).and_then(|m| m.actor.account_id) else { return };
+        let crate::guard::GuardState { readmissions, service_invites, .. } = &mut self.guards;
+        readmissions.retain(|id| service_invites.get(id).is_none_or(|a| a.account_id != Some(account)));
+    }
+
     fn next_transcript_seq(&mut self) -> u64 {
         self.transcript_seq += 1;
         self.transcript_seq
@@ -1021,6 +1030,7 @@ impl ChatSession {
                 if self.members.iter().any(|m| &m.id == member_id) {
                     self.guards.removed_members.insert(member_id.clone());
                 }
+                self.void_readmissions(member_id);
                 self.members.retain(|m| &m.id != member_id);
                 self.left.remove(member_id);
             }
@@ -1223,6 +1233,7 @@ impl ChatSession {
                 if self.members.iter().any(|m| m.id == retirement.member_id) {
                     self.guards.removed_members.insert(retirement.member_id.clone());
                 }
+                self.void_readmissions(&retirement.member_id);
                 // The linked computer's host passes to the person (8.3).
                 let successor = self
                     .members
@@ -2540,6 +2551,14 @@ fn fold_pass(
             // event's own recorded time, and who from its signed stamp.
             let archive_before = crate::proposal_archive::touches_proposals(payload)
                 .then(|| crate::proposal_archive::settled_states(&session));
+            // Rules 4: a box admission an Admin issues for an account no
+            // member holds can let that account's member back in
+            // (`authorization::self_enroll_allowance`).
+            if rules_at >= authz::RULES_V4 && !superseded && !enveloped {
+                if let Some(id) = crate::admission::readmission(payload, &session) {
+                    session.guards.readmissions.insert(id);
+                }
+            }
             if !superseded && !enveloped && !crate::guard::fold_authored(&mut session, payload, author) {
                 let ms = crate::admission::envelope_ms(env);
                 if let SessionEvent::TurnClaimed { trigger_id, device_id, epoch, supersedes, repo_id } = payload {

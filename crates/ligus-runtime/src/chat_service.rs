@@ -34,7 +34,7 @@ mod attachments;
 mod changes;
 mod computer_link;
 pub use computer_link::LinkPreview;
-pub use leave::{LeaveCheck, LEAVE_CONSEQUENCE, NOT_REVOKING};
+pub use leave::{leave_consequence, LeaveCheck, LEAVE_CONSEQUENCE, NOT_REVOKING};
 pub use changes::{ChangeFeed, ChangeOrigin, ChatChange, CHANGE_FEED_CAPACITY};
 mod facts;
 mod guards;

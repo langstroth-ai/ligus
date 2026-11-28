@@ -392,9 +392,17 @@ fn self_enroll_allowance(
         return None;
     }
     // Someone an Admin removed can't enroll themself back (they still hold
-    // old-epoch keys): only an authorized re-add lifts the removal.
+    // old-epoch keys): only an authorized re-add lifts the removal. Rules 4:
+    // a member that left on its own (a leave is a removal) comes back with a
+    // box admission an Admin issued for its account since
+    // (`admission::readmission`), redeemed with its code's proof through the
+    // box it names (`admission::redemption_refusal`).
     if session.guards.removed_members.contains(actor_id) {
-        return None;
+        let readmitted = member.role.rank() < WorkspaceRole::Admin.rank()
+            && session.left.contains_key(actor_id)
+            && !session.members.iter().any(|m| m.id == actor_id)
+            && invite.is_some_and(|id| session.guards.readmissions.contains(&id) && invite_redeemable(session, id));
+        return readmitted.then(|| AuthzDecision::allow_reason(AuthzReason::SelfEnroll));
     }
     match session.members.iter().find(|m| m.id == actor_id) {
         // Already a member: allowed only if the role is unchanged (idempotent

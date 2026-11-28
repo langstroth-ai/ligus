@@ -161,6 +161,22 @@ pub fn admission_of(fold: &ChatSession, id: Uuid) -> Option<&Admission> {
     fold.guards.service_invites.get(&id)
 }
 
+/// Rules 4: the invite of the box admission `event` issues for one box
+/// (bound to its account and its device key) while no member of `fold`
+/// holds that account: an Admin letting a box that left back in. Only the
+/// invite's first issue counts. Its redemption is judged as any
+/// ([`redemption_refusal`]).
+pub fn readmission(event: &SessionEvent, fold: &ChatSession) -> Option<Uuid> {
+    let SessionEvent::JoinApproved { subject, admission: Some(a), .. } = event else { return None };
+    let id = invite_of_subject(subject)?;
+    let account = a.account_id?;
+    a.device_key.as_ref()?;
+    if fold.guards.service_invites.contains_key(&id) {
+        return None;
+    }
+    (!fold.members.iter().any(|m| m.actor.account_id == Some(account))).then_some(id)
+}
+
 /// Why issuing `admission` under `subject` is refused, if it is: it names a
 /// fresh invite, admits a service, and expires after it was issued and within
 /// [`MAX_ADMISSION_TTL_MS`]. A plain `JoinApproved` may not re-issue a box
