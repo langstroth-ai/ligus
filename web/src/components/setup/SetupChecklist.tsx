@@ -29,7 +29,7 @@ function RowLine({ row, onAction, open }: { row: SetupRow; onAction: (row: Setup
     <div role="listitem" className="flex min-h-[36px] items-center gap-3 py-1.5" data-testid={`setup-row-${row.id}`} data-state={row.state}>
       <Mark row={row} />
       <span className="w-24 shrink-0 text-[13px] font-medium">{row.title}</span>
-      <span className="min-w-0 flex-1 truncate text-[13px]" style={{ color: greyed ? "var(--ligus-ink-faint)" : "var(--ligus-ink-soft)" }} title={row.detail}>
+      <span className="min-w-0 flex-1 truncate text-[13px]" style={{ color: greyed ? "var(--ligus-ink-faint)" : "var(--ligus-ink-soft)" }} data-tip={row.detail}>
         {row.detail}
       </span>
       {row.action && (
