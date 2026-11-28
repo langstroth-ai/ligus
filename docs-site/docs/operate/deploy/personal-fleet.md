@@ -345,6 +345,13 @@ gateway on a runtime and bind the agent to the server. See
   `deploy/ligus-serve/` runs `~/.local/bin/ligus`; with Homebrew, install
   the unit with `$L start --systemd` instead (it runs the `ligus` on your
   `PATH`), or the upgrade won't change what runs.
+- When a newer release is out, the desktop says so under the box in
+  **People** > **Workers & hosts** with one grey line, "0.4.1 → 0.5.0
+  available · how", and the phone's Health shows the same line. The box's
+  version comes from its signed presence beat; the latest release is the
+  one the desktop's own update check reads from the docs site's
+  `version.json`. **how** names the command above. Nothing upgrades a box
+  on its own, and a pre-release or development build shows no line.
 - Back up `~/.ligus-serve` (keys, events, phone pairings). See
   [Operations](../ops/operations.md).
 - Lost phone: `ligus phones revoke <name>`. Lost server: an Admin removes its

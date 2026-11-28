@@ -56,6 +56,7 @@ const host = (id: string, label: string, kind = "device", online = true, ownerNa
   offers: [],
   readiness: "",
   build: "",
+  upgradeTo: "",
   mine,
 });
 
