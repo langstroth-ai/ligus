@@ -22,6 +22,9 @@ export type NeedsYouKind =
   | "device"
   /// Another phone answered the add-a-phone code you showed.
   | "phone"
+  /// One of your phones was unpaired from a box, or forgot it: remove the
+  /// device too?
+  | "unpaired"
   /// A box asks to join, or a device asks to be yours: compare a code.
   | "approval"
   /// A request that didn't match, or a computer link that didn't finish
@@ -57,6 +60,24 @@ export interface NeedsYouItem {
   at?: number;
   /// An approval fact's kind and its key (to dismiss it).
   fact?: { kind: "mismatch" | "didntFinish" | "notMe"; key: string; help?: string };
+  /// An unpaired phone: which one, on which box, and when (to keep it).
+  unpaired?: UnpairedRef;
+}
+
+export interface UnpairedRef {
+  deviceId: string;
+  name: string;
+  hostId: string;
+  hostLabel: string;
+  by: "box" | "phone";
+  at: number;
+}
+
+/// "Your phone “Ana's iPhone” forgot box-1" or "box-1 unpaired your phone
+/// “Ana's iPhone”".
+export function unpairedTitle(u: { name: string; hostLabel: string; by: string }): string {
+  const box = u.hostLabel.trim() || "a box";
+  return u.by === "phone" ? `Your phone ${quoteLabel(u.name)} forgot ${box}` : `${box} unpaired your phone ${quoteLabel(u.name)}`;
 }
 
 export interface ApprovalRef {
@@ -119,8 +140,9 @@ const ORDER: Record<NeedsYouKind, number> = {
   apply: 7,
   failed: 8,
   device: 9,
-  invite: 10,
-  waiting: 11,
+  unpaired: 10,
+  invite: 11,
+  waiting: 12,
 };
 
 export interface NeedsYouSources {
@@ -137,6 +159,8 @@ export interface NeedsYouSources {
   sandboxChanged?: boolean;
   /// Code-match requests this device can approve.
   approvals?: readonly ApprovalRef[];
+  /// Your phones a box unpaired, or that forgot a box.
+  unpaired?: readonly UnpairedRef[];
   /// Approval facts of the last day.
   approvalFacts?: readonly { key: string; kind: "mismatch" | "didntFinish" | "notMe"; label: string; at: number; text?: string; help?: string }[];
 }
@@ -227,6 +251,9 @@ export function needsYouItems(s: NeedsYouSources): NeedsYouItem[] {
   }
   for (const r of s.deviceRequests ?? []) {
     out.push({ key: `device:${r.hostId}`, kind: "device", title: `${r.label || "A box"} says it's your device` });
+  }
+  for (const u of s.unpaired ?? []) {
+    out.push({ key: `unpaired:${u.hostId}:${u.deviceId}`, kind: "unpaired", title: unpairedTitle(u), at: u.at * 1000, unpaired: u });
   }
   for (const i of s.invites ?? []) {
     out.push({

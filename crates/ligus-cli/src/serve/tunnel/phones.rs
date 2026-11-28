@@ -4,6 +4,13 @@
 //! `ligus phones list|revoke` read and edit the file from another process (a
 //! revocation also goes through `pending/`, so `ligus serve` re-applies it even
 //! if one of its own writes raced the CLI's).
+//!
+//! Format v2 (workspace model v3, 10.2): a new pairing names its workspace
+//! device (`deviceId`); a pairing ended on this box (`ligus phones revoke`)
+//! or by the phone (Forget host) says so (`unpaired`), so the phone's person
+//! is asked whether to remove the device too; a revoked record is dropped
+//! [`PURGE_REVOKED_AFTER_SECS`] after it was revoked; `ownerPhone` is gone.
+//! Version 1 files load unchanged (their extra field is ignored).
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -45,13 +52,10 @@ pub struct PhoneRecord {
     pub push_seq: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen: Option<u64>,
-    /// The owner's own phone (P0.6 interim): set only by the desktop owner
-    /// over a signed pairing confirmation. While serve acts for the owner
-    /// (delegated), only an owner phone may vote, and its votes are recorded
-    /// as delegated. No path sets it yet, so a delegated serve refuses every
-    /// phone vote until passkey presence lands.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub owner_phone: bool,
+    /// Who ended this pairing, when it was unpaired rather than cut by a
+    /// revoked device certificate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unpaired: Option<Unpaired>,
     /// The phone's own workspace device (its P-256 Secure Enclave key,
     /// certified on the config log; Phase A, item 6). A `DeviceRevoked` of
     /// it revokes this pairing too: the tunnel is cut and pushes stop.
@@ -61,6 +65,39 @@ pub struct PhoneRecord {
 
 fn default_true() -> bool {
     true
+}
+
+/// Who ended a pairing (workspace model v3, 10.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Unpaired {
+    /// `ligus phones revoke` on the box.
+    Box,
+    /// The phone's Forget host (`DELETE /v1/tunnel/pairing`).
+    Phone,
+}
+
+impl Unpaired {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Box => "box",
+            Self::Phone => "phone",
+        }
+    }
+}
+
+/// The current `phones.json` format.
+pub const PHONES_FILE_VERSION: u32 = 2;
+
+/// A revoked pairing is dropped from `phones.json` this long after it was
+/// revoked (30 days). A phone without a record is refused like a revoked one.
+pub const PURGE_REVOKED_AFTER_SECS: u64 = 30 * 86_400;
+
+/// Keep only what isn't due for purging at `now`.
+fn purge(phones: &mut Vec<PhoneRecord>, now: u64) -> bool {
+    let before = phones.len();
+    phones.retain(|r| r.revoked_at.is_none_or(|t| now.saturating_sub(t) < PURGE_REVOKED_AFTER_SECS));
+    phones.len() != before
 }
 
 /// The push kinds a phone's notification switches turn on and off (the app
@@ -110,7 +147,10 @@ impl Registry {
 
     pub fn load(dir: &Path) -> Result<Self> {
         let path = Self::file(dir);
-        let phones = read_json::<PhonesFile>(&path)?.map(|f| f.phones).unwrap_or_default();
+        let mut phones = read_json::<PhonesFile>(&path)?.map(|f| f.phones).unwrap_or_default();
+        // In memory only: a read-only command (`ligus phones list`) never
+        // rewrites the file under a running serve; the next save purges it.
+        purge(&mut phones, super::now());
         Ok(Self { path, inner: Mutex::new(phones), generation: Default::default() })
     }
 
@@ -120,7 +160,9 @@ impl Registry {
 
     fn save(&self, phones: &[PhoneRecord]) -> Result<()> {
         self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        write_json(&self.path, &PhonesFile { v: 1, phones: phones.to_vec() })
+        let mut phones = phones.to_vec();
+        purge(&mut phones, super::now());
+        write_json(&self.path, &PhonesFile { v: PHONES_FILE_VERSION, phones })
     }
 
     /// Changes whenever the registry is saved.
@@ -179,6 +221,54 @@ impl Registry {
             self.save(&phones)?;
         }
         Ok(Some(exp))
+    }
+
+    /// Mark `pid`'s pairing as ended by `by` (it is revoked, or about to be).
+    /// Pushes stop at once.
+    pub fn mark_unpaired(&self, pid: &str, by: Unpaired) -> Result<bool> {
+        let mut phones = self.lock();
+        let Some(r) = phones.iter_mut().find(|r| r.pid == pid) else { return Ok(false) };
+        if r.unpaired == Some(by) && !r.push_enabled {
+            return Ok(true);
+        }
+        r.unpaired = Some(by);
+        r.push_enabled = false;
+        self.save(&phones)?;
+        Ok(true)
+    }
+
+    /// The pairings unpaired on this box or by their phone (not cut by a
+    /// revoked certificate) whose device has no other active pairing here
+    /// and isn't revoked (`revoked`): the phone's person is asked whether to
+    /// remove the device too. One per device, the newest, to the minute.
+    pub fn unpaired_report(
+        &self,
+        host_id: &str,
+        workspace_id: uuid::Uuid,
+        at: i64,
+        revoked: impl Fn(uuid::Uuid) -> bool,
+    ) -> ligus_runtime::revocation_status::UnpairedReport {
+        use ligus_runtime::revocation_status::{UnpairedPhone, UnpairedReport, MAX_UNPAIRED_REPORTED};
+        // A copy: `revoked` may look at the roster (never under this lock).
+        let phones = self.list();
+        let active: std::collections::BTreeSet<uuid::Uuid> = phones.iter().filter(|r| r.is_active()).filter_map(|r| r.device_id).collect();
+        let mut by_device: std::collections::BTreeMap<uuid::Uuid, UnpairedPhone> = Default::default();
+        for r in phones.iter() {
+            let (Some(d), Some(by), Some(t)) = (r.device_id, r.unpaired, r.revoked_at) else { continue };
+            if active.contains(&d) || revoked(d) || (at.max(0) as u64).saturating_sub(t) >= PURGE_REVOKED_AFTER_SECS {
+                continue;
+            }
+            let t = (t - t % 60) as i64;
+            let e = by_device.entry(d).or_insert_with(|| UnpairedPhone { device_id: d.to_string(), at: t, by: by.as_str().into() });
+            if t >= e.at {
+                e.at = t;
+                e.by = by.as_str().into();
+            }
+        }
+        let mut list: Vec<UnpairedPhone> = by_device.into_values().collect();
+        list.sort_by_key(|p| std::cmp::Reverse(p.at));
+        list.truncate(MAX_UNPAIRED_REPORTED);
+        UnpairedReport { host_id: host_id.to_string(), workspace_id, at, phones: list, signature: Vec::new() }
     }
 
     /// The active pairings of phones whose workspace device is in `revoked`.
@@ -266,5 +356,92 @@ impl Registry {
         let seq = r.push_seq;
         self.save(&phones).ok()?;
         Some((seq, key))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(pid: &str, device: Option<uuid::Uuid>) -> PhoneRecord {
+        PhoneRecord {
+            pid: pid.into(),
+            name: format!("phone {pid}"),
+            auth_pub: format!("a-{pid}"),
+            static_pub: format!("s-{pid}"),
+            push_key: String::new(),
+            enrolled_at: 10,
+            cred_exp: 20,
+            revoked_at: None,
+            push_enabled: true,
+            push_previews: true,
+            push_kinds: None,
+            push_seq: 0,
+            last_seen: None,
+            unpaired: None,
+            device_id: device,
+        }
+    }
+
+    /// `phones.json` v2: written as v2 without `ownerPhone`; a v1 file with
+    /// it still loads; a pairing revoked over 30 days ago is dropped.
+    #[test]
+    fn v2_drops_owner_phone_and_purges_old_revocations() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = crate::serve::tunnel::now();
+        let d = uuid::Uuid::new_v4();
+        let v1 = serde_json::json!({ "v": 1, "phones": [
+            { "pid": "old", "name": "Old", "authPub": "a", "staticPub": "s", "pushKey": "", "enrolledAt": 1, "credExp": 2,
+              "revokedAt": now - PURGE_REVOKED_AFTER_SECS - 5, "ownerPhone": true, "deviceId": d },
+            { "pid": "recent", "name": "Recent", "authPub": "b", "staticPub": "t", "pushKey": "", "enrolledAt": 1, "credExp": 2,
+              "revokedAt": now - 60, "deviceId": d },
+            { "pid": "live", "name": "Live", "authPub": "c", "staticPub": "u", "pushKey": "", "enrolledAt": 1, "credExp": 2, "ownerPhone": true },
+        ]});
+        std::fs::write(Registry::file(dir.path()), v1.to_string()).unwrap();
+        let reg = Registry::load(dir.path()).unwrap();
+        let pids: Vec<String> = reg.list().into_iter().map(|r| r.pid).collect();
+        assert_eq!(pids, ["recent", "live"], "the 30-day-old revocation is purged");
+        let untouched: serde_json::Value = serde_json::from_slice(&std::fs::read(Registry::file(dir.path())).unwrap()).unwrap();
+        assert_eq!(untouched, v1, "loading (ligus phones list) never rewrites the file");
+        reg.save(&reg.list()).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(Registry::file(dir.path())).unwrap()).unwrap();
+        assert_eq!(saved["v"], PHONES_FILE_VERSION);
+        assert!(!saved.to_string().contains("ownerPhone"), "{saved}");
+        // An unverified (older) pairing stays and is listed as such.
+        assert!(reg.get("live").unwrap().device_id.is_none());
+        // A new pairing must name its device.
+        assert!(reg.activate(rec("new", None)).is_err());
+    }
+
+    /// The unpaired report: pairings ended on the box or by the phone,
+    /// not cut by a certificate revoke, whose device has no other active
+    /// pairing here and isn't revoked.
+    #[test]
+    fn the_unpaired_report_names_only_devices_still_worth_asking_about() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = Registry::load(dir.path()).unwrap();
+        let (a, b, c, r) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4(), uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        for (pid, d) in [("a", a), ("b1", b), ("b2", b), ("c", c), ("r", r)] {
+            reg.activate(rec(pid, Some(d))).unwrap();
+        }
+        // a: the phone forgot the box. b: unpaired once, but paired again.
+        // c: cut by a certificate revoke (no question). r: unpaired, then
+        // its device revoked (answered).
+        reg.mark_unpaired("a", Unpaired::Phone).unwrap();
+        reg.revoke("a").unwrap();
+        reg.mark_unpaired("b1", Unpaired::Box).unwrap();
+        reg.revoke("b1").unwrap();
+        reg.revoke("c").unwrap();
+        reg.mark_unpaired("r", Unpaired::Box).unwrap();
+        reg.revoke("r").unwrap();
+        assert!(!reg.get("a").unwrap().push_enabled, "unpairing stops pushes at once");
+        let now = crate::serve::tunnel::now() as i64;
+        let report = reg.unpaired_report("box", uuid::Uuid::nil(), now, |d| d == r);
+        let named: Vec<(String, String)> = report.phones.iter().map(|p| (p.device_id.clone(), p.by.clone())).collect();
+        assert_eq!(named, vec![(a.to_string(), "phone".to_string())]);
+        assert_eq!(report.phones[0].at % 60, 0, "to the minute");
+        // Past the purge window it isn't asked about any more.
+        let later = now + PURGE_REVOKED_AFTER_SECS as i64 + 60;
+        assert!(reg.unpaired_report("box", uuid::Uuid::nil(), later, |_| false).phones.is_empty());
     }
 }

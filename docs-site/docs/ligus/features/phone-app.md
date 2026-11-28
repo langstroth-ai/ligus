@@ -641,9 +641,13 @@ seconds is queued.
   has three switches, all on: *Votes, questions and approvals for you*,
   *Mentions and direct messages*, and *Runs you started*. Other chat
   messages never notify. The phone sends the box the kinds it wants, and the
-  box sends only those. **Forget host** turns that box's notifications off
-  before the phone forgets it (if the box is offline then, revoke the
-  pairing on the box with `ligus phones revoke`).
+  box sends only those, and the phone sends them to every box it's paired
+  with, whenever you change them and when the app comes to the front.
+  **Forget host** asks the box to drop the pairing first: its notifications
+  stop and the relay forgets the phone's push registration. Your desktop then
+  asks whether to remove the phone from your devices too ("Your phone …
+  forgot box-1", with **Remove**). If the box is offline then, unpair it on
+  the box with `ligus phones revoke`, which asks the same.
 - **How loudly.** A run that finished arrives silently and groups with other
   finished runs; a failure alerts you. Something waiting on you is
   time-sensitive (it can break through a Focus) only when it has a deadline

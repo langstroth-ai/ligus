@@ -305,6 +305,18 @@ pub fn remote_reset(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A pairing's state for `ligus phones list`: `active`, `unverified` (an
+/// active pairing from before pairings named their device: no "you"
+/// notices), `unpaired` (ended here or by the phone) or `revoked`.
+fn state(p: &super::PhoneRecord) -> &'static str {
+    match (p.is_active(), p.device_id.is_some(), p.unpaired) {
+        (true, true, _) => "active",
+        (true, false, _) => "unverified",
+        (false, _, Some(_)) => "unpaired",
+        (false, _, None) => "revoked",
+    }
+}
+
 /// `ligus phones list [--json]`.
 pub fn phones_list(data_dir: &Path, json: bool) -> Result<()> {
     let phones = Registry::load(&tunnel_dir(data_dir))?.list();
@@ -314,7 +326,9 @@ pub fn phones_list(data_dir: &Path, json: bool) -> Result<()> {
             "phones": phones.iter().map(|p| serde_json::json!({
                 "pid": p.pid,
                 "name": p.name,
-                "state": if p.is_active() { "active" } else { "revoked" },
+                "state": state(p),
+                "deviceId": p.device_id,
+                "unpaired": p.unpaired.map(|u| u.as_str()),
                 "pairedAt": p.enrolled_at,
                 "lastSeen": p.last_seen,
                 "pushEnabled": p.push_enabled,
@@ -341,7 +355,7 @@ pub fn phones_list(data_dir: &Path, json: bool) -> Result<()> {
             "{:<24} {:<24} {:<10} {:<12} {}",
             p.pid,
             p.name,
-            if p.is_active() { "active" } else { "revoked" },
+            state(&p),
             fmt_day(p.enrolled_at),
             p.last_seen.map(fmt_day).unwrap_or_else(|| "-".into())
         );
@@ -371,9 +385,16 @@ pub fn phones_revoke(data_dir: &Path, who: Option<&str>, token_file: &Path, keep
     let dir = tunnel_dir(data_dir);
     let reg = Registry::load(&dir)?;
     let Some(rec) = reg.resolve(who) else { bail!("no phone '{who}' (see `ligus phones list`; names must be unique)") };
+    reg.mark_unpaired(&rec.pid, super::phones::Unpaired::Box)?;
     let exp = reg.revoke(&rec.pid)?.unwrap_or(rec.cred_exp);
-    write_json(&pending_dir(&dir).join(format!("revoke-{}.json", rec.pid)), &RevokeFile { pid: rec.pid.clone(), exp })?;
+    write_json(
+        &pending_dir(&dir).join(format!("revoke-{}.json", rec.pid)),
+        &RevokeFile { pid: rec.pid.clone(), exp, unpaired: Some(super::phones::Unpaired::Box) },
+    )?;
     println!("Revoked {} ({}). A running `ligus serve` ends its sessions and tells the relay within seconds.", rec.name, rec.pid);
+    if rec.device_id.is_some() {
+        println!("The phone's person is asked on their desktop whether to remove the device from their devices too.");
+    }
     if keep_token {
         println!("The direct-path bearer token was kept (--keep-token).");
     } else if token_file.exists() {

@@ -47,6 +47,16 @@ Full release notes are on the
   with **Remove** for Admins and **Remove from view** for anyone (this
   device only). Builds before 0.5 keep listing the member as before. See
   [Leaving a workspace](../features/invites.md#leaving-a-workspace).
+- **Unpairing works both ways.** Forget host on the phone now tells the box
+  first: the box stops notifying it, the relay forgets its push
+  registration, and your desktop asks "Your phone … forgot box-1. Remove
+  the device?" with **Remove** (your passkey) or **Keep the device**.
+  `ligus phones revoke` on a box asks the same. Resetting a phone's key now
+  names the old key in the new request, so the desktop that adds it offers
+  to remove the old one in the same sheet. The phone sends its notification
+  settings to every box it's paired with. Boxes drop ended pairings 30 days
+  later. See [Notifications](../features/phone-app.md) and
+  [Manage phones](../../operate/networking/remote-access.md#manage-phones).
 - **Pending, Active, Idle and Revoked devices.** My devices now shows a
   device that was approved but never wrote anything as **pending**, and one
   with nothing signed and no beat for 30 days as **idle**, both grey with

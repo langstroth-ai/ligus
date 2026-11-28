@@ -133,11 +133,11 @@ const PRESENCE_HINT: &str = "confirm with your passkey: POST /v1/presence/prepar
 
 /// P0.6 interim: while this box acts for the owner (`act_as_owner_device`),
 /// anything it signs is signed as the owner, so a phone's or a bearer
-/// caller's vote would pass for the owner's own. Until passkey presence
-/// lands, such a host refuses votes (approve, reject), lockdown clears,
-/// agent host rebinds and applies from the API, except from a phone the owner marked as theirs
-/// (`owner_phone`), whose action is recorded as delegated. Every decision is
-/// one content-free fact naming the phone (`pid`) or `bearer`.
+/// caller's vote would pass for the owner's own. Such a host refuses votes
+/// (approve, reject), lockdown clears, agent host rebinds and applies from
+/// the API (the interim "owner phone" mark was never set by any path and is
+/// gone from `phones.json` v2). Every decision is one content-free fact
+/// naming the phone (`pid`) or `bearer`.
 pub(super) fn presence_gate(s: &Shared, peer: Option<&TunnelPeer>, action: &str) -> ApiResult<()> {
     if !s.lock().is_delegated() {
         return Ok(());
@@ -146,16 +146,15 @@ pub(super) fn presence_gate(s: &Shared, peer: Option<&TunnelPeer>, action: &str)
 }
 
 /// The decision of [`presence_gate`] for a host where presence applies:
-/// accept a request from a phone the owner marked as theirs (recorded as
-/// delegated), refuse anything else with `presence_required`.
+/// refuse with `presence_required` (tests can stand in for a confirmed
+/// presence, recorded as delegated).
 pub(super) fn presence_gate_always(s: &Shared, peer: Option<&TunnelPeer>, action: &str) -> ApiResult<()> {
-    let owner_phone = peer
-        .and_then(|p| s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)))
-        .is_some_and(|r| r.is_active() && r.owner_phone);
     #[cfg(test)]
-    let owner_phone = owner_phone || s.test_presence.load(std::sync::atomic::Ordering::SeqCst);
+    let confirmed = s.test_presence.load(std::sync::atomic::Ordering::SeqCst);
+    #[cfg(not(test))]
+    let confirmed = false;
     let source = peer.map(|p| p.pid.clone()).unwrap_or_else(|| "bearer".into());
-    let (verdict, reason) = if owner_phone {
+    let (verdict, reason) = if confirmed {
         (ligus_core::signal::GuardVerdict::Accept, format!("delegated_{action}"))
     } else {
         (ligus_core::signal::GuardVerdict::Reject, format!("presence_required_{action}"))
@@ -171,7 +170,7 @@ pub(super) fn presence_gate_always(s: &Shared, peer: Option<&TunnelPeer>, action
             reason,
         },
     );
-    if owner_phone {
+    if confirmed {
         Ok(())
     } else {
         Err(ApiError(StatusCode::FORBIDDEN, PRESENCE_REQUIRED.into()))
@@ -1030,6 +1029,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/events", get(events))
         .route("/v1/tunnel/credential", post(tunnel_credential))
         .route("/v1/tunnel/push", put(tunnel_push))
+        .route("/v1/tunnel/pairing", delete(tunnel_unpair))
         .route("/v1/tunnel/direct", get(tunnel_direct))
         .route("/v1/revocations", get(list_revocations))
         .route("/v1/revocations/{device}/retry", post(retry_revocation));
@@ -1948,6 +1948,39 @@ async fn tunnel_push(State(s): S, peer: Option<Extension<TunnelPeer>>, body: Byt
         t.registry.set_push(&rec.pid, pref.enabled, pref.previews, pref.kinds)?.ok_or_else(|| ApiError::not_found("phone"))?;
     Ok(Json(json!({ "enabled": enabled, "previews": previews })))
 }
+
+/// `DELETE /v1/tunnel/pairing` → `{"unpaired": true}` (tunnel only): the
+/// calling phone forgets this box (Forget host, workspace model v3, 10.2).
+/// Pushes to it stop now; its sessions end and the relay drops the pairing
+/// and its push registration right after this answer goes out. Its person's
+/// desktop then asks whether to remove the device too. A phone can only
+/// unpair itself: the pairing is the tunnel peer's.
+async fn tunnel_unpair(State(s): S, peer: Option<Extension<TunnelPeer>>) -> ApiResult<Json<Value>> {
+    let (t, rec) = tunnel_phone(&s, peer)?;
+    let by = super::tunnel::phones::Unpaired::Phone;
+    t.registry.mark_unpaired(&rec.pid, by)?;
+    // Durable before the answer: a stop inside the delay below still leaves
+    // the pairing revoked and its relay step pending for the next start.
+    let exp = t.registry.revoke(&rec.pid)?.unwrap_or(rec.cred_exp);
+    super::tunnel::write_json(
+        &super::tunnel::pending_dir(&t.dir).join(format!("revoke-{}.json", rec.pid)),
+        &super::tunnel::RevokeFile { pid: rec.pid.clone(), exp, unpaired: Some(by) },
+    )?;
+    let pid = rec.pid.clone();
+    // After the answer is on its way: revoking ends this very session.
+    tokio::spawn(async move {
+        tokio::time::sleep(UNPAIR_CUT_DELAY).await;
+        if let Err(e) = t.unpair(&pid, super::tunnel::phones::Unpaired::Phone) {
+            eprintln!("remote: unpairing {pid}: {e:#}");
+        }
+    });
+    println!("remote: phone {:?} forgot this box; its pairing and push registration are cut", rec.name);
+    Ok(Json(json!({ "unpaired": true })))
+}
+
+/// How long `DELETE /v1/tunnel/pairing` waits before cutting the session it
+/// answered on.
+const UNPAIR_CUT_DELAY: Duration = Duration::from_millis(300);
 
 /// `GET /v1/tunnel/direct` → `{"token", "url"}`: the calling phone's own
 /// direct-path credential (tunnel only), so its direct-path requests act for
