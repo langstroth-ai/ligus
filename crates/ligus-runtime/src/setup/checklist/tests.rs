@@ -246,6 +246,11 @@ async fn gather_reads_the_fold_and_clean_up_follows_it() {
     let cfg = workspace_config_session_id(ws);
 
     let mut mac = Dev::open(&tmp.path().join("mac"), "Alex", &relay, ws);
+    // A member who asked to leave stays one until an Admin removes them
+    // only on rules 3 (rules 4 makes the leave a removal: see
+    // `under_rules_4_a_member_who_left_is_nothing_to_clean_up`), so this
+    // fixture founds on rules 3.
+    mac.svc.set_founding_rules(ligus_core::authz::RULES_V3);
     mac.svc.ensure_self_member(cfg, ws).unwrap();
 
     // A new workspace: the founder, nothing else.
@@ -322,4 +327,30 @@ async fn gather_reads_the_fold_and_clean_up_follows_it() {
     assert!(f.rules >= ligus_core::authz::RULES_V3 || is_former_host(&f, &taylor_box), "{:?}", f.leftovers);
     assert!(f.boxes.iter().all(|b| b.id != taylor_box), "{:?}", f.boxes);
     assert_eq!(checklist(&f).row(RowId::Cleanup).unwrap().state, RowState::Done, "{:?}", f.leftovers);
+}
+
+/// Rules 4: leaving removes the member, so Clean up has no "asked to leave"
+/// row for them; nothing waits for an Admin.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn under_rules_4_a_member_who_left_is_nothing_to_clean_up() {
+    let relay = spawn_relay().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = ligus_core::room_workspace_id("acme-setup-r4");
+    let cfg = workspace_config_session_id(ws);
+    let mut mac = Dev::open(&tmp.path().join("mac"), "Alex", &relay, ws);
+    mac.svc.ensure_self_member(cfg, ws).unwrap();
+    mac.passkey(ws);
+    mac.sync().await;
+    let mut taylor = Dev::open(&tmp.path().join("taylor"), "Taylor", &relay, ws);
+    taylor.join_via(&mut mac, ws).await;
+    taylor.passkey(ws);
+    taylor.sync().await;
+    mac.sync().await;
+    assert!(taylor.svc.leave_workspace(ws).unwrap());
+    taylor.sync().await;
+    mac.sync().await;
+
+    let f = mac.facts(ws);
+    assert!(f.rules >= ligus_core::authz::RULES_V4, "this build founds on rules 4 from its first passkey: {f:?}");
+    assert!(f.leftovers.iter().all(|l| l.kind != LeftoverKind::MemberLeft), "{:?}", f.leftovers);
 }
