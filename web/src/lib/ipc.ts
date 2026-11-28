@@ -2669,6 +2669,37 @@ export const passkeyRegister = (label: string) => invoke<void>("passkey_register
 export const recoveryKeyCreate = () => invoke<string>("recovery_key_create");
 export const passkeyRemove = (credentialId: string) => invoke<void>("passkey_remove", { workspaceId: shownWorkspace(), credentialId });
 export const workspaceRulesSet = (version: number) => invoke<void>("workspace_rules_set", { workspaceId: shownWorkspace(), version });
+// ── Workspace rules 4 (workspace model v3, 15.2; app/src/rules4_ui.rs) ─────
+
+export type DeviceBuildDto = { name: string; person: string; build: string | null };
+export type EndpointRuntimeDto = {
+  runtimeId: string;
+  name: string;
+  agents: { id: string; name: string }[];
+  /** This person can move the address to this computer (rules 4). */
+  movableHere: boolean;
+};
+export type PinOfferDto = { agentId: string; name: string; label: string; mine: boolean };
+export type Rules4StatusDto = {
+  rules: number;
+  isOwner: boolean;
+  /** What switching to rules 4 changes, one plain line each. */
+  changes: string[];
+  /** The readiness list, one plain line each (empty: nothing to say). */
+  readiness: string[];
+  oldDevices: DeviceBuildDto[];
+  unknownDevices: DeviceBuildDto[];
+  endpointRuntimes: EndpointRuntimeDto[];
+  /** Rules 4: agents a person here may pin to what their runtime runs. */
+  pins: PinOfferDto[];
+};
+export const workspaceRules4Status = () => invoke<Rules4StatusDto>("workspace_rules4_status", { workspaceId: shownWorkspace() });
+/** The Owner's switch to rules 4: one passkey, never back. `true` when it switched. */
+export const workspaceRulesUpgrade = () => invoke<boolean>("workspace_rules_upgrade", { workspaceId: shownWorkspace() });
+/** Move a runtime's model server address to this computer (rules 4); returns how many agents moved. */
+export const runtimeEndpointMove = (runtimeId: string) => invoke<number>("runtime_endpoint_move", { workspaceId: shownWorkspace(), runtimeId });
+/** Agents this chat still carries an old copy of (Admins, rules 4). */
+export const chatOldAgentCopies = (sessionId: string) => invoke<{ id: string; name: string }[]>("chat_old_agent_copies", { sessionId });
 /** Confirm this device on the active workspace with your passkey (rules v2). */
 export const deviceConfirm = () => invoke<boolean>("device_confirm");
 /** Let a member register a first passkey again (an Admin's re-grant, confirmed with your passkey). */

@@ -8,6 +8,29 @@ Full release notes are on the
 
 ### Added
 
+- **Upgrade an existing workspace to rules 4.** Settings → Workspace rules
+  (Owner only) shows what upgrading changes and the readiness list, naming
+  each device that will go read-only and its build ("lt on zaz-mbp (Ana) is
+  on 0.4.1"), then switches with one passkey; there's no going back. On the
+  command line: `ligus workspace rules` and `ligus workspace rules upgrade
+  [--dry-run]`, with the passkey handed off to your desktop or phone. After
+  the switch, agents that still name a runtime can be pinned to what it runs
+  (**Pin**), a chat's old copy of an agent no longer shadows the workspace's,
+  and an agent whose runtime keeps a model server's address on the workspace
+  gets one line with **Move it to this computer**. See
+  [Workspace rules](../features/workspace-rules.md).
+
+- **Change model… and Runs on… for each agent.** An agent's ⋯ menu (Tools
+  pane, and in `lt`) opens the Add an agent form with just that field: the
+  models its source offers where it runs (a gateway's list from its host,
+  `auto` included), or your own devices and the hosts that offer its source,
+  each with its state and one line on what it means. On rules 4 changing the
+  model of your own agent within its source needs no passkey; moves follow
+  the placement rules, and shared agents are an Admin's. On rules 3 it goes
+  through the agent's runtime, as an Admin's with a passkey. On the command
+  line: `ligus agents set <agent> --model M` or `--runs-on here|HOST`. See
+  [Changing an agent's model or where it runs](../features/workspace-rules.md#change).
+
 - **Workspace rules 4.** New workspaces now start on rules 4, where every
   device checks what an agent runs and where: placing an agent on a host
   needs that host to exist, be trusted and offer what the agent runs; a

@@ -50,6 +50,8 @@ pub use phone_enroll_relay::{EnrollDesktop, EnrollPhoneStanding};
 mod phone_sign;
 mod presence;
 mod relay_removal;
+mod rules4_switch;
+pub use rules4_switch::{DeviceBuild, EndpointRuntime, Rules4Report, RULES4_CHANGES};
 pub use relay_removal::{RelayRemoval, RelayRemovalError, RelaySubject, BOX_SUBJECT_PREFIX};
 mod repos;
 pub use repos::canonical_from_input;

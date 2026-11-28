@@ -31,6 +31,7 @@ use zeroize::Zeroizing;
 use crate::checks::{Check, Report, Status};
 
 mod agent;
+mod agent_edit;
 mod folder;
 mod gate;
 mod human;
@@ -41,10 +42,13 @@ mod tool;
 pub mod validate;
 
 #[cfg(test)]
+mod edit_tests;
+#[cfg(test)]
 mod fake;
 #[cfg(test)]
 mod tests;
 
+pub use agent_edit::{pin_offers, PinOffer};
 pub use ops::*;
 
 /// The exit codes of the shared table (`ligus help exit-codes`).

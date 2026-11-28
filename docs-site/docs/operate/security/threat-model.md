@@ -539,7 +539,8 @@ Residual risks:
 ### Workspace rules 4 {#rules-4}
 
 Ligus 0.5 founds every new workspace on rules 4; an existing one moves to it
-when an Owner switches it, with a passkey (it never goes back). A build that
+when an Owner switches it, with a passkey (it never goes back; see
+[Upgrading an existing workspace](../../ligus/features/workspace-rules.md#upgrade)). A build that
 doesn't know rules 4 (0.4 and earlier) opens such a workspace read-only and
 says to update. Every device folds the same log the same way, so what rules
 4 refuses is refused everywhere. Events written before the switch are judged

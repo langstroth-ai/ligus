@@ -37,7 +37,14 @@ pane's page in these docs.
   and MCP servers — open it when a run is in flight (it shows each
   agent's planning → working → awaiting-review state) or when an MCP
   server is misbehaving and you want to disable a tool. The wrench
-  glyph in the chat header also opens this pane. To remove an agent, open
+  glyph in the chat header also opens this pane. An agent's **⋯** menu
+  has **Change model…** and **Runs on…** (see
+  [Changing an agent's model or where it runs](workspace-rules.md#change)).
+  An agent whose runtime keeps a model server's address on the workspace
+  shows one quiet line under it, with **Move it to this computer** on the
+  computer that runs it (see
+  [Model server addresses](workspace-rules.md#model-server-addresses)).
+  To remove an agent, open
   its **⋯** menu and pick **Remove from workspace…**; the confirmation says
   what follows: the agent leaves every chat in the workspace for everyone,
   mentions of it go unanswered, workflow stages that use it stop with an

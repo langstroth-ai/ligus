@@ -48,11 +48,55 @@ pub fn lockdown(svc: &ChatService, ws: Uuid) -> (bool, Vec<String>) {
 // ── agent ───────────────────────────────────────────────────────────────────
 
 pub fn agents(svc: &ChatService, ws: Uuid) -> Vec<AgentFact> {
+    let me = svc.author().id.clone();
+    // A person's ids across their linked devices are one person.
+    let links = svc.device_links(ws).unwrap_or_default();
+    let mine = |owner: &str| !me.is_empty() && !owner.is_empty() && (owner == me || links.person(owner) == links.person(&me));
     svc.load_in(ws, workspace_config_session_id(ws))
         .ok()
         .flatten()
-        .map(|s| s.workspace_agents.into_iter().map(|a| AgentFact { id: a.id, name: a.name, runtime_id: a.runtime_id }).collect())
+        .map(|s| {
+            s.workspace_agents
+                .into_iter()
+                .map(|a| {
+                    let run = a.effective_run();
+                    let full = run.runtime_ref().is_none() && !run.source.is_empty();
+                    let host_id = a.as_judged().host_id.clone();
+                    AgentFact {
+                        id: a.id,
+                        mine: mine(&a.owner_actor_id),
+                        owner: a.owner_actor_id.clone(),
+                        host_id,
+                        source: if full { run.source.clone() } else { String::new() },
+                        harness: if full { run.harness.clone() } else { String::new() },
+                        model: if full { run.model.clone() } else { String::new() },
+                        name: a.name,
+                        runtime_id: a.runtime_id,
+                    }
+                })
+                .collect()
+        })
         .unwrap_or_default()
+}
+
+/// The workspace's rules version here (0 with no config log yet).
+pub fn rules(svc: &ChatService, ws: Uuid) -> u32 {
+    svc.workspace_config(ws).ok().flatten().map(|c| c.session().authz.rules).unwrap_or(0)
+}
+
+/// Change agent `id` in one record (Change model…, Runs on…): see
+/// [`ChatService::edit_agent`].
+pub fn change_agent(svc: &mut ChatService, ws: Uuid, id: Uuid, edit: &super::AgentEdit) -> OpsResult<()> {
+    let run = edit.run.as_ref().map(|(harness, source, model)| ligus_core::agent_run::AgentRun {
+        harness: harness.clone(),
+        source: source.clone(),
+        model: model.clone(),
+        resolved: None,
+    });
+    svc.edit_agent(ws, id, edit.runtime_id.as_deref(), run, edit.host_id.as_deref()).map_err(|e| match e {
+        crate::chat_service::ChatError::Unauthorized(m) => OpsError::Refused(m),
+        e => failed(e),
+    })
 }
 
 pub fn member_names(svc: &ChatService, ws: Uuid) -> Vec<String> {

@@ -9,7 +9,7 @@
 
 use uuid::Uuid;
 
-use ligus_core::agent_run::{ResolvedRun, RunRules};
+use ligus_core::agent_run::{AgentRun, ResolvedRun, RunRules};
 use ligus_core::{workspace_config_session_id, SessionEvent, WorkspaceAgent, WorkspaceRole};
 
 use super::{ChatError, ChatService, Result};
@@ -78,6 +78,55 @@ impl ChatService {
         if !rt.gateway.is_empty() && !host.offers_gateway(&rt.gateway) {
             return Err(ChatError::Unauthorized(format!("{} doesn't offer {}", label(), rt.gateway)));
         }
+        Ok(())
+    }
+
+    /// Change agent `agent_id` in one record (Change model…, Runs on…;
+    /// workspace model v3, 5.7 and 17.4): name `runtime_id` instead of what
+    /// it runs now, carry `run` (rules 4 only: `{harness, source, model}`),
+    /// and/or place it on `host_id` (`""`: its owner's own devices). `None`
+    /// keeps what it has. The fold judges the merged record: on rules 4 a
+    /// model change within one source on your own agent needs neither an
+    /// Admin nor a passkey; a move or a source change follows the placement
+    /// rules (G1, G2); a shared agent is an Admin's. On rules 3 any change
+    /// of runtime or host is an Admin's, with a passkey.
+    pub fn edit_agent(&mut self, workspace_id: Uuid, agent_id: Uuid, runtime_id: Option<&str>, run: Option<AgentRun>, host_id: Option<&str>) -> Result<()> {
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        let config = self.workspace_config(workspace_id)?;
+        let rules = config.as_ref().map(|c| c.session().authz.rules).unwrap_or(0);
+        let Some(current) = config.as_ref().and_then(|c| c.agent(agent_id)).cloned() else {
+            return Err(ChatError::NotFound("unknown agent".into()));
+        };
+        if run.is_some() && rules < ligus_core::authz::RULES_V4 {
+            return Err(ChatError::Unauthorized(
+                "an agent carries its own model choice on rules 4: on this workspace its model belongs to its runtime".into(),
+            ));
+        }
+        if let Some(r) = &run {
+            if r.source.is_empty() || r.source.starts_with(ligus_core::agent_run::RUNTIME_SOURCE_PREFIX) {
+                return Err(ChatError::Unauthorized("a run spec names a source a host offers".into()));
+            }
+        }
+        // An agent whose host is gone keeps naming it (a model change isn't
+        // a move).
+        let mut agent = current.as_judged().into_owned();
+        if let Some(h) = host_id {
+            agent.place(h);
+        }
+        if let Some(r) = runtime_id {
+            agent.runtime_id = r.to_string();
+            agent.run = None;
+        }
+        if let Some(mut r) = run {
+            r.resolved = None;
+            agent.run = Some(r);
+        }
+        // As written (a run spec's legacy id included), so a source change
+        // on the same host is judged too.
+        let agent = self.agent_for_write(workspace_id, &agent);
+        self.ensure_own_host_record(workspace_id, &agent.host_id)?;
+        self.refuse_unoffered_placement(workspace_id, &agent)?;
+        self.append_signed(config_id, workspace_id, SessionEvent::AgentUpserted { agent })?;
         Ok(())
     }
 

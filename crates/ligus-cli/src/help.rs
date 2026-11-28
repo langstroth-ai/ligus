@@ -473,6 +473,7 @@ pub const COMMANDS: &[Cmd] = &[
         synopsis: &["ligus setup agent --name NAME [--source S] [--model M] [--runs-on here|HOST] [--endpoint URL] [--local-servers] [--test-turn] [--no-wait | --timeout 10m] [--recovery-words-file PATH] [--json] [--dry-run]"],
         flags: &[
             f("--name NAME", "required", "the agent's @name"),
+            f("--agent NAME|ID", "none", "change this existing agent instead (with --model and --runs-on; ligus agents set says more)"),
             f("--source S", "the best one found", "what answers: claude-code, codex, copilot, antigravity, aider, pi, gateway:NAME (a gateway a host offers), provider:NAME (a hosted API a host holds the key for), or local (a model server)"),
             f("--model M", "the CLI's default; a gateway's first model", "the model (required for a gateway, a hosted API or local)"),
             f("--runs-on here|HOST", "this device for a CLI; the one host offering a gateway or key", "where turns run: here, or a host's id or name (ligus hosts)"),
@@ -1092,22 +1093,94 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "agents set",
         group: G_AGENTS,
-        summary: "let an agent run local servers (or stop it)",
-        purpose: "Turn an agent's local-servers switch on or off: a signed workspace sandbox grant, off by default, \
-                  the workspace Owner's to change (with a passkey in a shared workspace, so on a CLI device it works \
-                  in your local workspace; otherwise use Settings, Sandbox on the desktop). On, the agent may run a \
-                  local server such as the Google Antigravity CLI's (agy) helper server. Linux with bubblewrap: every \
-                  turn has its own loopback in a private network namespace, where that works. Linux Landlock tier (no \
-                  namespaces): it stays off. macOS: not available yet (the Mac's sandbox can't keep a listener \
-                  loopback-only), so the switch is stored but has no effect there. Files, unix sockets and egress \
-                  never change. Applies where the workspace grants apply (by default \
-                  the Owner's own devices). Share with `ligus sync`.",
-        synopsis: &["ligus agents set <agent> --local-servers on|off [--json]"],
-        flags: &[f("--local-servers on|off", "required", "the agent's local-servers switch"), JSON],
+        summary: "change an agent's model or where it runs, or let it run local servers",
+        purpose: "Change model and Runs on, the same form as the agent's menu on the desktop and in lt: --model picks \
+                  from what the agent's source lists where it runs (a gateway's own list, auto included when it has \
+                  one), --runs-on moves it to your own devices (here) or a host that offers its source (ligus hosts \
+                  lists what each offers, with readiness). One record, one event. On a rules-4 workspace the agent \
+                  carries its own model choice: a model change within one source on your own agent needs no passkey; \
+                  a move, or pinning an agent that still names a runtime to the source it runs, takes one; a shared \
+                  agent (no owner) is an Admin's to change, and so is placing an agent on a host you don't own. On a \
+                  rules-3 workspace the model belongs to the runtime: the engine reuses a runtime that runs the new \
+                  model or defines one, and any change is an Admin's, with a passkey (passkey 1 of 2, 2 of 2 when a \
+                  runtime is defined too). A step that needs your passkey goes to your desktop or phone (exit 4 with \
+                  --no-wait; finish with ligus handoff wait, then run this again). \
+                  --local-servers turns the agent's local-servers switch on or off: a signed workspace sandbox grant, \
+                  off by default, the workspace Owner's to change (with a passkey in a shared workspace, so on a CLI \
+                  device it works in your local workspace; otherwise use Settings, Sandbox on the desktop). On, the \
+                  agent may run a local server such as the Google Antigravity CLI's (agy) helper server. Linux with \
+                  bubblewrap: every turn has its own loopback in a private network namespace, where that works. Linux \
+                  Landlock tier (no namespaces): it stays off. macOS: not available yet (the Mac's sandbox can't keep \
+                  a listener loopback-only), so the switch is stored but has no effect there. Files, unix sockets and \
+                  egress never change. Share with `ligus sync`.",
+        synopsis: &[
+            "ligus agents set <agent> [--model M] [--runs-on here|HOST] [--no-wait | --timeout 10m] [--recovery-words-file PATH] [--dry-run] [--json]",
+            "ligus agents set <agent> --local-servers on|off [--json]",
+        ],
+        flags: &[
+            f("--model M", "unchanged", "the model, from what the agent's source lists where it runs"),
+            f("--runs-on here|HOST", "unchanged", "where turns run: here (your own devices), or a host's id or name that offers its source"),
+            f("--timeout DURATION", "10m", "how long a step that needs your passkey waits for your desktop or phone"),
+            f("--no-wait", "off", "send that step to your desktop or phone and exit 4; finish with ligus handoff wait, then run this again"),
+            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file) as your passkey"),
+            f("--local-servers on|off", "unchanged", "the agent's local-servers switch (on its own)"),
+            DRY_RUN,
+            JSON,
+        ],
         conn: true,
-        exit: &[(2, "no agent named, or --local-servers without on or off"), (5, "no such agent"), (6, "you aren't the workspace Owner, or a shared workspace needs your passkey (use the desktop)")],
-        examples: &["ligus agents set gem --local-servers on && ligus sync", "ligus agents set @gem --local-servers off --json"],
-        see_also: &["ligus agents", "ligus doctor --sandbox", "ligus setup agent", "desktop: Settings > Sandbox"],
+        exit: &[
+            (2, "no agent named, a host that doesn't offer its source, a model its source's complete list lacks, or --local-servers without on or off"),
+            (4, "the change needs your passkey and your desktop or phone didn't confirm it in time (or --no-wait)"),
+            (5, "no such agent"),
+            (6, "your role can't change that agent, or place it on that host, or you aren't the workspace Owner (--local-servers)"),
+        ],
+        examples: &[
+            "ligus agents set coder --model glm-4.6",
+            "ligus agents set coder --runs-on build-1 --no-wait",
+            "ligus agents set gem --local-servers on && ligus sync",
+        ],
+        see_also: &["ligus agents", "ligus hosts", "ligus setup agent", "ligus workspace rules", "ligus doctor --sandbox", "desktop: the agent's ⋯ menu > Change model… / Runs on…"],
+        ..D
+    },
+    Cmd {
+        name: "workspace",
+        group: G_AGENTS,
+        summary: "the workspace's rules: see them, or switch to rules 4",
+        purpose: "Commands about the workspace as a whole. `ligus workspace rules` shows its rules version and, below \
+                  rules 4, what the switch changes and the readiness list.",
+        synopsis: &["ligus workspace rules [upgrade] [--dry-run] [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus workspace rules", "ligus workspace rules upgrade --dry-run"],
+        see_also: &["ligus workspace rules"],
+        ..D
+    },
+    Cmd {
+        name: "workspace rules",
+        group: G_AGENTS,
+        summary: "show the rules version and readiness; upgrade an existing workspace to rules 4",
+        purpose: "Shows the workspace's rules version. Below rules 4 it lists what the switch changes and the readiness \
+                  list: devices whose signed beat reports a build below 0.5, by name and build (\"lt on zaz-mbp (Ana) is \
+                  on 0.4.1\": they go read-only on this workspace until they're updated), devices that haven't said \
+                  which build they run, agents whose placement wouldn't resolve, host records not signed by their own \
+                  device, members with no account, and model server addresses kept on the workspace (they keep \
+                  working; rules 4 refuses new or changed ones). The list informs: the Owner can switch anyway. \
+                  `upgrade` switches: the workspace's Owner only, with one passkey (handed off to your desktop or phone; \
+                  exit 4 with --no-wait, finish with ligus handoff wait, then run this again), and there is no going \
+                  back. --dry-run prints the readiness list and writes nothing. New workspaces start on rules 4. Share \
+                  with `ligus sync`.",
+        synopsis: &["ligus workspace rules [--json]", "ligus workspace rules upgrade [--dry-run] [--no-wait | --timeout 10m] [--recovery-words-file PATH] [--json]"],
+        flags: &[
+            DRY_RUN,
+            f("--timeout DURATION", "10m", "how long the switch waits for your passkey on your desktop or phone"),
+            f("--no-wait", "off", "send the passkey step to your desktop or phone and exit 4"),
+            f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file) as your passkey"),
+            JSON,
+        ],
+        conn: true,
+        exit: &[(4, "the switch needs your passkey: confirm it on your desktop or phone (ligus handoff wait), then run this again"), (6, "you aren't the workspace's Owner")],
+        examples: &["ligus workspace rules", "ligus workspace rules upgrade --dry-run", "ligus workspace rules upgrade --no-wait && ligus handoff wait <id>"],
+        see_also: &["ligus agents set", "ligus handoff", "desktop: Settings > Workspace rules"],
         ..D
     },
     Cmd {
@@ -3961,6 +4034,7 @@ mod tests {
             ("devices", main.clone(), "\"devices\" => {", "\n        \"recovery-key\"", &[]),
             ("profile", main.clone(), "\"profile\" => match", "\n        },\n", &[]),
             ("agents", main.clone(), "\"agents\" => match", "\n        },\n", &[]),
+            ("workspace", main.clone(), "\"workspace\" => match", "\n        },\n", &[]),
             ("dashboard", main.clone(), "\"dashboard\" => match", "\n        },\n", &[]),
             ("facts", main.clone(), "\"facts\" => {", "\n        }\n", &[]),
             ("trust", main.clone(), "fn cmd_trust", "\n}\n", &[]),

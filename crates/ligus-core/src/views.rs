@@ -121,9 +121,15 @@ impl ChatState {
                 session.members.push(m);
             }
         }
+        // Rules 4 (workspace model v3, 11, G5): a chat runs the workspace's
+        // record of an agent; an older build's copy on the chat's own log
+        // keeps folding but no longer shadows it.
+        let workspace_wins = cfg.authz.rules >= crate::authz::RULES_V4;
         for a in cfg.workspace_agents {
-            if !session.workspace_agents.iter().any(|x| x.id == a.id) {
-                session.workspace_agents.push(a);
+            match session.workspace_agents.iter_mut().find(|x| x.id == a.id) {
+                Some(slot) if workspace_wins => *slot = a,
+                Some(_) => {}
+                None => session.workspace_agents.push(a),
             }
         }
         for s in cfg.loaded_skills {
@@ -187,5 +193,27 @@ mod tests {
         assert!(view.workspace_agents.iter().any(|a| a.id == agent.id));
         // Before the config log syncs, the chat as it folded.
         assert_eq!(ChatState::new(chat.clone()).view(None), chat);
+    }
+
+    /// Workspace model v3, 11 (G5): an older build's copy of an agent on a
+    /// chat's own log shadows the workspace's record on rules 3 and below;
+    /// on rules 4 the chat runs the workspace's record.
+    #[test]
+    fn on_rules4_the_workspace_record_wins_over_a_chats_old_copy() {
+        let ws = Uuid::new_v4();
+        let agent = WorkspaceAgent::new("helper", "claude-code");
+        let mut chat = ChatSession::new("c", ws, "x");
+        let mut copy = agent.clone();
+        copy.runtime_id = "old-runtime".into();
+        chat.workspace_agents.push(copy);
+        let mut cfg = config(ws);
+        cfg.workspace_agents.push(agent.clone());
+        cfg.authz.rules = crate::authz::RULES_V3;
+        let view = ChatState::new(chat.clone()).view(Some(WorkspaceConfig::new(cfg.clone())));
+        assert_eq!(view.workspace_agents.iter().find(|a| a.id == agent.id).unwrap().runtime_id, "old-runtime");
+        cfg.authz.rules = crate::authz::RULES_V4;
+        let view = ChatState::new(chat).view(Some(WorkspaceConfig::new(cfg)));
+        assert_eq!(view.workspace_agents.iter().find(|a| a.id == agent.id).unwrap().runtime_id, "claude-code");
+        assert_eq!(view.workspace_agents.iter().filter(|a| a.id == agent.id).count(), 1);
     }
 }

@@ -104,6 +104,44 @@ pub fn offers_from(
     out
 }
 
+/// A full run spec's legacy id (`run:…`) as a runtime this computer runs
+/// itself (the desktop, lt), resolved from its own offers only: a CLI it
+/// has with the spec's model, a model server its `host.toml` lists, a
+/// gateway its operator listed, or a provider declared for `workspace_id`
+/// ([`runtime_for_spec`]). `None`: not a full spec id, or this computer
+/// doesn't offer its source (the turn is "can't run here", never another
+/// model).
+pub fn target_for_spec(runtime_id: &str, workspace_id: Uuid, role: HostRole) -> Option<ligus_core::RuntimeTarget> {
+    if !ligus_core::agent_run::is_full_spec_id(runtime_id) {
+        return None;
+    }
+    let run = ligus_core::agent_run::from_legacy_id(runtime_id);
+    let cfg = crate::host_config::host();
+    let gws = crate::model_gateway::host();
+    let wr = runtime_for_spec(&cfg, workspace_id, &run, &own_offers(role, workspace_id), &gws.offers())?;
+    Some(ligus_core::RuntimeTarget {
+        id: wr.id,
+        name: wr.name,
+        provider_kind: wr.provider,
+        location: ligus_core::RuntimeLocation::Local,
+        model_id: wr.model,
+        available_models: Vec::new(),
+        endpoint: wr.endpoint,
+        metrics_endpoint: None,
+        model_provider_id: None,
+        model_base_url: None,
+        request_keep_alive: None,
+        think: None,
+        max_tool_rounds: None,
+        allow_remote_file_tools: false,
+        driver: wr.driver,
+        gateway: (!wr.gateway.is_empty()).then_some(wr.gateway),
+        estimated_performance_score: 0.0,
+        estimated_cost_per_1m_input_tokens_usd: 0.0,
+        capabilities: Default::default(),
+    })
+}
+
 /// The runtime a full run spec (rules 4: `{harness, source, model}`)
 /// resolves to on this host, from its own offers only (workspace model v3,
 /// 5.4): a CLI it has, a local server its `host.toml` lists (the address
@@ -165,6 +203,17 @@ pub fn offers_now(role: HostRole, workspace_id: Option<Uuid>) -> Vec<HostOffer> 
     let gws = crate::model_gateway::host();
     let path = std::env::var_os("PATH").unwrap_or_default();
     offers_from(&crate::host_config::host(), role, workspace_id, |bin| cli_detect::find_on_path(bin, &path).is_some(), &gws.offers(), gws.exclusive())
+}
+
+/// What this computer can run itself for `workspace_id`, listed on its host
+/// record or not: "Don't list this computer's tools" hides them from the
+/// workspace, never from this computer's own agents.
+pub fn own_offers(role: HostRole, workspace_id: Uuid) -> Vec<HostOffer> {
+    let mut cfg = (*crate::host_config::host()).clone();
+    cfg.list_tools = true;
+    let gws = crate::model_gateway::host();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    offers_from(&cfg, role, Some(workspace_id), |bin| cli_detect::find_on_path(bin, &path).is_some(), &gws.offers(), gws.exclusive())
 }
 
 /// Why this host turns work down, from its configuration.

@@ -39,7 +39,9 @@ impl AppState {
     pub(crate) fn resolve_runtime_strict(&self, runtime_id: &str, this_host: &str) -> Result<ResolvedRuntime, Why> {
         let runtimes = self.combined_runtimes();
         let resolved = self.resolve_runtime_in(&runtimes, runtime_id);
-        let found = runtimes.iter().find(|r| r.id == runtime_id).map(|r| r.provider_kind);
+        // A full run spec (rules 4) counts as found when this computer
+        // offers its source.
+        let found = runtimes.iter().find(|r| r.id == runtime_id).map(|r| r.provider_kind).or_else(|| self.spec_runtime(&runtimes, runtime_id).map(|r| r.provider_kind));
         strict_verdict(found, resolved.provider, runtime_id, this_host).map(|()| resolved)
     }
 
