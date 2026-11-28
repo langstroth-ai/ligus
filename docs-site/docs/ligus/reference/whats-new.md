@@ -4,7 +4,13 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
-## Unreleased
+## 0.5.0
+
+One person on all your devices: link a device with a short code, and one
+link brings all your workspaces. Add an agent in one step with its model and
+where it runs, and change either from its menu. A turn that can't run says
+so, with no silent fallbacks. Set up Ligus shows what's left, the phone sets
+up in one flow, and new workspaces start on rules 4.
 
 ### Added
 
