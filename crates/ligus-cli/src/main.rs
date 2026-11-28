@@ -1891,6 +1891,9 @@ fn cmd_set_agent_host(cfg: &Config, agent_name: &str, host_id: &str, dry_run: bo
         println!("dry run: would bind @{agent_name} ({aid}) to host {host_id}; nothing was signed or written.");
         return Ok(());
     }
+    // The hosts' signed beats: a full run spec never goes to a host below 0.5.
+    let presence = fetch_presence_with(cfg, Some(&svc));
+    svc.set_host_presence(presence);
     svc.set_agent_host(ws, aid, host_id)?;
     println!("bound @{agent_name} to host {host_id} (sync to apply).");
     Ok(())
@@ -2025,6 +2028,9 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
 async fn worker_start(cfg: &mut Config, label: &str, admission: Option<String>) -> Result<(ChatService, String)> {
     let (mut svc, _) = admit::prepare_box(cfg, label, None, admission, |c| async move { sync_once(&c).await }).await?;
     let ws = uuid_of_room(&cfg.room);
+    if admit::left_and_out(&svc, ws)? {
+        bail!("{}", admit::left_line(&cfg.room));
+    }
     let id = svc.device_id().to_string();
     if svc.device_standing(ws)? == ligus_runtime::device_enroll::Standing::Revoked {
         bail!("this worker's device was revoked by a workspace Admin; start it from a fresh data dir and admit it again");

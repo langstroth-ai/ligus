@@ -10629,7 +10629,12 @@ async fn send_message(
         // unless this device has the repo, can run the agent's runtime, and
         // the agent is this person's.
         if depth == 0 && run_here == Some(true) && binding == HostBinding::Elsewhere {
-            match run_here_once(&state, &session, agent.as_ref(), &local_actor_id) {
+            let delegated = run_here_once(&state, &session, agent.as_ref(), &local_actor_id).and_then(|()| match responder.agent_id {
+                // Rules 4: a signed one-turn delegation (G14).
+                Some(aid) => state.service.lock().unwrap().delegate_turn(sid, workspace_id, trigger_id, aid).map(|_| ()).map_err(map_err),
+                None => Ok(()),
+            });
+            match delegated {
                 Ok(()) => binding = HostBinding::ThisDevice,
                 Err(why) => {
                     let mut svc = state.service.lock().unwrap();
@@ -13375,6 +13380,10 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     // thread after the window is live — see `run()`. Running it here scanned
     // the events table on every launch and blocked first paint.
     let mut service = ChatService::new(store, device_kp, account_kp, stored.account.actor());
+    // Writers read hosts' builds from their signed beats (no full run spec
+    // on a host below 0.5).
+    let host_presence = ligus_runtime::HostPresence::new();
+    service.set_host_presence(host_presence.clone());
     // Agents bound to this device sign their own output with keys it
     // certifies (A3), kept with this device's other keys.
     service.set_agent_vault(Box::new(StoreKeyVault::for_data_dir(&data_dir)));
@@ -13679,7 +13688,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
 
     Ok(AppState {
         service: BlockingLock::new(service),
-        host_presence: ligus_runtime::HostPresence::new(),
+        host_presence,
         phone_enroll: Default::default(),
         guards: Default::default(),
         identity,
@@ -20510,6 +20519,9 @@ mod agent_access_ui_tests {
         let store = ligus_runtime::EventStore::open(path).unwrap();
         let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ligus_core::ActorIdentity::new(id, id, ligus_core::ActorKind::Human));
         svc.enable_test_presence();
+        // Named, accountless members (the rules-3 shape; rules 4 refuses
+        // them, D12).
+        svc.set_founding_rules(ligus_core::authz::RULES_V3);
         svc
     }
 

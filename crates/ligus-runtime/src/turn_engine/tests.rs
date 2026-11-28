@@ -702,6 +702,14 @@ async fn a_fenced_placeholder_stops_the_turn() {
     assert!(!s.messages.iter().any(|m| m.is_streaming), "no live placeholder left");
 }
 
+/// A teammate with an account (rules 4 admits no one without, D12).
+fn mate_identity() -> ActorIdentity {
+    let account = Uuid::new_v4();
+    let mut a = ActorIdentity::new(account.to_string(), "Mate", ActorKind::Human);
+    a.account_id = Some(account);
+    a
+}
+
 /// Agent access controls, the engine's backstop: a teammate's mention of an
 /// owner-only agent is answered with a short note no model wrote, the model
 /// is never called and nothing is counted. The owner's own turn runs, is
@@ -711,24 +719,24 @@ async fn a_refused_agent_turn_never_calls_the_model() {
     let (endpoint, model) = spawn_model(vec![text("Done.")]).await;
     let mut w = world(Vec::new());
     let own_trigger = w.trigger;
+    let mate_actor = mate_identity();
     {
         let mut svc = w.host.inner.svc.lock().unwrap();
-        let mut m = ligus_core::WorkspaceMember {
-            id: "mate".into(),
-            actor: ActorIdentity::new("mate", "Mate", ActorKind::Human),
+        svc.add_member(w.chat, w.ws, ligus_core::WorkspaceMember {
+            id: mate_actor.id.clone(),
+            actor: mate_actor.clone(),
             role: ligus_core::WorkspaceRole::Admin,
             title: String::new(),
             index: 0,
             joined_at: ligus_core::Timestamp::now(),
-        };
-        m.actor.account_id = None;
-        svc.add_member(w.chat, w.ws, m).unwrap();
+        })
+        .unwrap();
     }
     let mut mate = ChatService::new(
         EventStore::open(w._dir.path().join("ligus.db")).unwrap(),
         SigningKeypair::generate().unwrap(),
         SigningKeypair::generate().unwrap(),
-        ActorIdentity::new("mate", "Mate", ActorKind::Human),
+        mate_actor,
     );
     w.trigger = mate.post_user_message(w.chat, w.ws, "@coder please add a greeting").unwrap().id;
     let err = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.unwrap_err();
@@ -758,24 +766,24 @@ async fn a_refused_agent_turn_never_calls_the_model() {
 async fn a_teammates_primary_turn_never_calls_the_model() {
     let (endpoint, model) = spawn_model(vec![text("Hi."), text("Hi.")]).await;
     let mut w = world(Vec::new());
+    let mate_actor = mate_identity();
     {
         let mut svc = w.host.inner.svc.lock().unwrap();
-        let mut m = ligus_core::WorkspaceMember {
-            id: "mate".into(),
-            actor: ActorIdentity::new("mate", "Mate", ActorKind::Human),
+        svc.add_member(w.chat, w.ws, ligus_core::WorkspaceMember {
+            id: mate_actor.id.clone(),
+            actor: mate_actor.clone(),
             role: ligus_core::WorkspaceRole::Admin,
             title: String::new(),
             index: 0,
             joined_at: ligus_core::Timestamp::now(),
-        };
-        m.actor.account_id = None;
-        svc.add_member(w.chat, w.ws, m).unwrap();
+        })
+        .unwrap();
     }
     let mut mate = ChatService::new(
         EventStore::open(w._dir.path().join("ligus.db")).unwrap(),
         SigningKeypair::generate().unwrap(),
         SigningKeypair::generate().unwrap(),
-        ActorIdentity::new("mate", "Mate", ActorKind::Human),
+        mate_actor,
     );
     w.trigger = mate.post_user_message(w.chat, w.ws, "@ligus hello").unwrap().id;
     let primary = |w: &World, open: bool| {

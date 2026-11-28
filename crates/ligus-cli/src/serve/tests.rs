@@ -199,6 +199,10 @@ async fn harness_with(
     let desktop = config(&tmp.path().join("desktop"), &relay, &room);
     let agent_id = {
         let mut svc = open_service(&desktop).unwrap();
+        // The harness reaches its mock model server through a workspace
+        // runtime's address, which rules 4 keeps off the log (G9): it founds
+        // on rules 3. A worker's rules-4 paths are in `worker`'s tests.
+        svc.set_founding_rules(ligus_core::authz::RULES_V3);
         svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
         let mut wr = WorkspaceRuntime::new("gw", "Lab gateway", ModelProviderKind::Custom, model);
         wr.endpoint = endpoint.to_string();

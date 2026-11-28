@@ -104,6 +104,62 @@ pub fn offers_from(
     out
 }
 
+/// The runtime a full run spec (rules 4: `{harness, source, model}`)
+/// resolves to on this host, from its own offers only (workspace model v3,
+/// 5.4): a CLI it has, a local server its `host.toml` lists (the address
+/// stays here), a gateway its operator listed (the harness follows the
+/// gateway's wire unless the spec names one), or a hosted provider backed by
+/// a secret declared for `workspace_id`. Its id is the spec's legacy id, so
+/// it matches the agent's `runtime_id`. `None`: this host doesn't offer the
+/// source, or offers it under another harness; the agent is refused, never
+/// run on something else.
+pub fn runtime_for_spec(
+    cfg: &HostConfig,
+    workspace_id: Uuid,
+    run: &ligus_core::agent_run::AgentRun,
+    offers: &[HostOffer],
+    gateways: &[HostModelGateway],
+) -> Option<ligus_core::WorkspaceRuntime> {
+    use ligus_core::{WorkspaceCredential, WorkspaceRuntime};
+    if run.source.is_empty() || run.runtime_ref().is_some() {
+        return None;
+    }
+    let offer = offers.iter().find(|o| o.name == run.source)?;
+    let id = ligus_core::agent_run::legacy_id(run);
+    let wants = (!run.harness.is_empty()).then(|| harness_kind(&run.harness)).flatten();
+    if !run.harness.is_empty() && wants.is_none() {
+        return None;
+    }
+    let mut rt = match offer.kind {
+        OfferKind::Cli | OfferKind::Local | OfferKind::Provider => {
+            let kind = harness_kind(&offer.harness)?;
+            if wants.is_some_and(|w| w != kind) {
+                return None;
+            }
+            let mut rt = WorkspaceRuntime::new(id, run.source.clone(), kind, run.model.clone());
+            match offer.kind {
+                OfferKind::Local => rt.endpoint = cfg.local.iter().find(|l| l.name == run.source)?.url.clone(),
+                OfferKind::Provider => {
+                    let p = cfg.providers_in(workspace_id).into_iter().find(|p| p.name == run.source)?;
+                    rt.credential = WorkspaceCredential::SecretRef { secret_ref: p.secret.clone() };
+                }
+                _ => {}
+            }
+            rt
+        }
+        OfferKind::Gateway => {
+            let g = gateways.iter().find(|g| g.name == run.source)?;
+            let by_wire = if g.api == "anthropic" { ModelProviderKind::Anthropic } else { ModelProviderKind::Custom };
+            let mut rt = WorkspaceRuntime::new(id, run.source.clone(), wants.unwrap_or(by_wire), run.model.clone());
+            rt.gateway = g.name.clone();
+            rt
+        }
+        OfferKind::Other => return None,
+    };
+    rt.created_at = ligus_core::Timestamp::epoch();
+    Some(rt)
+}
+
 /// This host's offers now: `host.toml`, the gateways file, the CLIs on `PATH`.
 pub fn offers_now(role: HostRole, workspace_id: Option<Uuid>) -> Vec<HostOffer> {
     let gws = crate::model_gateway::host();
@@ -349,6 +405,40 @@ mod tests {
 
     fn gw(name: &str, api: &str) -> HostModelGateway {
         HostModelGateway { name: name.into(), api: api.into() }
+    }
+
+    /// A full run spec resolves only through this host's own offers (the
+    /// local server's address and the provider's secret from `host.toml`),
+    /// with the spec's legacy id; a source it doesn't offer, or one under
+    /// another harness, doesn't resolve (never a stand-in).
+    #[test]
+    fn a_full_run_spec_resolves_through_this_hosts_offers_only() {
+        use ligus_core::agent_run::{legacy_id, AgentRun};
+        let ws = Uuid::new_v4();
+        let mut cfg = HostConfig::default();
+        cfg.local.push(LocalSource { name: "ollama".into(), harness: "ollama".into(), url: "http://127.0.0.1:11434".into() });
+        cfg.workspaces.insert(
+            ws.to_string(),
+            WorkspaceDecl {
+                secrets: vec!["team-claude".into()],
+                providers: vec![ProviderDecl { name: "team-claude".into(), harness: "anthropic".into(), secret: "team-claude".into() }],
+            },
+        );
+        let gws = [gw("gw-home", "anthropic")];
+        let offers = offers_from(&cfg, HostRole::Box, Some(ws), |b| b == "codex", &gws, false);
+        let spec = |h: &str, s: &str, m: &str| AgentRun { harness: h.into(), source: s.into(), model: m.into(), resolved: None };
+        let r = |run: &AgentRun| runtime_for_spec(&cfg, ws, run, &offers, &gws);
+        let codex = r(&spec("", "codex", "gpt-5.3-codex")).unwrap();
+        assert_eq!((codex.provider, codex.model.as_str(), codex.id.clone()), (ModelProviderKind::Codex, "gpt-5.3-codex", legacy_id(&spec("", "codex", "gpt-5.3-codex"))));
+        let local = r(&spec("ollama", "ollama", "llama3:8b")).unwrap();
+        assert_eq!((local.provider, local.endpoint.as_str()), (ModelProviderKind::Ollama, "http://127.0.0.1:11434"));
+        let hosted = r(&spec("", "team-claude", "claude-opus")).unwrap();
+        assert_eq!(hosted.credential, ligus_core::WorkspaceCredential::SecretRef { secret_ref: "team-claude".into() });
+        let g = r(&spec("", "gw-home", "m")).unwrap();
+        assert_eq!((g.provider, g.gateway.as_str()), (ModelProviderKind::Anthropic, "gw-home"), "the harness follows the gateway's wire");
+        assert!(r(&spec("", "claude-code", "opus")).is_none(), "not installed here");
+        assert!(r(&spec("codex", "ollama", "x")).is_none(), "another harness");
+        assert!(r(&AgentRun::mirror("ws-claude", None)).is_none(), "a runtime reference isn't a spec");
     }
 
     #[test]

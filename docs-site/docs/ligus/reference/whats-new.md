@@ -22,6 +22,20 @@ Full release notes are on the
   with an older relay, Add a computer shows the approval address as before.
   See [With a short code](../features/linked-devices.md#short-code).
 
+- **Workspace rules 4.** New workspaces now start on rules 4, where every
+  device checks what an agent runs and where: placing an agent on a host
+  needs that host to exist, be trusted and offer what the agent runs; a
+  Contributor places their own agent on their own computer with a passkey,
+  and only an Admin places one elsewhere or in a pool; changing an agent's
+  model within the same source needs no passkey. **Run here this time** is a
+  signed one-turn permission, so the reply counts on every device. Leaving a
+  workspace removes you; a box started again after `ligus serve leave` stays
+  out and logs how to rejoin. A host record counts only from its own device, and
+  members without an account, model server addresses on the log and
+  whole-list writes are refused. An existing workspace stays on its rules
+  until an Owner switches it; builds before 0.5 open a rules 4 workspace
+  read-only. See [Workspace rules 4](../../operate/security/threat-model.md#rules-4).
+
 - **"Update available" for boxes.** When a box or worker runs an older
   release than the latest one, its row in **People** > **Workers & hosts**
   shows one grey line, "0.4.1 → 0.5.0 available · how", and the phone's

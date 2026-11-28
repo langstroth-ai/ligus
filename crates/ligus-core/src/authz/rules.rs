@@ -65,6 +65,11 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         // someone else owns.
         // Opening an agent to everyone (its owner's credentials, spent on
         // other people's requests) too.
+        // Rules 4 (table 5.7): on the merged record, a move or a change of
+        // source or harness; a model change within one source needs none.
+        SessionEvent::AgentUpserted { agent } if roster.rules >= super::RULES_V4 => {
+            super::rules4::needs_presence(agent, fold) || agent_opens(agent, fold)
+        }
         SessionEvent::AgentUpserted { agent } => agent_rebinds(agent, fold) || agent_opens(agent, fold),
         SessionEvent::AgentRosterUpdated { agents } => {
             agents.iter().any(|a| agent_rebinds(a, fold) || agent_opens(a, fold))
@@ -135,6 +140,9 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         | SessionEvent::MessageCompleted { .. }
         | SessionEvent::MessageRemoved { .. }
         | SessionEvent::TurnClaimed { .. }
+        // A person's own device, for one turn of their own agent: the
+        // agent's run spec is unchanged.
+        | SessionEvent::TurnDelegated { .. }
         | SessionEvent::SessionRuntimeChanged { .. }
         | SessionEvent::SessionTitleChanged { .. }
         | SessionEvent::SessionArchivedChanged { .. }

@@ -320,6 +320,35 @@ impl WorkspaceAgent {
         a
     }
 
+    /// [`WorkspaceAgent::for_write`] under the rules in force: on rules 4
+    /// an agent that carries a full run spec, or a `pool` or `chatCreator`
+    /// placement, is written as it is, with `runtime_id = legacy_id(run)`
+    /// and `host_id` the one its placement implies (a pool keeps its first
+    /// host); everything else mirrors its legacy fields as on rules 3.
+    pub fn for_write_at(&self, resolved: Option<ResolvedRun>, rules: RunRules) -> WorkspaceAgent {
+        let full_run = self.run.as_ref().filter(|r| r.runtime_ref().is_none() && !r.source.is_empty());
+        let full_place = matches!(self.placement, Some(Placement::Pool | Placement::ChatCreator));
+        if rules != RunRules::Full || (full_run.is_none() && !full_place) {
+            return self.for_write(resolved);
+        }
+        let mut a = self.for_write(resolved);
+        if let Some(r) = full_run {
+            let mut r = r.clone();
+            r.resolved = None;
+            a.runtime_id = legacy_id(&r);
+            a.run = Some(r);
+        }
+        if let Some(p) = &self.placement {
+            a.host_id = match p {
+                Placement::Host { host_id } => host_id.clone(),
+                Placement::Pool => self.host_id.clone(),
+                _ => String::new(),
+            };
+            a.placement = Some(p.clone());
+        }
+        a
+    }
+
     /// The record authz compares an upsert with: an agent whose host is
     /// gone is judged as still naming that host, as the fold sees it at the
     /// event's position (the clearing is a pass over the finished fold). So

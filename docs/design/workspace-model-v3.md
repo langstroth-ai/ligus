@@ -361,7 +361,10 @@ Additive, sticky fields on `WorkspaceAgent`:
   (`agent_bound_to`, `core/authz/timeline.rs`; `authorize_agent`,
   `core/authz/mod.rs`). Under rules 4 a key certified by any host the
   placement admits is accepted (for `pool`: workers whose valid host record
-  offers the source), plus the device a `TurnDelegated` names for that turn.
+  offers the source and that are boxes, a service member's or one enrolled
+  for its owner; a record's `kind` is its writer's word, so a person's own
+  computer never joins a pool), plus the device a `TurnDelegated` names for
+  that turn while that device is trusted.
 - **"Run here this time" is a signed one-turn delegation** under rules 4: a
   new chat-log kind `TurnDelegated{triggerId, agentId, deviceId}`, written by
   the agent's owner (or an Admin for a shared agent), allows exactly one turn
@@ -462,6 +465,7 @@ consistent.
 | Change `run.model` within the same source, on your own agent | Contributor | no (the agent's limits still apply) |
 | Change `run.source` or `run.harness` | as moving the agent | yes |
 | Change someone else's agent | Admin (unchanged) | as today |
+| Move a shared agent (no owner), or change its source or model | Admin | for a move or a source change |
 
 Under rules 3 these stay as they are today: a model change is a runtime
 change (Admin and passkey), and a new agent with a host is an Admin action.
@@ -761,6 +765,14 @@ keeps stale ones. The question cap is per (person, hour).
   more than the leaver could do by publishing them before leaving, so it is
   accepted. Rotations exclude the leaver's devices from the leave's position,
   and the next rotation after it is prompted.
+- As built (0.5): a leave under rules 4 is judged like a self-removal and is
+  never a cut, so the leaver's own watermark can't deny anything it did
+  before (an empty one would otherwise erase the members it added and the
+  votes it cast). The watermark is still checked: at most 1024 entries, one
+  per (signer, log), each with one to eight heads and at most eight gaps,
+  naming only the leaver's own devices and agent keys. Backdated chat events
+  from the leaver are closed by an Admin's later `MemberRemoved`, whose
+  watermark is the Admin's.
 
 ## 11. The workspace layer
 

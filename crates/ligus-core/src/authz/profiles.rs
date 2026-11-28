@@ -36,7 +36,7 @@ pub fn profile_ok(env: &SessionEventEnvelope, change: &ProfileChange, on_config:
 /// The rules version from which a phone may name itself (workspace model
 /// v3, 17.6; identity model v2, O3 "the device itself"). Before it a phone's
 /// own label is denied, exactly as 0.4 folds it.
-pub const PHONE_NAMES_ITSELF_FROM: u32 = 4;
+pub const PHONE_NAMES_ITSELF_FROM: u32 = super::RULES_V4;
 
 /// `DeviceLabelSet`: on the config log, for the stamp's own account, of a
 /// device certified for that account here and not revoked, signed either by

@@ -14,6 +14,11 @@ struct World {
 
 /// A desktop (founder) and a box admitted to its workspace, not started.
 async fn world() -> World {
+    world_on(None).await
+}
+
+/// [`world`], founded on `rules` (this build's default when `None`).
+async fn world_on(rules: Option<u32>) -> World {
     let tmp = tempfile::tempdir().unwrap();
     let relay = spawn(test_relay::router()).await;
     let room = format!("serve-host-{}", Uuid::new_v4());
@@ -21,6 +26,9 @@ async fn world() -> World {
     let desktop = config(&tmp.path().join("desktop"), &relay, &room);
     let code = {
         let mut svc = open_service(&desktop).unwrap();
+        if let Some(r) = rules {
+            svc.set_founding_rules(r);
+        }
         svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
         let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
         crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap()
@@ -155,32 +163,43 @@ async fn the_first_beat_carries_the_build_and_the_record_its_offers() {
     stop(h).await;
 }
 
-/// W3 (box leave): after `ligus serve leave` the box publishes no more
-/// beats, and a restart writes no host record or label.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_box_that_left_stops_beating_and_writes_nothing_of_its_own() {
-    let w = world().await;
-    let h = w.start("sff", true).await;
-    let mut first = None;
+/// The time of the box's first beat.
+async fn first_beat(h: &ServeHandle) -> i64 {
     for _ in 0..100 {
         h.shared.beat_kick.notify_one();
-        if let Some(b) = own_beat(&h).await {
-            first = Some(b.at);
-            break;
+        if let Some(b) = own_beat(h).await {
+            return b.at;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    let first = first.expect("a first beat");
-    crate::leave_cmd::cmd_serve_leave(&w.boxc, true, true).await.unwrap();
-    assert!(h.shared.lock().has_left(w.ws).unwrap());
-    // Past the second the beat's time would move by.
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    panic!("a first beat")
+}
+
+/// The box's beat times over a few kicks.
+async fn beats_after(h: &ServeHandle) -> Vec<Option<i64>> {
     let mut after = Vec::new();
     for _ in 0..5 {
         h.shared.beat_kick.notify_one();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        after.push(own_beat(&h).await.map(|b| b.at));
+        after.push(own_beat(h).await.map(|b| b.at));
     }
+    after
+}
+
+/// W3 (box leave): after `ligus serve leave` the box publishes no more
+/// beats, and a restart writes no host record or label.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_box_that_left_stops_beating_and_writes_nothing_of_its_own() {
+    // Under rules 3 a leave is a request: the box stays on the roster until
+    // an Admin removes it. Rules 4 (a leave removes it) is the next test.
+    let w = world_on(Some(ligus_core::authz::RULES_V3)).await;
+    let h = w.start("sff", true).await;
+    let first = first_beat(&h).await;
+    crate::leave_cmd::cmd_serve_leave(&w.boxc, true, true).await.unwrap();
+    assert!(h.shared.lock().has_left(w.ws).unwrap());
+    // Past the second the beat's time would move by.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let after = beats_after(&h).await;
     // One beat may have been in flight when the leave landed.
     let last = after.last().cloned().flatten();
     assert!(last.is_none_or(|t| t <= first + 2), "the box kept beating after it left: {first} then {after:?}");
@@ -192,4 +211,43 @@ async fn a_box_that_left_stops_beating_and_writes_nothing_of_its_own() {
     assert_eq!(h.shared.lock().store().max_row_id().unwrap(), rows, "a box that left wrote an event");
     assert_eq!(w.names(&h).0.as_deref(), Some("sff"));
     stop(h).await;
+}
+
+/// Rules 4: leaving removes the box, so a restart after `ligus serve leave`
+/// keeps it out. It starts, sees that it left, writes nothing, publishes no
+/// beat, and says how to rejoin (only an Admin's re-add lifts the removal).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn under_rules_4_a_box_that_left_stays_out_after_a_restart() {
+    let w = world().await;
+    let h = w.start("sff", true).await;
+    {
+        let svc = h.shared.lock();
+        let rules = svc.load_in(w.ws, workspace_config_session_id(w.ws)).unwrap().unwrap().authz.rules;
+        assert!(rules >= ligus_core::authz::RULES_V4, "this build founds on rules 4 (got {rules})");
+    }
+    let first = first_beat(&h).await;
+    crate::leave_cmd::cmd_serve_leave(&w.boxc, true, true).await.unwrap();
+    let rows = h.shared.lock().store().max_row_id().unwrap();
+    stop(h).await;
+
+    // A restart, even with a new label: it starts, out of the workspace.
+    let h = w.start("attic", true).await;
+    {
+        let svc = h.shared.lock();
+        assert!(svc.has_left(w.ws).unwrap());
+        assert!(crate::admit::left_and_out(&svc, w.ws).unwrap(), "the leave removed the box");
+        assert!(svc.write_block().is_some(), "a box that left writes nothing");
+        assert_eq!(svc.store().max_row_id().unwrap(), rows, "a box that left wrote an event on start");
+    }
+    assert_eq!(w.names(&h).0.as_deref(), Some("sff"), "a box that left renamed itself");
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let after = beats_after(&h).await;
+    assert!(after.iter().flatten().all(|t| *t <= first + 2), "a box that left beat after a restart: {first} then {after:?}");
+    assert_eq!(h.shared.lock().store().max_row_id().unwrap(), rows, "a box that left wrote an event");
+    stop(h).await;
+
+    assert_eq!(
+        crate::admit::left_line("home"),
+        "This box left home. To rejoin: ligus admit request (an Admin approves)."
+    );
 }
