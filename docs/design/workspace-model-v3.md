@@ -761,6 +761,14 @@ keeps stale ones. The question cap is per (person, hour).
   more than the leaver could do by publishing them before leaving, so it is
   accepted. Rotations exclude the leaver's devices from the leave's position,
   and the next rotation after it is prompted.
+- As built (0.5): a leave under rules 4 is judged like a self-removal and is
+  never a cut, so the leaver's own watermark can't deny anything it did
+  before (an empty one would otherwise erase the members it added and the
+  votes it cast). The watermark is still checked: at most 1024 entries, one
+  per (signer, log), each with one to eight heads and at most eight gaps,
+  naming only the leaver's own devices and agent keys. Backdated chat events
+  from the leaver are closed by an Admin's later `MemberRemoved`, whose
+  watermark is the Admin's.
 
 ## 11. The workspace layer
 

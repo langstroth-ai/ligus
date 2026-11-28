@@ -236,6 +236,7 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         | SessionEvent::MessageCompleted { .. }
         | SessionEvent::MessageRemoved { .. }
         | SessionEvent::TurnClaimed { .. }
+        | SessionEvent::TurnDelegated { .. }
         | SessionEvent::MessageReactionAdded { .. }
         | SessionEvent::MessageReactionRemoved { .. }
         | SessionEvent::AgentRosterUpdated { .. }

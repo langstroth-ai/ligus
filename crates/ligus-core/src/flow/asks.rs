@@ -182,6 +182,10 @@ pub struct AskProvenance {
     pub digest: String,
     /// An answer: why it doesn't count (empty: it counts).
     pub why: String,
+    /// Rules 4 (G10): an ask's canonical position `(lamport, event_id)`.
+    /// When set, eviction orders by it instead of the payload's `at_ms`
+    /// (the author's own clock).
+    pub position: Option<(u64, Uuid)>,
 }
 
 impl AskProvenance {
@@ -453,6 +457,7 @@ impl FlowState {
             st.signer = None;
             st.host = None;
             st.event_id = None;
+            st.position = None;
             if st.is_v2() {
                 // A snapshot's word about who answered a v2 ask isn't
                 // evidence: its votes and settlement go, and no answer can
@@ -491,13 +496,15 @@ impl FlowState {
                 Some(_) => {}
                 None => {
                     if self.asks.len() >= MAX_ASKS_PER_CHAT {
-                        if let Some(oldest) = self
-                            .asks
-                            .iter()
-                            .filter(|(_, s)| s.evictable())
-                            .min_by_key(|(_, s)| s.ask.at_ms)
-                            .map(|(k, _)| *k)
-                        {
+                        // Rules 4 (G10): by canonical position; an ask
+                        // folded without one (a snapshot's, or one from
+                        // before the rules-4 position) sorts first.
+                        let oldest = if p.position.is_some() {
+                            self.asks.iter().filter(|(_, s)| s.evictable()).min_by_key(|(_, s)| s.position.unwrap_or_default()).map(|(k, _)| *k)
+                        } else {
+                            self.asks.iter().filter(|(_, s)| s.evictable()).min_by_key(|(_, s)| s.ask.at_ms).map(|(k, _)| *k)
+                        };
+                        if let Some(oldest) = oldest {
                             self.asks.remove(&oldest);
                         }
                     }
@@ -522,6 +529,7 @@ impl FlowState {
                             digest: p.digest.clone(),
                             frontier: p.frontier,
                             event_id: p.event_id,
+                            position: p.position,
                             ..Default::default()
                         },
                     );

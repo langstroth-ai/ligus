@@ -15,7 +15,11 @@ use crate::{ChatService, EventStore};
 
 fn svc_on(path: &Path, id: &str, name: &str) -> ChatService {
     let store = EventStore::open(path).unwrap();
-    ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ActorIdentity::new(id, name, ActorKind::Human))
+    let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ActorIdentity::new(id, name, ActorKind::Human));
+    // A fixture of accountless, named members (the rules-3 shape, which
+    // rules 4 refuses: D12): found its workspaces on rules 3.
+    svc.set_founding_rules(ligus_core::authz::RULES_V3);
+    svc
 }
 
 fn member(id: &str, name: &str, role: WorkspaceRole) -> WorkspaceMember {

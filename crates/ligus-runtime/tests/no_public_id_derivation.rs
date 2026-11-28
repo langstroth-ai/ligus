@@ -10,6 +10,11 @@ use std::path::{Path, PathBuf};
 /// (file suffix, a fragment of the call line, why it's fine).
 const ALLOWED: &[(&str, &str, &str)] = &[
     (
+        "crates/ligus-core/src/authz/rules4.rs",
+        "Uuid::new_v5(&workspace_id, b\"ligus-default-agent\")",
+        "the default agent's id (workspace model v3, 5.8): input is the workspace id, random for every workspace; names an agent, not a room, chat or invite",
+    ),
+    (
         "crates/ligus-core/src/channel.rs",
         "Uuid::new_v5(&NS, workspace_id.as_bytes())",
         "config-log session id: input is the workspace id",

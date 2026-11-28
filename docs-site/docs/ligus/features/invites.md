@@ -152,8 +152,16 @@ A box leaves the same way with `ligus serve leave --yes`
 ([CLI](../reference/cli.md#the-home-host-for-the-phone)), and `lt` has
 **Leave workspace** in its palette.
 
+On a workspace on [rules 4](../../operate/security/threat-model.md#rules-4)
+(every workspace made by 0.5, and older ones an Owner switched), leaving is a
+removal: you stop being a member at once, write nothing more there, and the
+next key rotation leaves your devices out. A box that leaves takes its host
+with it, and the agents placed on it wait for someone to place them again.
+Your own leave never undoes anything you did before it.
+
 Builds before 0.5 don't know about leaving: they keep listing the member as
-before, and decide everything else the same way.
+before, and decide everything else the same way. They can't write to a rules
+4 workspace at all.
 
 ## Revocation
 

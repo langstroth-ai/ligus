@@ -97,6 +97,14 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         repo_id: Option<Uuid>,
     },
+    /// "Run here this time" (chat log; workspace model v3, 5.3): the agent's
+    /// owner (or an Admin, for a shared agent) lets the device it signs from
+    /// answer the turn `trigger_id` starts for `agent_id`, once, with the
+    /// agent's own run spec. Under rules 4 the reply of that one turn from
+    /// `device_id` is accepted wherever the agent is placed (G14). Inert
+    /// under rules 3 (where only the owner's own devices answer an unbound
+    /// agent), and an older build decodes it as `Unknown`.
+    TurnDelegated { trigger_id: Uuid, agent_id: Uuid, device_id: Uuid },
     MemberAdded {
         member: WorkspaceMember,
         /// The Admin-issued invite a self-enrollment redeems (an id whose
@@ -638,6 +646,7 @@ impl SessionEvent {
             SessionEvent::MessageCompleted { .. } => "messageCompleted",
             SessionEvent::MessageRemoved { .. } => "messageRemoved",
             SessionEvent::TurnClaimed { .. } => "turnClaimed",
+            SessionEvent::TurnDelegated { .. } => "turnDelegated",
             SessionEvent::MemberAdded { .. } => "memberAdded",
             SessionEvent::MemberRemoved { .. } => "memberRemoved",
             SessionEvent::MemberRoleChanged { .. } => "memberRoleChanged",
@@ -933,8 +942,17 @@ impl ChatSession {
     }
 
     /// Apply a single delta event in place. `SessionSnapshot` is a base seed,
-    /// not a delta, so it is ignored here (handled by [`project`]).
+    /// not a delta, so it is ignored here (handled by [`project`]). Agent
+    /// records merge under the rules-3 mirror ([`Self::apply_at`]).
     pub fn apply(&mut self, event: &SessionEvent) {
+        self.apply_at(event, crate::agent_run::RunRules::Mirror)
+    }
+
+    /// [`Self::apply`] with the agent merge in force at the event's position:
+    /// rules 4 ([`crate::agent_run::RunRules::Full`]) keeps full run specs
+    /// and the `pool` and `chatCreator` placements; below it they only
+    /// mirror the legacy fields.
+    pub fn apply_at(&mut self, event: &SessionEvent, run_rules: crate::agent_run::RunRules) {
         match event {
             SessionEvent::SessionSnapshot { .. } => {}
             SessionEvent::MessageAppended { message } => {
@@ -981,6 +999,9 @@ impl ChatSession {
                     crate::dispatch::Claim { device: *device_id, epoch: *epoch, supersedes: *supersedes, repo_id: *repo_id },
                 );
             }
+            // Folded with its signed event in projection (`fold_pass`), and
+            // only under rules 4.
+            SessionEvent::TurnDelegated { .. } => {}
             SessionEvent::MemberAdded { member, invite, .. } => {
                 if let Some(id) = invite {
                     self.guards.used_invites.insert(*id);
@@ -1022,10 +1043,10 @@ impl ChatSession {
             // merged with the record it replaces: `run` and `placement` are
             // sticky and always agree with `runtime_id` and `host_id`, which
             // win (`crate::agent_run::merge_upsert`). Rules 3 keeps them a
-            // mirror of the legacy fields.
+            // mirror of the legacy fields; rules 4 keeps full run specs.
             SessionEvent::AgentUpserted { agent } => {
                 let prev = self.workspace_agents.iter().find(|a| a.id == agent.id);
-                let mut agent = crate::agent_run::merge_upsert(prev, agent, crate::agent_run::RunRules::Mirror);
+                let mut agent = crate::agent_run::merge_upsert(prev, agent, run_rules);
                 agent.sanitize_color();
                 if let Some(slot) = self.workspace_agents.iter_mut().find(|a| a.id == agent.id) {
                     *slot = agent;
@@ -2377,6 +2398,10 @@ fn fold_pass(
             if let SessionEvent::ProposalApplyRequested { request } = payload {
                 session.authz.apply_requesters.entry(request.id).or_insert_with(|| author.to_string());
             }
+            // The rules in force at this event's position: the config log's
+            // own so far, or the workspace's at a chat event's frontier.
+            let rules_at = at.map(|r| r.rules).unwrap_or(tracker.state.rules);
+            let run_rules = if rules_at >= authz::RULES_V4 { crate::agent_run::RunRules::Full } else { crate::agent_run::RunRules::Mirror };
             // Attachments (issue #118) are folded with their signed author.
             match payload {
                 SessionEvent::AttachmentShared { attachment } => {
@@ -2410,8 +2435,14 @@ fn fold_pass(
                 }
                 // A member asked to leave (workspace model v3, 10.4): who,
                 // when, and from which device. Display only under rules 3.
+                // Rules 4 (G4): a removal, judged like a self-removal (never a
+                // cut: the leaver's own watermark erases nothing). The record
+                // stays for display.
                 SessionEvent::MemberLeft { member_id, account_id, .. } => {
                     if session.members.iter().any(|m| &m.id == member_id) {
+                        if rules_at >= authz::RULES_V4 {
+                            session.apply(&SessionEvent::MemberRemoved { member_id: member_id.clone(), watermark: Vec::new() });
+                        }
                         session.left.entry(member_id.clone()).or_insert(crate::leave::Left {
                             account_id: *account_id,
                             at: env.timestamp,
@@ -2419,6 +2450,15 @@ fn fold_pass(
                             device_id: env.signer_device_id,
                         });
                     }
+                }
+                // "Run here this time" (rules 4, G14): the first allowed
+                // delegation of a turn is the one in force.
+                SessionEvent::TurnDelegated { trigger_id, agent_id, device_id } if rules_at >= authz::RULES_V4 => {
+                    session
+                        .authz
+                        .delegations
+                        .entry(*trigger_id)
+                        .or_insert(authz::Delegation { agent_id: *agent_id, device_id: *device_id, event_id: env.event_id });
                 }
                 SessionEvent::DeviceLabelSet { label } => {
                     session.device_label_set.insert(
@@ -2483,7 +2523,11 @@ fn fold_pass(
                     // (`flow::asks`), judged at the event's position.
                     let roster = at.unwrap_or(&tracker.state);
                     match crate::flow::asks::AskProvenance::of(record, env, &session, roster, trusted) {
-                        Some(p) => {
+                        Some(mut p) => {
+                            // Rules 4 (G10): eviction by canonical position.
+                            if rules_at >= authz::RULES_V4 {
+                                p.position = Some(env.canonical_key());
+                            }
                             session.flow.apply_ask(record, &p);
                             true
                         }
@@ -2519,7 +2563,7 @@ fn fold_pass(
                         }
                     }
                 } else {
-                    session.apply(payload);
+                    session.apply_at(payload, run_rules);
                     // The reader view of hosts: each host's latest record
                     // signed by its own device (workspace model v3, 5.1, H11).
                     crate::workspace_host::fold_signers(&mut session.authz.host_signers, payload, env.signer_device_id);
@@ -2543,9 +2587,17 @@ fn fold_pass(
                 // key, as the workspace roster at its position holds it)
                 // commits its turn or is marked superseded.
                 if let SessionEvent::MessageAppended { message } = payload {
+                    let delegations = &session.authz.delegations;
                     let agent_host = |k: Uuid| {
                         at.and_then(|r| r.valid_agent_key(k))
                             .or_else(|| tracker.state.valid_agent_key(k))
+                            // Rules 4: a key of the host one turn was
+                            // delegated to (the fold allowed its answer).
+                            .or_else(|| {
+                                at.filter(|r| r.rules >= authz::RULES_V4)
+                                    .and_then(|r| r.agent_keys.get(&k))
+                                    .filter(|key| delegations.values().any(|d| d.agent_id == key.agent_id && d.device_id == key.host_device_id))
+                            })
                             .map(|key| key.host_device_id)
                     };
                     let origin = message
@@ -2601,12 +2653,19 @@ fn fold_pass(
     // bound to it become unbound everywhere at once, for older readers).
     // A placement-aware reader sees the agent as `host_gone`: it keeps
     // naming the host and runs nowhere (workspace model v3, 5.3).
+    // Rules 4 (G3, G13): so is a host whose device is revoked (a box that
+    // left is a former member's), and one whose latest record its own
+    // device didn't sign.
     if session.authz.rules >= authz::RULES_V3 && session.id == crate::channel::workspace_config_session_id(session.workspace_id) {
         let members: std::collections::BTreeSet<&str> = session.members.iter().map(|m| m.id.as_str()).collect();
+        let rules4 = session.authz.rules >= authz::RULES_V4;
         let gone: Vec<String> = session
             .workspace_hosts
             .iter()
-            .filter(|h| !h.owner_actor_id.is_empty() && !members.contains(h.owner_actor_id.as_str()))
+            .filter(|h| {
+                (!h.owner_actor_id.is_empty() && !members.contains(h.owner_actor_id.as_str()))
+                    || (rules4 && authz::rules4::host_inert(h, &session.guards.revoked_devices, &session.authz.host_signers))
+            })
             .map(|h| h.id.clone())
             .collect();
         if !gone.is_empty() {

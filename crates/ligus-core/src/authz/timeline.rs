@@ -34,6 +34,22 @@ pub struct AgentState {
     pub owner: String,
     /// Who may use it and its budgets (only the owner changes them).
     pub policy: crate::agent::AgentPolicy,
+    /// Where it may run (its effective placement; rules 4 reads it).
+    pub placement: crate::agent_run::Placement,
+    /// The source it runs (its effective run's; a `pool` admits only
+    /// workers offering it).
+    pub source: String,
+}
+
+/// A host as rules 4 sees it (workspace model v3, 5.1): a record its own
+/// device signed, whose device isn't revoked. Filled only under rules 4.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct HostState {
+    pub owner: String,
+    pub kind: crate::workspace_host::HostKind,
+    /// The sources it lists, when it published offers (`None`: an older
+    /// writer's record, which lists none by name).
+    pub offers: Option<Vec<String>>,
 }
 
 /// One device, as the trust events on this log certify it.
@@ -115,6 +131,8 @@ pub struct RosterState {
     pub members: BTreeMap<String, MemberState>,
     pub agents: BTreeMap<Uuid, AgentState>,
     pub devices: BTreeMap<Uuid, DeviceState>,
+    /// Rules 4: the live hosts by id ([`HostState`]); empty below it.
+    pub hosts: BTreeMap<String, HostState>,
     /// Agent keys by `key_id` (an agent-signed envelope's `signer_device_id`).
     pub agent_keys: BTreeMap<Uuid, AgentKeyState>,
     pub dearth: bool,
@@ -217,10 +235,29 @@ impl RosterState {
 
     /// Whether `host` may hold keys for `agent_id` here: the agent is bound
     /// to that host, or, unbound, its owner's account holds the host.
+    ///
+    /// Rules 4 (G3, G14): by the agent's placement. A `host` placement
+    /// admits that host while its record is live and its owner a member; a
+    /// `pool` admits every live worker whose record offers the agent's
+    /// source; the owner's devices as before; `chatCreator` (the default
+    /// agent) holds no keys.
     pub fn agent_bound_to(&self, agent_id: Uuid, host: Uuid) -> bool {
         let Some(agent) = self.agents.get(&agent_id) else { return false };
         if !self.device_trusted(host) {
             return false;
+        }
+        if self.rules >= super::RULES_V4 {
+            use crate::agent_run::Placement;
+            let live = |id: &str| self.hosts.get(id).filter(|h| self.members.contains_key(&h.owner));
+            return match &agent.placement {
+                Placement::OwnerDevices => self.owner_holds(&agent.owner, host),
+                Placement::Host { host_id } => *host_id == host.to_string() && live(host_id).is_some(),
+                Placement::Pool => live(&host.to_string()).is_some_and(|h| {
+                    h.kind == crate::workspace_host::HostKind::Worker
+                        && h.offers.as_ref().is_some_and(|o| o.contains(&agent.source))
+                }),
+                Placement::ChatCreator | Placement::Unknown => false,
+            };
         }
         if agent.host_id.is_empty() {
             let owner_account = self
@@ -232,6 +269,12 @@ impl RosterState {
         } else {
             agent.host_id == host.to_string()
         }
+    }
+
+    /// Whether `owner` (a member id, or an account id) holds `host`.
+    fn owner_holds(&self, owner: &str, host: Uuid) -> bool {
+        let owner_account = self.members.get(owner).and_then(|m| m.account_id).or_else(|| Uuid::parse_str(owner).ok());
+        owner_account.is_some_and(|a| self.account_holds_device(a, host))
     }
 
     /// The agent key `key_id`, if it is valid at this position: certified,
@@ -557,6 +600,10 @@ impl RosterTracker {
                 if (was >= super::RULES_V3) != (*version >= super::RULES_V3) {
                     self.rebuild_devices(fold);
                 }
+                // Rules 4 reads the hosts.
+                if (was >= super::RULES_V4) != (*version >= super::RULES_V4) {
+                    self.refresh_hosts(fold);
+                }
             }
             SessionEvent::WorkspaceKeyRotated { rotation } if allowed => {
                 self.state.key_epochs.push(rotation, env.canonical_key());
@@ -636,6 +683,11 @@ impl RosterTracker {
             SessionEvent::AttachmentHashUnblocked { sha256 } if allowed => {
                 self.state.attachments.blocked.remove(sha256);
             }
+            SessionEvent::WorkspaceHostUpserted { .. } | SessionEvent::WorkspaceHostsUpdated { .. } | SessionEvent::WorkspaceHostRemoved { .. }
+                if allowed =>
+            {
+                self.refresh_hosts(fold)
+            }
             e if allowed && touches_roster(e) => self.refresh(fold),
             _ => {}
         }
@@ -667,11 +719,43 @@ impl RosterTracker {
         self.state.agents = fold
             .workspace_agents
             .iter()
-            .map(|a| (a.id, AgentState { host_id: a.host_id.clone(), runtime_id: a.runtime_id.clone(), owner: a.owner_actor_id.clone(), policy: a.policy() }))
+            .map(|a| {
+                (
+                    a.id,
+                    AgentState {
+                        host_id: a.host_id.clone(),
+                        runtime_id: a.runtime_id.clone(),
+                        owner: a.owner_actor_id.clone(),
+                        policy: a.policy(),
+                        placement: a.effective_placement(),
+                        source: a.effective_run().source,
+                    },
+                )
+            })
             .collect();
         self.state.dearth = fold.guards.dearth_on().is_some();
         self.state.zones = fold.flow.zones.clone();
         self.rebuild_devices(fold);
+        self.refresh_hosts(fold);
+    }
+
+    /// Rules 4: the live hosts (records their own devices signed, devices
+    /// not revoked). Empty below rules 4, so older rules' roster states are
+    /// what they always were.
+    fn refresh_hosts(&mut self, fold: &ChatSession) {
+        if self.state.rules < super::RULES_V4 {
+            self.state.hosts.clear();
+            return;
+        }
+        self.state.hosts = fold
+            .workspace_hosts
+            .iter()
+            .filter(|h| !super::rules4::host_inert(h, &fold.guards.revoked_devices, &fold.authz.host_signers))
+            .map(|h| {
+                let offers = h.offers.as_ref().map(|_| h.listed_offers().into_iter().map(|o| o.name).collect());
+                (h.id.clone(), HostState { owner: h.owner_actor_id.clone(), kind: h.kind, offers })
+            })
+            .collect();
     }
 
     fn rebuild_devices(&mut self, fold: &ChatSession) {
@@ -727,6 +811,7 @@ fn touches_roster(e: &SessionEvent) -> bool {
         SessionEvent::MemberAdded { .. }
             | SessionEvent::MemberRemoved { .. }
             | SessionEvent::MemberRetired { .. }
+            | SessionEvent::MemberLeft { .. }
             | SessionEvent::MemberRoleChanged { .. }
             | SessionEvent::AgentRosterUpdated { .. }
             | SessionEvent::AgentUpserted { .. }

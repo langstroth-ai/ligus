@@ -1888,6 +1888,9 @@ fn cmd_set_agent_host(cfg: &Config, agent_name: &str, host_id: &str, dry_run: bo
         println!("dry run: would bind @{agent_name} ({aid}) to host {host_id}; nothing was signed or written.");
         return Ok(());
     }
+    // The hosts' signed beats: a full run spec never goes to a host below 0.5.
+    let presence = fetch_presence_with(cfg, Some(&svc));
+    svc.set_host_presence(presence);
     svc.set_agent_host(ws, aid, host_id)?;
     println!("bound @{agent_name} to host {host_id} (sync to apply).");
     Ok(())

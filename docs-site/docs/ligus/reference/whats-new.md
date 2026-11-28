@@ -8,6 +8,19 @@ Full release notes are on the
 
 ### Added
 
+- **Workspace rules 4.** New workspaces now start on rules 4, where every
+  device checks what an agent runs and where: placing an agent on a host
+  needs that host to exist, be trusted and offer what the agent runs; a
+  Contributor places their own agent on their own computer with a passkey,
+  and only an Admin places one elsewhere or in a pool; changing an agent's
+  model within the same source needs no passkey. **Run here this time** is a
+  signed one-turn permission, so the reply counts on every device. Leaving a
+  workspace removes you. A host record counts only from its own device, and
+  members without an account, model server addresses on the log and
+  whole-list writes are refused. An existing workspace stays on its rules
+  until an Owner switches it; builds before 0.5 open a rules 4 workspace
+  read-only. See [Workspace rules 4](../../operate/security/threat-model.md#rules-4).
+
 - **Admit a box without pasting anything, from setup or the deploy
   script.** `ligus setup box --to ligusaddr1:…` and `deploy/local/ligus-local
   configure --admit-to ligusaddr1:…` send the box's join request to the

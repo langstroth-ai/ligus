@@ -637,7 +637,11 @@ async fn permission_escalation_needs_the_hosts_own_person() {
                 let bob = Uuid::new_v4().to_string();
                 let member = ligus_core::WorkspaceMember {
                     id: bob.clone(),
-                    actor: ActorIdentity::new(bob.as_str(), "Bob", ActorKind::Human),
+                    actor: {
+                        let mut a = ActorIdentity::new(bob.as_str(), "Bob", ActorKind::Human);
+                        a.account_id = Uuid::parse_str(&bob).ok();
+                        a
+                    },
                     role: ligus_core::WorkspaceRole::Contributor,
                     title: String::new(),
                     index: 0,
