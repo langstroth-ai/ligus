@@ -185,7 +185,8 @@ pub const COMMANDS: &[Cmd] = &[
         purpose: "For a person's own CLI device (never a serve or worker box: a box joins with `ligus admit`). An invite makes \
                   a NEW member: if you are already in the workspace on your desktop, link this computer instead \
                   (`ligus devices request`). Decode a workspace invite (`hivews1:…`: relay URL, room, end-to-end key) and save it: the relay and \
-                  room to <data dir>/config.toml, the key and the optional relay access token to the secret store. \
+                  room to <data dir>/workspaces.json (and config.toml, for an older ligus), the key and the optional relay \
+                  access token to the secret store. \
                   An invite carries the workspace key: pipe it or pass a file; on the command line it works with a \
                   warning. Refuses an invite whose workspace has no usable relay URL.",
         synopsis: &["ligus enroll - [--token - | @FILE]", "ligus enroll --file PATH [--token - | @FILE]", "ligus enroll <hivews1:invite> [--token …]"],
@@ -2276,7 +2277,8 @@ pub const COMMANDS: &[Cmd] = &[
         group: G_REPOS,
         summary: "bind a checkout for agent file tools (legacy, per box)",
         purpose: "Bind a checkout (a name under the repos dir, or an absolute path) for agent file tools, for the \
-                  workspace or one chat, in <data dir>/repo-bindings.toml. A chat with a workspace repository uses \
+                  workspace (in ligus.db since 0.5) or one chat (in <data dir>/repo-bindings.toml). A chat with a workspace \
+                  repository uses \
                   `ligus repos` instead.",
         synopsis: &["ligus bind-repo <name|path> [--chat CHAT-ID]", "ligus bind-repo --clear [--chat CHAT-ID]"],
         flags: &[
@@ -3367,7 +3369,8 @@ Access controls:
         summary: "the data dir, secret backends, LIGUS_DATA_DIR, LIGUS_SECRET_BACKEND",
         text: "\
 The data dir is one Ligus device: its identity and keys, the decrypted event log
-(ligus.db), config.toml (relay and room only), and for serve the phone credentials.
+(ligus.db), workspaces.json (relay and room only; config.toml before 0.5), and for
+serve the phone credentials.
 - LIGUS_DATA_DIR picks it (default ~/.ligus; ./ligus-data without HOME). It is
   created owner-only (0700). One process per data dir; never share one between
   machines, and never point a box at the desktop app's.

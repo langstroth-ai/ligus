@@ -4,7 +4,9 @@
 //! desktop or `lt` for their own chats) creates an **empty** repository
 //! (one empty commit on `main`) under its scratch root, by default
 //! `<data dir>/scratch/<slug>-<short id>`, and records it here, in this
-//! device's store (`repo_settings`, never synced). Agents then work in it
+//! device's store (the `scratch_repos` and `scratch_repo_chats` tables,
+//! never synced; before 0.5 a JSON list in `repo_settings`, imported once
+//! and kept as it was). Agents then work in it
 //! exactly as in any other checkout: the chat's own branch and worktree,
 //! proposals, approvals and the sandbox. Nothing is relaxed.
 //!
@@ -50,7 +52,8 @@ pub const MARKER: &str = "ligus-scratch";
 
 const DAY: i64 = 86_400;
 
-const KEY_REGISTRY: &str = "scratch:registry";
+#[cfg(test)]
+const KEY_REGISTRY: &str = crate::event_store::local_tables::SCRATCH_BLOB_KEY;
 const KEY_ROOT: &str = "scratch:root";
 const KEY_DAYS: &str = "scratch:cleanupDays";
 const KEY_MAX_HOST: &str = "scratch:maxPerHost";
@@ -307,31 +310,42 @@ pub fn check_root(root: &Path, forbidden: &[PathBuf]) -> Result<PathBuf> {
 /// Every entry here, for a reader: what [`try_load_all`] gives, or none
 /// when the registry can't be read.
 fn load_all(store: &EventStore) -> Vec<ScratchRepo> {
-    try_load_all(store).unwrap_or_else(|e| {
+    try_load_all(store).map(|(all, _)| all).unwrap_or_else(|e| {
         eprintln!("scratch: couldn't read the scratch registry: {e}");
         Vec::new()
     })
 }
 
-/// Every entry here, or an error when the store can't be read (a writer
-/// must not take that as "none" and save over the list). A registry that
-/// doesn't parse is kept, moved aside under `scratch:registry.corrupt-<ts>`,
-/// with a warning, and a new one starts: nothing saves over it.
-fn try_load_all(store: &EventStore) -> Result<Vec<ScratchRepo>> {
-    let Some(text) = store.repo_setting(KEY_REGISTRY).map_err(store_err)? else { return Ok(Vec::new()) };
-    match serde_json::from_str(&text) {
-        Ok(all) => Ok(all),
-        Err(e) => {
-            let aside = format!("{KEY_REGISTRY}.corrupt-{}", now());
-            store.set_repo_setting(&aside, Some(&text)).map_err(store_err)?;
-            store.set_repo_setting(KEY_REGISTRY, None).map_err(store_err)?;
-            eprintln!("scratch: the scratch registry couldn't be read ({e}); kept it as {aside} and started a new one");
-            Ok(Vec::new())
+/// Every entry here (the `scratch_repos` table), or an error when the store
+/// can't be read (a writer must not take that as "none" and save over the
+/// list). Until the old registry blob is imported (a start that had the
+/// store alone does it, `EventStore::migrate_local_tables`), its entries
+/// are read beside the table's, the table winning by id; the flag says
+/// whether a writer saving this list may note the blob as imported (it
+/// parsed, or there is none). A blob that doesn't parse is never read,
+/// changed or imported: the table's rows are the list, and `ligus doctor`
+/// warns.
+fn try_load_all(store: &EventStore) -> Result<(Vec<ScratchRepo>, bool)> {
+    use crate::event_store::local_tables::{ScratchBlob, SCRATCH_IMPORT};
+    let mut rows = store.scratch_rows().map_err(store_err)?;
+    if store.local_import_done(SCRATCH_IMPORT).map_err(store_err)? {
+        return Ok((rows, false));
+    }
+    match store.scratch_blob().map_err(store_err)? {
+        ScratchBlob::Absent => Ok((rows, true)),
+        ScratchBlob::Parsed(old) => {
+            let have: std::collections::HashSet<Uuid> = rows.iter().map(|e| e.id).collect();
+            rows.extend(old.into_iter().filter(|e| !have.contains(&e.id)));
+            Ok((rows, true))
+        }
+        ScratchBlob::Unreadable(e) => {
+            eprintln!("scratch: the old scratch registry couldn't be read ({e}); it is kept as it was (ligus doctor)");
+            Ok((rows, false))
         }
     }
 }
 
-fn save_all(store: &EventStore, mut all: Vec<ScratchRepo>) -> Result<()> {
+fn save_all(store: &EventStore, (mut all, imported): (Vec<ScratchRepo>, bool)) -> Result<()> {
     if all.len() > MAX_ENTRIES {
         // Forget the oldest finished ones first; live ones always stay.
         all.sort_by_key(|e| (e.is_live(), e.removed_at.unwrap_or(e.last_activity)));
@@ -347,16 +361,15 @@ fn save_all(store: &EventStore, mut all: Vec<ScratchRepo>) -> Result<()> {
         });
         all.sort_by_key(|e| e.created_at);
     }
-    let text = serde_json::to_string(&all).map_err(store_err)?;
-    store.set_repo_setting(KEY_REGISTRY, Some(&text)).map_err(store_err)
+    store.replace_scratch_rows(&all, imported).map_err(store_err)
 }
 
 fn update(store: &EventStore, id: Uuid, f: impl FnOnce(&mut ScratchRepo)) -> Result<ScratchRepo> {
-    let mut all = try_load_all(store)?;
+    let (mut all, imported) = try_load_all(store)?;
     let e = all.iter_mut().find(|e| e.id == id).ok_or(ScratchError::NotFound)?;
     f(e);
     let out = e.clone();
-    save_all(store, all)?;
+    save_all(store, (all, imported))?;
     Ok(out)
 }
 
@@ -444,7 +457,7 @@ pub fn set_chat(store: &EventStore, id: Uuid, chat: Uuid, on: bool, now: i64) ->
 
 /// Drop `chat` from every scratch repository's chats here.
 pub fn forget_chat(store: &EventStore, chat: Uuid) -> Result<()> {
-    let mut all = try_load_all(store)?;
+    let (mut all, imported) = try_load_all(store)?;
     let mut changed = false;
     for e in &mut all {
         let n = e.chats.len();
@@ -452,7 +465,7 @@ pub fn forget_chat(store: &EventStore, chat: Uuid) -> Result<()> {
         changed |= n != e.chats.len();
     }
     if changed {
-        save_all(store, all)?;
+        save_all(store, (all, imported))?;
     }
     Ok(())
 }
@@ -587,9 +600,9 @@ pub fn init_dir(root: &Path, workspace_id: Uuid, name: &str, created_by: &str, n
 /// (another request may have raced this one).
 pub fn record(store: &EventStore, settings: &Settings, entry: &ScratchRepo) -> Result<()> {
     reserve(store, settings, &entry.created_by)?;
-    let mut all = try_load_all(store)?;
+    let (mut all, imported) = try_load_all(store)?;
     all.push(entry.clone());
-    save_all(store, all)
+    save_all(store, (all, imported))
 }
 
 /// Remove the folder of a scratch entry that was never recorded.

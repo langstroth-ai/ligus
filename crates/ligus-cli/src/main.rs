@@ -132,7 +132,7 @@ fn config_path(data_dir: &std::path::Path) -> PathBuf {
 
 /// The secret-store scope of this CLI's connection secrets.
 const CLI_SCOPE: &str = "cli";
-use ligus_runtime::connection_settings::ConnectionSecrets;
+use ligus_runtime::connection_settings::{ConnectionSecrets, SavedWorkspace, WorkspaceList};
 
 impl FileConfig {
     /// `config.toml`, with its secrets from the store. Secrets still written
@@ -155,17 +155,71 @@ impl FileConfig {
         let store = ligus_runtime::secret_store::for_data_dir(data_dir);
         let secrets = ConnectionSecrets::load(store.as_ref(), CLI_SCOPE, "");
         (f.token, f.key, f.ek) = (secrets.token, secrets.key, secrets.ek);
+        // One connection list (identity model v2, 10.1): `workspaces.json`
+        // names this CLI's workspace from 0.5 and wins; `config.toml` is
+        // imported into it once (its secrets copied to the entry's own ids
+        // and read back first) and kept for a downgrade.
+        let list = WorkspaceList::load(data_dir, store.as_ref(), CLI_SCOPE);
+        match list.workspaces.first() {
+            Some(w) => f.apply(w),
+            // (Not from `ligus doctor`: checking never writes.)
+            None if f.room.is_some() && !doctor_run() => match WorkspaceList::mirror(data_dir, store.as_ref(), CLI_SCOPE, f.saved().into_iter().collect()) {
+                Ok(out) if !out.unverified.is_empty() => {
+                    eprintln!("ligus: couldn't copy this workspace's secrets into workspaces.json (they didn't read back); config.toml stays in use")
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("ligus: couldn't write workspaces.json ({e}); config.toml stays in use"),
+            },
+            None => {}
+        }
         f
     }
 
-    /// Write `config.toml` (owner-only, no secrets) and the secrets to the store.
+    #[cfg(test)]
+    fn clone_conn(&self) -> Self {
+        Self { relay_url: self.relay_url.clone(), token: self.token.clone(), room: self.room.clone(), key: self.key.clone(), ek: self.ek.clone() }
+    }
+
+    /// This connection as a `workspaces.json` entry (none without a room).
+    fn saved(&self) -> Option<SavedWorkspace> {
+        let room = self.room.clone().filter(|r| !r.trim().is_empty())?;
+        Some(SavedWorkspace {
+            name: room.clone(),
+            relay_url: self.relay_url.clone().unwrap_or_default(),
+            room,
+            dm_account: None,
+            founder_actor_id: None,
+            fk: None,
+            secrets: ConnectionSecrets { token: self.token.clone(), key: self.key.clone(), ek: self.ek.clone() },
+        })
+    }
+
+    /// Take the connection from a `workspaces.json` entry.
+    fn apply(&mut self, w: &SavedWorkspace) {
+        self.relay_url = Some(w.relay_url.clone()).filter(|r| !r.trim().is_empty());
+        self.room = Some(w.room.clone());
+        (self.token, self.key, self.ek) = (w.secrets.token.clone(), w.secrets.key.clone(), w.secrets.ek.clone());
+    }
+
+    /// Write `workspaces.json` (the one this CLI reads) and, for a
+    /// downgrade, `config.toml` (owner-only, no secrets), with the secrets
+    /// to the store under both.
     fn save(&self, data_dir: &std::path::Path) -> Result<()> {
         let store = ligus_runtime::secret_store::for_data_dir(data_dir);
         let secrets = ConnectionSecrets { token: self.token.clone(), key: self.key.clone(), ek: self.ek.clone() };
         secrets.save(store.as_ref(), CLI_SCOPE, "")?;
         serve::tunnel::write_private(&config_path(data_dir), toml::to_string_pretty(self)?.as_bytes())?;
+        let out = WorkspaceList::mirror(data_dir, store.as_ref(), CLI_SCOPE, self.saved().into_iter().collect())?;
+        if !out.unverified.is_empty() {
+            anyhow::bail!("the workspace's secrets didn't read back from the secret store; nothing in workspaces.json changed (ligus doctor)");
+        }
         Ok(())
     }
+}
+
+/// This process runs `ligus doctor` (it checks without prompts or writes).
+fn doctor_run() -> bool {
+    std::env::args().skip(1).find(|a| !a.starts_with('-')).as_deref() == Some("doctor")
 }
 
 fn load_file_config(data_dir: &std::path::Path) -> FileConfig {
@@ -180,7 +234,7 @@ fn config() -> Config {
     create_data_dir_or_exit(&data_dir);
     // B2: secrets come from the OS secret store from here on. `ligus doctor`
     // opens it with keychain prompts off: checking never asks.
-    if std::env::args().skip(1).find(|a| !a.starts_with('-')).as_deref() == Some("doctor") {
+    if doctor_run() {
         ligus_runtime::secret_store::without_prompts(|| ligus_runtime::secret_store::init_for_data_dir(&data_dir, None));
     } else {
         ligus_runtime::secret_store::init_for_data_dir(&data_dir, None);
@@ -244,6 +298,24 @@ fn prepare_store(cfg: &Config, command: &str) -> Result<()> {
         }
         Ok(_) => {}
         Err(e) => eprintln!("ligus: upgrading the local log tables failed, it runs again on the next start: {e}"),
+    }
+    // Workspace model v3 (M9): the scratch repository list and the
+    // workspace's folder (repo-bindings.toml's workspace line) become
+    // tables, once. After M8, under the same rule.
+    let legacy = ligus_runtime::event_store::LegacyLocal {
+        source: repos::FOLDER_SOURCE,
+        folders: repos::RepoBindings::load_file(&cfg.data_dir)
+            .workspace
+            .map(|w| ligus_runtime::event_store::LegacyFolder { workspace_id: repos::data_dir_workspace(&cfg.data_dir), path: w })
+            .into_iter()
+            .collect(),
+    };
+    match store.migrate_local_tables(&legacy) {
+        Ok(ligus_runtime::event_store::LocalTablesMigration::Migrated { backup: Some(b), .. }) => {
+            eprintln!("ligus: moved the scratch repository list and the workspace folder into tables (backup: {})", b.display());
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("ligus: moving the local lists into tables failed, it runs again on the next start: {e}"),
     }
     Ok(())
 }
@@ -2523,6 +2595,14 @@ fn store_checks(cfg: &Config) -> Vec<checks::Check> {
             Ok(s) => Check::ok("store.schema", "database", format!("schema version {}", s.schema_version().unwrap_or(0))),
             Err(e) => Check::warn("store.schema", "database", format!("couldn't open it: {e}")),
         });
+        // The old scratch repository list, when it couldn't be imported
+        // (kept as it was; nothing was removed).
+        if let Some(why) = EventStore::open(&db).ok().filter(|s| s.newer_schema().is_none()).and_then(|s| s.scratch_import_problem()) {
+            out.push(
+                Check::warn("store.scratch", "scratch repository list", why)
+                    .fix("the scratch repositories already in the new list are unaffected; to recover the old entries, restore a backup of ligus.db or ask on GitHub"),
+            );
+        }
     }
     let backups = ligus_runtime::event_store::seed_backups(&db);
     out.push(if backups.is_empty() {
@@ -3663,6 +3743,42 @@ mod cli_tests {
         assert_eq!(mode, 0o600, "config.toml is {mode:o}");
         let dir = std::fs::metadata(&cfg.data_dir).unwrap().permissions().mode() & 0o077;
         assert_eq!(dir, 0, "data dir is readable by others");
+    }
+
+    /// One connection list: a 0.4 data dir's config.toml is imported into
+    /// workspaces.json once (secrets copied to the entry's own ids and read
+    /// back), config.toml stays as it was, workspaces.json then wins, and
+    /// neither file holds a secret.
+    #[test]
+    fn config_toml_is_imported_into_workspaces_json_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let toml_text = "relay_url = \"https://relay.example\"\nroom = \"team\"\n";
+        std::fs::write(config_path(&data), toml_text).unwrap();
+        let store = ligus_runtime::secret_store::for_data_dir(&data);
+        ConnectionSecrets { token: Some("hrt1-decoy-token".into()), key: Some("decoy-passphrase".into()), ek: Vec::new() }
+            .save(store.as_ref(), CLI_SCOPE, "")
+            .unwrap();
+        let f = FileConfig::load(&data);
+        assert_eq!((f.relay_url.as_deref(), f.room.as_deref(), f.key.as_deref()), (Some("https://relay.example"), Some("team"), Some("decoy-passphrase")));
+        let list = WorkspaceList::load(&data, store.as_ref(), CLI_SCOPE);
+        assert_eq!(list.workspaces.len(), 1);
+        let w = &list.workspaces[0];
+        assert_eq!((w.room.as_str(), w.secrets.token.as_deref()), ("team", Some("hrt1-decoy-token")));
+        let json = std::fs::read_to_string(WorkspaceList::path(&data)).unwrap();
+        assert!(!json.contains("decoy"), "a secret in workspaces.json: {json}");
+        assert_eq!(std::fs::read_to_string(config_path(&data)).unwrap(), toml_text, "config.toml kept as it was");
+        // workspaces.json wins from now on.
+        let mut moved = f.clone_conn();
+        moved.relay_url = Some("https://other.example".into());
+        WorkspaceList::mirror(&data, store.as_ref(), CLI_SCOPE, moved.saved().into_iter().collect()).unwrap();
+        assert_eq!(FileConfig::load(&data).relay_url.as_deref(), Some("https://other.example"));
+        // A save writes both, the secrets under both ids.
+        moved.save(&data).unwrap();
+        assert!(std::fs::read_to_string(config_path(&data)).unwrap().contains("other.example"));
+        assert!(!std::fs::read_to_string(config_path(&data)).unwrap().contains("decoy"));
+        assert_eq!(ConnectionSecrets::load(store.as_ref(), CLI_SCOPE, "").key.as_deref(), Some("decoy-passphrase"));
     }
 
     fn bare_cfg(dir: &std::path::Path, relay_url: Option<&str>) -> Config {
