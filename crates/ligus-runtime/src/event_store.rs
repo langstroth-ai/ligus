@@ -86,6 +86,9 @@ mod agent_usage;
 mod blob_renewals;
 mod held;
 mod hidden_proposals;
+pub(crate) mod local_tables;
+#[cfg(test)]
+mod local_tables_tests;
 mod log_hygiene;
 #[cfg(test)]
 mod log_hygiene_tests;
@@ -97,6 +100,7 @@ pub use held::{claimed_account, HeldEvent, HeldStats, HoldItem, RefetchRow, HELD
 pub use agent_usage::{parse_day, utc_day, AgentUsageRow};
 pub use blob_renewals::BlobRenewal;
 pub use repo_tables::{CheckoutSource, RepoMapping};
+pub use local_tables::{peek_workspace_folder, write_workspace_folder, LegacyFolder, LegacyLocal, LocalTablesMigration};
 pub use log_hygiene::{HygieneMigration, DISPATCH_AGE_BOUND_MS, PRUNE_EVERY_MS};
 pub use storage_v2::{
     invite_secret, redeem_secret, relay_origin, seed_backups, SyncKey, SyncMigration, NEWER_DATA_MESSAGE, PERSON_SEED_KEEP_MS, SCHEMA_VERSION,
@@ -899,6 +903,7 @@ impl EventStore {
         storage_v2::stamp_if_nothing_to_migrate(conn)?;
         log_hygiene::init(conn)?;
         log_hygiene::stamp_if_new(conn)?;
+        local_tables::init(conn)?;
         held::init(conn)?;
         hidden_proposals::init(conn)?;
         agent_usage::init(conn)?;

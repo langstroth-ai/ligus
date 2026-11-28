@@ -186,6 +186,15 @@ Full release notes are on the
 
 ### Changed
 
+- **Two local lists move into the database.** The scratch repositories a
+  device created and the folder bound to each workspace are now tables in
+  `ligus.db`, one format for the desktop, the CLI and lt. The first start of
+  0.5 copies them in once, after a backup, and leaves the old copies as they
+  were; an old scratch list that can't be read is kept and named by
+  `ligus doctor`, never overwritten. The CLI now reads its connection from
+  `workspaces.json`, like lt (its `config.toml` is copied in once and kept).
+  See [Operations](../../operate/ops/operations.md#whats-in-a-data-dir).
+
 - **A box keeps the name you gave it.** Renaming a box on a desktop used to
   be undone the next time it started with its `--label`. A box now writes
   its name only when `--label` (or `LIGUS_SERVE_LABEL`) changed since the
