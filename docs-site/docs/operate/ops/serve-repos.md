@@ -9,8 +9,11 @@ chat.
 ## Where checkouts live
 
 Checkouts live under `LIGUS_REPOS_DIR` (default `<LIGUS_DATA_DIR>/repos`). The
-workspace has a default checkout, and any chat can override it. Both are kept
-in `<LIGUS_DATA_DIR>/repo-bindings.toml` on the box and are never synced:
+workspace has a default checkout, and any chat can override it. The chats'
+checkouts are kept in `<LIGUS_DATA_DIR>/repo-bindings.toml` on the box, and
+the workspace's in the box's `ligus.db` (since 0.5; the file's `workspace`
+line is copied there once and then left as it was, for a downgrade). Neither
+is ever synced:
 
 ```toml
 workspace = "sandbox"

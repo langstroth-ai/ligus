@@ -160,6 +160,17 @@ pub struct WorkspaceList {
     pub workspaces: Vec<SavedWorkspace>,
 }
 
+/// What [`WorkspaceList::mirror`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MirrorOutcome {
+    /// Entries whose secrets were written (and read back).
+    pub written: usize,
+    /// Entries dropped (their secrets deleted).
+    pub removed: usize,
+    /// Rooms whose secrets didn't read back: left out of the file.
+    pub unverified: Vec<String>,
+}
+
 /// The file a [`WorkspaceList`] lives in, under the data dir.
 pub const WORKSPACE_LIST_FILE: &str = "workspaces.json";
 
@@ -202,6 +213,53 @@ impl WorkspaceList {
             Some(x) => *x = w,
             None => self.workspaces.push(w),
         }
+    }
+
+    /// Make the list in `data_dir` hold exactly `desired` (in that order),
+    /// the one-format step of identity model v2, 10.1: an app that keeps its
+    /// connections in an older place (the desktop's `settings.json`, the
+    /// CLI's `config.toml`) mirrors them here. Each entry's secrets are
+    /// written under its own ids in `scope` and read back; an entry goes in
+    /// the file only once its secrets read back equal, so the file never
+    /// names a connection whose secrets aren't there. Nothing is written
+    /// when the list already matches (no secret-store writes on a start
+    /// with nothing new). An entry no longer desired is dropped and its
+    /// secrets deleted. The older place is never changed.
+    pub fn mirror(data_dir: &Path, store: &dyn SecretStore, scope: &'static str, desired: Vec<SavedWorkspace>) -> Result<MirrorOutcome, SecretError> {
+        let current = Self::load(data_dir, store, scope);
+        let file_exists = Self::path(data_dir).exists();
+        if file_exists && current.workspaces == desired {
+            return Ok(MirrorOutcome::default());
+        }
+        let mut out = MirrorOutcome::default();
+        let mut next = WorkspaceList::default();
+        for w in desired {
+            let prefix = w.secret_prefix();
+            if current.get(w.id()).map(|c| &c.secrets) != Some(&w.secrets) {
+                w.secrets.save(store, scope, &prefix)?;
+                if ConnectionSecrets::load(store, scope, &prefix) != w.secrets {
+                    // Keep what the file named before, if anything.
+                    out.unverified.push(w.room.clone());
+                    if let Some(c) = current.get(w.id()) {
+                        next.workspaces.push(c.clone());
+                    }
+                    continue;
+                }
+                out.written += 1;
+            }
+            next.workspaces.push(w);
+        }
+        for old in &current.workspaces {
+            if next.get(old.id()).is_none() {
+                ConnectionSecrets::delete(store, scope, &old.secret_prefix())?;
+                out.removed += 1;
+            }
+        }
+        if !file_exists || next.workspaces != current.workspaces {
+            let json = serde_json::to_vec_pretty(&next).map_err(|e| SecretError::Io(e.into()))?;
+            crate::private_file::write_private_atomic(&Self::path(data_dir), &json)?;
+        }
+        Ok(out)
     }
 
     /// Remove workspace `id` and delete its secrets. Returns whether it was
@@ -292,6 +350,37 @@ mod tests {
         assert!(list.remove(c.id(), &store, "term").unwrap());
         assert!(!list.remove(c.id(), &store, "term").unwrap());
         assert_eq!(ConnectionSecrets::load(&store, "term", &secret_prefix(c.id())), ConnectionSecrets::default());
+    }
+
+    /// One connection list (identity model v2, 10.1): a mirror copies each
+    /// secret to the entry's own ids and reads it back before the file names
+    /// it; a second mirror with nothing new writes nothing; a dropped entry's
+    /// secrets go; the file never holds a secret (V3).
+    #[test]
+    fn mirror_copies_verifies_and_drops() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = File0600::new(tmp.path());
+        let (a, b) = (conn("room-a"), conn("room-b"));
+        let want = vec![SavedWorkspace::from_conn(&a, Some("hrt1-token-a".into())), SavedWorkspace::from_conn(&b, None)];
+        let out = WorkspaceList::mirror(tmp.path(), &store, "desktop", want.clone()).unwrap();
+        assert_eq!((out.written, out.removed, out.unverified.len()), (2, 0, 0));
+        let back = WorkspaceList::load(tmp.path(), &store, "desktop");
+        assert_eq!(back.workspaces, want);
+        assert_eq!(back.get(a.id()).unwrap().secrets.token.as_deref(), Some("hrt1-token-a"));
+        let text = std::fs::read_to_string(WorkspaceList::path(tmp.path())).unwrap();
+        for secret in ["passphrase-1", "hrt1-token-a", &DeliveredKey::new(2, &[7u8; 32]).k] {
+            assert!(!text.contains(secret), "{secret} leaked into {text}");
+        }
+        let mtime = std::fs::metadata(WorkspaceList::path(tmp.path())).unwrap().modified().unwrap();
+        assert_eq!(WorkspaceList::mirror(tmp.path(), &store, "desktop", want.clone()).unwrap(), MirrorOutcome::default());
+        assert_eq!(std::fs::metadata(WorkspaceList::path(tmp.path())).unwrap().modified().unwrap(), mtime, "nothing new, nothing written");
+        let out = WorkspaceList::mirror(tmp.path(), &store, "desktop", vec![want[1].clone()]).unwrap();
+        assert_eq!(out.removed, 1);
+        assert_eq!(ConnectionSecrets::load(&store, "desktop", &secret_prefix(a.id())), ConnectionSecrets::default());
+        assert_eq!(WorkspaceList::load(tmp.path(), &store, "desktop").workspaces, vec![want[1].clone()]);
+        // An empty list still leaves a file saying so.
+        assert_eq!(WorkspaceList::mirror(tmp.path(), &store, "desktop", Vec::new()).unwrap().removed, 1);
+        assert!(WorkspaceList::load(tmp.path(), &store, "desktop").workspaces.is_empty());
     }
 
     #[test]

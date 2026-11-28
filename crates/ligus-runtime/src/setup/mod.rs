@@ -32,6 +32,7 @@ use crate::checks::{Check, Report, Status};
 
 mod agent;
 mod agent_edit;
+pub mod checklist;
 mod folder;
 mod gate;
 mod human;

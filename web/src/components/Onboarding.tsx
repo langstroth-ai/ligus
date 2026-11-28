@@ -1,3 +1,4 @@
+import { openSettingsTab } from "@/lib/nav";
 import { useEffect, useState } from "react";
 import {
   setDisplayName,
@@ -161,7 +162,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
   /// The agent screen is done: the agent was added (or skipped). An agent
   /// that runs on this device also answers untagged messages here (its
   /// runtime becomes this device's default), and the edit switch is saved.
-  const finish = (added?: { outcome: SetupOutcome; inputs: Record<string, string> }) =>
+  const finish = (added?: { outcome: SetupOutcome; inputs: Record<string, string> }, thenSetUp = false) =>
     run(async () => {
       const runtimeId = added?.outcome.results.runtimeId;
       if (runtimeId && added?.inputs["runs-on"] === "here") await setDefaultRuntime(runtimeId);
@@ -176,6 +177,8 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
         permissionMode,
       });
       await onComplete();
+      // The rest (a phone, a box, your other devices) is one line each there.
+      if (thenSetUp) openSettingsTab("setup");
     });
 
   const dot = firstRunDot(step);
@@ -342,6 +345,11 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
               {step === "finishLater" && (
                 <button className={quiet} onClick={() => go("finishLater")}>
                   Finish later
+                </button>
+              )}
+              {step === "agent" && (
+                <button className={quiet} disabled={busy} onClick={() => void finish(undefined, true)} data-testid="first-run-set-up">
+                  See what's left to set up
                 </button>
               )}
             </span>

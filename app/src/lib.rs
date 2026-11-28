@@ -58,6 +58,7 @@ mod attachments;
 mod memory_ui;
 mod repos_ui;
 mod scratch_ui;
+mod setup_checklist_ui;
 mod setup_ui;
 mod first_run_ui;
 mod link_code_ui;
@@ -68,6 +69,7 @@ mod attention;
 mod notices;
 mod chat_models;
 mod dispatch_outcome;
+mod local_tables_ui;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -12512,9 +12514,10 @@ fn set_workspace_root(state: State<AppState>, path: String) -> Result<(), String
         // workspace UUID) so the effective root follows the workspace when
         // switching between them. `workspace_root` above stays the legacy
         // single-folder field (migration source / GUI-relaunch fallback).
-        s.workspace_dirs.insert(active_id, normalized.clone());
+        s.workspace_dirs.insert(active_id.clone(), normalized.clone());
         save_settings(&state.data_dir, &s);
     }
+    local_tables_ui::bind(&state.data_dir, &active_id, &normalized);
     state.reload_workspace_catalogs(&normalized);
     // Re-arm the file watcher on the new root so `workspace://fs-changed` events
     // track the workspace the editor/tree is now showing.
@@ -13692,9 +13695,14 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     {
         let mut s = settings.lock().unwrap();
         let local_key = local_workspace_id.to_string();
-        if migrate_local_workspace_dir(&mut s.workspace_dirs, &local_key, &workspace_root) {
+        let mut changed = migrate_local_workspace_dir(&mut s.workspace_dirs, &local_key, &workspace_root);
+        // Workspace model v3 (M9): the folders and the scratch list become
+        // tables, once; the table wins from then on.
+        changed |= local_tables_ui::import_and_overlay(&service, &mut s.workspace_dirs);
+        if changed {
             save_settings(&data_dir, &s);
         }
+        local_tables_ui::mirror_connections(&data_dir, &s);
         // Active workspace at launch is always the local one → honor its binding
         // if present, else keep the launch-computed root.
         if let Some(bound) = s.workspace_dirs.get(&local_key).cloned() {
@@ -17209,6 +17217,9 @@ pub fn run() {
             phones_ui::inspect_phone_code,
             setup_ui::setup_flows,
             setup_ui::setup_status,
+            setup_checklist_ui::setup_checklist,
+            setup_checklist_ui::setup_hide,
+            setup_checklist_ui::setup_remove_host,
             setup_ui::setup_form,
             setup_ui::setup_run,
             setup_ui::setup_cancel,

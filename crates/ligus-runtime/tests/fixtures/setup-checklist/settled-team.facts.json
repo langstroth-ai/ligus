@@ -1,0 +1,35 @@
+{
+  "workspace": "Team",
+  "role": "Owner",
+  "rules": 3,
+  "rulesSupported": 4,
+  "name": "Ana",
+  "picture": true,
+  "passkeys": 2,
+  "recoveryKey": true,
+  "thisDevice": "Ana's MacBook",
+  "thisDeviceWord": "this Mac",
+  "devices": [
+    { "id": "6f1c2a10-0000-4000-8000-000000000001", "label": "build-1", "state": "active" },
+    { "id": "6f1c2a10-0000-4000-8000-000000000002", "label": "old-laptop", "state": "pending" },
+    { "id": "6f1c2a10-0000-4000-8000-000000000003", "label": "Device 9a8b7c6d", "state": "revoked" }
+  ],
+  "phones": [
+    { "id": "6f1c2a10-0000-4000-8000-000000000004", "label": "Ana's iPhone", "state": "active", "push": true }
+  ],
+  "boxes": [
+    { "id": "6f1c2a10-0000-4000-8000-000000000005", "label": "box-1", "online": true, "build": "0.4.1", "upgradeTo": "0.5.0" }
+  ],
+  "agents": [
+    { "name": "coder", "runsOn": "box-1", "answers": true, "why": "" },
+    { "name": "reviewer", "runsOn": "your devices", "answers": true, "why": "" }
+  ],
+  "leftovers": [
+    { "kind": "memberLeft", "id": "member-taylor", "label": "Taylor", "detail": "asked to leave 24 Nov", "canRemove": true },
+    { "kind": "devicePending", "id": "6f1c2a10-0000-4000-8000-000000000002", "label": "old-laptop", "detail": "approved, never used", "canRemove": true },
+    { "kind": "deviceRevoked", "id": "6f1c2a10-0000-4000-8000-000000000003", "label": "Device 9a8b7c6d", "detail": "revoked", "canRemove": false },
+    { "kind": "formerHost", "id": "6f1c2a10-0000-4000-8000-000000000006", "label": "taylor-desktop", "detail": "its owner isn't a member", "canRemove": true },
+    { "kind": "legacyAgent", "id": "6f1c2a10-0000-4000-8000-000000000007", "label": "hive", "detail": "an old name: @ligus is the default agent", "canRemove": true }
+  ],
+  "hidden": []
+}

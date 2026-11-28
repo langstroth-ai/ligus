@@ -2,7 +2,7 @@
 
 Ligus's Settings view has a **grouped, searchable sidebar** so the page
 isn't one overwhelming scroll — only the active section mounts. The
-groups are **You** (Account, Appearance), **This workspace** (Folder &
+groups are **You** ([Set up Ligus](set-up-ligus.md), Account, Appearance), **This workspace** (Folder &
 Git, Team sync, Schedules), **Agents** (Models & runtimes, Tools & MCP,
 Permissions), and **Advanced** (Updates & data, Diagnostics, Danger
 zone). A **Search settings** box at the top filters the nav by section

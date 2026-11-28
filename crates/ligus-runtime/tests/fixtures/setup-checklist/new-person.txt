@@ -1,0 +1,9 @@
+○ You          Not set up                                       Set your name: ligus profile
+○ Passkey      Not set up                                       Add a passkey: ligus passkey
+○ This device  Not named                                        Name it: ligus deviceName
+○ My devices   Not set up                                       Add a computer: ligus addComputer
+○ Phone        Not set up                                       Add a phone: ligus addPhone
+○ Box          Not set up (optional)                            Add a box: ligus addBox
+○ Agents       Not set up                                       Add an agent: ligus addAgent
+✓ Workspace    Ana's workspace · rules 3
+✓ Clean up     Nothing to clean up

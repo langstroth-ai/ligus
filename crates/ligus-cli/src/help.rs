@@ -185,7 +185,8 @@ pub const COMMANDS: &[Cmd] = &[
         purpose: "For a person's own CLI device (never a serve or worker box: a box joins with `ligus admit`). An invite makes \
                   a NEW member: if you are already in the workspace on your desktop, link this computer instead \
                   (`ligus devices request`). Decode a workspace invite (`hivews1:…`: relay URL, room, end-to-end key) and save it: the relay and \
-                  room to <data dir>/config.toml, the key and the optional relay access token to the secret store. \
+                  room to <data dir>/workspaces.json (and config.toml, for an older ligus), the key and the optional relay \
+                  access token to the secret store. \
                   An invite carries the workspace key: pipe it or pass a file; on the command line it works with a \
                   warning. Refuses an invite whose workspace has no usable relay URL.",
         synopsis: &["ligus enroll - [--token - | @FILE]", "ligus enroll --file PATH [--token - | @FILE]", "ligus enroll <hivews1:invite> [--token …]"],
@@ -474,9 +475,17 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "setup",
         group: G_START,
-        summary: "guided setup: list the flows and what is done here",
-        purpose: "List the seven guided setup flows (agent, tool, folder, box, phone, invite, relay) and what each has \
-                  done on this device, from the same engine the desktop's Set up commands use. `ligus setup <flow> \
+        summary: "Set up Ligus: the checklist, then the guided flows and what is done here",
+        purpose: "Print the \"Set up Ligus\" checklist: one line each for you (your profile), your passkey and recovery \
+                  key, this device's name, your other devices, your phone, an always-on box (optional) and its update, \
+                  the agents and where each answers, the workspace and its rules version, and Clean up (leftovers such as \
+                  members who asked to leave, devices never finished, former members' hosts). Each line has a mark (✓ \
+                  done, ○ not set up, • wants a look) and at most one next step; the desktop's Settings > Set up, lt and \
+                  the phone's Health show the same rows. Under it, the seven guided setup flows (agent, tool, folder, \
+                  box, phone, invite, relay) and what each has done on this device, from the same engine the desktop's \
+                  Set up commands use. Nothing here uses the network. `--json` is the `ligus.checks.v1` report of the \
+                  flows with the checklist under `checklist` (`ligus.setup.v1`: `rows[]` with `id`, `title`, `state` \
+                  of done, notSetUp or attention, `detail` and an optional `action{id,label}`; `cleanup[]`). `ligus setup <flow> \
                   --help` shows a flow's flags. Every flow checks first, writes only when every check passed, is safe \
                   to run again, and stops with exit 4 at a step only a person can do. `ligus help setup` is the guide.",
         synopsis: &["ligus setup [--json]", "ligus setup <flow> [flags] [--no-wait | --timeout 10m] [--recovery-words-file PATH] [--json] [--dry-run]"],
@@ -487,9 +496,32 @@ pub const COMMANDS: &[Cmd] = &[
             f("--no-wait", "off", "send a step that needs your passkey to your desktop or phone and exit 4 (finish with ligus handoff wait)"),
             f("--recovery-words-file PATH", "none", "your recovery key's 24 words (an owner-only file): your presence for a step that needs your passkey, instead of your desktop or phone"),
         ],
-        examples: &["ligus setup", "ligus setup agent --name builder --source claude-code", "ligus setup --json | jq '.checks[] | {id, status}'"],
+        examples: &["ligus setup", "ligus setup agent --name builder --source claude-code", "ligus setup --json | jq '.checklist.rows[] | {id, state, detail}'"],
         exit: &[(0, "listed (setup never fails a listing)")],
         see_also: &["ligus help setup", "ligus doctor", "desktop: ⌘K > Add an agent (and the other setup commands)"],
+        ..D
+    },
+    Cmd {
+        name: "setup cleanup",
+        group: G_START,
+        summary: "the leftovers Set up Ligus lists, and Remove from view",
+        purpose: "List Clean up's leftovers in this workspace: members who asked to leave or were retired, your devices \
+                  that were revoked, never finished or went idle, hosts of former members or revoked devices, old agent \
+                  names that no longer mean anything (a roster agent called hive or ligus). Each has one action. Remove \
+                  from view hides it on this device only (`--hide KEY`; `--show KEY` brings it back): nothing changes in \
+                  the workspace and other devices still show it. Remove takes it out of the workspace with your passkey, \
+                  one ceremony each, on your desktop (Settings > Set up > Clean up), after it asks you to confirm. \
+                  Nothing is ever removed without that.",
+        synopsis: &["ligus setup cleanup [--json]", "ligus setup cleanup --hide KEY", "ligus setup cleanup --show KEY"],
+        flags: &[
+            f("--hide KEY", "none", "remove a leftover from view on this device (KEY is kind:id, as listed)"),
+            f("--show KEY", "none", "show a leftover again"),
+            JSON,
+        ],
+        conn: true,
+        examples: &["ligus setup cleanup", "ligus setup cleanup --hide deviceRevoked:3c1e0f2a-...", "ligus setup cleanup --json | jq '.cleanup[] | {key, action: .action.id}'"],
+        exit: &[(0, "listed"), (2, "a key that isn't kind:id, or --hide without one")],
+        see_also: &["ligus setup", "desktop: Settings > Set up > Clean up"],
         ..D
     },
     Cmd {
@@ -2349,7 +2381,8 @@ pub const COMMANDS: &[Cmd] = &[
         group: G_REPOS,
         summary: "bind a checkout for agent file tools (legacy, per box)",
         purpose: "Bind a checkout (a name under the repos dir, or an absolute path) for agent file tools, for the \
-                  workspace or one chat, in <data dir>/repo-bindings.toml. A chat with a workspace repository uses \
+                  workspace (in ligus.db since 0.5) or one chat (in <data dir>/repo-bindings.toml). A chat with a workspace \
+                  repository uses \
                   `ligus repos` instead.",
         synopsis: &["ligus bind-repo <name|path> [--chat CHAT-ID]", "ligus bind-repo --clear [--chat CHAT-ID]"],
         flags: &[
@@ -3440,7 +3473,8 @@ Access controls:
         summary: "the data dir, secret backends, LIGUS_DATA_DIR, LIGUS_SECRET_BACKEND",
         text: "\
 The data dir is one Ligus device: its identity and keys, the decrypted event log
-(ligus.db), config.toml (relay and room only), and for serve the phone credentials.
+(ligus.db), workspaces.json (relay and room only; config.toml before 0.5), and for
+serve the phone credentials.
 - LIGUS_DATA_DIR picks it (default ~/.ligus; ./ligus-data without HOME). It is
   created owner-only (0700). One process per data dir; never share one between
   machines, and never point a box at the desktop app's.

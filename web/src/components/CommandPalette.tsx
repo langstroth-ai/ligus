@@ -186,6 +186,16 @@ export function CommandPalette({
     if (actions.cycleAppearance) {
       items.push({ id: "appearance", label: "Toggle light / dark", hint: "Action", run: run(actions.cycleAppearance) });
     }
+    if (actions.openSettingsTab) {
+      const open = actions.openSettingsTab;
+      items.push({
+        id: "setup-ligus",
+        label: "Set up Ligus",
+        hint: "Settings",
+        keywords: "setup checklist readiness health clean up cleanup leftovers passkey phone box agent devices",
+        run: run(() => open("setup")),
+      });
+    }
     if (actions.addPhone) {
       items.push({
         id: "add-phone",

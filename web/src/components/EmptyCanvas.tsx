@@ -23,10 +23,13 @@ export function EmptyCanvas({
   workspaceName,
   onNewChat,
   onOpenPalette,
+  onSetUp,
 }: {
   workspaceName: string;
   onNewChat: () => void;
   onOpenPalette: () => void;
+  /// Settings > Set up ("Set up Ligus"): a quiet link, no badge.
+  onSetUp?: () => void;
 }) {
   return (
     <div className="ligus-enter flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
@@ -54,6 +57,11 @@ export function EmptyCanvas({
           <Kbd>⌘J</Kbd> tools rail
         </span>
       </p>
+      {onSetUp && (
+        <button type="button" className="text-xs text-ink-soft underline-offset-2 hover:underline" onClick={onSetUp}>
+          Set up Ligus
+        </button>
+      )}
     </div>
   );
 }

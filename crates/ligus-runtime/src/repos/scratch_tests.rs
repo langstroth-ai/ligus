@@ -327,20 +327,16 @@ fn the_scratch_hint_shows_on_local_repos_only() {
     assert!(serde_json::to_string(&local).unwrap().contains("\"scratch\":true"));
 }
 
-/// A registry that doesn't parse is never saved over: it is kept aside
-/// (`scratch:registry.corrupt-<ts>`), and the next entry starts a new list.
+/// An old registry blob that doesn't parse is never saved over or moved:
+/// it stays as it was, and the next entry goes in the table beside it.
 #[test]
 fn an_unreadable_registry_is_kept_not_erased() {
     let e = env();
     let garbled = r#"[{"id": "not a uuid", "#;
     e.store.set_repo_setting(KEY_REGISTRY, Some(garbled)).unwrap();
-    let before = now();
     assert!(list(&e.store, e.ws).is_empty());
     let r = mk(&e, "After", "", 0);
-    let after = now();
-    let kept: Vec<String> = (before..=after)
-        .filter_map(|t| e.store.repo_setting(&format!("{KEY_REGISTRY}.corrupt-{t}")).unwrap())
-        .collect();
-    assert_eq!(kept, vec![garbled.to_string()], "the unreadable registry was kept as it was");
+    assert_eq!(e.store.repo_setting(KEY_REGISTRY).unwrap().as_deref(), Some(garbled), "the unreadable registry was kept as it was");
     assert_eq!(list(&e.store, e.ws).iter().map(|x| x.id).collect::<Vec<_>>(), vec![r.id]);
+    assert!(e.store.scratch_import_problem().is_some());
 }

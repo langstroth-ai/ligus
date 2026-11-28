@@ -1,0 +1,18 @@
+{
+  "workspace": "Ana's workspace",
+  "role": "Owner",
+  "rules": 3,
+  "rulesSupported": 3,
+  "name": "",
+  "picture": false,
+  "passkeys": 0,
+  "recoveryKey": false,
+  "thisDevice": "",
+  "thisDeviceWord": "this Mac",
+  "devices": [],
+  "phones": [],
+  "boxes": [],
+  "agents": [],
+  "leftovers": [],
+  "hidden": []
+}

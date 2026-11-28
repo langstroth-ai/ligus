@@ -61,12 +61,21 @@ any events it hadn't synced yet.
 | `identity.json` | yes | yes | public identity |
 | `secrets/` (`ligus.keychain-db` on macOS), `credentials/` (systemd-creds), or `keys/` (file fallback) | yes | yes | **private key seeds**, workspace keys, API keys and tokens (see [Key storage](../../ligus/concepts/identity.md#key-storage)) |
 | `settings.json` | yes | | settings; secrets only as `{"set": true}` |
-| `config.toml` | | yes | relay URL and room (the workspace key and relay token are in the secret store) |
+| `workspaces.json` | yes | yes | the workspace connections: relay URL and room (their keys and tokens are in the secret store). The CLI reads it from 0.5; the desktop keeps a copy of its list here |
+| `config.toml` | | yes | relay URL and room from before 0.5, imported into `workspaces.json` once and kept for a downgrade |
 | `serve.token`, `serve-state.json` | | serve | direct-path token, read marks |
 | `tunnel/` | | serve | host keys, paired phones, relay settings |
-| `repo-bindings.toml`, `repos/` | | serve/worker | bound checkouts |
+| `repo-bindings.toml`, `repos/` | | serve/worker | per-chat checkouts (the workspace's checkout is in `ligus.db` from 0.5) |
 | `dashboard.toml` | | serve | dashboard config |
 | `attachments/` | yes | yes | composer files, verified copies of shared files (`verified/`, private), agents' offered files waiting for approval (`staged/`) |
+
+Since 0.5, `ligus.db` also holds two lists that used to live elsewhere: the
+scratch repositories this device created (`scratch_repos`) and the folder
+bound to each workspace on this device (`workspace_folders`). The first 0.5
+start copies them in once, after a backup of the database next to it
+(`ligus.db.bak-local-v2-…`), and leaves the old copies as they were, so a 0.4
+build still finds them. `ligus doctor` lists the backups, and warns if the
+old scratch list couldn't be read (it is kept as it was, never overwritten).
 
 Backups contain keys: encrypt them and keep them private.
 

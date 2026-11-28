@@ -80,6 +80,39 @@ fn the_list_is_one_checks_report_of_seven_flows() {
     assert!(String::from_utf8_lossy(&text.stdout).contains("Add an agent"));
 }
 
+/// The "Set up Ligus" checklist rides in the same document (additive), with
+/// the rows every surface shows, in order; a fresh data dir has nothing set
+/// up, and nothing reads red.
+#[test]
+fn the_list_carries_the_checklist() {
+    let b = fresh();
+    let d = doc(&ligus(&b, &["setup", "--json"], None));
+    let list = &d["checklist"];
+    assert_eq!(list["schema"], "ligus.setup.v1");
+    let ids: Vec<&str> = list["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["you", "passkey", "device", "devices", "phone", "box", "agents", "workspace", "cleanup"]);
+    for r in list["rows"].as_array().unwrap() {
+        let state = r["state"].as_str().unwrap();
+        assert!(["done", "notSetUp", "attention"].contains(&state), "{r}");
+        assert!(r.get("action").is_none_or(|a| a["id"].is_string() && a["label"].is_string()), "{r}");
+    }
+    assert!(list["cleanup"].as_array().unwrap().is_empty());
+    let text = String::from_utf8_lossy(&ligus(&b, &["setup"], None).stdout).to_string();
+    assert!(text.starts_with("Set up Ligus"), "{text}");
+    assert!(text.contains("○ Phone") && text.contains("Add a phone: ligus setup phone"), "{text}");
+
+    // Clean up on its own, and Remove from view.
+    let o = ligus(&b, &["setup", "cleanup", "--json"], None);
+    assert_eq!(code(&o), 0);
+    assert_eq!(doc(&o)["cleanup"], serde_json::json!([]));
+    let o = ligus(&b, &["setup", "cleanup", "--hide", "memberLeft:someone"], None);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    let hidden: Vec<String> = serde_json::from_slice(&std::fs::read(b.data.join("setup-hidden.json")).unwrap()).unwrap();
+    assert_eq!(hidden, ["memberLeft:someone"]);
+    assert_eq!(code(&ligus(&b, &["setup", "cleanup", "--hide", "no-colon"], None)), 2);
+    assert_eq!(code(&ligus(&b, &["setup", "cleanup", "--hide"], None)), 2);
+}
+
 #[test]
 fn usage_errors_exit_2_with_the_flag_named() {
     let b = fresh();

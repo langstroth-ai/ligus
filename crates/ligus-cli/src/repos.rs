@@ -18,6 +18,11 @@
 //! else none (the turn gets no file tools; MCP tools still apply). Written by
 //! `ligus bind-repo`; the binding is device-local and never synced, exactly
 //! like the desktop's.
+//!
+//! Since 0.5 the workspace binding lives in the `workspace_folders` table of
+//! `ligus.db` (one table for every app's workspace folder). The file's
+//! `workspace` line is imported once and then kept as it was, for a
+//! downgrade; the `[chats]` overrides stay in the file.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -46,17 +51,64 @@ pub fn repos_dir(data_dir: &Path) -> PathBuf {
         .unwrap_or_else(|| data_dir.join("repos"))
 }
 
+/// The name this CLI's workspace-folder rows carry (`workspace_folders`).
+pub const FOLDER_SOURCE: &str = "cli";
+
+/// This data dir's workspace, as the CLI's config names it:
+/// `LIGUS_WORKSPACE`, else `config.toml`'s room, else `default`. A cheap
+/// read (no secret store), for the binding lookup.
+pub fn data_dir_workspace(data_dir: &Path) -> Uuid {
+    #[derive(Deserialize)]
+    struct Room {
+        room: Option<String>,
+    }
+    let room = crate::env_opt("LIGUS_WORKSPACE")
+        .or_else(|| {
+            std::fs::read_to_string(data_dir.join("config.toml")).ok().and_then(|t| toml::from_str::<Room>(&t).ok()).and_then(|r| r.room)
+        })
+        .unwrap_or_else(|| "default".into());
+    ligus_core::room_workspace_id(&room)
+}
+
 impl RepoBindings {
+    /// The bindings: the chats' from the file, the workspace's from the
+    /// `workspace_folders` table once this data dir's import ran (0.5), else
+    /// from the file as before.
     pub fn load(data_dir: &Path) -> Self {
+        let mut b = Self::load_file(data_dir);
+        let db = data_dir.join("ligus.db");
+        if let Some(row) = ligus_runtime::event_store::peek_workspace_folder(&db, data_dir_workspace(data_dir), FOLDER_SOURCE) {
+            b.workspace = row.map(|p| p.to_string_lossy().into_owned());
+        }
+        b
+    }
+
+    /// The file alone (what 0.4 reads, and the import's source).
+    pub fn load_file(data_dir: &Path) -> Self {
         std::fs::read_to_string(data_dir.join(BINDINGS_FILE))
             .ok()
             .and_then(|t| toml::from_str(&t).ok())
             .unwrap_or_default()
     }
 
+    /// Save: the workspace binding to the `workspace_folders` table once the
+    /// import ran (the file then keeps the workspace binding it had at the
+    /// import, for a downgrade), the chats to the file. Before the import,
+    /// all of it to the file, as before.
+    pub fn save(&self, data_dir: &Path) -> Result<()> {
+        let db = data_dir.join("ligus.db");
+        let mut file = self.clone();
+        if ligus_runtime::event_store::write_workspace_folder(&db, data_dir_workspace(data_dir), FOLDER_SOURCE, self.workspace.as_deref())
+            .context("couldn't record the workspace's folder")?
+        {
+            file.workspace = Self::load_file(data_dir).workspace;
+        }
+        file.save_file(data_dir)
+    }
+
     /// Write the file atomically (a temp file in the same dir, then a rename),
     /// so a turn reading it mid-write never sees half a file.
-    pub fn save(&self, data_dir: &Path) -> Result<()> {
+    fn save_file(&self, data_dir: &Path) -> Result<()> {
         std::fs::create_dir_all(data_dir)?;
         let tmp = data_dir.join(format!(".{BINDINGS_FILE}.{}.tmp", Uuid::new_v4().simple()));
         std::fs::write(&tmp, toml::to_string_pretty(self)?)?;
@@ -653,6 +705,41 @@ mod tests {
         assert_eq!((f.host.as_str(), f.full_name().as_str()), ("", "o/n"));
         assert_eq!(parse_remote("/srv/git/o/n").unwrap().full_name(), "o/n");
         assert!(parse_remote("nothing").is_none());
+    }
+
+    /// The workspace binding moves to the `workspace_folders` table once:
+    /// the import takes the file's line, later binds and unbinds go to the
+    /// table, the file keeps the line it had (a downgrade still reads it),
+    /// and the chats stay in the file.
+    #[test]
+    fn the_workspace_binding_moves_to_the_table_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        std::fs::write(data.join("config.toml"), "room = \"team\"\n").unwrap();
+        let ws = ligus_core::room_workspace_id("team");
+        let chat = Uuid::new_v4();
+        let mut b = RepoBindings { workspace: Some("app".into()), ..Default::default() };
+        b.chats.insert(chat.to_string(), "other".into());
+        b.save(data).unwrap();
+        let store = ligus_runtime::EventStore::open(data.join("ligus.db")).unwrap();
+        assert_eq!(RepoBindings::load(data).workspace.as_deref(), Some("app"), "before the import: the file");
+        let legacy = ligus_runtime::event_store::LegacyLocal {
+            source: FOLDER_SOURCE,
+            folders: vec![ligus_runtime::event_store::LegacyFolder { workspace_id: data_dir_workspace(data), path: "app".into() }],
+        };
+        store.migrate_local_tables(&legacy).unwrap();
+        assert_eq!(store.workspace_folder(ws).unwrap(), Some(PathBuf::from("app")));
+        let mut b = RepoBindings::load(data);
+        assert_eq!(b.workspace.as_deref(), Some("app"));
+        b.workspace = Some("/abs/elsewhere".into());
+        b.save(data).unwrap();
+        assert_eq!(RepoBindings::load(data).workspace.as_deref(), Some("/abs/elsewhere"));
+        assert_eq!(RepoBindings::load_file(data).workspace.as_deref(), Some("app"), "the file keeps its line");
+        assert_eq!(RepoBindings::load(data).chats.get(&chat.to_string()).map(String::as_str), Some("other"));
+        let mut b = RepoBindings::load(data);
+        b.workspace = None;
+        b.save(data).unwrap();
+        assert_eq!(RepoBindings::load(data).workspace, None, "unbound stays unbound");
     }
 
     #[test]

@@ -131,6 +131,7 @@ plugins:
         features/mentions-and-notifications.md: ligus/features/mentions-and-notifications.md
         features/multi-agent.md: ligus/features/multi-agent.md
         features/onboarding.md: ligus/features/onboarding.md
+        features/set-up-ligus.md: ligus/features/set-up-ligus.md
         features/phone-app.md: ligus/features/phone-app.md
         features/proposal-sets.md: ligus/features/proposal-sets.md
         features/agent-questions.md: ligus/features/agent-questions.md
@@ -230,6 +231,7 @@ nav:
           - Linked accounts: ligus/features/linked-identities.md
           - Collaborative editing: ligus/features/collaboration.md
           - Onboarding: ligus/features/onboarding.md
+          - Set up Ligus: ligus/features/set-up-ligus.md
       - Code hosts:
           - Overview: ligus/features/code-hosts.md
           - GitHub: ligus/forges/github.md
