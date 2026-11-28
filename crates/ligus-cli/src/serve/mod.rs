@@ -58,6 +58,7 @@ pub mod pair;
 pub mod people;
 pub mod phone_actions_api;
 pub mod phone_enroll_api;
+pub mod phone_label_api;
 pub mod presence_api;
 pub mod principal;
 pub mod proposal_file;
@@ -329,6 +330,8 @@ pub struct Shared {
     pub admission_drafts: admissions_api::Drafts,
     /// Phone actions waiting for the phone's signature (Phase B).
     pub phone_action_drafts: phone_actions_api::Drafts,
+    /// A phone's own name waiting for its signature (workspace model v3, 17.6).
+    pub phone_label_drafts: phone_label_api::Drafts,
     /// The box's direct messages (`dms.rs`).
     pub dms: dms::DmStore,
     /// Wakes the DM sync loop after a local write.
@@ -1364,6 +1367,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         presence_drafts: presence_api::Pending::default(),
         admission_drafts: admissions_api::Drafts::default(),
         phone_action_drafts: phone_actions_api::Drafts::default(),
+        phone_label_drafts: phone_label_api::Drafts::default(),
         dms: dms::DmStore::load(&cfg.data_dir),
         dm_kick: Notify::new(),
         contact_lock: tokio::sync::Mutex::new(()),

@@ -513,3 +513,25 @@ pub const PHONE_ACTION_EVENT_KINDS: &[&str] = &[
     "proposalApplyWithdrawn",
     "proposalDismissed",
 ];
+
+/// What a phone checks before signing its own name, drafted by its box
+/// (`POST /v1/phone-label/prepare`; workspace model v3, 17.6):
+/// [`parse_phone_preimage`] on `workspace_id`, for `phone` and its person's
+/// `account`, with no presence; on the workspace config log; and a payload
+/// that is exactly `deviceLabelSet` naming `phone` under `account` as
+/// `label`. Anything else (another device or account, another name, a
+/// field the phone didn't ask for) is refused. Returns the event id.
+pub fn check_phone_label_preimage(preimage: &[u8], workspace_id: Uuid, phone: Uuid, account: Uuid, label: &str) -> Result<Uuid, &'static str> {
+    crate::profile::label_ok(label)?;
+    if label.trim().is_empty() {
+        return Err("a phone's name can't be empty");
+    }
+    let p = parse_phone_preimage(preimage, workspace_id, phone, Some(account), None)?;
+    if p.session_id != crate::channel::workspace_config_session_id(workspace_id) {
+        return Err("not on the workspace config log");
+    }
+    match &p.event {
+        SessionEvent::DeviceLabelSet { label: l } if l.device_id == phone && l.account_id == account && l.label == label => Ok(p.event_id),
+        _ => Err("not the name this phone asked for"),
+    }
+}

@@ -2,8 +2,8 @@
 //! (Secure Enclave) key may sign. A phone posts, reacts, votes and approves,
 //! answers an agent's question, asks a host to apply (and withdraws that
 //! request), and raises or clears a chat lockdown; it never changes
-//! membership, roles, devices or keys (its own revocation and admitting a
-//! box as a service member excepted), never rebinds an agent, never issues a
+//! membership, roles, devices or keys (its own revocation, its own name from
+//! rules 4, and admitting a box as a service member excepted), never rebinds an agent, never issues a
 //! person's invite, and never touches workspace configuration. Capped by its
 //! person's role and judged by the presence table like every event.
 
@@ -37,6 +37,9 @@ pub fn phone_tier_allows(event: &SessionEvent, device: Uuid) -> Result<(), Strin
         },
         // Its own revocation (a lost phone revoking itself is harmless).
         SessionEvent::DeviceRevoked { device_id, .. } => *device_id == device,
+        // Its own name (workspace model v3, 17.6): only from rules 4, which
+        // `authz::profiles::label_ok` enforces; render-only either way.
+        SessionEvent::DeviceLabelSet { label } => label.device_id == device,
         // Phase B: a box admission (a service member, at most Contributor),
         // with its person's passkey presence and Admin role like every
         // invite. No other membership change.

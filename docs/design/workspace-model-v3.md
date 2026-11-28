@@ -887,6 +887,7 @@ a rules-4 workspace.
 | G12 | `ChatChannelChanged` judged by workspace role | 9 |
 | G13 | A host record counts only when signed by its own trusted device, owned by an account holding it | 5.1 |
 | G14 | Agent keys accepted from every host the placement admits, and from a `TurnDelegated` device for that one turn | 5.3 |
+| G15 | A phone names itself: `DeviceLabelSet` for its own device under its person, signed by the phone (`authz::profiles::PHONE_NAMES_ITSELF_FROM`); its person's desktop still renames it on every rules version | 17.6 |
 
 Every rules-4 check on agents judges the merged record (5.6 rule 5). Events
 before the rules-4 position are judged as before and never re-judged.

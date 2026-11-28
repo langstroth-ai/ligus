@@ -959,6 +959,8 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/phone-actions/prepare", post(super::phone_actions_api::prepare))
         .route("/v1/phone-actions/presence", post(super::phone_actions_api::presence))
         .route("/v1/phone-actions/commit", post(super::phone_actions_api::commit))
+        .route("/v1/phone-label/prepare", post(super::phone_label_api::prepare))
+        .route("/v1/phone-label/commit", post(super::phone_label_api::commit))
         .route("/v1/chats", get(list_chats).post(create_chat))
         .route("/v1/chats/{id}/messages", get(list_messages).post(post_message))
         .route("/v1/chats/{id}/typing", get(super::typing_api::get_typing).post(super::typing_api::post_typing))

@@ -250,3 +250,40 @@ fn every_arrival_order_folds_the_same_profile() {
         assert_eq!(got.device_labels, expect.device_labels, "order {k}");
     }
 }
+
+/// Workspace model v3, 17.6: a phone names itself from rules 4, and only
+/// itself, under its own person. On rules 3 its label is denied, as a 0.4
+/// fold denies it (no rules-3 verdict changes).
+#[test]
+fn a_phone_names_itself_only_from_rules_4() {
+    let mut w = world();
+    let (ana, ben) = (w.people["ana"].account_id, w.people["ben"].account_id);
+    let phone = Phone::new();
+    let cert = w.phone_certificate("ana", &phone);
+    w.push("ana", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    w.push("ana", SessionEvent::WorkspaceRulesSet { version: 3, presence: None });
+    let on3 = w.phone_write("ana", &phone, None, label(phone.device_id, ana, "Ana's iPhone"));
+    assert_eq!(w.verdict(on3), Verdict::Denied, "rules 3 folds a phone's own label as 0.4 does");
+    assert!(!w.config().device_labels.contains_key(&phone.device_id));
+
+    w.push("ana", SessionEvent::WorkspaceRulesSet { version: ligus_core::authz::profiles::PHONE_NAMES_ITSELF_FROM, presence: None });
+    let own = w.phone_write("ana", &phone, None, label(phone.device_id, ana, "Ana's iPhone"));
+    assert_eq!(w.verdict(own), Verdict::Allowed, "rules 4: the phone names itself");
+    assert_eq!(w.config().device_labels[&phone.device_id][&ana], "Ana's iPhone");
+    // Never another device, not even its person's desktop.
+    let desk = w.people["ana"].device_id;
+    let other = w.phone_write("ana", &phone, None, label(desk, ana, "renamed by the phone"));
+    assert_eq!(w.verdict(other), Verdict::Denied);
+    // Never under another account.
+    let foreign = w.phone_write("ana", &phone, None, label(phone.device_id, ben, "Ben's now"));
+    assert_eq!(w.verdict(foreign), Verdict::Denied);
+    // The content checks still hold.
+    let long = w.phone_write("ana", &phone, None, label(phone.device_id, ana, &"p".repeat(49)));
+    assert_eq!(w.verdict(long), Verdict::Denied);
+    // And the desktop still renames it; the newest wins.
+    w.push_bare("ana", label(phone.device_id, ana, "Work phone"));
+    assert_eq!(w.config().device_labels[&phone.device_id][&ana], "Work phone");
+    // Still nothing about its person's profile.
+    let p = w.phone_write("ana", &phone, None, name(ana, "From Phone"));
+    assert_eq!(w.verdict(p), Verdict::Denied);
+}
