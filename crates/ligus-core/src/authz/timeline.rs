@@ -255,6 +255,7 @@ impl RosterState {
                 Placement::Pool => live(&host.to_string()).is_some_and(|h| {
                     h.kind == crate::workspace_host::HostKind::Worker
                         && h.offers.as_ref().is_some_and(|o| o.contains(&agent.source))
+                        && self.is_box(&h.owner, host)
                 }),
                 Placement::ChatCreator | Placement::Unknown => false,
             };
@@ -269,6 +270,17 @@ impl RosterState {
         } else {
             agent.host_id == host.to_string()
         }
+    }
+
+    /// Whether `device` is a box rather than a person's own computer: its
+    /// host record's owner is a service member, or the device acts for the
+    /// owner's account without holding its key (enrolled for them). A
+    /// record's `kind` is its writer's word, so a `pool` (which admits every
+    /// worker offering its source) checks this too.
+    fn is_box(&self, owner: &str, device: Uuid) -> bool {
+        let Some(m) = self.members.get(owner) else { return false };
+        m.kind == crate::identity::ActorKind::Service
+            || m.account_id.is_some_and(|a| self.devices.get(&device).is_some_and(|d| d.delegated_for(a)))
     }
 
     /// Whether `owner` (a member id, or an account id) holds `host`.

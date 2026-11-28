@@ -822,3 +822,36 @@ fn g14_a_shared_agent_answers_from_any_members_device() {
     let by_eve = w.say(chat, "eve", reply_to(a.id, qid));
     assert_eq!((v(&w, by_dee), v(&w, by_eve)), (Verdict::Allowed, Verdict::Denied));
 }
+
+// ---- Security review: holes found after the self-review, each proved first ----
+
+/// A person's own computer can't join a pool by calling itself a worker: a
+/// `pool` admits workers that are boxes (a service member's, or one enrolled
+/// for its owner), so a Contributor's laptop with a `kind: worker` record
+/// offering the pool's source neither holds the pool agent's keys nor
+/// writes its replies.
+#[test]
+fn sr_a_persons_computer_calling_itself_a_worker_isnt_in_a_pool() {
+    let mut w = world();
+    let h = host_record(&w, "dee", HostKind::Worker, &["ollama"]);
+    let rec = w.push_bare("dee", SessionEvent::WorkspaceHostUpserted { host: h });
+    assert_eq!(v(&w, rec), Verdict::Allowed, "dee may describe her own computer");
+    let mut a = agent(&w, "ben", spec("ollama", "llama3"), Placement::Pool);
+    a.owner_actor_id = "ben".into();
+    w.push("ben", up(&a));
+    let kd = certify(&mut w, "dee", a.id, 7);
+    assert!(w.roster().valid_agent_key(kd.0).is_none(), "a person's computer holds no pool key");
+    let chat = w.chat("ben", "plans");
+    let q = ChatMessage::new(MessageRole::User, "ben", "hi");
+    let qid = q.id;
+    w.say(chat, "ben", SessionEvent::MessageAppended { message: q });
+    let by_key = agent_say(&mut w, chat, a.id, (kd.0, &kd.1), reply_to(a.id, qid));
+    let by_host = w.say(chat, "dee", reply_to(a.id, qid));
+    let k1 = certify(&mut w, "box", a.id, 8);
+    let by_box = agent_say(&mut w, chat, a.id, (k1.0, &k1.1), reply_to(a.id, qid));
+    assert_eq!(
+        (v(&w, by_key), v(&w, by_host), v(&w, by_box)),
+        (Verdict::Denied, Verdict::Denied, Verdict::Allowed),
+        "only the pool's boxes answer for it"
+    );
+}
