@@ -855,3 +855,34 @@ fn sr_a_persons_computer_calling_itself_a_worker_isnt_in_a_pool() {
         "only the pool's boxes answer for it"
     );
 }
+
+/// A delegation never revives a revoked device: an agent key its host
+/// certified while the agent ran there doesn't sign the delegated turn once
+/// that device is revoked (a stolen laptop's keys).
+#[test]
+fn sr_a_revoked_devices_agent_key_doesnt_ride_a_delegation() {
+    let mut w = world();
+    let a = agent(&w, "cy", spec("ollama", "llama3"), Placement::OwnerDevices);
+    w.push_bare("cy", up(&a));
+    let kc = certify(&mut w, "cy", a.id, 9);
+    assert!(w.roster().valid_agent_key(kc.0).is_some(), "bound while on cy's devices");
+    let mut moved = folded(&w).unwrap();
+    moved.placement = Some(Placement::Host { host_id: host_of(&w, "box") });
+    moved.host_id = host_of(&w, "box");
+    let m = w.push("ben", up(&moved));
+    assert_eq!(v(&w, m), Verdict::Allowed, "an Admin moves it to the box");
+    let chat = w.chat("cy", "plans");
+    let q = ChatMessage::new(MessageRole::User, "cy", "one");
+    let t1 = q.id;
+    w.say(chat, "cy", SessionEvent::MessageAppended { message: q });
+    let cy_dev = w.people["cy"].device_id;
+    let d = w.say(chat, "cy", SessionEvent::TurnDelegated { trigger_id: t1, agent_id: a.id, device_id: cy_dev });
+    // The laptop is stolen: an Admin revokes it, holding everything it wrote.
+    let signers = std::iter::once(cy_dev).collect();
+    let mut wm = held(&w, "cy");
+    wm.extend(ligus_core::watermark::heads_of(&w.chats[&chat], chat, &signers));
+    let r = w.push("ana", SessionEvent::DeviceRevoked { device_id: cy_dev, watermark: wm });
+    assert_eq!((v(&w, d), v(&w, r)), (Verdict::Allowed, Verdict::Allowed));
+    let late = agent_say(&mut w, chat, a.id, (kc.0, &kc.1), reply_to(a.id, t1));
+    assert_eq!(v(&w, late), Verdict::Denied, "a revoked device's key signs nothing, delegated or not");
+}

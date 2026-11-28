@@ -1224,9 +1224,11 @@ fn memory_refusal(env: &SessionEventEnvelope, record: &crate::flow::FlowRecord, 
 fn authorize_agent(env: &SessionEventEnvelope, ctx: &Ctx<'_>, roster: &RosterState) -> Decision {
     let author = author_of(env);
     // Rules 4 (G14): a key its host certified while the placement admitted
-    // it also signs the one turn a `TurnDelegated` gives that host.
+    // it also signs the one turn a `TurnDelegated` gives that host, while
+    // that host is still trusted (a delegation never revives a revoked
+    // device's keys).
     let delegated_key = || {
-        let key = env.signer_device_id.and_then(|k| roster.agent_keys.get(&k))?;
+        let key = env.signer_device_id.and_then(|k| roster.agent_keys.get(&k)).filter(|k| roster.device_trusted(k.host_device_id))?;
         let trigger = rules4::trigger_of(&env.payload, ctx.fold);
         let new_output = matches!(env.payload, SessionEvent::MessageAppended { .. } | SessionEvent::ProposalUpserted { .. });
         (roster.rules >= RULES_V4 && new_output && rules4::delegated(key.agent_id, key.host_device_id, trigger, ctx.fold)).then_some(key)
