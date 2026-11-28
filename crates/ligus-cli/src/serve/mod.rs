@@ -58,6 +58,7 @@ pub mod pair;
 pub mod people;
 pub mod phone_actions_api;
 pub mod phone_enroll_api;
+pub mod phone_label_api;
 pub mod presence_api;
 pub mod principal;
 pub mod proposal_file;
@@ -399,6 +400,8 @@ pub struct Shared {
     pub admission_drafts: admissions_api::Drafts,
     /// Phone actions waiting for the phone's signature (Phase B).
     pub phone_action_drafts: phone_actions_api::Drafts,
+    /// A phone's own name waiting for its signature (workspace model v3, 17.6).
+    pub phone_label_drafts: phone_label_api::Drafts,
     /// The box's direct messages (`dms.rs`).
     pub dms: dms::DmStore,
     /// Wakes the DM sync loop after a local write.
@@ -1349,11 +1352,19 @@ pub async fn start(cfg: Config, mut opts: ServeOptions) -> Result<ServeHandle> {
     let ws = uuid_of_room(&cfg.room);
     let host_id = svc.device_id().to_string();
     let standing = svc.device_standing(ws).unwrap_or(Standing::Own);
+    // Rules 4: the box left, which removed it. It stays out: it writes
+    // nothing and publishes no beat until an Admin admits it again.
+    let stays_out = standing != Standing::Revoked && crate::admit::left_and_out(&svc, ws).unwrap_or(false);
+    if stays_out {
+        eprintln!("{}", crate::admit::left_line(&cfg.room));
+        svc.set_write_block(Some(format!("this box left {}", cfg.room)));
+    }
     match &standing {
         Standing::Revoked => {
             svc.set_write_block(Some(REVOKED.into()));
             eprintln!("ligus serve: {REVOKED}.");
         }
+        _ if stays_out => {}
         _ => {
             if let Some(name) = &opts.name {
                 svc.set_author_display_name(name.clone());
@@ -1378,7 +1389,11 @@ pub async fn start(cfg: Config, mut opts: ServeOptions) -> Result<ServeHandle> {
     svc.set_context_workspace(Some(ws));
     // A turn cut off by the last stop would otherwise stay "streaming" forever
     // and never be answered (its placeholder counts as the reply).
-    if standing != Standing::Revoked {
+    if stays_out {
+        if let Some(l) = svc.author().account_id.and_then(|a| svc.device_label_of(ws, svc.device_id(), a)) {
+            opts.label = l;
+        }
+    } else if standing != Standing::Revoked {
         match worker::recover_interrupted_turns(&mut svc) {
             Ok(done) if !done.is_empty() => eprintln!("serve: finished {} reply(s) interrupted by the last stop", done.len()),
             Ok(_) => {}
@@ -1445,6 +1460,7 @@ pub async fn start(cfg: Config, mut opts: ServeOptions) -> Result<ServeHandle> {
         presence_drafts: presence_api::Pending::default(),
         admission_drafts: admissions_api::Drafts::default(),
         phone_action_drafts: phone_actions_api::Drafts::default(),
+        phone_label_drafts: phone_label_api::Drafts::default(),
         dms: dms::DmStore::load(&cfg.data_dir),
         dm_kick: Notify::new(),
         contact_lock: tokio::sync::Mutex::new(()),
@@ -1760,6 +1776,8 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     // Whether the last pairing report named any phone (an empty one is sent
     // once after that, so My devices stops showing a pairing that ended).
     let mut paired_reported = false;
+    // The same for the unpaired-phones report.
+    let mut unpaired_reported = false;
     let mut known_repos: Option<Vec<uuid::Uuid>> = None;
     loop {
         shared.presence.record(&shared.host_id, Timestamp::now().inner().unix_timestamp());
@@ -1808,6 +1826,7 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         if shared.tunnel.is_some() {
             revocation_presence(&shared, &relay, &room, &ring, &mut retry_seen).await;
             pairing_presence(&shared, &relay, &room, &ring, &mut paired_reported).await;
+            unpaired_presence(&shared, &relay, &room, &ring, &mut unpaired_reported).await;
         }
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(HOST_BEAT_EVERY_SECS as u64)) => {}
@@ -1935,6 +1954,32 @@ async fn pairing_presence(
     match ligus_runtime::revocation_status::publish_pairing_report(relay, room, ring, &report).await {
         Ok(()) => *reported = named,
         Err(e) => eprintln!("presence: publishing the paired phones failed: {e}"),
+    }
+}
+
+/// Publish which phones were unpaired here (`ligus phones revoke`) or forgot
+/// this box (Forget host) while their device is still certified, so each
+/// phone's person is asked on their desktop whether to remove the device
+/// (workspace model v3, 10.2). Device ids only; sealed and signed by this
+/// box's device key. The box can't revoke a person's device itself.
+async fn unpaired_presence(
+    shared: &Arc<Shared>,
+    relay: &ligus_runtime::RelayClient,
+    room: &str,
+    ring: &ligus_runtime::keyring::KeyringEngine,
+    reported: &mut bool,
+) {
+    let Some(t) = shared.tunnel.as_ref() else { return };
+    let now = Timestamp::now().inner().unix_timestamp();
+    let report = t.registry.unpaired_report(&shared.host_id, shared.ws, now, |d| shared.device_lookup(d) == tunnel::device_bind::DeviceLookup::Revoked);
+    if report.phones.is_empty() && !*reported {
+        return;
+    }
+    let named = !report.phones.is_empty();
+    let report = shared.lock().sign_unpaired_report(report);
+    match ligus_runtime::revocation_status::publish_unpaired_report(relay, room, ring, &report).await {
+        Ok(()) => *reported = named,
+        Err(e) => eprintln!("presence: publishing the unpaired phones failed: {e}"),
     }
 }
 

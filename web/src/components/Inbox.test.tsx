@@ -7,6 +7,7 @@ import { needsYouItems } from "@/lib/needsYou";
 import { liveTurns } from "@/state/liveTurns";
 import { phoneAlerts } from "@/state/phoneAlerts";
 import { approvalSheet } from "@/state/approvals";
+import { keepUnpairedPhone, revokeMyDevice } from "@/lib/ipc";
 
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
@@ -24,6 +25,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   getSandboxPolicy: vi.fn(async () => ({ changed: false, appliesHere: true, grants: {} })),
   ackSandboxGrants: vi.fn(async () => {}),
   getWorkspaceTrust: vi.fn(async () => ({ root: "/r", items: [] })),
+  revokeMyDevice: vi.fn(async () => {}),
+  keepUnpairedPhone: vi.fn(async () => {}),
 }));
 
 function mount(items: ReturnType<typeof needsYouItems>, actions?: Partial<InboxActions>) {
@@ -188,5 +191,18 @@ describe("Inbox", () => {
     const row = screen.getByText("You said Not me to a request from \u201Claptop\u201D. Nothing was written.").closest('[role="listitem"]') as HTMLElement;
     await userEvent.click(within(row).getByRole("button", { name: "My devices" }));
     expect(a.openSettingsTab).toHaveBeenCalledWith("account");
+  });
+
+  it("asks whether to remove a phone that forgot a box, with Remove and Keep", async () => {
+    const u = { deviceId: "d1", name: "Ana's iPhone", hostId: "h1", hostLabel: "box-1", by: "phone" as const, at: 1_800_000_000 };
+    mount(needsYouItems({ unpaired: [u, { ...u, deviceId: "d2", name: "Old phone", by: "box" as const }] }));
+    expect(screen.getByText("Your phone \u201CAna's iPhone\u201D forgot box-1")).toBeInTheDocument();
+    expect(screen.getByText("box-1 unpaired your phone \u201COld phone\u201D")).toBeInTheDocument();
+    expect(screen.getByText("2 need you")).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+    expect(revokeMyDevice).toHaveBeenCalledWith("d1");
+    await userEvent.click(screen.getAllByRole("button", { name: /^Actions for / })[1]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Keep the device" }));
+    expect(keepUnpairedPhone).toHaveBeenCalledWith("h1", "d2", 1_800_000_000);
   });
 });

@@ -285,6 +285,34 @@ pub fn runtime_for<'a>(runtimes: &'a [WorkspaceRuntime], agent: &WorkspaceAgent)
     })
 }
 
+/// Whether `agent` is placed on this host (`my_host`): bound to it, or, on
+/// rules 4, in a pool whose source this host offers (the turn claim
+/// arbitrates between the pool's workers). An agent whose host is gone runs
+/// nowhere.
+pub fn placed_here(agent: &WorkspaceAgent, my_host: &str, rules4: bool, offers: &[ligus_core::HostOffer]) -> bool {
+    if agent.is_host_gone() {
+        return false;
+    }
+    if agent.host_id == my_host && !matches!(agent.placement, Some(ligus_core::agent_run::Placement::Pool)) {
+        return true;
+    }
+    rules4
+        && matches!(agent.placement, Some(ligus_core::agent_run::Placement::Pool))
+        && offers.iter().any(|o| o.name == agent.effective_run().source)
+}
+
+/// The runtimes the full run specs of `agents` resolve to here (rules 4),
+/// from this host's own offers and `host.toml`.
+pub fn spec_runtimes(workspace_id: Uuid, agents: &[WorkspaceAgent], offers: &[ligus_core::HostOffer]) -> Vec<WorkspaceRuntime> {
+    let cfg = ligus_runtime::host_config::host();
+    let gateways = ligus_runtime::model_gateway::host().offers();
+    agents
+        .iter()
+        .filter(|a| ligus_core::agent_run::is_full_spec_id(&a.runtime_id))
+        .filter_map(|a| ligus_runtime::host_offers::runtime_for_spec(&cfg, workspace_id, &a.effective_run(), offers, &gateways))
+        .collect()
+}
+
 /// Why this host won't run `agent` (placed on it), if it won't: what its
 /// beat says, so the sender's chat shows "can't run" with the reason
 /// instead of waiting (workspace model v3, 5.4). `None`: it runs.
@@ -432,15 +460,22 @@ pub async fn drain_tick(
         }
         // Liveness is published to the relay's presence channel by the caller
         // (`ligus serve`'s presence loop, `ligus worker`'s loop), not the log.
-        let placed: Vec<WorkspaceAgent> = svc
-            .load_in(ctx.ws, workspace_config_session_id(ctx.ws))?
+        let config = svc.load_in(ctx.ws, workspace_config_session_id(ctx.ws))?;
+        let rules4 = config.as_ref().is_some_and(|c| c.authz.rules >= ligus_core::authz::RULES_V4);
+        let offers = if rules4 { ligus_runtime::host_offers::offers_now(ligus_runtime::host_offers::HostRole::Box, Some(ctx.ws)) } else { Vec::new() };
+        let placed: Vec<WorkspaceAgent> = config
             .map(|s| s.workspace_agents)
             .unwrap_or_default()
             .into_iter()
-            .filter(|a| a.host_id == ctx.my_host)
+            .filter(|a| placed_here(a, ctx.my_host, rules4, &offers))
             .collect();
         let mut runtimes = svc.list_workspace_runtimes(ctx.ws)?;
         runtimes.extend(local_runtimes(&ctx.cfg.data_dir));
+        // Rules 4: an agent's own run spec resolves through this host's own
+        // offers, never the catch-all.
+        if rules4 {
+            runtimes.extend(spec_runtimes(ctx.ws, &placed, &offers));
+        }
         // Never a silent substitute (workspace model v3, 5.4): an agent this
         // host can't resolve is refused before any claim, and the beat says
         // why, so the sender's chat shows "can't run" with the reason.
@@ -1134,6 +1169,32 @@ credential = { kind = "none" }
         let r = refusal_for(test_ws(), &[hosted], &agent("team")).expect("refused");
         assert_eq!(r.kind, ligus_core::outcome::RefusalKind::NoKey);
         assert!(!r.why.contains("TEAM_KEY"), "the reason names the runtime, not the secret: {}", r.why);
+    }
+
+    /// Rules 4: a pool agent runs on every worker offering its source (the
+    /// claim arbitrates); a host-placed one only on its host; a gone one
+    /// nowhere; below rules 4 a pool is only its first host.
+    #[test]
+    fn a_pool_runs_on_workers_offering_its_source() {
+        use ligus_core::agent_run::{legacy_id, AgentRun, Placement};
+        let run = AgentRun { harness: String::new(), source: "codex".into(), model: "m".into(), resolved: None };
+        let mut pool = agent(&legacy_id(&run));
+        pool.run = Some(run);
+        pool.placement = Some(Placement::Pool);
+        pool.host_id = "first".into();
+        let codex = [ligus_core::HostOffer { name: "codex".into(), kind: ligus_core::OfferKind::Cli, harness: "codex".into(), wire: String::new() }];
+        assert!(placed_here(&pool, "second", true, &codex));
+        assert!(placed_here(&pool, "first", true, &codex));
+        assert!(!placed_here(&pool, "second", true, &[]), "doesn't offer the source");
+        assert!(!placed_here(&pool, "second", false, &codex), "rules 3");
+        let mut on_host = agent("rt");
+        on_host.host_id = "first".into();
+        assert!(placed_here(&on_host, "first", true, &codex) && !placed_here(&on_host, "second", true, &codex));
+        let mut gone = on_host.clone();
+        gone.placement = Some(Placement::Host { host_id: "first".into() });
+        gone.host_id = String::new();
+        gone.host_gone = true;
+        assert!(!placed_here(&gone, "first", true, &codex) && !placed_here(&gone, "", true, &codex));
     }
 
     #[test]

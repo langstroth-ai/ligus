@@ -25,6 +25,8 @@
 //! * [`list_live`] and [`ApproverSession`]: the approver's side, with the
 //!   device-local [`SeenSet`].
 //!
+//! * [`LinkCodeOffer`] and [`resolve_link_code`]: short link codes (0.5),
+//!   a 6-character code a new device types instead of the address.
 //! * [`PresenceRequester`] and [`PresenceApproval`]: the passkey hand-off
 //!   (0.5), where a terminal asks its person's desktop to confirm one
 //!   drafted event with the passkey.
@@ -36,11 +38,14 @@ mod address;
 mod approver;
 mod client;
 mod envelope;
+mod link_code;
 mod log_check;
 mod more;
 mod notices;
 mod presence_ask;
 mod requester;
+#[cfg(test)]
+mod link_code_tests;
 #[cfg(test)]
 mod more_tests;
 #[cfg(test)]
@@ -58,6 +63,7 @@ pub use envelope::{
     hint, open_blob, seal_blob, AbortBody, AckBody, OfferBody, AbortReason, ApproverPerson, ClaimBody, MsgError, MsgType, OpenBody, Outcome, RequestBody, RequestSubject,
     ResultBody, RevealBody, Signer, Verified, VerifiedOpen, VerifiedRequest, CLOCK_SKEW_MS, MAX_HINT_CHARS,
 };
+pub use link_code::{relay_forgot, resolve as resolve_link_code, CodeState, LinkCodeOffer, LINK_CODE_TTL_SECS};
 pub use more::{MoreGrant, MoreGrantCheck, MoreOffer, MAX_MORE};
 pub use notices::{Notice, NoticeKind, Notices, NOTICES_FILE, NOTICE_TTL_MS};
 pub use log_check::{retry_log_check, LogApproval, LogApprovalCheck, LogSubject, LogVerdict, LOG_CHECK_RETRY_MS};

@@ -75,17 +75,22 @@ itself, through your `ligus serve` box.
    says so above **Show code** but still lets you try. If the check itself
    couldn't run, the panel says so with **Check again**. **Add a phone…** is
    also in the command palette (⌘K).
-2. **On the phone:** **Settings → This phone → Add to my devices**. If the
-   phone would call itself just "iPhone" (iOS doesn't let apps read the
-   name you gave your iPhone), the app first asks you to **Name this
-   phone**: type a name your desktop will show, such as "Ana's iPhone", and
-   choose **Save name**. Then point the camera at the desktop's code. Use
-   the scanner inside the Ligus app; the phone's camera app doesn't read
-   this code.
-3. The phone asks the box who showed the code and says "Add this phone to
-   *Ana* (*role*)'s devices in *workspace*?". Check that it is you, then
-   choose **Add**. The phone then shows its fingerprint
-   (`XXXX-XXXX-XXXX-XXXX-XXXX`, five groups of four) and waits.
+2. **On the phone:** **Scan the code** on the Connect screen (it reads both
+   the desktop's code and the one `ligus pair` prints on the box), or
+   **Settings → This phone → Add to my devices → Scan your desktop's code**
+   on a phone that is already paired. Use the scanner inside the Ligus app;
+   the phone's camera app doesn't read this code.
+3. The phone asks the box who showed the code and shows one screen:
+   **Name this phone**, already filled in, and "Add this phone to *Ana*
+   (*role*)'s devices in *workspace*?". iOS doesn't let apps read the name
+   you gave your iPhone, so a phone that would call itself just "iPhone"
+   starts with your first name and the device ("Ana's iPhone"); change it
+   if you like. Check that it is you, then choose **Add** and confirm with
+   Face ID (or your passcode). That one confirmation also signs the phone's
+   own statement that it is your phone in this workspace (under **Why**):
+   the app hands it to the box once it is paired, with no second question.
+   The phone then shows its fingerprint (`XXXX-XXXX-XXXX-XXXX-XXXX`, five
+   groups of four) and waits.
 4. **On the desktop:** a card says "*Ana's iPhone* wants to be added",
    "Relayed by *box*", who the phone will act as, and the fingerprint. **Compare the
    fingerprint with the phone's screen**, group by group, and tick "Your
@@ -98,20 +103,24 @@ itself, through your `ligus serve` box.
    a second phone answers the same code in that time, nothing is added and
    the desktop asks you to start again. If the card isn't your phone, choose **Not my
    phone**.
-6. The phone sees that the box now knows its certificate, pairs, and says
-   "This phone is now one of your devices". There is nothing to retry by
-   hand.
+6. The phone sees that the box now knows its certificate and pairs. On a
+   build that can push, it asks once, **Get notifications?** ("When an agent
+   asks you something or a change waits for your review"): **Turn on
+   notifications** brings up the iOS prompt, **Not now** is kept (turn them
+   on later in **Settings → Notifications**). A build without push doesn't
+   ask. Then "This phone is now one of your devices" lists what works now:
+   your chats, approving with Face ID, and whether notifications are on,
+   off, or not available in this build. There is nothing to retry by hand.
 
-**My devices** lists the phone once, under the name it gave itself
-(cleaned, as every name is). That name is remembered only on the desktop
-that added the phone, in its local settings. Your other desktops show the
-name the phone's box knows it by, or what it is and the day it was added
-(for example "Phone · added 24 Nov"); its fingerprint is under Details. Both flows
-([Can't scan?](#cant-scan) too) remember it, and adding a phone that is
-already yours again replaces the old name rather than adding a second row:
-the phone says "This phone is already one of *Ana*'s devices in
-*workspace*. Update its name there?" and **Update name** sends its current
-name to the desktop, which needs no passkey for it. The row can also say
+**My devices** lists the phone once, under the name it chose (cleaned, as
+every name is). The desktop that adds the phone writes that name to the
+workspace in the same step, so every desktop and box shows it; a phone that
+chose none is "Phone · added 24 Nov", never a bare id. Its fingerprint is
+under Details. Adding a phone that is already yours again replaces the old
+name rather than adding a second row: the phone says "This phone is already
+one of *Ana*'s devices in *workspace*. Update its name there?" and **Update
+name** sends its current name to the desktop, which writes it for every
+device. To rename it later, see [Renaming the phone](#rename-phone). The row can also say
 which box the phone is paired with ("Paired with home-server · seen 2 min
 ago"), but only when that report is signed by one of your own devices. A box
 is its own member, never one of your devices, so a box admitted that way
@@ -148,6 +157,20 @@ box:
 A pairing link allows five attempts in all; the provisional connection and
 the final pairing each use one. If the link runs out, run `ligus pair` again.
 
+### Renaming the phone {#rename-phone}
+
+**Settings → This phone** shows the phone's name in this workspace. Where
+the workspace lets a phone name itself, **Rename** changes it for every
+device: the box drafts the change as you, the phone checks that it names
+exactly this phone and the name you typed, and signs it with its own key
+(no passkey: a name changes nothing else). Names are cleaned the same way
+everywhere: at most 48 characters, no hidden characters, single spaces.
+
+A phone may name itself only on workspaces that use the newer workspace
+rules (version 4). On the others the **?** next to the name says where to
+rename it instead: on your desktop, **Settings → Profile → My devices**, the
+phone's row, **Rename**. Boxes before 0.5 don't offer it either.
+
 ### Can't scan? {#cant-scan}
 
 The paste flow still works, for a phone without a camera, a desktop that
@@ -167,6 +190,11 @@ a box older than 0.1.1:
    the desktop refuses and asks you to check the code again.
 4. Give the box a few seconds to sync, then tap **Retry** on the phone (or
    scan a new `ligus pair` link if the old one used its five attempts).
+
+Added this way, the phone hasn't confirmed anything on its side yet, so once
+it is paired it asks once, "Confirm this phone is *Ana*'s in *workspace*",
+and signs its statement when you choose **Confirm**. Phones added before 0.5
+ask the same.
 
 Without a desktop, `ligus phones certify` does the same on a CLI identity of
 yours with your recovery key ([CLI reference](../reference/cli.md)).
@@ -641,9 +669,13 @@ seconds is queued.
   has three switches, all on: *Votes, questions and approvals for you*,
   *Mentions and direct messages*, and *Runs you started*. Other chat
   messages never notify. The phone sends the box the kinds it wants, and the
-  box sends only those. **Forget host** turns that box's notifications off
-  before the phone forgets it (if the box is offline then, revoke the
-  pairing on the box with `ligus phones revoke`).
+  box sends only those, and the phone sends them to every box it's paired
+  with, whenever you change them and when the app comes to the front.
+  **Forget host** asks the box to drop the pairing first: its notifications
+  stop and the relay forgets the phone's push registration. Your desktop then
+  asks whether to remove the phone from your devices too ("Your phone …
+  forgot box-1", with **Remove**). If the box is offline then, unpair it on
+  the box with `ligus phones revoke`, which asks the same.
 - **How loudly.** A run that finished arrives silently and groups with other
   finished runs; a failure alerts you. Something waiting on you is
   time-sensitive (it can break through a Focus) only when it has a deadline
@@ -670,7 +702,9 @@ seconds is queued.
     `Config/Shared.xcconfig`; set it to `YES` in your
     `Config/Local.xcconfig`). To get push you
     build the app yourself with it switched on. Without push the app still
-    shows everything when you open it.
+    shows everything when you open it; adding the phone doesn't ask about
+    notifications, its last screen says "Notifications aren't available in
+    this build", and Health shows the push row in grey.
 
 !!! warning "Push needs your own APNs key today"
     Apple accepts a push only when it is signed with a key from the team that

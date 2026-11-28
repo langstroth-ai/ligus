@@ -50,6 +50,9 @@ mod auth;
 mod checks;
 mod cli_flags;
 mod devices_cmd;
+mod link_code_cmd;
+#[cfg(test)]
+mod link_code_cmd_tests;
 mod link_io;
 mod forge_cmd;
 mod gateway_check;
@@ -1960,6 +1963,9 @@ fn cmd_set_agent_host(cfg: &Config, agent_name: &str, host_id: &str, dry_run: bo
         println!("dry run: would bind @{agent_name} ({aid}) to host {host_id}; nothing was signed or written.");
         return Ok(());
     }
+    // The hosts' signed beats: a full run spec never goes to a host below 0.5.
+    let presence = fetch_presence_with(cfg, Some(&svc));
+    svc.set_host_presence(presence);
     svc.set_agent_host(ws, aid, host_id)?;
     println!("bound @{agent_name} to host {host_id} (sync to apply).");
     Ok(())
@@ -2094,6 +2100,9 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
 async fn worker_start(cfg: &mut Config, label: &str, admission: Option<String>) -> Result<(ChatService, String)> {
     let (mut svc, _) = admit::prepare_box(cfg, label, None, admission, |c| async move { sync_once(&c).await }).await?;
     let ws = uuid_of_room(&cfg.room);
+    if admit::left_and_out(&svc, ws)? {
+        bail!("{}", admit::left_line(&cfg.room));
+    }
     let id = svc.device_id().to_string();
     if svc.device_standing(ws)? == ligus_runtime::device_enroll::Standing::Revoked {
         bail!("this worker's device was revoked by a workspace Admin; start it from a fresh data dir and admit it again");
@@ -3075,6 +3084,33 @@ fn run() -> Result<()> {
             let mut ask = devices_cmd::confirm_on_tty;
             match positional.first().map(|s| s.as_str()) {
                 Some("list") | None => devices_cmd::cmd_list(&cfg, json),
+                Some("link") => {
+                    if flag_val("--code").is_some_and(|v| !v.starts_with('-')) {
+                        let fix = "on the new device, type the code with `ligus devices request --code CODE`".to_string();
+                        return Err(anyhow::Error::new(problem::Problem {
+                            exit: problem::EXIT_USAGE,
+                            code: "usage",
+                            message: "`ligus devices link` shows a code; it doesn't take one".into(),
+                            fix: Option::Some(fix),
+                        }));
+                    }
+                    let wait = flag_val("--wait").map(|w| cli_flags::parse_duration(&w)).transpose()?.unwrap_or(std::time::Duration::from_secs(ligus_runtime::approval_mailbox::LINK_CODE_TTL_SECS));
+                    rt()?.block_on(link_code_cmd::cmd_link(&cfg, wait, json))
+                }
+                Some("request") if flag_val("--code").is_some() => {
+                    let wait = flag_val("--wait").map(|w| cli_flags::parse_duration(&w)).transpose()?.unwrap_or(approvals_cmd::DEFAULT_WAIT);
+                    let o = approvals_cmd::ToOptions::new(String::new(), flag_val("--label").unwrap_or_default(), wait, has("--insecure-relay"), json);
+                    let mut ask2 = devices_cmd::confirm_on_tty;
+                    let code = flag_val("--code").unwrap_or_default();
+                    rt()?.block_on(link_code_cmd::cmd_request_code(
+                        &cfg,
+                        &code,
+                        flag_val("--relay"),
+                        o,
+                        has("--new-device"),
+                        interactive.then_some(&mut ask2 as approvals_cmd::Ask<'_>),
+                    ))
+                }
                 Some("request") if flag_val("--to").is_some() => {
                     let wait = flag_val("--wait").map(|w| cli_flags::parse_duration(&w)).transpose()?.unwrap_or(approvals_cmd::DEFAULT_WAIT);
                     let o = approvals_cmd::ToOptions::new(flag_val("--to").unwrap_or_default(), flag_val("--label").unwrap_or_default(), wait, has("--insecure-relay"), json);
@@ -3121,7 +3157,7 @@ fn run() -> Result<()> {
                     positional.get(2).map(|s| s.as_str()),
                     json,
                 )),
-                Some(other) => bail!("unknown `ligus devices {other}`: use list|request|approve|redeem|rename"),
+                Some(other) => bail!("unknown `ligus devices {other}`: use list|link|request|approve|redeem|rename"),
             }
         }
         "recovery-key" => admit::cmd_recovery_key(&cfg, &positional, flag_val("--out")),

@@ -1,11 +1,15 @@
 import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getSandboxPolicy, getWorkspaceTrust, listChats, listDeviceRequests, listPendingInvites, setNeedsYouCount } from "@/lib/ipc";
+import { getSandboxPolicy, getWorkspaceTrust, listChats, listDeviceRequests, listPendingInvites, listUnpairedPhones, setNeedsYouCount } from "@/lib/ipc";
 import { needsYouCount, needsYouItems, type NeedsYouItem } from "@/lib/needsYou";
 import { useChatAttention } from "@/state/useSessionStates";
 import { useLiveTurns } from "@/state/liveTurns";
 import { usePhoneAlerts } from "@/state/phoneAlerts";
 import { useApprovals } from "@/state/approvals";
+
+/// The query key of the unpaired phones (the Inbox refetches it after
+/// Remove or Keep).
+export const UNPAIRED_KEY = ["unpaired-phones"] as const;
 
 /// Everything waiting on this person in the active workspace, plus what
 /// reaches this device from outside it (invites, device requests, a phone
@@ -19,6 +23,8 @@ export function useNeedsYou(workspaceId: string): NeedsYouItem[] {
   const devices = useQuery({ queryKey: ["device-requests"], queryFn: listDeviceRequests, refetchInterval: 15_000 });
   const trust = useQuery({ queryKey: ["workspace-trust"], queryFn: getWorkspaceTrust, refetchInterval: 30_000 });
   const sandbox = useQuery({ queryKey: ["sandbox-policy", null], queryFn: () => getSandboxPolicy(null), refetchInterval: 30_000 });
+  // Boxes republish what they unpaired every beat (30 s).
+  const unpaired = useQuery({ queryKey: UNPAIRED_KEY, queryFn: listUnpairedPhones, refetchInterval: 30_000, retry: false });
   const phone = usePhoneAlerts();
   const approvals = useApprovals();
   return useMemo(() => {
@@ -40,8 +46,9 @@ export function useNeedsYou(workspaceId: string): NeedsYouItem[] {
         .filter((r) => r.workspaceId === workspaceId)
         .map((r) => ({ workspaceId: r.workspaceId, rid: r.rid, kind: r.kind, label: r.label, createdAt: r.createdAt, summary: r.summary })),
       approvalFacts: approvals.facts.filter((f) => f.workspaceId === workspaceId),
+      unpaired: unpaired.data,
     });
-  }, [attention.data, chats.data, live, invites.data, devices.data, trust.data, sandbox.data, phone, approvals.requests, approvals.facts, workspaceId]);
+  }, [attention.data, chats.data, live, invites.data, devices.data, trust.data, sandbox.data, phone, approvals.requests, approvals.facts, unpaired.data, workspaceId]);
 }
 
 /// Mirror the count on the dock icon (macOS) and the tray tooltip. Zero

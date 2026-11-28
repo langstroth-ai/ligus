@@ -6,7 +6,8 @@ import { WorkspaceTrustSheet } from "@/components/WorkspaceTrustBanner";
 import { RepoSuggestionNotice, REPOS_KEY } from "@/components/settings/RepositoriesSection";
 import { InboxItem } from "@/components/kit";
 import { Button, InfoTip, SectionCap } from "@/components/ui";
-import { approvalDecline, approvalDismissFact, listWorkspaceRepos } from "@/lib/ipc";
+import { approvalDecline, approvalDismissFact, keepUnpairedPhone, listWorkspaceRepos, revokeMyDevice } from "@/lib/ipc";
+import { UNPAIRED_KEY } from "@/state/useNeedsYou";
 import { approvalTitle, needsYouCount, needsYouLabel, type ApprovalRef, type NeedsYouItem } from "@/lib/needsYou";
 import { COPY as APPROVAL_COPY } from "@/components/ApprovalSheet";
 import { APPROVALS_KEY, approvalSheet } from "@/state/approvals";
@@ -147,6 +148,46 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
             }
           />
         );
+      case "unpaired": {
+        const u = item.unpaired!;
+        const refresh = () => qc.invalidateQueries({ queryKey: UNPAIRED_KEY });
+        return (
+          <InboxItem
+            key={item.key}
+            state="idle"
+            title={item.title}
+            detail="Remove the device too, if you no longer use it with Ligus."
+            when={item.at ? shortAgo(item.at) : undefined}
+            whenInline
+            actions={
+              <Button
+                size="sm"
+                onClick={() =>
+                  void revokeMyDevice(u.deviceId)
+                    .then(() => {
+                      toast.success(`Removed ${u.name}.`);
+                      void refresh();
+                      void qc.invalidateQueries({ queryKey: ["my-devices"] });
+                    })
+                    .catch((e) => toast.error(errMsg(e)))
+                }
+              >
+                Remove
+              </Button>
+            }
+            menu={[
+              {
+                label: "Keep the device",
+                onSelect: () =>
+                  void keepUnpairedPhone(u.hostId, u.deviceId, u.at)
+                    .then(refresh)
+                    .catch((e) => toast.error(errMsg(e))),
+              },
+              { label: "My devices", onSelect: () => actions.openSettingsTab("account") },
+            ]}
+          />
+        );
+      }
       case "trust":
         return (
           <InboxItem

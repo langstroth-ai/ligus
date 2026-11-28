@@ -106,7 +106,7 @@ async fn a_teammate_leaves_with_their_passkey_and_the_founder_cant() {
     taylor.sync().await;
     mac.sync().await;
     let (_, t) = mac.svc.store().load_config(ws, None, None).unwrap();
-    assert!(t.current().rules >= ligus_core::authz::RULES_V3, "a 0.4 workspace is on rules 3");
+    assert_eq!(t.current().rules, ligus_core::authz::RULES_V4, "a 0.5 workspace is on rules 4");
 
     // The founder stays.
     match mac.svc.leave_check(ws).unwrap() {
@@ -131,16 +131,12 @@ async fn a_teammate_leaves_with_their_passkey_and_the_founder_cant() {
     taylor.sync().await;
     mac.sync().await;
 
-    // Everyone sees it; under rules 3 Taylor is still a member and writes.
+    // Everyone sees it; under rules 4 a leave is a removal (G4): Taylor is
+    // no longer a member and writes nothing more there.
     let tid = taylor.id();
-    assert!(mac.left_here(ws, &tid) && mac.member_here(ws, &tid));
-    taylor.svc.post_user_message(chat, ws, "one last thing").unwrap();
-    taylor.sync().await;
-    mac.sync().await;
+    assert!(mac.left_here(ws, &tid) && !mac.member_here(ws, &tid));
+    assert!(taylor.svc.post_user_message(chat, ws, "one last thing").is_err(), "a former member writes nothing");
     let s = mac.svc.load(chat).unwrap().unwrap();
-    assert!(s.messages.iter().any(|m| m.body == "one last thing"));
-
-    // An Admin removes Taylor: no longer listed as asked to leave.
-    mac.svc.remove_member(cfg, ws, tid.clone()).unwrap();
-    assert!(!mac.left_here(ws, &tid) && !mac.member_here(ws, &tid));
+    assert!(!s.messages.iter().any(|m| m.body == "one last thing"));
+    let _ = cfg;
 }

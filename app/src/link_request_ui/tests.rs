@@ -216,9 +216,13 @@ impl LinkHost for NewDesktop {
 }
 
 async fn spawn_relay() -> String {
+    spawn_router(ligus_runtime::test_relay::router()).await
+}
+
+async fn spawn_router(router: axum::Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, ligus_runtime::test_relay::router()).await.unwrap() });
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     format!("http://{addr}")
 }
 
@@ -294,7 +298,7 @@ async fn a_second_desktop_links_by_matching_codes_and_is_the_same_member() {
     let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
     let own_id = two.svc.lock().unwrap().author().id.clone();
     let slot = Arc::new(Slot::default());
-    let v = start(two.clone(), slot.clone(), &address.encode()).await;
+    let v = start(two.clone(), slot.clone(), &address.encode(), None).await;
     assert_eq!(v.phase, "waiting", "{v:?}");
     assert!(v.request.as_deref().is_some_and(|r| r.starts_with("liguslink1:")), "the paste path's request is ready too");
 
@@ -349,7 +353,7 @@ async fn codes_that_dont_match_grant_nothing_and_save_nothing() {
     let (client, ek, address) = mailbox(&first).await;
     let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
     let slot = Arc::new(Slot::default());
-    start(two.clone(), slot.clone(), &address.encode()).await;
+    start(two.clone(), slot.clone(), &address.encode(), None).await;
     let live = list_live(&client, std::slice::from_ref(&ek)).await.unwrap().live.remove(0);
     let mut session = ApproverSession::begin(client.clone(), &ek, &live.request, first.identity(), &mut SeenSet::in_memory()).await.unwrap();
     wait_for(&slot, "code").await;
@@ -413,7 +417,7 @@ async fn an_install_with_its_own_workspaces_is_never_linked() {
     two.own = 2;
     let two = Arc::new(two);
     let slot = Arc::new(Slot::default());
-    let v = start(two.clone(), slot.clone(), &address.encode()).await;
+    let v = start(two.clone(), slot.clone(), &address.encode(), None).await;
     assert_eq!(v.phase, "failed");
     assert!(v.error.as_deref().is_some_and(|e| e.contains("its own member (2 workspaces)")) && !v.can_retry, "{v:?}");
     assert!(LinkState::load(&two.dir).unwrap().pending.is_empty(), "no request was made");
@@ -431,7 +435,7 @@ async fn saying_no_to_link_as_leaves_nothing_behind() {
     let ws = first.ws();
     let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
     let slot = Arc::new(Slot::default());
-    start(two.clone(), slot.clone(), &address.encode()).await;
+    start(two.clone(), slot.clone(), &address.encode(), None).await;
     approve_in_inbox(&mut first, &client, &ek, &slot).await;
     wait_for(&slot, "confirmPerson").await;
     assert!(two.svc.lock().unwrap().store().workspace_pin(ws).unwrap().is_some(), "pinned while checking");
@@ -555,7 +559,7 @@ async fn one_link_brings_all_three_workspaces_as_the_same_member() {
 
     let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
     let slot = Arc::new(Slot::default());
-    start(two.clone(), slot.clone(), &address.encode()).await;
+    start(two.clone(), slot.clone(), &address.encode(), None).await;
     approve_all_in_inbox(&mut first, &client, &ek, &slot, &["beta", "gamma"], &[]).await;
 
     let v = wait_for(&slot, "confirmPerson").await;
@@ -610,7 +614,7 @@ async fn a_partial_link_shows_what_didnt_come_and_try_again_links_it() {
     let ana = first.svc.author().clone();
     let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
     let slot = Arc::new(Slot::default());
-    start(two.clone(), slot.clone(), &address.encode()).await;
+    start(two.clone(), slot.clone(), &address.encode(), None).await;
 
     // Delta's certificate is written, but device 1 doesn't push it yet.
     let ws = first.ws();
@@ -675,7 +679,7 @@ async fn an_older_approver_links_one_workspace_as_before() {
     let (client, ek, address) = mailbox(&first).await;
     let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
     let slot = Arc::new(Slot::default());
-    start(two.clone(), slot.clone(), &address.encode()).await;
+    start(two.clone(), slot.clone(), &address.encode(), None).await;
     approve_in_inbox(&mut first, &client, &ek, &slot).await;
     let v = wait_for(&slot, "confirmPerson").await;
     assert!(v.workspaces.is_empty());
@@ -683,4 +687,90 @@ async fn an_older_approver_links_one_workspace_as_before() {
     let v = wait_for(&slot, "linked").await;
     assert!(v.workspaces.is_empty());
     assert!(two.kept.lock().unwrap().is_empty());
+}
+
+// ── Short link codes ─────────────────────────────────────────────────────
+
+/// Device 1 shows a code (Add a computer); device 2 types it ("k7q 4mx" is
+/// fine) for device 1's relay, and links as before: same member, nothing
+/// pasted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_second_desktop_links_by_typing_the_code_the_first_shows() {
+    let relay = spawn_relay().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let first = First::found(&tmp.path().join("one"), &relay, "acme");
+    first.sync().await;
+    let (client, ek, address) = mailbox(&first).await;
+    let offer = am::LinkCodeOffer::post(&client, first.ws(), &address.founder_pin, std::slice::from_ref(&ek)).await.unwrap();
+    let typed = offer.code().shown().to_lowercase().replace('-', " ");
+    let ana = first.svc.author().clone();
+
+    let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
+    let slot = Arc::new(Slot::default());
+    let v = start(two.clone(), slot.clone(), &typed, Some(&relay)).await;
+    assert_eq!(v.phase, "waiting", "{v:?}");
+    let mut first = first;
+    approve_in_inbox(&mut first, &client, &ek, &slot).await;
+    wait_for(&slot, "confirmPerson").await;
+    slot.answer(Answer::LinkAs(true)).unwrap();
+    wait_for(&slot, "linked").await;
+    assert_eq!(two.svc.lock().unwrap().author().id, ana.id, "one of Ana's devices");
+    first.sync().await;
+    assert_eq!(first.human_members(), vec![ana.id.clone()], "never a second member");
+
+    // The code was used once: typed again, a plain error that says what to do.
+    let three = Arc::new(NewDesktop::open(&tmp.path().join("three")));
+    let slot3 = Arc::new(Slot::default());
+    let v = start(three, slot3, &typed, Some(&relay)).await;
+    assert_eq!(v.phase, "failed");
+    assert!(v.error.as_deref().unwrap_or_default().contains("No device is showing that code"), "{v:?}");
+    assert!(!v.can_retry);
+}
+
+/// A relay with mailboxes but no short codes: typing a code says to paste
+/// the approval address instead, and nothing is posted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relay_without_short_codes_asks_for_the_address() {
+    let (router, _clock, _restart) = ligus_runtime::test_relay::router_with_restart(false);
+    let relay = spawn_router(router).await;
+    let tmp = tempfile::tempdir().unwrap();
+    let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
+    let v = start(two, Arc::new(Slot::default()), "K7Q-4MX", Some(&relay)).await;
+    assert_eq!(v.phase, "failed");
+    assert!(v.error.as_deref().unwrap_or_default().contains("copy the approval address instead"), "{v:?}");
+}
+
+/// The relay restarts while device 2 waits: it says so, asks again once a
+/// member registers the mailbox again, and links on the second request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_relay_restart_while_waiting_asks_again() {
+    let (router, _clock, restart) = ligus_runtime::test_relay::router_with_restart(true);
+    let relay = spawn_router(router).await;
+    let tmp = tempfile::tempdir().unwrap();
+    let first = First::found(&tmp.path().join("one"), &relay, "acme");
+    first.sync().await;
+    let (client, ek, address) = mailbox(&first).await;
+    let two = Arc::new(NewDesktop::open(&tmp.path().join("two")));
+    let slot = Arc::new(Slot::default());
+    start(two.clone(), slot.clone(), &address.encode(), None).await;
+    let before = list_live(&client, std::slice::from_ref(&ek)).await.unwrap().live.remove(0).rid_hex();
+    restart.restart();
+    // The members' devices register the mailbox again (the Inbox does when it polls).
+    client.ensure_registered(&ek.key).await.unwrap();
+    let mut asked_again = false;
+    for _ in 0..200 {
+        let l = list_live(&client, std::slice::from_ref(&ek)).await.unwrap();
+        if l.live.first().is_some_and(|r| r.rid_hex() != before) {
+            asked_again = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(asked_again, "asked again after the restart: {:?}", slot.view());
+    assert_eq!(slot.view().notice.as_deref(), Some(RESTARTED));
+    let mut first = first;
+    approve_in_inbox(&mut first, &client, &ek, &slot).await;
+    wait_for(&slot, "confirmPerson").await;
+    slot.answer(Answer::LinkAs(true)).unwrap();
+    wait_for(&slot, "linked").await;
 }

@@ -163,6 +163,17 @@ fn is_member(svc: &ChatService, ws: Uuid) -> Result<bool> {
     Ok(svc.load_in(ws, workspace_config_session_id(ws))?.is_some_and(|c| c.members.iter().any(|m| m.id == me)))
 }
 
+/// Whether this box left `ws` and is no longer on its roster (rules 4: a
+/// leave is a removal), with no new admission redeemed to join it again.
+pub fn left_and_out(svc: &ChatService, ws: Uuid) -> Result<bool> {
+    Ok(svc.has_left(ws)? && !is_member(svc, ws)? && svc.store().join_redeem_key(ws)?.is_none())
+}
+
+/// The one line a box that left logs when it starts again.
+pub fn left_line(room: &str) -> String {
+    format!("This box left {room}. To rejoin: ligus admit request (an Admin approves).")
+}
+
 /// The start-up shared by `ligus serve` and `ligus worker` (Phase B):
 ///
 /// 1. this data dir is a box (a service member);
@@ -231,6 +242,12 @@ where
         ),
         Standing::Revoked => return Ok((svc, synced.is_ok())),
         Standing::Own => {}
+    }
+    // Rules 4: `ligus serve leave` removed this box. It stays out (joins
+    // nothing, writes nothing) until an Admin adds it back; the caller
+    // says so ([`left_and_out`]).
+    if left_and_out(&svc, ws)? {
+        return Ok((svc, synced.is_ok()));
     }
     if !is_member(&svc, ws)? {
         let joined = svc.ensure_self_member(workspace_config_session_id(ws), ws);

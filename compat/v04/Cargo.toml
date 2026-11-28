@@ -3,7 +3,7 @@ name = "ligus-compat-v04"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "Mixed-version tests: the released 0.4 core and this checkout's core fold the same rules-3 logs alike (workspace model v3, 16.3)."
+description = "Mixed-version tests against the released 0.4.1 core and runtime: rules-3 logs fold alike, rules 4 is read-only there (workspace model v3, 15 and 16.3)."
 
 [workspace]
 
@@ -12,5 +12,6 @@ description = "Mixed-version tests: the released 0.4 core and this checkout's co
 [dev-dependencies]
 ligus-core = { path = "../../crates/ligus-core" }
 ligus-core-v04 = { package = "ligus-core", git = "https://github.com/langstroth-ai/ligus", tag = "v0.4.1" }
+ligus-runtime-v04 = { package = "ligus-runtime", git = "https://github.com/langstroth-ai/ligus", tag = "v0.4.1" }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }

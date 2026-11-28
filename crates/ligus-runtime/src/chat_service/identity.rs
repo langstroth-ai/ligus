@@ -258,4 +258,15 @@ impl ChatService {
         }
         Ok(out)
     }
+
+    /// The readiness list for switching `workspace_id` to rules 4
+    /// (workspace model v3, 15.2): accountless members, agents whose
+    /// placement wouldn't resolve, and host records not signed by the device
+    /// they name. It informs; an Owner can switch anyway
+    /// (`set_workspace_rules(ws, 4)`, with a passkey). Builds below 0.5 come
+    /// from the hosts' beats, which the embedder holds.
+    pub fn rules4_readiness(&self, workspace_id: Uuid) -> Result<ligus_core::authz::rules4::Readiness> {
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        Ok(config.map(|c| ligus_core::authz::rules4::readiness(&c, timeline.current())).unwrap_or_default())
+    }
 }

@@ -52,6 +52,7 @@ use uuid::Uuid;
 const GOLDEN: &str = include_str!("../../ligus-core/tests/golden/phone_enroll_qr_v1.jsonl");
 const PARITY: &str =
     include_str!("../../ligus-core/tests/golden/differential/rust_parity_enroll_v1.jsonl");
+const GOLDEN_V2: &str = include_str!("../../ligus-core/tests/golden/phone_enroll_req_v2.jsonl");
 
 const NOW: u64 = 1_800_000_000;
 const NOW_MS: i64 = 1_800_000_000_000;
@@ -528,6 +529,7 @@ fn generate_golden() -> String {
         phone_sig: sig,
         mac: keys.request_mac(&signed, &sig),
         code: code_b,
+        ext: Default::default(),
     };
     out.push(request_line(
         "request/another phone's code, signed by the sender",
@@ -1054,6 +1056,7 @@ fn golden_and_parity_files_are_fresh() {
     };
     same("phone_enroll_qr_v1.jsonl", GOLDEN, &generate_golden());
     same("rust_parity_enroll_v1.jsonl", PARITY, &generate_parity());
+    same("phone_enroll_req_v2.jsonl", GOLDEN_V2, &generate_v2());
 }
 
 /// The iOS corpus: every line's recorded answer is today's.
@@ -1398,4 +1401,55 @@ fn phone_enroll_qr_goldens() {
     let dir = std::path::Path::new(&dir);
     std::fs::write(dir.join("phone_enroll_qr_v1.jsonl"), generate_golden()).unwrap();
     std::fs::write(dir.join("rust_parity_enroll_v1.jsonl"), generate_parity()).unwrap();
+    std::fs::write(dir.join("phone_enroll_req_v2.jsonl"), generate_v2()).unwrap();
+}
+
+/// The v2 request (extensions: the previous device id after a key reset),
+/// with every intermediate value, so the phone builds the same bytes.
+fn generate_v2() -> String {
+    let a = phone(0x21);
+    let valid = offer(0x31, NOW + 300);
+    let d_text = valid.encode().to_string();
+    let prev = u(0x77);
+    let code = a.code("Ana's iPhone");
+    let req = EnrollRequest::build_with(&valid, &code, RequestExt::previous(prev), |m| a.sign(m));
+    let text = req.encode();
+    let line_of = |label: &str, text: &str, extra: Vec<(&str, Value)>| {
+        let mut v = vec![
+            ("label", json!(label)),
+            ("check", json!("request2")),
+            ("offer", json!(d_text)),
+            ("request", json!(text)),
+            ("nowMs", json!(NOW_MS)),
+            ("boxWorkspaceId", json!(u(1))),
+            ("expectBox", json!(expect_of(&box_verdict(text, u(1), None, NOW_MS)))),
+            ("expectDesktop", json!(expect_of(&desktop_verdict(&d_text, text, NOW_MS)))),
+        ];
+        v.extend(extra);
+        line(v)
+    };
+    let mut out = vec![line_of(
+        "request2/valid, previous device",
+        &text,
+        vec![
+            ("previousDeviceId", json!(prev)),
+            ("ext", json!(b64u(&RequestExt::previous(prev).encode()))),
+            ("phonePublicKey", json!(hex(&a.public_key))),
+            ("phoneCode", json!(req.code.encode())),
+            ("signed", json!(b64u(&req.signed()))),
+            ("phoneSig", json!(b64u(&req.phone_sig))),
+            ("mac", json!(b64u(&req.mac))),
+        ],
+    )];
+    // Stripped to v1 by whoever carried it: the signature no longer holds.
+    let b = body(&text, REQUEST_V2_PREFIX);
+    let n = b[16 + 16 + 16 + 8 + 64 + 32] as usize;
+    let fixed = 16 + 16 + 16 + 8 + 64 + 32;
+    let stripped = [&b[..fixed], &b[fixed + 1 + n..]].concat();
+    out.push(line_of("request2/stripped to v1", &with_body(REQUEST_PREFIX, &stripped), vec![]));
+    let critical = [&b[..fixed], &[2u8, 0x80, 0], &b[fixed + 1 + n..]].concat();
+    out.push(line_of("request2/unknown critical extension", &with_body(REQUEST_V2_PREFIX, &critical), vec![]));
+    let mut s = out.join("\n");
+    s.push('\n');
+    s
 }

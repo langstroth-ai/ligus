@@ -927,6 +927,9 @@ mod tests {
         let author = ActorIdentity::new("u1", "Mara", ActorKind::Human);
         let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
         svc.enable_test_presence();
+        // Replies from agents with no record (the rules-3 shape; rules 4
+        // accepts agent output only where its placement admits it, G14).
+        svc.set_founding_rules(ligus_core::authz::RULES_V3);
         svc
     }
 

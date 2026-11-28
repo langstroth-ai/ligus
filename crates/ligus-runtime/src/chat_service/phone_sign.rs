@@ -433,6 +433,41 @@ impl ChatService {
         Ok((draft, presence))
     }
 
+    /// Whether a phone may name itself in `workspace_id` (workspace model
+    /// v3, 17.6): from rules 4 ([`ligus_core::authz::profiles::PHONE_NAMES_ITSELF_FROM`]).
+    /// Before it, its person's desktop renames it.
+    pub fn phone_can_name_itself(&self, workspace_id: Uuid) -> Result<bool> {
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        Ok(timeline.current().rules >= ligus_core::authz::profiles::PHONE_NAMES_ITSELF_FROM)
+    }
+
+    /// Draft phone `phone`'s own name, `label`, as its person, to be signed
+    /// by the phone (`DeviceLabelSet` for itself on the config log; workspace
+    /// model v3, 17.6), judged as every fold will. Refused with
+    /// [`RENAME_ON_DESKTOP`] before rules 4. `label` must already be clean
+    /// (the phone checks the draft names exactly what it sent). Nothing is
+    /// written.
+    pub fn draft_phone_label(&mut self, workspace_id: Uuid, phone: Uuid, label: &str) -> Result<PhoneDraft> {
+        if label.trim().is_empty() {
+            return Err(ChatError::Unauthorized("a phone's name can't be empty".into()));
+        }
+        ligus_core::profile::label_ok(label).map_err(|e| ChatError::Unauthorized(e.into()))?;
+        let actor = self.phone_person(workspace_id, phone)?;
+        if !self.phone_can_name_itself(workspace_id)? {
+            return Err(ChatError::Unauthorized(RENAME_ON_DESKTOP.into()));
+        }
+        let account = actor.account_id.ok_or_else(|| ChatError::Unauthorized("that phone's person has no account here".into()))?;
+        let payload = SessionEvent::DeviceLabelSet {
+            label: ligus_core::profile::DeviceLabel { device_id: phone, account_id: account, label: label.to_string() },
+        };
+        let draft = self.draft_for_phone(workspace_id, phone, payload)?;
+        let mut probe = draft.env.clone();
+        probe.signer_device_id = Some(phone);
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        self.authorize_as_fold(&probe, config.as_ref(), &timeline)?;
+        Ok(draft)
+    }
+
     /// The preimage of `draft` without presence (an action the rules don't
     /// need a passkey for), for the phone to check and sign.
     pub fn phone_unconfirmed_preimage(draft: &mut PhoneDraft) -> Vec<u8> {
@@ -518,7 +553,26 @@ impl ChatService {
         crate::phone_enroll::check_device_id(code.device_id, &code.public_key).map_err(ChatError::Unauthorized)?;
         match self.phone_standing(workspace_id, code)? {
             crate::phone_enroll::PhoneStanding::New => {}
-            crate::phone_enroll::PhoneStanding::AlreadyMine => return Ok(code.device_id),
+            crate::phone_enroll::PhoneStanding::AlreadyMine => {
+                // Added again under a new name (or one that never got a
+                // synced name, enrolled before 0.5): the name it chose now,
+                // synced (10.1, U5). An unchanged or empty choice writes
+                // nothing; best effort, as at a first enrolment.
+                let chosen = ligus_proto::names::clean_display_name(&code.label);
+                let me = self.author.account_id;
+                let current = me.and_then(|a| self.device_label_of(workspace_id, code.device_id, a));
+                let label = match &current {
+                    None => Some(phone_label(&code.label, Timestamp::now())),
+                    Some(c) if !chosen.trim().is_empty() && ligus_core::profile::label_ok(&chosen).is_ok() && *c != chosen => Some(chosen),
+                    Some(_) => None,
+                };
+                if let Some(label) = label {
+                    if let Err(e) = self.set_device_label(workspace_id, code.device_id, &label) {
+                        tracing::warn!(error = %e, "couldn't rename the phone added again");
+                    }
+                }
+                return Ok(code.device_id);
+            }
             crate::phone_enroll::PhoneStanding::Revoked => {
                 return Err(ChatError::Unauthorized(
                     "this phone was revoked here: in the app, choose Reset this phone's key (on the screen that says it was revoked, or Settings > This phone), then add it again".into(),
@@ -550,6 +604,9 @@ pub fn phone_label(chosen: &str, added: Timestamp) -> String {
     let month = d.month().to_string();
     format!("Phone \u{00B7} added {} {}", d.day(), &month[..3])
 }
+
+/// The refusal of a phone's own rename before rules 4.
+pub const RENAME_ON_DESKTOP: &str = "this workspace's rules don't let a phone rename itself yet: rename it on your desktop, under Settings > Profile > My devices";
 
 /// The refusal of an enrollment statement that doesn't verify.
 pub const BAD_CONSENT: &str = "that statement isn't this phone's signature for this account and workspace";

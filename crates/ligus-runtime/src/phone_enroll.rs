@@ -353,11 +353,19 @@ mod tests {
     /// A person's desktop (test presence: the account's test recovery key)
     /// on a fresh workspace.
     fn desktop() -> (ChatService, Uuid) {
+        desktop_on(None)
+    }
+
+    /// [`desktop`], founded on `rules` (this build's default when `None`).
+    fn desktop_on(rules: Option<u32>) -> (ChatService, Uuid) {
         let store = crate::EventStore::open_in_memory().unwrap();
         let account = Uuid::new_v4();
         let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
         author.account_id = Some(account);
         let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        if let Some(r) = rules {
+            svc.set_founding_rules(r);
+        }
         let wid = Uuid::new_v4();
         svc.ensure_workspace_config(wid).unwrap();
         (svc, wid)
@@ -424,6 +432,65 @@ mod tests {
         let at = ligus_core::Timestamp::from_unix_seconds(1_795_521_600); // 24 Nov 2026
         assert_eq!(crate::chat_service::phone_label("", at), "Phone \u{00B7} added 24 Nov");
         assert_eq!(crate::chat_service::phone_label("Ana's iPhone", at), "Ana's iPhone");
+    }
+
+    /// U5 for a phone added again: the name it chose now is synced (a phone
+    /// enrolled before names were synced gets one too); the same name writes
+    /// nothing.
+    #[test]
+    fn a_phone_added_again_under_a_new_name_is_renamed() {
+        let (mut svc, wid) = desktop();
+        let phone = ligus_core::testkit::Phone::new();
+        let me = svc.author().account_id.unwrap();
+        let code = |l: &str| PhoneCode::decode(&PhoneCode::new(phone.device_id, &phone, l).encode()).unwrap();
+        svc.certify_phone_code(wid, &code("Ana's iPhone")).unwrap();
+        let labels = |svc: &ChatService| {
+            svc.store()
+                .list(workspace_config_session_id(wid))
+                .unwrap()
+                .into_iter()
+                .filter(|e| matches!(e.payload, SessionEvent::DeviceLabelSet { .. }))
+                .count()
+        };
+        let before = labels(&svc);
+        svc.certify_phone_code(wid, &code("Ana's iPhone")).unwrap();
+        assert_eq!(labels(&svc), before, "the same name writes nothing");
+        svc.certify_phone_code(wid, &code("Work phone")).unwrap();
+        assert_eq!(svc.device_label_of(wid, phone.device_id, me).as_deref(), Some("Work phone"));
+        assert_eq!(certs(&svc, wid).len(), 1, "no second certificate");
+        // An empty choice keeps the synced name.
+        svc.certify_phone_code(wid, &code(" ")).unwrap();
+        assert_eq!(svc.device_label_of(wid, phone.device_id, me).as_deref(), Some("Work phone"));
+    }
+
+    /// 17.6: a phone renames itself only from rules 4; before, the box
+    /// refuses the draft and says where to rename it.
+    #[test]
+    fn a_phone_renames_itself_only_from_rules_4() {
+        let add = |svc: &mut ChatService, wid: Uuid, phone: &ligus_core::testkit::Phone| {
+            svc.certify_phone_code(wid, &PhoneCode::decode(&PhoneCode::new(phone.device_id, phone, "Ana's iPhone").encode()).unwrap()).unwrap();
+        };
+        // A workspace this build founds is on rules 4 from its first
+        // passkey (adding the phone): its phones name themselves.
+        let (mut svc, wid) = desktop();
+        add(&mut svc, wid, &ligus_core::testkit::Phone::new());
+        assert!(svc.phone_can_name_itself(wid).unwrap());
+        // One founded on rules 3 refuses the draft.
+        let (mut svc, wid) = desktop_on(Some(ligus_core::authz::RULES_V3));
+        let phone = ligus_core::testkit::Phone::new();
+        add(&mut svc, wid, &phone);
+        assert!(!svc.phone_can_name_itself(wid).unwrap());
+        match svc.draft_phone_label(wid, phone.device_id, "Work phone") {
+            Err(ChatError::Unauthorized(m)) => assert_eq!(m, crate::chat_service::RENAME_ON_DESKTOP),
+            other => panic!("{other:?}"),
+        }
+        // Malformed names are refused first, whatever the rules.
+        let long = "w".repeat(49);
+        for bad in ["", " Work", "Work\u{202E}", long.as_str()] {
+            assert!(svc.draft_phone_label(wid, phone.device_id, bad).is_err(), "{bad:?}");
+        }
+        // Not a phone of this workspace.
+        assert!(svc.draft_phone_label(wid, Uuid::new_v4(), "Work phone").is_err());
     }
 
     #[test]

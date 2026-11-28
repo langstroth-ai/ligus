@@ -54,7 +54,7 @@ pub use relay_removal::{RelayRemoval, RelayRemovalError, RelaySubject, BOX_SUBJE
 mod repos;
 pub use repos::canonical_from_input;
 pub use keys::RotationIssued;
-pub use phone_sign::{phone_label, PhoneDraft, BAD_CONSENT, STALE_DRAFT};
+pub use phone_sign::{phone_label, PhoneDraft, BAD_CONSENT, RENAME_ON_DESKTOP, STALE_DRAFT};
 pub use presence::{summarize, summarize_with, MatchContext, PresenceDraft, PresenceProvider, PresenceRequest};
 
 #[derive(Debug, thiserror::Error)]
@@ -130,6 +130,10 @@ pub struct ChatService {
     delegated: bool,
     /// When set, every append is refused with this reason (a revoked device).
     write_block: Option<String>,
+    /// The hosts' signed beats, when the embedder keeps them: writers read a
+    /// host's build from it (a full run spec is never placed on a host
+    /// below 0.5).
+    host_presence: Option<crate::HostPresence>,
     /// Where this host keeps the signing keys of agents bound to it (A3). When
     /// unset, the host signs its agents' output itself (the transition).
     agent_vault: Option<Box<dyn crate::identity_store::KeyVault + Send>>,
@@ -230,6 +234,7 @@ impl ChatService {
             context_workspace: None,
             delegated: false,
             write_block: None,
+            host_presence: None,
             agent_vault: None,
             runtime_effect: false,
             presence_provider: None,
@@ -435,6 +440,13 @@ impl ChatService {
     /// Refuse every write with `reason` (or allow writes again with `None`).
     pub fn set_write_block(&mut self, reason: Option<String>) {
         self.write_block = reason;
+    }
+
+    /// Share the hosts' beats this embedder keeps (their signed statuses):
+    /// writers then refuse to place an agent's full run spec on a host whose
+    /// build is below 0.5.
+    pub fn set_host_presence(&mut self, presence: crate::HostPresence) {
+        self.host_presence = Some(presence);
     }
 
     /// The reason writes are refused, if they are.
@@ -1563,6 +1575,7 @@ impl ChatService {
         let session_id = self.ensure_workspace_config(workspace_id)?;
         // Name, runtime, host, run and placement in one record (workspace
         // model v3, 5.2): run and placement mirror the legacy fields.
+        self.ensure_own_host_record(workspace_id, &agent.host_id)?;
         self.refuse_unoffered_placement(workspace_id, &agent)?;
         let agent = self.agent_for_write(workspace_id, &agent);
         self.append_signed(
@@ -2329,6 +2342,7 @@ impl ChatService {
         // gone is placed again.
         slot.place(host_id);
         let agent = slot.clone();
+        self.ensure_own_host_record(workspace_id, host_id)?;
         self.refuse_unoffered_placement(workspace_id, &agent)?;
         let agent = self.agent_for_write(workspace_id, &agent);
         self.append_signed(
@@ -4297,7 +4311,11 @@ mod tests {
         let account_kp = SigningKeypair::generate().unwrap();
         // No account id → publish_identity is a no-op (local-only, unverifiable).
         let author = ActorIdentity::new("u1", "Mara", ligus_core::ActorKind::Human);
-        (ChatService::new(store, kp, account_kp, author), public)
+        let mut svc = ChatService::new(store, kp, account_kp, author);
+        // These fixtures admit accountless, named members (the rules-3
+        // shape, which rules 4 refuses: D12): they found on rules 3.
+        svc.set_founding_rules(ligus_core::authz::RULES_V3);
+        (svc, public)
     }
 
     /// A workspace from the Hive builds, written in the events those builds
@@ -5426,7 +5444,7 @@ mod tests {
         let cfg = workspace_config_session_id(wid);
         let (ana_id, ben_id) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
         let mut ana = svc_on(&path, "a", "Ana");
-        ana.set_founding_rules(ligus_core::authz::RULES_NEW_WORKSPACE);
+        ana.set_founding_rules(ligus_core::authz::RULES_V3);
         ana.set_author_account(ana_id.clone(), "Ana", None);
         ana.create_chat("general", wid, "rt").unwrap();
         ana.ensure_workspace_config(wid).unwrap();
