@@ -8,6 +8,20 @@ Full release notes are on the
 
 ### Added
 
+- **Link a device by typing a short code.** **Settings → Profile → My
+  devices → Add a computer** now shows **Link a device** with a 6-character
+  code such as `K7Q-4MX`; the new device types it in its first run (**I
+  already use Ligus on another device**), in `lt`'s **Add to my devices**, or
+  with `ligus devices request --code K7Q-4MX`, instead of pasting the
+  approval address. From there it is the code match as before, and Add a
+  computer opens the request when it arrives. A code works once, for 10
+  minutes, and the relay sees neither the code nor the address. `ligus
+  devices link` shows a code from a terminal. If the relay restarts, the
+  desktop posts the same code again and a waiting computer asks again, and
+  both say so. This needs a relay with the short code routes (the relay's next release);
+  with an older relay, Add a computer shows the approval address as before.
+  See [With a short code](../features/linked-devices.md#short-code).
+
 - **"Update available" for boxes.** When a box or worker runs an older
   release than the latest one, its row in **People** > **Workers & hosts**
   shows one grey line, "0.4.1 → 0.5.0 available · how", and the phone's

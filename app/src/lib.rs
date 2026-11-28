@@ -59,6 +59,7 @@ mod repos_ui;
 mod scratch_ui;
 mod setup_ui;
 mod first_run_ui;
+mod link_code_ui;
 mod link_request_ui;
 mod link_more;
 mod turn_host;
@@ -17348,6 +17349,9 @@ pub fn run() {
             first_run_ui::set_first_run_path,
             first_run_ui::first_run_workspace,
             first_run_ui::invite_link_hint,
+            link_code_ui::link_code_show,
+            link_code_ui::link_code_status,
+            link_code_ui::link_code_close,
             link_request_ui::link_request_status,
             link_request_ui::link_request_start,
             link_request_ui::link_request_codes_match,

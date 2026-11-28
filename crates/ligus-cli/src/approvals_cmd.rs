@@ -37,6 +37,16 @@ use crate::checks::{Check, Report};
 use crate::problem::{Problem, EXIT_ERROR, EXIT_FIXABLE, EXIT_HUMAN, EXIT_OFFLINE, EXIT_REFUSED, EXIT_USAGE};
 use crate::{uuid_of_room, Config};
 
+/// A computer's request the relay lost (it restarted): asked again.
+const RELAY_RESTARTED: &str = "relay_restarted";
+/// Times a computer asks again after relay restarts.
+const MAX_REPOSTS: usize = 3;
+/// How often it tries to ask again while the relay's mailbox comes back.
+#[cfg(not(test))]
+const REPOST_EVERY: Duration = Duration::from_secs(3);
+#[cfg(test)]
+const REPOST_EVERY: Duration = Duration::from_millis(200);
+
 /// How long `--to` waits for an approver by default.
 pub const DEFAULT_WAIT: Duration = Duration::from_secs(15 * 60);
 /// How long a requester retries check 5 while the approval syncs.
@@ -59,7 +69,7 @@ fn now_ms() -> i64 {
 
 /// A mailbox error as the shared exit table reads it. `paste` is the paste
 /// command a relay without the routes falls back to.
-fn mailbox_problem(e: MailboxError, paste: &str) -> anyhow::Error {
+pub(crate) fn mailbox_problem(e: MailboxError, paste: &str) -> anyhow::Error {
     let fix_paste = format!("this relay has no approval mailbox: use the paste path instead ({paste})");
     match e {
         MailboxError::NoRoutes => problem(EXIT_FIXABLE, "no_mailbox_routes", e.to_string(), Some(&fix_paste)),
@@ -137,14 +147,14 @@ fn keep(_text: &str) {
 }
 
 /// A line on stderr (progress, the code).
-fn note(text: &str) {
+pub(crate) fn note(text: &str) {
     keep(text);
     eprintln!("{text}");
 }
 
 /// Write a line for the person: stderr with `--json` (stdout carries the
 /// one document), stdout otherwise.
-fn say(json: bool, text: &str) {
+pub(crate) fn say(json: bool, text: &str) {
     keep(text);
     if json {
         eprintln!("{text}");
@@ -153,7 +163,7 @@ fn say(json: bool, text: &str) {
     }
 }
 
-fn print_report(r: &Report, json: bool, result: serde_json::Value, text: &str) {
+pub(crate) fn print_report(r: &Report, json: bool, result: serde_json::Value, text: &str) {
     if json {
         let mut v = r.to_json(0);
         if let Some(o) = v.as_object_mut() {
@@ -170,7 +180,7 @@ fn print_report(r: &Report, json: bool, result: serde_json::Value, text: &str) {
 // ---- The address ----
 
 /// The workspace keys, founder pin and relay this member uses for the mailbox.
-fn member_context(cfg: &Config) -> Result<(ligus_runtime::ChatService, Uuid, String, Vec<am::EpochKey>, MailboxClient)> {
+pub(crate) fn member_context(cfg: &Config) -> Result<(ligus_runtime::ChatService, Uuid, String, Vec<am::EpochKey>, MailboxClient)> {
     let svc = crate::open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
     let relay = cfg.relay_url.clone().filter(|r| crate::usable_relay_url(r)).ok_or_else(|| {
@@ -219,6 +229,7 @@ pub async fn cmd_address(cfg: &Config, reset: bool, json: bool) -> Result<()> {
 // ---- The box requester ----
 
 /// What `--to` waits with.
+#[derive(Clone)]
 pub struct ToOptions {
     pub to: String,
     pub label: String,
@@ -497,27 +508,49 @@ pub async fn cmd_devices_request_to(cfg: &Config, o: ToOptions, new_device: bool
     let stored = ids.load()?.ok_or_else(|| anyhow!("no identity"))?;
     let ka = ids.key_agreement(device_id)?;
     let device_key = ids.device_keypair(device_id)?.public_key_bytes();
-    let spec = RequestSpec {
-        kind: MatchKind::Computer,
-        code: paste_text.clone(),
-        signer: Signer::Ed25519(ids.device_keypair(device_id)?),
-        ka: Some(ids.key_agreement(device_id)?),
+    let spec = || -> Result<RequestSpec> {
+        Ok(RequestSpec {
+            kind: MatchKind::Computer,
+            code: paste_text.clone(),
+            signer: Signer::Ed25519(ids.device_keypair(device_id)?),
+            ka: Some(ids.key_agreement(device_id)?),
+        })
     };
-    let client = client_for(cfg, &address.relay);
-    let mut req = Requester::post(client, &address, spec, Some(&cfg.data_dir)).await.map_err(|e| requester_problem(e, paste))?;
-    req.allow_relay_override(relay_override());
     let mut r = Report::new("devices request");
-    r.add(Check::ok("approval.posted", "posted", format!("request {} in the workspace's approval mailbox", req.rid_hex())));
-    note("Waiting for an approver…");
     let mut cfg = cfg.clone();
-    let outcome = wait_computer(&mut cfg, &mut req, &request, &ka, &device_key, device_id, stored.device.id, &o, ask, &mut r).await;
-    let _ = req.settle().await;
-    let person = outcome?;
+    let deadline = Instant::now() + o.wait;
+    let mut restarts = 0;
+    let (person, rid) = loop {
+        let client = client_for(&cfg, &address.relay);
+        let mut req = match Requester::post(client, &address, spec()?, Some(&cfg.data_dir)).await {
+            Ok(req) => req,
+            // Asking again after a restart: the mailbox comes back once a
+            // member's device registers it again.
+            Err(RequesterError::Mailbox(m)) if restarts > 0 && (am::relay_forgot(&m) || m.retryable()) && Instant::now() < deadline => {
+                tokio::time::sleep(REPOST_EVERY).await;
+                continue;
+            }
+            Err(e) => return Err(requester_problem(e, paste)),
+        };
+        req.allow_relay_override(relay_override());
+        r.add(Check::ok("approval.posted", "posted", format!("request {} in the workspace's approval mailbox", req.rid_hex())));
+        note("Waiting for an approver…");
+        let left = ToOptions { wait: deadline.saturating_duration_since(Instant::now()), ..o.clone() };
+        let outcome = wait_computer(&mut cfg, &mut req, &request, &ka, &device_key, device_id, stored.device.id, &left, ask, &mut r).await;
+        let _ = req.settle().await;
+        match outcome {
+            Err(e) if e.downcast_ref::<Problem>().is_some_and(|p| p.code == RELAY_RESTARTED) && restarts < MAX_REPOSTS => {
+                restarts += 1;
+                note("The relay restarted; asking again.");
+            }
+            other => break (other?, req.rid_hex()),
+        }
+    };
     r.next("ligus chats");
     print_report(
         &r,
         o.json,
-        serde_json::json!({ "rid": req.rid_hex(), "fingerprint": request.fingerprint(), "request": paste_text, "person": person.id, "workspace": cfg.room }),
+        serde_json::json!({ "rid": rid, "fingerprint": request.fingerprint(), "request": paste_text, "person": person.id, "workspace": cfg.room }),
         &format!("This computer is now one of {}'s devices in workspace '{}'.\n", shown(&person.display_name), cfg.room),
     );
     Ok(())
@@ -554,6 +587,10 @@ async fn wait_computer(
             Err(RequesterError::Mailbox(m)) if m.retryable() => {
                 tokio::time::sleep(Duration::from_secs(3).min(left)).await;
                 continue;
+            }
+            // The relay forgot the request (it restarted): ask again.
+            Err(RequesterError::Mailbox(m)) if am::relay_forgot(&m) => {
+                return Err(problem(EXIT_OFFLINE, RELAY_RESTARTED, "the relay restarted and lost the request", Some("start again")));
             }
             Err(e) => return Err(requester_problem(e, "ligus devices request")),
         };
