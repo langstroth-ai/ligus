@@ -2025,6 +2025,9 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
 async fn worker_start(cfg: &mut Config, label: &str, admission: Option<String>) -> Result<(ChatService, String)> {
     let (mut svc, _) = admit::prepare_box(cfg, label, None, admission, |c| async move { sync_once(&c).await }).await?;
     let ws = uuid_of_room(&cfg.room);
+    if admit::left_and_out(&svc, ws)? {
+        bail!("{}", admit::left_line(&cfg.room));
+    }
     let id = svc.device_id().to_string();
     if svc.device_standing(ws)? == ligus_runtime::device_enroll::Standing::Revoked {
         bail!("this worker's device was revoked by a workspace Admin; start it from a fresh data dir and admit it again");

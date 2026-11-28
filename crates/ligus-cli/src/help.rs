@@ -1423,7 +1423,9 @@ pub const COMMANDS: &[Cmd] = &[
                   until then it is still a member (workspace rules 3). Works for any box data dir (serve or worker). \
                   Leaving isn't revoking: the box keeps the keys and copies it holds until an Admin removes it and \
                   rotates the workspace key. A box that left stops its host beat and writes no host record, label \
-                  or offers of its own, also after a restart. Without --yes it only prints what it would do and exits 4. Refused \
+                  or offers of its own, also after a restart. On rules 4 the leave removes the box: started again, \
+                  it stays out (writes nothing, no beat) and logs \"This box left <workspace>. To rejoin: ligus admit \
+                  request (an Admin approves).\" Without --yes it only prints what it would do and exits 4. Refused \
                   for the founder, the last Owner, and a member that holds a passkey (a person leaves from their \
                   desktop).",
         synopsis: &["ligus serve leave [--yes] [--json]"],

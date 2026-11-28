@@ -1352,11 +1352,19 @@ pub async fn start(cfg: Config, mut opts: ServeOptions) -> Result<ServeHandle> {
     let ws = uuid_of_room(&cfg.room);
     let host_id = svc.device_id().to_string();
     let standing = svc.device_standing(ws).unwrap_or(Standing::Own);
+    // Rules 4: the box left, which removed it. It stays out: it writes
+    // nothing and publishes no beat until an Admin admits it again.
+    let stays_out = standing != Standing::Revoked && crate::admit::left_and_out(&svc, ws).unwrap_or(false);
+    if stays_out {
+        eprintln!("{}", crate::admit::left_line(&cfg.room));
+        svc.set_write_block(Some(format!("this box left {}", cfg.room)));
+    }
     match &standing {
         Standing::Revoked => {
             svc.set_write_block(Some(REVOKED.into()));
             eprintln!("ligus serve: {REVOKED}.");
         }
+        _ if stays_out => {}
         _ => {
             if let Some(name) = &opts.name {
                 svc.set_author_display_name(name.clone());
@@ -1381,7 +1389,11 @@ pub async fn start(cfg: Config, mut opts: ServeOptions) -> Result<ServeHandle> {
     svc.set_context_workspace(Some(ws));
     // A turn cut off by the last stop would otherwise stay "streaming" forever
     // and never be answered (its placeholder counts as the reply).
-    if standing != Standing::Revoked {
+    if stays_out {
+        if let Some(l) = svc.author().account_id.and_then(|a| svc.device_label_of(ws, svc.device_id(), a)) {
+            opts.label = l;
+        }
+    } else if standing != Standing::Revoked {
         match worker::recover_interrupted_turns(&mut svc) {
             Ok(done) if !done.is_empty() => eprintln!("serve: finished {} reply(s) interrupted by the last stop", done.len()),
             Ok(_) => {}

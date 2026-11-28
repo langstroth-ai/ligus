@@ -15,7 +15,8 @@ Full release notes are on the
   and only an Admin places one elsewhere or in a pool; changing an agent's
   model within the same source needs no passkey. **Run here this time** is a
   signed one-turn permission, so the reply counts on every device. Leaving a
-  workspace removes you. A host record counts only from its own device, and
+  workspace removes you; a box started again after `ligus serve leave` stays
+  out and logs how to rejoin. A host record counts only from its own device, and
   members without an account, model server addresses on the log and
   whole-list writes are refused. An existing workspace stays on its rules
   until an Owner switches it; builds before 0.5 open a rules 4 workspace
