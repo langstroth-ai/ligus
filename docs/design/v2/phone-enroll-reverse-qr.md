@@ -191,6 +191,30 @@ request    = "ligusenrollreq1:" + b64u( rid ‖ workspace_id ‖ desktop_device_
 - `mac` proves the sender read the QR. The box can check everything except
   the MAC; the desktop checks everything.
 
+**v2: `ligusenrollreq2:` (workspace model v3, 10.2).** The same request with
+signed extensions, sent only when the phone has something to say (otherwise
+it sends v1, so older desktops and boxes keep working):
+
+```
+ext        = entries of type(u8) ‖ len(u8) ‖ value, each type at most once, 1..64 bytes in all
+             type 1 = previousDeviceId (16): the phone's device id before a key reset
+signed v2  = "ligus-enroll-request-v2\0" ‖ rid ‖ workspace_id ‖ desktop_device_id ‖ exp
+             ‖ ext_len(u8) ‖ ext ‖ code_body
+request v2 = "ligusenrollreq2:" + b64u( rid ‖ workspace_id ‖ desktop_device_id ‖ exp
+                                        ‖ phone_sig ‖ mac ‖ ext_len ‖ ext ‖ code_body )
+```
+
+- The signature and the MAC cover `ext` under their own context, so it can't
+  be stripped (a downgrade to v1), added or changed by whoever carries it.
+- An unknown type below 0x80 is ignored (and kept, so it verifies as it
+  came); an unknown type from 0x80 up is refused. A nil id, a wrong length,
+  a repeated type and a phone naming itself are refused.
+- The desktop offers to remove the previous device only when it is one of
+  this account's phones, certified and not revoked ("Also remove …", off by
+  default); it revokes it with a second passkey step, after certifying the
+  new key, in the same sheet. It is never on the log. Vectors:
+  `crates/ligus-core/tests/golden/phone_enroll_req_v2.jsonl`.
+
 ### 5.4 The desktop's answer: `ligusenrollres1:`
 
 ```

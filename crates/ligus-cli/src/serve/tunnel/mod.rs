@@ -313,6 +313,10 @@ pub struct WindowFile {
 pub struct RevokeFile {
     pub pid: String,
     pub exp: u64,
+    /// Who ended the pairing, when it was unpaired (`ligus phones revoke`,
+    /// Forget host) rather than cut by a revoked certificate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unpaired: Option<phones::Unpaired>,
 }
 
 /// The values derived from a pairing secret (§4).
@@ -725,11 +729,24 @@ impl TunnelHost {
             (None, None) => return Ok(false),
             (a, b) => a.unwrap_or(0).max(b.unwrap_or(0)),
         };
-        write_json(&file, &RevokeFile { pid: pid.to_string(), exp })?;
+        let unpaired = self.registry.get(pid).and_then(|r| r.unpaired);
+        write_json(&file, &RevokeFile { pid: pid.to_string(), exp, unpaired })?;
         let _ = self.revoked.send(pid.to_string());
         Self::lock(&self.revocations).entry(pid.to_string()).or_insert((exp, None)).0 = exp;
         self.send_revocations();
         Ok(true)
+    }
+
+    /// End `pid`'s pairing because `by` asked (workspace model v3, 10.2):
+    /// pushes stop, then [`Self::revoke`] (sessions end, the relay drops the
+    /// pairing and its push registration). The phone's person is asked on
+    /// their desktop whether to remove the device too
+    /// ([`Registry::unpaired_report`]).
+    pub fn unpair(&self, pid: &str, by: phones::Unpaired) -> Result<bool> {
+        // A purged or unknown pid still has its relay step (the pending
+        // file's `exp`).
+        self.registry.mark_unpaired(pid, by)?;
+        self.revoke(pid)
     }
 
     /// (Re)send unacked revocations: on connect, and every 30 s until acked.
@@ -866,7 +883,13 @@ impl TunnelHost {
             } else if let Some(pid) = name.strip_prefix("revoke-").and_then(|n| n.strip_suffix(".json")) {
                 let known = Self::lock(&self.revocations).contains_key(pid);
                 if !known {
-                    if let Err(e) = self.revoke(pid) {
+                    // `ligus phones revoke` says it was unpaired on the box.
+                    let unpaired = read_json::<RevokeFile>(&path).ok().flatten().and_then(|f| f.unpaired);
+                    let done = match unpaired {
+                        Some(by) => self.unpair(pid, by),
+                        None => self.revoke(pid),
+                    };
+                    if let Err(e) = done {
                         eprintln!("remote: revoking {pid}: {e:#}");
                     }
                 }

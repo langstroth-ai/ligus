@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { needsYouCount, needsYouItems, needsYouLabel, reviewBadge } from "@/lib/needsYou";
+import { needsYouCount, needsYouItems, needsYouLabel, reviewBadge, unpairedTitle } from "@/lib/needsYou";
 
 const titles = new Map([
   ["c1", "Relay backoff"],
@@ -136,5 +136,18 @@ describe("approval requests", () => {
     expect(needsYouCount(items)).toBe(4);
     expect(needsYouItems({ approvals: four.slice(0, 3) }).filter((i) => i.kind === "approval")).toHaveLength(3);
   });
-});
 
+  it("an unpaired phone is one item, after device requests and before invites", () => {
+    const items = needsYouItems({
+      unpaired: [{ deviceId: "d1", name: "Ana\u202Es iPhone", hostId: "h1", hostLabel: "box-1", by: "phone", at: 60 }],
+      deviceRequests: [{ hostId: "x", label: "sff" }],
+      invites: [{ relay: "r", seq: 1, isDm: false, workspaceName: "W", founderName: null }],
+    });
+    expect(items.map((i) => i.kind)).toEqual(["device", "unpaired", "invite"]);
+    const u = items[1];
+    expect(u.title).toBe("Your phone \u201CAnas iPhone\u201D forgot box-1");
+    expect(u.at).toBe(60_000);
+    expect(needsYouCount(items)).toBe(3);
+    expect(unpairedTitle({ name: "P", hostLabel: "", by: "box" })).toBe("a box unpaired your phone \u201CP\u201D");
+  });
+});

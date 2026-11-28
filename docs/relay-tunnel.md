@@ -610,6 +610,11 @@ Host connector (`ligus serve`):
     whether they carry a message preview (§14). `previews` defaults to `true`
     for a newly paired phone; when the field is absent the stored value is
     kept.
+  - `DELETE /v1/tunnel/pairing` → `{"unpaired":true}`: the phone forgets
+    this host (Forget host). Pushes to it stop at once; right after the
+    answer the host revokes the pairing as in §13.2 steps 1 to 3 (the relay
+    drops it and its push token), records it as unpaired by the phone, and
+    reports the device to its person's desktop (§13.2, "Unpaired");
   - `GET /v1/tunnel/direct` → `{"token","url"}`: this phone's own
     direct-path token and the URL (tunnel only; `404` on the direct path).
     The token is `ld1.<pid>.<hex HMAC-SHA256(serve.token, "ligus-direct-v1\0"
@@ -782,6 +787,26 @@ unused for 90 days.
    `exp`;
 4. by default also rotates the direct-path bearer token (`serve.token`),
    because a stolen phone holds that too. `--keep-token` opts out.
+
+**Unpaired.** A pairing ended this way, or by the phone with `DELETE
+/v1/tunnel/pairing` (Forget host), is recorded with who ended it
+(`unpaired: "box" | "phone"`). The host can't revoke a person's device (it is
+a Service member), so while the phone's device stays certified, has no other
+active pairing on this host and was unpaired within 30 days, the host
+publishes it in a sealed presence slot `unpaired:<host device id>`, signed by
+its device key (context `ligus-unpaired-report-v1\0`): device ids, the time
+to the minute and `by`, no names. The person's desktop shows "Your phone …
+forgot box-1" (or "box-1 unpaired your phone …") in its Inbox with
+**Remove**, which revokes the device with their passkey, and **Keep the
+device**. A certificate revoke asks nothing.
+
+**`phones.json` v2.** Written with `"v": 2`. A new pairing must name its
+workspace device (`deviceId`); a v1 record without one still works as an
+"unverified" pairing (`ligus phones list`) that gets no "you" notices. A
+revoked record is dropped 30 days after `revokedAt`: a phone without a
+record is refused like a revoked one, and the relay keeps its own
+revocation until the credential's `exp`. The unused `ownerPhone` field is
+gone; v1 files load unchanged.
 
 **Device revocation (Phase B).** A workspace `DeviceRevoked` of a phone's
 device revokes every pairing bound to it (E3a), whatever path the event took
